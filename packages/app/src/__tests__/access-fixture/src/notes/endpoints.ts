@@ -109,7 +109,7 @@ export const shared = app.link('/s', {
 })
 
 /** Removes every trashed note; a retried attempt lists again, so it removes nothing twice. */
-export const purge = app.cron('0 3 * * *', { actions: ['notes.read', 'notes.write'], scope: 'app' })
+export const purge = app.cron('0 3 * * *', { actions: ['notes.read', 'notes.write'] })
 	.handle(async ({ ctx }) => {
 		const trashed = await ctx.db.over(ctx.within('notes.read', 'workspace')).notes.list({ where: [['trashed', '=', true]] })
 		await ctx.transaction(async (tx) => {

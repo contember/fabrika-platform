@@ -27,7 +27,7 @@ const noteColumns = { notes: { columns: ['id', 'workspace_id', 'title'], foreign
 describe('the policies as data', () => {
 	test('tablePolicies gives every table its artifact form, with every optional field present', () => {
 		const artifacts = tablePolicies(tables)
-		const { notes: noteTable, note_comments: comments, countries, contact_messages: inbox } = artifacts
+		const { notes: noteTable, note_comments: comments, countries } = artifacts
 		expect(Object.keys(artifacts)).toEqual(Object.keys(columns))
 		expect(noteTable).toEqual({
 			scope: { mode: 'dimension', dimension: 'note', key: 'id', container: { dimension: 'workspace', column: 'workspace_id' } },
@@ -53,10 +53,6 @@ describe('the policies as data', () => {
 			inherit: ['workspace_id', 'organization_id'],
 		})
 		expect(countries).toMatchObject({ scope: { mode: 'reference', reason: 'read-only lookup data' }, insert: [], version: null })
-		expect(inbox).toMatchObject({
-			scope: { mode: 'inbox', form: 'contact' },
-			actions: { read: 'contact.read', insert: null, update: null, delete: null },
-		})
 	})
 
 	test('one action stays its text in the artifact, so a 0.5 policy keeps its digest; several are a list', () => {
@@ -104,7 +100,11 @@ describe('readTables refuses what nobody type-checked', () => {
 		['a scope that is not an object', { notes: { ...notes, scope: 'note' } }, 'notes: scope must be a plain object'],
 		['a policy that is an array', { notes: [notes] }, 'notes: the policy must be a plain object'],
 		['a container with an extra field', { notes: { ...notes, scope: { ...notes.scope, in: { ...notes.scope.in, key: 'id' } } } }, 'scope.in: key'],
-		['an inbox with actions', { notes: { scope: { inbox: 'contact', read: 'notes.read' }, actions: { read: 'notes.read' } } }, 'an inbox table'],
+		[
+			'the removed inbox scope',
+			{ notes: { scope: { inbox: 'contact', read: 'notes.read' } } },
+			"notes: the inbox scope was removed; declare an application table, scope: { app: '<why>' }, that a public procedure inserts into",
+		],
 		[
 			'a dimension the vocabulary does not declare',
 			{ notes: { ...notes, scope: { dimension: 'nte' } } },
@@ -268,7 +268,6 @@ function policiesOf(): unknown {
 			update: ['value'],
 		},
 		countries: { scope: { reference: 'read-only lookup data' }, actions: { read: 'notes.read' } },
-		contact_messages: { scope: { inbox: 'contact', read: 'contact.read' } },
 	}
 }
 

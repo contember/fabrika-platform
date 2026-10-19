@@ -18,7 +18,6 @@ import {
 import type { DataKind, UnscopedMode } from '@fabrika/db/tables'
 import type { SqlMode } from '../contract/context'
 import { DECLARED_FIELDS } from '../contract/declaration'
-import type { FileSite } from '../files/collections'
 import { CapabilityRefusedError, isActiveRequest, type RequestFrame } from './capability'
 import { ServerFault } from './faults'
 
@@ -28,7 +27,6 @@ export interface SiteDeclaration {
 	readonly unscoped: Readonly<Record<string, UnscopedMode>>
 	readonly connect: readonly string[]
 	readonly issues: string | null
-	readonly then: string | null
 	readonly mailer: JobMailer | null
 	/** The cron jobs `ctx.kick` may name. */
 	readonly kicks: readonly string[]
@@ -75,7 +73,6 @@ const NO_DECLARATION: SiteDeclaration = Object.freeze({
 	unscoped: Object.freeze({}),
 	connect: Object.freeze([]),
 	issues: null,
-	then: null,
 	mailer: null,
 	kicks: Object.freeze([]),
 	binds: null,
@@ -149,10 +146,6 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 	if (issues !== undefined && typeof issues !== 'string') {
 		problems.push(`${where}: issues is not the name of a link mount`)
 	}
-	const then = ownField(declared, 'then')
-	if (then !== undefined && typeof then !== 'string') {
-		problems.push(`${where}: then is not the name of a job`)
-	}
 	const mailerField = ownField(declared, 'mailer')
 	const mailer = JOB_MAILERS.find((transport) => transport === mailerField) ?? null
 	if (mailerField !== undefined && mailer === null) {
@@ -182,7 +175,6 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 		unscoped: Object.freeze(unscoped),
 		connect: Object.freeze(connectors),
 		issues: typeof issues === 'string' ? issues : null,
-		then: typeof then === 'string' ? then : null,
 		mailer,
 		kicks: Object.freeze([...new Set(kicks)].sort()),
 		binds: typeof binds === 'string' ? binds : null,
@@ -228,7 +220,6 @@ export function approvedReach(site: string, artifact: ContractArtifact): SiteDec
 			unscoped: Object.freeze({ ...reach.unscoped }),
 			connect: Object.freeze([...reach.connect]),
 			issues: reach.issues,
-			then: reach.then ?? null,
 			mailer: reach.mailer ?? null,
 			kicks: Object.freeze([...(reach.kicks ?? [])]),
 			binds: reach.binds ?? null,
@@ -238,8 +229,8 @@ export function approvedReach(site: string, artifact: ContractArtifact): SiteDec
 }
 
 /**
- * A declaration as one comparable line: its fields in a fixed order, its tables and connectors sorted; `then` and
- * `mailer` only when declared.
+ * A declaration as one comparable line: its fields in a fixed order, its tables and connectors sorted; each optional
+ * field only when declared.
  */
 function describeDeclaration(declaration: SiteDeclaration): string {
 	const unscoped = Object.entries(declaration.unscoped).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -248,7 +239,6 @@ function describeDeclaration(declaration: SiteDeclaration): string {
 		unscoped,
 		connect: [...declaration.connect].sort(),
 		issues: declaration.issues,
-		...(declaration.then === null ? {} : { then: declaration.then }),
 		...(declaration.mailer === null ? {} : { mailer: declaration.mailer }),
 		...(declaration.kicks.length === 0 ? {} : { kicks: declaration.kicks }),
 		...(declaration.binds === null ? {} : { binds: declaration.binds }),
@@ -319,16 +309,10 @@ export class Invocation {
 		})
 	}
 
-	/** Where `ctx.files` runs: this invocation's transaction, bound like every handle; a query's only reads. */
-	fileSite(where: string, kind: DataKind): Omit<FileSite, 'frame'> {
+	/** The check of `ctx.files`: bound to this invocation's transaction, like every handle. */
+	fileCheck(): () => void {
 		const transaction = this.#transaction
-		return {
-			where,
-			check: boundTo(this.#frame, () => transaction.ended, 'ctx.files'),
-			session: () => transaction.session(),
-			readOnly: kind === 'mutation' && !transaction.readOnly ? null : 'a query reads only; remove files in a mutation',
-			attaches: false,
-		}
+		return boundTo(this.#frame, () => transaction.ended, 'ctx.files')
 	}
 
 	/** Where the framework writes for this site (a webhook binding): this invocation's transaction, bound like every handle. */
@@ -467,13 +451,6 @@ export function undeclaredSql(site: string, kind: DataKind, member: 'ctx.sql' | 
 /** `ctx.sql` of a job that declares `sql`, outside `ctx.transaction`: its statements run only in the attempt's fence. */
 export function jobSqlOutsideTransaction(job: string): SqlTag {
 	return refusingSql('sql_outside_transaction', `${job} runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql`)
-}
-
-/** `ctx.files` of a contract that declares no file collection: every name is refused. */
-export function noFileCollections(where: string): (collection: string) => never {
-	return (collection) => {
-		throw new ServerFault('file_collection_unknown', `${where}: ctx.files('${String(collection)}') names a collection, and the contract declares none`)
-	}
 }
 
 /** `tx.sql` of a job site that declares it: its statements run in the attempt's fenced transaction. */

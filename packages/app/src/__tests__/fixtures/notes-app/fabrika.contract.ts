@@ -3,7 +3,7 @@
 
 import { defineContract } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
-import { ById, Contact, Deleted, Import, Imported, Me, NewWorkspace, Note, NoteList, Push } from './src/schemas'
+import { ById, Deleted, Import, Imported, Me, NewWorkspace, Note, NoteList, Push } from './src/schemas'
 
 export const contract = defineContract({
 	app: 'notes',
@@ -68,21 +68,12 @@ export const contract = defineContract({
 		actions: ['notes.write'],
 		input: Push,
 	}),
-	contact: c.form('/contact', { input: Contact, appendTo: 'contact_messages' }),
 	spa: c.spa('/', { dir: 'dist/app', access: { member: true } }),
 	files: {
-		attachments: c.files({
-			owner: 'notes',
-			read: 'notes.read',
-			write: 'notes.write',
-			delete: 'notes.write',
-			maxBytes: 26214400,
-			types: ['image/png', 'application/pdf'],
-			maxPerOwner: 50,
-		}),
+		attachments: c.files({ maxBytes: 26214400, types: ['image/png', 'application/pdf'] }),
 	},
 	jobs: {
-		purgeDeleted: c.cron('0 3 * * *', { actions: ['notes.delete'], scope: 'app', limits: { timeoutMs: 600000 }, retries: 2 }),
+		purgeDeleted: c.cron('0 3 * * *', { actions: ['notes.delete'], limits: { timeoutMs: 600000 }, retries: 2 }),
 	},
 	exports: {
 		products: c.export({

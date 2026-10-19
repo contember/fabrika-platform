@@ -16,7 +16,6 @@ import {
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_PROXY_SECRET,
-	type FormMountArtifact,
 	type IamMembershipRpc,
 	isLoopbackHost,
 	type Jwks,
@@ -24,15 +23,7 @@ import {
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
-import {
-	bindScopedDatabase,
-	type DataAccess,
-	dataAccessOf,
-	type FrameworkTables,
-	frameworkTablesOf,
-	isScopedDatabase,
-	type WebhookTables,
-} from '@fabrika/db/framework'
+import { bindScopedDatabase, type DataAccess, dataAccessOf, type FrameworkTables, frameworkTablesOf, isScopedDatabase } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { EmailProviderRegistry } from '@fabrika/email'
 import { builtinEmailProviders } from '@fabrika/email/providers'
@@ -41,13 +32,12 @@ import type { FileObjectStore } from '@fabrika/platform'
 import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
-import { exportBase, FORM_CHALLENGE_FIELD, FORM_FILE_LIMITS, FORM_LIMITS, spaPrefixRowId } from '../contract/defaults'
+import { exportBase, spaPrefixRowId } from '../contract/defaults'
 import type { AnyContract, Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
 import { schemaFromShape } from '../contract/schema-from-shape'
 import type { RequestExecutionContext } from '../fetch'
-import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, type FileCollections, fileCollections } from '../files/collections'
-import { storedFileKinds } from '../files/kinds'
+import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, storedFileKinds } from '../files/kinds'
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
 import { type MailStandIn, resolveMailTransports } from '../jobs/mail'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
@@ -55,12 +45,11 @@ import { bindJobs, type ContractJobs, type HandlerErrorSink } from '../jobs/runn
 import { environmentScrubber } from '../jobs/scrub'
 import { browserConfigs } from './browser-config'
 import { createCapabilityIssuer, requestIsReadOnly } from './capability'
-import { type ChallengeFetch, type ChallengeVerifier, turnstileVerifier } from './challenge'
+import type { ChallengeFetch } from './challenge'
 import { type ConnectFetch, wireImports } from './connect'
 import {
 	ContractRuntime,
 	type Facilities,
-	type FormAdmission,
 	NO_FACILITIES,
 	type ProcedureQuery,
 	proxySecretDigest,
@@ -71,8 +60,6 @@ import {
 import { installEgressGuard, platformCall, platformFacility } from './egress'
 import type { CapturedEnvironment } from './environment'
 import { FailureReports } from './failures'
-import { ServerFault } from './faults'
-import type { SubmissionFields } from './form-admission'
 import { applicationPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
 import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration } from './invocation'
@@ -80,7 +67,7 @@ import type { ReadDirectory } from './membership'
 import { type AdmissionOptions, InFlightShare, type ProcedureAdmission, procedureAdmission, publicShareOf } from './public'
 import { readTokenKeys, type RuntimePurpose, SignedTokens } from './tokens'
 import { appUrl, readAppOrigin } from './urls'
-import { type BindableWebhook, bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
+import type { BindableWebhook } from './webhook'
 import { type WorkloadCredential, workloadCredentials, workloadSite, type WorkloadTokenSource } from './workload'
 
 /** Where the token verifier gets IAM's public keys: the IAM binding on Cloudflare, the issuer's JWKS elsewhere. */
@@ -102,10 +89,10 @@ export interface BootOptions {
 	 * authenticated hop (ADR-0022 rule 1). A secret that is set is checked either way.
 	 */
 	readonly requireProxySecret?: boolean
-	/** The object storage of the file collections, which the Bun adapter opens. Without it, a contract with files does not boot. */
+	/** The object storage of the stored files, which the Bun adapter opens. Without it, a contract with file kinds does not boot. */
 	readonly files?: FileObjectStore
 	/**
-	 * The malware scanner of the scan job of `scan: true` collections, which the Bun adapter supplies to a job run
+	 * The malware scanner of the scan job of `scan: true` file kinds, which the Bun adapter supplies to a job run
 	 * (`clamscanScanner`). Without it the scan job leaves every quarantined file quarantined and reports.
 	 */
 	readonly scanner?: FileScanner
@@ -126,15 +113,13 @@ export interface BootOptions {
 	readonly workloadTokens?: WorkloadTokenSource
 	/** What posts a report to Operations' ingest; `fetch` by default. */
 	readonly operationsFetch?: (request: Request) => Promise<Response>
-	/** What asks a form's challenge provider to verify a token; `fetch` by default. */
+	/** What asks a public procedure's challenge provider to verify a token; `fetch` by default. */
 	readonly challengeFetch?: ChallengeFetch
 	/**
-	 * The developer's own machine only (`fabrika app dev`): the token a form's challenge admits more than once, which
-	 * Turnstile's always-passing test widget hands out for every submission. Every other token stays single use.
+	 * The developer's own machine only (`fabrika app dev`): the token a challenge admits more than once, which
+	 * Turnstile's always-passing test widget hands out for every call. Every other token stays single use.
 	 */
 	readonly repeatableChallengeToken?: string
-	/** How long a form's multipart body may take to arrive; `FORM_FILE_LIMITS.timeoutMs` unless a framework test shortens it. */
-	readonly formFileTimeoutMs?: number
 	/**
 	 * The developer's own machine only (`fabrika app dev`): what a job's handler threw, which every log of a deployed
 	 * application withholds because it may carry a credential.
@@ -524,7 +509,7 @@ function asksIam(served: ServedEndpoint): boolean {
 	return creates || served.facilities.members === 'manage' || served.facilities.links.length > 0
 }
 
-/** A form and a webhook write the framework's own tables, which only `@fabrika/db`'s `scoped(tables)` reaches. */
+/** A webhook and a procedure's buckets write the framework's own tables, which only `@fabrika/db`'s `scoped(tables)` reaches. */
 function frameworkProblems(artifact: ContractArtifact, framework: FrameworkTables | null, problems: string[]): void {
 	const counted = Object.entries(artifact.procedures ?? {}).find(([, rules]) => Object.values(rules.rate).some((bucket) => bucket !== null))
 	if (counted !== undefined && framework === null) {
@@ -533,82 +518,14 @@ function frameworkProblems(artifact: ContractArtifact, framework: FrameworkTable
 		)
 	}
 	for (const [name, mount] of Object.entries(artifact.mounts)) {
-		if (mount.kind !== 'form' && mount.kind !== 'webhook') {
-			continue
-		}
-		if (framework === null) {
-			problems.push(`mount '${name}' is a ${mount.kind}, which writes through @fabrika/db: pass serve(contract, { database: scoped(tables) })`)
-			continue
-		}
-		if (mount.kind === 'form') {
-			const input = artifact.endpoints.find((row) => row.id === name)?.input
-			const submitted = submissionFieldsOf(mount)
-			const fields = (input?.type === 'object' ? Object.keys(input.fields) : []).filter((field) =>
-				field !== submitted.honeypot && !(submitted.challenge && field === FORM_CHALLENGE_FIELD)
-			)
-			// A file field's column receives the id of the file the submission carried.
-			problems.push(...framework.inboxProblems(name, [...fields, ...Object.keys(mount.files ?? {})]))
+		if (mount.kind === 'webhook' && framework === null) {
+			problems.push(`mount '${name}' is a webhook, which writes through @fabrika/db: pass serve(contract, { database: scoped(tables) })`)
 		}
 	}
 }
 
 function isCredentialed(row: EndpointRow | undefined): row is CredentialedEndpoint {
 	return row !== undefined && row.requirement !== null
-}
-
-function submissionFieldsOf(mount: FormMountArtifact): SubmissionFields {
-	return { honeypot: mount.honeypot ?? null, challenge: mount.challenge !== undefined }
-}
-
-/**
- * A form's admission from its approved mount: the declared rate or the defaults, and a challenge verified with the
- * secret the application variable it names holds. Without that variable the application does not boot.
- */
-function formAdmission(
-	name: string,
-	artifact: ContractArtifact,
-	options: BootOptions,
-	files: FileCollections | null,
-	problems: string[],
-): FormAdmission | null {
-	const mount = artifact.mounts[name]
-	if (mount?.kind !== 'form') {
-		return null
-	}
-	const fileFields = new Map(Object.entries(mount.files ?? {}))
-	for (const [field, file] of fileFields) {
-		if (files === null || !files.has(file.collection)) {
-			problems.push(`form '${name}' takes its file '${field}' into files '${file.collection}', which this runtime does not serve`)
-		}
-	}
-	if (fileFields.size > 0 && mount.challenge === undefined) {
-		problems.push(`form '${name}' takes files and declares no challenge; an anonymous upload needs a solved one`)
-	}
-	let challenge: ChallengeVerifier | null = null
-	if (mount.challenge !== undefined) {
-		const secret: unknown = options.environment.application[mount.challenge.secret]
-		if (typeof secret !== 'string' || secret.trim() === '') {
-			problems.push(
-				`form '${name}' verifies its ${mount.challenge.provider} challenge with the application variable ${mount.challenge.secret}, which is not set`,
-			)
-			return null
-		}
-		challenge = turnstileVerifier(secret.trim(), options.challengeFetch ?? ((request) => fetch(request)))
-	}
-	return Object.freeze({
-		perClient: mount.rate?.perClient ?? FORM_LIMITS.perClient,
-		// A form with files accepts fewer submissions by default: each may write its collections' maxBytes.
-		perForm: mount.rate?.perForm ?? (fileFields.size === 0 ? FORM_LIMITS.perForm : FORM_FILE_LIMITS.perForm),
-		fields: Object.freeze(submissionFieldsOf(mount)),
-		files: fileFields.size === 0 || files === null ? null : {
-			fields: fileFields,
-			collections: files,
-			bytesPerHour: mount.rate?.bytesPerHour ?? FORM_FILE_LIMITS.bytesPerHour,
-			timeoutMs: options.formFileTimeoutMs ?? FORM_FILE_LIMITS.timeoutMs,
-		},
-		challenge,
-		repeatableToken: challenge === null ? null : (options.repeatableChallengeToken ?? null),
-	})
 }
 
 /** A POST procedure's `http.query`, as the field its served endpoint carries: parsed by the approved shape. */
@@ -689,47 +606,6 @@ function bindsOf(
 	return { binds: { name, path: mount.path, scheme: mount.scheme, boundTo: mount.boundTo } }
 }
 
-/** `frameworkProblems` refused a webhook without the framework tables, so this answers only after a bug. */
-function frameworkOf(framework: FrameworkTables | null): FrameworkTables {
-	if (framework === null) {
-		throw new ServerFault('facility_unbound', 'a webhook was served without the framework tables')
-	}
-	return framework
-}
-
-/** The generated `webhooks.<name>.bind` and `.unbind` endpoints, served by the framework's own handlers. */
-function bindWebhookBindings(
-	name: string,
-	path: string,
-	rows: ReadonlyMap<string, EndpointRow>,
-	endpoints: Map<string, ServedEndpoint>,
-	tables: () => WebhookTables,
-): void {
-	const handlers = bindingHandlers(name, path, tables)
-	const bind = rows.get(`webhooks.${name}.bind`)
-	const unbind = rows.get(`webhooks.${name}.unbind`)
-	if (isCredentialed(bind)) {
-		endpoints.set(bind.id, {
-			kind: 'procedure',
-			row: bind,
-			input: webhookBindInput,
-			output: webhookBindOutput,
-			handler: handlers.bind,
-			facilities: NO_FACILITIES,
-		})
-	}
-	if (isCredentialed(unbind)) {
-		endpoints.set(unbind.id, {
-			kind: 'procedure',
-			row: unbind,
-			input: webhookUnbindInput,
-			output: webhookUnbindOutput,
-			handler: handlers.unbind,
-			facilities: NO_FACILITIES,
-		})
-	}
-}
-
 /** Each approved token purpose with the claims schema the application declared for it. */
 function runtimePurposes(contract: AnyContract, artifact: ContractArtifact): ReadonlyMap<string, RuntimePurpose> {
 	const declared = contract.surface.tokens ?? {}
@@ -763,20 +639,15 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			? null
 			: operationsReporter({ ...operations, source, scrubber, ...(options.operationsFetch === undefined ? {} : { fetch: options.operationsFetch }) })
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
-	// A file collection's dimension is located through its own table and its owner's.
-	for (const name of Object.keys(artifact.files)) {
-		owned.add(`file:${name}`)
-	}
 	const containers = containersOf(artifact)
 	unservable(artifact, options.assets, owned, containers, problems)
 	// This runtime's own: what another `boot` call mints, application code's included, its stores refuse.
 	const issuer = createCapabilityIssuer()
-	const files = fileCollections(artifact, app.database, objects, issuer.authority, issuer.mint, problems)
 	const fileKinds = storedFileKinds(artifact, app.database, objects, problems)
 	const bound = contractDatabase(app.database, options.database, issuer.authority, problems)
 	const framework = bound?.framework ?? null
 	frameworkProblems(artifact, framework, problems)
-	const database = files === null || bound === null ? (bound?.database ?? null) : files.locating(bound.database)
+	const database = bound?.database ?? null
 	const verifier = new TokenVerifier({ getJwks: () => platformCall(() => options.iam.getJwks()), issuer: variables.issuer })
 	const workloads = workloadCredentials({
 		artifact,
@@ -875,20 +746,11 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 						connect: siteConnect(connect.get(id), bound.declaration),
 						site: servedSite(procedure.type, bound),
 						...egressOf(bound),
-						...(bound.declaration?.then == null ? {} : { then: bound.declaration.then }),
 						...bindsOf(id, bound.declaration, artifact, problems),
 						...admissionOf(id, artifact, options, problems),
 						...queryOf(id, artifact),
 					})
 				}
-			}
-		} else if (mount.kind === 'form') {
-			const row = rows.get(name)
-			const admission = formAdmission(name, artifact, options, files, problems)
-			const approved = artifact.mounts[name]
-			const then = approved?.kind === 'form' ? (approved.then ?? null) : null
-			if (row !== undefined && admission !== null) {
-				endpoints.set(name, { kind: 'form', row, form: name, input: mount.input, admission, then })
 			}
 		} else if (mount.kind === 'webhook') {
 			declared.add(name)
@@ -912,12 +774,8 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 					credential,
 					site: bound.site ? (bound.declaration ?? undefined) : undefined,
 				})
-				bindWebhookBindings(name, mount.path, rows, endpoints, () => frameworkOf(framework).webhooks)
 			}
 		}
-	}
-	for (const [id, served] of files?.endpoints(rows, problems) ?? []) {
-		endpoints.set(id, served)
 	}
 	const membership = membershipRpc === undefined ? null : new IamMembership(membershipRpc, variables.iamAppId)
 	const jobs = bindJobs({
@@ -930,34 +788,21 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		credentials: workloads,
 		mint: issuer.mint,
 		data: bound?.data ?? null,
-		files,
 		fileKinds,
-		frameworkJobs: files === null && fileKinds === null ? [] : [
-			...(files?.scans === true || fileKinds?.scans === true
+		frameworkJobs: fileKinds === null ? [] : [
+			...(fileKinds.scans
 				? [{
 					name: FILE_SCAN_JOB,
 					schedule: FILE_SCAN_SCHEDULE,
 					timeoutMs: SCAN_LIMITS.jobTimeoutMs,
-					run: async (reporter: OperationsReporter, signal: AbortSignal) => {
-						await files?.scanPass(options.scanner ?? null, reporter, signal)
-						await fileKinds?.scanPass(options.scanner ?? null, reporter, signal)
-					},
+					run: (reporter: OperationsReporter, signal: AbortSignal) => fileKinds.scanPass(options.scanner ?? null, reporter, signal),
 				}]
 				: []),
 			{
 				name: FILE_SWEEP_JOB,
 				schedule: FILE_SWEEP_SCHEDULE,
 				timeoutMs: FILE_SWEEP_TIMEOUT_MS,
-				// Each sweep runs whatever the other did; the run fails after both when one did.
-				run: async (_reporter, signal) => {
-					const failures: unknown[] = []
-					for (const sweep of [files, fileKinds]) {
-						await sweep?.sweep(signal).catch((error: unknown) => failures.push(error))
-					}
-					if (failures.length > 0) {
-						throw failures[0]
-					}
-				},
+				run: (_reporter, signal) => fileKinds.sweep(signal),
 			},
 		],
 		membership,
@@ -1042,7 +887,6 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		mint: issuer.mint,
 		capabilities: issuer.authority,
 		data,
-		files,
 		fileKinds,
 		failures: new FailureReports(reporterFor('fabrika.requests')),
 		kick: jobs.kick,

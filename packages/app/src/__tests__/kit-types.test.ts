@@ -42,32 +42,15 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'29-members-without-the-list-action.ts': "listing the members of org needs the action 'crm.read'; get(principalId) checks one",
 	'30-attachment-handler-returns-no-rows.ts': 'an attachment handler returns its rows: an array of its row schema, with nothing around it',
 	'31-job-links-without-issues.ts': "declare issues: '<link mount>' on this job to issue its share links",
-	'32-form-kicks-an-unknown-job.ts': "then names a job of the contract's jobs section",
-	// The compiler lists a union's members in no fixed order.
-	'33-form-field-that-is-no-inbox-column.ts':
-		'the inbox registrations has no column fullName: each input and file field is named like its column (columns: ',
 	'34-unscoped-write-of-a-reference-table.ts':
 		"countries is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { countries: 'read' }",
-	'35-unscoped-write-of-an-inbox.ts': "registrations is a form's inbox, which only its form writes: declare unscoped: { registrations: 'read' }",
-	'36-widened-honeypot/contract.ts': "honeypot names the field the page hides as a literal: honeypot: '<field>'",
-	'37-widened-inbox-name.ts': "appendTo names the form's inbox table as a literal: appendTo: '<inbox table>'",
-	'38-append-to-a-table-that-is-no-inbox.ts': 'candidates is not an inbox table of src/db/tables.ts (inboxes: ',
 	'39-unscoped-union-mode-of-a-reference-table.ts':
 		"countries is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { countries: 'read' }",
-	'40-unscoped-optional-mode-of-an-inbox.ts':
-		"registrations is a form's inbox, which only its form writes: declare unscoped: { registrations: 'read' }",
 	'41-unscoped-get-of-a-reference-table.ts': 'countries is a reference table, which has no key: read it with list',
-	'42-unscoped-get-of-an-inbox.ts': "registrations is a form's inbox, which has no key: read it with list",
 	'43-member-label-without-a-labels-directory.ts': "'member.label' is possibly 'null'.",
-	'44-remove-files-in-a-query.ts': 'a query reads only; remove files in a mutation',
-	'45-remove-files-outside-a-job-transaction.ts': 'a job removes files inside ctx.transaction((tx) => …), as tx.files',
-	'46-then-on-a-query.ts': 'a query kicks no job: declare then on a mutation',
-	'47-then-not-a-literal.ts': "then names one cron job, as a literal: then: 'mailing'",
 	'48-job-mail-without-mailer.ts': "declare mailer: 'installation' or 'own' on this job to send mail",
 	'49-mail-in-an-endpoint.ts': 'an endpoint sends no mail: write an outbox row and kick a job that declares mailer',
 	'50-mail-in-a-webhook.ts': 'an endpoint sends no mail: write an outbox row and kick a job that declares mailer',
-	'51-form-file-that-is-no-inbox-column.ts':
-		'the inbox registrations has no column selfie: each input and file field is named like its column (columns: ',
 	'52-app-capability-in-a-bound-webhook.ts': 'a webhook bound to a dimension acts on its bound value: use ctx.refs and ctx.db.on(ref)',
 	'53-target-of-several-capabilities.ts': 'an endpoint of several capabilities binds each: ctx.db.on(ctx.capabilities.<name>), .in or .over',
 	'54-kick-an-undeclared-job.ts': `Argument of type '"digest"' is not assignable to parameter of type '"close"'`,
@@ -79,15 +62,12 @@ const EXPECTED: Readonly<Record<string, string>> = {
 
 /**
  * The compiler elaborates these through the declaration's own types, so each is held to its line and text only: an
- * optional field an annotation allows, a form's `then`, which only the whole surface can check, and an options or
- * `unscoped` object typed apart from its call, whose whole type the compiler prints.
+ * optional field an annotation allows, and an `unscoped` object typed apart from its call, whose whole type the
+ * compiler prints.
  */
 const ELABORATED = [
 	'11-declaration-only-in-a-type.ts',
-	'32-form-kicks-an-unknown-job.ts',
-	'36-widened-honeypot/contract.ts',
 	'39-unscoped-union-mode-of-a-reference-table.ts',
-	'40-unscoped-optional-mode-of-an-inbox.ts',
 ]
 
 describe('the staged kit', () => {

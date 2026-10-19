@@ -2,7 +2,7 @@
 // once described. `buildArtifact` reads only this shape, so a reader that produces it from source (B1) and
 // `compileContract` normalize through the same code.
 
-import type { ChallengeProvider, CspSource, MailTemplate, RpcCaller } from '@fabrika/auth-core'
+import type { CspSource, MailTemplate, RpcCaller } from '@fabrika/auth-core'
 
 export interface ContractDeclaration<S> {
 	readonly app: string
@@ -10,7 +10,7 @@ export interface ContractDeclaration<S> {
 	readonly actions: Readonly<Record<string, string>>
 	readonly roles: Readonly<Record<string, RoleDeclaration>>
 	readonly mounts: Readonly<Record<string, MountDeclaration<S>>>
-	readonly files: Readonly<Record<string, FilesDeclaration | FileKindDeclaration>>
+	readonly files: Readonly<Record<string, FileKindDeclaration>>
 	readonly jobs: Readonly<Record<string, CronDeclaration>>
 	readonly exports: Readonly<Record<string, ExportDeclaration<S>>>
 	readonly imports: Readonly<Record<string, ImportDeclaration>>
@@ -41,7 +41,7 @@ export type SurfaceSection = (typeof SURFACE_SECTIONS)[number]
  * records every other key of its options in `unknownOptions`, so an option can never replace what the builder set;
  * `buildArtifact` refuses a non-empty `unknownOptions`. A reader of source fills it the same way.
  */
-export type Builder = 'procedure' | 'rpc' | 'link' | 'spa' | 'form' | 'webhook' | 'files' | 'fileKind' | 'cron' | 'export' | 'attachment'
+export type Builder = 'procedure' | 'rpc' | 'link' | 'spa' | 'webhook' | 'fileKind' | 'cron' | 'export' | 'attachment'
 
 export interface BuilderFields {
 	readonly options: readonly string[]
@@ -53,11 +53,9 @@ export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
 	rpc: { options: ['callers'], owned: ['kind', 'prefix', 'procedures'] },
 	link: { options: ['spa', 'dimension', 'grants', 'issuedBy', 'maxDays', 'procedures'], owned: ['kind', 'prefix'] },
 	spa: { options: ['dir', 'access', 'public'], owned: ['kind', 'prefix'] },
-	form: { options: ['input', 'appendTo', 'maxBytes', 'rate', 'honeypot', 'challenge', 'then', 'crossOrigin', 'files'], owned: ['kind', 'path'] },
 	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'limits'], owned: ['kind', 'path'] },
-	files: { options: ['owner', 'read', 'write', 'delete', 'maxBytes', 'types', 'maxPerOwner', 'link', 'scan'], owned: ['kind'] },
 	fileKind: { options: ['types', 'maxBytes', 'scan'], owned: ['kind'] },
-	cron: { options: ['actions', 'scope', 'limits', 'retries'], owned: ['kind', 'schedule'] },
+	cron: { options: ['actions', 'limits', 'retries'], owned: ['kind', 'schedule'] },
 	export: { options: ['version', 'consumers', 'audience', 'procedures'], owned: ['kind'] },
 	attachment: { options: ['format', 'filename', 'row', 'maxBytes', 'maxRows'], owned: [] },
 }
@@ -72,7 +70,7 @@ export function unknownOptions(options: object, builder: Builder): string[] {
  * The off-road fields a site of the staged kit declares beside its builder's options. The kit copies them into
  * `declared`; `buildArtifact` checks which of them the site may carry.
  */
-export const DECLARED_FIELDS = ['sql', 'unscoped', 'connect', 'issues', 'then', 'mailer', 'kicks', 'binds', 'signs', 'egress'] as const
+export const DECLARED_FIELDS = ['sql', 'unscoped', 'connect', 'issues', 'mailer', 'kicks', 'binds', 'signs', 'egress'] as const
 
 /** The keys of a kit site's `options` that are neither `builder`'s option fields nor a declared field. */
 export function kitUnknownOptions(options: object, builder: Builder): string[] {
@@ -80,7 +78,7 @@ export function kitUnknownOptions(options: object, builder: Builder): string[] {
 }
 
 /**
- * The reach a site of the staged kit declares, as written (`sql`, `unscoped`, `connect`, `issues`, `then`, `mailer`, `kicks`, `binds`, `signs`, `egress`): only the fields
+ * The reach a site of the staged kit declares, as written (`sql`, `unscoped`, `connect`, `issues`, `mailer`, `kicks`, `binds`, `signs`, `egress`): only the fields
  * its options carry. Unchecked here: the static reader copies what the source holds, and `buildArtifact` parses it.
  */
 export interface DeclaredDeclaration {
@@ -88,7 +86,6 @@ export interface DeclaredDeclaration {
 	readonly unscoped?: unknown
 	readonly connect?: unknown
 	readonly issues?: unknown
-	readonly then?: unknown
 	readonly mailer?: unknown
 	readonly kicks?: unknown
 	readonly binds?: unknown
@@ -103,7 +100,6 @@ export function declaredOf(options: DeclaredDeclaration): DeclaredDeclaration {
 		...(options.unscoped === undefined ? {} : { unscoped: options.unscoped }),
 		...(options.connect === undefined ? {} : { connect: options.connect }),
 		...(options.issues === undefined ? {} : { issues: options.issues }),
-		...(options.then === undefined ? {} : { then: options.then }),
 		...(options.mailer === undefined ? {} : { mailer: options.mailer }),
 		...(options.kicks === undefined ? {} : { kicks: options.kicks }),
 		...(options.binds === undefined ? {} : { binds: options.binds }),
@@ -234,7 +230,6 @@ export type MountDeclaration<S> =
 	| LinkMountDeclaration<S>
 	| SpaMountDeclaration
 	| HealthMountDeclaration
-	| FormMountDeclaration<S>
 	| WebhookMountDeclaration<S>
 
 export interface RpcMountDeclaration<S> extends OptionsRecord {
@@ -272,32 +267,6 @@ export interface HealthMountDeclaration {
 	readonly path: string
 }
 
-export interface FormMountDeclaration<S> extends OptionsRecord {
-	readonly kind: 'form'
-	readonly path: string
-	readonly input: S
-	readonly appendTo: string
-	readonly maxBytes?: number
-	/**
-	 * Submissions per minute from one client and accepted in all, and the bytes a form with files writes per hour;
-	 * `FORM_LIMITS` and `FORM_FILE_LIMITS` hold the defaults.
-	 */
-	readonly rate?: { readonly perClient?: number; readonly perForm?: number; readonly bytesPerHour?: number }
-	/** An input field that must stay empty. */
-	readonly honeypot?: string
-	/**
-	 * A challenge verified on the server; `secret` names the application variable that holds the provider's secret,
-	 * `siteKey` the one that holds the widget's public site key.
-	 */
-	readonly challenge?: { readonly provider: ChallengeProvider; readonly secret: string; readonly siteKey?: string }
-	/** The cron job of the contract that each accepted submission kicks. */
-	readonly then?: string
-	/** `true` (the environment's listed origins) or `'*'` (any origin), as written; `buildArtifact` refuses anything else. */
-	readonly crossOrigin?: unknown
-	/** The file fields, by name: `{ collection, required? }` each, as written; `buildArtifact` checks them. */
-	readonly files?: unknown
-}
-
 export interface WebhookMountDeclaration<S> extends OptionsRecord {
 	readonly kind: 'webhook'
 	readonly path: string
@@ -311,21 +280,6 @@ export interface WebhookMountDeclaration<S> extends OptionsRecord {
 	readonly limits?: unknown
 	/** What a webhook of the staged kit declares off the paved road. */
 	readonly declared?: unknown
-}
-
-export interface FilesDeclaration extends OptionsRecord {
-	readonly kind: 'files'
-	readonly owner: string
-	readonly read: string
-	readonly write: string
-	readonly delete: string
-	readonly maxBytes: number
-	readonly types: readonly string[]
-	readonly maxPerOwner?: number
-	/** `true`: every link mount bound to the owner's dimension serves the files; a list: the named link mounts only. */
-	readonly link?: boolean | readonly string[]
-	/** Every upload waits `quarantined` until the scan pass gives it a clean verdict. */
-	readonly scan?: boolean
 }
 
 /**
@@ -344,8 +298,6 @@ export interface CronDeclaration extends OptionsRecord {
 	readonly kind: 'cron'
 	readonly schedule: string
 	readonly actions: readonly string[]
-	/** A dimension, or `app` for the whole application. */
-	readonly scope: string
 	/** `{ timeoutMs? }`, as written; `buildArtifact` checks it against its ceiling. */
 	readonly limits?: unknown
 	readonly retries?: number

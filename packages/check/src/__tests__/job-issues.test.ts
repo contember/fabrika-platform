@@ -16,13 +16,13 @@ import { KIT_ROOT, readTree } from './colocated-helpers'
 
 const JOBS = `import { app } from './app-kit'
 
-export const close = app.cron('* * * * *', { actions: ['crm.read', 'deals.share'], scope: 'app', issues: 'shared' })
+export const close = app.cron('* * * * *', { actions: ['crm.read', 'deals.share'], issues: 'shared' })
 	.handle(async ({ ctx }) => {
 		await ctx.links.issue(await ctx.ref('deals.share', 'deal', 'id'), { mount: 'shared', days: 3 })
 	})
 `
 
-const close = app.cron('* * * * *', { actions: ['crm.read', 'deals.share'], scope: 'app', issues: 'shared' }).handle(async () => {})
+const close = app.cron('* * * * *', { actions: ['crm.read', 'deals.share'], issues: 'shared' }).handle(async () => {})
 
 const evaluated = app.contract((c) => ({
 	api: c.rpc('/api', { deals, companies, ledgers }),

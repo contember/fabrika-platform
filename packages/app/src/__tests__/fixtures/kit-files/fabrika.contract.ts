@@ -1,31 +1,15 @@
-// A kit application whose handlers and jobs reach its file collections through `ctx.files`: `documents` scans and
-// serves link holders, `attachments` does neither.
+// A kit application whose notes hold files in two file columns: `documents` scans, `attachments` does not. Its
+// handlers and jobs reach the files through the rows that reference them, and `ctx.files.open`.
 
 import { app } from './src/app-kit'
-import { erase, mail, notes, peek, share } from './src/notes'
+import { erase, mail, notes, share } from './src/notes'
 
 export const contract = app.contract((c) => ({
 	api: c.rpc('/api', { notes }),
 	share,
 	files: {
-		documents: c.files({
-			owner: 'notes',
-			read: 'notes.write',
-			write: 'notes.write',
-			delete: 'notes.delete',
-			maxBytes: 4096,
-			types: ['application/pdf'],
-			scan: true,
-			link: true,
-		}),
-		attachments: c.files({
-			owner: 'notes',
-			read: 'notes.read',
-			write: 'notes.write',
-			delete: 'notes.delete',
-			maxBytes: 4096,
-			types: ['application/pdf', 'text/plain'],
-		}),
+		documents: c.files({ maxBytes: 4096, types: ['application/pdf'], scan: true }),
+		attachments: c.files({ maxBytes: 4096, types: ['application/pdf', 'text/plain'] }),
 	},
-	jobs: { mail, peek, erase },
+	jobs: { mail, erase },
 }))

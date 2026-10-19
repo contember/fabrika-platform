@@ -236,7 +236,7 @@ describe.skipIf(accessPostgres === null)('the endpoint access kit over a kit app
 const mailed: string[] = []
 const Pending = z.strictObject({ id: z.string(), body: z.string() })
 
-const notify = outboxApp.cron('* * * * *', { actions: ['outbox.read'], scope: 'app', sql: 'write', mailer: 'installation' }).handle(
+const notify = outboxApp.cron('* * * * *', { actions: ['outbox.read'], sql: 'write', mailer: 'installation' }).handle(
 	async ({ ctx }) => {
 		const pending = await ctx.transaction((tx) => tx.sql(Pending)`delete from outbox returning id::text, body`)
 		for (const row of pending) {
@@ -247,10 +247,11 @@ const notify = outboxApp.cron('* * * * *', { actions: ['outbox.read'], scope: 'a
 )
 
 const queue = outboxApp.group({ callers: ['human'] }, (r) => ({
-	enqueue: r.mutation({ input: Message, output: Queued, access: { action: 'outbox.write', app: true }, sql: 'write', then: 'notify' })
+	enqueue: r.mutation({ input: Message, output: Queued, access: { action: 'outbox.write', app: true }, sql: 'write', kicks: ['notify'] })
 		.handle(async ({ input, ctx }) => {
 			const id = Bun.randomUUIDv7()
 			await ctx.sql(Queued)`insert into outbox (id, body) values (${id}, ${input.body}) returning id`
+			ctx.kick('notify')
 			return { id }
 		}),
 }))

@@ -41,8 +41,7 @@ export class ContractSourceError extends Error {
  * The contract artifact of an application, read from the text of its files (path relative to the application root →
  * text): `fabrika.contract.ts`, every module it imports and the configuration that applies to them (`readContract`),
  * and `src/db/tables.ts` with the modules it imports (`readTablesDefinition`). `tables`, when given, replaces what
- * `src/db/tables.ts` declares: its parsed policies, or the artifact form of each policy, which names no inbox's
- * columns, so a form's fields are not checked against them.
+ * `src/db/tables.ts` declares: its parsed policies, or the artifact form of each policy.
  *
  * Throws `ContractSourceError` for a form the reader refuses, and `ContractError` with the same problems
  * `compileContract` reports for a contract that does not compile.

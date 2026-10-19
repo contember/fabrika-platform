@@ -31,9 +31,9 @@ export const contract = defineContract({
 	}),
 	health: c.health('/healthz'),
 	jobs: {
-		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', limits: { timeoutMs: 600000 }, retries: 2 }),
-		sweep: c.cron('*/15 * * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', limits: { timeoutMs: 60000 } }),
-		flaky: c.cron('0 * * * *', { actions: ['notes.read'], scope: 'app', retries: 1 }),
+		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], limits: { timeoutMs: 600000 }, retries: 2 }),
+		sweep: c.cron('*/15 * * * *', { actions: ['notes.read', 'notes.delete'], limits: { timeoutMs: 60000 } }),
+		flaky: c.cron('0 * * * *', { actions: ['notes.read'], retries: 1 }),
 	},
 }))
 
@@ -59,11 +59,11 @@ export const startingContract = defineContract({
 	}),
 	health: c.health('/healthz'),
 	jobs: {
-		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', limits: { timeoutMs: 600000 }, retries: 2 }),
+		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], limits: { timeoutMs: 600000 }, retries: 2 }),
 	},
 }))
 
-/** A contract with a job and a file collection, so `boot` needs the object storage the platform wrote. */
+/** A contract with a job and a file kind, so `boot` needs the object storage the platform wrote. */
 export const filesContract = defineContract({
 	app: 'notes',
 	dimensions: {
@@ -83,10 +83,10 @@ export const filesContract = defineContract({
 		notes: { list: c.query({ output: NoteList, access: { action: 'notes.read', over: 'workspace' } }) },
 	}),
 	files: {
-		attachments: c.files({ owner: 'notes', read: 'notes.read', write: 'notes.write', delete: 'notes.delete', maxBytes: 1024, types: ['text/plain'] }),
+		attachments: c.files({ maxBytes: 1024, types: ['text/plain'] }),
 	},
 	health: c.health('/healthz'),
 	jobs: {
-		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', limits: { timeoutMs: 600000 }, retries: 2 }),
+		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], limits: { timeoutMs: 600000 }, retries: 2 }),
 	},
 }))

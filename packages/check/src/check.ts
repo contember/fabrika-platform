@@ -31,14 +31,7 @@ import { checkClientIdentity } from './rules/identity'
 import { checkGeneratedTests } from './rules/isolation'
 import { checkJsonStrings } from './rules/json'
 import { checkLiteralGraph } from './rules/literal'
-import {
-	checkConflictIndexes,
-	checkFileColumnMigrations,
-	checkMigrationNames,
-	checkScanMigrations,
-	type ConflictInsert,
-	type FileColumn,
-} from './rules/migrations'
+import { checkConflictIndexes, checkFileColumnMigrations, checkMigrationNames, type ConflictInsert, type FileColumn } from './rules/migrations'
 import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
 import { checkRuntimeNode, crossAppFetchMessage, rawSqlBindings } from './rules/runtime'
@@ -260,10 +253,6 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	findings.push(...(await checkGeneratedTests(tree.files, literal.length === 0 && trust.length === 0 && contractRead.length === 0)))
 	findings.push(...checkMigrationNames(checkedPaths))
 	const read = contract !== undefined && literal.length === 0 && contractRead.length === 0 ? readContractModule(graph) : undefined
-	if (read?.ok === true) {
-		const scanning = Object.entries(read.contract.surface.files ?? {}).filter(([, collection]) => collection.scan === true).map(([name]) => name)
-		findings.push(...checkScanMigrations(tree.files, scanning))
-	}
 	const declaredTables = tables !== undefined && literal.length === 0 ? readTablesValue(graph, tables, new ReaderProblems()) : null
 	findings.push(...contractDependentFindings(dependent, read?.ok === true ? compiledReach(read.contract, declaredTables) : null))
 	if (declaredTables !== null) {

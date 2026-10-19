@@ -1,8 +1,7 @@
-// Membership, share links and the anonymous kinds through `boot`'s real pipeline, on a REAL Postgres (the share
-// link's chain re-check, the form's inbox and the webhook tables need it); IAM is a recording stand-in. Skips cleanly
-// when FABRIKA_TEST_POSTGRES_URL is unset (see scoped-database.test.ts).
+// Membership, share links and a GitHub webhook through `boot`'s real pipeline, on a REAL Postgres (the share link's
+// chain re-check and the webhook tables need it); IAM is a recording stand-in. Skips cleanly when
+// FABRIKA_TEST_POSTGRES_URL is unset (see scoped-database.test.ts).
 
-import { FORM_LIMITS } from '@fabrika/app/contract'
 import { type ContractApp, LINK_BOOTSTRAP_SCRIPT, type SpaAssets, type WorkloadTokenSource } from '@fabrika/app/implement'
 import { DELEGATION_HEADER, type PermissionEntry } from '@fabrika/auth-core'
 import { applicationSchema, Database } from '@fabrika/db'
@@ -10,10 +9,23 @@ import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
-import { bootApp, errorType, grant, linkToken, resultOf, send, type Sent, token, workloadTokensFor } from './fixtures/implement/harness'
+import {
+	bootApp,
+	environment,
+	errorType,
+	frameworkEnvFor,
+	grant,
+	linkToken,
+	resultOf,
+	send,
+	type Sent,
+	token,
+	workloadTokensFor,
+} from './fixtures/implement/harness'
 import { RecordingMembership } from './fixtures/multi-tenant/iam'
 import { migration } from './fixtures/multi-tenant/migration'
 import { multiTenantApp, type Seen } from './fixtures/multi-tenant/src/app'
+import { githubApp } from './fixtures/multi-tenant/src/github'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR] ?? ''
@@ -53,7 +65,7 @@ async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 	}
 }
 
-/** A fresh boot over the shared schema: its own data layer, IAM stand-in and webhook record; form buckets are the schema's. */
+/** A fresh boot over the shared schema: its own data layer, IAM stand-in and webhook record. */
 function start(workloadTokens?: WorkloadTokenSource): { app: ContractApp; iam: RecordingMembership; seen: Seen } {
 	const iam = new RecordingMembership()
 	const seen: Seen = { pushes: [], keys: [], failNextPush: false }
@@ -248,44 +260,22 @@ describe.skipIf(!hasPostgres)('share links', () => {
 	})
 })
 
-describe.skipIf(!hasPostgres)('c.form', () => {
-	const json = { 'Content-Type': 'application/json' }
+describe.skipIf(!hasPostgres)('a GitHub webhook bound by a mutation that declares binds', () => {
+	/** A boot of the kit application that binds the webhook; `tokens` stands in for IAM's exchange of its workload keys. */
+	function startHook(tokens?: (app: ReturnType<typeof githubApp>['implementation']) => WorkloadTokenSource): { app: ContractApp; seen: Seen } {
+		const seen: Seen = { pushes: [], keys: [], failNextPush: false }
+		const connection = Database.postgres({ url, schema, max: 2 })
+		opened.push(connection)
+		const { implementation, variables } = githubApp(seen)
+		const app = bootApp(implementation, {
+			database: connection,
+			membership: new RecordingMembership(),
+			environment: environment({ ...frameworkEnvFor(implementation), ...variables }),
+			workloadTokens: tokens?.(implementation) ?? workloadTokensFor(implementation),
+		})
+		return { app, seen }
+	}
 
-	test('appends one row of the declared fields and answers a constant: a form cannot read', async () => {
-		const { app } = start()
-		const sent = await send(app, '/contact', { body: { email: 'reader@example.com', body: 'hello there' }, headers: json })
-		expect(sent.status).toBe(200)
-		expect(sent.body).toEqual({ result: { received: true } })
-		expect(await count('contact_messages', `email = 'reader@example.com' and body = 'hello there'`)).toBe(1)
-	})
-
-	test('an undeclared field, another content type and a body over the limit write nothing', async () => {
-		const { app } = start()
-		const before = await count('contact_messages')
-		expect((await send(app, '/contact', { body: { email: 'a@example.com', body: 'x', admin: true }, headers: json })).status).toBe(400)
-		expect((await send(app, '/contact', { body: { email: 'a@example.com', body: 'x' }, headers: { 'Content-Type': 'text/plain' } })).status).toBe(400)
-		const large = await send(app, '/contact', { body: { email: 'a@example.com', body: 'x'.repeat(600) }, headers: json })
-		expect(large.status).toBe(413)
-		expect(await count('contact_messages')).toBe(before)
-	})
-
-	test('admits FORM_LIMITS.perClient requests a minute from one client, then answers 429', async () => {
-		const { app } = start()
-		// The bucket is the database's minute; eleven requests started in its last seconds would span two.
-		const [row] = await admin((sql) => sql.unsafe('select extract(second from now())::float8 as second'))
-		if (Number(row?.second) > 55) {
-			await Bun.sleep((61 - Number(row?.second)) * 1000)
-		}
-		const statuses: number[] = []
-		for (let index = 0; index <= FORM_LIMITS.perClient; index++) {
-			const headers = { ...json, 'X-Fabrika-Client-Ip': '203.0.113.99' }
-			statuses.push((await send(app, '/contact', { body: { email: 'burst@example.com', body: `${index}` }, headers })).status)
-		}
-		expect(statuses).toEqual([...Array.from({ length: FORM_LIMITS.perClient }, () => 200), 429])
-	}, 20_000)
-})
-
-describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 	const hook = { 'Content-Type': 'application/json' }
 	const push = (repository: number, message: string) => ({
 		ref: 'refs/heads/main',
@@ -296,7 +286,7 @@ describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 
 	async function bind(app: ContractApp, account: string): Promise<{ id: string; url: string; secret: string }> {
 		const manager = await token('user', inW1('notes.admin'))
-		const result = resultOf(await send(app, '/api/webhooks.github.bind', { token: manager, body: { scope: 'w1', account }, headers: PROXY }))
+		const result = resultOf(await send(app, '/api/webhooks.connect', { token: manager, body: { workspaceId: 'w1', account }, headers: PROXY }))
 		if (typeof result !== 'object' || result === null || !('id' in result) || !('url' in result) || !('secret' in result)) {
 			throw new Error('no binding')
 		}
@@ -310,17 +300,17 @@ describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 	}
 
 	test('a member who manages the workspace binds an account; the framework generates the secret and the URL', async () => {
-		const { app } = start()
+		const { app } = startHook()
 		const binding = await bind(app, 'repository:42')
 		expect(binding.url).toBe(`/hooks/github/${binding.id}`)
 		expect(binding.secret).toMatch(/^[0-9a-f]{64}$/)
 		const editor = await token('user', inW1('notes.write', 'notes.read'))
-		const refused = await send(app, '/api/webhooks.github.bind', { token: editor, body: { scope: 'w1', account: 'repository:42' }, headers: PROXY })
+		const refused = await send(app, '/api/webhooks.connect', { token: editor, body: { workspaceId: 'w1', account: 'repository:42' }, headers: PROXY })
 		expect(refused.status).toBe(403)
 	})
 
 	test('a delivery runs once with a Ref of the bound workspace and only the declared fields; a replay is ignored', async () => {
-		const { app, seen } = start()
+		const { app, seen } = startHook()
 		const binding = await bind(app, 'repository:42')
 		const delivered = await deliver(app, binding.url, binding.secret, push(42, 'first push'), 'd-1')
 		expect(delivered.status).toBe(200)
@@ -334,7 +324,7 @@ describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 	})
 
 	test('a replay with only its unsigned delivery header changed is still a replay', async () => {
-		const { app, seen } = start()
+		const { app, seen } = startHook()
 		const binding = await bind(app, 'repository:42')
 		expect((await deliver(app, binding.url, binding.secret, push(42, 'header replay'), 'd-original')).status).toBe(200)
 		expect((await deliver(app, binding.url, binding.secret, push(42, 'header replay'), 'd-forged')).status).toBe(200)
@@ -348,7 +338,7 @@ describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 	})
 
 	test('a delivery signed for another binding is refused, and so is one naming another account', async () => {
-		const { app, seen } = start()
+		const { app, seen } = startHook()
 		const ours = await bind(app, 'repository:42')
 		const theirs = await bind(app, 'repository:42')
 		expect((await deliver(app, ours.url, theirs.secret, push(42, 'forged'), 'd-2')).status).toBe(401)
@@ -359,11 +349,10 @@ describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 
 	test("a delivery IAM gives no authority to is a 503, not recorded, so GitHub's redelivery runs it", async () => {
 		let refusing = true
-		const signing = workloadTokensFor(multiTenantApp({ pushes: [], keys: [], failNextPush: false }))
-		const source: WorkloadTokenSource = {
-			exchange: (input) => refusing ? Promise.resolve({ ok: false, reason: 'invalid_key' }) : signing.exchange(input),
-		}
-		const { app, seen } = start(source)
+		const { app, seen } = startHook((implementation) => {
+			const signing = workloadTokensFor(implementation)
+			return { exchange: (input) => refusing ? Promise.resolve({ ok: false, reason: 'invalid_key' }) : signing.exchange(input) }
+		})
 		const binding = await bind(app, 'repository:42')
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {
@@ -379,7 +368,9 @@ describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 	})
 
 	test("a declared action the webhook's token does not carry is a 503, and its handler does not run", async () => {
-		const { app, seen } = start(workloadTokensFor(multiTenantApp({ pushes: [], keys: [], failNextPush: false }), () => []))
+		const { app, seen } = startHook((implementation) =>
+			workloadTokensFor(implementation, (workload) => workload.kind === 'webhook' ? [] : workload.actions)
+		)
 		const binding = await bind(app, 'repository:42')
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {
@@ -391,8 +382,8 @@ describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 		expect(await count('notes', `title = 'narrowed'`)).toBe(0)
 	})
 
-	test('a handler runs at least once: a run that failed after its write runs again with the same key, a success never', async () => {
-		const { app, seen } = start()
+	test('a run that failed after its write rolls it back and runs again with the same key; a success never runs again', async () => {
+		const { app, seen } = startHook()
 		const binding = await bind(app, 'repository:42')
 		seen.failNextPush = true
 		const log = spyOn(console, 'error').mockImplementation(() => {})
@@ -405,28 +396,25 @@ describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 		} finally {
 			log.mockRestore()
 		}
-		// The failed run's write stays: the handler is at-least-once, and the key is what makes its writes idempotent.
-		expect(await count('notes', `title = 'retried'`)).toBe(1)
+		// The failed run's write is rolled back with its transaction.
+		expect(await count('notes', `title = 'retried'`)).toBe(0)
 		expect((await deliver(app, binding.url, binding.secret, push(42, 'retried'), 'd-5-redelivered')).status).toBe(200)
 		expect(seen.keys).toHaveLength(2)
 		expect(seen.keys[1]).toBe(seen.keys[0])
 		expect(seen.keys[0]).toMatch(/^sha256:[0-9a-f]{64}$/)
-		expect(await count('notes', `title = 'retried'`)).toBe(2)
+		expect(await count('notes', `title = 'retried'`)).toBe(1)
 		expect((await deliver(app, binding.url, binding.secret, push(42, 'retried'), 'd-5-again')).status).toBe(200)
 		expect(seen.keys).toHaveLength(2)
 	})
 
 	test('unbinding removes the binding from its own workspace only', async () => {
-		const { app } = start()
+		const { app } = startHook()
 		const binding = await bind(app, 'installation:7')
 		const manager = await token('user', [...inW1('notes.admin'), grant('notes.admin', { type: 'workspace', value: 'w2' })])
-		const elsewhere = await send(app, '/api/webhooks.github.unbind', { token: manager, body: { scope: 'w2', id: binding.id }, headers: PROXY })
-		expect(elsewhere.status).toBe(404)
-		expect(resultOf(await send(app, '/api/webhooks.github.unbind', { token: manager, body: { scope: 'w1', id: binding.id }, headers: PROXY }))).toEqual(
-			{
-				id: binding.id,
-			},
-		)
+		const unbind = (workspaceId: string) =>
+			send(app, '/api/webhooks.disconnect', { token: manager, body: { workspaceId, id: binding.id }, headers: PROXY })
+		expect(resultOf(await unbind('w2'))).toEqual({ removed: false })
+		expect(resultOf(await unbind('w1'))).toEqual({ removed: true })
 		const installation = { ...push(42, 'gone'), installation: { id: 7 } }
 		expect((await deliver(app, binding.url, binding.secret, installation, 'd-6')).status).toBe(404)
 	})

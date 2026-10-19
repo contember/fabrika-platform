@@ -1,5 +1,5 @@
-// What the jobs reach outside the application: an outbox standing in for the e-mail provider, and where a job puts
-// what `ctx.files` refused it. A test registers its own world and names it in the boot's environment.
+// What the jobs reach outside the application: an outbox standing in for the e-mail provider, and what the erase job
+// removed. A test registers its own world and names it in the boot's environment.
 
 import { defineDeps } from '@fabrika/app/implement'
 
@@ -8,17 +8,11 @@ export interface Mail {
 	readonly attachments: readonly { readonly name: string | null; readonly type: string; readonly bytes: Uint8Array }[]
 }
 
-export interface Refusal {
-	readonly step: string
-	readonly error: unknown
-}
-
 export interface FilesWorld {
 	readonly sent: Mail[]
-	readonly refusals: Refusal[]
-	/** How many files each `removeAll` of the erase job removed. */
+	/** How many file rows the erase job deleted, per table and note. */
 	readonly removed: number[]
-	/** Makes the erase job throw inside its transaction, after it removed the files. */
+	/** Makes the erase job throw inside its transaction, after it deleted the rows. */
 	failErase: boolean
 }
 

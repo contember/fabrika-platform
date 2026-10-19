@@ -1,5 +1,5 @@
 // A Ref's predicate over a table's containment links: the first link takes the Ref's id, every other link a value
-// of its chain, and a chain entry no link covers is refused. Shared by the stores and the file collections' tables.
+// of its chain, and a chain entry no link covers is refused. Shared by the stores and the handles.
 
 import type { OperationNode } from 'kysely'
 import { freeze, inSet, nameSet, ownEntry, ownKeys, recordOf } from './builtins'

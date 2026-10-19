@@ -287,6 +287,13 @@ describe('what the slice keeps, the literal rule reads', () => {
 		expect(refusals('src/deals/endpoints.ts', exported)).toContain('src/deals/logic.ts:6:26 literal')
 	})
 
+	test('an import the module re-exports by name is part of the module: it stays, though only a handler calls it', () => {
+		const reexported = DEALS.replace("import { canReopen } from './logic'", "import { canReopen } from './logic'\n\nexport { canReopen }")
+		expect(reexported).not.toBe(DEALS)
+		expect(shellSlice('src/deals/endpoints.ts', reexported).text).toContain("import { canReopen } from './logic'")
+		expect(refusals('src/deals/endpoints.ts', reexported)).toContain('src/deals/logic.ts:6:26 literal')
+	})
+
 	test('a refusal after a handler keeps its line and column', () => {
 		const late = DEALS.replace('}))\n', "\tbroken: r.query({ output: Deal, access: { member: true }, sql: `${'read'}` }),\n}))\n")
 		expect(late).not.toBe(DEALS)

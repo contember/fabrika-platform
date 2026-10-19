@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { compileContract, defineApp, defineContract, parseContractArtifact } from '../contract'
+import { FILE_LIMITS } from '../contract/defaults'
 import { contract } from './fixtures/notes-app/fabrika.contract'
 import { contract as scopedContract } from './fixtures/scoped-notes/fabrika.contract'
 import { tables as scopedTables } from './fixtures/scoped-notes/src/db/tables'
@@ -12,81 +13,37 @@ import { tables as kitTables } from './kit-fixture/src/db/tables'
 import { ById } from './kit-fixture/src/schemas'
 import { vocabulary as kitVocabulary } from './kit-fixture/src/vocabulary'
 
-/** The generated file endpoints `notesArtifact` does not list. */
-const UNLISTED_FILE_ROWS = new Set(['files.attachments.upload', 'files.attachments.list', 'files.attachments.remove'])
-/** The generated webhook binding endpoints `notesArtifact` does not list. */
-const UNLISTED_WEBHOOK_ROWS = new Set(['webhooks.github.bind', 'webhooks.github.unbind'])
+/** `notesArtifact` without the auth-core fixture's 0.5 contact form and inbox table, which no 0.6 contract declares. */
+const { contact_messages: _inbox, ...noteTables } = notesArtifact.tables
+
+/**
+ * What the notes fixture compiles to now: `notesArtifact` stays 0.5-shaped, as the platform reads it, and the fixture
+ * no longer declares its contact form, its inbox or its file collection. Its file kind takes the collection's place.
+ */
+function notesArtifactWithoutRemovedForms(): ContractArtifact {
+	const { 'file:attachments': _fileDimension, ...dimensions } = notesArtifact.dimensions
+	const { contact: _form, ...mounts } = notesArtifact.mounts
+	return {
+		...notesArtifact,
+		dimensions,
+		mounts,
+		tables: noteTables,
+		files: {},
+		fileKinds: { attachments: { types: ['application/pdf', 'image/png'], maxBytes: 26214400 } },
+		endpoints: notesArtifact.endpoints.filter((row) => row.id !== 'contact' && row.source.kind !== 'files'),
+	}
+}
 
 describe('compileContract', () => {
-	const artifact = compileContract(contract, notesArtifact.tables)
+	const artifact = compileContract(contract, noteTables)
 
-	test('compiles the notes contract to the artifact auth-core describes', () => {
-		const { endpoints, reservedPrefixes, ...rest } = artifact
-		const { endpoints: expectedEndpoints, reservedPrefixes: expectedPrefixes, ...expectedRest } = canonicalizeArtifact(notesArtifact)
-		expect(rest).toEqual(expectedRest)
-		expect(endpoints.filter((row) => !UNLISTED_FILE_ROWS.has(row.id) && !UNLISTED_WEBHOOK_ROWS.has(row.id))).toEqual([...expectedEndpoints])
-		expect(reservedPrefixes).toEqual(expectedPrefixes)
+	test('compiles the notes contract to the artifact auth-core describes, without its 0.5-only parts', () => {
+		expect(artifact).toEqual(canonicalizeArtifact(notesArtifactWithoutRemovedForms()))
 	})
 
-	test("generates a webhook's bind and unbind endpoints for a holder of its dimension's members.manage", () => {
-		const rows = artifact.endpoints.filter((row) => UNLISTED_WEBHOOK_ROWS.has(row.id))
-		const access = { form: 'in', dimension: 'workspace', from: 'scope' } as const
-		expect(rows.map(({ id, kind, method, path, callers, requirement, source }) => ({ id, kind, method, path, callers, requirement, source })))
-			.toEqual([
-				{
-					id: 'webhooks.github.bind',
-					kind: 'mutation',
-					method: 'POST',
-					path: '/api/webhooks.github.bind',
-					callers: ['human'],
-					requirement: { kind: 'action', action: 'notes.admin', access },
-					source: { kind: 'mount', name: 'github' },
-				},
-				{
-					id: 'webhooks.github.unbind',
-					kind: 'mutation',
-					method: 'POST',
-					path: '/api/webhooks.github.unbind',
-					callers: ['human'],
-					requirement: { kind: 'action', action: 'notes.admin', access },
-					source: { kind: 'mount', name: 'github' },
-				},
-			])
-		expect(artifact.reservedPrefixes).toContain('/api')
-	})
-
-	test('generates the upload, list and remove endpoints of a file collection', () => {
-		const rows = artifact.endpoints.filter((row) => UNLISTED_FILE_ROWS.has(row.id))
-		expect(rows.map(({ id, kind, method, path, callers, requirement, admission }) => ({ id, kind, method, path, callers, requirement, admission })))
-			.toEqual([
-				{
-					id: 'files.attachments.list',
-					kind: 'query',
-					method: 'POST',
-					path: '/api/files.attachments.list',
-					callers: ['human'],
-					requirement: { kind: 'action', action: 'notes.read', access: { form: 'on', dimension: 'note', from: 'owner' } },
-					admission: { contentTypes: ['application/json'], maxBytes: null },
-				},
-				{
-					id: 'files.attachments.remove',
-					kind: 'mutation',
-					method: 'POST',
-					path: '/api/files.attachments.remove',
-					callers: ['human'],
-					requirement: { kind: 'action', action: 'notes.write', access: { form: 'on', dimension: 'file:attachments', from: 'id' } },
-					admission: { contentTypes: ['application/json'], maxBytes: null },
-				},
-				{
-					id: 'files.attachments.upload',
-					kind: 'upload',
-					method: 'POST',
-					path: '/api/files.attachments.upload/:owner',
-					callers: ['human'],
-					requirement: { kind: 'action', action: 'notes.write', access: { form: 'on', dimension: 'note', from: 'owner' } },
-					admission: { contentTypes: ['application/pdf', 'image/png'], maxBytes: 26214400 },
-				},
-			])
+	test('generates no file collection endpoint and no webhook binding endpoint', () => {
+		expect(artifact.endpoints.filter((row) => row.id.startsWith('files.') || row.id.startsWith('webhooks.'))).toEqual([])
+		expect(artifact.files).toEqual({})
 	})
 
 	test('is plain JSON that the artifact parser reads back unchanged', () => {
@@ -96,74 +53,45 @@ describe('compileContract', () => {
 	})
 
 	test('normalizes every optional field to null, [] or {}', () => {
-		expect(artifact.files['attachments']?.link).toBe(false)
 		expect(artifact.dimensions['note']).toEqual({ in: 'workspace', creator: null, members: null })
 		expect(artifact.roles['starter']).toEqual({ grants: ['workspaces.create'], member: null })
 		expect(artifact.csp.imgSrc).toEqual([])
 	})
 })
 
-describe('a file collection that scans its uploads', () => {
-	const withFiles = (collection: { readonly scan?: boolean; readonly maxBytes: number }) =>
+describe('a file kind that scans its files', () => {
+	const withKind = (kind: { readonly scan?: boolean; readonly maxBytes: number; readonly types?: readonly [string, ...string[]] }) =>
 		defineContract({
 			app: 'notes',
 			dimensions: { workspace: {}, note: { in: 'workspace' } },
-			actions: { 'notes.read': 'Read', 'notes.write': 'Write', 'notes.delete': 'Delete' },
+			actions: { 'notes.read': 'Read' },
 			roles: { editor: { grants: ['notes.read'] } },
 		}, (c) => ({
-			files: {
-				attachments: c.files({
-					owner: 'notes',
-					read: 'notes.read',
-					write: 'notes.write',
-					delete: 'notes.delete',
-					types: ['application/pdf'],
-					...collection,
-				}),
-			},
+			files: { attachments: c.files({ types: ['application/pdf'], ...kind }) },
 			health: c.health('/healthz'),
 		}))
-	const tables = tablePolicies(scopedTables)
 
 	test('carries scan: true only when it scans, so the artifact of one that does not is what it was before', () => {
-		expect(compileContract(withFiles({ scan: true, maxBytes: 1024 }), tables).files['attachments']?.scan).toBe(true)
+		expect(compileContract(withKind({ scan: true, maxBytes: 1024 }), {}).fileKinds?.['attachments']?.scan).toBe(true)
 		for (const scan of [false, undefined]) {
-			const artifact = compileContract(withFiles({ ...(scan === undefined ? {} : { scan }), maxBytes: 1024 }), tables)
-			expect(Object.keys(artifact.files['attachments'] ?? {})).not.toContain('scan')
+			const artifact = compileContract(withKind({ ...(scan === undefined ? {} : { scan }), maxBytes: 1024 }), {})
+			expect(Object.keys(artifact.fileKinds?.['attachments'] ?? {})).not.toContain('scan')
 			expect(canonicalArtifactJson(artifact)).not.toContain('"scan"')
 		}
 	})
 
 	test('admits no file larger than the scanner reads in full', () => {
-		expect(() => compileContract(withFiles({ scan: true, maxBytes: 100 * 1024 * 1024 + 1 }), tables)).toThrow(
-			"files 'attachments': scans its files and admits 104857601 bytes per file; the scanner gives a clean verdict to at most 104857600",
+		const tooLarge = FILE_LIMITS.maxScannedBytes + 1
+		expect(() => compileContract(withKind({ scan: true, maxBytes: tooLarge }), {})).toThrow(
+			`files 'attachments': scans its files and admits ${tooLarge} bytes per file; the scanner gives a clean verdict to at most ${FILE_LIMITS.maxScannedBytes}`,
 		)
-		expect(() => compileContract(withFiles({ maxBytes: 100 * 1024 * 1024 + 1 }), tables)).not.toThrow()
+		expect(() => compileContract(withKind({ maxBytes: tooLarge }), {})).not.toThrow('the scanner gives a clean verdict')
 	})
 
 	test('admits no archive the framework does not open', () => {
-		const gzip = (scan: boolean) =>
-			defineContract({
-				app: 'notes',
-				dimensions: { workspace: {}, note: { in: 'workspace' } },
-				actions: { 'notes.read': 'Read', 'notes.write': 'Write', 'notes.delete': 'Delete' },
-				roles: {},
-			}, (c) => ({
-				files: {
-					attachments: c.files({
-						owner: 'notes',
-						read: 'notes.read',
-						write: 'notes.read',
-						delete: 'notes.read',
-						maxBytes: 1024,
-						types: ['application/gzip'],
-						scan,
-					}),
-				},
-				health: c.health('/healthz'),
-			}))
-		expect(() => compileContract(gzip(true), tables)).toThrow("files 'attachments': scans its files and admits 'application/gzip'")
-		expect(() => compileContract(gzip(false), tables)).not.toThrow()
+		const gzip = (scan: boolean) => withKind({ scan, maxBytes: 1024, types: ['application/gzip'] })
+		expect(() => compileContract(gzip(true), {})).toThrow("files 'attachments': scans its files and admits 'application/gzip'")
+		expect(() => compileContract(gzip(false), {})).not.toThrow()
 	})
 })
 
@@ -233,7 +161,7 @@ describe('the canonical artifact', () => {
 })
 
 describe('parseContractArtifact', () => {
-	const artifact: ContractArtifact = compileContract(contract, notesArtifact.tables)
+	const artifact: ContractArtifact = compileContract(contract, noteTables)
 
 	test('refuses an unknown field, a public caller and a missing normalized field', () => {
 		expect(() => parseContractArtifact({ ...artifact, extra: true })).toThrow()
@@ -335,29 +263,32 @@ describe('parseContractArtifact of a kit contract that kicks and mails', () => {
 	const contract = kit.contract((c) => ({
 		api: c.rpc('/api', {
 			deals: kit.group({ callers: ['human'] }, (r) => ({
-				touch: r.mutation({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' }, then: 'notify' })
-					.handle(({ ctx }) => ({ id: ctx.target.value })),
+				touch: r.mutation({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' }, kicks: ['notify'] })
+					.handle(({ ctx }) => {
+						ctx.kick('notify')
+						return { id: ctx.target.value }
+					}),
 			})),
 		}),
-		jobs: { notify: kit.cron('* * * * *', { actions: ['crm.read'], scope: 'app', mailer: 'installation' }).handle(async () => {}) },
+		jobs: { notify: kit.cron('* * * * *', { actions: ['crm.read'], mailer: 'installation' }).handle(async () => {}) },
 	}))
 	const artifact = compileContract(contract, kitTables)
 
-	test('reads then and mailer back unchanged, each under its site', () => {
+	test('reads kicks and mailer back unchanged, each under its site', () => {
 		expect(artifact.declared).toEqual({
-			'api.deals.touch': { sql: null, unscoped: {}, connect: [], issues: null, then: 'notify' },
+			'api.deals.touch': { sql: null, unscoped: {}, connect: [], issues: null, kicks: ['notify'] },
 			'job:notify': { sql: null, unscoped: {}, connect: [], issues: null, mailer: 'installation' },
 		})
 		const json: unknown = JSON.parse(JSON.stringify(artifact))
 		expect(parseContractArtifact(json)).toEqual(artifact)
 	})
 
-	test('refuses a mailer that is no transport and a then that is no name', () => {
+	test('refuses a mailer that is no transport and a kick that is no name', () => {
 		const declared = artifact.declared ?? {}
 		const job = declared['job:notify']
 		const endpoint = declared['api.deals.touch']
 		if (job === undefined || endpoint === undefined) throw new Error('the contract changed')
 		expect(() => parseContractArtifact({ ...artifact, declared: { ...declared, 'job:notify': { ...job, mailer: 'smtp' } } })).toThrow()
-		expect(() => parseContractArtifact({ ...artifact, declared: { ...declared, 'api.deals.touch': { ...endpoint, then: '' } } })).toThrow()
+		expect(() => parseContractArtifact({ ...artifact, declared: { ...declared, 'api.deals.touch': { ...endpoint, kicks: [''] } } })).toThrow()
 	})
 })

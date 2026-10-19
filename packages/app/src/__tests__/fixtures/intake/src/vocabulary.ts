@@ -5,7 +5,9 @@ export const vocabulary = defineVocabulary({
 	app: 'notes',
 	dimensions: {},
 	actions: {
+		'applications.submit': 'Record an anonymous registration',
 		'applications.read': 'Read registrations',
+		'messages.send': 'Record an anonymous contact message',
 		'messages.read': 'Read contact messages',
 	},
 	roles: {

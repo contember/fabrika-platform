@@ -3,11 +3,13 @@
 import type { TypedColumnList } from '@fabrika/db'
 
 export interface ApplicationsTable {
+	id: string
 	name: string
 	email: string
 }
 
 export interface MessagesTable {
+	id: string
 	email: string
 	body: string
 }
@@ -20,6 +22,7 @@ export interface DB {
 export const columns: TypedColumnList<DB> = {
 	'applications': {
 		columns: [
+			'id',
 			'name',
 			'email',
 		],
@@ -27,6 +30,7 @@ export const columns: TypedColumnList<DB> = {
 	},
 	'messages': {
 		columns: [
+			'id',
 			'email',
 			'body',
 		],

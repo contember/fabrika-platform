@@ -11,10 +11,6 @@ import { dirname, join, relative } from 'node:path'
 import { z } from 'zod/v4'
 import { contract as catalogContract } from '../../../app/src/__tests__/fixtures/connect-catalog/fabrika.contract'
 import { contract as shopContract } from '../../../app/src/__tests__/fixtures/connect-shop/fabrika.contract'
-import { contract as formFilesContract } from '../../../app/src/__tests__/fixtures/form-files/fabrika.contract'
-import { tables as formFilesTables } from '../../../app/src/__tests__/fixtures/form-files/src/db/tables'
-import { contract as formKickContract } from '../../../app/src/__tests__/fixtures/form-kick/fabrika.contract'
-import { tables as formKickTables } from '../../../app/src/__tests__/fixtures/form-kick/src/db/tables'
 import { contract as implementContract } from '../../../app/src/__tests__/fixtures/implement/fabrika.contract'
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
 import { contract as intakeContract } from '../../../app/src/__tests__/fixtures/intake/fabrika.contract'
@@ -27,8 +23,8 @@ import { tables as multiTenantTables } from '../../../app/src/__tests__/fixtures
 import { contract as mutationKickContract } from '../../../app/src/__tests__/fixtures/mutation-kick/fabrika.contract'
 import { tables as mutationKickTables } from '../../../app/src/__tests__/fixtures/mutation-kick/src/db/tables'
 import { contract as notesContract } from '../../../app/src/__tests__/fixtures/notes-app/fabrika.contract'
-import { contract as filesContract } from '../../../app/src/__tests__/fixtures/scoped-files/fabrika.contract'
-import { tables as filesTables } from '../../../app/src/__tests__/fixtures/scoped-files/src/db/tables'
+import { contract as publicKickContract } from '../../../app/src/__tests__/fixtures/public-kick/fabrika.contract'
+import { tables as publicKickTables } from '../../../app/src/__tests__/fixtures/public-kick/src/db/tables'
 import { contract as scopedContract } from '../../../app/src/__tests__/fixtures/scoped-notes/fabrika.contract'
 import { tables as scopedTables } from '../../../app/src/__tests__/fixtures/scoped-notes/src/db/tables'
 import { contract as organizationsContract } from '../../../app/src/__tests__/fixtures/scoped-organizations/fabrika.contract'
@@ -94,8 +90,12 @@ const READER_FORMS_TABLES: Readonly<Record<string, TablePolicyArtifact>> = {
 		'tasks.read',
 		'tasks.write',
 	),
-	feedback: table({ mode: 'inbox', form: 'feedback' }, 'inbox.read', null),
 }
+
+/** The notes artifact's policies without its form inbox, which this framework release no longer compiles against. */
+const NOTES_TABLES: Readonly<Record<string, TablePolicyArtifact>> = Object.fromEntries(
+	Object.entries(notesArtifact.tables).filter(([, policy]) => policy.scope.mode !== 'inbox'),
+)
 
 interface Fixture {
 	readonly name: string
@@ -110,8 +110,8 @@ const fixtures: readonly Fixture[] = [
 	{
 		name: '@fabrika/app notes-app',
 		root: join(APP_TESTS, 'fixtures', 'notes-app'),
-		evaluated: () => compileContract(notesContract, notesArtifact.tables),
-		tables: notesArtifact.tables,
+		evaluated: () => compileContract(notesContract, NOTES_TABLES),
+		tables: NOTES_TABLES,
 	},
 	{
 		name: '@fabrika/check clean-app',
@@ -147,12 +147,7 @@ const fixtures: readonly Fixture[] = [
 		evaluated: () => compileContract(organizationsContract, organizationsTables),
 	},
 	{
-		name: '@fabrika/app scoped-files (a file collection on a table read from source)',
-		root: join(APP_TESTS, 'fixtures', 'scoped-files'),
-		evaluated: () => compileContract(filesContract, filesTables),
-	},
-	{
-		name: '@fabrika/app kit-files (ctx.files of handlers and jobs, a scanning link collection, read from source)',
+		name: '@fabrika/app kit-files (file columns of two kinds, one that scans, reached by handlers and jobs, read from source)',
 		root: join(APP_TESTS, 'fixtures', 'kit-files'),
 		evaluated: () => compileContract(kitFilesContract, kitFilesTables),
 	},
@@ -168,7 +163,7 @@ const fixtures: readonly Fixture[] = [
 		evaluated: () => compileContract(multiTenantContract, multiTenantTables),
 	},
 	{
-		name: '@fabrika/app intake (a form with a rate, a honeypot and a challenge; src/db/tables.ts read from source)',
+		name: '@fabrika/app intake (public procedures with a rate, a honeypot and a challenge; src/db/tables.ts read from source)',
 		root: join(APP_TESTS, 'fixtures', 'intake'),
 		evaluated: () => compileContract(intakeContract, intakeTables),
 	},
@@ -179,14 +174,9 @@ const fixtures: readonly Fixture[] = [
 		tables: {},
 	},
 	{
-		name: '@fabrika/app visitor-intake (a job that issues links, link-holder files, forms and a public SPA, read from source)',
+		name: '@fabrika/app visitor-intake (a job that issues links, link-holder files, public procedures and a public SPA, read from source)',
 		root: join(APP_TESTS, 'fixtures', 'visitor-intake'),
 		evaluated: () => compileContract(visitorIntakeContract, visitorIntakeTables),
-	},
-	{
-		name: '@fabrika/app form-files (forms that take files into a scanning collection, a job that attaches them, read from source)',
-		root: join(APP_TESTS, 'fixtures', 'form-files'),
-		evaluated: () => compileContract(formFilesContract, formFilesTables),
 	},
 	{
 		name: '@fabrika/app public-fixture (public procedures in a group without callers, admission and limits, read from source)',
@@ -199,12 +189,12 @@ const fixtures: readonly Fixture[] = [
 		evaluated: () => compileContract(tokenContract, tokenTables),
 	},
 	{
-		name: '@fabrika/app form-kick (forms whose then kicks a job, read from source)',
-		root: join(APP_TESTS, 'fixtures', 'form-kick'),
-		evaluated: () => compileContract(formKickContract, formKickTables),
+		name: '@fabrika/app public-kick (a public procedure that kicks a job, read from source)',
+		root: join(APP_TESTS, 'fixtures', 'public-kick'),
+		evaluated: () => compileContract(publicKickContract, publicKickTables),
 	},
 	{
-		name: '@fabrika/app mutation-kick (a mutation whose then kicks a job, read from source)',
+		name: '@fabrika/app mutation-kick (a mutation that kicks a job, read from source)',
 		root: join(APP_TESTS, 'fixtures', 'mutation-kick'),
 		evaluated: () => compileContract(mutationKickContract, mutationKickTables),
 	},
@@ -236,9 +226,9 @@ describe('the static reader and the evaluated contract agree', () => {
 		const artifact = readContractSource(readTree(fixtures[2]?.root ?? ''), READER_FORMS_TABLES)
 
 		expect(new Set(artifact.endpoints.map((row) => row.kind))).toEqual(
-			new Set(['query', 'mutation', 'spa', 'upload', 'download', 'health', 'form', 'webhook', 'link-spa']),
+			new Set(['query', 'mutation', 'spa', 'health', 'webhook', 'link-spa']),
 		)
-		expect(Object.keys(artifact.files)).toEqual(['attachments'])
+		expect(Object.keys(artifact.fileKinds ?? {})).toEqual(['attachments'])
 		expect(Object.keys(artifact.jobs).sort()).toEqual(['cleanup', 'digest'])
 		expect(Object.keys(artifact.exports)).toEqual(['tasks'])
 		expect(Object.keys(artifact.imports)).toEqual(['billing'])
@@ -299,7 +289,7 @@ describe('the reader refuses what the runtime cannot evaluate', () => {
 	for (const [file, refusal] of Object.entries(MISTAKES)) {
 		test(`contract-mistakes/${file}`, () => {
 			const files = new Map([['fabrika.contract.ts', readFileSync(join(mistakesDir, file), 'utf8')]])
-			expect(firstRefusal(files, notesArtifact.tables)).toBe(refusal)
+			expect(firstRefusal(files, NOTES_TABLES)).toBe(refusal)
 		})
 	}
 

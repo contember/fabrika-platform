@@ -8,7 +8,7 @@
 import { tableActions, type TablePolicyArtifact } from '@fabrika/auth-core'
 import { scoped, type Tables } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
-import { type IsolationWorlds, type SampleValue, tableProbe, type TestDatabase, withoutInboxes } from '@fabrika/db/testing'
+import { type IsolationWorlds, type SampleValue, tableProbe, type TestDatabase } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { z } from 'zod/v4'
 import { createClient } from '../client/contract'
@@ -267,7 +267,7 @@ export function appPolicyIsolationKit<C extends AnyContract, DB, P>(
 		throw new Error(`${table} is a ${scope.mode} table; policyIsolationKit probes a dimension or child table`)
 	}
 	const actions = probeActions(policy.actions)
-	const layer = scoped(withoutInboxes(tables))
+	const layer = scoped(tables)
 	const probe = tableProbe(layer, table)
 	const expectVersion = policy.version === null ? undefined : 1
 	const staged = new Map<string, Readonly<Record<string, SampleValue>>>()
@@ -457,7 +457,7 @@ function appReachKit<DB, P>(
 	const kits = new Map<string, ReturnType<typeof appReachClient>>()
 	const appReachClient = (action: string) => {
 		const probeContract = appReachProbe(contract, action)
-		const layer = scoped(withoutInboxes(tables))
+		const layer = scoped(tables)
 		const probe = tableProbe(layer, table)
 		const kit = testKit(
 			implement(probeContract, {
@@ -531,7 +531,7 @@ function scopedAppKit<DB, P>(
 	key: string,
 	postgres: TestDatabase,
 ) {
-	const layer = scoped(withoutInboxes(tables))
+	const layer = scoped(tables)
 	const probe = tableProbe(layer, table)
 	const kit = testKit(
 		implement(probeContract, {
@@ -585,7 +585,7 @@ export function policyIsolationKit<C extends AnyContract, DB, P>(
 	}
 	const actions = probeActions(policy.actions)
 	// The probe serves no form, so it compiles against the policies without the forms' inboxes.
-	const layer = scoped(withoutInboxes(tables))
+	const layer = scoped(tables)
 	const probe = tableProbe(layer, table)
 	const expectVersion = policy.version === null ? undefined : 1
 	const pending = new Map<string, Readonly<Record<string, SampleValue>>>()

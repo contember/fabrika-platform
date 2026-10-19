@@ -46,13 +46,13 @@ const sharing = app.group({ callers: ['human'] }, (r) => ({
 /** The issuing job's input and output, for the test: the note it shares, whether it revokes, the link's URL. */
 const jobRun: { note: string; url: string; revoke: boolean } = { note: '', url: '', revoke: false }
 
-const shareNote = app.cron('0 4 * * *', { actions: ['notes.read', 'notes.share'], scope: 'app', issues: 'shared' }).handle(async ({ ctx }) => {
+const shareNote = app.cron('0 4 * * *', { actions: ['notes.read', 'notes.share'], issues: 'shared' }).handle(async ({ ctx }) => {
 	const link = await ctx.links.issue(await ctx.ref('notes.share', 'note', jobRun.note), { mount: 'shared', days: 3 })
 	jobRun.url = link.url
 	if (jobRun.revoke) await ctx.links.revoke(link.id)
 })
 
-const broken = app.cron('0 5 * * *', { actions: ['notes.read'], scope: 'app' }).handle(() => {
+const broken = app.cron('0 5 * * *', { actions: ['notes.read'] }).handle(() => {
 	throw new Error('the broken job threw on purpose')
 })
 

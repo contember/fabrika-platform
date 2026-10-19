@@ -196,15 +196,12 @@ describe('a dimension no table owns keeps the vocabulary ancestry above it', () 
 describe('every action is one of the vocabulary', () => {
 	const read = (policies: Readonly<Record<string, unknown>>) => () => readTables(plain(columns), plain({ ...derived, ...policies }), plain(vocabulary))
 
-	test('a table action, a column read and an inbox read outside the vocabulary are refused', () => {
+	test('a table action and a column read outside the vocabulary are refused', () => {
 		expect(read({ workspaces: { ...workspaces, actions: { read: 'notes.raed' } } })).toThrow(
 			new PolicyError('workspaces: actions.read names notes.raed, which is not an action of the vocabulary (actions: notes.read, notes.write)'),
 		)
 		expect(read({ notes: { ...notes, columns: { title: { read: 'notes.raed' } } } })).toThrow(
 			'notes: columns.title.read names notes.raed, which is not an action of the vocabulary',
-		)
-		expect(read({ workspaces: { scope: { inbox: 'contact', read: 'contact.read' } } })).toThrow(
-			'workspaces: scope.read names contact.read, which is not an action of the vocabulary',
 		)
 	})
 })

@@ -2,11 +2,6 @@
 
 import type { TypedColumnList } from '@fabrika/db'
 
-export interface ContactMessagesTable {
-	email: string
-	body: string
-}
-
 export interface NotesTable {
 	id: string
 	workspace_id: string
@@ -16,18 +11,10 @@ export interface NotesTable {
 }
 
 export interface DB {
-	contact_messages: ContactMessagesTable
 	notes: NotesTable
 }
 
 export const columns: TypedColumnList<DB> = {
-	'contact_messages': {
-		columns: [
-			'email',
-			'body',
-		],
-		foreignKeys: [],
-	},
 	'notes': {
 		columns: [
 			'id',

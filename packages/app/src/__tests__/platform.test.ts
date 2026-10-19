@@ -34,7 +34,9 @@ const mixedContract = defineContract(mixedVocabulary, (c) => ({
 	health: c.health('/healthz'),
 }))
 
-const notes = compileContract(notesContract, notesArtifact.tables)
+/** The notes fixture's tables without auth-core's 0.5 form inbox, which a 0.6 contract no longer declares. */
+const { contact_messages: _inbox, ...noteTables } = notesArtifact.tables
+const notes = compileContract(notesContract, noteTables)
 const implemented = compileContract(implementContract, { notes: NOTE_TABLE })
 const mixed = compileContract(mixedContract, {})
 
@@ -70,7 +72,6 @@ describe('schemaFromContract', () => {
 	test('the notes contract: scopes with their membership metadata, actions, roles, link mounts and delegations', () => {
 		expect(schemaFromContract(notes)).toEqual({
 			scopes: [
-				{ type: 'file:attachments', in: 'note' },
 				{ type: 'note', in: 'workspace' },
 				{
 					type: 'workspace',
@@ -106,8 +107,6 @@ describe('schemaFromContract', () => {
 			links: { shared: { dimension: 'note', grants: ['notes.read'], issuedBy: 'notes.share', maxDays: 30 } },
 			delegations: {
 				'api.workspaces.create': { action: 'workspaces.create', dimension: 'workspace', purpose: 'creates' },
-				'webhooks.github.bind': { action: 'notes.admin', dimension: 'workspace', purpose: 'members' },
-				'webhooks.github.unbind': { action: 'notes.admin', dimension: 'workspace', purpose: 'members' },
 			},
 			workloads: [
 				{ kind: 'app', name: 'shop', actions: ['notes.read'] },

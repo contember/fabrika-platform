@@ -1,8 +1,8 @@
-// The notes' endpoints and jobs over `ctx.files`. `documents` is read with `notes.write`, so the mutation that
-// writes a note lists them with its own capability; `attachments` is read with `notes.read`, which a write
-// capability alone does not hold.
+// The notes' procedures and jobs over their file columns: a note's documents and attachments are rows of its child
+// tables, each holding one file reference.
 
 import { ConflictError } from '@fabrika/app'
+import { file } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from './app-kit'
 import { filesDeps } from './world'
@@ -10,6 +10,7 @@ import { filesDeps } from './world'
 const Versioned = z.strictObject({ id: z.uuid(), expectVersion: z.int().positive() })
 const ById = z.strictObject({ id: z.uuid() })
 const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
+const Added = z.strictObject({ id: z.uuid() })
 const Count = z.strictObject({ files: z.int() })
 const Title = z.strictObject({ title: z.string() })
 
@@ -17,21 +18,39 @@ const Title = z.strictObject({ title: z.string() })
 export const MAIL_MAX_BYTES = 4096
 
 export const notes = app.group({ callers: ['human'] }, (r) => ({
+	upload: r.mutation({
+		input: z.strictObject({ id: z.uuid(), file: file('documents') }),
+		output: Added,
+		access: { action: 'notes.write', on: 'note', from: 'id' },
+	})
+		.handle(({ input, ctx }) => ctx.db.target.note_documents.insert({ file: input.file })),
+	attach: r.mutation({
+		input: z.strictObject({ id: z.uuid(), file: file('attachments') }),
+		output: Added,
+		access: { action: 'notes.write', on: 'note', from: 'id' },
+	})
+		.handle(({ input, ctx }) => ctx.db.target.note_attachments.insert({ file: input.file })),
 	submit: r.mutation({ input: Versioned, output: Saved, access: { action: 'notes.write', on: 'note', from: 'id' } })
 		.handle(async ({ input, ctx }) => {
-			const page = await ctx.files('documents').list(ctx.target)
-			if (!page.items.some((file) => file.status === 'live' || file.status === 'quarantined')) {
+			const page = await ctx.db.target.note_documents.list()
+			if (!page.items.some((row) => row.file.status === 'live' || row.file.status === 'quarantined')) {
 				throw new ConflictError('a note is submitted with a document')
 			}
 			return ctx.db.target.update({ title: 'submitted' }, { expectVersion: input.expectVersion })
 		}),
 	attached: r.query({ input: ById, output: Count, access: { action: 'notes.read', on: 'note', from: 'id' } })
-		.handle(async ({ ctx }) => ({ files: (await ctx.files('attachments').list(ctx.target)).items.length })),
+		.handle(async ({ ctx }) => ({ files: (await ctx.db.target.note_attachments.list()).items.length })),
 	clear: r.mutation({ input: ById, output: Count, access: { action: 'notes.delete', on: 'note', from: 'id' } })
-		.handle(async ({ ctx }) => ({ files: await ctx.files('attachments').removeAll(ctx.target) })),
-	// notes.delete is not the read action of documents: this query's capability does not list them.
-	peek: r.query({ input: ById, output: Count, access: { action: 'notes.delete', on: 'note', from: 'id' } })
-		.handle(async ({ ctx }) => ({ files: (await ctx.files('documents').list(ctx.target)).items.length })),
+		.handle(async ({ ctx }) => {
+			const { items } = await ctx.db.target.note_attachments.list()
+			for (const row of items) await ctx.db.target.note_attachments.remove(row.id)
+			return { files: items.length }
+		}),
+	download: r.query({
+		input: z.strictObject({ id: z.uuid(), document: z.uuid() }),
+		output: file('documents'),
+		access: { action: 'notes.read', on: 'note', from: 'id' },
+	}).handle(async ({ input, ctx }) => (await ctx.db.target.note_documents.get(input.document)).file),
 }))
 
 export const share = app.link('/s', {
@@ -46,61 +65,26 @@ export const share = app.link('/s', {
 })
 
 /** Mails every note's live documents; a quarantined one waits for its scan. */
-export const mail = app.cron('0 6 * * *', { actions: ['notes.read', 'notes.write'], scope: 'app' })
+export const mail = app.cron('0 6 * * *', { actions: ['notes.read'] })
 	.handle(async ({ ctx }) => {
 		const outbox = filesDeps.get()
 		const page = await ctx.db.over(ctx.within('notes.read', 'workspace')).notes.list({ orderBy: [['id', 'asc']] })
 		for (const note of page.items) {
-			const owner = await ctx.ref('notes.write', 'note', note.id)
-			const documents = ctx.files('documents')
-			const live = (await documents.list(owner)).items.filter((file) => file.status === 'live')
+			const reader = await ctx.ref('notes.read', 'note', note.id)
+			const documents = await ctx.db.on(reader).note_documents.list()
+			const live = documents.items.filter((row) => row.file.status === 'live')
 			if (live.length === 0) continue
 			const attachments = []
-			for (const file of live) {
-				const opened = await documents.open(owner, file.id, { maxBytes: MAIL_MAX_BYTES })
+			for (const row of live) {
+				const opened = await ctx.files.open(row.file, { maxBytes: MAIL_MAX_BYTES })
 				attachments.push({ name: opened.name, type: opened.type, bytes: opened.bytes })
 			}
 			outbox.sent.push({ note: note.id, attachments })
 		}
 	})
 
-/** Tries what `ctx.files` refuses, and records each refusal by its step. */
-export const peek = app.cron('0 7 * * *', { actions: ['notes.read', 'notes.write', 'notes.delete'], scope: 'app' })
-	.handle(async ({ ctx }) => {
-		const world = filesDeps.get()
-		const refused = (step: string) => (error: unknown) => {
-			world.refusals.push({ step, error })
-		}
-		const documents = ctx.files('documents')
-		const page = await ctx.db.over(ctx.within('notes.read', 'workspace')).notes.list({ orderBy: [['id', 'asc']] })
-		const earlier: string[] = []
-		for (const note of page.items) {
-			const reader = await ctx.ref('notes.read', 'note', note.id)
-			const writer = await ctx.ref('notes.write', 'note', note.id)
-			const remover = await ctx.ref('notes.delete', 'note', note.id)
-			await documents.list(remover).catch(refused('list with notes.delete'))
-			for (const id of earlier) {
-				await documents.open(writer, id, { maxBytes: MAIL_MAX_BYTES }).catch(refused('open of another note'))
-			}
-			for (const file of (await documents.list(writer)).items) {
-				await documents.open(reader, file.id, { maxBytes: MAIL_MAX_BYTES }).catch(refused('open with notes.read'))
-				await documents.open(writer, file.id, { maxBytes: MAIL_MAX_BYTES }).catch(refused(`open ${file.status}`))
-				earlier.push(file.id)
-			}
-			await ctx.files('attachments').list(writer).catch(refused('list with the write action only'))
-			for (const file of (await ctx.files('attachments').list(reader)).items) {
-				await ctx.files('attachments').open(reader, file.id, { maxBytes: 1 }).catch(refused('open over maxBytes'))
-			}
-		}
-		try {
-			ctx.files('missing')
-		} catch (error) {
-			refused('an unknown collection')(error)
-		}
-	})
-
-/** Erases every note titled `erase me`: blanks its title and removes its files, in one transaction per note. */
-export const erase = app.cron('0 8 * * *', { actions: ['notes.read', 'notes.write', 'notes.delete'], scope: 'app' })
+/** Erases every note titled `erase me`: blanks its title and deletes the rows of its files, in one transaction per note. */
+export const erase = app.cron('0 8 * * *', { actions: ['notes.read', 'notes.write', 'notes.delete'] })
 	.handle(async ({ ctx }) => {
 		const world = filesDeps.get()
 		const notes = ctx.db.over(ctx.within('notes.read', 'workspace')).notes
@@ -111,7 +95,11 @@ export const erase = app.cron('0 8 * * *', { actions: ['notes.read', 'notes.writ
 			await ctx.transaction(async (tx) => {
 				const row = await tx.db.on(writer).getForUpdate()
 				await tx.db.on(writer).update({ title: '' }, { expectVersion: row.version })
-				world.removed.push(await tx.files('attachments').removeAll(remover), await tx.files('documents').removeAll(remover))
+				for (const table of ['note_attachments', 'note_documents'] as const) {
+					const { items } = await tx.db.on(remover)[table].list()
+					for (const item of items) await tx.db.on(remover)[table].remove(item.id)
+					world.removed.push(items.length)
+				}
 				if (world.failErase) throw new Error('the erasure stops before its transaction commits')
 			})
 		}

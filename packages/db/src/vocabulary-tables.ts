@@ -1,17 +1,7 @@
 // The table policies of the vocabulary form, `defineTables(vocabulary, columns)`: how an application writes them, with
 // containment taken from the vocabulary, and the normalized policies the kit and the handles read. Types only.
 
-import type {
-	ColumnList,
-	ColumnPolicies,
-	FilePolicies,
-	InboxPolicy,
-	RecordActions,
-	ReferencePolicy,
-	TableActions,
-	Tables,
-	VersionColumn,
-} from './policy'
+import type { ColumnList, ColumnPolicies, FilePolicies, RecordActions, ReferencePolicy, TableActions, Tables, VersionColumn } from './policy'
 
 declare const databaseType: unique symbol
 
@@ -143,20 +133,18 @@ type AuthoredApplicationPolicy<Col extends string, A extends string, Ver extends
 
 /**
  * One table's policy as an application writes it under a vocabulary. `S` is its scope as written: its mode picks the
- * one policy form a mistake is reported against, rather than a union of all five. `P` is every policy as written.
+ * one policy form a mistake is reported against, rather than a union of all four. `P` is every policy as written.
  */
 export type VocabularyTablePolicy<Table extends string, Col extends string, A extends string, V, Ver extends Col, S = unknown, P = unknown> =
 	S extends { readonly dimension: unknown } ? AuthoredDimensionPolicy<Col, A, V, Ver, S>
 		: S extends { readonly child: unknown } ? AuthoredChildPolicy<Table, Col, A, Ver, S, P>
 		: S extends { readonly app: unknown } ? AuthoredApplicationPolicy<Col, A, Ver>
 		: S extends { readonly reference: unknown } ? ReferencePolicy<Col, A>
-		: S extends { readonly inbox: unknown } ? InboxPolicy<Col, A>
 		:
 			| AuthoredDimensionPolicy<Col, A, V, Ver, S>
 			| AuthoredChildPolicy<Table, Col, A, Ver, S, P>
 			| AuthoredApplicationPolicy<Col, A, Ver>
 			| ReferencePolicy<Col, A>
-			| InboxPolicy<Col, A>
 
 type StatedScope<P, T> = T extends keyof P ? P[T] extends { readonly scope: infer S } ? S : unknown : unknown
 

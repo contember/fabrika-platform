@@ -66,7 +66,7 @@ describe('the artifact of signed tokens', () => {
 			}).handle(() => ({})),
 		}))
 		expect(() => compileContract(app.contract((c) => ({ api: c.rpc('/api', { unknown }) })), tables)).toThrow(/names no token purpose/)
-		const signing = app.cron('0 3 * * *', { actions: ['mail.read'], scope: 'app', signs: ['unsubscribe'] }).handle(() => {})
+		const signing = app.cron('0 3 * * *', { actions: ['mail.read'], signs: ['unsubscribe'] }).handle(() => {})
 		expect(
 			compileContract(app.contract((c) => ({ api: c.rpc('/api', { mail: app.group({ callers: ['human'] }, () => ({})) }), jobs: { signing } })), tables)
 				.declared?.['job:signing'],

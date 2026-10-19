@@ -49,11 +49,11 @@ export const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, Bu
  */
 const SERVER_ENTRY_OF: Readonly<Record<string, string>> = { '@fabrika/db': '@fabrika/db/tables' }
 
-const SURFACE_BUILDERS = new Set(['rpc', 'query', 'mutation', 'link', 'spa', 'health', 'form', 'webhook', 'files', 'cron', 'export'])
+const SURFACE_BUILDERS = new Set(['rpc', 'query', 'mutation', 'link', 'spa', 'health', 'webhook', 'files', 'cron', 'export'])
 /** The methods of the kit `defineApp` returns. */
 export const KIT_BUILDERS: ReadonlySet<string> = new Set(['group', 'contract', 'cron', 'webhook', 'link', 'export'])
 /** The builders of `app.contract`'s callback: the mounts that take no handler, and `rpc`, which mounts groups. */
-export const SHELL_BUILDERS: ReadonlySet<string> = new Set(['rpc', 'spa', 'health', 'form', 'files'])
+export const SHELL_BUILDERS: ReadonlySet<string> = new Set(['rpc', 'spa', 'health', 'files'])
 /** The builders of a group's, a link's and an export's callback. */
 export const ENDPOINT_BUILDERS: ReadonlySet<string> = new Set(['query', 'mutation'])
 

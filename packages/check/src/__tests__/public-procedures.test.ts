@@ -10,6 +10,8 @@ import { readTree } from './colocated-helpers'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'public-fixture')
 const ENDPOINTS = 'src/intake/endpoints.ts'
+const CONTRACT = 'fabrika.contract.ts'
+const HEALTH = "health: c.health('/healthz')"
 const PRODUCTS = "products: r.query({ output: Products, access: { public: true }, actions: ['catalog.read'] })"
 
 const withProducts = (declaration: string): Map<string, string> => {
@@ -67,6 +69,29 @@ describe('public procedures in the static reader', () => {
 				withProducts("products: r.query({ output: Products, access: { public: true }, actions: ['catalog.read'], limits: { timeoutMs: 120000 } })"),
 			).join('\n'),
 		).toContain('limits.timeoutMs 120000 is not a whole number of ms from 1 to 60000')
+	})
+
+	test('reads a challenge and a script origin into the CSP, and refuses an origin that is not https, as the runtime build does', () => {
+		const challenged = withProducts(
+			"products: r.query({ input: z.strictObject({ challengeToken: z.string() }), output: Products, access: { public: true }, actions: ['catalog.read'], admission: { challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' } } })",
+		)
+		const withCsp = (csp: string): Map<string, string> => {
+			const files = new Map(challenged)
+			const contract = files.get(CONTRACT) ?? ''
+			expect(contract).toContain(HEALTH)
+			files.set(CONTRACT, contract.replace(HEALTH, `${HEALTH}, csp: ${csp}`))
+			return files
+		}
+		const read = readContractSource(withCsp("{ scriptSrc: [{ origin: 'https://maps.example.com', purpose: 'the office map' }] }"))
+		expect(read.csp.scriptSrc?.map((source) => source.origin)).toEqual(['https://challenges.cloudflare.com', 'https://maps.example.com'])
+		expect(read.csp.frameSrc?.map((source) => source.origin)).toEqual(['https://challenges.cloudflare.com'])
+		const problems = problemsOf(
+			withCsp(
+				"{ scriptSrc: [{ origin: 'http://widgets.example', purpose: 'A widget' }], frameSrc: [{ origin: 'https://*.example.com', purpose: 'Any' }] }",
+			),
+		).join('\n')
+		expect(problems).toContain("csp scriptSrc: 'http://widgets.example' is not an https origin")
+		expect(problems).toContain("csp frameSrc: 'https://*.example.com' is not an https origin")
 	})
 
 	test('the scaffold writes a case per public procedure: anyone reaches it, or is refused without a solved challenge', async () => {

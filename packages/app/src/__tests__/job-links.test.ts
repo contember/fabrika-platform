@@ -51,14 +51,14 @@ const seen: { issued: { id: string; url: string } | null; links: boolean | null;
 	kept: null,
 }
 
-const invite = app.cron('* * * * *', { actions: ['crm.read', 'deals.share'], scope: 'app', issues: 'shared' }).handle(async ({ ctx }) => {
+const invite = app.cron('* * * * *', { actions: ['crm.read', 'deals.share'], issues: 'shared' }).handle(async ({ ctx }) => {
 	const issued = await ctx.links.issue(await ctx.ref('deals.share', 'deal', DEAL), { mount: 'shared', days: 3 })
 	seen.issued = { id: issued.id, url: issued.url }
 	seen.kept = ctx.links
 	await ctx.links.revoke(issued.id)
 })
 
-const quiet = app.cron('0 3 * * *', { actions: ['crm.read'], scope: 'app' }).handle(({ ctx }) => {
+const quiet = app.cron('0 3 * * *', { actions: ['crm.read'] }).handle(({ ctx }) => {
 	seen.links = 'links' in ctx
 })
 
@@ -97,8 +97,8 @@ describe('a job declares the link mount it issues', () => {
 	})
 
 	test("only a link mount of the contract, whose issuedBy and every grant are the job's actions", () => {
-		const short = app.cron('* * * * *', { actions: ['deals.share'], scope: 'app', issues: 'shared' }).handle(async () => {})
-		const unknown = app.cron('* * * * *', { actions: ['crm.read', 'deals.share'], scope: 'app', issues: 'elsewhere' }).handle(async () => {})
+		const short = app.cron('* * * * *', { actions: ['deals.share'], issues: 'shared' }).handle(async () => {})
+		const unknown = app.cron('* * * * *', { actions: ['crm.read', 'deals.share'], issues: 'elsewhere' }).handle(async () => {})
 		const refused = app.contract(() => ({ shared, jobs: { short, unknown } }))
 		expect(refusals(() => compileContract(refused, tables))).toEqual([
 			"job 'short': issues 'shared', whose links need 'crm.read' among the job's actions",
@@ -282,7 +282,7 @@ describe.skipIf(!hasPostgres)("a job's ctx.links", () => {
 
 describe.skipIf(!hasPostgres)('a job that declares its mailer', () => {
 	let ran = false
-	const mailing = app.cron('* * * * *', { actions: ['crm.read'], scope: 'app', mailer: 'own' }).handle(() => {
+	const mailing = app.cron('* * * * *', { actions: ['crm.read'], mailer: 'own' }).handle(() => {
 		ran = true
 	})
 	const mailingContract = app.contract(() => ({ jobs: { mailing } }))

@@ -138,7 +138,7 @@ describe('boot binds every job or does not start', () => {
 		expect(bootApp(app, { database: connection }).jobs.names).toEqual(['purge', 'sweep', 'flaky'])
 	})
 
-	test('a job without the data layer, without a handler, scoped to a dimension, or with an undeclared handler', () => {
+	test('a job without the data layer, without a handler, or with an undeclared handler', () => {
 		const contract = defineContract({
 			app: 'notes',
 			dimensions: { workspace: {} },
@@ -147,8 +147,8 @@ describe('boot binds every job or does not start', () => {
 		}, (c) => ({
 			health: c.health('/healthz'),
 			jobs: {
-				nightly: c.cron('0 3 * * *', { actions: ['notes.read'], scope: 'workspace' }),
-				hourly: c.cron('0 * * * *', { actions: ['notes.read'], scope: 'app', limits: { timeoutMs: 300000 } }),
+				nightly: c.cron('0 3 * * *', { actions: ['notes.read'] }),
+				hourly: c.cron('0 * * * *', { actions: ['notes.read'], limits: { timeoutMs: 300000 } }),
 			},
 		}))
 		const loose = implement(contract, {
@@ -159,7 +159,6 @@ describe('boot binds every job or does not start', () => {
 		const missing = { ...loose, handlers: () => ({ jobs: { nightly: () => {}, extra: () => {} } }) }
 		const options = { environment: environment(frameworkEnvFor(loose)), iam: keySource }
 		expect(problemsOf(() => bootApp(missing, options))).toEqual([
-			"job 'nightly' is scoped to 'workspace'; this version runs jobs with scope: 'app' only",
 			"job 'nightly' needs @fabrika/db on Postgres, which holds its lease and fences its writes: serve(contract, { database: scoped(tables) })",
 			"job 'hourly' needs @fabrika/db on Postgres, which holds its lease and fences its writes: serve(contract, { database: scoped(tables) })",
 			"job 'hourly' has no handler; add it to handlers.jobs",
@@ -528,7 +527,7 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 		}
 	})
 
-	test('fabrika job run boots a contract with a file collection on the object storage the platform wrote', async () => {
+	test('fabrika job run boots a contract with a file kind on the object storage the platform wrote', async () => {
 		const iam = serveStandInIam(filesJobsApp())
 		const env = {
 			...frameworkEnvFor(filesJobsApp()),

@@ -19,7 +19,6 @@ export const vocabulary = {
 		'workspaces.create': 'Create workspaces',
 		'workspaces.admin': 'Administer workspaces',
 		'secrets.admin': 'Administer secrets',
-		'contact.read': 'Read the contact inbox',
 		'settings.read': 'Read the settings',
 		'settings.edit': 'Edit the settings',
 	},
@@ -80,7 +79,6 @@ export const policies = {
 		update: ['value'],
 	},
 	countries: { scope: { reference: 'read-only lookup data' }, actions: { read: 'notes.read' } },
-	contact_messages: { scope: { inbox: 'contact', read: 'contact.read' } },
 } as const
 
 export const tables = defineTables(vocabulary, columns)(policies)

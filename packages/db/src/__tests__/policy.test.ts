@@ -292,11 +292,10 @@ describe('the parsed model', () => {
 		})
 	})
 
-	test('reference and inbox tables keep their mode and read action', () => {
+	test('a reference table keeps its mode and read action', () => {
 		const models = tableModels(tables)
 		expect(modelOf(models, 'countries')?.scope).toEqual({ mode: 'reference', reason: 'read-only lookup data' })
-		expect(modelOf(models, 'contact_messages')?.scope).toEqual({ mode: 'inbox', form: 'contact' })
-		expect(modelOf(models, 'contact_messages')?.actions.read).toEqual(['contact.read'])
+		expect(modelOf(models, 'countries')?.actions.read).toEqual(['notes.read'])
 	})
 })
 

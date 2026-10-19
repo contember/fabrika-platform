@@ -26,7 +26,6 @@ import { refuseInProduction } from './production'
 import { frameworkSideOf } from './registry'
 import type { TableProbe } from './store'
 
-export { withoutInboxes } from './policy'
 export { ChildTable, defineChildStore, defineStore, DimensionTable, type TableProbe } from './store'
 
 const MODULE = '@fabrika/db/testing'
@@ -266,6 +265,12 @@ const MAX_REFERENCE_DEPTH = 4
 /** The digest of the empty object a seeded file stands for. */
 const EMPTY_SHA256 = createHash('sha256').digest('hex')
 
+/**
+ * The object version a seeded file was scanned at: whoever stocks its empty object (`seededObjects`) stores it under
+ * this version, so a file of a scanning kind is served as a live one is, by its scanned version.
+ */
+export const SEEDED_OBJECT_VERSION = '"seeded"'
+
 /** A CHECK or foreign key violation of a seeded row, as the generator limit it is; `undefined` for any other failure. */
 function seedLimit(error: unknown, table: string): SeedLimitError | undefined {
 	if (!(error instanceof SQL.PostgresError)) return undefined
@@ -489,9 +494,9 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 		const objectKey = `${kind}/${id}`
 		seededObjects.push(objectKey)
 		await seeder.unsafe(
-			`INSERT INTO ${quoted(schema)}.${quoted(FILES_TABLE)} (id, kind, status, object_key, size, sha256, content_type, name, created_at)
-			VALUES ($1, $2, 'live', $3, 0, $4, 'application/octet-stream', 'seeded', now())`,
-			[id, kind, objectKey, EMPTY_SHA256],
+			`INSERT INTO ${quoted(schema)}.${quoted(FILES_TABLE)} (id, kind, status, object_key, size, sha256, content_type, name, created_at, object_version)
+			VALUES ($1, $2, 'live', $3, 0, $4, 'application/octet-stream', 'seeded', now(), $5)`,
+			[id, kind, objectKey, EMPTY_SHA256, SEEDED_OBJECT_VERSION],
 		)
 		return id
 	}

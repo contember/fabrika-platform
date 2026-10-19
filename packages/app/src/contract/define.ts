@@ -9,8 +9,6 @@ import {
 	type ExportAccessDeclaration,
 	type ExportDeclaration,
 	type FileKindDeclaration,
-	type FilesDeclaration,
-	type FormMountDeclaration,
 	type HealthMountDeclaration,
 	type ImportDeclaration,
 	type LinkAccessDeclaration,
@@ -268,34 +266,17 @@ export interface SpaMount<Acc extends SpaAccessDeclaration> extends SpaMountDecl
 
 export type HealthMount = HealthMountDeclaration
 
-export interface FormMount<I extends Schema, T extends string = string> extends FormMountDeclaration<Schema> {
-	readonly input: I
-	readonly then?: T
-}
-
 export interface WebhookMount<B extends string, Acts extends string, I extends Schema> extends WebhookMountDeclaration<Schema> {
 	readonly boundTo: B
 	readonly actions: readonly Acts[]
 	readonly input: I
 }
 
-/** `L` is which link mounts' holders reach the collection: the typed client gives a link mount's holders only those. */
-/** `link` of `c.files`: every link mount bound to the owner's dimension, none, or the named ones. */
-export type LinkServing = boolean | readonly string[]
-
-export interface FileCollection<A extends string, L extends LinkServing = LinkServing> extends FilesDeclaration {
-	readonly read: A
-	readonly write: A
-	readonly delete: A
-	readonly link?: L
-}
-
 /** A file kind `c.files({ types, maxBytes, scan? })` declares: what a file column of that kind holds. */
 export interface FileKind extends FileKindDeclaration {}
 
-export interface CronJob<Acts extends string, Sc extends string> extends CronDeclaration {
+export interface CronJob<Acts extends string> extends CronDeclaration {
 	readonly actions: readonly Acts[]
-	readonly scope: Sc
 }
 
 export interface Export<T extends QueryTree> extends ExportDeclaration<Schema> {
@@ -307,13 +288,12 @@ export type AnyMount =
 	| LinkMount<string, string, string, LinkProcedureTree>
 	| SpaMount<SpaAccessDeclaration>
 	| HealthMount
-	| FormMount<Schema>
 	| WebhookMount<string, string, Schema>
 
 /** What the callback of `defineContract` returns: mounts by name, and the sections `SURFACE_SECTIONS` names. */
 export interface SurfaceSections {
-	readonly files?: { readonly [name: string]: FileCollection<string> | FileKind }
-	readonly jobs?: { readonly [name: string]: CronJob<string, string> }
+	readonly files?: { readonly [name: string]: FileKind }
+	readonly jobs?: { readonly [name: string]: CronJob<string> }
 	readonly exports?: { readonly [name: string]: Export<QueryTree> }
 	readonly imports?: { readonly [name: string]: ImportDeclaration }
 	readonly csp?: CspDeclaration
@@ -325,53 +305,13 @@ export interface Surface extends SurfaceSections {
 	readonly [name: string]: AnyMount | SurfaceSections[keyof SurfaceSections]
 }
 
-/** What a form's `then` must be instead: the refusal, at the form's own line. */
-export type FormJobMessage = "then names a job of the contract's jobs section"
-
-/** Each form's `then` names a job of the same surface's `jobs` section. */
-export type FormJobs<S> = {
-	readonly [K in keyof S]: S[K] extends { readonly kind: 'form'; readonly then?: infer T }
-		? [T] extends [string] ? { readonly then?: (S extends { readonly jobs: infer J } ? keyof J & string : never) | FormJobMessage }
-		: unknown
-		: unknown
-}
-
-/** A form's challenge: the provider and the application variables that hold its secret and its public site key. */
-export interface FormChallengeOption {
+/** A public procedure's challenge: the provider and the application variables that hold its secret and its public site key. */
+export interface ChallengeOption {
 	readonly provider: ChallengeProvider
 	readonly secret: string
 	/** Served by every SPA mount at `<prefix>/__fabrika-config.json`, so the page renders the widget with it. */
 	readonly siteKey?: string
 }
-
-/** A file field of a form: the collection its file lands in (a `scan: true` one), and whether a submission must carry it. */
-export interface FormFileOption {
-	readonly collection: string
-	/** `true`: a submission without the file is refused (400). Absent or `false`: the column gets `null`. */
-	readonly required?: boolean
-}
-
-/** What `c.form(path, options)` takes. */
-export type FormOptions<I, T> =
-	& {
-		readonly input: I & NotLoose<I>
-		readonly appendTo: string
-		readonly maxBytes?: number
-		/** Per minute; `bytesPerHour` only on a form with files, the bytes all its submissions write per hour. */
-		readonly rate?: { readonly perClient?: number; readonly perForm?: number; readonly bytesPerHour?: number }
-		readonly honeypot?: string
-		readonly challenge?: FormChallengeOption
-		/** The cron job each accepted submission kicks, in the background of the constant answer. */
-		readonly then?: T
-		/** A page on another origin may submit it: `true` from the environment's listed origins, `'*'` from any. */
-		readonly crossOrigin?: true | '*'
-		/**
-		 * Files a submission carries beside its input, by field. The form becomes `multipart/form-data` and needs a
-		 * challenge; each file waits, owned by nobody, until the job that drains the inbox attaches it.
-		 */
-		readonly files?: { readonly [field: string]: FormFileOption }
-	}
-	& Owned<'kind' | 'path'>
 
 export interface LinkKit<A extends string> {
 	query<const Acc extends LinkAccess<A>, O extends Schema, I extends InputSchema | null = null>(
@@ -418,7 +358,6 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 		} & Owned<'kind' | 'prefix'>,
 	): SpaMount<Acc>
 	health(path: Path): HealthMount
-	form<I extends InputSchema, const T extends string = never>(path: Path, options: FormOptions<I, T>): FormMount<I, NoInfer<T>>
 	webhook<const B extends D | 'app', const Acts extends readonly [A, ...A[]], I extends InputSchema>(
 		path: Path,
 		options: {
@@ -442,28 +381,13 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 				/** Each file is scanned for malware and served only after a clean verdict; until then it answers 409. */
 				readonly scan?: boolean
 			}
-			& Owned<'kind'>
-			& { readonly owner?: never },
+			& Owned<'kind'>,
 	): FileKind
-	files<const L extends boolean | readonly [string, ...string[]] = false>(
-		collection: {
-			readonly owner: string
-			readonly read: A
-			readonly write: A
-			readonly delete: A
-			readonly maxBytes: number
-			readonly types: readonly [string, ...string[]]
-			readonly maxPerOwner?: number
-			/** `true`: every link mount bound to the owner's dimension serves the files; a list: the named link mounts only. */
-			readonly link?: L
-			/** Each upload is scanned for malware and served only after a clean verdict; until then it answers 409. */
-			readonly scan?: boolean
-		} & Owned<'kind'>,
-	): FileCollection<A, L>
-	cron<const Acts extends readonly [A, ...A[]], const Sc extends D | 'app'>(
+	/** A job of the whole application, holding `actions`; it runs on its schedule (UTC, five fields) and when kicked. */
+	cron<const Acts extends readonly [A, ...A[]]>(
 		schedule: string,
-		options: { readonly actions: Acts; readonly scope: Sc; readonly limits?: JobLimitsOption; readonly retries?: number } & Owned<'kind' | 'schedule'>,
-	): CronJob<Acts[number], Sc>
+		options: { readonly actions: Acts; readonly limits?: JobLimitsOption; readonly retries?: number } & Owned<'kind' | 'schedule'>,
+	): CronJob<Acts[number]>
 	export<const T extends QueryTree>(
 		definition: {
 			readonly version: number
@@ -511,52 +435,6 @@ function linkKit<A extends string>(): LinkKit<A> {
 	}
 }
 
-interface FileKindOptions {
-	readonly types: readonly [string, ...string[]]
-	readonly maxBytes: number
-	readonly scan?: boolean
-}
-
-interface FileCollectionOptions<A extends string, L extends LinkServing> {
-	readonly owner: string
-	readonly read: A
-	readonly write: A
-	readonly delete: A
-	readonly maxBytes: number
-	readonly types: readonly [string, ...string[]]
-	readonly maxPerOwner?: number
-	readonly link?: L
-	readonly scan?: boolean
-}
-
-/** `c.files`: a file kind without an `owner`, a file collection with one (the older form, until it is removed). */
-function filesBuilder(kind: FileKindOptions): FileKind
-function filesBuilder<A extends string, const L extends LinkServing>(collection: FileCollectionOptions<A, L>): FileCollection<A, L>
-function filesBuilder(options: FileKindOptions | FileCollectionOptions<string, LinkServing>): FileKind | FileCollection<string, LinkServing> {
-	if (!('owner' in options)) {
-		return {
-			kind: 'file-kind',
-			types: options.types,
-			maxBytes: options.maxBytes,
-			scan: options.scan,
-			unknownOptions: unknownOptions(options, 'fileKind'),
-		}
-	}
-	return {
-		kind: 'files',
-		owner: options.owner,
-		read: options.read,
-		write: options.write,
-		delete: options.delete,
-		maxBytes: options.maxBytes,
-		types: options.types,
-		maxPerOwner: options.maxPerOwner,
-		link: options.link,
-		scan: options.scan,
-		unknownOptions: unknownOptions(options, 'files'),
-	}
-}
-
 /** The builders `defineContract` hands its callback; the staged kit's contract reuses its mounts that take no handler. */
 export function surfaceKit<A extends string, D extends string, CD extends string>(): Kit<A, D, CD> {
 	return {
@@ -589,20 +467,6 @@ export function surfaceKit<A extends string, D extends string, CD extends string
 			unknownOptions: unknownOptions(options, 'spa'),
 		}),
 		health: (path) => ({ kind: 'health', path }),
-		form: (path, options) => ({
-			kind: 'form',
-			path,
-			input: options.input,
-			appendTo: options.appendTo,
-			maxBytes: options.maxBytes,
-			rate: options.rate,
-			honeypot: options.honeypot,
-			challenge: options.challenge,
-			then: options.then,
-			...(options.crossOrigin === undefined ? {} : { crossOrigin: options.crossOrigin }),
-			...(options.files === undefined ? {} : { files: options.files }),
-			unknownOptions: unknownOptions(options, 'form'),
-		}),
 		webhook: (path, options) => ({
 			kind: 'webhook',
 			path,
@@ -613,12 +477,17 @@ export function surfaceKit<A extends string, D extends string, CD extends string
 			...(options.limits === undefined ? {} : { limits: options.limits }),
 			unknownOptions: unknownOptions(options, 'webhook'),
 		}),
-		files: filesBuilder,
+		files: (kind) => ({
+			kind: 'file-kind',
+			types: kind.types,
+			maxBytes: kind.maxBytes,
+			scan: kind.scan,
+			unknownOptions: unknownOptions(kind, 'fileKind'),
+		}),
 		cron: (schedule, options) => ({
 			kind: 'cron',
 			schedule,
 			actions: options.actions,
-			scope: options.scope,
 			...(options.limits === undefined ? {} : { limits: options.limits }),
 			retries: options.retries,
 			unknownOptions: unknownOptions(options, 'cron'),
@@ -643,7 +512,7 @@ export function defineContract<
 	const D extends string,
 	const R extends string,
 	const Dims extends { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> },
-	const S extends Surface & FormJobs<S>,
+	const S extends Surface,
 >(
 	vocabulary: Presentation & AppPeople<NoInfer<A>> & {
 		readonly app: string

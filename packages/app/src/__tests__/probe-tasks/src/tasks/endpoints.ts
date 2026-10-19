@@ -42,7 +42,7 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 }))
 
 /** Marks every task past its due day, across every org: a keyset page at a time, each write in the attempt's transaction. */
-export const markOverdue = app.cron('15 * * * *', { actions: ['tasks.read', 'tasks.write'], scope: 'app' })
+export const markOverdue = app.cron('15 * * * *', { actions: ['tasks.read', 'tasks.write'] })
 	.handle(async ({ ctx }) => {
 		const today = new Date().toISOString().slice(0, 10)
 		const tasks = ctx.db.over(ctx.within('tasks.read', 'org')).tasks

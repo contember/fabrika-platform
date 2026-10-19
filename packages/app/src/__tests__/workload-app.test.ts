@@ -44,7 +44,7 @@ afterAll(async () => {
 
 const seen: { title?: string; listed?: boolean; action?: string } = {}
 
-const open = app.cron('* * * * *', { actions: ['positions.read', 'positions.manage'], scope: 'app' }).handle(async ({ ctx }) => {
+const open = app.cron('* * * * *', { actions: ['positions.read', 'positions.manage'] }).handle(async ({ ctx }) => {
 	const title = `Opened by the job ${crypto.randomUUID()}`
 	seen.action = ctx.app('positions.manage').action
 	await ctx.transaction(async (tx) => {
@@ -54,7 +54,7 @@ const open = app.cron('* * * * *', { actions: ['positions.read', 'positions.mana
 	seen.listed = (await ctx.db.app('positions.read').positions.list()).items.some((row) => row.title === title)
 })
 
-const undeclared = app.cron('0 3 * * *', { actions: ['positions.read'], scope: 'app' }).handle(({ ctx }) => {
+const undeclared = app.cron('0 3 * * *', { actions: ['positions.read'] }).handle(({ ctx }) => {
 	// The types refuse the action; at run time the runner refuses one the job does not declare.
 	Reflect.apply(ctx.app, ctx, ['positions.manage'])
 })

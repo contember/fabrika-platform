@@ -2,7 +2,7 @@
 // endpoint the proxy applied (ADR-0022 rule 5), the token, the caller kind, the requirement, admission, strict input, the access form, the handler, output
 // projection. The caller-kind, requirement and access checks are authorization; the same-origin and content-type
 // checks are admission. Neither is the proxy's decision: the proxy has already decided that the request may reach us.
-// The anonymous kinds (health, form, webhook, the share SPA) read no token and take their own fixed steps.
+// The anonymous kinds (health, public, webhook, the share SPA) read no token and take their own fixed steps.
 
 import type { IamMembership, MembershipRequestCaller } from '@fabrika/auth'
 import {
@@ -16,7 +16,6 @@ import {
 	type EndpointRow,
 	type ExportDescription,
 	FORM_URLENCODED_TYPE,
-	type FormFileArtifact,
 	isAttachmentShape,
 	isFileShape,
 	isRedirectShape,
@@ -46,11 +45,9 @@ import { z } from 'zod/v4'
 import { fileFieldsOf } from '../contract/build'
 import {
 	BROWSER_CONFIG_FILE,
+	CHALLENGE_FIELD,
 	challengeAction,
 	FILE_INPUT_PART,
-	FORM_CHALLENGE_FIELD,
-	FORM_FILE_LIMITS,
-	FORM_INPUT_PART,
 	FORM_MULTIPART_TYPE,
 	joinPath,
 	PAGE_CALLER_FILE,
@@ -69,7 +66,6 @@ import {
 	UnauthorizedError,
 } from '../errors'
 import type { RequestExecutionContext } from '../fetch'
-import type { FileCollections, ReceivedFormFile } from '../files/collections'
 import { FileWork, type StoredFileKinds, storedFilesHandle } from '../files/kinds'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
 import { abortedBody, bodyDeadlineMs, bootstrapPath, bootstrapResponse, readBoundedBody, withBootstrap } from './anonymous'
@@ -91,20 +87,9 @@ import { connectContext, type ImportWire } from './connect'
 import { runAsSite } from './egress'
 import type { FailureReports } from './failures'
 import { ServerFault } from './faults'
-import { ACCEPTED_BUCKET, clientBucket, type Submission, type SubmissionFields, submissionOf } from './form-admission'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
-import {
-	boundTo,
-	boundWebhookApp,
-	endpointData,
-	Invocation,
-	kickRecorder,
-	noFileCollections,
-	siteData,
-	type SiteDeclaration,
-	undeclaredSql,
-} from './invocation'
+import { boundTo, boundWebhookApp, endpointData, Invocation, kickRecorder, siteData, type SiteDeclaration, undeclaredSql } from './invocation'
 import {
 	applicationDirectory,
 	createScope,
@@ -182,8 +167,6 @@ export type ServedEndpoint =
 		readonly site?: ServedSite
 		/** The origins a staged-kit site's `fetch` reaches while its handler runs; absent for a handler `implement` bound. */
 		readonly egress?: readonly string[]
-		/** The cron job this mutation kicks once its transaction committed; absent without `then`. */
-		readonly then?: string
 		/** Its buckets and time limit; without them (a generated endpoint) no bucket and the request budget. */
 		readonly admission?: ProcedureAdmission
 		/** A POST's `query`, parsed from the URL beside the body: its schema and its shape. */
@@ -199,28 +182,8 @@ export type ServedEndpoint =
 	/** An SPA anyone opens: anonymous, served without a token. */
 	| { readonly kind: 'public-spa'; readonly row: EndpointRow; readonly prefix: string; readonly dir: string; readonly config: BrowserConfig }
 	| { readonly kind: 'health'; readonly row: EndpointRow }
-	| {
-		/** A file collection's upload or download, served by `src/files` once the access form minted its target. */
-		readonly kind: 'file'
-		readonly row: CredentialedEndpoint
-		readonly serve: (request: Request, target: unknown) => Promise<Response | FileDownload>
-		/**
-		 * A link holder's download: the `file:<name>` dimension whose `:fileId` must lie beneath the link's object. Its
-		 * row is `on` the owner's dimension, the link's object; the file is resolved under it.
-		 */
-		readonly beneath?: string
-	}
 	/** The shell of a link mount's share SPA: anonymous, and served with the fragment bootstrap. */
 	| { readonly kind: 'link-spa'; readonly row: EndpointRow; readonly prefix: string; readonly dir: string }
-	| {
-		readonly kind: 'form'
-		readonly row: EndpointRow
-		readonly form: string
-		readonly input: Schema
-		readonly admission: FormAdmission
-		/** The job each accepted submission kicks once its row committed; `null` without `then`. */
-		readonly then: string | null
-	}
 	| {
 		/** A procedure anyone calls: its handler runs as the endpoint's own workload, holding `actions` only. */
 		readonly kind: 'public'
@@ -258,31 +221,6 @@ export interface ProcedureQuery {
 	readonly shape: SchemaShape
 }
 
-/** A form's file fields and the collections they land in: such a form reads `multipart/form-data`. */
-export interface FormFileAdmission {
-	readonly fields: ReadonlyMap<string, FormFileArtifact>
-	readonly collections: FileCollections
-	/** The bytes all the form's files may write per hour; each file reserves its collection's `maxBytes` first. */
-	readonly bytesPerHour: number
-	/** How long the whole body may take to arrive. */
-	readonly timeoutMs: number
-}
-
-/** What a form admits, decided once at boot from the approved artifact and the application's variables. */
-export interface FormAdmission {
-	/** Requests per minute from one client, admitted before the body is read. */
-	readonly perClient: number
-	/** Submissions per minute the form accepts in all: only one that passed its honeypot and its challenge counts. */
-	readonly perForm: number
-	readonly fields: SubmissionFields
-	/** The form's file fields; `null` for a form that takes none, whose body is JSON. */
-	readonly files: FormFileAdmission | null
-	/** The challenge's verifier, with the secret the application variable holds; `null` without a challenge. */
-	readonly challenge: ChallengeVerifier | null
-	/** The one token the challenge does not record, so it passes again: `fabrika app dev`'s test widget's; `null` otherwise. */
-	readonly repeatableToken: string | null
-}
-
 export interface RuntimeParts {
 	readonly table: CompiledEndpointTable
 	readonly endpoints: ReadonlyMap<string, ServedEndpoint>
@@ -302,15 +240,13 @@ export interface RuntimeParts {
 	readonly assets: SpaAssets | null
 	/** IAM's membership operations; `boot` refuses a contract that needs them when the adapter supplies none. */
 	readonly membership: IamMembership | null
-	/** The framework's own writes (inboxes, admissions, webhook tables); `boot` refuses a form or webhook without them. */
+	/** The framework's own writes (admission buckets, webhook tables); `boot` refuses a webhook or a bucket without them. */
 	readonly framework: FrameworkTables | null
 	/** This runtime's capability mint, which `boot` alone holds, and the authority its stores are bound to. */
 	readonly mint: CapabilityMint
 	readonly capabilities: CapabilityAuthority
 	/** The mini-ORM of the bound `scoped(tables)` layer; `boot` refuses a site without one. */
 	readonly data: DataAccess | null
-	/** The contract's file collections, behind a staged-kit site's `ctx.files`; `null` when it declares none. */
-	readonly files: FileCollections | null
 	/** The contract's file kinds: file fields, file outputs, `ctx.files.put` and `.open`; `null` when it declares none. */
 	readonly fileKinds: StoredFileKinds | null
 	/** Where a 5xx goes: the server log, and Operations when the application has a DSN. */
@@ -432,10 +368,6 @@ export class ContractRuntime {
 					return await withBootstrap(await this.#asset(served, request), served.prefix)
 				case 'procedure':
 					return await this.#procedure(served, request, exec)
-				case 'file':
-					return await this.#file(served, request, plan.params)
-				case 'form':
-					return await this.#form(served, request, exec)
 				case 'public':
 					return await this.#public(served, request, exec)
 				case 'webhook':
@@ -570,7 +502,7 @@ export class ContractRuntime {
 	 * A staged-kit site runs in one transaction: its statements commit after the handler returned, the output passed
 	 * validation and an attachment was encoded, and roll back on a throw, a refused output, a file over its limit or a
 	 * cancelled request. So an audited export keeps its log row only when its file goes out. Only after that commit does
-	 * `then` kick its job, which the answer neither waits for nor depends on.
+	 * `ctx.kick` send its jobs, which the answer neither waits for nor depends on.
 	 */
 	async #procedure(
 		served: Extract<ServedEndpoint, { kind: 'procedure' }>,
@@ -619,7 +551,7 @@ export class ContractRuntime {
 						// An export's consumer reaches its rows only, never the files of their owners.
 						...(site === undefined || invocation === null || served.readOnly === true
 							? {}
-							: { files: this.#files(served.row.id, frame, invocation, site.kind, work) }),
+							: { files: this.#files(served.row.id, invocation, site.kind, work) }),
 						...(served.binds === undefined || invocation === null
 							? {}
 							: { webhooks: this.#webhookBindings(served.row.id, served.binds, invocation, caller.subject) }),
@@ -638,7 +570,7 @@ export class ContractRuntime {
 			const answer = await this.#answerOf(served, result, request, work, carried)
 			outcome = 'committing'
 			await commitAnswer(invocation, signal, answer)
-			this.#kickAll([...(served.then === undefined ? [] : [served.then]), ...kicks.kicked()], exec)
+			this.#kickAll(kicks.kicked(), exec)
 			return answer
 		} finally {
 			await invocation?.rollback()
@@ -721,17 +653,9 @@ export class ContractRuntime {
 		})
 	}
 
-	/**
-	 * `ctx.files` of a staged-kit site, in its invocation's transaction: each collection by its name, and `put` and `open`
-	 * of the stored files, bound to the request's work.
-	 */
-	#files(endpoint: string, frame: RequestFrame, invocation: Invocation, kind: DataKind, work: FileWork): object {
-		const where = `'${endpoint}'`
-		const site = invocation.fileSite(where, kind)
-		const collections = this.#parts.files === null ? noFileCollections(where) : this.#parts.files.site({ frame, ...site })
-		return Object.freeze(
-			Object.assign(collections, storedFilesHandle(this.#parts.fileKinds, work, { where, check: site.check, writes: kind !== 'query' })),
-		)
+	/** `ctx.files` of a staged-kit site: `put` and `open` of the stored files, bound to the invocation and the request's work. */
+	#files(endpoint: string, invocation: Invocation, kind: DataKind, work: FileWork): object {
+		return storedFilesHandle(this.#parts.fileKinds, work, { where: `'${endpoint}'`, check: invocation.fileCheck(), writes: kind !== 'query' })
 	}
 
 	#data(): DataAccess {
@@ -740,73 +664,6 @@ export class ContractRuntime {
 			throw new ServerFault('facility_unbound', 'a site reaches data through ctx.db, and boot bound no @fabrika/db layer')
 		}
 		return data
-	}
-
-	/**
-	 * The access form reads its value from the path parameter it names: `:owner` of an upload, `:fileId` of a download.
-	 * A link holder's row names none: its owner is the link's object, checked as a link procedure's is.
-	 */
-	async #file(
-		served: Extract<ServedEndpoint, { kind: 'file' }>,
-		request: Request,
-		params: Readonly<Record<string, string>>,
-	): Promise<Response | FileDownload> {
-		const caller = await this.#authorize(served.row, request)
-		const access = served.row.requirement.kind === 'action' ? served.row.requirement.access : null
-		if (access?.form === 'on' && access.from === null && served.row.requirement.kind === 'action') {
-			return await this.#linkFile(served, request, params, caller, served.row.requirement.action, access.dimension)
-		}
-		const from = access?.form === 'on' ? access.from : null
-		const raw = from === null ? undefined : params[from]
-		if (from === null || raw === undefined) {
-			throw new ServerFault('contract_inconsistent', `'${served.row.id}' names no path parameter for its access form`)
-		}
-		const frame = new RequestFrame(crypto.randomUUID())
-		try {
-			return await runInRequest(frame, async () => {
-				const { context } = await this.#access(served.row, caller, { [from]: decodePathParameter(raw) }, frame, null)
-				return await served.serve(request, context['target'])
-			})
-		} finally {
-			frame.end()
-		}
-	}
-
-	/**
-	 * A link holder's upload or download. The link's mount and its chain are checked as `#linkTarget` checks them; a
-	 * download then resolves `:fileId` beneath that object, and a file of any other object is indistinguishable from a
-	 * missing one.
-	 */
-	async #linkFile(
-		served: Extract<ServedEndpoint, { kind: 'file' }>,
-		request: Request,
-		params: Readonly<Record<string, string>>,
-		caller: Caller,
-		action: string,
-		dimension: string,
-	): Promise<Response | FileDownload> {
-		const frame = new RequestFrame(crypto.randomUUID())
-		try {
-			return await runInRequest(frame, async () => {
-				const owner = await this.#linkTarget(served.row, caller, action, dimension, {}, frame)
-				const beneath = served.beneath
-				if (beneath === undefined) {
-					return await served.serve(request, owner.context['target'])
-				}
-				const raw = params['fileId']
-				const fileId = raw === undefined ? '' : decodePathParameter(raw)
-				const [object, ...containers] = caller.link?.chain ?? []
-				const chain = fileId === '' ? null : await this.#chain(beneath, fileId)
-				const ownedHere = chain !== null && object !== undefined && chain.get(dimension) === object.value
-					&& containers.every((scope) => chain.get(scope.type) === scope.value)
-				if (chain === null || object === undefined || !ownedHere) {
-					throw new NotFoundError('Not found')
-				}
-				return await served.serve(request, this.#parts.mint.ref(frame, beneath, action, caller.subject, fileId, chain))
-			})
-		} finally {
-			frame.end()
-		}
 	}
 
 	/** The caller's authority at IAM for this request, when the endpoint's access form names a dimension and an action. */
@@ -987,203 +844,22 @@ export class ContractRuntime {
 	}
 
 	/**
-	 * A form appends one row of its declared fields to its inbox and answers a constant; it reads nothing. In order: the
-	 * client's request bucket (before the body is read), the input, the honeypot (a filled one is answered as accepted
-	 * and writes nothing), the challenge, then the form's bucket of accepted submissions with the row, in one
-	 * transaction, so nothing refused or failed can empty it. Only after that commit does `then` kick its job, which the
-	 * answer neither waits for nor depends on.
+	 * The token verifies for this host and this action, and was not accepted before unless it is the `repeatable` one: a
+	 * failure is 403, an unreachable provider 503.
 	 */
-	async #form(served: Extract<ServedEndpoint, { kind: 'form' }>, request: Request, exec: RequestExecutionContext | undefined): Promise<Response> {
-		admitContentType(served.row, request)
-		const { admission } = served
-		const admissions = this.#framework().forms
-		if (!(await admissions.take(served.form, clientBucket(request), admission.perClient))) {
-			throw formRateLimited(served.row)
-		}
-		// A form with files whose every file is optional also takes the JSON body of a page that sends none.
-		if (admission.files !== null && mediaType(request.headers.get('Content-Type')) === FORM_MULTIPART_TYPE) {
-			return await this.#multipartForm(served, admission.files, request, exec)
-		}
-		const body = await readBoundedBody(request, maxBytesOf(served.row))
-		const submission = submissionOf(strictInput(served.row, served.input, parseJson(body)), admission.fields)
-		if (submission.trapped) {
-			return jsonResponse({ result: { received: true } }, 200)
-		}
-		if (admission.challenge !== null) {
-			await this.#challenge(served.form, admission.challenge, submission.token, request, admission.repeatableToken)
-		}
-		// One transaction: a row that fails to insert gives its place in the form's bucket back.
-		if (!(await this.#framework().appendToInbox(served.form, submission.row, { bucket: ACCEPTED_BUCKET, limit: admission.perForm }))) {
-			throw formRateLimited(served.row)
-		}
-		if (served.then !== null) {
-			// Without an execution context the kick runs detached; it never rejects.
-			const kicked = this.#parts.kick(served.then)
-			exec?.waitUntil(kicked)
-		}
-		return jsonResponse({ result: { received: true } }, 200)
-	}
-
-	/**
-	 * A form that takes files reads its `multipart/form-data` body as it streams, in the order of `#form`: its first part
-	 * is the input as JSON (within the form's `maxBytes`), so the input, the honeypot and the challenge are decided before
-	 * a byte of any file is read. Each file part then lands in its collection under a pending row of its own, owned by
-	 * nobody, and the inbox row that names each file's id makes them held in its own transaction. A submission that does
-	 * not commit deletes every file it received. The whole body arrives within the form's `timeoutMs`.
-	 */
-	async #multipartForm(
-		served: Extract<ServedEndpoint, { kind: 'form' }>,
-		files: FormFileAdmission,
-		request: Request,
-		exec: RequestExecutionContext | undefined,
-	): Promise<Response> {
-		const { admission } = served
-		const boundary = multipartBoundary(request.headers.get('Content-Type'))
-		if (boundary === null) {
-			throw new HttpError(400, 'admission', `'${served.row.id}' takes multipart/form-data with a boundary`)
-		}
-		// Each part is bounded on its own as it streams; a declared length past all of them together is refused unread.
-		const declaredFiles = [...files.fields.values()]
-		const limit = maxBytesOf(served.row) + declaredFiles.reduce((sum, field) => sum + files.collections.maxBytesOf(field.collection), 0)
-			+ (declaredFiles.length + 1) * MULTIPART_PART_OVERHEAD
-		const declared = Number(request.headers.get('Content-Length') ?? '')
-		if (Number.isFinite(declared) && declared > limit) {
-			throw new HttpError(413, 'too_large', `The body is larger than the ${limit} bytes the form's input and files can hold`)
-		}
-		const deadline = AbortSignal.any([request.signal, AbortSignal.timeout(files.timeoutMs)])
-		const parts = multipartParts(request.body ?? new Blob([]).stream(), boundary, { maxHeaderBytes: FORM_FILE_LIMITS.maxPartHeaderBytes })
-		const stop = () => {
-			parts.cancel().catch(() => {})
-		}
-		deadline.addEventListener('abort', stop, { once: true })
-		const received: ReceivedFormFile[] = []
-		/**
-		 * `kept` once the inbox row may have committed: an append that threw may have committed before its answer was
-		 * lost, so its files are left to the sweep, which deletes a pending row's object after an hour and never a held one.
-		 */
-		let kept = false
-		try {
-			const submission = await this.#multipartInput(served, parts)
-			if (submission.trapped) {
-				return jsonResponse({ result: { received: true } }, 200)
-			}
-			if (admission.challenge === null) {
-				// `boot` refuses a form with files and no challenge; reaching this is a composition bug.
-				throw new ServerFault('contract_inconsistent', `'${served.row.id}' takes files without a challenge`)
-			}
-			await this.#challenge(served.form, admission.challenge, submission.token, request, admission.repeatableToken)
-			const columns = new Map<string, string | null>()
-			for (let part = await parts.next(); part !== null; part = await parts.next()) {
-				const field = files.fields.get(part.name)
-				if (field === undefined || columns.has(part.name) || part.filename === null) {
-					await part.body.cancel()
-					throw new HttpError(
-						400,
-						'multipart',
-						`'${served.row.id}': a part is no file field of the form, a field arrives twice, or a file has no filename`,
-					)
-				}
-				const file = await this.#receiveFormFile(served, files, field.collection, part)
-				if (file !== null) {
-					received.push(file)
-				}
-				columns.set(part.name, file?.id ?? null)
-			}
-			const row: Record<string, unknown> = { ...submission.row }
-			for (const [name, field] of files.fields) {
-				const id = columns.get(name) ?? null
-				if (id === null && field.required) {
-					throw new HttpError(400, 'validation', `${name}: the form needs this file`, {
-						issues: [{ path: name, code: 'required', message: 'a file is required' }],
-					})
-				}
-				row[name] = id
-			}
-			const held = { files: received.map(({ id, size, sha256 }) => ({ id, size, sha256 })), holdMs: FORM_FILE_LIMITS.holdMs }
-			kept = true
-			const appended = await this.#framework().appendToInbox(served.form, row, { bucket: ACCEPTED_BUCKET, limit: admission.perForm }, held)
-			if (!appended) {
-				kept = false
-				throw formRateLimited(served.row)
-			}
-		} catch (error) {
-			throw multipartFailure(error, parts, deadline, request)
-		} finally {
-			deadline.removeEventListener('abort', stop)
-			await parts.cancel()
-			if (!kept) {
-				await files.collections.releaseFormFiles(received)
-			}
-		}
-		if (served.then !== null) {
-			// Without an execution context the kick runs detached; it never rejects.
-			const kicked = this.#parts.kick(served.then)
-			exec?.waitUntil(kicked)
-		}
-		return jsonResponse({ result: { received: true } }, 200)
-	}
-
-	/**
-	 * One file of a submission, within the form's hourly byte budget: it reserves its collection's `maxBytes` before its
-	 * first byte is written (429 when they no longer fit) and gives back what it did not use. A file that failed keeps
-	 * its reservation: its bytes may have been written.
-	 */
-	async #receiveFormFile(
-		served: Extract<ServedEndpoint, { kind: 'form' }>,
-		files: FormFileAdmission,
-		collection: string,
-		part: { readonly filename: string | null; readonly contentType: string | null; readonly body: ReadableStream<Uint8Array> },
-	): Promise<ReceivedFormFile | null> {
-		const admissions = this.#framework().forms
-		const reserved = files.collections.maxBytesOf(collection)
-		if (!(await admissions.reserveBytes(served.form, reserved, files.bytesPerHour))) {
-			await part.body.cancel()
-			throw new HttpError(429, 'rate_limited', `'${served.row.id}' takes no more files this hour; try again later`)
-		}
-		const file = await files.collections.receiveFormFile(served.form, collection, part)
-		await admissions.releaseBytes(served.form, reserved - (file?.size ?? 0))
-		return file
-	}
-
-	/** The first part of a multipart form: its input, as JSON within the form's `maxBytes`, parsed strictly. */
-	async #multipartInput(served: Extract<ServedEndpoint, { kind: 'form' }>, parts: MultipartReader): Promise<Submission> {
-		const first = await parts.next()
-		if (first === null || first.name !== FORM_INPUT_PART || first.filename !== null) {
-			await first?.body.cancel()
-			throw new HttpError(400, 'multipart', `'${served.row.id}': the first part is the input as JSON, named '${FORM_INPUT_PART}', without a filename`)
-		}
-		const limit = maxBytesOf(served.row)
-		const bytes = await readBoundedBytes(first.body, { maxBytes: limit })
-		if (bytes === null) {
-			throw new HttpError(413, 'too_large', `The input is larger than ${limit} bytes`)
-		}
-		return submissionOf(strictInput(served.row, served.input, parseJson(bytes)), served.admission.fields)
-	}
-
-	/**
-	 * The token verifies for this host and this form, and was not accepted before unless it is the `repeatable` one: a
-	 * failure is 400, an unreachable provider 503.
-	 */
-	async #challenge(
-		form: string,
-		verifier: ChallengeVerifier,
-		token: string | null,
-		request: Request,
-		repeatable: string | null,
-		refusal: 400 | 403 = 400,
-	): Promise<void> {
-		const outcome = token === null ? 'failed' : await verifier.verify({ token, hostname: new URL(request.url).hostname, action: form })
+	async #challenge(action: string, verifier: ChallengeVerifier, token: string | null, request: Request, repeatable: string | null): Promise<void> {
+		const outcome = token === null ? 'failed' : await verifier.verify({ token, hostname: new URL(request.url).hostname, action })
 		if (outcome === 'unavailable') {
-			throw new ServerFault('challenge_unavailable', `the ${verifier.provider} challenge of '${form}' could not be verified`, 503)
+			throw new ServerFault('challenge_unavailable', `the ${verifier.provider} challenge of '${action}' could not be verified`, 503)
 		}
 		if (outcome === 'misconfigured') {
-			throw new ServerFault('challenge_misconfigured', `the ${verifier.provider} challenge of '${form}' refused the application's secret`, 503)
+			throw new ServerFault('challenge_misconfigured', `the ${verifier.provider} challenge of '${action}' refused the application's secret`, 503)
 		}
 		const refused = token === null || outcome === 'failed'
 			|| (token !== repeatable
-				&& !(await this.#framework().forms.recordChallenge(form, sha256Hex(token), CHALLENGE_LIMITS.maxAgeMs + CHALLENGE_LIMITS.maxSkewMs)))
+				&& !(await this.#framework().admissions.recordChallenge(action, sha256Hex(token), CHALLENGE_LIMITS.maxAgeMs + CHALLENGE_LIMITS.maxSkewMs)))
 		if (refused) {
-			throw new HttpError(refusal, 'challenge_failed', 'The challenge did not verify; solve it again')
+			throw new HttpError(403, 'challenge_failed', 'The challenge did not verify; solve it again')
 		}
 	}
 
@@ -1218,14 +894,13 @@ export class ContractRuntime {
 				throw new ServerFault('workload_unauthorized', `the key of public procedure '${served.row.id}' gives it no authority: ${authority.reason}`, 503)
 			}
 			if (admission.challenge !== null) {
-				const token = fields[FORM_CHALLENGE_FIELD]
+				const token = fields[CHALLENGE_FIELD]
 				await this.#challenge(
 					challengeAction(served.row.id),
 					admission.challenge,
 					typeof token === 'string' ? token : null,
 					request,
 					admission.repeatableToken,
-					403,
 				)
 			}
 			return await this.#publicInvocation(served, request, body, fields, query, carried, authority.perms, exec)
@@ -1241,7 +916,8 @@ export class ContractRuntime {
 	 */
 	#kickAll(jobs: readonly string[], exec: RequestExecutionContext | undefined): void {
 		for (const job of new Set(jobs)) {
-			exec?.waitUntil(this.#parts.kick(job))
+			const kicked = this.#parts.kick(job)
+			exec?.waitUntil(kicked)
 		}
 	}
 
@@ -1254,7 +930,7 @@ export class ContractRuntime {
 	async #admit(row: EndpointRow, admission: ProcedureAdmission, request: Request, caller: string | null): Promise<void> {
 		const endpoint = row.id
 		for (const { bucket, limit } of bucketsOf(admission.rate, request, caller)) {
-			if (!(await this.#framework().forms.take(endpoint, bucket, limit))) {
+			if (!(await this.#framework().admissions.take(endpoint, bucket, limit))) {
 				throw new HttpError(429, 'rate_limited', `'${endpoint}' admits no more calls this minute; try again later`)
 			}
 		}
@@ -1264,7 +940,7 @@ export class ContractRuntime {
 		}
 		const declared = Number(request.headers.get('Content-Length') ?? '')
 		const charged = Math.min(Number.isSafeInteger(declared) && declared > 0 ? declared : maxBytesOf(row), maxBytesOf(row))
-		if (charged > 0 && !(await this.#framework().forms.reserveBytes(endpoint, charged, bytesPerHour))) {
+		if (charged > 0 && !(await this.#framework().admissions.reserveBytes(endpoint, charged, bytesPerHour))) {
 			throw new HttpError(429, 'rate_limited', `'${endpoint}' admits no more bytes this hour; try again later`)
 		}
 	}
@@ -1615,7 +1291,7 @@ function admit(row: CredentialedEndpoint, request: Request): void {
 }
 
 /** What one part adds to a multipart body beside its bytes: its delimiter and its headers, at most. */
-const MULTIPART_PART_OVERHEAD = FORM_FILE_LIMITS.maxPartHeaderBytes + 128
+const MULTIPART_PART_OVERHEAD = PROCEDURE_LIMITS.maxPartHeaderBytes + 128
 
 /**
  * What a failed multipart submission answers: a body that broke the format 400, one that did not arrive in time 408,
@@ -1642,10 +1318,6 @@ function multipartFailure(error: unknown, parts: MultipartReader, deadline: Abor
 }
 
 /** The content types an endpoint admits; an anonymous endpoint has no session, so this is its whole admission. */
-function formRateLimited(row: EndpointRow): HttpError {
-	return new HttpError(429, 'rate_limited', `'${row.id}' takes no more submissions right now; try again in a minute`)
-}
-
 function admitContentType(row: EndpointRow, request: Request): void {
 	if (row.admission !== null) {
 		const type = mediaType(request.headers.get('Content-Type'))
@@ -1819,7 +1491,7 @@ async function openMultipart(
 		throw new HttpError(413, 'too_large', `The body is larger than the ${maxBytes} bytes '${row.id}' admits`)
 	}
 	const deadline = AbortSignal.any([request.signal, AbortSignal.timeout(bodyDeadlineMs(maxBytes))])
-	const parts = multipartParts(request.body ?? new Blob([]).stream(), boundary, { maxHeaderBytes: FORM_FILE_LIMITS.maxPartHeaderBytes })
+	const parts = multipartParts(request.body ?? new Blob([]).stream(), boundary, { maxHeaderBytes: PROCEDURE_LIMITS.maxPartHeaderBytes })
 	const stop = () => {
 		parts.cancel().catch(() => {})
 	}
@@ -1946,20 +1618,6 @@ function redirectResponse(row: EndpointRow, shape: RedirectShape, output: unknow
 function asksForJson(request: Request): boolean {
 	const accept = (request.headers.get('Accept') ?? '').toLowerCase()
 	return accept.includes('application/json') && !accept.includes('text/html')
-}
-
-/** A canonical path's segments all decode; a value that does not is no id of anything. */
-function decodePathParameter(raw: string): string {
-	let decoded: string
-	try {
-		decoded = decodeURIComponent(raw)
-	} catch {
-		throw new BadRequestError('A path parameter does not decode')
-	}
-	if (decoded.includes('\u0000')) {
-		throw new BadRequestError('A path parameter may not contain U+0000')
-	}
-	return decoded
 }
 
 /** Removes the `from` field: the only copy of that id the handler gets is the checked capability. */

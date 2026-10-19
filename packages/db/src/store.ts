@@ -1,4 +1,5 @@
 import { BinaryOperationNode, type OperationNode, OperatorNode, type ReturningNode, ValueNode } from 'kysely'
+import { admissions } from './admissions'
 import {
 	defineValue,
 	freeze,
@@ -45,9 +46,6 @@ import {
 import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
 import { answerFiles, type FileBinding, fileValue, referenceFiles, rowScope, storedRowScope } from './file-columns'
 import { fileReference } from './file-references'
-import { fileTables } from './file-tables'
-import { formAdmissions, type InboxQuota, takeFromBucket } from './form-admissions'
-import { formFiles, type HeldFormFiles, holdFormFiles } from './form-files'
 import { webhookTables } from './framework-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
 import { fencedTransaction, jobLeases } from './job-leases'
@@ -1927,15 +1925,10 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			connection.runtime = bound
 			return async (dimension, id, using) => locateObject(models, bound, dimension, id, using)
 		},
-		files: fileTables(models, () => runtimeOf(connection)),
 		framework: freeze({
-			inboxProblems: (form: string, fields: readonly string[]) => inboxProblems(models, form, fields),
-			appendToInbox: (form: string, values: Readonly<Record<string, unknown>>, quota: InboxQuota, held?: HeldFormFiles) =>
-				appendToInbox(models, runtimeOf(connection), form, values, quota, held),
 			webhooks: webhookTables(() => runtimeOf(connection)),
 			jobs: jobLeases(() => runtimeOf(connection)),
-			forms: formAdmissions(() => runtimeOf(connection)),
-			formFiles: formFiles(() => runtimeOf(connection)),
+			admissions: admissions(() => runtimeOf(connection)),
 			files: storedFiles(() => runtimeOf(connection)),
 		}),
 		data: dataAccess({
@@ -1984,69 +1977,6 @@ export function defineChildStore<DB, P, const T extends ChildTableName<P>, S>(
 	build: (t: ChildTable<DB, P, T>) => S,
 ): S {
 	return build(new ChildTable(storeContext(database, table, 'child')))
-}
-
-/** The inbox table of `form`: the one table whose scope is `{ inbox: form }`. */
-function inboxOf(models: TableModels, form: string): TableModel | undefined {
-	const names = ownKeys(models)
-	for (let index = 0; index < names.length; index++) {
-		const model = modelOf(models, names[index] ?? '')
-		if (model?.scope.mode === 'inbox' && model.scope.form === form) {
-			return model
-		}
-	}
-	return undefined
-}
-
-function inboxProblems(models: TableModels, form: string, fields: readonly string[]): readonly string[] {
-	const inbox = inboxOf(models, form)
-	if (inbox === undefined) {
-		return [`no table in src/db/tables.ts is the inbox of '${form}' (scope: { inbox: '${form}', read })`]
-	}
-	const problems: string[] = []
-	for (let index = 0; index < fields.length; index++) {
-		const field = fields[index] ?? ''
-		if (!inSet(inbox.columns, field)) {
-			problems[problems.length] = `the input field '${field}' of '${form}' is not a column of its inbox ${inbox.name}`
-		}
-	}
-	return problems
-}
-
-/**
- * One row of the form's declared fields, taken from the form's `quota` bucket in the same transaction: a row that
- * fails to insert gives its place back. The submission's files become held in that transaction too, so a row that does
- * not commit holds none. `false`, with nothing written, when the bucket is full. An inbox answers nothing, so the form
- * reads nothing back.
- */
-async function appendToInbox(
-	models: TableModels,
-	runtime: DataLayerRuntime,
-	form: string,
-	values: Readonly<Record<string, unknown>>,
-	quota: InboxQuota,
-	held: HeldFormFiles | undefined,
-): Promise<boolean> {
-	const inbox = inboxOf(models, form)
-	if (inbox === undefined) {
-		throw new QueryRefusedError('unknown_table', `no table is the inbox of ${form}`)
-	}
-	const row = readValues(values, inbox.columns, 'insert', inbox)
-	return await sessionOf(runtime).transaction(async (transaction) => {
-		if (!(await takeFromBucket(transaction, form, quota.bucket, quota.limit))) {
-			return false
-		}
-		await transaction.run(insertNode(inbox.name, row, undefined), {
-			root: 'InsertQueryNode',
-			table: inbox.name,
-			joins: {},
-			scope: undefined,
-		})
-		if (held !== undefined) {
-			await holdFormFiles(transaction, held)
-		}
-		return true
-	})
 }
 
 /** The table that owns `dimension`: the one dimension table scoped by it (`defineTables` refuses a second). */

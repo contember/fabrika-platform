@@ -6,15 +6,11 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { Within } from '../capability'
 import { Database } from '../database'
 import { QueryRefusedError } from '../errors'
-import { fileTableSql } from '../file-table-sql'
-import type { FileCollectionTable, PendingFile } from '../file-tables'
-import { fileTablesOf } from '../framework'
 import { defineStore } from '../store'
 import { TestAuthority } from './fixtures/authority'
 import { recordingLayer } from './fixtures/harness'
-import { migration } from './fixtures/schema'
 import { connected } from './fixtures/stores'
-import { tables } from './fixtures/tables'
+import { migration as tasksMigration, tables as tasksTables } from './fixtures/tasks'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR]
@@ -23,19 +19,6 @@ const hasPostgres = url !== undefined && url !== ''
 if (!hasPostgres) {
 	console.warn(`date-binding.test.ts skipped: set ${URL_VAR} to run the Postgres-backed tests`)
 }
-
-const SPEC = {
-	name: 'attachments',
-	owner: 'notes',
-	dimension: 'file:attachments',
-	actions: { read: 'notes.read', write: 'notes.write', delete: 'notes.delete' },
-	scan: true,
-}
-const OWNER = {
-	table: 'notes',
-	key: { column: 'id', type: 'text' },
-	chain: [{ column: 'workspace_id', type: 'text' }, { column: 'organization_id', type: 'text' }],
-} as const
 
 /** West of UTC, so `Date#toString()` names an offset Postgres does not read as one. */
 const PROCESS_TIME_ZONE = 'America/Los_Angeles'
@@ -46,8 +29,8 @@ const later = (date: Date, ms: number): Date => new Date(date.getTime() + ms)
 const schema = `dates_${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
 const alice = new TestAuthority('user:alice')
 let database: Database
-let files: FileCollectionTable
-let createdBetween: (within: Within<'workspace', 'notes.read'>, from: Date, to: Date) => Promise<readonly { id: string }[]>
+let close: (task: string, at: Date, expectVersion: number) => Promise<unknown>
+let closedBetween: (within: Within<'project', 'tasks.read'>, from: Date, to: Date) => Promise<readonly { id: string }[]>
 
 async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
@@ -58,12 +41,8 @@ async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 	}
 }
 
-const ownerRef = (note: string) => alice.ref('note', 'notes.write', note, { workspace: 'w1', organization: 'o1' })
-
-function pending(createdAt: Date): PendingFile {
-	const id = Bun.randomUUIDv7()
-	return { id, objectKey: `attachments/${id}`, contentType: 'image/png', originalName: 'a.png', createdAt }
-}
+const closedAt = async (task: string): Promise<unknown> =>
+	(await admin((sql) => sql.unsafe(`select closed_at from ${schema}.tasks where id = $1`, [task])))[0]?.closed_at
 
 beforeAll(async () => {
 	process.env.TZ = PROCESS_TIME_ZONE
@@ -72,21 +51,22 @@ beforeAll(async () => {
 	}
 	await admin(async (sql) => {
 		await sql.unsafe(`create schema ${schema}`)
-		await sql.unsafe(`set search_path to ${schema}; ${migration} ${fileTableSql('attachments', OWNER)}`)
-		await sql.unsafe(`insert into ${schema}.organizations (id, name) values ('o1', 'One')`)
-		await sql.unsafe(`insert into ${schema}.workspaces (id, organization_id, name, created_by) values ('w1', 'o1', 'w1', 'user:alice')`)
+		await sql.unsafe(`set search_path to ${schema}; ${tasksMigration}`)
+		await sql.unsafe(`insert into ${schema}.projects (id, org_id, title) values ('p1', 'o1', 'p1')`)
 		await sql.unsafe(
-			`insert into ${schema}.notes (id, workspace_id, organization_id, title, created_by, version) values ('n1', 'w1', 'o1', 'n1', 'user:alice', 1)`,
+			`insert into ${schema}.tasks (id, project_id, org_id, title, created_by, version) values ('t1', 'p1', 'o1', 't1', 'user:alice', 1), ('t2', 'p1', 'o1', 't2', 'user:alice', 1)`,
 		)
 	})
 	database = Database.postgres({ url: url ?? '', schema, max: 2 })
-	const layer = connected(tables, { database, capabilities: alice }).database
-	files = fileTablesOf(layer).collection(SPEC)
-	const notes = defineStore(layer, 'notes', (t) => ({
-		createdBetween: (within: Within<'workspace', 'notes.read'>, from: Date, to: Date) =>
-			t.select(within, (q) => q.columns(['id']).where('created_at', '>=', from).where('created_at', '<', to).orderBy('id')),
+	const layer = connected(tasksTables, { database, capabilities: alice }).database
+	const tasks = defineStore(layer, 'tasks', (t) => ({
+		close: (task: string, at: Date, expectVersion: number) =>
+			t.update(alice.ref('task', 'tasks.write', task, { project: 'p1', org: 'o1' }), { closed_at: at }, { expectVersion }),
+		closedBetween: (within: Within<'project', 'tasks.read'>, from: Date, to: Date) =>
+			t.select(within, (q) => q.columns(['id']).where('closed_at', '>=', from).where('closed_at', '<', to).orderBy('id')),
 	}))
-	createdBetween = notes.createdBetween
+	close = tasks.close
+	closedBetween = tasks.closedBetween
 })
 
 afterAll(async () => {
@@ -126,41 +106,19 @@ describe('a bound Date', () => {
 
 describe.skipIf(!hasPostgres)('a bound Date on Postgres', () => {
 	test('the layer stores it to the millisecond', async () => {
-		const file = pending(AT)
-		await files.begin(ownerRef('n1'), file)
-		const [row] = await admin((sql) => sql.unsafe(`select created_at from ${schema}.fabrika_files_attachments where id = $1`, [file.id]))
-		expect(row?.created_at).toEqual(AT)
-	})
-
-	test('it compares to the millisecond: the sweep takes a pending row only when it is strictly older', async () => {
-		const file = pending(later(AT, 60_000))
-		await files.begin(ownerRef('n1'), file)
-		const removable = async (cutoff: Date) => (await files.removable(100, cutoff)).map((removed) => removed.id)
-		expect(await removable(file.createdAt)).not.toContain(file.id)
-		expect(await removable(later(file.createdAt, 1))).toContain(file.id)
+		await close('t1', AT, 1)
+		expect(await closedAt('t1')).toEqual(AT)
 	})
 
 	test('an invalid Date is refused and nothing is written', async () => {
-		const file = pending(AT)
-		await expect(files.begin(ownerRef('n1'), pending(new Date(Number.NaN)))).rejects.toBeInstanceOf(QueryRefusedError)
-		await files.begin(ownerRef('n1'), file)
-		await files.complete(ownerRef('n1'), file.id, { size: 3, sha256: 'ab'.repeat(32) }, 'live')
-		const fileRef = alice.ref('file:attachments', 'notes.delete', file.id, { note: 'n1', workspace: 'w1', organization: 'o1' })
-		await expect(files.markRemoved(fileRef, new Date(Number.NaN))).rejects.toBeInstanceOf(QueryRefusedError)
-		const [row] = await admin((sql) => sql.unsafe(`select deleted_at from ${schema}.fabrika_files_attachments where id = $1`, [file.id]))
-		expect(row?.deleted_at).toBeNull()
+		await expect(close('t2', new Date(Number.NaN), 1)).rejects.toBeInstanceOf(QueryRefusedError)
+		expect(await closedAt('t2')).toBeNull()
 	})
 
 	test('a store compares it to the millisecond', async () => {
-		await admin((sql) =>
-			sql.unsafe(
-				`insert into ${schema}.notes (id, workspace_id, organization_id, title, created_by, version, created_at)
-				values ('n2', 'w1', 'o1', 'n2', 'user:alice', 1, '2026-03-04T05:06:07.891Z')`,
-			)
-		)
-		const within = alice.within('workspace', 'notes.read', ['w1'])
-		expect(await createdBetween(within, AT, later(AT, 1))).toEqual([{ id: 'n2' }])
-		expect(await createdBetween(within, later(AT, 1), later(AT, 2))).toEqual([])
-		expect(await createdBetween(within, later(AT, -1), AT)).toEqual([])
+		const within = alice.within('project', 'tasks.read', ['p1'])
+		expect(await closedBetween(within, AT, later(AT, 1))).toEqual([{ id: 't1' }])
+		expect(await closedBetween(within, later(AT, 1), later(AT, 2))).toEqual([])
+		expect(await closedBetween(within, later(AT, -1), AT)).toEqual([])
 	})
 })

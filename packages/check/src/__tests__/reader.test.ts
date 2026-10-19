@@ -86,7 +86,7 @@ export const contract = defineServiceContract('vozka', (s) => ({ mcp: s.oauth('/
 	test('a hand-written mount, a job among the mounts, and a mount that is a plain value', () => {
 		const contract = edited(
 			"health: c.health('/healthz'),",
-			"health: { kind: 'health', path: '/healthz' },\n\tpurge: c.cron('0 3 * * *', { actions: ['notes.write'], scope: 'app' }),\n\tlabel: 'notes',",
+			"health: { kind: 'health', path: '/healthz' },\n\tpurge: c.cron('0 3 * * *', { actions: ['notes.write'] }),\n\tlabel: 'notes',",
 		)
 		expect(refusal(application(contract))).toEqual([
 			'fabrika.contract.ts:14:10 contract a object where a builder call stands',

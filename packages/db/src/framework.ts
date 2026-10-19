@@ -2,11 +2,11 @@
 // the data layer an application passed to `implement` to the framework's connection and capability authority, and
 // hands the framework the locator its access check uses. Browser- and Worker-safe: the Worker adapter imports `boot`.
 
-import type { FileTables } from './file-tables'
 import type { DataAccess } from './orm'
 import { frameworkSideOf, type FrameworkTables, type Locator } from './registry'
 import type { DataLayerRuntime } from './store'
 
+export type { Admissions } from './admissions'
 export type { LeaseFence } from './capability'
 export type { InvocationTransaction, Session } from './database'
 export {
@@ -20,22 +20,6 @@ export {
 } from './errors'
 export type { FileBinding } from './file-columns'
 export { type FileHolding, fileHoldingOf, type FileReference, fileReference, holdsFile } from './file-references'
-export { fileTableName } from './file-table-sql'
-export type {
-	AdoptedFile,
-	FileCollectionSpec,
-	FileCollectionTable,
-	FilePage,
-	FileTables,
-	HeldStatus,
-	ListedFile,
-	PendingFile,
-	QuarantinedFile,
-	RemovableFile,
-	StoredFile,
-} from './file-tables'
-export type { FormAdmissions, InboxQuota } from './form-admissions'
-export type { ClaimedFormFile, FormFiles, HeldFormFiles, RemovableFormFile, StagedFormFile, WrittenFormFile } from './form-files'
 export type { DeliveryClaim, NewWebhookBinding, WebhookBinding, WebhookTables } from './framework-tables'
 export type { JobLeases, JobLeaseState, JobOutcome, OverdueClaim } from './job-leases'
 export type { DataAccess, DataHandles, DataSite } from './orm'
@@ -60,18 +44,9 @@ export function bindScopedDatabase(value: unknown, runtime: DataLayerRuntime): L
 	return side.bind(runtime)
 }
 
-/** The file collections' tables of the layer `scoped(tables)` created; each operation needs the layer bound first. */
-export function fileTablesOf(value: unknown): FileTables {
-	const side = frameworkSideOf(value)
-	if (side === undefined) {
-		throw new TypeError('not a data layer scoped(tables) created')
-	}
-	return side.files
-}
-
 /**
- * The framework's own writes over the layer `scoped(tables)` created: inbox appends for `c.form` and the webhook
- * tables. Each operation needs the layer bound first. Throws for any other value.
+ * The framework's own writes over the layer `scoped(tables)` created: the webhook tables, the job leases and the
+ * admission counters. Each operation needs the layer bound first. Throws for any other value.
  */
 export function frameworkTablesOf(value: unknown): FrameworkTables {
 	const side = frameworkSideOf(value)

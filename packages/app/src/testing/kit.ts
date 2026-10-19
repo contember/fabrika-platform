@@ -42,7 +42,7 @@ import type { AnyContract, DimensionOf } from '../contract/define'
 import type { TokenPurpose } from '../contract/token'
 import { diskAssets } from '../disk-assets'
 import type { RequestExecutionContext } from '../fetch'
-import type { FILE_SWEEP_JOB } from '../files/collections'
+import type { FILE_SWEEP_JOB } from '../files/kinds'
 import type { FILE_SCAN_JOB, FileScanner } from '../files/scan'
 import { boot, type BootOptions, type ContractApp } from '../implement/boot'
 import type { ChallengeFetch } from '../implement/challenge'
@@ -101,9 +101,9 @@ export interface TestKitOptions {
 	readonly assets?: SpaAssets
 	/** The connection a `scoped(tables)` database is bound to, as the runtime adapter supplies it to `boot`. */
 	readonly database?: Database
-	/** The object storage of the file collections, as the runtime adapter supplies it to `boot`. */
+	/** The object storage of the stored files, as the runtime adapter supplies it to `boot`. */
 	readonly files?: FileObjectStore
-	/** The scanner of the scan job of `scan: true` collections; without it, the job leaves every upload quarantined. */
+	/** The scanner of the scan job of `scan: true` file kinds; without it, the job leaves every such file quarantined. */
 	readonly scanner?: FileScanner
 	/**
 	 * IAM's membership operations in place of the kit's own stand-in: `boot` asks it as the adapter's transport, and the
@@ -115,7 +115,7 @@ export interface TestKitOptions {
 	 * framework variables, and how a request reaches it — usually the owner kit's `fetch`.
 	 */
 	readonly connect?: Readonly<Record<string, TestConnection>>
-	/** What answers a form's challenge verification in place of the provider: a stand-in for its siteverify. */
+	/** What answers a public procedure's challenge verification in place of the provider: a stand-in for its siteverify. */
 	readonly challengeFetch?: ChallengeFetch
 	/** What a job's handler threw, shown on the developer's own machine: `fabrika app dev` sets it, a test need not. */
 	readonly revealHandlerErrors?: HandlerErrorSink
@@ -172,12 +172,12 @@ export interface TestKit<C extends AnyContract> {
 	acceptInvitation(invitationId: string, person?: LabelledTestCaller): LabelledTestCaller
 	/**
 	 * Runs the cron job `name` once, as `fabrika job run <name>` does: under its lease, with the actions IAM signs for
-	 * its key, its writes fenced. It first waits for the runs a form's or a mutation's `then` kicked, so it never races them.
-	 * `FILE_SCAN_JOB` runs the scan of `scan: true` collections with the kit's `scanner`, `FILE_SWEEP_JOB` the sweep of
-	 * removed and orphaned files. Needs the application's data layer on Postgres.
+	 * its key, its writes fenced. It first waits for the runs a site's `ctx.kick` sent, so it never races them.
+	 * `FILE_SCAN_JOB` runs the scan of `scan: true` file kinds with the kit's `scanner`, `FILE_SWEEP_JOB` the sweep of
+	 * unreferenced files. Needs the application's data layer on Postgres.
 	 */
 	runJob(name: JobName<C> | typeof FILE_SCAN_JOB | typeof FILE_SWEEP_JOB, options?: JobRunOptions): Promise<JobRunResult>
-	/** Waits for the work requests left running: the runs a form's or a mutation's `then` kicked, a failure's report. */
+	/** Waits for the work requests left running: the runs a site's `ctx.kick` sent, a failure's report. */
 	drain(): Promise<void>
 	/**
 	 * The stand-in for every job's transport: what reached it (`accepted`, `handoffs`) and its faults (`refuse`,
@@ -582,7 +582,7 @@ export function bootTestKit<C extends AnyContract>(
 		...(options.crossOrigins === undefined ? {} : { crossOrigins: options.crossOrigins }),
 	})
 
-	// What requests leave running: a job a form's or a mutation's `then` kicked, or a failure's report.
+	// What requests leave running: a job a site's `ctx.kick` sent, or a failure's report.
 	const background = new Set<Promise<void>>()
 	const exec: RequestExecutionContext = {
 		waitUntil(promise) {

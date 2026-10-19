@@ -2,7 +2,7 @@
 // `buildArtifact`. A reader of source produces the same declaration and calls `buildArtifact` itself.
 
 import type { ContractArtifact, SchemaShape, TablePolicyArtifact } from '@fabrika/auth-core'
-import { inboxColumns, isTables, tablePolicies, type Tables } from '@fabrika/db/tables'
+import { isTables, tablePolicies, type Tables } from '@fabrika/db/tables'
 import { z } from 'zod/v4'
 import { attachmentOf } from './attachment'
 import { buildArtifact } from './build'
@@ -25,15 +25,14 @@ import { describeSchema } from './schema-shape'
 
 /**
  * The normalized artifact of a contract and its table policies: what `defineTables` returned (`src/db/tables.ts`),
- * or the artifact form of each policy. Only the first knows each inbox's columns, so only it checks a form's fields
- * against them; `boot` checks them against the data layer either way.
+ * or the artifact form of each policy.
  */
 export function compileContract<DB, P>(
 	contract: AnyContract,
 	tables: Tables<DB, P> | Readonly<Record<string, TablePolicyArtifact>>,
 ): ContractArtifact {
 	const described = describeContract(contract)
-	return isTables(tables) ? buildArtifact(described, tablePolicies(tables), inboxColumns(tables)) : buildArtifact(described, tables)
+	return buildArtifact(described, isTables(tables) ? tablePolicies(tables) : tables)
 }
 
 /** The contract with its schemas read as shapes; throws `ContractError` for a schema outside the subset. */
@@ -49,7 +48,7 @@ export function describeContract(contract: AnyContract): ContractDeclaration<Sch
 		if (isMount(entry)) {
 			mounts[name] = reader.mount(name, entry)
 		} else {
-			problems.add(`mount '${name}'`, 'is not a mount (allowed: c.rpc, c.link, c.spa, c.health, c.form or c.webhook)')
+			problems.add(`mount '${name}'`, 'is not a mount (allowed: c.rpc, c.link, c.spa, c.health or app.webhook)')
 		}
 	}
 	const exports: Record<string, ExportDeclaration<SchemaShape>> = {}
@@ -91,7 +90,7 @@ function isSection(name: string): name is SurfaceSection {
 	return SECTIONS.has(name)
 }
 
-const MOUNT_KINDS: ReadonlySet<string> = new Set(['rpc', 'link', 'spa', 'health', 'form', 'webhook'])
+const MOUNT_KINDS: ReadonlySet<string> = new Set(['rpc', 'link', 'spa', 'health', 'webhook'])
 
 function isMount(entry: Surface[string]): entry is AnyMount {
 	return typeof entry === 'object' && 'kind' in entry && typeof entry.kind === 'string' && MOUNT_KINDS.has(entry.kind)
@@ -111,8 +110,6 @@ class SchemaReader {
 				return { ...mount, procedures: this.tree(where, mount.procedures) }
 			case 'link':
 				return { ...mount, procedures: this.tree(where, mount.procedures) }
-			case 'form':
-				return { ...mount, input: this.schema(`${where} input`, mount.input) }
 			case 'webhook':
 				return { ...mount, input: this.schema(`${where} input`, mount.input) }
 			default:

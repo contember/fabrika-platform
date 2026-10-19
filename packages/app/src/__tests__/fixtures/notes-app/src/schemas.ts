@@ -25,5 +25,3 @@ export const Import = z.strictObject({ workspaceId: z.uuid(), notes: z.array(Not
 export const Imported = z.strictObject({ imported: z.int().nonnegative() })
 
 export const Push = z.strictObject({ ref: z.string(), compare: z.url() })
-
-export const Contact = z.strictObject({ email: z.email(), message: z.string().max(5000) })

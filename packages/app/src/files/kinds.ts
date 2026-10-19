@@ -24,11 +24,19 @@ import { ServerFault } from '../implement/faults'
 import type { ImplementationDatabase } from '../implement/implement'
 import type { OperationsReporter } from '../jobs/report'
 import type { OpenedFile } from './handle'
-import { type FileScanner, runScanPass, type ScanningCollection } from './scan'
+import { type FileScanner, runScanPass, type ScanningKind } from './scan'
 import { bytesAreOfType, SNIFF_BYTES, SNIFFABLE_TYPES } from './sniff'
 import { cleanName, digesting, isNamed, readExactly, readHead } from './streams'
 import { FileDownload } from './treatment'
 
+/**
+ * The framework's sweep job: hourly, it deletes the files no declared column references and the pending ones past the
+ * grace, so none waits for the next request. A reserved name with `-`, which no `c.cron` name can take;
+ * `@fabrika/provider-zerops` writes it into the crontab on this schedule (`ZEROPS_FILE_SWEEP_JOB`).
+ */
+export const FILE_SWEEP_JOB = 'fabrika-file-sweep'
+export const FILE_SWEEP_SCHEDULE = '41 * * * *'
+export const FILE_SWEEP_TIMEOUT_MS = 10 * 60_000
 /** How long a staged file waits for its first reference before the sweep may delete it. */
 export const FILE_PENDING_GRACE_MS = 60 * 60 * 1000
 /** How many files one sweep batch handles; the next batch, or the next run, takes the rest. */
@@ -340,7 +348,7 @@ export class StoredFileKinds {
 	/** One scan pass over the quarantined files of every scanning kind: the scan job's part for kinds. */
 	async scanPass(scanner: FileScanner | null, reporter: OperationsReporter, signal: AbortSignal): Promise<void> {
 		const files = this.#files
-		const scanning: ScanningCollection[] = [...this.#kinds.values()].filter((kind) => kind.artifact.scan === true).map((kind) => ({
+		const scanning: ScanningKind[] = [...this.#kinds.values()].filter((kind) => kind.artifact.scan === true).map((kind) => ({
 			name: kind.name,
 			table: {
 				quarantined: (limit: number, now: Date) => files.quarantined([kind.name], limit, now),

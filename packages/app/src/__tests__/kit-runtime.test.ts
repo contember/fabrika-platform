@@ -64,7 +64,6 @@ describe("the kit's builders", () => {
 			kind: 'cron',
 			schedule: '0 3 * * *',
 			actions: ['crm.read', 'deals.write'],
-			scope: 'app',
 			retries: undefined,
 			declared: { sql: 'write' },
 			unknownOptions: [],
@@ -127,7 +126,7 @@ describe("the kit's builders", () => {
 
 /** A cron job that counts its runs, and a link mount whose mutation kicks it. */
 const nightlyRuns = { count: 0 }
-const nightly = plainApp.cron('0 3 * * *', { actions: ['crm.read'], scope: 'app' }).handle(() => {
+const nightly = plainApp.cron('0 3 * * *', { actions: ['crm.read'] }).handle(() => {
 	nightlyRuns.count++
 })
 const linkKicking = plainApp.contract(() => ({
@@ -138,7 +137,10 @@ const linkKicking = plainApp.contract(() => ({
 		issuedBy: 'deals.share',
 		maxDays: 30,
 		procedures: (l) => ({
-			touch: l.mutation({ output: Done, access: { action: 'crm.read' }, then: 'nightly' }).handle(() => ({ ok: true })),
+			touch: l.mutation({ output: Done, access: { action: 'crm.read' }, kicks: ['nightly'] }).handle(({ ctx }) => {
+				ctx.kick('nightly')
+				return { ok: true }
+			}),
 		}),
 	}),
 	jobs: { nightly },
@@ -188,27 +190,30 @@ describe('buildArtifact refuses a declaration the site may not carry', () => {
 		return options
 	}
 	const kicks = plainApp.group({ callers: ['human'] }, (r) => ({
-		touch: r.mutation({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' }, then: 'nightly' })
-			.handle(({ ctx }) => ({ id: ctx.target.value })),
+		touch: r.mutation({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' }, kicks: ['nightly'] })
+			.handle(({ ctx }) => {
+				ctx.kick('nightly')
+				return { id: ctx.target.value }
+			}),
 	}))
 	const misspelled = plainApp.group({ callers: ['human'] }, (r) => ({
-		touch: r.mutation({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' }, then: 'nightyl' })
+		touch: r.mutation({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' }, kicks: ['nightyl'] })
 			.handle(({ ctx }) => ({ id: ctx.target.value })),
 	}))
-	const kicking = (deals: typeof kicks, jobs: Readonly<Record<string, typeof nightly>> = { nightly }) =>
+	const kicking = (deals: typeof kicks | typeof misspelled, jobs: Readonly<Record<string, typeof nightly>> = { nightly }) =>
 		plainApp.contract((c) => ({ api: c.rpc('/api', { deals }), jobs }))
 
-	test('then on a mutation names a cron job: the artifact records it under the endpoint', () => {
+	test('kicks on a mutation names a cron job: the artifact records it under the endpoint', () => {
 		expect(compileContract(kicking(kicks), tables).declared).toEqual({
-			'api.deals.touch': { sql: null, unscoped: {}, connect: [], issues: null, then: 'nightly' },
+			'api.deals.touch': { sql: null, unscoped: {}, connect: [], issues: null, kicks: ['nightly'] },
 		})
 	})
 
-	test('then on a query, on a webhook and on a cron job', () => {
+	test('a leftover then is not an option: on a mutation, on a webhook and on a cron job', () => {
 		const contract = plainApp.contract((c) => ({
 			api: c.rpc('/api', {
 				deals: plainApp.group({ callers: ['human'] }, (r) => ({
-					get: r.query(withField({ input: ById, output: ById, access: { action: 'crm.read', on: 'deal', from: 'id' } }, 'then', 'nightly'))
+					touch: r.mutation(withField({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' } }, 'then', 'nightly'))
 						.handle(({ ctx }) => ({ id: ctx.target.value })),
 				})),
 			}),
@@ -218,38 +223,40 @@ describe('buildArtifact refuses a declaration the site may not carry', () => {
 			).handle(async () => {}),
 			jobs: {
 				nightly,
-				hourly: plainApp.cron('0 * * * *', withField({ actions: ['crm.read'], scope: 'app' }, 'then', 'nightly')).handle(async () => {}),
+				hourly: plainApp.cron('0 * * * *', withField({ actions: ['crm.read'] }, 'then', 'nightly')).handle(async () => {}),
 			},
 		}))
 		expect(refusals(() => compileContract(contract, tables))).toEqual([
-			"procedure 'api.deals.get': declares then, and it runs read-only (allowed: then on a mutation)",
-			"mount 'github': declares then, which only a mutation of an RPC or link mount declares",
-			"job 'hourly': declares then, which only a mutation of an RPC or link mount declares",
+			"procedure 'api.deals.touch': 'then' is not an option of c.query and c.mutation (allowed: input, output, access, crossOrigin, actions, admission, limits, http)",
+			"mount 'github': 'then' is not an option of c.webhook (allowed: scheme, boundTo, actions, input, limits)",
+			"job 'hourly': 'then' is not an option of c.cron (allowed: actions, limits, retries)",
 		])
 	})
 
-	test('then that names no job of the contract, with a suggestion, and a job that is not a cron job', () => {
+	test('kicks that names no job of the contract, with a suggestion, and a job that is not a cron job', () => {
 		expect(refusals(() => compileContract(kicking(misspelled), tables))).toEqual([
-			"procedure 'api.deals.touch': then 'nightyl' is not a job of the contract (jobs: nightly) — did you mean 'nightly'?",
+			"procedure 'api.deals.touch': kicks 'nightyl' is not a job of the contract (jobs: nightly) — did you mean 'nightly'?",
 		])
 		const notCron = withField({ ...nightly }, 'kind', 'webhook')
 		expect(refusals(() => compileContract(kicking(kicks, { nightly: notCron }), tables))).toEqual([
-			"procedure 'api.deals.touch': then 'nightly' is not a cron job (allowed: a job c.cron declares)",
+			"procedure 'api.deals.touch': kicks 'nightly' is not a cron job (allowed: a job c.cron declares)",
 			"job 'nightly': is not built with c.cron('<schedule>', { … })",
 		])
 	})
 
-	test('then on a mutation of a link mount names a cron job: the artifact records it under the procedure', () => {
+	test('kicks on a mutation of a link mount names a cron job: the artifact records it under the procedure', () => {
 		expect(compileContract(linkKicking, tables).declared).toEqual({
-			'kicked.touch': { sql: null, unscoped: {}, connect: [], issues: null, then: 'nightly' },
+			'kicked.touch': { sql: null, unscoped: {}, connect: [], issues: null, kicks: ['nightly'] },
 		})
 	})
 
-	test('then on an export procedure, and a then that is no name', () => {
+	test('kicks on a query and on an export procedure, and kicks that is no list of names', () => {
 		const contract = plainApp.contract((c) => ({
 			api: c.rpc('/api', {
 				deals: plainApp.group({ callers: ['human'] }, (r) => ({
-					touch: r.mutation(withField({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' } }, 'then', 42))
+					get: r.query(withField({ input: ById, output: ById, access: { action: 'crm.read', on: 'deal', from: 'id' } }, 'kicks', ['nightly']))
+						.handle(({ ctx }) => ({ id: ctx.target.value })),
+					touch: r.mutation(withField({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' } }, 'kicks', 'nightly'))
 						.handle(({ ctx }) => ({ id: ctx.target.value })),
 				})),
 			}),
@@ -260,15 +267,16 @@ describe('buildArtifact refuses a declaration the site may not carry', () => {
 					consumers: ['billing'],
 					audience: 'any consumer user',
 					procedures: (e) => ({
-						deal: e.query(withField({ input: ById, output: ById, access: { action: 'crm.read', on: 'deal', from: 'id' } }, 'then', 'nightly'))
+						deal: e.query(withField({ input: ById, output: ById, access: { action: 'crm.read', on: 'deal', from: 'id' } }, 'kicks', ['nightly']))
 							.handle(({ ctx }) => ({ id: ctx.target.value })),
 					}),
 				}),
 			},
 		}))
 		expect(refusals(() => compileContract(contract, tables))).toEqual([
-			"procedure 'api.deals.touch': then is not a job's name (allowed: then: '<cron job>')",
-			"procedure 'pipeline.v1.deal': declares then, which only a mutation of an RPC or link mount declares",
+			"procedure 'api.deals.get': declares kicks, and it runs read-only: only a mutation, a webhook or a job kicks a job",
+			"procedure 'api.deals.touch': kicks is not a list of cron jobs (allowed: kicks: ['<cron job>'])",
+			"procedure 'pipeline.v1.deal': declares kicks, and it runs read-only: only a mutation, a webhook or a job kicks a job",
 		])
 	})
 
@@ -280,7 +288,7 @@ describe('buildArtifact refuses a declaration the site may not carry', () => {
 						.handle(({ ctx }) => ({ id: ctx.target.value })),
 				})),
 			}),
-			jobs: { nightly: plainApp.cron('0 3 * * *', withField({ actions: ['crm.read'], scope: 'app' }, 'mailer', 'smtp')).handle(async () => {}) },
+			jobs: { nightly: plainApp.cron('0 3 * * *', withField({ actions: ['crm.read'] }, 'mailer', 'smtp')).handle(async () => {}) },
 		}))
 		expect(refusals(() => compileContract(contract, tables))).toEqual([
 			"procedure 'api.deals.touch': declares mailer, which only a cron job declares",
@@ -424,7 +432,7 @@ describe('serve', () => {
 	})
 })
 
-describe.skipIf(!hasPostgres)('a link mount whose mutation declares then', () => {
+describe.skipIf(!hasPostgres)('a link mount whose mutation declares kicks', () => {
 	test("kicks its job once the holder's mutation committed", async () => {
 		const served = serve(linkKicking, { database: scoped(tables) })
 		const connection = Database.postgres({ url, schema, max: 2 })

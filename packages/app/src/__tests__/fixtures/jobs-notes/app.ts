@@ -63,7 +63,7 @@ export function startingJobsApp() {
 	})
 }
 
-/** The jobs contract with a file collection, so `boot` needs the object storage the platform wrote. */
+/** The jobs contract with a file kind, so `boot` needs the object storage the platform wrote. */
 export function filesJobsApp() {
 	const database = scoped(tables)
 	const notes = defineStore(database, 'notes', (t) => ({

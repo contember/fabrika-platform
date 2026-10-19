@@ -2,6 +2,20 @@
 
 import type { TypedColumnList } from '@fabrika/db'
 
+export interface NoteAttachmentsTable {
+	id: string
+	note_id: string
+	workspace_id: string
+	file: string
+}
+
+export interface NoteDocumentsTable {
+	id: string
+	note_id: string
+	workspace_id: string
+	file: string
+}
+
 export interface NotesTable {
 	id: string
 	workspace_id: string
@@ -11,10 +25,34 @@ export interface NotesTable {
 }
 
 export interface DB {
+	note_attachments: NoteAttachmentsTable
+	note_documents: NoteDocumentsTable
 	notes: NotesTable
 }
 
 export const columns: TypedColumnList<DB> = {
+	'note_attachments': {
+		columns: [
+			'id',
+			'note_id',
+			'workspace_id',
+			'file',
+		],
+		foreignKeys: [
+			{ columns: ['note_id', 'workspace_id'], table: 'notes', references: ['id', 'workspace_id'] },
+		],
+	},
+	'note_documents': {
+		columns: [
+			'id',
+			'note_id',
+			'workspace_id',
+			'file',
+		],
+		foreignKeys: [
+			{ columns: ['note_id', 'workspace_id'], table: 'notes', references: ['id', 'workspace_id'] },
+		],
+	},
 	'notes': {
 		columns: [
 			'id',

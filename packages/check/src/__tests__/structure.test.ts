@@ -108,11 +108,11 @@ describe('a step out of the structure is a hint', () => {
 				+ '}))\n',
 			'fabrika.contract.ts': fileOf('fabrika.contract.ts').replace(
 				"health: c.health('/healthz'),",
-				"health: c.health('/healthz'),\n\tjobs: { purge: c.cron('0 3 * * *', { actions: ['deals.write'], scope: 'app' }).handle(async () => {}) },",
+				"health: c.health('/healthz'),\n\tjobs: { purge: c.cron('0 3 * * *', { actions: ['deals.write'] }).handle(async () => {}) },",
 			),
 		})
 		expect(findings).toEqual([
-			'fabrika.contract.ts:9:81 hint handler-location',
+			'fabrika.contract.ts:9:67 hint handler-location',
 			'src/deals/reports.ts:6:4 hint handler-location',
 		])
 	})

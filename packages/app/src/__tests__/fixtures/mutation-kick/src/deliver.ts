@@ -5,7 +5,7 @@ import { app } from './app-kit'
 import { Delivered } from './schemas'
 import { outboxDeps } from './world'
 
-export const deliver = app.cron('* * * * *', { actions: ['outbox.read'], scope: 'app', retries: 1, sql: 'write' }).handle(async ({ ctx }) => {
+export const deliver = app.cron('* * * * *', { actions: ['outbox.read'], retries: 1, sql: 'write' }).handle(async ({ ctx }) => {
 	const world = outboxDeps.get()
 	await world.started({ principal: ctx.principal.id, runId: ctx.runId, signal: ctx.signal })
 	const delivered = await ctx.transaction((tx) => tx.sql(Delivered)`delete from outbox returning body`)
@@ -13,6 +13,6 @@ export const deliver = app.cron('* * * * *', { actions: ['outbox.read'], scope: 
 })
 
 /** Kicks `deliver` once its own run succeeded, so a job edge starts the drain without waiting for its schedule. */
-export const sweep = app.cron('0 * * * *', { actions: ['outbox.read'], scope: 'app', kicks: ['deliver'] }).handle(({ ctx }) => {
+export const sweep = app.cron('0 * * * *', { actions: ['outbox.read'], kicks: ['deliver'] }).handle(({ ctx }) => {
 	ctx.kick('deliver')
 })

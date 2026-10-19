@@ -6,21 +6,7 @@ import type { BodyAdmission, ChallengeProvider } from '@fabrika/auth-core'
 export const CONTRACT_DEFAULTS = {
 	/** A failed job run is not retried unless the job asks for it: a retry repeats work. */
 	jobRetries: 0,
-	formMaxBytes: 16 * 1024,
-	fileMaxPerOwner: null,
-	fileLink: false,
 	importTimeoutMs: null,
-} as const
-
-/**
- * A form's admission, per minute and shared by every instance of the application: the requests it admits from one
- * client (`X-Fabrika-Client-Ip`) and the submissions it accepts in all. A form may declare its own `rate`, up to
- * `maxPerMinute` each.
- */
-export const FORM_LIMITS = {
-	perClient: 10,
-	perForm: 100,
-	maxPerMinute: 10_000,
 } as const
 
 /**
@@ -38,12 +24,13 @@ export const PROCEDURE_LIMITS = {
 	maxFileBodyBytes: 48 * 1024 * 1024,
 	/** The files one request carries, at most: each field's `.max(n)` together. */
 	maxFiles: 20,
+	/** The headers of one part of a multipart body, at most. */
+	maxPartHeaderBytes: 8 * 1024,
 } as const
 
 /**
- * A procedure with file fields is `multipart/form-data`: its JSON input travels in the first part, named `input` (the
- * form's `FORM_INPUT_PART`), and each file in a part named after its field. A field of several files sends one part per
- * file, under its name.
+ * A procedure with file fields is `multipart/form-data`: its JSON input travels in the first part, named `input`, and
+ * each file in a part named after its field. A field of several files sends one part per file, under its name.
  */
 export const FILE_INPUT_PART = 'input'
 
@@ -62,8 +49,8 @@ export const JOB_LIMITS = {
 	maxTimeoutMs: 24 * 60 * 60_000,
 } as const
 
-/** A public mutation's buckets unless it declares its own: today's form limits, per client and for the endpoint. */
-export const PUBLIC_MUTATION_RATE = { perClient: FORM_LIMITS.perClient, perEndpoint: FORM_LIMITS.perForm } as const
+/** A public mutation's buckets per minute unless it declares its own: per client and for the endpoint. */
+export const PUBLIC_MUTATION_RATE = { perClient: 10, perEndpoint: 100 } as const
 
 /**
  * The challenge widget's `action` of a public procedure: its endpoint id with `_` for `.`, as the provider admits at most
@@ -73,35 +60,11 @@ export function challengeAction(endpoint: string): string {
 	return endpoint.replaceAll('.', '_')
 }
 
-/** The input field that carries a form's challenge token; a form with a challenge declares it as a string. */
-export const FORM_CHALLENGE_FIELD = 'challengeToken'
+/** The input field that carries a challenge token; a procedure with a challenge declares it as a string. */
+export const CHALLENGE_FIELD = 'challengeToken'
 
-/**
- * A form that takes files is `multipart/form-data`: its input travels as JSON in the first part, named `input`, and each
- * file in a part named after its field. The proxy admits only that type for such a form.
- */
+/** A procedure with file fields reads `multipart/form-data`; the proxy admits that type for its row. */
 export { FORM_MULTIPART_TYPE } from '@fabrika/auth-core'
-export const FORM_INPUT_PART = 'input'
-
-/**
- * The bounds of a form's files: at most `maxFields` file fields, a file each; a received file waits `holdMs` for the
- * job that drains the inbox to attach it, then the sweep deletes it; a submission's body must arrive within
- * `timeoutMs`; a part's headers hold at most `maxPartHeaderBytes`.
- */
-export const FORM_FILE_LIMITS = {
-	maxFields: 4,
-	holdMs: 7 * 24 * 60 * 60 * 1000,
-	timeoutMs: 5 * 60 * 1000,
-	maxPartHeaderBytes: 8 * 1024,
-	/**
-	 * A form with files accepts this many submissions per minute unless it declares `rate.perForm`, and its files write
-	 * at most `bytesPerHour` per hour unless it declares `rate.bytesPerHour` (at most `maxBytesPerHour`). Each file
-	 * reserves its collection's `maxBytes` before its first byte is written, and gives back what it did not use.
-	 */
-	perForm: 20,
-	bytesPerHour: 512 * 1024 * 1024,
-	maxBytesPerHour: 64 * 1024 * 1024 * 1024,
-} as const
 
 /** Each challenge provider's fixed browser origins: its widget's script and its frame. */
 export const CHALLENGE_ORIGINS: Readonly<Record<ChallengeProvider, { readonly scriptSrc: readonly string[]; readonly frameSrc: readonly string[] }>> =
@@ -109,19 +72,14 @@ export const CHALLENGE_ORIGINS: Readonly<Record<ChallengeProvider, { readonly sc
 		turnstile: { scriptSrc: ['https://challenges.cloudflare.com'], frameSrc: ['https://challenges.cloudflare.com'] },
 	}
 
-/** Generated file endpoints live under this prefix, for signed-in people. */
-export const FILES_PREFIX = '/api'
-
 /**
- * The bounds of a file collection: the largest file a `scan: true` collection admits (the scanner reads at most this
- * much of one file, so a larger one could never be given a clean verdict), and the pages of `files.<name>.list`.
+ * The bounds of a file kind: the largest file a `scan: true` kind admits (the scanner reads at most this much of one
+ * file, so a larger one could never be given a clean verdict).
  */
 export const FILE_LIMITS = {
 	maxScannedBytes: 100 * 1024 * 1024,
-	/** Sniffable types a `scan: true` collection refuses: archives other than ZIP, whose contents the framework does not check. */
+	/** Sniffable types a `scan: true` kind refuses: archives other than ZIP, whose contents the framework does not check. */
 	unscannedTypes: ['application/gzip'] as readonly string[],
-	listPageDefault: 50,
-	listPageMax: 100,
 } as const
 
 /**
@@ -164,15 +122,6 @@ export const LINK_API_SEGMENT = 'api'
 
 /** The path segment a webhook appends for the binding a delivery addresses. */
 export const WEBHOOK_BINDING_PARAMETER = 'bindingId'
-
-/** Generated webhook binding endpoints (`webhooks.<name>.bind`, `.unbind`) live under this prefix, for signed-in people. */
-export const WEBHOOKS_PREFIX = '/api'
-
-/** The input field of a binding endpoint that names the scope value the binding reaches. */
-export const WEBHOOK_SCOPE_FIELD = 'scope'
-
-/** A GitHub account a binding accepts: an App installation or a repository, by numeric id. */
-export const WEBHOOK_ACCOUNT_PATTERN = '^(?:installation|repository):[1-9][0-9]{0,19}$'
 
 /**
  * The share SPA's bootstrap, served by the framework under the link prefix and loaded before any other script: it
@@ -228,16 +177,4 @@ export const JSON_ADMISSION: BodyAdmission = { contentTypes: ['application/json'
 /** `/api` + `notes.list` → `/api/notes.list`; a root prefix does not double the `/`. */
 export function joinPath(prefix: string, rest: string): string {
 	return prefix === '/' ? `/${rest}` : `${prefix}/${rest}`
-}
-
-/**
- * The paths of the endpoints of collection `name` under `base` (`FILES_PREFIX`, or a link mount's API prefix): the
- * upload takes `/:owner` after its path for a signed-in caller, and the download `/:fileId`.
- */
-export function fileCollectionPaths(
-	base: string,
-	name: string,
-): { readonly upload: string; readonly download: string; readonly list: string; readonly remove: string } {
-	const at = joinPath(base, `files.${name}`)
-	return { upload: `${at}.upload`, download: at, list: `${at}.list`, remove: `${at}.remove` }
 }

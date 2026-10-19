@@ -177,7 +177,8 @@ CREATE TABLE ${FILE_DELETIONS_TABLE} (
 );
 
 -- Copies the held rows of a collection's table (fabrika_files_<collection>) into ${FILES_TABLE}, marked legacy with
--- the collection: same id, object, status and scan state. A row copied before is skipped.
+-- the collection: same id, object, status and scan state. A row copied before is skipped, and so is an orphan, whose
+-- owner was deleted: no application can adopt it, so the release records its object for deletion.
 CREATE FUNCTION ${FILES_COPY_FUNCTION}(collection TEXT) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
 	source TEXT := 'fabrika_files_' || collection;
@@ -191,7 +192,7 @@ BEGIN
 	EXECUTE format(
 		'INSERT INTO ${FILES_TABLE} (id, kind, status, object_key, size, sha256, content_type, name, created_at, object_version, scan_attempts, scan_after, legacy) '
 		|| 'SELECT id, $1, status, object_key, size, sha256, content_type, original_name, created_at, %s, $1 FROM %I '
-		|| 'WHERE deleted_at IS NULL AND status <> ''pending'' ON CONFLICT (id) DO NOTHING',
+		|| 'WHERE deleted_at IS NULL AND status <> ''pending'' AND owner_id IS NOT NULL ON CONFLICT (id) DO NOTHING',
 		CASE WHEN scanned THEN 'object_version, scan_attempts, scan_after' ELSE 'NULL, 0, NULL' END,
 		source
 	) USING collection;

@@ -50,7 +50,7 @@ const seen: { kept: AppMail | null; mayRetry: boolean | null; failure: unknown; 
 	quietHasMail: null,
 }
 
-const notify = app.cron('* * * * *', { actions: ['crm.read'], scope: 'app', mailer: 'installation' }).handle(async ({ ctx }) => {
+const notify = app.cron('* * * * *', { actions: ['crm.read'], mailer: 'installation' }).handle(async ({ ctx }) => {
 	seen.kept = ctx.mail
 	try {
 		await ctx.mail.send({ to: 'ada@example.com', subject: 'Welcome aboard', text: 'Hello Ada', idempotencyKey: plan.key }, plan.signal)
@@ -61,22 +61,22 @@ const notify = app.cron('* * * * *', { actions: ['crm.read'], scope: 'app', mail
 	}
 })
 
-const ownNotify = app.cron('* * * * *', { actions: ['crm.read'], scope: 'app', mailer: 'own' }).handle(async ({ ctx }) => {
+const ownNotify = app.cron('* * * * *', { actions: ['crm.read'], mailer: 'own' }).handle(async ({ ctx }) => {
 	await ctx.mail.send({ to: 'ada@example.com', subject: 'Your own', text: 'Hello again', idempotencyKey: 'o-1' })
 })
 
-const retried = app.cron('* * * * *', { actions: ['crm.read'], scope: 'app', mailer: 'installation', retries: 2 }).handle(async ({ ctx }) => {
+const retried = app.cron('* * * * *', { actions: ['crm.read'], mailer: 'installation', retries: 2 }).handle(async ({ ctx }) => {
 	await ctx.mail.send({ to: 'ada@example.com', subject: 'Welcome aboard', text: 'Hello Ada', idempotencyKey: 'r-1' })
 })
 
-const quiet = app.cron('0 3 * * *', { actions: ['crm.read'], scope: 'app' }).handle(({ ctx }) => {
+const quiet = app.cron('0 3 * * *', { actions: ['crm.read'] }).handle(({ ctx }) => {
 	seen.quietHasMail = 'mail' in ctx
 })
 
 /** The keys of the messages an outbox holds, in its order: the recipe leaves them while mail is not available. */
 const outbox: string[] = []
 
-const sendOutbox = app.cron('* * * * *', { actions: ['crm.read'], scope: 'app', mailer: 'installation' }).handle(async ({ ctx }) => {
+const sendOutbox = app.cron('* * * * *', { actions: ['crm.read'], mailer: 'installation' }).handle(async ({ ctx }) => {
 	if (!ctx.mail.available) return
 	for (const key of [...outbox]) {
 		await ctx.mail.send({ to: 'ada@example.com', subject: 'Queued', text: 'Hello Ada', idempotencyKey: key })

@@ -3,7 +3,7 @@ import { app } from './app-kit'
 
 const Closed = z.strictObject({ id: z.uuid() })
 
-export const close = app.cron('0 3 * * *', { actions: ['crm.read', 'deals.write'], scope: 'app', sql: 'write' })
+export const close = app.cron('0 3 * * *', { actions: ['crm.read', 'deals.write'], sql: 'write' })
 	.handle(async ({ ctx }) => {
 		const companies = await ctx.db.over(ctx.within('crm.read', 'org')).companies.count()
 		if (companies > 0) {

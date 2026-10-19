@@ -1,13 +1,12 @@
 // What a procedure admits before its handler runs, decided once at boot from the approved artifact: its buckets, a
 // public procedure's challenge, and its time limit. The buckets live in the application's database
-// (`@fabrika/db`'s `FormAdmissions`, keyed by the endpoint id, which no form's name can be), so every instance shares
-// them. Admission is not authorization: it bounds how much one client, one caller and everyone together send.
+// (`@fabrika/db`'s `Admissions`, keyed by the endpoint id), so every instance shares them. Admission is not authorization: it bounds how much one client, one caller and everyone together send.
 
 import { type AdmissionRate, CLIENT_ADDRESS_HEADER, type ContractArtifact, type ProcedureArtifact } from '@fabrika/auth-core'
 import { createHash } from 'node:crypto'
 import { REQUEST_BUDGET_MS } from './bounded'
 import { type ChallengeFetch, type ChallengeVerifier, turnstileVerifier } from './challenge'
-import { clientBucket, clientKey } from './form-admission'
+import { clientBucket, clientKey } from './client-address'
 import type { RequestClient } from './types'
 
 /** The bucket every call of an endpoint takes from; a client's is `client:<digest>`, a caller's `caller:<digest>`. */

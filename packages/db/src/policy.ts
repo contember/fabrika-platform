@@ -47,11 +47,6 @@ export interface ApplicationScope<Col extends string> {
 	readonly key?: Col
 }
 
-export interface InboxScope<A extends string> {
-	readonly inbox: string
-	readonly read: A
-}
-
 /** One action, or a list of them: a table that staff and a public procedure both read names both actions. */
 export type TableAction<A extends string> = A | readonly A[]
 
@@ -114,7 +109,7 @@ export interface ColumnPolicy<A extends string> {
 	readonly write?: A
 }
 
-/** A table no handler writes (a reference or an inbox) declares column read actions only. */
+/** A table no handler writes (a reference table) declares column read actions only. */
 export type ColumnReadPolicies<Col extends string, A extends string> = { readonly [C in Col]?: { readonly read: A } }
 
 export interface DimensionPolicy<Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V, RecordActions<A>> {
@@ -145,11 +140,6 @@ interface ReadOnlyPolicy<Col extends string, A extends string> {
 export interface ReferencePolicy<Col extends string, A extends string> extends ReadOnlyPolicy<Col, A> {
 	readonly scope: ReferenceScope
 	readonly actions: { readonly read: TableAction<A> }
-}
-
-export interface InboxPolicy<Col extends string, A extends string> extends ReadOnlyPolicy<Col, A> {
-	readonly scope: InboxScope<A>
-	readonly actions?: never
 }
 
 /** The columns a version can live in: those whose generated select type is `number`, an INTEGER (int4). */
@@ -184,7 +174,6 @@ export type ScopeModel =
 	| { readonly mode: 'dimension'; readonly dimension: string; readonly key: string; readonly container: Container | undefined }
 	| { readonly mode: 'child'; readonly parent: string; readonly key: string; readonly column: string; readonly inherit: readonly string[] }
 	| { readonly mode: 'reference'; readonly reason: string }
-	| { readonly mode: 'inbox'; readonly form: string }
 	| { readonly mode: 'app'; readonly reason: string; readonly key: string }
 
 /** Each operation's actions: any one of them allows it. `read` names at least one; an empty list allows no operation. */
@@ -280,15 +269,6 @@ export function tableModels<DB, P>(tables: Tables<DB, P>): TableModels {
 	return readModels(tables)
 }
 
-/**
- * The same policies without the forms' inbox tables: what a contract that serves no form compiles against. A form's
- * inbox is reached by its form only, so no other table's policy names one.
- */
-export function withoutInboxes<DB, P>(tables: Tables<DB, P>): Tables<DB, P> {
-	const models = readModels(tables)
-	return new Tables(Object.freeze(Object.fromEntries(Object.entries(models).filter(([, model]) => model.scope.mode !== 'inbox'))))
-}
-
 /** Whether `value` is what `defineTables` returned, rather than another form of the same policies. */
 export function isTables<DB, P, Other extends object>(value: Tables<DB, P> | Other): value is Tables<DB, P> {
 	return hasModels(value)
@@ -372,7 +352,6 @@ const CONTAINER_FIELDS = nameSet(['dimension', 'column'])
 const CHILD_FIELDS = nameSet(['child', 'key', 'column', 'inherit'])
 const REFERENCE_FIELDS = nameSet(['reference'])
 const APPLICATION_FIELDS = nameSet(['app', 'key'])
-const INBOX_FIELDS = nameSet(['inbox', 'read'])
 const COLUMN_FIELDS = nameSet(['read', 'write'])
 
 /** A copy of a plain object's own data properties; anything else (an instance, a symbol key, an accessor) is refused. */
@@ -826,15 +805,16 @@ function parseScope(table: string, scope: Readonly<Record<string, unknown>>, col
 		return freeze({ mode: 'reference', reason: nonEmpty(table, ownEntry(scope, 'reference'), 'scope.reference') })
 	}
 	if (hasOwn(scope, 'inbox')) {
-		onlyFields(scope, INBOX_FIELDS, what)
-		return freeze({ mode: 'inbox', form: nonEmpty(table, ownEntry(scope, 'inbox'), 'scope.inbox') })
+		throw new PolicyError(
+			`${table}: the inbox scope was removed; declare an application table, scope: { app: '<why>' }, that a public procedure inserts into`,
+		)
 	}
 	if (hasOwn(scope, 'app')) {
 		onlyFields(scope, APPLICATION_FIELDS, what)
 		return freeze({ mode: 'app', reason: nonEmpty(table, ownEntry(scope, 'app'), 'scope.app'), key: key() })
 	}
 	throw new PolicyError(
-		`${what} takes one mode: { dimension, key?, in? }, { child, key?, column?, inherit? }, { app, key? }, { reference } or { inbox, read }`,
+		`${what} takes one mode: { dimension, key?, in? }, { child, key?, column?, inherit? }, { app, key? } or { reference }`,
 	)
 }
 
@@ -874,19 +854,6 @@ function parseActions(
 	actionsInput: unknown,
 	action: (value: unknown, field: string) => string,
 ): ActionModel {
-	if (hasOwn(scope, 'inbox')) {
-		if (actionsInput !== undefined) {
-			throw new PolicyError(`${table}: an inbox table takes its read action as scope.read and no actions; only its form appends`)
-		}
-		return freeze({
-			read: freeze([action(ownEntry(scope, 'read'), 'scope.read')]),
-			insert: freeze([]),
-			update: freeze([]),
-			delete: freeze([]),
-			appRead: freeze([]),
-			appCount: freeze([]),
-		})
-	}
 	if (actionsInput === undefined) {
 		throw new PolicyError(`${table}: the policy needs actions`)
 	}

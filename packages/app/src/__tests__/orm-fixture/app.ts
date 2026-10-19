@@ -134,6 +134,12 @@ export function ormApp(hooks: OrmHooks): ContractImplementation<typeof contract>
 					return Array.from({ length: Number(field(input, 'rows')) }, () => ({ line }))
 				}, undefined),
 			},
+			hooks: {
+				connect: siteHandler(async ({ input, ctx }) => {
+					const github = await call(ctx, 'webhooks', 'github')
+					return call(github, 'bind', at(ctx, 'target'), field(input, 'account'))
+				}, { binds: 'github' }),
+			},
 		},
 		github: siteHandler(async ({ input, ctx }) => {
 			const name = `${String(field(input, 'ref'))} ${hooks.deliveries.length}`

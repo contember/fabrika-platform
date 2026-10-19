@@ -82,7 +82,7 @@ const app = defineApp(vocabulary, tables)
 /** What the last run of `refusing` saw when it claimed inside its transaction. */
 const seen: { refusal: string | null } = { refusal: null }
 
-const render = app.cron('*/5 * * * *', { actions: ['reports.render'], scope: 'app' }).handle(async ({ ctx }) => {
+const render = app.cron('*/5 * * * *', { actions: ['reports.render'] }).handle(async ({ ctx }) => {
 	const queue = ctx.db.over(ctx.within('reports.render', 'deal')).report_requests
 	for (const request of await queue.claim({ limit: 5 })) {
 		await ctx.transaction(async (tx) => {
@@ -91,7 +91,7 @@ const render = app.cron('*/5 * * * *', { actions: ['reports.render'], scope: 'ap
 	}
 })
 
-const refusing = app.cron('* * * * *', { actions: ['reports.render'], scope: 'app' }).handle(async ({ ctx }) => {
+const refusing = app.cron('* * * * *', { actions: ['reports.render'] }).handle(async ({ ctx }) => {
 	const within = ctx.within('reports.render', 'deal')
 	await ctx.transaction(async (tx) => {
 		// The types refuse the call; a handler whose types were defeated reaches the runtime's refusal.

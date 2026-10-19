@@ -10,8 +10,8 @@ export {
 	type EmailSenderCapabilities,
 	mayRetryDelivery,
 } from '@fabrika/email'
-export { FILE_SWEEP_JOB } from '../files/collections'
 export type { FileCollectionHandle, FileCollectionReader, FileListing, ListedFile, OpenedFile } from '../files/handle'
+export { FILE_SWEEP_JOB } from '../files/kinds'
 export {
 	FILE_SCAN_JOB,
 	type FileScanner,

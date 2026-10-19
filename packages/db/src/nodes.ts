@@ -229,14 +229,11 @@ export function aggregateNode(
 	return Object.freeze(node)
 }
 
-/**
- * `answer` is `undefined` only for an inbox append, which answers nothing. `conflict` names the columns of a unique
- * index the insert does nothing on: `on conflict (<columns>) do nothing`.
- */
+/** `conflict` names the columns of a unique index the insert does nothing on: `on conflict (<columns>) do nothing`. */
 export function insertNode(
 	table: string,
 	values: ReadonlyMap<string, Primitive | null>,
-	answer: ReturningNode | undefined,
+	answer: ReturningNode,
 	conflict?: readonly string[],
 ): InsertQueryNode {
 	const names = [...values.keys()]
@@ -249,7 +246,7 @@ export function insertNode(
 		columns: names.map((name) => ColumnNode.create(name)),
 		values: ValuesNode.create([ValueListNode.create(names.map((name) => ValueNode.create(values.get(name) ?? null)))]),
 		...(onConflict === undefined ? {} : { onConflict }),
-		...(answer === undefined ? {} : { returning: answer }),
+		returning: answer,
 	}
 	return Object.freeze(node)
 }

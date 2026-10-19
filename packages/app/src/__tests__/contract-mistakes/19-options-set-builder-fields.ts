@@ -4,7 +4,6 @@ import { z } from 'zod/v4'
 const options = {
 	kind: 'form',
 	path: '/contact',
-	appendTo: 'messages',
 	scheme: 'github-sha256',
 	boundTo: 'app',
 	actions: ['notes.write'],

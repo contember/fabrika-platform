@@ -1,9 +1,6 @@
-// The fixture's migrations, as `db/migrations/` would hold them: the framework's tables (the jobs' leases), the notes,
-// and the table of each collection. A note owns the files of both.
-import { fileTableSql } from '@fabrika/db'
+// The fixture's migrations, as `db/migrations/` would hold them: the framework's tables (the jobs' leases and the
+// stored files), the notes, and a table per file column. A note holds the rows of both.
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
-
-const OWNER = { table: 'notes', key: { column: 'id', type: 'uuid' }, chain: [{ column: 'workspace_id', type: 'text' }] } as const
 
 export const migration = `
 ${FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n')}
@@ -15,6 +12,20 @@ create table notes (
 	version integer not null,
 	unique (id, workspace_id)
 );
-${fileTableSql('documents', OWNER)}
-${fileTableSql('attachments', OWNER)}
+create table note_documents (
+	id uuid primary key,
+	note_id uuid not null,
+	workspace_id text not null,
+	file uuid not null references fabrika_files (id),
+	foreign key (note_id, workspace_id) references notes (id, workspace_id)
+);
+create index note_documents_file on note_documents (file);
+create table note_attachments (
+	id uuid primary key,
+	note_id uuid not null,
+	workspace_id text not null,
+	file uuid not null references fabrika_files (id),
+	foreign key (note_id, workspace_id) references notes (id, workspace_id)
+);
+create index note_attachments_file on note_attachments (file);
 `

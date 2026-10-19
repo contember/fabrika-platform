@@ -2,7 +2,7 @@
 // job is a staged-kit site. The shell declares each site's reach, which the approved artifact carries; the handlers that
 // reach data through `ctx.db` are the tree `app.ts` writes, so the handlers here are never served.
 
-import { attachment, defineApp } from '@fabrika/app/contract'
+import { attachment, defineApp, WebhookSecret } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { tables } from '../kit-fixture/src/db/tables'
 import { vocabulary } from '../kit-fixture/src/vocabulary'
@@ -14,6 +14,7 @@ export const Rename = z.strictObject({ id: z.uuid(), title: z.string(), expectVe
 export const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
 export const Ok = z.strictObject({ ok: z.boolean() })
 export const Push = z.strictObject({ ref: z.string() })
+export const Connect = z.strictObject({ org: z.string(), account: z.string() })
 export const ExportDeal = z.strictObject({ id: z.uuid(), expectVersion: z.int(), rows: z.int(), width: z.int() })
 /** An audited export: the handler writes its log entry (here the deal's title), then answers the rows. */
 export const DealExport = attachment({
@@ -44,12 +45,18 @@ const deals = kit.group({ callers: ['human'] }, (r) => ({
 		.handle(servedByTheTree),
 }))
 
+/** Binds the webhook to an organization, under an action on it. */
+const hooks = kit.group({ callers: ['human'] }, (r) => ({
+	connect: r.mutation({ input: Connect, output: WebhookSecret, access: { action: 'crm.write', on: 'org', from: 'org' }, binds: 'github' })
+		.handle(servedByTheTree),
+}))
+
 const github = kit.webhook('/hooks/github', { scheme: 'github-sha256', boundTo: 'org', actions: ['crm.write'], input: Push }).handle(servedByTheTree)
 
-const close = kit.cron('0 3 * * *', { actions: ['crm.read', 'deals.write'], scope: 'app' }).handle(servedByTheTree)
+const close = kit.cron('0 3 * * *', { actions: ['crm.read', 'deals.write'] }).handle(servedByTheTree)
 
 export const contract = kit.contract((c) => ({
-	api: c.rpc('/api', { deals }),
+	api: c.rpc('/api', { deals, hooks }),
 	github,
 	health: c.health('/healthz'),
 	jobs: { close },

@@ -213,6 +213,7 @@ describe.skipIf(!hasPostgres)('ctx.db through the pipeline', () => {
 						),
 						retitle: siteHandler(() => ({ ok: true }), declaration),
 					},
+					hooks: { connect: siteHandler(() => ({}), { binds: 'github' }) },
 				},
 				github: siteHandler(() => undefined, undefined),
 				jobs: { close: siteHandler(() => undefined, undefined) },
@@ -263,8 +264,8 @@ describe.skipIf(!hasPostgres)('a webhook delivery is one transaction', () => {
 	const hook = { 'Content-Type': 'application/json' }
 
 	async function bind(app: ContractApp): Promise<{ id: string; url: string; secret: string }> {
-		const manager = await token('user', [grant('members.manage', O1)])
-		const result = resultOf(await send(app, '/api/webhooks.github.bind', { token: manager, body: { scope: 'o1', account: 'repository:42' } }))
+		const writer = await token('user', [grant('crm.write', O1)])
+		const result = resultOf(await send(app, '/api/hooks.connect', { token: writer, body: { org: 'o1', account: 'repository:42' } }))
 		const field = (name: string) => String(typeof result === 'object' && result !== null ? Reflect.get(result, name) : '')
 		return { id: field('id'), url: field('url'), secret: field('secret') }
 	}

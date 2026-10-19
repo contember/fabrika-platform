@@ -1,5 +1,5 @@
-// Mutations that kick their job through `boot`'s real pipeline, on a REAL Postgres: a mutation's `then` starts a run of
-// the job in the background once the mutation's transaction committed, under the job's own key; a refused request kicks
+// Mutations that kick their job through `boot`'s real pipeline, on a REAL Postgres: a mutation's `ctx.kick` starts a run
+// of the job in the background once the mutation's transaction committed, under the job's own key; a refused request kicks
 // nothing; a process that stops aborts its kicked runs and frees their lease for the schedule. Skips cleanly when
 // FABRIKA_TEST_POSTGRES_URL is unset.
 
@@ -246,17 +246,12 @@ async function commitWaiting(): Promise<boolean> {
 	return Number(row?.n) > 0
 }
 
-describe('a mutation with then in the artifact', () => {
-	test('names its job under the endpoint; a site without then carries none', () => {
+describe('a mutation with kicks in the artifact', () => {
+	test('kicks names the jobs a site may kick, under the endpoint and under the job; a site without kicks carries none', () => {
 		const declared = compileContract(contract, tables).declared ?? {}
-		expect(declared['api.outbox.enqueue']?.then).toBe('deliver')
-		expect(declared['api.outbox.refuse']?.then).toBe('deliver')
-		expect(declared['api.outbox.peek']).toEqual({ sql: 'read', unscoped: {}, connect: [], issues: null })
-	})
-
-	test('kicks names the jobs a site may kick, under the endpoint and under the job', () => {
-		const declared = compileContract(contract, tables).declared ?? {}
+		expect(declared['api.outbox.enqueue']?.kicks).toEqual(['deliver'])
 		expect(declared['api.outbox.post']?.kicks).toEqual(['deliver'])
+		expect(declared['api.outbox.peek']).toEqual({ sql: 'read', unscoped: {}, connect: [], issues: null })
 		expect(declared['job:sweep']).toEqual({ sql: null, unscoped: {}, connect: [], issues: null, kicks: ['deliver'] })
 	})
 })
@@ -272,7 +267,7 @@ function problemsOf(build: () => unknown): readonly string[] {
 }
 
 describe('the kick edges a contract declares', () => {
-	const options = { actions: ['outbox.read'], scope: 'app' } as const
+	const options = { actions: ['outbox.read'] } as const
 
 	test('a kick names a cron job of the contract', () => {
 		const sweep = outboxKit.cron('0 * * * *', { ...options, kicks: ['delivr'] }).handle(() => {})
@@ -322,7 +317,7 @@ describe.skipIf(!hasPostgres)('a site with kicks kicks a job when its handler as
 	})
 })
 
-describe.skipIf(!hasPostgres)('a mutation with then kicks its job', () => {
+describe.skipIf(!hasPostgres)('a mutation that kicks its job', () => {
 	test('a queued message is delivered within a second, by a run under the job’s own key, without waiting for cron', async () => {
 		const running = start()
 		const sent = performance.now()

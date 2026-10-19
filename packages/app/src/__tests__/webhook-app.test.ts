@@ -146,7 +146,7 @@ describe('binds in the artifact', () => {
 			}),
 			stripe,
 			jobs: {
-				nightly: app.cron('0 3 * * *', withField({ actions: ['positions.manage'], scope: 'app' }, 'binds', 'stripe')).handle(async () => {}),
+				nightly: app.cron('0 3 * * *', withField({ actions: ['positions.manage'] }, 'binds', 'stripe')).handle(async () => {}),
 			},
 		}))
 		expect(refusals(() => compileContract(misplaced, tables))).toEqual([

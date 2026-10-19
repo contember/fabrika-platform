@@ -1,9 +1,9 @@
-// The fixture's migrations, as `db/migrations/` would hold them. A form appends to its inbox; the intake job drains
-// both inboxes and keeps each candidate's link delivery in the candidate's own row; a candidate owns its attachments.
-// An inbox row and a delivery each count their failed attempts and keep the step that failed last; one that failed
-// MAX_ATTEMPTS times is dead (a registration left in its inbox, a delivery 'failed') until an operator acts. A link
+// The fixture's migrations, as `db/migrations/` would hold them. The public procedures write a registration or a
+// resend request; the intake job claims the registrations as a queue, drains the resend requests, and keeps each
+// candidate's link delivery in the candidate's own row; a candidate's files are rows of candidate_files. A
+// registration counts its claims and keeps the step that failed last; one claimed MAX_ATTEMPTS times stays, no longer
+// due, for an operator. A delivery counts its failed attempts the same way and is 'failed' after MAX_ATTEMPTS. A link
 // waiting to be e-mailed keeps its URL sealed (link_seal), never in plain text, so a retry sends the same link.
-import { fileTableSql } from '@fabrika/db'
 
 export const migration = `
 create table candidates (
@@ -23,17 +23,23 @@ create table candidates (
 	version integer not null
 );
 create table registrations (
-	id uuid not null default gen_random_uuid(),
+	id uuid primary key,
 	email text not null,
 	name text not null,
-	received_at timestamptz not null default now(),
 	attempts integer not null default 0,
-	last_failure text
+	due_at timestamptz default now(),
+	last_failure text,
+	version integer not null
 );
 create table resend_requests (
-	id uuid not null default gen_random_uuid(),
+	id uuid primary key,
 	email text not null,
 	received_at timestamptz not null default now()
 );
-${fileTableSql('attachments', { table: 'candidates', key: { column: 'id', type: 'uuid' }, chain: [] })}
+create table candidate_files (
+	id uuid primary key,
+	candidate_id uuid not null references candidates (id),
+	file uuid not null references fabrika_files (id)
+);
+create index candidate_files_file on candidate_files (file);
 `

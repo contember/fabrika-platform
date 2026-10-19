@@ -1,7 +1,7 @@
 // The job runner (`fabrika job run <name>`): one run of one `c.cron` job. A run takes the job's lease or does not
 // start; each attempt holds one generation of it with a deadline the database enforces, so a write of an attempt
-// that timed out, failed or lost the lease never commits (`@fabrika/db`'s fence). A form's `then` kicks a run in the
-// background without waiting for any lock; a kick that finds the lease held leaves the shared pending flag, and the run
+// that timed out, failed or lost the lease never commits (`@fabrika/db`'s fence). A site's `ctx.kick` sends a run in
+// the background after its commit, without waiting for any lock; a kick that finds the lease held leaves the shared pending flag, and the run
 // holding it runs once more after it succeeded. Failures, crashed runs and a job that stopped succeeding are reported
 // to Operations, each under a fixed failure code.
 
@@ -11,7 +11,6 @@ import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError, type Session } from '@fabrika/db/framework'
 import { EmailDeliveryError, type EmailSenderCapabilities, mayRetryDelivery } from '@fabrika/email'
 import { NotFoundError } from '../errors'
-import type { FileCollections } from '../files/collections'
 import { FileWork, type StoredFileKinds, storedFilesHandle } from '../files/kinds'
 import {
 	type AppCapability,
@@ -35,7 +34,6 @@ import {
 	jobSql,
 	jobSqlOutsideTransaction,
 	kickRecorder,
-	noFileCollections,
 	siteData,
 	type SiteDeclaration,
 	undeclaredSql,
@@ -176,7 +174,6 @@ interface RunnerContext {
 	readonly reporter: OperationsReporter
 	readonly mint: CapabilityMint
 	readonly data: DataAccess | null
-	readonly files: FileCollections | null
 	readonly fileKinds: StoredFileKinds | null
 	readonly membership: IamMembership | null
 	readonly capabilities: CapabilityAuthority
@@ -209,11 +206,9 @@ export interface JobBindingInput {
 	readonly mint: CapabilityMint
 	/** The mini-ORM of the bound `scoped(tables)` layer, behind a staged-kit job's `ctx.db`. */
 	readonly data: DataAccess | null
-	/** The contract's file collections, behind a staged-kit job's `ctx.files` and `tx.files`; `null` without any. */
-	readonly files?: FileCollections | null
 	/** The contract's file kinds, behind a staged-kit job's `ctx.files.put` and `.open`; `null` without any. */
 	readonly fileKinds?: StoredFileKinds | null
-	/** The framework's own jobs this contract needs: the scan of its `scan: true` file collections. */
+	/** The framework's own jobs this contract needs: the scan of its `scan: true` file kinds, and the file sweep. */
 	readonly frameworkJobs?: readonly FrameworkJob[]
 	/** IAM's membership operations, which a job that `issues` links asks; `null` when the adapter supplies none. */
 	readonly membership: IamMembership | null
@@ -242,7 +237,7 @@ export interface BoundJobs {
 	/** The handler ids the jobs took (`jobs.<name>`), so `boot` finds no undeclared handler among them. */
 	readonly declared: readonly string[]
 	/**
-	 * Kicks the contract job `name`, as a form's `then` does after its row committed: a run under the job's own key
+	 * Kicks the contract job `name`, as a site's `ctx.kick` does after its commit: a run under the job's own key
 	 * now, or the shared pending flag for the run holding the lease, which then runs once more after it succeeded. It
 	 * waits for no lock, settles when that work has ended and never rejects; the schedule stays the recovery path.
 	 */
@@ -320,7 +315,6 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		reporter: chosen ?? input.reporter,
 		mint: input.mint,
 		data: input.data,
-		files: input.files ?? null,
 		fileKinds: input.fileKinds ?? null,
 		membership: input.membership,
 		capabilities: input.capabilities,
@@ -809,7 +803,7 @@ function jobContext(
 			: kitJobContext(
 				frame,
 				context.data,
-				{ collections: context.files, kinds: context.fileKinds },
+				context.fileKinds,
 				job.name,
 				job.site,
 				principal.id,
@@ -886,7 +880,7 @@ function jobMailOf(job: BoundJob, mailer: JobMailer, frame: RequestFrame, signal
 function kitJobContext(
 	frame: RequestFrame,
 	data: DataAccess,
-	stored: { readonly collections: FileCollections | null; readonly kinds: StoredFileKinds | null },
+	kinds: StoredFileKinds | null,
 	name: string,
 	site: SiteDeclaration,
 	principal: string,
@@ -894,25 +888,16 @@ function kitJobContext(
 	app: (action: string) => AppCapability<string>,
 	tickMs: number | undefined,
 ): Readonly<Record<string, unknown>> {
-	const files = stored.collections
 	// One attempt's files: what it reads, puts and writes, inside its transactions and outside them, belongs to it.
 	const work = new FileWork(frame, frame.id)
-	const binding = stored.kinds?.binding(work)
+	const binding = kinds?.binding(work)
 	const reads = jobHandles(frame, data, site, principal, 'job', async () => data.direct(), () => false, tickMs, binding)
 	const job = `job '${name}'`
-	const putAndOpen = (check: () => void) => storedFilesHandle(stored.kinds, work, { where: job, check, writes: true })
-	const collections = files === null ? noFileCollections(job) : files.site({
-		where: job,
-		frame,
-		check: boundTo(frame, () => false, 'ctx.files'),
-		session: async () => data.direct(),
-		readOnly: 'a job removes files inside ctx.transaction((tx) => …), as tx.files',
-		attaches: false,
-	})
+	const putAndOpen = (check: () => void) => storedFilesHandle(kinds, work, { where: job, check, writes: true })
 	return {
 		db: siteData(reads, (action) => reads.app(app(action))),
 		sql: site.sql === null ? undeclaredSql(job, 'job') : jobSqlOutsideTransaction(job),
-		files: Object.freeze(Object.assign(collections, putAndOpen(boundTo(frame, () => false, 'ctx.files')))),
+		files: putAndOpen(boundTo(frame, () => false, 'ctx.files')),
 		transaction: async <R>(work: (tx: object) => Promise<R>): Promise<R> => {
 			// Outside its attempt there is no lease to fence the transaction with, so it never opens.
 			boundTo(frame, () => false)()
@@ -921,23 +906,13 @@ function kitJobContext(
 				const writes = jobHandles(frame, data, site, principal, 'mutation', async () => session, () => !open, undefined, binding)
 				try {
 					const sql = site.sql === null ? undeclaredSql(job, 'job', 'tx.sql') : jobSql(frame, data, site.sql, session, () => !open)
-					const removing = files === null
-						? noFileCollections(job)
-						: files.site({
-							where: job,
-							frame,
-							check: boundTo(frame, () => !open, 'tx.files'),
-							session: async () => session,
-							readOnly: null,
-							attaches: true,
-						})
 					// Located in this transaction, so an object it wrote is found before the commit.
 					const located = (action: string, dimension: string, id: string) => {
 						boundTo(frame, () => !open, 'tx.ref')()
 						return ref(action, dimension, id, session)
 					}
-					const txFiles = Object.freeze(Object.assign(removing, putAndOpen(boundTo(frame, () => !open, 'tx.files'))))
-					return await work(Object.freeze({ db: siteData(writes, (action) => writes.app(app(action))), sql, files: txFiles, ref: located }))
+					const files = putAndOpen(boundTo(frame, () => !open, 'tx.files'))
+					return await work(Object.freeze({ db: siteData(writes, (action) => writes.app(app(action))), sql, files, ref: located }))
 				} finally {
 					open = false
 				}

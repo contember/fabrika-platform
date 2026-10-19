@@ -11,5 +11,5 @@ export const tables = defineTables<DB, typeof contract>()({
 		version: 'version',
 		createdBy: 'created_by',
 	},
-	contact_messages: { scope: { inbox: 'contact', read: 'notes.admin' } },
+	contact_messages: { scope: { app: 'messages from the public contact procedure' }, actions: { read: 'notes.admin' } },
 })

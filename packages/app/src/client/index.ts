@@ -16,6 +16,5 @@ export {
 	type ProcedureCall,
 	type ResultOf,
 } from './contract'
-export type { FileClient, FileList, FilePage, LinkFileClient, UploadOptions } from './files'
 export { shareKey } from './share'
 export { type BounceOption, RpcError, type RpcFetch } from './transport'

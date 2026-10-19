@@ -355,11 +355,10 @@ describe('ctx.sql.scope of an app capability reaches what ctx.db.app reaches', (
 		)
 	})
 
-	test('a reference or inbox table is refused, whatever its read action', () => {
+	test('a reference table is refused, whatever its read action', () => {
 		expect(() => sql.scope(authority.app('notes.read'), 'countries')).toThrow(
 			'an app capability does not reach countries: ctx.db.app lists application, dimension and child tables only',
 		)
-		expect(() => sql.scope(authority.app('contact.read'), 'contact_messages')).toThrow('an app capability does not reach contact_messages')
 	})
 })
 
@@ -442,8 +441,6 @@ describe("ctx.sql.scope takes the statement's operation: a fragment on its UPDAT
 		await expect(sql(Row)`with gone as (delete from countries returning code) select code from gone`).rejects.toThrow(
 			'countries is a reference table',
 		)
-		await sql(Row)`delete from contact_messages returning id`
-		expect(sent()).toEqual(['delete from contact_messages returning id'])
 	})
 })
 

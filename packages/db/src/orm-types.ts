@@ -39,15 +39,13 @@ type ModeOf<P, T> = PolicyOf<P, T> extends { readonly scope: infer S } ? S exten
 	: S extends { readonly child: string } ? 'child'
 	: S extends { readonly app: string } ? 'app'
 	: S extends { readonly reference: string } ? 'reference'
-	: 'inbox'
+	: never
 	: never
 
 /** The actions a table's `actions.appRead` or `actions.appCount` lists; `never` when it lists none. */
 type AppActionsOf<P, T, F extends 'appRead' | 'appCount'> = PolicyOf<P, T> extends
 	{ readonly actions: { readonly [K in F]: readonly (infer A extends string)[] } } ? A
 	: never
-
-type ReadActionOf<P, T> = PolicyOf<P, T> extends { readonly scope: { readonly read: infer A extends string } } ? A : ActionOf<P, T, 'read'>
 
 /** Each column that declares its own read action, by column. */
 type ColumnReadsOf<P, T> = PolicyOf<P, T> extends { readonly columns: infer C } ? {
@@ -76,7 +74,7 @@ type ColumnWriteAction<C> = { [K in keyof C]: C[K] extends { readonly write: inf
 
 /** One table, as every handle reads it. */
 export interface IndexedTable {
-	readonly mode: 'dimension' | 'child' | 'app' | 'reference' | 'inbox'
+	readonly mode: 'dimension' | 'child' | 'app' | 'reference'
 	/** The dimension a dimension table owns. */
 	readonly dimension: string
 	/** The dimension its rows are listed and inserted in: the container's, or a top-level table's own. */
@@ -113,7 +111,7 @@ type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string, V = unknown> =
 	readonly list: ListDimensionOf<P, T>
 	readonly parent: ParentOf<P, T>
 	readonly actions: {
-		readonly read: ReadActionOf<P, T>
+		readonly read: ActionOf<P, T, 'read'>
 		readonly insert: ActionOf<P, T, 'insert'>
 		readonly update: ActionOf<P, T, 'update'>
 		readonly delete: ActionOf<P, T, 'delete'>
@@ -605,30 +603,28 @@ export type UnscopedMode = 'read' | 'write'
 export type UnscopedDeclaration<Table extends string, Mode extends UnscopedMode> = { readonly [T in Table]?: Mode }
 
 /**
- * The tables of `U` whose mode may be `'write'` that no site writes: a reference table and a form's inbox. A union or
- * optional mode that admits `'write'` counts, because the declaration it types may hold it.
+ * The tables of `U` whose mode may be `'write'` that no site writes: a reference table. A union or optional mode that
+ * admits `'write'` counts, because the declaration it types may hold it.
  */
 type ReadOnlyWritten<Ix extends AnyDbIndex, U> = {
-	[T in keyof U & TableName<Ix>]: 'write' extends U[T] ? Ix['tables'][T]['mode'] extends 'reference' | 'inbox' ? T : never : never
+	[T in keyof U & TableName<Ix>]: 'write' extends U[T] ? Ix['tables'][T]['mode'] extends 'reference' ? T : never : never
 }[keyof U & TableName<Ix>]
 
-type ReadOnlyMessage<T extends string, Mode> = Mode extends 'reference'
-	? `${T} is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { ${T}: 'read' }`
-	: `${T} is a form's inbox, which only its form writes: declare unscoped: { ${T}: 'read' }`
+type ReadOnlyMessage<T extends string> =
+	`${T} is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { ${T}: 'read' }`
 
-/** An `unscoped` declaration's `'write'` of a read-only table, refused at its own line. */
+/** An `unscoped` declaration's `'write'` of a reference table, refused at its own line. */
 export type ReadOnlyUnscoped<Ix extends AnyDbIndex, U> = [ReadOnlyWritten<Ix, U>] extends [never] ? unknown
-	: { readonly [T in ReadOnlyWritten<Ix, U>]: Unavailable<ReadOnlyMessage<T, Ix['tables'][T]['mode']>> }
+	: { readonly [T in ReadOnlyWritten<Ix, U>]: Unavailable<ReadOnlyMessage<T>> }
 
-type KeylessMessage<T extends string, Mode> = Mode extends 'reference' ? `${T} is a reference table, which has no key: read it with list`
-	: `${T} is a form's inbox, which has no key: read it with list`
+type KeylessMessage<T extends string> = `${T} is a reference table, which has no key: read it with list`
 
 /** A table a site declared `unscoped`: its scope predicate is `true`, and `'read'` writes nothing. */
 export interface UnscopedRows<T extends string, E extends IndexedTable, M extends UnscopedMode, K extends DataKind> {
 	list(options?: ListOptions<TableRow<E>>): Promise<ListPage<TableRow<E>>>
 	count(options?: CountOptions<TableRow<E>>): Promise<number>
 	aggregate<const S extends AggregateSpec<TableRow<E>>>(spec: S): Promise<AggregateRow<TableRow<E>, S>[]>
-	readonly get: E['mode'] extends 'reference' | 'inbox' ? Unavailable<KeylessMessage<T, E['mode']>> : (key: string) => Promise<TableRow<E>>
+	readonly get: E['mode'] extends 'reference' ? Unavailable<KeylessMessage<T>> : (key: string) => Promise<TableRow<E>>
 	readonly insert: UnscopedWrite<T, M, K, 'insert', (values: { [C in keyof UnscopedInsert<E>]: UnscopedInsert<E>[C] }) => Promise<Saved<E>>>
 	readonly update: UnscopedWrite<
 		T,

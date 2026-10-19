@@ -3,12 +3,6 @@
 import type { TypedColumnList } from '@fabrika/db'
 import type { ColumnType, Generated } from 'kysely'
 
-export interface ContactMessagesTable {
-	id: string
-	email: string
-	body: string
-}
-
 export interface CountriesTable {
 	code: string
 	name: string
@@ -66,7 +60,6 @@ export interface WorkspacesTable {
 }
 
 export interface DB {
-	contact_messages: ContactMessagesTable
 	countries: CountriesTable
 	note_comments: NoteCommentsTable
 	note_flags: NoteFlagsTable
@@ -78,14 +71,6 @@ export interface DB {
 }
 
 export const columns: TypedColumnList<DB> = {
-	'contact_messages': {
-		columns: [
-			'id',
-			'email',
-			'body',
-		],
-		foreignKeys: [],
-	},
 	'countries': {
 		columns: [
 			'code',

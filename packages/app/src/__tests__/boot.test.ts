@@ -4,16 +4,13 @@
 
 import { defineContract } from '@fabrika/app/contract'
 import { boot, BootError, captureEnvironment, type ContractImplementation } from '@fabrika/app/implement'
-import { Database } from '@fabrika/db'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { implement } from '../implement/implement'
 import { notesApp } from './fixtures/implement/app'
 import { echoAssets, environment, frameworkEnvFor, keepingProcessEnvironment, keySource, workloadTokensFor } from './fixtures/implement/harness'
-import { NOTE_TABLE, noteDatabase } from './fixtures/implement/stores'
-import { contract } from './fixtures/multi-tenant/fabrika.contract'
+import { noteDatabase } from './fixtures/implement/stores'
 import { RecordingMembership } from './fixtures/multi-tenant/iam'
-import { multiTenantApp } from './fixtures/multi-tenant/src/app'
 
 function problemsOf(start: () => unknown): readonly string[] {
 	try {
@@ -147,55 +144,24 @@ describe('what this version does not serve yet stops the boot', () => {
 		expect(() => boot(app, { ...options, membership: new RecordingMembership() })).not.toThrow()
 	})
 
-	test('a form and a webhook write through @fabrika/db', () => {
+	test('a webhook writes through @fabrika/db', () => {
 		const anonymous = defineContract({
 			app: 'notes',
 			dimensions: { note: {} },
-			actions: { 'notes.write': 'Write', 'contacts.read': 'Read contacts' },
-			roles: { support: { grants: ['contacts.read'] } },
+			actions: { 'notes.write': 'Write' },
+			roles: { writer: { grants: ['notes.write'] } },
 		}, (c) => ({
-			contact: c.form('/contact', { input: z.strictObject({ email: z.string() }), appendTo: 'contact_messages' }),
 			hook: c.webhook('/hooks/github', { scheme: 'github-sha256', boundTo: 'app', actions: ['notes.write'], input: ById }),
 		}))
-		const inbox = {
-			...NOTE_TABLE,
-			scope: { mode: 'inbox', form: 'contact' },
-			actions: { read: 'contacts.read', insert: null, update: null, delete: null },
-		} as const
 		const app = implement(anonymous, {
-			database: { tables: { contact_messages: { ...inbox, insert: [], update: [] } }, locate: () => Promise.resolve(null) },
+			database: { tables: {}, locate: () => Promise.resolve(null) },
 			deps: () => null,
 			handlers: () => ({ hook: () => undefined }),
 		})
 		expect(problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource, workloadTokens: workloadTokensFor(app) })))
 			.toEqual([
-				"mount 'contact' is a form, which writes through @fabrika/db: pass serve(contract, { database: scoped(tables) })",
 				"mount 'hook' is a webhook, which writes through @fabrika/db: pass serve(contract, { database: scoped(tables) })",
 			])
-	})
-
-	test("a form's input field must be a column of its inbox", async () => {
-		const extended = defineContract(contract.vocabulary, (c) => ({
-			...contract.surface,
-			contact: c.form('/contact', { input: z.strictObject({ email: z.email(), phone: z.string() }), appendTo: 'contact_messages' }),
-		}))
-		const connection = Database.postgres({ url: 'postgres://unused@127.0.0.1:1/unused', schema: 'app_notes' })
-		try {
-			const base = multiTenantApp({ pushes: [], keys: [], failNextPush: false })
-			const app: ContractImplementation = { ...base, contract: extended }
-			const options = {
-				environment: environment(frameworkEnvFor(app)),
-				iam: keySource,
-				assets: echoAssets,
-				database: connection,
-				workloadTokens: workloadTokensFor(app),
-			}
-			expect(problemsOf(() => boot(app, { ...options, membership: new RecordingMembership() }))).toEqual([
-				"the input field 'phone' of 'contact' is not a column of its inbox contact_messages",
-			])
-		} finally {
-			await connection.close()
-		}
 	})
 })
 

@@ -522,8 +522,8 @@ const refused: readonly DirectForm[] = [
 		files: {
 			...CLEAN_APPLICATION,
 			'fabrika.contract.ts': contractWith(
-				"\tjobs: { purgeDeleted: c.cron('0 3 * * *', { actions: ['notes.write'], scope: 'app' }) },",
-				"\tjobs: {\n\t\tpurgeDeleted: c.cron(nightly, { actions: ['notes.write'], scope: 'app' }),\n\t\tdigest: c.cron('0 7 * * 1', { actions: ['notes.read'], scope: 'app' }) satisfies object,\n\t},",
+				"\tjobs: { purgeDeleted: c.cron('0 3 * * *', { actions: ['notes.write'] }) },",
+				"\tjobs: {\n\t\tpurgeDeleted: c.cron(nightly, { actions: ['notes.write'] }),\n\t\tdigest: c.cron('0 7 * * 1', { actions: ['notes.read'] }) satisfies object,\n\t},",
 			).replace('export const contract', "const nightly = '0 3 * * *'\nexport const contract"),
 			'zerops.yaml': ZEROPS_YAML('        - command: fabrika job run purgeDeleted\n          allContainers: false\n'),
 		},

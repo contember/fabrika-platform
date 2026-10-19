@@ -1,4 +1,3 @@
-import { fileScanSql } from '@fabrika/db'
 import { describe, expect, test } from 'bun:test'
 import type { RuleId } from '../finding'
 import { RULE_IDS } from '../finding'
@@ -15,23 +14,6 @@ import {
 	CLEAN_TABLES,
 	locations,
 } from './helpers'
-
-/** The clean contract with a collection that scans, and its table as an earlier `fileTableSql` created it. */
-const SCANNING_CONTRACT = CLEAN_CONTRACT.replace(
-	"\thealth: c.health('/healthz'),\n",
-	"\tfiles: { attachments: c.files({ owner: 'notes', read: 'notes.read', write: 'notes.write', delete: 'notes.write', maxBytes: 1024, types: ['text/plain'], scan: true }) },\n\thealth: c.health('/healthz'),\n",
-)
-const SCANNING_SOURCES: Readonly<Record<string, string>> = { ...CLEAN_APPLICATION, 'fabrika.contract.ts': SCANNING_CONTRACT }
-const scanningInputs = scaffoldInputs(new Map(Object.entries(SCANNING_SOURCES)))
-/** The scanning application with the tests `fabrika db test-scaffold` writes for it. */
-const SCANNING_APPLICATION: Readonly<Record<string, string>> = {
-	...SCANNING_SOURCES,
-	...Object.fromEntries(
-		[...(await generatedTests(scanningInputs.policies, scanningInputs.artifact, scanningInputs.fixtures))].map(([file, test]) => [file, test.text]),
-	),
-}
-const EARLIER_FILE_TABLE =
-	"CREATE TABLE fabrika_files_attachments (id UUID PRIMARY KEY, status TEXT NOT NULL CHECK (status IN ('pending', 'live')));\n"
 
 /** The clean application with a file kind and a nullable file column of it on notes. */
 const FILE_COLUMN_SOURCES: Readonly<Record<string, string>> = {
@@ -600,19 +582,6 @@ const cases: readonly RuleCase[] = [
 		good: { 'db/migrations/20261008120000_init.sql': '', 'db/migrations/20261008120001_add_notes.sql': '', 'db/seeds/example.sql': '' },
 	},
 	{
-		rule: 'file-scan-migration',
-		bad: {
-			...SCANNING_APPLICATION,
-			'db/migrations/20261001000000_files.sql': `-- the table an earlier fileTableSql wrote\n${EARLIER_FILE_TABLE}`,
-		},
-		expected: ['db/migrations/20261001000000_files.sql:2:1'],
-		good: {
-			...SCANNING_APPLICATION,
-			'db/migrations/20261001000000_files.sql': EARLIER_FILE_TABLE,
-			'db/migrations/20261012000000_scan_files.sql': fileScanSql('attachments'),
-		},
-	},
-	{
 		rule: 'file-column-migration',
 		bad: { ...FILE_COLUMN_APPLICATION, 'db/migrations/20261001000000_notes.sql': `${NOTES_TABLE});\n` },
 		expected: ['db/migrations/20261001000000_notes.sql:1:1'],
@@ -949,33 +918,6 @@ describe('generated tests', () => {
 		}
 		expect((await findingsOf(computed)).map((line) => line.split(' ').slice(0, 2).join(' '))).toEqual([
 			'src/__tests__/endpoint-access.fixtures.ts:1:1 endpoint-fixture',
-		])
-	})
-
-	test('a file collection gets cross-scope cases, and a removal weakened to the read action makes the committed test stale', async () => {
-		const collection = (remove: string) =>
-			`\tfiles: { attachments: c.files({ owner: 'notes', read: 'notes.read', write: 'notes.write', delete: '${remove}', maxBytes: 1024, types: ['text/plain'] }) },\n`
-		const withFiles = (remove: string) =>
-			CLEAN_CONTRACT.replace("\thealth: c.health('/healthz'),\n", `${collection(remove)}\thealth: c.health('/healthz'),\n`)
-		const generatedFor = async (files: Readonly<Record<string, string>>): Promise<Record<string, string>> => {
-			const inputs = scaffoldInputs(new Map(Object.entries(files)))
-			return Object.fromEntries([...(await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures))].map(([file, test]) => [file, test.text]))
-		}
-		const sources = { ...CLEAN_APPLICATION, 'fabrika.contract.ts': withFiles('notes.write') }
-		const application: Record<string, string> = { ...sources, ...(await generatedFor(sources)) }
-		const endpointTest = application[endpoints] ?? ''
-		for (
-			const line of [
-				"expect(await kit.denied('files.attachments.remove', { id: '00000000-0000-4000-8000-000000000000' })).toEqual({ status: 404 })",
-				"expect(await kit.leaked('files.attachments.remove', { id: '00000000-0000-4000-8000-000000000000' })).toEqual({ answered: true, leaked: [] })",
-				"expect(await kit.file('attachments', 'upload', 'other')).toEqual({ status: 404 })",
-				"expect(await kit.file('attachments', 'download', 'other')).toEqual({ status: 404 })",
-				"expect(await kit.file('attachments', 'remove', 'reader')).toEqual({ status: 403 })",
-			]
-		) expect(endpointTest).toContain(line)
-		expect(await findingsOf(application)).toEqual([])
-		expect(await findingsOf({ ...application, 'fabrika.contract.ts': withFiles('notes.read') })).toEqual([
-			`${endpoints}:1:1 generated-test-hash this file is not the generated test the scaffold writes here`,
 		])
 	})
 

@@ -1,10 +1,12 @@
-// `scan: true` through boot's real pipeline on a REAL Postgres: an upload waits `quarantined`, the scan job promotes
-// it or rejects it under its lease, a download answers by state, and the list shows each one. Every scan that does not
-// complete with a clean verdict over the uploaded bytes — no scanner, a failed or timed-out run, a skipped or truncated
-// file, a lost lease, a concurrent remove — leaves the file unserved. Runs against an in-memory object store and a real
+// A file kind with `scan: true` through boot's real pipeline on a REAL Postgres: an uploaded file waits `quarantined`,
+// the scan job promotes it or rejects it under its lease, a download answers by state, and a list of its column shows
+// each one. Every scan that does not complete with a clean verdict over the uploaded bytes — no scanner, a failed or
+// timed-out run, a skipped or truncated file, a lost lease — leaves the file unserved. Runs against an in-memory object store and a real
 // S3 bucket when FABRIKA_TEST_S3_* is set, with a stand-in scanner and a REAL clamscan when FABRIKA_TEST_CLAMSCAN_BIN
 // names one (see clamscan.test.ts). Skips cleanly without FABRIKA_TEST_POSTGRES_URL.
 
+import { NotFoundError } from '@fabrika/app'
+import { defineApp, defineVocabulary, file } from '@fabrika/app/contract'
 import {
 	FILE_SCAN_JOB,
 	type FileScanner,
@@ -13,23 +15,22 @@ import {
 	type OperationsReporter,
 	SCAN_LIMITS,
 	type ScanBatchResult,
+	serve,
 } from '@fabrika/app/implement'
-import { ENDPOINT_HEADER, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
-import { applicationSchema, Database, fileTableSql, scoped } from '@fabrika/db'
+import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import { applicationSchema, Database, scoped, type TypedColumnList } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { defineTables } from '@fabrika/db/tables'
 import type { FileObjectStore, ObjectMetadata, ObjectWriteOptions, StoredObject } from '@fabrika/platform'
 import { S3BlobStore } from '@fabrika/platform-node'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
-import { defineContract } from '../contract/define'
+import { z } from 'zod/v4'
 import { clamscanScanner } from '../files/clamscan'
 import type { ContractApp } from '../implement/boot'
-import { implement } from '../implement/implement'
-import { bootApp, endpointHeaderFor, errorType, grant, ORIGIN, resultOf, send, type Sent, token } from './fixtures/implement/harness'
+import { bootApp, errorType, grant, ORIGIN, type Sent, token } from './fixtures/implement/harness'
 import { CLEAN_PDF, damagedZip, EICAR, encryptedZip, LZMA_EICAR_ZIP, zipOf } from './fixtures/scan-samples'
-import { tables } from './fixtures/scoped-files/src/db/tables'
-import { vocabulary } from './fixtures/scoped-files/src/vocabulary'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR] ?? ''
@@ -40,32 +41,107 @@ if (!hasPostgres) {
 	console.warn(`file-scan.test.ts skipped: set ${URL_VAR} to run it`)
 }
 
-const MAX_PER_NOTE = 3
-const contract = defineContract(vocabulary, (c) => ({
+const vocabulary = defineVocabulary({
+	app: 'notes',
+	dimensions: { workspace: {}, note: { in: 'workspace' } },
+	actions: { 'notes.read': 'Read notes', 'notes.write': 'Create and edit notes' },
+	roles: { editor: { grants: ['notes.read', 'notes.write'] } },
+})
+
+interface NotesTable {
+	id: string
+	workspace_id: string
+	title: string
+	created_by: string
+	version: number
+}
+
+interface FilesTable {
+	id: string
+	note_id: string
+	workspace_id: string
+	file: string
+}
+
+interface DB {
+	notes: NotesTable
+	note_uploads: FilesTable
+	note_photos: FilesTable
+}
+
+const fileColumns = ['id', 'note_id', 'workspace_id', 'file'] as const
+const ofNote = [{ columns: ['note_id', 'workspace_id'], table: 'notes', references: ['id', 'workspace_id'] }] as const
+const columns: TypedColumnList<DB> = {
+	notes: { columns: ['id', 'workspace_id', 'title', 'created_by', 'version'], foreignKeys: [] },
+	note_uploads: { columns: fileColumns, foreignKeys: ofNote },
+	note_photos: { columns: fileColumns, foreignKeys: ofNote },
+}
+
+const tables = defineTables(vocabulary, columns)({
+	notes: {
+		scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
+		actions: { read: 'notes.read', insert: 'notes.write' },
+		insert: ['title'],
+		version: 'version',
+		createdBy: 'created_by',
+	},
+	note_uploads: { scope: { child: 'notes' }, actions: { read: 'notes.read', insert: 'notes.write' }, insert: ['file'], files: { file: 'uploads' } },
+	note_photos: { scope: { child: 'notes' }, actions: { read: 'notes.read', insert: 'notes.write' }, insert: ['file'], files: { file: 'photos' } },
+})
+
+const app = defineApp(vocabulary, tables)
+const Uploaded = z.strictObject({ id: z.uuid() })
+const InNote = z.strictObject({ noteId: z.uuid() })
+
+const notes = app.group({ callers: ['human'] }, (r) => ({
+	upload: r.mutation({
+		input: z.strictObject({ noteId: z.uuid(), file: file('uploads') }),
+		output: Uploaded,
+		access: { action: 'notes.write', on: 'note', from: 'noteId' },
+	}).handle(async ({ input, ctx }) => {
+		await ctx.db.target.note_uploads.insert({ file: input.file })
+		return { id: input.file.id }
+	}),
+	photo: r.mutation({
+		input: z.strictObject({ noteId: z.uuid(), file: file('photos') }),
+		output: Uploaded,
+		access: { action: 'notes.write', on: 'note', from: 'noteId' },
+	}).handle(async ({ input, ctx }) => {
+		await ctx.db.target.note_photos.insert({ file: input.file })
+		return { id: input.file.id }
+	}),
+	download: r.query({
+		input: z.strictObject({ noteId: z.uuid(), id: z.uuid() }),
+		output: file('uploads'),
+		access: { action: 'notes.read', on: 'note', from: 'noteId' },
+	}).handle(async ({ input, ctx }) => {
+		const row = (await ctx.db.target.note_uploads.list()).items.find((item) => item.file.id === input.id)
+		if (row === undefined) throw new NotFoundError('no such upload')
+		return row.file
+	}),
+	uploads: r.query({
+		input: InNote,
+		output: z.strictObject({ items: z.array(z.strictObject({ id: z.uuid(), status: z.string(), type: z.string(), size: z.int() })) }),
+		access: { action: 'notes.read', on: 'note', from: 'noteId' },
+	}).handle(async ({ ctx }) => ({
+		items: (await ctx.db.target.note_uploads.list({ orderBy: [['id', 'asc']] })).items.map(({ file }) => ({
+			id: file.id,
+			status: file.status,
+			type: file.type,
+			size: file.size,
+		})),
+	})),
+}))
+
+const contract = app.contract((c) => ({
+	api: c.rpc('/api', { notes }),
 	files: {
-		uploads: c.files({
-			owner: 'notes',
-			read: 'notes.read',
-			write: 'notes.write',
-			delete: 'notes.delete',
-			maxBytes: 65536,
-			types: ['application/pdf', 'text/plain', 'application/zip'],
-			maxPerOwner: MAX_PER_NOTE,
-			scan: true,
-		}),
-		photos: c.files({
-			owner: 'notes',
-			read: 'notes.read',
-			write: 'notes.write',
-			delete: 'notes.delete',
-			maxBytes: 65536,
-			types: ['text/plain'],
-			scan: true,
-		}),
+		uploads: c.files({ maxBytes: 65536, types: ['application/pdf', 'text/plain', 'application/zip'], scan: true }),
+		photos: c.files({ maxBytes: 65536, types: ['text/plain'], scan: true }),
 	},
 	health: c.health('/healthz'),
 }))
-const filesApp = () => implement(contract, { database: scoped(tables), deps: () => ({}), handlers: () => ({}) })
+const filesApp = () => serve(contract, { database: scoped(tables) })
 
 const appId = `scan-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
 const schema = applicationSchema(appId)
@@ -73,11 +149,21 @@ const W1 = { type: 'workspace', value: 'w1' }
 const W2 = { type: 'workspace', value: 'w2' }
 const SECOND = 1000
 
+const fileTable = (name: string) => `
+create table ${name} (
+	id uuid primary key,
+	note_id uuid not null,
+	workspace_id text not null,
+	file uuid not null references fabrika_files (id),
+	foreign key (note_id, workspace_id) references notes (id, workspace_id)
+);
+create index ${name}_file on ${name} (file);`
+
 const migration = `
-${FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n')}
+${FRAMEWORK_MIGRATIONS.map((migrationFile) => migrationFile.sql).join('\n')}
 create table notes (id uuid primary key, workspace_id text not null, title text not null, created_by text not null, version integer not null, unique (id, workspace_id));
-${fileTableSql('uploads', { table: 'notes', key: { column: 'id', type: 'uuid' }, chain: [{ column: 'workspace_id', type: 'text' }] })}
-${fileTableSql('photos', { table: 'notes', key: { column: 'id', type: 'uuid' }, chain: [{ column: 'workspace_id', type: 'text' }] })}
+${fileTable('note_uploads')}
+${fileTable('note_photos')}
 `
 
 async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
@@ -98,11 +184,14 @@ async function seedNote(workspace = 'w1'): Promise<string> {
 }
 
 const editorOf = (...workspaces: (typeof W1)[]): Promise<string> =>
-	token('user', workspaces.flatMap((scope) => [grant('notes.read', scope), grant('notes.write', scope), grant('notes.delete', scope)]))
+	token('user', workspaces.flatMap((scope) => [grant('notes.read', scope), grant('notes.write', scope)]))
 
-type CollectionName = 'uploads' | 'photos'
+type KindName = 'uploads' | 'photos'
 
-const uploadEndpoint = (collection: CollectionName): string => endpointHeaderFor(filesApp(), 'POST', `/api/files.${collection}.upload/x`) ?? ''
+const EXTENSIONS: Readonly<Record<string, string>> = { 'application/pdf': 'pdf', 'text/plain': 'txt', 'application/zip': 'zip' }
+
+/** The note each uploaded file is attached to: a download names both. */
+const noteOf = new Map<string, string>()
 
 async function upload(
 	app: ContractApp,
@@ -110,15 +199,14 @@ async function upload(
 	bytes: Uint8Array<ArrayBuffer> | string,
 	type: string,
 	callerToken: string,
-	collection: CollectionName = 'uploads',
+	kind: KindName = 'uploads',
 ): Promise<Sent> {
-	const headers = new Headers({
-		'Sec-Fetch-Site': 'same-origin',
-		'Content-Type': type,
-		[PROXY_TOKEN_HEADER]: callerToken,
-		[ENDPOINT_HEADER]: uploadEndpoint(collection),
-	})
-	const response = await app.fetch(new Request(`${ORIGIN}/api/files.${collection}.upload/${note}`, { method: 'POST', headers, body: bytes }))
+	const form = new FormData()
+	form.append('input', JSON.stringify({ noteId: note }))
+	form.append('file', new File([bytes], `upload.${EXTENSIONS[type] ?? 'bin'}`, { type }))
+	const headers = new Headers({ 'Sec-Fetch-Site': 'same-origin', [PROXY_TOKEN_HEADER]: callerToken })
+	const path = kind === 'uploads' ? '/api/notes.upload' : '/api/notes.photo'
+	const response = await app.fetch(new Request(`${ORIGIN}${path}`, { method: 'POST', headers, body: form }))
 	return { status: response.status, headers: response.headers, body: await response.json() }
 }
 
@@ -127,40 +215,42 @@ async function uploaded(
 	note: string,
 	bytes: Uint8Array<ArrayBuffer> | string,
 	type = 'text/plain',
-	collection: CollectionName = 'uploads',
+	kind: KindName = 'uploads',
 ): Promise<string> {
-	const result = resultOf(await upload(app, note, bytes, type, await editorOf(W1), collection))
-	if (typeof result !== 'object' || result === null || !('id' in result) || typeof result.id !== 'string') {
-		throw new Error(`expected an id, got ${JSON.stringify(result)}`)
-	}
-	return result.id
+	const sent = await upload(app, note, bytes, type, await editorOf(W1), kind)
+	const id = Uploaded.parse(z.strictObject({ result: z.unknown() }).parse(sent.body).result).id
+	noteOf.set(id, note)
+	return id
 }
 
 async function download(app: ContractApp, id: string, callerToken?: string): Promise<Response> {
-	return app.fetch(new Request(`${ORIGIN}/api/files.uploads/${id}`, { headers: { [PROXY_TOKEN_HEADER]: callerToken ?? (await editorOf(W1)) } }))
+	const query = new URLSearchParams({ noteId: noteOf.get(id) ?? '', id })
+	return app.fetch(new Request(`${ORIGIN}/api/notes.download?${query}`, { headers: { [PROXY_TOKEN_HEADER]: callerToken ?? (await editorOf(W1)) } }))
 }
 
-async function list(app: ContractApp, note: string, page: Readonly<Record<string, unknown>> = {}): Promise<Sent> {
-	return send(app, '/api/files.uploads.list', { token: await editorOf(W1), body: { owner: note, ...page } })
+async function list(app: ContractApp, note: string): Promise<unknown> {
+	const response = await app.fetch(
+		new Request(`${ORIGIN}/api/notes.uploads`, {
+			method: 'POST',
+			headers: { 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json', [PROXY_TOKEN_HEADER]: await editorOf(W1) },
+			body: JSON.stringify({ noteId: note }),
+		}),
+	)
+	return z.strictObject({ result: z.unknown() }).parse(await response.json()).result
+}
+
+async function errorOf(response: Response): Promise<unknown> {
+	return errorType({ status: response.status, headers: response.headers, body: await response.json() })
 }
 
 async function attemptsOf(id: string): Promise<unknown> {
-	const [row] = await admin((sql) =>
-		sql.unsafe(
-			`select scan_attempts from ${schema}.fabrika_files_uploads where id = $1 union all select scan_attempts from ${schema}.fabrika_files_photos where id = $1`,
-			[id],
-		)
-	)
+	const [row] = await admin((sql) => sql.unsafe(`select scan_attempts from ${schema}.fabrika_files where id = $1`, [id]))
 	return row?.scan_attempts
 }
 
 /** Every deferred retry is due now: what the passes of the next hour would see. */
 async function dueNow(): Promise<void> {
-	await admin((sql) =>
-		sql.unsafe(
-			`update ${schema}.fabrika_files_uploads set scan_after = now() - interval '1 second' where scan_after > now(); update ${schema}.fabrika_files_photos set scan_after = now() - interval '1 second' where scan_after > now()`,
-		)
-	)
+	await admin((sql) => sql.unsafe(`update ${schema}.fabrika_files set scan_after = now() - interval '1 second' where scan_after > now()`))
 }
 
 /** Replaces an object outside the upload path, as an operator or another writer with the bucket's key could. */
@@ -175,12 +265,7 @@ async function replaceObject(store: FileObjectStore, key: string, text: string):
 }
 
 async function statusOf(id: string): Promise<unknown> {
-	const [row] = await admin((sql) =>
-		sql.unsafe(
-			`select status from ${schema}.fabrika_files_uploads where id = $1 union all select status from ${schema}.fabrika_files_photos where id = $1`,
-			[id],
-		)
-	)
+	const [row] = await admin((sql) => sql.unsafe(`select status from ${schema}.fabrika_files where id = $1`, [id]))
 	return row?.status
 }
 
@@ -317,14 +402,10 @@ afterAll(async () => {
 	await admin((sql) => sql.unsafe(`drop schema ${schema} cascade`))
 })
 
-/** Each test scans only its own uploads: an earlier test's leftovers are removed first, and the pass sweeps them. */
+/** Each test scans only its own uploads: an earlier test's leftovers are rejected first, so no pass takes them. */
 async function clearBacklog(): Promise<void> {
 	if (hasPostgres) {
-		await admin((sql) =>
-			sql.unsafe(
-				`update ${schema}.fabrika_files_uploads set deleted_at = now() where status = 'quarantined'; update ${schema}.fabrika_files_photos set deleted_at = now() where status = 'quarantined'`,
-			)
-		)
+		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_files set status = 'rejected' where status = 'quarantined'`))
 	}
 }
 
@@ -362,12 +443,10 @@ for (const [storeLabel, makeStore] of stores) {
 					expect(await statusOf(id)).toBe('quarantined')
 					const before = await download(app, id)
 					expect(before.status).toBe(409)
-					expect(errorType({ status: 409, headers: before.headers, body: await before.json() })).toBe('quarantined')
+					expect(await errorOf(before)).toBe('file_not_ready')
 				}
-				const quarantined = resultOf(await list(app, note))
-				expect(quarantined).toMatchObject({
+				expect(await list(app, note)).toMatchObject({
 					items: [{ id: infected, status: 'quarantined', type: 'text/plain' }, { id: clean }, { id: encrypted }],
-					next: null,
 				})
 
 				const { reporter, result } = await scanPass(app)
@@ -377,21 +456,17 @@ for (const [storeLabel, makeStore] of stores) {
 				expect(await statusOf(clean)).toBe('live')
 				expect(await store.read(`uploads/${infected}`)).toBeNull()
 				expect(await store.read(`uploads/${encrypted}`)).toBeNull()
-				expect((await download(app, infected)).status).toBe(404)
-				expect((await download(app, encrypted)).status).toBe(404)
+				for (const id of [infected, encrypted]) {
+					expect(await errorOf(await download(app, id))).toBe('file_rejected')
+				}
 				const served = await download(app, clean)
 				expect(served.status).toBe(200)
 				expect(await served.text()).toBe(CLEAN_PDF)
 				expect(reporter.reports.filter((report) => report.type === 'FileRejected').map((report) => report.tags['file'])).toEqual(
 					expect.arrayContaining([infected, encrypted]),
 				)
-				const states = resultOf(await list(app, note))
-				expect(states).toMatchObject({
-					items: [{ id: infected, status: 'rejected' }, { id: clean, status: 'live', name: null, size: CLEAN_PDF.length }, {
-						id: encrypted,
-						status: 'rejected',
-					}],
-					next: null,
+				expect(await list(app, note)).toMatchObject({
+					items: [{ id: infected, status: 'rejected' }, { id: clean, status: 'live', size: CLEAN_PDF.length }, { id: encrypted, status: 'rejected' }],
 				})
 			}, 120 * SECOND)
 
@@ -403,7 +478,7 @@ for (const [storeLabel, makeStore] of stores) {
 				for (const id of [lzma, damaged]) {
 					expect(await statusOf(id)).toBe('rejected')
 					expect(await store.read(`uploads/${id}`)).toBeNull()
-					expect((await download(app, id)).status).toBe(404)
+					expect((await download(app, id)).status).toBe(409)
 				}
 				expect(reporter.reports.filter((report) => report.type === 'FileRejected').map((report) => report.tags['signature']).sort()).toEqual([
 					'Fabrika.Archive.malformed',
@@ -439,7 +514,7 @@ for (const [storeLabel, makeStore] of stores) {
 				const { reporter } = await scanPass(app)
 				for (const id of [inText, inPdf, shadowed]) {
 					expect(await statusOf(id)).toBe('rejected')
-					expect((await download(app, id)).status).toBe(404)
+					expect((await download(app, id)).status).toBe(409)
 				}
 				expect(reporter.reports.filter((report) => report.type === 'FileRejected').map((report) => report.tags['signature']).sort()).toEqual([
 					'Fabrika.Archive.ambiguous_directory',
@@ -453,7 +528,7 @@ for (const [storeLabel, makeStore] of stores) {
 				const sent = await upload(app, note, '', 'text/plain', await editorOf(W1))
 				expect(sent.status).toBe(400)
 				expect(errorType(sent)).toBe('empty')
-				expect(resultOf(await list(app, note))).toEqual(expect.objectContaining({ items: [] }))
+				expect(await list(app, note)).toEqual({ items: [] })
 			}, 120 * SECOND)
 		})
 	}
@@ -563,19 +638,6 @@ describe.skipIf(!hasPostgres)('a scan that does not complete with a clean verdic
 		await admin((sql) => sql.unsafe(`delete from ${schema}.fabrika_job_leases where job = $1`, [FILE_SCAN_JOB]))
 	})
 
-	test('a file removed while it is scanned is never promoted, and the pass sweeps its object and row', async () => {
-		const id = await uploaded(app, await seedNote(), CLEAN_PDF, 'application/pdf')
-		scanner.next = async (objects) => {
-			const result = await judge(objects)
-			resultOf(await send(app, '/api/files.uploads.remove', { token: await editorOf(W1), body: { id } }))
-			return result
-		}
-		await scanPass(app)
-		expect(await statusOf(id)).toBeUndefined()
-		expect(await memory.read(`uploads/${id}`)).toBeNull()
-		expect((await download(app, id)).status).toBe(404)
-	})
-
 	test('an infected file whose object delete fails stays quarantined and unserved; the next pass deletes it and rejects it', async () => {
 		const id = await uploaded(app, await seedNote(), EICAR)
 		store.failDeletes = 1
@@ -647,7 +709,7 @@ describe.skipIf(!hasPostgres)('a scan that does not complete with a clean verdic
 		}
 	})
 
-	test('a file of a quiet collection is scanned in its turn while another collection keeps receiving uploads', async () => {
+	test('a file of a quiet kind is scanned in its turn while another kind keeps receiving uploads', async () => {
 		const busy = async (count: number): Promise<void> => {
 			for (let index = 0; index < count; index++) await uploaded(app, await seedNote(), `busy ${index}`)
 		}
@@ -706,21 +768,6 @@ describe.skipIf(!hasPostgres)('a quarantined file through the endpoints', () => 
 
 	beforeEach(clearBacklog)
 
-	test('quarantined and rejected uploads count against the limit per owner until they are removed', async () => {
-		const note = await seedNote()
-		const rejected = await uploaded(app, note, EICAR)
-		await scanPass(app)
-		expect(await statusOf(rejected)).toBe('rejected')
-		const waiting = await uploaded(app, note, CLEAN_PDF, 'application/pdf')
-		await uploaded(app, note, CLEAN_PDF, 'application/pdf')
-		const over = await upload(app, note, CLEAN_PDF, 'application/pdf', await editorOf(W1))
-		expect(over.status).toBe(409)
-		expect(errorType(over)).toBe('limit')
-		resultOf(await send(app, '/api/files.uploads.remove', { token: await editorOf(W1), body: { id: waiting } }))
-		resultOf(await send(app, '/api/files.uploads.remove', { token: await editorOf(W1), body: { id: rejected } }))
-		expect((await upload(app, note, CLEAN_PDF, 'application/pdf', await editorOf(W1))).status).toBe(200)
-	})
-
 	test('the 409 is for a caller who may read the file; anyone else gets what a live file would give', async () => {
 		const note = await seedNote()
 		const quarantined = await uploaded(app, note, CLEAN_PDF, 'application/pdf')
@@ -732,24 +779,13 @@ describe.skipIf(!hasPostgres)('a quarantined file through the endpoints', () => 
 		expect((await download(app, live, outsider)).status).toBe(404)
 	})
 
-	test('a live file without a scanned version — live before the collection scanned — is quarantined at its download', async () => {
+	test('a live file without a scanned version — live before its kind scanned — is quarantined at its download', async () => {
 		const id = await uploaded(app, await seedNote(), CLEAN_PDF, 'application/pdf')
 		await scanPass(app)
-		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_files_uploads set object_version = null where id = $1`, [id]))
+		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_files set object_version = null where id = $1`, [id]))
 		expect((await download(app, id)).status).toBe(409)
 		expect(await statusOf(id)).toBe('quarantined')
 		await scanPass(app)
 		expect((await download(app, id)).status).toBe(200)
-	})
-
-	test('the list is bounded and paginated, and reaches only what the caller may read', async () => {
-		const note = await seedNote()
-		const ids = [await uploaded(app, note, CLEAN_PDF, 'application/pdf'), await uploaded(app, note, CLEAN_PDF, 'application/pdf')]
-		const first = resultOf(await list(app, note, { limit: 1 }))
-		expect(first).toEqual({ items: [expect.objectContaining({ id: ids[0] })], next: ids[0] })
-		expect(resultOf(await list(app, note, { limit: 1, after: ids[0] }))).toEqual({ items: [expect.objectContaining({ id: ids[1] })], next: null })
-		expect((await list(app, note, { limit: 101 })).status).toBe(400)
-		const outsider = await send(app, '/api/files.uploads.list', { token: await editorOf(W2), body: { owner: note } })
-		expect(outsider.status).toBe(404)
 	})
 })

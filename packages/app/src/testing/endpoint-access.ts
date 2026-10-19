@@ -12,14 +12,13 @@ import {
 	endpointDirectory,
 	endpointMembers,
 	type EndpointMethod,
-	type FileCollectionArtifact,
 	type FormChallenge,
 	type SchemaShape,
 	type Scope,
 } from '@fabrika/auth-core'
 import type { Tables } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
-import type { IsolationWorlds, SampleValue, TestDatabase, WorldRow } from '@fabrika/db/testing'
+import { type IsolationWorlds, type SampleValue, SEEDED_OBJECT_VERSION, type TestDatabase, type WorldRow } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { z } from 'zod/v4'
 import type { RpcFetch } from '../client/transport'
@@ -33,7 +32,7 @@ import {
 	GENERATED_ROW_PREFIX,
 } from '../contract/defaults'
 import type { AnyContract } from '../contract/define'
-import { FILE_SCAN_JOB, type FileScanner, type ScanVerdict } from '../files/scan'
+import type { FileScanner, ScanVerdict } from '../files/scan'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import type { TestCaller, TestGrant } from './caller'
 import { standInIamKit } from './kit'
@@ -78,12 +77,6 @@ export interface EndpointAccessKit {
 	 */
 	own(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<DeniedOutcome>
 	/**
-	 * One file endpoint of `collection`, over a file seeded in each scope through the upload endpoint. `own` holds the
-	 * operation's action in one scope and addresses its own owner row or file, `other` holds it there and addresses
-	 * the other scope's, `reader` holds only the collection's read action and addresses its own.
-	 */
-	file(collection: string, operation: FileOperation, caller: 'own' | 'other' | 'reader'): Promise<DeniedOutcome>
-	/**
 	 * An `app` or a `creates` endpoint asked by a caller who holds its action in one value of a dimension only, never
 	 * globally: refused (403), by the proxy for `app` and by IAM for `creates`, since both need a global grant.
 	 */
@@ -106,8 +99,6 @@ export interface EndpointAccessKit {
 	 */
 	anyone(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
 }
-
-export type FileOperation = 'upload' | 'download' | 'remove'
 
 interface ActionEndpoint {
 	readonly id: string
@@ -172,7 +163,6 @@ export type Grant =
 
 const randomHex = (): string => crypto.randomUUID().replaceAll('-', '').slice(0, 8)
 
-const uploadedSchema = z.strictObject({ result: z.strictObject({ id: z.string() }) })
 const errorSchema = z.object({ error: z.object({ type: z.string() }) })
 
 /** The file fields of a procedure's input: a file, an optional one, or an array of them, each sent as a part of its own. */
@@ -233,20 +223,15 @@ const cleanScanner: FileScanner = {
 }
 
 /**
- * The variables `boot` requires of `app` that a generated case never uses: each form challenge's secret and site key,
- * since no case submits a form, and each SPA mount's `public` variables, since no case reads a page's config. The
- * kit's challenge stand-in refuses every token, so no verification leaves the process.
+ * The variables `boot` requires of `app` that a generated case never uses: each challenge's secret and site key, since
+ * no case solves a challenge, and each SPA mount's `public` variables, since no case reads a page's config. The kit's
+ * challenge stand-in refuses every token, so no verification leaves the process.
  */
 function unusedVariables(app: ContractImplementation<AnyContract>): ApplicationEnvironment {
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
 	const challengeVariables = (challenge: FormChallenge): readonly string[] =>
 		challenge.siteKey === undefined ? [challenge.secret] : [challenge.secret, challenge.siteKey]
-	const names = Object.values(artifact.mounts).flatMap((mount): readonly string[] => {
-		if (mount.kind === 'form' && mount.challenge !== undefined) {
-			return challengeVariables(mount.challenge)
-		}
-		return mount.kind === 'spa' ? (mount.public ?? []) : []
-	})
+	const names = Object.values(artifact.mounts).flatMap((mount): readonly string[] => mount.kind === 'spa' ? (mount.public ?? []) : [])
 	const procedures = Object.values(artifact.procedures ?? {}).flatMap((procedure) =>
 		procedure.challenge === null ? [] : challengeVariables(procedure.challenge)
 	)
@@ -424,7 +409,9 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 	let stocked = 0
 	const stockSeededObjects = (): void => {
 		const seeded = postgres.seededObjects()
-		for (const key of seeded.slice(stocked)) objects.replace(key, new Uint8Array(0))
+		for (const key of seeded.slice(stocked)) {
+			objects.objects.set(key, { bytes: new Uint8Array(0), contentType: 'application/octet-stream', version: SEEDED_OBJECT_VERSION })
+		}
 		stocked = seeded.length
 	}
 
@@ -486,39 +473,6 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		return { status: response.status, text }
 	}
 
-	const collectionOf = (name: string): FileCollectionArtifact => {
-		const collection = kit.artifact.files[name]
-		if (collection === undefined) throw new Error(`${name} is not a file collection of the contract`)
-		return collection
-	}
-
-	const fileRow = (name: string, operation: FileOperation): { readonly method: EndpointMethod; readonly path: string } => {
-		const row = kit.artifact.endpoints.find((candidate) => candidate.id === `files.${name}.${operation}`)
-		if (row === undefined) throw new Error(`files.${name}.${operation} is not an endpoint of the contract`)
-		return { method: row.method, path: row.path }
-	}
-
-	/** One owner row in each scope, and one file of each, written through the upload endpoint as a person of that scope. */
-	const seedFiles = async (name: string) => {
-		const collection = collectionOf(name)
-		const worlds = await postgres.seedWorlds(tables, collection.owner)
-		const upload = fileRow(name, 'upload')
-		const put = async (world: 'own' | 'other'): Promise<string> => {
-			const caller = kit.testCaller([{ action: collection.write, scope: { type: worlds.dimension, value: worlds[world].scope } }])
-			const file = sampleFile(name, collection.types)
-			const response = await kit.browser(caller)(upload.path.replace(':owner', encodeURIComponent(worlds[world].key)), {
-				method: 'POST',
-				headers: { 'Content-Type': file.type },
-				body: file.bytes,
-			})
-			if (response.status !== 200) throw new Error(`files.${name}.upload: seeding a file of the ${world} scope answered ${response.status}`)
-			return uploadedSchema.parse(await response.json()).result.id
-		}
-		const seeded = { collection, worlds, own: await put('own'), other: await put('other') }
-		if (collection.scan === true) await kit.runJob(FILE_SCAN_JOB)
-		return seeded
-	}
-
 	/**
 	 * Two scopes of `dimension`: rows of the table that owns it when one does, with `seed`, otherwise two fresh scope
 	 * values. Each row `input` names in the object (`rows`) is seeded in each scope's row.
@@ -531,24 +485,9 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		input: Readonly<Record<string, unknown>>,
 	): Promise<Scopes> => {
 		const named = rowFields(input)
-		const collection = Object.keys(kit.artifact.files).find((name) => dimension === `file:${name}`)
 		const owner = ownerOf(dimension)
-		if (named.length > 0 && (collection !== undefined || owner === undefined)) {
+		if (named.length > 0 && owner === undefined) {
 			throw new Error(`no table owns ${dimension}, so the kit seeds no ${named.map((row) => row.table).join(', ')} row in one`)
-		}
-		if (collection !== undefined) {
-			const seeded = await seedFiles(collection)
-			const grant = (world: 'own' | 'other'): Grant[] => [{ action, scope: { type: seeded.worlds.dimension, value: seeded.worlds[world].scope } }]
-			return {
-				own: { target: seeded.own, grants: grant('own'), chain: seeded.worlds.own.chain, rows: {} },
-				other: {
-					target: seeded.other,
-					grants: grant('other'),
-					values: [...worldValues(seeded.worlds, 'other'), seeded.other],
-					chain: seeded.worlds.other.chain,
-					rows: {},
-				},
-			}
 		}
 		if (owner === undefined) {
 			const own = freshValue(dimension, 'own', field)
@@ -854,31 +793,6 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			)
 			return { status }
 		},
-		async file(name, operation, caller) {
-			if (operation === 'upload') {
-				// An upload needs owners only: a seeded file would hold the owner's place, and a collection of
-				// `maxPerOwner: 1` could never take the probe's.
-				const collection = collectionOf(name)
-				const worlds = await postgres.seedWorlds(tables, collection.owner)
-				const grants = [{ action: caller === 'reader' ? collection.read : collection.write, scope: { type: worlds.dimension, value: worlds.own.scope } }]
-				const file = sampleFile(name, collection.types)
-				const path = fileRow(name, 'upload').path.replace(':owner', encodeURIComponent(worlds[caller === 'other' ? 'other' : 'own'].key))
-				const fetch = kit.browser(kit.testCaller(grants))
-				return { status: (await fetch(path, { method: 'POST', headers: { 'Content-Type': file.type }, body: file.bytes })).status }
-			}
-			const { collection, worlds, own, other } = await seedFiles(name)
-			const operationAction = operation === 'download' ? collection.read : collection.delete
-			const grants = [{ action: caller === 'reader' ? collection.read : operationAction, scope: { type: worlds.dimension, value: worlds.own.scope } }]
-			const world = caller === 'other' ? 'other' : 'own'
-			const fetch = kit.browser(kit.testCaller(grants))
-			const row = fileRow(name, operation)
-			const fileId = world === 'own' ? own : other
-			if (operation === 'download') {
-				return { status: (await fetch(row.path.replace(':fileId', encodeURIComponent(fileId)))).status }
-			}
-			const body = JSON.stringify({ id: fileId })
-			return { status: (await fetch(row.path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).status }
-		},
 		async scoped(endpoint, input) {
 			const row = globalEndpointOf(endpoint)
 			const dimension = row.access.form === 'creates' ? row.access.dimension : scopeTypeOf(kit.artifact.dimensions)
@@ -945,7 +859,6 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		denied: drained(accessKit.denied),
 		leaked: drained(accessKit.leaked),
 		own: drained(accessKit.own),
-		file: drained(accessKit.file),
 		scoped: drained(accessKit.scoped),
 		global: drained(accessKit.global),
 		anyone: drained(accessKit.anyone),

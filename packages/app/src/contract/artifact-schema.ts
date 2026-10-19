@@ -28,7 +28,7 @@ import {
 } from '@fabrika/auth-core'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
-import { FORM_LIMITS, JOB_LIMITS, PROCEDURE_LIMITS } from './defaults'
+import { JOB_LIMITS, PROCEDURE_LIMITS } from './defaults'
 import { TOKEN_MAX_DAYS } from './token'
 import { webhookSchemeSchema } from './webhook-scheme'
 
@@ -213,7 +213,8 @@ const scopeBinding = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('dimension'), dimension: name }),
 ])
 
-const formRate = z.int().positive().max(FORM_LIMITS.maxPerMinute)
+/** A form's rate, per minute, as the releases that declared forms (up to 0.5) bounded it. */
+const formRate = z.int().positive().max(10_000)
 const applicationVariable = z.string().regex(/^[A-Z][A-Z0-9_]*$/)
 const bucket = z.int().positive().max(PROCEDURE_LIMITS.maxPerMinute).nullable()
 const challenge = z.strictObject({ provider: z.literal('turnstile'), secret: applicationVariable, siteKey: applicationVariable.optional() })

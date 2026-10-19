@@ -21,14 +21,7 @@ import type {
 	WithinTables,
 } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
-import type {
-	FileCollectionHandle,
-	FileCollectionJobHandle,
-	FileCollectionReadHandle,
-	FileCollections,
-	StoredFilesHandle,
-	StoredFilesReadHandle,
-} from '../files/handle'
+import type { StoredFilesHandle, StoredFilesReadHandle } from '../files/handle'
 import type { AppCapability, Ref, Within } from '../implement/capability'
 import type { ApplicationDirectory, LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
 import type { AppPrincipal, PrincipalOf, PublicPrincipal, ServicePrincipal } from '../implement/principal'
@@ -148,21 +141,12 @@ type SqlContext<S, Ix extends AnyDbIndex> = {
 		: SqlTag<Ix, S & SqlMode>
 }
 
-/**
- * `ctx.files(<collection>)`: removal where the site writes (a mutation, a job's transaction), reading everywhere; and
- * `ctx.files.put` and `.open` of the stored files: a put everywhere but in a query.
- */
+/** `ctx.files.put` and `.open` of the stored files: a put everywhere but in a query. */
 type FilesContext<Ix, K extends DataKind | 'transaction'> = {
-	readonly files: Ix extends NoTablesIndex ? Unavailable<'this application declares no tables, so it has no file collections'>
-		:
-			& FileCollections<
-				K extends 'transaction' ? FileCollectionJobHandle : K extends 'mutation' ? FileCollectionHandle : FileCollectionReadHandle<RemovesIn<K>>
-			>
-			& (K extends 'query' ? StoredFilesReadHandle : StoredFilesHandle)
+	readonly files: Ix extends NoTablesIndex ? Unavailable<'this application declares no tables, so it stores no files'>
+		: K extends 'query' ? StoredFilesReadHandle
+		: StoredFilesHandle
 }
-
-type RemovesIn<K extends DataKind | 'transaction'> = K extends 'job' ? 'a job removes files inside ctx.transaction((tx) => …), as tx.files'
-	: 'a query reads only; remove files in a mutation'
 
 type UnscopedData<Ix extends AnyDbIndex, U, K extends DataKind> = {
 	readonly unscoped: [U] extends [never] ? NoUnscoped : UnscopedTables<Ix, U, K>
@@ -230,7 +214,6 @@ type Reach<Ix extends AnyDbIndex, T extends string, Form extends 'target' | 'ove
 /** Why the handle `Where` holds no table `T`: one line that names the table, the access form, and the form that reaches it. */
 type Unreached<Ix extends AnyDbIndex, T extends string, Where extends string, Form extends 'target' | 'over'> = T extends Ix['references']
 	? Unavailable<`${T} is a reference table: read it through ctx.db.reference.${T}`>
-	: TableOf<Ix, T>['mode'] extends 'inbox' ? Unavailable<`${T} is a form inbox, which no ctx.db handle reads`>
 	: T extends Ix['applications']
 		? Unavailable<`${T} is an application table: read it through ctx.db.app.${T}, or declare access: { action, app: true }`>
 	: Unavailable<`${T} is not under ${Where} (${Lies<Ix, T>}): ${Reach<Ix, T, Form>}`>
@@ -507,7 +490,7 @@ export type JobTransaction<K extends KitTypes, A extends string, D extends Decla
 	& {
 		/**
 		 * `ctx.ref`, located in this transaction: an object it wrote is found before the commit, so the same transaction
-		 * attaches a form's file to the record it just created.
+		 * reaches the record it just created.
 		 */
 		ref<const Act extends A, const Dim extends K['dimension']>(action: Act, dimension: Dim, id: string): Promise<Ref<Dim, Act>>
 	}
@@ -526,7 +509,7 @@ type JobMailContext<M extends JobMailer> = [M] extends [never]
 	: { readonly mail: AppMail }
 
 /** A send is external I/O that never rolls back, so only a job sends, from the outbox row an endpoint wrote. */
-type NoMail = { readonly mail: Unavailable<"an endpoint sends no mail: write an outbox row and kick a job that declares mailer (then: '<job>')"> }
+type NoMail = { readonly mail: Unavailable<"an endpoint sends no mail: write an outbox row and kick a job that declares mailer (kicks: ['<job>'])"> }
 
 /** What a cron job's handler receives. Its reads run outside the transaction; every write runs in `ctx.transaction`. */
 export type JobKitContext<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string, JobMailer>> =

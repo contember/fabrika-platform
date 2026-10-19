@@ -4,6 +4,7 @@ export const vocabulary = defineVocabulary({
 	app: 'intake',
 	dimensions: { candidate: {} },
 	actions: {
+		'candidates.register': 'Record an anonymous registration or resend request',
 		'candidates.read': 'Read a candidate record',
 		'candidates.verify': "Confirm a candidate's e-mail address",
 		'candidates.attach': 'Attach files to a candidate record',

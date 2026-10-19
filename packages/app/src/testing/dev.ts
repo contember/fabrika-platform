@@ -106,9 +106,9 @@ export interface DevKit<C extends AnyContract> {
 const isPerson = (caller: TestCaller): caller is PersonTestCaller => caller.kind === 'human' && caller.email !== null
 
 /**
- * The test kit of `app` with its stand-in IAM, and what `fabrika app dev` shows of it. A form's challenge passes
+ * The test kit of `app` with its stand-in IAM, and what `fabrika app dev` shows of it. A challenge passes
  * (`passingChallenge`) unless `options.challengeFetch` answers it, and admits the test widget's token
- * (`TURNSTILE_TEST_TOKEN`) at every submission; any other token is single use, as deployed.
+ * (`TURNSTILE_TEST_TOKEN`) at every call; any other token is single use, as deployed.
  */
 export function devKit<C extends AnyContract>(app: ContractImplementation<C>, options: Omit<TestKitOptions, 'membership'> = {}): DevKit<C> {
 	const { kit, standIn, callerOf } = bootTestKit(app, { challengeFetch: passingChallenge, ...options }, {

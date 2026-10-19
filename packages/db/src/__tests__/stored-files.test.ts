@@ -41,7 +41,10 @@ insert into fabrika_files_attachments values
 	('01900000-0000-7000-8000-000000000002', 'd1', 'o1', 'live', 'attachments/01900000-0000-7000-8000-000000000002', 3, 'application/pdf', '${
 	'b'.repeat(64)
 }', 'gone.pdf', 'u1', now() - interval '30 days', now()),
-	('01900000-0000-7000-8000-000000000003', 'd1', 'o1', 'pending', 'attachments/01900000-0000-7000-8000-000000000003', null, 'application/pdf', null, null, 'u1', now(), null);
+	('01900000-0000-7000-8000-000000000003', 'd1', 'o1', 'pending', 'attachments/01900000-0000-7000-8000-000000000003', null, 'application/pdf', null, null, 'u1', now(), null),
+	('01900000-0000-7000-8000-000000000006', null, 'o1', 'live', 'attachments/01900000-0000-7000-8000-000000000006', 3, 'application/pdf', '${
+	'c'.repeat(64)
+}', 'orphan.pdf', 'u1', now() - interval '30 days', null);
 insert into fabrika_form_files (id, form, collection, status, object_key, size, sha256, content_type, original_name, created_at, held_until) values
 	('01900000-0000-7000-8000-000000000004', 'join', 'photos', 'held', 'photos/01900000-0000-7000-8000-000000000004', 3, '${
 	'd'.repeat(64)
@@ -341,6 +344,8 @@ describeDb('the migration of a collection', () => {
 		expect(await fileRow('01900000-0000-7000-8000-000000000001')).toEqual({ status: 'live', scope: null, legacy: 'attachments' })
 		expect(await fileRow('01900000-0000-7000-8000-000000000002')).toBeUndefined()
 		expect(await fileRow('01900000-0000-7000-8000-000000000003')).toBeUndefined()
+		// An orphan, whose owner was deleted, is not copied: no application could adopt it.
+		expect(await fileRow('01900000-0000-7000-8000-000000000006')).toBeUndefined()
 		const release = () => admin((sql) => sql.unsafe(`set search_path to ${schema}; select fabrika_files_release('attachments')`))
 		await expect(release()).rejects.toThrow(/referenced by no file column/)
 		await admin((sql) =>
@@ -348,7 +353,7 @@ describeDb('the migration of a collection', () => {
 				`set search_path to ${schema};
 				insert into deal_attachments (id, deal_id, org_id, file, name)
 				select gen_random_uuid()::text, owner_id, org_id, id, coalesce(original_name, '') from fabrika_files_attachments
-				where deleted_at is null and status <> 'pending'`,
+				where deleted_at is null and status <> 'pending' and owner_id is not null`,
 			)
 		)
 		// The sweep adopts a migrated file a declared column references: it is an ordinary file from then on.
@@ -361,6 +366,7 @@ describeDb('the migration of a collection', () => {
 		expect(deletions.map((row) => row.object_key)).toEqual([
 			'attachments/01900000-0000-7000-8000-000000000002',
 			'attachments/01900000-0000-7000-8000-000000000003',
+			'attachments/01900000-0000-7000-8000-000000000006',
 		])
 		const tables: { name: string | null }[] = await admin((sql) =>
 			sql.unsafe(`select to_regclass('${schema}.fabrika_files_attachments')::text as name`)

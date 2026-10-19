@@ -251,7 +251,7 @@ const STORAGE_VARIABLES = {
 } as const
 
 /**
- * The file collections' object storage (Zerops object storage, path-style), when the platform wrote its variables;
+ * The stored files' object storage (Zerops object storage, path-style), when the platform wrote its variables;
  * a partial set stops the boot. The credentials are never quoted in a message.
  */
 export function openFileStorage(framework: Readonly<Record<string, string>>): FileObjectStore | undefined {
@@ -465,7 +465,7 @@ export async function runContractJob(
 			workloadTokens,
 			requireProxySecret: true,
 			localEmailProviders: LOCAL_EMAIL_PROVIDERS,
-			// ClamAV on PATH, as the provider's build installs it for a `scan: true` collection; missing, the scan fails closed.
+			// ClamAV on PATH, as the provider's build installs it for a `scan: true` file kind; missing, the scan fails closed.
 			scanner: clamscanScanner(),
 		})
 			.jobs.run(name, options)

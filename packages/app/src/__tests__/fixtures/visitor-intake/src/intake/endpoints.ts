@@ -1,10 +1,10 @@
-// The intake job: drains the registration inbox into candidates, accepts resends, then delivers each due candidate's
-// link of the `portal` mount. Its invariants, which a copy must keep:
-// - each batch is bounded, and each record is its own work: a record that fails counts the attempt and keeps the step
-//   that failed, the run goes on with the rest, and a record that failed MAX_ATTEMPTS times is dead until an operator
-//   acts (a registration stays in its inbox, a delivery is 'failed'); a resend revives a dead delivery;
-// - a record is claimed with `for update skip locked` in the transaction that consumes it, so a row other work holds
-//   is left for a later run and blocks nothing behind it;
+// The intake job: claims the registrations into candidates, accepts resends, then delivers each due candidate's link
+// of the `portal` mount. Its invariants, which a copy must keep:
+// - each batch is bounded, and each record is its own work: a record that fails keeps the step that failed, the run
+//   goes on with the rest, and a record that failed MAX_ATTEMPTS times is dead until an operator acts (a registration
+//   stays in its table, no longer due; a delivery is 'failed'); a resend revives a dead delivery;
+// - a registration is claimed as a queue row (`claim`, which skips a row other work holds) and consumed in a
+//   transaction of its own, so a failure leaves it due again after the backoff and blocks nothing behind it;
 // - each delivery first reserves one e-mail of the recipient's daily budget, durably, so a delivery that fails after
 //   the e-mail left is still counted;
 // - each step is recorded in the candidate's row before the next effect, so the next run finishes a stopped one;
@@ -17,11 +17,13 @@
 
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
+import { MAX_ATTEMPTS } from '../limits'
 import { Resend } from '../schemas'
 import { intakeDeps } from '../world'
 
+export { MAX_ATTEMPTS }
+
 const Id = z.strictObject({ id: z.string() })
-const Queued = z.strictObject({ id: z.string(), email: z.string(), name: z.string() })
 const Due = z.strictObject({
 	id: z.string(),
 	email: z.string(),
@@ -36,8 +38,6 @@ export const LINK_DAYS = 7
 export const SENDS_PER_DAY = 3
 /** The records one run takes of each kind; the next run takes the rest. */
 export const BATCH = 50
-/** A record that failed this many attempts is dead: the job leaves it to an operator. */
-export const MAX_ATTEMPTS = 5
 /** How long one e-mail may take: far inside the attempt's 15 minutes, so a hanging one is a counted failure. */
 export const SEND_TIMEOUT_MS = 10_000
 
@@ -46,7 +46,6 @@ type Step = 'reserve' | 'revoke' | 'issue' | 'send'
 
 export const intake = app.cron('* * * * *', {
 	actions: ['candidates.process', 'candidates.invite', 'candidates.read', 'candidates.verify', 'candidates.attach'],
-	scope: 'app',
 	retries: 0,
 	sql: 'write',
 	issues: 'portal',
@@ -66,31 +65,19 @@ export const intake = app.cron('* * * * *', {
 			await failed()
 		}
 	}
-	// A registration becomes a candidate once, whatever the form received; the form told the visitor nothing either way.
-	const queued = await ctx.transaction((tx) =>
-		tx.sql(Id)`select id from registrations where attempts < ${MAX_ATTEMPTS} order by received_at, id limit ${BATCH}`
-	)
-	for (const { id } of queued) {
+	// A registration becomes a candidate once, whatever the procedure received; it told the visitor nothing either way.
+	const claimed = await ctx.db.app('candidates.process').registrations.claim({ limit: BATCH })
+	for (const registration of claimed) {
 		await eachRecord(() =>
 			ctx.transaction(async (tx) => {
-				// Claimed in the transaction that consumes it: a row other work holds is skipped, not waited for.
-				const [row] = await tx.sql(Queued)`select id, email, name from registrations
-					where id = ${id} and attempts < ${MAX_ATTEMPTS} for update skip locked`
-				if (row === undefined) {
-					return
-				}
-				await tx.sql(Id)`delete from registrations where id = ${row.id} returning id`
 				await tx.sql(Id)`insert into candidates (id, email, name, created_by, version)
-					values (${Bun.randomUUIDv7()}, ${row.email}, ${row.name}, ${ctx.principal.id}, 1)
+					values (${Bun.randomUUIDv7()}, ${registration.email}, ${registration.name}, ${ctx.principal.id}, 1)
 					on conflict (email) do nothing returning id`
+				await tx.db.on(registration.ref).remove({ expectVersion: registration.version })
 			}), async () => {
-			const [dead] = await ctx.transaction((tx) =>
-				tx.sql(z.strictObject({ attempts: z.number() }))`update registrations
-					set attempts = attempts + 1, last_failure = 'register'
-					where id = ${id} returning attempts`
-			)
-			if (dead !== undefined && dead.attempts >= MAX_ATTEMPTS) {
-				console.error(`intake: registration ${id} failed ${MAX_ATTEMPTS} attempts; it waits in registrations for an operator`)
+			await ctx.transaction((tx) => tx.db.on(registration.ref).update({ last_failure: 'register' }, { expectVersion: registration.version }))
+			if (registration.attempts >= MAX_ATTEMPTS) {
+				console.error(`intake: registration ${registration.id} failed ${MAX_ATTEMPTS} attempts; it waits in registrations for an operator`)
 			}
 		})
 	}

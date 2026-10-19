@@ -69,9 +69,7 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   `readTablesSource` reads `src/db/tables.ts` and the modules it imports (the generated `src/db/schema.generated.ts`)
   under the same literal rule, and parses the column list and the policies of `defineTables` with `@fabrika/db/tables`' `readTables`,
   the parse `defineTables` runs; a policy it refuses is a `ContractSourceError` at the call. No `src/db/tables.ts` in
-  `files` means no policies. `readContractSource` compiles against `readTablesDefinition` unless `tables` is given: only
-  the parsed policies carry each inbox's columns, so only they make `compileContract` check a form's input fields
-  against them; the artifact form does not.
+  `files` means no policies. `readContractSource` compiles against `readTablesDefinition` unless `tables` is given.
 
 | Module                 | What it owns                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -151,7 +149,6 @@ reads stale module state across plugin builds in one process. `colocated-scale.t
 | `unsafe-html`                | `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`, `insertAdjacentHTML`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `dynamic-code`               | `eval` (also `globalThis.eval`), `Function(…)`/`new Function(…)`/`Function.call`/`apply`, a string passed to `setTimeout`/`setInterval`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `migration-name`             | a file in `db/migrations/` not named `YYYYMMDDHHMMSS_slug.sql` with a real UTC timestamp, or in a subdirectory                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `file-scan-migration`        | a `scan: true` collection whose table no migration lets hold the scan states: only the current `fileTableSql` DDL or the exact `fileScanSql` statement count (`fileTableScanReady` of `@fabrika/platform-node/sql`), never an index or a comment that mentions a state                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `file-column-migration`      | a declared file column (`files` of a table policy) that no migration makes a foreign key to `fabrika_files (id)`, or that leads no index a migration creates (a partial index or one a later `DROP INDEX` removes does not count)                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `crontab`                    | a `zerops.yaml` setup whose `run.crontab` is not exactly the contract's `c.cron` (or `app.cron`) jobs with explicit, equal timings; a background `run.start`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `package-replacement`        | a trusted name (`@fabrika/*`, `zod`) as any `package.json`'s `name`, which Bun resolves to the application itself; an `exports` map in the root one; `patchedDependencies`/`overrides`/`resolutions` in a `package.json`; a non-registry specifier of `@fabrika/*` or `zod`; their `bun.lock` entry without a registry version and a `sha512-` hash; another registry in `bunfig.toml` or `.npmrc`; `declare module` of one                                                                                                                                                                                                                                                                     |
@@ -209,8 +206,8 @@ where the types refuse too (see below). Change the rule, `reader/value.ts` and `
   foreign keys it checks a containment column against are the generated column list's, read from source.
 - **Functions:** an inline arrow with one parameter and an expression body, only as the second argument of
   `defineContract` and as `procedures` in the options of `c.link(path, { … })`. Its parameter is used only as
-  `c.<builder>(…)`: `rpc`, `query`, `mutation`, `link`, `spa`, `health`, `form`, `webhook`, `files`, `cron`, `export`.
-  In the kit form: `app.contract((c) => ({ … }))`, whose `c` has `rpc(prefix, groups)`, `spa`, `health`, `form` and
+  `c.<builder>(…)`: `rpc`, `query`, `mutation`, `link`, `spa`, `health`, `webhook`, `files`, `cron`, `export`.
+  In the kit form: `app.contract((c) => ({ … }))`, whose `c` has `rpc(prefix, groups)`, `spa`, `health` and
   `files`; `app.group(options, (r) => ({ … }))` and `procedures` of `app.link(prefix, { … })` and `app.export({ … })`,
   whose parameter has `query` and `mutation`. The handler of `.handle(…)` is no exception: the slice removes it first,
   and a `.handle` the slice keeps (a named function, a builder that takes none) is refused.
@@ -240,12 +237,13 @@ where the types refuse too (see below). Change the rule, `reader/value.ts` and `
 The literal rule fixes the forms; the reader also checks what the types check, because Control reads a commit
 nobody has type-checked. It refuses with the `contract` rule:
 
-- a mount, procedure, file collection, job or export that is not its builder call (a hand-written
+- a mount, procedure, file kind, job or export that is not its builder call (a hand-written
   `{ kind: 'rpc', … }` is refused even where the types accept it), `l.<builder>` other than `query` and `mutation`, a
   mutation in an export;
 - a field of the wrong type, a missing required field, an unknown key in the vocabulary, a dimension, a role, an
   access, an import or the CSP, and a builder called with the wrong number of arguments. Unknown builder options are
-  recorded in `unknownOptions`, as the kit does, so `buildArtifact` refuses them in the runtime's words;
+  recorded in `unknownOptions`, as the kit does, so `buildArtifact` refuses them in the runtime's words: `c.files`
+  reads only a file kind, so an old collection's `owner` is refused there as at runtime, and so is a job's `scope`;
 - a `z` step on the wrong schema (`z.string().positive()`), an argument of the wrong type or count, and an option
   other than `message` and `error` (a string or `{ message, error }`) plus, where zod takes them, `version` of a
   UUID, `offset`/`local`/`precision` of `z.iso.datetime`, `precision` of `z.iso.time` and `position` of
@@ -324,7 +322,7 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   process; do not grow these rules into a sandbox.
 - **The scaffold and the check are one function.** `fabrika db test-scaffold` writes exactly `generatedTests` of what
   `scaffoldInputs` reads (`readTablesDefinition`, `readEndpointFixtures`, and `readContractSource` against the parsed
-  policies, so the checker reports a form field that is no inbox column), and
+  policies), and
   `rules/isolation.ts` compares the tree with the same call, byte for byte. The case names are what `fabrika db
   test-isolation` requires as passed in the JUnit report, so keep them unique within a file. The output is
   not formatter-stable: the root `dprint.json` excludes the generated files of `examples/*` and `packages/cli`'s fixtures,
@@ -337,9 +335,6 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   weaken a rule; `denied` stays exactly 404 or 403. An `unscoped` endpoint has no leak case: it reaches across scopes
   by declaration, which the approver reviews. A precondition is a seed in the fixtures file, never an edited test, and
   a seed only adds a seeded leak case: the unseeded one always runs, since a seed could set aside the state that leaks.
-- **A file collection's endpoints get cross-scope cases like every `on` endpoint** (`fileCases`), over files the kit
-  seeds through the upload endpoint. Their names carry the collection's actions, so weakening one (a `delete` of the
-  `read` action) makes the committed test stale; never drop a file endpoint from the generated tests.
 - **`@babel/parser` is pinned exactly (8.0.7).** It is plain JavaScript and also runs in a Worker, which B1 needs.
   A parser upgrade can move positions and change node shapes; rerun the spike fixture test.
 - **The reader evaluates no application code, and normalizes nothing itself.** It calls only zod's own builders on

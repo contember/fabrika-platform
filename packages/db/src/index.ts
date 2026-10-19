@@ -37,17 +37,6 @@ export {
 	type QueryRefusal,
 	QueryRefusedError,
 } from './errors'
-export {
-	FILE_STATUSES,
-	FILE_TABLE_PREFIX,
-	type FileColumn,
-	type FileColumnType,
-	type FileOwner,
-	fileScanSql,
-	type FileStatus,
-	fileTableName,
-	fileTableSql,
-} from './file-table-sql'
 export type {
 	AnyDbIndex,
 	ChildRows,
@@ -87,8 +76,6 @@ export {
 	defineTables,
 	type DimensionPolicy,
 	type DimensionScope,
-	type InboxPolicy,
-	type InboxScope,
 	type InsertValues,
 	isTables,
 	readTables,

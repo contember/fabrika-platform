@@ -34,7 +34,7 @@ export class CapabilityError extends Error {
 export const QUERY_REFUSALS = {
 	invalid_argument: 'a data-layer call took an argument of another shape than its type declares',
 	invalid_value: 'a value cannot be bound: an invalid or out-of-range date, or a non-finite number',
-	invalid_name: 'a configured name (application, schema, file collection or owner column) breaks its naming rule',
+	invalid_name: 'a configured name (application, schema, table or file column) breaks its naming rule',
 	unknown_column: 'a column the table does not declare, or one this operation may not set',
 	unknown_table: 'a table src/db/tables.ts does not declare, or one no store, join or locator reaches',
 	framework_table: "a framework table or a catalog name: application data reaches only the application's own tables",
@@ -55,7 +55,7 @@ export const QUERY_REFUSALS = {
 	sql_function: 'ctx.sql calls a function that is not a reviewed built-in',
 	sql_outside_transaction: 'a job runs ctx.sql only inside ctx.transaction((tx) => …), as tx.sql',
 	sql_scope: 'ctx.sql.scope(…) stands alone, joined by AND, in a WHERE or JOIN … ON clause of its own invocation',
-	file_scan: "a scan operation on a file collection without scan: true, or a scan verdict outside the scan job's lease",
+	file_scan: "a scan verdict outside the scan job's lease",
 	claim_site: 'claim leases rows in a transaction of its own: a job calls it on ctx.db, never inside ctx.transaction or a request',
 	on_conflict: "an insert's onConflict names no column of the table, a column the insert leaves empty, or another action",
 	public_reach: "a public procedure updates, removes, locks or claims no row, and an insert's conflict writes nothing",

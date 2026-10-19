@@ -66,6 +66,4 @@ export const NewProject = z.strictObject({ name: z.string().min(1).max(80) })
 
 export const Deleted = z.strictObject({ deleted: z.uuid() })
 
-export const Feedback = z.strictObject({ email: z.email(), message: z.string().max(5000) })
-
 export const Push = z.strictObject({ ref: z.string(), commits: z.array(z.strictObject({ id: z.string() })).max(50) })

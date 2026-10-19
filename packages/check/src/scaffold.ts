@@ -446,43 +446,6 @@ const publicCases = (row: EndpointRow, artifact: ContractArtifact, fixtures: End
 	]
 }
 
-/**
- * A file endpoint's own cases, over a file the kit seeds in each scope. Their names carry the collection's actions, so a
- * change of one makes the committed test stale; a read action that also writes or removes loses its refusal case.
- */
-const fileCases = (row: EndpointRow, artifact: ContractArtifact): readonly Case[] => {
-	if (row.source.kind !== 'files') return []
-	const name = row.source.name
-	const collection = artifact.files[name]
-	if (collection === undefined) return []
-	const call = (operation: string, caller: string, status: number) =>
-		`expect(await kit.file(${quote(name)}, ${quote(operation)}, ${quote(caller)})).toEqual({ status: ${status} })`
-	const owner = `${collection.owner} row`
-	if (row.kind === 'upload') {
-		return [
-			testCase(`${row.id}: a caller with ${collection.write} uploads to an own ${owner}`, call('upload', 'own', 200)),
-			testCase(`${row.id}: the ${owner} of another scope is 404`, call('upload', 'other', 404)),
-			...(collection.write === collection.read ? [] : [
-				testCase(`${row.id}: a caller with only ${collection.read} cannot upload`, call('upload', 'reader', 403)),
-			]),
-		]
-	}
-	if (row.kind === 'download') {
-		return [
-			testCase(`${row.id}: a caller with ${collection.read} downloads an own file`, call('download', 'own', 200)),
-			testCase(`${row.id}: a file of another scope is 404`, call('download', 'other', 404)),
-		]
-	}
-	// The list is a query on the owner: the endpoint cases above cover it.
-	if (row.kind !== 'mutation') return []
-	return [
-		testCase(`${row.id}: a caller with ${collection.delete} removes an own file`, call('remove', 'own', 200)),
-		...(collection.delete === collection.read ? [] : [
-			testCase(`${row.id}: a caller with only ${collection.read} cannot remove`, call('remove', 'reader', 403)),
-		]),
-	]
-}
-
 /** The endpoint access test of the application, or `undefined` when no endpoint has an access form to test. */
 const endpointTestBody = (
 	artifact: ContractArtifact,
@@ -494,7 +457,6 @@ const endpointTestBody = (
 	) => [
 		...endpointCases(row, artifact, policies, fixtures),
 		...capabilityCases(row, fixtures),
-		...fileCases(row, artifact),
 		...publicCases(row, artifact, fixtures),
 	])
 	if (cases.length === 0) return undefined

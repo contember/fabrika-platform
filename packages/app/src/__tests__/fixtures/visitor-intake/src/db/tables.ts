@@ -1,4 +1,5 @@
 import { defineTables } from '@fabrika/db/tables'
+import { MAX_ATTEMPTS } from '../limits'
 import { vocabulary } from '../vocabulary'
 import { columns } from './schema.generated'
 
@@ -22,6 +23,23 @@ export const tables = defineTables(vocabulary, columns)({
 			last_failure: { read: 'candidates.process' },
 		},
 	},
-	registrations: { scope: { inbox: 'register', read: 'candidates.process' } },
-	resend_requests: { scope: { inbox: 'resend', read: 'candidates.process' } },
+	registrations: {
+		scope: { app: 'anonymous registrations before a candidate exists' },
+		actions: { read: 'candidates.process', insert: 'candidates.register', update: 'candidates.process', delete: 'candidates.process' },
+		insert: ['email', 'name'],
+		update: ['last_failure'],
+		queue: { attempts: 'attempts', due: 'due_at', maxAttempts: MAX_ATTEMPTS },
+		version: 'version',
+	},
+	resend_requests: {
+		scope: { app: 'anonymous resend requests, matched to a candidate by the intake job' },
+		actions: { read: 'candidates.process', insert: 'candidates.register', delete: 'candidates.process' },
+		insert: ['email'],
+	},
+	candidate_files: {
+		scope: { child: 'candidates' },
+		actions: { read: 'candidates.read', insert: 'candidates.attach' },
+		insert: ['file'],
+		files: { file: 'attachments' },
+	},
 })

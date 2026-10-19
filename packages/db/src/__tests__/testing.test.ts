@@ -135,7 +135,6 @@ describe('the table probe', () => {
 	test('reaches only a table a store reaches', () => {
 		const layer = scoped(tables)
 		expect(() => tableProbe(layer, 'countries')).toThrow(QueryRefusedError)
-		expect(() => tableProbe(layer, 'contact_messages')).toThrow(QueryRefusedError)
 		expect(() => tableProbe(layer, 'missing')).toThrow(QueryRefusedError)
 		expect(tableProbe(layer, 'notes').mode).toBe('dimension')
 		expect(tableProbe(layer, 'note_comments').mode).toBe('child')

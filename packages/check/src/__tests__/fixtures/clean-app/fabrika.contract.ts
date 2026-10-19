@@ -13,5 +13,5 @@ export const contract = defineContract({
 		create: c.mutation({ input: CreateNote, output: Note, access: { action: 'notes.write', in: 'workspace', from: 'workspaceId' } }),
 	}),
 	health: c.health('/healthz'),
-	jobs: { purgeDeleted: c.cron('0 3 * * *', { actions: ['notes.write'], scope: 'app' }) },
+	jobs: { purgeDeleted: c.cron('0 3 * * *', { actions: ['notes.write'] }) },
 }))

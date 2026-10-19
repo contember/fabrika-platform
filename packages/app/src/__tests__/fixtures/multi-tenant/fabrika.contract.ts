@@ -1,5 +1,6 @@
-// A multi-tenant contract: workspaces IAM creates, members a manager invites, share links of a note, a contact form
-// and a GitHub webhook bound to a workspace. The anonymous kinds and the IAM operations A13 serves.
+// A multi-tenant contract: workspaces IAM creates, members a manager invites, share links of a note, and a GitHub
+// webhook bound to a workspace. The IAM operations A13 serves. Only a staged kit's mutation binds a webhook, so
+// `src/github.ts` serves the same webhook beside the procedures that bind it.
 
 import { defineContract } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
@@ -15,7 +16,6 @@ export const Remove = z.strictObject({ workspaceId: z.string(), principalId: z.s
 export const MemberCount = z.strictObject({ members: z.int(), invitations: z.int() })
 export const Share = z.strictObject({ id: z.uuid(), days: z.int() })
 export const Shared = z.strictObject({ id: z.string(), url: z.string() })
-export const Contact = z.strictObject({ email: z.email(), body: z.string().min(1) })
 export const Push = z.strictObject({
 	ref: z.string(),
 	repository: z.strictObject({ id: z.int(), full_name: z.string() }),
@@ -47,7 +47,6 @@ export const contract = defineContract(vocabulary, (c) => ({
 			note: l.query({ output: Note, access: { action: 'notes.read' } }),
 		}),
 	}),
-	contact: c.form('/contact', { input: Contact, appendTo: 'contact_messages', maxBytes: 512 }),
 	github: c.webhook('/hooks/github', { scheme: 'github-sha256', boundTo: 'workspace', actions: ['notes.write'], input: Push }),
 	health: c.health('/healthz'),
 }))

@@ -29,6 +29,8 @@ const vocabulary = {
 } as const
 
 const Id = z.strictObject({ id: z.uuid() })
+/** The notes fixture's tables without its 0.5 form inbox, which a 0.6 contract no longer declares. */
+const { contact_messages: _inbox, ...noteTables } = notesArtifact.tables
 
 function problemsOf(compile: () => unknown): readonly string[] {
 	try {
@@ -93,16 +95,9 @@ describe('compileContract refuses what the types let through', () => {
 		const contract = defineContract(vocabulary, (c) => ({
 			api: c.rpc('/api', { callers: ['human'] }, { list: c.query({ output: Id, access: { action: 'tasks.read', over: 'workspace' } }) }),
 			files: {
-				attachments: c.files({
-					owner: 'tasks',
-					read: 'tasks.read',
-					write: 'tasks.write',
-					delete: 'tasks.write',
-					maxBytes: 1024,
-					types: ['image/*'],
-				}),
+				attachments: c.files({ maxBytes: 1024, types: ['image/*'] }),
 			},
-			jobs: { nightly: c.cron('@daily', { actions: ['tasks.write'], scope: 'app', limits: { timeoutMs: 600 } }) },
+			jobs: { nightly: c.cron('@daily', { actions: ['tasks.write'], limits: { timeoutMs: 600 } }) },
 			imports: {
 				catalog: { app: 'catalog', export: 'products', version: 1, digest: 'sha256:00', procedures: ['get'], usedBy: ['api.missing'] },
 			},
@@ -113,7 +108,6 @@ describe('compileContract refuses what the types let through', () => {
 		}))
 		expect(compileProblems(contract)).toEqual([
 			"files 'attachments': 'image/*' is not an exact media type (allowed: 'image/png'; no wildcards or parameters)",
-			"files 'attachments': its owner 'tasks' is not a table with a dimension scope in src/db/tables.ts",
 			"job 'nightly': schedule '@daily' is not five cron fields separated by single spaces (allowed: '0 3 * * *')",
 			"import 'catalog': usedBy 'api.missing' is not a procedure of this contract (allowed: an id such as 'api.products.show')",
 			"csp connectSrc: 'https://maps.example.com/tiles' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)",
@@ -128,10 +122,8 @@ describe('compileContract refuses what the types let through', () => {
 		expect(compileProblems(withImgSrc(MAX_CSP_ORIGINS + 1))).toEqual(['csp imgSrc: 17 origins exceed the limit of 16'])
 	})
 
-	test('table policies that disagree with the contract', () => {
-		const contract = defineContract(vocabulary, (c) => ({
-			contact: c.form('/contact', { input: z.strictObject({ message: z.string() }), appendTo: 'messages' }),
-		}))
+	test('table policies that disagree with the contract, and a form inbox', () => {
+		const contract = defineContract(vocabulary, () => ({}))
 		const tasks: TablePolicyArtifact = {
 			scope: { mode: 'dimension', dimension: 'task', key: 'id', container: null },
 			actions: { read: 'tasks.read', insert: 'tasks.write', update: null, delete: null },
@@ -152,23 +144,29 @@ describe('compileContract refuses what the types let through', () => {
 		}
 		expect(compileProblems(contract, { tasks, messages })).toEqual([
 			"table 'tasks': lies in 'nothing', but the contract puts 'task' in 'workspace'",
-			"table 'messages': its read action 'tasks.read' is granted by a membership role (allowed: an action only application-level roles grant)",
+			"table 'messages': is a form inbox, and no form fills one any more: make it an application table (scope: { app: '<why>' }) a public procedure inserts into",
 		])
-		const contained: TablePolicyArtifact = {
-			...tasks,
-			scope: { mode: 'dimension', dimension: 'task', key: 'id', container: { dimension: 'workspace', column: 'workspace_id' } },
+	})
+
+	test('a file collection is refused with the form that replaces it', () => {
+		const collection = { maxBytes: 1024, types: ['image/png'] } as const
+		for (const [key, value] of [['owner', 'tasks'], ['read', 'tasks.read'], ['write', 'tasks.write'], ['delete', 'tasks.write']] as const) {
+			Object.defineProperty(collection, key, { value, enumerable: true })
 		}
-		expect(compileProblems(contract, { tasks: contained }))
-			.toEqual(["mount 'contact': appends to 'messages', which is not an inbox table of this form (scope: { inbox: 'contact', … })"])
+		const contract = defineContract(vocabulary, (c) => ({ files: { attachments: c.files(collection) } }))
+		expect(compileProblems(contract)).toEqual([
+			"files 'attachments': is a file collection (owner, read, write, delete), which no longer exists: declare the kind c.files({ types, maxBytes, scan? }) and a table with a file column of it (files: { <column>: '<kind>' })",
+		])
 	})
 
 	test('an option that names a field the builder sets is refused, and never replaces it', () => {
 		const webhookOptions = { scheme: 'github-sha256', boundTo: 'app', actions: ['tasks.write'], input: Id } as const
 		Object.defineProperty(webhookOptions, 'kind', { value: 'form', enumerable: true })
 		Object.defineProperty(webhookOptions, 'path', { value: '/contact', enumerable: true })
-		const cronOptions = { actions: ['tasks.write'], scope: 'app' } as const
+		const cronOptions = { actions: ['tasks.write'] } as const
 		Object.defineProperty(cronOptions, 'schedule', { value: '* * * * *', enumerable: true })
 		Object.defineProperty(cronOptions, 'retry', { value: 3, enumerable: true })
+		Object.defineProperty(cronOptions, 'scope', { value: 'app', enumerable: true })
 		const contract = defineContract(vocabulary, (c) => ({
 			hook: c.webhook('/hooks/github', webhookOptions),
 			jobs: { nightly: c.cron('0 3 * * *', cronOptions) },
@@ -180,7 +178,8 @@ describe('compileContract refuses what the types let through', () => {
 			"mount 'hook': 'kind' is set by c.webhook itself and cannot be an option; remove it",
 			"mount 'hook': 'path' is set by c.webhook itself and cannot be an option; remove it",
 			"job 'nightly': 'schedule' is set by c.cron itself and cannot be an option; remove it",
-			"job 'nightly': 'retry' is not an option of c.cron (allowed: actions, scope, limits, retries)",
+			"job 'nightly': 'retry' is not an option of c.cron (allowed: actions, limits, retries)",
+			"job 'nightly': 'scope' is not an option of c.cron (allowed: actions, limits, retries)",
 		])
 	})
 
@@ -290,13 +289,13 @@ describe('compileContract refuses what the types let through', () => {
 	test('applies the defaults in one place', () => {
 		const contract = defineContract(vocabulary, (c) => ({
 			hook: c.webhook('/hooks/github', { scheme: 'github-sha256', boundTo: 'app', actions: ['tasks.write'], input: Id }),
-			jobs: { nightly: c.cron('0 3 * * *', { actions: ['tasks.write'], scope: 'workspace' }) },
+			jobs: { nightly: c.cron('0 3 * * *', { actions: ['tasks.write'] }) },
 		}))
 		const artifact = compileContract(contract, {})
 		expect(artifact.jobs['nightly']).toEqual({
 			schedule: '0 3 * * *',
 			actions: ['tasks.write'],
-			scope: { kind: 'dimension', dimension: 'workspace' },
+			scope: { kind: 'app' },
 			timeoutMs: 900000,
 			retries: 0,
 		})
@@ -314,7 +313,7 @@ describe('compileContract refuses what the types let through', () => {
 	test('a webhook and a job bound their time, and a webhook its body, within their ceilings', () => {
 		const bounded = (limits: object, jobLimits: object) => {
 			const hook = { scheme: 'github-sha256', boundTo: 'app', actions: ['tasks.write'], input: Id } as const
-			const job = { actions: ['tasks.write'], scope: 'app' } as const
+			const job = { actions: ['tasks.write'] } as const
 			Object.defineProperty(hook, 'limits', { value: limits, enumerable: true })
 			Object.defineProperty(job, 'limits', { value: jobLimits, enumerable: true })
 			return defineContract(vocabulary, (c) => ({ hook: c.webhook('/hooks/github', hook), jobs: { nightly: c.cron('0 3 * * *', job) } }))
@@ -341,7 +340,7 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 	}
 	const output: SchemaShape = { type: 'null' }
 	const withMounts = (mounts: Readonly<Record<string, MountDeclaration<SchemaShape>>>): ContractDeclaration<SchemaShape> => ({ ...base, mounts })
-	const build = (contract: ContractDeclaration<SchemaShape>) => problemsOf(() => buildArtifact(contract, notesArtifact.tables))
+	const build = (contract: ContractDeclaration<SchemaShape>) => problemsOf(() => buildArtifact(contract, noteTables))
 
 	test('an access that mixes two forms, a typo, an optional from field, and a create in a query', () => {
 		const problems = build(withMounts({
@@ -370,7 +369,7 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		])
 	})
 
-	test('a cross-origin form a builder does not take', () => {
+	test('a cross-origin value a builder does not take', () => {
 		const problems = build(withMounts({
 			...base.mounts,
 			api: {
@@ -380,12 +379,10 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 					off: { '~kind': 'procedure', type: 'query', input: null, output, access: { member: true }, crossOrigin: false },
 				},
 			},
-			contact: { kind: 'form', path: '/contact', input: { type: 'object', fields: {} }, appendTo: 'contact', crossOrigin: 'yes' },
 		}))
 		expect(problems.filter((problem) => problem.includes('crossOrigin'))).toEqual([
 			`procedure 'api.any': crossOrigin "*" is not a cross-origin form (allowed: crossOrigin: true)`,
 			"procedure 'api.off': crossOrigin false is not a cross-origin form (allowed: crossOrigin: true)",
-			`mount 'contact': crossOrigin "yes" is not a cross-origin form (allowed: crossOrigin: true for the environment's listed origins, or crossOrigin: '*' for any)`,
 		])
 	})
 
@@ -456,7 +453,7 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 			"mail 'welcome': is not a message IAM sends (allowed: 'invitation', 'enrollment', 'reset')",
 		])
 		const reset = { subject: 'Nové heslo do {{displayName}}', text: 'Odkaz: {{actionUrl}} (platí do {{expiry}})' }
-		expect(buildArtifact({ ...base, mail: { reset: { cs: reset } } }, notesArtifact.tables).mail).toEqual({ reset: { cs: reset } })
+		expect(buildArtifact({ ...base, mail: { reset: { cs: reset } } }, noteTables).mail).toEqual({ reset: { cs: reset } })
 	})
 
 	test('an HTML body of an e-mail outside the closed subset, and one inside it carried to the artifact', () => {
@@ -465,7 +462,7 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 			'mail.reset.en: the HTML has <iframe>, which an e-mail body may not use (allowed: <a>, <b>, <blockquote>, <br>, <div>, <em>, <h1>, <h2>, <h3>, <hr>, <i>, <li>, <ol>, <p>, <span>, <strong>, <u>, <ul>)',
 		])
 		const html = '<p><a href="{{actionUrl}}">Reset</a></p>'
-		expect(buildArtifact({ ...base, mail: reset(html) }, notesArtifact.tables).mail?.reset?.en?.html).toBe(html)
+		expect(buildArtifact({ ...base, mail: reset(html) }, noteTables).mail?.reset?.en?.html).toBe(html)
 	})
 
 	test('members of the application name actions of the catalog, and its directory needs them', () => {
@@ -473,7 +470,7 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 			"members.manage: 'people.manage' is not an action of the contract",
 		])
 		expect(build({ ...base, directory: 'labels' })).toEqual(['directory: declares a directory and no members: { manage, list } whose list it labels'])
-		expect(buildArtifact({ ...base, members: { manage: 'notes.write', list: 'notes.read' } }, notesArtifact.tables).members).toEqual({
+		expect(buildArtifact({ ...base, members: { manage: 'notes.write', list: 'notes.read' } }, noteTables).members).toEqual({
 			manage: 'notes.write',
 			list: 'notes.read',
 		})
@@ -515,11 +512,11 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 				...base,
 				roles: { ...base.roles, partner: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: true } },
 			},
-			notesArtifact.tables,
+			noteTables,
 		)
 		expect(artifact.roles['partner']).toEqual({ grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: true })
 		expect(Object.keys(artifact.roles['editor'] ?? {}).sort()).toEqual(['grants', 'member'])
-		expect(canonicalArtifactJson(buildArtifact(base, notesArtifact.tables))).not.toContain('"external"')
+		expect(canonicalArtifactJson(buildArtifact(base, noteTables))).not.toContain('"external"')
 	})
 
 	test('the artifact boundary refuses external on a role that is not a membership role; translation carries the flag', () => {
@@ -547,7 +544,7 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 				editor: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy } },
 			},
 		})
-		const artifact = buildArtifact(assignable(['owner', 'support']), notesArtifact.tables)
+		const artifact = buildArtifact(assignable(['owner', 'support']), noteTables)
 		expect(artifact.roles['editor']?.member).toEqual({ scope: 'workspace', assignableBy: ['owner', 'support'] })
 		const schema = schemaFromContract(parseContractArtifact(artifact))
 		expect(schema.roles['editor']?.member).toEqual({ scope: 'workspace', assignableBy: ['owner', 'support'] })
@@ -585,7 +582,7 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		])
 	})
 
-	test('an unscoped write of a reference table or a form inbox, which no site writes', () => {
+	test('an unscoped write of a reference table, which no site writes', () => {
 		const problems = build(withMounts({
 			...base.mounts,
 			api: {
@@ -598,14 +595,13 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 						input: null,
 						output,
 						access: { member: true },
-						declared: { unscoped: { countries: 'write', contact_messages: 'write', notes: 'write' } },
+						declared: { unscoped: { countries: 'write', notes: 'write' } },
 					},
 				},
 			},
 		}))
 		expect(problems).toEqual([
 			"procedure 'api.fill': declares unscoped 'countries': 'write', and no site writes a reference table: its rows come from a migration (allowed: 'read')",
-			"procedure 'api.fill': declares unscoped 'contact_messages': 'write', and only its form writes a form's inbox (allowed: 'read')",
 		])
 	})
 

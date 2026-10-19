@@ -116,7 +116,7 @@ const contract = kit.contract((c) => ({
 	api: c.rpc('/api', { deals }),
 	github: kit.webhook('/hooks/github', { scheme: 'github-sha256', boundTo: 'org', actions: ['crm.write'], input: Push }).handle(servedByTheTree),
 	health: c.health('/healthz'),
-	jobs: { close: kit.cron('0 3 * * *', { actions: ['crm.read', 'deals.write'], scope: 'app', sql: 'write' }).handle(servedByTheTree) },
+	jobs: { close: kit.cron('0 3 * * *', { actions: ['crm.read', 'deals.write'], sql: 'write' }).handle(servedByTheTree) },
 }))
 
 function sqlApp(hooks: Hooks): ContractImplementation<typeof contract> {

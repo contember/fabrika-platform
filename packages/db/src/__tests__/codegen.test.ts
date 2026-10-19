@@ -210,7 +210,6 @@ import { vocabulary } from '../vocabulary'
 import { columns } from './schema.generated'
 
 export const tables = defineTables(vocabulary, columns)({
-	contact_messages: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
 	countries: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
 	note_comments: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
 	note_flags: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },

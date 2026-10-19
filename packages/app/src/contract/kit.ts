@@ -26,18 +26,12 @@ import {
 	unknownOptions,
 	type WebhookMountDeclaration,
 } from './declaration'
-import type { FORM_CHALLENGE_FIELD } from './defaults'
 import {
 	type AnyContract,
 	type Contract,
 	type CreatableDimension,
 	type CronJob,
 	type Export,
-	type FormChallengeOption,
-	type FormFileOption,
-	type FormJobs,
-	type FormMount,
-	type FormOptions,
 	type InputSchema,
 	type JobLimitsOption,
 	type Kit,
@@ -93,9 +87,9 @@ export type KitOf<V, Ix, Imp extends KitImports, Tk extends TokenPurposes = Reco
 	}
 	: never
 
-export type CronOptions<Acts, Sc, S, U, Is, Ix extends AnyDbIndex, M = never, Ks = never, Sg = never, Purposes extends string = never> =
+export type CronOptions<Acts, S, U, Is, Ix extends AnyDbIndex, M = never, Ks = never, Sg = never, Purposes extends string = never> =
 	& Owned<'kind' | 'schedule'>
-	& { readonly actions: Acts; readonly scope: Sc; readonly limits?: JobLimitsOption; readonly retries?: number }
+	& { readonly actions: Acts; readonly limits?: JobLimitsOption; readonly retries?: number }
 	& DeclaredFields<S, U, never, Is, Ix>
 	& MailerField<M>
 	& KicksField<Ks>
@@ -111,7 +105,7 @@ type MailerField<M> =
 	& ([M] extends [never] ? unknown : { readonly mailer: M })
 
 /** A cron job of the kit, handled. */
-export interface KitCronJob<Acts extends string, Sc extends string, D> extends CronJob<Acts, Sc> {
+export interface KitCronJob<Acts extends string, D> extends CronJob<Acts> {
 	readonly declared: D
 }
 
@@ -119,14 +113,13 @@ export interface KitCronJob<Acts extends string, Sc extends string, D> extends C
 export interface CronBuilder<
 	K extends KitTypes,
 	Acts extends string,
-	Sc extends string,
 	D extends Declared<SqlMode, unknown, never, string, JobMailer>,
 	Ks = never,
 	Sg = never,
 > {
 	handle(
 		handler: (args: { readonly ctx: JobKitContext<K, Acts, D> & KickContext<Ks> & TokensContext<K, Sg> }) => void | Promise<void>,
-	): KitCronJob<Acts, Sc, D>
+	): KitCronJob<Acts, D>
 }
 
 export type WebhookOptions<B, Acts, I, S, U, Ix extends AnyDbIndex, Ks = never, Sg = never, Purposes extends string = never> =
@@ -208,60 +201,8 @@ type MountPrefix<G> = [PendingOf<G>] extends [never]
 	: Path
 	: Unavailable<`add .handle(…) to ${ListOf<PendingOf<G>>}: every endpoint takes its handler beside it`>
 
-/** The inbox tables of the kit: each a form's own table (`scope: { inbox, read }`). */
-type InboxTables<Ix extends AnyDbIndex> = {
-	[T in keyof Ix['tables'] & string]: Ix['tables'][T]['mode'] extends 'inbox' ? T : never
-}[keyof Ix['tables'] & string]
-
-/** `unknown` for one literal name; a widened or union name would let the check below pass for any other. */
-type OneName<N, Message extends string> = string extends N ? Unavailable<Message> : true extends IsUnion<N> ? Unavailable<Message> : unknown
-
-type LiteralInbox = "appendTo names the form's inbox table as a literal: appendTo: '<inbox table>'"
-type LiteralHoneypot = "honeypot names the field the page hides as a literal: honeypot: '<field>'"
-
-/**
- * `appendTo` names one inbox table, and the form's input fields are its columns, the honeypot `H` and the challenge
- * token `Ch` exempt: the form writes each field to the column of its name. A widened honeypot is refused here too,
- * since it would exempt every field.
- */
-type InboxTarget<Ix extends AnyDbIndex, T, Fields, H, Ch> = unknown extends OneName<T, LiteralInbox>
-	? T extends InboxTables<Ix> & string
-		? unknown extends OneName<H, LiteralHoneypot>
-			? ExtraFields<T, Exclude<Fields & string, keyof Ix['tables'][T]['row'] | H | Ch>, keyof Ix['tables'][T]['row'] & string>
-		: OneName<H, LiteralHoneypot>
-	: [InboxTables<Ix>] extends [never]
-		? Unavailable<"no table of src/db/tables.ts is a form's inbox: declare one with scope: { inbox: '<form>', read }">
-	: Unavailable<`${T & string} is not an inbox table of src/db/tables.ts (inboxes: ${ListOf<InboxTables<Ix> & string>})`>
-	: OneName<T, LiteralInbox>
-
-type ExtraFields<T extends string, Extra extends string, Columns extends string> = [Extra] extends [never] ? unknown
-	: Unavailable<`the inbox ${T} has no column ${ListOf<Extra>}: each input and file field is named like its column (columns: ${ListOf<Columns>})`>
-
-/** The challenge token's field, exempt from the inbox's columns where the form declares a challenge. */
-type ChallengeField<Ch> = [Ch] extends [never] ? never : typeof FORM_CHALLENGE_FIELD
-
-/** A form's file fields: each is a column of its inbox too, which receives the held file's id. */
-type FileFields<F> = [F] extends [never] ? never : keyof F
-
 /** The builders of the contract's callback: the mounts that take no handler, and `rpc`, which mounts groups. */
 export interface ContractKit<K extends KitTypes> extends Pick<Kit<K['action'], K['dimension'], K['creatable']>, 'spa' | 'health' | 'files'> {
-	/** A form that appends each submission to its inbox `appendTo`, one column per input field, and answers a constant. */
-	form<
-		I extends InputSchema,
-		const T extends string,
-		const H extends string = never,
-		const Ch extends FormChallengeOption = never,
-		const Then extends string = never,
-		const F extends { readonly [field: string]: FormFileOption } = never,
-	>(
-		path: Path,
-		options: FormOptions<I, Then> & {
-			readonly appendTo: T & NoInfer<InboxTarget<K['index'], T, keyof z.output<I> | FileFields<F>, H, ChallengeField<Ch>>>
-			readonly honeypot?: H & NoInfer<OneName<H, LiteralHoneypot>>
-			readonly challenge?: Ch
-			readonly files?: F
-		},
-	): FormMount<I, NoInfer<Then>>
 	/**
 	 * The groups' endpoints at `POST <prefix>/<group>.<endpoint>`, to the callers the groups name. `compatibility:
 	 * 'backward'` promises their callers that a later deploy breaks none of them; Control refuses one that does.
@@ -304,10 +245,9 @@ export interface App<K extends KitTypes> {
 		options: { readonly callers?: C & NoInfer<SomeCallers<C>> } & Owned<'kind' | 'endpoints'>,
 		build: (r: GroupKit<K, C[number]>) => T,
 	): Group<C, T>
-	/** A cron job (UTC, five fields) holding `actions` in `scope`; the contract mounts it under `jobs`. */
+	/** A job of the whole application (UTC, five fields) holding `actions`; the contract mounts it under `jobs`. */
 	cron<
 		const Acts extends readonly [K['action'], ...K['action'][]],
-		const Sc extends K['dimension'] | 'app',
 		const S extends SqlMode = never,
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
 		const Is extends string = never,
@@ -316,8 +256,8 @@ export interface App<K extends KitTypes> {
 		const Sg extends readonly string[] = never,
 	>(
 		schedule: string,
-		options: CronOptions<Acts, Sc, S, U, Is, K['index'], M, Ks, Sg, keyof K['tokens'] & string>,
-	): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, Is, M>, Ks, Sg>
+		options: CronOptions<Acts, S, U, Is, K['index'], M, Ks, Sg, keyof K['tokens'] & string>,
+	): CronBuilder<K, Acts[number], Declared<S, U, never, Is, M>, Ks, Sg>
 	/**
 	 * A webhook whose deliveries `scheme` verifies, bound per value of `boundTo` or once for the application (`'app'`);
 	 * the contract mounts it by name.
@@ -364,7 +304,7 @@ export interface App<K extends KitTypes> {
 	 * The contract: mounts by name and the `files`, `jobs`, `exports` and `csp` sections; `imports` and `tokens` come from
 	 * the kit.
 	 */
-	contract<const S extends Surface & Owned<'imports' | 'tokens'> & FormJobs<S>>(build: (c: ContractKit<K>) => S): KitContract<K, S>
+	contract<const S extends Surface & Owned<'imports' | 'tokens'>>(build: (c: ContractKit<K>) => S): KitContract<K, S>
 }
 
 /**
@@ -484,7 +424,6 @@ interface RuntimeGroup extends GroupDeclaration {
 
 interface CronSiteOptions extends DeclaredDeclaration {
 	readonly actions: readonly string[]
-	readonly scope: string
 	readonly limits?: object
 	readonly retries?: number
 }
@@ -515,7 +454,7 @@ interface ExportSiteOptions {
 
 type MountedGroupsValue = GroupDeclaration | { readonly [name: string]: MountedGroupsValue }
 
-interface RuntimeContractKit extends Pick<Kit<string, string, string>, 'spa' | 'health' | 'form' | 'files'> {
+interface RuntimeContractKit extends Pick<Kit<string, string, string>, 'spa' | 'health' | 'files'> {
 	rpc(prefix: Path, groups: MountedGroupsValue, options?: object): RpcMountDeclaration<Schema>
 }
 
@@ -559,7 +498,6 @@ function runtimeApp(vocabulary: AnyAppVocabulary, options: KitOptions | undefine
 				kind: 'cron',
 				schedule,
 				actions: options.actions,
-				scope: options.scope,
 				...(options.limits === undefined ? {} : { limits: options.limits }),
 				retries: options.retries,
 				declared: declaredOf(options),
@@ -602,7 +540,7 @@ function runtimeApp(vocabulary: AnyAppVocabulary, options: KitOptions | undefine
 		}),
 		contract: (build) => {
 			const shared = surfaceKit()
-			const surface = build({ rpc, spa: shared.spa, health: shared.health, form: shared.form, files: shared.files })
+			const surface = build({ rpc, spa: shared.spa, health: shared.health, files: shared.files })
 			if (surface.imports !== undefined) {
 				throw new ContractError(['contract: imports come from defineApp(vocabulary, tables, { imports }); remove the section'])
 			}

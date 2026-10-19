@@ -28,14 +28,10 @@ import {
 	type EndpointRow,
 	type EndpointSource,
 	type ExportArtifact,
-	type FileCollectionArtifact,
 	type FileKindArtifact,
 	type FileShape,
 	FORM_URLENCODED_TYPE,
 	type FormChallenge,
-	type FormFileArtifact,
-	type FormMountArtifact,
-	type FormRate,
 	type ImportArtifact,
 	isLocale,
 	isMessageKind,
@@ -63,7 +59,6 @@ import {
 	type TokenPurposeArtifact,
 	type WebhookScheme,
 } from '@fabrika/auth-core'
-import type { InboxColumns } from '@fabrika/db/tables'
 import { isPolicyOrigin, MAX_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
 import { contractArtifactSchema } from './artifact-schema'
@@ -78,8 +73,6 @@ import {
 	DECLARED_FIELDS,
 	type ExportDeclaration,
 	type FileKindDeclaration,
-	type FilesDeclaration,
-	type FormMountDeclaration,
 	type ImportDeclaration,
 	isProcedure,
 	type LinkAccessDeclaration,
@@ -91,6 +84,7 @@ import {
 } from './declaration'
 import {
 	ATTACHMENT_LIMITS,
+	CHALLENGE_FIELD,
 	CHALLENGE_ORIGINS,
 	challengeAction,
 	CONNECT_LIMITS,
@@ -98,12 +92,6 @@ import {
 	CONTRACT_DEFAULTS,
 	exportBase,
 	FILE_LIMITS,
-	fileCollectionPaths,
-	FILES_PREFIX,
-	FORM_CHALLENGE_FIELD,
-	FORM_FILE_LIMITS,
-	FORM_INPUT_PART,
-	FORM_LIMITS,
 	FORM_MULTIPART_TYPE,
 	JOB_LIMITS,
 	joinPath,
@@ -112,11 +100,8 @@ import {
 	PROCEDURE_LIMITS,
 	PUBLIC_MUTATION_RATE,
 	spaPrefixRowId,
-	WEBHOOK_ACCOUNT_PATTERN,
 	WEBHOOK_BINDING_PARAMETER,
 	WEBHOOK_LIMITS,
-	WEBHOOK_SCOPE_FIELD,
-	WEBHOOKS_PREFIX,
 } from './defaults'
 import { ContractError, Problems } from './problems'
 import { TOKEN_MAX_DAYS } from './token'
@@ -137,7 +122,7 @@ const ATTACHMENT_FILENAMES: Readonly<Record<AttachmentFormat, RegExp>> = {
 	csv: /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.csv$/,
 	xlsx: /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.xlsx$/,
 }
-/** The `boundTo` and job `scope` value for the whole application; no dimension may take the name. */
+/** The `boundTo` value for the whole application; no dimension may take the name. */
 const APP_SCOPE = 'app'
 const AUDIENCE = 'any consumer user'
 const IMPORT_FIELDS = ['app', 'export', 'version', 'digest', 'procedures', 'usedBy', 'timeoutMs']
@@ -146,90 +131,17 @@ const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
 /** The most origins one site calls: a site that reaches more is an integration hub, which a connector import serves. */
 const MAX_EGRESS_ORIGINS = 16
 const DECLARED_ALLOWED =
-	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>'], egress: ['https://<host>']"
+	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>'], egress: ['https://<host>']"
 const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc']
-/** An environment variable an application reads; a form's challenge names its secret by one. */
+/** An environment variable an application reads; a challenge names its secret by one. */
 const APPLICATION_VARIABLE = /^[A-Z][A-Z0-9_]*$/
-/** A form's file field names the inbox column its file's id lands in. */
-const FORM_FILE_FIELD = /^[a-z_][a-z0-9_]*$/
-/** Turnstile's `action`: the form's name, which the verification expects back. */
+/** Turnstile's `action`: the procedure's endpoint id, which the verification expects back. */
 const CHALLENGE_ACTION = /^[A-Za-z0-9_-]{1,32}$/
 
-const UUID: SchemaShape = {
-	type: 'string',
-	format: 'uuid',
-	minLength: null,
-	maxLength: null,
-	pattern: null,
-	startsWith: null,
-	endsWith: null,
-	includes: null,
-}
-const ID_OBJECT: SchemaShape = { type: 'object', fields: { id: UUID } }
-const TEXT: SchemaShape = { ...UUID, format: null, minLength: 1 }
-
-const COUNT: SchemaShape = { type: 'number', int: true, min: 0, exclusiveMin: false, max: null, exclusiveMax: false, multipleOf: null }
-
-/** The shapes of a collection's generated list query; `src/files/collections.ts` parses with the same schemas. */
-export const FILE_LIST_INPUT: SchemaShape = {
-	type: 'object',
-	fields: {
-		owner: TEXT,
-		after: { type: 'optional', inner: UUID },
-		limit: { type: 'optional', inner: { ...COUNT, min: 1, max: FILE_LIMITS.listPageMax } },
-	},
-}
-/** A link holder's list names no owner: the owner is the link's object. */
-export const FILE_LINK_LIST_INPUT: SchemaShape = {
-	type: 'object',
-	fields: {
-		after: { type: 'optional', inner: UUID },
-		limit: { type: 'optional', inner: { ...COUNT, min: 1, max: FILE_LIMITS.listPageMax } },
-	},
-}
-export const FILE_LIST_OUTPUT: SchemaShape = {
-	type: 'object',
-	fields: {
-		items: {
-			type: 'array',
-			minItems: null,
-			maxItems: FILE_LIMITS.listPageMax,
-			items: {
-				type: 'object',
-				fields: {
-					id: UUID,
-					name: { type: 'nullable', inner: TEXT },
-					type: TEXT,
-					size: COUNT,
-					status: { type: 'enum', values: ['live', 'quarantined', 'rejected'] },
-					createdAt: { ...UUID, format: 'datetime' },
-				},
-			},
-		},
-		next: { type: 'nullable', inner: UUID },
-	},
-}
-
-/** The shapes of the generated webhook binding endpoints; `@fabrika/app/implement` parses with the same schemas. */
-export const WEBHOOK_BIND_INPUT: SchemaShape = {
-	type: 'object',
-	fields: { [WEBHOOK_SCOPE_FIELD]: TEXT, account: { ...UUID, format: null, pattern: WEBHOOK_ACCOUNT_PATTERN } },
-}
-export const WEBHOOK_BIND_OUTPUT: SchemaShape = { type: 'object', fields: { id: UUID, url: TEXT, secret: TEXT } }
-export const WEBHOOK_UNBIND_INPUT: SchemaShape = { type: 'object', fields: { [WEBHOOK_SCOPE_FIELD]: TEXT, id: UUID } }
-export const WEBHOOK_UNBIND_OUTPUT: SchemaShape = ID_OBJECT
-
-/**
- * Validates a described contract against its table policies and normalizes it; throws `ContractError` with every
- * problem. A form's fields are checked against its inbox's columns only where `inboxes` names them.
- */
-export function buildArtifact(
-	contract: ContractDeclaration<SchemaShape>,
-	tables: Readonly<Record<string, TablePolicyArtifact>>,
-	inboxes: InboxColumns = {},
-): ContractArtifact {
+/** Validates a described contract against its table policies and normalizes it; throws `ContractError` with every problem. */
+export function buildArtifact(contract: ContractDeclaration<SchemaShape>, tables: Readonly<Record<string, TablePolicyArtifact>>): ContractArtifact {
 	const problems = new Problems()
-	const artifact = canonicalizeArtifact(new ArtifactBuilder(contract, tables, inboxes, problems).build())
+	const artifact = canonicalizeArtifact(new ArtifactBuilder(contract, tables, problems).build())
 	problems.throwIfAny()
 	// A check missing above must surface here, not in the proxy or Control that reads the artifact later.
 	const parsed = contractArtifactSchema.safeParse(JSON.parse(JSON.stringify(artifact)))
@@ -242,7 +154,6 @@ export function buildArtifact(
 class ArtifactBuilder {
 	readonly #contract: ContractDeclaration<SchemaShape>
 	readonly #tables: Readonly<Record<string, TablePolicyArtifact>>
-	readonly #inboxes: InboxColumns
 	readonly #problems: Problems
 	readonly #endpoints: EndpointRow[] = []
 	readonly #reservedPrefixes: string[] = []
@@ -253,8 +164,8 @@ class ArtifactBuilder {
 	#kit = false
 	/** The endpoints that declare `connect`, by the import they name. */
 	readonly #connected = new Map<string, string[]>()
-	/** The forms that declare a challenge: their provider's fixed origins join the CSP, and their secret stays private. */
-	readonly #challenges: { readonly form: string; readonly provider: ChallengeProvider; readonly secret: string }[] = []
+	/** The procedures that declare a challenge: their provider's fixed origins join the CSP, and their secret stays private. */
+	readonly #challenges: { readonly site: string; readonly provider: ChallengeProvider; readonly secret: string }[] = []
 	/** Each variable a browser config serves, and where the contract names it. */
 	readonly #publicVariables: { readonly where: string; readonly field: string; readonly name: string }[] = []
 	/** The file kinds the contract declares, by name: read before the mounts, whose file fields and outputs name them. */
@@ -263,12 +174,10 @@ class ArtifactBuilder {
 	constructor(
 		contract: ContractDeclaration<SchemaShape>,
 		tables: Readonly<Record<string, TablePolicyArtifact>>,
-		inboxes: InboxColumns,
 		problems: Problems,
 	) {
 		this.#contract = contract
 		this.#tables = tables
-		this.#inboxes = inboxes
 		this.#problems = problems
 	}
 
@@ -293,17 +202,15 @@ class ArtifactBuilder {
 		}
 		this.#checkPublicVariables()
 		for (const row of this.#endpoints) {
-			if ((row.kind === 'form' || row.kind === 'webhook') && row.input !== null && containsFile(row.input)) {
+			if (row.kind === 'webhook' && row.input !== null && containsFile(row.input)) {
 				this.#problem(`mount '${row.id}'`, "takes a file in its input, which only a procedure's top-level field does (file('<kind>'))")
 			}
 		}
-		const files = this.#files(dimensions)
 		const jobs = this.#jobs()
 		const exports = this.#exports()
 		const imports = this.#imports()
 		const csp = this.#csp(contract.csp)
 		const tables = this.#checkTables()
-		this.#reserve(this.#endpoints.some((row) => row.source.kind === 'files') ? FILES_PREFIX : null)
 		this.#reserve(this.#endpoints.some((row) => row.source.kind === 'export') ? CONNECT_PREFIX : null)
 		this.#checkKickCycles()
 		const directories = this.#directories(dimensions)
@@ -318,7 +225,7 @@ class ArtifactBuilder {
 			actions,
 			roles,
 			mounts,
-			files,
+			files: {},
 			...(Object.keys(this.#fileKinds).length === 0 ? {} : { fileKinds: this.#fileKinds }),
 			jobs,
 			exports,
@@ -578,200 +485,44 @@ class ArtifactBuilder {
 				this.#prefix(where, mount.path)
 				this.#anonymous(name, 'health', 'GET', mount.path, null, null)
 				return { kind: 'health', path: mount.path }
-			case 'form': {
-				this.#prefix(where, mount.path)
-				this.#objectSchema(`${where} input`, mount.input)
-				this.#nonEmpty(`${where} appendTo`, mount.appendTo)
-				const files = mount.files === undefined ? null : this.#formFiles(where, mount, mount.files)
-				this.#formByteBudget(where, mount, files)
-				const limit = this.#bodyLimit(where, mount.maxBytes, CONTRACT_DEFAULTS.formMaxBytes)
-				// A form that takes files is multipart: `maxBytes` bounds its input part, each collection its file. While no
-				// file is required it also takes the JSON body it took before, so its existing pages keep working.
-				const optional = files !== null && Object.values(files).every((file) => !file.required)
-				const admission: BodyAdmission = files === null
-					? limit
-					: { contentTypes: optional ? ['application/json', FORM_MULTIPART_TYPE] : [FORM_MULTIPART_TYPE], maxBytes: limit.maxBytes }
-				this.#anonymous(name, 'form', 'POST', mount.path, admission, mount.input, this.#crossOrigin(where, mount.crossOrigin, true))
-				return {
-					kind: 'form',
-					path: mount.path,
-					appendTo: mount.appendTo,
-					...this.#formAdmission(name, where, mount),
-					...(mount.then === undefined ? {} : { then: this.#kickedJob(where, mount.then) }),
-					...(files === null ? {} : { files }),
-				}
-			}
 			case 'webhook': {
 				this.#prefix(where, mount.path)
 				this.#objectSchema(`${where} input`, mount.input)
 				const boundTo = this.#scopeBinding(where, 'boundTo', mount.boundTo)
-				// A GitHub webhook bound to a dimension keeps its generated binding endpoints; any other binds through `binds`.
-				const generated = boundTo?.kind === 'dimension' && mount.scheme === 'github-sha256' ? boundTo.dimension : null
-				const members = generated === null ? undefined : this.#contract.dimensions[generated]?.members
-				if (generated !== null && members === undefined) {
-					this.#problem(where, `is bound to '${generated}', which declares no members: { manage, list } to create bindings with`)
-				}
 				this.#actionList(where, mount.actions)
 				const path = joinPath(mount.path, `:${WEBHOOK_BINDING_PARAMETER}`)
 				const limits = this.#limits(where, mount.limits, WEBHOOK_LIMITS)
 				this.#anonymous(name, 'webhook', 'POST', path, { contentTypes: ['application/json'], maxBytes: limits.maxBytes }, mount.input)
 				this.#declare(where, name, mount.declared, { kind: 'webhook', readOnly: false })
-				if (generated !== null && members !== undefined) {
-					this.#webhookBindings(name, generated, members.manage)
-				}
 				const scheme = this.#webhookScheme(where, mount.scheme)
 				return boundTo === null || scheme === null
 					? null
 					: { kind: 'webhook', path: mount.path, scheme, boundTo, actions: [...mount.actions], timeoutMs: limits.timeoutMs }
 			}
 			default:
-				this.#problem(where, 'is not a mount (allowed: c.rpc, c.link, c.spa, c.health, c.form or c.webhook)')
+				this.#problem(where, 'is not a mount (allowed: c.rpc, c.link, c.spa, c.health or app.webhook)')
 				return null
 		}
 	}
 
-	/** The job a form, a mutation, a webhook or a job kicks: a cron job of this contract. */
-	#kickedJob(where: string, then: string, field: 'then' | 'kicks' = 'then'): string {
+	/** The job a mutation, a webhook or a job kicks: a cron job of this contract. */
+	#kickedJob(where: string, name: string): string {
 		const jobs = this.#contract.jobs
-		const job: { readonly kind: string } | undefined = Object.hasOwn(jobs, then) ? jobs[then] : undefined
+		const job: { readonly kind: string } | undefined = Object.hasOwn(jobs, name) ? jobs[name] : undefined
 		if (job === undefined) {
 			const names = Object.keys(jobs)
 			this.#problem(
 				where,
-				`${field} '${then}' is not a job of the contract (jobs: ${names.length === 0 ? 'none' : names.join(', ')})${suggestion(then, names)}`,
+				`kicks '${name}' is not a job of the contract (jobs: ${names.length === 0 ? 'none' : names.join(', ')})${suggestion(name, names)}`,
 			)
 		} else if (job.kind !== 'cron') {
-			this.#problem(where, `${field} '${then}' is not a cron job (allowed: a job c.cron declares)`)
+			this.#problem(where, `kicks '${name}' is not a cron job (allowed: a job c.cron declares)`)
 		}
-		return then
+		return name
 	}
 
-	/** A form's declared rate, honeypot and challenge, each present in the artifact only when declared. */
-	#formAdmission(name: string, where: string, mount: FormMountDeclaration<SchemaShape>): Pick<FormMountArtifact, 'rate' | 'honeypot' | 'challenge'> {
-		const fields = mount.input.type === 'object' ? mount.input.fields : {}
-		const admission: { rate?: FormRate; honeypot?: string; challenge?: FormChallenge } = {}
-		if (mount.rate !== undefined) {
-			admission.rate = this.#formRate(`${where} rate`, mount.rate)
-		}
-		if (mount.honeypot !== undefined) {
-			const field = fields[mount.honeypot]
-			if (field === undefined) {
-				this.#problem(where, `honeypot '${mount.honeypot}' is not a field of its input (allowed: a z.string() field the form's page hides)`)
-			} else if (!isStringField(field)) {
-				this.#problem(where, `honeypot '${mount.honeypot}' is not a string field (allowed: z.string() or z.optional(z.string()))`)
-			}
-			if (mount.honeypot === FORM_CHALLENGE_FIELD) {
-				this.#problem(where, `honeypot '${mount.honeypot}' is the field the challenge token travels in`)
-			}
-			admission.honeypot = mount.honeypot
-		}
-		if (mount.challenge !== undefined) {
-			admission.challenge = this.#formChallenge(name, where, mount.challenge, fields)
-		}
-		return admission
-	}
-
-	/**
-	 * A form's file fields: at most `FORM_FILE_LIMITS.maxFields`, each a lowercase column name that no input field, the
-	 * honeypot, the challenge token or the input part takes, each landing in a declared collection that scans. An
-	 * anonymous visitor's file reaches the people who read the collection, so the form must declare a challenge too.
-	 */
-	#formFiles(where: string, mount: FormMountDeclaration<SchemaShape>, declared: unknown): Readonly<Record<string, FormFileArtifact>> | null {
-		const example = "files: { photo: { collection: '<a c.files collection with scan: true>' } }"
-		if (typeof declared !== 'object' || declared === null || Array.isArray(declared)) {
-			this.#problem(where, `files is not an object of file fields (allowed: ${example})`)
-			return null
-		}
-		const entries = Object.entries(declared)
-		if (entries.length === 0 || entries.length > FORM_FILE_LIMITS.maxFields) {
-			this.#problem(where, `files declares ${entries.length} file fields (allowed: 1 to ${FORM_FILE_LIMITS.maxFields}, one file each)`)
-		}
-		if (mount.challenge === undefined) {
-			this.#problem(where, "takes files, so it declares a challenge: an anonymous upload needs a solved one (challenge: { provider: 'turnstile', … })")
-		}
-		const fields = mount.input.type === 'object' ? mount.input.fields : {}
-		const files: Record<string, FormFileArtifact> = {}
-		for (const [field, option] of entries) {
-			const at = `${where} file '${field}'`
-			if (!FORM_FILE_FIELD.test(field)) {
-				this.#problem(at, 'is not a column name (allowed: lowercase snake_case, as its inbox column is named)')
-			}
-			if (field === FORM_INPUT_PART || field === FORM_CHALLENGE_FIELD || field === mount.honeypot || Object.hasOwn(fields, field)) {
-				this.#problem(at, `is also the name of the input part, the challenge token, the honeypot or an input field; name the file its own field`)
-			}
-			if (typeof option !== 'object' || option === null || Array.isArray(option)) {
-				this.#problem(at, `is not { collection, required? } (allowed: ${example})`)
-				continue
-			}
-			this.#keys(at, option, ['collection', 'required'])
-			const collection: unknown = Reflect.get(option, 'collection')
-			const required: unknown = Reflect.get(option, 'required')
-			if (required !== undefined && typeof required !== 'boolean') {
-				this.#problem(at, `required ${JSON.stringify(required)} is not true or false`)
-			}
-			const collections = this.#contract.files
-			const target: { readonly kind: string; readonly scan?: boolean } | undefined =
-				typeof collection === 'string' && Object.hasOwn(collections, collection) ? collections[collection] : undefined
-			if (typeof collection !== 'string' || target === undefined || target.kind !== 'files') {
-				const names = Object.keys(collections)
-				this.#problem(
-					at,
-					`collection ${JSON.stringify(collection)} is not a file collection of the contract (collections: ${
-						names.length === 0 ? 'none' : names.join(', ')
-					})`,
-				)
-				continue
-			}
-			if (target.scan !== true) {
-				this.#problem(at, `lands in files '${collection}', which does not scan; an anonymous visitor's file waits for a clean verdict (scan: true)`)
-			}
-			files[field] = { collection, required: required === true }
-		}
-		return files
-	}
-
-	/** `bytesPerHour` belongs to a form with files, and fits at least the largest file one of its fields admits. */
-	#formByteBudget(where: string, mount: FormMountDeclaration<SchemaShape>, files: Readonly<Record<string, FormFileArtifact>> | null): void {
-		const declared: unknown = typeof mount.rate === 'object' && mount.rate !== null ? Reflect.get(mount.rate, 'bytesPerHour') : undefined
-		if (declared === undefined) {
-			return
-		}
-		if (files === null) {
-			this.#problem(where, 'declares rate.bytesPerHour and takes no files (allowed: on a form with files)')
-			return
-		}
-		const largest = Math.max(...Object.values(files).map((file) => this.#contract.files[file.collection]?.maxBytes ?? 0))
-		if (typeof declared === 'number' && declared < largest) {
-			this.#problem(where, `rate.bytesPerHour ${declared} is less than the ${largest} bytes one of its files may hold`)
-		}
-	}
-
-	#formRate(where: string, rate: object): FormRate {
-		this.#keys(where, rate, ['perClient', 'perForm', 'bytesPerHour'])
-		const parsed: { perClient?: number; perForm?: number; bytesPerHour?: number } = {}
-		const bytes: unknown = Reflect.get(rate, 'bytesPerHour')
-		if (bytes !== undefined) {
-			if (typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes < 1 || bytes > FORM_FILE_LIMITS.maxBytesPerHour) {
-				this.#problem(where, `bytesPerHour ${String(bytes)} is not a whole number of bytes from 1 to ${FORM_FILE_LIMITS.maxBytesPerHour}`)
-			} else {
-				parsed.bytesPerHour = bytes
-			}
-		}
-		for (const key of ['perClient', 'perForm'] as const) {
-			const value: unknown = Reflect.get(rate, key)
-			if (value === undefined) {
-				continue
-			}
-			if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > FORM_LIMITS.maxPerMinute) {
-				this.#problem(where, `${key} ${String(value)} is not a whole number of submissions per minute from 1 to ${FORM_LIMITS.maxPerMinute}`)
-				continue
-			}
-			parsed[key] = value
-		}
-		return parsed
-	}
-
-	#formChallenge(name: string, where: string, challenge: object, fields: Readonly<Record<string, SchemaShape>>): FormChallenge | undefined {
+	/** A public procedure's challenge; `id` is its endpoint id, whose widget action is `challengeAction(id)`. */
+	#challenge(id: string, where: string, challenge: object, fields: Readonly<Record<string, SchemaShape>>): FormChallenge | undefined {
 		this.#keys(`${where} challenge`, challenge, ['provider', 'secret', 'siteKey'])
 		const provider: unknown = Reflect.get(challenge, 'provider')
 		const secret: unknown = Reflect.get(challenge, 'secret')
@@ -789,14 +540,17 @@ class ArtifactBuilder {
 			)
 			return undefined
 		}
-		if (!CHALLENGE_ACTION.test(name)) {
-			this.#problem(where, `a form with a challenge is named as the widget's action, at most 32 letters, digits, '_' or '-'`)
+		if (!CHALLENGE_ACTION.test(challengeAction(id))) {
+			this.#problem(
+				where,
+				`a procedure with a challenge is named as the widget's action (its endpoint id, '.' as '_'), at most 32 letters, digits, '_' or '-'`,
+			)
 		}
-		const token = fields[FORM_CHALLENGE_FIELD]
+		const token = fields[CHALLENGE_FIELD]
 		if (token === undefined || token.type !== 'string') {
-			this.#problem(where, `declares a challenge, so its input needs the required field ${FORM_CHALLENGE_FIELD}: z.string(), the widget's token`)
+			this.#problem(where, `declares a challenge, so its input needs the required field ${CHALLENGE_FIELD}: z.string(), the widget's token`)
 		}
-		this.#challenges.push({ form: name, provider, secret })
+		this.#challenges.push({ site: id, provider, secret })
 		if (siteKey === undefined || !this.#applicationVariable(where, 'challenge siteKey', siteKey, 'TURNSTILE_SITE_KEY')) {
 			return { provider, secret }
 		}
@@ -837,7 +591,7 @@ class ArtifactBuilder {
 		for (const variable of this.#publicVariables) {
 			const owner = this.#challenges.find((challenge) => challenge.secret === variable.name)
 			if (owner !== undefined) {
-				this.#problem(variable.where, `${variable.field} '${variable.name}' is the secret of form '${owner.form}'; a secret is never public`)
+				this.#problem(variable.where, `${variable.field} '${variable.name}' is the secret of the challenge of '${owner.site}'; a secret is never public`)
 			}
 		}
 	}
@@ -864,26 +618,6 @@ class ArtifactBuilder {
 		const detail = issue === undefined ? '' : ` (hmac${issue.path.map((key) => `.${String(key)}`).join('')}: ${issue.message})`
 		this.#problem(where, `scheme ${JSON.stringify(value)} is not a verifier${detail} (allowed: ${WEBHOOK_SCHEME_ALLOWED})`)
 		return null
-	}
-
-	/** A holder of the dimension's `members.manage` there binds a provider account to one value, and unbinds it. */
-	#webhookBindings(name: string, dimension: string, manage: string): void {
-		const access: AccessForm = { form: 'in', dimension, from: WEBHOOK_SCOPE_FIELD }
-		const binding = (operation: 'bind' | 'unbind', input: SchemaShape, output: SchemaShape): EndpointRow => ({
-			id: `webhooks.${name}.${operation}`,
-			source: { kind: 'mount', name },
-			kind: 'mutation',
-			method: 'POST',
-			path: joinPath(WEBHOOKS_PREFIX, `webhooks.${name}.${operation}`),
-			callers: ['human'],
-			requirement: { kind: 'action', action: manage, access },
-			admission: JSON_ADMISSION,
-			input,
-			output,
-		})
-		this.#row(binding('bind', WEBHOOK_BIND_INPUT, WEBHOOK_BIND_OUTPUT))
-		this.#row(binding('unbind', WEBHOOK_UNBIND_INPUT, WEBHOOK_UNBIND_OUTPUT))
-		this.#reserve(WEBHOOKS_PREFIX)
 	}
 
 	#link(name: string, mount: LinkMountDeclaration<SchemaShape>): MountArtifact {
@@ -1421,7 +1155,7 @@ class ArtifactBuilder {
 			return { origins, rate, challenge: null }
 		}
 		const fields = procedure.input?.type === 'object' ? procedure.input.fields : {}
-		return { origins, rate, challenge: this.#formChallenge(challengeAction(id), where, challenge, fields) ?? null }
+		return { origins, rate, challenge: this.#challenge(id, where, challenge, fields) ?? null }
 	}
 
 	#origins(where: string, value: unknown, kind: 'public' | 'credentialed' | 'link'): AdmissionOrigins {
@@ -1541,7 +1275,7 @@ class ArtifactBuilder {
 
 	#anonymous(
 		name: string,
-		kind: 'health' | 'form' | 'webhook' | 'public-spa',
+		kind: 'health' | 'webhook' | 'public-spa',
 		method: 'GET' | 'POST',
 		path: string,
 		admission: BodyAdmission | null,
@@ -1797,193 +1531,7 @@ class ArtifactBuilder {
 
 	// ── Sections ────────────────────────────────────────────────────────────────────────────────
 
-	#files(dimensions: Record<string, DimensionArtifact>): Record<string, FileCollectionArtifact> {
-		const files: Record<string, FileCollectionArtifact> = {}
-		for (const [name, collection] of Object.entries(this.#contract.files)) {
-			const where = `files '${name}'`
-			if (collection.kind === 'file-kind') {
-				continue
-			}
-			if (!this.#name(where, name) || !this.#kind(where, collection, 'files', 'c.files({ … })')) {
-				continue
-			}
-			const artifact = this.#fileCollection(where, collection)
-			const owner = this.#tables[collection.owner]
-			if (owner?.scope.mode !== 'dimension') {
-				this.#problem(where, `its owner '${collection.owner}' is not a table with a dimension scope in src/db/tables.ts`)
-				continue
-			}
-			const dimension = `file:${name}`
-			dimensions[dimension] = { in: owner.scope.dimension, creator: null, members: null }
-			files[name] = artifact
-			const source: EndpointSource = { kind: 'files', name }
-			const paths = fileCollectionPaths(FILES_PREFIX, name)
-			const [firstType, ...otherTypes] = collection.types
-			if (firstType !== undefined) {
-				this.#row({
-					id: `files.${name}.upload`,
-					source,
-					kind: 'upload',
-					method: 'POST',
-					path: `${paths.upload}/:owner`,
-					callers: ['human'],
-					requirement: { kind: 'action', action: collection.write, access: { form: 'on', dimension: owner.scope.dimension, from: 'owner' } },
-					admission: { contentTypes: [firstType, ...otherTypes], maxBytes: collection.maxBytes },
-					input: null,
-					output: ID_OBJECT,
-				})
-			}
-			this.#row({
-				id: `files.${name}.download`,
-				source,
-				kind: 'download',
-				method: 'GET',
-				path: `${paths.download}/:fileId`,
-				callers: ['human'],
-				requirement: { kind: 'action', action: collection.read, access: { form: 'on', dimension, from: 'fileId' } },
-				admission: null,
-				input: null,
-				output: null,
-			})
-			this.#row({
-				id: `files.${name}.list`,
-				source,
-				kind: 'query',
-				method: 'POST',
-				path: paths.list,
-				callers: ['human'],
-				requirement: { kind: 'action', action: collection.read, access: { form: 'on', dimension: owner.scope.dimension, from: 'owner' } },
-				admission: JSON_ADMISSION,
-				input: FILE_LIST_INPUT,
-				output: FILE_LIST_OUTPUT,
-			})
-			this.#row({
-				id: `files.${name}.remove`,
-				source,
-				kind: 'mutation',
-				method: 'POST',
-				path: paths.remove,
-				callers: ['human'],
-				requirement: { kind: 'action', action: collection.delete, access: { form: 'on', dimension, from: 'id' } },
-				admission: JSON_ADMISSION,
-				input: ID_OBJECT,
-				output: ID_OBJECT,
-			})
-			if (artifact.link !== false) {
-				this.#linkFiles(where, name, collection, owner.scope.dimension, artifact.link)
-			}
-		}
-		return files
-	}
-
-	/**
-	 * The rows a link holder reaches a collection by (upload, list, download): under the API prefix of every link mount
-	 * bound to the owner's dimension (`link: true`) or of each one `link` names, caller `link`, the owner being the
-	 * link's object (no parameter names it). A serving mount grants the collection's write and read actions, so a key of
-	 * it can do what the rows require; a mount `link` does not name serves no row and need not grant them.
-	 */
-	#linkFiles(where: string, name: string, collection: FilesDeclaration, ownerDimension: string, link: true | readonly string[]): void {
-		const bound = Object.entries(this.#contract.mounts).flatMap(([mountName, mount]) =>
-			mount.kind === 'link' && mount.dimension === ownerDimension ? [{ mountName, mount }] : []
-		)
-		const boundForm = `c.link(prefix, { dimension: '${ownerDimension}', … })`
-		if (link === true && bound.length === 0) {
-			this.#problem(where, `sets link: true, and no link mount is bound to '${ownerDimension}' (allowed: ${boundForm})`)
-		}
-		const mounts = link === true ? bound : link.flatMap((mountName) => {
-			const found = bound.find((candidate) => candidate.mountName === mountName)
-			if (found === undefined) {
-				const allowed = bound.length === 0 ? boundForm : bound.map((candidate) => candidate.mountName).join(', ')
-				this.#problem(where, `link names '${mountName}', which is no link mount bound to '${ownerDimension}' (allowed: ${allowed})`)
-			}
-			return found === undefined ? [] : [found]
-		})
-		const [firstType, ...otherTypes] = collection.types
-		for (const { mountName, mount } of mounts) {
-			const missing = [collection.write, collection.read].filter((action, index, all) => all.indexOf(action) === index && !mount.grants.includes(action))
-			if (missing.length > 0) {
-				const subject = link === true ? `sets link: true, and link mount '${mountName}'` : `link names mount '${mountName}', which`
-				this.#problem(
-					where,
-					`${subject} grants no ${missing.map((action) => `'${action}'`).join(' or ')} (allowed: grants: [${
-						[...mount.grants, ...missing].map((action) => `'${action}'`).join(', ')
-					}])`,
-				)
-				continue
-			}
-			const source: EndpointSource = { kind: 'mount', name: mountName }
-			const paths = fileCollectionPaths(joinPath(mount.prefix, LINK_API_SEGMENT), name)
-			const ofTheLink = (action: string): EndpointRequirement => ({
-				kind: 'action',
-				action,
-				access: { form: 'on', dimension: ownerDimension, from: null },
-			})
-			if (firstType !== undefined) {
-				this.#row({
-					id: `${mountName}.files.${name}.upload`,
-					source,
-					kind: 'upload',
-					method: 'POST',
-					path: paths.upload,
-					callers: ['link'],
-					requirement: ofTheLink(collection.write),
-					admission: { contentTypes: [firstType, ...otherTypes], maxBytes: collection.maxBytes },
-					input: null,
-					output: ID_OBJECT,
-				})
-			}
-			this.#row({
-				id: `${mountName}.files.${name}.list`,
-				source,
-				kind: 'query',
-				method: 'POST',
-				path: paths.list,
-				callers: ['link'],
-				requirement: ofTheLink(collection.read),
-				admission: JSON_ADMISSION,
-				input: FILE_LINK_LIST_INPUT,
-				output: FILE_LIST_OUTPUT,
-			})
-			this.#row({
-				id: `${mountName}.files.${name}.download`,
-				source,
-				kind: 'download',
-				method: 'GET',
-				path: `${paths.download}/:fileId`,
-				callers: ['link'],
-				requirement: ofTheLink(collection.read),
-				admission: null,
-				input: null,
-				output: null,
-			})
-		}
-	}
-
-	#fileCollection(where: string, collection: FilesDeclaration): FileCollectionArtifact {
-		this.#options(where, 'files', collection.unknownOptions)
-		this.#knownAction(`${where} read`, collection.read)
-		this.#knownAction(`${where} write`, collection.write)
-		this.#knownAction(`${where} delete`, collection.delete)
-		this.#positiveInteger(`${where} maxBytes`, collection.maxBytes)
-		if (collection.maxPerOwner !== undefined) {
-			this.#positiveInteger(`${where} maxPerOwner`, collection.maxPerOwner)
-		}
-		const link = this.#fileLink(where, collection.link)
-		this.#fileTypes(where, collection)
-		return {
-			owner: collection.owner,
-			read: collection.read,
-			write: collection.write,
-			delete: collection.delete,
-			maxBytes: collection.maxBytes,
-			types: [...collection.types],
-			maxPerOwner: collection.maxPerOwner ?? CONTRACT_DEFAULTS.fileMaxPerOwner,
-			link,
-			...(collection.scan === true ? { scan: true } : {}),
-		}
-	}
-
-	/** The media types and the scan of a file kind or a collection: exact types, and a scan that can vouch for each file. */
+	/** The media types and the scan of a file kind: exact types, and a scan that can vouch for each file. */
 	#fileTypes(where: string, declared: Pick<FileKindDeclaration, 'types' | 'maxBytes' | 'scan'>): void {
 		this.#unique(where, 'types', declared.types)
 		for (const type of declared.types) {
@@ -2015,11 +1563,15 @@ class ArtifactBuilder {
 	#readFileKinds(): Record<string, FileKindArtifact> {
 		const kinds: Record<string, FileKindArtifact> = {}
 		for (const [name, declared] of Object.entries(this.#contract.files)) {
-			if (declared.kind !== 'file-kind') {
+			const where = `files '${name}'`
+			if (!this.#name(where, name) || !this.#kind(where, declared, 'file-kind', 'c.files({ types, maxBytes, scan? })')) {
 				continue
 			}
-			const where = `files '${name}'`
-			if (!this.#name(where, name)) {
+			if (declared.unknownOptions?.includes('owner') === true) {
+				this.#problem(
+					where,
+					"is a file collection (owner, read, write, delete), which no longer exists: declare the kind c.files({ types, maxBytes, scan? }) and a table with a file column of it (files: { <column>: '<kind>' })",
+				)
 				continue
 			}
 			this.#options(where, 'fileKind', declared.unknownOptions)
@@ -2052,14 +1604,6 @@ class ArtifactBuilder {
 		return found
 	}
 
-	/** `link` as the artifact holds it: a boolean, or the link mounts it names, each once. */
-	#fileLink(where: string, link: FilesDeclaration['link']): boolean | readonly string[] {
-		if (link === undefined || typeof link === 'boolean') return link ?? CONTRACT_DEFAULTS.fileLink
-		if (link.length === 0) this.#problem(where, "link names no mount (allowed: link: true, or link: ['<link mount>'])")
-		this.#unique(where, 'link', link)
-		return [...link]
-	}
-
 	#jobs(): Record<string, JobArtifact> {
 		const jobs: Record<string, JobArtifact> = {}
 		for (const [name, job] of Object.entries(this.#contract.jobs)) {
@@ -2067,16 +1611,14 @@ class ArtifactBuilder {
 			if (!this.#name(where, name) || !this.#kind(where, job, 'cron', "c.cron('<schedule>', { … })")) {
 				continue
 			}
-			const scope = this.#job(where, job)
+			this.#job(where, job)
 			this.#declare(where, `${JOB_SITE_PREFIX}${name}`, job.declared, { kind: 'job', readOnly: false, actions: job.actions })
-			if (scope !== null) {
-				jobs[name] = {
-					schedule: job.schedule,
-					actions: [...job.actions],
-					scope,
-					timeoutMs: this.#jobLimits(where, job.limits),
-					retries: job.retries ?? CONTRACT_DEFAULTS.jobRetries,
-				}
+			jobs[name] = {
+				schedule: job.schedule,
+				actions: [...job.actions],
+				scope: { kind: 'app' },
+				timeoutMs: this.#jobLimits(where, job.limits),
+				retries: job.retries ?? CONTRACT_DEFAULTS.jobRetries,
 			}
 		}
 		return jobs
@@ -2098,7 +1640,8 @@ class ArtifactBuilder {
 		return this.#bounded(where, 'limits.timeoutMs', value['timeoutMs'], JOB_LIMITS.timeoutMs, JOB_LIMITS.maxTimeoutMs, 'ms')
 	}
 
-	#job(where: string, job: CronDeclaration): ScopeBinding | null {
+	/** A job acts for the whole application: it holds its actions globally. */
+	#job(where: string, job: CronDeclaration): void {
 		this.#options(where, 'cron', job.unknownOptions)
 		const fields = job.schedule.split(' ')
 		if (fields.length !== 5 || !fields.every((field) => CRON_FIELD.test(field))) {
@@ -2108,7 +1651,6 @@ class ArtifactBuilder {
 		if (job.retries !== undefined && (!Number.isInteger(job.retries) || job.retries < 0)) {
 			this.#problem(where, `retries ${job.retries} is not a whole number of at least 0`)
 		}
-		return this.#scopeBinding(where, 'scope', job.scope)
 	}
 
 	#exports(): Record<string, ExportArtifact> {
@@ -2318,14 +1860,14 @@ class ArtifactBuilder {
 		}
 	}
 
-	/** The declared sources, plus each fixed origin a form's challenge provider loads that the contract does not name itself. */
+	/** The declared sources, plus each fixed origin a challenge provider loads that the contract does not name itself. */
 	#withChallengeOrigins(directive: 'scriptSrc' | 'frameSrc', declared: readonly CspSource[]): CspSource[] {
 		const sources = [...declared]
 		for (const provider of new Set(this.#challenges.map((challenge) => challenge.provider))) {
-			const forms = this.#challenges.filter((challenge) => challenge.provider === provider).map((challenge) => challenge.form).sort()
+			const sites = this.#challenges.filter((challenge) => challenge.provider === provider).map((challenge) => challenge.site).sort()
 			for (const origin of CHALLENGE_ORIGINS[provider][directive]) {
 				if (!sources.some((source) => source.origin === origin)) {
-					sources.push({ origin, purpose: `the ${provider} challenge of ${forms.map((form) => `'${form}'`).join(', ')}` })
+					sources.push({ origin, purpose: `the ${provider} challenge of ${sites.map((site) => `'${site}'`).join(', ')}` })
 				}
 			}
 		}
@@ -2384,7 +1926,6 @@ class ArtifactBuilder {
 				}
 			}
 		}
-		const then = this.#then(where, value['then'], place)
 		const mailer = this.#mailer(where, value['mailer'], place)
 		const kicks = this.#kicks(where, value['kicks'], place)
 		const binds = this.#binds(where, value['binds'], place)
@@ -2399,7 +1940,6 @@ class ArtifactBuilder {
 				: place.kind === 'job'
 				? this.#jobIssues(where, value['issues'], place.actions)
 				: null,
-			...(then === undefined ? {} : { then }),
 			...(mailer === undefined ? {} : { mailer }),
 			...(workload === null || workload.length === 0 ? {} : { actions: workload }),
 			...(kicks.length === 0 ? {} : { kicks }),
@@ -2414,7 +1954,7 @@ class ArtifactBuilder {
 			this.#problem(where, 'declares issues, which only an endpoint of an RPC mount or a cron job declares')
 		}
 		if (
-			reach.sql !== null || Object.keys(reach.unscoped).length > 0 || reach.connect.length > 0 || reach.issues !== null || reach.then !== undefined
+			reach.sql !== null || Object.keys(reach.unscoped).length > 0 || reach.connect.length > 0 || reach.issues !== null
 			|| reach.mailer !== undefined || reach.actions !== undefined || reach.kicks !== undefined || reach.binds !== undefined
 			|| reach.signs !== undefined || reach.egress !== undefined
 		) {
@@ -2464,8 +2004,6 @@ class ArtifactBuilder {
 					where,
 					`declares unscoped '${table}': 'write', and no site writes a reference table: its rows come from a migration (allowed: 'read')`,
 				)
-			} else if (mode === 'write' && scope === 'inbox') {
-				this.#problem(where, `declares unscoped '${table}': 'write', and only its form writes a form's inbox (allowed: 'read')`)
 			}
 			unscoped[table] = mode
 		}
@@ -2641,26 +2179,6 @@ class ArtifactBuilder {
 		return [...new Set(origins)].sort()
 	}
 
-	/** The cron job a mutation kicks once its transaction committed; `undefined` when it declares none or after a problem. */
-	#then(where: string, value: unknown, place: DeclaringSite): string | undefined {
-		if (value === undefined) {
-			return undefined
-		}
-		if (place.kind !== 'rpc' && place.kind !== 'link') {
-			this.#problem(where, 'declares then, which only a mutation of an RPC or link mount declares')
-			return undefined
-		}
-		if (place.readOnly) {
-			this.#problem(where, 'declares then, and it runs read-only (allowed: then on a mutation)')
-			return undefined
-		}
-		if (typeof value !== 'string') {
-			this.#problem(where, "then is not a job's name (allowed: then: '<cron job>')")
-			return undefined
-		}
-		return this.#kickedJob(where, value)
-	}
-
 	/**
 	 * The cron jobs a site may kick (`ctx.kick`): a mutation of an RPC or link mount, a webhook or a job, never a site
 	 * that runs read-only. Each names a cron job of the contract, once; `[]` when it declares none or after a problem.
@@ -2680,7 +2198,7 @@ class ArtifactBuilder {
 		const names: string[] = value.filter((name) => typeof name === 'string')
 		this.#unique(where, 'kicks', names)
 		for (const name of names) {
-			this.#kickedJob(where, name, 'kicks')
+			this.#kickedJob(where, name)
 		}
 		return [...new Set(names)]
 	}
@@ -2740,7 +2258,6 @@ class ArtifactBuilder {
 
 	#checkTables(): Record<string, TablePolicyArtifact> {
 		const owners = new Map<string, string>()
-		const memberActions = new Set(Object.values(this.#contract.roles).flatMap((role) => role.member === undefined ? [] : role.grants))
 		const tables: Record<string, TablePolicyArtifact> = {}
 		for (const [name, table] of Object.entries(this.#tables)) {
 			const where = `table '${name}'`
@@ -2768,52 +2285,18 @@ class ArtifactBuilder {
 				if (this.#tables[scope.parent]?.scope.mode !== 'dimension') {
 					this.#problem(where, `its parent '${scope.parent}' is not a table with a dimension scope`)
 				}
+			} else if (scope.mode === 'inbox') {
+				this.#problem(
+					where,
+					`is a form inbox, and no form fills one any more: make it an application table (scope: { app: '<why>' }) a public procedure inserts into`,
+				)
 			}
 			for (const [column, kind] of Object.entries(table.files ?? {})) {
 				this.#fileKind(`${where} files.${column}`, kind)
 			}
-			if (scope.mode === 'inbox') {
-				const form = this.#contract.mounts[scope.form]
-				if (form?.kind !== 'form' || form.appendTo !== name) {
-					this.#problem(where, `is the inbox of '${scope.form}', which is not a c.form mount that appends to '${name}'`)
-				}
-				for (const action of tableActions(read).filter((held) => memberActions.has(held))) {
-					this.#problem(where, `its read action '${action}' is granted by a membership role (allowed: an action only application-level roles grant)`)
-				}
-			}
 			tables[name] = table
 		}
-		for (const [name, mount] of Object.entries(this.#contract.mounts)) {
-			if (mount.kind === 'form') {
-				const inbox = this.#tables[mount.appendTo]?.scope
-				if (inbox?.mode !== 'inbox' || inbox.form !== name) {
-					this.#problem(`mount '${name}'`, `appends to '${mount.appendTo}', which is not an inbox table of this form (scope: { inbox: '${name}', … })`)
-				} else {
-					this.#inboxFields(name, mount)
-				}
-			}
-		}
 		return tables
-	}
-
-	/** Each input field of a form is a column of its inbox, of the same name; the honeypot and the challenge token are not. */
-	#inboxFields(name: string, mount: FormMountDeclaration<SchemaShape>): void {
-		const columns = Object.hasOwn(this.#inboxes, mount.appendTo) ? this.#inboxes[mount.appendTo] : undefined
-		if (columns === undefined || mount.input.type !== 'object') {
-			return
-		}
-		const fileFields = typeof mount.files === 'object' && mount.files !== null ? Object.keys(mount.files) : []
-		for (const field of [...Object.keys(mount.input.fields), ...fileFields]) {
-			const exempt = field === mount.honeypot || (mount.challenge !== undefined && field === FORM_CHALLENGE_FIELD)
-			if (!exempt && !columns.includes(field)) {
-				this.#problem(
-					`mount '${name}'`,
-					`the ${fileFields.includes(field) ? 'file' : 'input'} field '${field}' is not a column of its inbox ${mount.appendTo}${
-						suggestion(field, columns)
-					} (allowed: a field named like a column: ${columns.join(', ')})`,
-				)
-			}
-		}
 	}
 
 	// ── Shared checks ───────────────────────────────────────────────────────────────────────────
@@ -3132,11 +2615,6 @@ function isRequiredString(shape: SchemaShape): boolean {
 		default:
 			return false
 	}
-}
-
-/** `z.string()` or `z.optional(z.string())`: a field a page can leave empty, such as a honeypot. */
-function isStringField(shape: SchemaShape): boolean {
-	return shape.type === 'string' || (shape.type === 'optional' && shape.inner.type === 'string')
 }
 
 function hasExactKeys(value: object, keys: readonly string[]): boolean {

@@ -11,5 +11,4 @@ export const tables = defineTables(vocabulary, columns)({
 		version: 'version',
 		createdBy: 'created_by',
 	},
-	contact_messages: { scope: { inbox: 'contact', read: 'contacts.read' } },
 })

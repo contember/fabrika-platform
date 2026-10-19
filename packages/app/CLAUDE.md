@@ -29,25 +29,23 @@ bun test src/__tests__/implement.test.ts        # boot's request pipeline, with 
 bun test src/__tests__/scoped-database.test.ts  # a handler tree over @fabrika/db (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/endpoint-access.test.ts  # the endpoint access kit: own target, seeds, link holder, runJob (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/membership-stand-in.test.ts  # the kit's IAM stand-in: delegations, creates, members, links, live roles
-bun test src/__tests__/generated-cases-intake.test.ts  # the generated tests' kits beside form inboxes, a challenge and a scan (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/generated-cases-intake.test.ts  # the generated tests' kits beside public procedures, a challenge and a scanning kind (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/kit-tableless.test.ts    # defineApp(vocabulary): no tables, database: null, no ctx.db
 bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot, a built SPA, the stand-in IAM
 bun test src/__tests__/test-kit-links.test.ts   # a share link the app issued opens as its holder until revoked; devKit (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/client-types.test.ts     # the client, hook and test-kit mistakes, compiled by tsc
 bun test --isolate src/react                    # the React hooks: cache, invalidation, the error union, the caller (DOM)
 bun test src/__tests__/locators.test.ts         # on, in and over through nested containment (needs FABRIKA_TEST_POSTGRES_URL)
-bun test src/__tests__/files.test.ts            # c.files (needs FABRIKA_TEST_POSTGRES_URL; FABRIKA_TEST_S3_* adds a real bucket)
-bun test src/__tests__/file-scan.test.ts        # scan: true and the scan job (needs FABRIKA_TEST_POSTGRES_URL; FABRIKA_TEST_CLAMSCAN_BIN adds a real ClamAV)
+bun test src/__tests__/file-scan.test.ts        # a scanning file kind and the scan job (needs FABRIKA_TEST_POSTGRES_URL; FABRIKA_TEST_CLAMSCAN_BIN adds a real ClamAV)
 bun test src/__tests__/clamscan.test.ts         # the ClamAV scanner: stand-in binaries, and a real clamscan with FABRIKA_TEST_CLAMSCAN_BIN
 bun test src/__tests__/archive.test.ts          # the archive check: LZMA, damaged, encrypted, nested, bombs
-bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share links, forms, webhooks (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share links, a webhook bound by binds (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/members-lookup.test.ts   # ctx.members below its dimension: types, the kit, a generated member field (needs FABRIKA_TEST_POSTGRES_URL)
-bun test src/__tests__/form-admission.test.ts   # a form's shared buckets, honeypot and challenge through boot (needs FABRIKA_TEST_POSTGRES_URL)
-bun test src/__tests__/form-challenge.test.ts   # the client key and the Turnstile verification, no database
-bun test src/__tests__/form-kick.test.ts        # a form's then: kicked runs, coalescing on the lease, the cron recovery (needs FABRIKA_TEST_POSTGRES_URL)
-bun test src/__tests__/form-files.test.ts       # a form's files: the multipart wire, held until the job attaches, scan, sweep, every refusal (needs FABRIKA_TEST_POSTGRES_URL)
-bun test src/__tests__/multipart.test.ts        # the streaming multipart reader a form with files reads its body through, no database
-bun test src/__tests__/mutation-kick.test.ts    # a mutation's then: a run after the commit, nothing on a refusal, stopKicks (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/public-admission.test.ts # a public procedure's shared buckets and challenge through boot (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/challenge.test.ts        # the client key and the Turnstile verification, no database
+bun test src/__tests__/public-kick.test.ts      # a public procedure's kicks: kicked runs, coalescing on the lease, the cron recovery (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/multipart.test.ts        # the streaming multipart reader a procedure with file fields reads its body through, no database
+bun test src/__tests__/mutation-kick.test.ts    # a mutation's ctx.kick: a run after the commit, nothing on a refusal, stopKicks (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-mail.test.ts         # ctx.mail: the kit's stand-in, prefixed keys, the installation's and the own transport, an installation without mail, fail-closed boot (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/error-reports.test.ts    # what a report carries: scrubbing, frames, causes, caps; crash reports of both adapters
@@ -85,7 +83,6 @@ src/
   client/             @fabrika/app/client — browser-safe
     contract.ts       createClient: the typed client of a contract mount; download, the call of an attachment procedure;
                       ResultOf, InputOf
-    files.ts          files.<name> of a client: a session's collections, a link holder's link: true ones
     share.ts          shareKey: the key the share SPA's bootstrap kept
     caller.ts         parsePageCaller: the caller document an SPA mount serves at <prefix>/__fabrika-me.json
     rpc.ts            createRpcClient: the client of the { method, input } wire protocol (exported from the root)
@@ -130,7 +127,6 @@ src/
     define.ts         defineContract, the c.* kit and every type an agent meets
     attachment.ts     attachment(): an output that answers a file of rows (the rows' array schema, marked)
     token.ts          token(Claims, { maxDays }) of defineApp's options, signedToken('<purpose>'), the claims types
-    file-schemas.ts   the zod schemas of a collection's list endpoint, shared by files/ and the client
     declaration.ts    the contract as plain data, generic over its schema type
     schema-shape.ts   a zod 4 schema of the subset → SchemaShape
     compile.ts        compileContract / describeContract
@@ -151,9 +147,9 @@ src/
     capability.ts     Ref, Within, createCapabilityIssuer (a mint and its CapabilityAuthority)
     membership.ts     creates, ctx.members and ctx.links: requests to IAM through IamMembership
     anonymous.ts      the bounded body read, the share bootstrap
-    form-admission.ts a form's client bucket (`X-Fabrika-Client-Ip` only) and what its submission carries beside the row
-    multipart.ts      the `multipart/form-data` reader of a form with files: part by part as the body streams, strict
-    challenge.ts      a form's challenge: Turnstile's siteverify under a deadline, strictly read
+    client-address.ts a public procedure's client bucket (`X-Fabrika-Client-Ip` only)
+    multipart.ts      the `multipart/form-data` reader of a procedure with file fields: part by part as the body streams, strict
+    challenge.ts      a public procedure's challenge: Turnstile's siteverify under a deadline, strictly read
     webhook.ts        a webhook's bindings (ctx.webhooks, a GitHub webhook's generated endpoints) and a delivery's principal
     verifiers.ts      a delivery's signature: the presets and the hmac shape, constant-time
     tokens.ts         signed tokens: FABRIKA_TOKEN_KEYS, ctx.tokens.sign, the verification of each token field
@@ -171,16 +167,15 @@ src/
     attachment.ts     encodeCsv and the response of an attachment output: RFC 4180, formula escape, size bounds
     xlsx.ts           encodeXlsx: one sheet of typed cells in a stored ZIP, the framework's own writer
   files/              c.files: served by boot, never imported by an application
-    collections.ts    the upload, download, list and remove endpoints, the file locator, the sweep, ctx.files
     handle.ts         the types of ctx.files (types only, browser-safe)
-    scan.ts           the scan pass of scan: true collections and the FileScanner contract (FILE_SCAN_JOB)
+    scan.ts           the scan pass of scan: true file kinds and the FileScanner contract (FILE_SCAN_JOB)
     archive.ts        checkArchive: what a ZIP must be for the scanner's OK to cover it
     clamscan.ts       clamscanScanner: ClamAV's clamscan over a batch (Bun; @fabrika/app/bun only)
     sniff.ts          the declared type checked against the first bytes
     treatment.ts      FileDownload and the file treatment of ADR-0022
   jobs/               c.cron at runtime; bound by boot, run by `fabrika job run <name>` (runContractJob)
     types.ts          JobContext, JobHandler, JobHandlersOf: handlers.jobs.<name>
-    runner.ts         bindJobs, the run: lease, attempts, timeout, retries, reports, a form's kick; the framework's own jobs
+    runner.ts         bindJobs, the run: lease, attempts, timeout, retries, reports, a site's kick; the framework's own jobs
     schedule.ts       five-field cron in UTC: the due minutes and the period
     report.ts         the Operations reporter: job runs, request failures and crashes as error events to its ingest
     exception.ts      a thrown value as Sentry exception values: type, message, parsed frames, cause chain, bounded
@@ -250,10 +245,7 @@ src/
   `files`, `jobs`, `exports`, `imports`, `csp` (`SURFACE_SECTIONS`); a mount may
   not take one of those names.
 - **`buildArtifact` is the one normalization.** `compileContract(contract, tables)`
-  = `describeContract` (zod → `SchemaShape`) + `buildArtifact`. Given what `defineTables` returned, it also hands
-  `buildArtifact` each inbox's columns (`inboxColumns`), which the artifact does not carry, and a form's input field
-  outside them (its honeypot and `challengeToken` excepted) is refused; the artifact form of the policies checks
-  nothing there, and `boot` checks it against the data layer either way. The static reader
+  = `describeContract` (zod → `SchemaShape`) + `buildArtifact`. The static reader
   (B1) must produce the same `ContractDeclaration<SchemaShape>` from source and
   call `buildArtifact`, never a copy. Every default and generated path is in
   `defaults.ts`; add new ones there, nowhere else.
@@ -261,7 +253,7 @@ src/
   (`BUILDER_FIELDS`) and records every other key in `unknownOptions`, which
   `buildArtifact` refuses; the types make a field the builder sets (`kind`,
   `path`, `prefix`, `schedule`, …) `never` in its options. A spread would let a
-  shared options const turn a webhook into a form.
+  shared options const turn a webhook into something else.
 - `buildArtifact` returns the canonical artifact (`canonicalizeArtifact` from
   `@fabrika/auth-core`, see its CLAUDE.md) after parsing it with
   `contractArtifactSchema`. A parse failure there is a check missing from
@@ -293,12 +285,12 @@ src/
   (kind `public-spa`, no token) with `access: { public: true }`,
   which takes no other key, and answers `<prefix>/__fabrika-config.json` itself with `{ dsn, release, environment, public }` (the
   browser-safe `FABRIKA_OPERATIONS_DSN`, `FABRIKA_RELEASE` and `FABRIKA_ENVIRONMENT`, `null` when unset; `public`, present only when non-empty, the values of
-  every form challenge's `siteKey` and of the mount's own `public` list, `browserConfigs` in `browser-config.ts`, each one
+  every public procedure's challenge `siteKey` and of the mount's own `public` list, `browserConfigs` in `browser-config.ts`, each one
   required at boot) and nothing else of the environment, and
   `<prefix>/__fabrika-me.json` (`PAGE_CALLER_FILE`) with the caller document (`pageCallerOf` in `principal.ts`) under
   the mount's own access, 401 on a public SPA; no SPA or link mount serves a path ending in `.map` (404: the platform
   build uploads source maps to Operations, and a map holds the source); a link mount serves `GET <prefix>/*` (anonymous) and its procedures at
-  `POST <prefix>/api/<name>`; file collections serve under `/api/files.<name>…`;
+  `POST <prefix>/api/<name>`;
   exports under `/__fabrika/connect/<export>.v<version>.<procedure>`, each export's
   description at `/__fabrika/connect/<export>.v<version>`; a webhook
   appends `/:bindingId`. No authored path may lie under `/__fabrika`.
@@ -315,10 +307,8 @@ src/
   for a dimension with `in`, because IAM's `createScope` makes only top-level values.
 - Membership, scopes and share links are requests to IAM through `@fabrika/auth`'s
   `IamMembership`. The framework writes no grant and mints no credential.
-- A GitHub webhook (`github-sha256`) bound to a dimension generates `POST /api/webhooks.<name>.bind` and `.unbind`
-  (`WEBHOOKS_PREFIX`), for a holder of that dimension's `members.manage`; their shapes
-  (`WEBHOOK_BIND_*` in `build.ts`) and the zod schemas `boot` parses with
-  (`webhook.ts`) must describe each other (`membership-shapes.test.ts`).
+- The framework generates no endpoint of its own for data: a webhook is bound by a procedure that declares
+  `binds: '<webhook>'` (`ctx.webhooks('<name>').bind`), and a file is served by a procedure whose output is a file.
 
 ## The staged kit
 
@@ -351,13 +341,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   `Unavailable` that says so, never a union of every form.
 - **A declaration exists only if the object carries it**: each off-road field is inferred from its optional field and
   then required (`DeclaredFields`), and an `unscoped` key that is no table is refused at its line, and so is
-  a mode that may be `'write'` (a union or an optional one included) of a reference table or a form inbox
+  a mode that may be `'write'` (a union or an optional one included) of a reference table
   (`ReadOnlyUnscoped`), which no site writes.
-- **The kit's `c.form` types its input by its inbox** (`ContractKit.form`): `appendTo` names one inbox table of the
-  kit as a literal, and an input field that is no column of it, other than the honeypot and, with a challenge,
-  `challengeToken`, is an `Unavailable` at `appendTo` that names the inbox's columns. A widened or union `appendTo` or
-  `honeypot` is refused, since it would skip the check or exempt every field. `defineContract`'s `c.form` knows no
-  tables.
 - **`connect` is a literal list and `issues` one literal**: a widened `string[]` or a union declares nothing, so the
   site refuses it with a message that shows the literal form.
 - **The declared off-road fields** (`sql`, `unscoped`, `connect`, `issues`) are the only way to `ctx.sql`,
@@ -385,7 +370,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   only as a type argument, would let the type promise a section the runtime does not build (`colocated-mistakes/05`–`07`). A kit import no endpoint connects is refused by `buildArtifact`, as before.
 - **`buildArtifact` parses `declared`** (the static reader copies it unchecked): `sql` and each `unscoped` mode `read`
   or `write`, `read` only on a query and an export; `unscoped` names tables of `src/db/tables.ts` and never a
-  `fabrika_*` one, and `'write'` never a reference table or a form inbox (their rows come from a migration and a form); `connect` only on an RPC endpoint, naming the kit's imports; `issues` on an RPC endpoint, a link
+  `fabrika_*` one, and `'write'` never a reference table (its rows come from a migration); `connect` only on an RPC endpoint, naming the kit's imports; `issues` on an RPC endpoint, a link
   mount whose `issuedBy` on its dimension is the endpoint's own access, and on a cron job, a link mount whose
   `issuedBy` and every grant are among the job's actions (`schemaFromContract` hands it to IAM as the job's `issues`).
   The artifact's `declared` section holds
@@ -477,8 +462,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   private fields and need a module-private token to construct; never export that
   token.
 - **Every `boot` call makes its own issuer, and only that call holds the mint.** `createCapabilityIssuer`
-  answers a mint and the one authority that accepts what it mints. `boot` binds the data layer, the file
-  collections, the membership requests and `deps` to the authority, and hands the mint to `ContractRuntime`
+  answers a mint and the one authority that accepts what it mints. `boot` binds the data layer, the stored
+  files, the membership requests and `deps` to the authority, and hands the mint to `ContractRuntime`
   and `bindJobs` as a parameter, never through a module export: an application can load any module of the
   package by URL (the package ships `src/`). So a mint application code makes, or a second runtime it boots
   with keys of its own, mints what the served runtime's stores refuse. There is no process-wide authority:
@@ -601,9 +586,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   reported twice; a request's and a job's failures are caught before any listener. Tests inject the event source:
   never let a test install a listener on the real `process`.
 - **`boot` refuses to start rather than answer nothing**: an SPA or a link mount without an asset server, a link mount
-  whose dimension no table owns, a form or webhook without a `scoped(tables)` layer, a
-  form field that is not a column of its inbox (its honeypot and `challengeToken` excepted), a form whose challenge
-  names an application variable that is not set, a job that cannot run (see Jobs), an endpoint that asks IAM with no
+  whose dimension no table owns, a webhook or a procedure with buckets without a `scoped(tables)` layer, a public
+  procedure whose challenge names an application variable (its secret or its site key) that is not set, a job that cannot run (see Jobs), an endpoint that asks IAM with no
   membership transport (`BootOptions.membership`), a handler outside the contract, a
   missing handler, an access form whose containment no table locates. Each refusal
   lifts when its work unit ships the runtime.
@@ -622,12 +606,6 @@ vocabulary (`packages/db/CLAUDE.md`).
   same, so change them together. A `Ref` passed to IAM must be this request's, for the
   endpoint's own dimension and action. A webhook gets neither; a job gets `ctx.links` only as Jobs says. A directory
   does not need the transport to boot: without one only its `list()` and `get()` calls answer 503.
-- **A link holder's file route is a link procedure for its owner** (`#linkFile` in `dispatch.ts`): a `link: true`
-  collection's rows sit under each link mount bound to the owner's dimension, a `link: ['<mount>']` one's under the
-  named mounts only (`buildArtifact`'s `#linkFiles`, which refuses a serving mount that does not grant the
-  collection's write and read), `on` the owner with no parameter. The route
-  checks the mount and the chain with `#linkTarget`, and a download then requires the file's located chain to put it
-  beneath that object (else 404). Never take the owner, or a file of another owner, from the request.
 - **A link procedure re-reads the object's chain on every request** and answers 404 when
   it differs from the chain the key was issued for, so a link stops working once its
   object moves. It admits only a key of its own mount.
@@ -640,50 +618,27 @@ vocabulary (`packages/db/CLAUDE.md`).
   every module and every telemetry script; it removes the fragment and keeps the key in a
   closure (`shareKey()`). Never serve the key anywhere else, and never read
   `location.hash` in application code.
-- **The anonymous kinds read no token.** A form appends its declared fields to its inbox
-  and answers a constant; it runs no handler and reads nothing. Its body limit is enforced
-  while reading (`readBoundedBody`, 413), because the proxy never sees a body.
-- **A form's admission is two buckets in the application's database, in a fixed order** (`#form`): the
-  client's request bucket (`rate.perClient`), before the body is read; the input; the honeypot (a filled one
-  answers the constant and writes nothing); the challenge; then the form's bucket of accepted submissions
-  (`rate.perForm`), taken in the insert's own transaction (`appendToInbox`'s quota), so a row the database refuses
-  gives its place back. Nothing refused or failed takes from it, so a flood of failed challenges or broken rows
-  cannot empty it; never move it before the challenge or out of that transaction. Each bucket is one statement of
-  `@fabrika/db`'s `FormAdmissions` (`FORM_LIMITS` holds the defaults), never a counter in the process. The client is
-  `clientBucket`: `X-Fabrika-Client-Ip` only, an IPv6 address by its /64, kept as a digest; never read another
-  forwarding header. Admission is not authorization.
-- **A form's `then` kicks its job only after the row committed, and the answer never depends on it** (`#form`): the
-  kick (`BoundJobs.kick`) goes to the request's `waitUntil` or runs detached, never rejects, and starts nothing for a
-  refused, honeypotted or challenge-failed submission. The kicked run is the job's own (its key, its lease, its
-  retries), never the request's. Never await the kick, and never give it a payload: the job reads its inbox.
-- **A form with files reads its multipart body as it streams, its input first** (`#multipartForm`, ADR-0061): the
-  client bucket, then the `input` part (JSON within `maxBytes`), the honeypot and the challenge, all before a byte of a
-  file is read; then each file part, sniffed and written by `FileCollections.receiveFormFile` under a `pending` row of
-  `fabrika_form_files`; then the inbox row and every file's `held` state in the accepted bucket's transaction. A
-  submission that does not commit deletes what it wrote (`releaseFormFiles`). Never buffer a part but the input, never
-  read a file before the challenge, and never let a form with files boot without a challenge or with a collection
-  that does not scan. The proxy refuses such a form's request from an origin its row does not admit; the framework
-  cannot repeat it.
-- **A form's file reaches an owner only through `attach`** (`files/collections.ts`), only in a job's transaction
-  (`FileSite.attaches`), with a `Ref` of the owner for the collection's `write` action (`tx.ref`, which locates in that
-  transaction): it claims the held row on the statement's clock and inserts the file under the owner, counted under the
-  owner's lock, `quarantined` in a scanning collection. Never serve, list or open a held file, never move one that
-  another owner already holds, and never let the sweep delete a held file before an hour past its hold.
-- **A form's files write within its hourly byte budget** (`fabrika_form_bytes`, `FormAdmissions.reserveBytes`): each
-  file reserves its collection's `maxBytes` before `receiveFormFile` stages it and gives back what it did not use. A
-  submission refused before its inbox append deletes what it wrote; one whose append threw leaves its files to the
-  sweep, because the row may have committed. A body whose stream fails (a closed connection) is 400 `aborted`, never a
-  5xx: an interrupted upload is the sender's. A form whose files are all optional also takes its JSON body.
-- **A form's challenge is verified before its row and recorded after it passed** (`challenge.ts`). The provider
-  list is closed (`turnstile`) and its origins are fixed (`CHALLENGE_ORIGINS`, which `buildArtifact` adds to
-  `scriptSrc`/`frameSrc`). Turnstile's siteverify gets one deadline for the call and the body (`CHALLENGE_LIMITS`),
-  a byte budget and no redirect; it passes only `success` for the request's host, the form's name as `action`
-  and a fresh `challenge_ts`. A token the visitor got wrong is 400 (`challenge_failed`); an unreachable provider or
-  one that refuses the secret is a 503 `ServerFault`. A passed token's digest is recorded under the form
-  (`recordChallenge`): a second use is a replay, whatever the provider answers. Only `devKit` exempts one token
-  (`repeatableChallengeToken`, Turnstile's test-widget token, which never changes); never set it outside `app dev`. The secret is the application
-  variable the contract names (`challenge.secret`), read by `boot`, which refuses to start without it; never put
-  the value in the contract or a log.
+- **The anonymous kinds read no token.** A public procedure runs its handler as the endpoint's own workload; a webhook
+  as the webhook's. Their body limit is enforced while reading (413), because the proxy never sees a body.
+- **A procedure's buckets are charged before its body is read and stay charged whatever follows** (`#admit`,
+  `bucketsOf` in `public.ts`): each take is one statement of `@fabrika/db`'s `Admissions`, keyed by the endpoint id
+  (`PUBLIC_MUTATION_RATE` holds a public mutation's defaults), never a counter in the process; `bytesPerHour` reserves
+  the body's declared length. The client is `clientBucket`: `X-Fabrika-Client-Ip` only, an IPv6 address by its /64,
+  kept as a digest; never read another forwarding header. Admission is not authorization.
+- **`ctx.kick` sends its jobs only after the commit, and the answer never depends on it** (`#kickAll`): each declared
+  job once, to the request's `waitUntil` or detached, never rejecting, and nothing for a refused, rolled-back or
+  cancelled request. The kicked run is the job's own (its key, its lease, its retries), never the request's. Never
+  await the kick, and never give it a payload: the job reads its rows.
+- **A public procedure's challenge is verified after its buckets and its body, before its handler, and recorded once it
+  passed** (`challenge.ts`). The provider list is closed (`turnstile`) and its origins are fixed (`CHALLENGE_ORIGINS`,
+  which `buildArtifact` adds to `scriptSrc`/`frameSrc`). Turnstile's siteverify gets one deadline for the call and the
+  body (`CHALLENGE_LIMITS`), a byte budget and no redirect; it passes only `success` for the request's host, the
+  endpoint's widget action (`challengeAction`) and a fresh `challenge_ts`. A token the visitor got wrong is 403
+  (`challenge_failed`); an unreachable provider or one that refuses the secret is a 503 `ServerFault`. A passed token's
+  digest is recorded under the endpoint (`recordChallenge`): a second use is a replay, whatever the provider answers.
+  Only `devKit` exempts one token (`repeatableChallengeToken`, Turnstile's test-widget token, which never changes);
+  never set it outside `app dev`. The secret is the application variable the contract names (`challenge.secret`), read
+  by `boot`, which refuses to start without it; never put the value in the contract or a log.
 - **A webhook's verifier is framework code** (`verifiers.ts`): a preset (`github-sha256`, `standard-webhooks`, `stripe`)
   or an `{ hmac }` shape, over the raw body, a signed timestamp within `WEBHOOK_TIMESTAMP_TOLERANCE_MS`. `buildArtifact`
   refuses `{ basic }` and `{ bearer }`: the proxy removes `Authorization` from an anonymous endpoint's request (ADR-0022
@@ -816,42 +771,32 @@ vocabulary (`packages/db/CLAUDE.md`).
   proxy applies the same definition. Never restate a header value here. A public GET query's `http.cache` turns its
   200's `Cache-Control` into its lifetime (`applyAnswerCache`), in-process and in the proxy; the row carries it.
 
-## File collections
+## Stored files
 
-- **The generated file endpoints are framework code** (`src/files/`), dispatched like every
-  row: the dispatcher checks the caller, the requirement, admission and the access form, and
-  only then hands the minted `Ref` to the files runtime. The access value of an upload or a
-  download is the path parameter its `from` names; `remove` is a procedure.
-- **Every database operation of a file request takes that `Ref`.** `@fabrika/db`'s file
-  tables scope it by the `Ref`'s whole chain, so a move after the access check makes it match
-  nothing. Never look a file up by its id alone after the check; `locate` is the only id-keyed
-  read, and it is the access check's.
-- **The pending row is written before the object and is the cleanup intent.** Any failure
-  after it deletes the object and the row, or leaves the row for the sweep, which deletes
-  pending rows only after `PENDING_GRACE_MS` (longer than `UPLOAD_TIMEOUT_MS`), so it never
-  touches an upload in progress. Never write an object without a row first.
-- **Every answer of a download endpoint carries the file treatment**, denials and errors
-  included: `ContractRuntime.fetch` chooses it by the planned endpoint's kind, and a file is a
-  `FileDownload`, never a `Response`, so no handler or store can set its headers. Keep the
-  treatment equal to ADR-0022's.
-- **The type is the sniffed one.** An upload is stored only when its first `SNIFF_BYTES`
-  are the declared type, and the recorded type is what a download sends; `boot` refuses a
-  collection that admits a type `sniff.ts` cannot verify. The size bound is the object
-  store's (`FileObjectStore.write`), enforced while the body streams.
-- **`ctx.files(<name>)` takes the owner's `Ref` for one of the collection's actions** (`FileCollections.site`):
-  `list` and `open` for `read`, `removeAll` for `delete`, each checked before any statement
-  (`wrong_capability`). `open` locates the file, requires it beneath the owner where the `Ref` says, mints a
-  `file:<name>` `Ref` for the same principal and action and reads through `find` and the download's version check;
-  never read a file by its id alone. Its statements run in the site's session (`FileSite.session`), so `removeAll`
-  commits or rolls back with the invocation; it runs only where `FileSite.readOnly` is `null`. An export gets no
-  `ctx.files`. The name is checked at the call (`file_collection_unknown`), because groups type before the contract.
-- **The sweep job is a framework job** (`FILE_SWEEP_JOB`, hourly, `FileCollections.sweep(signal)`): it sweeps every
-  collection batch by batch until nothing removable is left, and fails the run (`file_sweep_failed`) after the others
-  when one failed. A remove and an upload sweep their own collection once, and the scan job sweeps the scanning ones.
-  `@fabrika/provider-zerops` mirrors its name and schedule (`ZEROPS_FILE_SWEEP_JOB`); change both together. `serveContract` opens the object storage from
-  `FABRIKA_APP_STORAGE_*` (all or none). Never return a storage URL or presign one.
-- **Only a completed clean verdict promotes a file** (`scan.ts`). An upload to a `scan: true` collection ends
-  `quarantined`; the download answers 409 until the scan job writes `live`, and 404 once `rejected`. The pass reads each
+- **A file is a value in a table column** (`files/kinds.ts`, `@fabrika/db`'s `stored-files.ts`): `c.files({ types,
+  maxBytes, scan? })` declares a kind, a table's `files: { <column>: '<kind>' }` a column of it, and the table's actions
+  are the file's authority. The framework generates no file endpoint; a procedure takes a file (`file('<kind>')` in its
+  input) or answers one (`file('<kind>')` as its output), and the dispatcher checks it like every row first.
+- **The pending row is written before the object and is the cleanup intent**, on a connection of its own, never the
+  handler's transaction. A known rollback deletes what the request staged (`StoredFileKinds.release`); after an
+  uncertain outcome nothing is deleted and the sweep decides from the database, past `FILE_PENDING_GRACE_MS`. Never
+  write an object without a row first.
+- **Every answer of a file output carries the file treatment**, denials and errors included: `ContractRuntime.fetch`
+  chooses it by the planned endpoint's row, and a file is a `FileDownload`, never a `Response`, so no handler or store
+  can set its headers. Keep the treatment equal to ADR-0022's.
+- **The type is the sniffed one.** A file is stored only when its first `SNIFF_BYTES` are the declared type, and the
+  recorded type is what a download sends. The size bound is the object store's (`FileObjectStore.write`), enforced
+  while the body streams.
+- **`ctx.files` is `put` and `open` only** (`storedFilesHandle`): `open` reads a live file whose reference this request
+  holds and may read (an input file, a put, or a file column read under its table's read action), and refuses any
+  other (`wrong_capability`). A query creates no file. Never read a file by its id alone.
+- **The sweep job is a framework job** (`FILE_SWEEP_JOB`, hourly, `StoredFileKinds.sweep(signal)`): it deletes the
+  files no declared column references once past the grace, row and deletion record first, object after, in bounded
+  batches. `@fabrika/provider-zerops` mirrors its name and schedule (`ZEROPS_FILE_SWEEP_JOB`); change both together.
+  `serveContract` opens the object storage from `FABRIKA_APP_STORAGE_*` (all or none). Never return a storage URL or
+  presign one.
+- **Only a completed clean verdict promotes a file** (`scan.ts`). A file of a `scan: true` kind is
+  `quarantined`; a byte consumer answers 409 `file_not_ready` until the scan job writes `live`, and 409 `file_rejected` once `rejected`. The pass reads each
   object whole, checks its size and SHA-256 against the upload's and checks it as an archive (`archive.ts`) before the
   scanner sees it, and promotes only a file the scanner called clean whose bytes verified; an empty upload is refused
   (400 `empty`), so no file skips the scanner. Never add a
@@ -866,15 +811,14 @@ vocabulary (`packages/db/CLAUDE.md`).
   record in the tail or a comment that does not end the file is `ambiguous_directory`. The rare false rejection of a
   binary file is accepted; never replace the rule with an emulation of ClamAV's parser. Keep it a framework check:
   never rely on a scanner flag for it.
-- **A download of a scanning collection serves only the scanned version** (`FileObjectStore.readVersion`, one
+- **A download of a scanning kind serves only the scanned version** (`FileObjectStore.readVersion`, one
   conditional read): a mismatch, or a live row without a version, answers 409 and quarantines the file again. Never
   read the object by key alone for such a file.
 - **A file without a verdict is retried, alone, with backoff** (`deferScan`, `SCAN_LIMITS.maxAttempts`): the batch
-  takes the due files that waited longest first (`dueSince`, across every scanning collection) and scans a file that
-  failed before on its own, so neither old failures nor a busy collection starve anything. Installation failures (no scanner, missing or stale signatures) count no try.
-- **A verdict is written only under the scan job's lease.** `FileCollectionTable.promote`, `reject` and `deferScan`
-  refuse to run without a fence and are one conditional update each (still quarantined, not removed, not orphaned,
-  same digest), so a pass that lost its lease or timed out, or a file removed meanwhile, changes nothing. The scan job is
+  takes the due files that waited longest first (`dueSince`, across every scanning kind) and scans a file that
+  failed before on its own, so neither old failures nor a busy kind starve anything. Installation failures (no scanner, missing or stale signatures) count no try.
+- **A verdict is written only under the scan job's lease.** `StoredFiles.promote`, `reject` and `deferScan`
+  refuse to run without a fence and are one conditional update each (still quarantined, same digest), so a pass that lost its lease or timed out, or a file removed meanwhile, changes nothing. The scan job is
   a framework job of `bindJobs` (`FrameworkJob`): a reserved name with `-`, which no `c.cron` name can take, no handler
   and no key; the runner refuses its writes before it signals the run to stop.
 - **The scanner comes from the runtime adapter.** `runContractJob` passes `clamscanScanner()` (ClamAV on `PATH`), which
@@ -889,10 +833,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   declared procedures exist, and each path comes from `joinPath` and
   `LINK_API_SEGMENT` in `contract/defaults.ts`, the code that gives the artifact its
   paths. Never compute a procedure path anywhere else.
-- **A file collection's client takes its paths from `fileCollectionPaths`** (`client/files.ts`), as `buildArtifact`
-  does: a session client of a mount that admits people gets every collection, a link mount's client the `link: true`
-  ones, with no owner parameter. Its list answer is parsed with `contract/file-schemas.ts`, the endpoint's own
-  schema; the client never imports `files/`, which the examples' SPA bundle test refuses.
+- **A file procedure's client answers a file handle** (`download(api.x, input)`, `api.x.url(input)` for a GET one);
+  the client never imports `files/`, which the examples' SPA bundle test refuses.
 - **An answer is parsed with the procedure's output schema** before the caller sees
   it. The tree's type is tied to the value by one structural check (`coversTree`),
   not a cast.
@@ -1006,7 +948,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   attempt locks) and tries once more. Every run clears the flag when it starts (it covers every kick before it) and,
   after it succeeded, takes it and runs once more, cron runs included; a failed run leaves it for the schedule. A run
   that took the flag but finds a newer run holding the lease sets it again (`handOver`): that run may have read before
-  the kick's row. There is no process-local kick state; every kick asks the lease. Never let a kick wait on the lease, and never drop the cron of a job a form kicks: it is the recovery path. `serveContract` drains
+  the kick's row. There is no process-local kick state; every kick asks the lease. Never let a kick wait on the lease, and never drop the cron of a kicked job: it is the recovery path. `serveContract` drains
   kicked runs on SIGTERM before it closes the database, and `kit.runJob` waits for them before it runs.
 - **A job acts only with what IAM signs for its key** (`implement/workload.ts`, ADR-0022 "Principal kinds"). Control
   writes `FABRIKA_JOB_<NAME>_KEY`; each attempt exchanges it through the adapter's `WorkloadTokenSource` (on Bun

@@ -36,7 +36,7 @@ export const CAPABILITY_REFUSALS = {
 	undeclared_egress: 'the site called an origin it does not declare in egress',
 	wrong_binding: 'a webhook binding was handed a capability of another kind or dimension than the webhook is bound to',
 	missing_id: 'the job named an object without an id',
-	wrong_capability: 'a file collection was handed a capability of another dimension or action than the operation needs',
+	wrong_capability: 'an operation was handed a capability of another dimension or action than it needs',
 } as const
 
 export type CapabilityRefusal = keyof typeof CAPABILITY_REFUSALS

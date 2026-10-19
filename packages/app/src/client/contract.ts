@@ -11,7 +11,6 @@ import { FILE_INPUT_PART } from '../contract/defaults'
 import { joinPath, LINK_API_SEGMENT } from '../contract/defaults'
 import type { AnyContract, InputSchema, Procedure, Schema, Surface } from '../contract/define'
 import { type ClientInput, type FileBrand, fileOf } from '../contract/file'
-import { type FileClient, type FileTransport, type LinkCollections, type LinkFileClient, linkFiles, sessionFiles } from './files'
 import { type BounceConfig, type BounceOption, exchange, exchangeFile, resolveBounce, RpcError, type RpcFetch } from './transport'
 
 type SurfaceOf<C> = C extends { readonly surface: infer S } ? S : never
@@ -35,27 +34,10 @@ export type ClientTree<T> = {
 		: ClientTree<T[K]>
 }
 
-/** The file collections of the contract: a file kind (`kind: 'file-kind'`) has no endpoint, so no client either. */
-type FilesOf<C> = SurfaceOf<C> extends { readonly files: infer F }
-	? { readonly [N in keyof F as F[N] extends { readonly kind: 'files' } ? N : never]: F[N] }
-	: Record<never, never>
-
-/** `files.<name>` of every collection, for the signed-in callers of an RPC mount that admits people. */
-type SessionFiles<C, Callers> = Callers extends readonly (infer Caller)[] ? 'human' extends Caller ? [keyof FilesOf<C>] extends [never] ? unknown
-		: { readonly files: { readonly [N in keyof FilesOf<C>]: FileClient } }
-	: unknown
-	: unknown
-
-/** `files.<name>` of every `link: true` collection, for a link mount's holders. */
-type HolderFiles<C, M> = [LinkCollections<FilesOf<C>, M>] extends [never] ? unknown
-	: { readonly files: { readonly [N in LinkCollections<FilesOf<C>, M>]: LinkFileClient } }
-
 type MountOf<C, M> = SurfaceOf<C>[M & keyof SurfaceOf<C>]
 
-/** One function per procedure, an `AttachmentProcedure` per attachment, and `files` where the mount's callers reach collections. */
-export type ContractClient<C, M> = MountOf<C, M> extends { readonly kind: 'link'; readonly procedures: infer T } ? ClientTree<T> & HolderFiles<C, M>
-	: MountOf<C, M> extends { readonly callers: infer Callers; readonly procedures: infer T } ? ClientTree<T> & SessionFiles<C, Callers>
-	: never
+/** One function per procedure, and an `AttachmentProcedure` or `FileProcedure` per procedure that answers a file. */
+export type ContractClient<C, M> = MountOf<C, M> extends { readonly procedures: infer T } ? ClientTree<T> : never
 
 /** The answer of a client procedure: `ResultOf<typeof api.tasks.get>`; a procedure that answers a file, a `DownloadedFile`. */
 export type ResultOf<F> = F extends (...args: never[]) => Promise<infer R> ? R
@@ -409,18 +391,6 @@ function coversTree(value: unknown, tree: ProcedureTreeDeclaration<Schema, unkno
 	})
 }
 
-/** A client of every collection in `names` under `files`, or no `files` at all. */
-function coversFiles(value: unknown, names: readonly string[]): boolean {
-	if (typeof value !== 'object' || value === null) {
-		return false
-	}
-	const files: unknown = Reflect.get(value, 'files')
-	if (names.length === 0) {
-		return true
-	}
-	return typeof files === 'object' && files !== null && names.every((name) => typeof Reflect.get(files, name) === 'object')
-}
-
 /** The page's origin when the client runs in a browser, else `null`. */
 function pageOrigin(): string | null {
 	const location: unknown = Reflect.get(globalThis, 'location')
@@ -461,28 +431,10 @@ export function createClient<const C extends AnyContract, const M extends Client
 		}
 		return fileOf(target.output) === null ? caller(target, at, options, bounce) : fileProcedure(target, at, options, bounce)
 	})
-	const transport: FileTransport = { origin, fetch: options.fetch ?? fetch, key: options.key, bounce }
-	const collections = Object.entries(surface.files ?? {}).flatMap(([name, collection]): (readonly [string, FileClient | LinkFileClient])[] => {
-		if (collection.kind !== 'files') {
-			return []
-		}
-		if (node.kind === 'link') {
-			const serves = collection.link === true || (Array.isArray(collection.link) && collection.link.includes(mount))
-			return serves ? [[name, linkFiles(transport, node.prefix, mount, name)]] : []
-		}
-		return node.callers.includes('human') ? [[name, sessionFiles(transport, name)]] : []
-	})
-	if (collections.length > 0 && Object.hasOwn(node.procedures, 'files')) {
-		throw new Error(`'${mount}' has a procedure group named files, which the client of its file collections takes`)
-	}
-	const client = collections.length === 0 ? procedures : Object.freeze({ ...procedures, files: Object.freeze(Object.fromEntries(collections)) })
-	// The client with its file collections is the mount's root too: `@fabrika/app/react` keys a provider by it.
-	if (client !== procedures) clientNodes.set(client, { mount, path: '', procedure: null })
 	// The tree was built from this mount's declaration; the check ties the value to the type the contract derives.
-	const names = collections.map(([name]) => name)
-	const covers = (value: unknown): value is ContractClient<C, M> => coversTree(value, node.procedures) && coversFiles(value, names)
-	if (!covers(client)) {
+	const covers = (value: unknown): value is ContractClient<C, M> => coversTree(value, node.procedures)
+	if (!covers(procedures)) {
 		throw new Error(`the client of '${mount}' does not cover its procedures`)
 	}
-	return client
+	return procedures
 }

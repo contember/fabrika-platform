@@ -203,7 +203,6 @@ declare const tables_: {
 	}
 	secrets: { scope: { dimension: 'secret'; key: 'id' }; actions: { read: 'secrets.admin' } }
 	countries: { scope: { reference: 'lookup' }; actions: { read: 'notes.read' } }
-	contact_messages: { scope: { inbox: 'contact'; read: 'contact.read' } }
 }
 
 interface Versioned {

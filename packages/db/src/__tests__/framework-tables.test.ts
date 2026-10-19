@@ -1,14 +1,11 @@
-// The framework's own writes against a REAL Postgres: a form's inbox append and the webhook tables of
-// `@fabrika/db/migrations`. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset (see postgres.test.ts).
+// The framework's own writes against a REAL Postgres: the webhook tables of `@fabrika/db/migrations`. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset (see postgres.test.ts).
 
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { Database } from '../database'
-import { QueryRefusedError } from '../errors'
 import { dataAccessOf, type DeliveryClaim, frameworkTablesOf } from '../framework'
 import { FRAMEWORK_MIGRATIONS } from '../migrations'
 import { TestAuthority } from './fixtures/authority'
-import { RecordingDialect } from './fixtures/recording-dialect'
 import { migration } from './fixtures/schema'
 import { connected } from './fixtures/stores'
 import { tables } from './fixtures/tables'
@@ -58,60 +55,14 @@ afterAll(async () => {
 })
 
 const W1 = { type: 'workspace', value: 'w1' }
-/** A bucket no test fills: these appends are about the row, not the form's admission. */
-const QUOTA = { bucket: 'accepted', limit: 1000 }
 
-describe('the inbox check, before anything is bound', () => {
-	test('names a form without an inbox and a field that is not a column', () => {
-		const unbound = frameworkTablesOf(
-			connected(tables, { database: Database.fromDialect(new RecordingDialect()), capabilities: new TestAuthority('x') }).database,
-		)
-		expect(unbound.inboxProblems('contact', ['id', 'email', 'body'])).toEqual([])
-		expect(unbound.inboxProblems('contact', ['email', 'phone'])).toEqual([
-			"the input field 'phone' of 'contact' is not a column of its inbox contact_messages",
-		])
-		expect(unbound.inboxProblems('feedback', [])).toEqual([
-			"no table in src/db/tables.ts is the inbox of 'feedback' (scope: { inbox: 'feedback', read })",
-		])
-	})
-
+describe('the framework tables, before anything is bound', () => {
 	test('refuses a value that is not one of scoped(tables)', () => {
 		expect(() => frameworkTablesOf({ tables: {} })).toThrow('not a data layer scoped(tables) created')
 	})
 })
 
 describe.skipIf(!hasPostgres)('the framework tables on Postgres', () => {
-	test('an inbox append writes one row of the declared columns and answers nothing', async () => {
-		expect(await framework.appendToInbox('contact', { id: 'm1', email: 'a@example.com', body: 'hello' }, QUOTA)).toBe(true)
-		const rows = await admin((sql) => sql.unsafe(`select id, email, body from ${schema}.contact_messages`))
-		expect([...rows]).toEqual([{ id: 'm1', email: 'a@example.com', body: 'hello' }])
-	})
-
-	test("a row that fails to insert gives its place in the form's bucket back, and a full bucket appends nothing", async () => {
-		const quota = { bucket: `accepted-${Bun.randomUUIDv7()}`, limit: 2 }
-		const taken = async () => {
-			const [row] = await admin((sql) => sql.unsafe(`select count from ${schema}.fabrika_form_admissions where bucket = $1`, [quota.bucket]))
-			return row?.count ?? 0
-		}
-		const id = `q-${Bun.randomUUIDv7()}`
-		expect(await framework.appendToInbox('contact', { id, email: 'a@example.com', body: 'first' }, quota)).toBe(true)
-		// The same key again: the insert fails, and its take is rolled back with it.
-		await expect(framework.appendToInbox('contact', { id, email: 'a@example.com', body: 'again' }, quota)).rejects.toThrow()
-		expect(await taken()).toBe(1)
-		expect(await framework.appendToInbox('contact', { id: `${id}-2`, email: 'a@example.com', body: 'second' }, quota)).toBe(true)
-		expect(await framework.appendToInbox('contact', { id: `${id}-3`, email: 'a@example.com', body: 'third' }, quota)).toBe(false)
-		const [row] = await admin((sql) => sql.unsafe(`select count(*)::int as n from ${schema}.contact_messages where id like $1`, [`${id}%`]))
-		expect(row?.n).toBe(2)
-	})
-
-	test('an inbox append refuses an undeclared column and a value the layer cannot bind', async () => {
-		await expect(framework.appendToInbox('contact', { id: 'm2', email: 'a@example.com', body: 'x', admin: true }, QUOTA)).rejects.toBeInstanceOf(
-			QueryRefusedError,
-		)
-		await expect(framework.appendToInbox('contact', { id: 'm3', email: ['a', 'b'], body: 'x' }, QUOTA)).rejects.toBeInstanceOf(QueryRefusedError)
-		await expect(framework.appendToInbox('feedback', { id: 'm4' }, QUOTA)).rejects.toBeInstanceOf(QueryRefusedError)
-	})
-
 	test('a binding is found only under its own webhook, and removed only from its own scope', async () => {
 		const binding = { id: 'b1', webhook: 'github', scope: W1, account: 'installation:42', secret: 's3cret' }
 		await framework.webhooks.createBinding({ ...binding, createdBy: 'user-1', createdAt: 1 })

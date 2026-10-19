@@ -3,7 +3,7 @@
 
 import { defineContract } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
-import { ById, Deleted, Draft, Event, Feedback, NewProject, NewTask, Patch, Push, Summary, Task } from './src/schemas/tasks'
+import { ById, Deleted, Draft, Event, NewProject, NewTask, Patch, Push, Summary, Task } from './src/schemas/tasks'
 import roles, { actions, READ } from './src/vocabulary'
 
 const API = '/api'
@@ -50,7 +50,6 @@ export const contract = defineContract({
 	}),
 	console: c.spa('/console', { dir: 'dist/console', access: { action: 'tasks.read', over: 'project' } }),
 	health: c.health('/healthz'),
-	feedback: c.form('/feedback', { input: Feedback, appendTo: 'feedback', maxBytes: 8192, crossOrigin: '*' }),
 	github: c.webhook('/hooks/github', {
 		scheme: 'github-sha256',
 		boundTo: 'project',
@@ -60,20 +59,11 @@ export const contract = defineContract({
 	}) satisfies object,
 	app: c.spa('/', { dir: 'dist/app', access: { member: true } }),
 	files: {
-		attachments: c.files({
-			owner: 'tasks',
-			read: 'tasks.read',
-			write: 'tasks.write',
-			delete: 'tasks.delete',
-			maxBytes: 10485760,
-			types: ['image/png', 'application/pdf'],
-			maxPerOwner: 20,
-			link: ['shared'],
-		}),
+		attachments: c.files({ types: ['image/png', 'application/pdf'], maxBytes: 10485760, scan: true }),
 	},
 	jobs: {
-		cleanup: c.cron(nightly, { actions: ['tasks.delete'], scope: 'app', limits: { timeoutMs: 900000 }, retries: 1 }),
-		digest: c.cron('0 7 * * 1', { actions: ['tasks.read'], scope: 'project' }),
+		cleanup: c.cron(nightly, { actions: ['tasks.delete'], limits: { timeoutMs: 900000 }, retries: 1 }),
+		digest: c.cron('0 7 * * 1', { actions: ['tasks.read'] }),
 	},
 	exports: {
 		tasks: c.export({

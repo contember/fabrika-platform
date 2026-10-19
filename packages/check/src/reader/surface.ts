@@ -16,7 +16,6 @@ import {
 	type DimensionDef,
 	type Export,
 	type ExportAccessDeclaration,
-	type FileCollection,
 	type FileKind,
 	type ImportDeclaration,
 	type KitImportDeclaration,
@@ -72,9 +71,9 @@ class Refused {
 const MAIL_ALLOWED =
 	"a one-line subject, a text with {{actionUrl}} and an optional HTML body of the e-mail subset, naming only the message's placeholders"
 
-const MOUNT_BUILDERS = ['rpc', 'link', 'spa', 'health', 'form', 'webhook'] as const
+const MOUNT_BUILDERS = ['rpc', 'link', 'spa', 'health', 'webhook'] as const
 const MOUNT_ALLOWED = `one of c.${MOUNT_BUILDERS.join(', c.')}(…)`
-const KIT_MOUNT_ALLOWED = 'one of c.rpc, c.spa, c.health, c.form(…), or a const of app.link(…) or app.webhook(…)'
+const KIT_MOUNT_ALLOWED = 'one of c.rpc, c.spa, c.health(…), or a const of app.link(…) or app.webhook(…)'
 const CONTRACT_ALLOWED = 'export const contract = app.contract((c) => ({ … })), or defineContract(vocabulary, (c) => ({ … }))'
 
 /** Which builders a surface is written with: `defineContract`'s `c`, or the staged kit's (`app.*` and its `c`). */
@@ -387,24 +386,6 @@ class SurfaceReader {
 				const [path] = args(at, 'c.health', 1, 1)
 				return { kind: 'health', path: text(path, at, 'the path') }
 			}
-			case 'form': {
-				const [path, optionsValue] = args(at, 'c.form', 2, 2)
-				const options = builderOptions(optionsValue, at, 'c.form')
-				return {
-					kind: 'form',
-					path: text(path, at, 'the path'),
-					input: this.#schema(options.get('input'), at, 'input'),
-					appendTo: text(options.get('appendTo'), at, 'appendTo'),
-					maxBytes: optionalNumber(options.get('maxBytes'), 'maxBytes'),
-					rate: formRate(options.get('rate')),
-					honeypot: optionalText(options.get('honeypot'), 'honeypot'),
-					challenge: formChallenge(options.get('challenge')),
-					then: optionalText(options.get('then'), 'then'),
-					...crossOriginOption(options.get('crossOrigin')),
-					...formFiles(options.get('files')),
-					unknownOptions: optionKeys(options, 'form'),
-				}
-			}
 			case 'webhook': {
 				const [path, optionsValue] = args(at, 'c.webhook', 2, 2)
 				const options = builderOptions(optionsValue, at, 'c.webhook')
@@ -465,7 +446,7 @@ class SurfaceReader {
 				unknownOptions: [...new Set(read.groups.flatMap((group) => group.unknownOptions))],
 			}
 		}
-		if (builder?.kit === 'shell' && (builder.name === 'spa' || builder.name === 'health' || builder.name === 'form')) {
+		if (builder?.kit === 'shell' && (builder.name === 'spa' || builder.name === 'health')) {
 			return this.#mount(asSurface(builder))
 		}
 		if (builder?.kit === 'app' && builder.name === 'link') {
@@ -611,39 +592,26 @@ class SurfaceReader {
 
 	// ── Sections ────────────────────────────────────────────────────────────────────────────────
 
-	/** `c.files({ … })`: a kind of stored file without an `owner`, a file collection with one. */
-	#files(value: LiteralValue, form: Form): FileCollection<string> | FileKind {
+	/**
+	 * `c.files({ … })`: a kind of stored file. Every option but `types`, `maxBytes` and `scan` is unknown, as the kit
+	 * records it, so `buildArtifact` refuses a file collection's `owner` in its own words.
+	 */
+	#files(value: LiteralValue, form: Form): FileKind {
 		const at =
 			surfaceBuilder(form === 'kit' && value.kind === 'builder' && value.kit === 'shell' ? asSurface(value) : value, ['files'], 'c.files({ … })').value
-		const [collection] = args(at, 'c.files', 1, 1)
-		const options = builderOptions(collection, at, 'c.files')
-		const link = options.get('link')
+		const [kind] = args(at, 'c.files', 1, 1)
+		const options = builderOptions(kind, at, 'c.files')
 		const scan = options.get('scan')
-		if (!options.has('owner')) {
-			return {
-				kind: 'file-kind',
-				types: texts(options.get('types'), at, 'types'),
-				maxBytes: numeric(options.get('maxBytes'), at, 'maxBytes'),
-				scan: scan === undefined ? undefined : boolean(scan, 'scan'),
-				unknownOptions: optionKeys(options, 'fileKind'),
-			}
-		}
 		return {
-			kind: 'files',
-			owner: text(options.get('owner'), at, 'owner'),
-			read: text(options.get('read'), at, 'read'),
-			write: text(options.get('write'), at, 'write'),
-			delete: text(options.get('delete'), at, 'delete'),
-			maxBytes: numeric(options.get('maxBytes'), at, 'maxBytes'),
+			kind: 'file-kind',
 			types: texts(options.get('types'), at, 'types'),
-			maxPerOwner: optionalNumber(options.get('maxPerOwner'), 'maxPerOwner'),
-			link: link === undefined ? undefined : fileLink(link, at),
+			maxBytes: numeric(options.get('maxBytes'), at, 'maxBytes'),
 			scan: scan === undefined ? undefined : boolean(scan, 'scan'),
-			unknownOptions: optionKeys(options, 'files'),
+			unknownOptions: optionKeys(options, 'fileKind'),
 		}
 	}
 
-	#cron(value: LiteralValue): CronJob<string, string> {
+	#cron(value: LiteralValue): CronJob<string> {
 		const at = surfaceBuilder(value, ['cron'], "c.cron('<schedule>', { … })").value
 		const [schedule, optionsValue] = args(at, 'c.cron', 2, 2)
 		const options = builderOptions(optionsValue, at, 'c.cron')
@@ -651,7 +619,6 @@ class SurfaceReader {
 			kind: 'cron',
 			schedule: text(schedule, at, 'the schedule'),
 			actions: texts(options.get('actions'), at, 'actions'),
-			scope: text(options.get('scope'), at, 'scope'),
 			...limitsOption(options),
 			retries: optionalNumber(options.get('retries'), 'retries'),
 			unknownOptions: optionKeys(options, 'cron'),
@@ -659,7 +626,7 @@ class SurfaceReader {
 	}
 
 	/** A job of the kit: a const of `app.cron(schedule, { … })`, whose `.handle(…)` the slice removed. */
-	#kitCron(value: LiteralValue): CronJob<string, string> {
+	#kitCron(value: LiteralValue): CronJob<string> {
 		if (value.kind !== 'builder' || value.kit !== 'app' || value.name !== 'cron') {
 			throw new Refused(value.at, `a ${describeKind(value)} where a job stands`, "a const of app.cron('<schedule>', { … })")
 		}
@@ -777,7 +744,6 @@ function declared(options: Entries): DeclaredDeclaration {
 		unscoped: plain(options.get('unscoped')),
 		connect: plain(options.get('connect')),
 		issues: plain(options.get('issues')),
-		then: plain(options.get('then')),
 		mailer: plain(options.get('mailer')),
 		kicks: plain(options.get('kicks')),
 		binds: plain(options.get('binds')),
@@ -829,7 +795,7 @@ function plain(value: LiteralValue | undefined): unknown {
 }
 
 const DECLARED_ALLOWED =
-	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>'], egress: ['https://<host>']"
+	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>'], egress: ['https://<host>']"
 
 /** A builder of the kit read as the `defineContract` builder of the same name, which builds the same declaration. */
 const asSurface = (builder: BuilderValue): LiteralValue => ({
@@ -975,7 +941,7 @@ function directoryOf(value: LiteralValue, owner: Owner): 'labels' {
 function crossOriginOption(value: LiteralValue | undefined): { readonly crossOrigin?: boolean | string } {
 	if (value === undefined) return {}
 	if (value.kind === 'boolean' || value.kind === 'string') return { crossOrigin: value.value }
-	throw new Refused(value.at, `crossOrigin is a ${describeKind(value)}`, "crossOrigin: true, or crossOrigin: '*' on a form")
+	throw new Refused(value.at, `crossOrigin is a ${describeKind(value)}`, 'crossOrigin: true')
 }
 
 function optionalText(value: LiteralValue | undefined, field: string): string | undefined {
@@ -1009,13 +975,6 @@ function boolean(value: LiteralValue, field: string): boolean {
 		throw new Refused(value.at, `${field} is a ${describeKind(value)}`, `${field}: true or false`)
 	}
 	return value.value
-}
-
-/** A collection's `link`: `true` or `false`, or the link mounts it names; the build refuses an empty list. */
-function fileLink(value: LiteralValue, owner: Owner): boolean | string[] {
-	if (value.kind === 'boolean') return value.value
-	if (value.kind !== 'array') throw new Refused(value.at, `link is a ${describeKind(value)}`, "link: true, or link: ['<link mount>']")
-	return texts(value, owner, 'link')
 }
 
 function schema(value: LiteralValue | undefined, owner: Owner, field: string): Schema {
@@ -1193,57 +1152,6 @@ function importDeclaration(name: string, value: LiteralValue): ImportDeclaration
 		usedBy: texts(fields.get('usedBy'), value, 'usedBy'),
 		timeoutMs: optionalNumber(fields.get('timeoutMs'), 'timeoutMs'),
 	}
-}
-
-/** A form's `rate`, as `buildArtifact` reads it: per-minute counts, each optional. */
-function formRate(value: LiteralValue | undefined): { perClient?: number; perForm?: number; bytesPerHour?: number } | undefined {
-	if (value === undefined) {
-		return undefined
-	}
-	const fields = strictFields(value, 'rate', [], ['perClient', 'perForm', 'bytesPerHour'])
-	const perClient = optionalNumber(fields.get('perClient'), 'perClient')
-	const perForm = optionalNumber(fields.get('perForm'), 'perForm')
-	const bytesPerHour = optionalNumber(fields.get('bytesPerHour'), 'bytesPerHour')
-	return {
-		...(perClient === undefined ? {} : { perClient }),
-		...(perForm === undefined ? {} : { perForm }),
-		...(bytesPerHour === undefined ? {} : { bytesPerHour }),
-	}
-}
-
-/** A form's `files`: each file field's collection and whether a submission must carry it; `buildArtifact` checks them. */
-function formFiles(value: LiteralValue | undefined): { readonly files?: Record<string, { collection: string; required?: boolean }> } {
-	if (value === undefined) {
-		return {}
-	}
-	if (value.kind !== 'object') {
-		throw new Refused(value.at, `files is a ${describeKind(value)}`, "files: { photo: { collection: '<collection>' } }")
-	}
-	const files: Record<string, { collection: string; required?: boolean }> = {}
-	for (const [field, entry] of value.entries) {
-		const fields = strictFields(entry, `file '${field}'`, ['collection'], ['required'])
-		const required = fields.get('required')
-		files[field] = {
-			collection: text(fields.get('collection'), entry, 'collection'),
-			...(required === undefined ? {} : { required: boolean(required, 'required') }),
-		}
-	}
-	return { files }
-}
-
-/** A form's `challenge`: a provider of the closed list and the names of the application variables with its secret and site key. */
-function formChallenge(value: LiteralValue | undefined): { provider: 'turnstile'; secret: string; siteKey?: string } | undefined {
-	if (value === undefined) {
-		return undefined
-	}
-	const fields = strictFields(value, 'challenge', ['provider', 'secret'], ['siteKey'])
-	const provider = fields.get('provider')
-	if (provider?.kind !== 'string' || provider.value !== 'turnstile') {
-		throw new Refused(provider?.at ?? value.at, 'challenge needs a known provider', "provider: 'turnstile'")
-	}
-	const secret = text(fields.get('secret'), value, 'secret')
-	const siteKey = fields.get('siteKey')
-	return siteKey === undefined ? { provider: provider.value, secret } : { provider: provider.value, secret, siteKey: text(siteKey, value, 'siteKey') }
 }
 
 function cspDeclaration(value: LiteralValue): CspDeclaration {

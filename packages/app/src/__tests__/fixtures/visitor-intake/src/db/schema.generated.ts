@@ -20,28 +20,46 @@ export interface CandidatesTable {
 	version: number
 }
 
+export interface CandidateFilesTable {
+	id: string
+	candidate_id: string
+	file: string
+}
+
 export interface RegistrationsTable {
-	id: Generated<string>
+	id: string
 	email: string
 	name: string
-	received_at: Generated<Date>
 	attempts: Generated<number>
+	due_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>
 	last_failure: string | null
+	version: number
 }
 
 export interface ResendRequestsTable {
-	id: Generated<string>
+	id: string
 	email: string
 	received_at: Generated<Date>
 }
 
 export interface DB {
+	candidate_files: CandidateFilesTable
 	candidates: CandidatesTable
 	registrations: RegistrationsTable
 	resend_requests: ResendRequestsTable
 }
 
 export const columns: TypedColumnList<DB> = {
+	'candidate_files': {
+		columns: [
+			'id',
+			'candidate_id',
+			'file',
+		],
+		foreignKeys: [
+			{ columns: ['candidate_id'], table: 'candidates', references: ['id'] },
+		],
+	},
 	'candidates': {
 		columns: [
 			'id',
@@ -67,12 +85,13 @@ export const columns: TypedColumnList<DB> = {
 			'id',
 			'email',
 			'name',
-			'received_at',
 			'attempts',
+			'due_at',
 			'last_failure',
+			'version',
 		],
 		foreignKeys: [],
-		timestamps: ['received_at'],
+		timestamps: ['due_at'],
 	},
 	'resend_requests': {
 		columns: [

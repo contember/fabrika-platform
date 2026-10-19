@@ -3,15 +3,17 @@ import { app } from './app-kit'
 import { Message, Queued, Waiting } from './schemas'
 
 export const outbox = app.group({ callers: ['human'] }, (r) => ({
-	enqueue: r.mutation({ input: Message, output: Queued, access: { action: 'outbox.write', app: true }, sql: 'write', then: 'deliver' })
+	enqueue: r.mutation({ input: Message, output: Queued, access: { action: 'outbox.write', app: true }, sql: 'write', kicks: ['deliver'] })
 		.handle(async ({ input, ctx }) => {
 			const id = Bun.randomUUIDv7()
 			await ctx.sql(Queued)`insert into outbox (id, body) values (${id}, ${input.body}) returning id`
+			ctx.kick('deliver')
 			return { id }
 		}),
-	refuse: r.mutation({ input: Message, output: Queued, access: { action: 'outbox.write', app: true }, sql: 'write', then: 'deliver' })
+	refuse: r.mutation({ input: Message, output: Queued, access: { action: 'outbox.write', app: true }, sql: 'write', kicks: ['deliver'] })
 		.handle(async ({ input, ctx }) => {
 			await ctx.sql(Queued)`insert into outbox (id, body) values (${Bun.randomUUIDv7()}, ${input.body}) returning id`
+			ctx.kick('deliver')
 			throw new ConflictError('the message is refused after its insert')
 		}),
 	post: r.mutation({ input: Message, output: Queued, access: { action: 'outbox.write', app: true }, sql: 'write', kicks: ['deliver'] })

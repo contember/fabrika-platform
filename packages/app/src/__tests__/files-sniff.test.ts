@@ -1,8 +1,9 @@
-// What an upload's first bytes must be for its declared type, and the disposition a download carries.
+// What a stored file's first bytes must be for its declared type, the name it records, and the disposition a download
+// carries.
 
 import { describe, expect, test } from 'bun:test'
-import { originalName } from '../files/collections'
 import { bytesAreOfType, SNIFFABLE_TYPES } from '../files/sniff'
+import { cleanName } from '../files/streams'
 import { contentDisposition } from '../files/treatment'
 
 const bytes = (...values: number[]) => new Uint8Array(values)
@@ -58,19 +59,17 @@ describe('the disposition of a download', () => {
 	})
 })
 
-describe('the file name an upload records', () => {
-	const named = (name: string) => originalName(new Request(`https://notes.test/api/files.attachments.upload/n?name=${encodeURIComponent(name)}`))
-
+describe('the file name a stored file records', () => {
 	test('is cut at 255 code points, never inside a character', () => {
 		const emoji = '\u{1F600}'
-		expect(named(`${'a'.repeat(254)}${emoji}`)).toBe(`${'a'.repeat(254)}${emoji}`)
-		expect(named(`${'a'.repeat(255)}${emoji}`)).toBe('a'.repeat(255))
-		expect(named(`${'a'.repeat(254)}${emoji}`)?.includes('\uFFFD')).toBe(false)
+		expect(cleanName(`${'a'.repeat(254)}${emoji}`)).toBe(`${'a'.repeat(254)}${emoji}`)
+		expect(cleanName(`${'a'.repeat(255)}${emoji}`)).toBe('a'.repeat(255))
+		expect(cleanName(`${'a'.repeat(254)}${emoji}`)?.includes('\uFFFD')).toBe(false)
 	})
 
 	test('loses its control characters, and an empty name is none', () => {
-		expect(named('a\r\nb.pdf')).toBe('ab.pdf')
-		expect(named('  ')).toBeNull()
-		expect(originalName(new Request('https://notes.test/x'))).toBeNull()
+		expect(cleanName('a\r\nb.pdf')).toBe('ab.pdf')
+		expect(cleanName('  ')).toBeNull()
+		expect(cleanName('')).toBeNull()
 	})
 })

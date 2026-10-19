@@ -1,4 +1,4 @@
-// The public intake recipe on a REAL Postgres (WU15): a form row becomes a candidate, the intake job issues and e-mails
+// The public intake recipe on a REAL Postgres (WU15): a registration a public procedure wrote becomes a candidate, the intake job issues and e-mails
 // a link bound to it, the holder verifies once, and a resend supersedes the sent link within a daily budget. The job
 // records each delivery step before the next effect; a run stopped between any two effects is finished by the next
 // run with exactly one live, e-mailed link. Each record is its own work: a bad one counts its attempts and ends dead
@@ -31,7 +31,7 @@ const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR] ?? ''
 const hasPostgres = url !== ''
 if (!hasPostgres) {
-	console.warn(`intake.test.ts skipped: set ${URL_VAR} to run it (the intake job's lease and the inboxes live in @fabrika/db)`)
+	console.warn(`intake.test.ts skipped: set ${URL_VAR} to run it (the intake job's lease and its queue live in @fabrika/db)`)
 }
 
 const APP = 'intake@prod'
@@ -58,7 +58,7 @@ beforeEach(async () => {
 	if (!hasPostgres) return
 	await admin((sql) =>
 		sql.unsafe(
-			`truncate ${schema}.fabrika_files_attachments, ${schema}.candidates, ${schema}.registrations, ${schema}.resend_requests; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_form_admissions`,
+			`truncate ${schema}.candidate_files, ${schema}.candidates, ${schema}.registrations, ${schema}.resend_requests; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_form_admissions`,
 		)
 	)
 })
@@ -261,8 +261,13 @@ function quietly<T>(lines: string[], work: () => Promise<T>): Promise<T> {
 
 const ANONYMOUS = { 'Content-Type': 'application/json' }
 
-async function submit(app: ContractApp, path: '/register' | '/resend', body: unknown): Promise<unknown> {
-	return resultOf(await send(app, path, { body, headers: ANONYMOUS }))
+async function submit(app: ContractApp, procedure: 'register' | 'resend', body: unknown): Promise<unknown> {
+	return resultOf(await send(app, `/api/visitors.${procedure}`, { body, headers: ANONYMOUS }))
+}
+
+/** Every registration a claim deferred is due again: what the runs of the next hours would see. */
+function dueAgain(): Promise<unknown> {
+	return admin((sql) => sql.unsafe(`update ${schema}.registrations set due_at = now() where due_at is not null`))
 }
 
 interface CandidateRow {
@@ -312,11 +317,11 @@ async function deliveredOnce(running: Running, email: string): Promise<void> {
 }
 
 describe.skipIf(!hasPostgres)('a visitor registers and verifies', () => {
-	test('a form row becomes one candidate with one e-mailed link of the portal, bound to it', async () => {
+	test('a registration becomes one candidate with one e-mailed link of the portal, bound to it', async () => {
 		const running = start()
-		expect(await submit(running.app, '/register', { email: 'ada@example.test', name: 'Ada' })).toEqual({ received: true })
+		expect(await submit(running.app, 'register', { email: 'ada@example.test', name: 'Ada' })).toEqual({ received: true })
 		// A second registration of the same address answers the same and makes nothing new.
-		expect(await submit(running.app, '/register', { email: 'ada@example.test', name: 'Ada L.' })).toEqual({ received: true })
+		expect(await submit(running.app, 'register', { email: 'ada@example.test', name: 'Ada L.' })).toEqual({ received: true })
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		const row = await candidate('ada@example.test')
 		expect(running.iam.links.map((link) => link.chain)).toEqual([[{ type: 'candidate', value: row.id }]])
@@ -328,7 +333,7 @@ describe.skipIf(!hasPostgres)('a visitor registers and verifies', () => {
 
 	test('the holder verifies twice and verified_at is set once; the credential still reads', async () => {
 		const running = start()
-		await submit(running.app, '/register', { email: 'bo@example.test', name: 'Bo' })
+		await submit(running.app, 'register', { email: 'bo@example.test', name: 'Bo' })
 		await running.run()
 		const holder = await holderToken(running.iam, running.world.lastKey('bo@example.test'))
 		const first = resultOf(await send(running.app, '/p/api/verify', { token: holder, body: {} }))
@@ -348,7 +353,7 @@ describe.skipIf(!hasPostgres)('a run stopped between two effects is finished by 
 	for (const step of ['issued', 'recorded', 'mailed'] satisfies DeliveryStep[]) {
 		test(`after the link was ${step}`, async () => {
 			const running = start()
-			await submit(running.app, '/register', { email: `${step}@example.test`, name: step })
+			await submit(running.app, 'register', { email: `${step}@example.test`, name: step })
 			running.world.stopAfter = step
 			// The stop fails the delivery, not the run: the record counts it and keeps the step that failed.
 			expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
@@ -367,7 +372,7 @@ describe.skipIf(!hasPostgres)('a run stopped between two effects is finished by 
 
 	test('after the e-mail provider refused the message', async () => {
 		const running = start()
-		await submit(running.app, '/register', { email: 'refused@example.test', name: 'R' })
+		await submit(running.app, 'register', { email: 'refused@example.test', name: 'R' })
 		running.world.failSend = true
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(await candidate('refused@example.test')).toMatchObject({ link_state: 'issued', attempts: 1, last_failure: 'send' })
@@ -379,7 +384,7 @@ describe.skipIf(!hasPostgres)('a run stopped between two effects is finished by 
 
 	test('after IAM could not be asked to issue', async () => {
 		const running = start()
-		await submit(running.app, '/register', { email: 'down@example.test', name: 'D' })
+		await submit(running.app, 'register', { email: 'down@example.test', name: 'D' })
 		running.iam.unreachable = true
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(await candidate('down@example.test')).toMatchObject({ link_state: 'due', attempts: 1, last_failure: 'issue' })
@@ -390,9 +395,9 @@ describe.skipIf(!hasPostgres)('a run stopped between two effects is finished by 
 
 	test('after a resend revoked the superseded link', async () => {
 		const running = start()
-		await submit(running.app, '/register', { email: 'again@example.test', name: 'A' })
+		await submit(running.app, 'register', { email: 'again@example.test', name: 'A' })
 		await running.run()
-		await submit(running.app, '/resend', { email: 'again@example.test' })
+		await submit(running.app, 'resend', { email: 'again@example.test' })
 		running.world.stopAfter = 'revoked'
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(await candidate('again@example.test')).toMatchObject({ link_state: 'due', last_failure: 'revoke' })
@@ -423,7 +428,7 @@ function testClock(): { readonly clock: JobClock; timeOut(): void } {
 describe.skipIf(!hasPostgres)('an attempt replaced after its deadline', () => {
 	test('that resumes after its replacement delivered sends nothing, and the latest e-mail carries the live link', async () => {
 		const running = start()
-		await submit(running.app, '/register', { email: 'late@example.test', name: 'L' })
+		await submit(running.app, 'register', { email: 'late@example.test', name: 'L' })
 		const pause = gate()
 		running.world.pauseAfter = { step: 'recorded', gate: pause }
 		const { clock, timeOut } = testClock()
@@ -440,7 +445,7 @@ describe.skipIf(!hasPostgres)('an attempt replaced after its deadline', () => {
 
 	test('whose e-mail is in flight abandons it before its replacement starts', async () => {
 		const running = start()
-		await submit(running.app, '/register', { email: 'flight@example.test', name: 'F' })
+		await submit(running.app, 'register', { email: 'flight@example.test', name: 'F' })
 		const hold = gate()
 		running.world.holdSend = hold
 		const { clock, timeOut } = testClock()
@@ -460,7 +465,7 @@ describe.skipIf(!hasPostgres)('an attempt replaced after its deadline', () => {
 describe.skipIf(!hasPostgres)('the daily budget', () => {
 	test('counts every e-mail a delivery may have sent, and an exhausted one waits for the next window', async () => {
 		const running = start()
-		await submit(running.app, '/register', { email: 'often@example.test', name: 'O' })
+		await submit(running.app, 'register', { email: 'often@example.test', name: 'O' })
 		for (let run = 0; run < SENDS_PER_DAY; run++) {
 			running.world.stopAfter = 'mailed'
 			expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
@@ -509,10 +514,10 @@ describe.skipIf(!hasPostgres)('the daily budget', () => {
 describe.skipIf(!hasPostgres)('a resend', () => {
 	test('supersedes the sent link of an unverified candidate, within the daily budget, and answers a constant', async () => {
 		const running = start()
-		await submit(running.app, '/register', { email: 'cy@example.test', name: 'Cy' })
+		await submit(running.app, 'register', { email: 'cy@example.test', name: 'Cy' })
 		await running.run()
 		for (let resend = 1; resend <= SENDS_PER_DAY; resend++) {
-			expect(await submit(running.app, '/resend', { email: 'cy@example.test' })).toEqual({ received: true })
+			expect(await submit(running.app, 'resend', { email: 'cy@example.test' })).toEqual({ received: true })
 			await running.run()
 		}
 		// The first e-mail and two resends fill the budget of three; the third resend sends nothing.
@@ -523,12 +528,12 @@ describe.skipIf(!hasPostgres)('a resend', () => {
 
 	test('of a verified candidate, or of an address nobody registered, sends nothing', async () => {
 		const running = start()
-		await submit(running.app, '/register', { email: 'di@example.test', name: 'Di' })
+		await submit(running.app, 'register', { email: 'di@example.test', name: 'Di' })
 		await running.run()
 		const holder = await holderToken(running.iam, running.world.lastKey('di@example.test'))
 		resultOf(await send(running.app, '/p/api/verify', { token: holder, body: {} }))
-		expect(await submit(running.app, '/resend', { email: 'di@example.test' })).toEqual({ received: true })
-		expect(await submit(running.app, '/resend', { email: 'nobody@example.test' })).toEqual({ received: true })
+		expect(await submit(running.app, 'resend', { email: 'di@example.test' })).toEqual({ received: true })
+		expect(await submit(running.app, 'resend', { email: 'nobody@example.test' })).toEqual({ received: true })
 		await running.run()
 		expect(running.world.mails).toHaveLength(1)
 		expect(running.iam.live()).toHaveLength(1)
@@ -543,22 +548,25 @@ describe.skipIf(!hasPostgres)('each record is its own work', () => {
 	test('a poisoned registration and a refused recipient end dead, and every other record is delivered', async () => {
 		const log: string[] = []
 		const running = start(log)
-		// A row an older form accepted, which the candidates table now refuses: its insert fails every time.
-		await admin((sql) => sql.unsafe(`insert into ${schema}.registrations (email, name) values ('long@example.test', repeat('x', 300))`))
-		await submit(running.app, '/register', { email: 'ada@example.test', name: 'Ada' })
-		await submit(running.app, '/register', { email: 'refused@example.test', name: 'R' })
-		await submit(running.app, '/register', { email: 'bo@example.test', name: 'Bo' })
+		// A row an older procedure accepted, which the candidates table now refuses: its insert fails every time.
+		await admin((sql) =>
+			sql.unsafe(`insert into ${schema}.registrations (id, email, name, version) values (gen_random_uuid(), 'long@example.test', repeat('x', 300), 1)`)
+		)
+		await submit(running.app, 'register', { email: 'ada@example.test', name: 'Ada' })
+		await submit(running.app, 'register', { email: 'refused@example.test', name: 'R' })
+		await submit(running.app, 'register', { email: 'bo@example.test', name: 'Bo' })
 		running.world.refused.add('refused@example.test')
 		for (let run = 1; run <= MAX_ATTEMPTS; run++) {
 			await renewBudget('refused@example.test')
+			await dueAgain()
 			expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		}
 		await deliveredOnce(running, 'ada@example.test')
 		await deliveredOnce(running, 'bo@example.test')
 		expect(running.world.mails.map((mail) => mail.to).sort()).toEqual(['ada@example.test', 'bo@example.test'])
 		expect(await candidate('refused@example.test')).toMatchObject({ link_state: 'failed', attempts: MAX_ATTEMPTS, last_failure: 'send' })
-		const inbox = await admin((sql) => sql.unsafe(`select email, attempts, last_failure from ${schema}.registrations`))
-		expect(inbox).toEqual([{ email: 'long@example.test', attempts: MAX_ATTEMPTS, last_failure: 'register' }])
+		const left = await admin((sql) => sql.unsafe(`select email, attempts, last_failure from ${schema}.registrations`))
+		expect(left).toEqual([{ email: 'long@example.test', attempts: MAX_ATTEMPTS, last_failure: 'register' }])
 		// Each dead record is logged once, by its id: never its address.
 		const dead = log.filter((line) => line.startsWith('intake: '))
 		expect(dead).toHaveLength(2)
@@ -566,6 +574,7 @@ describe.skipIf(!hasPostgres)('each record is its own work', () => {
 
 		// A dead record is not retried.
 		await renewBudget('refused@example.test')
+		await dueAgain()
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(await candidate('refused@example.test')).toMatchObject({ link_state: 'failed', attempts: MAX_ATTEMPTS })
 		expect((await admin((sql) => sql.unsafe(`select attempts from ${schema}.registrations`)))[0]).toEqual({ attempts: MAX_ATTEMPTS })
@@ -573,7 +582,7 @@ describe.skipIf(!hasPostgres)('each record is its own work', () => {
 
 	test('a resend revives a dead delivery, revokes its last link and delivers one', async () => {
 		const running = start()
-		await submit(running.app, '/register', { email: 'late@example.test', name: 'L' })
+		await submit(running.app, 'register', { email: 'late@example.test', name: 'L' })
 		running.world.refused.add('late@example.test')
 		for (let run = 1; run <= MAX_ATTEMPTS; run++) {
 			await renewBudget('late@example.test')
@@ -582,7 +591,7 @@ describe.skipIf(!hasPostgres)('each record is its own work', () => {
 		expect(await candidate('late@example.test')).toMatchObject({ link_state: 'failed' })
 		running.world.refused.clear()
 		await renewBudget('late@example.test')
-		await submit(running.app, '/resend', { email: 'late@example.test' })
+		await submit(running.app, 'resend', { email: 'late@example.test' })
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		await deliveredOnce(running, 'late@example.test')
 		expect(running.iam.live()).toHaveLength(1)
@@ -592,13 +601,13 @@ describe.skipIf(!hasPostgres)('each record is its own work', () => {
 		const running = start()
 		await admin((sql) =>
 			sql.unsafe(
-				`insert into ${schema}.registrations (email, name, received_at)
-				select 'many' || n || '@example.test', 'M', now() - (n || ' seconds')::interval from generate_series(1, ${BATCH + 1}) as n`,
+				`insert into ${schema}.registrations (id, email, name, due_at, version)
+				select gen_random_uuid(), 'many' || n || '@example.test', 'M', now() - (n || ' seconds')::interval, 1 from generate_series(1, ${BATCH + 1}) as n`,
 			)
 		)
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		const left = await admin((sql) => sql.unsafe(`select email from ${schema}.registrations`))
-		// The oldest are taken first: the newest submission waits.
+		// The longest due are taken first: the newest submission waits.
 		expect(left).toEqual([{ email: 'many1@example.test' }])
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		const [count] = await admin((sql) => sql.unsafe(`select count(*)::int as n from ${schema}.candidates`))
@@ -610,7 +619,7 @@ describe.skipIf(!hasPostgres)('each record is its own work', () => {
 describe.skipIf(!hasPostgres)('a delivery is its link', () => {
 	test('a lost answer is retried under the same key: the provider sends one e-mail, and its link works', async () => {
 		const running = start()
-		await submit(running.app, '/register', { email: 'lost@example.test', name: 'L' })
+		await submit(running.app, 'register', { email: 'lost@example.test', name: 'L' })
 		running.world.loseAnswer = true
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(await candidate('lost@example.test')).toMatchObject({ link_state: 'issued', attempts: 1, last_failure: 'send' })
@@ -631,8 +640,8 @@ describe.skipIf(!hasPostgres)('a delivery is its link', () => {
 		const running = start()
 		running.world.sendTimeoutMs = 50
 		running.world.hanging.add('slow@example.test')
-		await submit(running.app, '/register', { email: 'slow@example.test', name: 'S' })
-		await submit(running.app, '/register', { email: 'fast@example.test', name: 'F' })
+		await submit(running.app, 'register', { email: 'slow@example.test', name: 'S' })
+		await submit(running.app, 'register', { email: 'fast@example.test', name: 'F' })
 		for (let run = 1; run <= MAX_ATTEMPTS; run++) {
 			await admin((sql) => sql.unsafe(`update ${schema}.candidates set sends = 0 where email = 'slow@example.test'`))
 			expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
@@ -646,9 +655,11 @@ describe.skipIf(!hasPostgres)('a delivery is its link', () => {
 	test('a registration other work holds is skipped, not waited for, and the rest are processed', async () => {
 		const running = start()
 		await admin((sql) =>
-			sql.unsafe(`insert into ${schema}.registrations (email, name, received_at) values ('held@example.test', 'H', now() - interval '1 hour')`)
+			sql.unsafe(
+				`insert into ${schema}.registrations (id, email, name, due_at, version) values (gen_random_uuid(), 'held@example.test', 'H', now() - interval '1 hour', 1)`,
+			)
 		)
-		await submit(running.app, '/register', { email: 'free@example.test', name: 'F' })
+		await submit(running.app, 'register', { email: 'free@example.test', name: 'F' })
 		const locked = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
 		const holding = admin((sql) =>

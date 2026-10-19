@@ -15,7 +15,7 @@ const IDENTITY_FIELDS = new Set([
 	'workspace_id',
 ])
 /** The contract builders whose options carry an `input`. */
-const ENDPOINT_BUILDERS = new Set(['query', 'mutation', 'form', 'webhook'])
+const ENDPOINT_BUILDERS = new Set(['query', 'mutation', 'webhook'])
 const SHAPE_METHODS = new Set(['object', 'strictObject', 'looseObject', 'extend', 'safeExtend'])
 const MERGE_METHODS = new Set(['merge', 'and'])
 

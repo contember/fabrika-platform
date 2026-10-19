@@ -1,7 +1,7 @@
 // Removing a record's files from server code, and the framework's scheduled sweep, on a REAL Postgres: an erasure job
-// blanks a note and removes its files in its transaction, a mutation on the note removes them, and the sweep job deletes
-// the objects of removed and orphaned files without any request, in a collection that does not scan too. Skips cleanly
-// without FABRIKA_TEST_POSTGRES_URL.
+// blanks a note and deletes the rows that reference its files in its transaction, a mutation on the note deletes them,
+// and the sweep job deletes each file no column references once past the pending grace, with its object, without any
+// request, of a kind that does not scan too. Skips cleanly without FABRIKA_TEST_POSTGRES_URL.
 
 import { createClient } from '@fabrika/app/client'
 import { FILE_SWEEP_JOB } from '@fabrika/app/implement'
@@ -45,7 +45,7 @@ beforeEach(async () => {
 	if (!hasPostgres) return
 	await admin((sql) =>
 		sql.unsafe(
-			`truncate ${schema}.fabrika_files_documents, ${schema}.fabrika_files_attachments, ${schema}.notes; delete from ${schema}.fabrika_job_leases`,
+			`truncate ${schema}.note_documents, ${schema}.note_attachments, ${schema}.notes; delete from ${schema}.fabrika_files; delete from ${schema}.fabrika_job_leases`,
 		)
 	)
 })
@@ -69,9 +69,19 @@ async function titleOf(note: string): Promise<unknown> {
 	return row?.title
 }
 
-async function rowsOf(collection: 'documents' | 'attachments'): Promise<number> {
-	const [row] = await admin((sql) => sql.unsafe(`select count(*)::int as count from ${schema}.fabrika_files_${collection}`))
+async function rowsOf(table: 'note_documents' | 'note_attachments'): Promise<number> {
+	const [row] = await admin((sql) => sql.unsafe(`select count(*)::int as count from ${schema}.${table}`))
 	return Number(row?.count)
+}
+
+async function filesOf(kind: 'documents' | 'attachments'): Promise<number> {
+	const [row] = await admin((sql) => sql.unsafe(`select count(*)::int as count from ${schema}.fabrika_files where kind = $1`, [kind]))
+	return Number(row?.count)
+}
+
+/** Every file is past the pending grace: what the sweep sees an hour later. */
+async function pastGrace(): Promise<void> {
+	await admin((sql) => sql.unsafe(`update ${schema}.fabrika_files set created_at = now() - interval '2 hours'`))
 }
 
 interface Booted {
@@ -79,11 +89,11 @@ interface Booted {
 	readonly world: FilesWorld
 	readonly store: MemoryFileObjects
 	readonly api: ReturnType<typeof createClient<typeof contract, 'api'>>
-	upload(collection: 'documents' | 'attachments', note: string): Promise<string>
+	upload(kind: 'documents' | 'attachments', note: string): Promise<void>
 }
 
 function boot(): Booted {
-	const world: FilesWorld = { sent: [], refusals: [], removed: [], failErase: false }
+	const world: FilesWorld = { sent: [], removed: [], failErase: false }
 	const app = filesApp(world)
 	const store = new MemoryFileObjects()
 	const kit = testKit(app.implementation, { database, files: store, env: app.variables })
@@ -93,30 +103,38 @@ function boot(): Booted {
 		world,
 		store,
 		api,
-		upload: async (collection, note) => (await api.files[collection].upload(note, new File([PDF], 'a.pdf', { type: 'application/pdf' }))).id,
+		upload: async (kind, note) => {
+			const file = new File([PDF], 'a.pdf', { type: 'application/pdf' })
+			await (kind === 'documents' ? api.notes.upload({ id: note, file }) : api.notes.attach({ id: note, file }))
+		},
 	}
 }
 
 describe.skipIf(!hasPostgres)('removing files from server code', () => {
-	test('an erasure job blanks a note and removes its files in one transaction; the sweep job then deletes their objects', async () => {
+	test('an erasure job blanks a note and deletes the rows of its files in one transaction; the sweep job then deletes the files', async () => {
 		const { kit, world, store, api, upload } = boot()
 		const erased = await seedNote('erase me')
 		const kept = await seedNote('keep me')
 		await upload('attachments', erased)
 		await upload('attachments', erased)
 		await upload('documents', erased)
-		const other = await upload('attachments', kept)
+		await upload('attachments', kept)
 
 		expect(await kit.runJob('erase')).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(world.removed).toEqual([2, 1])
 		expect(await titleOf(erased)).toBe('')
-		expect((await api.files.attachments.list({ owner: erased })).items).toEqual([])
-		expect((await api.files.documents.list({ owner: erased })).items).toEqual([])
+		expect(await api.notes.attached({ id: erased })).toEqual({ files: 0 })
+		expect(await rowsOf('note_documents')).toBe(0)
 		expect(store.objects.size).toBe(4)
 
+		// Within the grace the sweep keeps an unreferenced file; past it, it deletes the file and its object.
 		expect(await kit.runJob(FILE_SWEEP_JOB)).toEqual({ status: 'succeeded', attempts: 1 })
-		expect([...store.objects.keys()]).toEqual([`attachments/${other}`])
-		expect([await rowsOf('attachments'), await rowsOf('documents')]).toEqual([1, 0])
+		expect(store.objects.size).toBe(4)
+		await pastGrace()
+		expect(await kit.runJob(FILE_SWEEP_JOB)).toEqual({ status: 'succeeded', attempts: 1 })
+		expect(store.objects.size).toBe(1)
+		expect([await filesOf('attachments'), await filesOf('documents')]).toEqual([1, 0])
+		expect(await api.notes.attached({ id: kept })).toEqual({ files: 1 })
 		expect(await titleOf(kept)).toBe('keep me')
 	})
 
@@ -128,30 +146,44 @@ describe.skipIf(!hasPostgres)('removing files from server code', () => {
 
 		expect(await kit.runJob('erase')).toMatchObject({ status: 'failed', code: 'handler_failed' })
 		expect(await titleOf(note)).toBe('erase me')
-		expect((await api.files.attachments.list({ owner: note })).items).toHaveLength(1)
+		expect(await api.notes.attached({ id: note })).toEqual({ files: 1 })
+		await pastGrace()
 		await kit.runJob(FILE_SWEEP_JOB)
 		expect(store.objects.size).toBe(1)
 	})
 
-	test('a mutation on the owner removes its files under the collection’s delete action', async () => {
+	test("a mutation on the note deletes the rows of its files under the table's delete action", async () => {
 		const { kit, store, api, upload } = boot()
 		const note = await seedNote('a note')
 		await upload('attachments', note)
 		expect(await api.notes.clear({ id: note })).toEqual({ files: 1 })
-		expect((await api.files.attachments.list({ owner: note })).items).toEqual([])
+		expect(await api.notes.attached({ id: note })).toEqual({ files: 0 })
+		await pastGrace()
 		await kit.runJob(FILE_SWEEP_JOB)
 		expect(store.objects.size).toBe(0)
 	})
 
-	test('the sweep job deletes an orphaned file of a collection that does not scan, without any request', async () => {
+	test('the sweep job deletes a file of a kind that does not scan once nothing references it, without any request', async () => {
 		const { kit, store, upload } = boot()
 		const note = await seedNote('a note')
-		const id = await upload('attachments', note)
+		await upload('attachments', note)
+		await admin((sql) => sql.unsafe(`delete from ${schema}.note_attachments`))
 		await admin((sql) => sql.unsafe(`delete from ${schema}.notes where id = $1`, [note]))
-		expect([...store.objects.keys()]).toEqual([`attachments/${id}`])
+		expect(store.objects.size).toBe(1)
+		await pastGrace()
 
 		expect(await kit.runJob(FILE_SWEEP_JOB)).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(store.objects.size).toBe(0)
-		expect(await rowsOf('attachments')).toBe(0)
+		expect(await filesOf('attachments')).toBe(0)
+	})
+
+	test('the sweep keeps a file a column still references, however old', async () => {
+		const { kit, store, api, upload } = boot()
+		const note = await seedNote('a note')
+		await upload('attachments', note)
+		await pastGrace()
+		expect(await kit.runJob(FILE_SWEEP_JOB)).toEqual({ status: 'succeeded', attempts: 1 })
+		expect(store.objects.size).toBe(1)
+		expect(await api.notes.attached({ id: note })).toEqual({ files: 1 })
 	})
 })

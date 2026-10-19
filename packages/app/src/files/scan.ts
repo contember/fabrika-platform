@@ -1,11 +1,11 @@
-// The scan pass of `scan: true` collections: a framework job (`FILE_SCAN_JOB`) that takes a batch of quarantined files,
+// The scan pass of `scan: true` file kinds: a framework job (`FILE_SCAN_JOB`) that takes a batch of quarantined files,
 // hands their objects to a `FileScanner`, and writes each verdict under the job's lease. It fails closed: a file goes
 // live only with a completed clean verdict over the exact bytes its upload recorded, and the download then serves only
 // that object version. An archive the scanner cannot read in full is rejected before it is scanned (`archive.ts`). No
 // scanner, a scanner error or a timeout leave files quarantined; a file that gets no verdict is retried later, alone,
 // and rejected after `SCAN_LIMITS.maxAttempts`. The scanner comes from the runtime adapter (`clamscan.ts` on Bun).
 
-import type { FileCollectionTable, QuarantinedFile } from '@fabrika/db/framework'
+import type { QuarantinedStoredFile } from '@fabrika/db/framework'
 import type { FileObjectStore } from '@fabrika/platform'
 import type { OperationsReporter } from '../jobs/report'
 import { type ArchiveRefusal, checkArchive } from './archive'
@@ -67,15 +67,20 @@ export interface FileScanner {
 	scan(objects: readonly ScanObject[], signal: AbortSignal): Promise<ScanBatchResult>
 }
 
-/** What one scanning collection or file kind lets the scan pass do: take its due files, and write each verdict. */
-export interface ScanningCollection {
+/** What one scanning file kind lets the scan pass do: take its due files, and write each verdict. */
+export interface ScanningKind {
 	readonly name: string
-	readonly table: Pick<FileCollectionTable, 'quarantined' | 'promote' | 'deferScan' | 'reject'>
+	readonly table: {
+		quarantined(limit: number, now: Date): Promise<readonly QuarantinedStoredFile[]>
+		promote(id: string, sha256: string, version: string): Promise<boolean>
+		deferScan(id: string, attempts: number, after: Date): Promise<boolean>
+		reject(id: string): Promise<boolean>
+	}
 }
 
 interface Candidate {
-	readonly collection: ScanningCollection
-	readonly file: QuarantinedFile
+	readonly collection: ScanningKind
+	readonly file: QuarantinedStoredFile
 }
 
 /** How reading one file's object ended; only `verified` lets a clean verdict promote it, as that version. */
@@ -117,7 +122,7 @@ async function readExactly(body: ReadableStream<Uint8Array>, size: number, signa
 }
 
 export interface ScanPassInput {
-	readonly collections: readonly ScanningCollection[]
+	readonly collections: readonly ScanningKind[]
 	readonly store: FileObjectStore
 	/** `null` when the runtime adapter supplies none: every quarantined file stays quarantined. */
 	readonly scanner: FileScanner | null
@@ -131,7 +136,7 @@ export interface ScanPassInput {
  * stream of new uploads never holds back an older file. A file that has failed before is scanned alone, so it cannot
  * take others down with it; new files go together, within the batch bounds.
  */
-async function batch(collections: readonly ScanningCollection[], now: Date): Promise<Candidate[]> {
+async function batch(collections: readonly ScanningKind[], now: Date): Promise<Candidate[]> {
 	const due: Candidate[] = []
 	for (const collection of collections) {
 		for (const file of await collection.table.quarantined(SCAN_LIMITS.batchFiles, now)) due.push({ collection, file })
@@ -168,7 +173,7 @@ class ScanPass {
 	 * The object's bytes, read whole, checked against the upload's size and digest, and checked as an archive. Its
 	 * outcome is the file's read state; the bytes reach the scanner only when they are verified.
 	 */
-	async load(file: QuarantinedFile, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
+	async load(file: QuarantinedStoredFile, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
 		const object = await this.#input.store.read(file.objectKey, signal)
 		if (object === null) {
 			this.#states.set(file.id, { kind: 'missing' })

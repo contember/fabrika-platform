@@ -28,7 +28,7 @@ if (!hasPostgres) {
 }
 
 const app = defineApp(vocabulary, tables)
-const notify = app.cron('* * * * *', { actions: ['notes.read'], scope: 'app', mailer: 'installation' }).handle(async ({ ctx }) => {
+const notify = app.cron('* * * * *', { actions: ['notes.read'], mailer: 'installation' }).handle(async ({ ctx }) => {
 	await ctx.mail.send({ to: 'ada@example.com', subject: 'Welcome aboard', text: 'Hello Ada', idempotencyKey: 'welcome-ada' })
 })
 const contract = app.contract(() => ({ jobs: { notify } }))

@@ -140,9 +140,15 @@ function handleSite(node: AstNode): HandleSite | undefined {
 	return { ranges: [{ start: receiverRange.end, end: call.end }], receiver }
 }
 
-/** Whether an identifier names a type or a value here, rather than a key, a property or a label. */
-function isReference(node: AstNode, parent: AstNode | undefined): boolean {
+/**
+ * Whether an identifier names a type or a value here, rather than a key, a property or a label. `export { name }`
+ * without a source names a binding of the module.
+ */
+function isReference(node: AstNode, ancestors: readonly AstNode[]): boolean {
+	const parent = ancestors.at(-1)
 	switch (parent?.type) {
+		case 'ExportSpecifier':
+			return parent['local'] === node && ancestors.at(-2)?.['source'] == null
 		case 'TSTypeReference':
 			return parent['typeName'] === node
 		case 'TSQualifiedName':
@@ -224,7 +230,7 @@ function referencedNames(statements: readonly AstNode[], skipped: (node: AstNode
 		walk(statement, (node, ancestors) => {
 			if (skipped(node)) return 'skip'
 			const name = identifierName(node)
-			if (name !== undefined && !own.has(node) && isReference(node, ancestors.at(-1))) referenced.add(name)
+			if (name !== undefined && !own.has(node) && isReference(node, ancestors)) referenced.add(name)
 			return undefined
 		})
 	}

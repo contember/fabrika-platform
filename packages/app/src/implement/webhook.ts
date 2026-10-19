@@ -1,7 +1,5 @@
 // A webhook's bindings and deliveries (docs/reference/application-runtime.md). A procedure that declares `binds`
-// creates a binding through `ctx.webhooks('<name>')`; a GitHub webhook bound to a dimension also has the generated
-// `webhooks.<name>.bind` endpoint, for a holder of that dimension's `members.manage`. The framework generates the
-// secret and keeps the binding in `fabrika_webhook_bindings`. A delivery is checked in a fixed order — the binding,
+// creates a binding through `ctx.webhooks('<name>')`. The framework generates the secret and keeps the binding in `fabrika_webhook_bindings`. A delivery is checked in a fixed order — the binding,
 // the signature over the raw body, the account, the input, the delivery key — before its handler sees a `Ref` of the
 // bound value, or its application-wide capabilities when the webhook is bound to `'app'`.
 
@@ -10,19 +8,13 @@ import { type CapabilityAuthority, describeGrant } from '@fabrika/db/capability'
 import type { Session, WebhookTables } from '@fabrika/db/framework'
 import { uuidv7 } from '@fabrika/platform'
 import { z } from 'zod/v4'
-import { joinPath, WEBHOOK_ACCOUNT_PATTERN, WEBHOOK_SCOPE_FIELD } from '../contract/defaults'
+import { joinPath } from '../contract/defaults'
 import type { WebhookBindings, WebhookSecret } from '../contract/webhook-binding'
-import { BadRequestError, NotFoundError } from '../errors'
-import { CapabilityRefusedError, Ref } from './capability'
+import { BadRequestError } from '../errors'
+import { CapabilityRefusedError } from './capability'
 
-/** The input and output of the generated binding endpoints; `build.ts`'s `WEBHOOK_BIND_*` shapes describe them. */
-export const webhookBindInput = z.strictObject({
-	[WEBHOOK_SCOPE_FIELD]: z.string().min(1),
-	account: z.string().regex(new RegExp(WEBHOOK_ACCOUNT_PATTERN)),
-})
-export const webhookBindOutput = z.strictObject({ id: z.uuid(), url: z.string().min(1), secret: z.string().min(1) })
-export const webhookUnbindInput = z.strictObject({ [WEBHOOK_SCOPE_FIELD]: z.string().min(1), id: z.uuid() })
-export const webhookUnbindOutput = z.strictObject({ id: z.uuid() })
+/** A GitHub account a binding accepts: an App installation or a repository, by numeric id. */
+const GITHUB_ACCOUNT = /^(?:installation|repository):[1-9][0-9]{0,19}$/
 
 /** The workload a delivery runs as: no person, only the binding. It creates no scope and manages no member. */
 export interface WebhookPrincipal {
@@ -152,61 +144,14 @@ export function webhookBindings(site: BindingSite): (name: string) => WebhookBin
 /** The account a binding records: GitHub's `installation:<id>` or `repository:<id>`, another provider's own label. */
 function accountOf(scheme: WebhookScheme, account: unknown): string {
 	if (scheme === 'github-sha256') {
-		const parsed = webhookBindInput.shape.account.safeParse(account)
-		if (!parsed.success) {
+		if (typeof account !== 'string' || !GITHUB_ACCOUNT.test(account)) {
 			throw new BadRequestError("A GitHub binding's account is installation:<id> or repository:<id>")
 		}
-		return parsed.data
+		return account
 	}
 	const printable = (text: string) => [...text].every((char) => char >= ' ' && char !== '\u007f')
 	if (typeof account !== 'string' || account === '' || account.length > MAX_ACCOUNT_LENGTH || !printable(account)) {
 		throw new BadRequestError(`A binding's account is a text of 1 to ${MAX_ACCOUNT_LENGTH} printable characters`)
 	}
 	return account
-}
-
-export interface BindingHandlers {
-	bind(args: { readonly input: Readonly<Record<string, unknown>>; readonly ctx: object }): Promise<z.output<typeof webhookBindOutput>>
-	unbind(args: { readonly input: Readonly<Record<string, unknown>>; readonly ctx: object }): Promise<z.output<typeof webhookUnbindOutput>>
-}
-
-/** What the `in` access form handed a binding endpoint: the checked `Ref` of the value, and the person. */
-function accessOf(ctx: object): { readonly scope: Ref<string, string>; readonly principal: string } {
-	const target: unknown = Reflect.get(ctx, 'target')
-	const principal: unknown = Reflect.get(ctx, 'principal')
-	const id: unknown = typeof principal === 'object' && principal !== null ? Reflect.get(principal, 'id') : undefined
-	if (!(target instanceof Ref) || typeof id !== 'string') {
-		throw new TypeError('a binding endpoint runs for a person, with the Ref of its in access form')
-	}
-	return { scope: target, principal: id }
-}
-
-/** The framework's handlers of `webhooks.<name>.bind` and `.unbind`. */
-export function bindingHandlers(webhook: string, path: string, tables: () => WebhookTables): BindingHandlers {
-	return {
-		async bind({ input, ctx }) {
-			const { scope, principal } = accessOf(ctx)
-			const account = z.parse(webhookBindInput.shape.account, input['account'])
-			const id = uuidv7()
-			const secret = generateSecret('github-sha256')
-			await tables().createBinding({
-				id,
-				webhook,
-				scope: { type: scope.dimension, value: scope.value },
-				account,
-				secret,
-				createdBy: principal,
-				createdAt: Date.now(),
-			})
-			return { id, url: joinPath(path, id), secret }
-		},
-		async unbind({ input, ctx }) {
-			const { scope } = accessOf(ctx)
-			const id = z.parse(webhookUnbindInput.shape.id, input['id'])
-			if (!(await tables().removeBinding(webhook, id, { type: scope.dimension, value: scope.value }))) {
-				throw new NotFoundError('Not found')
-			}
-			return { id }
-		},
-	}
 }

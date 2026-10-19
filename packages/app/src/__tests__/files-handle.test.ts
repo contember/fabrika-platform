@@ -1,182 +1,127 @@
-// `ctx.files` of a kit application on a REAL Postgres: a job that mails a note's clean documents read whole, a
-// mutation that requires a document, and every refusal of a capability that does not take the collection's action.
-// Skips cleanly without FABRIKA_TEST_POSTGRES_URL.
+// `ctx.files.put` and `ctx.files.open` of a kit procedure on a REAL Postgres: what a put refuses before anything is
+// stored, the bound open reads within, and a reference the request does not hold. Skips cleanly without
+// FABRIKA_TEST_POSTGRES_URL.
 
-import { createClient, RpcError } from '@fabrika/app/client'
-import { FILE_SCAN_JOB, type FileScanner, type ScanBatchResult, type ScanVerdict } from '@fabrika/app/implement'
-import { type TestKit, testKit } from '@fabrika/app/testing'
-import { applicationSchema, Database } from '@fabrika/db'
+import { NotFoundError } from '@fabrika/app'
+import { serve } from '@fabrika/app/implement'
+import { testKit } from '@fabrika/app/testing'
+import { scoped } from '@fabrika/db'
+import { testDatabase } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
-import { SQL } from 'bun'
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
-import { CapabilityRefusedError } from '../implement/capability'
-import { ServerFault } from '../implement/faults'
-import { contract } from './fixtures/kit-files/fabrika.contract'
-import { migration } from './fixtures/kit-files/migration'
-import { filesApp } from './fixtures/kit-files/src/app'
-import type { FilesWorld } from './fixtures/kit-files/src/world'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { join } from 'node:path'
+import { z } from 'zod/v4'
+import { app } from './stored-files-fixture/src/app-kit'
+import { tables } from './stored-files-fixture/src/db/tables'
+import { PNG_BYTES } from './stored-files-fixture/src/deals/endpoints'
 
-const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
-const url = process.env[URL_VAR] ?? ''
-const hasPostgres = url !== ''
-if (!hasPostgres) {
-	console.warn(`files-handle.test.ts skipped: set ${URL_VAR} to run it (the file rows and the jobs' leases live in @fabrika/db)`)
+const CATALOG_MAX_BYTES = 64
+const BODIES = {
+	png: new Uint8Array(PNG_BYTES),
+	pdf: new TextEncoder().encode('%PDF-1.7\n%%EOF\n'),
+	large: new Uint8Array([...PNG_BYTES, ...new Array<number>(CATALOG_MAX_BYTES).fill(0)]),
 }
 
-const PDF = new TextEncoder().encode('%PDF-1.7\n1 0 obj << >> endobj\n%%EOF\n')
-const schema = applicationSchema(`fhandle-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`)
-let database: Database
+const Versioned = z.strictObject({ id: z.string(), version: z.int() })
+const Opened = z.strictObject({ name: z.nullable(z.string()), type: z.string(), size: z.int(), head: z.array(z.int()) })
 
-async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
-	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
-	try {
-		return await work(sql)
-	} finally {
-		await sql.close()
-	}
-}
+const handle = app.group({ callers: ['human'] }, (r) => ({
+	put: r.mutation({
+		input: z.strictObject({ name: z.string(), type: z.string(), body: z.enum(['png', 'pdf', 'large']) }),
+		output: Versioned,
+		access: { action: 'catalog.write', app: true },
+	}).handle(async ({ input, ctx }) => {
+		const image = await ctx.files.put('catalog', BODIES[input.body], { type: input.type, name: input.name })
+		return ctx.db.app.products.insert({ name: input.name, image })
+	}),
+	open: r.mutation({
+		input: z.strictObject({ id: z.string(), maxBytes: z.optional(z.int()) }),
+		output: Opened,
+		access: { action: 'catalog.write', app: true },
+	}).handle(async ({ input, ctx }) => {
+		const { image } = await ctx.db.app.products.get(input.id)
+		if (image === null) throw new NotFoundError('no image')
+		const opened = await ctx.files.open(image, input.maxBytes === undefined ? {} : { maxBytes: input.maxBytes })
+		return { name: opened.name, type: opened.type, size: opened.size, head: [...opened.bytes.subarray(0, 4)] }
+	}),
+	copied: r.mutation({
+		input: z.strictObject({ id: z.string() }),
+		output: z.strictObject({}),
+		access: { action: 'catalog.write', app: true },
+	}).handle(async ({ input, ctx }) => {
+		const { image } = await ctx.db.app.products.get(input.id)
+		if (image === null) throw new NotFoundError('no image')
+		await ctx.files.open({ ...image })
+		return {}
+	}),
+}))
 
-/** Calls every file it was handed clean, after reading it whole. */
-class CleanScanner implements FileScanner {
-	async scan(objects: Parameters<FileScanner['scan']>[0], signal: AbortSignal): Promise<ScanBatchResult> {
-		const verdicts = new Map<string, ScanVerdict>()
-		for (const object of objects) {
-			await new Response(await object.open(signal)).arrayBuffer()
-			verdicts.set(object.id, { kind: 'clean' })
-		}
-		return { ok: true, verdicts }
-	}
-}
+const contract = app.contract((c) => ({
+	api: c.rpc('/api', { handle }),
+	files: {
+		attachments: c.files({ types: ['application/pdf', 'image/png'], maxBytes: 1048576 }),
+		catalog: c.files({ types: ['image/png'], maxBytes: CATALOG_MAX_BYTES }),
+		photos: c.files({ types: ['image/png'], maxBytes: 262144 }),
+	},
+}))
 
-beforeAll(async () => {
-	if (!hasPostgres) return
-	await admin((sql) => sql.unsafe(`create schema ${schema}; set search_path to ${schema}; ${migration}`))
-	database = Database.postgres({ url, schema, max: 4 })
-})
-
-beforeEach(async () => {
-	if (!hasPostgres) return
-	await admin((sql) =>
-		sql.unsafe(
-			`truncate ${schema}.fabrika_files_documents, ${schema}.fabrika_files_attachments, ${schema}.notes; delete from ${schema}.fabrika_job_leases`,
-		)
-	)
-})
+const postgres = await testDatabase({ migrations: join(import.meta.dir, 'stored-files-fixture', 'db', 'migrations'), label: 'files-handle.test.ts' })
 
 afterAll(async () => {
-	if (!hasPostgres) return
-	await database.close()
-	await admin((sql) => sql.unsafe(`drop schema ${schema} cascade`))
+	await postgres?.close()
 })
 
-async function seedNote(title = 'a note'): Promise<string> {
-	const id = Bun.randomUUIDv7()
-	await admin((sql) =>
-		sql.unsafe(`insert into ${schema}.notes (id, workspace_id, title, created_by, version) values ($1, 'w1', $2, 'user-1', 1)`, [id, title])
-	)
-	return id
-}
-
-interface Booted {
-	readonly kit: TestKit<typeof contract>
-	readonly world: FilesWorld
-	readonly store: MemoryFileObjects
-	upload(collection: 'documents' | 'attachments', note: string, name?: string): Promise<string>
-}
-
-function boot(): Booted {
-	const world: FilesWorld = { sent: [], refusals: [], removed: [], failErase: false }
-	const app = filesApp(world)
+if (postgres !== null) {
 	const store = new MemoryFileObjects()
-	const kit = testKit(app.implementation, { database, files: store, scanner: new CleanScanner(), env: app.variables })
-	const editor = kit.browser(kit.testCaller([{ role: 'editor', scope: kit.scope('workspace', 'w1') }]))
-	return {
-		kit,
-		world,
-		store,
-		async upload(collection, note, name = 'brief.pdf') {
-			const response = await editor(`/api/files.${collection}.upload/${note}?name=${name}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/pdf' },
-				body: PDF,
-			})
-			const body: unknown = await response.json()
-			const result = typeof body === 'object' && body !== null && 'result' in body ? body.result : null
-			const id = typeof result === 'object' && result !== null && 'id' in result ? result.id : null
-			if (response.status !== 200 || typeof id !== 'string') throw new Error(`expected an upload, got ${response.status}`)
-			return id
-		},
+	const kit = testKit(serve(contract, { database: scoped(tables) }), { database: postgres.database, files: store })
+	const call = kit.browser(kit.testCaller([{ action: 'catalog.write' }]))
+	const post = async (procedure: string, body: unknown): Promise<{ readonly status: number; readonly body: unknown }> => {
+		const response = await call(`/api/handle.${procedure}`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+		})
+		return { status: response.status, body: await response.json() }
 	}
+	const errorType = (body: unknown): unknown => z.strictObject({ error: z.looseObject({ type: z.string() }) }).safeParse(body).data?.error.type
+
+	describe('ctx.files.put', () => {
+		test('stores a file of the kind, which open reads back whole with its name and type', async () => {
+			const put = await post('put', { name: 'lamp.png', type: 'image/png', body: 'png' })
+			expect(put.status).toBe(200)
+			const { id } = Versioned.parse(z.strictObject({ result: Versioned }).parse(put.body).result)
+			const opened = await post('open', { id })
+			expect(opened).toEqual({
+				status: 200,
+				body: { result: { name: 'lamp.png', type: 'image/png', size: PNG_BYTES.length, head: PNG_BYTES.slice(0, 4) } },
+			})
+		})
+
+		test('refuses a type the kind does not admit, bytes that are not the declared type, and a file over the kind', async () => {
+			const objects = store.objects.size
+			const notAdmitted = await post('put', { name: 'brief.pdf', type: 'application/pdf', body: 'pdf' })
+			expect([notAdmitted.status, errorType(notAdmitted.body)]).toEqual([415, 'unsupported_media_type'])
+			const notItsBytes = await post('put', { name: 'fake.png', type: 'image/png', body: 'pdf' })
+			expect([notItsBytes.status, errorType(notItsBytes.body)]).toEqual([415, 'unsupported_media_type'])
+			const tooLarge = await post('put', { name: 'large.png', type: 'image/png', body: 'large' })
+			expect([tooLarge.status, errorType(tooLarge.body)]).toEqual([413, 'too_large'])
+			expect(store.objects.size).toBe(objects)
+		})
+	})
+
+	describe('ctx.files.open', () => {
+		test('refuses a file larger than the bound the site reads within', async () => {
+			const put = await post('put', { name: 'desk.png', type: 'image/png', body: 'png' })
+			const { id } = Versioned.parse(z.strictObject({ result: Versioned }).parse(put.body).result)
+			const opened = await post('open', { id, maxBytes: 4 })
+			expect([opened.status, errorType(opened.body)]).toEqual([413, 'too_large'])
+		})
+
+		test('refuses a copy of a reference, which the request does not hold, though its file exists', async () => {
+			const put = await post('put', { name: 'chair.png', type: 'image/png', body: 'png' })
+			const { id } = Versioned.parse(z.strictObject({ result: Versioned }).parse(put.body).result)
+			expect((await post('open', { id })).status).toBe(200)
+			expect((await post('copied', { id })).status).toBe(500)
+		})
+	})
 }
-
-function api(kit: TestKit<typeof contract>) {
-	return createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ role: 'editor', scope: kit.scope('workspace', 'w1') }])) })
-}
-
-describe.skipIf(!hasPostgres)('ctx.files of a job', () => {
-	test("mails a note's document read whole once its scan called it clean, and nothing while it is quarantined", async () => {
-		const { kit, world, upload } = boot()
-		const note = await seedNote()
-		await seedNote()
-		await upload('documents', note)
-
-		expect(await kit.runJob('mail')).toEqual({ status: 'succeeded', attempts: 1 })
-		expect(world.sent).toEqual([])
-
-		expect(await kit.runJob(FILE_SCAN_JOB)).toEqual({ status: 'succeeded', attempts: 1 })
-		expect(await kit.runJob('mail')).toEqual({ status: 'succeeded', attempts: 1 })
-		expect(world.sent).toEqual([{ note, attachments: [{ name: 'brief.pdf', type: 'application/pdf', bytes: PDF }] }])
-	})
-
-	test("refuses a capability of another action than the collection's, another note's file, a quarantined or too large one", async () => {
-		const { kit, world, upload } = boot()
-		const first = await seedNote()
-		const second = await seedNote()
-		await upload('documents', first)
-		await upload('attachments', second, 'notes.pdf')
-
-		expect(await kit.runJob('peek')).toEqual({ status: 'succeeded', attempts: 1 })
-		const steps = world.refusals.map(({ step, error }) => [step, refusalOf(error)])
-		expect(steps).toEqual([
-			['list with notes.delete', 'CapabilityRefusedError wrong_capability'],
-			['open with notes.read', 'CapabilityRefusedError wrong_capability'],
-			['open quarantined', 'HttpError 409 quarantined'],
-			['list with the write action only', 'CapabilityRefusedError wrong_capability'],
-			['list with notes.delete', 'CapabilityRefusedError wrong_capability'],
-			['open of another note', 'NotFoundError 404 not_found'],
-			['list with the write action only', 'CapabilityRefusedError wrong_capability'],
-			['open over maxBytes', 'HttpError 413 too_large'],
-			['an unknown collection', 'ServerFault file_collection_unknown'],
-		])
-	})
-})
-
-function refusalOf(error: unknown): string {
-	if (error instanceof CapabilityRefusedError) return `CapabilityRefusedError ${error.reason}`
-	if (error instanceof ServerFault) return `ServerFault ${error.reason}`
-	if (error instanceof Error && 'httpStatus' in error && 'type' in error) return `${error.name} ${String(error.httpStatus)} ${String(error.type)}`
-	return 'unexpected'
-}
-
-describe.skipIf(!hasPostgres)('ctx.files of an endpoint', () => {
-	test('a mutation refuses while its note has no live or quarantined document, and passes once one is uploaded', async () => {
-		const { kit, upload } = boot()
-		const note = await seedNote()
-		const client = api(kit)
-		const refused = await client.notes.submit({ id: note, expectVersion: 1 }).then(() => null, (error: unknown) => error)
-		expect(refused).toBeInstanceOf(RpcError)
-		expect(refused).toMatchObject({ httpStatus: 409 })
-		await upload('documents', note)
-		expect(await client.notes.submit({ id: note, expectVersion: 1 })).toEqual({ id: note, version: 2 })
-	})
-
-	test('a query lists the files its capability reaches, and fails with a capability of another action than the read one', async () => {
-		const { kit, upload } = boot()
-		const note = await seedNote()
-		await upload('attachments', note)
-		const client = api(kit)
-		expect(await client.notes.attached({ id: note })).toEqual({ files: 1 })
-		const refused = await client.notes.peek({ id: note }).then(() => null, (error: unknown) => error)
-		expect(refused).toMatchObject({ httpStatus: 500 })
-	})
-})

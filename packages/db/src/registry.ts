@@ -2,10 +2,8 @@
 // `store.ts`, which registers and builds the framework's stores, `framework.ts`, which `@fabrika/app` alone imports, and `testing.ts`, which only test
 // files may import.
 
+import type { Admissions } from './admissions'
 import type { Session } from './database'
-import type { FileTables } from './file-tables'
-import type { FormAdmissions, InboxQuota } from './form-admissions'
-import type { FormFiles, HeldFormFiles } from './form-files'
 import type { WebhookTables } from './framework-tables'
 import type { JobLeases } from './job-leases'
 import type { DataAccess } from './orm'
@@ -18,22 +16,12 @@ import type { StoredFiles } from './stored-files'
  */
 export type Locator = (dimension: string, id: string, using?: Session) => Promise<ReadonlyMap<string, string> | null>
 
-/** What the framework writes itself: a form's inbox row and its own `fabrika_*` tables. Usable once bound. */
+/** What the framework writes itself: its own `fabrika_*` tables. Usable once bound. */
 export interface FrameworkTables {
-	/** Why `fields` of form `form` cannot be appended to an inbox table of this layer; empty when they can. */
-	inboxProblems(form: string, fields: readonly string[]): readonly string[]
-	/**
-	 * Appends one row of `values` (column → value) to the inbox table of `form`, taking one from `quota` in the same
-	 * transaction, and makes the submission's `held` files held in it too; `false`, with nothing written, when the
-	 * bucket is full.
-	 */
-	appendToInbox(form: string, values: Readonly<Record<string, unknown>>, quota: InboxQuota, held?: HeldFormFiles): Promise<boolean>
 	readonly webhooks: WebhookTables
 	readonly jobs: JobLeases
-	/** A form's admission counters and the challenge tokens it accepted. */
-	readonly forms: FormAdmissions
-	/** The files forms received, until the job that drains each inbox attaches them to their owner. */
-	readonly formFiles: FormFiles
+	/** A procedure's admission buckets, the challenge tokens it accepted and its byte budget. */
+	readonly admissions: Admissions
 	/** Every stored file (`fabrika_files`): staged before its object, claimed at its first reference, swept unreferenced. */
 	readonly files: StoredFiles
 }
@@ -41,8 +29,6 @@ export interface FrameworkTables {
 export interface FrameworkSide {
 	/** Connects the layer once and answers its locator; a second call throws. */
 	bind(runtime: DataLayerRuntime): Locator
-	/** The rows of the file collections' tables; usable once bound. */
-	readonly files: FileTables
 	readonly framework: FrameworkTables
 	/** The untyped handle over one table that `@fabrika/db/testing` hands the isolation tests. */
 	probe(table: string): TableProbe

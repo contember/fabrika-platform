@@ -88,6 +88,6 @@ type JobsOf<C> = C extends { readonly surface: { readonly jobs: infer J } } ? J 
 /** `{ jobs: { <name>: handler } }` for a contract that declares jobs, and nothing for one that declares none. */
 export type JobHandlersOf<C> = [JobsOf<C>] extends [never] ? unknown : {
 	readonly jobs: {
-		readonly [K in keyof JobsOf<C>]: JobsOf<C>[K] extends CronJob<infer A, string> ? JobHandler<A, DimensionOf<C>> : never
+		readonly [K in keyof JobsOf<C>]: JobsOf<C>[K] extends CronJob<infer A> ? JobHandler<A, DimensionOf<C>> : never
 	}
 }

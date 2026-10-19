@@ -1,8 +1,11 @@
-// A public intake: a registration form with a honeypot and a Turnstile challenge, and a plain contact form. Each
-// declares its own rate, small enough for a test to empty its buckets.
+// A public intake: a registration with a honeypot and a Turnstile challenge, and a plain contact message, each a
+// public procedure that writes an application table. Each declares its own rate, small enough for a test to empty its
+// buckets.
 
-import { defineContract } from '@fabrika/app/contract'
+import { honeypot } from '@fabrika/app'
+import { defineApp } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
+import { tables } from './src/db/tables'
 import { vocabulary } from './src/vocabulary'
 
 export const Application = z.strictObject({
@@ -12,15 +15,35 @@ export const Application = z.strictObject({
 	challengeToken: z.string(),
 })
 export const Contact = z.strictObject({ email: z.email(), body: z.string().min(1) })
+const Received = z.strictObject({ received: z.boolean() })
 
-export const contract = defineContract(vocabulary, (c) => ({
-	apply: c.form('/apply', {
+const app = defineApp(vocabulary, tables)
+
+const intake = app.group({}, (r) => ({
+	apply: r.mutation({
 		input: Application,
-		appendTo: 'applications',
-		honeypot: 'website',
-		challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' },
-		rate: { perClient: 3, perForm: 5 },
+		output: Received,
+		access: { public: true },
+		actions: ['applications.submit'],
+		admission: { challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' }, rate: { perClient: 3, perEndpoint: 5 } },
+	}).handle(async ({ input, ctx }) => {
+		if (honeypot(input.website)) return { received: true }
+		await ctx.db.app('applications.submit').applications.insert({ name: input.name, email: input.email })
+		return { received: true }
 	}),
-	contact: c.form('/contact', { input: Contact, appendTo: 'messages', rate: { perClient: 2, perForm: 4 } }),
+	contact: r.mutation({
+		input: Contact,
+		output: Received,
+		access: { public: true },
+		actions: ['messages.send'],
+		admission: { rate: { perClient: 2, perEndpoint: 4 } },
+	}).handle(async ({ input, ctx }) => {
+		await ctx.db.app('messages.send').messages.insert({ email: input.email, body: input.body })
+		return { received: true }
+	}),
+}))
+
+export const contract = app.contract((c) => ({
+	api: c.rpc('/api', { intake }),
 	health: c.health('/healthz'),
 }))

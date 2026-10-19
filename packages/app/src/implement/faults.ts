@@ -22,7 +22,6 @@ export const SERVER_FAULTS = {
 	file_object_missing: "a file's object is missing from storage",
 	file_object_mismatch: "a file's object has another size than its row records",
 	file_key_taken: "a new file's object key already held an object this upload did not write",
-	file_collection_unknown: 'ctx.files named a collection the contract does not declare',
 	file_kind_unknown: 'ctx.files.put or a file field named a file kind the contract does not declare',
 	file_put: 'ctx.files.put was called without the options it takes ({ type, name? })',
 	file_output_kind: 'the handler answered a file of another kind than its output declares',
