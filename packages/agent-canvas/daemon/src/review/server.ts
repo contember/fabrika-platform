@@ -122,7 +122,7 @@ export function createReviewServer(store: ReviewStore) {
 		route('POST', '/api/review/:project/threads', 'browser', async (req, match) => {
 			const project = projectOf(match)
 			const body = await parseBody(req, createThreadBodySchema)
-			const thread = store.create(project, body.anchor, body.body, body.send)
+			const thread = store.create(project, body.anchor, body.body, body.send, body.screenshot)
 			publish(project)
 			if (body.send) notifyAgent(project)
 			return { thread }

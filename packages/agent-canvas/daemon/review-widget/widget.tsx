@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import type { ReviewAnchor, ReviewThread, ReviewThreadState } from '../src/review/model'
+import type { ReviewAnchor, ReviewSource, ReviewThread, ReviewThreadState } from '../src/review/model'
 import { describe, find } from './anchor'
 import type { ReviewClient } from './client'
+import { captureElement } from './screenshot'
+import { bundleFrames, resolveSources } from './source'
 
 /** A type alias, not an interface, so it passes as an inline style. */
 type Box = {
@@ -14,6 +16,9 @@ type Box = {
 interface Draft {
 	anchor: ReviewAnchor
 	box: Box
+	element: Element
+	/** Resolved while the reviewer writes: source maps can take a moment to load. */
+	sources: Promise<ReviewSource[]>
 }
 
 const STATE_LABELS: Record<ReviewThreadState, string> = {
@@ -174,8 +179,9 @@ function popoverPosition(box: Box): { top: number; left: number } {
 	return { top, left }
 }
 
-function Composer(props: { draft: Draft; onSubmit: (body: string, send: boolean) => Promise<void>; onCancel: () => void }) {
+function Composer(props: { draft: Draft; onSubmit: (body: string, send: boolean, screenshot: boolean) => Promise<void>; onCancel: () => void }) {
 	const [body, setBody] = useState('')
+	const [screenshot, setScreenshot] = useState(false)
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const textarea = useRef<HTMLTextAreaElement>(null)
@@ -186,7 +192,7 @@ function Composer(props: { draft: Draft; onSubmit: (body: string, send: boolean)
 		setBusy(true)
 		setError(null)
 		try {
-			await props.onSubmit(body, send)
+			await props.onSubmit(body, send, screenshot)
 		} catch (failure) {
 			setError(failure instanceof Error ? failure.message : String(failure))
 			setBusy(false)
@@ -207,6 +213,10 @@ function Composer(props: { draft: Draft; onSubmit: (body: string, send: boolean)
 					if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) void submit(true)
 				}}
 			/>
+			<label class="option">
+				<input type="checkbox" checked={screenshot} onChange={(event) => setScreenshot(event.currentTarget.checked)} />
+				Attach a screenshot
+			</label>
 			{error !== null && <div class="error">{error}</div>}
 			<div class="actions">
 				<button type="button" class="ghost" onClick={props.onCancel}>Cancel</button>
@@ -310,7 +320,7 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 		setPicking(false)
 		setHovered(null)
 		window.getSelection()?.removeAllRanges()
-		setDraft({ anchor: describe(element, location.href, range), box: boxOf(element) })
+		setDraft({ anchor: describe(element, location.href, range), box: boxOf(element), element, sources: resolveSources(bundleFrames(element)) })
 	}, [])
 	usePicker(host, picking, setHovered, pick, cancelPicking)
 	// The panel covers the right edge of the page, which the reviewer may want to pick from.
@@ -375,8 +385,11 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 				<Composer
 					draft={draft}
 					onCancel={() => setDraft(null)}
-					onSubmit={async (body, send) => {
-						await client.createThread(draft.anchor, body, send)
+					onSubmit={async (body, send, screenshot) => {
+						// The capture asks for the tab, which the browser allows only while the click still counts as a gesture.
+						const image = screenshot ? await captureElement(draft.element, host) : undefined
+						const sources = await draft.sources
+						await client.createThread(sources.length === 0 ? draft.anchor : { ...draft.anchor, sources }, body, send, image)
 						setDraft(null)
 					}}
 				/>

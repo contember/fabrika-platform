@@ -1,4 +1,5 @@
 import type { ReviewAnchor } from '../src/review/model'
+import { contextOf, htmlOf } from './markup'
 
 const MAX_TEXT = 120
 const QUOTE_CONTEXT = 40
@@ -136,13 +137,17 @@ function quoteOf(element: Element, range: Range): ReviewAnchor['quote'] {
 	}
 }
 
-/** Describes the element, or the selection inside it, so the agent can find it in code and the widget in the page. */
+/**
+ * Describes the element, or the selection inside it, so the agent can find it in code and the widget in the page.
+ * Source positions need the page's source maps, so the caller resolves them separately.
+ */
 export function describe(element: Element, url: string, range?: Range): ReviewAnchor {
 	const role = roleOf(element)
 	const name = nameOf(element)
 	const text = element.textContent === null ? '' : shorten(element.textContent)
 	const components = componentsOf(element)
 	const quote = range === undefined ? undefined : quoteOf(element, range)
+	const context = contextOf(element)
 	return {
 		url,
 		selector: selectorOf(element),
@@ -151,6 +156,8 @@ export function describe(element: Element, url: string, range?: Range): ReviewAn
 		...(text === '' ? {} : { text }),
 		...(components.length === 0 ? {} : { components }),
 		...(quote === undefined ? {} : { quote }),
+		...(context === undefined ? {} : { context }),
+		html: htmlOf(element),
 	}
 }
 

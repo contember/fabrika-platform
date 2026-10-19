@@ -48,11 +48,17 @@ bunx agent-canvas review watch --project <name>
 The output lists each thread with:
 
 - `Page` — the URL the comment was made on, hash route included.
+- `Where` — the page heading and the section or dialog around the element.
 - `Element` — ARIA role and accessible name, the way you would target the element in a browser.
 - `Selector` — a CSS path to the element.
-- `Components` — React components that own the element, outermost first (React development builds only). Search the
-  code for the innermost one first.
+- `Components` — React components that own the element, outermost first.
+- `Source` — `file:line:column` where the element and its nearest components are written, innermost first. Start
+  there. It needs React 19 in development and source maps from the dev server; without them, search for the innermost
+  component instead.
 - `Selected text` — when the user commented on a text selection.
+- `Screenshot` — when the user attached one: a PNG of the element in its surroundings, the element outlined in red.
+  Read it; it shows what the user sees, which matters for visual comments.
+- `Markup` — the element's HTML, trimmed: classes, attributes and structure, not whole subtrees.
 - The conversation so far.
 
 For each thread:

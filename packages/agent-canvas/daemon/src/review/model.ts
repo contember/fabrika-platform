@@ -9,6 +9,18 @@ export const PROJECT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
 const shortText = z.string().max(500)
 
+export const MAX_HTML = 4000
+
+/** A position in the application's source, resolved from a development stack through the page's source maps. */
+export const reviewSourceSchema = z.object({
+	/** What was created there, e.g. `<a> in ProductListCell` or `<ProductListCell> in DataGrid`. */
+	label: shortText,
+	file: z.string().max(1000),
+	line: z.number().int().positive(),
+	column: z.number().int().nonnegative(),
+})
+export type ReviewSource = z.infer<typeof reviewSourceSchema>
+
 /** Where in the page a thread points. Every field is best effort; the agent reads them, the widget re-finds the element. */
 export const reviewAnchorSchema = z.object({
 	/** The page's URL when the thread was created, hash routes included. */
@@ -22,6 +34,12 @@ export const reviewAnchorSchema = z.object({
 	text: shortText.optional(),
 	/** Owner components from the outermost to the element, read off React's development fibers. */
 	components: z.array(z.string().max(200)).max(20).optional(),
+	/** Source positions of the element and its nearest owner components, innermost first. */
+	sources: z.array(reviewSourceSchema).max(10).optional(),
+	/** The landmarks around the element: page heading, section, dialog. */
+	context: shortText.optional(),
+	/** The element's markup, trimmed: deep subtrees, long lists and long texts are cut. */
+	html: z.string().max(MAX_HTML).optional(),
 	/** A text selection inside the element, with its surroundings. */
 	quote: z.object({ exact: z.string().min(1).max(2000), before: shortText, after: shortText }).optional(),
 })
@@ -52,6 +70,8 @@ export const reviewThreadSchema = z.object({
 	anchor: reviewAnchorSchema,
 	state: reviewThreadStateSchema,
 	comments: z.array(reviewCommentSchema).min(1),
+	/** Absolute path of a PNG of the element the reviewer attached, stored by the daemon. */
+	screenshot: z.string().optional(),
 	createdAt: z.string(),
 	updatedAt: z.string(),
 })
@@ -61,7 +81,18 @@ export const reviewThreadsFileSchema = z.object({ threads: z.array(reviewThreadS
 
 const commentBody = z.string().trim().min(1).max(20_000)
 
-export const createThreadBodySchema = z.object({ anchor: reviewAnchorSchema, body: commentBody, send: z.boolean() })
+const PNG_DATA_URL = 'data:image/png;base64,'
+
+/** A PNG the widget rendered from the element, as a data URL; at most about 6 MB decoded. */
+export const screenshotDataUrlSchema = z.string().startsWith(PNG_DATA_URL).max(8_000_000)
+	.transform((url) => Uint8Array.from(atob(url.slice(PNG_DATA_URL.length)), (char) => char.charCodeAt(0)))
+
+export const createThreadBodySchema = z.object({
+	anchor: reviewAnchorSchema,
+	body: commentBody,
+	send: z.boolean(),
+	screenshot: screenshotDataUrlSchema.optional(),
+})
 export const addCommentBodySchema = z.object({ body: commentBody, send: z.boolean() })
 export const agentReplyBodySchema = z.object({ body: commentBody, resolve: z.boolean() })
 

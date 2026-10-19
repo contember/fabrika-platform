@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { renderReviewRequests } from './markdown'
@@ -62,6 +62,15 @@ describe('ReviewStore', () => {
 		expect(() => store.send('demo', thread.id)).toThrow('already working')
 	})
 
+	test('an attached screenshot is stored beside the threads and removed with its thread', () => {
+		const png = new Uint8Array([137, 80, 78, 71])
+		const thread = store.create('demo', anchor, 'Misaligned', true, png)
+		expect(thread.screenshot).toBe(join(directory, 'demo', 'screenshots', `${thread.id}.png`))
+		expect([...readFileSync(thread.screenshot ?? '')]).toEqual([...png])
+		store.delete('demo', thread.id)
+		expect(existsSync(thread.screenshot ?? '')).toBe(false)
+	})
+
 	test('projects are separate and their names cannot leave the directory', () => {
 		store.create('one', anchor, 'A', false)
 		expect(store.list('two')).toEqual([])
@@ -79,6 +88,26 @@ describe('renderReviewRequests', () => {
 		expect(markdown).toContain('- Components: ProductPage › SaveBar')
 		expect(markdown).toContain('> Make it green')
 		expect(markdown).toContain('review reply <thread-id>')
+	})
+
+	test('adds source positions, landmarks, the screenshot and fenced markup', () => {
+		const thread = store.create(
+			'demo',
+			{
+				...anchor,
+				context: 'Page "Products" › Dialog "Edit price"',
+				sources: [{ label: '<button> in SaveBar', file: '/app/src/SaveBar.tsx', line: 12, column: 7 }],
+				html: '<button class="primary">Save ```</button>',
+			},
+			'Make it green',
+			true,
+			new Uint8Array([1]),
+		)
+		const markdown = renderReviewRequests('demo', [thread])
+		expect(markdown).toContain('- Where: Page "Products" › Dialog "Edit price"')
+		expect(markdown).toContain('  - <button> in SaveBar: `/app/src/SaveBar.tsx:12:7`')
+		expect(markdown).toContain(`- Screenshot, the element outlined in red: \`${thread.screenshot}\``)
+		expect(markdown).toContain('````html\n<button class="primary">Save ```</button>\n````')
 	})
 })
 
@@ -123,6 +152,17 @@ describe('review routes', () => {
 		const body: unknown = await claimed.json()
 		expect(body).toMatchObject({ found: true })
 		expect(JSON.stringify(body)).toContain('Make it green')
+	})
+
+	test('a screenshot arrives as a PNG data URL and is stored as a file', async () => {
+		const screenshot = `data:image/png;base64,${btoa(String.fromCharCode(137, 80, 78, 71))}`
+		const created = await call('POST', '/api/review/demo/threads', {
+			origin: 'http://localhost:4317',
+			body: { anchor, body: 'Misaligned', send: false, screenshot },
+		})
+		expect(created.status).toBe(200)
+		const [thread] = store.list('demo')
+		expect([...readFileSync(thread?.screenshot ?? '')]).toEqual([137, 80, 78, 71])
 	})
 
 	test('a foreign origin cannot create a thread', async () => {
