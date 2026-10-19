@@ -12,7 +12,15 @@ import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence,
 import { EmailDeliveryError, type EmailSenderCapabilities, mayRetryDelivery } from '@fabrika/email'
 import { NotFoundError } from '../errors'
 import type { FileCollections } from '../files/collections'
-import { type CapabilityMint, CapabilityRefusedError, type Ref, RequestFrame, runInRequest, type Within } from '../implement/capability'
+import {
+	type AppCapability,
+	type CapabilityMint,
+	CapabilityRefusedError,
+	type Ref,
+	RequestFrame,
+	runInRequest,
+	type Within,
+} from '../implement/capability'
 import { failureCode, type FailureReason, failureReason } from '../implement/failures'
 import { ServerFault } from '../implement/faults'
 import type { ContractDatabase } from '../implement/implement'
@@ -730,7 +738,7 @@ function jobContext(
 	perms: readonly PermissionEntry[],
 ): JobContext<string, string> {
 	const principal: JobPrincipal = Object.freeze({ kind: 'job', id: `job:${job.name}`, job: job.name })
-	const check = (action: string, dimension: string): void => {
+	const checkAction = (action: string): void => {
 		if (frame.ended) {
 			throw new CapabilityRefusedError('ended', `attempt ${frame.id} of job '${job.name}' has ended; it mints no capability`)
 		}
@@ -743,6 +751,9 @@ function jobContext(
 		if (!permits([...perms], action)) {
 			throw new CapabilityRefusedError('undeclared_action', `the token IAM signed for the key of job '${job.name}' does not carry this action`)
 		}
+	}
+	const check = (action: string, dimension: string): void => {
+		checkAction(action)
 		if (!Object.hasOwn(context.artifact.dimensions, dimension)) {
 			throw new CapabilityRefusedError('undeclared_dimension', `job '${job.name}' named a dimension the contract does not declare`)
 		}
@@ -765,6 +776,10 @@ function jobContext(
 		}
 		return context.mint.ref(frame, dimension, action, principal.id, id, chain)
 	}
+	const app = <const Act extends string>(action: Act): AppCapability<Act> => {
+		checkAction(action)
+		return context.mint.app(frame, action, principal.id)
+	}
 	return Object.freeze({
 		principal,
 		runId: frame.id,
@@ -772,7 +787,7 @@ function jobContext(
 		signal,
 		...(job.site === null || context.data === null
 			? {}
-			: kitJobContext(frame, context.data, context.files, job.name, job.site, principal.id, ref, periodAt(job.schedule, new Date()) ?? undefined)),
+			: kitJobContext(frame, context.data, context.files, job.name, job.site, principal.id, ref, app, periodAt(job.schedule, new Date()) ?? undefined)),
 		...(job.links === null || context.membership === null ? {} : { links: jobLinksOf(job, job.links, context.membership, frame, context) }),
 		...(job.mailer === null ? {} : { mail: jobMailOf(job, job.mailer, frame, signal, context) }),
 		within<const Act extends string, const Dim extends string>(action: Act, dimension: Dim): Within<Dim, Act> {
@@ -782,6 +797,7 @@ function jobContext(
 		ref<const Act extends string, const Dim extends string>(action: Act, dimension: Dim, id: string): Promise<Ref<Dim, Act>> {
 			return ref(action, dimension, id)
 		},
+		app,
 	})
 }
 
@@ -845,12 +861,13 @@ function kitJobContext(
 	site: SiteDeclaration,
 	principal: string,
 	ref: (action: string, dimension: string, id: string, using: Session) => Promise<Ref<string, string>>,
+	app: (action: string) => AppCapability<string>,
 	tickMs: number | undefined,
 ): Readonly<Record<string, unknown>> {
 	const reads = jobHandles(frame, data, site, principal, 'job', async () => data.direct(), () => false, tickMs)
 	const job = `job '${name}'`
 	return {
-		db: siteData(reads),
+		db: siteData(reads, (action) => reads.app(app(action))),
 		sql: site.sql === null ? undeclaredSql(job, 'job') : jobSqlOutsideTransaction(job),
 		files: files === null ? noFileCollections(job) : files.site({
 			where: job,
@@ -883,7 +900,7 @@ function kitJobContext(
 						boundTo(frame, () => !open, 'tx.ref')()
 						return ref(action, dimension, id, session)
 					}
-					return await work(Object.freeze({ db: siteData(writes), sql, files: removing, ref: located }))
+					return await work(Object.freeze({ db: siteData(writes, (action) => writes.app(app(action))), sql, files: removing, ref: located }))
 				} finally {
 					open = false
 				}

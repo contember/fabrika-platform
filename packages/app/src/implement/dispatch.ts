@@ -68,7 +68,7 @@ import { ServerFault } from './faults'
 import { ACCEPTED_BUCKET, clientBucket, type Submission, type SubmissionFields, submissionOf } from './form-admission'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
-import { endpointData, Invocation, noFileCollections, siteData, type SiteDeclaration, undeclaredSql } from './invocation'
+import { boundWebhookApp, endpointData, Invocation, noFileCollections, siteData, type SiteDeclaration, undeclaredSql } from './invocation'
 import {
 	applicationDirectory,
 	createScope,
@@ -1004,14 +1004,15 @@ export class ContractRuntime {
 					)
 					const principal: WebhookPrincipal = Object.freeze({ kind: 'webhook', bindingId: binding.id })
 					const delivery = Object.freeze({ key })
+					const app = boundWebhookApp(served.webhook)
 					const data = site === undefined || invocation === null
 						? {}
 						: {
-							db: siteData(invocation.handles('mutation', site, subject)),
+							db: siteData(invocation.handles('mutation', site, subject), app),
 							sql: site.sql === null ? undeclaredSql(served.row.id, 'mutation') : invocation.sql(site.sql),
 						}
 					const signal = handlerSignal(request)
-					await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, signal, refs, delivery, ...data }) })
+					await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, signal, refs, delivery, app, ...data }) })
 				})
 			} finally {
 				frame.end()

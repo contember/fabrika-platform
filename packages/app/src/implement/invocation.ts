@@ -321,14 +321,28 @@ export function endpointData(
 }
 
 /** `ctx.db` of a job or a webhook: each capability it minted or received binds the same handles an endpoint gets. */
-export function siteData(handles: DataHandles): object {
+export function siteData(handles: DataHandles, app: (action: string) => object): object {
 	return Object.freeze({
 		on: (ref: unknown) => handles.target(ref, 'on'),
 		in: (ref: unknown) => handles.target(ref, 'in'),
 		over: (within: unknown) => handles.within(within),
+		app,
 		reference: handles.reference,
 		...(handles.unscoped === undefined ? {} : { unscoped: handles.unscoped }),
 	})
+}
+
+/**
+ * `ctx.app` and `ctx.db.app` of a webhook bound to a dimension. The types already refuse them; at run time they exist
+ * only to refuse by name.
+ */
+export function boundWebhookApp(webhook: string): (action: string) => never {
+	return () => {
+		throw new CapabilityRefusedError(
+			'undeclared_action',
+			`webhook '${webhook}' is bound to a dimension and acts on its bound value: use ctx.refs and ctx.db.on(ref)`,
+		)
+	}
 }
 
 /**

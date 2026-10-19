@@ -251,6 +251,10 @@ export type Sites = [
 	Expect<Equal<JobCtx['links'], Unavailable<"declare issues: '<link mount>' on this job to issue its share links">>>,
 	Expect<Equal<Parameters<Parameters<JobCtx['transaction']>[0]>[0]['sql'], SqlTag<K['index'], 'write'>>>,
 	Expect<Equal<HookCtx['refs'], { readonly 'crm.write': Ref<'org', 'crm.write'> }>>,
+	// A job mints an application-wide capability of a declared action; a webhook bound to a dimension holds none.
+	Expect<Equal<Parameters<JobCtx['app']>[0], 'crm.read' | 'deals.write'>>,
+	Expect<Equal<Parameters<JobCtx['db']['app']>[0], 'crm.read' | 'deals.write'>>,
+	Expect<Equal<HookCtx['app'], Unavailable<'a webhook bound to a dimension acts on its bound value: use ctx.refs and ctx.db.on(ref)'>>>,
 ]
 
 type Get = typeof deals.endpoints.get

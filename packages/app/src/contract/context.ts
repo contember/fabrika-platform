@@ -402,9 +402,17 @@ type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string,
 	& { readonly reference: ReferenceTables<Ix> }
 	& UnscopedData<Ix, U, Kind>
 
+/**
+ * `ctx.db.app('<action>')` of a workload site that acts application-wide (a job): the application tables of one of its
+ * declared actions, over `ctx.app('<action>')`.
+ */
+export interface WorkloadAppData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string> {
+	app<const A extends Acts>(action: A): AppData<Ix, A, Kind>
+}
+
 /** The fenced transaction of a job attempt: writes and `tx.sql` commit only while the attempt holds its lease. */
 export type JobTransaction<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string, JobMailer>> =
-	& { readonly db: SiteData<K['index'], 'mutation', A, Of<D, 'unscoped'>> }
+	& { readonly db: SiteData<K['index'], 'mutation', A, Of<D, 'unscoped'>> & WorkloadAppData<K['index'], 'mutation', A> }
 	& SqlContext<Of<D, 'sql'>, K['index']>
 	& FilesContext<K['index'], 'transaction'>
 	& {
@@ -434,7 +442,7 @@ type NoMail = { readonly mail: Unavailable<"an endpoint sends no mail: write an 
 /** What a cron job's handler receives. Its reads run outside the transaction; every write runs in `ctx.transaction`. */
 export type JobKitContext<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string, JobMailer>> =
 	& JobContext<A, K['dimension']>
-	& { readonly db: SiteData<K['index'], 'job', A, Of<D, 'unscoped'>> }
+	& { readonly db: SiteData<K['index'], 'job', A, Of<D, 'unscoped'>> & WorkloadAppData<K['index'], 'job', A> }
 	& { readonly sql: Unavailable<'a job runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql'> }
 	& FilesContext<K['index'], 'job'>
 	& JobLinksContext<K['dimension'], A, Of<D, 'issues'>>
@@ -445,8 +453,14 @@ export type JobKitContext<K extends KitTypes, A extends string, D extends Declar
 export type WebhookKitContext<K extends KitTypes, B extends string, Acts extends string, D extends Declared<SqlMode, unknown, never, never>> =
 	& RequestContext<WebhookPrincipal>
 	& { readonly refs: { readonly [A in Acts]: Ref<B, A> }; readonly delivery: WebhookDelivery }
+	// A webhook bound to a dimension acts on its bound value only, so it holds no application-wide capability.
+	& { readonly app: Unavailable<'a webhook bound to a dimension acts on its bound value: use ctx.refs and ctx.db.on(ref)'> }
 	& SqlContext<Of<D, 'sql'>, K['index']>
-	& { readonly db: SiteData<K['index'], 'mutation', Acts, Of<D, 'unscoped'>> }
+	& {
+		readonly db:
+			& SiteData<K['index'], 'mutation', Acts, Of<D, 'unscoped'>>
+			& { readonly app: Unavailable<'a webhook bound to a dimension acts on its bound value: use ctx.refs and ctx.db.on(ref)'> }
+	}
 	& NoMail
 
 type IndexOf<A> = A extends App<infer K> ? K['index'] : never

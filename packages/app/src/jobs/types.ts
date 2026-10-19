@@ -3,7 +3,7 @@
 
 import type { EmailDeliveryResult, EmailSenderCapabilities } from '@fabrika/email'
 import type { CronJob, DimensionOf } from '../contract/define'
-import type { Ref, Within } from '../implement/capability'
+import type { AppCapability, Ref, Within } from '../implement/capability'
 
 /** Who a job's writes are stamped with (`createdBy`): the job itself, never a person. */
 export interface JobPrincipal {
@@ -31,6 +31,8 @@ export interface JobContext<A extends string, D extends string> {
 	within<const Act extends A, const Dim extends D>(action: Act, dimension: Dim): Within<Dim, Act>
 	/** One object of `dimension` for a declared action, located now: what a write takes. A missing object is NotFound. */
 	ref<const Act extends A, const Dim extends D>(action: Act, dimension: Dim, id: string): Promise<Ref<Dim, Act>>
+	/** A declared action, application-wide: what `ctx.db.app('<action>')` reads and writes the application tables with. */
+	app<const Act extends A>(action: Act): AppCapability<Act>
 }
 
 /** One message a job sends. The framework prefixes `idempotencyKey` before the transport sees it. */

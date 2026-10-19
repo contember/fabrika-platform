@@ -68,6 +68,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'50-mail-in-a-webhook.ts': 'an endpoint sends no mail: write an outbox row and kick a job that declares mailer',
 	'51-form-file-that-is-no-inbox-column.ts':
 		'the inbox registrations has no column selfie: each input and file field is named like its column (columns: ',
+	'52-app-capability-in-a-bound-webhook.ts': 'a webhook bound to a dimension acts on its bound value: use ctx.refs and ctx.db.on(ref)',
 }
 
 /**
