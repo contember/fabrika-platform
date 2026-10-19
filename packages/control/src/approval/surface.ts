@@ -1,6 +1,6 @@
-import { APP_CALLER_PREFIX, type ContractArtifact, type EndpointRow, type FormMountArtifact } from '@fabrika/auth-core'
+import { APP_CALLER_PREFIX, type ContractArtifact, type EndpointRow, type FormMountArtifact, isFileShape, type SchemaShape } from '@fabrika/auth-core'
 import { SURFACE_REACHES, type SurfaceEndpointDto, type SurfaceReach } from '@fabrika/control-contract'
-import { attachmentName, crossOriginReach, requirementPhrase } from './diff'
+import { attachmentName, crossOriginReach, requirementPhrase, storedFileName } from './diff'
 import { type AccessSnapshot, compareText } from './snapshot'
 
 /** Every endpoint a snapshot publishes, grouped by who reaches it, most exposed first, then by path and method. */
@@ -37,11 +37,22 @@ function notesOf(contract: ContractArtifact, row: EndpointRow): string[] {
 	if (row.crossOrigin !== undefined) notes.push(`callable from ${crossOriginReach(row.crossOrigin)}`)
 	const file = attachmentName(row)
 	if (file !== null) notes.push(`answers ${file}`)
+	if (row.output !== null && isFileShape(row.output)) notes.push(`answers ${storedFileName(row.output)}`)
+	const taken = inputFileKinds(row.input)
+	if (taken.length > 0) notes.push(`takes files of kind ${taken.map((kind) => `\`${kind}\``).join(', ')}`)
 	if (row.kind === 'upload' && row.admission !== null) notes.push(uploadLimit(row.admission.maxBytes))
 	const mount = row.source.kind === 'mount' ? contract.mounts[row.source.name] : undefined
 	if (mount?.kind === 'form') notes.push(...formProtection(mount))
 	if (mount?.kind === 'webhook') notes.push(`verifies a ${mount.scheme} signature`)
 	return notes
+}
+
+/** The kinds of an input's file fields: a file, an optional one, or an array of them. */
+function inputFileKinds(input: SchemaShape | null): string[] {
+	const kindOf = (shape: SchemaShape): string | undefined =>
+		shape.type === 'file' ? shape.kind : shape.type === 'optional' ? kindOf(shape.inner) : shape.type === 'array' ? kindOf(shape.items) : undefined
+	const kinds = input?.type === 'object' ? Object.values(input.fields).map(kindOf) : []
+	return [...new Set(kinds.filter((kind) => kind !== undefined))].sort()
 }
 
 function uploadLimit(maxBytes: number | null): string {

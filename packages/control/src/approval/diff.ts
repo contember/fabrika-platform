@@ -20,9 +20,12 @@ import {
 	type EndpointRequirement,
 	type EndpointRow,
 	type FileCollectionArtifact,
+	type FileKindArtifact,
+	type FileShape,
 	type FormChallenge,
 	type FormMountArtifact,
 	isAttachmentShape,
+	isFileShape,
 	isRedirectShape,
 	isSchemaOutput,
 	JOB_SITE_PREFIX,
@@ -155,6 +158,12 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		removed: (name) => `File collection \`${name}\` is removed`,
 		changed: fileChanges,
 	})
+	// A file kind adds no authority of its own: who writes and reads its files is the reach of the columns that hold them.
+	compareKeyed(changes, record(baseline.fileKinds ?? {}), record(candidate.fileKinds ?? {}), {
+		added: (name, kind) => neutral(`New file kind \`${name}\`: ${fileKindPhrase(kind)}`),
+		removed: (name) => `File kind \`${name}\` is removed`,
+		changed: fileKindChanges,
+	})
 	compareKeyed(changes, record(baseline.jobs), record(candidate.jobs), {
 		added: (name, job) => `New job \`${name}\` with ${listOf(job.actions, 'no actions')}, running at most ${seconds(job.timeoutMs)}`,
 		removed: (name) => `Job \`${name}\` is removed`,
@@ -203,6 +212,11 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		removed: (name) => `Table policy \`${name}\` is removed`,
 		changed: tableChanges,
 	})
+	for (const [name, table] of Object.entries(candidate.tables)) {
+		const before = Object.hasOwn(baseline.tables, name) ? baseline.tables[name] : undefined
+		const shown = new Set(before === undefined ? [] : fileColumnLines(name, before).map((change) => change.line))
+		changes.add(...fileColumnLines(name, table).filter((change) => !shown.has(change.line)))
+	}
 	compareDeclared(changes, baseline.declared, candidate.declared)
 	compareProcedures(changes, baseline, candidate)
 	compareDirectories(changes, baseline, candidate)
@@ -839,6 +853,7 @@ function crossOriginChanges(name: string, from: CrossOriginForm | undefined, to:
 /** `, answering the file …` for an endpoint whose output is an attachment: the approver sees that data leaves as a file. */
 function answersFile(row: EndpointRow): string {
 	if (row.output !== null && isRedirectShape(row.output)) return `, answering ${redirectReach(row.output)}`
+	if (row.output !== null && isFileShape(row.output)) return `, answering ${storedFileName(row.output)}`
 	const file = attachmentName(row)
 	return file === null ? '' : `, answering ${file}`
 }
@@ -853,6 +868,9 @@ export function attachmentName(row: EndpointRow): string | null {
  * answer and a file widens. A file's name and its column order grant nothing, so they narrow at most.
  */
 function outputChanges(name: string, from: OutputShape | null, to: OutputShape | null): AccessChange[] {
+	if (from !== null && isFileShape(from) && to !== null && isFileShape(to)) {
+		return valueChange(`${name} file kind`, from.kind, to.kind)
+	}
 	if (from !== null && isAttachmentShape(from) && to !== null && isAttachmentShape(to)) {
 		return attachmentChanges(name, from, to)
 	}
@@ -869,7 +887,13 @@ function outputChanges(name: string, from: OutputShape | null, to: OutputShape |
 function outputKind(shape: OutputShape | null): string {
 	if (shape === null) return 'none'
 	if (isRedirectShape(shape)) return redirectReach(shape)
+	if (isFileShape(shape)) return storedFileName(shape)
 	return isAttachmentShape(shape) ? `the ${shape.format.toUpperCase()} file \`${shape.filename}\`` : 'JSON'
+}
+
+/** `a stored file of kind \`attachments\``: a file a handler wrote or read, streamed. */
+export function storedFileName(shape: FileShape): string {
+	return `a stored file of kind \`${shape.kind}\``
 }
 
 /** `a redirect to its own origin` or `… or https://partner.example`: where anyone who calls it may be sent. */
@@ -1136,6 +1160,44 @@ function externalChange(name: string, before: true | undefined, after: true | un
 		: [narrowing(`Role \`${name}\` may no longer be held by external principals`)]
 }
 
+/** `image/png, at most 262144 bytes, served only after a clean scan`. */
+function fileKindPhrase(kind: FileKindArtifact): string {
+	return `${listOf(kind.types, 'no types')}, at most ${bytes(kind.maxBytes)}${kind.scan === true ? ', served only after a clean scan' : ''}`
+}
+
+function fileKindChanges(name: string, from: FileKindArtifact, to: FileKindArtifact): AccessChange[] {
+	const kind = `File kind \`${name}\``
+	return [
+		...setChanges(kind, from.types, to.types, 'admits', 'no longer admits'),
+		...limitChange(`${kind} size limit`, from.maxBytes, to.maxBytes),
+		...flagChange(
+			from.scan === true,
+			to.scan === true,
+			narrowing(`${kind} serves a file only after a clean scan`),
+			widening(`${kind} no longer waits for a scan`),
+		),
+	]
+}
+
+/**
+ * `` `deals.write` writes `deal_attachments.file` (attachments) ``, for each action that inserts or updates the column: a
+ * file's reach is the reach of the column that holds it.
+ */
+function fileColumnLines(name: string, table: TablePolicyArtifact): AccessChange[] {
+	return Object.entries(table.files ?? {}).map(([column, kind]) => {
+		const ownWrite = table.columns[column]?.write
+		const writers = [
+			...(table.insert.includes(column) ? tableActions(table.actions.insert) : []),
+			...(table.update.includes(column) ? tableActions(table.actions.update) : []),
+			...(ownWrite === undefined ? [] : [ownWrite]),
+		]
+		const holder = `\`${name}.${column}\` (${kind})`
+		return neutral(
+			writers.length === 0 ? `No action writes ${holder}` : `${[...new Set(writers)].map((action) => `\`${action}\``).join(' and ')} writes ${holder}`,
+		)
+	})
+}
+
 function fileChanges(name: string, from: FileCollectionArtifact, to: FileCollectionArtifact): AccessChange[] {
 	const files = `File collection \`${name}\``
 	const linkChange = fileLinkChanges(files, from.link, to.link)
@@ -1253,7 +1315,20 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...valueChange(`${table} version column`, from.version, to.version),
 		...valueChange(`${table} creator column`, from.createdBy, to.createdBy),
 		...columns,
+		...fileColumnChanges(name, from.files ?? {}, to.files ?? {}),
 	]
+}
+
+/** A column that starts or stops holding files, or holds another kind; who writes it is `fileColumnLines`'. */
+function fileColumnChanges(name: string, from: Readonly<Record<string, string>>, to: Readonly<Record<string, string>>): AccessChange[] {
+	return union(Object.keys(from), Object.keys(to)).flatMap((column): AccessChange[] => {
+		const subject = `Column \`${name}.${column}\``
+		const before = from[column]
+		const after = to[column]
+		if (before === undefined) return after === undefined ? [] : [neutral(`${subject} holds files of kind \`${after}\``)]
+		if (after === undefined) return [neutral(`${subject} no longer holds files`)]
+		return valueChange(`${subject} file kind`, before, after)
+	})
 }
 
 // ── Generic comparisons ─────────────────────────────────────────────────────────────────────────
