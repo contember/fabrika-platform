@@ -129,8 +129,8 @@ bun test
   from the approved contract: Control may have upcast it from an older release's artifact.
   `renderLockedExecutionDescriptor` sends ONLY the generated setup: the SPA commands, the frozen install, the
   application's tests, then — because the tests are authored code — a reinstall, the regenerated entrypoint,
-  the checker fetched at the application's own release (`ZeropsLockedExecution.checkRelease`, from
-  `ProviderApprovedAccess.framework`, which Control reads from the application's `bun.lock`; ADR-0062), `tsc` with
+  the checker fetched at the release of the reader that read the application (`ZeropsLockedExecution.checkRelease`,
+  from `ProviderApprovedAccess.checker`: the newest patch of the minor its `bun.lock` pins; ADR-0062), `tsc` with
   the platform tsconfig and
   the scripts. Keep the tests before every step that produces or checks what deploys. The start script runs
   `fabrika db migrate`, then `fabrika db codegen --verify`, then `fabrika db test-isolation` (the generated tests on

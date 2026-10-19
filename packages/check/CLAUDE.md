@@ -301,9 +301,9 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   resolution path to a rule, or the rules drift apart on the same source. Likewise every rule that follows a mapped
   specifier asks `mappedTargets(mappings, file, specifier)` for the importing module.
 - **The platform build runs this checker by version** (`bun x -p @fabrika/check@<version> fabrika-check`, from
-  `@fabrika/provider-zerops`'s generated build, ADR-0043), never the application's own copy. The version is the
-  release the application's `bun.lock` pins (`lockedRegistryVersion`), so an older application is checked by its own
-  release's rules (ADR-0062). `CHECKER_VERSION` is read from `package.json`; installations run the git source, so a
+  `@fabrika/provider-zerops`'s generated build, ADR-0043), never the application's own copy. The version is the newest
+  patch of the minor the application's `bun.lock` pins (`lockedRegistryVersion`), so an older application is checked
+  by its own minor's rules (ADR-0062). `CHECKER_VERSION` is read from `package.json`; installations run the git source, so a
   release sets it before tagging (`release:bump`). `package-replacement` is
   what makes the application's frozen install the published `@fabrika/*`; it reads the root `.npmrc` and `bun.lock`,
   the only dot file and lockfile the checker reads.

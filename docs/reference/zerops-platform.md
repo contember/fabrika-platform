@@ -1416,10 +1416,13 @@ release artifacts incomplete. The variable stays readable to the runtime until t
 ### The checker version
 
 Every contract application build fetches the checker by version: `bun x -p @fabrika/check@<version>`, for
-`fabrika-check` and `fabrika-source-maps`. `<version>` is the `@fabrika/app` release the application's `bun.lock`
-pins, which Control reads at the run's commit (`ProviderApprovedAccess.framework`), so an application is checked by
-the rules of the release it was written against ([ADR-0062](../decisions/0062-a-platform-release-serves-older-framework-releases.md)).
-A snapshot a 0.5.4 Control stored names no release; its build uses the snapshot's checker, as that platform did.
+`fabrika-check` and `fabrika-source-maps`. `<version>` is the release of the reader that read the application at the
+run's commit (`ProviderApprovedAccess.checker`): the newest patch of the framework minor its `bun.lock` pins, so an
+application is checked by the rules of the minor it was written against
+([ADR-0062](../decisions/0062-a-platform-release-serves-older-framework-releases.md)). Not the exact pinned patch: a
+patch never changes the contract language, and an early one may lack a tool (`@fabrika/check@0.4.1` has no
+`fabrika-source-maps`). A 0.4 application built on a 0.4 installation was checked by that installation's 0.4 checker
+the same way.
 
 `FABRIKA_CHECK_VERSION` is the `package.json` version of `@fabrika/provider-zerops`. Control runs the git checkout of
 the installation's tag, not the published tarballs, so that version is the source version of the checkout. A release

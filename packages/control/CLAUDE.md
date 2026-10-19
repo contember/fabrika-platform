@@ -443,13 +443,14 @@ other environment, before the provider prepares anything, and the write maps a r
   from the provider artifact is a bug. An approval names both digests and holds only for them.
 - **An application is read by the reader of the framework release it pins (ADR-0062, `readers.ts`, `formats.ts`).**
   `readAccessSnapshot` reads the `@fabrika/app` release from `<root>/bun.lock` and picks this release's reader for its
-  own minor, or the bundled npm alias of an older one (`@fabrika/check-0.5`). A release outside the window, newer than
+  own minor, or the bundled npm alias of an older one (`@fabrika/check-0.4`, `@fabrika/check-0.5`). A release outside the window, newer than
   the platform, or a root without a registry `bun.lock` entry fails the run with `FrameworkReleaseRefused`, one line of
   versions and fixed names. The snapshot keeps an older release's artifact in `older` and stores and digests that one;
   `contract` is it upcast to this release's model, which the diff, the proxy table and the IAM schema read.
   `approvedAccess` hands the provider the digest the application's release computes (`applicationContractDigest`) and
-  the pinned release; never recompute a digest from the upcast contract. A model change adds its upcast rule in
-  `formats.ts`, and `framework-compat.test.ts` keeps the oldest release of the window reading as it did.
+  the reader's release (`checker`), which the build checks with; never recompute a digest from the upcast contract. A
+  0.4 artifact is a 0.5 one (`from04`). A model change adds its upcast rule in `formats.ts`, and
+  `framework-compat.test.ts` keeps every older minor of the window reading as its own platform read it.
 - **Steps off the paved road are in the reviewed snapshot, never refused by it (`diff.ts`).** Two kinds only: the
   reach a staged-kit site declares (`ContractArtifact.declared`: `sql`, `unscoped`, `connect`, `issues`), and the
   database code the migrations declare (`AccessSnapshot.databaseCode`, from `classifyMigrations` of
