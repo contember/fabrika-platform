@@ -84,7 +84,7 @@ bunx agent-canvas review snippet --project my-app
 ```
 
 The widget mounts a toolbar in its own shadow root. The reviewer clicks **Comment**, picks an element or selects text,
-and saves the comment as a note or sends it to the agent. The agent waits with `bunx agent-canvas review watch`,
+and saves the comment as a note or sends it to the agent. The agent waits with `bunx agent-canvas review watch` (`--follow` keeps waiting),
 receives each thread with its page URL, the element's role and accessible name, a CSS path and the React components that
 own it, changes the code and answers with `bunx agent-canvas review reply <thread> "<text>" --resolve`. The answer and
 the thread's state show up next to the element.

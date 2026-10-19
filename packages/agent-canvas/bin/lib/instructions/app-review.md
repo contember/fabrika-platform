@@ -25,15 +25,25 @@ different one.
 
 ## Loop
 
-Start the watcher right away, in the background:
+Start the watcher right away. The toolbar shows the user "Claude is listening" while it runs. Do NOT poll, sleep, or
+check proactively.
+
+**Claude Code**: run the streaming watcher with the Monitor tool and its longest timeout:
+
+```bash
+bunx agent-canvas review watch --follow --project <name>
+```
+
+It keeps one connection open and prints every batch the user sends as one event, so it needs no restart between
+batches. Its only other stdout line is the one that ends the watch when the daemon stays unreachable. Re-arm the
+monitor when it expires.
+
+**Other hosts**: run the one-shot watcher in the background. It prints one batch and exits; start it again after
+answering:
 
 ```bash
 bunx agent-canvas review watch --project <name>
 ```
-
-**Claude Code**: run it with the Bash tool's `run_in_background` parameter. You are notified when the user sends
-threads. Do NOT poll, sleep, or check proactively. The toolbar shows the user "Claude is listening" while the watcher
-runs.
 
 The output lists each thread with:
 
@@ -56,7 +66,7 @@ For each thread:
 
    Leave out `--resolve` when you ask a question back; the thread returns to the user.
 
-Then start `review watch` again for the next batch.
+With the one-shot watcher, start `review watch` again for the next batch.
 
 If the user says they already sent comments and no watcher was running, take them with `review fetch`. `review list`
 shows every thread that is not resolved, notes included.
