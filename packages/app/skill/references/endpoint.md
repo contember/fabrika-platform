@@ -64,8 +64,8 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   key (`references/jobs.md`). A call that is the request's whole purpose lives in a `{ member: true }` endpoint, which
   they do not cover. The framework's own calls (IAM, the file store, `ctx.connect`) are not outside.
 - **An endpoint never sends e-mail**, covered or not: it has no `ctx.mail`. It records the message in an outbox row
-  and declares `then: '<job>'` on the mutation, so the job that declares `mailer` sends it within seconds of the
-  commit (`references/jobs.md`; the test e-mail in `references/public-intake.md`). Only a mutation declares `then`.
+  and declares `kicks: ['<job>']` on the mutation and calls `ctx.kick('<job>')`, so the job that declares `mailer`
+  sends it within seconds of the commit (`references/jobs.md`; the test e-mail in `references/public-intake.md`).
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
   shows), or the id when the token carries none. When the caller owns what it writes (the creator of a deal, the
   assignee of a task nobody was picked for), store `ctx.principal.id` and `ctx.principal.label`, never a
@@ -122,7 +122,7 @@ dimension value takes `access: { action, app: true }`.
 | `app.<table>` (`app: true`), an application table      | `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; in a mutation `getForUpdate(id)`, `insert(values)`, `update(id, values, { expectVersion })`, `remove(id, { expectVersion })` |
 | `app.<table>` (`app: true`), a scoped table            | `list(options)` (read action or `appRead`), `count({ where })` (also `appCount`), `aggregate(spec)`                                                                                             |
 | `app.<table>` (`on`, `in`, `over`)                     | an application table whose read action is the endpoint's: `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; no write                                                           |
-| `unscoped.<table>` (declared)                          | `list`, `count`, `aggregate`, `get(id)` (not of a reference table or an inbox, which have no key); with `'write'` also `insert`, `update`, `remove`                                             |
+| `unscoped.<table>` (declared)                          | `list`, `count`, `aggregate`, `get(id)` (not of a reference table, which has no key); with `'write'` also `insert`, `update`, `remove`                                                          |
 
 `{ expectVersion }` is taken only on a table with `version`.
 
@@ -461,8 +461,8 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   values, each container grant on its own column, every row for a global grant and none for an empty one. The
   capability is the access form's: `ctx.target` for `on` and `in`, `ctx.within` for `over`; a job passes the `Ref` or
   `Within` it minted to `tx.sql.scope`. A table the capability does not reach is a type error at the table name. A
-  reference table is shared by every scope and needs no fragment, and no statement writes it. A form's inbox needs none either; read it from a site that holds the inbox's
-  `read` action (the intake job of `references/public-intake.md`).
+  reference table is shared by every scope and needs no fragment, and no statement writes it. An application table
+  needs none either (the intake job of `references/public-intake.md`).
 - **A fragment carries its action into the statement.** On the table an `update` or `delete` writes it needs the
   table's own update or delete action (`ctx.within('tasks.write', 'project')` for `update tasks`), so a read action
   never scopes a write. A column's own write action (`columns: { assignee: { write: 'tasks.assign' } }`) scopes an
@@ -534,8 +534,8 @@ different pages. The approver sees the flag like any other access change.
   person's session is never read for a request from a listed origin: the answer is 401 without a login bounce.
 - **The proxy answers CORS, the handler never does.** The proxy answers the preflight and sets
   `Access-Control-Allow-Origin` on the answer; it deletes every `Access-Control-*` header a handler sets.
-- **Only RPC procedures.** A link procedure, an export, an SPA, a download and an upload refuse `crossOrigin`. A form
-  takes it too (`references/public-intake.md`).
+- **Only RPC procedures.** A link procedure, an export, an SPA, a download and an upload refuse `crossOrigin`. A public
+  procedure declares `admission.origins` instead (`references/public-intake.md`).
 - **Test it** with `testKit(app, { crossOrigins: ['https://partner.example'] })` and a request carrying that `Origin`.
 
 ## Members

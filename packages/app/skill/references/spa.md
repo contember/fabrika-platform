@@ -356,10 +356,10 @@ export function EditTask(
 - `Form` shows its `error`: a summary on top, and each `fields[name]` under the `Field` of that `name`. `Field` gives
   its control the `name`, an `id`, its label and `aria-describedby`; the control needs nothing else. `Form` hands
   `onSubmit` the `FormData`: read the fields by name, and leave the checking to the procedure's schema.
-- A call that is no procedure — a file collection's `api.files.<name>.upload(owner, file)`, `list`, `download` —
-  runs through `useAction(async (input) => …)`, with the same state and error union; it refetches only what
+- A call that is no procedure of a client runs through `useAction(async (input) => …)`, with the same state and error union; it refetches only what
   `invalidates` names.
-- An attachment procedure (`output: attachment(…)`) downloads through `useDownload(api.reports.exportProject)`:
+- An attachment procedure (`output: attachment(…)`) or a file procedure (`output: file('<kind>')`) downloads through
+  `useDownload(api.reports.exportProject)`:
   `mutate(input)` saves the file and answers it, with the same state and error union. It runs on the provider's client,
   so a screen test downloads over the kit; never call `download(api.…)` of the module's client from a screen.
 
@@ -737,9 +737,9 @@ if (postgres !== null) {
 
 - `web/__tests__/dom.ts` comes first: imports run in order, and React reads `window` when it loads. `installDom` keeps
   Bun's `fetch`, `AbortController`, `URL`, `Blob`, `File`, `FormData` and its `ReadableStream`, `WritableStream` and
-  `TransformStream`, because the clients, the kit, a form's challenge, a form's file and a download run on them, and
+  `TransformStream`, because the clients, the kit, a challenge, a file field and a download run on them, and
   turns navigation off, so a download's link click leaves the page for the next test. A DOM registration of your own
-  keeps the same classes of Bun, or a form with a file fails in the kit. Run the tests with `bun test --isolate`, which
+  keeps the same classes of Bun, or an input with a file fails in the kit. Run the tests with `bun test --isolate`, which
   gives each file its own globals.
 - `await type('Title', 'report')` types into the control whose label (or `aria-label`) is `Title` as React reads a
   person typing; a select takes the option's value. `controlByLabel(label)` answers the control, and

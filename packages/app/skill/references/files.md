@@ -1,7 +1,9 @@
-# references/files.md — file collections
+# references/files.md — file kinds and file columns
 
-A file collection attaches uploaded files to the rows of one table that owns a dimension. It is a section of the
-contract with generated endpoints: no handler, no storage client, no URL of your own.
+A file is a value in a table column. The contract declares a file kind (`c.files`): which types, how large, whether it
+is scanned. A table declares a file column of that kind, and the table's policy is the file's authority: reading the
+column under the table's `read` action is what lets a procedure answer the file, and writing it needs the action that
+writes the column. There are no generated file endpoints: each operation is a procedure of a few lines.
 
 ```ts fabrika.contract.ts
 import { app } from './src/app-kit'
@@ -11,6 +13,7 @@ import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
 import { archive } from './src/tasks/archive'
+import { attachments } from './src/tasks/attachments'
 import { tasks } from './src/tasks/endpoints'
 import { erase } from './src/tasks/erase'
 
@@ -22,16 +25,12 @@ export const contract = app.contract((c) => ({
 		reports,
 		members,
 		priorities,
+		attachments,
 	}),
 	files: {
 		attachments: c.files({
-			owner: 'tasks',
-			read: 'tasks.read',
-			write: 'tasks.write',
-			delete: 'tasks.write',
-			maxBytes: 5242880,
 			types: ['image/png', 'image/jpeg', 'application/pdf', 'text/plain'],
-			maxPerOwner: 20,
+			maxBytes: 5242880,
 		}),
 	},
 	jobs: { archive, erase },
@@ -39,20 +38,119 @@ export const contract = app.contract((c) => ({
 }))
 ```
 
-The collection serves, for signed-in people only:
+The table that holds the files is a child of `tasks`, with a file column of the kind `attachments`:
 
-| Endpoint                                     | Access                      | Does                                                                    |
-| -------------------------------------------- | --------------------------- | ----------------------------------------------------------------------- |
-| `POST /api/files.attachments.upload/:taskId` | `write` on the task         | the body is the file, `?name=` its name; answers `{ result: { id } }`   |
-| `GET /api/files.attachments/:fileId`         | `read` on the file's task   | streams the file                                                        |
-| `POST /api/files.attachments.list`           | `read` on the task          | body `{ owner, limit?, after? }`; answers `{ result: { items, next } }` |
-| `POST /api/files.attachments.remove`         | `delete` on the file's task | body `{ id }`                                                           |
+```sql db/migrations/20261012100000_attachments.sql
+CREATE TABLE task_attachments (
+	id UUID PRIMARY KEY,
+	task_id UUID NOT NULL,
+	project_id UUID NOT NULL,
+	org_id TEXT NOT NULL,
+	file UUID NOT NULL REFERENCES fabrika_files (id),
+	created_by TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	FOREIGN KEY (task_id, project_id, org_id) REFERENCES tasks (id, project_id, org_id) ON UPDATE CASCADE ON DELETE CASCADE
+);
+CREATE INDEX task_attachments_task ON task_attachments (task_id);
+CREATE INDEX task_attachments_file ON task_attachments (file);
+```
 
-A file reaches what its task reaches, now: a moved task moves its files. The list answers the task's files oldest
-first, each `{ id, name, type, size, status, createdAt }`, at most `limit` (1–100, default 50) after the id `after`.
+Its policy in `src/db/tables.ts` (`references/table-and-migration.md`) names the column and its kind:
 
-The SPA calls them through the typed client, never a hand-written `fetch`: `api.files.attachments` of
-`createClient(contract, 'api')`, and on a link mount's client the `link: true` collections, without the owner.
+```text
+task_attachments: {
+	scope: { child: 'tasks' },
+	actions: { read: 'tasks.read', insert: 'tasks.write', delete: 'tasks.write' },
+	insert: ['file'],
+	files: { file: 'attachments' },
+	createdBy: 'created_by',
+},
+```
+
+- A file column is `UUID REFERENCES fabrika_files (id)` with an index on it; the checker verifies both for every
+  column the policy names in `files`. `fabrika_files` is the framework's table: never write it.
+- A file reaches what its row reaches, now: a moved task moves its files. Deleting the row (here with its task, by the
+  cascade) or clearing a nullable column removes the reference; the framework's sweep deletes a file no column
+  references.
+- A file column takes only a file reference: an input file (`file('<kind>')`), a `ctx.files.put` of this request, or a
+  reference this request read from a file column under that table's `read` action. A string id is refused.
+
+```ts src/tasks/attachments.ts
+import { file } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
+import { app } from '../app-kit'
+
+const Upload = z.strictObject({ taskId: z.uuid(), file: file('attachments') })
+const OfTask = z.strictObject({ taskId: z.uuid() })
+const OneFile = z.strictObject({ taskId: z.uuid(), id: z.uuid() })
+const Saved = z.strictObject({ id: z.uuid() })
+const Empty = z.strictObject({})
+const Attachments = z.strictObject({
+	items: z.array(z.strictObject({
+		id: z.uuid(),
+		name: z.nullable(z.string()),
+		type: z.string(),
+		size: z.int(),
+		status: z.enum(['pending', 'quarantined', 'live', 'rejected']),
+	})),
+})
+
+export const attachments = app.group({ callers: ['human'] }, (r) => ({
+	upload: r.mutation({
+		input: Upload,
+		output: Saved,
+		access: { action: 'tasks.write', on: 'task', from: 'taskId' },
+	})
+		.handle(({ input, ctx }) =>
+			ctx.db.target.task_attachments.insert({ file: input.file })
+		),
+	list: r.query({
+		input: OfTask,
+		output: Attachments,
+		access: { action: 'tasks.read', on: 'task', from: 'taskId' },
+	})
+		.handle(async ({ ctx }) => ({
+			items: (await ctx.db.target.task_attachments.list()).items.map((row) => ({
+				id: row.id,
+				name: row.file.name,
+				type: row.file.type,
+				size: row.file.size,
+				status: row.file.status,
+			})),
+		})),
+	download: r.query({
+		input: OneFile,
+		output: file('attachments'),
+		access: { action: 'tasks.read', on: 'task', from: 'taskId' },
+	})
+		.handle(async ({ input, ctx }) =>
+			(await ctx.db.target.task_attachments.get(input.id)).file
+		),
+	remove: r.mutation({
+		input: OneFile,
+		output: Empty,
+		access: { action: 'tasks.write', on: 'task', from: 'taskId' },
+	})
+		.handle(async ({ input, ctx }) => {
+			await ctx.db.target.task_attachments.remove(input.id)
+			return {}
+		}),
+}))
+```
+
+- An input field `file('<kind>')` makes the body multipart; the file is bounded by the kind's `types` (sniffed, not
+  trusted) and `maxBytes`. The handler writes the reference into the column, in its transaction; a rolled-back
+  request keeps no file.
+- A row read through the data layer carries a file reference in each file column, with `id`, `name`, `type`, `size`
+  and `status`, so a list shows them without a call per file.
+- A query whose output is `file('<kind>')` returns the reference, and the framework streams the file. It is a `GET`
+  with its input in flat query parameters. A `pending` or `quarantined` file answers 409 `file_not_ready`, a `rejected`
+  one 409 `file_rejected`, and one the sweep deleted 404.
+
+The SPA calls them through the typed client, never a hand-written `fetch`. `api.attachments.download.url(input)` is
+the URL of a `GET` file procedure for a same-origin page (`<img src>`, `<a download>`), and
+`download(api.attachments.download, input)` of `@fabrika/app/client` fetches it with the caller's credential and
+answers a file (`blob()`, `stream()`, `save()`).
 
 ```ts web/attachments.ts
 import { createClient, RpcError } from '@fabrika/app/client'
@@ -60,18 +158,20 @@ import { contract } from '../fabrika.contract'
 
 const api = createClient(contract, 'api')
 
-/** Uploads `file` to the task, then lists its files; a file's `type` is the declared media type. */
+/** Uploads `file` to the task, then lists its files, each a link to its download. */
 export const attach = async (
 	taskId: string,
 	file: File,
 	list: HTMLElement,
 ): Promise<void> => {
 	try {
-		await api.files.attachments.upload(taskId, file)
-		const page = await api.files.attachments.list({ owner: taskId })
+		await api.attachments.upload({ taskId, file })
+		const page = await api.attachments.list({ taskId })
 		list.replaceChildren(
 			...page.items.map((item) =>
-				Object.assign(document.createElement('li'), {
+				Object.assign(document.createElement('a'), {
+					href: api.attachments.download.url({ taskId, id: item.id }),
+					download: item.name ?? 'file',
 					textContent: `${item.name ?? 'file'} (${item.status})`,
 				})
 			),
@@ -84,43 +184,35 @@ export const attach = async (
 }
 ```
 
-`download(id)` answers a `File` named as it was uploaded (409 `quarantined` while a scan runs), and `remove({ id })`
-removes one. `ResultOf<typeof api.tasks.get>` and `InputOf<typeof api.tasks.create>` of `@fabrika/app/client` name a
-procedure's answer and input for a view that maps them.
+A link holder's client has a key, which never goes into a URL: a link page uses `download`. `ResultOf<typeof
+api.tasks.get>` and `InputOf<typeof api.tasks.create>` of `@fabrika/app/client` name a procedure's answer and input for
+a view that maps them.
 
 ## From a handler or a job: `ctx.files`
 
-`ctx.files('<collection>')` reaches one collection of the contract from a handler, a job's `ctx` and its `tx`. Each
-call takes a `Ref` of the owner (a task here), for one of the collection's actions:
+`ctx.files` of a mutation, a webhook, a job and a job's `tx` has two calls; a query's has `open` only:
 
-| Call                              | Takes the owner's `Ref` for | Answers                                                                    |
-| --------------------------------- | --------------------------- | -------------------------------------------------------------------------- |
-| `list(owner, { after?, limit? })` | `read`                      | `{ items, next }`, the files the list endpoint answers; `createdAt` a Date |
-| `open(owner, id, { maxBytes })`   | `read`                      | `{ id, name, type, size, bytes }` of one live file, read whole             |
-| `removeAll(owner)`                | `delete`                    | how many files it marked removed                                           |
+| Call                                | Does                                                                                           |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `put(kind, bytes, { type, name? })` | stores a new file of the kind and answers its reference; it is pending until a column holds it |
+| `open(ref, { maxBytes? })`          | `{ id, name, type, size, bytes }` of a live file, read whole                                   |
 
-A Ref for another action, or of another dimension, is refused. `open` answers 404 for a file of another owner, a
-removed or a rejected one, 409 `quarantined` while the scan has not called it clean, and 413 for a file over
-`maxBytes`, before any byte is read. Pass the size you hold in memory, at most the collection's `maxBytes`. The name
-is checked when the call runs, not by the types: a name the contract does not declare is a 500.
+`open` takes a reference the site read from a file column under that table's `read` action. It answers 409
+`file_not_ready` until the scan called the file clean, 409 `file_rejected` for a rejected one, and 413 for a file over
+`maxBytes` (the kind's by default), before any byte is read. Pass the size you hold in memory.
 
-Every call needs the collection's `read`, so a write capability alone sees no file. A mutation that requires a
-document is declared with an action that is the collection's `read` too, or the check runs where the caller holds
-`read`: never mint or widen a capability to list.
-
-A job mints the owner's `Ref` with `ctx.ref` and opens each live file, here to hand it to an archive service of
-`deps`. `ctx.mail` carries no attachments, so a file leaves through a service of the application's own:
+A job reads each task's rows with a `Ref` it minted and opens each live file, here to hand it to an archive service of
+`deps`. A file can also leave as an e-mail attachment (`attachments` of `ctx.mail.send`, `references/jobs.md`):
 
 ```ts src/tasks/archive.ts
 import { app } from '../app-kit'
 import { archiver } from '../archive'
 
-/** The largest report the archive takes in one call: the collection's maxBytes. */
+/** The largest report the archive takes in one call: the kind's maxBytes. */
 const REPORT_MAX_BYTES = 5242880
 
 export const archive = app.cron('0 6 * * *', {
 	actions: ['tasks.read'],
-	scope: 'app',
 })
 	.handle(async ({ ctx }) => {
 		const store = archiver.get()
@@ -128,12 +220,11 @@ export const archive = app.cron('0 6 * * *', {
 		const done = await tasks.list({ where: [['status', '=', 'done']], limit: 50 })
 		for (const task of done.items) {
 			const owner = await ctx.ref('tasks.read', 'task', task.id)
-			const files = ctx.files('attachments')
-			const page = await files.list(owner)
+			const rows = await ctx.db.on(owner).task_attachments.list()
 			const reports = []
-			for (const file of page.items.filter((item) => item.status === 'live')) {
+			for (const row of rows.items.filter((item) => item.file.status === 'live')) {
 				reports.push(
-					await files.open(owner, file.id, { maxBytes: REPORT_MAX_BYTES }),
+					await ctx.files.open(row.file, { maxBytes: REPORT_MAX_BYTES }),
 				)
 			}
 			ctx.signal.throwIfAborted()
@@ -207,9 +298,8 @@ export default serve(contract, { database: scoped(tables), deps: archiver })
 
 The `PUT` under the task's id makes a repeated run replace the same object, so a retried attempt stores nothing twice.
 
-`removeAll` runs in a mutation and in a job's `tx.files`, in the same transaction as the handler's writes: an erasure
-that blanks a record and removes its files keeps both or neither. A query and a job's `ctx.files` only read. The
-framework's sweep deletes the removed files' objects within the hour, and so the objects of a deleted owner's files.
+An erasure removes the rows that hold the files in the same transaction as its other writes: it keeps both or
+neither. The framework's sweep then deletes each file no column references, within the hour.
 
 ```ts src/tasks/erase.ts
 import { app } from '../app-kit'
@@ -217,7 +307,6 @@ import { app } from '../app-kit'
 /** Blanks the title of every task closed more than a year ago, and removes its attachments with it. */
 export const erase = app.cron('30 2 * * *', {
 	actions: ['tasks.read', 'tasks.write'],
-	scope: 'app',
 })
 	.handle(async ({ ctx }) => {
 		const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(
@@ -236,33 +325,38 @@ export const erase = app.cron('30 2 * * *', {
 		for (const task of stale.items) {
 			const ref = await ctx.ref('tasks.write', 'task', task.id)
 			await ctx.transaction(async (tx) => {
-				const locked = await tx.db.on(ref).getForUpdate()
-				await tx.db.on(ref).update({ title: '' }, { expectVersion: locked.version })
-				await tx.files('attachments').removeAll(ref)
+				const target = tx.db.on(ref)
+				const locked = await target.getForUpdate()
+				await target.update({ title: '' }, { expectVersion: locked.version })
+				let page = await target.task_attachments.list({ limit: 100 })
+				while (page.items.length > 0) {
+					for (const row of page.items) {
+						await target.task_attachments.remove(row.id)
+					}
+					page = await target.task_attachments.list({ limit: 100 })
+				}
 			})
 		}
 	})
 ```
 
-- The owner is a table with a dimension scope; an application table owns no collection.
-- There is no limit on the bytes of one owner's files together: `maxPerOwner` × `maxBytes` bounds them.
+- Never write a sweep or delete an object yourself: a file goes when no column references it.
+- **A handover writes the new reference before it deletes the old one, in one transaction.** Written in two
+  transactions, the sweep can delete the file between them.
 
 ## Malware scan
 
-`scan: true` on a collection holds every upload `quarantined` until ClamAV answers clean; on Zerops the platform
-installs ClamAV and runs the scan job. The download answers 409 `quarantined` until then and 404 once the file is
-`rejected`; the list shows each file's `status`, so show it rather than a broken link. In a test, the scan runs with
+`scan: true` on a kind holds every file of it `quarantined` until ClamAV answers clean; on Zerops the platform
+installs ClamAV and runs the scan job. A file answer is 409 `file_not_ready` until then and 409 `file_rejected` once
+the file is `rejected`; a list shows each file's `status`, so show it rather than a broken link. In a test, the scan runs with
 `kit.runJob(FILE_SCAN_JOB)` and a `scanner` passed to `testKit` (`references/tests.md`); the generated tests pass their
 own seeded files.
 
-- A scanning collection admits at most 100 MiB per file (`maxBytes`) and not `application/gzip`; an empty upload is
+- A scanning kind admits at most 100 MiB per file (`maxBytes`) and not `application/gzip`; an empty upload is
   400 `empty`.
 - A ZIP or Office document must start with the ZIP header. Any other file that holds a ZIP signature anywhere is
   rejected, even a rare harmless PDF or image; that is the fail-closed cost.
-- A table written by the `fileTableSql` below can already hold the scan states: turning `scan` on needs no migration.
-  Only a table created by an earlier two-state `fileTableSql` (its check names `'pending', 'live'` alone) needs
-  `fileScanSql('<name>')` of `@fabrika/db` in a new migration, and `fabrika-check` names it. On a current table that
-  migration fails: it adds the constraint, columns and index again.
+- Turning `scan` on needs no migration: the framework's table holds the scan states.
 - ClamAV holds about 1 GB of signatures in memory. On Zerops the deploy service must declare
   `verticalAutoscaling: { minRam: 2 }` (GB), or the build refuses the application. Zerops ignores a changed `verticalAutoscaling` of an existing service on a re-import:
   raise an existing service's RAM through Zerops itself.
@@ -280,73 +374,13 @@ own seeded files.
 }
 ```
 
-## Its table
+## A file from a public procedure
 
-Each collection has a table `fabrika_files_<name>`, created by an application migration. Write exactly the DDL that
-`fileTableSql` of `@fabrika/db` returns. `key` and each `chain` entry are `{ column, type }`, with `type` `'uuid'` or
-`'text'` as the owner table declares the column, the nearest container first:
-
-```bash
-bun -e "import { fileTableSql } from '@fabrika/db'; console.log(fileTableSql('attachments', { table: 'tasks', key: { column: 'id', type: 'uuid' }, chain: [{ column: 'project_id', type: 'uuid' }, { column: 'org_id', type: 'text' }] }))"
-```
-
-```sql db/migrations/20261012100000_attachments.sql
-CREATE TABLE fabrika_files_attachments (
-	id UUID PRIMARY KEY,
-	owner_id UUID,
-	project_id UUID,
-	org_id TEXT,
-	status TEXT NOT NULL CONSTRAINT fabrika_files_attachments_status CHECK (status IN ('pending', 'live', 'quarantined', 'rejected')),
-	object_key TEXT NOT NULL UNIQUE,
-	size BIGINT,
-	content_type TEXT NOT NULL,
-	sha256 TEXT,
-	original_name TEXT,
-	created_by TEXT NOT NULL,
-	created_at TIMESTAMPTZ NOT NULL,
-	deleted_at TIMESTAMPTZ,
-	object_version TEXT,
-	scan_attempts INTEGER NOT NULL DEFAULT 0,
-	scan_after TIMESTAMPTZ,
-	FOREIGN KEY (owner_id, project_id, org_id) REFERENCES tasks (id, project_id, org_id) ON UPDATE CASCADE ON DELETE SET NULL
-);
-CREATE INDEX fabrika_files_attachments_owner ON fabrika_files_attachments (owner_id) WHERE deleted_at IS NULL;
-CREATE INDEX fabrika_files_attachments_removable ON fabrika_files_attachments (created_at) WHERE deleted_at IS NOT NULL OR owner_id IS NULL OR status = 'pending';
-CREATE INDEX fabrika_files_attachments_scan ON fabrika_files_attachments (scan_after) WHERE status = 'quarantined';
-```
-
-- The owner table needs `UNIQUE (<key>, <chain columns>)`; `tasks` has `UNIQUE (id, project_id, org_id)`.
-- Codegen leaves the table out, and no policy names it: only the framework reads it.
-- The name is lowercase snake_case, at most 39 characters.
-- `link: true` serves a link mount's holders, for the mount's own object: `POST <prefix>/api/files.<name>.upload`,
-  `POST <prefix>/api/files.<name>.list` (no `owner`) and `GET <prefix>/api/files.<name>/:fileId` under every link mount bound to the owner's dimension, which must grant the
-  collection's `write` and `read`. The owner is the link's object, never a parameter.
-- `link: ['completion']` serves the named link mounts only. Name them when the owner's dimension has a link meant
-  for something else (a one-click answer): a mount the list does not name has no file route and need not grant
-  the collection's actions. Its holder gets 403 from the proxy, which finds no endpoint for the path.
-
-## A file with a public form
-
-A visitor without an account reaches no collection endpoint. A form takes the file with its submission instead
-(`references/public-intake.md` builds it): `files: { photo: { collection: 'photos' } }` on `c.form`, into a collection
-with `scan: true`, beside a challenge. The file waits owned by nobody, and nothing reads it; its id lands in the inbox
-column of its field (`photo UUID`). The job that drains the inbox creates the record and attaches the file in the same
-transaction, with a `Ref` of the new record for the collection's `write` action, which `tx.ref` locates in that
-transaction:
-
-```text
-const [created] = await tx.sql(Id)`insert into candidates (…) values (…) on conflict (email) do nothing returning id`
-if (created !== undefined && row.photo !== null) {
-	await tx.files('photos').attach(await tx.ref('candidates.attach', 'candidate', created.id), row.photo)
-}
-```
-
-- Only a job's `tx.files` has `attach`; a mutation's has none. `tx.ref` is `ctx.ref` located in the transaction.
-- `attach` answers `false` when no file of the collection waits under the id (none was sent, or its hold of seven days
-  ended) and `true` again for one the same owner attached before; it never moves another owner's file. Past
-  `maxPerOwner` it throws 409, and the transaction rolls back with the file still held.
-- The attached file is `quarantined` until the scan job's clean verdict, like any upload of a scanning collection.
-- A file nobody attached is deleted by the sweep job an hour after its hold of seven days ended.
+A visitor without an account sends a file as a field of a public procedure's input
+(`references/public-intake.md` builds it): `photo: z.optional(file('photos'))`, into a kind with `scan: true`, beside
+a challenge and `admission.rate.bytesPerHour`. The handler writes the reference into a file column of an application
+table (`registrations.photo`), and the job that claims the row writes the same reference into the record's column in
+the transaction that deletes the row. The file is never copied; the sweep deletes it once no column references it.
 
 ## Storage
 

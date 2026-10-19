@@ -34,8 +34,8 @@ export const members = { 'api.tasks.assign': ['assignee'] }
 ```
 
 - `export const fixtures = { '<endpoint id>': { … } }` is an input for an endpoint whose schema the scaffold cannot
-  sample, such as a `regex` or a webhook's bind:
-  `{ 'webhooks.github.bind': { scope: 'acme', account: 'installation:1' } }`. The checker names each missing one,
+  sample, such as a `regex` (a webhook's account):
+  `{ 'api.integrations.connectGithub': { orgId: 'acme', account: 'installation:1' } }`. The checker names each missing one,
   and one of an endpoint that does not exist (`endpoint-fixture`). The access form's `from` field is
   replaced by the seeded scope.
 - `members['<endpoint id>']` lists the input fields that name a picked person the handler checks with
@@ -284,7 +284,7 @@ if (postgres !== null) {
 - `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`. A job's `ctx.links`
   reaches the kit's stand-in IAM under the job's own key, so a job that declares `issues` issues and revokes links in a
   plain `testKit` and under `fabrika app dev`, as IAM allows it: for its declared mount only.
-- A form or a mutation that declares `then` starts its job in the background of the call. `kit.drain()` waits for
+- A mutation that kicks (`kicks`, `ctx.kick`) starts its job in the background of the call. `kit.drain()` waits for
   those runs, and `kit.runJob` first waits for them; every generated access case drains before it answers. The kicked
   run may start at once, so arm a fault before the call, never between the call and the run.
 - `kit.mail` is the stand-in for every job's mail transport (`MemoryEmailSender` of `@fabrika/app/testing`), so a test
@@ -297,7 +297,7 @@ if (postgres !== null) {
   without it the application does not boot. With `scan: true`, an upload stays `quarantined` until
   `kit.runJob(FILE_SCAN_JOB)` (`@fabrika/app/implement`) runs with a `scanner` passed to `testKit`: a `FileScanner`
   stand-in, or the real ClamAV one, `clamscanScanner()` of `@fabrika/app/bun`.
-- A form's challenge token is single use: a second submission with the same token answers 400 `challenge_failed`,
+- A challenge token is single use: a second submission with the same token answers 400 `challenge_failed`,
   also when the test's `challengeFetch` answers success. Send a fresh token with each submission
   (`crypto.randomUUID()`). `passingChallenge` (`@fabrika/app/testing`) is a `challengeFetch` that passes every token;
   a stand-in of your own receives the check (`hostname`, `action`) a passing answer must confirm as its second argument.

@@ -6,6 +6,7 @@ what it lets that caller do.
 ## Webhooks (GitHub)
 
 ```ts src/github/endpoints.ts
+import { WebhookSecret } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 
@@ -27,19 +28,39 @@ export const github = app.webhook('/hooks/github', {
 			name: input.repository.full_name,
 		})
 	})
+
+const Connect = z.strictObject({
+	orgId: z.string(),
+	account: z.string().regex(/^(installation|repository):\d+$/),
+})
+
+/** Binds an org to a GitHub account: answers the secret and the URL once. */
+export const integrations = app.group({ callers: ['human'] }, (r) => ({
+	connectGithub: r.mutation({
+		input: Connect,
+		output: WebhookSecret,
+		access: { action: 'members.manage', on: 'org', from: 'orgId' },
+		binds: 'github',
+	})
+		.handle(({ input, ctx }) =>
+			ctx.webhooks('github').bind(ctx.target, input.account)
+		),
+}))
 ```
 
-- Mount it by name in the contract: `github,` beside `api`. It answers `POST /hooks/github/:bindingId`.
-- `boundTo` is a dimension with `members`. A holder of its `members.manage` binds an org to a GitHub account with the
-  generated `POST /api/webhooks.github.bind` (`{ scope, account: 'installation:<id>' | 'repository:<id>' }`), which
-  answers the secret and the URL once. The generated tests need a fixture for it (`references/tests.md`).
+- Mount it by name in the contract: `github,` beside `api`, and the group in `api`. It answers
+  `POST /hooks/github/:bindingId`.
+- A binding is made by a procedure that declares `binds: '<webhook>'` and calls `ctx.webhooks('<webhook>').bind(ref,
+  account)` with a capability on the bound value (`ctx.target`, an org here), in its transaction; `unbind(ref, id)`
+  removes one. A GitHub account is `installation:<id>` or `repository:<id>`. The answer carries the secret and the URL
+  once. The generated tests need a fixture for its input (`references/tests.md`).
 - The framework checks the signature, the account and the input (undeclared fields are dropped).
   `ctx.refs['<action>']` is a `Ref` of the bound org for each declared action.
-- It records the delivery key (a digest of the binding and the body) before the handler runs, and answers a body it
-  already ran in the last 30 days without running it again. A handler that throws commits nothing, and the key is
-  forgotten, so GitHub's redelivery runs it again from nothing. A process that dies after the record and before the
-  commit keeps the key and loses the delivery. So make every effect idempotent, and key an external effect after the
-  data work on `ctx.delivery.key`; never rely on exactly one run.
+- It claims the delivery key (a digest of the binding and the body) under a lease before the handler runs, marks it
+  complete in the handler's transaction, and answers a body it already ran in the last 30 days without running it
+  again. A handler that throws commits nothing, and a process that dies before the commit leaves the lease to expire,
+  so GitHub's redelivery runs it again from nothing. So make every effect idempotent, and key an external effect after
+  the data work on `ctx.delivery.key`; never rely on exactly one run.
 
 ## Share links
 
@@ -97,8 +118,8 @@ export const shared = app.link('/s', {
   that should work once records its use in the row: a `verify` sets `verified_at` once under `getForUpdate`, and a
   second call answers the same. IAM counts no uses.
 - A cron job may issue links too (`issues` on `app.cron`, `references/jobs.md`): a visitor without an account gets a
-  link by e-mail from a job that drains a form's inbox. `references/public-intake.md` is that recipe end to end, with
-  the files a link holder uploads (`link: true`, or `link: ['<mount>']` for some mounts only, `references/files.md`).
+  link by e-mail from a job that claims a public procedure's rows. `references/public-intake.md` is that recipe end to
+  end, with the files a link holder uploads through the link's own procedures (`references/files.md`).
 
 ## Connectors: another application's data
 

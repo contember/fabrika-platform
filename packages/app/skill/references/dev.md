@@ -59,8 +59,8 @@ export default seed
 - `dev/dev.env` holds the application's variables for `app dev`, one `NAME=value` per line (`#` comments, quotes
   optional). They win over the shell's; a `FABRIKA_*` name is refused. Commit it: it holds stand-in values, never a
   real secret.
-- A form's challenge passes in `app dev`: the stand-in answers Turnstile's siteverify for any token. Set the form's
-  `secret` variable to any value in `dev/dev.env`, and send a fresh `challengeToken` with each submission, as a test
+- A public procedure's challenge passes in `app dev`: the stand-in answers Turnstile's siteverify for any token. Set the
+  challenge's `secret` variable to any value in `dev/dev.env`, and send a fresh `challengeToken` with each submission, as a test
   does: a token is single use. For the widget on a page, set the `siteKey` variable to Turnstile's always-passing test
   key `1x00000000000000000000AA`. Its token is the same every time, and `app dev` admits that one token again at each
   submission; a deployed application records it like any other, so there it passes once.
@@ -72,7 +72,7 @@ export default seed
 - The seed's second argument reads what left the application: `outside.mails()` is every message a job handed to the
   stand-in, oldest first (`{ id, at, to, subject, text, html, key, transportKey, answer, outcome, delivered, … }`), so
   the seed can open a link the application mailed. Run the job first (`dev.runJob('<job>')`), or let a mutation's
-  `then` kick it and `await dev.drain()`.
+  `ctx.kick` start it and `await dev.drain()`.
 - Point another outside service at the dev outbox: `app dev` captures every request the process sends to
   `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN` of `@fabrika/app/testing`) and answers `200 {"id": …}`. A section of
   its own lists each one, by the `to` and `subject` of a JSON body, and opens its body; its headers are not kept.
@@ -95,5 +95,5 @@ ARCHIVE_KEY=dev
   is the invited person from then on. A job's message opens at `/__fabrika/dev/mail/<id>`.
 - The choice stays in a cookie the application never sees. The data is gone when the command stops.
 - It serves this machine only (`--host` is a loopback address, `--port=0` picks a free port), answers no request
-  addressed to another host name, and runs no cron job on its schedule: the seed runs one with `dev.runJob`, a test with `kit.runJob`. A form's or a
-  mutation's `then` still starts its job, as deployed.
+  addressed to another host name, and runs no cron job on its schedule: the seed runs one with `dev.runJob`, a test with `kit.runJob`. A mutation's
+  `ctx.kick` still starts its job, as deployed.

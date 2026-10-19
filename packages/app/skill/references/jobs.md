@@ -1,9 +1,9 @@
 # references/jobs.md — cron jobs
 
-Background work is a cron job: `app.cron(schedule, { actions, scope: 'app' })` with its `.handle(…)` in the
+Background work is a cron job: `app.cron(schedule, { actions })` with its `.handle(…)` in the
 `endpoints.ts` of the slice whose data it works on, mounted under `jobs` in the contract. There are no timers, loops,
 `setInterval` or self-scheduled work, and no `ctx.jobs.enqueue`: work for later is a row that a run picks up. A
-mutation that declares `then: '<job>'` starts a run within seconds of its commit (the outbox below); the schedule
+mutation that declares `kicks: ['<job>']` and calls `ctx.kick('<job>')` starts a run within seconds of its commit (the outbox below); the schedule
 picks up whatever that run leaves.
 
 ```ts src/overdue/endpoints.ts
@@ -13,7 +13,6 @@ import { isOverdue } from './logic'
 /** Marks every open task past its due day, hourly; each is re-read under its lock, so a concurrent change is skipped. */
 export const markOverdue = app.cron('15 * * * *', {
 	actions: ['tasks.read', 'tasks.write'],
-	scope: 'app',
 	limits: { timeoutMs: 600000 },
 	retries: 2,
 })
@@ -103,7 +102,7 @@ export const contract = app.contract((c) => ({
 }))
 ```
 
-- The schedule is five cron fields, UTC. `scope: 'app'` is the only scope: a job reaches every value.
+- The schedule is five cron fields, UTC. A job is application-wide: it reaches every value.
 - A job holds exactly its `actions`. `ctx.within(action, dimension)` is a `Within` of every value;
   `ctx.ref(action, dimension, id)` locates one object (404 when it is gone). Bind them with `ctx.db.over(within)`,
   `ctx.db.in(ref)` and `ctx.db.on(ref)`.
@@ -128,18 +127,18 @@ export const contract = app.contract((c) => ({
 
   ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where (…) returning id`)``
 
-  The version bump is yours to write. **A job writes no scope fragment**: it is app-wide (`scope: 'app'` is the only
-  scope), so `tx.sql.scope` of its `Within` would be every row.
+  The version bump is yours to write. **A job writes no scope fragment**: it is application-wide, so `tx.sql.scope` of
+  its `Within` would be every row.
 - `bun test --isolate` runs a job with `kit.runJob('markOverdue')` (`references/tests.md`). The platform runs
   `fabrika job run <name>` from the crontab it generates; never write a crontab or read `FABRIKA_JOB_*`.
 - A job cannot create scopes or manage members, and has no `ctx.members`: a job holds no object chain. It issues share
   links only when it declares `issues: '<link mount>'` and its actions hold the mount's `issuedBy` and every grant:
   `ctx.links.issue(await ctx.ref('<issuedBy>', '<dimension>', id), { mount, days })`, and `ctx.links.revoke(id)` for
-  a link it issued. It is a widening for closer review. `references/public-intake.md` is the whole recipe: a form's
-  inbox, the record, the link and its e-mail, each step recorded before the next.
-- A job reads a file collection through `ctx.files('<collection>')` with a `Ref` it minted (`list`, `open` to hand a
-  file to another service), and removes an owner's files only inside its transaction, `tx.files('<collection>').removeAll(ref)`
-  (`references/files.md`). The framework's own `fabrika-file-sweep` then deletes their objects; never write a sweep.
+  a link it issued. It is a widening for closer review. `references/public-intake.md` is the whole recipe: a public
+  procedure's row, the record, the link and its e-mail, each step recorded before the next.
+- A job reads a file column through a capability it minted and opens a file with `ctx.files.open(ref)`, to hand it to
+  another service; it removes files by deleting the rows that hold them, inside its transaction (`references/files.md`).
+  The framework's own `fabrika-file-sweep` then deletes a file no column references; never write a sweep.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
   each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
 - A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, a framework refusal
@@ -163,7 +162,8 @@ that says so): it records an outbox row and kicks the job (below). `references/p
 - `ctx.mail.send({ to, subject, text, html?, replyTo?, fromName?, idempotencyKey }, signal?)` hands one message to the
   transport and answers `{ status: 'accepted', provider, messageId }`. It always aborts with the attempt's
   `ctx.signal`; pass `AbortSignal.timeout(ms)` for a deadline of the message's own. The sending address is the
-  transport's; `fromName` and `replyTo` are the application's, per message. There are no attachments.
+  transport's; `fromName` and `replyTo` are the application's, per message. `attachments: [ref]` attaches files the
+  job read from a file column; a transport that sends none refuses the message.
 - `idempotencyKey` is 1 to 200 visible ASCII characters, unique per message in the application environment, and
   derived from the outbox row (`intake-link-<link id>`), never random. `ctx.mail` puts a prefix of the installation
   and the environment in front of it, so no other application on the same provider account shares it.
@@ -182,22 +182,23 @@ that says so): it records an outbox row and kicks the job (below). `references/p
 ## An outbox: what a request asks a job to do
 
 A request handler calls no outside service and sends no e-mail (`references/endpoint.md`). It records what to do in a
-row, in its own transaction: a form's inbox row, an outbox row (`test_mails`), or a state of its record
+row, in its own transaction: a public procedure's row (`registrations`), an outbox row (`test_mails`), or a state of its record
 (`link_state = 'due'`). A job does the work and calls the service. `references/public-intake.md` is the whole recipe.
 
-**The kick.** A mutation that records such a row declares `then: '<job>'`: once its transaction committed, the job
-runs within seconds, under its own key, and the answer does not wait for it. A form's `then` does the same for its
-inbox. A thrown handler, a refused answer and a failed commit kick nothing. Kicks coalesce: at most one run is active
-and one pending, however many calls arrive. A kick carries nothing; the job reads its rows, and its schedule stays the
-recovery. `then` names one cron job of the contract, as a literal (`r.mutation({ …, then: 'testMails' })`); a query,
-an export, a webhook and a job declare none.
+**The kick.** A mutation that records such a row declares `kicks: ['<job>']` and calls `ctx.kick('<job>')`: once its
+transaction committed, the job runs within seconds, under its own key, and the answer does not wait for it. A thrown
+handler, a refused answer and a failed commit kick nothing. Kicks coalesce: at most one run is active and one pending,
+however many calls arrive. A kick carries nothing; the job reads its rows, and its schedule stays the recovery.
+`kicks` names cron jobs of the contract, as literals (`r.mutation({ …, kicks: ['testMails'] })`); a mutation, a
+webhook and a job declare it, and the kick edges never form a cycle.
 
 The rules of the job:
 
 - **Bounded batches.** Each run takes at most a fixed number of records (`order by received_at, id limit 50`), oldest
   first; the next run takes the rest.
-- **Claim a record where you consume it**: read it `for update skip locked` in the transaction that writes it, so a
-  row another session holds waits for a later run and blocks nothing behind it.
+- **Claim a record where you consume it**: a queue table's `claim` (`references/public-intake.md`), or a read
+  `for update skip locked` in the transaction that writes it, so a row another session holds waits for a later run and
+  blocks nothing behind it.
 - **Each record is its own work.** Run it in its own transactions, inside a `try`: a failure adds one to the record's
   `attempts`, keeps a fixed step code in `last_failure` (never the error's message, which can quote a value), and the
   run goes on with the next record. Rethrow when `ctx.signal` aborted: that failure is the attempt's, and the next
@@ -223,5 +224,3 @@ The rules of the job:
   where `ctx.mail.mayRetry(error)` holds, and is dead at once otherwise; one whose `outcome` is `not_sent` returns to
   the state it had before `sending`.
 - **Each step recorded before the next effect**, so the next run finishes a stopped one.
-- An inbox needs a row key for this: `id UUID NOT NULL DEFAULT gen_random_uuid()`, since a form writes only its input
-  fields.

@@ -50,7 +50,7 @@ the SPA is added with it.
 - `kysely` is there for the generated schema's types. The SPA reports its errors to Operations by itself:
   `FabrikaProvider` reads the DSN, release and environment the framework serves at `<prefix>/__fabrika-config.json`
   and sends every uncaught error and unhandled rejection there; add no error-reporting SDK. The same file carries
-  `public: { <VARIABLE>: <value> }`: each form challenge's `siteKey`, and the variables the SPA mount lists in
+  `public: { <VARIABLE>: <value> }`: each public procedure's challenge `siteKey`, and the variables the SPA mount lists in
   `c.spa(prefix, { …, public: ['SIGNUP_URL'] })`. A page reads a per-environment public value (a site key, a link
   target) there, never as a build-time constant; it holds no other variable, and the contract refuses a secret in it.
   `react`, `react-dom` and `@fabrika/ui` (with `@types/react`, `@types/react-dom` and `@happy-dom/global-registrator`
@@ -138,30 +138,30 @@ export default serve(contract, { database: scoped(tables) })
 ```
 
 - Mounts: `c.rpc(prefix, groups)` once per prefix, `c.spa(prefix, { dir, access })`, `c.health('/healthz')` (required
-  on Zerops), `c.form(path, { input, appendTo, then? })` (an anonymous form that appends one row and runs no handler), a
-  webhook, a link mount. An SPA's `access` is `{ member: true }`, `{ action, over }`, or `{ public: true }` for a page
+  on Zerops), a webhook, a link mount. An anonymous visitor reaches a public procedure of an `c.rpc` mount
+  (`access: { public: true }`, `references/public-intake.md`). An SPA's `access` is `{ member: true }`, `{ action, over }`, or `{ public: true }` for a page
   anyone opens without signing in (a landing page, a public form): the approver sees it as "for anyone". A public SPA
   at `/` answers every `GET` no more specific endpoint serves; give a member SPA its own prefix (`/app`). Sections:
   `files`, `jobs`, `exports`, `csp` (`connectSrc`, `imgSrc`, `frameAncestors`, `scriptSrc`, `frameSrc`, `styleSrc`,
   `fontSrc`: exact `https://` origins, each with a `purpose`, at most 16 each). A hosted typeface needs both its
   stylesheet origin in `styleSrc` and its font origin in `fontSrc`; font files under the SPA's `dir` need neither. No path under `/__fabrika`.
-- A public form's abuse control, all optional on `c.form`: `rate: { perClient, perForm }` (per minute, shared by
-  every instance; 10 and 100 by default; 429 past either), `honeypot: '<field>'` (a `z.optional(z.string())` input
-  field the page hides; a filled one gets the same answer and writes nothing) and
-  `challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' }`. A challenge needs the input field
-  `challengeToken: z.string()`, which the page fills from the Turnstile widget rendered with `action` set to the
-  form's mount name; the framework verifies it on the server (a failed token 400, an unreachable provider 503, no
-  row either way) and adds Turnstile's origin to the CSP. `secret` names an application variable the human sets,
-  never the value; without it the application does not boot. `siteKey` names the variable with the widget's public
-  site key, which every SPA mount serves its pages (below). Neither field reaches the inbox, so neither is a
-  column. On Zerops every visitor still shares one client address (the balancer), so `perClient` acts as a second
-  per-form limit: raise it, and use the challenge. `references/public-intake.md` builds a whole public intake on it.
-- `then: '<job>'` on `c.form` names a cron job of the same contract (`jobs`), which each accepted submission kicks
-  once its row committed: a run starts within seconds, under the job's own key, and the answer stays the same constant
-  and never waits for it. A mutation declares the same `then` for the outbox row it records (`references/jobs.md`). Kicks coalesce on the job's lease (at most one run and one pending, however many visitors
-  submit), so the job still drains its inbox in batches under its own budgets. Keep its schedule: it is the recovery
-  path for a kicked run that died. A kick carries nothing; the job reads its inbox. `kit.runJob` first waits for the
-  kicked runs.
+- A public procedure's abuse control is its `admission`: `rate: { perClient, perEndpoint }` (per minute, shared by
+  every instance; 10 and 100 by default for a public mutation; 429 past either) and
+  `challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' }`. `honeypot(value)`
+  of `@fabrika/app` is true for a filled field the page hides: answer the same and write nothing. A challenge needs the
+  input field `challengeToken: z.string()`, which the page fills from the Turnstile widget rendered with `action` set
+  to the endpoint id with `_` for `.` (`api_visitors_register`); the framework verifies it on the server (a failed
+  token 400, an unreachable provider 503, no row either way) and adds Turnstile's origin to the CSP. `secret` names an
+  application variable the human sets, never the value; without it the application does not boot. `siteKey` names
+  the variable with the widget's public site key, which every SPA mount serves its pages (below). On Zerops every
+  visitor still shares one client address (the balancer), so `perClient` acts as a second per-endpoint limit: raise
+  it, and use the challenge. `references/public-intake.md` builds a whole public intake on it.
+- `kicks: ['<job>']` on a mutation names cron jobs of the same contract (`jobs`), and `ctx.kick('<job>')` in its
+  handler starts one once its transaction committed: a run starts within seconds, under the job's own key, and the
+  answer never waits for it (`references/jobs.md`). Kicks coalesce on the job's lease (at most one run and one
+  pending, however many calls arrive), so the job still works in batches under its own budgets. Keep its schedule: it
+  is the recovery path for a kicked run that died. A kick carries nothing; the job reads its rows. `kit.runJob` first
+  waits for the kicked runs.
 - `src/app.ts` composes and does nothing else. A dependency built from the application's own variables is
   `defineDeps(build)`, passed as `serve(contract, { database, deps })` and read in a handler with `get()`. Never read
   `process.env`. `build` runs at every boot, the generated tests' too, which pass no variable: read a variable when

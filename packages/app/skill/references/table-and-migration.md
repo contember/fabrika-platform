@@ -149,7 +149,7 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
 - Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or a strict ISO 8601 string with `Z` or an offset;
   `int8` and `numeric` are strings; an enum is its literal union. JSON, `bytea`, arrays and domains are refused.
 - Plain SQL of the application's own schema only. Refused: another schema (`public.`, `app_…`), any `fabrika_*`
-  object (except a file collection's table, `references/files.md`), `GRANT`, roles, `CREATE EXTENSION`, `COPY`,
+  object (a file column references `fabrika_files (id)`, `references/files.md`), `GRANT`, roles, `CREATE EXTENSION`, `COPY`,
   `SET`, transaction control, `SECURITY DEFINER`, a domain, `serial` and sequences (use `GENERATED ALWAYS AS IDENTITY`),
   a function overload, and calls outside the reviewed built-ins.
 - Never edit, rename or delete a committed migration; add a new one. Change a schema by expand, switch, contract, and
@@ -223,6 +223,13 @@ export const tables = defineTables(vocabulary, columns)({
 		insert: ['row_count'],
 		createdBy: 'created_by',
 	},
+	task_attachments: {
+		scope: { child: 'tasks' },
+		actions: { read: 'tasks.read', insert: 'tasks.write', delete: 'tasks.write' },
+		insert: ['file'],
+		files: { file: 'attachments' },
+		createdBy: 'created_by',
+	},
 	priorities: {
 		scope: { reference: 'the priority codes; a migration changes them' },
 		actions: { read: 'tasks.read' },
@@ -252,6 +259,8 @@ export const tables = defineTables(vocabulary, columns)({
 - `columns: { <column>: { read: '<action>' } }` hides a column from every capability of another action, in the data
   and in the types. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
   action updates nothing else); the column is then not in `update`.
+- `files: { <column>: '<kind>' }` makes a column a file column of a kind the contract declares (`c.files`):
+  `task_attachments.file` holds the files of a task (`references/files.md`).
 - A column has one write action. A state that two actions change is two columns: in `references/public-intake.md` the
   link holder's `candidates.verify` sets `verified_at`, HR's `candidates.review` sets `status`, and `logic.ts` derives
   the stage HR sees from both (`stageOf`).

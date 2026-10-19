@@ -171,166 +171,6 @@
 			"enum_labels": []
 		},
 		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "id",
-			"type_name": "uuid",
-			"type_type": "b",
-			"type_category": "U",
-			"nullable": false,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "owner_id",
-			"type_name": "uuid",
-			"type_type": "b",
-			"type_category": "U",
-			"nullable": true,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "project_id",
-			"type_name": "uuid",
-			"type_type": "b",
-			"type_category": "U",
-			"nullable": true,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "org_id",
-			"type_name": "text",
-			"type_type": "b",
-			"type_category": "S",
-			"nullable": true,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "status",
-			"type_name": "text",
-			"type_type": "b",
-			"type_category": "S",
-			"nullable": false,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "object_key",
-			"type_name": "text",
-			"type_type": "b",
-			"type_category": "S",
-			"nullable": false,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "size",
-			"type_name": "int8",
-			"type_type": "b",
-			"type_category": "N",
-			"nullable": true,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "content_type",
-			"type_name": "text",
-			"type_type": "b",
-			"type_category": "S",
-			"nullable": false,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "sha256",
-			"type_name": "text",
-			"type_type": "b",
-			"type_category": "S",
-			"nullable": true,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "original_name",
-			"type_name": "text",
-			"type_type": "b",
-			"type_category": "S",
-			"nullable": true,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "created_by",
-			"type_name": "text",
-			"type_type": "b",
-			"type_category": "S",
-			"nullable": false,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "created_at",
-			"type_name": "timestamptz",
-			"type_type": "b",
-			"type_category": "D",
-			"nullable": false,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "deleted_at",
-			"type_name": "timestamptz",
-			"type_type": "b",
-			"type_category": "D",
-			"nullable": true,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "object_version",
-			"type_name": "text",
-			"type_type": "b",
-			"type_category": "S",
-			"nullable": true,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "scan_attempts",
-			"type_name": "int4",
-			"type_type": "b",
-			"type_category": "N",
-			"nullable": false,
-			"generated": "default",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_files_attachments",
-			"column_name": "scan_after",
-			"type_name": "timestamptz",
-			"type_type": "b",
-			"type_category": "D",
-			"nullable": true,
-			"generated": "no",
-			"enum_labels": []
-		},
-		{
 			"table_name": "fabrika_form_admissions",
 			"column_name": "form",
 			"type_name": "text",
@@ -981,6 +821,76 @@
 			"enum_labels": []
 		},
 		{
+			"table_name": "task_attachments",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_attachments",
+			"column_name": "task_id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_attachments",
+			"column_name": "project_id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_attachments",
+			"column_name": "org_id",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_attachments",
+			"column_name": "file",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_attachments",
+			"column_name": "created_by",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_attachments",
+			"column_name": "created_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
 			"table_name": "task_comments",
 			"column_name": "id",
 			"type_name": "uuid",
@@ -1167,21 +1077,6 @@
 	],
 	"foreignKeys": [
 		{
-			"table_name": "fabrika_files_attachments",
-			"constraint_name": "fabrika_files_attachments_owner_id_project_id_org_id_fkey",
-			"columns": [
-				"owner_id",
-				"project_id",
-				"org_id"
-			],
-			"referenced_table": "tasks",
-			"referenced_columns": [
-				"id",
-				"project_id",
-				"org_id"
-			]
-		},
-		{
 			"table_name": "fabrika_webhook_deliveries",
 			"constraint_name": "fabrika_webhook_deliveries_binding_id_fkey",
 			"columns": [
@@ -1202,6 +1097,32 @@
 			"referenced_table": "projects",
 			"referenced_columns": [
 				"id",
+				"org_id"
+			]
+		},
+		{
+			"table_name": "task_attachments",
+			"constraint_name": "task_attachments_file_fkey",
+			"columns": [
+				"file"
+			],
+			"referenced_table": "fabrika_files",
+			"referenced_columns": [
+				"id"
+			]
+		},
+		{
+			"table_name": "task_attachments",
+			"constraint_name": "task_attachments_task_id_project_id_org_id_fkey",
+			"columns": [
+				"task_id",
+				"project_id",
+				"org_id"
+			],
+			"referenced_table": "tasks",
+			"referenced_columns": [
+				"id",
+				"project_id",
 				"org_id"
 			]
 		},

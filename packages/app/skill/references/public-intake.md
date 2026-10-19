@@ -10,16 +10,16 @@ Every piece lets in someone who is not signed in, so ask the human before you bu
 visitor do. The visitor never reaches a handler without a credential:
 
 1. **A public page** (`c.spa('/', { access: { public: true } })`) holds the form. It reads no data.
-2. **A form** appends one row to its inbox table and answers `{ result: { received: true } }`, for a new and a known
-   address alike. It runs no handler: a handler would give every anonymous request a transaction, and a different
-   answer for a known address would tell a stranger who registered.
-3. **A cron job** drains the inbox, creates the record, issues a link bound to it (`issues`), and sends the e-mail
-   through the installation's transport (`mailer: 'installation'`, `ctx.mail`). Each form kicks it (`then: 'intake'`),
-   so it runs within seconds of a submission; its schedule is the recovery. It is the outbox recipe of
+2. **A public procedure** (`access: { public: true }`) inserts one row into an application table and answers `{}`, for
+   a new and a known address alike. It reads no existing row: a different answer for a known address would tell a
+   stranger who registered.
+3. **A cron job** claims the registrations, creates the record, issues a link bound to it (`issues`), and sends the
+   e-mail through the installation's transport (`mailer: 'installation'`, `ctx.mail`). Each submission kicks it
+   (`kicks: ['intake']`, `ctx.kick('intake')`), so it runs within seconds; its schedule is the recovery. It is the outbox recipe of
    `references/jobs.md`: bounded batches, each record its own work with an attempt count and a backoff, a dead state
    for a record that keeps failing, an idempotency key on the e-mail, and a retry only where the transport allows it.
 4. **A link mount** serves the visitor's own record: `verify` and the record's files, under the link's key.
-5. **A second form** asks for a new link. The job revokes the old one and sends a new one, within a budget per address.
+5. **A second public procedure** asks for a new link. The job revokes the old one and sends a new one, within a budget per address.
 
 ## The vocabulary, the migrations and the policies
 
@@ -37,6 +37,7 @@ export const vocabulary = defineVocabulary({
 		'candidates.attach': 'Attach files to a candidate record',
 		'candidates.invite': "Issue a candidate's portal link",
 		'candidates.process': 'Register candidates and send their links',
+		'candidates.register': 'Record an anonymous registration or resend request',
 		'positions.read': 'Read the open positions',
 		'positions.manage': 'Edit the open positions',
 		'reasons.manage': 'Edit the reasons a decision records',
@@ -94,7 +95,8 @@ export const vocabulary = defineVocabulary({
 - `directory: 'labels'` lets every `people.list` holder read each person's label, for naming the author of a change.
   A label spells a user's address, so the approver reviews it closely.
 - The link's holder and the jobs get their actions from the link mount and each job's `actions`, not from a role.
-  `mail.send` is no role's: only the job that sends the test e-mails holds it.
+  `mail.send` is no role's: only the job that sends the test e-mails holds it. `candidates.register` is no role's
+  either: only the public procedures hold it.
 
 ```sql db/migrations/20261013090000_intake.sql
 CREATE TYPE candidate_status AS ENUM ('new', 'screening', 'interview', 'hired', 'rejected');
@@ -120,9 +122,11 @@ CREATE TABLE candidates (
 	attempts INTEGER NOT NULL DEFAULT 0,
 	next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	last_failure TEXT,
+	photo UUID REFERENCES fabrika_files (id),
 	created_by TEXT NOT NULL,
 	version INTEGER NOT NULL
 );
+CREATE INDEX candidates_photo ON candidates (photo);
 
 -- The review's history: one row per decision, written in the decision's own transaction.
 CREATE TABLE candidate_events (
@@ -136,21 +140,23 @@ CREATE TABLE candidate_events (
 );
 CREATE INDEX candidate_events_candidate ON candidate_events (candidate_id);
 
--- The forms' inboxes: a column per input field, of its name, except the honeypot and the challenge token, and one per
--- file field, which receives the id of the file the submission carried (NULL without one). A form writes those
--- columns only, so every other column has a default: id names the row for the job, received_at keeps the time of the
--- submission, and a registration counts the job's failed attempts at it.
+-- What the public procedures insert. A registration is a queue row the job claims: attempts counts its claims and
+-- next_attempt_at is when it is due, NULL once done; last_failure names the step that failed last. photo holds the
+-- file the visitor sent, or NULL. received_at keeps the time of the submission.
 CREATE TABLE registrations (
-	id UUID NOT NULL DEFAULT gen_random_uuid(),
+	id UUID PRIMARY KEY,
 	email TEXT NOT NULL,
 	full_name TEXT NOT NULL,
-	photo UUID,
+	photo UUID REFERENCES fabrika_files (id),
 	received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	attempts INTEGER NOT NULL DEFAULT 0,
-	last_failure TEXT
+	next_attempt_at TIMESTAMPTZ DEFAULT now(),
+	last_failure TEXT,
+	version INTEGER NOT NULL
 );
+CREATE INDEX registrations_photo ON registrations (photo);
 CREATE TABLE resend_requests (
-	id UUID NOT NULL DEFAULT gen_random_uuid(),
+	id UUID PRIMARY KEY,
 	email TEXT NOT NULL,
 	received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -194,53 +200,19 @@ CREATE TABLE test_mails (
 ```
 
 ```sql db/migrations/20261013090100_attachments.sql
-CREATE TABLE fabrika_files_attachments (
+-- The files a link holder attaches to the candidate's record: one row per file, its reference in a file column.
+CREATE TABLE candidate_files (
 	id UUID PRIMARY KEY,
-	owner_id UUID,
-	status TEXT NOT NULL CONSTRAINT fabrika_files_attachments_status CHECK (status IN ('pending', 'live', 'quarantined', 'rejected')),
-	object_key TEXT NOT NULL UNIQUE,
-	size BIGINT,
-	content_type TEXT NOT NULL,
-	sha256 TEXT,
-	original_name TEXT,
+	candidate_id UUID NOT NULL REFERENCES candidates (id) ON DELETE CASCADE,
+	file UUID NOT NULL REFERENCES fabrika_files (id),
 	created_by TEXT NOT NULL,
-	created_at TIMESTAMPTZ NOT NULL,
-	deleted_at TIMESTAMPTZ,
-	object_version TEXT,
-	scan_attempts INTEGER NOT NULL DEFAULT 0,
-	scan_after TIMESTAMPTZ,
-	FOREIGN KEY (owner_id) REFERENCES candidates (id) ON UPDATE CASCADE ON DELETE SET NULL
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX fabrika_files_attachments_owner ON fabrika_files_attachments (owner_id) WHERE deleted_at IS NULL;
-CREATE INDEX fabrika_files_attachments_removable ON fabrika_files_attachments (created_at) WHERE deleted_at IS NOT NULL OR owner_id IS NULL OR status = 'pending';
-CREATE INDEX fabrika_files_attachments_scan ON fabrika_files_attachments (scan_after) WHERE status = 'quarantined';
+CREATE INDEX candidate_files_candidate ON candidate_files (candidate_id);
+CREATE INDEX candidate_files_file ON candidate_files (file);
 ```
 
-```sql db/migrations/20261013090150_photos.sql
-CREATE TABLE fabrika_files_photos (
-	id UUID PRIMARY KEY,
-	owner_id UUID,
-	status TEXT NOT NULL CONSTRAINT fabrika_files_photos_status CHECK (status IN ('pending', 'live', 'quarantined', 'rejected')),
-	object_key TEXT NOT NULL UNIQUE,
-	size BIGINT,
-	content_type TEXT NOT NULL,
-	sha256 TEXT,
-	original_name TEXT,
-	created_by TEXT NOT NULL,
-	created_at TIMESTAMPTZ NOT NULL,
-	deleted_at TIMESTAMPTZ,
-	object_version TEXT,
-	scan_attempts INTEGER NOT NULL DEFAULT 0,
-	scan_after TIMESTAMPTZ,
-	FOREIGN KEY (owner_id) REFERENCES candidates (id) ON UPDATE CASCADE ON DELETE SET NULL
-);
-CREATE INDEX fabrika_files_photos_owner ON fabrika_files_photos (owner_id) WHERE deleted_at IS NULL;
-CREATE INDEX fabrika_files_photos_removable ON fabrika_files_photos (created_at) WHERE deleted_at IS NOT NULL OR owner_id IS NULL OR status = 'pending';
-CREATE INDEX fabrika_files_photos_scan ON fabrika_files_photos (scan_after) WHERE status = 'quarantined';
-```
-
-The file tables are `fileTableSql('attachments', { table: 'candidates', key: { column: 'id', type: 'uuid' }, chain: [] })`
-and the same for `photos` (`references/files.md`): a top-level owner has no chain.
+A file column is a `UUID` that references `fabrika_files (id)`, with an index on it (`references/files.md`).
 
 ```ts src/db/tables.ts
 import { defineTables } from '@fabrika/db/tables'
@@ -260,8 +232,10 @@ export const tables = defineTables(vocabulary, columns)({
 		update: ['verified_at'],
 		version: 'version',
 		createdBy: 'created_by',
+		files: { photo: 'photos' },
 		columns: {
 			status: { write: 'candidates.review' },
+			photo: { write: 'candidates.attach' },
 			link_state: { read: 'candidates.process' },
 			link_id: { read: 'candidates.process' },
 			link_seal: { read: 'candidates.process' },
@@ -279,8 +253,40 @@ export const tables = defineTables(vocabulary, columns)({
 		insert: ['status', 'note', 'reason_id'],
 		createdBy: 'created_by',
 	},
-	registrations: { scope: { inbox: 'register', read: 'candidates.process' } },
-	resend_requests: { scope: { inbox: 'resend', read: 'candidates.process' } },
+	candidate_files: {
+		scope: { child: 'candidates' },
+		actions: {
+			read: 'candidates.read',
+			insert: 'candidates.attach',
+			delete: 'candidates.review',
+		},
+		insert: ['file'],
+		files: { file: 'attachments' },
+		createdBy: 'created_by',
+	},
+	registrations: {
+		scope: { app: 'registrations of visitors, until the intake job takes them' },
+		actions: {
+			read: 'candidates.process',
+			insert: 'candidates.register',
+			update: 'candidates.process',
+			delete: 'candidates.process',
+		},
+		insert: ['email', 'full_name', 'photo'],
+		update: ['last_failure'],
+		files: { photo: 'photos' },
+		queue: { attempts: 'attempts', due: 'next_attempt_at', maxAttempts: 5 },
+		version: 'version',
+	},
+	resend_requests: {
+		scope: { app: 'requests for a new link, until the intake job takes them' },
+		actions: {
+			read: 'candidates.process',
+			insert: 'candidates.register',
+			delete: 'candidates.process',
+		},
+		insert: ['email'],
+	},
 	positions: {
 		scope: { app: 'the open positions an HR lead edits' },
 		actions: {
@@ -320,24 +326,26 @@ export const tables = defineTables(vocabulary, columns)({
 })
 ```
 
-- `{ inbox: '<form>', read }` is a form's table: only that form appends to it, and only a site that holds `read` and
-  declares the reach reads it. No site writes it: `unscoped: { registrations: 'write' }` is refused.
+- `registrations` and `resend_requests` are what the public procedures insert, with `candidates.register`, which no
+  role grants. A public procedure inserts and reads back nothing; only the job, with `candidates.process`, reads them.
+- `queue` makes `registrations` a queue table: the job's `claim` leases due rows, counts `attempts`, and moves
+  `next_attempt_at` by the backoff; a row claimed `maxAttempts` times stays, no longer due, for an operator.
+- `files: { photo: 'photos' }` makes `photo` a file column of the kind `photos`. The claim reads it with the table's read
+  action, so the job may write the same reference into `candidates.photo`, whose own write action is `candidates.attach`.
 - `{ app: '<why>' }` is an application table: its rows belong to no candidate. An endpoint declared
   `access: { action, app: true }` reads and writes it through `ctx.db.app`, with the action the operation names. An
   endpoint `on`, `in` or `over` a candidate reads it, read-only and every row, where its action is the table's read
   action: `decide` reads `reasons` with `candidates.review`. A position or a reason is deactivated, never deleted, so
   neither table has a delete action. `candidate_exports` is appended with the export's own action, `candidates.export`,
   and read with `exports.read`. `test_mails` is appended with `mail.test` and read only by the job's `mail.send`.
-- The form writes each input field to the column of the same name: `full_name`, never `fullName`. tsc refuses another
-  name at the form's `appendTo`, and the checker refuses it too. A `ctx.sql` row still reads it as `fullName`.
-- The form writes nothing else, so an inbox records the time of a submission only in a `DEFAULT now()` column
-  (`received_at`). The job's own `now()` is later: seconds after a kick, up to a minute when the schedule recovers it.
-  An inbox's `id` is a `DEFAULT gen_random_uuid()` for the same reason: the job takes and counts each row by it.
+- A registration records the time of the submission in a `DEFAULT now()` column (`received_at`). The job's own
+  `now()` is later: seconds after a kick, up to a minute when the schedule recovers it.
 - The delivery columns are read only with `candidates.process`, so neither HR nor the link's holder sees them.
 
 ## The contract
 
 ```ts src/schemas.ts
+import { file } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 
 export const CandidateStatus = z.enum([
@@ -349,9 +357,10 @@ export const CandidateStatus = z.enum([
 ])
 export const Register = z.strictObject({
 	email: z.email().max(200),
-	full_name: z.string().min(1).max(200),
+	fullName: z.string().min(1).max(200),
 	website: z.optional(z.string().max(200)),
 	challengeToken: z.string().max(4096),
+	photo: z.optional(file('photos')),
 })
 export const Resend = z.strictObject({ email: z.email().max(200) })
 export const Me = z.strictObject({
@@ -366,59 +375,29 @@ export const Verified = z.strictObject({ verifiedAt: z.iso.datetime() })
 import { app } from './src/app-kit'
 import { candidates } from './src/candidates/endpoints'
 import { intake } from './src/intake/endpoints'
+import { visitors } from './src/intake/visitors'
 import { portal } from './src/portal/endpoints'
 import { positions } from './src/positions/endpoints'
 import { reasons } from './src/reasons/endpoints'
-import { Register, Resend } from './src/schemas'
 import { settings, testMails } from './src/settings/endpoints'
 
 export const contract = app.contract((c) => ({
 	site: c.spa('/', { dir: 'dist/site', access: { public: true } }),
-	register: c.form('/register', {
-		input: Register,
-		appendTo: 'registrations',
-		maxBytes: 4096,
-		honeypot: 'website',
-		challenge: {
-			provider: 'turnstile',
-			secret: 'TURNSTILE_SECRET',
-			siteKey: 'TURNSTILE_SITE_KEY',
-		},
-		files: { photo: { collection: 'photos' } },
-		then: 'intake',
-	}),
-	resend: c.form('/resend', {
-		input: Resend,
-		appendTo: 'resend_requests',
-		maxBytes: 1024,
-		then: 'intake',
-	}),
 	portal,
-	api: c.rpc('/api', { candidates, positions, reasons, settings }),
+	api: c.rpc('/api', { visitors, candidates, positions, reasons, settings }),
 	hr: c.spa('/hr', {
 		dir: 'dist/hr',
 		access: { action: 'candidates.read', over: 'candidate' },
 	}),
 	files: {
 		attachments: c.files({
-			owner: 'candidates',
-			read: 'candidates.read',
-			write: 'candidates.attach',
-			delete: 'candidates.review',
-			maxBytes: 10485760,
 			types: ['application/pdf'],
-			maxPerOwner: 5,
-			link: true,
+			maxBytes: 10485760,
 			scan: true,
 		}),
 		photos: c.files({
-			owner: 'candidates',
-			read: 'candidates.read',
-			write: 'candidates.attach',
-			delete: 'candidates.review',
-			maxBytes: 15728640,
 			types: ['image/jpeg', 'image/png', 'image/webp'],
-			maxPerOwner: 1,
+			maxBytes: 15728640,
 			scan: true,
 		}),
 	},
@@ -427,59 +406,110 @@ export const contract = app.contract((c) => ({
 }))
 ```
 
+```ts src/intake/visitors.ts
+import { honeypot } from '@fabrika/app'
+import { z } from 'zod/v4'
+import { app } from '../app-kit'
+import { Register, Resend } from '../schemas'
+
+const Empty = z.strictObject({})
+
+/** Each inserts one row and answers the same, whatever the database holds: no answer tells who registered. */
+export const visitors = app.group({}, (r) => ({
+	register: r.mutation({
+		input: Register,
+		output: Empty,
+		access: { public: true },
+		actions: ['candidates.register'],
+		admission: {
+			challenge: {
+				provider: 'turnstile',
+				secret: 'TURNSTILE_SECRET',
+				siteKey: 'TURNSTILE_SITE_KEY',
+			},
+			rate: { perClient: 100, perEndpoint: 100, bytesPerHour: 536870912 },
+		},
+		kicks: ['intake'],
+	})
+		.handle(async ({ input, ctx }) => {
+			if (honeypot(input.website)) return {}
+			await ctx.db.app('candidates.register').registrations.insert({
+				email: input.email,
+				full_name: input.fullName,
+				photo: input.photo ?? null,
+			})
+			ctx.kick('intake')
+			return {}
+		}),
+	resend: r.mutation({
+		input: Resend,
+		output: Empty,
+		access: { public: true },
+		actions: ['candidates.register'],
+		limits: { maxBytes: 1024 },
+		kicks: ['intake'],
+	})
+		.handle(async ({ input, ctx }) => {
+			await ctx.db.app('candidates.register').resend_requests.insert({
+				email: input.email,
+			})
+			ctx.kick('intake')
+			return {}
+		}),
+}))
+```
+
 - **The public page.** `access: { public: true }` serves the SPA to anyone, without a token, and takes no other key.
   At `/` it answers every `GET` that no more specific endpoint serves, so the HR SPA (`/hr`) and the link's SPA (`/p`)
   keep their own. The approver sees it as "for anyone, without signing in". Put nothing on it that only members may
-  read: the page calls no procedure.
-- **The form's abuse control.** `honeypot` names an optional string field the page hides: a filled one gets the same
-  answer and writes no row. `challenge` makes the framework verify the Turnstile token in `challengeToken` before it
-  writes the row (a failed token 400, an unreachable provider 503, no row either way) and adds Turnstile's origin to
-  the CSP. `TURNSTILE_SECRET` is an application variable the human sets; without it the application does not boot.
-  `siteKey` names the variable with the widget's public site key, which every SPA mount serves its pages; without it
-  the application does not boot either. Another public value a page needs per environment (a link target) goes in
-  the SPA mount's own list: `c.spa('/', { …, public: ['SIGNUP_URL'] })`. Both reach the page in
-  `<prefix>/__fabrika-config.json` as `public: { <VARIABLE>: <value> }`, and the approver sees each name. Never name
-  a secret there: the contract refuses a variable that is both.
-  `rate: { perClient, perForm }` (per minute, 10 and 100 by default) answers 429 past either limit.
-- **A form on someone else's page.** A form served from this application's own SPA needs nothing. A form a partner's
-  page or a separate marketing site submits needs `crossOrigin`: `true` for the origins an operator lists for the
-  environment in Control, `'*'` for any site (an embeddable widget). The proxy answers the browser's preflight and
-  the page can read the constant answer. Keep the honeypot, the challenge and the rate limit: `'*'` invites every site.
+  read: the page calls only the public procedures.
+- **A public procedure** sits in a group with no callers (`app.group({}, …)`), declares `access: { public: true }`
+  and the `actions` it holds, and is served at `POST /api/visitors.register`. Its `ctx.db.app('<action>')` inserts and
+  reads back nothing; it never locks or claims a row.
+- **Its abuse control.** `honeypot(input.website)` is true when the field the page hides is filled: answer the same
+  and write no row. `admission.challenge` makes the framework verify the Turnstile token in the input field
+  `challengeToken` before the handler runs (a failed token 400, an unreachable provider 503, no row either way) and adds
+  Turnstile's origin to the CSP. `TURNSTILE_SECRET` is an application variable the human sets; without it the
+  application does not boot. `siteKey` names the variable with the widget's public site key, which every SPA mount
+  serves its pages; without it the application does not boot either. Another public value a page needs per
+  environment (a link target) goes in the SPA mount's own list: `c.spa('/', { …, public: ['SIGNUP_URL'] })`. Both
+  reach the page in `<prefix>/__fabrika-config.json` as `public: { <VARIABLE>: <value> }`, and the approver sees each
+  name. Never name a secret there: the contract refuses a variable that is both.
+  `admission.rate: { perClient, perEndpoint }` (per minute, 10 and 100 by default for a public mutation) answers 429
+  past either limit.
+- **A form on someone else's page.** A page served from this application's own origin needs nothing. A partner's page
+  or a separate marketing site needs `admission.origins`: `'listed'` for the origins an operator lists for the
+  environment in Control, `'any'` for any site (an embeddable widget). Keep the honeypot, the challenge and the rate
+  limit: `'any'` invites every site.
 - **Zerops shares one client address.** Until the platform reads the visitor's address behind the Zerops balancer,
-  every visitor counts as one client there, so `perClient` acts as a second per-form limit: set it to the form's
-  expected peak, never lower it to stop a flood. The challenge is the defense that does not depend on the address.
-- **Counting clicks** on a public page has no primitive. The pattern is an anonymous form without a challenge whose
-  inbox gets one row per click, posted with `fetch(…, { keepalive: true })`. Know both limits before you offer it:
-  anyone can inflate the counts (the rate limits bound only how fast), and nothing drains the inbox but a job you
+  every visitor counts as one client there, so `perClient` acts as a second per-endpoint limit: set it to the expected
+  peak, never lower it to stop a flood. The challenge is the defense that does not depend on the address.
+- **Counting clicks** on a public page has no primitive. The pattern is a public procedure without a challenge that
+  inserts one row per click, posted with `fetch(…, { keepalive: true })`. Know both limits before you offer it:
+  anyone can inflate the counts (the rate limits bound only how fast), and nothing reads the rows but a job you
   write. Ask the human first; usually the application should not count clicks.
 - **Other origins** the pages load (an image host, an API the browser calls) go in the contract's `csp` section:
   `csp: { scriptSrc: [{ origin: 'https://…', purpose: '…' }] }`, beside `connectSrc`, `imgSrc`, `frameSrc`,
   `styleSrc`, `fontSrc` and `frameAncestors`: exact `https://` origins, at most 16 each. Each new origin is a widening the approver sees.
-- **Scanned files.** A visitor's upload waits `quarantined` until ClamAV answers clean (`references/files.md`): its
-  download answers 409 until then. On Zerops the deploy service needs `verticalAutoscaling: { minRam: 2 }`.
-- **A photo with the registration.** `files: { photo: { collection: 'photos' } }` lets the form carry one file beside
-  its input; `required: true` refuses a submission without it. The form becomes `multipart/form-data` (the page's code
-  is below) and must declare a challenge; each field lands in a collection that has `scan: true`, whose `types`,
-  `maxBytes` and `maxPerOwner` bound the file, while the form's `maxBytes` bounds only its input. The inbox has a
-  column named like the field (`photo UUID`), which receives the file's id, or `NULL` when the visitor sent none. Until
-  the job attaches it, the file is owned by nobody and nobody can read it; one the job never attaches (a known address,
-  a registration that stays dead) is deleted seven days after the submission. The approver sees "Form `register` takes
-  a file `photo` from anyone into files `photos`". A file the collection refuses (a type it does not admit, bytes
-  that are not that type, too large) is 415 or 413 after the challenge was spent, so the page checks the type and the
-  size before it submits, and solves the challenge again after a refusal.
-  While no file is `required`, the form still takes the JSON body it took before (every file column `NULL`): deploy the
-  application first, then switch each page to multipart. A form with files accepts 20 submissions a minute unless
-  `rate.perForm` says otherwise, and its files write at most 512 MiB an hour in all (`rate: { bytesPerHour }` to raise
-  it, never below the largest file): each file reserves its collection's `maxBytes` first, so with a 15 MiB photo about
-  34 maximal photos fit in an hour, more of the usual 2–5 MB ones; past it the form answers 429 until the hour ends.
-  Size the budget for the expected peak: a flood that spends it costs that hour's photos, not the storage.
-- **The kick.** `then: 'intake'` makes each accepted submission start a run of the job within seconds, once its row
-  committed, under the job's own key. The visitor's answer is the same constant and never waits for the run. Kicks
-  coalesce on the job's lease (at most one run and one pending, however many visitors submit), so a flood adds no
-  work: the run still drains the inbox in batches of 50, within each address's budget. A kick carries nothing; the
-  job reads its inbox.
+- **Scanned files.** A visitor's upload waits `quarantined` until ClamAV answers clean (`references/files.md`): a file
+  answer is 409 until then. On Zerops the deploy service needs `verticalAutoscaling: { minRam: 2 }`.
+- **A photo with the registration.** `photo: z.optional(file('photos'))` lets the visitor send one file beside the
+  input; the client then sends the body as multipart. A public file field needs a challenge, `bytesPerHour` and a kind
+  with `scan: true`, whose `types` and `maxBytes` bound the file. The handler writes the reference into
+  `registrations.photo`, and the job writes the same reference into `candidates.photo`: the file is never copied. A
+  file no column references any more (a known address, a registration an operator deleted) is deleted by the
+  framework's sweep. A file the kind refuses (a type it does not admit, bytes that are not that type, too large) is
+  415 or 413 after the challenge was spent, so the page checks the type and the size before it submits, and solves
+  the challenge again after a refusal. The files of the procedure write at most `bytesPerHour` in all (512 MiB here),
+  each file reserving its kind's `maxBytes` first, so with a 15 MiB photo about 34 maximal photos fit in an hour;
+  past it the procedure answers 429 until the hour ends. Size the budget for the expected peak: a flood that spends
+  it costs that hour's photos, not the storage.
+- **The kick.** `kicks: ['intake']` and `ctx.kick('intake')` start a run of the job within seconds, once the row
+  committed, under the job's own key. The visitor's answer never waits for the run. Kicks coalesce on the job's lease
+  (at most one run and one pending, however many visitors submit), so a flood adds no work: the run still claims in
+  batches of 50, within each address's budget. A kick carries nothing; the job reads its tables.
 
-## The job: inbox → record → link → e-mail
+## The job: registration → record → link → e-mail
 
 ```ts src/links.ts
 import { defineDeps } from '@fabrika/app/implement'
@@ -553,15 +583,8 @@ import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { links } from '../links'
 
-const Queued = z.strictObject({
-	id: z.string(),
-	email: z.string(),
-	fullName: z.string(),
-	photo: z.nullable(z.string()),
-})
 const Ask = z.strictObject({ email: z.string() })
 const Id = z.strictObject({ id: z.string() })
-const Attempts = z.strictObject({ attempts: z.number() })
 const State = z.strictObject({ linkState: z.string() })
 const Due = z.strictObject({
 	id: z.string(),
@@ -593,7 +616,6 @@ export const intake = app.cron('* * * * *', {
 		'candidates.verify',
 		'candidates.attach',
 	],
-	scope: 'app',
 	retries: 0,
 	sql: 'write',
 	issues: 'portal',
@@ -616,47 +638,42 @@ export const intake = app.cron('* * * * *', {
 				await failed(error)
 			}
 		}
-		// A registration becomes a candidate once; the form told the visitor nothing either way.
-		const queued = await ctx.transaction((tx) =>
-			tx.sql(Id)`
-				select id from registrations where attempts < ${MAX_ATTEMPTS}
-				order by received_at, id limit ${BATCH}`
-		)
-		for (const { id } of queued) {
+		// A registration becomes a candidate once; the procedure told the visitor nothing either way.
+		const claimed = await ctx.db.app('candidates.process').registrations.claim({
+			limit: BATCH,
+		})
+		for (const row of claimed) {
 			await eachRecord(() =>
 				ctx.transaction(async (tx) => {
-					// Claimed where it is consumed: a row other work holds is skipped, not waited for.
-					const [row] = await tx.sql(Queued)`
-						select id, email, full_name, photo from registrations
-						where id = ${id} and attempts < ${MAX_ATTEMPTS}
-						for update skip locked`
-					if (row === undefined) return
-					await tx.sql(Id)`
-						delete from registrations where id = ${row.id} returning id`
 					const [created] = await tx.sql(Id)`
 						insert into candidates (id, email, name, created_by, version)
-						values (${crypto.randomUUID()}, ${row.email}, ${row.fullName},
+						values (${crypto.randomUUID()}, ${row.email}, ${row.full_name},
 							${ctx.principal.id}, 1)
 						on conflict (email) do nothing
 						returning id`
-					// The photo becomes the new candidate's in this transaction; a known address gets none.
+					// The photo's reference moves to the new candidate in this transaction; a known address gets none.
 					if (created !== undefined && row.photo !== null) {
 						const candidate = await tx.ref(
 							'candidates.attach',
 							'candidate',
 							created.id,
 						)
-						await tx.files('photos').attach(candidate, row.photo)
+						await tx.db.on(candidate).update({ photo: row.photo }, {
+							expectVersion: 1,
+						})
 					}
+					await tx.db.on(row.ref).remove({ expectVersion: row.version })
 				}), async () => {
-				const [counted] = await ctx.transaction((tx) =>
-					tx.sql(Attempts)`
-						update registrations
-						set attempts = attempts + 1, last_failure = 'register'
-						where id = ${id} returning attempts`
+				// The claim counted the attempt and set the backoff; the row keeps the step that failed.
+				await ctx.transaction((tx) =>
+					tx.db.on(row.ref).update({ last_failure: 'register' }, {
+						expectVersion: row.version,
+					})
 				)
-				if (counted !== undefined && counted.attempts >= MAX_ATTEMPTS) {
-					console.error(`intake: registration ${id} is dead; an operator decides`)
+				if (row.attempts >= MAX_ATTEMPTS) {
+					console.error(
+						`intake: registration ${row.id} is dead; an operator decides`,
+					)
 				}
 			})
 		}
@@ -815,7 +832,7 @@ The job keeps eight invariants. Keep them when you change it:
   deliveries; the next run takes the rest. Each record's work runs in `eachRecord`: a failure (a row the insert refuses,
   a refused recipient, an e-mail past `SEND_TIMEOUT_MS`, IAM down) adds one to the record's `attempts`, keeps the step
   in `last_failure`, and the run goes on with the next record, so one bad record stops nothing else. A record that failed `MAX_ATTEMPTS` times is
-  dead: a registration stays in its inbox and the batch skips it, a delivery is `failed`; the job logs each once, by
+  dead: a registration stays in its table, no longer due, a delivery is `failed`; the job logs each once, by
   id, never by address. An operator decides: fix the row, or delete it. A resend revives a `failed` delivery, within
   the budget. A failure of an ended attempt (`ctx.signal` aborted) is the attempt's, not the record's: it is thrown,
   and the next run meets the record as it is. So each e-mail gets its own deadline inside the attempt's: `ctx.mail.send`
@@ -830,8 +847,9 @@ The job keeps eight invariants. Keep them when you change it:
   lost answer) sends it again only when `ctx.mail.capabilities.idempotent` holds, and otherwise leaves it dead for a
   person, because the e-mail may have arrived. A failure the transport says did not send it (`outcome: 'not_sent'`)
   returns the row to `issued`.
-- **A record is claimed where it is consumed.** Each registration is read again `for update skip locked` in the
-  transaction that deletes it and inserts the candidate, the resend batch is `for update skip locked` in the delete that
+- **A record is claimed where it is consumed.** `claim` leases each registration in a short transaction of its own and
+  skips a row other work holds; the job then removes it and inserts the candidate in one transaction, under the
+  version the claim answered. A failure leaves the row due again after the claim's backoff. The resend batch is `for update skip locked` in the delete that
   takes it, and the reservation skips a candidate row other work holds. A row someone else locks (an operator's
   session, an HR request) waits for a later run and blocks nothing behind it.
 - **The budget is charged first.** Each delivery reserves one e-mail of the address's daily budget, in its own
@@ -861,10 +879,11 @@ More on the job:
   links it issued. Its `actions` must hold the mount's `issuedBy` and every grant of the mount, or the contract is
   refused: IAM lets an issuer delegate only what it holds. The link is bound to one candidate (the `Ref`), and the
   approver sees the job's `issues` marked "needs closer review".
-- **`sql: 'write'`** is the declared reach into the inboxes: `delete … where id = …` takes each row exactly once, and
-  a refused insert rolls its delete back with it. **A job writes no scope fragment**: it is app-wide (`scope: 'app'`
-  is the only scope), so `tx.sql.scope` of its `Within` is every row, and an inbox has no scope at all.
-- **The latency.** The forms' kick starts a run within seconds of a submission, so the e-mail leaves seconds later,
+- **`sql: 'write'`** is the declared reach for the candidate's insert (`on conflict (email) do nothing`), the resend
+  requests and the delivery state. A file column is written only through `tx.db`, so the photo's reference goes into
+  `candidates.photo` through `tx.db.on(ref).update`. **A job writes no scope fragment**: it is application-wide, so
+  `tx.sql.scope` of its `Within` is every row, and an application table has no scope at all.
+- **The latency.** The procedures' kick starts a run within seconds of a submission, so the e-mail leaves seconds later,
   while the address has an e-mail of its daily budget left; a spent one waits until a day after the window's first
   e-mail. Keep the schedule (`* * * * *`): it is the recovery path. A kicked run that dies (a crash, a deploy, a
   timeout) leaves its rows, and the next scheduled run finishes them, within a minute. `retries: 0`: that run is the
@@ -884,8 +903,25 @@ More on the job:
 ## The visitor's link: verify once, attach files
 
 ```ts src/portal/endpoints.ts
+import { ConflictError, NotFoundError } from '@fabrika/app'
+import { file } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { Me, Verified } from '../schemas'
+
+const Attach = z.strictObject({ file: file('attachments') })
+const Attached = z.strictObject({ id: z.uuid() })
+const Document = z.strictObject({ id: z.uuid() })
+const Documents = z.strictObject({
+	items: z.array(z.strictObject({
+		id: z.uuid(),
+		name: z.nullable(z.string()),
+		status: z.string(),
+	})),
+})
+
+/** The files one candidate keeps. */
+const MAX_FILES = 5
 
 export const portal = app.link('/p', {
 	spa: 'dist/portal',
@@ -918,6 +954,43 @@ export const portal = app.link('/p', {
 				})
 				return { verifiedAt: now.toISOString() }
 			}),
+		attach: l.mutation({
+			input: Attach,
+			output: Attached,
+			access: { action: 'candidates.attach' },
+		})
+			.handle(async ({ input, ctx }) => {
+				// The lock serializes two uploads of one candidate, so the count holds.
+				await ctx.db.target.getForUpdate()
+				const held = await ctx.db.target.candidate_files.list({ limit: MAX_FILES })
+				if (held.items.length >= MAX_FILES) {
+					throw new ConflictError(`a candidate keeps at most ${MAX_FILES} files`)
+				}
+				await ctx.db.target.candidate_files.insert({ file: input.file })
+				return { id: input.file.id }
+			}),
+		documents: l.query({
+			output: Documents,
+			access: { action: 'candidates.read' },
+		})
+			.handle(async ({ ctx }) => ({
+				items: (await ctx.db.target.candidate_files.list()).items.map((row) => ({
+					id: row.file.id,
+					name: row.file.name,
+					status: row.file.status,
+				})),
+			})),
+		document: l.query({
+			input: Document,
+			output: file('attachments'),
+			access: { action: 'candidates.read' },
+		})
+			.handle(async ({ input, ctx }) => {
+				const rows = (await ctx.db.target.candidate_files.list()).items
+				const row = rows.find((item) => item.file.id === input.id)
+				if (row === undefined) throw new NotFoundError('no such document')
+				return row.file
+			}),
 	}),
 })
 ```
@@ -926,11 +999,12 @@ export const portal = app.link('/p', {
   answers the same time. IAM counts no uses: the proxy honors a token it holds without asking IAM.
 - A link procedure acts on the link's own object: no `from`, no id in the input. A key of another candidate reaches
   only that candidate's record, and a key whose candidate is gone answers 404.
-- `link: true` on the collection gives the holder's client `portal.files.attachments`: `upload(file)`, `list()` and
-  `download(id)`, for the link's candidate only: another candidate's file id answers 404. The mount must grant the
-  collection's `write` and `read`. HR reaches the same files through `api.files.attachments`, which names the owner,
-  with `candidates.read`. A second link mount on candidates that must not reach the files (a one-click answer) needs
-  `link: ['portal']` instead.
+- A file is a value in `candidate_files.file`: `attach` writes the uploaded reference with `candidates.attach`,
+  `documents` lists the rows with each file's `name` and `status`, and `document` answers one file
+  (`output: file('attachments')`), all for the link's candidate only: another candidate's file id answers 404. The
+  holder's client calls `portal.attach({ file })` and `download(portal.document, { id })`; a key never goes into a
+  URL. HR reaches the same rows through procedures of its own with `candidates.read`. A link mount reaches only the
+  files its own procedures answer.
 
 ```ts web/portal/main.ts
 import { createClient, RpcError, shareKey } from '@fabrika/app/client'
@@ -958,7 +1032,7 @@ export const confirm = async (status: HTMLElement): Promise<void> => {
 export const attach = async (file: File): Promise<string> => {
 	if (portal === null) return 'This link holds no key.'
 	try {
-		await portal.files.attachments.upload(file)
+		await portal.attach({ file })
 		return 'Received: it is being checked.'
 	} catch (error) {
 		return error instanceof RpcError ? `Refused: ${error.type}` : 'Failed'
@@ -983,13 +1057,16 @@ export const siteKey = async (): Promise<string | null> => {
 }
 ```
 
-The public page sends the form with a plain `fetch`: a form has no typed client, and its answer never depends on the
-data. A form that takes files is `multipart/form-data`: the first part is named `input` and holds the input as JSON,
-and each file follows in a part named after its field. Let the browser write the `Content-Type` with its boundary:
-never set it yourself.
+The public page calls the public procedure through the typed client, like any other. An input with a file is sent
+as a multipart body, and one without a file as JSON.
 
 ```ts web/site/register.ts
-/** What the `photos` collection admits; the page checks it before it spends the challenge. */
+import { createClient } from '@fabrika/app/client'
+import { contract } from '../../fabrika.contract'
+
+const api = createClient(contract, 'api')
+
+/** What the `photos` kind admits; the page checks it before it spends the challenge. */
 const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 const PHOTO_MAX_BYTES = 15728640
 
@@ -1002,32 +1079,33 @@ export const register = async (
 		const value = data.get(name)
 		return typeof value === 'string' ? value : ''
 	}
-	const body = new FormData()
-	body.append(
-		'input',
-		JSON.stringify({
+	// <input type="file" name="photo" accept="image/*" capture="environment">; an empty one sends nothing.
+	const sent = data.get('photo')
+	const photo = sent instanceof File && sent.size > 0 ? sent : undefined
+	if (
+		photo !== undefined
+		&& (!PHOTO_TYPES.includes(photo.type) || photo.size > PHOTO_MAX_BYTES)
+	) {
+		return false
+	}
+	try {
+		await api.visitors.register({
 			email: field('email'),
-			full_name: field('full_name'),
+			fullName: field('full_name'),
 			website: field('website'),
 			challengeToken,
-		}),
-	)
-	// <input type="file" name="photo" accept="image/*" capture="environment">; an empty one sends nothing.
-	const photo = data.get('photo')
-	if (photo instanceof File && photo.size > 0) {
-		if (!PHOTO_TYPES.includes(photo.type) || photo.size > PHOTO_MAX_BYTES) {
-			return false
-		}
-		body.append('photo', photo, photo.name)
+			photo,
+		})
+		return true
+	} catch {
+		return false
 	}
-	const response = await fetch('/register', { method: 'POST', body })
-	return response.ok
 }
 ```
 
-- The page renders the Turnstile widget with the site key `siteKey()` reads and `action` set to the form's mount name
-  (`register`), and passes the widget's token. Say "check your inbox" on success whatever the address was.
-- The resend form is the same call to `/resend` with `{ email }`. It answers the same for an unknown, a verified and a
+- The page renders the Turnstile widget with the site key `siteKey()` reads and `action` set to the procedure's
+  endpoint id with `_` for `.` (`api_visitors_register`), and passes the widget's token. Say "check your inbox" on success whatever the address was.
+- The resend form calls `api.visitors.resend({ email })`. It answers the same for an unknown, a verified and a
   rate-limited address; the job decides.
 - Build each SPA into its `dir` (`dist/site`, `dist/portal`, `dist/hr`): one `Bun.build` per `index.html` in
   `build-web.ts`.
@@ -1059,8 +1137,14 @@ export const stageOf = (
 ```
 
 ```ts src/candidates/endpoints.ts
-import { BadRequestError, ConflictError, fromPage, fromRow } from '@fabrika/app'
-import { attachment } from '@fabrika/app/contract'
+import {
+	BadRequestError,
+	ConflictError,
+	fromPage,
+	fromRow,
+	NotFoundError,
+} from '@fabrika/app'
+import { attachment, file } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { CandidateStatus } from '../schemas'
@@ -1094,6 +1178,14 @@ const ListCandidates = z.strictObject({
 	after: Cursor.optional(),
 })
 const ById = z.strictObject({ id: z.uuid() })
+const FileOf = z.strictObject({ id: z.uuid(), file: z.uuid() })
+const Files = z.strictObject({
+	items: z.array(z.strictObject({
+		id: z.uuid(),
+		name: z.nullable(z.string()),
+		status: z.string(),
+	})),
+})
 const HistoryOf = z.strictObject({ id: z.uuid(), after: Cursor.optional() })
 const Decide = z.strictObject({
 	id: z.uuid(),
@@ -1176,6 +1268,39 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
 				}),
 			)
 		),
+	files: r.query({
+		input: ById,
+		output: Files,
+		access: { action: 'candidates.read', on: 'candidate', from: 'id' },
+	})
+		.handle(async ({ ctx }) => ({
+			items: (await ctx.db.target.candidate_files.list()).items.map((row) => ({
+				id: row.file.id,
+				name: row.file.name,
+				status: row.file.status,
+			})),
+		})),
+	file: r.query({
+		input: FileOf,
+		output: file('attachments'),
+		access: { action: 'candidates.read', on: 'candidate', from: 'id' },
+	})
+		.handle(async ({ input, ctx }) => {
+			const rows = (await ctx.db.target.candidate_files.list()).items
+			const row = rows.find((item) => item.file.id === input.file)
+			if (row === undefined) throw new NotFoundError('no such file')
+			return row.file
+		}),
+	photo: r.query({
+		input: ById,
+		output: file('photos'),
+		access: { action: 'candidates.read', on: 'candidate', from: 'id' },
+	})
+		.handle(async ({ ctx }) => {
+			const { photo } = await ctx.db.target.get()
+			if (photo === null) throw new NotFoundError('the candidate sent no photo')
+			return photo
+		}),
 	decide: r.mutation({
 		input: Decide,
 		output: Saved,
@@ -1264,6 +1389,9 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
+- **HR's files.** `files`, `file` and `photo` serve the candidate's files to a holder of `candidates.read`. A file
+  query is a `GET`, so the HR page links it for its signed-in session: `api.candidates.photo.url({ id })` in an
+  `<img src>`, `api.candidates.file.url({ id, file })` in an `<a download>`.
 - **A code list an administrator edits is validated by reading it.** `decide` runs `on` one candidate with
   `candidates.review`, the read action of `reasons`, so `ctx.db.app.reasons` reads every reason there, read-only. A
   reason that is unknown or retired answers 400 that names it, before anything is written. Do not let a foreign key
@@ -1467,11 +1595,12 @@ export const settings = app.group({ callers: ['human'] }, (r) => ({
 	testMail: r.mutation({
 		output: Queued,
 		access: { action: 'mail.test', app: true },
-		then: 'testMails',
+		kicks: ['testMails'],
 	})
 		.handle(async ({ ctx }) => {
 			const to = ctx.principal.email
 			await ctx.db.app.test_mails.insert({ recipient: to })
+			ctx.kick('testMails')
 			return { queuedFor: to }
 		}),
 }))
@@ -1490,7 +1619,6 @@ const stateAfter = (
 
 export const testMails = app.cron('* * * * *', {
 	actions: ['mail.send'],
-	scope: 'app',
 	retries: 0,
 	sql: 'write',
 	mailer: 'installation',
@@ -1571,7 +1699,7 @@ export const testMails = app.cron('* * * * *', {
   who holds `mail.test` mail any address past every consent the application asks for. Never take a recipient from the
   input for "send it to me".
 - **The endpoint sends nothing.** It has no `ctx.mail`: it records the e-mail in `test_mails` in its own transaction,
-  and `then: 'testMails'` kicks the job once that transaction committed. The person's answer does not wait for the
+  and `kicks: ['testMails']` with `ctx.kick('testMails')` starts the job once that transaction committed. The person's answer does not wait for the
   run; the e-mail leaves seconds later. The schedule (`* * * * *`) sends what a kicked run left behind. The generated
   tests cover the endpoint like any `app` endpoint: a global holder of `mail.test` reaches it, a holder in one scope
   gets 403.
@@ -1600,21 +1728,20 @@ export const testMails = app.cron('* * * * *', {
   })` and calls `createClient(contract, 'portal', { fetch: kit.fetch, key: holder.key ?? '' })`.
 - The job asks IAM to issue and revoke links, and the kit's own IAM answers only the credentials of its callers, not a
   job's key, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an `IamMembershipRpc` of your own that
-  answers `issueLink` and `revokeLink`. A test of a form passes `env: {
+  answers `issueLink` and `revokeLink`. A test of a public procedure with a challenge passes `env: {
   TURNSTILE_SECRET: '…', TURNSTILE_SITE_KEY: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
-  `challengeToken` with each submission: a token is single use. A form that takes files is sent as the page sends it,
-  a `FormData` with the `input` part first, through `kit.fetch` with the page's `Origin` (`kit.origin`), and needs
-  `files: new MemoryFileObjects()` in `testKit`; `kit.runJob('intake')` then attaches the photo, and the scan job
-  (`FILE_SCAN_JOB`, with a `scanner`) makes it downloadable. Test the refusals beside the success: no or a failed
-  token, a filled honeypot, a file too large or of another type, a part the form does not declare, a page on another
-  origin; each keeps nothing. Test each stop of a delivery (a refused e-mail, IAM
+  `challengeToken` with each submission: a token is single use. A submission with a photo goes through the typed
+  client over `kit.fetch`, and needs `files: new MemoryFileObjects()` in `testKit`; `kit.runJob('intake')` then
+  writes the photo's reference into the candidate, and the scan job (`FILE_SCAN_JOB`, with a `scanner`) makes it
+  readable. Test the refusals beside the success: no or a failed token, a filled honeypot, a file too large or of
+  another type, a page on another origin; each keeps nothing. Test each stop of a delivery (a refused e-mail, IAM
   down, a crash after each step, an answer lost after the provider took the e-mail): the next run must leave exactly
   one live, e-mailed link and the transport one message per key. Test a bad record beside good ones too: a
   registration the insert refuses and a recipient whose e-mail hangs end dead after `MAX_ATTEMPTS` runs, a recipient
   the transport refuses ends dead at once, and every other record is delivered and every run succeeds; a
   registration another session locks waits. A failed delivery waits for its `next_attempt_at`: a test that runs the
   job again moves that column into the past first, as an operator's repair would.
-- A test that submits a form, or calls a mutation that declares `then`, kicks the job too, and the kicked run may start
+- A test that calls a mutation that kicks (`kicks`, `ctx.kick`) starts the job too, and the kicked run may start
   at once: arm a fault before the call, never between it and the run. `kit.drain()` waits for the kicked runs, and
   `kit.runJob('intake')` first waits for them, then runs once.
 - The mail transport is the kit's stand-in: `kit.mail`, a `MemoryEmailSender` that takes every message a job sends

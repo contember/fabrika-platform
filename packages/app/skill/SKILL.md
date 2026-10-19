@@ -220,15 +220,15 @@ the access check. `references/spa.md` shows the stack.
 
 ## Off the road: declare it
 
-| What the handler needs         | Declare on the endpoint                        | It gets                                             |
-| ------------------------------ | ---------------------------------------------- | --------------------------------------------------- |
-| a join, a report, a bulk write | `sql: 'read'` (or `'write'`)                   | `` ctx.sql(Row)`…` ``, scoped with `ctx.sql.scope`  |
-| rows outside its capability    | `unscoped: { <table>: 'read' }`                | `ctx.db.unscoped.<table>`                           |
-| another application's export   | `connect: ['<import>']`                        | `ctx.connect.<import>`                              |
-| a share link                   | `issues: '<link mount>'`                       | `ctx.links.issue`                                   |
-| e-mail (a cron job only)       | `mailer: 'installation'`                       | `ctx.mail.send`                                     |
-| a file with a public form      | `files: { photo: { collection } }` on `c.form` | the id in the inbox; the job's `tx.files(…).attach` |
-| a trigger, function or view    | its migration                                  | —                                                   |
+| What the handler needs         | Declare on the endpoint                                 | It gets                                            |
+| ------------------------------ | ------------------------------------------------------- | -------------------------------------------------- |
+| a join, a report, a bulk write | `sql: 'read'` (or `'write'`)                            | `` ctx.sql(Row)`…` ``, scoped with `ctx.sql.scope` |
+| rows outside its capability    | `unscoped: { <table>: 'read' }`                         | `ctx.db.unscoped.<table>`                          |
+| another application's export   | `connect: ['<import>']`                                 | `ctx.connect.<import>`                             |
+| a share link                   | `issues: '<link mount>'`                                | `ctx.links.issue`                                  |
+| e-mail (a cron job only)       | `mailer: 'installation'`                                | `ctx.mail.send`                                    |
+| a file from a public procedure | `file('<kind>')` input, `admission` with `bytesPerHour` | a reference the handler writes into a file column  |
+| a trigger, function or view    | its migration                                           | —                                                  |
 
 Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
 of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for `over`, a
@@ -246,7 +246,7 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 - Data work first, external calls after. The invocation's one transaction rolls back on a throw; IAM, object storage
   and connector calls do not. An endpoint the generated tests cover calls no outside service (a provider's API): it
   records an outbox row, and a job makes the call (`references/jobs.md`).
-- An endpoint never sends e-mail; it has no `ctx.mail`. It records an outbox row and declares `then: '<job>'`, which
+- An endpoint never sends e-mail; it has no `ctx.mail`. It records an outbox row, declares `kicks: ['<job>']` and calls `ctx.kick('<job>')`, which
   starts that job once its transaction committed. The job declares `mailer` and sends with `ctx.mail`, under a key
   derived from the row, and sends again only where `ctx.mail.mayRetry(error)` allows it (`references/jobs.md`).
 - No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`.
@@ -259,7 +259,7 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 - A 401, a 403 or a failing generated test: never loosen the contract, a role, a policy or a test to pass. Tell the
   human which action or role the caller lacks.
 - When the task does not already ask for it, before you add a role, a grant, an action, a declared deviation, an
-  anonymous endpoint (`c.form`, a form's `files`, a webhook, a link), an export or an import, or a job, or before you drop or rename a
+  anonymous endpoint (a public procedure, its file field, a webhook, a link), an export or an import, or a job, or before you drop or rename a
   column: say in one sentence what it lets someone do, and wait for a yes. A data repair goes to the operator, not
   into a job.
 - A file refused as protected: stop and ask. Do not move the change elsewhere.
@@ -311,16 +311,15 @@ their errors, the caller, the components, routing, theming, screen tests), `tabl
 (access forms, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`, `ctx.sql`, audited CSV
 downloads, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
 `errors.md` (checker findings, type errors, runtime answers), `dev.md` (the seed and the preview), `jobs.md` (which dimension `ctx.within` names, the UTC
-day, e-mail through `ctx.mail`, the outbox and `then`), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
+day, e-mail through `ctx.mail`, the outbox and `kicks`), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
 `start.md`, a new application before its first table (its first test, adding the first table, installing and updating
-this skill), and `public-intake.md`, a public page, a form, a job that issues links and e-mails them, a link holder's
-files, HR's review with its history.
+this skill), and `public-intake.md`, a public page, public procedures, a job that claims their rows, issues links and
+e-mails them, a link holder's files, HR's review with its history.
 
 ## Not built yet
 
 - The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
-- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A mutation's `then` starts a run of its
-  job; it carries nothing. A list write is off the road (`sql`).
-- `ctx.mail` sends no attachments.
+- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A mutation's `ctx.kick` starts a run of
+  its job; it carries nothing. A list write is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.

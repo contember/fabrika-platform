@@ -5,7 +5,6 @@
 // application of its own over the base's shared files. Each application's migrations are classified as the runner
 // classifies them and, on Postgres, migrate to the catalog its generated schema is rendered from.
 
-import { type FileOwner, fileTableSql } from '@fabrika/db'
 import { introspectCatalog, renderSchema } from '@fabrika/db/codegen'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { testDatabase } from '@fabrika/db/testing'
@@ -282,34 +281,5 @@ describe('the code blocks of the agent skill', () => {
 				rmSync(directory, { recursive: true })
 			}
 		}, 60_000)
-	}
-
-	const fileTables: readonly { readonly path: string; readonly name: string; readonly owner: FileOwner }[] = [
-		{
-			path: 'db/migrations/20261012100000_attachments.sql',
-			name: 'attachments',
-			owner: {
-				table: 'tasks',
-				key: { column: 'id', type: 'uuid' },
-				chain: [{ column: 'project_id', type: 'uuid' }, { column: 'org_id', type: 'text' }],
-			},
-		},
-		{
-			path: 'db/migrations/20261013090100_attachments.sql',
-			name: 'attachments',
-			owner: { table: 'candidates', key: { column: 'id', type: 'uuid' }, chain: [] },
-		},
-		{
-			path: 'db/migrations/20261013090150_photos.sql',
-			name: 'photos',
-			owner: { table: 'candidates', key: { column: 'id', type: 'uuid' }, chain: [] },
-		},
-	]
-	for (const table of fileTables) {
-		test(`the file collection's migration ${table.path} is what fileTableSql writes`, () => {
-			const shown = checked.filter((block) => block.path === table.path)
-			expect(shown.length).toBeGreaterThan(0)
-			for (const block of shown) expect(block.code).toBe(fileTableSql(table.name, table.owner))
-		})
 	}
 })
