@@ -93,7 +93,8 @@ export interface DataSite {
 	readonly tickMs?: number
 	/**
 	 * A public procedure, which anyone calls: its `ctx.db.app` inserts and reads nothing back, reads only under a table's
-	 * read action, and reaches application tables only. It never updates, removes, locks or claims a row.
+	 * read action, and reaches application tables only. It updates or removes only a versioned row whose id a verified
+	 * signed token of its request carries (`carried`); it never locks or claims a row.
 	 */
 	readonly public?: true
 	/**
@@ -101,6 +102,8 @@ export interface DataSite {
 	 * only one it holds. Absent where the framework serves no file; the columns then read as ids and refuse every write.
 	 */
 	readonly files?: FileBinding
+	/** The texts the verified signed tokens of a public procedure's request carry: the row ids it may update or remove. */
+	readonly carried?: ReadonlySet<string>
 	/** Throws unless the work running now is the invocation these handles were made for. */
 	check(): void
 	/** The session every statement of the site runs in. */
@@ -629,8 +632,8 @@ function applicationRows(
 
 /**
  * An application table of a public procedure: listed, counted, aggregated and read by key under its read action only;
- * inserted with only the new key and version answered; never updated, removed, locked or claimed. An update or a
- * removal waits for a signed token that names the row.
+ * inserted with only the new key and version answered; updated or removed only by an id a verified signed token of the
+ * request carries, under `expectVersion`, answering only the new version; never locked or claimed.
  */
 function publicApplicationRows(
 	context: TableContext,
@@ -642,6 +645,18 @@ function publicApplicationRows(
 	const model = context.model
 	const refusal = (operation: string) =>
 		refused(site, 'public_reach', `a public procedure does not ${operation} a ${model.name} row: it inserts, and reads under the read action`)
+	/** A row a public procedure may change: one a verified token names, of a table whose rows carry a version. */
+	const tokenRow = (operation: string, id: unknown): void => {
+		if (model.version === undefined) {
+			throw new QueryRefusedError('public_reach', `a public procedure ${operation}s only a versioned row, and ${model.name} declares no version`)
+		}
+		if (typeof id !== 'string' || site.carried?.has(id) !== true) {
+			throw new QueryRefusedError(
+				'public_reach',
+				`a public procedure ${operation}s a ${model.name} row only by an id a verified signed token of its request carries`,
+			)
+		}
+	}
 	return freeze({
 		list: rows['list'],
 		count: rows['count'],
@@ -653,8 +668,23 @@ function publicApplicationRows(
 		}),
 		getForUpdate: refusal('lock'),
 		claim: refusal('claim'),
-		update: refusal('update'),
-		remove: refusal('remove'),
+		update: writing(site, 'update', async (id: unknown, values: unknown, ...options: unknown[]) => {
+			tokenRow('update', id)
+			const grant = updatingApp(context, capability)
+			const changes = readValues(values, updatableBy(model, grant.action), 'update', model)
+			const saved = await updateRow<Readonly<Record<string, unknown>>>(
+				context,
+				run,
+				{ scope: appKeyPredicate(model, id) },
+				changes,
+				versionArgument(context, options),
+			)
+			return freeze({ version: saved['version'] })
+		}),
+		remove: writing(site, 'remove', async (id: unknown, ...options: unknown[]) => {
+			tokenRow('remove', id)
+			await removeRow(context, run, { scope: appRowPredicate(context, capability, id, 'delete') }, versionArgument(context, options))
+		}),
 		insert: bound(site, async (values: unknown, options?: unknown) => {
 			const prepared = prepareApplicationInsert(context, capability, values, options)
 			if (prepared.conflict !== undefined && prepared.conflict.mode !== 'nothing') {

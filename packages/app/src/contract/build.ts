@@ -1095,6 +1095,7 @@ class ArtifactBuilder {
 			challenge: admission.challenge,
 			timeoutMs: limits.timeoutMs,
 			...(http.query === null ? {} : { query: http.query }),
+			...(http.method === 'GET' && procedure.type === 'mutation' ? { changesStateOnGet: true } : {}),
 		}
 		return {
 			maxBytes: limits.maxBytes,

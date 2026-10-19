@@ -1289,7 +1289,13 @@ export class ContractRuntime {
 			let result: unknown
 			try {
 				result = await runInRequest(frame, async () => {
-					const handles = invocation.handles(served.site.kind, served.site.declaration, subject, 'public', this.#parts.fileKinds?.binding(work))
+					const handles = invocation.handles(
+						served.site.kind,
+						served.site.declaration,
+						subject,
+						{ carried },
+						this.#parts.fileKinds?.binding(work),
+					)
 					const where = `'${served.row.id}'`
 					const ctx = Object.freeze({
 						principal: Object.freeze({ kind: 'public', endpoint: served.row.id }),

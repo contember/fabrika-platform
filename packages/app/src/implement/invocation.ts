@@ -38,6 +38,11 @@ export interface SiteDeclaration {
 	readonly signs: readonly string[]
 }
 
+/** A public procedure's reach: the texts the verified signed tokens of its request carry, which name the rows it changes. */
+export interface PublicReach {
+	readonly carried: ReadonlySet<string>
+}
+
 export type SiteFunction = (args: { readonly input?: unknown; readonly ctx: object }) => unknown
 
 /**
@@ -269,14 +274,14 @@ export class Invocation {
 	}
 
 	/**
-	 * The handles of the site, all of them running in this invocation's transaction. A public procedure's (`reach:
-	 * 'public'`) insert and read under its actions only.
+	 * The handles of the site, all of them running in this invocation's transaction. A public procedure's (`reach` its
+	 * carried texts) insert and read under its actions only, and update or remove only a row a verified token names.
 	 */
 	handles(
 		kind: DataKind,
 		declaration: SiteDeclaration,
 		principal: string,
-		reach: 'public' | 'declared' = 'declared',
+		reach: PublicReach | 'declared' = 'declared',
 		files?: FileBinding,
 	): DataHandles {
 		const transaction = this.#transaction
@@ -286,7 +291,7 @@ export class Invocation {
 			principal,
 			check: boundTo(this.#frame, () => transaction.ended),
 			session: () => transaction.session(),
-			...(reach === 'public' ? { public: true } : {}),
+			...(reach === 'declared' ? {} : { public: true, carried: reach.carried }),
 			...(files === undefined ? {} : { files }),
 		}
 		return this.#data.handles(site)

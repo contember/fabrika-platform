@@ -249,6 +249,7 @@ function compareProcedures(changes: Changes, baseline: ContractArtifact, candida
 				neutral(
 					`\`${id}\` admits ${ratePhrase(rules.rate)}${challengePhrase(rules.challenge)}; it runs at most ${seconds(rules.timeoutMs)}${bodyPhrase(row)}`,
 				),
+				...(rules.changesStateOnGet === true ? [closerWidening(stateOnGet(`\`${id}\``))] : []),
 			)
 			continue
 		}
@@ -312,7 +313,17 @@ function procedureChanges(name: string, from: ProcedureArtifact, to: ProcedureAr
 		: valueChange(`${name} challenge`, from.challenge, to.challenge)
 	const time = timeLimitChange(name, from.timeoutMs, to.timeoutMs)
 	const query = schemaChanges({ endpoint: `${name} URL query`, side: 'input', path: '' }, from.query ?? null, to.query ?? null)
-	return [...buckets, ...challenge, ...time, ...query]
+	const onGet = from.changesStateOnGet === to.changesStateOnGet
+		? []
+		: to.changesStateOnGet === true
+		? [closerWidening(stateOnGet(name))]
+		: [narrowing(`${name} no longer changes state on GET`)]
+	return [...buckets, ...challenge, ...time, ...query, ...onGet]
+}
+
+/** What a public mutation served on `GET` means: whoever follows its URL, a mail client's link scanner too, changes state. */
+function stateOnGet(name: string): string {
+	return `${name} changes state on GET; link scanners may trigger it`
 }
 
 // ── Member directories ──────────────────────────────────────────────────────────────────────────

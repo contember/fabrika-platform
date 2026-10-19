@@ -390,6 +390,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		challenge: challenge.nullable(),
 		timeoutMs: z.int().positive().max(PROCEDURE_LIMITS.maxTimeoutMs),
 		query: schemaShapeSchema.optional(),
+		changesStateOnGet: z.literal(true).optional(),
 	})).optional(),
 	tokens: record(z.strictObject({ claims: schemaShapeSchema, maxDays: z.int().positive().max(TOKEN_MAX_DAYS) })).optional(),
 }).superRefine((artifact, context) => {

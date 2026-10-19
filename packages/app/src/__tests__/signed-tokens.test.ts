@@ -72,6 +72,31 @@ describe('the artifact of signed tokens', () => {
 			.toMatchObject({ signs: ['unsubscribe'] })
 	})
 
+	test('a public GET mutation holds a signed token, answers a redirect, and says that it changes state on GET', () => {
+		expect(artifact.endpoints.find((row) => row.id === 'api.mail.click')).toMatchObject({ kind: 'public', method: 'GET', admission: null })
+		expect(artifact.procedures?.['api.mail.click']?.changesStateOnGet).toBe(true)
+		expect(artifact.procedures?.['api.mail.unsubscribe']?.changesStateOnGet).toBeUndefined()
+		const tokenless = app.group({}, (r) => ({
+			tokenless: r.mutation({
+				input: z.strictObject({ campaign: z.string() }),
+				output: Empty,
+				access: { public: true },
+				actions: ['stats.click'],
+				http: { method: 'GET' },
+			}).handle(() => ({})),
+		}))
+		expect(() => compileContract(app.contract((c) => ({ api: c.rpc('/api', { tokenless }) })), tables)).toThrow(/holds a required signedToken/)
+		const session = app.group({ callers: ['human'] }, (r) => ({
+			session: r.mutation({
+				input: z.strictObject({ t: signedToken('click') }),
+				output: Empty,
+				access: { action: 'mail.read', app: true },
+				http: { method: 'GET' },
+			}).handle(() => ({})),
+		}))
+		expect(() => compileContract(app.contract((c) => ({ api: c.rpc('/api', { session }) })), tables)).toThrow(/only a public procedure is/)
+	})
+
 	test('a contract takes its tokens from the kit, never a section of its own', () => {
 		// The types refuse the section; a contract that slips past them is refused when it is built.
 		const written = () => ({ tokens: { other: token(Recipient, { maxDays: 1 }) } })
@@ -132,6 +157,15 @@ if (postgres !== null) {
 			headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: kit.origin },
 			body: 'List-Unsubscribe=One-Click',
 		})
+	const post = (path: string, body: unknown) =>
+		kit.fetch(`/api/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+	const asStaff = (path: string, body: unknown) =>
+		kit.browser(staff)(`/api/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+	const clicks = async () => z.strictObject({ count: z.int() }).parse((await (await asStaff('staff.clicks', {})).json()).result).count
+	const slotOf = async (id: string) => {
+		const response = await asStaff('staff.booking', { id })
+		return response.status === 404 ? null : z.strictObject({ slot: z.string() }).parse((await response.json()).result).slot
+	}
 	const unsubscribed = async () => {
 		const listed = await kit.browser(staff)('/api/staff.unsubscribes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
 		return Unsubscribed.parse((await listed.json()).result).items
@@ -153,6 +187,34 @@ if (postgres !== null) {
 			expect((await unsubscribe(`t=${booking}`)).status).toBe(400)
 			expect((await unsubscribe('')).status).toBe(400)
 			expect((await unsubscribed()).some((row) => row.email === 'bob@example.com')).toBe(false)
+		})
+
+		test('a tracked click counts on GET and is redirected to the target its verified token carries, and nowhere else', async () => {
+			const before = await clicks()
+			const signed = kit.signToken('click', { campaign: 'spring', target: 'https://shop.example/offer?id=7' }, { days: 90 })
+			const followed = await kit.fetch(`/api/mail.click?t=${signed}`, { redirect: 'manual' })
+			expect(followed.status).toBe(302)
+			expect(followed.headers.get('Location')).toBe('https://shop.example/offer?id=7')
+			expect(await clicks()).toBe(before + 1)
+			expect((await kit.fetch(`/api/mail.click?t=${signed.slice(0, -2)}xx`, { redirect: 'manual' })).status).toBe(400)
+			// A target the token does not carry is no redirect at all, and nothing the handler wrote is kept.
+			expect((await kit.fetch(`/api/mail.elsewhere?t=${signed}`, { redirect: 'manual' })).status).toBe(500)
+			expect(await clicks()).toBe(before + 1)
+		})
+
+		test('a management link moves and cancels only the booking its token names, under its version', async () => {
+			const booked = Booked.parse((await (await post('bookings.book', { name: 'Ann', slot: 'mon-9' })).json()).result)
+			const moved = await post('bookings.move', { t: booked.manage, slot: 'tue-10', version: booked.version })
+			expect(moved.status).toBe(200)
+			const { version } = z.strictObject({ version: z.int() }).parse((await moved.json()).result)
+			expect(version).toBe(booked.version + 1)
+			expect(await slotOf(booked.id)).toBe('tue-10')
+			expect((await post('bookings.move', { t: booked.manage, slot: 'wed-11', version: booked.version })).status).toBe(409)
+			const other = Booked.parse((await (await post('bookings.book', { name: 'Bob', slot: 'fri-8' })).json()).result)
+			expect((await post('bookings.moveAnother', { t: booked.manage, other: other.id, version: other.version })).status).toBe(500)
+			expect(await slotOf(other.id)).toBe('fri-8')
+			expect((await post('bookings.cancel', { t: booked.manage, version })).status).toBe(200)
+			expect(await slotOf(booked.id)).toBeNull()
 		})
 
 		test('a booking procedure answers its own management link, signed with the environment key', async () => {

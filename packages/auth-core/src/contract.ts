@@ -93,6 +93,11 @@ export interface ProcedureArtifact {
 	readonly timeoutMs: number
 	/** A POST's flat schema of the URL's parameters, the handler's `query`; absent without one, so digests stay. */
 	readonly query?: SchemaShape
+	/**
+	 * A public mutation served on `GET` (its input holds a signed token): a link scanner that follows the URL changes
+	 * state. Absent otherwise, so digests stay.
+	 */
+	readonly changesStateOnGet?: true
 }
 
 /**

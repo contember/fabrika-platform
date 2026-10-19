@@ -12,3 +12,8 @@ create table bookings (
 	version integer not null default 1,
 	created_by text not null
 );
+create table clicks (
+	id uuid primary key,
+	campaign text not null,
+	created_by text not null
+);

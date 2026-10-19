@@ -484,9 +484,14 @@ export interface PublicInsertMethod<E extends IndexedTable> {
 
 type PublicRefusal<Op extends string> = Unavailable<`a public procedure does not ${Op} a row: it inserts, and reads under the table's read action`>
 
+/** A public procedure updates and removes only a versioned row, by an id a verified signed token of its request carries. */
+type PublicVersioned<T extends string, E extends IndexedTable, Member> = E['versioned'] extends true ? Member
+	: Unavailable<`a public procedure updates and removes only a versioned row: declare version in the policy of ${T}`>
+
 /**
- * An application table of a public procedure of action `A`, in a site of kind `K`: read under its read action only, and
- * inserted with nothing read back; never updated, removed, locked or claimed.
+ * An application table of a public procedure of action `A`, in a site of kind `K`: read under its read action only,
+ * inserted with nothing read back, and updated or removed only by the id a verified signed token of the request carries,
+ * under `expectVersion`; never locked or claimed.
  */
 export interface PublicApplicationRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
 	readonly list: ApplicationRows<T, E, A, K>['list']
@@ -495,8 +500,24 @@ export interface PublicApplicationRows<T extends string, E extends IndexedTable,
 	readonly get: A extends E['actions']['read'] ? (key: string) => Promise<RowFor<E, A>> : Unavailable<ListRefusal<T, E, A>>
 	readonly getForUpdate: PublicRefusal<'lock'>
 	readonly claim: PublicRefusal<'claim'>
-	readonly update: PublicRefusal<'update'>
-	readonly remove: PublicRefusal<'remove'>
+	/** By the id a verified signed token of the request carries; answers only the new version. */
+	readonly update: PublicVersioned<
+		T,
+		E,
+		Update<
+			T,
+			E,
+			A,
+			K,
+			(
+				key: string,
+				values: { [C in keyof UpdateValuesOf<E, A>]: UpdateValuesOf<E, A>[C] },
+				options: { readonly expectVersion: number },
+			) => Promise<{ readonly version: number }>
+		>
+	>
+	/** By the id a verified signed token of the request carries. */
+	readonly remove: PublicVersioned<T, E, Write<T, E, 'delete', A, K, (key: string, options: { readonly expectVersion: number }) => Promise<void>>>
 	readonly insert: Write<T, E, 'insert', A, K, PublicInsertMethod<E>>
 }
 

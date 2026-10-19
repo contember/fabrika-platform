@@ -11,9 +11,16 @@ export const tables = defineTables(vocabulary, columns)({
 	},
 	bookings: {
 		scope: { app: 'anyone books a slot' },
-		actions: { read: 'mail.read', insert: 'bookings.book' },
+		actions: { read: 'mail.read', insert: 'bookings.book', update: 'bookings.manage', delete: 'bookings.manage' },
 		insert: ['name', 'slot'],
+		update: ['slot'],
 		version: 'version',
+		createdBy: 'created_by',
+	},
+	clicks: {
+		scope: { app: 'campaign statistics' },
+		actions: { read: 'mail.read', insert: 'stats.click' },
+		insert: ['campaign'],
 		createdBy: 'created_by',
 	},
 })

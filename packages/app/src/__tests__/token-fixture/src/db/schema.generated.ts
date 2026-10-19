@@ -10,6 +10,12 @@ export interface BookingsTable {
 	created_by: string
 }
 
+export interface ClicksTable {
+	id: string
+	campaign: string
+	created_by: string
+}
+
 export interface UnsubscribesTable {
 	id: string
 	email: string
@@ -19,6 +25,7 @@ export interface UnsubscribesTable {
 
 export interface DB {
 	bookings: BookingsTable
+	clicks: ClicksTable
 	unsubscribes: UnsubscribesTable
 }
 
@@ -29,6 +36,14 @@ export const columns: TypedColumnList<DB> = {
 			'name',
 			'slot',
 			'version',
+			'created_by',
+		],
+		foreignKeys: [],
+	},
+	'clicks': {
+		columns: [
+			'id',
+			'campaign',
 			'created_by',
 		],
 		foreignKeys: [],

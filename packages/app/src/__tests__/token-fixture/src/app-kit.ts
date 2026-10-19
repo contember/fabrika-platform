@@ -5,10 +5,12 @@ import { vocabulary } from './vocabulary'
 
 export const Recipient = z.strictObject({ email: z.email(), campaign: z.string().min(1).max(100) })
 export const Booking = z.strictObject({ booking: z.uuid() })
+export const Click = z.strictObject({ campaign: z.string().min(1).max(100), target: z.url() })
 
 export const app = defineApp(vocabulary, tables, {
 	tokens: {
 		unsubscribe: token(Recipient, { maxDays: 400 }),
 		booking: token(Booking, { maxDays: 30 }),
+		click: token(Click, { maxDays: 90 }),
 	},
 })
