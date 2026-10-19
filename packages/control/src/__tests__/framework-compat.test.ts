@@ -1,12 +1,17 @@
-// ADR-0062: this platform deploys an application on an older framework release. The CRM of tag v0.5.4, installed from
-// npm (`fixtures/crm-0.5.4.json`: the files v0.5.4's Control read, and its `bun.lock`), goes through Control's read
-// path, which picks the bundled 0.5.4 reader and upcasts its artifact. What comes out must be what the 0.5.4 packages
-// compute from npm, and what v0.5.4's own Control recorded in the fixture.
+// ADR-0062: this platform deploys an application on an older framework release. Each fixture holds the files an older
+// release's own Control read from an application at its tag, the `bun.lock` a `bun install` of it writes from npm, and
+// what that Control recorded: the stored snapshot, its digest, the contract digest, the proxy table and the IAM schema.
+// Through this Control's read path, which picks the bundled reader of the application's minor and upcasts its artifact,
+// the application must come out as that release's npm packages compute it, and as its own platform recorded it.
 
+import { schemaFromContract as schemaFromContract04 } from '@fabrika/app-0.4/contract'
 import { schemaFromContract as schemaFromContract05 } from '@fabrika/app-0.5/contract'
 import { CONTRACT_FORMAT } from '@fabrika/auth-core'
+import { contractDigest as contractDigest04 } from '@fabrika/auth-core-0.4'
 import { contractDigest as contractDigest05 } from '@fabrika/auth-core-0.5'
+import { readContractSource as readContractSource04 } from '@fabrika/check-0.4/contract'
 import { readContractSource as readContractSource05 } from '@fabrika/check-0.5/contract'
+import { contractProxyTable as contractProxyTable04 } from '@fabrika/proxy-core-0.4/manifest'
 import { contractProxyTable as contractProxyTable05 } from '@fabrika/proxy-core-0.5/manifest'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
@@ -17,7 +22,7 @@ import { readAccessSnapshot } from '../approval/read'
 import { approvedAccess, parseSnapshot, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
 import { memoryCommits } from './helpers/commits'
 
-const fixture = z.object({
+const fixtureSchema = z.object({
 	files: z.record(z.string()),
 	platform: z.object({
 		stored: z.string(),
@@ -26,68 +31,128 @@ const fixture = z.object({
 		proxyTable: z.unknown(),
 		schema: z.unknown(),
 	}).strict(),
-}).strict().parse(JSON.parse(readFileSync(new URL('./fixtures/crm-0.5.4.json', import.meta.url), 'utf8')))
+}).strict()
 
-/** What the CRM computes at startup on 0.5.4: `contractDigest(compileContract(contract, tables))` over its own modules. */
-const STARTUP_DIGEST = 'sha256:88312782b8fe094862492595b599ab4b8e24d439de0b31afe9d6c63d9e536fb2'
+/** What the application's own release computes from its files, run from npm. */
+interface ReleaseView {
+	readonly artifact: unknown
+	readonly contractDigest: string
+	readonly proxyTable: unknown
+	readonly schema: unknown
+}
 
-const files = new Map(Object.entries(fixture.files))
-const read = async () =>
-	readAccessSnapshot(
-		await memoryCommits(fixture.files).open({ repoUrl: 'github.com/acme/crm', commitSha: 'c'.repeat(40), signal: new AbortController().signal }),
-		'',
-		'crm',
-	)
-const artifact05 = readContractSource05(files)
+const view04 = (files: ReadonlyMap<string, string>): ReleaseView => {
+	const artifact = readContractSource04(files)
+	return { artifact, contractDigest: contractDigest04(artifact), proxyTable: contractProxyTable04(artifact), schema: schemaFromContract04(artifact) }
+}
 
-describe('a 0.5.4 application on this platform', () => {
-	test('is read by the bundled 0.5.4 reader, which its bun.lock selects', async () => {
-		const snapshot = await read()
-		expect(snapshot.checker).toBe('0.5.4')
-		expect(snapshot.framework).toBe('0.5.4')
-		expect(snapshot.older).toEqual(artifact05)
-		expect(snapshot.contract?.format).toBe(CONTRACT_FORMAT)
+const view05 = (files: ReadonlyMap<string, string>): ReleaseView => {
+	const artifact = readContractSource05(files)
+	return { artifact, contractDigest: contractDigest05(artifact), proxyTable: contractProxyTable05(artifact), schema: schemaFromContract05(artifact) }
+}
+
+interface Case {
+	readonly name: string
+	readonly fixture: string
+	readonly app: string
+	/** The `@fabrika/app` release its `bun.lock` pins. */
+	readonly framework: string
+	/** The bundled reader of that minor. */
+	readonly checker: string
+	/** What the application computes at startup: `contractDigest(compileContract(contract, tables))` over its own modules. */
+	readonly startupDigest: string
+	readonly view: (files: ReadonlyMap<string, string>) => ReleaseView
+}
+
+const CASES: readonly Case[] = [
+	{
+		name: 'the CRM at v0.4.8',
+		fixture: 'crm-0.4.8.json',
+		app: 'crm',
+		framework: '0.4.8',
+		checker: '0.4.8',
+		startupDigest: 'sha256:88312782b8fe094862492595b599ab4b8e24d439de0b31afe9d6c63d9e536fb2',
+		view: view04,
+	},
+	{
+		name: 'the CRM at v0.5.4, an older patch of the bundled 0.5.5 reader',
+		fixture: 'crm-0.5.4.json',
+		app: 'crm',
+		framework: '0.5.4',
+		checker: '0.5.5',
+		startupDigest: 'sha256:88312782b8fe094862492595b599ab4b8e24d439de0b31afe9d6c63d9e536fb2',
+		view: view05,
+	},
+	{
+		name: 'an application with form files at v0.5.5',
+		fixture: 'form-files-0.5.5.json',
+		app: 'signup',
+		framework: '0.5.5',
+		checker: '0.5.5',
+		startupDigest: 'sha256:b52454f9becd0e2beae741bcea7644f0ff232dd5f4d8178a096228a3809e94d6',
+		view: view05,
+	},
+]
+
+for (const release of CASES) {
+	const fixture = fixtureSchema.parse(JSON.parse(readFileSync(new URL(`./fixtures/${release.fixture}`, import.meta.url), 'utf8')))
+	const live = release.view(new Map(Object.entries(fixture.files)))
+	const read = async () =>
+		readAccessSnapshot(
+			await memoryCommits(fixture.files).open({ repoUrl: 'github.com/acme/app', commitSha: 'c'.repeat(40), signal: new AbortController().signal }),
+			'',
+			release.app,
+		)
+
+	describe(`${release.name} on this platform`, () => {
+		test('is read by the bundled reader of its minor, which its bun.lock selects', async () => {
+			const snapshot = await read()
+			expect(snapshot.checker).toBe(release.checker)
+			expect(snapshot.framework).toBe(release.framework)
+			expect(live.artifact).toEqual(snapshot.older)
+			expect(snapshot.contract?.format).toBe(CONTRACT_FORMAT)
+		})
+
+		test('starts with the contract digest its own release computes, and builds with the reader release', async () => {
+			const access = approvedAccess(await read())
+			expect(access?.contractDigest).toBe(release.startupDigest)
+			expect(access?.contractDigest).toBe(live.contractDigest)
+			expect(access?.contractDigest).toBe(fixture.platform.contractDigest)
+			expect(access?.checker).toBe(release.checker)
+		})
+
+		test('gets the proxy rows and the IAM schema its own platform compiles', async () => {
+			const access = approvedAccess(await read())
+			if (access === undefined) throw new Error('the snapshot has no contract')
+			const rows = contractProxyTable(access.contract, access.contractDigest)
+			expect(live.proxyTable).toEqual(rows)
+			expect(fixture.platform.proxyTable).toEqual(rows)
+			expect(live.schema).toEqual(access.schema)
+			expect(fixture.platform.schema).toEqual(access.schema)
+		})
+
+		test('keeps the snapshot digest its platform recorded, so the approvals that name it stay valid across the upgrade', async () => {
+			const snapshot = await read()
+			expect(snapshotDigest(snapshot)).toBe(fixture.platform.snapshotDigest)
+			expect(snapshotDigest(parseSnapshot(fixture.platform.stored))).toBe(fixture.platform.snapshotDigest)
+			expect(snapshotDigest(parseSnapshot(serializeSnapshot(snapshot)))).toBe(fixture.platform.snapshotDigest)
+		})
+
+		test('a snapshot its platform stored publishes the same contract, and its next unchanged deploy changes nothing', async () => {
+			const snapshot = await read()
+			const stored = parseSnapshot(fixture.platform.stored)
+			expect(stored.framework).toBeUndefined()
+			expect(approvedAccess(stored)?.contract).toEqual(approvedAccess(snapshot)?.contract)
+			expect(approvedAccess(stored)?.contractDigest).toBe(release.startupDigest)
+			expect(classifyAccess(stored, snapshot)).toEqual({ outcome: 'none', changes: [] })
+		})
+
+		test('stores the artifact its release read, never the upcast', async () => {
+			const snapshot = await read()
+			const stored = z.object({ contract: z.record(z.unknown()) }).passthrough().parse(JSON.parse(serializeSnapshot(snapshot)))
+			expect(stored.contract).toEqual(JSON.parse(JSON.stringify(live.artifact)))
+			expect('format' in stored.contract).toBe(false)
+			expect(parseSnapshot(serializeSnapshot(snapshot))).toEqual(snapshot)
+		})
 	})
-
-	test('starts with the contract digest its own release computes', async () => {
-		const access = approvedAccess(await read())
-		expect(access?.contractDigest).toBe(STARTUP_DIGEST)
-		expect(access?.contractDigest).toBe(contractDigest05(artifact05))
-		expect(access?.contractDigest).toBe(fixture.platform.contractDigest)
-		expect(access?.framework).toBe('0.5.4')
-	})
-
-	test('gets the proxy rows and the IAM schema the 0.5.4 platform compiles', async () => {
-		const access = approvedAccess(await read())
-		if (access === undefined) throw new Error('the snapshot has no contract')
-		const rows = contractProxyTable(access.contract, access.contractDigest)
-		expect(rows).toEqual(contractProxyTable05(artifact05))
-		expect(fixture.platform.proxyTable).toEqual(rows)
-		expect(access.schema).toEqual(schemaFromContract05(artifact05))
-		expect(fixture.platform.schema).toEqual(access.schema)
-	})
-
-	test('keeps the snapshot digest v0.5.4 recorded, so the approvals that name it stay valid across the upgrade', async () => {
-		const snapshot = await read()
-		expect(snapshotDigest(snapshot)).toBe(fixture.platform.snapshotDigest)
-		const stored = parseSnapshot(fixture.platform.stored)
-		expect(snapshotDigest(stored)).toBe(fixture.platform.snapshotDigest)
-		expect(snapshotDigest(parseSnapshot(serializeSnapshot(snapshot)))).toBe(fixture.platform.snapshotDigest)
-	})
-
-	test('a snapshot v0.5.4 stored publishes the same access, and its next unchanged deploy changes nothing', async () => {
-		const snapshot = await read()
-		const stored = parseSnapshot(fixture.platform.stored)
-		expect(stored.framework).toBeUndefined()
-		expect(approvedAccess(stored)).toEqual(approvedAccess(snapshot))
-		expect(classifyAccess(stored, snapshot)).toEqual({ outcome: 'none', changes: [] })
-	})
-
-	test('stores the artifact its release read, never the upcast', async () => {
-		const snapshot = await read()
-		const stored = z.object({ contract: z.record(z.unknown()) }).passthrough().parse(JSON.parse(serializeSnapshot(snapshot)))
-		expect(stored.contract).toEqual(JSON.parse(JSON.stringify(artifact05)))
-		expect('format' in stored.contract).toBe(false)
-		expect(parseSnapshot(serializeSnapshot(snapshot))).toEqual(snapshot)
-	})
-})
+}
