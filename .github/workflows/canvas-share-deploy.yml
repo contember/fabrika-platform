@@ -9,10 +9,10 @@ on:
         type: string
     # No `secrets:` inputs on purpose. The deploy job below declares
     # `environment: ${{ inputs.env }}`, so referencing `secrets.X` directly
-    # resolves the matching *environment* secret (falling back to a
-    # repo-level secret of the same name). Callers pass `secrets: inherit`
+    # resolves the matching *environment* secret or variable (falling back to a
+    # repo-level one of the same name). Callers pass `secrets: inherit`
     # so org/repo secrets remain reachable too. This is what makes the
-    # CLOUDFLARE_* / SHARE_AUTH_TOKEN values environment-scoped — a prod
+    # CANVAS_DEPLOY_CLOUDFLARE_* / SHARE_AUTH_TOKEN values environment-scoped — a prod
     # token can never be read by a stage deploy and vice versa.
 
 jobs:
@@ -44,8 +44,8 @@ jobs:
       - name: Provision Cloudflare resources
         working-directory: packages/canvas-share
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CANVAS_DEPLOY_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CANVAS_DEPLOY_CLOUDFLARE_ACCOUNT_ID }}
         run: bunx oblaka oblaka.ts --env ${{ inputs.env }} --remote --state-namespace agent-state-kv
 
       # Push the bearer token as a Worker secret if it was provided. Using
@@ -55,8 +55,8 @@ jobs:
       - name: Set worker secrets
         working-directory: packages/canvas-share
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CANVAS_DEPLOY_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CANVAS_DEPLOY_CLOUDFLARE_ACCOUNT_ID }}
           SHARE_AUTH_TOKEN: ${{ secrets.SHARE_AUTH_TOKEN }}
         run: |
           if [ -z "$SHARE_AUTH_TOKEN" ]; then
@@ -69,6 +69,6 @@ jobs:
       - name: Deploy worker
         working-directory: packages/canvas-share
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CANVAS_DEPLOY_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CANVAS_DEPLOY_CLOUDFLARE_ACCOUNT_ID }}
         run: bunx wrangler deploy
