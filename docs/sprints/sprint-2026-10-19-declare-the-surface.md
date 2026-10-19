@@ -68,3 +68,12 @@ back and runs `bun run check:ci` on the integration branch.
 ## Run log
 
 <!-- Append as you work: discoveries, deviations, blockers. -->
+
+- **Source version.** Bun links an `npm:` alias to the workspace when name and version match, so the 0.5 reader alias
+  resolved to HEAD while the source was 0.5.4. The branch moves to 0.6.0 first (WU-0); `release-process.md` records the
+  rule.
+- **WU-4 choices.** `due` may be set on insert, `attempts` never. The backoff is the job's schedule period (60 s if none),
+  doubling, capped at 30 days. `claim` needs `limit` (max 500). `queue` is not in the artifact (it changes no access).
+  `onConflict: 'update'` runs a second guarded update, not `DO UPDATE`.
+- **WU-4 open.** The checker does not verify that `onConflict.columns` is a unique index (Postgres answers 42P10). A row
+  past `maxAttempts` has no staff path to requeue it.
