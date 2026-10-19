@@ -1,0 +1,196 @@
+{
+	"files": {
+		"bun.lock": "{\n  \"lockfileVersion\": 1,\n  \"configVersion\": 1,\n  \"workspaces\": {\n    \"\": {\n      \"name\": \"form-files-055\",\n      \"dependencies\": {\n        \"@fabrika/app\": \"0.5.5\",\n        \"@fabrika/db\": \"0.5.5\",\n        \"kysely\": \"0.29.6\",\n        \"zod\": \"^3.25.76\",\n      },\n      \"devDependencies\": {\n        \"@fabrika/check\": \"0.5.5\",\n      },\n    },\n  },\n  \"packages\": {\n    \"@babel/helper-string-parser\": [\"@babel/helper-string-parser@8.0.6\", \"\", {}, \"sha512-+6HYEBnsDRZHJtUTAEfMQd0zMDqdFHS7C+5vAsEZqBUr3vEMWOWlHJ0Jz1gS8jJIlCvLsuA6ivmeoqzH936YcA==\"],\n\n    \"@babel/helper-validator-identifier\": [\"@babel/helper-validator-identifier@8.0.6\", \"\", {}, \"sha512-HYx0YmuchRxRSpnjvcNffnPS8DCauKNmnumIuHG3jnQAVewRA7kfJGwF13ayEpSZs7s4R/oBH4eppuXcAQd5JQ==\"],\n\n    \"@babel/parser\": [\"@babel/parser@8.0.7\", \"\", { \"dependencies\": { \"@babel/types\": \"^8.0.6\" }, \"bin\": \"./bin/babel-parser.js\" }, \"sha512-UkDwEbPO1px2JQSrdh4qIgaH1JgG7GO/pFeJkpxhDxIETkT/QvGpnigXIw75ViHYPtIgKITmVUJqLjiO+JuWjA==\"],\n\n    \"@babel/types\": [\"@babel/types@8.0.6\", \"\", { \"dependencies\": { \"@babel/helper-string-parser\": \"^8.0.6\", \"@babel/helper-validator-identifier\": \"^8.0.6\" } }, \"sha512-c+xgSWboV2pdwXP67BUWDVRHi2BO5Q3KwxyFVs7taVTY+fsK47/L51ZXQoV9rozHJDNHvJ4v4WEsI/IlxV2l2A==\"],\n\n    \"@fabrika/app\": [\"@fabrika/app@0.5.5\", \"\", { \"dependencies\": { \"@fabrika/auth\": \"0.5.5\", \"@fabrika/auth-core\": \"0.5.5\", \"@fabrika/db\": \"0.5.5\", \"@fabrika/email\": \"0.5.5\", \"@fabrika/jwks\": \"0.5.5\", \"@fabrika/platform\": \"0.5.5\", \"@fabrika/platform-node\": \"0.5.5\", \"@fabrika/proxy-core\": \"0.5.5\", \"jose\": \"^5.9.0\" }, \"peerDependencies\": { \"@happy-dom/global-registrator\": \"^20.11.2\", \"react\": \"^19.0.0\", \"zod\": \"^3.25.76\" }, \"optionalPeers\": [\"@happy-dom/global-registrator\", \"react\"] }, \"sha512-fUTU6RaDMfXADmh/gloJt62oW7tvl+cJzp/U+4LIInwDv0hxvWeF/QKRP1Qp0UbpskQZGFUK0AIRhxaHq4rNTg==\"],\n\n    \"@fabrika/auth\": [\"@fabrika/auth@0.5.5\", \"\", { \"dependencies\": { \"@fabrika/auth-core\": \"0.5.5\", \"@fabrika/jwks\": \"0.5.5\", \"jose\": \"^5.9.0\", \"zod\": \"^3.25.76\" } }, \"sha512-XoiqXQZS8yIbtGkSminyuicHtJqzZ9dygEiifITXP3M0hBHNpRTZeq5pwwRNwd9GTRkNfkGq7sUed7jzVpcfIw==\"],\n\n    \"@fabrika/auth-core\": [\"@fabrika/auth-core@0.5.5\", \"\", {}, \"sha512-R8Ionb7MEcxcglIein+zMFVPCuie/l8A3IOvwBinTcinJ+448GcZOFX4Rl5furmDvFkoJgcU4vwtocyW651iAg==\"],\n\n    \"@fabrika/check\": [\"@fabrika/check@0.5.5\", \"\", { \"dependencies\": { \"@babel/parser\": \"8.0.7\", \"@fabrika/app\": \"0.5.5\", \"@fabrika/auth-core\": \"0.5.5\", \"@fabrika/db\": \"0.5.5\", \"@fabrika/operations-contract\": \"0.5.5\", \"@fabrika/platform-node\": \"0.5.5\", \"zod\": \"^3.25.76\" }, \"bin\": { \"fabrika-check\": \"src/cli.ts\", \"fabrika-source-maps\": \"src/source-maps-cli.ts\" } }, \"sha512-NkL+wbWV1E00a5pNouK+urk102SnequUrh8pBJK7l4msDtGybRj9qTDroupxnt/1WIml/Kd2E2StwV75Um6m7Q==\"],\n\n    \"@fabrika/db\": [\"@fabrika/db@0.5.5\", \"\", { \"dependencies\": { \"@fabrika/auth-core\": \"0.5.5\", \"@fabrika/platform-node\": \"0.5.5\", \"kysely\": \"0.29.6\", \"kysely-postgres-js\": \"5.0.1\", \"zod\": \"^3.25.76\" } }, \"sha512-IRMPyzzv4ZJn7XseoMcaBu4+8BbNkjRahIsWD/4502aJrvelutUKkhZWS/dBl1rqNLW+HEpamg+9yizYUR2WLQ==\"],\n\n    \"@fabrika/email\": [\"@fabrika/email@0.5.5\", \"\", { \"dependencies\": { \"zod\": \"^3.25.76\" } }, \"sha512-JQpY/uw9+C+FJm+6nO6JnZEDM6ffj94ven5hYniAkyQDsVOC1W8lEQ3fQSrCl1QTzyNjzbkCl8j85clyH2qnxA==\"],\n\n    \"@fabrika/jwks\": [\"@fabrika/jwks@0.5.5\", \"\", { \"dependencies\": { \"@fabrika/auth-core\": \"0.5.5\", \"jose\": \"^5.9.0\", \"zod\": \"^3.25.76\" } }, \"sha512-CvcdyGJZwvFCwaapdYn1apNTtiHJPuZGlWq7hX1cZ0N9afsfZ35YUYoLrB0M6UEwwjDg+VLLBeY1DU1kvBiaIA==\"],\n\n    \"@fabrika/operations-contract\": [\"@fabrika/operations-contract@0.5.5\", \"\", { \"dependencies\": { \"@fabrika/app\": \"0.5.5\", \"zod\": \"^3.25.76\" } }, \"sha512-v7SwMO5vg8BEP7bspL6PadUqy//ZTTeOAx7QsWQo6X7lVvKRsir8vENUlUHVpJ1v9mY9qJXAnFpZLKgEdlWAQg==\"],\n\n    \"@fabrika/platform\": [\"@fabrika/platform@0.5.5\", \"\", {}, \"sha512-MU6fK+IFXTh8FTea4+v5U6CgZBhVKA2iJxsX0rp2u/rALCuZY7Vc+CgyDbnKwxjOymDn8jAU68HvZ0l9aNA3HA==\"],\n\n    \"@fabrika/platform-node\": [\"@fabrika/platform-node@0.5.5\", \"\", { \"dependencies\": { \"@fabrika/platform\": \"0.5.5\" } }, \"sha512-qCGgc/DtDnd6n85qZlAt5cUl/brlalKqMaghQ7zUbl3/FhVviYLlpBcBqPoHr9Ns0Eukjo0v+v0LTfj7ED8B6Q==\"],\n\n    \"@fabrika/proxy-core\": [\"@fabrika/proxy-core@0.5.5\", \"\", { \"dependencies\": { \"@fabrika/auth-core\": \"0.5.5\", \"@fabrika/jwks\": \"0.5.5\", \"@fabrika/platform\": \"0.5.5\", \"jose\": \"^5.9.0\", \"zod\": \"^3.25.76\" } }, \"sha512-N/bble/A33V8dSHs9XKOyPkrLdEZEiNDgzYhri+63syq71RbQ+KCMFq/O6yKACC6P+p5zkQ1Pu6KO6RMWT2Atw==\"],\n\n    \"jose\": [\"jose@5.10.0\", \"\", {}, \"sha512-s+3Al/p9g32Iq+oqXxkW//7jk2Vig6FF1CFqzVXoTUXt2qz89YWbL+OwS17NFYEvxC35n0FKeGO2LGYSxeM2Gg==\"],\n\n    \"kysely\": [\"kysely@0.29.6\", \"\", {}, \"sha512-hHaB8C/rfzDDtr/t8YZwxAuPJTT0zHyaPoVzcXwDYhYNAgH/4sIfVhi/XLLIY+bL/FqaIJnjATDbi8ObSELmxg==\"],\n\n    \"kysely-postgres-js\": [\"kysely-postgres-js@5.0.1\", \"\", { \"peerDependencies\": { \"kysely\": \">= 0.29.0 < 1\", \"postgres\": \"^3.4.0\" }, \"optionalPeers\": [\"postgres\"] }, \"sha512-3qY2qzXJszS35CMuknpon79CE5G7MfcTMoIQHuFmGsaQQ2rau3rwx7eNaRJkO9nhli8yQedQroBZ/VehzNJy4w==\"],\n\n    \"zod\": [\"zod@3.25.76\", \"\", {}, \"sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==\"],\n  }\n}\n",
+		"fabrika.contract.ts": "// A GitHub webhook bound to each repository, with the generated binding endpoints, and a job with a time limit.\n\nimport { app } from './src/app-kit'\nimport { github, nightly } from './src/hooks/endpoints'\n\nexport const contract = app.contract((c) => ({\n\tgithub,\n\thealth: c.health('/healthz'),\n\tjobs: { nightly },\n}))\n",
+		"package.json": "{\n\t\"name\": \"form-files-055\",\n\t\"private\": true,\n\t\"type\": \"module\",\n\t\"dependencies\": {\n\t\t\"@fabrika/app\": \"0.5.5\",\n\t\t\"@fabrika/db\": \"0.5.5\",\n\t\t\"kysely\": \"0.29.6\",\n\t\t\"zod\": \"^3.25.76\"\n\t},\n\t\"devDependencies\": {\n\t\t\"@fabrika/check\": \"0.5.5\"\n\t}\n}\n",
+		"src/app-kit.ts": "import { defineApp } from '@fabrika/app/contract'\nimport { tables } from './db/tables'\nimport { vocabulary } from './vocabulary'\n\nexport const app = defineApp(vocabulary, tables)\n",
+		"src/db/schema.generated.ts": "// @generated by fabrika db codegen from the migrated database. Do not edit: write a migration, then run fabrika db codegen.\n\nimport type { TypedColumnList } from '@fabrika/db'\n\nexport interface ReposTable {\n\tid: string\n\tname: string\n\tlast_push: string | null\n\tcreated_by: string\n\tversion: number\n}\n\nexport interface DB {\n\trepos: ReposTable\n}\n\nexport const columns: TypedColumnList<DB> = {\n\t'repos': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'name',\n\t\t\t'last_push',\n\t\t\t'created_by',\n\t\t\t'version',\n\t\t],\n\t\tforeignKeys: [],\n\t\ttimestamps: [],\n\t},\n}\n",
+		"src/db/tables.ts": "import { defineTables } from '@fabrika/db/tables'\nimport { vocabulary } from '../vocabulary'\nimport { columns } from './schema.generated'\n\nexport const tables = defineTables(vocabulary, columns)({\n\trepos: {\n\t\tscope: { dimension: 'repo', key: 'id' },\n\t\tactions: { read: 'repos.read', update: 'repos.write' },\n\t\tupdate: ['last_push'],\n\t\tversion: 'version',\n\t\tcreatedBy: 'created_by',\n\t},\n})\n",
+		"src/hooks/endpoints.ts": "// A GitHub webhook per repository: a maintainer binds it through the generated endpoint, and each push records the ref.\n\nimport { app } from '../app-kit'\nimport { Push } from '../schemas'\n\nexport const github = app.webhook('/hooks/github', { scheme: 'github-sha256', boundTo: 'repo', actions: ['repos.write'], input: Push, maxBytes: 262144 })\n\t.handle(async ({ input, ctx }) => {\n\t\tconst repo = ctx.db.on(ctx.refs['repos.write'])\n\t\tconst row = await repo.getForUpdate()\n\t\tawait repo.update({ last_push: input.ref }, { expectVersion: row.version })\n\t})\n\n/** A nightly pass over every repository, with its own time limit. */\nexport const nightly = app.cron('0 3 * * *', { actions: ['repos.read'], scope: 'app', timeout: '5m', retries: 1 }).handle(async () => {})\n",
+		"src/schemas.ts": "import { z } from 'zod/v4'\n\nexport const Push = z.strictObject({ ref: z.string(), repository: z.strictObject({ id: z.int() }) })\n",
+		"src/vocabulary.ts": "import { defineVocabulary } from '@fabrika/app/contract'\n\nexport const vocabulary = defineVocabulary({\n\tapp: 'hooks',\n\tdimensions: { repo: { creator: 'maintainer', members: { manage: 'repos.admin', list: 'repos.read' } } },\n\tactions: {\n\t\t'repos.read': 'Read a repository and its pushes',\n\t\t'repos.write': 'Record a push to a repository',\n\t\t'repos.admin': 'Connect a repository to GitHub and manage its maintainers',\n\t\t'repos.create': 'Start a repository',\n\t},\n\troles: {\n\t\tstarter: { grants: ['repos.create'] },\n\t\tmaintainer: { grants: ['repos.read', 'repos.write', 'repos.admin'], member: { scope: 'repo', assignableBy: ['maintainer'] } },\n\t},\n})\n"
+	},
+	"platform": {
+		"stored": "{\"version\":1,\"contract\":{\"app\":\"hooks\",\"dimensions\":{\"repo\":{\"in\":null,\"creator\":\"maintainer\",\"members\":{\"manage\":\"repos.admin\",\"list\":\"repos.read\"}}},\"actions\":{\"repos.read\":\"Read a repository and its pushes\",\"repos.write\":\"Record a push to a repository\",\"repos.admin\":\"Connect a repository to GitHub and manage its maintainers\",\"repos.create\":\"Start a repository\"},\"roles\":{\"starter\":{\"grants\":[\"repos.create\"],\"member\":null},\"maintainer\":{\"grants\":[\"repos.admin\",\"repos.read\",\"repos.write\"],\"member\":{\"scope\":\"repo\",\"assignableBy\":[\"maintainer\"]}}},\"mounts\":{\"github\":{\"kind\":\"webhook\",\"path\":\"/hooks/github\",\"scheme\":\"github-sha256\",\"boundTo\":{\"kind\":\"dimension\",\"dimension\":\"repo\"},\"actions\":[\"repos.write\"]},\"health\":{\"kind\":\"health\",\"path\":\"/healthz\"}},\"files\":{},\"jobs\":{\"nightly\":{\"schedule\":\"0 3 * * *\",\"actions\":[\"repos.read\"],\"scope\":{\"kind\":\"app\"},\"timeout\":\"5m\",\"retries\":1}},\"exports\":{},\"imports\":{},\"csp\":{\"connectSrc\":[],\"imgSrc\":[],\"frameAncestors\":[]},\"tables\":{\"repos\":{\"scope\":{\"mode\":\"dimension\",\"dimension\":\"repo\",\"key\":\"id\",\"container\":null},\"actions\":{\"read\":\"repos.read\",\"insert\":null,\"update\":\"repos.write\",\"delete\":null},\"insert\":[],\"update\":[\"last_push\"],\"version\":\"version\",\"createdBy\":\"created_by\",\"columns\":{}}},\"endpoints\":[{\"id\":\"github\",\"source\":{\"kind\":\"mount\",\"name\":\"github\"},\"method\":\"POST\",\"path\":\"/hooks/github/:bindingId\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":262144},\"input\":{\"type\":\"object\",\"fields\":{\"ref\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"repository\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}}}},\"output\":null,\"kind\":\"webhook\",\"callers\":[],\"requirement\":null},{\"id\":\"health\",\"source\":{\"kind\":\"mount\",\"name\":\"health\"},\"method\":\"GET\",\"path\":\"/healthz\",\"admission\":null,\"input\":null,\"output\":null,\"kind\":\"health\",\"callers\":[],\"requirement\":null},{\"id\":\"webhooks.github.bind\",\"source\":{\"kind\":\"mount\",\"name\":\"github\"},\"method\":\"POST\",\"path\":\"/api/webhooks.github.bind\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":null},\"input\":{\"type\":\"object\",\"fields\":{\"scope\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"account\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":\"^(?:installation|repository):[1-9][0-9]{0,19}$\",\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"url\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"secret\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"repos.admin\",\"access\":{\"form\":\"in\",\"dimension\":\"repo\",\"from\":\"scope\"}}},{\"id\":\"webhooks.github.unbind\",\"source\":{\"kind\":\"mount\",\"name\":\"github\"},\"method\":\"POST\",\"path\":\"/api/webhooks.github.unbind\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":null},\"input\":{\"type\":\"object\",\"fields\":{\"scope\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"repos.admin\",\"access\":{\"form\":\"in\",\"dimension\":\"repo\",\"from\":\"scope\"}}}],\"reservedPrefixes\":[\"/api\"],\"declared\":{}},\"migrations\":[],\"checker\":\"0.5.5\"}",
+		"snapshotDigest": "sha256:5ce847aaf9545393913ee63306d9a2161f055cea16b7f6efaf343e9fdad07d64",
+		"contractDigest": "sha256:e2afd0f3d3f482ad8100f5cc92b550085932349564d2319bcf55b8a3cdaef267",
+		"proxyTable": {
+			"endpoints": [
+				{
+					"id": "github",
+					"method": "POST",
+					"path": "/hooks/github/:bindingId",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 262144
+					},
+					"kind": "webhook",
+					"callers": [],
+					"requirement": null,
+					"delegation": null,
+					"digest": "sha256:73b07f7d5c2222c5a73774afa271a285e2fdc6c25b4589a42bc3ac5638d09e99"
+				},
+				{
+					"id": "health",
+					"method": "GET",
+					"path": "/healthz",
+					"admission": null,
+					"kind": "health",
+					"callers": [],
+					"requirement": null,
+					"delegation": null,
+					"digest": "sha256:f180f636975e69016cea9bf60a44f559f8c5b00572f70903979674bf936c086f"
+				},
+				{
+					"id": "webhooks.github.bind",
+					"method": "POST",
+					"path": "/api/webhooks.github.bind",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": null
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "repos.admin",
+						"access": {
+							"form": "in",
+							"dimension": "repo",
+							"from": "scope"
+						}
+					},
+					"delegation": "members",
+					"digest": "sha256:ad074127a17e42c72f661878487e3e9b5d625cd15a72723719a6d0652592e4dc"
+				},
+				{
+					"id": "webhooks.github.unbind",
+					"method": "POST",
+					"path": "/api/webhooks.github.unbind",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": null
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "repos.admin",
+						"access": {
+							"form": "in",
+							"dimension": "repo",
+							"from": "scope"
+						}
+					},
+					"delegation": "members",
+					"digest": "sha256:d6bc04926322b481532aa5f286cf9b63c91705d9391306620c7a3010c0acb263"
+				}
+			],
+			"reservedPrefixes": [
+				"/api"
+			],
+			"snapshot": "sha256:e2afd0f3d3f482ad8100f5cc92b550085932349564d2319bcf55b8a3cdaef267",
+			"csp": {
+				"connectSrc": [],
+				"imgSrc": [],
+				"frameAncestors": [],
+				"scriptSrc": [],
+				"frameSrc": [],
+				"styleSrc": [],
+				"fontSrc": []
+			}
+		},
+		"schema": {
+			"scopes": [
+				{
+					"type": "repo",
+					"creator": "maintainer",
+					"members": {
+						"manage": "repos.admin",
+						"list": "repos.read"
+					}
+				}
+			],
+			"actions": [
+				{
+					"action": "repos.admin",
+					"description": "Connect a repository to GitHub and manage its maintainers"
+				},
+				{
+					"action": "repos.create",
+					"description": "Start a repository"
+				},
+				{
+					"action": "repos.read",
+					"description": "Read a repository and its pushes"
+				},
+				{
+					"action": "repos.write",
+					"description": "Record a push to a repository"
+				}
+			],
+			"roles": {
+				"starter": {
+					"name": "starter",
+					"permissions": [
+						"repos.create"
+					]
+				},
+				"maintainer": {
+					"name": "maintainer",
+					"permissions": [
+						"repos.admin",
+						"repos.read",
+						"repos.write"
+					],
+					"member": {
+						"scope": "repo",
+						"assignableBy": [
+							"maintainer"
+						]
+					}
+				}
+			},
+			"contract": true,
+			"links": {},
+			"delegations": {
+				"webhooks.github.bind": {
+					"action": "repos.admin",
+					"dimension": "repo",
+					"purpose": "members"
+				},
+				"webhooks.github.unbind": {
+					"action": "repos.admin",
+					"dimension": "repo",
+					"purpose": "members"
+				}
+			},
+			"workloads": [
+				{
+					"kind": "job",
+					"name": "nightly",
+					"actions": [
+						"repos.read"
+					]
+				},
+				{
+					"kind": "webhook",
+					"name": "github",
+					"actions": [
+						"repos.write"
+					]
+				}
+			]
+		}
+	}
+}

@@ -92,6 +92,15 @@ const CASES: readonly Case[] = [
 		startupDigest: 'sha256:b52454f9becd0e2beae741bcea7644f0ff232dd5f4d8178a096228a3809e94d6',
 		view: view05,
 	},
+	{
+		name: 'a GitHub webhook with its generated binding endpoints, and a job with a timeout, at v0.5.5',
+		fixture: 'webhooks-0.5.5.json',
+		app: 'hooks',
+		framework: '0.5.5',
+		checker: '0.5.5',
+		startupDigest: 'sha256:e2afd0f3d3f482ad8100f5cc92b550085932349564d2319bcf55b8a3cdaef267',
+		view: view05,
+	},
 ]
 
 for (const release of CASES) {
@@ -105,6 +114,20 @@ for (const release of CASES) {
 		)
 
 	describe(`${release.name} on this platform`, () => {
+		test("upcasts its jobs' and webhooks' time limits to what its release ran with", async () => {
+			const contract = (await read()).contract
+			if (contract === null) throw new Error('the snapshot has no contract')
+			const older = z.object({ jobs: z.record(z.object({ timeout: z.string().nullable() }).passthrough()) }).passthrough().parse(live.artifact)
+			for (const [name, job] of Object.entries(contract.jobs)) {
+				const timeout = older.jobs[name]?.timeout ?? null
+				const minutes = timeout === null ? 15 : timeout.endsWith('m') ? Number(timeout.slice(0, -1)) : Number.NaN
+				expect([name, job.timeoutMs]).toEqual([name, minutes * 60_000])
+			}
+			for (const mount of Object.values(contract.mounts)) {
+				if (mount.kind === 'webhook') expect(mount.timeoutMs).toBe(10_000)
+			}
+		})
+
 		test('is read by the bundled reader of its minor, which its bun.lock selects', async () => {
 			const snapshot = await read()
 			expect(snapshot.checker).toBe(release.checker)
