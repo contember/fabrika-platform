@@ -1378,6 +1378,7 @@ function byName(migrations: AccessSnapshot['migrations']): Map<string, AccessSna
 /** The baseline of a first contract; a staged-kit candidate is compared with sites that declare nothing. */
 function emptyArtifact(candidate: ContractArtifact): ContractArtifact {
 	return {
+		format: candidate.format,
 		app: candidate.app,
 		dimensions: {},
 		actions: {},

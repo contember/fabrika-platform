@@ -6,6 +6,7 @@ import {
 	type ArrayShape,
 	type AttachmentShape,
 	BUILTIN_ROLE_KEYS,
+	CONTRACT_FORMAT,
 	type ContractArtifact,
 	CROSS_ORIGIN_KINDS,
 	displayNameProblem,
@@ -248,6 +249,7 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 })
 
 export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObject({
+	format: z.literal(CONTRACT_FORMAT),
 	app: name,
 	dimensions: record(z.strictObject({
 		in: nullableName,

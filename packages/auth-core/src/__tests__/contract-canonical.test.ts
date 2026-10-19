@@ -25,6 +25,7 @@ function reversed(artifact: ContractArtifact): ContractArtifact {
 		actions: flip(artifact.actions),
 		dimensions: flip(artifact.dimensions),
 		app: artifact.app,
+		format: artifact.format,
 	}
 }
 

@@ -1,4 +1,13 @@
-import type { ArrayShape, BodyAdmission, ContractArtifact, EndpointRow, NumberShape, SchemaShape, StringShape } from '../../contract'
+import {
+	type ArrayShape,
+	type BodyAdmission,
+	CONTRACT_FORMAT,
+	type ContractArtifact,
+	type EndpointRow,
+	type NumberShape,
+	type SchemaShape,
+	type StringShape,
+} from '../../contract'
 
 const json: BodyAdmission = { contentTypes: ['application/json'], maxBytes: null }
 
@@ -222,6 +231,7 @@ const endpoints: EndpointRow[] = [
  * `compile.test.ts`). An inbox is read with an action that no membership role grants.
  */
 export const notesArtifact: ContractArtifact = {
+	format: CONTRACT_FORMAT,
 	app: 'notes',
 	dimensions: {
 		workspace: { in: null, creator: 'owner', members: { manage: 'notes.admin', list: 'notes.read' } },

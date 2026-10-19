@@ -1,4 +1,4 @@
-import type { ContractArtifact, DeclaredReach } from '@fabrika/auth-core'
+import { CONTRACT_FORMAT, type ContractArtifact, type DeclaredReach } from '@fabrika/auth-core'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { describe, expect, test } from 'bun:test'
 import {
@@ -14,6 +14,7 @@ const REACH: DeclaredReach = { sql: null, unscoped: {}, connect: [], issues: nul
 
 /** An artifact whose only interesting part is the reach its sites declare. */
 const artifact = (declared: Record<string, DeclaredReach>): ContractArtifact => ({
+	format: CONTRACT_FORMAT,
 	app: 'notes',
 	dimensions: {},
 	actions: {},

@@ -5,12 +5,19 @@ import type { Locale } from './locale'
 import type { MailTemplates } from './mail'
 
 /**
+ * The artifact format this release writes. A release that changes the artifact raises it, and Control upcasts every
+ * older format of its window to this one (ADR-0062). The 0.5 artifact carries no `format`.
+ */
+export const CONTRACT_FORMAT = 2
+
+/**
  * An application's whole access surface as plain JSON. `compileContract` produces it from the evaluated contract and
  * the static reader from source; both must produce the same value for the same contract. Every optional authored
  * field is normalized to `null`, `[]` or `{}`, so a field is always present. Key order and the order of `endpoints`
  * carry no meaning.
  */
 export interface ContractArtifact extends EndpointTable {
+	readonly format: typeof CONTRACT_FORMAT
 	readonly app: string
 	readonly dimensions: Readonly<Record<string, DimensionArtifact>>
 	/** Action → description. Exact actions only; the artifact holds no wildcard. */

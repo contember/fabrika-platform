@@ -22,6 +22,7 @@ import type {
  */
 export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifact {
 	return {
+		format: artifact.format,
 		app: artifact.app,
 		dimensions: artifact.dimensions,
 		actions: artifact.actions,

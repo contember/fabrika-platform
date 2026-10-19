@@ -12,6 +12,7 @@ import {
 	type CapabilityAccessForm,
 	type CapabilityRequirement,
 	type ChallengeProvider,
+	CONTRACT_FORMAT,
 	type ContractArtifact,
 	type CrossOriginForm,
 	type CspExtensions,
@@ -279,6 +280,7 @@ class ArtifactBuilder {
 		const mail = this.#mail()
 		const people = this.#people()
 		const artifact: ContractArtifact = {
+			format: CONTRACT_FORMAT,
 			app: contract.app,
 			dimensions,
 			actions,
