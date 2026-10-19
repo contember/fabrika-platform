@@ -1,6 +1,6 @@
 export { AnnotationProvider } from './AnnotationProvider'
 export type { PersistedState } from './AnnotationProvider'
-export { feedbackEntrySchema, parsePersistedState, persistedStateSchema, planResponseSchema } from './persistenceSchemas'
+export { feedbackEntrySchema, filePreviewResponseSchema, parsePersistedState, persistedStateSchema, planResponseSchema } from './persistenceSchemas'
 // Canvas documents and the shell must read the same external context instance.
 export {
 	ActiveViewCtx,

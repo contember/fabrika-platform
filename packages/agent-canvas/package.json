@@ -36,7 +36,8 @@
 		"marked": "^17.0.4",
 		"mermaid-parser-bundle": "^0.1.2",
 		"preact": "^10.25.0",
-		"preact-render-to-string": "^6.6.6"
+		"preact-render-to-string": "^6.6.6",
+		"zod": "^3.25.76"
 	},
 	"devDependencies": {
 		"@tailwindcss/cli": "4",

@@ -1,6 +1,7 @@
 import { compileJsx, type SessionManager, watchSession } from '@fabrika/canvas-kernel/server'
 import { jsonResponse, type Route } from '@fabrika/daemon-kit'
 import { existsSync, readdirSync, readFileSync } from 'fs'
+import { errorMessage } from '../../client/errorMessage'
 import { HOST_COMPONENTS } from '../components'
 import { COMPILE_TEMP_DIR } from '../paths'
 import { loadShareConfig, revokeShare, shareRevision } from '../share'
@@ -116,8 +117,8 @@ export function createApiHandlers(ctx: ApiContext): Route[] {
 				sessionId,
 				canvasFiles: [...canvasFiles.keys()],
 			})
-		} catch (e: any) {
-			return jsonResponse({ error: e.message }, 500)
+		} catch (e) {
+			return jsonResponse({ error: errorMessage(e) }, 500)
 		}
 	}
 
@@ -200,8 +201,8 @@ export function createApiHandlers(ctx: ApiContext): Route[] {
 			const entry = await shareRevision(sessionManager, sessionId, rev, config)
 			broadcastRevisionUpdate(sessionId)
 			return jsonResponse({ ok: true, share: entry })
-		} catch (e: any) {
-			return jsonResponse({ error: e.message || String(e) }, 502)
+		} catch (e) {
+			return jsonResponse({ error: errorMessage(e) }, 502)
 		}
 	}
 
@@ -215,8 +216,8 @@ export function createApiHandlers(ctx: ApiContext): Route[] {
 			await revokeShare(sessionManager, sessionId, shareId, config)
 			broadcastRevisionUpdate(sessionId)
 			return jsonResponse({ ok: true })
-		} catch (e: any) {
-			return jsonResponse({ error: e.message || String(e) }, 502)
+		} catch (e) {
+			return jsonResponse({ error: errorMessage(e) }, 502)
 		}
 	}
 

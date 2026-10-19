@@ -1,9 +1,10 @@
 import { SessionContext } from '#canvas/runtime'
 import { RESPONSE_ANNOTATION_PATH } from '@fabrika/annotations'
-import { useAnnotations } from '@fabrika/canvas-kernel/client'
+import { filePreviewResponseSchema, useAnnotations } from '@fabrika/canvas-kernel/client'
 import { ActiveViewContext } from '@fabrika/canvas-kernel/client'
 import { FileIcon } from '@fabrika/canvas-kernel/client'
-import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import React, { useContext, useEffect, useMemo, useState } from 'react'
+import { treeResponseSchema } from './apiSchemas'
 import { FS_AVAILABLE } from './clientApi'
 
 interface TreeEntry {
@@ -17,12 +18,6 @@ interface DirState {
 }
 
 export function FileBrowser({ embedded }: { embedded?: boolean } = {}) {
-	const sessionId = useContext(SessionContext)
-	const { annotations, addAnnotation } = useAnnotations()
-	const { setActiveView } = useContext(ActiveViewContext)
-	const [collapsed, setCollapsed] = useState(false)
-	const [dirs, setDirs] = useState<Record<string, DirState>>({})
-
 	// Shared-mode canvases have no filesystem backing — the daemon's /api/tree
 	// endpoint isn't reachable. Render a simple placeholder so reviewers see
 	// something informative instead of a broken tree.
@@ -36,6 +31,15 @@ export function FileBrowser({ embedded }: { embedded?: boolean } = {}) {
 			</div>
 		)
 	}
+	return <LocalFileBrowser embedded={embedded} />
+}
+
+function LocalFileBrowser({ embedded }: { embedded?: boolean }) {
+	const sessionId = useContext(SessionContext)
+	const { annotations, addAnnotation } = useAnnotations()
+	const { setActiveView } = useContext(ActiveViewContext)
+	const [collapsed, setCollapsed] = useState(false)
+	const [dirs, setDirs] = useState<Record<string, DirState>>({})
 
 	const { annCountMap, annotatedFiles } = useMemo(() => {
 		const map = new Map<string, number>()
@@ -47,8 +51,8 @@ export function FileBrowser({ embedded }: { embedded?: boolean } = {}) {
 
 	const loadDir = async (path: string) => {
 		const res = await fetch(`/api/tree?session=${sessionId}&path=${encodeURIComponent(path)}`)
-		const data = await res.json() as any
-		if (data.entries) setDirs((prev) => ({ ...prev, [path]: { entries: data.entries, expanded: true, loaded: true } }))
+		const data = treeResponseSchema.safeParse(await res.json())
+		if (data.success) setDirs((prev) => ({ ...prev, [path]: { entries: data.data.entries, expanded: true, loaded: true } }))
 	}
 
 	useEffect(() => {
@@ -66,9 +70,10 @@ export function FileBrowser({ embedded }: { embedded?: boolean } = {}) {
 
 	const addWholeFile = async (path: string) => {
 		const res = await fetch(`/api/file?session=${sessionId}&path=${encodeURIComponent(path)}`)
-		const data = await res.json() as any
-		if (!data.error) {
-			const preview = data.content.split('\n').slice(0, 3).join('\n') + (data.content.split('\n').length > 3 ? '\n...' : '')
+		const data = filePreviewResponseSchema.safeParse(await res.json())
+		if (data.success && 'content' in data.data) {
+			const { content } = data.data
+			const preview = content.split('\n').slice(0, 3).join('\n') + (content.split('\n').length > 3 ? '\n...' : '')
 			addAnnotation(preview, 'Include this file for context', path)
 		}
 	}
@@ -80,8 +85,8 @@ export function FileBrowser({ embedded }: { embedded?: boolean } = {}) {
 			entries = dirs[path].entries
 		} else {
 			const res = await fetch(`/api/tree?session=${sessionId}&path=${encodeURIComponent(path)}`)
-			const data = await res.json() as any
-			if (data.entries) entries = data.entries
+			const data = treeResponseSchema.safeParse(await res.json())
+			if (data.success) entries = data.data.entries
 		}
 		await Promise.all(
 			entries

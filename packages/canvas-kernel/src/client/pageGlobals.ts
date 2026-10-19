@@ -2,6 +2,8 @@
 
 interface HighlightJs {
 	highlightElement(element: HTMLElement): void
+	highlight(code: string, options: { language: string }): { value: string }
+	highlightAuto(code: string): { value: string }
 }
 
 interface MermaidApi {

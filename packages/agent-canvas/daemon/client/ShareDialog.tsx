@@ -1,17 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react'
-
-export interface ShareEntry {
-	shareId: string
-	url: string
-	revision: number
-	createdAt: string
-	ownerToken?: string
-	expiresAt?: string
-	lastFeedbackAt?: string
-	/** Present iff the share is end-to-end encrypted; the URL itself
-	 *  carries the key in the `#k=...` fragment. */
-	encryptionKey?: string
-}
+import { useCallback, useEffect, useState } from 'react'
+import { shareCreatedResponseSchema, type ShareEntry, shareRevokedResponseSchema } from './apiSchemas'
+import { errorMessage } from './errorMessage'
 
 interface ShareDialogProps {
 	sessionId: string
@@ -68,13 +57,12 @@ export function ShareDialog({
 			const res = await fetch(`/api/session/${sessionId}/revision/${revision}/share`, {
 				method: 'POST',
 			})
-			const data = await res.json() as any
-			if (!res.ok || !data.ok) {
-				throw new Error(data.error || `HTTP ${res.status}`)
-			}
-			onShareCreated(data.share as ShareEntry)
-		} catch (e: any) {
-			setError(e.message || String(e))
+			const data = shareCreatedResponseSchema.parse(await res.json())
+			if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`)
+			if (!res.ok) throw new Error(`HTTP ${res.status}`)
+			onShareCreated(data.share)
+		} catch (e) {
+			setError(errorMessage(e))
 		} finally {
 			setLoading(false)
 		}
@@ -88,13 +76,12 @@ export function ShareDialog({
 			const res = await fetch(`/api/session/${sessionId}/shares/${shareId}/revoke`, {
 				method: 'POST',
 			})
-			const data = await res.json() as any
-			if (!res.ok || !data.ok) {
-				throw new Error(data.error || `HTTP ${res.status}`)
-			}
+			const data = shareRevokedResponseSchema.parse(await res.json())
+			if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`)
+			if (!res.ok) throw new Error(`HTTP ${res.status}`)
 			onShareRevoked(shareId)
-		} catch (e: any) {
-			setError(e.message || String(e))
+		} catch (e) {
+			setError(errorMessage(e))
 		} finally {
 			setRevoking(false)
 		}

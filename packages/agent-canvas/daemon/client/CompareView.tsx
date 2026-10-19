@@ -1,6 +1,6 @@
 import { useTextAnnotation } from '@fabrika/annotations'
 import { extractContext } from '@fabrika/annotations'
-import { type CanvasFileInfo, RevisionContext, type RevisionInfo } from '@fabrika/canvas-kernel/client'
+import { RevisionContext, type RevisionInfo } from '@fabrika/canvas-kernel/client'
 import { useAnnotations } from '@fabrika/canvas-kernel/client'
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { runDomDiff } from './domDiff'

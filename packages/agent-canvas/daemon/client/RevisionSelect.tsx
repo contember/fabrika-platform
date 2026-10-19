@@ -1,5 +1,5 @@
 import { RevisionContext, RevisionInfo } from '@fabrika/canvas-kernel/client'
-import React, { useContext, useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 
 /** Format a revision for the trigger button: label or "Round N" */
 function revisionButtonLabel(r: RevisionInfo) {

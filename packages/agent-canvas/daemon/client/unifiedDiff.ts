@@ -309,22 +309,7 @@ function processListLike(clone: HTMLElement, childMatches: BlockMatch[], type: s
 
 /** Build a bidirectional map between original and cloned [data-md] elements. */
 function buildCloneMap(oldBlock: BlockDescriptor, newClone: HTMLElement) {
-	const newMap = new Map<HTMLElement, HTMLElement>()
-
-	// Map new block's original elements to their clones by walking querySelectorAll in parallel
-	// We need the original new block's element — but we only have the old block and the clone.
-	// The clone IS the cloneNode of newBlock.element. So walk the old block's new counterpart
-	// by using the children from childMatches.
-	// Actually, we can map by matching data-md attributes + position.
-	const origEls = oldBlock.element.querySelectorAll<HTMLElement>('[data-md]')
-	const cloneEls = newClone.querySelectorAll<HTMLElement>('[data-md]')
-
-	// For sections/items: the clone is from the NEW block. We need to map
-	// new block's original children → cloned children. But we don't have newBlock.element here.
-	// Instead, just map by querySelectorAll order on the clone's source structure.
-	// Since we can't access the original new element, let's store the mapping differently.
-
-	// We'll use a different approach: find elements in the clone by data-md attributes
+	// The original new block element is not available here, so clones are found by their data-md attributes.
 	return {
 		newMap: {
 			get(originalNewEl: HTMLElement): HTMLElement | null {

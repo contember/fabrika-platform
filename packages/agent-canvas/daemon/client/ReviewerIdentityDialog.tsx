@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 /**
  * Modal shown in shared mode when a reviewer submits feedback without a

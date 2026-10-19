@@ -1,9 +1,8 @@
 import { SessionContext } from '#canvas/runtime'
 import type { AnnotationContext } from '#canvas/runtime'
 import { wrapRangeWithMark } from '@fabrika/annotations'
-import { generateAnnotationId } from '@fabrika/annotations'
 import { useTextAnnotation } from '@fabrika/annotations'
-import { useAnnotations } from '@fabrika/canvas-kernel/client'
+import { filePreviewResponseSchema, useAnnotations } from '@fabrika/canvas-kernel/client'
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { LANG_MAP } from '../langMap'
 import { FS_AVAILABLE } from './clientApi'
@@ -43,6 +42,11 @@ function buildFileContext(range: Range): AnnotationContext {
 	return { before, after, hierarchy: [], lineStart, lineEnd }
 }
 
+function HighlightedLine({ html }: { html: string }) {
+	// biome-ignore lint/security/noDangerouslySetInnerHtml: highlight.js escapes the file text and adds only its own span markup.
+	return <code className="py-px" dangerouslySetInnerHTML={{ __html: html }} />
+}
+
 interface FileViewerProps {
 	path: string
 }
@@ -64,10 +68,13 @@ export function FileViewer({ path }: FileViewerProps) {
 			</div>
 		)
 	}
+	return <LocalFileViewer path={path} />
+}
+
+function LocalFileViewer({ path }: FileViewerProps) {
 	const sessionId = useContext(SessionContext)
-	const { annotations, addAnnotationWithId, activeAnnotationId, setActiveAnnotationId } = useAnnotations()
+	const { annotations } = useAnnotations()
 	const [content, setContent] = useState<string | null>(null)
-	const [language, setLanguage] = useState('text')
 	const [loading, setLoading] = useState(true)
 	const [error, setError] = useState<string | null>(null)
 	const contentRef = useRef<HTMLPreElement>(null)
@@ -97,13 +104,13 @@ export function FileViewer({ path }: FileViewerProps) {
 		setError(null)
 		fetch(`/api/file?session=${sessionId}&path=${encodeURIComponent(path)}`)
 			.then((r) => r.json())
-			.then((data: any) => {
-				if (data.error) {
+			.then((raw) => {
+				const data = filePreviewResponseSchema.parse(raw)
+				if ('error' in data) {
 					setError(data.error)
 					setLoading(false)
 				} else {
 					setContent(data.content)
-					setLanguage(data.language || 'text')
 					setLoading(false)
 				}
 			})
@@ -189,7 +196,7 @@ export function FileViewer({ path }: FileViewerProps) {
 	// Highlight content
 	const highlightedLines = useMemo(() => {
 		if (!content) return null
-		const hljs = (window as any).hljs
+		const hljs = window.hljs
 		if (!hljs) return null
 		const ext = path.split('.').pop() || ''
 		const lang = LANG_MAP[ext]
@@ -201,13 +208,6 @@ export function FileViewer({ path }: FileViewerProps) {
 		}
 	}, [content, path])
 
-	if (loading) return <div className="flex items-center justify-center h-64 text-text-tertiary font-body text-[13px]">Loading {path}...</div>
-	if (error) return <div className="p-8 text-accent-red font-body text-[13px]">{error}</div>
-	if (!content) return null
-
-	const lines = content.split('\n')
-	linesRef.current = lines
-
 	// Computed selected line range for highlighting during drag
 	const selectedLineRange = useMemo(() => {
 		if (lineSelectStart === null) return null
@@ -215,13 +215,12 @@ export function FileViewer({ path }: FileViewerProps) {
 		return { start: Math.min(lineSelectStart, end), end: Math.max(lineSelectStart, end) }
 	}, [lineSelectStart, lineSelectEnd])
 
-	const addWholeFileWithPopup = () => {
-		const preview = content!.split('\n').slice(0, 3).join('\n') + (lines.length > 3 ? '\n...' : '')
-		const id = generateAnnotationId()
-		addAnnotationWithId(id, preview, '', path)
-		// Focus the new annotation's note in sidebar by activating it
-		setActiveAnnotationId(id)
-	}
+	if (loading) return <div className="flex items-center justify-center h-64 text-text-tertiary font-body text-[13px]">Loading {path}...</div>
+	if (error) return <div className="p-8 text-accent-red font-body text-[13px]">{error}</div>
+	if (!content) return null
+
+	const lines = content.split('\n')
+	linesRef.current = lines
 
 	return (
 		<div>
@@ -237,7 +236,7 @@ export function FileViewer({ path }: FileViewerProps) {
                 onMouseDown={(e) => handleGutterMouseDown(e, lineNum)}
               >{lineNum}</span>
               {highlightedLines ? (
-                <code className="py-px" dangerouslySetInnerHTML={{ __html: highlightedLines[i] || " " }} />
+                <HighlightedLine html={highlightedLines[i] || " "} />
               ) : (
                 <code className="py-px">{line || " "}</code>
               )}

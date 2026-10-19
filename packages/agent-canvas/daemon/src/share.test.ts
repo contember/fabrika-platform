@@ -9,8 +9,16 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { z } from 'zod'
 import { decryptString, generateShareKey, importShareKey } from '../client/shareCrypto'
 import { buildSharePayload, encryptSharePayload, loadShareConfig, pushShareToWorker, shareRevision } from './share'
+import { stubFetch } from './stubFetch'
+
+const postedPayloadSchema = z.object({
+	encryption: z.unknown(),
+	origin: z.object({ sessionId: z.string(), revision: z.number(), label: z.string() }),
+	canvasFiles: z.array(z.object({ filename: z.string(), compiledJs: z.string() })),
+})
 
 let testDir: string
 let originalSessionsDir: string | undefined
@@ -100,9 +108,9 @@ describe('pushShareToWorker', () => {
 	})
 
 	test('posts JSON and unwraps the response', async () => {
-		let captured: { url: string; init: RequestInit } | null = null
-		;(globalThis as any).fetch = async (url: any, init: any) => {
-			captured = { url: String(url), init }
+		let captured: { url: string; init: RequestInit | undefined } | null = null
+		stubFetch((url, init) => {
+			captured = { url, init }
 			return new Response(
 				JSON.stringify({
 					shareId: 'deadbeef',
@@ -112,7 +120,7 @@ describe('pushShareToWorker', () => {
 				}),
 				{ status: 200, headers: { 'Content-Type': 'application/json' } },
 			)
-		}
+		})
 
 		const result = await pushShareToWorker(
 			{
@@ -128,15 +136,15 @@ describe('pushShareToWorker', () => {
 		expect(result.url).toBe('https://example.com/s/deadbeef')
 		expect(result.ownerToken).toBe('ot')
 		expect(captured!.url).toBe('https://example.com/shares')
-		expect(captured!.init.method).toBe('POST')
+		expect(captured!.init?.method).toBe('POST')
 	})
 
 	test('includes Authorization header when authToken set', async () => {
-		let captured: any = null
-		;(globalThis as any).fetch = async (_url: any, init: any) => {
-			captured = init
+		let capturedHeaders: HeadersInit | undefined
+		stubFetch((_url, init) => {
+			capturedHeaders = init?.headers
 			return new Response(JSON.stringify({ shareId: 'x', url: 'x' }), { status: 200 })
-		}
+		})
 
 		await pushShareToWorker(
 			{
@@ -148,11 +156,11 @@ describe('pushShareToWorker', () => {
 			{ endpoint: 'https://example.com', componentsVersion: '1.0.0', authToken: 'topsecret' },
 		)
 
-		expect(captured.headers['Authorization']).toBe('Bearer topsecret')
+		expect(new Headers(capturedHeaders).get('Authorization')).toBe('Bearer topsecret')
 	})
 
 	test('throws on non-2xx', async () => {
-		;(globalThis as any).fetch = async () => new Response('nope', { status: 500 })
+		stubFetch(() => new Response('nope', { status: 500 }))
 		await expect(
 			pushShareToWorker(
 				{
@@ -167,7 +175,7 @@ describe('pushShareToWorker', () => {
 	})
 
 	test('throws on malformed response', async () => {
-		;(globalThis as any).fetch = async () => new Response(JSON.stringify({ shareId: 'x' }), { status: 200 })
+		stubFetch(() => new Response(JSON.stringify({ shareId: 'x' }), { status: 200 }))
 		await expect(
 			pushShareToWorker(
 				{
@@ -189,7 +197,7 @@ describe('shareRevision', () => {
 	})
 
 	test('records share entry on the session', async () => {
-		;(globalThis as any).fetch = async () =>
+		stubFetch(() =>
 			new Response(
 				JSON.stringify({
 					shareId: 'abc123def456',
@@ -199,6 +207,7 @@ describe('shareRevision', () => {
 				}),
 				{ status: 200 },
 			)
+		)
 
 		const sm = new SessionManager(testDir)
 		const sid = `test-${Date.now()}`
@@ -227,9 +236,9 @@ describe('shareRevision', () => {
 	})
 
 	test('encrypts payload by default and appends #k= fragment to URL', async () => {
-		let captured: any = null
-		;(globalThis as any).fetch = async (_url: any, init: any) => {
-			captured = JSON.parse(init.body)
+		const posted: z.infer<typeof postedPayloadSchema>[] = []
+		stubFetch((_url, init) => {
+			posted.push(postedPayloadSchema.parse(JSON.parse(String(init?.body))))
 			return new Response(
 				JSON.stringify({
 					shareId: 'encshareid01',
@@ -238,7 +247,7 @@ describe('shareRevision', () => {
 				}),
 				{ status: 200 },
 			)
-		}
+		})
 
 		const sm = new SessionManager(testDir)
 		const sid = `enc-${Date.now()}`
@@ -252,6 +261,8 @@ describe('shareRevision', () => {
 		})
 
 		// Payload going to the worker must be ciphertext, not plaintext.
+		expect(posted).toHaveLength(1)
+		const captured = posted[0]
 		expect(captured.encryption).toEqual({ alg: 'AES-GCM', v: 1 })
 		expect(captured.origin.sessionId).not.toBe(sid)
 		expect(captured.origin.label).not.toBe('Secret Label')

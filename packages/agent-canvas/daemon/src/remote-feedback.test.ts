@@ -10,6 +10,7 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { startRemoteFeedbackPoller } from './remote-feedback'
+import { stubFetch } from './stubFetch'
 
 let testDir: string
 beforeEach(() => {
@@ -58,9 +59,9 @@ describe('startRemoteFeedbackPoller', () => {
 		const { sessionId, shareId } = setupSession(sm)
 
 		let calls = 0
-		;(globalThis as any).fetch = async (url: any) => {
+		stubFetch((url) => {
 			calls++
-			expect(String(url)).toContain(`/shares/${shareId}/feedback`)
+			expect(url).toContain(`/shares/${shareId}/feedback`)
 			return new Response(
 				JSON.stringify({
 					entries: [{
@@ -80,10 +81,10 @@ describe('startRemoteFeedbackPoller', () => {
 				}),
 				{ status: 200 },
 			)
-		}
+		})
 
 		const broadcasted: { sessionId: string; revision: number; count: number }[] = []
-		const broadcast = (sid: string, rev: number, entries: any[]) => {
+		const broadcast = (sid: string, rev: number, entries: unknown[]) => {
 			broadcasted.push({ sessionId: sid, revision: rev, count: entries.length })
 		}
 
@@ -121,7 +122,7 @@ describe('startRemoteFeedbackPoller', () => {
 			author: { id: 'u1', name: 'Bob' },
 			annotations: [],
 		}
-		;(globalThis as any).fetch = async () => new Response(JSON.stringify({ entries: [sameEntry] }), { status: 200 })
+		stubFetch(() => new Response(JSON.stringify({ entries: [sameEntry] }), { status: 200 }))
 
 		const poller = startRemoteFeedbackPoller(sm, () => {}, '0.0.0')
 		await new Promise((r) => setTimeout(r, 200))
@@ -139,10 +140,10 @@ describe('startRemoteFeedbackPoller', () => {
 		const { sessionId, shareId } = setupSession(sm)
 
 		let calls = 0
-		;(globalThis as any).fetch = async () => {
+		stubFetch(() => {
 			calls++
 			return new Response('not found', { status: 404 })
-		}
+		})
 
 		const poller = startRemoteFeedbackPoller(sm, () => {}, '0.0.0')
 		await new Promise((r) => setTimeout(r, 200))
@@ -157,10 +158,10 @@ describe('startRemoteFeedbackPoller', () => {
 	test('does nothing when no shares exist', async () => {
 		const sm = newSessionManager()
 		let calls = 0
-		;(globalThis as any).fetch = async () => {
+		stubFetch(() => {
 			calls++
 			return new Response('', { status: 200 })
-		}
+		})
 
 		const poller = startRemoteFeedbackPoller(sm, () => {}, '0.0.0')
 		await new Promise((r) => setTimeout(r, 100))

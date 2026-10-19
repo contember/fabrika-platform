@@ -1,5 +1,5 @@
 import { useFeedback } from '#canvas/runtime'
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { clearLocalSecret, getLocalSecretStatus, MODE, storeLocalSecret } from '../clientApi'
 
 const FIELD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/

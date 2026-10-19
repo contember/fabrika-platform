@@ -328,8 +328,9 @@ async function handleUpload(shareId: string, req: Request, env: Env, origin: str
 	}
 
 	const formData = await req.formData()
-	const file = formData.get('image') as unknown as File | null
-	if (!file || typeof (file as any).arrayBuffer !== 'function') {
+	// workers-types declares `FormData.get` as `string | null`, but the runtime returns a File for file parts.
+	const file: unknown = formData.get('image')
+	if (!(file instanceof File)) {
 		return json({ error: 'No image provided' }, { status: 400 })
 	}
 	if (!file.type.startsWith('image/')) return json({ error: 'Not an image' }, { status: 400 })
