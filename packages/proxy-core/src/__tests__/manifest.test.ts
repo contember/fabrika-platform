@@ -31,6 +31,7 @@ import { createVerifyService } from '../service'
 import {
 	anonymousRow,
 	contractAppWith,
+	endpointRow,
 	FakeIam,
 	HOST,
 	installationAppWith,
@@ -390,6 +391,33 @@ describe('contract apps — the endpoint table', () => {
 		],
 	])('refuses a public-spa row with %s', (_name, row) => {
 		expect(parseProxyManifest({ apps: [{ ...app, endpoints: [...app.endpoints.filter((other) => other.id !== 'site'), row] }] })).toBeNull()
+	})
+
+	test('reads the file-response profile of a procedure, and refuses it on any other row', () => {
+		const file = endpointRow({
+			id: 'api.reports.file',
+			kind: 'query',
+			method: 'GET',
+			path: '/api/reports.file',
+			callers: ['human'],
+			requirement: { kind: 'member' },
+			admission: null,
+			response: 'file',
+		})
+		expect(parseProxyManifest({ apps: [{ ...app, endpoints: [...app.endpoints, file] }] })?.apps[0]).toMatchObject({
+			endpoints: expect.arrayContaining([file]),
+		})
+		const spa = endpointRow({
+			id: 'web.file',
+			kind: 'spa',
+			method: 'GET',
+			path: '/files/*',
+			callers: ['human'],
+			requirement: { kind: 'member' },
+			admission: null,
+			response: 'file',
+		})
+		expect(parseProxyManifest({ apps: [{ ...app, endpoints: [...app.endpoints, spa] }] })).toBeNull()
 	})
 })
 

@@ -1,4 +1,4 @@
-import { FABRIKA_HOP_HEADERS, parseEndpointHeader, rawRequestTarget } from '@fabrika/auth-core'
+import { answersFile, FABRIKA_HOP_HEADERS, parseEndpointHeader, rawRequestTarget } from '@fabrika/auth-core'
 import type { DelegationIssuer, IamGateway, ProxyLogger, VerifyService } from '@fabrika/proxy-core'
 import {
 	CLIENT_ADDRESS_HEADER,
@@ -210,7 +210,7 @@ type AnswerHeaders = (endpoint: string | null) => (headers: Headers) => void
 function contractAnswerHeaders(app: ContractProxyApp): AnswerHeaders {
 	const policy: HeaderPolicy = appHeaderPolicy(app)
 	const fileTreatment: HeaderPolicy = appFileTreatment(app)
-	const downloads = new Set(app.endpoints.filter((row) => row.kind === 'download').map((row) => row.id))
+	const downloads = new Set(app.endpoints.filter(answersFile).map((row) => row.id))
 	const withPolicy = (headers: Headers) => applyHeaderPolicy(headers, policy)
 	const withFileTreatment = (headers: Headers) => applyFileTreatment(headers, fileTreatment)
 	return (endpoint) => {

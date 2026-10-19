@@ -39,6 +39,16 @@ const DOWNLOAD = endpointRow({
 	admission: null,
 })
 const HEALTH = anonymousRow({ id: 'health', kind: 'health', method: 'GET', path: '/healthz', admission: null })
+const REPORT = endpointRow({
+	id: 'api.reports.file',
+	kind: 'query',
+	method: 'GET',
+	path: '/api/reports.file',
+	callers: ['human'],
+	requirement: { kind: 'member' },
+	admission: null,
+	response: 'file',
+})
 
 const CSP = {
 	connectSrc: ['https://api.maps.example'],
@@ -50,7 +60,7 @@ const CSP = {
 	frameSrc: [],
 }
 const OPERATIONS = 'https://operations.example.com'
-const CONTRACT = contractAppWith([ME, DOWNLOAD, HEALTH], ['/api'], { csp: CSP, operationsOrigin: OPERATIONS })
+const CONTRACT = contractAppWith([ME, DOWNLOAD, HEALTH, REPORT], ['/api'], { csp: CSP, operationsOrigin: OPERATIONS })
 const POLICY = headerPolicy(CSP, OPERATIONS)
 
 function verifyWith(iam: FakeIam, app: ProxyApp = CONTRACT) {
@@ -124,6 +134,13 @@ describe('a contract application', () => {
 		expectHeaders(response, FILE_TREATMENT)
 		expect(response.headers.get('Content-Disposition')).toBe('attachment')
 		expect(response.headers.get('Permissions-Policy')).toBeNull()
+	})
+
+	test('a denial of a procedure that answers a stored file gets the file treatment too', async () => {
+		const iam = new FakeIam({ mintToken: { ok: true, token: await signToken({ type: 'user', permissions: [] }), expiresAt: 4_102_444_800 } })
+		const response = await verifyWith(iam)(verifyRequest({ path: '/api/reports.file', cookie: '__Host-px_session=s' }))
+		expect(response.status).toBe(403)
+		expectHeaders(response, FILE_TREATMENT)
 	})
 
 	test('an allow carries no policy: it answers Caddy, never the client', async () => {

@@ -16,6 +16,7 @@
  */
 
 import {
+	answersFile,
 	API_KEY_PREFIX,
 	AUTH_CODE_PARAM,
 	FABRIKA_COOKIE_PREFIX,
@@ -448,7 +449,7 @@ function contractUpstream(
 	policy: HeaderPolicy,
 	upstream: (response: CaddyHeaderOps) => CaddyReverseProxyHandler,
 ): CaddyRoute[] {
-	const downloads = app.endpoints.filter((row) => row.kind === 'download').map((row) => `${row.id}@*`)
+	const downloads = app.endpoints.filter(answersFile).map((row) => `${row.id}@*`)
 	const download: CaddyRoute = {
 		match: [{ header: { [ENDPOINT_HEADER]: downloads } }],
 		terminal: true,
@@ -504,7 +505,7 @@ function errorRoutes(manifest: ProxyManifest): CaddyRoute[] {
 		headers: headerValues(policy),
 	})
 	const routes = manifest.apps.filter(isApplicationEntry).flatMap((app): CaddyRoute[] => {
-		const downloads = app.endpoints.filter((row) => row.kind === 'download').map((row) => `${row.id}@*`)
+		const downloads = app.endpoints.filter(answersFile).map((row) => `${row.id}@*`)
 		return [
 			...(downloads.length === 0
 				? []

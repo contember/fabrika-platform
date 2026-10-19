@@ -55,6 +55,9 @@ export function schemaFromShape(shape: SchemaShape): z.ZodType {
 			return z.nullable(schemaFromShape(shape.inner))
 		case 'union':
 			return z.union(shape.options.map(schemaFromShape))
+		case 'file':
+			// No export carries a file: the build refuses one, so a description that holds one admits nothing.
+			return z.never()
 	}
 }
 

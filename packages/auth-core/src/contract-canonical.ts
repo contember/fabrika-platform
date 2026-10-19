@@ -33,6 +33,9 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 			types: sorted(collection.types),
 			link: typeof collection.link === 'boolean' ? collection.link : sorted(collection.link),
 		})),
+		...(artifact.fileKinds === undefined
+			? {}
+			: { fileKinds: mapValues(artifact.fileKinds, (kind) => ({ ...kind, types: sorted(kind.types) })) }),
 		jobs: mapValues(artifact.jobs, (job) => ({ ...job, actions: sorted(job.actions) })),
 		exports: mapValues(artifact.exports, (declaration) => ({ ...declaration, consumers: sorted(declaration.consumers) })),
 		imports: mapValues(artifact.imports, (declaration) => ({

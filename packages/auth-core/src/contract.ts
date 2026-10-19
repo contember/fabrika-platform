@@ -25,6 +25,11 @@ export interface ContractArtifact extends EndpointTable {
 	readonly roles: Readonly<Record<string, RoleArtifact>>
 	readonly mounts: Readonly<Record<string, MountArtifact>>
 	readonly files: Readonly<Record<string, FileCollectionArtifact>>
+	/**
+	 * The file kinds (`c.files({ types, maxBytes, scan? })`): classes of stored files a table's file column holds. A kind
+	 * has no owner and no endpoint; the table that holds a file is its authority. Absent unless declared, so the digest stays.
+	 */
+	readonly fileKinds?: Readonly<Record<string, FileKindArtifact>>
 	readonly jobs: Readonly<Record<string, JobArtifact>>
 	readonly exports: Readonly<Record<string, ExportArtifact>>
 	readonly imports: Readonly<Record<string, ImportArtifact>>
@@ -156,6 +161,22 @@ interface EndpointRowBase {
 	 * declared, so every other row keeps its digest. Only an RPC procedure, a public procedure and a form may carry it.
 	 */
 	readonly crossOrigin?: CrossOriginForm
+	/**
+	 * `file`: the procedure answers a stored file (an output `file('<kind>')`), so the proxy and the application give every
+	 * answer of it, a denial included, ADR-0022's file treatment. Absent otherwise, so every other row keeps its digest.
+	 */
+	readonly response?: EndpointResponse
+}
+
+/** The answer profile of a row that answers a stored file. */
+export type EndpointResponse = 'file'
+
+/** The endpoint kinds whose row may answer a stored file: a procedure's. */
+export const FILE_RESPONSE_KINDS: readonly EndpointKind[] = ['query', 'mutation', 'public']
+
+/** Whether every answer of a row gets the file treatment: a collection's download, or a procedure that answers a file. */
+export function answersFile(row: { readonly kind: string; readonly response?: EndpointResponse }): boolean {
+	return row.kind === 'download' || row.response === 'file'
 }
 
 /** How an endpoint admits another origin: from the environment's list, or (a form or a public procedure) from any origin. */
@@ -249,6 +270,20 @@ export type SchemaShape =
 	| { readonly type: 'optional'; readonly inner: SchemaShape }
 	| { readonly type: 'nullable'; readonly inner: SchemaShape }
 	| { readonly type: 'union'; readonly options: readonly SchemaShape[] }
+	| FileShape
+
+/**
+ * A stored file of a declared kind (`file('<kind>')`). In an input it is a top-level field, optional, or a bounded
+ * array of them: a multipart part of its own beside the JSON input. As an output it is the file the procedure answers.
+ */
+export interface FileShape {
+	readonly type: 'file'
+	readonly kind: string
+}
+
+export function isFileShape(shape: OutputShape): shape is FileShape {
+	return shape.type === 'file'
+}
 
 /**
  * What a procedure answers: a JSON value of a schema, a file of rows (`attachment()` of `@fabrika/app/contract`), or a
@@ -272,7 +307,7 @@ export function isRedirectShape(shape: OutputShape): shape is RedirectShape {
 
 /** An output answered as JSON of a schema: neither a file nor a redirect. */
 export function isSchemaOutput(shape: OutputShape): shape is SchemaShape {
-	return shape.type !== 'attachment' && shape.type !== 'redirect'
+	return shape.type !== 'attachment' && shape.type !== 'redirect' && shape.type !== 'file'
 }
 
 /**
@@ -534,6 +569,14 @@ export interface FileCollectionArtifact {
 	readonly scan?: true
 }
 
+/** One file kind: the media types its files may be, the largest file, and whether each waits for a clean scan. */
+export interface FileKindArtifact {
+	readonly types: readonly string[]
+	readonly maxBytes: number
+	/** Present when every file of the kind waits `quarantined` for a clean malware verdict before it is served. */
+	readonly scan?: true
+}
+
 export interface JobArtifact {
 	readonly schedule: string
 	readonly actions: readonly string[]
@@ -670,6 +713,11 @@ export interface TablePolicyArtifact {
 	 * is updated by that action only, never by the table's update action.
 	 */
 	readonly columns: Readonly<Record<string, ColumnPolicyArtifact>>
+	/**
+	 * Column → the file kind it holds: a foreign key to `fabrika_files`, written only with a file reference. The table's
+	 * actions are the file's authority. Absent unless declared, so the digest stays.
+	 */
+	readonly files?: Readonly<Record<string, string>>
 }
 
 /** A column's own read action, its own write action, or both; an absent one is left out. */

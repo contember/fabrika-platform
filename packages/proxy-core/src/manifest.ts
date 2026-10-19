@@ -12,6 +12,7 @@ import {
 	endpointDelegation,
 	type EndpointRow,
 	EndpointTableError,
+	FILE_RESPONSE_KINDS,
 	type InstallationEndpointRow,
 	type InstallationEndpointTable,
 	isDigest,
@@ -92,9 +93,15 @@ interface ProxyEndpointExtras {
 
 /** An endpoint row as the proxy applies it: the rules without the schemas, plus the digest and the delegation. */
 export type ProxyEndpointRow =
-	| (Pick<CredentialedEndpoint, 'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin'> & ProxyEndpointExtras)
 	| (
-		& Pick<Extract<EndpointRow, { requirement: null }>, 'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin'>
+		& Pick<CredentialedEndpoint, 'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin' | 'response'>
+		& ProxyEndpointExtras
+	)
+	| (
+		& Pick<
+			Extract<EndpointRow, { requirement: null }>,
+			'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin' | 'response'
+		>
 		& {
 			digest: string
 			delegation: null
@@ -190,6 +197,7 @@ export const proxyEndpointRowSchema = z.union([
 		requirement: requirementSchema,
 		delegation: z.enum(['members', 'creates']).nullable(),
 		crossOrigin: z.literal('environment').optional(),
+		response: z.literal('file').optional(),
 	}).strict(),
 	z.object({
 		...endpointRuleFields,
@@ -198,6 +206,7 @@ export const proxyEndpointRowSchema = z.union([
 		requirement: z.null(),
 		delegation: z.null(),
 		crossOrigin: z.enum(['environment', 'any']).optional(),
+		response: z.literal('file').optional(),
 	}).strict(),
 	// A public SPA is a fixed static row: it serves GET only and admits no body.
 	z.object({
@@ -212,6 +221,9 @@ export const proxyEndpointRowSchema = z.union([
 ]).refine(
 	(row) => crossOriginAllowed(row.kind, 'crossOrigin' in row ? row.crossOrigin : undefined),
 	'this endpoint kind cannot be called cross-origin',
+).refine(
+	(row) => !('response' in row) || row.response === undefined || FILE_RESPONSE_KINDS.includes(row.kind),
+	'only a procedure answers a stored file',
 ).refine(
 	(row) => row.digest === requirementDigest(row),
 	'endpoint digest does not match its rules',
@@ -361,6 +373,7 @@ export function contractProxyTable(artifact: ContractArtifact, digest: string = 
 				path: row.path,
 				admission: row.admission,
 				...(row.crossOrigin === undefined ? {} : { crossOrigin: row.crossOrigin }),
+				...(row.response === undefined ? {} : { response: row.response }),
 			}
 			if (row.requirement === null) {
 				const anonymous = { ...rules, kind: row.kind, callers: row.callers, requirement: null, delegation: null }

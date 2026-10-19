@@ -22,6 +22,7 @@
  */
 
 import {
+	answersFile,
 	AUTH_CALLBACK_PATH,
 	compileEndpointTable,
 	DELEGATION_HEADER,
@@ -244,10 +245,13 @@ function withFileTreatment(response: Response, treatment: HeaderPolicy): Respons
 	return response
 }
 
-/** Whether the request selects a download endpoint, whose every answer gets the file treatment instead of the policy. */
+/**
+ * Whether the request selects a download endpoint or a procedure that answers a stored file, whose every answer gets
+ * the file treatment instead of the policy.
+ */
 function isDownload(resolved: ResolvedApp, forwarded: ForwardedRequest): boolean {
 	const plan = planEndpoint(resolved.table, forwarded.method, forwarded.rawPath)
-	return plan.outcome === 'endpoint' && plan.endpoint.kind === 'download'
+	return plan.outcome === 'endpoint' && answersFile(plan.endpoint)
 }
 
 /**

@@ -123,6 +123,8 @@ function schemaSource(shape: SchemaShape, where: string): string {
 			return `z.${shape.type}(${schemaSource(shape.inner, where)})`
 		case 'union':
 			return `z.union([${shape.options.map((option) => schemaSource(option, where)).join(', ')}])`
+		case 'file':
+			throw new ContractError([`procedure '${where}': an export carries no file`])
 	}
 }
 

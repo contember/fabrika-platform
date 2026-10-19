@@ -757,6 +757,8 @@ const ADMITS_NO_MORE: { readonly [Field in keyof EndpointRow]-?: (after: Endpoin
 	},
 	admission: (after, before) => after.admission === null || canonicalJson(after.admission) === canonicalJson(before.admission),
 	crossOrigin: (after, before) => crossOriginRank(after.crossOrigin) <= crossOriginRank(before.crossOrigin),
+	// The file treatment the proxy gives every answer of a file procedure, denials included.
+	response: (after, before) => after.response === before.response,
 	// The rows that answer the removed row's paths now were selected by its method; the paths are the removed row's.
 	method: (after, before) => after.method === before.method,
 	path: () => true,
