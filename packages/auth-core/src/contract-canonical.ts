@@ -67,6 +67,7 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 		...(artifact.mail === undefined ? {} : { mail: artifact.mail }),
 		...(artifact.members === undefined ? {} : { members: artifact.members }),
 		...(artifact.directory === undefined ? {} : { directory: artifact.directory }),
+		...(artifact.procedures === undefined ? {} : { procedures: artifact.procedures }),
 	}
 }
 
@@ -91,7 +92,7 @@ function canonicalRole(role: RoleArtifact): RoleArtifact {
 function canonicalMount(mount: MountArtifact): MountArtifact {
 	switch (mount.kind) {
 		case 'rpc':
-			return { ...mount, callers: sortedTuple(mount.callers) }
+			return { ...mount, callers: sorted(mount.callers) }
 		case 'link':
 			return { ...mount, grants: sorted(mount.grants) }
 		case 'webhook':

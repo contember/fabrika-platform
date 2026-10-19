@@ -35,6 +35,13 @@ export interface AppPrincipal<Id extends string = string> {
 
 export type Principal = UserPrincipal | ServicePrincipal | LinkHolder | AppPrincipal
 
+/** Whoever called a public procedure: nobody the platform knows. The handler runs as the endpoint's own workload. */
+export interface PublicPrincipal {
+	readonly kind: 'public'
+	/** The endpoint id, which is the workload's name: `<mount>.<group>.<procedure>`. */
+	readonly endpoint: string
+}
+
 export type PrincipalOf<C> = C extends 'human' ? UserPrincipal
 	: C extends 'machine' ? ServicePrincipal
 	: C extends 'link' ? LinkHolder

@@ -73,6 +73,7 @@ import { applicationPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
 import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration } from './invocation'
 import type { ReadDirectory } from './membership'
+import { type AdmissionOptions, InFlightShare, type ProcedureAdmission, procedureAdmission, publicShareOf } from './public'
 import { bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
 import { type WorkloadCredential, workloadCredentials, workloadSite, type WorkloadTokenSource } from './workload'
 
@@ -145,7 +146,18 @@ export interface BootOptions {
 	 * `FABRIKA_EMAIL_*` nor `serve`'s `mail`.
 	 */
 	readonly mailStandIn?: MailStandIn
+	/** The connections the application's pool holds: a quarter of them, at least one, is the public procedures' share. */
+	readonly connections?: number
+	/**
+	 * `'vouched'` where the proxy's `X-Fabrika-Client-Ip` is the visitor's own address, so `ctx.client.ip` reads it. A
+	 * runtime behind a balancer whose range the platform does not trust (Zerops, until it does) leaves it unset: the ip is
+	 * then `null`.
+	 */
+	readonly clientAddress?: 'vouched'
 }
+
+/** The pool size a runtime adapter that names none is assumed to have: the Bun adapter's default. */
+const DEFAULT_CONNECTIONS = 10
 
 export interface ContractApp {
 	/** `exec` keeps a failure's report to Operations alive past the response (a Worker's `waitUntil`). */
@@ -506,6 +518,12 @@ function asksIam(served: ServedEndpoint): boolean {
 
 /** A form and a webhook write the framework's own tables, which only `@fabrika/db`'s `scoped(tables)` reaches. */
 function frameworkProblems(artifact: ContractArtifact, framework: FrameworkTables | null, problems: string[]): void {
+	const counted = Object.entries(artifact.procedures ?? {}).find(([, rules]) => Object.values(rules.rate).some((bucket) => bucket !== null))
+	if (counted !== undefined && framework === null) {
+		problems.push(
+			`procedure '${counted[0]}' counts its calls in buckets, which live in @fabrika/db: pass serve(contract, { database: scoped(tables) })`,
+		)
+	}
 	for (const [name, mount] of Object.entries(artifact.mounts)) {
 		if (mount.kind !== 'form' && mount.kind !== 'webhook') {
 			continue
@@ -583,6 +601,58 @@ function formAdmission(
 		challenge,
 		repeatableToken: challenge === null ? null : (options.repeatableChallengeToken ?? null),
 	})
+}
+
+/** A procedure's admission, as the field its served endpoint carries; none after a problem. */
+function admissionOf(id: string, artifact: ContractArtifact, options: BootOptions, problems: string[]): { readonly admission?: ProcedureAdmission } {
+	const admission = procedureAdmission(id, artifact, admissionOptions(options), problems)
+	return admission === null ? {} : { admission }
+}
+
+function admissionOptions(options: BootOptions): AdmissionOptions {
+	return {
+		application: options.environment.application,
+		...(options.challengeFetch === undefined ? {} : { challengeFetch: options.challengeFetch }),
+		...(options.repeatableChallengeToken === undefined ? {} : { repeatableChallengeToken: options.repeatableChallengeToken }),
+	}
+}
+
+/**
+ * A public procedure: its staged-kit handler, its key, and its admission. Without the key's credential (no token
+ * exchange, or the variable unset) `workloadCredentials` already reported why.
+ */
+function publicEndpoint(
+	row: EndpointRow,
+	procedure: ProcedureDeclaration<Schema, unknown>,
+	bound: BoundHandler | null,
+	artifact: ContractArtifact,
+	workloads: ReadonlyMap<string, WorkloadCredential>,
+	options: BootOptions,
+	problems: string[],
+): ServedEndpoint | null {
+	const where = `public procedure '${row.id}'`
+	const site = bound === null ? undefined : servedSite(procedure.type, bound)
+	if (bound === null || site === undefined) {
+		problems.push(`${where} has no handler of the staged kit; declare it with .handle(…) beside its declaration`)
+		return null
+	}
+	const actions = artifact.declared?.[row.id]?.actions ?? []
+	const credential = workloads.get(workloadSite('public', row.id))
+	const admission = procedureAdmission(row.id, artifact, admissionOptions(options), problems)
+	if (credential === undefined || admission === null) {
+		return null
+	}
+	return {
+		kind: 'public',
+		row,
+		input: procedure.input,
+		output: procedure.output,
+		handler: bound.handler,
+		actions,
+		credential,
+		admission,
+		site,
+	}
 }
 
 /** `frameworkProblems` refused a webhook without the framework tables, so this answers only after a bug. */
@@ -724,6 +794,13 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 				declared.add(id)
 				const row = rows.get(id)
 				const bound = boundHandler(path.reduce<unknown>(childAt, handlers), id, `procedure '${id}'`, procedure.type, artifact, problems)
+				if (row?.kind === 'public') {
+					const served = publicEndpoint(row, procedure, bound, artifact, workloads, options, problems)
+					if (served !== null) {
+						endpoints.set(id, served)
+					}
+					continue
+				}
 				if (!isCredentialed(row)) {
 					problems.push(`procedure '${id}' has no endpoint row`)
 				} else if (bound === null) {
@@ -739,6 +816,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 						connect: siteConnect(connect.get(id), bound.declaration),
 						site: servedSite(procedure.type, bound),
 						...(bound.declaration?.then == null ? {} : { then: bound.declaration.then }),
+						...admissionOf(id, artifact, options, problems),
 					})
 				}
 			}
@@ -830,6 +908,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 					facilities: NO_FACILITIES,
 					readOnly: true,
 					site: servedSite('query', bound),
+					...admissionOf(id, artifact, options, problems),
 				})
 			}
 		}
@@ -844,7 +923,9 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	if (data === null && kitOriginOf(app.contract) === 'tableless') {
 		servedWithoutData(endpoints, problems)
 	}
-	const site = [...endpoints.values()].find((served) => (served.kind === 'procedure' || served.kind === 'webhook') && served.site !== undefined)
+	const site = [...endpoints.values()].find((served) =>
+		served.kind === 'public' || ((served.kind === 'procedure' || served.kind === 'webhook') && served.site !== undefined)
+	)
 	if (site !== undefined && data === null) {
 		problems.push(`'${site.row.id}' reaches data through ctx.db, which runs on @fabrika/db: pass serve(contract, { database: scoped(tables) })`)
 	}
@@ -879,6 +960,8 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		failures: new FailureReports(reporterFor('fabrika.requests')),
 		kick: jobs.kick,
 		actions: Object.freeze(Object.keys(artifact.actions).sort()),
+		publicShare: new InFlightShare(publicShareOf(options.connections ?? DEFAULT_CONNECTIONS)),
+		clientVouched: options.clientAddress === 'vouched',
 	})
 	return Object.freeze({
 		fetch: (request: Request, exec?: RequestExecutionContext) => runtime.fetch(request, exec),

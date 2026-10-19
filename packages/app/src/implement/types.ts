@@ -12,15 +12,26 @@ import type { LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } fro
 import type { AppPrincipal, LinkHolder, PrincipalOf, ServicePrincipal } from './principal'
 import type { WebhookDelivery, WebhookPrincipal } from './webhook'
 
-/** What every handler gets: who called, this request's id, and the signal that ends it. */
+/** What every handler gets: who called, this request's id, the client the proxy saw, and the signal that ends it. */
 export interface RequestContext<P> {
 	readonly principal: P
 	readonly requestId: string
 	/**
-	 * Aborts when the client leaves or the request outlives `REQUEST_BUDGET_MS`; its transaction then rolls back. Pass
-	 * it to every outbound call, so the call stops with the request.
+	 * Aborts when the client leaves or the request outlives its time limit (`limits.timeoutMs`, `REQUEST_BUDGET_MS` by
+	 * default); its transaction then rolls back. Pass it to every outbound call, so the call stops with the request.
 	 */
 	readonly signal: AbortSignal
+	/** The client the proxy saw. Information to record, never a check. */
+	readonly client: RequestClient
+}
+
+/**
+ * The client of a request: its address as the proxy saw it, `null` where the platform cannot vouch for it (behind a
+ * balancer whose range it does not trust); its `User-Agent`, cut to `MAX_USER_AGENT_LENGTH`, `null` when it sends none.
+ */
+export interface RequestClient {
+	readonly ip: string | null
+	readonly userAgent: string | null
 }
 
 /** The capability an access form hands. `{ member: true }` hands none. */

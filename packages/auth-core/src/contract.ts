@@ -56,6 +56,37 @@ export interface ContractArtifact extends EndpointTable {
 	readonly members?: { readonly manage: string; readonly list: string }
 	/** `labels`: the application's directory shows labels to `members.list` holders. Absent unless declared, so digests stay. */
 	readonly directory?: 'labels'
+	/**
+	 * What each procedure of the staged kit admits and how long it runs, by endpoint id, with every default applied: the
+	 * rules the application applies itself, beside the row the proxy applies. Absent for a contract with no such
+	 * procedure (a `defineContract` one, an older release's), so its digest stays.
+	 */
+	readonly procedures?: Readonly<Record<string, ProcedureArtifact>>
+}
+
+/**
+ * One procedure's own admission and time limit, effective values only. The body limit and codec are the row's
+ * `admission`, the origin rule its `crossOrigin`.
+ */
+export interface ProcedureArtifact {
+	readonly rate: AdmissionRate
+	/** The challenge the framework verifies before the handler; a public procedure only. */
+	readonly challenge: FormChallenge | null
+	/** How long the handler may run after the last body byte, in ms. */
+	readonly timeoutMs: number
+}
+
+/**
+ * A procedure's buckets, per minute and shared by every instance; `null` is no bucket. `perClient` counts by the client
+ * address (public only), `perCaller` by the principal or link key (credentialed and link only), `perEndpoint` every
+ * call. Every bucket is charged before the body is read and stays charged whatever the handler does.
+ */
+export interface AdmissionRate {
+	readonly perClient: number | null
+	readonly perCaller: number | null
+	readonly perEndpoint: number | null
+	/** The bytes the procedure's file fields may write per hour, all calls together. */
+	readonly bytesPerHour: number | null
 }
 
 // ── The endpoint table ──────────────────────────────────────────────────────────────────────────
@@ -89,9 +120,11 @@ export type CredentialedEndpointKind = 'query' | 'mutation' | 'spa' | 'upload' |
 
 /**
  * Fixed anonymous kinds: no caller, no requirement, no token. `link-spa` is the shell of a link mount's SPA;
- * `public-spa` is an SPA anyone opens (`access: { public: true }`).
+ * `public-spa` is an SPA anyone opens (`access: { public: true }`); `public` is a procedure anyone calls, whose handler
+ * runs as the endpoint's own workload. A proxy that does not know `public` refuses the manifest that holds one, so no
+ * proxy serves a public procedure without its admission rules.
  */
-export type AnonymousEndpointKind = 'health' | 'form' | 'webhook' | 'link-spa' | 'public-spa'
+export type AnonymousEndpointKind = 'health' | 'form' | 'webhook' | 'link-spa' | 'public-spa' | 'public'
 
 export type EndpointKind = CredentialedEndpointKind | AnonymousEndpointKind
 
@@ -117,18 +150,18 @@ interface EndpointRowBase {
 	readonly output: OutputShape | null
 	/**
 	 * Whether a page on another origin may call the endpoint (ADR-0022 "Cross-origin endpoints"): `environment` from
-	 * the origins its environment lists, `any` (a form only) from every origin. Absent unless declared, so every other
-	 * row keeps its digest. Only an RPC procedure and a form may carry it.
+	 * the origins its environment lists, `any` (a form or a public procedure only) from every origin. Absent unless
+	 * declared, so every other row keeps its digest. Only an RPC procedure, a public procedure and a form may carry it.
 	 */
 	readonly crossOrigin?: CrossOriginForm
 }
 
-/** How an endpoint admits another origin: from the environment's list, or (a form only) from any origin. */
+/** How an endpoint admits another origin: from the environment's list, or (a form or a public procedure) from any origin. */
 export type CrossOriginForm = 'environment' | 'any'
 
-/** The endpoint kinds that may declare `crossOrigin`, and the one of them that may admit any origin. */
-export const CROSS_ORIGIN_KINDS: readonly EndpointKind[] = ['query', 'mutation', 'form']
-export const ANY_ORIGIN_KINDS: readonly EndpointKind[] = ['form']
+/** The endpoint kinds that may declare `crossOrigin`, and those of them that may admit any origin. */
+export const CROSS_ORIGIN_KINDS: readonly EndpointKind[] = ['query', 'mutation', 'form', 'public']
+export const ANY_ORIGIN_KINDS: readonly EndpointKind[] = ['form', 'public']
 
 export interface CredentialedEndpoint extends EndpointRowBase {
 	readonly kind: CredentialedEndpointKind
@@ -325,7 +358,8 @@ export type MountArtifact =
 export interface RpcMountArtifact {
 	readonly kind: 'rpc'
 	readonly prefix: string
-	readonly callers: readonly [RpcCaller, ...RpcCaller[]]
+	/** The callers of its credentialed procedures; none when every procedure it mounts is public. */
+	readonly callers: readonly RpcCaller[]
 }
 
 export interface LinkMountArtifact {
@@ -380,6 +414,9 @@ export interface FormMountArtifact {
  * refuses such a form's request from an origin its row does not admit (ADR-0061).
  */
 export const FORM_MULTIPART_TYPE = 'multipart/form-data'
+
+/** The media type of a public procedure that declares `http: { body: 'urlencoded' }`: flat scalar fields, as a native form posts them. */
+export const FORM_URLENCODED_TYPE = 'application/x-www-form-urlencoded'
 
 /** One file field of a form: the collection the file lands in, and whether a submission must carry it. */
 export interface FormFileArtifact {

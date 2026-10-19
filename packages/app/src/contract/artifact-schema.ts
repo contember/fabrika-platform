@@ -25,7 +25,7 @@ import {
 	type TupleShape,
 } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
-import { FORM_LIMITS } from './defaults'
+import { FORM_LIMITS, PROCEDURE_LIMITS } from './defaults'
 
 const name = z.string().min(1)
 const nullableName = name.nullable()
@@ -159,6 +159,17 @@ const endpointRow: z.ZodType<EndpointRow> = z.union([
 		requirement: z.null(),
 		crossOrigin: z.enum(['environment', 'any']).optional(),
 	}),
+	// A public procedure is a mount's procedure anyone calls: it admits a body and answers its output.
+	z.strictObject({
+		...rowBase,
+		kind: z.literal('public'),
+		source: z.strictObject({ kind: z.literal('mount'), name }),
+		admission: rowBase.admission.unwrap(),
+		output: outputShapeSchema,
+		callers: z.tuple([]),
+		requirement: z.null(),
+		crossOrigin: z.enum(['environment', 'any']).optional(),
+	}),
 	// A public SPA is a fixed static row: GET only, no body, no schemas.
 	z.strictObject({
 		...rowBase,
@@ -171,7 +182,7 @@ const endpointRow: z.ZodType<EndpointRow> = z.union([
 		requirement: z.null(),
 	}),
 ]).refine(
-	// Only an RPC procedure and a form open to another origin, and only a form to any (ADR-0022).
+	// Only an RPC procedure, a public procedure and a form open to another origin, and only the anonymous two to any (ADR-0022).
 	(row) =>
 		!('crossOrigin' in row) || row.crossOrigin === undefined
 		|| (CROSS_ORIGIN_KINDS.includes(row.kind) && (row.crossOrigin !== 'any' || ANY_ORIGIN_KINDS.includes(row.kind))),
@@ -185,9 +196,11 @@ const scopeBinding = z.discriminatedUnion('kind', [
 
 const formRate = z.int().positive().max(FORM_LIMITS.maxPerMinute)
 const applicationVariable = z.string().regex(/^[A-Z][A-Z0-9_]*$/)
+const bucket = z.int().positive().max(PROCEDURE_LIMITS.maxPerMinute).nullable()
+const challenge = z.strictObject({ provider: z.literal('turnstile'), secret: applicationVariable, siteKey: applicationVariable.optional() })
 
 const mount = z.discriminatedUnion('kind', [
-	z.strictObject({ kind: z.literal('rpc'), prefix: name, callers: z.tuple([rpcCaller], rpcCaller) }),
+	z.strictObject({ kind: z.literal('rpc'), prefix: name, callers: z.array(rpcCaller) }),
 	z.strictObject({
 		kind: z.literal('link'),
 		prefix: name,
@@ -205,7 +218,7 @@ const mount = z.discriminatedUnion('kind', [
 		appendTo: name,
 		rate: z.strictObject({ perClient: formRate.optional(), perForm: formRate.optional(), bytesPerHour: z.int().positive().optional() }).optional(),
 		honeypot: name.optional(),
-		challenge: z.strictObject({ provider: z.literal('turnstile'), secret: applicationVariable, siteKey: applicationVariable.optional() }).optional(),
+		challenge: challenge.optional(),
 		then: name.optional(),
 		files: z.record(name, z.strictObject({ collection: name, required: z.boolean() })).optional(),
 	}),
@@ -344,6 +357,22 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		.optional(),
 	members: z.strictObject({ manage: action, list: action }).optional(),
 	directory: z.literal('labels').optional(),
+	procedures: record(z.strictObject({
+		rate: z.strictObject({
+			perClient: bucket,
+			perCaller: bucket,
+			perEndpoint: bucket,
+			bytesPerHour: z.int().positive().max(PROCEDURE_LIMITS.maxBytesPerHour).nullable(),
+		}),
+		challenge: challenge.nullable(),
+		timeoutMs: z.int().positive().max(PROCEDURE_LIMITS.maxTimeoutMs),
+	})).optional(),
+}).superRefine((artifact, context) => {
+	for (const row of artifact.endpoints) {
+		if (row.kind === 'public' && artifact.declared?.[row.id]?.actions === undefined) {
+			context.addIssue({ code: 'custom', path: ['declared', row.id], message: 'a public procedure declares its workload actions' })
+		}
+	}
 })
 
 function mailLocales(kind: MessageKind) {

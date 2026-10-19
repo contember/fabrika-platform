@@ -36,6 +36,8 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
 import {
 	BROWSER_CONFIG_FILE,
+	challengeAction,
+	FORM_CHALLENGE_FIELD,
 	FORM_FILE_LIMITS,
 	FORM_INPUT_PART,
 	FORM_MULTIPART_TYPE,
@@ -61,7 +63,16 @@ import { abortedBody, bootstrapPath, bootstrapResponse, githubAccounts, readBoun
 import { attachmentResponse } from './attachment'
 import { handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
-import { CapabilityLimitError, type CapabilityMint, type Ref, RequestFrame, runInRequest, type Within } from './capability'
+import {
+	type AppCapability,
+	CapabilityLimitError,
+	type CapabilityMint,
+	CapabilityRefusedError,
+	type Ref,
+	RequestFrame,
+	runInRequest,
+	type Within,
+} from './capability'
 import { CHALLENGE_LIMITS, type ChallengeVerifier } from './challenge'
 import { connectContext, type ImportWire } from './connect'
 import type { FailureReports } from './failures'
@@ -83,6 +94,7 @@ import {
 import { multipartBoundary, MultipartError, multipartParts, type MultipartReader } from './multipart'
 import { pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
+import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
 import { deliveryKey, WEBHOOK_REPLAY_RETENTION_MS, type WebhookPrincipal, webhookSubject } from './webhook'
 import type { WorkloadCredential } from './workload'
 
@@ -133,6 +145,8 @@ export type ServedEndpoint =
 		readonly site?: ServedSite
 		/** The cron job this mutation kicks once its transaction committed; absent without `then`. */
 		readonly then?: string
+		/** Its buckets and time limit; without them (a generated endpoint) no bucket and the request budget. */
+		readonly admission?: ProcedureAdmission
 	}
 	/** What an export's consumer vendors, behind the export's own callers. */
 	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
@@ -163,6 +177,19 @@ export type ServedEndpoint =
 		readonly admission: FormAdmission
 		/** The job each accepted submission kicks once its row committed; `null` without `then`. */
 		readonly then: string | null
+	}
+	| {
+		/** A procedure anyone calls: its handler runs as the endpoint's own workload, holding `actions` only. */
+		readonly kind: 'public'
+		readonly row: EndpointRow
+		readonly input: Schema | null
+		readonly output: Schema
+		readonly handler: (args: { readonly input: Readonly<Record<string, unknown>>; readonly ctx: object }) => unknown
+		readonly actions: readonly string[]
+		/** The endpoint's key: `ctx.app` mints only what IAM signs for it. */
+		readonly credential: WorkloadCredential
+		readonly admission: ProcedureAdmission
+		readonly site: ServedSite
 	}
 	| {
 		readonly kind: 'webhook'
@@ -237,6 +264,10 @@ export interface RuntimeParts {
 	readonly kick: (job: string) => Promise<void>
 	/** The contract's actions, sorted: what a caller document lists a pattern grant as. */
 	readonly actions: readonly string[]
+	/** The connections all public procedures of this instance hold at once, at most. */
+	readonly publicShare: InFlightShare
+	/** Whether the proxy's `X-Fabrika-Client-Ip` is the visitor's, so `ctx.client.ip` reads it. */
+	readonly clientVouched: boolean
 }
 
 interface Caller {
@@ -340,6 +371,8 @@ export class ContractRuntime {
 					return await this.#file(served, request, plan.params)
 				case 'form':
 					return await this.#form(served, request, exec)
+				case 'public':
+					return await this.#public(served, request)
 				case 'webhook':
 					return await this.#webhook(served, request, plan.params)
 				case 'description':
@@ -480,11 +513,14 @@ export class ContractRuntime {
 		exec: RequestExecutionContext | undefined,
 	): Promise<Response> {
 		const caller = await this.#authorize(served.row, request)
+		const admission = served.admission ?? DEFAULT_ADMISSION
+		await this.#admit(served.row.id, admission, request, caller.subject)
 		const input = await readInput(served, request)
 		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.readOnly === true, endpoint: served.row.id })
 		const site = served.site
 		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), site.kind === 'query' || served.readOnly === true)
-		const signal = handlerSignal(request)
+		// The handler's time starts after the last body byte, so a slow upload does not eat it.
+		const signal = handlerSignal(request, admission.timeoutMs)
 		try {
 			let result: unknown
 			try {
@@ -495,6 +531,7 @@ export class ContractRuntime {
 						principal: caller.principal,
 						requestId: frame.id,
 						signal,
+						client: requestClient(request, this.#parts.clientVouched),
 						...access.context,
 						...this.#facilities(served.facilities, served.row, membership, access.context['target'], {
 							credential: caller.token,
@@ -977,7 +1014,14 @@ export class ContractRuntime {
 	 * The token verifies for this host and this form, and was not accepted before unless it is the `repeatable` one: a
 	 * failure is 400, an unreachable provider 503.
 	 */
-	async #challenge(form: string, verifier: ChallengeVerifier, token: string | null, request: Request, repeatable: string | null): Promise<void> {
+	async #challenge(
+		form: string,
+		verifier: ChallengeVerifier,
+		token: string | null,
+		request: Request,
+		repeatable: string | null,
+		refusal: 400 | 403 = 400,
+	): Promise<void> {
 		const outcome = token === null ? 'failed' : await verifier.verify({ token, hostname: new URL(request.url).hostname, action: form })
 		if (outcome === 'unavailable') {
 			throw new ServerFault('challenge_unavailable', `the ${verifier.provider} challenge of '${form}' could not be verified`, 503)
@@ -989,7 +1033,107 @@ export class ContractRuntime {
 			|| (token !== repeatable
 				&& !(await this.#framework().forms.recordChallenge(form, sha256Hex(token), CHALLENGE_LIMITS.maxAgeMs + CHALLENGE_LIMITS.maxSkewMs)))
 		if (refused) {
-			throw new HttpError(400, 'challenge_failed', 'The challenge did not verify; solve it again')
+			throw new HttpError(refusal, 'challenge_failed', 'The challenge did not verify; solve it again')
+		}
+	}
+
+	/**
+	 * A public procedure, in the order of the idea's public request: the in-flight share (503), then every bucket in the
+	 * order of `bucketsOf` (429), each charged before the body is read and kept whatever follows; the bounded body and the
+	 * strict input (413, 400); the workload token, before a challenge spends its token (503); the challenge (403); then
+	 * the handler in one transaction, the output and the commit. The handler's time starts after the last body byte.
+	 */
+	async #public(served: Extract<ServedEndpoint, { kind: 'public' }>, request: Request): Promise<Response> {
+		admitContentType(served.row, request)
+		const release = this.#parts.publicShare.enter()
+		if (release === null) {
+			throw new HttpError(503, 'public_share_full', 'Too many anonymous requests at once; try again shortly')
+		}
+		try {
+			const { admission } = served
+			await this.#admit(served.row.id, admission, request, null)
+			const input = await readInput({ row: served.row, input: served.input }, request)
+			const authority = await served.credential.authority()
+			if (!authority.ok) {
+				throw new ServerFault('workload_unauthorized', `the key of public procedure '${served.row.id}' gives it no authority: ${authority.reason}`, 503)
+			}
+			if (admission.challenge !== null) {
+				const token = input[FORM_CHALLENGE_FIELD]
+				await this.#challenge(
+					challengeAction(served.row.id),
+					admission.challenge,
+					typeof token === 'string' ? token : null,
+					request,
+					admission.repeatableToken,
+					403,
+				)
+			}
+			return await this.#publicInvocation(served, request, input, authority.perms)
+		} finally {
+			release()
+		}
+	}
+
+	/**
+	 * Takes one from each bucket of the endpoint, in order, before the body is read; a full one is a 429, and a take
+	 * stays taken whatever the request does next. `caller` is the principal a `perCaller` bucket counts.
+	 */
+	async #admit(endpoint: string, admission: ProcedureAdmission, request: Request, caller: string | null): Promise<void> {
+		for (const { bucket, limit } of bucketsOf(admission.rate, request, caller)) {
+			if (!(await this.#framework().forms.take(endpoint, bucket, limit))) {
+				throw new HttpError(429, 'rate_limited', `'${endpoint}' admits no more calls this minute; try again later`)
+			}
+		}
+	}
+
+	async #publicInvocation(
+		served: Extract<ServedEndpoint, { kind: 'public' }>,
+		request: Request,
+		input: Readonly<Record<string, unknown>>,
+		perms: readonly PermissionEntry[],
+	): Promise<Response> {
+		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.site.kind === 'query', endpoint: served.row.id })
+		const invocation = new Invocation(frame, this.#data(), served.site.kind === 'query')
+		const signal = handlerSignal(request, served.admission.timeoutMs)
+		const subject = publicSubject(served.row.id)
+		const app = (action: string): AppCapability<string> => {
+			if (frame.ended) {
+				throw new CapabilityRefusedError('ended', `request ${frame.id} has ended; it mints no capability`)
+			}
+			if (!served.actions.includes(action)) {
+				throw new CapabilityRefusedError('undeclared_action', `public procedure '${served.row.id}' does not declare this action`)
+			}
+			if (!permits([...perms], action)) {
+				throw new CapabilityRefusedError('undeclared_action', `the token IAM signed for the key of '${served.row.id}' does not carry this action`)
+			}
+			return this.#parts.mint.app(frame, action, subject)
+		}
+		try {
+			let result: unknown
+			try {
+				result = await runInRequest(frame, async () => {
+					const handles = invocation.handles(served.site.kind, served.site.declaration, subject, 'public')
+					const ctx = Object.freeze({
+						principal: Object.freeze({ kind: 'public', endpoint: served.row.id }),
+						requestId: frame.id,
+						signal,
+						client: requestClient(request, this.#parts.clientVouched),
+						app,
+						db: Object.freeze({ app: (action: string) => handles.app(app(action)) }),
+					})
+					return await served.handler({ input, ctx })
+				})
+			} finally {
+				frame.end()
+			}
+			const output = z.safeParse(served.output, projectSchema(served.row.id, served.output, result))
+			if (!output.success) {
+				throw new ServerFault('output_refused', `'${served.row.id}' returned a value its output schema refuses`)
+			}
+			await invocation.commit(signal)
+			return jsonResponse({ result: output.data }, 200)
+		} finally {
+			await invocation.rollback()
 		}
 	}
 
@@ -1063,7 +1207,8 @@ export class ContractRuntime {
 							sql: site.sql === null ? undeclaredSql(served.row.id, 'mutation') : invocation.sql(site.sql),
 						}
 					const signal = handlerSignal(request)
-					await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, signal, refs, delivery, app, ...data }) })
+					const client = requestClient(request, this.#parts.clientVouched)
+					await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, signal, client, refs, delivery, app, ...data }) })
 				})
 			} finally {
 				frame.end()
@@ -1131,14 +1276,23 @@ function holdsOnChain(perms: PermissionEntry[], action: string, dimension: strin
 }
 
 function projectOutput(served: Extract<ServedEndpoint, { kind: 'procedure' }>, result: unknown): unknown {
+	return projectSchema(served.row.id, served.output, result)
+}
+
+function projectSchema(endpoint: string, output: Schema, result: unknown): unknown {
 	try {
-		return project(served.output, result)
+		return project(output, result)
 	} catch (error) {
 		if (error instanceof ProjectionRefusedError) {
-			throw new ServerFault('output_refused', `'${served.row.id}' returned a value no branch of its output union accepts`)
+			throw new ServerFault('output_refused', `'${endpoint}' returned a value no branch of its output union accepts`)
 		}
 		throw error
 	}
+}
+
+/** The principal a public procedure's capabilities are granted to: its workload, never a visitor. */
+function publicSubject(endpoint: string): string {
+	return `public:${endpoint}`
 }
 
 /**
@@ -1274,10 +1428,11 @@ function nulAt(value: unknown, path: readonly string[]): readonly string[] | nul
 
 /** The strictly parsed input; a procedure without input takes an empty body or `{}`. */
 async function readInput(
-	served: { readonly row: CredentialedEndpoint; readonly input: Schema | null },
+	served: { readonly row: EndpointRow; readonly input: Schema | null },
 	request: Request,
 ): Promise<Readonly<Record<string, unknown>>> {
-	const text = await request.text()
+	const limit = served.row.admission?.maxBytes ?? null
+	const text = limit === null ? await request.text() : new TextDecoder().decode(await readBoundedBody(request, limit))
 	let body: unknown = {}
 	if (text.trim() !== '') {
 		try {

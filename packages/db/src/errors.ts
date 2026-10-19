@@ -58,6 +58,7 @@ export const QUERY_REFUSALS = {
 	file_scan: "a scan operation on a file collection without scan: true, or a scan verdict outside the scan job's lease",
 	claim_site: 'claim leases rows in a transaction of its own: a job calls it on ctx.db, never inside ctx.transaction or a request',
 	on_conflict: "an insert's onConflict names no column of the table, a column the insert leaves empty, or another action",
+	public_reach: "a public procedure updates, removes, locks or claims no row, and an insert's conflict writes nothing",
 } as const
 
 export type QueryRefusal = keyof typeof QUERY_REFUSALS

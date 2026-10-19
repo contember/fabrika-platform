@@ -27,6 +27,7 @@ import {
 	callerOf,
 	type CompiledEndpointTable,
 	FORM_MULTIPART_TYPE,
+	FORM_URLENCODED_TYPE,
 	formatEndpointHeader,
 	planEndpoint,
 	satisfies,
@@ -661,18 +662,33 @@ function withBearerChallenge(denial: Denial, oauth: OAuthBinding | null): Denial
 	return { ...denial, challenge: denial.status === 401 ? { ...challenge, error: 'invalid_token' } : challenge }
 }
 
+/** The media types a browser sends from any page without a CORS preflight, which therefore carry no origin check of their own. */
+const PREFLIGHTLESS_TYPES: readonly string[] = [FORM_MULTIPART_TYPE, FORM_URLENCODED_TYPE]
+
 /**
- * A multipart form admits a browser's request only from the application's own origin or one the row admits (ADR-0022
- * "Cross-origin endpoints"). A page on any origin sends `multipart/form-data` without a preflight, so the proxy refuses
- * at the request what it refuses at the preflight of a JSON form. A request without `Origin` is no browser's
- * cross-origin request.
+ * An anonymous body a browser sends without a preflight is admitted only from the application's own origin or one the
+ * row admits (ADR-0022 "Cross-origin endpoints", the browser admission matrix): a multipart form, and a public
+ * procedure's multipart or urlencoded body. The proxy refuses at the request what it refuses at the preflight of a JSON
+ * body. A request without `Origin` is no browser's cross-origin request; `Origin: null` names no origin and is refused.
  */
 function admitFormOrigin(app: ProxyApp, row: ManifestEndpointRow, request: ForwardedRequest, crossOrigin: string | null): Denial | null {
 	const origin = request.headers.get(ORIGIN_HEADER)
-	if (row.kind !== 'form' || origin === null || crossOrigin !== null || !(row.admission?.contentTypes.includes(FORM_MULTIPART_TYPE) ?? false)) {
+	if (origin === null || crossOrigin !== null || !preflightless(row, request.headers)) {
 		return null
 	}
 	return origin === `${app.scheme}://${request.url.host}` ? null : { outcome: 'deny', status: 403, reason: 'cross_origin' }
+}
+
+/** A form that takes files (whatever this request sends), or a public procedure's request of a preflightless type. */
+function preflightless(row: ManifestEndpointRow, headers: Headers): boolean {
+	if (row.kind === 'form') {
+		return row.admission?.contentTypes.includes(FORM_MULTIPART_TYPE) ?? false
+	}
+	return row.kind === 'public' && PREFLIGHTLESS_TYPES.includes(mediaTypeOf(headers))
+}
+
+function mediaTypeOf(headers: Headers): string {
+	return headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() ?? ''
 }
 
 /** An endpoint that admits a body admits only its declared media types (ADR-0022 rule 3, admission). */
@@ -680,8 +696,7 @@ function admitBody(row: ManifestEndpointRow, headers: Headers): Denial | null {
 	if (row.admission === null) {
 		return null
 	}
-	const type = headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() ?? ''
-	return row.admission.contentTypes.includes(type) ? null : { outcome: 'deny', status: 400, reason: 'content_type' }
+	return row.admission.contentTypes.includes(mediaTypeOf(headers)) ? null : { outcome: 'deny', status: 400, reason: 'content_type' }
 }
 
 /**

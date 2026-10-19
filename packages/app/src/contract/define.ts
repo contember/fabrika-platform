@@ -179,7 +179,10 @@ export interface AppAccess<A extends string> {
 export interface LinkAccess<A extends string> {
 	readonly action: A
 }
-/** An SPA anyone opens, with no session; the page reaches only the anonymous endpoints. */
+/**
+ * Anyone opens it, with no session: an SPA whose page reaches only the anonymous endpoints, or a procedure whose
+ * handler runs as its own workload, holding the `actions` declared beside it.
+ */
 export interface PublicAccess {
 	readonly public: true
 }
@@ -239,7 +242,8 @@ export interface ProcedureDef<I, O, Acc> extends Owned<'~kind' | 'type'> {
 	readonly crossOrigin?: true
 }
 
-export interface RpcMount<C extends readonly [RpcCaller, ...RpcCaller[]], T extends ProcedureTree> extends RpcMountDeclaration<Schema> {
+/** `C` names the callers of its credentialed procedures; `readonly []` when every procedure is public. */
+export interface RpcMount<C extends readonly RpcCaller[], T extends ProcedureTree> extends RpcMountDeclaration<Schema> {
 	readonly callers: C
 	readonly procedures: T
 }
@@ -289,7 +293,7 @@ export interface Export<T extends QueryTree> extends ExportDeclaration<Schema> {
 }
 
 export type AnyMount =
-	| RpcMount<readonly [RpcCaller, ...RpcCaller[]], ProcedureTree>
+	| RpcMount<readonly RpcCaller[], ProcedureTree>
 	| LinkMount<string, string, string, LinkProcedureTree>
 	| SpaMount<SpaAccessDeclaration>
 	| HealthMount

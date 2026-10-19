@@ -235,8 +235,11 @@ export class Invocation {
 		this.#transaction = data.invocation(readOnly)
 	}
 
-	/** The handles of the site, all of them running in this invocation's transaction. */
-	handles(kind: DataKind, declaration: SiteDeclaration, principal: string): DataHandles {
+	/**
+	 * The handles of the site, all of them running in this invocation's transaction. A public procedure's (`reach:
+	 * 'public'`) insert and read under its actions only.
+	 */
+	handles(kind: DataKind, declaration: SiteDeclaration, principal: string, reach: 'public' | 'declared' = 'declared'): DataHandles {
 		const transaction = this.#transaction
 		const site: DataSite = {
 			kind,
@@ -244,6 +247,7 @@ export class Invocation {
 			principal,
 			check: boundTo(this.#frame, () => transaction.ended),
 			session: () => transaction.session(),
+			...(reach === 'public' ? { public: true } : {}),
 		}
 		return this.#data.handles(site)
 	}

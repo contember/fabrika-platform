@@ -37,6 +37,8 @@ import { contract as visitorIntakeContract } from '../../../app/src/__tests__/fi
 import { tables as visitorIntakeTables } from '../../../app/src/__tests__/fixtures/visitor-intake/src/db/tables'
 import { contract as kitContract } from '../../../app/src/__tests__/kit-fixture/fabrika.contract'
 import { tables as kitTables } from '../../../app/src/__tests__/kit-fixture/src/db/tables'
+import { contract as publicContract } from '../../../app/src/__tests__/public-fixture/fabrika.contract'
+import { tables as publicTables } from '../../../app/src/__tests__/public-fixture/src/db/tables'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { ContractSourceError, readContractSource, readTablesSource } from '../contract'
 import {
@@ -181,6 +183,11 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app form-files (forms that take files into a scanning collection, a job that attaches them, read from source)',
 		root: join(APP_TESTS, 'fixtures', 'form-files'),
 		evaluated: () => compileContract(formFilesContract, formFilesTables),
+	},
+	{
+		name: '@fabrika/app public-fixture (public procedures in a group without callers, admission and limits, read from source)',
+		root: join(APP_TESTS, 'public-fixture'),
+		evaluated: () => compileContract(publicContract, publicTables),
 	},
 	{
 		name: '@fabrika/app form-kick (forms whose then kicks a job, read from source)',

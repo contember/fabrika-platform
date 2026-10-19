@@ -11,6 +11,7 @@ import type {
 	DataKind,
 	FragmentTable,
 	NoUnscoped,
+	PublicApplicationTables,
 	ReferenceTables,
 	ScopedApplicationTables,
 	ScopeTarget,
@@ -23,7 +24,7 @@ import type { z } from 'zod/v4'
 import type { FileCollectionHandle, FileCollectionJobHandle, FileCollectionReadHandle, FileCollections } from '../files/handle'
 import type { AppCapability, Ref, Within } from '../implement/capability'
 import type { ApplicationDirectory, LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
-import type { AppPrincipal, PrincipalOf, ServicePrincipal } from '../implement/principal'
+import type { AppPrincipal, PrincipalOf, PublicPrincipal, ServicePrincipal } from '../implement/principal'
 import type { CapabilityOf, ConnectCall, RequestContext } from '../implement/types'
 import type { WebhookDelivery, WebhookPrincipal } from '../implement/webhook'
 import type { AppMail, JobContext } from '../jobs/types'
@@ -373,6 +374,39 @@ export type EndpointContext<
 	& SqlContext<Of<D, 'sql'>, K['index']>
 	& FilesContext<K['index'], Kind>
 	& { readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, Acc, Of<D, 'unscoped'>>> }
+	& NoMail
+
+type PublicOnly = 'a public procedure acts application-wide, as its own workload: ctx.app(<action>) and ctx.db.app(<action>)'
+
+/**
+ * What the handler of a public procedure receives: anyone called it, and it runs as the endpoint's own workload, holding
+ * its declared actions `Acts` and nothing else. `ctx.app('<action>')` mints, and `ctx.db.app('<action>')` inserts and
+ * reads under it; no other reach.
+ */
+export type PublicContext<K extends KitTypes, Kind extends DataKind, Acts extends string> =
+	& RequestContext<PublicPrincipal>
+	& {
+		/** A capability of one of the procedure's declared actions, application-wide, bound to this request. */
+		app<const A extends Acts>(action: A): AppCapability<A>
+		readonly target: Unavailable<PublicOnly>
+		readonly within: Unavailable<PublicOnly>
+		readonly members: Unavailable<'a public procedure reaches no member directory'>
+		readonly links: Unavailable<'a public procedure issues no share link'>
+		readonly connect: Unavailable<'a public procedure calls no other application'>
+		readonly files: Unavailable<'a public procedure reaches no file collection'>
+		readonly sql: Unavailable<'a public procedure reaches its actions only: it declares no sql'>
+	}
+	& {
+		readonly db: DataOf<
+			K['index'],
+			{
+				app<const A extends Acts>(action: A): PublicApplicationTables<K['index'], A, Kind>
+				readonly target: Unavailable<PublicOnly>
+				readonly within: Unavailable<PublicOnly>
+				readonly unscoped: Unavailable<'a public procedure reaches its actions only: it declares no unscoped'>
+			}
+		>
+	}
 	& NoMail
 
 /** A link procedure acts on the one object its key is bound to. */

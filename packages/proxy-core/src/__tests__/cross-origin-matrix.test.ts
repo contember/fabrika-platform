@@ -85,7 +85,47 @@ const REGISTER = anonymousRow({ id: 'register', kind: 'form', method: 'POST', pa
 const APPLY = anonymousRow({ id: 'apply', kind: 'form', method: 'POST', path: '/apply', admission: MULTIPART })
 const EMBED = anonymousRow({ id: 'embed', kind: 'form', method: 'POST', path: '/embed', admission: MULTIPART, crossOrigin: 'any' })
 
-const TABLE = [OPEN, CLOSED, SIGNUP, CONTACT, SPA, DOWNLOAD, UPLOAD, HEALTH, HOOK, SHELL, FEEDBACK, REGISTER, APPLY, EMBED]
+/** Public procedures: anonymous rows whose body a native form or a page's FormData may send without a preflight. */
+const NATIVE: BodyAdmission = { contentTypes: ['application/x-www-form-urlencoded'], maxBytes: 4096 }
+const CLICK = anonymousRow({ id: 'api.stats.cta', kind: 'public', method: 'POST', path: '/api/stats.cta', admission: JSON_BODY })
+const UNSUBSCRIBE = anonymousRow({ id: 'api.mail.unsubscribe', kind: 'public', method: 'POST', path: '/api/mail.unsubscribe', admission: NATIVE })
+const PARTNER_SIGNUP = anonymousRow({
+	id: 'api.intake.partner',
+	kind: 'public',
+	method: 'POST',
+	path: '/api/intake.partner',
+	admission: NATIVE,
+	crossOrigin: 'environment',
+})
+const WIDGET = anonymousRow({
+	id: 'api.intake.widget',
+	kind: 'public',
+	method: 'POST',
+	path: '/api/intake.widget',
+	admission: MULTIPART,
+	crossOrigin: 'any',
+})
+
+const TABLE = [
+	OPEN,
+	CLOSED,
+	SIGNUP,
+	CONTACT,
+	SPA,
+	DOWNLOAD,
+	UPLOAD,
+	HEALTH,
+	HOOK,
+	SHELL,
+	FEEDBACK,
+	REGISTER,
+	APPLY,
+	EMBED,
+	CLICK,
+	UNSUBSCRIBE,
+	PARTNER_SIGNUP,
+	WIDGET,
+]
 const RESERVED = ['/api']
 
 const future = (seconds = 300) => Math.floor(Date.now() / 1000) + seconds
@@ -301,6 +341,61 @@ describe('a multipart form, which a browser sends without a preflight', () => {
 	test('admits only its own media type: a JSON body to a multipart form is a 400', async () => {
 		const { verify } = service({})
 		expect((await verify(verifyRequest(call('/register', PARTNER)))).status).toBe(400)
+	})
+})
+
+describe('a public procedure, the browser admission matrix', () => {
+	const native = (path: string, origin: string | null, type = 'application/x-www-form-urlencoded'): VerifyRequestOptions => ({
+		method: 'POST',
+		path,
+		cookie: SESSION,
+		headers: { ...(origin === null ? {} : { Origin: origin }), 'Content-Type': type, 'Sec-Fetch-Site': 'cross-site', Authorization: 'Bearer px_x' },
+	})
+
+	test('a urlencoded or multipart body from an origin the row does not admit is refused, Origin: null included', async () => {
+		const { iam, verify } = service({})
+		for (
+			const [path, origin, type] of [
+				['/api/mail.unsubscribe', STRANGER, undefined],
+				['/api/mail.unsubscribe', 'null', undefined],
+				['/api/mail.unsubscribe', PARTNER, undefined],
+				['/api/intake.partner', STRANGER, undefined],
+			] as const
+		) {
+			const response = await verify(verifyRequest(native(path, origin, type)))
+			expect(response.status).toBe(403)
+			expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull()
+		}
+		expect(iam.mintTokenCalls + iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
+	})
+
+	test('is forwarded from its own page, without Origin, from a listed origin and on a row open to any, every credential unread', async () => {
+		const { iam, verify } = service({ mintToken: await minted('user') })
+		const own = await verify(verifyRequest(native('/api/mail.unsubscribe', `https://${HOST}`)))
+		expect(own.status).toBe(204)
+		expect(own.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
+		expect((await verify(verifyRequest(native('/api/mail.unsubscribe', null)))).status).toBe(204)
+		const listed = await verify(verifyRequest(native('/api/intake.partner', PARTNER)))
+		expect(listed.status).toBe(204)
+		expect(listed.headers.get('Access-Control-Allow-Origin')).toBe(PARTNER)
+		const any = await verify(verifyRequest(native('/api/intake.widget', STRANGER, 'multipart/form-data; boundary=x')))
+		expect(any.status).toBe(204)
+		expect(any.headers.get('Access-Control-Allow-Origin')).toBe('*')
+		expect(iam.mintTokenCalls + iam.mintFromKeyCalls).toBe(0)
+	})
+
+	test('a JSON body is left to the preflight: an unadmitted origin is refused there, and its own page is forwarded', async () => {
+		const { verify } = service({})
+		expectRefusedPreflight(await verify(verifyRequest(preflight('/api/stats.cta', STRANGER))))
+		const own = await verify(verifyRequest(native('/api/stats.cta', `https://${HOST}`, 'application/json')))
+		expect(own.status).toBe(204)
+		expect(own.headers.get(ENDPOINT_HEADER)).toStartWith('api.stats.cta@sha256:')
+	})
+
+	test('admits only its own media type', async () => {
+		const { verify } = service({})
+		expect((await verify(verifyRequest(native('/api/stats.cta', `https://${HOST}`)))).status).toBe(400)
+		expect((await verify(verifyRequest(native('/api/mail.unsubscribe', `https://${HOST}`, 'application/json')))).status).toBe(400)
 	})
 })
 

@@ -51,7 +51,7 @@ export type {
 	MemberManagement,
 	MemberTarget,
 } from './membership'
-export type { AppPrincipal, LinkHolder, Principal, PrincipalOf, ServicePrincipal, UserPrincipal } from './principal'
+export type { AppPrincipal, LinkHolder, Principal, PrincipalOf, PublicPrincipal, ServicePrincipal, UserPrincipal } from './principal'
 export { type AppDeps, defineDeps, serve, type ServeOptions } from './serve'
 export type {
 	AccessContext,
@@ -63,6 +63,7 @@ export type {
 	Handler,
 	HandlerInput,
 	HandlersOf,
+	RequestClient,
 	RequestContext,
 	WebhookHandler,
 } from './types'

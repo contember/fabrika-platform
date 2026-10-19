@@ -144,18 +144,25 @@ export interface ExportTree {
 
 /** What `c.rpc` mounts: one group, or groups by name, nested. */
 export type MountedGroups =
-	| Group<readonly [RpcCaller, ...RpcCaller[]], GroupInput>
+	| Group<readonly RpcCaller[], GroupInput>
 	| { readonly [name: string]: MountedGroups }
 
-type CallersOf<G> = G extends Group<infer C, GroupInput> ? C : { [K in keyof G]: CallersOf<G[K]> }[keyof G]
-type EndpointsOf<G> = G extends Group<readonly [RpcCaller, ...RpcCaller[]], infer T> ? T : { readonly [K in keyof G]: EndpointsOf<G[K]> }
+/** The callers each group names; a group of public procedures names none and is left out. */
+type CallersOf<G> = G extends Group<infer C, GroupInput> ? (C extends readonly [] ? never : C) : { [K in keyof G]: CallersOf<G[K]> }[keyof G]
+type EndpointsOf<G> = G extends Group<readonly RpcCaller[], infer T> ? T : { readonly [K in keyof G]: EndpointsOf<G[K]> }
 
-type Callers<G> = CallersOf<G> extends infer C extends readonly [RpcCaller, ...RpcCaller[]] ? C : never
+/** A group that names callers names at least one; a group of public procedures leaves `callers` out. */
+type SomeCallers<C> = C extends readonly []
+	? Unavailable<"callers names at least one caller: callers: ['human']; a group of public procedures names none">
+	: unknown
+
+/** The callers of the mount's credentialed procedures, `readonly []` when every group is public. */
+type Callers<G> = [CallersOf<G>] extends [never] ? readonly [] : CallersOf<G> extends infer C extends readonly RpcCaller[] ? C : never
 type Endpoints<G> = EndpointsOf<G> extends infer T extends ProcedureTree ? T : never
 
 type IsUnion<T, All = T> = T extends unknown ? ([All] extends [T] ? false : true) : never
 
-type PendingOf<G, Path extends string = ''> = G extends Group<readonly [RpcCaller, ...RpcCaller[]], infer T> ? PendingIn<T, Path>
+type PendingOf<G, Path extends string = ''> = G extends Group<readonly RpcCaller[], infer T> ? PendingIn<T, Path>
 	: { [K in keyof G & string]: PendingOf<G[K], `${Path}${K}.`> }[keyof G & string]
 
 /**
@@ -163,7 +170,8 @@ type PendingOf<G, Path extends string = ''> = G extends Group<readonly [RpcCalle
  * one without, because its own callback cannot be checked before it is typed), and every group names the same callers.
  */
 type MountPrefix<G> = [PendingOf<G>] extends [never]
-	? true extends IsUnion<CallersOf<G>> ? Unavailable<'every group of one RPC mount names the same callers, in the same order'> : Path
+	? true extends IsUnion<CallersOf<G>> ? Unavailable<'every group of one RPC mount that names callers names the same ones, in the same order'>
+	: Path
 	: Unavailable<`add .handle(…) to ${ListOf<PendingOf<G>>}: every endpoint takes its handler beside it`>
 
 /** The inbox tables of the kit: each a form's own table (`scope: { inbox, read }`). */
@@ -242,9 +250,12 @@ export type KitContract<K extends KitTypes, S extends Surface> = Contract<
 
 /** The kit of one application: every builder is typed by its vocabulary, its tables and its imports. */
 export interface App<K extends KitTypes> {
-	/** Endpoints for `callers`, declared and handled together; `fabrika.contract.ts` mounts the group with `c.rpc`. */
-	group<const C extends readonly [RpcCaller, ...RpcCaller[]], const T extends GroupBuild>(
-		options: { readonly callers: C } & Owned<'kind' | 'endpoints'>,
+	/**
+	 * Endpoints for `callers`, declared and handled together; `fabrika.contract.ts` mounts the group with `c.rpc`. A group
+	 * of public procedures only (`access: { public: true }`), which anyone calls, names no callers: `app.group({}, …)`.
+	 */
+	group<const C extends readonly RpcCaller[] = readonly [], const T extends GroupBuild = GroupBuild>(
+		options: { readonly callers?: C & NoInfer<SomeCallers<C>> } & Owned<'kind' | 'endpoints'>,
 		build: (r: GroupKit<K, C[number]>) => T,
 	): Group<C, T>
 	/** A cron job (UTC, five fields) holding `actions` in `scope`; the contract mounts it under `jobs`. */
@@ -343,6 +354,10 @@ interface EndpointOptions<Access> extends DeclaredDeclaration {
 	readonly output: Schema
 	readonly access: Access
 	readonly crossOrigin?: true
+	readonly actions?: readonly string[]
+	readonly admission?: object
+	readonly limits?: object
+	readonly http?: object
 }
 
 function endpoint<Access>(type: ProcedureType, def: EndpointOptions<Access>): PendingSite<ProcedureDeclaration<Schema, Access>> {
@@ -353,6 +368,10 @@ function endpoint<Access>(type: ProcedureType, def: EndpointOptions<Access>): Pe
 		output: def.output,
 		access: def.access,
 		...(def.crossOrigin === undefined ? {} : { crossOrigin: def.crossOrigin }),
+		...(def.actions === undefined ? {} : { actions: def.actions }),
+		...(def.admission === undefined ? {} : { admission: def.admission }),
+		...(def.limits === undefined ? {} : { limits: def.limits }),
+		...(def.http === undefined ? {} : { http: def.http }),
 		declared: declaredOf(def),
 		unknownOptions: kitUnknownOptions(def, 'procedure'),
 	}
@@ -369,10 +388,10 @@ const endpointKit = <Access>(): RuntimeEndpointKit<Access> => ({
 	mutation: (def) => endpoint('mutation', def),
 })
 
-/** A group as data: its callers and its endpoints, which a mount nests by name. */
+/** A group as data: its callers and its endpoints, which a mount nests by name. A group of public procedures has none. */
 interface GroupDeclaration {
 	readonly '~kind': 'group'
-	readonly callers: readonly [RpcCaller, ...RpcCaller[]]
+	readonly callers: readonly RpcCaller[]
 	readonly endpoints: ProcedureTreeDeclaration<Schema>
 }
 
@@ -420,7 +439,7 @@ interface RuntimeContractKit extends Pick<Kit<string, string, string>, 'spa' | '
 
 interface RuntimeApp {
 	group(
-		options: { readonly callers: readonly [RpcCaller, ...RpcCaller[]] },
+		options: { readonly callers?: readonly RpcCaller[] },
 		build: (r: RuntimeEndpointKit<AccessDeclaration>) => ProcedureTreeDeclaration<Schema>,
 	): RuntimeGroup
 	cron(schedule: string, options: CronSiteOptions): PendingSite<CronDeclaration>
@@ -436,12 +455,21 @@ interface RuntimeApp {
  */
 function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefined, tables: boolean): RuntimeApp {
 	return {
-		group: (options, build) => ({
-			'~kind': 'group',
-			callers: options.callers,
-			endpoints: build(endpointKit()),
-			unknownOptions: unknownOptions(options, 'rpc'),
-		}),
+		group: (options, build) => {
+			const callers = options.callers ?? []
+			const endpoints = build(endpointKit())
+			if (callers.length === 0) {
+				const credentialed = procedureEntries(endpoints).filter(([, procedure]) => !isPublicAccess(procedure.access)).map(([path]) => path)
+				if (credentialed.length > 0) {
+					throw new ContractError([
+						`app.group: ${credentialed.join(', ')} ${
+							credentialed.length === 1 ? 'is' : 'are'
+						} not public, and the group names no callers (allowed: app.group({ callers: ['human'] }, …), or access: { public: true })`,
+					])
+				}
+			}
+			return { '~kind': 'group', callers, endpoints, unknownOptions: unknownOptions(options, 'rpc') }
+		},
 		cron: (schedule, options) => {
 			const declaration: CronDeclaration = {
 				kind: 'cron',
@@ -516,20 +544,34 @@ function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefine
 /** `c.rpc(prefix, groups)`: the groups' endpoints under the prefix, nested by the names `groups` gives them. */
 function rpc(prefix: Path, groups: MountedGroupsValue): RpcMountDeclaration<Schema> {
 	const mounted = mountedGroups(groups)
-	const [first] = mounted
-	if (first === undefined) {
+	if (mounted.length === 0) {
 		throw new ContractError([`c.rpc('${prefix}'): mounts no group (allowed: c.rpc('${prefix}', { <name>: <group> }))`])
 	}
-	if (mounted.some((group) => !sameCallers(group.callers, first.callers))) {
-		throw new ContractError([`c.rpc('${prefix}'): every group of one RPC mount names the same callers, in the same order`])
+	// A group of public procedures names no callers; every group that names them names the same ones.
+	const credentialed = mounted.filter((group) => group.callers.length > 0)
+	const callers = credentialed[0]?.callers ?? []
+	if (credentialed.some((group) => !sameCallers(group.callers, callers))) {
+		throw new ContractError([`c.rpc('${prefix}'): every group of one RPC mount that names callers names the same ones, in the same order`])
 	}
 	return {
 		kind: 'rpc',
 		prefix,
-		callers: first.callers,
+		callers,
 		procedures: mountedProcedures(groups),
 		unknownOptions: [...new Set(mounted.flatMap((group) => isRuntimeGroup(group) ? group.unknownOptions : []))],
 	}
+}
+
+function isPublicAccess(access: unknown): boolean {
+	return typeof access === 'object' && access !== null && 'public' in access && access.public === true
+}
+
+/** Every procedure of a tree with its dotted path. */
+function procedureEntries(tree: ProcedureTreeDeclaration<Schema>, prefix = ''): [string, ProcedureDeclaration<Schema>][] {
+	return Object.entries(tree).flatMap(([name, node]): [string, ProcedureDeclaration<Schema>][] => {
+		const path = prefix === '' ? name : `${prefix}.${name}`
+		return isProcedure(node) ? [[path, node]] : procedureEntries(node, path)
+	})
 }
 
 function isGroup(value: MountedGroupsValue): value is GroupDeclaration {

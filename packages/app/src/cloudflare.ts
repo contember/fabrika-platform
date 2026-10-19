@@ -190,6 +190,8 @@ export function createContractWorker(load: ImplementationLoader, options: Contra
 				assets: bindingAssets(env['ASSETS']),
 				membership: bindingMembership(env['IAM']),
 				connectBindings: connectBindings(env),
+				// The proxy Worker sets `X-Fabrika-Client-Ip` from `CF-Connecting-IP`, the visitor Cloudflare saw.
+				clientAddress: 'vouched',
 				...(options.operationsFetch === undefined ? {} : { operationsFetch: options.operationsFetch }),
 			})
 		} catch (error) {

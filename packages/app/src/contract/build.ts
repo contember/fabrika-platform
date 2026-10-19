@@ -3,6 +3,7 @@
 
 import {
 	type AccessForm,
+	type AdmissionRate,
 	assertNoAmbiguity,
 	type AttachmentFormat,
 	type BodyAdmission,
@@ -47,6 +48,7 @@ import {
 	type MessageKind,
 	type MountArtifact,
 	type OutputShape,
+	type ProcedureArtifact,
 	type RoleArtifact,
 	type SchemaShape,
 	type ScopeBinding,
@@ -80,6 +82,7 @@ import {
 import {
 	ATTACHMENT_LIMITS,
 	CHALLENGE_ORIGINS,
+	challengeAction,
 	CONNECT_LIMITS,
 	CONNECT_PREFIX,
 	CONTRACT_DEFAULTS,
@@ -95,6 +98,8 @@ import {
 	joinPath,
 	JSON_ADMISSION,
 	LINK_API_SEGMENT,
+	PROCEDURE_LIMITS,
+	PUBLIC_MUTATION_RATE,
 	spaPrefixRowId,
 	WEBHOOK_ACCOUNT_PATTERN,
 	WEBHOOK_BINDING_PARAMETER,
@@ -227,6 +232,8 @@ class ArtifactBuilder {
 	readonly #endpoints: EndpointRow[] = []
 	readonly #reservedPrefixes: string[] = []
 	readonly #declared: Record<string, DeclaredReach> = {}
+	/** Each procedure of the staged kit's rules, by endpoint id. */
+	readonly #procedureRules: Record<string, ProcedureArtifact> = {}
 	/** Whether any site is the staged kit's, whose reach is only what it declares; `defineContract`'s sites are not. */
 	#kit = false
 	/** The endpoints that declare `connect`, by the import they name. */
@@ -300,6 +307,7 @@ class ArtifactBuilder {
 			...(displayName === null ? {} : { displayName }),
 			...(mail === null ? {} : { mail }),
 			...people,
+			...(Object.keys(this.#procedureRules).length === 0 ? {} : { procedures: this.#procedureRules }),
 		}
 		try {
 			assertNoAmbiguity(artifact)
@@ -504,10 +512,16 @@ class ArtifactBuilder {
 				this.#reserve(mount.prefix)
 				for (const [path, procedure] of procedures(mount.procedures)) {
 					const id = `${name}.${path}`
-					this.#procedure({ kind: 'mount', name }, id, joinPath(mount.prefix, path), mount.callers, procedure)
-					this.#declare(`procedure '${id}'`, id, procedure.declared, { kind: 'rpc', readOnly: procedure.type === 'query', access: procedure.access })
+					const callers = nonEmpty(mount.callers)
+					const actions = this.#procedure({ kind: 'mount', name }, id, joinPath(mount.prefix, path), callers, procedure)
+					this.#declare(`procedure '${id}'`, id, procedure.declared, {
+						kind: 'rpc',
+						readOnly: procedure.type === 'query',
+						access: procedure.access,
+						actions,
+					})
 				}
-				return { kind: 'rpc', prefix: mount.prefix, callers: mount.callers }
+				return { kind: 'rpc', prefix: mount.prefix, callers: [...mount.callers] }
 			}
 			case 'link':
 				return this.#link(name, mount)
@@ -847,6 +861,10 @@ class ArtifactBuilder {
 			const requirement = this.#linkRequirement(`procedure '${id}'`, procedure.access, mount)
 			this.#procedureSchemas(`procedure '${id}'`, procedure)
 			this.#noCrossOrigin(`procedure '${id}'`, procedure.crossOrigin, 'a link holder')
+			if (procedure.actions !== undefined) {
+				this.#problem(`procedure '${id}'`, 'declares actions, which only a public procedure holds; a link procedure holds its link grant')
+			}
+			const rules = this.#rules(id, procedure, 'link')
 			this.#declare(`procedure '${id}'`, id, procedure.declared, { kind: 'link', readOnly: procedure.type === 'query' })
 			if (requirement !== null) {
 				this.#row({
@@ -857,7 +875,7 @@ class ArtifactBuilder {
 					path: joinPath(api, path),
 					callers: ['link'],
 					requirement,
-					admission: JSON_ADMISSION,
+					admission: rules === null ? JSON_ADMISSION : { contentTypes: ['application/json'], maxBytes: rules.maxBytes },
 					input: procedure.input,
 					output: this.#output(`procedure '${id}'`, procedure),
 				})
@@ -874,19 +892,45 @@ class ArtifactBuilder {
 		}
 	}
 
+	/**
+	 * A procedure's row and its rules; a public procedure's workload actions, which `#declare` records, or `null`.
+	 * `callers` is `null` on an RPC mount whose groups are all public.
+	 */
 	#procedure(
 		source: EndpointSource,
 		id: string,
 		path: string,
-		callers: readonly [Caller, ...Caller[]],
+		callers: readonly [Caller, ...Caller[]] | null,
 		procedure: ProcedureDeclaration<SchemaShape>,
-	): void {
+	): readonly string[] | null {
 		const where = `procedure '${id}'`
 		this.#procedureSchemas(where, procedure)
+		if (isPublicAccess(procedure.access)) {
+			if (source.kind === 'mount') {
+				return this.#publicProcedure(source, id, path, procedure)
+			}
+			this.#problem(where, 'is public, which only a procedure of an RPC mount is (allowed: an action and its scope)')
+			return null
+		}
+		if (procedure.actions !== undefined) {
+			this.#problem(where, 'declares actions, which only a public procedure holds (its handler runs as its own workload); remove them')
+		}
 		const requirement = this.#requirement(where, procedure)
+		const rules = this.#rules(id, procedure, 'credentialed')
 		const crossOrigin = source.kind === 'mount'
-			? this.#crossOrigin(where, procedure.crossOrigin, false)
-			: this.#noCrossOrigin(where, procedure.crossOrigin, 'a consuming application, from its server')
+			? this.#credentialedOrigins(where, procedure.crossOrigin, rules?.origins ?? 'same-origin')
+			: this.#noCrossOrigin(
+				where,
+				procedure.crossOrigin ?? (rules?.origins === 'same-origin' ? undefined : rules?.origins),
+				'a consuming application, from its server',
+			)
+		if (callers === null) {
+			this.#problem(
+				where,
+				"is credentialed, and its group names no callers: a group without callers holds public procedures only (app.group({ callers: ['human'] }, …))",
+			)
+			return null
+		}
 		if (requirement !== null) {
 			this.#row({
 				id,
@@ -896,12 +940,198 @@ class ArtifactBuilder {
 				path,
 				callers,
 				requirement,
-				admission: JSON_ADMISSION,
+				admission: rules === null ? JSON_ADMISSION : { contentTypes: ['application/json'], maxBytes: rules.maxBytes },
 				input: procedure.input,
 				output: this.#output(where, procedure),
 				...crossOrigin,
 			})
 		}
+		return null
+	}
+
+	/**
+	 * A procedure anyone calls (`access: { public: true }`): its own row mode, no callers and no requirement, and its
+	 * handler holding its top-level `actions` as the endpoint's own workload. It answers the default admission of a public
+	 * procedure unless it declares its own.
+	 */
+	#publicProcedure(source: EndpointSource, id: string, path: string, procedure: ProcedureDeclaration<SchemaShape>): readonly string[] | null {
+		const where = `procedure '${id}'`
+		if (!hasExactKeys(procedure.access, ['public'])) {
+			this.#problem(where, `access ${JSON.stringify(procedure.access)} is not the public form (allowed: { public: true }, with actions beside it)`)
+		}
+		if (procedure.crossOrigin !== undefined) {
+			this.#problem(where, "is public: its origins are admission.origins ('same-origin', 'listed' or 'any'), never crossOrigin")
+		}
+		const actions = this.#workloadActions(where, procedure.actions)
+		const rules = this.#rules(id, procedure, 'public')
+		if (rules === null) {
+			// A procedure of the staged kit always carries `declared`; one without it is no kit procedure.
+			this.#problem(where, 'is public, which only a procedure of the staged kit (app.group) is')
+			return null
+		}
+		const origins = rules.origins === 'any'
+			? { crossOrigin: 'any' as const }
+			: rules.origins === 'listed'
+			? { crossOrigin: 'environment' as const }
+			: {}
+		this.#row({
+			id,
+			source,
+			kind: 'public',
+			method: 'POST',
+			path,
+			callers: [],
+			requirement: null,
+			admission: { contentTypes: ['application/json'], maxBytes: rules.maxBytes },
+			input: procedure.input,
+			output: this.#output(where, procedure),
+			...origins,
+		})
+		return actions
+	}
+
+	/** A public procedure's `actions`: at least one action of the contract, each once. */
+	#workloadActions(where: string, value: unknown): readonly string[] {
+		if (!Array.isArray(value) || value.length === 0 || !value.every((action) => typeof action === 'string')) {
+			this.#problem(where, "is public, so it declares what its handler holds: actions: ['<action>'], at least one")
+			return []
+		}
+		const actions: string[] = value.filter((action) => typeof action === 'string')
+		this.#unique(where, 'actions', actions)
+		for (const action of actions) {
+			this.#knownAction(where, action)
+		}
+		return actions
+	}
+
+	/** A credentialed procedure's origins: `crossOrigin: true` as before, or `admission.origins: 'listed'`; never both. */
+	#credentialedOrigins(where: string, crossOrigin: unknown, origins: AdmissionOrigins): { readonly crossOrigin?: CrossOriginForm } {
+		if (crossOrigin !== undefined && origins !== 'same-origin') {
+			this.#problem(where, "declares crossOrigin and admission.origins; declare admission.origins: 'listed' alone")
+		}
+		if (origins === 'listed') {
+			return { crossOrigin: 'environment' }
+		}
+		return this.#crossOrigin(where, crossOrigin, false)
+	}
+
+	/**
+	 * A procedure's rules of the staged kit, every default applied: `limits` within its ceilings, and `admission` merged
+	 * into the default of the procedure's kind (a declared bucket replaces the default, `null` turns it off). Recorded under
+	 * the endpoint id; `null` for a `defineContract` procedure, which declares none and keeps its row as it was.
+	 */
+	#rules(id: string, procedure: ProcedureDeclaration<SchemaShape, unknown>, kind: 'public' | 'credentialed' | 'link'): ProcedureRules | null {
+		const where = `procedure '${id}'`
+		if (procedure.declared === undefined) {
+			for (const field of ['admission', 'limits', 'http'] as const) {
+				if (procedure[field] !== undefined) {
+					this.#problem(where, `declares ${field}, which only a procedure of the staged kit declares`)
+				}
+			}
+			return null
+		}
+		if (procedure.http !== undefined) {
+			this.#problem(where, 'declares http, which this release does not serve yet (allowed: no http; every procedure is POST with a JSON body)')
+		}
+		const limits = this.#limits(where, procedure.limits)
+		const admission = this.#admission(id, procedure, kind)
+		this.#procedureRules[id] = { rate: admission.rate, challenge: admission.challenge, timeoutMs: limits.timeoutMs }
+		return { maxBytes: limits.maxBytes, origins: admission.origins }
+	}
+
+	#limits(where: string, value: unknown): { readonly maxBytes: number; readonly timeoutMs: number } {
+		const defaults = { maxBytes: PROCEDURE_LIMITS.maxBytes, timeoutMs: PROCEDURE_LIMITS.timeoutMs }
+		if (value === undefined) {
+			return defaults
+		}
+		if (!isRecord(value)) {
+			this.#problem(where, 'limits is not an object (allowed: limits: { maxBytes?, timeoutMs? })')
+			return defaults
+		}
+		this.#keys(`${where} limits`, value, ['maxBytes', 'timeoutMs'])
+		return {
+			maxBytes: this.#bounded(where, 'limits.maxBytes', value['maxBytes'], defaults.maxBytes, PROCEDURE_LIMITS.maxMaxBytes, 'bytes'),
+			timeoutMs: this.#bounded(where, 'limits.timeoutMs', value['timeoutMs'], defaults.timeoutMs, PROCEDURE_LIMITS.maxTimeoutMs, 'ms'),
+		}
+	}
+
+	/** A declared whole number from 1 to `ceiling`, or `fallback` when it is absent or refused. */
+	#bounded(where: string, field: string, value: unknown, fallback: number, ceiling: number, unit: string): number {
+		if (value === undefined) {
+			return fallback
+		}
+		if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > ceiling) {
+			this.#problem(where, `${field} ${JSON.stringify(value)} is not a whole number of ${unit} from 1 to ${ceiling}`)
+			return fallback
+		}
+		return value
+	}
+
+	#admission(
+		id: string,
+		procedure: ProcedureDeclaration<SchemaShape, unknown>,
+		kind: 'public' | 'credentialed' | 'link',
+	): { readonly origins: AdmissionOrigins; readonly rate: AdmissionRate; readonly challenge: FormChallenge | null } {
+		const where = `procedure '${id}'`
+		const rate: Record<keyof AdmissionRate, number | null> = kind === 'public' && procedure.type === 'mutation'
+			? { perClient: PUBLIC_MUTATION_RATE.perClient, perCaller: null, perEndpoint: PUBLIC_MUTATION_RATE.perEndpoint, bytesPerHour: null }
+			: { perClient: null, perCaller: null, perEndpoint: null, bytesPerHour: null }
+		const declared = procedure.admission
+		if (declared === undefined) {
+			return { origins: 'same-origin', rate, challenge: null }
+		}
+		const allowed =
+			"admission: { origins?: 'same-origin' | 'listed' | 'any', rate?: { perClient?, perCaller?, perEndpoint?, bytesPerHour? }, challenge? }"
+		if (!isRecord(declared)) {
+			this.#problem(where, `admission is not an object (allowed: ${allowed})`)
+			return { origins: 'same-origin', rate, challenge: null }
+		}
+		this.#keys(`${where} admission`, declared, ['origins', 'rate', 'challenge'])
+		const origins = this.#origins(where, declared['origins'], kind)
+		const declaredRate = declared['rate']
+		if (declaredRate !== undefined && !isRecord(declaredRate)) {
+			this.#problem(where, `admission.rate is not an object of buckets (allowed: ${allowed})`)
+		}
+		for (const [bucket, value] of Object.entries(isRecord(declaredRate) ? declaredRate : {})) {
+			if (!Object.hasOwn(rate, bucket)) {
+				this.#problem(where, `admission.rate.${bucket} is not a bucket (allowed: perClient, perCaller, perEndpoint, bytesPerHour)`)
+				continue
+			}
+			const field = bucket === 'perClient' || bucket === 'perCaller' || bucket === 'perEndpoint' || bucket === 'bytesPerHour' ? bucket : null
+			if (field === null) continue
+			if (field === 'perClient' && kind !== 'public') {
+				this.#problem(where, 'admission.rate.perClient counts by the client address, which only a public procedure does (allowed: perCaller)')
+			} else if (field === 'perCaller' && kind === 'public') {
+				this.#problem(where, 'admission.rate.perCaller counts by the caller, and a public procedure has none (allowed: perClient)')
+			} else if (field === 'bytesPerHour') {
+				this.#problem(where, 'admission.rate.bytesPerHour bounds the bytes of file fields, and the input declares none')
+			}
+			rate[field] = value === null
+				? null
+				: this.#bounded(where, `admission.rate.${field}`, value, rate[field] ?? 1, PROCEDURE_LIMITS.maxPerMinute, 'calls per minute')
+		}
+		const challenge = declared['challenge']
+		if (challenge === undefined) {
+			return { origins, rate, challenge: null }
+		}
+		if (kind !== 'public' || !isRecord(challenge)) {
+			this.#problem(where, kind === 'public' ? 'admission.challenge is not an object' : 'admission.challenge belongs to a public procedure only')
+			return { origins, rate, challenge: null }
+		}
+		const fields = procedure.input?.type === 'object' ? procedure.input.fields : {}
+		return { origins, rate, challenge: this.#formChallenge(challengeAction(id), where, challenge, fields) ?? null }
+	}
+
+	#origins(where: string, value: unknown, kind: 'public' | 'credentialed' | 'link'): AdmissionOrigins {
+		if (value === undefined || value === 'same-origin') {
+			return 'same-origin'
+		}
+		if ((value === 'listed' && kind !== 'link') || (value === 'any' && kind === 'public')) {
+			return value
+		}
+		const allowed = kind === 'public' ? "'same-origin', 'listed' or 'any'" : kind === 'link' ? "'same-origin'" : "'same-origin' or 'listed'"
+		this.#problem(where, `admission.origins ${JSON.stringify(value)} is not an origin rule here (allowed: ${allowed})`)
+		return 'same-origin'
 	}
 
 	/**
@@ -1665,6 +1895,14 @@ class ArtifactBuilder {
 				this.#problem(where, `'${key}' is not a declared field (allowed: ${DECLARED_ALLOWED})`)
 			}
 		}
+		const workload = place.kind === 'rpc' ? place.actions : null
+		if (workload !== null) {
+			for (const field of ['sql', 'unscoped', 'connect', 'issues'] as const) {
+				if (value[field] !== undefined) {
+					this.#problem(where, `is public and declares ${field}: a public procedure reaches its actions only (allowed: kicks)`)
+				}
+			}
+		}
 		const then = this.#then(where, value['then'], place)
 		const mailer = this.#mailer(where, value['mailer'], place)
 		const reach: DeclaredReach = {
@@ -1678,6 +1916,7 @@ class ArtifactBuilder {
 				: null,
 			...(then === undefined ? {} : { then }),
 			...(mailer === undefined ? {} : { mailer }),
+			...(workload === null || workload.length === 0 ? {} : { actions: workload }),
 		}
 		if (place.kind !== 'rpc') {
 			this.#rpcOnly(where, 'connect', value['connect'])
@@ -1687,7 +1926,7 @@ class ArtifactBuilder {
 		}
 		if (
 			reach.sql !== null || Object.keys(reach.unscoped).length > 0 || reach.connect.length > 0 || reach.issues !== null || reach.then !== undefined
-			|| reach.mailer !== undefined
+			|| reach.mailer !== undefined || reach.actions !== undefined
 		) {
 			this.#declared[site] = reach
 		}
@@ -2056,11 +2295,29 @@ class ArtifactBuilder {
 
 /** Where a declaration stands: what kind of site, whether it runs read-only, and an RPC endpoint's access form. */
 type DeclaringSite =
-	| { readonly kind: 'rpc'; readonly readOnly: boolean; readonly access: AccessDeclaration }
+	/** `actions` are a public procedure's workload actions; `null` for a credentialed procedure. */
+	| { readonly kind: 'rpc'; readonly readOnly: boolean; readonly access: AccessDeclaration; readonly actions: readonly string[] | null }
 	| { readonly kind: 'job'; readonly readOnly: boolean; readonly actions: readonly string[] }
 	| { readonly kind: 'link' | 'export' | 'webhook'; readonly readOnly: boolean }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/** What a procedure's row takes from its rules: the body limit and the origin rule. */
+interface ProcedureRules {
+	readonly maxBytes: number
+	readonly origins: AdmissionOrigins
+}
+
+type AdmissionOrigins = 'same-origin' | 'listed' | 'any'
+
+function nonEmpty<T>(list: readonly T[]): readonly [T, ...T[]] | null {
+	const [first, ...rest] = list
+	return first === undefined ? null : [first, ...rest]
+}
+
+function isPublicAccess(access: unknown): boolean {
+	return isRecord(access) && access['public'] === true
+}
 
 type ResolvedAccess = { readonly form: 'member' } | { readonly form: 'action'; readonly action: string; readonly access: AccessForm }
 

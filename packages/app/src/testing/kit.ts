@@ -82,6 +82,11 @@ export interface TestKitOptions {
 	/** The application's own variables, as `deps` receives them. */
 	readonly env?: ApplicationEnvironment
 	/**
+	 * The address the kit's proxy reports for every request, as the platform's proxy reports the visitor's
+	 * (`X-Fabrika-Client-Ip`): what `ctx.client.ip` reads and a per-client bucket counts. `192.0.2.1` by default.
+	 */
+	readonly clientIp?: string
+	/**
 	 * The application root an SPA mount's `dir` is relative to; the working directory when omitted. A mount whose built
 	 * directory exists there is served from it as the deploy serves it: a file by its path, every other path by the
 	 * directory's `index.html`. A mount not built is an empty HTML document.
@@ -207,6 +212,9 @@ function toRequest(origin: string, input: RequestInfo | URL, init: RequestInit |
 function withHeaders(request: Request, headers: Headers): Request {
 	return new Request(request.url, { method: request.method, headers, body: request.body, signal: request.signal, redirect: request.redirect })
 }
+
+/** The client every request of a kit comes from, unless `clientIp` names another: TEST-NET-1 (RFC 5737). */
+const TEST_CLIENT_IP = '192.0.2.1'
 
 /** Every header only the proxy may assert, deleted before the decision as Caddy and the proxy Worker delete them. */
 function stripClientAsserted(headers: Headers): void {
@@ -366,6 +374,8 @@ export function bootTestKit<C extends AnyContract>(
 		connectBindings,
 		workloadTokens,
 		mailStandIn: options.mail === 'none' ? 'none' : mail,
+		// The kit's proxy sets `X-Fabrika-Client-Ip` from the request it was handed, as the Worker sets it from Cloudflare's.
+		clientAddress: 'vouched',
 	})
 
 	let issued = 0
@@ -567,6 +577,7 @@ export function bootTestKit<C extends AnyContract>(
 		for (const [header, value] of outcome.asserted) {
 			headers.set(header, value)
 		}
+		headers.set(CLIENT_ADDRESS_HEADER, options.clientIp ?? TEST_CLIENT_IP)
 		const answer = await application.fetch(withHeaders(request, headers), exec)
 		const decorated = new Headers(answer.headers)
 		outcome.decorate(decorated)

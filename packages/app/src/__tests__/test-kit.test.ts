@@ -167,7 +167,8 @@ describe('a forwarded request reaches the real dispatcher', () => {
 		const headers = received[0]
 		expect(headers?.get('X-Fabrika-Token')).not.toBe('forged')
 		expect(headers?.get('X-Fabrika-Token')?.split('.')).toHaveLength(3)
-		expect(headers?.get('X-Fabrika-Client-Ip')).toBeNull()
+		// The kit's proxy reports its own client, as the platform's reports the connection's, never the one a client sends.
+		expect(headers?.get('X-Fabrika-Client-Ip')).toBe('192.0.2.1')
 		expect(headers?.get('X-Forwarded-For')).toBeNull()
 		expect(headers?.get('X-Request-Id')).not.toBe('chosen-by-client')
 		// The endpoint the proxy selected, with the digest of the rules it applied, as production sends it.

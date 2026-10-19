@@ -8,7 +8,7 @@ import { compileFixtures, expectMistakes } from './type-fixtures'
 
 const EXPECTED: Readonly<Record<string, string>> = {
 	'01-group-in-another-file/group.ts': 'the handler returns margin, which the output does not declare: return only declared fields',
-	'02-groups-with-different-callers.ts': 'every group of one RPC mount names the same callers, in the same order',
+	'02-groups-with-different-callers.ts': 'every group of one RPC mount that names callers names the same ones, in the same order',
 	// The compiler lists a union's fields in no fixed order.
 	'03-wrong-output-field.ts': 'which the output does not declare: return only declared fields',
 	'04-get-for-update-in-a-query.ts': 'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation',

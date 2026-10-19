@@ -8,12 +8,13 @@ import type { z } from 'zod/v4'
 import type { Snake } from '../from-row'
 import type { ExtraKeys, HandlerInput, IsAny } from '../implement/types'
 import type { AttachmentBrand } from './attachment'
-import type { CheckedAccess, Declared, EndpointContext, ExportContext, ImportOf, KitTypes, LinkContext, SqlMode } from './context'
+import type { CheckedAccess, Declared, EndpointContext, ExportContext, ImportOf, KitTypes, LinkContext, PublicContext, SqlMode } from './context'
 import type { ProcedureType } from './declaration'
 import type {
 	AppAccess,
 	CapabilitiesAccess,
 	CapabilityAccess,
+	FormChallengeOption,
 	InputOf,
 	InputSchema,
 	LinkAccess,
@@ -21,6 +22,7 @@ import type {
 	MutationAccess,
 	NotLoose,
 	Procedure,
+	PublicAccess,
 	QueryAccess,
 	Schema,
 } from './define'
@@ -86,6 +88,56 @@ type NoKick = { readonly then?: Unavailable<'a query kicks no job: declare then 
 
 type IsUnion<T, All = T> = T extends unknown ? ([All] extends [T] ? false : true) : never
 
+/** A bucket's calls per minute, or `null` to turn a default bucket off. */
+type Bucket = number | null
+
+/**
+ * How a procedure is admitted (`admission`), merged into its kind's default: a public mutation counts 10 calls per
+ * minute per client and 100 for the endpoint; every other procedure counts none unless it declares a bucket.
+ */
+export type AdmissionOption<Acc> = [Acc] extends [PublicAccess] ? {
+		/** `'same-origin'` by default; `'listed'` the environment's listed origins; `'any'` every origin. */
+		readonly origins?: 'same-origin' | 'listed' | 'any'
+		readonly rate?: { readonly perClient?: Bucket; readonly perEndpoint?: Bucket; readonly bytesPerHour?: Bucket }
+		/** Verified on the server before the handler; the input carries the widget's token in `challengeToken`. */
+		readonly challenge?: FormChallengeOption
+	}
+	: {
+		/** `'same-origin'` by default; `'listed'` the environment's listed origins, with a key only (ADR-0022). */
+		readonly origins?: 'same-origin' | 'listed'
+		readonly rate?: { readonly perCaller?: Bucket; readonly perEndpoint?: Bucket }
+	}
+
+/** A procedure's bounds: its body in bytes (64 KiB by default, at most 1 MiB) and its handler's time (10 s, at most 60 s). */
+export interface LimitsOption {
+	readonly maxBytes?: number
+	readonly timeoutMs?: number
+}
+
+/**
+ * A public procedure's workload actions, which its handler holds and nothing else; no other procedure declares them.
+ * Inferred from the optional field and then required, like a declared field.
+ */
+export type PublicFields<Acc, Acts> = [Acc] extends [PublicAccess] ? {
+		readonly actions:
+			& Acts
+			& NoInfer<Acts extends readonly [] ? Unavailable<"a public procedure names what its handler holds: actions: ['<action>']"> : unknown>
+	}
+	: { readonly actions?: Unavailable<'only a public procedure declares actions: its handler runs as its own workload'> }
+
+/** The handler context of a group's procedure: a public one runs as its own workload, every other as its caller. */
+export type ProcedureContext<
+	K extends KitTypes,
+	Caller extends RpcCaller,
+	Kind extends 'query' | 'mutation',
+	Acc,
+	Acts extends readonly string[],
+	D extends Declared<SqlMode, unknown, readonly string[], string>,
+> = [Acc] extends [PublicAccess] ? PublicContext<K, Kind, Acts[number]> : EndpointContext<K, Caller, Kind, CheckedAccess<Acc>, D>
+
+/** A group without callers holds public procedures only; any other group may hold both. */
+export type GroupAccess<Caller extends RpcCaller, Acc> = [Caller] extends [never] ? PublicAccess : Acc | PublicAccess
+
 /** An endpoint's declaration: its schemas, its access form and the reach it declares. */
 export type EndpointDef<I, O, Acc, S, U, Cn, Is, Ix extends AnyDbIndex> =
 	& Owned<'~kind' | 'type'>
@@ -95,6 +147,8 @@ export type EndpointDef<I, O, Acc, S, U, Cn, Is, Ix extends AnyDbIndex> =
 		readonly access: Acc
 		/** A page on one of the environment's listed origins may call it, with a key (ADR-0022). An RPC endpoint only. */
 		readonly crossOrigin?: true
+		readonly admission?: AdmissionOption<Acc>
+		readonly limits?: LimitsOption
 	}
 	& DeclaredFields<S, U, Cn, Is, Ix>
 
@@ -167,28 +221,25 @@ export interface PendingEndpoint {
 	handle(handler: never): unknown
 }
 
-/** The builders of a group's callback: they know the group's callers, so a handler knows its principal. */
+/**
+ * The builders of a group's callback: they know the group's callers, so a handler knows its principal. A group without
+ * callers (`Caller` is `never`) declares public procedures only.
+ */
 export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 	query<
-		const Acc extends QueryAccess<K['action'], K['dimension'], InputOf<I>>,
+		const Acc extends GroupAccess<Caller, QueryAccess<K['action'], K['dimension'], InputOf<I>>>,
 		O extends Schema,
 		I extends InputSchema | null = null,
 		const S extends 'read' = never,
 		const U extends UnscopedDeclaration<K['tables'], 'read'> = never,
 		const Cn extends readonly ImportOf<K>[] = never,
 		const Is extends string = never,
+		const Acts extends readonly K['action'][] = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & NoKick,
-	): EndpointBuilder<
-		'query',
-		I,
-		O,
-		Acc,
-		Declared<S, U, Cn, Is>,
-		EndpointContext<K, Caller, 'query', CheckedAccess<Acc>, Declared<S, U, Cn, Is>>
-	>
+		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & PublicFields<Acc, Acts> & NoKick,
+	): EndpointBuilder<'query', I, O, Acc, Declared<S, U, Cn, Is>, ProcedureContext<K, Caller, 'query', Acc, Acts, Declared<S, U, Cn, Is>>>
 	mutation<
-		const Acc extends MutationAccess<K['action'], K['dimension'], K['creatable'], InputOf<I>>,
+		const Acc extends GroupAccess<Caller, MutationAccess<K['action'], K['dimension'], K['creatable'], InputOf<I>>>,
 		O extends Schema,
 		I extends InputSchema | null = null,
 		const S extends SqlMode = never,
@@ -196,16 +247,10 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		const Cn extends readonly ImportOf<K>[] = never,
 		const Is extends string = never,
 		const Th extends string = never,
+		const Acts extends readonly K['action'][] = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & KickField<Th>,
-	): EndpointBuilder<
-		'mutation',
-		I,
-		O,
-		Acc,
-		Declared<S, U, Cn, Is>,
-		EndpointContext<K, Caller, 'mutation', CheckedAccess<Acc>, Declared<S, U, Cn, Is>>
-	>
+		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & PublicFields<Acc, Acts> & KickField<Th>,
+	): EndpointBuilder<'mutation', I, O, Acc, Declared<S, U, Cn, Is>, ProcedureContext<K, Caller, 'mutation', Acc, Acts, Declared<S, U, Cn, Is>>>
 }
 
 /** Any handled endpoint. */
@@ -242,8 +287,8 @@ export type PendingIn<T, Path extends string> = typeof failedBuild extends keyof
 	: string extends keyof T ? [IsPending<T[string & keyof T]>] extends [true] ? `${Path}* (its type admits an endpoint without a handler)` : never
 	: { [K in keyof T]: [IsPending<T[K]>] extends [true] ? `${Path}${K & string}` : never }[keyof T]
 
-/** `app.group(…)`: endpoints for one set of callers, declared in any module and mounted by the contract. */
-export interface Group<C extends readonly [RpcCaller, ...RpcCaller[]], T extends GroupInput> {
+/** `app.group(…)`: endpoints for one set of callers (none for a group of public procedures), mounted by the contract. */
+export interface Group<C extends readonly RpcCaller[], T extends GroupInput> {
 	readonly '~kind': 'group'
 	readonly callers: C
 	readonly endpoints: T

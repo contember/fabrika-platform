@@ -90,6 +90,11 @@ export interface DataSite {
 	readonly principal: string
 	/** A job's schedule period, in ms: a queue claim's first backoff, doubled at each later claim of the row. */
 	readonly tickMs?: number
+	/**
+	 * A public procedure, which anyone calls: its `ctx.db.app` inserts and reads nothing back, reads only under a table's
+	 * read action, and reaches application tables only. It never updates, removes, locks or claims a row.
+	 */
+	readonly public?: true
 	/** Throws unless the work running now is the invocation these handles were made for. */
 	check(): void
 	/** The session every statement of the site runs in. */
@@ -472,8 +477,9 @@ function applicationTables(parts: DataLayerParts, site: DataSite, run: Runner, c
 		}
 		const context = parts.contextOf(model.name)
 		if (model.scope.mode === 'app') {
-			setOwn(handle, model.name, applicationRows(parts, context, site, run, capability))
-		} else if (model.scope.mode === 'dimension' || model.scope.mode === 'child') {
+			const rows = applicationRows(parts, context, site, run, capability)
+			setOwn(handle, model.name, site.public === true ? publicApplicationRows(context, site, run, capability, rows) : freeze(rows))
+		} else if (site.public !== true && (model.scope.mode === 'dimension' || model.scope.mode === 'child')) {
 			setOwn(handle, model.name, appRecordRows(context, site, run, capability, grant.action))
 		}
 	}
@@ -549,7 +555,13 @@ function namedApp(context: TableContext, capability: unknown): string {
  * An application table under an `app` capability: listed, counted and aggregated with its read action; one row read
  * (and locked) with any action it names; inserted, updated and removed with that operation's action.
  */
-function applicationRows(parts: DataLayerParts, context: TableContext, site: DataSite, run: Runner, capability: unknown): object {
+function applicationRows(
+	parts: DataLayerParts,
+	context: TableContext,
+	site: DataSite,
+	run: Runner,
+	capability: unknown,
+): Readonly<Record<string, unknown>> {
 	const model = context.model
 	const table = model.name
 	const visible = () => visibleFor(model, heldAction(context, capability))
@@ -568,7 +580,7 @@ function applicationRows(parts: DataLayerParts, context: TableContext, site: Dat
 			}
 			return row
 		})
-	return freeze({
+	return {
 		list: bound(site, async (options?: unknown) => listRows(context, run, appListPredicate(context, capability), visible(), options, key)),
 		count: bound(site, async (options?: unknown) => countRows(context, run, appListPredicate(context, capability), visible(), options)),
 		aggregate: bound(
@@ -593,6 +605,43 @@ function applicationRows(parts: DataLayerParts, context: TableContext, site: Dat
 		}),
 		remove: writing(site, 'remove', async (id: unknown, ...options: unknown[]) => {
 			await removeRow(context, run, { scope: appRowPredicate(context, capability, id, 'delete') }, versionArgument(context, options))
+		}),
+	}
+}
+
+/**
+ * An application table of a public procedure: listed, counted, aggregated and read by key under its read action only;
+ * inserted with only the new key and version answered; never updated, removed, locked or claimed. An update or a
+ * removal waits for a signed token that names the row.
+ */
+function publicApplicationRows(
+	context: TableContext,
+	site: DataSite,
+	run: Runner,
+	capability: unknown,
+	rows: Readonly<Record<string, unknown>>,
+): object {
+	const model = context.model
+	const refusal = (operation: string) =>
+		refused(site, 'public_reach', `a public procedure does not ${operation} a ${model.name} row: it inserts, and reads under the read action`)
+	return freeze({
+		list: rows['list'],
+		count: rows['count'],
+		aggregate: rows['aggregate'],
+		get: bound(site, async (id: unknown) => {
+			appListPredicate(context, capability)
+			return selectOne(context, run, appKeyPredicate(model, id), visibleFor(model, heldAction(context, capability)))
+		}),
+		getForUpdate: refusal('lock'),
+		claim: refusal('claim'),
+		update: refusal('update'),
+		remove: refusal('remove'),
+		insert: bound(site, async (values: unknown, options?: unknown) => {
+			const prepared = prepareApplicationInsert(context, capability, values, options)
+			if (prepared.conflict !== undefined && prepared.conflict.mode !== 'nothing') {
+				throw new QueryRefusedError('public_reach', `a public procedure's insert into ${model.name} takes onConflict do: 'nothing' only`)
+			}
+			return insertPrepared(context, run, prepared)
 		}),
 	})
 }

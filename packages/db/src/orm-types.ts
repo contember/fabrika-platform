@@ -466,6 +466,38 @@ export interface ApplicationRows<T extends string, E extends IndexedTable, A ext
 }
 
 /**
+ * A public procedure's insert: it answers the new row's key (and version), which the data layer generated, and reads
+ * no column back; a conflict of `onConflict`'s columns writes nothing.
+ */
+export interface PublicInsertMethod<E extends IndexedTable> {
+	(values: InsertValuesOf<E>, options: InsertConflict<E, 'nothing'>): Promise<(Saved<E> & { readonly inserted: true }) | { readonly inserted: false }>
+	(values: InsertValuesOf<E>): Promise<Saved<E>>
+}
+
+type PublicRefusal<Op extends string> = Unavailable<`a public procedure does not ${Op} a row: it inserts, and reads under the table's read action`>
+
+/**
+ * An application table of a public procedure of action `A`, in a site of kind `K`: read under its read action only, and
+ * inserted with nothing read back; never updated, removed, locked or claimed.
+ */
+export interface PublicApplicationRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
+	readonly list: ApplicationRows<T, E, A, K>['list']
+	readonly count: ApplicationRows<T, E, A, K>['count']
+	readonly aggregate: ApplicationRows<T, E, A, K>['aggregate']
+	readonly get: A extends E['actions']['read'] ? (key: string) => Promise<RowFor<E, A>> : Unavailable<ListRefusal<T, E, A>>
+	readonly getForUpdate: PublicRefusal<'lock'>
+	readonly claim: PublicRefusal<'claim'>
+	readonly update: PublicRefusal<'update'>
+	readonly remove: PublicRefusal<'remove'>
+	readonly insert: Write<T, E, 'insert', A, K, PublicInsertMethod<E>>
+}
+
+/** `ctx.db.app('<action>')` of a public procedure: the application tables only, each as `PublicApplicationRows`. */
+export type PublicApplicationTables<Ix extends AnyDbIndex, A extends string, K extends DataKind> = {
+	readonly [T in Ix['applications']]: PublicApplicationRows<T, Ix['tables'][T], A, K>
+}
+
+/**
  * A dimension or child table under an `app` endpoint of action `A`: every row read-only, with the columns `A` reads
  * (`RowFor`), or only how many rows match. A count-only action has no `aggregate`: a group or a minimum is a value.
  */

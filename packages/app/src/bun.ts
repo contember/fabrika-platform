@@ -394,6 +394,7 @@ async function startContractServer(
 		workloadTokens,
 		requireProxySecret: true,
 		localEmailProviders: LOCAL_EMAIL_PROVIDERS,
+		connections: databaseConnections(environment.framework[DATABASE_CONNECTIONS]) ?? DEFAULT_DATABASE_CONNECTIONS,
 		...(operationsFetch === undefined ? {} : { operationsFetch }),
 	})
 	// The work a request leaves running (a failure's report, a kicked run) is drained, within a bound, before the database closes.

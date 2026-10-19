@@ -76,7 +76,7 @@ const CONTRACT_ALLOWED = 'export const contract = app.contract((c) => ({ … }))
 /** Which builders a surface is written with: `defineContract`'s `c`, or the staged kit's (`app.*` and its `c`). */
 type Form = 'surface' | 'kit'
 const ACCESS_ALLOWED =
-	'{ member: true }, { action, over }, { action, in, from }, { action, on, from }, { action, creates }, { action, app: true } or { capabilities: { <name>: … } }'
+	'{ member: true }, { action, over }, { action, in, from }, { action, on, from }, { action, creates }, { action, app: true }, { capabilities: { <name>: … } } or { public: true }'
 const CAPABILITY_ALLOWED = '{ action, over }, { action, in, from } or { action, on, from }'
 
 type Entries = ReadonlyMap<string, LiteralValue>
@@ -425,13 +425,19 @@ class SurfaceReader {
 			if (first === undefined) {
 				throw new Refused(groupsValue?.at ?? builder.at, `c.rpc('${path}') mounts no group`, `c.rpc('${path}', { <name>: <group> })`)
 			}
-			if (read.groups.some((group) => !sameCallers(group.callers, first.callers))) {
-				throw new Refused(builder.at, 'every group of one RPC mount names the same callers, in the same order', "callers: ['human'] in each group")
+			const credentialed = read.groups.filter((group) => group.callers.length > 0)
+			const callers = credentialed[0]?.callers ?? []
+			if (credentialed.some((group) => !sameCallers(group.callers, callers))) {
+				throw new Refused(
+					builder.at,
+					'every group of one RPC mount that names callers names the same ones, in the same order',
+					"callers: ['human'] in each group",
+				)
 			}
 			return {
 				kind: 'rpc',
 				prefix: path,
-				callers: first.callers,
+				callers,
 				procedures: read.procedures,
 				unknownOptions: [...new Set(read.groups.flatMap((group) => group.unknownOptions))],
 			}
@@ -489,8 +495,19 @@ class SurfaceReader {
 					'app.group({ callers }, (r) => ({ <name>: r.query({ … }) }))',
 				)
 			}
-			const procedures = this.#tree(callback.result, at, 'endpoints', (leaf) => this.#procedure(leaf, 'endpoints', accessDeclaration))
-			return { groups: [{ callers: rpcCallers(options.get('callers'), at), unknownOptions: optionKeys(options, 'rpc') }], procedures }
+			const callers = options.has('callers') ? rpcCallers(options.get('callers'), at) : []
+			const procedures = this.#tree(callback.result, at, 'endpoints', (leaf) => {
+				const procedure = this.#procedure(leaf, 'endpoints', accessDeclaration)
+				if (callers.length === 0 && !('public' in procedure.access)) {
+					throw new Refused(
+						leaf.at,
+						'a group without callers holds public procedures only',
+						"app.group({ callers: ['human'] }, …), or access: { public: true }",
+					)
+				}
+				return procedure
+			})
+			return { groups: [{ callers, unknownOptions: optionKeys(options, 'rpc') }], procedures }
 		}
 		if (value?.kind !== 'object') {
 			throw new Refused(
@@ -550,6 +567,7 @@ class SurfaceReader {
 			output: this.#output(options.get('output'), builder),
 			access: access(options.get('access'), builder),
 			...crossOriginOption(options.get('crossOrigin')),
+			...plainOptions(options, ['actions', 'admission', 'limits', 'http']),
 			...(kit === 'endpoints'
 				? { declared: declared(options), unknownOptions: kitOptionKeys(options, 'procedure') }
 				: { unknownOptions: optionKeys(options, 'procedure') }),
@@ -719,6 +737,21 @@ function declared(options: Entries): DeclaredDeclaration {
 	})
 }
 
+/** The procedure options that hold plain values, each only when written, as the kit copies them. */
+function plainOptions(
+	options: Entries,
+	keys: readonly ('actions' | 'admission' | 'limits' | 'http')[],
+): Partial<Record<(typeof keys)[number], unknown>> {
+	const read: Partial<Record<(typeof keys)[number], unknown>> = {}
+	for (const key of keys) {
+		const value = options.get(key)
+		if (value !== undefined) {
+			read[key] = plain(value)
+		}
+	}
+	return read
+}
+
 /** A literal as the plain value the evaluated module holds; a declared field holds no schema or builder. */
 function plain(value: LiteralValue | undefined): unknown {
 	if (value === undefined) {
@@ -753,7 +786,8 @@ const asSurface = (builder: BuilderValue): LiteralValue => ({
 })
 
 interface ReadGroup {
-	readonly callers: readonly [RpcCaller, ...RpcCaller[]]
+	/** None for a group of public procedures only. */
+	readonly callers: readonly RpcCaller[]
 	readonly unknownOptions: readonly string[]
 }
 
@@ -966,6 +1000,12 @@ function isApp(fields: Entries): boolean {
 	return hasKeys(fields, ['action', 'app']) && app?.kind === 'boolean' && app.value
 }
 
+/** `{ public: true }`: `public` is the literal `true`. */
+function isPublic(fields: Entries): boolean {
+	const open = fields.get('public')
+	return hasKeys(fields, ['public']) && open?.kind === 'boolean' && open.value
+}
+
 /** The one access form the object spells, with exactly its keys, as `buildArtifact` reads it. */
 function accessDeclaration(value: LiteralValue | undefined, at: BuilderValue): AccessDeclaration {
 	const fields = accessFields(value, at, ACCESS_ALLOWED)
@@ -987,6 +1027,9 @@ function accessDeclaration(value: LiteralValue | undefined, at: BuilderValue): A
 	}
 	if (isApp(fields)) {
 		return { action: field('action'), app: true }
+	}
+	if (isPublic(fields)) {
+		return { public: true }
 	}
 	if (hasKeys(fields, ['capabilities'])) {
 		return { capabilities: capabilityDeclarations(fields.get('capabilities'), value ?? at) }
@@ -1025,7 +1068,7 @@ function exportAccessDeclaration(value: LiteralValue | undefined, at: BuilderVal
 	if ('app' in access) {
 		throw new Refused(value?.at ?? at.at, 'an export procedure reads in one dimension', '{ action, over } (or in, on)')
 	}
-	if ('capabilities' in access) {
+	if ('capabilities' in access || 'public' in access) {
 		throw new Refused(value?.at ?? at.at, 'an export procedure names one action', '{ action, over } (or in, on)')
 	}
 	return access

@@ -47,7 +47,7 @@ export interface BuilderFields {
 }
 
 export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
-	procedure: { options: ['input', 'output', 'access', 'crossOrigin'], owned: ['~kind', 'type'] },
+	procedure: { options: ['input', 'output', 'access', 'crossOrigin', 'actions', 'admission', 'limits', 'http'], owned: ['~kind', 'type'] },
 	rpc: { options: ['callers'], owned: ['kind', 'prefix', 'procedures'] },
 	link: { options: ['spa', 'dimension', 'grants', 'issuedBy', 'maxDays', 'procedures'], owned: ['kind', 'prefix'] },
 	spa: { options: ['dir', 'access', 'public'], owned: ['kind', 'prefix'] },
@@ -129,6 +129,8 @@ export type AccessDeclaration =
 	| { readonly action: string; readonly creates: string }
 	| { readonly action: string; readonly app: true }
 	| { readonly capabilities: Readonly<Record<string, CapabilityDeclaration>> }
+	/** Anyone calls it; its handler runs as the procedure's own workload, with its top-level `actions`. RPC only. */
+	| { readonly public: true }
 
 /** One of several capabilities: an action in a dimension, listed `over` it or read from an input field. */
 export type CapabilityDeclaration =
@@ -142,7 +144,10 @@ export type CapabilityDeclaration =
  */
 export type ExportAccessDeclaration = Exclude<
 	AccessDeclaration,
-	{ readonly member: true } | { readonly app: true } | { readonly capabilities: Readonly<Record<string, CapabilityDeclaration>> }
+	| { readonly member: true }
+	| { readonly app: true }
+	| { readonly capabilities: Readonly<Record<string, CapabilityDeclaration>> }
+	| { readonly public: true }
 >
 
 export interface LinkAccessDeclaration {
@@ -167,6 +172,14 @@ export interface ProcedureDeclaration<S, Access = AccessDeclaration> extends Opt
 	readonly access: Access
 	/** `true` opens the procedure to the environment's listed origins, as written; `buildArtifact` refuses anything else. */
 	readonly crossOrigin?: unknown
+	/** A public procedure's workload actions, as written: all its handler holds. Required there, refused elsewhere. */
+	readonly actions?: unknown
+	/** `{ origins?, rate?, challenge? }`, as written; `buildArtifact` merges it into the defaults. */
+	readonly admission?: unknown
+	/** `{ maxBytes?, timeoutMs? }`, as written; `buildArtifact` checks each against its ceiling. */
+	readonly limits?: unknown
+	/** `{ method?, query?, body?, cache? }`, as written; `buildArtifact` checks the HTTP shape's rules. */
+	readonly http?: unknown
 	/** What a procedure of the staged kit declares off the paved road; a `defineContract` procedure has none. */
 	readonly declared?: unknown
 	/**
@@ -203,7 +216,8 @@ export type MountDeclaration<S> =
 export interface RpcMountDeclaration<S> extends OptionsRecord {
 	readonly kind: 'rpc'
 	readonly prefix: string
-	readonly callers: readonly [RpcCaller, ...RpcCaller[]]
+	/** The callers of its credentialed procedures; none when every procedure is public. */
+	readonly callers: readonly RpcCaller[]
 	readonly procedures: ProcedureTreeDeclaration<S>
 }
 

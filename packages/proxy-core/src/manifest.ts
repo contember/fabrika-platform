@@ -193,7 +193,7 @@ export const proxyEndpointRowSchema = z.union([
 	}).strict(),
 	z.object({
 		...endpointRuleFields,
-		kind: z.enum(['health', 'form', 'webhook', 'link-spa']),
+		kind: z.enum(['health', 'form', 'webhook', 'link-spa', 'public']),
 		callers: z.tuple([]),
 		requirement: z.null(),
 		delegation: z.null(),
@@ -221,7 +221,7 @@ export const proxyEndpointRowSchema = z.union([
 	unknown
 >
 
-/** Only an RPC procedure and a form open to another origin, and only a form to any origin (ADR-0022). */
+/** Only an RPC procedure, a public procedure and a form open to another origin, and only the anonymous two to any (ADR-0022). */
 function crossOriginAllowed(kind: ProxyEndpointRow['kind'], form: CrossOriginForm | undefined): boolean {
 	return form === undefined || (CROSS_ORIGIN_KINDS.includes(kind) && (form !== 'any' || ANY_ORIGIN_KINDS.includes(kind)))
 }

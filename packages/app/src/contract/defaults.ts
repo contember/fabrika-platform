@@ -24,6 +24,30 @@ export const FORM_LIMITS = {
 	maxPerMinute: 10_000,
 } as const
 
+/**
+ * A procedure's bounds: its body (`maxBytes`, without files) and its handler's time (`timeoutMs`, counted after the last
+ * body byte), each with its default and its ceiling, and the most calls a bucket admits per minute.
+ */
+export const PROCEDURE_LIMITS = {
+	maxBytes: 64 * 1024,
+	maxMaxBytes: 1024 * 1024,
+	timeoutMs: 10_000,
+	maxTimeoutMs: 60_000,
+	maxPerMinute: 10_000,
+	maxBytesPerHour: 64 * 1024 * 1024 * 1024,
+} as const
+
+/** A public mutation's buckets unless it declares its own: today's form limits, per client and for the endpoint. */
+export const PUBLIC_MUTATION_RATE = { perClient: FORM_LIMITS.perClient, perEndpoint: FORM_LIMITS.perForm } as const
+
+/**
+ * The challenge widget's `action` of a public procedure: its endpoint id with `_` for `.`, as the provider admits at most
+ * 32 letters, digits, `_` and `-`.
+ */
+export function challengeAction(endpoint: string): string {
+	return endpoint.replaceAll('.', '_')
+}
+
 /** The input field that carries a form's challenge token; a form with a challenge declares it as a string. */
 export const FORM_CHALLENGE_FIELD = 'challengeToken'
 
