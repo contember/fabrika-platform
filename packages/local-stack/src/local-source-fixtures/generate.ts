@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { z } from 'zod'
 import { type LocalSourceFixture, type LocalSourceFixtureKind, localSourceFixtureSchema } from '../local-source-contract'
 
 export const fixtureInputs = fileURLToPath(new URL('../../fixtures/source/', import.meta.url))
@@ -15,9 +16,10 @@ export const applicationFixtureRoot = fileURLToPath(new URL('../../../../example
 const UNCOMMITTED = new Set(['node_modules', 'fabrika', 'dist', '.env', 'fabrika.manifest.json'])
 
 /**
- * The complete application commit: every file of the example an author pushes, and the entrypoint the platform build
- * writes, so the archive is what a production build checks and what the composed container runs. The tree is pinned in
- * `fixtures/source/manifest.json`; an edit to any of these files moves it (`bun run fixtures:pin`).
+ * The complete application commit: every file of the example an author pushes, the entrypoint the platform build
+ * writes, and a `bun.lock` of the packages the composed container runs (`sourceVersionLockfile`), so the archive is what
+ * a production build checks and what the container runs. The tree is pinned in `fixtures/source/manifest.json`; an
+ * edit to any of these files moves it (`bun run fixtures:pin`).
  */
 export async function applicationFixtureSource(root: string = applicationFixtureRoot): Promise<ReadonlyMap<string, Uint8Array<ArrayBuffer>>> {
 	const files = new Map<string, Uint8Array<ArrayBuffer>>()
@@ -32,8 +34,34 @@ export async function applicationFixtureSource(root: string = applicationFixture
 	}
 	await visit('')
 	files.set(GENERATED_ENTRY_FILE, new TextEncoder().encode(generatedEntry('bun')))
+	const manifest = files.get('package.json')
+	if (manifest === undefined) throw new Error('the application fixture has no package.json')
+	files.set('bun.lock', new TextEncoder().encode(sourceVersionLockfile(new TextDecoder().decode(manifest))))
 	return files
 }
+
+const manifestSchema = z.object({
+	dependencies: z.record(z.string()).default({}),
+	devDependencies: z.record(z.string()).default({}),
+})
+
+/**
+ * The fixture's `bun.lock`: every `@fabrika/*` pin of the example resolved from the registry at the version it names.
+ * Those pins are the source version (`release:bump` writes them), which no registry holds before its release, and the
+ * composed container runs the workspace's packages of that version. So Control reads the release the container runs
+ * and picks its reader (ADR-0062). The example's own `bun.lock` is the standalone mirror's, which its job regenerates.
+ */
+export function sourceVersionLockfile(packageJson: string): string {
+	const manifest = manifestSchema.parse(JSON.parse(packageJson))
+	const pins = Object.entries({ ...manifest.dependencies, ...manifest.devDependencies })
+		.filter(([name]) => name.startsWith('@fabrika/'))
+		.sort(([a], [b]) => (a < b ? -1 : 1))
+	const packages = Object.fromEntries(pins.map(([name, version]) => [name, [`${name}@${version}`, '', {}, UNPUBLISHED_INTEGRITY]]))
+	return `${JSON.stringify({ lockfileVersion: 1, workspaces: { '': manifest }, packages }, null, 2)}\n`
+}
+
+/** No registry holds the source version yet, so no integrity exists; the form is the one the checker requires. */
+const UNPUBLISHED_INTEGRITY = 'sha512-unpublished'
 
 export function sha256(bytes: Uint8Array): string {
 	return createHash('sha256').update(bytes).digest('hex')
