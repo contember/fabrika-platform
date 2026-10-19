@@ -126,7 +126,6 @@ import {
 	WEBHOOK_CLAIM_GRACE_MS,
 	WEBHOOK_REPLAY_RETENTION_MS,
 	webhookBindings,
-	webhookFiles,
 	type WebhookPrincipal,
 	webhookSubject,
 } from './webhook'
@@ -1354,11 +1353,13 @@ export class ContractRuntime {
 			return jsonResponse({ result: { received: true } }, 200)
 		}
 		const frame = new RequestFrame(crypto.randomUUID())
+		const work = new FileWork(frame, frame.id)
 		const site = served.site
 		// The claim stays outside the delivery's transaction, and its completion commits inside it, with the work.
 		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), false)
 		const kicks = kickRecorder(`webhook '${served.webhook}'`, site?.kicks ?? [])
 		const signal = handlerSignal(request, budgetMs)
+		let committing = false
 		try {
 			try {
 				await runInRequest(frame, async () => {
@@ -1366,7 +1367,9 @@ export class ContractRuntime {
 					const reach = this.#webhookReach(served, frame, subject, binding.scope.value, chain)
 					const principal: WebhookPrincipal = Object.freeze({ kind: 'webhook', bindingId: binding.id })
 					const delivery = Object.freeze({ key })
-					const handles = site === undefined || invocation === null ? null : invocation.handles('mutation', site, subject)
+					const handles = site === undefined || invocation === null
+						? null
+						: invocation.handles('mutation', site, subject, 'declared', this.#parts.fileKinds?.binding(work))
 					const data = site === undefined || invocation === null || handles === null
 						? {}
 						: {
@@ -1383,7 +1386,11 @@ export class ContractRuntime {
 							client,
 							...reach.context,
 							delivery,
-							files: webhookFiles(served.webhook),
+							files: storedFilesHandle(this.#parts.fileKinds, work, {
+								where: `webhook '${served.webhook}'`,
+								check: boundTo(frame, () => false, 'ctx.files'),
+								writes: true,
+							}),
 							kick: kicks.kick,
 							...data,
 						}),
@@ -1396,10 +1403,15 @@ export class ContractRuntime {
 			if (!(await tables.completeDelivery(claim, using))) {
 				throw new ServerFault('webhook_claim_lost', `the claim of a delivery to '${served.webhook}' expired and another copy took it over`)
 			}
+			committing = true
 			await invocation?.commit(signal)
 			this.#kickAll(kicks.kicked(), exec)
 		} catch (error) {
 			await invocation?.rollback()
+			// Only a known rollback deletes what the delivery staged; after a commit that may have happened, the sweep decides.
+			if (!committing) {
+				await this.#parts.fileKinds?.release(work)
+			}
 			// The provider redelivers a failed delivery; giving the claim back lets the redelivery run at once. The unsigned
 			// delivery header is the caller's word, so the log names only the endpoint.
 			console.error(`fabrika: ${served.row.id}: delivery_failed; the provider's redelivery runs it again`)

@@ -1,5 +1,5 @@
 import { NotFoundError } from '@fabrika/app'
-import { file } from '@fabrika/app/contract'
+import { file, WebhookSecret } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 
@@ -80,6 +80,12 @@ export const catalog = app.group({ callers: ['human'] }, (r) => ({
 		const opened = await ctx.files.open(image)
 		return { size: opened.size, name: opened.name }
 	}),
+	connectScans: r.mutation({
+		input: z.strictObject({ account: z.string() }),
+		output: WebhookSecret,
+		access: { action: 'catalog.write', app: true },
+		binds: 'scans',
+	}).handle(({ input, ctx }) => ctx.webhooks('scans').bind(ctx.app, input.account)),
 	putOnly: r.mutation({
 		input: z.strictObject({ name: z.string() }),
 		output: Empty,
@@ -118,3 +124,14 @@ export const intake = app.group({}, (r) => ({
 		return {}
 	}),
 }))
+
+/** A provider's delivery that renders a product's image: the webhook puts the file and writes it into the column. */
+export const scans = app.webhook('/hooks/scans', {
+	scheme: 'stripe',
+	boundTo: 'app',
+	actions: ['catalog.write'],
+	input: z.strictObject({ id: z.string(), type: z.string() }),
+}).handle(async ({ input, ctx }) => {
+	const image = await ctx.files.put('catalog', new Uint8Array(PNG_BYTES), { type: 'image/png', name: `${input.id}.png` })
+	await ctx.db.app('catalog.write').products.insert({ name: input.type, image })
+})

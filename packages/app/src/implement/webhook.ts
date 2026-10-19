@@ -14,7 +14,6 @@ import { joinPath, WEBHOOK_ACCOUNT_PATTERN, WEBHOOK_SCOPE_FIELD } from '../contr
 import type { WebhookBindings, WebhookSecret } from '../contract/webhook-binding'
 import { BadRequestError, NotFoundError } from '../errors'
 import { CapabilityRefusedError, Ref } from './capability'
-import { ServerFault } from './faults'
 
 /** The input and output of the generated binding endpoints; `build.ts`'s `WEBHOOK_BIND_*` shapes describe them. */
 export const webhookBindInput = z.strictObject({
@@ -210,15 +209,4 @@ export function bindingHandlers(webhook: string, path: string, tables: () => Web
 			return { id }
 		},
 	}
-}
-
-/**
- * `ctx.files` of a delivery's handler. A webhook writes no file in this release; the types refuse it too, and at run
- * time it exists only to refuse by name.
- */
-export function webhookFiles(webhook: string): object {
-	const refuse = (): never => {
-		throw new ServerFault('facility_unbound', `webhook '${webhook}': ctx.files.put in a webhook is not served by this release`)
-	}
-	return Object.freeze({ put: refuse })
 }

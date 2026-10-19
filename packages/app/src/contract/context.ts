@@ -551,7 +551,10 @@ export type WebhookKitContext<K extends KitTypes, B extends string, Acts extends
 			& SiteData<K['index'], 'mutation', Acts, Of<D, 'unscoped'>>
 			& ([B] extends ['app'] ? WorkloadAppData<K['index'], 'mutation', Acts> : { readonly app: Unavailable<BoundToValue> })
 	}
-	& { readonly files: Unavailable<'a webhook writes no file in this release'> }
+	& {
+		/** The stored files: a delivery puts one, and opens one it holds. */
+		readonly files: StoredFilesHandle
+	}
 	& NoMail
 
 type IndexOf<A> = A extends App<infer K> ? K['index'] : never

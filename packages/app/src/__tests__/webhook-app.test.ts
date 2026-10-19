@@ -9,6 +9,7 @@ import {
 	compileContract,
 	ContractError,
 	type Declared,
+	type FileRef,
 	type KitTypes,
 	type Unavailable,
 	type WebhookKitContext,
@@ -36,7 +37,7 @@ export type AppWebhookContext = [
 	Expect<Equal<ReturnType<Hook['app']>, AppCapability<'positions.manage'>>>,
 	Expect<Equal<Parameters<Hook['db']['app']>[0], 'positions.manage'>>,
 	Expect<Hook['refs'] extends Unavailable<string> ? true : false>,
-	Expect<Hook['files'] extends Unavailable<string> ? true : false>,
+	Expect<Equal<ReturnType<Hook['files']['put']>, Promise<FileRef>>>,
 ]
 
 const fixtureRoot = join(import.meta.dir, 'app-wide-fixture')

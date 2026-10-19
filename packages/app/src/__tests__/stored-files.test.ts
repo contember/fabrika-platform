@@ -16,6 +16,7 @@ import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { SQL } from 'bun'
 import { afterAll, describe, expect, test } from 'bun:test'
+import { createHmac } from 'node:crypto'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { FILE_SWEEP_JOB } from '../files/collections'
@@ -299,6 +300,30 @@ if (postgres !== null) {
 			for (let call = 0; call < 3; call++) expect((await register(false)).status).toBe(200)
 			expect(await charged()).toBe(declared.length + 3 * 327680)
 			expect((await register(false)).status).toBe(429)
+		})
+	})
+
+	describe('a webhook', () => {
+		test("a delivery puts a file and writes it into a column, in the delivery's own transaction", async () => {
+			const manager = kit.browser(kit.testCaller([{ action: 'catalog.write' }]))
+			const connected = await manager('/api/catalog.connectScans', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ account: 'acct_scans' }),
+			})
+			const binding =
+				z.strictObject({ result: z.strictObject({ id: z.string(), url: z.string(), secret: z.string() }) }).parse(await connected.json()).result
+			const body = JSON.stringify({ id: `evt_${crypto.randomUUID()}`, type: 'scanned lamp' })
+			const t = String(Math.floor(Date.now() / 1000))
+			const signature = createHmac('sha256', binding.secret).update(`${t}.${body}`).digest('hex')
+			const delivered = await kit.fetch(binding.url, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json', 'Stripe-Signature': `t=${t},v1=${signature}` },
+				body,
+			})
+			expect(delivered.status).toBe(200)
+			const [row] = await admin((sql) => sql.unsafe(`select image::text as image from ${schema}.products where name = 'scanned lamp'`))
+			expect((await files()).find((file) => file.id === row?.image)).toMatchObject({ status: 'live', kind: 'catalog' })
 		})
 	})
 
