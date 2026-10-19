@@ -10,7 +10,7 @@ export interface ContractDeclaration<S> {
 	readonly actions: Readonly<Record<string, string>>
 	readonly roles: Readonly<Record<string, RoleDeclaration>>
 	readonly mounts: Readonly<Record<string, MountDeclaration<S>>>
-	readonly files: Readonly<Record<string, FilesDeclaration>>
+	readonly files: Readonly<Record<string, FilesDeclaration | FileKindDeclaration>>
 	readonly jobs: Readonly<Record<string, CronDeclaration>>
 	readonly exports: Readonly<Record<string, ExportDeclaration<S>>>
 	readonly imports: Readonly<Record<string, ImportDeclaration>>
@@ -39,7 +39,7 @@ export type SurfaceSection = (typeof SURFACE_SECTIONS)[number]
  * records every other key of its options in `unknownOptions`, so an option can never replace what the builder set;
  * `buildArtifact` refuses a non-empty `unknownOptions`. A reader of source fills it the same way.
  */
-export type Builder = 'procedure' | 'rpc' | 'link' | 'spa' | 'form' | 'webhook' | 'files' | 'cron' | 'export' | 'attachment'
+export type Builder = 'procedure' | 'rpc' | 'link' | 'spa' | 'form' | 'webhook' | 'files' | 'fileKind' | 'cron' | 'export' | 'attachment'
 
 export interface BuilderFields {
 	readonly options: readonly string[]
@@ -54,6 +54,7 @@ export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
 	form: { options: ['input', 'appendTo', 'maxBytes', 'rate', 'honeypot', 'challenge', 'then', 'crossOrigin', 'files'], owned: ['kind', 'path'] },
 	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'limits'], owned: ['kind', 'path'] },
 	files: { options: ['owner', 'read', 'write', 'delete', 'maxBytes', 'types', 'maxPerOwner', 'link', 'scan'], owned: ['kind'] },
+	fileKind: { options: ['types', 'maxBytes', 'scan'], owned: ['kind'] },
 	cron: { options: ['actions', 'scope', 'limits', 'retries'], owned: ['kind', 'schedule'] },
 	export: { options: ['version', 'consumers', 'audience', 'procedures'], owned: ['kind'] },
 	attachment: { options: ['format', 'filename', 'row', 'maxBytes', 'maxRows'], owned: [] },
@@ -310,6 +311,18 @@ export interface FilesDeclaration extends OptionsRecord {
 	/** `true`: every link mount bound to the owner's dimension serves the files; a list: the named link mounts only. */
 	readonly link?: boolean | readonly string[]
 	/** Every upload waits `quarantined` until the scan pass gives it a clean verdict. */
+	readonly scan?: boolean
+}
+
+/**
+ * A file kind (`c.files({ types, maxBytes, scan? })`, no `owner`): a class of stored files a table's file column holds.
+ * It has no owner, no actions and no endpoint.
+ */
+export interface FileKindDeclaration extends OptionsRecord {
+	readonly kind: 'file-kind'
+	readonly types: readonly string[]
+	readonly maxBytes: number
+	/** Every file waits `quarantined` until the scan gives it a clean verdict; a byte consumer answers 409 until then. */
 	readonly scan?: boolean
 }
 

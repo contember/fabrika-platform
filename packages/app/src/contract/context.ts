@@ -21,7 +21,14 @@ import type {
 	WithinTables,
 } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
-import type { FileCollectionHandle, FileCollectionJobHandle, FileCollectionReadHandle, FileCollections } from '../files/handle'
+import type {
+	FileCollectionHandle,
+	FileCollectionJobHandle,
+	FileCollectionReadHandle,
+	FileCollections,
+	StoredFilesHandle,
+	StoredFilesReadHandle,
+} from '../files/handle'
 import type { AppCapability, Ref, Within } from '../implement/capability'
 import type { ApplicationDirectory, LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
 import type { AppPrincipal, PrincipalOf, PublicPrincipal, ServicePrincipal } from '../implement/principal'
@@ -138,12 +145,17 @@ type SqlContext<S, Ix extends AnyDbIndex> = {
 		: SqlTag<Ix, S & SqlMode>
 }
 
-/** `ctx.files(<collection>)`: removal where the site writes (a mutation, a job's transaction), reading everywhere. */
+/**
+ * `ctx.files(<collection>)`: removal where the site writes (a mutation, a job's transaction), reading everywhere; and
+ * `ctx.files.put` and `.open` of the stored files: a put everywhere but in a query.
+ */
 type FilesContext<Ix, K extends DataKind | 'transaction'> = {
 	readonly files: Ix extends NoTablesIndex ? Unavailable<'this application declares no tables, so it has no file collections'>
-		: FileCollections<
-			K extends 'transaction' ? FileCollectionJobHandle : K extends 'mutation' ? FileCollectionHandle : FileCollectionReadHandle<RemovesIn<K>>
-		>
+		:
+			& FileCollections<
+				K extends 'transaction' ? FileCollectionJobHandle : K extends 'mutation' ? FileCollectionHandle : FileCollectionReadHandle<RemovesIn<K>>
+			>
+			& (K extends 'query' ? StoredFilesReadHandle : StoredFilesHandle)
 }
 
 type RemovesIn<K extends DataKind | 'transaction'> = K extends 'job' ? 'a job removes files inside ctx.transaction((tx) => …), as tx.files'
@@ -394,7 +406,8 @@ export type PublicContext<K extends KitTypes, Kind extends DataKind, Acts extend
 		readonly members: Unavailable<'a public procedure reaches no member directory'>
 		readonly links: Unavailable<'a public procedure issues no share link'>
 		readonly connect: Unavailable<'a public procedure calls no other application'>
-		readonly files: Unavailable<'a public procedure reaches no file collection'>
+		/** The stored files: a public mutation puts one, and both open one this request holds. */
+		readonly files: Kind extends 'query' ? StoredFilesReadHandle : StoredFilesHandle
 		readonly sql: Unavailable<'a public procedure reaches its actions only: it declares no sql'>
 	}
 	& {

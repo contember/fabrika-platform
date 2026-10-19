@@ -12,6 +12,7 @@ import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence,
 import { EmailDeliveryError, type EmailSenderCapabilities, mayRetryDelivery } from '@fabrika/email'
 import { NotFoundError } from '../errors'
 import type { FileCollections } from '../files/collections'
+import { FileWork, type StoredFileKinds, storedFilesHandle } from '../files/kinds'
 import {
 	type AppCapability,
 	type CapabilityMint,
@@ -173,6 +174,7 @@ interface RunnerContext {
 	readonly mint: CapabilityMint
 	readonly data: DataAccess | null
 	readonly files: FileCollections | null
+	readonly fileKinds: StoredFileKinds | null
 	readonly membership: IamMembership | null
 	readonly capabilities: CapabilityAuthority
 	readonly containers: ReadonlyMap<string, readonly string[]>
@@ -203,6 +205,8 @@ export interface JobBindingInput {
 	readonly data: DataAccess | null
 	/** The contract's file collections, behind a staged-kit job's `ctx.files` and `tx.files`; `null` without any. */
 	readonly files?: FileCollections | null
+	/** The contract's file kinds, behind a staged-kit job's `ctx.files.put` and `.open`; `null` without any. */
+	readonly fileKinds?: StoredFileKinds | null
 	/** The framework's own jobs this contract needs: the scan of its `scan: true` file collections. */
 	readonly frameworkJobs?: readonly FrameworkJob[]
 	/** IAM's membership operations, which a job that `issues` links asks; `null` when the adapter supplies none. */
@@ -307,6 +311,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		mint: input.mint,
 		data: input.data,
 		files: input.files ?? null,
+		fileKinds: input.fileKinds ?? null,
 		membership: input.membership,
 		capabilities: input.capabilities,
 		containers: input.containers,
@@ -783,7 +788,17 @@ function jobContext(
 		signal,
 		...(job.site === null || context.data === null
 			? {}
-			: kitJobContext(frame, context.data, context.files, job.name, job.site, principal.id, ref, app, periodAt(job.schedule, new Date()) ?? undefined)),
+			: kitJobContext(
+				frame,
+				context.data,
+				{ collections: context.files, kinds: context.fileKinds },
+				job.name,
+				job.site,
+				principal.id,
+				ref,
+				app,
+				periodAt(job.schedule, new Date()) ?? undefined,
+			)),
 		...(job.links === null || context.membership === null ? {} : { links: jobLinksOf(job, job.links, context.membership, frame, context) }),
 		...(job.mailer === null ? {} : { mail: jobMailOf(job, job.mailer, frame, signal, context) }),
 		within<const Act extends string, const Dim extends string>(action: Act, dimension: Dim): Within<Dim, Act> {
@@ -852,7 +867,7 @@ function jobMailOf(job: BoundJob, mailer: JobMailer, frame: RequestFrame, signal
 function kitJobContext(
 	frame: RequestFrame,
 	data: DataAccess,
-	files: FileCollections | null,
+	stored: { readonly collections: FileCollections | null; readonly kinds: StoredFileKinds | null },
 	name: string,
 	site: SiteDeclaration,
 	principal: string,
@@ -860,25 +875,31 @@ function kitJobContext(
 	app: (action: string) => AppCapability<string>,
 	tickMs: number | undefined,
 ): Readonly<Record<string, unknown>> {
-	const reads = jobHandles(frame, data, site, principal, 'job', async () => data.direct(), () => false, tickMs)
+	const files = stored.collections
+	// One attempt's files: what it reads, puts and writes, inside its transactions and outside them, belongs to it.
+	const work = new FileWork(frame, frame.id)
+	const binding = stored.kinds?.binding(work)
+	const reads = jobHandles(frame, data, site, principal, 'job', async () => data.direct(), () => false, tickMs, binding)
 	const job = `job '${name}'`
+	const putAndOpen = (check: () => void) => storedFilesHandle(stored.kinds, work, { where: job, check, writes: true })
+	const collections = files === null ? noFileCollections(job) : files.site({
+		where: job,
+		frame,
+		check: boundTo(frame, () => false, 'ctx.files'),
+		session: async () => data.direct(),
+		readOnly: 'a job removes files inside ctx.transaction((tx) => …), as tx.files',
+		attaches: false,
+	})
 	return {
 		db: siteData(reads, (action) => reads.app(app(action))),
 		sql: site.sql === null ? undeclaredSql(job, 'job') : jobSqlOutsideTransaction(job),
-		files: files === null ? noFileCollections(job) : files.site({
-			where: job,
-			frame,
-			check: boundTo(frame, () => false, 'ctx.files'),
-			session: async () => data.direct(),
-			readOnly: 'a job removes files inside ctx.transaction((tx) => …), as tx.files',
-			attaches: false,
-		}),
+		files: Object.freeze(Object.assign(collections, putAndOpen(boundTo(frame, () => false, 'ctx.files')))),
 		transaction: async <R>(work: (tx: object) => Promise<R>): Promise<R> => {
 			// Outside its attempt there is no lease to fence the transaction with, so it never opens.
 			boundTo(frame, () => false)()
 			return data.transaction(async (session) => {
 				let open = true
-				const writes = jobHandles(frame, data, site, principal, 'mutation', async () => session, () => !open)
+				const writes = jobHandles(frame, data, site, principal, 'mutation', async () => session, () => !open, undefined, binding)
 				try {
 					const sql = site.sql === null ? undeclaredSql(job, 'job', 'tx.sql') : jobSql(frame, data, site.sql, session, () => !open)
 					const removing = files === null
@@ -896,7 +917,8 @@ function kitJobContext(
 						boundTo(frame, () => !open, 'tx.ref')()
 						return ref(action, dimension, id, session)
 					}
-					return await work(Object.freeze({ db: siteData(writes, (action) => writes.app(app(action))), sql, files: removing, ref: located }))
+					const txFiles = Object.freeze(Object.assign(removing, putAndOpen(boundTo(frame, () => !open, 'tx.files'))))
+					return await work(Object.freeze({ db: siteData(writes, (action) => writes.app(app(action))), sql, files: txFiles, ref: located }))
 				} finally {
 					open = false
 				}

@@ -31,6 +31,7 @@ import type { OperationsReporter } from '../jobs/report'
 import type { FileCollectionJobHandle, FileCollections as FilesOfSite, FileListing, FileListPage, OpenedFile, OpenOptions } from './handle'
 import { type FileScanner, runScanPass } from './scan'
 import { bytesAreOfType, SNIFF_BYTES, SNIFFABLE_TYPES } from './sniff'
+import { cleanName, digesting, isNamed, readExactly, readHead } from './streams'
 import { FileDownload } from './treatment'
 
 /** Which step of a file cleanup or sweep failed: the whole of what its log line says about the failure. */
@@ -38,7 +39,6 @@ type FileCleanupStep = 'rows_read_failed' | 'object_delete_failed' | 'row_delete
 
 /** How many removable files one sweep handles; the next remove picks up the rest. */
 const SWEEP_BATCH = 20
-const MAX_NAME_CODE_POINTS = 255
 /** An upload whose body has not arrived by then fails, so its pending row is abandoned well before the grace ends. */
 export const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000
 /** A pending row older than this is an upload that will never complete; the sweep deletes its object and the row. */
@@ -92,11 +92,6 @@ export function originalName(request: Request): string | null {
 	return cleanName(new URL(request.url).searchParams.get('name') ?? '')
 }
 
-function cleanName(raw: string): string | null {
-	const name = Array.from(raw.replace(/\p{Cc}/gu, '').trim()).slice(0, MAX_NAME_CODE_POINTS).join('')
-	return name === '' ? null : name
-}
-
 /** One file part of a form's submission, as the multipart reader hands it over. */
 export interface FormFilePart {
 	readonly filename: string | null
@@ -108,107 +103,6 @@ export interface FormFilePart {
 /** A form's file whose object is written under its pending row: what the inbox append holds, or a failure cleans up. */
 export interface ReceivedFormFile extends WrittenFormFile {
 	readonly objectKey: string
-}
-
-/** The first `size` bytes of `body`, and a stream that yields the whole body again. */
-async function readHead(
-	body: ReadableStream<Uint8Array>,
-	size: number,
-): Promise<{ readonly head: Uint8Array; readonly stream: ReadableStream<Uint8Array> }> {
-	const reader = body.getReader()
-	const chunks: Uint8Array[] = []
-	let length = 0
-	let done = false
-	while (length < size) {
-		const next = await reader.read()
-		if (next.done) {
-			done = true
-			break
-		}
-		chunks.push(next.value)
-		length += next.value.byteLength
-	}
-	const buffered = new Uint8Array(length)
-	let offset = 0
-	for (const chunk of chunks) {
-		buffered.set(chunk, offset)
-		offset += chunk.byteLength
-	}
-	const stream = new ReadableStream<Uint8Array>({
-		start(controller) {
-			if (buffered.byteLength > 0) {
-				controller.enqueue(buffered)
-			}
-			if (done) {
-				controller.close()
-			}
-		},
-		async pull(controller) {
-			const next = await reader.read()
-			if (next.done) {
-				controller.close()
-			} else {
-				controller.enqueue(next.value)
-			}
-		},
-		cancel: (reason) => reader.cancel(reason),
-	})
-	return { head: buffered.subarray(0, size), stream }
-}
-
-/** The body as it is stored: hashed on the way, and failed once `timeoutMs` (`null`: no timer) passes before it ends. */
-function digesting(body: ReadableStream<Uint8Array>, timeoutMs: number | null): {
-	readonly stream: ReadableStream<Uint8Array>
-	digest(): string
-	timedOut(): boolean
-	stop(): void
-} {
-	const hasher = new Bun.CryptoHasher('sha256')
-	let timer: ReturnType<typeof setTimeout> | undefined
-	let expired = false
-	const stream = body.pipeThrough(
-		new TransformStream<Uint8Array, Uint8Array>({
-			start(controller) {
-				if (timeoutMs !== null) {
-					timer = setTimeout(() => {
-						expired = true
-						controller.error(new Error('the upload did not finish in time'))
-					}, timeoutMs)
-				}
-			},
-			transform(chunk, controller) {
-				hasher.update(chunk)
-				controller.enqueue(chunk)
-			},
-			flush() {
-				clearTimeout(timer)
-			},
-		}),
-	)
-	return { stream, digest: () => hasher.digest('hex'), timedOut: () => expired, stop: () => clearTimeout(timer) }
-}
-
-/** The whole body when it holds exactly `size` bytes; `null` as soon as it proves longer, or once it ends shorter. */
-async function readExactly(body: ReadableStream<Uint8Array>, size: number): Promise<Uint8Array | null> {
-	const bytes = new Uint8Array(size)
-	let length = 0
-	const reader = body.getReader()
-	try {
-		for (let next = await reader.read(); !next.done; next = await reader.read()) {
-			if (length + next.value.byteLength > size) {
-				return null
-			}
-			bytes.set(next.value, length)
-			length += next.value.byteLength
-		}
-	} finally {
-		reader.releaseLock()
-	}
-	return length === size ? bytes : null
-}
-
-function isNamed(error: unknown, name: string): boolean {
-	return error instanceof Error && error.name === name
 }
 
 export class FileCollections {

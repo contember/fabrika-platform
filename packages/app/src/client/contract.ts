@@ -32,7 +32,10 @@ export type ClientTree<T> = {
 		: ClientTree<T[K]>
 }
 
-type FilesOf<C> = SurfaceOf<C> extends { readonly files: infer F } ? F : Record<never, never>
+/** The file collections of the contract: a file kind (`kind: 'file-kind'`) has no endpoint, so no client either. */
+type FilesOf<C> = SurfaceOf<C> extends { readonly files: infer F }
+	? { readonly [N in keyof F as F[N] extends { readonly kind: 'files' } ? N : never]: F[N] }
+	: Record<never, never>
 
 /** `files.<name>` of every collection, for the signed-in callers of an RPC mount that admits people. */
 type SessionFiles<C, Callers> = Callers extends readonly (infer Caller)[] ? 'human' extends Caller ? [keyof FilesOf<C>] extends [never] ? unknown
@@ -346,6 +349,9 @@ export function createClient<const C extends AnyContract, const M extends Client
 	})
 	const transport: FileTransport = { origin, fetch: options.fetch ?? fetch, key: options.key, bounce }
 	const collections = Object.entries(surface.files ?? {}).flatMap(([name, collection]): (readonly [string, FileClient | LinkFileClient])[] => {
+		if (collection.kind !== 'files') {
+			return []
+		}
 		if (node.kind === 'link') {
 			const serves = collection.link === true || (Array.isArray(collection.link) && collection.link.includes(mount))
 			return serves ? [[name, linkFiles(transport, node.prefix, mount, name)]] : []

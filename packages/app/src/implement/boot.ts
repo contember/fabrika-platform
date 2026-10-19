@@ -47,6 +47,7 @@ import { kitOriginOf } from '../contract/handled'
 import { schemaFromShape } from '../contract/schema-from-shape'
 import type { RequestExecutionContext } from '../fetch'
 import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, type FileCollections, fileCollections } from '../files/collections'
+import { storedFileKinds } from '../files/kinds'
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
 import { type MailStandIn, resolveMailTransports } from '../jobs/mail'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
@@ -743,6 +744,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	// This runtime's own: what another `boot` call mints, application code's included, its stores refuse.
 	const issuer = createCapabilityIssuer()
 	const files = fileCollections(artifact, app.database, options.files, issuer.authority, issuer.mint, problems)
+	const fileKinds = storedFileKinds(artifact, app.database, options.files, problems)
 	const bound = contractDatabase(app.database, options.database, issuer.authority, problems)
 	const framework = bound?.framework ?? null
 	frameworkProblems(artifact, framework, problems)
@@ -896,16 +898,34 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		mint: issuer.mint,
 		data: bound?.data ?? null,
 		files,
-		frameworkJobs: files === null ? [] : [
-			...(files.scans
+		fileKinds,
+		frameworkJobs: files === null && fileKinds === null ? [] : [
+			...(files?.scans === true || fileKinds?.scans === true
 				? [{
 					name: FILE_SCAN_JOB,
 					schedule: FILE_SCAN_SCHEDULE,
 					timeoutMs: SCAN_LIMITS.jobTimeoutMs,
-					run: (reporter: OperationsReporter, signal: AbortSignal) => files.scanPass(options.scanner ?? null, reporter, signal),
+					run: async (reporter: OperationsReporter, signal: AbortSignal) => {
+						await files?.scanPass(options.scanner ?? null, reporter, signal)
+						await fileKinds?.scanPass(options.scanner ?? null, reporter, signal)
+					},
 				}]
 				: []),
-			{ name: FILE_SWEEP_JOB, schedule: FILE_SWEEP_SCHEDULE, timeoutMs: FILE_SWEEP_TIMEOUT_MS, run: (_reporter, signal) => files.sweep(signal) },
+			{
+				name: FILE_SWEEP_JOB,
+				schedule: FILE_SWEEP_SCHEDULE,
+				timeoutMs: FILE_SWEEP_TIMEOUT_MS,
+				// Each sweep runs whatever the other did; the run fails after both when one did.
+				run: async (_reporter, signal) => {
+					const failures: unknown[] = []
+					for (const sweep of [files, fileKinds]) {
+						await sweep?.sweep(signal).catch((error: unknown) => failures.push(error))
+					}
+					if (failures.length > 0) {
+						throw failures[0]
+					}
+				},
+			},
 		],
 		membership,
 		capabilities: issuer.authority,
@@ -987,6 +1007,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		capabilities: issuer.authority,
 		data,
 		files,
+		fileKinds,
 		failures: new FailureReports(reporterFor('fabrika.requests')),
 		kick: jobs.kick,
 		actions: Object.freeze(Object.keys(artifact.actions).sort()),

@@ -3,6 +3,7 @@
 // collection's actions, so a file reaches what its owner reaches, as through the generated endpoints.
 
 import type { Unavailable } from '@fabrika/db/tables'
+import type { FileRef } from '../contract/file'
 import type { Ref } from '../implement/capability'
 
 /** A held file's state: served when `live`, `409` while `quarantined`, gone when `rejected`. */
@@ -94,3 +95,24 @@ export type FileCollectionReadHandle<Why extends string> = FileCollectionReader 
 
 /** `ctx.files(<collection>)`: the handle of one collection of the contract, by its name in `files`. */
 export type FileCollections<H> = (collection: string) => H
+
+/** What `ctx.files.put` writes: bytes in memory, a `Blob`, or a stream a large file comes from. */
+export type StoredFileBody = Uint8Array | ReadableStream<Uint8Array> | Blob
+
+/**
+ * `ctx.files.put` and `ctx.files.open`: the stored files of a site (`c.files` kinds). A put stages a file this request
+ * holds; writing its reference into a file column is what keeps it. `open` reads a live file whose reference this
+ * request holds and may read: an input file, a put, or a file column read under its table's read action.
+ */
+export interface StoredFilesHandle {
+	/** A file of `kind` with these bytes, which must be of `type`; it is pending until a column references it. */
+	put(kind: string, body: StoredFileBody, options: { readonly type: string; readonly name?: string }): Promise<FileRef>
+	/** The bytes of a live file, read whole, at most `maxBytes` (the kind's by default); 409 until it is live. */
+	open(file: FileRef, options?: { readonly maxBytes?: number }): Promise<OpenedFile>
+}
+
+/** A site that only reads (a query): it opens a file and creates none. */
+export interface StoredFilesReadHandle {
+	readonly put: Unavailable<'a query creates no file; put it in a mutation, a job or a webhook'>
+	open(file: FileRef, options?: { readonly maxBytes?: number }): Promise<OpenedFile>
+}

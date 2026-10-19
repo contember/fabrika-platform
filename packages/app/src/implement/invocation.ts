@@ -8,6 +8,7 @@ import {
 	type DataAccess,
 	type DataHandles,
 	type DataSite,
+	type FileBinding,
 	type InvocationTransaction,
 	type QueryRefusal,
 	QueryRefusedError,
@@ -260,7 +261,13 @@ export class Invocation {
 	 * The handles of the site, all of them running in this invocation's transaction. A public procedure's (`reach:
 	 * 'public'`) insert and read under its actions only.
 	 */
-	handles(kind: DataKind, declaration: SiteDeclaration, principal: string, reach: 'public' | 'declared' = 'declared'): DataHandles {
+	handles(
+		kind: DataKind,
+		declaration: SiteDeclaration,
+		principal: string,
+		reach: 'public' | 'declared' = 'declared',
+		files?: FileBinding,
+	): DataHandles {
 		const transaction = this.#transaction
 		const site: DataSite = {
 			kind,
@@ -269,6 +276,7 @@ export class Invocation {
 			check: boundTo(this.#frame, () => transaction.ended),
 			session: () => transaction.session(),
 			...(reach === 'public' ? { public: true } : {}),
+			...(files === undefined ? {} : { files }),
 		}
 		return this.#data.handles(site)
 	}
@@ -399,6 +407,7 @@ export function jobHandles(
 	session: () => Promise<Session>,
 	ended: () => boolean,
 	tickMs?: number,
+	files?: FileBinding,
 ): DataHandles {
 	return data.handles({
 		kind,
@@ -407,6 +416,7 @@ export function jobHandles(
 		check: boundTo(frame, ended),
 		session,
 		...(tickMs === undefined ? {} : { tickMs }),
+		...(files === undefined ? {} : { files }),
 	})
 }
 

@@ -8,6 +8,7 @@ import {
 	type CspDeclaration,
 	type ExportAccessDeclaration,
 	type ExportDeclaration,
+	type FileKindDeclaration,
 	type FilesDeclaration,
 	type FormMountDeclaration,
 	type HealthMountDeclaration,
@@ -288,6 +289,9 @@ export interface FileCollection<A extends string, L extends LinkServing = LinkSe
 	readonly link?: L
 }
 
+/** A file kind `c.files({ types, maxBytes, scan? })` declares: what a file column of that kind holds. */
+export interface FileKind extends FileKindDeclaration {}
+
 export interface CronJob<Acts extends string, Sc extends string> extends CronDeclaration {
 	readonly actions: readonly Acts[]
 	readonly scope: Sc
@@ -307,7 +311,7 @@ export type AnyMount =
 
 /** What the callback of `defineContract` returns: mounts by name, and the sections `SURFACE_SECTIONS` names. */
 export interface SurfaceSections {
-	readonly files?: { readonly [name: string]: FileCollection<string> }
+	readonly files?: { readonly [name: string]: FileCollection<string> | FileKind }
 	readonly jobs?: { readonly [name: string]: CronJob<string, string> }
 	readonly exports?: { readonly [name: string]: Export<QueryTree> }
 	readonly imports?: { readonly [name: string]: ImportDeclaration }
@@ -423,6 +427,21 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 			readonly limits?: { readonly maxBytes?: number; readonly timeoutMs?: number }
 		} & Owned<'kind' | 'path'>,
 	): WebhookMount<B, Acts[number], I>
+	/**
+	 * A file kind: the media types its files may be, the largest one, and whether each waits for a clean scan. A table's
+	 * file column holds files of it (`files: { <column>: '<kind>' }`), and the table's actions are their authority.
+	 */
+	files(
+		kind:
+			& {
+				readonly types: readonly [string, ...string[]]
+				readonly maxBytes: number
+				/** Each file is scanned for malware and served only after a clean verdict; until then it answers 409. */
+				readonly scan?: boolean
+			}
+			& Owned<'kind'>
+			& { readonly owner?: never },
+	): FileKind
 	files<const L extends boolean | readonly [string, ...string[]] = false>(
 		collection: {
 			readonly owner: string
@@ -489,6 +508,52 @@ function linkKit<A extends string>(): LinkKit<A> {
 	}
 }
 
+interface FileKindOptions {
+	readonly types: readonly [string, ...string[]]
+	readonly maxBytes: number
+	readonly scan?: boolean
+}
+
+interface FileCollectionOptions<A extends string, L extends LinkServing> {
+	readonly owner: string
+	readonly read: A
+	readonly write: A
+	readonly delete: A
+	readonly maxBytes: number
+	readonly types: readonly [string, ...string[]]
+	readonly maxPerOwner?: number
+	readonly link?: L
+	readonly scan?: boolean
+}
+
+/** `c.files`: a file kind without an `owner`, a file collection with one (the older form, until it is removed). */
+function filesBuilder(kind: FileKindOptions): FileKind
+function filesBuilder<A extends string, const L extends LinkServing>(collection: FileCollectionOptions<A, L>): FileCollection<A, L>
+function filesBuilder(options: FileKindOptions | FileCollectionOptions<string, LinkServing>): FileKind | FileCollection<string, LinkServing> {
+	if (!('owner' in options)) {
+		return {
+			kind: 'file-kind',
+			types: options.types,
+			maxBytes: options.maxBytes,
+			scan: options.scan,
+			unknownOptions: unknownOptions(options, 'fileKind'),
+		}
+	}
+	return {
+		kind: 'files',
+		owner: options.owner,
+		read: options.read,
+		write: options.write,
+		delete: options.delete,
+		maxBytes: options.maxBytes,
+		types: options.types,
+		maxPerOwner: options.maxPerOwner,
+		link: options.link,
+		scan: options.scan,
+		unknownOptions: unknownOptions(options, 'files'),
+	}
+}
+
 /** The builders `defineContract` hands its callback; the staged kit's contract reuses its mounts that take no handler. */
 export function surfaceKit<A extends string, D extends string, CD extends string>(): Kit<A, D, CD> {
 	return {
@@ -545,19 +610,7 @@ export function surfaceKit<A extends string, D extends string, CD extends string
 			...(options.limits === undefined ? {} : { limits: options.limits }),
 			unknownOptions: unknownOptions(options, 'webhook'),
 		}),
-		files: (collection) => ({
-			kind: 'files',
-			owner: collection.owner,
-			read: collection.read,
-			write: collection.write,
-			delete: collection.delete,
-			maxBytes: collection.maxBytes,
-			types: collection.types,
-			maxPerOwner: collection.maxPerOwner,
-			link: collection.link,
-			scan: collection.scan,
-			unknownOptions: unknownOptions(collection, 'files'),
-		}),
+		files: filesBuilder,
 		cron: (schedule, options) => ({
 			kind: 'cron',
 			schedule,

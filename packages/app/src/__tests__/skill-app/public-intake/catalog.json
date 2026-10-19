@@ -289,6 +289,176 @@
 			"enum_labels": []
 		},
 		{
+			"table_name": "fabrika_file_deletions",
+			"column_name": "object_key",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_file_deletions",
+			"column_name": "recorded_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "kind",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "status",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "object_key",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "size",
+			"type_name": "int8",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "sha256",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "content_type",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "name",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "scope",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "request",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "created_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "object_version",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "scan_attempts",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "scan_after",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files",
+			"column_name": "legacy",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
 			"table_name": "fabrika_files_attachments",
 			"column_name": "id",
 			"type_name": "uuid",

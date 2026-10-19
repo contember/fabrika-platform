@@ -127,12 +127,13 @@ export function zeropsContractRun(artifact: ContractArtifact, digest: string): Z
 			"fabrika app build: a contract application on Zerops needs a health endpoint for its readiness check (allowed form: health: c.health('/healthz'))",
 		)
 	}
+	const fileKinds = Object.values(artifact.fileKinds ?? {})
 	return {
 		digest,
 		readinessPath: health.path,
 		jobs: Object.entries(artifact.jobs).map(([name, job]) => ({ name, schedule: job.schedule })).sort(byName),
-		...(Object.keys(artifact.files).length > 0 ? { files: true } : {}),
-		...(Object.values(artifact.files).some((collection) => collection.scan === true) ? { scan: true } : {}),
+		...(Object.keys(artifact.files).length > 0 || fileKinds.length > 0 ? { files: true } : {}),
+		...([...Object.values(artifact.files), ...fileKinds].some((declared) => declared.scan === true) ? { scan: true } : {}),
 	}
 }
 

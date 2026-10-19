@@ -4,6 +4,7 @@
 import type { ArrayShape, NumberShape, SchemaShape, StringShape } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
 import { attachmentOf } from './attachment'
+import { fileOf } from './file'
 import type { Problems } from './problems'
 
 const SUBSET = 'allowed: the supported z subset of packages/check/CLAUDE.md'
@@ -21,6 +22,10 @@ export function describeSchema(schema: z.core.$ZodType, where: string, problems:
 	if (attachmentOf(schema) !== null) {
 		problems.add(where, "an attachment() is a procedure's whole output, never part of a schema or an input (allowed: output: attachment({ … }))")
 		return null
+	}
+	const file = fileOf(schema)
+	if (file !== null) {
+		return { type: 'file', kind: file.kind }
 	}
 	if (schema instanceof z.core.$ZodString || schema instanceof z.core.$ZodStringFormat) {
 		return describeString(schema, where, problems)

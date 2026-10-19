@@ -7,6 +7,7 @@
 
 import { type FileOwner, fileTableSql } from '@fabrika/db'
 import { introspectCatalog, renderSchema } from '@fabrika/db/codegen'
+import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { testDatabase } from '@fabrika/db/testing'
 import { classifyMigrations } from '@fabrika/platform-node/sql'
 import { describe, expect, test } from 'bun:test'
@@ -270,7 +271,10 @@ describe('the code blocks of the agent skill', () => {
 				return
 			}
 			try {
-				const classified = classifyMigrations(migrations.map((block) => ({ name: block.path ?? '', sql: block.code })), postgres.schema)
+				// The runner's manifest: the framework's own bundle first, as `fabrika db migrate` applies it.
+				const framework = FRAMEWORK_MIGRATIONS.map((migration) => ({ ...migration, framework: true }))
+				const own = migrations.map((block) => ({ name: block.path ?? '', sql: block.code }))
+				const classified = classifyMigrations([...framework, ...own], postgres.schema)
 				const catalog = await introspectCatalog(process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '', postgres.schema, classified.objects)
 				expect(catalog).toEqual(expected)
 			} finally {

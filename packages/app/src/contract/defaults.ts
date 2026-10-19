@@ -34,7 +34,18 @@ export const PROCEDURE_LIMITS = {
 	maxTimeoutMs: 60_000,
 	maxPerMinute: 10_000,
 	maxBytesPerHour: 64 * 1024 * 1024 * 1024,
+	/** The body of a procedure with file fields: its default adds each field's files at its kind's `maxBytes`. */
+	maxFileBodyBytes: 48 * 1024 * 1024,
+	/** The files one request carries, at most: each field's `.max(n)` together. */
+	maxFiles: 20,
 } as const
+
+/**
+ * A procedure with file fields is `multipart/form-data`: its JSON input travels in the first part, named `input` (the
+ * form's `FORM_INPUT_PART`), and each file in a part named after its field. A field of several files sends one part per
+ * file, under its name.
+ */
+export const FILE_INPUT_PART = 'input'
 
 /**
  * A webhook's bounds: a provider's body, by default the most a procedure without files takes, since providers send

@@ -11,6 +11,7 @@ import {
 	CROSS_ORIGIN_KINDS,
 	displayNameProblem,
 	type EndpointRow,
+	FILE_RESPONSE_KINDS,
 	isOwnWorkloadName,
 	JOB_MAILERS,
 	LOCALES,
@@ -74,6 +75,7 @@ export const schemaShapeSchema: z.ZodType<SchemaShape> = z.lazy(() =>
 		z.strictObject({ type: z.literal('optional'), inner: schemaShapeSchema }),
 		z.strictObject({ type: z.literal('nullable'), inner: schemaShapeSchema }),
 		z.strictObject({ type: z.literal('union'), options: z.array(schemaShapeSchema) }),
+		z.strictObject({ type: z.literal('file'), kind: z.string().min(1) }),
 	])
 )
 
@@ -145,6 +147,7 @@ const rowBase = {
 	admission: z.strictObject({ contentTypes: z.tuple([name], name), maxBytes: z.int().positive().nullable() }).nullable(),
 	input: schemaShapeSchema.nullable(),
 	output: outputShapeSchema.nullable(),
+	response: z.literal('file').optional(),
 }
 
 const endpointRow: z.ZodType<EndpointRow> = z.union([
@@ -184,6 +187,10 @@ const endpointRow: z.ZodType<EndpointRow> = z.union([
 		requirement: z.null(),
 	}),
 ]).refine(
+	// Only a procedure answers a stored file, and exactly when its output is one.
+	(row) => (row.response === 'file') === (row.output?.type === 'file') && (row.response === undefined || FILE_RESPONSE_KINDS.includes(row.kind)),
+	'only a procedure whose output is a file answers a stored file',
+).refine(
 	// Only an RPC procedure, a public procedure and a form open to another origin, and only the anonymous two to any (ADR-0022).
 	(row) =>
 		!('crossOrigin' in row) || row.crossOrigin === undefined
@@ -268,6 +275,7 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 	version: nullableName,
 	createdBy: nullableName,
 	columns: record(z.strictObject({ read: action.optional(), write: action.optional() })),
+	files: z.record(name, name).optional(),
 })
 
 export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObject({
@@ -303,6 +311,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		link: z.union([z.boolean(), z.array(name).nonempty()]),
 		scan: z.literal(true).optional(),
 	})),
+	fileKinds: z.record(name, z.strictObject({ types: names, maxBytes: z.int().positive(), scan: z.literal(true).optional() })).optional(),
 	jobs: record(z.strictObject({
 		schedule: name,
 		actions,

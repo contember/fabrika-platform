@@ -80,8 +80,11 @@ export interface StoredFiles {
 	stage(file: StagedFile): Promise<void>
 	/** Records the written object's size and digest on its pending row, on a connection of its own. */
 	written(id: string, written: { readonly size: number; readonly sha256: string }): Promise<void>
-	/** Deletes a pending row this request wrote and nobody claimed, once its object is gone; `false` when it was claimed. */
-	abandon(id: string, request: string): Promise<boolean>
+	/**
+	 * Deletes a pending row this request wrote and nobody claimed, and records its object for deletion, in one
+	 * statement: the object key, or `null` when the file was claimed (or is gone).
+	 */
+	abandon(id: string, request: string): Promise<string | null>
 	/** A file as a byte consumer reads it, in `using` or on its own; `null` when the sweep deleted it. */
 	find(id: string, using?: Session): Promise<ServedFile | null>
 	/** Quarantines a live file of a scanning kind again when it has no scanned version, so the scan decides once more. */
@@ -119,7 +122,8 @@ values ($1::uuid, $2, 'pending', $3, $4, $5, $6, now())`
 
 const SQL_WRITTEN = `update ${F} set size = $2::bigint, sha256 = $3 where id = $1::uuid and status = 'pending' returning id`
 
-const SQL_ABANDON = `delete from ${F} where id = $1::uuid and status = 'pending' and request = $2 returning id`
+const SQL_ABANDON = `with gone as (delete from ${F} where id = $1::uuid and status = 'pending' and request = $2 returning object_key)
+insert into ${D} (object_key, recorded_at) select object_key, now() from gone on conflict (object_key) do nothing returning object_key`
 
 const SQL_FIND = `select ${SERVED_COLUMNS} from ${F} where id = $1::uuid`
 
@@ -310,8 +314,9 @@ export function storedFiles(runtime: () => DataLayerRuntime): StoredFiles {
 			}
 		},
 
-		async abandon(id: string, request: string): Promise<boolean> {
-			return (await runFixedStatement(session(), SQL_ABANDON, [uuid(id), request])).length === 1
+		async abandon(id: string, request: string): Promise<string | null> {
+			const [found] = await runFixedStatement(session(), SQL_ABANDON, [uuid(id), request])
+			return found === undefined ? null : text(record(found), 'object_key')
 		},
 
 		async find(id: string, using?: Session): Promise<ServedFile | null> {

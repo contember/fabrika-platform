@@ -28,6 +28,8 @@ import {
 	type EndpointSource,
 	type ExportArtifact,
 	type FileCollectionArtifact,
+	type FileKindArtifact,
+	type FileShape,
 	FORM_URLENCODED_TYPE,
 	type FormChallenge,
 	type FormFileArtifact,
@@ -71,6 +73,7 @@ import {
 	type CspDeclaration,
 	DECLARED_FIELDS,
 	type ExportDeclaration,
+	type FileKindDeclaration,
 	type FilesDeclaration,
 	type FormMountDeclaration,
 	type ImportDeclaration,
@@ -247,6 +250,8 @@ class ArtifactBuilder {
 	readonly #challenges: { readonly form: string; readonly provider: ChallengeProvider; readonly secret: string }[] = []
 	/** Each variable a browser config serves, and where the contract names it. */
 	readonly #publicVariables: { readonly where: string; readonly field: string; readonly name: string }[] = []
+	/** The file kinds the contract declares, by name: read before the mounts, whose file fields and outputs name them. */
+	#fileKinds: Record<string, FileKindArtifact> = {}
 
 	constructor(
 		contract: ContractDeclaration<SchemaShape>,
@@ -268,6 +273,7 @@ class ArtifactBuilder {
 		const actions = this.#actions()
 		const dimensions = this.#dimensions()
 		const roles = this.#roles()
+		this.#fileKinds = this.#readFileKinds()
 		const mounts: Record<string, MountArtifact> = {}
 		for (const [name, mount] of Object.entries(contract.mounts)) {
 			if (this.#name(`mount '${name}'`, name)) {
@@ -278,6 +284,11 @@ class ArtifactBuilder {
 			}
 		}
 		this.#checkPublicVariables()
+		for (const row of this.#endpoints) {
+			if ((row.kind === 'form' || row.kind === 'webhook') && row.input !== null && containsFile(row.input)) {
+				this.#problem(`mount '${row.id}'`, "takes a file in its input, which only a procedure's top-level field does (file('<kind>'))")
+			}
+		}
 		const files = this.#files(dimensions)
 		const jobs = this.#jobs()
 		const exports = this.#exports()
@@ -300,6 +311,7 @@ class ArtifactBuilder {
 			roles,
 			mounts,
 			files,
+			...(Object.keys(this.#fileKinds).length === 0 ? {} : { fileKinds: this.#fileKinds }),
 			jobs,
 			exports,
 			imports,
@@ -953,6 +965,9 @@ class ArtifactBuilder {
 		if (source.kind === 'export' && (procedure.redirect !== undefined || procedure.http !== undefined)) {
 			this.#problem(where, 'is an export procedure, which answers JSON to a POST: it declares no http and no redirect()')
 		}
+		if (source.kind === 'export' && (procedure.output.type === 'file' || (procedure.input !== null && containsFile(procedure.input)))) {
+			this.#problem(where, 'is an export procedure, which carries JSON both ways: it takes no file and answers none')
+		}
 		const requirement = this.#requirement(where, procedure)
 		const rules = this.#rules(id, procedure, 'credentialed')
 		const crossOrigin = source.kind === 'mount'
@@ -1066,16 +1081,71 @@ class ArtifactBuilder {
 			}
 			return null
 		}
-		const limits = this.#limits(where, procedure.limits, PROCEDURE_LIMITS)
-		const admission = this.#admission(id, procedure, kind)
-		const http = this.#http(where, procedure)
+		const files = this.#inputFiles(where, procedure)
+		const limits = this.#limits(where, procedure.limits, PROCEDURE_LIMITS, files)
+		const admission = this.#admission(id, procedure, kind, files)
+		const http = this.#http(where, procedure, files)
 		this.#procedureRules[id] = {
 			rate: admission.rate,
 			challenge: admission.challenge,
 			timeoutMs: limits.timeoutMs,
 			...(http.query === null ? {} : { query: http.query }),
 		}
-		return { maxBytes: limits.maxBytes, origins: admission.origins, method: http.method, body: http.body }
+		return {
+			maxBytes: limits.maxBytes,
+			origins: admission.origins,
+			method: http.method,
+			body: http.body,
+			...(files === null ? {} : { filesOptional: files.optional }),
+		}
+	}
+
+	/**
+	 * A procedure's file fields: each a top-level field of its input that holds a file of a declared kind (`file(k)`),
+	 * an optional one, or an array of them bounded by `.max(n)`; a mutation's only, `maxFiles` files together. `null`
+	 * when it takes none.
+	 */
+	#inputFiles(where: string, procedure: ProcedureDeclaration<SchemaShape, unknown>): InputFiles | null {
+		const input = procedure.input
+		if (input === null || input.type !== 'object') {
+			return null
+		}
+		const fields: { readonly name: string; readonly kind: string; readonly count: number; readonly required: boolean }[] = []
+		for (const [name, shape] of Object.entries(input.fields)) {
+			const field = fileField(shape)
+			if (field === 'unbounded') {
+				this.#problem(where, `input field '${name}' is an array of files without a bound (allowed: z.array(file('<kind>')).max(n))`)
+			} else if (field !== null) {
+				fields.push({ name, ...field })
+			} else if (containsFile(shape)) {
+				this.#problem(
+					where,
+					`input field '${name}' holds a file below the top level (allowed: ${name}: file('<kind>'), z.optional(file('<kind>')) or z.array(file('<kind>')).max(n))`,
+				)
+			}
+		}
+		if (fields.length === 0) {
+			return null
+		}
+		if (procedure.type !== 'mutation') {
+			this.#problem(where, 'takes a file, which only a mutation does: a file is written, and a query writes nothing')
+		}
+		const count = fields.reduce((sum, field) => sum + field.count, 0)
+		if (count > PROCEDURE_LIMITS.maxFiles) {
+			this.#problem(where, `takes up to ${count} files, more than the ${PROCEDURE_LIMITS.maxFiles} one request may carry`)
+		}
+		let bytes = 0
+		let largest = 0
+		let scanning = true
+		for (const field of fields) {
+			const kind = this.#fileKind(`${where} input field '${field.name}'`, field.kind)
+			if (kind !== null) {
+				bytes += field.count * kind.maxBytes
+				largest = Math.max(largest, kind.maxBytes)
+				scanning &&= kind.scan === true
+			}
+		}
+		return { bytes, largest, scanning, optional: fields.every((field) => !field.required) }
 	}
 
 	/**
@@ -1087,9 +1157,14 @@ class ArtifactBuilder {
 	#http(
 		where: string,
 		procedure: ProcedureDeclaration<SchemaShape, unknown>,
-	): { readonly method: 'GET' | 'POST'; readonly body: 'json' | 'urlencoded' | null; readonly query: SchemaShape | null } {
-		const fallback = { method: 'POST' as const, body: 'json' as const, query: null }
+		files: InputFiles | null = null,
+	): { readonly method: 'GET' | 'POST'; readonly body: ProcedureBody | null; readonly query: SchemaShape | null } {
+		const fallback = { method: 'POST' as const, body: files === null ? ('json' as const) : ('multipart' as const), query: null }
 		const value = procedure.http
+		// A query that answers a file is a GET, so `<img src>` and `<a download>` reach it.
+		if (value === undefined && procedure.type === 'query' && procedure.output.type === 'file') {
+			return this.#http(where, { ...procedure, http: { method: 'GET' } }, files)
+		}
 		if (value === undefined) {
 			return fallback
 		}
@@ -1107,7 +1182,11 @@ class ArtifactBuilder {
 			this.#problem(where, `http.method ${JSON.stringify(method)} is not a method (allowed: 'GET' or 'POST')`)
 			return fallback
 		}
-		const body = value['body'] ?? (method === 'GET' ? null : 'json')
+		if (files !== null && value['body'] !== undefined) {
+			this.#problem(where, 'takes files, so its body is multipart/form-data, which the input derives: it declares no http.body')
+			return fallback
+		}
+		const body = value['body'] ?? (method === 'GET' ? null : files === null ? 'json' : 'multipart')
 		const flat = (shape: SchemaShape | null) => shape === null || (shape.type === 'object' && Object.values(shape.fields).every(isCell))
 		if (method === 'GET') {
 			if (procedure.type === 'mutation') {
@@ -1123,6 +1202,14 @@ class ArtifactBuilder {
 				this.#problem(where, 'is GET, so its input is flat scalar fields the URL carries (allowed: strings, numbers, booleans, enums, literals, null)')
 			}
 			return { method, body: null, query: null }
+		}
+		if (body === 'multipart' && files !== null) {
+			const query = value['query']
+			if (query !== undefined && (!isSchemaShape(query) || query.type !== 'object' || !flat(query))) {
+				this.#problem(where, 'http.query is not a strict object of flat scalar fields (allowed: z.strictObject({ t: z.string() }))')
+				return { method, body, query: null }
+			}
+			return { method, body, query: query === undefined ? null : query }
 		}
 		if (body !== 'json' && body !== 'urlencoded') {
 			this.#problem(where, `http.body ${JSON.stringify(body)} is not a body codec (allowed: 'json' or 'urlencoded')`)
@@ -1142,14 +1229,29 @@ class ArtifactBuilder {
 		return { method, body, query }
 	}
 
-	/** A procedure's or a webhook's `limits`, each bound within a procedure's ceiling; `defaults` for what it leaves out. */
+	/**
+	 * A procedure's or a webhook's `limits`, each bound within a procedure's ceiling; `defaults` for what it leaves out. A
+	 * procedure with file fields admits by default its JSON input's bytes and each of its files at its kind's `maxBytes`,
+	 * at most `maxFileBodyBytes` in all.
+	 */
 	#limits(
 		where: string,
 		value: unknown,
-		defaults: { readonly maxBytes: number; readonly timeoutMs: number },
+		base: { readonly maxBytes: number; readonly timeoutMs: number },
+		files: InputFiles | null = null,
 	): { readonly maxBytes: number; readonly timeoutMs: number } {
+		const defaults = { maxBytes: base.maxBytes + (files?.bytes ?? 0), timeoutMs: base.timeoutMs }
+		const ceiling = files === null ? PROCEDURE_LIMITS.maxMaxBytes : PROCEDURE_LIMITS.maxFileBodyBytes
+		if (defaults.maxBytes > ceiling && (!isRecord(value) || value['maxBytes'] === undefined)) {
+			this.#problem(
+				where,
+				`takes files of up to ${
+					files?.bytes ?? 0
+				} bytes together, more than the ${ceiling} bytes a request may carry: take fewer or smaller files, or declare limits.maxBytes`,
+			)
+		}
 		if (value === undefined) {
-			return defaults
+			return { ...defaults, maxBytes: Math.min(defaults.maxBytes, ceiling) }
 		}
 		if (!isRecord(value)) {
 			this.#problem(where, 'limits is not an object (allowed: limits: { maxBytes?, timeoutMs? })')
@@ -1157,7 +1259,7 @@ class ArtifactBuilder {
 		}
 		this.#keys(`${where} limits`, value, ['maxBytes', 'timeoutMs'])
 		return {
-			maxBytes: this.#bounded(where, 'limits.maxBytes', value['maxBytes'], defaults.maxBytes, PROCEDURE_LIMITS.maxMaxBytes, 'bytes'),
+			maxBytes: this.#bounded(where, 'limits.maxBytes', value['maxBytes'], Math.min(defaults.maxBytes, ceiling), ceiling, 'bytes'),
 			timeoutMs: this.#bounded(where, 'limits.timeoutMs', value['timeoutMs'], defaults.timeoutMs, PROCEDURE_LIMITS.maxTimeoutMs, 'ms'),
 		}
 	}
@@ -1178,6 +1280,33 @@ class ArtifactBuilder {
 		id: string,
 		procedure: ProcedureDeclaration<SchemaShape, unknown>,
 		kind: 'public' | 'credentialed' | 'link',
+		files: InputFiles | null = null,
+	): { readonly origins: AdmissionOrigins; readonly rate: AdmissionRate; readonly challenge: FormChallenge | null } {
+		const where = `procedure '${id}'`
+		const admitted = this.#declaredAdmission(id, procedure, kind, files)
+		if (kind === 'public' && files !== null) {
+			const missing = [
+				...(admitted.rate.bytesPerHour === null ? ['admission.rate.bytesPerHour'] : []),
+				...(admitted.challenge === null ? ['admission.challenge'] : []),
+			]
+			if (missing.length > 0) {
+				this.#problem(where, `is public and takes files, so it declares ${missing.join(' and ')}: an anonymous upload is budgeted and challenged`)
+			}
+			if (!files.scanning) {
+				this.#problem(
+					where,
+					"is public and takes files, so each of its file kinds scans (scan: true): an anonymous visitor's file waits for a clean verdict",
+				)
+			}
+		}
+		return admitted
+	}
+
+	#declaredAdmission(
+		id: string,
+		procedure: ProcedureDeclaration<SchemaShape, unknown>,
+		kind: 'public' | 'credentialed' | 'link',
+		files: InputFiles | null,
 	): { readonly origins: AdmissionOrigins; readonly rate: AdmissionRate; readonly challenge: FormChallenge | null } {
 		const where = `procedure '${id}'`
 		const rate: Record<keyof AdmissionRate, number | null> = kind === 'public' && procedure.type === 'mutation'
@@ -1210,12 +1339,15 @@ class ArtifactBuilder {
 				this.#problem(where, 'admission.rate.perClient counts by the client address, which only a public procedure does (allowed: perCaller)')
 			} else if (field === 'perCaller' && kind === 'public') {
 				this.#problem(where, 'admission.rate.perCaller counts by the caller, and a public procedure has none (allowed: perClient)')
-			} else if (field === 'bytesPerHour') {
+			} else if (field === 'bytesPerHour' && files === null) {
 				this.#problem(where, 'admission.rate.bytesPerHour bounds the bytes of file fields, and the input declares none')
+			} else if (field === 'bytesPerHour' && typeof value === 'number' && value < (files?.largest ?? 0)) {
+				this.#problem(where, `admission.rate.bytesPerHour ${value} is less than the ${files?.largest ?? 0} bytes one of its files may hold`)
 			}
-			rate[field] = value === null
-				? null
-				: this.#bounded(where, `admission.rate.${field}`, value, rate[field] ?? 1, PROCEDURE_LIMITS.maxPerMinute, 'calls per minute')
+			const [ceiling, unit] = field === 'bytesPerHour'
+				? [PROCEDURE_LIMITS.maxBytesPerHour, 'bytes per hour']
+				: [PROCEDURE_LIMITS.maxPerMinute, 'calls per minute']
+			rate[field] = value === null ? null : this.#bounded(where, `admission.rate.${field}`, value, rate[field] ?? 1, ceiling, unit)
 		}
 		const challenge = declared['challenge']
 		if (challenge === undefined) {
@@ -1275,6 +1407,13 @@ class ArtifactBuilder {
 	#output(where: string, procedure: ProcedureDeclaration<SchemaShape, unknown>): OutputShape {
 		if (procedure.redirect !== undefined) {
 			return this.#redirect(where, procedure.redirect.origins)
+		}
+		if (procedure.output.type === 'file') {
+			this.#fileKind(`${where} output`, procedure.output.kind)
+			return procedure.output
+		}
+		if (containsFile(procedure.output)) {
+			this.#problem(where, "answers JSON with a file inside, which JSON cannot carry (allowed: output: file('<kind>'), or the file's reference fields)")
 		}
 		const attachment = procedure.attachment
 		if (attachment === undefined) {
@@ -1361,8 +1500,9 @@ class ArtifactBuilder {
 		})
 	}
 
+	/** A row that answers a stored file carries the file-response profile, which its digest covers. */
 	#row(row: EndpointRow): void {
-		this.#endpoints.push(row)
+		this.#endpoints.push(row.output?.type === 'file' ? { ...row, response: 'file' } : row)
 	}
 
 	#reserve(prefix: string | null): void {
@@ -1512,6 +1652,9 @@ class ArtifactBuilder {
 		const files: Record<string, FileCollectionArtifact> = {}
 		for (const [name, collection] of Object.entries(this.#contract.files)) {
 			const where = `files '${name}'`
+			if (collection.kind === 'file-kind') {
+				continue
+			}
 			if (!this.#name(where, name) || !this.#kind(where, collection, 'files', 'c.files({ … })')) {
 				continue
 			}
@@ -1676,31 +1819,8 @@ class ArtifactBuilder {
 		if (collection.maxPerOwner !== undefined) {
 			this.#positiveInteger(`${where} maxPerOwner`, collection.maxPerOwner)
 		}
-		this.#unique(where, 'types', collection.types)
 		const link = this.#fileLink(where, collection.link)
-		for (const type of collection.types) {
-			if (!MIME_TYPE.test(type)) {
-				this.#problem(where, `'${type}' is not an exact media type (allowed: 'image/png'; no wildcards or parameters)`)
-			}
-		}
-		if (collection.types.length === 0) {
-			this.#problem(where, 'admits no media type (allowed: types: [<exact media types>])')
-		}
-		if (collection.scan !== undefined && typeof collection.scan !== 'boolean') {
-			this.#problem(where, 'scan is true or false')
-		}
-		for (const type of collection.scan === true ? collection.types.filter((candidate) => FILE_LIMITS.unscannedTypes.includes(candidate)) : []) {
-			this.#problem(
-				where,
-				`scans its files and admits '${type}', an archive the framework does not open, so no scan can vouch for its contents (allowed: application/zip, which the framework checks entry by entry)`,
-			)
-		}
-		if (collection.scan === true && collection.maxBytes > FILE_LIMITS.maxScannedBytes) {
-			this.#problem(
-				where,
-				`scans its files and admits ${collection.maxBytes} bytes per file; the scanner gives a clean verdict to at most ${FILE_LIMITS.maxScannedBytes} (allowed: maxBytes: ${FILE_LIMITS.maxScannedBytes} or less)`,
-			)
-		}
+		this.#fileTypes(where, collection)
 		return {
 			owner: collection.owner,
 			read: collection.read,
@@ -1712,6 +1832,75 @@ class ArtifactBuilder {
 			link,
 			...(collection.scan === true ? { scan: true } : {}),
 		}
+	}
+
+	/** The media types and the scan of a file kind or a collection: exact types, and a scan that can vouch for each file. */
+	#fileTypes(where: string, declared: Pick<FileKindDeclaration, 'types' | 'maxBytes' | 'scan'>): void {
+		this.#unique(where, 'types', declared.types)
+		for (const type of declared.types) {
+			if (!MIME_TYPE.test(type)) {
+				this.#problem(where, `'${type}' is not an exact media type (allowed: 'image/png'; no wildcards or parameters)`)
+			}
+		}
+		if (declared.types.length === 0) {
+			this.#problem(where, 'admits no media type (allowed: types: [<exact media types>])')
+		}
+		if (declared.scan !== undefined && typeof declared.scan !== 'boolean') {
+			this.#problem(where, 'scan is true or false')
+		}
+		for (const type of declared.scan === true ? declared.types.filter((candidate) => FILE_LIMITS.unscannedTypes.includes(candidate)) : []) {
+			this.#problem(
+				where,
+				`scans its files and admits '${type}', an archive the framework does not open, so no scan can vouch for its contents (allowed: application/zip, which the framework checks entry by entry)`,
+			)
+		}
+		if (declared.scan === true && declared.maxBytes > FILE_LIMITS.maxScannedBytes) {
+			this.#problem(
+				where,
+				`scans its files and admits ${declared.maxBytes} bytes per file; the scanner gives a clean verdict to at most ${FILE_LIMITS.maxScannedBytes} (allowed: maxBytes: ${FILE_LIMITS.maxScannedBytes} or less)`,
+			)
+		}
+	}
+
+	/** The file kinds (`c.files({ types, maxBytes, scan? })`), before the mounts that name them. */
+	#readFileKinds(): Record<string, FileKindArtifact> {
+		const kinds: Record<string, FileKindArtifact> = {}
+		for (const [name, declared] of Object.entries(this.#contract.files)) {
+			if (declared.kind !== 'file-kind') {
+				continue
+			}
+			const where = `files '${name}'`
+			if (!this.#name(where, name)) {
+				continue
+			}
+			this.#options(where, 'fileKind', declared.unknownOptions)
+			this.#positiveInteger(`${where} maxBytes`, declared.maxBytes)
+			if (declared.maxBytes > PROCEDURE_LIMITS.maxFileBodyBytes) {
+				this.#problem(
+					where,
+					`admits ${declared.maxBytes} bytes per file, more than the ${PROCEDURE_LIMITS.maxFileBodyBytes} bytes a request may carry (allowed: maxBytes: ${PROCEDURE_LIMITS.maxFileBodyBytes} or less)`,
+				)
+			}
+			this.#fileTypes(where, declared)
+			kinds[name] = { types: [...declared.types], maxBytes: declared.maxBytes, ...(declared.scan === true ? { scan: true } : {}) }
+		}
+		return kinds
+	}
+
+	/** A file kind the contract declares, by the name a file field, a file output or a file column gives. */
+	#fileKind(where: string, kind: string): FileKindArtifact | null {
+		const found = Object.hasOwn(this.#fileKinds, kind) ? this.#fileKinds[kind] : undefined
+		if (found === undefined) {
+			const declared = Object.keys(this.#fileKinds)
+			this.#problem(
+				where,
+				`names the file kind '${kind}', which the contract does not declare (allowed: ${
+					declared.length === 0 ? 'files: { <kind>: c.files({ types, maxBytes }) }' : declared.join(', ')
+				})`,
+			)
+			return null
+		}
+		return found
 	}
 
 	/** `link` as the artifact holds it: a boolean, or the link mounts it names, each once. */
@@ -2350,7 +2539,11 @@ class ArtifactBuilder {
 				if (this.#tables[scope.parent]?.scope.mode !== 'dimension') {
 					this.#problem(where, `its parent '${scope.parent}' is not a table with a dimension scope`)
 				}
-			} else if (scope.mode === 'inbox') {
+			}
+			for (const [column, kind] of Object.entries(table.files ?? {})) {
+				this.#fileKind(`${where} files.${column}`, kind)
+			}
+			if (scope.mode === 'inbox') {
 				const form = this.#contract.mounts[scope.form]
 				if (form?.kind !== 'form' || form.appendTo !== name) {
 					this.#problem(where, `is the inbox of '${scope.form}', which is not a c.form mount that appends to '${name}'`)
@@ -2523,12 +2716,80 @@ type DeclaringSite =
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
 /** What a procedure's row takes from its rules: the body limit and the origin rule. */
+/** A procedure's body codec: `multipart` is derived from its file fields, never declared. */
+type ProcedureBody = 'json' | 'urlencoded' | 'multipart'
+
 interface ProcedureRules {
 	readonly method: 'GET' | 'POST'
 	/** `null` for a GET, which takes no body. */
-	readonly body: 'json' | 'urlencoded' | null
+	readonly body: ProcedureBody | null
 	readonly maxBytes: number
 	readonly origins: AdmissionOrigins
+	/** A multipart procedure whose every file field may be left empty also takes a JSON body. */
+	readonly filesOptional?: boolean
+}
+
+/** What a procedure's file fields add to its body: their bytes together, the largest one, and whether every kind scans. */
+interface InputFiles {
+	readonly bytes: number
+	readonly largest: number
+	readonly scanning: boolean
+	readonly optional: boolean
+}
+
+/** A top-level input field that holds files: `file(k)`, optional, or an array bounded by `.max(n)`. */
+function fileField(shape: SchemaShape): { readonly kind: string; readonly count: number; readonly required: boolean } | 'unbounded' | null {
+	if (shape.type === 'file') {
+		return { kind: shape.kind, count: 1, required: true }
+	}
+	if (shape.type === 'optional') {
+		const inner = fileField(shape.inner)
+		return inner === null || inner === 'unbounded' ? inner : { ...inner, required: false }
+	}
+	if (shape.type === 'array' && shape.items.type === 'file') {
+		return shape.maxItems === null ? 'unbounded' : { kind: shape.items.kind, count: shape.maxItems, required: (shape.minItems ?? 0) > 0 }
+	}
+	return null
+}
+
+/** Whether a schema holds a file anywhere. */
+export function containsFile(shape: SchemaShape): boolean {
+	switch (shape.type) {
+		case 'file':
+			return true
+		case 'array':
+			return containsFile(shape.items)
+		case 'tuple':
+			return shape.items.some(containsFile) || (shape.rest !== null && containsFile(shape.rest))
+		case 'record':
+			return containsFile(shape.value)
+		case 'object':
+			return Object.values(shape.fields).some(containsFile)
+		case 'optional':
+		case 'nullable':
+			return containsFile(shape.inner)
+		case 'union':
+			return shape.options.some(containsFile)
+		default:
+			return false
+	}
+}
+
+/** The file fields of an input, by name: the parts a multipart body carries beside its JSON. */
+export function fileFieldsOf(input: SchemaShape | null): ReadonlyMap<string, FileShape & { readonly many: boolean; readonly max: number }> {
+	const fields = new Map<string, FileShape & { readonly many: boolean; readonly max: number }>()
+	if (input?.type !== 'object') {
+		return fields
+	}
+	for (const [name, shape] of Object.entries(input.fields)) {
+		const inner = shape.type === 'optional' ? shape.inner : shape
+		if (inner.type === 'file') {
+			fields.set(name, { type: 'file', kind: inner.kind, many: false, max: 1 })
+		} else if (inner.type === 'array' && inner.items.type === 'file') {
+			fields.set(name, { type: 'file', kind: inner.items.kind, many: true, max: inner.maxItems ?? 0 })
+		}
+	}
+	return fields
 }
 
 type AdmissionOrigins = 'same-origin' | 'listed' | 'any'
@@ -2540,6 +2801,12 @@ function rowWire(rules: ProcedureRules | null): Pick<EndpointRow, 'method' | 'ad
 	}
 	if (rules.body === null) {
 		return { method: rules.method, admission: null }
+	}
+	if (rules.body === 'multipart') {
+		const contentTypes: readonly [string, ...string[]] = rules.filesOptional === true
+			? ['application/json', FORM_MULTIPART_TYPE]
+			: [FORM_MULTIPART_TYPE]
+		return { method: rules.method, admission: { contentTypes, maxBytes: rules.maxBytes } }
 	}
 	return {
 		method: rules.method,

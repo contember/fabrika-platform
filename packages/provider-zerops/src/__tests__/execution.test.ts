@@ -293,6 +293,13 @@ describe('a contract application is refused at compile time', () => {
 		expect(render(manifest)['setup']).toBe('notesapi')
 	})
 
+	test('runs the sweep and the scan of file kinds, as of file collections', () => {
+		const withKinds: ContractArtifact = { ...notesArtifact, files: {}, fileKinds: { photos: { types: ['image/png'], maxBytes: 1024, scan: true } } }
+		expect(zeropsContractRun(withKinds, contractDigest(withKinds))).toMatchObject({ files: true, scan: true })
+		const unscanned: ContractArtifact = { ...withKinds, fileKinds: { photos: { types: ['image/png'], maxBytes: 1024 } } }
+		expect(zeropsContractRun(unscanned, contractDigest(unscanned))).not.toHaveProperty('scan')
+	})
+
 	test('without a health endpoint for the readiness check', () => {
 		const withoutHealth: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.filter((row) => row.kind !== 'health') }
 		expect(() => zeropsContractRun(withoutHealth, contractDigest(withoutHealth))).toThrow("c.health('/healthz')")

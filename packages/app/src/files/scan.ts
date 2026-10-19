@@ -67,9 +67,10 @@ export interface FileScanner {
 	scan(objects: readonly ScanObject[], signal: AbortSignal): Promise<ScanBatchResult>
 }
 
+/** What one scanning collection or file kind lets the scan pass do: take its due files, and write each verdict. */
 export interface ScanningCollection {
 	readonly name: string
-	readonly table: FileCollectionTable
+	readonly table: Pick<FileCollectionTable, 'quarantined' | 'promote' | 'deferScan' | 'reject'>
 }
 
 interface Candidate {

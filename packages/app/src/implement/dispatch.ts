@@ -6,6 +6,7 @@
 
 import type { IamMembership, MembershipRequestCaller } from '@fabrika/auth'
 import {
+	answersFile,
 	type CapabilitiesRequirement,
 	type CompiledEndpointTable,
 	type CredentialedEndpoint,
@@ -17,6 +18,7 @@ import {
 	FORM_URLENCODED_TYPE,
 	type FormFileArtifact,
 	isAttachmentShape,
+	isFileShape,
 	isRedirectShape,
 	type LinkTokenClaims,
 	parseEndpointHeader,
@@ -35,20 +37,23 @@ import {
 	type WebhookScheme,
 } from '@fabrika/auth-core'
 import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
-import type { DataAccess, FrameworkTables } from '@fabrika/db/framework'
+import type { DataAccess, FileBinding, FrameworkTables } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
+import { fileFieldsOf } from '../contract/build'
 import {
 	BROWSER_CONFIG_FILE,
 	challengeAction,
+	FILE_INPUT_PART,
 	FORM_CHALLENGE_FIELD,
 	FORM_FILE_LIMITS,
 	FORM_INPUT_PART,
 	FORM_MULTIPART_TYPE,
 	joinPath,
 	PAGE_CALLER_FILE,
+	PROCEDURE_LIMITS,
 	WEBHOOK_BINDING_PARAMETER,
 } from '../contract/defaults'
 import type { Schema } from '../contract/define'
@@ -64,6 +69,7 @@ import {
 } from '../errors'
 import type { RequestExecutionContext } from '../fetch'
 import type { FileCollections, ReceivedFormFile } from '../files/collections'
+import { FileWork, type StoredFileKinds, storedFilesHandle } from '../files/kinds'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
 import { abortedBody, bodyDeadlineMs, bootstrapPath, bootstrapResponse, readBoundedBody, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
@@ -87,6 +93,7 @@ import { ACCEPTED_BUCKET, clientBucket, type Submission, type SubmissionFields, 
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
 import {
+	boundTo,
 	boundWebhookApp,
 	endpointData,
 	Invocation,
@@ -299,6 +306,8 @@ export interface RuntimeParts {
 	readonly data: DataAccess | null
 	/** The contract's file collections, behind a staged-kit site's `ctx.files`; `null` when it declares none. */
 	readonly files: FileCollections | null
+	/** The contract's file kinds: file fields, file outputs, `ctx.files.put` and `.open`; `null` when it declares none. */
+	readonly fileKinds: StoredFileKinds | null
 	/** Where a 5xx goes: the server log, and Operations when the application has a DSN. */
 	readonly failures: FailureReports
 	/** Kicks a contract job under its own key, in the background (`BoundJobs.kick`); it never rejects. */
@@ -371,7 +380,7 @@ export class ContractRuntime {
 		if (answer instanceof FileDownload) {
 			return fileResponse(answer)
 		}
-		return plan.outcome === 'endpoint' && plan.endpoint.kind === 'download' ? withFileTreatment(answer) : withHeaderPolicy(answer, this.#parts.policy)
+		return plan.outcome === 'endpoint' && answersFile(plan.endpoint) ? withFileTreatment(answer) : withHeaderPolicy(answer, this.#parts.policy)
 	}
 
 	async #answer(request: Request, plan: EndpointPlan, exec: RequestExecutionContext | undefined): Promise<Response | FileDownload> {
@@ -552,24 +561,28 @@ export class ContractRuntime {
 		served: Extract<ServedEndpoint, { kind: 'procedure' }>,
 		request: Request,
 		exec: RequestExecutionContext | undefined,
-	): Promise<Response> {
+	): Promise<Response | FileDownload> {
 		const caller = await this.#authorize(served.row, request)
 		const admission = served.admission ?? DEFAULT_ADMISSION
 		await this.#admit(served.row.id, admission, request, caller.subject)
-		const input = await readInput(served, request)
+		const body = await procedureBody(served, request, this.#parts.fileKinds)
 		const query = readQuery(served.row, served.query?.schema, served.query?.shape, request)
 		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.readOnly === true, endpoint: served.row.id })
+		const work = new FileWork(frame, frame.id)
 		const site = served.site
 		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), site.kind === 'query' || served.readOnly === true)
-		// The handler's time starts after the last body byte, so a slow upload does not eat it.
-		const signal = handlerSignal(request, admission.timeoutMs)
 		const kicks = kickRecorder(`'${served.row.id}'`, site?.declaration.kicks ?? [])
+		let outcome: 'open' | 'committing' = 'open'
 		try {
+			const input = body.multipart === null ? body.input : await this.#fileInput(served, body.multipart, work)
+			// The handler's time starts after the last body byte, so a slow upload does not eat it.
+			const signal = handlerSignal(request, admission.timeoutMs)
 			let result: unknown
 			try {
 				result = await runInRequest(frame, async () => {
 					const membership = this.#membershipRequest(served.row, caller, request, frame)
 					const access = await this.#access(served.row, caller, input, frame, membership)
+					const binding = this.#parts.fileKinds?.binding(work)
 					const ctx = Object.freeze({
 						principal: caller.principal,
 						requestId: frame.id,
@@ -581,11 +594,11 @@ export class ContractRuntime {
 							requestId: request.headers.get(REQUEST_ID_HEADER) ?? frame.id,
 						}),
 						...(served.connect === undefined ? {} : { connect: connectContext(served.connect, frame) }),
-						...(site === undefined || invocation === null ? {} : siteContext(served.row, site, invocation, caller.subject, access.context)),
+						...(site === undefined || invocation === null ? {} : siteContext(served.row, site, invocation, caller.subject, access.context, binding)),
 						// An export's consumer reaches its rows only, never the files of their owners.
 						...(site === undefined || invocation === null || served.readOnly === true
 							? {}
-							: { files: this.#files(served.row.id, frame, invocation, site.kind) }),
+							: { files: this.#files(served.row.id, frame, invocation, site.kind, work) }),
 						...(served.binds === undefined || invocation === null
 							? {}
 							: { webhooks: this.#webhookBindings(served.row.id, served.binds, invocation, caller.subject) }),
@@ -596,25 +609,61 @@ export class ContractRuntime {
 			} finally {
 				frame.end()
 			}
-			const answer = this.#answerOf(served, result, request)
-			await invocation?.commit(signal)
+			const answer = await this.#answerOf(served, result, request, work)
+			outcome = 'committing'
+			await commitAnswer(invocation, signal, answer)
 			this.#kickAll([...(served.then === undefined ? [] : [served.then]), ...kicks.kicked()], exec)
 			return answer
 		} finally {
 			await invocation?.rollback()
+			await body.multipart?.close()
+			// Only a known rollback deletes what the request staged; after a commit that may have happened, the sweep decides.
+			if (outcome === 'open') {
+				await this.#parts.fileKinds?.release(work)
+			}
 		}
 	}
 
+	/** A multipart body's input: its JSON part with every file part staged for `work`, parsed strictly as one input. */
+	async #fileInput(
+		served: { readonly row: EndpointRow; readonly input: Schema | null },
+		multipart: MultipartInput,
+		work: FileWork,
+	): Promise<Readonly<Record<string, unknown>>> {
+		const files = await multipart.files(work)
+		if (served.input === null) {
+			throw new ServerFault('contract_inconsistent', `'${served.row.id}' takes files and declares no input`)
+		}
+		return strictInput(served.row, served.input, { ...multipart.json, ...files })
+	}
+
 	/**
-	 * The output as JSON, projected and validated whole; or an attachment's file, whose rows are projected, validated
-	 * and encoded one at a time, so a result over a limit stops before it is copied.
+	 * The output as JSON, projected and validated whole; an attachment's file, whose rows are projected, validated and
+	 * encoded one at a time, so a result over a limit stops before it is copied; or the stored file the handler answered.
 	 */
-	#answerOf(served: Extract<ServedEndpoint, { kind: 'procedure' }>, result: unknown, request: Request): Response {
-		const file = served.row.output !== null && isAttachmentShape(served.row.output) ? served.row.output : null
+	async #answerOf(
+		served: Extract<ServedEndpoint, { kind: 'procedure' }>,
+		result: unknown,
+		request: Request,
+		work: FileWork,
+	): Promise<Response | FileDownload> {
+		const output = served.row.output
+		if (output !== null && isFileShape(output)) {
+			return await this.#fileKinds(served.row.id).download(work, served.row.id, output.kind, result)
+		}
+		const file = output !== null && isAttachmentShape(output) ? output : null
 		if (file !== null) {
 			return attachmentResponse(served.row.id, file, served.output, result)
 		}
 		return outputResponse(served.row, served.output, result, request)
+	}
+
+	#fileKinds(endpoint: string): StoredFileKinds {
+		const kinds = this.#parts.fileKinds
+		if (kinds === null) {
+			throw new ServerFault('facility_unbound', `'${endpoint}' takes or answers a file, and boot bound no file kinds`)
+		}
+		return kinds
 	}
 
 	/** `ctx.webhooks` of a procedure that declares `binds`: its bindings are written in the invocation's transaction. */
@@ -629,10 +678,17 @@ export class ContractRuntime {
 		})
 	}
 
-	/** `ctx.files` of a staged-kit site, in its invocation's transaction. */
-	#files(endpoint: string, frame: RequestFrame, invocation: Invocation, kind: DataKind): object {
+	/**
+	 * `ctx.files` of a staged-kit site, in its invocation's transaction: each collection by its name, and `put` and `open`
+	 * of the stored files, bound to the request's work.
+	 */
+	#files(endpoint: string, frame: RequestFrame, invocation: Invocation, kind: DataKind, work: FileWork): object {
 		const where = `'${endpoint}'`
-		return this.#parts.files === null ? noFileCollections(where) : this.#parts.files.site({ frame, ...invocation.fileSite(where, kind) })
+		const site = invocation.fileSite(where, kind)
+		const collections = this.#parts.files === null ? noFileCollections(where) : this.#parts.files.site({ frame, ...site })
+		return Object.freeze(
+			Object.assign(collections, storedFilesHandle(this.#parts.fileKinds, work, { where, check: site.check, writes: kind !== 'query' })),
+		)
 	}
 
 	#data(): DataAccess {
@@ -1094,22 +1150,29 @@ export class ContractRuntime {
 	 * strict input (413, 400); the workload token, before a challenge spends its token (503); the challenge (403); then
 	 * the handler in one transaction, the output and the commit. The handler's time starts after the last body byte.
 	 */
-	async #public(served: Extract<ServedEndpoint, { kind: 'public' }>, request: Request, exec: RequestExecutionContext | undefined): Promise<Response> {
+	async #public(
+		served: Extract<ServedEndpoint, { kind: 'public' }>,
+		request: Request,
+		exec: RequestExecutionContext | undefined,
+	): Promise<Response | FileDownload> {
 		admitContentType(served.row, request)
 		const release = this.#parts.publicShare.enter()
 		if (release === null) {
 			throw new HttpError(503, 'public_share_full', 'Too many anonymous requests at once; try again shortly')
 		}
+		let multipart: MultipartInput | null = null
 		try {
 			const { admission } = served
 			await this.#admit(served.row.id, admission, request, null)
-			const input = await readInput({ row: served.row, input: served.input }, request)
+			const body = await procedureBody({ row: served.row, input: served.input }, request, this.#parts.fileKinds)
+			multipart = body.multipart
+			const fields = body.multipart === null ? body.input : body.multipart.json
 			const authority = await served.credential.authority()
 			if (!authority.ok) {
 				throw new ServerFault('workload_unauthorized', `the key of public procedure '${served.row.id}' gives it no authority: ${authority.reason}`, 503)
 			}
 			if (admission.challenge !== null) {
-				const token = input[FORM_CHALLENGE_FIELD]
+				const token = fields[FORM_CHALLENGE_FIELD]
 				await this.#challenge(
 					challengeAction(served.row.id),
 					admission.challenge,
@@ -1120,8 +1183,9 @@ export class ContractRuntime {
 				)
 			}
 			const query = readQuery(served.row, served.query?.schema, served.query?.shape, request)
-			return await this.#publicInvocation(served, request, input, query, authority.perms, exec)
+			return await this.#publicInvocation(served, request, body, query, authority.perms, exec)
 		} finally {
+			await multipart?.close()
 			release()
 		}
 	}
@@ -1151,15 +1215,15 @@ export class ContractRuntime {
 	async #publicInvocation(
 		served: Extract<ServedEndpoint, { kind: 'public' }>,
 		request: Request,
-		input: Readonly<Record<string, unknown>>,
+		body: Awaited<ReturnType<typeof procedureBody>>,
 		query: Readonly<Record<string, unknown>> | undefined,
 		perms: readonly PermissionEntry[],
 		exec: RequestExecutionContext | undefined,
-	): Promise<Response> {
+	): Promise<Response | FileDownload> {
 		const kicks = kickRecorder(`'${served.row.id}'`, served.site.declaration.kicks)
 		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.site.kind === 'query', endpoint: served.row.id })
+		const work = new FileWork(frame, frame.id)
 		const invocation = new Invocation(frame, this.#data(), served.site.kind === 'query')
-		const signal = handlerSignal(request, served.admission.timeoutMs)
 		const subject = publicSubject(served.row.id)
 		const app = (action: string): AppCapability<string> => {
 			if (frame.ended) {
@@ -1173,11 +1237,17 @@ export class ContractRuntime {
 			}
 			return this.#parts.mint.app(frame, action, subject)
 		}
+		let outcome: 'open' | 'committing' = 'open'
 		try {
+			// The file parts come after the challenge, so a refused visitor stores nothing.
+			const input = body.multipart === null ? body.input : await this.#fileInput(served, body.multipart, work)
+			// The handler's time starts after the last body byte, so a slow upload does not eat it.
+			const signal = handlerSignal(request, served.admission.timeoutMs)
 			let result: unknown
 			try {
 				result = await runInRequest(frame, async () => {
-					const handles = invocation.handles(served.site.kind, served.site.declaration, subject, 'public')
+					const handles = invocation.handles(served.site.kind, served.site.declaration, subject, 'public', this.#parts.fileKinds?.binding(work))
+					const where = `'${served.row.id}'`
 					const ctx = Object.freeze({
 						principal: Object.freeze({ kind: 'public', endpoint: served.row.id }),
 						requestId: frame.id,
@@ -1185,6 +1255,11 @@ export class ContractRuntime {
 						client: requestClient(request, this.#parts.clientVouched),
 						app,
 						db: Object.freeze({ app: (action: string) => handles.app(app(action)) }),
+						files: storedFilesHandle(this.#parts.fileKinds, work, {
+							where,
+							check: boundTo(frame, () => false, 'ctx.files'),
+							writes: served.site.kind !== 'query',
+						}),
 						kick: kicks.kick,
 					})
 					return await served.handler({ input, ctx, ...(query === undefined ? {} : { query }) })
@@ -1192,12 +1267,19 @@ export class ContractRuntime {
 			} finally {
 				frame.end()
 			}
-			const answer = outputResponse(served.row, served.output, result, request)
-			await invocation.commit(signal)
+			const output = served.row.output
+			const answer = output !== null && isFileShape(output)
+				? await this.#fileKinds(served.row.id).download(work, served.row.id, output.kind, result)
+				: outputResponse(served.row, served.output, result, request)
+			outcome = 'committing'
+			await commitAnswer(invocation, signal, answer)
 			this.#kickAll(kicks.kicked(), exec)
 			return answer
 		} finally {
 			await invocation.rollback()
+			if (outcome === 'open') {
+				await this.#parts.fileKinds?.release(work)
+			}
 		}
 	}
 
@@ -1381,9 +1463,10 @@ function siteContext(
 	invocation: Invocation,
 	principal: string,
 	access: Readonly<Record<string, unknown>>,
+	files: FileBinding | undefined,
 ): Readonly<Record<string, unknown>> {
 	const form = row.requirement.kind === 'member' ? 'member' : row.requirement.kind === 'capabilities' ? 'capabilities' : row.requirement.access.form
-	const db = endpointData(invocation.handles(site.kind, site.declaration, principal), form, {
+	const db = endpointData(invocation.handles(site.kind, site.declaration, principal, 'declared', files), form, {
 		target: access['target'],
 		within: access['within'],
 		created: access['created'],
@@ -1591,6 +1674,138 @@ async function readInput(
 		return {}
 	}
 	return strictInput(served.row, served.input, body)
+}
+
+/**
+ * A procedure's body: its input read whole (JSON, urlencoded, or a GET's URL parameters), or a multipart body whose JSON
+ * part was read and whose file parts follow. Only a procedure with file fields reads multipart.
+ */
+async function procedureBody(
+	served: { readonly row: EndpointRow; readonly input: Schema | null },
+	request: Request,
+	kinds: StoredFileKinds | null,
+): Promise<
+	{ readonly input: Readonly<Record<string, unknown>>; readonly multipart: null } | { readonly input: null; readonly multipart: MultipartInput }
+> {
+	const fields = fileFieldsOf(served.row.input)
+	if (served.row.method === 'POST' && fields.size > 0 && mediaType(request.headers.get('Content-Type')) === FORM_MULTIPART_TYPE) {
+		return { input: null, multipart: await openMultipart(served.row, fields, request, kinds) }
+	}
+	return { input: await readInput(served, request), multipart: null }
+}
+
+/** A multipart body being read: its JSON input part, read first, and its file parts, read by `files`. */
+interface MultipartInput {
+	/** The input part's fields: no file field among them; the challenge reads its token from here. */
+	readonly json: Readonly<Record<string, unknown>>
+	/** Reads every file part as the body streams, staging each for `work`: the file fields' references by name. */
+	files(work: FileWork): Promise<Readonly<Record<string, unknown>>>
+	/** Ends the read and the body deadline, whatever happened. */
+	close(): Promise<void>
+}
+
+/**
+ * Opens a procedure's `multipart/form-data` body: its first part is the input as JSON (named `input`, at most the JSON
+ * input's limit), and each later part a file of a file field, under the field's name. The whole body arrives within the
+ * deadline its `maxBytes` derives; a declared length past every part together is refused unread.
+ */
+async function openMultipart(
+	row: EndpointRow,
+	fields: ReturnType<typeof fileFieldsOf>,
+	request: Request,
+	kinds: StoredFileKinds | null,
+): Promise<MultipartInput> {
+	const boundary = multipartBoundary(request.headers.get('Content-Type'))
+	if (boundary === null) {
+		throw new HttpError(400, 'admission', `'${row.id}' takes multipart/form-data with a boundary`)
+	}
+	const maxBytes = maxBytesOf(row)
+	const files = [...fields.values()].reduce((sum, field) => sum + field.max, 0)
+	const declared = Number(request.headers.get('Content-Length') ?? '')
+	if (Number.isFinite(declared) && declared > maxBytes + (files + 1) * MULTIPART_PART_OVERHEAD) {
+		throw new HttpError(413, 'too_large', `The body is larger than the ${maxBytes} bytes '${row.id}' admits`)
+	}
+	const deadline = AbortSignal.any([request.signal, AbortSignal.timeout(bodyDeadlineMs(maxBytes))])
+	const parts = multipartParts(request.body ?? new Blob([]).stream(), boundary, { maxHeaderBytes: FORM_FILE_LIMITS.maxPartHeaderBytes })
+	const stop = () => {
+		parts.cancel().catch(() => {})
+	}
+	deadline.addEventListener('abort', stop, { once: true })
+	const close = async () => {
+		deadline.removeEventListener('abort', stop)
+		await parts.cancel()
+	}
+	let json: Readonly<Record<string, unknown>>
+	try {
+		const first = await parts.next()
+		if (first === null || first.name !== FILE_INPUT_PART || first.filename !== null) {
+			await first?.body.cancel()
+			throw new HttpError(400, 'multipart', `'${row.id}': the first part is the input as JSON, named '${FILE_INPUT_PART}', without a filename`)
+		}
+		const bytes = await readBoundedBytes(first.body, { maxBytes: PROCEDURE_LIMITS.maxBytes })
+		if (bytes === null) {
+			throw new HttpError(413, 'too_large', `The input is larger than ${PROCEDURE_LIMITS.maxBytes} bytes`)
+		}
+		const parsed = parseJson(bytes)
+		if (!isRecord(parsed) || Object.keys(parsed).some((name) => fields.has(name))) {
+			throw new HttpError(400, 'multipart', `'${row.id}': the input part is an object, and each file field arrives as a part of its own`)
+		}
+		json = parsed
+	} catch (error) {
+		const failure = multipartFailure(error, parts, deadline, request)
+		await close()
+		throw failure
+	}
+	return {
+		json,
+		close,
+		files: async (work) => {
+			if (kinds === null) {
+				throw new ServerFault('facility_unbound', `'${row.id}' takes files, and boot bound no file kinds`)
+			}
+			const values: Record<string, unknown> = {}
+			const counts = new Map<string, number>()
+			try {
+				for (let part = await parts.next(); part !== null; part = await parts.next()) {
+					const field = fields.get(part.name)
+					const count = counts.get(part.name) ?? 0
+					if (field === undefined || count >= field.max || part.filename === null) {
+						await part.body.cancel()
+						throw new HttpError(
+							400,
+							'multipart',
+							`'${row.id}': a part is no file field of the input, a field carries more files than it admits, or a file has no filename`,
+						)
+					}
+					counts.set(part.name, count + 1)
+					const file = await kinds.receive(work, field.kind, part)
+					if (file === null) {
+						continue
+					}
+					const taken = values[part.name]
+					values[part.name] = field.many ? [...(Array.isArray(taken) ? taken : []), file] : file
+				}
+			} catch (error) {
+				throw multipartFailure(error, parts, deadline, request)
+			}
+			return values
+		},
+	}
+}
+
+/**
+ * Commits the invocation of an answer that is ready: a file's object stream was opened before the commit, so a failed
+ * commit cancels it and nothing of it is sent.
+ */
+async function commitAnswer(invocation: Invocation | null, signal: AbortSignal, answer: Response | FileDownload): Promise<void> {
+	try {
+		await invocation?.commit(signal)
+	} catch (error) {
+		if (answer instanceof FileDownload) {
+			await answer.body.cancel()
+		}
+		throw error
+	}
 }
 
 /** A POST's `query`: the URL's flat parameters, parsed strictly by the declared schema; `undefined` without one. */
