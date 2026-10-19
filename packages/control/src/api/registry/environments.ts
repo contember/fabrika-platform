@@ -1,4 +1,4 @@
-import type { AppEnvDto, ListResponse, OkResponse, PutAppEnvRequest } from '@fabrika/control-contract'
+import type { AppEnvDto, ListResponse, OkResponse, PutAppEnvRequest, RotateTokenKeyResponse } from '@fabrika/control-contract'
 import type { ProviderApp, ProviderRegistration } from '@fabrika/provider-contract'
 import { requireHumanForProtectedDelete } from '../../approval/human'
 import {
@@ -162,6 +162,18 @@ export async function deleteAppEnvUseCase(c: RegistryUseCaseContext, appId: stri
 	notifyCatalogChanged(c)
 	await syncChangedNamespaceProxies(c.namespaceProxyChanged, routed === null ? [] : [routed])
 	return { ok: true }
+}
+
+/**
+ * Asks the environment's next deploy to rotate the key its signed tokens are signed with. The retired key keeps verifying
+ * until the last token it signed may expire; a platform upgrade rotates nothing. `requested` is `false` when the
+ * environment has not deployed a contract with a token purpose yet, so it has no key to rotate.
+ */
+export async function rotateTokenKeyUseCase(c: RegistryUseCaseContext, appId: string, env: string, now: number): Promise<RotateTokenKeyResponse> {
+	if ((await c.repositories.registry.getAppEnv(appId, env)) === null) fail(404, 'app env not found')
+	const requested = await c.repositories.tokenKeys.requestRotation(appId, env, now)
+	await c.auth.audit({ action: 'app.env.token_key.rotate', resourceType: 'app_env', resourceId: `${appId}/${env}` })
+	return { requested }
 }
 
 /** ADR-0049: authoring is Zerops-only, and Source can reach the repository only through the app's GitHub connection. */

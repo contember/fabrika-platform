@@ -34,6 +34,8 @@ export interface SiteDeclaration {
 	readonly kicks: readonly string[]
 	/** The webhook whose bindings `ctx.webhooks` creates and removes. */
 	readonly binds: string | null
+	/** The token purposes `ctx.tokens.sign` may sign. */
+	readonly signs: readonly string[]
 }
 
 export type SiteFunction = (args: { readonly input?: unknown; readonly ctx: object }) => unknown
@@ -70,6 +72,7 @@ const NO_DECLARATION: SiteDeclaration = Object.freeze({
 	mailer: null,
 	kicks: Object.freeze([]),
 	binds: null,
+	signs: Object.freeze([]),
 })
 
 function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -156,6 +159,11 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 	if (binds !== undefined && typeof binds !== 'string') {
 		problems.push(`${where}: binds is not the name of a webhook`)
 	}
+	const signsField = ownField(declared, 'signs')
+	const signs = Array.isArray(signsField) ? signsField.filter((purpose): purpose is string => typeof purpose === 'string') : []
+	if (signsField !== undefined && (!Array.isArray(signsField) || signs.length !== signsField.length)) {
+		problems.push(`${where}: signs is not a list of token purposes`)
+	}
 	return Object.freeze({
 		sql: sql === 'read' || sql === 'write' ? sql : null,
 		unscoped: Object.freeze(unscoped),
@@ -165,6 +173,7 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 		mailer,
 		kicks: Object.freeze([...new Set(kicks)].sort()),
 		binds: typeof binds === 'string' ? binds : null,
+		signs: Object.freeze([...new Set(signs)].sort()),
 	})
 }
 
@@ -209,6 +218,7 @@ export function approvedReach(site: string, artifact: ContractArtifact): SiteDec
 			mailer: reach.mailer ?? null,
 			kicks: Object.freeze([...(reach.kicks ?? [])]),
 			binds: reach.binds ?? null,
+			signs: Object.freeze([...(reach.signs ?? [])]),
 		})
 }
 
@@ -227,6 +237,7 @@ function describeDeclaration(declaration: SiteDeclaration): string {
 		...(declaration.mailer === null ? {} : { mailer: declaration.mailer }),
 		...(declaration.kicks.length === 0 ? {} : { kicks: declaration.kicks }),
 		...(declaration.binds === null ? {} : { binds: declaration.binds }),
+		...(declaration.signs.length === 0 ? {} : { signs: declaration.signs }),
 	})
 }
 

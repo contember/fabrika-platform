@@ -610,6 +610,33 @@ describe('Cloudflare control provider', () => {
 		expect(jobs).toEqual([])
 	})
 
+	test('refuses token keys before any runner call, and passes the canonical origin as a Worker var', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async (job) => {
+				jobs.push(job)
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		const input = deployInput()
+		const refusal = provider.deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, FABRIKA_TOKEN_KEYS: 'kid12345:private-secret' } })
+		await expect(refusal).rejects.toThrow('cloudflare: the contract declares token purposes')
+		await expect(refusal).rejects.not.toThrow('private-secret')
+		expect(jobs).toEqual([])
+		await provider.deploy({
+			...input,
+			managedEnvironment: { ...input.managedEnvironment, FABRIKA_APP_ORIGIN: 'https://demo.example', FABRIKA_TOKEN_KEYS: null },
+		})
+		expect(jobs[0]?.managedEnvironment?.['FABRIKA_APP_ORIGIN']).toBe('https://demo.example')
+		expect(jobs[0]?.managedEnvironment?.['FABRIKA_TOKEN_KEYS']).toBeUndefined()
+	})
+
 	test("sends every Cloudflare deployment of Control's registry with the job", async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const provider = createCloudflareControlProvider({

@@ -33,5 +33,19 @@ export { schemaFromContract } from './platform'
 export { ContractError } from './problems'
 export { type Redirect, redirect, type RedirectBrand, type RedirectMark, redirectOf, type RedirectOptions } from './redirect'
 export { SNAPSHOT_DIRECTORY, type SnapshotNames, snapshotNames, snapshotSource } from './snapshot-source'
+export {
+	SIGNED_TOKEN_MAX_LENGTH,
+	signedToken,
+	type SignedTokenMark,
+	signedTokenOf,
+	type SignedTokenSchema,
+	token,
+	TOKEN_MAX_DAYS,
+	type TokenOptions,
+	type TokenPurpose,
+	type TokenPurposes,
+	type TokenSigning,
+	type WithClaims,
+} from './token'
 export * from './vocabulary'
 export { type WebhookBindings, WebhookSecret } from './webhook-binding'

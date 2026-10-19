@@ -288,6 +288,8 @@ const makeRun = (
 		// The example has no creates, members or share links, so Control hands it no membership transport.
 		FABRIKA_IAM_RPC_URL: null,
 		FABRIKA_IAM_RPC_KEY: null,
+		FABRIKA_APP_ORIGIN: null,
+		FABRIKA_TOKEN_KEYS: null,
 	},
 	dryRun: false,
 	signal: new AbortController().signal,

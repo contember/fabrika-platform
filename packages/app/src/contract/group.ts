@@ -19,6 +19,7 @@ import type {
 	LinkContext,
 	PublicContext,
 	SqlMode,
+	TokensContext,
 	WebhooksContext,
 } from './context'
 import type { ProcedureType } from './declaration'
@@ -38,6 +39,7 @@ import type {
 	QueryAccess,
 	Schema,
 } from './define'
+import type { WithClaims } from './token'
 
 /** Fields a builder sets itself: a definition that carries one does not type-check. */
 type Owned<K extends string> = { readonly [P in K]?: never }
@@ -117,6 +119,17 @@ export type KicksField<Ks> =
 	& { readonly kicks?: Ks }
 	& ([Ks] extends [never] ? unknown : { readonly kicks: Ks & NoInfer<LiteralList<Ks>> })
 
+/** The token purposes a site signs (`ctx.tokens.sign`), inferred from its optional field and then required, as a literal list. */
+export type SignsField<Sg, Purposes extends string> =
+	& { readonly signs?: Sg }
+	& ([Sg] extends [never] ? unknown : { readonly signs: Sg & NoInfer<KnownPurposes<Sg, Purposes>> })
+
+/** Each purpose `signs` names is one of `defineApp`'s `tokens`. */
+type KnownPurposes<Sg, Purposes extends string> = Sg extends readonly (infer P extends string)[]
+	? [Exclude<P, Purposes>] extends [never] ? LiteralList<Sg>
+	: Unavailable<`signs names ${ListOf<Exclude<P, Purposes>>}, which defineApp's tokens do not declare`>
+	: unknown
+
 type IsUnion<T, All = T> = T extends unknown ? ([All] extends [T] ? false : true) : never
 
 /** A bucket's calls per minute, or `null` to turn a default bucket off. */
@@ -166,10 +179,12 @@ export type ProcedureContext<
 	D extends Declared<SqlMode, unknown, readonly string[], string>,
 	Ks = never,
 	Bs = never,
+	Sg = never,
 > =
 	& ([Acc] extends [PublicAccess] ? PublicContext<K, Kind, Acts[number]>
 		: EndpointContext<K, Caller, Kind, CheckedAccess<Acc>, D> & WebhooksContext<Bs>)
 	& KickContext<Ks>
+	& TokensContext<K, Sg>
 
 /** A group without callers holds public procedures only; any other group may hold both. */
 export type GroupAccess<Caller extends RpcCaller, Acc> = [Caller] extends [never] ? PublicAccess : Acc | PublicAccess
@@ -229,8 +244,13 @@ export type HandlerReturn<F, O extends Schema> = [Returned<F>] extends [z.input<
 /** A kit endpoint's handler, returning `R`; `X` adds what its HTTP shape reads beside the input (`query`). */
 export type KitHandler<In, Ctx, R, X = unknown> = (args: { readonly input: In; readonly ctx: Ctx } & X) => R | Promise<R>
 
-/** What a handler reads beside its input: the URL's `query` of a POST that declares `http.query`. */
-export type QueryArgs<Q> = [Q] extends [never] ? unknown : Q extends InputSchema ? { readonly query: z.output<Q> } : unknown
+/**
+ * What a handler reads beside its input: the URL's `query` of a POST that declares `http.query`, each signed token in it
+ * as the claims of its purpose.
+ */
+export type QueryArgs<Q, T = Record<never, never>> = [Q] extends [never] ? unknown
+	: Q extends InputSchema ? { readonly query: WithClaims<z.output<Q>, T> }
+	: unknown
 
 /**
  * The wire of a procedure: `POST` with a JSON body by default; a query may be `GET`, its input then flat scalar URL
@@ -262,12 +282,24 @@ export interface Endpoint<T extends ProcedureType, I extends InputSchema | null,
 	readonly declared: D
 }
 
-/** An endpoint before `.handle`: a group refuses it. */
-export interface EndpointBuilder<T extends ProcedureType, I extends InputSchema | null, O extends Schema, Acc, D, Ctx, X = unknown>
-	extends PendingEndpoint
-{
+/**
+ * An endpoint before `.handle`: a group refuses it. `Tk` are the kit's token purposes: a signed token field of the input
+ * reaches the handler as the claims of its purpose.
+ */
+export interface EndpointBuilder<
+	T extends ProcedureType,
+	I extends InputSchema | null,
+	O extends Schema,
+	Acc,
+	D,
+	Ctx,
+	X = unknown,
+	Tk = Record<never, never>,
+> extends PendingEndpoint {
 	/** The endpoint's handler, typed by its access form and declaration; it may return only the output's fields. */
-	handle<const F extends KitHandler<HandlerInput<I, Acc>, Ctx, HandlerReturn<F, O>, X>>(handler: F): ExactReturn<F, O, Endpoint<T, I, O, Acc, D>>
+	handle<const F extends KitHandler<WithClaims<HandlerInput<I, Acc>, Tk>, Ctx, HandlerReturn<F, O>, X>>(
+		handler: F,
+	): ExactReturn<F, O, Endpoint<T, I, O, Acc, D>>
 }
 
 /** What every endpoint builder has and no handled endpoint has. */
@@ -290,16 +322,23 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		const Is extends string = never,
 		const Acts extends readonly K['action'][] = never,
 		Q extends InputSchema = never,
+		const Sg extends readonly string[] = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & PublicFields<Acc, Acts> & HttpField<Q> & NoKick,
+		def:
+			& EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']>
+			& PublicFields<Acc, Acts>
+			& HttpField<Q>
+			& NoKick
+			& SignsField<Sg, keyof K['tokens'] & string>,
 	): EndpointBuilder<
 		'query',
 		I,
 		O,
 		Acc,
 		Declared<S, U, Cn, Is>,
-		ProcedureContext<K, Caller, 'query', Acc, Acts, Declared<S, U, Cn, Is>>,
-		QueryArgs<Q>
+		ProcedureContext<K, Caller, 'query', Acc, Acts, Declared<S, U, Cn, Is>, never, never, Sg>,
+		QueryArgs<Q, K['tokens']>,
+		K['tokens']
 	>
 	mutation<
 		const Acc extends GroupAccess<Caller, MutationAccess<K['action'], K['dimension'], K['creatable'], InputOf<I>>>,
@@ -314,6 +353,7 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		Q extends InputSchema = never,
 		const Ks extends readonly string[] = never,
 		const Bs extends string = never,
+		const Sg extends readonly string[] = never,
 	>(
 		def:
 			& EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']>
@@ -321,15 +361,17 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 			& HttpField<Q>
 			& KickField<Th>
 			& KicksField<Ks>
-			& BindsField<Bs>,
+			& BindsField<Bs>
+			& SignsField<Sg, keyof K['tokens'] & string>,
 	): EndpointBuilder<
 		'mutation',
 		I,
 		O,
 		Acc,
 		Declared<S, U, Cn, Is>,
-		ProcedureContext<K, Caller, 'mutation', Acc, Acts, Declared<S, U, Cn, Is>, Ks, Bs>,
-		QueryArgs<Q>
+		ProcedureContext<K, Caller, 'mutation', Acc, Acts, Declared<S, U, Cn, Is>, Ks, Bs, Sg>,
+		QueryArgs<Q, K['tokens']>,
+		K['tokens']
 	>
 }
 
@@ -384,7 +426,16 @@ export interface LinkGroupKit<K extends KitTypes, LD extends string, G extends s
 		const U extends UnscopedDeclaration<K['tables'], 'read'> = never,
 	>(
 		def: EndpointDef<I, O, Acc, S, U, never, never, K['index']> & NoKick,
-	): EndpointBuilder<'query', I, O, Acc, Declared<S, U, never, never>, LinkContext<K, 'query', LD, Acc['action'], Declared<S, U, never, never>>>
+	): EndpointBuilder<
+		'query',
+		I,
+		O,
+		Acc,
+		Declared<S, U, never, never>,
+		LinkContext<K, 'query', LD, Acc['action'], Declared<S, U, never, never>>,
+		unknown,
+		K['tokens']
+	>
 	mutation<
 		const Acc extends LinkAccess<G>,
 		O extends Schema,
@@ -394,7 +445,16 @@ export interface LinkGroupKit<K extends KitTypes, LD extends string, G extends s
 		const Th extends string = never,
 	>(
 		def: EndpointDef<I, O, Acc, S, U, never, never, K['index']> & KickField<Th>,
-	): EndpointBuilder<'mutation', I, O, Acc, Declared<S, U, never, never>, LinkContext<K, 'mutation', LD, Acc['action'], Declared<S, U, never, never>>>
+	): EndpointBuilder<
+		'mutation',
+		I,
+		O,
+		Acc,
+		Declared<S, U, never, never>,
+		LinkContext<K, 'mutation', LD, Acc['action'], Declared<S, U, never, never>>,
+		unknown,
+		K['tokens']
+	>
 }
 
 /** An export procedure names its action and its scope; `{ member: true }` would give the consumer's key nothing to hold. */

@@ -56,6 +56,14 @@ export function describeContract(contract: AnyContract): ContractDeclaration<Sch
 	for (const [name, declaration] of Object.entries(surface.exports ?? {})) {
 		exports[name] = { ...declaration, procedures: reader.tree(`export '${name}'`, declaration.procedures) }
 	}
+	const tokens = surface.tokens === undefined
+		? undefined
+		: Object.fromEntries(
+			Object.entries(surface.tokens).map(([purpose, declared]) => [purpose, {
+				claims: reader.schema(`token '${purpose}' claims`, declared.claims),
+				maxDays: declared.maxDays,
+			}]),
+		)
 	problems.throwIfAny()
 	return {
 		app: vocabulary.app,
@@ -68,6 +76,7 @@ export function describeContract(contract: AnyContract): ContractDeclaration<Sch
 		exports,
 		imports: surface.imports ?? {},
 		csp: surface.csp ?? {},
+		...(tokens === undefined ? {} : { tokens }),
 		...(vocabulary.locale === undefined ? {} : { locale: vocabulary.locale }),
 		...(vocabulary.displayName === undefined ? {} : { displayName: vocabulary.displayName }),
 		...(vocabulary.mail === undefined ? {} : { mail: vocabulary.mail }),

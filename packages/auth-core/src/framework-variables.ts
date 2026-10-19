@@ -9,6 +9,13 @@ import { FABRIKA_PROXY_SECRET } from './wire'
 export const FABRIKA_SOURCE_MAP_UPLOAD = 'FABRIKA_SOURCE_MAP_UPLOAD'
 /** The run-scoped bearer of that upload. */
 export const FABRIKA_SOURCE_MAP_UPLOAD_KEY = 'FABRIKA_SOURCE_MAP_UPLOAD_KEY'
+/**
+ * The keys an application environment signs and verifies its signed tokens with: `<kid>:<secret>` entries joined by `,`,
+ * the signing key first, then each retired key still verifying. Written only for a contract that declares token purposes.
+ */
+export const FABRIKA_TOKEN_KEYS = 'FABRIKA_TOKEN_KEYS'
+/** The environment's canonical origin (`https://crm.example`), which `ctx.url` builds absolute links on. */
+export const FABRIKA_APP_ORIGIN = 'FABRIKA_APP_ORIGIN'
 
 /**
  * The environment names only the platform writes into an application
@@ -38,6 +45,8 @@ export const FRAMEWORK_VARIABLE_NAMES = [
 	'FABRIKA_IAM_RPC_KEY',
 	FABRIKA_SOURCE_MAP_UPLOAD,
 	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
+	FABRIKA_TOKEN_KEYS,
+	FABRIKA_APP_ORIGIN,
 ] as const
 
 export type FrameworkVariableName = (typeof FRAMEWORK_VARIABLE_NAMES)[number]

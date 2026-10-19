@@ -32,6 +32,7 @@ export const CAPABILITY_REFUSALS = {
 	undeclared_dimension: 'the job named a dimension the contract does not declare',
 	undeclared_kick: 'the site kicked a job it does not declare in kicks',
 	undeclared_binding: 'the site named a webhook it does not declare in binds',
+	undeclared_signs: 'the site signed a token of a purpose it does not declare in signs, or for longer than the purpose allows',
 	wrong_binding: 'a webhook binding was handed a capability of another kind or dimension than the webhook is bound to',
 	missing_id: 'the job named an object without an id',
 	wrong_capability: 'a file collection was handed a capability of another dimension or action than the operation needs',

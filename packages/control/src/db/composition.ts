@@ -7,6 +7,7 @@ import { OperationsReleaseRepository } from './operations-releases'
 import { RepoPollingRepository } from './polling'
 import { ControlRegistryRepository } from './registry'
 import { RunRepository } from './runs'
+import { TokenKeyRepository } from './token-keys'
 import { WorkloadCredentialRepository } from './workload-credentials'
 import { WorkspaceRepository } from './workspaces'
 
@@ -22,6 +23,7 @@ export interface ControlRepositories {
 	workspaces: WorkspaceRepository
 	workloadCredentials: WorkloadCredentialRepository
 	membershipKeys: MembershipKeyRepository
+	tokenKeys: TokenKeyRepository
 }
 
 /** The portable repository bundle. */
@@ -38,5 +40,6 @@ export function createControlRepositories(db: SqlDatabase, options: { now?: () =
 		workspaces: new WorkspaceRepository(db),
 		workloadCredentials: new WorkloadCredentialRepository(db),
 		membershipKeys: new MembershipKeyRepository(db),
+		tokenKeys: new TokenKeyRepository(db),
 	}
 }

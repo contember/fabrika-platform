@@ -6,7 +6,7 @@
 import type { JobMailer, RpcCaller, WebhookScheme } from '@fabrika/auth-core'
 import type { AnyDbIndex, DbIndex, Tables, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
-import type { Declared, JobKitContext, KickContext, KitImports, KitTypes, NoTablesIndex, SqlMode, WebhookKitContext } from './context'
+import type { Declared, JobKitContext, KickContext, KitImports, KitTypes, NoTablesIndex, SqlMode, TokensContext, WebhookKitContext } from './context'
 import {
 	type AccessDeclaration,
 	type CronDeclaration,
@@ -66,16 +66,19 @@ import type {
 	LinkGroupKit,
 	ListOf,
 	PendingIn,
+	SignsField,
 } from './group'
 import { withHandler, withKitOrigin, withSnapshots } from './handled'
 import { ContractError } from './problems'
+import type { TokenPurposes } from './token'
 import type { AnyAppVocabulary, AppVocabulary } from './vocabulary'
 
 /** Fields a builder sets itself: an options object that carries one does not type-check. */
 type Owned<K extends string> = { readonly [P in K]?: never }
 
-/** The kit's types, computed once from the vocabulary, the tables' index and the imports. */
-export type KitOf<V, Ix, Imp extends KitImports> = V extends AppVocabulary<infer A, infer D, infer R, infer Dims, infer M> ? {
+/** The kit's types, computed once from the vocabulary, the tables' index, the imports and the token purposes. */
+export type KitOf<V, Ix, Imp extends KitImports, Tk extends TokenPurposes = Record<never, never>> = V extends
+	AppVocabulary<infer A, infer D, infer R, infer Dims, infer M> ? {
 		readonly action: A
 		readonly dimension: D
 		readonly creatable: CreatableDimension<Dims>
@@ -85,15 +88,17 @@ export type KitOf<V, Ix, Imp extends KitImports> = V extends AppVocabulary<infer
 		readonly index: Ix
 		readonly tables: Ix extends { readonly tables: infer T } ? keyof T & string : never
 		readonly imports: Imp
+		readonly tokens: Tk
 	}
 	: never
 
-export type CronOptions<Acts, Sc, S, U, Is, Ix extends AnyDbIndex, M = never, Ks = never> =
+export type CronOptions<Acts, Sc, S, U, Is, Ix extends AnyDbIndex, M = never, Ks = never, Sg = never, Purposes extends string = never> =
 	& Owned<'kind' | 'schedule'>
 	& { readonly actions: Acts; readonly scope: Sc; readonly limits?: JobLimitsOption; readonly retries?: number }
 	& DeclaredFields<S, U, never, Is, Ix>
 	& MailerField<M>
 	& KicksField<Ks>
+	& SignsField<Sg, Purposes>
 
 /** The mail transport a job reaches, inferred from its optional field and then required, like a declared field. */
 type MailerField<M> =
@@ -115,11 +120,14 @@ export interface CronBuilder<
 	Sc extends string,
 	D extends Declared<SqlMode, unknown, never, string, JobMailer>,
 	Ks = never,
+	Sg = never,
 > {
-	handle(handler: (args: { readonly ctx: JobKitContext<K, Acts, D> & KickContext<Ks> }) => void | Promise<void>): KitCronJob<Acts, Sc, D>
+	handle(
+		handler: (args: { readonly ctx: JobKitContext<K, Acts, D> & KickContext<Ks> & TokensContext<K, Sg> }) => void | Promise<void>,
+	): KitCronJob<Acts, Sc, D>
 }
 
-export type WebhookOptions<B, Acts, I, S, U, Ix extends AnyDbIndex, Ks = never> =
+export type WebhookOptions<B, Acts, I, S, U, Ix extends AnyDbIndex, Ks = never, Sg = never, Purposes extends string = never> =
 	& Owned<'kind' | 'path'>
 	& {
 		readonly scheme: WebhookScheme
@@ -131,6 +139,7 @@ export type WebhookOptions<B, Acts, I, S, U, Ix extends AnyDbIndex, Ks = never> 
 	}
 	& DeclaredFields<S, U, never, never, Ix>
 	& KicksField<Ks>
+	& SignsField<Sg, Purposes>
 
 /** A webhook of the kit, handled. */
 export interface KitWebhook<B extends string, Acts extends string, I extends Schema, D> extends WebhookMount<B, Acts, I> {
@@ -145,9 +154,12 @@ export interface WebhookBuilder<
 	I extends InputSchema,
 	D extends Declared<SqlMode, unknown, never, never>,
 	Ks = never,
+	Sg = never,
 > {
 	handle(
-		handler: (args: { readonly input: z.output<I>; readonly ctx: WebhookKitContext<K, B, Acts, D> & KickContext<Ks> }) => void | Promise<void>,
+		handler: (
+			args: { readonly input: z.output<I>; readonly ctx: WebhookKitContext<K, B, Acts, D> & KickContext<Ks> & TokensContext<K, Sg> },
+		) => void | Promise<void>,
 	): KitWebhook<B, Acts, I, D>
 }
 
@@ -258,13 +270,16 @@ export interface ContractKit<K extends KitTypes> extends Pick<Kit<K['action'], K
 type ImportsSection<K extends KitTypes> = [keyof K['imports']] extends [never] ? unknown
 	: { readonly imports: { readonly [N in keyof K['imports']]: ImportDeclaration } }
 
+/** The `tokens` section the contract carries: the kit's token purposes, as `defineApp`'s options declare them. */
+type TokensSection<K extends KitTypes> = [keyof K['tokens']] extends [never] ? unknown : { readonly tokens: K['tokens'] }
+
 /** The contract `app.contract` returns: the same `Contract` the client, the compiler and the test kit read. */
 export type KitContract<K extends KitTypes, S extends Surface> = Contract<
 	K['action'],
 	K['dimension'],
 	K['role'],
 	K['dimensions'],
-	S & ImportsSection<K>
+	S & ImportsSection<K> & TokensSection<K>
 >
 
 /** The kit of one application: every builder is typed by its vocabulary, its tables and its imports. */
@@ -286,10 +301,11 @@ export interface App<K extends KitTypes> {
 		const Is extends string = never,
 		const M extends JobMailer = never,
 		const Ks extends readonly string[] = never,
+		const Sg extends readonly string[] = never,
 	>(
 		schedule: string,
-		options: CronOptions<Acts, Sc, S, U, Is, K['index'], M, Ks>,
-	): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, Is, M>, Ks>
+		options: CronOptions<Acts, Sc, S, U, Is, K['index'], M, Ks, Sg, keyof K['tokens'] & string>,
+	): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, Is, M>, Ks, Sg>
 	/**
 	 * A webhook whose deliveries `scheme` verifies, bound per value of `boundTo` or once for the application (`'app'`);
 	 * the contract mounts it by name.
@@ -301,10 +317,11 @@ export interface App<K extends KitTypes> {
 		const S extends SqlMode = never,
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
 		const Ks extends readonly string[] = never,
+		const Sg extends readonly string[] = never,
 	>(
 		path: Path,
-		options: WebhookOptions<B, Acts, I, S, U, K['index'], Ks>,
-	): WebhookBuilder<K, B, Acts[number], I, Declared<S, U, never, never>, Ks>
+		options: WebhookOptions<B, Acts, I, S, U, K['index'], Ks, Sg, keyof K['tokens'] & string>,
+	): WebhookBuilder<K, B, Acts[number], I, Declared<S, U, never, never>, Ks, Sg>
 	/** A share SPA under `prefix` and its procedures under `<prefix>/api`, for an anonymous key bound to one object. */
 	link<
 		const LD extends K['dimension'],
@@ -331,8 +348,11 @@ export interface App<K extends KitTypes> {
 			readonly procedures: (e: ExportKit<K>) => T
 		} & Owned<'kind'>,
 	): Export<T>
-	/** The contract: mounts by name and the `files`, `jobs`, `exports` and `csp` sections; `imports` come from the kit. */
-	contract<const S extends Surface & Owned<'imports'> & FormJobs<S>>(build: (c: ContractKit<K>) => S): KitContract<K, S>
+	/**
+	 * The contract: mounts by name and the `files`, `jobs`, `exports` and `csp` sections; `imports` and `tokens` come from
+	 * the kit.
+	 */
+	contract<const S extends Surface & Owned<'imports' | 'tokens'> & FormJobs<S>>(build: (c: ContractKit<K>) => S): KitContract<K, S>
 }
 
 /**
@@ -349,14 +369,30 @@ export function defineApp<V extends AnyAppVocabulary, DB, P>(
 	vocabulary: V,
 	tables: Tables<DB, P>,
 ): App<KitOf<V, DbIndex<DB, P, V>, Record<never, never>>>
-/** Options that may be absent are no overload: the contract's type would promise an imports section it may not have. */
-export function defineApp<V extends AnyAppVocabulary, DB, P, const Imp extends KitImports>(
+/**
+ * Options that may be absent are no overload: the contract's type would promise an imports section it may not have. An
+ * option field left out is empty, so the contract has a section only for a field the options carry.
+ */
+export function defineApp<
+	V extends AnyAppVocabulary,
+	DB,
+	P,
+	const Imp extends KitImports = Record<never, never>,
+	const Tk extends TokenPurposes = Record<never, never>,
+>(
 	vocabulary: V,
 	tables: Tables<DB, P>,
-	options: { readonly imports: Imp },
-): App<KitOf<V, DbIndex<DB, P, V>, Imp>>
-export function defineApp(vocabulary: AnyAppVocabulary, tables?: unknown, options?: { readonly imports: KitImports }): object {
-	return runtimeApp(vocabulary, options?.imports, tables !== undefined)
+	options: KitOptions<Imp, Tk>,
+): App<KitOf<V, DbIndex<DB, P, V>, Imp, Tk>>
+export function defineApp(vocabulary: AnyAppVocabulary, tables?: unknown, options?: KitOptions<KitImports, TokenPurposes>): object {
+	return runtimeApp(vocabulary, options, tables !== undefined)
+}
+
+/** What `defineApp`'s options carry: the connectors the kit imports, and the purposes of the tokens it signs. */
+export interface KitOptions<Imp extends KitImports, Tk extends TokenPurposes> {
+	readonly imports?: Imp
+	/** `{ <purpose>: token(Claims, { maxDays }) }`: each kind of signed token, declared once. */
+	readonly tokens?: Tk
 }
 
 // ── The runtime ─────────────────────────────────────────────────────────────────────────────────
@@ -480,10 +516,12 @@ interface RuntimeApp {
 }
 
 /**
- * `imports` is what `defineApp`'s options carry; the contract has an imports section exactly when they carry one.
- * `tables` is whether the kit was given tables: a contract of a kit without them is served without a database.
+ * `options` is what `defineApp`'s options carry; the contract has an imports or a tokens section exactly when they carry
+ * one. `tables` is whether the kit was given tables: a contract of a kit without them is served without a database.
  */
-function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefined, tables: boolean): RuntimeApp {
+function runtimeApp(vocabulary: AnyAppVocabulary, options: KitOptions<KitImports, TokenPurposes> | undefined, tables: boolean): RuntimeApp {
+	const imports = options?.imports
+	const tokens = options?.tokens
 	return {
 		group: (options, build) => {
 			const callers = options.callers ?? []
@@ -552,7 +590,11 @@ function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefine
 			if (surface.imports !== undefined) {
 				throw new ContractError(['contract: imports come from defineApp(vocabulary, tables, { imports }); remove the section'])
 			}
-			const declared = imports === undefined ? surface : { ...surface, imports: kitImportsSection(importDeclarations(imports), surface) }
+			if (surface.tokens !== undefined) {
+				throw new ContractError(['contract: tokens come from defineApp(vocabulary, tables, { tokens }); remove the section'])
+			}
+			const withImports = imports === undefined ? surface : { ...surface, imports: kitImportsSection(importDeclarations(imports), surface) }
+			const declared = tokens === undefined ? withImports : { ...withImports, tokens }
 			const contract: AnyContract = {
 				vocabulary: {
 					app: vocabulary.app,

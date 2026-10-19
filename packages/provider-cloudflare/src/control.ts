@@ -3,6 +3,7 @@ import {
 	type AppEnvironment,
 	appEnvironmentId,
 	type AppSchema,
+	FABRIKA_TOKEN_KEYS,
 	isEmailTransportVariable,
 	isWorkloadKeyVariable,
 	parseAppEnvironmentId,
@@ -305,6 +306,11 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	const mailVariable = Object.keys(input.managedEnvironment).find(isEmailTransportVariable)
 	if (mailVariable !== undefined) {
 		throw new Error(`cloudflare: the contract declares a job that sends mail through the installation (${mailVariable}); jobs run on Zerops only`)
+	}
+	// A Worker's vars are plain text in its config, so the signing keys of the application's tokens never go there.
+	const tokenKeys = input.managedEnvironment[FABRIKA_TOKEN_KEYS]
+	if (tokenKeys !== undefined && tokenKeys !== null) {
+		throw new Error('cloudflare: the contract declares token purposes, whose keys a Worker would hold as plain vars; signed tokens run on Zerops only')
 	}
 	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal, input.sourceBinding))
 	const listInstallationApps = options.installationApps

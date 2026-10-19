@@ -1,9 +1,11 @@
 import {
 	appEnvironmentId,
 	type ContractArtifact,
+	FABRIKA_APP_ORIGIN,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
 	FABRIKA_PROXY_SECRET,
+	FABRIKA_TOKEN_KEYS,
 	isFrameworkVariableName,
 } from '@fabrika/auth-core'
 import type { RunLogLine } from '@fabrika/control-contract'
@@ -50,6 +52,7 @@ import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './op
 import type { ProxySecrets } from './proxy-secret'
 import { projectedReturnOrigins } from './return-origins'
 import { appSecretPurpose, type SecretResolver } from './secret-resolver'
+import { longestTokenLifetime, type TokenKeysPort } from './token-keys'
 import { declaredConnectors, declaredWorkloads, type WorkloadCredentialsPort } from './workload-credentials'
 
 export type RunOutcome = ProviderTerminalOutcome
@@ -90,6 +93,11 @@ export interface RunDeps {
 	 * absent without a vault, an IAM issuer or a provisioning key, and then a contract that needs one does not deploy there.
 	 */
 	membershipTransport?: MembershipTransportPort
+	/**
+	 * The keys of each environment's signed tokens, sealed in the vault; absent without a vault, and then a contract that
+	 * declares a token purpose does not deploy.
+	 */
+	tokenKeys?: TokenKeysPort
 	/**
 	 * The installation's mail transport; absent means none, and then a job that declares `mailer: 'installation'` gets
 	 * `FABRIKA_EMAIL_PROVIDER=none`. An invalid one refuses only the deploys that need it.
@@ -620,12 +628,17 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			: await reconcileMembershipKey(deps, app.id, appEnv.env, namespaceProxy && needsMembershipTransport(approvedContract))
 		managedEnvironment[MEMBERSHIP_URL_VARIABLE] = membershipKey === null ? null : membershipTransportOrigin(deps.iamIssuer)
 		managedEnvironment[MEMBERSHIP_KEY_VARIABLE] = membershipKey
+		// The canonical origin `ctx.url` builds links on; `null` removes a stale one from an environment that has none.
+		managedEnvironment[FABRIKA_APP_ORIGIN] = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
+		const tokenKeys = dryRun ? null : await reconcileTokenKeys(deps.tokenKeys, app.id, appEnv.env, approvedContract)
+		managedEnvironment[FABRIKA_TOKEN_KEYS] = tokenKeys
 		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id, appEnv.env)
 		runLogs.redact([
 			...Object.values(secrets),
 			managedEnvironment[FABRIKA_PROXY_SECRET] ?? '',
 			...Object.values(workloadKeys),
 			membershipKey ?? '',
+			tokenKeys ?? '',
 			...installationMailSecrets(deps.mailTransport ?? NO_INSTALLATION_MAIL, mailEnvironment),
 			// A Zerops build holds the source-map bearer, and the provider relays the build's log.
 			releaseContext?.artifactUpload?.bearer ?? '',
@@ -744,6 +757,22 @@ async function reconcileWorkloadKeys(
 		)
 	}
 	return {}
+}
+
+/** The signing and verifying keys of the contract's token purposes; `null` for a contract that declares none. */
+async function reconcileTokenKeys(
+	keys: TokenKeysPort | undefined,
+	appId: string,
+	env: string,
+	contract: ContractArtifact | null,
+): Promise<string | null> {
+	if (keys !== undefined) {
+		return keys.reconcile(appId, env, contract)
+	}
+	if (longestTokenLifetime(contract) !== null) {
+		throw new Error('the contract declares token purposes, and this installation cannot keep their keys (it needs FABRIKA_CONTROL_VAULT_KEY)')
+	}
+	return null
 }
 
 /** IAM's membership transport for an application without an IAM binding: its URL (IAM's public origin) and its key. */

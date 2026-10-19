@@ -389,6 +389,8 @@ const MANAGED_DEFAULTS: ManagedValues = {
 	FABRIKA_PROXY_SECRET: 'private-proxy-secret',
 	FABRIKA_IAM_RPC_URL: null,
 	FABRIKA_IAM_RPC_KEY: null,
+	FABRIKA_APP_ORIGIN: null,
+	FABRIKA_TOKEN_KEYS: null,
 }
 
 const checkpointLabel = (state: JsonValue): string => {
@@ -560,6 +562,8 @@ describe('Zerops provider', () => {
 				FABRIKA_PROXY_SECRET: 'private-proxy-secret',
 				FABRIKA_IAM_RPC_URL: 'https://iam.test',
 				FABRIKA_IAM_RPC_KEY: 'px_private-membership-key',
+				FABRIKA_APP_ORIGIN: 'https://demo.example',
+				FABRIKA_TOKEN_KEYS: 'private-token-keys',
 			},
 		}, provider)
 
@@ -571,6 +575,9 @@ describe('Zerops provider', () => {
 			{ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret', sensitive: true },
 			{ key: 'FABRIKA_IAM_RPC_URL', value: 'https://iam.test', sensitive: false },
 			{ key: 'FABRIKA_IAM_RPC_KEY', value: 'px_private-membership-key', sensitive: true },
+			// The canonical origin is read back and compared; the token keys are a credential, written every deploy.
+			{ key: 'FABRIKA_APP_ORIGIN', value: 'https://demo.example', sensitive: false },
+			{ key: 'FABRIKA_TOKEN_KEYS', value: 'private-token-keys', sensitive: true },
 		])
 		expect(recorded.envDeletes).toEqual(['env-issuer'])
 		// Every service-variable write settles before the build request (`userDataSyncRunning`).
@@ -588,6 +595,8 @@ describe('Zerops provider', () => {
 				'FABRIKA_PROXY_SECRET',
 				'FABRIKA_IAM_RPC_URL',
 				'FABRIKA_IAM_RPC_KEY',
+				'FABRIKA_APP_ORIGIN',
+				'FABRIKA_TOKEN_KEYS',
 			]
 		) {
 			// A service variable, never a literal of the descriptor (the generated scripts name the app id themselves).

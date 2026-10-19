@@ -38,6 +38,7 @@ import type { AppMail, JobContext } from '../jobs/types'
 import type { ConnectSnapshot } from './connect'
 import type { MemberAccess, Schema } from './define'
 import type { App } from './kit'
+import type { TokenPurposes, TokenSigning } from './token'
 import type { WebhookBindings } from './webhook-binding'
 
 export type { Unavailable } from '@fabrika/db/tables'
@@ -66,6 +67,8 @@ export interface KitTypes {
 	/** The table names of `src/db/tables.ts`. */
 	readonly tables: string
 	readonly imports: KitImports
+	/** The token purposes of `defineApp`'s options, by purpose. */
+	readonly tokens: TokenPurposes
 }
 
 /**
@@ -430,6 +433,12 @@ export type PublicContext<K extends KitTypes, Kind extends DataKind, Acts extend
 export type KickContext<Ks> = [Ks] extends [never]
 	? { readonly kick: Unavailable<"declare kicks: ['<cron job>'] on this site to kick a job after its commit"> }
 	: Ks extends readonly (infer N extends string)[] ? { kick(job: N): void }
+	: never
+
+/** `ctx.tokens.sign('<purpose>', claims, { days })` of a site that declares `signs`: a token of one of those purposes. */
+export type TokensContext<K extends KitTypes, Sg> = [Sg] extends [never]
+	? { readonly tokens: Unavailable<"declare signs: ['<token purpose>'] on this site to sign its tokens"> }
+	: Sg extends readonly (infer P extends string)[] ? { readonly tokens: TokenSigning<K['tokens'], P> }
 	: never
 
 /**

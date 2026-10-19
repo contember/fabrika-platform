@@ -24,6 +24,7 @@ import {
 	unknownOptions,
 	type WebhookMountDeclaration,
 } from './declaration'
+import type { TokenPurposes } from './token'
 
 export type Path = `/${string}`
 
@@ -316,6 +317,8 @@ export interface SurfaceSections {
 	readonly exports?: { readonly [name: string]: Export<QueryTree> }
 	readonly imports?: { readonly [name: string]: ImportDeclaration }
 	readonly csp?: CspDeclaration
+	/** The token purposes; a kit contract takes them from `defineApp`'s options. */
+	readonly tokens?: TokenPurposes
 }
 
 export interface Surface extends SurfaceSections {

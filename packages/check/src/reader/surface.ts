@@ -32,6 +32,8 @@ import {
 	type SpaAccessDeclaration,
 	type Surface,
 	SURFACE_SECTIONS,
+	type TokenPurpose,
+	type TokenPurposes,
 	unknownOptions,
 	type Vocabulary,
 } from '@fabrika/app/contract'
@@ -132,8 +134,10 @@ class SurfaceReader {
 		}
 		const vocabulary = this.#vocabulary(app.vocabulary)
 		const imports = this.#attempt(() => kitImports(app.options)) ?? undefined
+		const tokens = this.#attempt(() => kitTokens(app.options)) ?? undefined
 		const surface = this.#surface(callback.result, 'kit')
-		return { vocabulary, surface: imports === undefined ? surface : { ...surface, imports: kitImportsSection(imports, surface) } }
+		const withImports = imports === undefined ? surface : { ...surface, imports: kitImportsSection(imports, surface) }
+		return { vocabulary, surface: tokens === undefined ? withImports : { ...withImports, tokens } }
 	}
 
 	/** Runs one entry's read; a refusal is recorded and the reader goes on, so one read reports every entry. */
@@ -766,6 +770,7 @@ function declared(options: Entries): DeclaredDeclaration {
 		mailer: plain(options.get('mailer')),
 		kicks: plain(options.get('kicks')),
 		binds: plain(options.get('binds')),
+		signs: plain(options.get('signs')),
 	})
 }
 
@@ -812,7 +817,7 @@ function plain(value: LiteralValue | undefined): unknown {
 }
 
 const DECLARED_ALLOWED =
-	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>'"
+	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>']"
 
 /** A builder of the kit read as the `defineContract` builder of the same name, which builds the same declaration. */
 const asSurface = (builder: BuilderValue): LiteralValue => ({
@@ -840,7 +845,10 @@ function kitImports(options: LiteralValue | undefined): Record<string, KitImport
 	if (options === undefined) {
 		return undefined
 	}
-	const imports = strictFields(options, "defineApp's options", ['imports'], []).get('imports')
+	const imports = strictFields(options, "defineApp's options", [], ['imports', 'tokens']).get('imports')
+	if (imports === undefined) {
+		return undefined
+	}
 	return Object.fromEntries([...entries(imports, options, 'imports')].map(([name, value]) => {
 		const where = `import '${name}'`
 		const declaration = strictFields(value, where, ['snapshot', 'procedures'], ['timeoutMs'])
@@ -856,6 +864,25 @@ function kitImports(options: LiteralValue | undefined): Record<string, KitImport
 			procedures: texts(declaration.get('procedures'), value, 'procedures'),
 			...(timeoutMs === undefined ? {} : { timeoutMs }),
 		}]
+	}))
+}
+
+/** The token purposes of `defineApp`'s options, each `token(Claims, { maxDays })`; `undefined` without any. */
+function kitTokens(options: LiteralValue | undefined): TokenPurposes | undefined {
+	const tokens = options === undefined ? undefined : strictFields(options, "defineApp's options", [], ['imports', 'tokens']).get('tokens')
+	if (options === undefined || tokens === undefined) {
+		return undefined
+	}
+	return Object.fromEntries([...entries(tokens, options, 'tokens')].map(([purpose, value]): [string, TokenPurpose] => {
+		if (value.kind !== 'token') {
+			throw new Refused(value.at, `token purpose '${purpose}' is not built with token`, `${purpose}: token(Claims, { maxDays: 400 })`)
+		}
+		const [claims, definition] = value.args
+		if (claims?.kind !== 'schema' || definition === undefined || value.args.length !== 2) {
+			throw new Refused(value.at, `token purpose '${purpose}' takes its claims schema and its options`, `${purpose}: token(Claims, { maxDays: 400 })`)
+		}
+		const maxDays = numeric(strictFields(definition, `token '${purpose}'`, ['maxDays'], []).get('maxDays'), definition, 'maxDays')
+		return [purpose, { '~kind': 'token', claims: claims.schema, maxDays }]
 	}))
 }
 

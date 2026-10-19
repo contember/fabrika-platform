@@ -63,6 +63,7 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 					connect: sorted(reach.connect),
 					...(reach.actions === undefined ? {} : { actions: sorted(reach.actions) }),
 					...(reach.kicks === undefined ? {} : { kicks: sorted(reach.kicks) }),
+					...(reach.signs === undefined ? {} : { signs: sorted(reach.signs) }),
 				})),
 			}),
 		...(artifact.directories === undefined ? {} : { directories: artifact.directories }),
@@ -76,6 +77,9 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 			: {
 				procedures: mapValues(artifact.procedures, (rules) => rules.query === undefined ? rules : { ...rules, query: canonicalShape(rules.query) }),
 			}),
+		...(artifact.tokens === undefined
+			? {}
+			: { tokens: mapValues(artifact.tokens, (purpose) => ({ claims: canonicalShape(purpose.claims), maxDays: purpose.maxDays })) }),
 	}
 }
 

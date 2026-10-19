@@ -580,7 +580,7 @@ const verifyExposure = async (env: StepEnv): Promise<void> => {
 	)
 }
 
-/** Write the nine service-level managed keys; `FABRIKA_RELEASE` is never a service variable (ADR-0044). */
+/** Write the eleven service-level managed keys; `FABRIKA_RELEASE` is never a service variable (ADR-0044). */
 const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 	const { zerops, log, signal, managedValues, familyVariables } = env
 	const serviceId = env.run.target.serviceId

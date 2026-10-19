@@ -217,6 +217,16 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		const shown = new Set(before === undefined ? [] : fileColumnLines(name, before).map((change) => change.line))
 		changes.add(...fileColumnLines(name, table).filter((change) => !shown.has(change.line)))
 	}
+	compareKeyed(changes, record(baseline.tokens ?? {}), record(candidate.tokens ?? {}), {
+		added: (name, purpose) => `New token purpose \`${name}\`, a token of it valid up to ${purpose.maxDays} days`,
+		removed: (name) => `Token purpose \`${name}\` is removed`,
+		changed: (name, from, to) => [
+			...(from.maxDays === to.maxDays
+				? []
+				: [(to.maxDays > from.maxDays ? widening : narrowing)(`Token purpose \`${name}\` lifetime changes from ${from.maxDays} to ${to.maxDays} days`)]),
+			...schemaChanges({ endpoint: `Token purpose \`${name}\` claims`, side: 'input', path: '' }, from.claims, to.claims),
+		],
+	})
 	compareDeclared(changes, baseline.declared, candidate.declared)
 	compareProcedures(changes, baseline, candidate)
 	compareDirectories(changes, baseline, candidate)
@@ -381,7 +391,21 @@ function compareDeclared(
 		changes.add(...kicksChanges(site, sites[site]?.kicks ?? [], after[site] ?? NO_REACH))
 		changes.add(...workloadActionChanges(site, sites[site]?.actions ?? [], after[site]?.actions ?? []))
 		changes.add(...bindsChange(site, sites[site]?.binds, after[site]?.binds))
+		changes.add(...signsChanges(site, sites[site]?.signs ?? [], after[site]?.signs ?? []))
 	}
+}
+
+/**
+ * The token purposes a site signs (`signs`): whoever holds a token it signs may call what verifies one, a public
+ * procedure included, so a new purpose widens; a dropped one narrows, while the tokens already signed stay valid.
+ */
+function signsChanges(site: string, from: readonly string[], to: readonly string[]): AccessChange[] {
+	const name = siteName(site)
+	return union(from, to).flatMap((purpose) => {
+		if (!from.includes(purpose)) return [widening(`${name} signs \`${purpose}\` tokens`)]
+		if (!to.includes(purpose)) return [narrowing(`${name} no longer signs \`${purpose}\` tokens`)]
+		return []
+	})
 }
 
 /**

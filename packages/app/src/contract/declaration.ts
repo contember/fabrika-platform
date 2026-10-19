@@ -15,6 +15,8 @@ export interface ContractDeclaration<S> {
 	readonly exports: Readonly<Record<string, ExportDeclaration<S>>>
 	readonly imports: Readonly<Record<string, ImportDeclaration>>
 	readonly csp: CspDeclaration
+	/** The token purposes of `defineApp`'s options, by purpose; absent without any. */
+	readonly tokens?: Readonly<Record<string, TokenDeclaration<S>>>
 	/** A language IAM speaks; `buildArtifact` refuses another value. */
 	readonly locale?: string
 	readonly displayName?: string
@@ -30,7 +32,7 @@ export interface ContractDeclaration<S> {
  * The keys of the object `defineContract`'s callback returns that are sections, not mounts. Every other key is a
  * mount. A reader of source splits the object the same way.
  */
-export const SURFACE_SECTIONS = ['files', 'jobs', 'exports', 'imports', 'csp'] as const
+export const SURFACE_SECTIONS = ['files', 'jobs', 'exports', 'imports', 'csp', 'tokens'] as const
 
 export type SurfaceSection = (typeof SURFACE_SECTIONS)[number]
 
@@ -70,7 +72,7 @@ export function unknownOptions(options: object, builder: Builder): string[] {
  * The off-road fields a site of the staged kit declares beside its builder's options. The kit copies them into
  * `declared`; `buildArtifact` checks which of them the site may carry.
  */
-export const DECLARED_FIELDS = ['sql', 'unscoped', 'connect', 'issues', 'then', 'mailer', 'kicks', 'binds'] as const
+export const DECLARED_FIELDS = ['sql', 'unscoped', 'connect', 'issues', 'then', 'mailer', 'kicks', 'binds', 'signs'] as const
 
 /** The keys of a kit site's `options` that are neither `builder`'s option fields nor a declared field. */
 export function kitUnknownOptions(options: object, builder: Builder): string[] {
@@ -78,7 +80,7 @@ export function kitUnknownOptions(options: object, builder: Builder): string[] {
 }
 
 /**
- * The reach a site of the staged kit declares, as written (`sql`, `unscoped`, `connect`, `issues`, `then`, `mailer`, `kicks`, `binds`): only the fields
+ * The reach a site of the staged kit declares, as written (`sql`, `unscoped`, `connect`, `issues`, `then`, `mailer`, `kicks`, `binds`, `signs`): only the fields
  * its options carry. Unchecked here: the static reader copies what the source holds, and `buildArtifact` parses it.
  */
 export interface DeclaredDeclaration {
@@ -90,6 +92,7 @@ export interface DeclaredDeclaration {
 	readonly mailer?: unknown
 	readonly kicks?: unknown
 	readonly binds?: unknown
+	readonly signs?: unknown
 }
 
 /** The declared fields of a kit site's options, each one only when the options carry it. */
@@ -103,7 +106,14 @@ export function declaredOf(options: DeclaredDeclaration): DeclaredDeclaration {
 		...(options.mailer === undefined ? {} : { mailer: options.mailer }),
 		...(options.kicks === undefined ? {} : { kicks: options.kicks }),
 		...(options.binds === undefined ? {} : { binds: options.binds }),
+		...(options.signs === undefined ? {} : { signs: options.signs }),
 	}
+}
+
+/** One token purpose as written: its claims schema and its longest lifetime; `buildArtifact` checks both. */
+export interface TokenDeclaration<S> {
+	readonly claims: S
+	readonly maxDays: unknown
 }
 
 /** Option keys outside the builder's option fields; `buildArtifact` refuses any. */

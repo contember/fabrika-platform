@@ -129,6 +129,7 @@ src/
     context.ts        what a kit handler receives: ctx by access form and declaration (types only)
     define.ts         defineContract, the c.* kit and every type an agent meets
     attachment.ts     attachment(): an output that answers a file of rows (the rows' array schema, marked)
+    token.ts          token(Claims, { maxDays }) of defineApp's options, signedToken('<purpose>'), the claims types
     file-schemas.ts   the zod schemas of a collection's list endpoint, shared by files/ and the client
     declaration.ts    the contract as plain data, generic over its schema type
     schema-shape.ts   a zod 4 schema of the subset → SchemaShape
@@ -155,6 +156,7 @@ src/
     challenge.ts      a form's challenge: Turnstile's siteverify under a deadline, strictly read
     webhook.ts        a webhook's bindings (ctx.webhooks, a GitHub webhook's generated endpoints) and a delivery's principal
     verifiers.ts      a delivery's signature: the presets and the hmac shape, constant-time
+    tokens.ts         signed tokens: FABRIKA_TOKEN_KEYS, ctx.tokens.sign, the verification of each token field
     faults.ts         ServerFault: a framework failure whose message only the log sees
     failures.ts       FailureReports: a 5xx as one log line and one rate-limited Operations event, by code
     crashes.ts        a boot that throws, an uncaught exception, an unhandled rejection: one crash report each
@@ -684,6 +686,12 @@ vocabulary (`packages/db/CLAUDE.md`).
   or an `{ hmac }` shape, over the raw body, a signed timestamp within `WEBHOOK_TIMESTAMP_TOLERANCE_MS`. `buildArtifact`
   refuses `{ basic }` and `{ bearer }`: the proxy removes `Authorization` from an anonymous endpoint's request (ADR-0022
   rule 3), so they could never verify. Only `github-sha256` checks the account the payload names.
+- **A signed token is verified as its input is parsed** (`implement/tokens.ts`): only a top-level field of a procedure's
+  input or `http.query` carries one (`buildArtifact` refuses it anywhere else, an export included). The HMAC covers the
+  key id, the purpose, the expiry and the claims; the claims are parsed again by the purpose's schema. The keys are
+  `FABRIKA_TOKEN_KEYS`, the signing key first; a retired key stays there while a token it signed may live (Control).
+  The texts a verified token carries are the only absolute redirect targets a request may name besides the listed
+  origins. A token is no credential: it opens no mount.
 - **A webhook's `limits` bound its body and its handler** (`WEBHOOK_LIMITS`): `maxBytes` (1 MiB by default and at most)
   is its row's body limit, read within the deadline `bodyDeadlineMs` derives from it; `timeoutMs` (10 s, at most 60 s)
   is its handler's, which the artifact records on the mount and the delivery claim's lease outlasts.

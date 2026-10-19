@@ -566,6 +566,7 @@ export type {
 	PutAppEnvironmentInput,
 	PutAppSecretInput,
 	PutAppVarInput,
+	RotateTokenKeyResponse,
 	RunIdInput,
 	RunListInput,
 	SecretValueInput,

@@ -32,7 +32,10 @@ export const SERVER_FAULTS = {
 	attachment_rows: 'the handler returned more rows than its attachment declares (maxRows)',
 	attachment_cell: 'a cell of the attachment is longer than one cell may hold',
 	attachment_size: 'the encoded attachment is larger than it declares (maxBytes); no body was sent',
-	redirect_refused: "the handler redirected to a target that is neither its own origin's path nor an origin its redirect() lists",
+	redirect_refused:
+		"the handler redirected to a target that is neither its own origin's path, an origin its redirect() lists, nor a URL a verified token of the request carries",
+	token_claims_refused: "the claims a site signed are not what the token purpose's claims schema admits",
+	token_keys_missing: 'a site signed a token, and the environment holds no token key',
 } as const
 
 export type ServerFaultReason = keyof typeof SERVER_FAULTS

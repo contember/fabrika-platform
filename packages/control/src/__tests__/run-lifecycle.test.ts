@@ -644,6 +644,9 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_PROXY_SECRET]: null,
 			FABRIKA_IAM_RPC_URL: null,
 			FABRIKA_IAM_RPC_KEY: null,
+			// The environment's public origin is the canonical origin `ctx.url` builds links on.
+			FABRIKA_APP_ORIGIN: 'https://public.example.com',
+			FABRIKA_TOKEN_KEYS: null,
 		})
 		expect(input.dryRun).toBe(true)
 
@@ -821,6 +824,8 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_PROXY_SECRET]: null,
 			FABRIKA_IAM_RPC_URL: null,
 			FABRIKA_IAM_RPC_KEY: null,
+			FABRIKA_APP_ORIGIN: 'https://public.example.com',
+			FABRIKA_TOKEN_KEYS: null,
 		})
 
 		const secondRunId = uuidv7()
@@ -849,6 +854,8 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_PROXY_SECRET]: null,
 			FABRIKA_IAM_RPC_URL: null,
 			FABRIKA_IAM_RPC_KEY: null,
+			FABRIKA_APP_ORIGIN: 'https://public.example.com',
+			FABRIKA_TOKEN_KEYS: null,
 		})
 	})
 

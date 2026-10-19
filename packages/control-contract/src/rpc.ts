@@ -54,6 +54,11 @@ export interface AppIdInput {
 	readonly appId: string
 }
 
+/** Whether a rotation was recorded: `false` while the environment holds no token key. */
+export interface RotateTokenKeyResponse {
+	readonly requested: boolean
+}
+
 export interface AppEnvironmentInput extends AppIdInput {
 	readonly env: string
 }
@@ -161,6 +166,8 @@ export interface ControlRpcContract {
 			delete: RpcProcedure<AppEnvironmentInput, OkResponse>
 			/** Human user principals with `access.approve` only, from the console (ADR-0050 §4). */
 			protect: RpcProcedure<SetEnvironmentProtectionRequest, AppEnvDto>
+			/** The environment's next deploy retires the key its signed tokens are signed with and signs with a new one. */
+			rotateTokenKey: RpcProcedure<AppEnvironmentInput, RotateTokenKeyResponse>
 		}
 		secrets: {
 			list: RpcProcedure<AppIdInput, ListResponse<AppSecretDto>>

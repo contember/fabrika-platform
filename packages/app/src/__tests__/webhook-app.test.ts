@@ -152,7 +152,7 @@ describe('binds in the artifact', () => {
 		expect(refusals(() => compileContract(misplaced, tables))).toEqual([
 			"procedure 'api.wrong.read': declares binds, which only a credentialed mutation of an RPC mount declares",
 			"procedure 'api.wrong.typo': binds \"strpe\" is not a webhook of the contract (webhooks: stripe) — did you mean 'stripe'?",
-			"procedure 'api.wrong.anyone': is public and declares binds: a public procedure reaches its actions only (allowed: kicks)",
+			"procedure 'api.wrong.anyone': is public and declares binds: a public procedure reaches its actions only (allowed: kicks, signs)",
 			"job 'nightly': declares binds, which only a credentialed mutation of an RPC mount declares",
 		])
 	})

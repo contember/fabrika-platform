@@ -23,6 +23,8 @@ export type BuilderKind =
 	| 'redirect'
 	| 'file'
 	| 'value'
+	| 'token'
+	| 'signedToken'
 
 /** The only imported names a literal module may use: the builders the platform reads without executing them. */
 export const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, BuilderKind>>>> = {
@@ -35,6 +37,8 @@ export const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, Bu
 		redirect: 'redirect',
 		file: 'file',
 		WebhookSecret: 'value',
+		token: 'token',
+		signedToken: 'signedToken',
 	},
 	'@fabrika/db/tables': { defineTables: 'tables' },
 }
@@ -329,7 +333,7 @@ const shapeProblem = (kind: BuilderKind, root: AstNode, links: readonly Link[]):
 		case 'app':
 			return links.length === 1 && calls === 1
 				? undefined
-				: { node: root, message: 'defineApp used other than as one call', allowed: 'defineApp(vocabulary, tables, { imports })' }
+				: { node: root, message: 'defineApp used other than as one call', allowed: 'defineApp(vocabulary, tables, { imports, tokens })' }
 		case 'contract':
 			return links.length === 1 && calls === 1
 				? undefined
@@ -352,6 +356,14 @@ const shapeProblem = (kind: BuilderKind, root: AstNode, links: readonly Link[]):
 				: { node: root, message: 'file used other than as one call', allowed: "file('<kind>')" }
 		case 'value':
 			return { node: root, message: `${identifierName(root) ?? 'the schema'} used other than as it is`, allowed: 'output: WebhookSecret' }
+		case 'token':
+			return links.length === 1 && calls === 1
+				? undefined
+				: { node: root, message: 'token used other than as one call', allowed: 'token(Claims, { maxDays: 400 })' }
+		case 'signedToken':
+			return links.length === 1 && calls === 1
+				? undefined
+				: { node: root, message: 'signedToken used other than as one call', allowed: "signedToken('<purpose>')" }
 		case 'tables':
 			return calls === links.length && (calls === 1 || calls === 2)
 				? undefined

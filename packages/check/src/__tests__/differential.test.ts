@@ -41,6 +41,8 @@ import { contract as publicContract } from '../../../app/src/__tests__/public-fi
 import { tables as publicTables } from '../../../app/src/__tests__/public-fixture/src/db/tables'
 import { contract as storedFilesContract } from '../../../app/src/__tests__/stored-files-fixture/fabrika.contract'
 import { tables as storedFilesTables } from '../../../app/src/__tests__/stored-files-fixture/src/db/tables'
+import { contract as tokenContract } from '../../../app/src/__tests__/token-fixture/fabrika.contract'
+import { tables as tokenTables } from '../../../app/src/__tests__/token-fixture/src/db/tables'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { ContractSourceError, readContractSource, readTablesSource } from '../contract'
 import {
@@ -190,6 +192,11 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app public-fixture (public procedures in a group without callers, admission and limits, read from source)',
 		root: join(APP_TESTS, 'public-fixture'),
 		evaluated: () => compileContract(publicContract, publicTables),
+	},
+	{
+		name: '@fabrika/app token-fixture (token purposes of the kit, signedToken fields, signs, read from source)',
+		root: join(APP_TESTS, 'token-fixture'),
+		evaluated: () => compileContract(tokenContract, tokenTables),
 	},
 	{
 		name: '@fabrika/app form-kick (forms whose then kicks a job, read from source)',

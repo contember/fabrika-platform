@@ -1,7 +1,7 @@
 // Reads the literal subset of `rules/literal.ts` into values, without executing the application: names resolve through
 // `ModuleGraph`, `z` chains build real zod schemas, `c.*` calls stay unapplied for `surface.ts`.
 
-import { file, WebhookSecret } from '@fabrika/app/contract'
+import { file, signedToken, WebhookSecret } from '@fabrika/app/contract'
 import type { z } from 'zod/v4'
 import { type AstNode, child, children, identifierName, isConstAssertion, type ParsedModule, staticKey } from '../ast'
 import type { Located, ModuleGraph } from '../graph'
@@ -59,6 +59,8 @@ export type LiteralValue =
 	| { readonly kind: 'attachment'; readonly args: readonly LiteralValue[]; readonly at: Located }
 	/** `redirect({ … })`, with its argument read; `surface.ts` builds the output schema the evaluated module holds. */
 	| { readonly kind: 'redirect'; readonly args: readonly LiteralValue[]; readonly at: Located }
+	/** `token(Claims, { maxDays })` of `defineApp`'s options, with its arguments read; `surface.ts` reads the purpose. */
+	| { readonly kind: 'token'; readonly args: readonly LiteralValue[]; readonly at: Located }
 	/** A builder callback: its parameter is only ever a kit, so its body is read once, as a value. */
 	| { readonly kind: 'callback'; readonly result: LiteralValue; readonly at: Located }
 
@@ -341,6 +343,10 @@ export class ValueReader {
 			case 'value':
 				this.#problems.add(located, `${rootName} used other than as it is`, 'output: WebhookSecret')
 				return null
+			case 'token':
+				return this.#tokenCall(located, links, scope)
+			case 'signedToken':
+				return this.#signedTokenCall(located, links, scope)
 			default:
 				if (this.#isConstName(located.module, rootName) && links[0]?.kind === 'member') {
 					return this.#schemaMethods(located, root, links, scope)
@@ -489,6 +495,28 @@ export class ValueReader {
 		}
 		const args = this.#arguments(located.module, call.node, scope, () => null)
 		return args === null ? null : { kind: 'redirect', args, at: located }
+	}
+
+	#tokenCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
+		const [call] = links
+		if (call?.kind !== 'call' || links.length !== 1) {
+			this.#problems.add(located, 'token used other than as one call', 'token(Claims, { maxDays: 400 })')
+			return null
+		}
+		const args = this.#arguments(located.module, call.node, scope, () => null)
+		return args === null ? null : { kind: 'token', args, at: located }
+	}
+
+	/** `signedToken('<purpose>')`: the schema `@fabrika/app`'s `signedToken` builds, so the artifact reads it as the runtime does. */
+	#signedTokenCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
+		const [call] = links
+		const args = call?.kind === 'call' && links.length === 1 ? this.#arguments(located.module, call.node, scope, () => null) : null
+		const [purpose] = args ?? []
+		if (args === null || args.length !== 1 || purpose?.kind !== 'string') {
+			this.#problems.add(located, 'signedToken used other than as one call with the purpose', "signedToken('<purpose>')")
+			return null
+		}
+		return { kind: 'schema', schema: signedToken(purpose.value), nodes: 1, depth: 1, steps: ['signedToken'], at: located }
 	}
 
 	/** `file('<kind>')`: the schema `@fabrika/app`'s `file` builds, so the artifact reads the file field as the runtime does. */
@@ -683,4 +711,6 @@ export const describeKind = (
 		? 'attachment(…)'
 		: value.kind === 'redirect'
 		? 'redirect(…)'
+		: value.kind === 'token'
+		? 'token(…)'
 		: value.kind

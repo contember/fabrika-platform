@@ -40,6 +40,7 @@ import {
 	undeclaredSql,
 } from '../implement/invocation'
 import { jobLinkIssuing, type JobLinkMount } from '../implement/membership'
+import type { SignedTokens } from '../implement/tokens'
 import { type WorkloadCredential, workloadSite } from '../implement/workload'
 import { jobMail, type MailTransports } from './mail'
 import type { OperationsReporter } from './report'
@@ -182,6 +183,8 @@ interface RunnerContext {
 	readonly mail: MailTransports
 	/** Kicks a contract job in the background: what a job's own `ctx.kick` sends once its run succeeded. */
 	readonly kick: (name: string) => Promise<void>
+	/** The environment's signed tokens: `ctx.tokens` of a job that declares `signs`. */
+	readonly tokens: SignedTokens | null
 }
 
 /** Where `fabrika app dev` shows what a handler threw, on the developer's own machine; nothing else sets one. */
@@ -219,6 +222,8 @@ export interface JobBindingInput {
 	readonly revealHandlerErrors?: HandlerErrorSink
 	/** The transports of the jobs that declare `mailer`, which `boot` resolved. */
 	readonly mail: MailTransports
+	/** The environment's signed tokens, which a job that declares `signs` signs with. */
+	readonly tokens?: SignedTokens
 }
 
 interface BoundFrameworkJob {
@@ -317,6 +322,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		containers: input.containers,
 		revealHandlerErrors: input.revealHandlerErrors ?? null,
 		mail: input.mail,
+		tokens: input.tokens ?? null,
 		// A job's kicks run only after the job is bound, so `kick` below is defined by then.
 		kick: (name: string) => kick(name),
 	})
@@ -801,6 +807,9 @@ function jobContext(
 			)),
 		...(job.links === null || context.membership === null ? {} : { links: jobLinksOf(job, job.links, context.membership, frame, context) }),
 		...(job.mailer === null ? {} : { mail: jobMailOf(job, job.mailer, frame, signal, context) }),
+		...(job.site === null || job.site.signs.length === 0 || context.tokens === null
+			? {}
+			: { tokens: context.tokens.context(`job '${job.name}'`, job.site.signs) }),
 		within<const Act extends string, const Dim extends string>(action: Act, dimension: Dim): Within<Dim, Act> {
 			check(action, dimension)
 			return context.mint.within(frame, dimension, action, principal.id, 'all')

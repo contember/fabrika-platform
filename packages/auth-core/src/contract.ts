@@ -67,6 +67,18 @@ export interface ContractArtifact extends EndpointTable {
 	 * procedure (a `defineContract` one, an older release's), so its digest stays.
 	 */
 	readonly procedures?: Readonly<Record<string, ProcedureArtifact>>
+	/**
+	 * The purposes of the signed tokens the application issues (`token(Claims, { maxDays })` of `defineApp`'s options): each
+	 * purpose's claims and the longest lifetime a token of it may have. Control keeps a retired signing key verifying until
+	 * the last token it signed may expire. Absent unless declared, so the digest stays.
+	 */
+	readonly tokens?: Readonly<Record<string, TokenPurposeArtifact>>
+}
+
+/** One token purpose: the claims a token of it carries, and the most days a site may sign one for. */
+export interface TokenPurposeArtifact {
+	readonly claims: SchemaShape
+	readonly maxDays: number
 }
 
 /**
@@ -270,7 +282,18 @@ export type SchemaShape =
 	| { readonly type: 'optional'; readonly inner: SchemaShape }
 	| { readonly type: 'nullable'; readonly inner: SchemaShape }
 	| { readonly type: 'union'; readonly options: readonly SchemaShape[] }
+	| TokenShape
 	| FileShape
+
+/**
+ * A signed token of a declared purpose (`signedToken('<purpose>')`): on the wire a string, verified by the application's
+ * framework as it parses the input (an HMAC over the purpose and the claims, and the expiry), and handed to the handler
+ * as the purpose's typed claims. Only a top-level field of a procedure's input or its `http.query`.
+ */
+export interface TokenShape {
+	readonly type: 'token'
+	readonly purpose: string
+}
 
 /**
  * A stored file of a declared kind (`file('<kind>')`). In an input it is a top-level field, optional, or a bounded
@@ -649,6 +672,11 @@ export interface DeclaredReach {
 	 * secret once. Absent unless declared, so the digest stays.
 	 */
 	readonly binds?: string
+	/**
+	 * The token purposes this site signs (`ctx.tokens.sign('<purpose>', …)`), sorted. Absent unless declared, so the digest
+	 * stays.
+	 */
+	readonly signs?: readonly string[]
 	/**
 	 * A public procedure's workload actions, sorted: all its handler holds, through the key Control issues for the
 	 * endpoint (`contractWorkloads`). Present only on a public procedure's entry, so every other digest stays.

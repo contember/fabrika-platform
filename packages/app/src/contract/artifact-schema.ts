@@ -27,6 +27,7 @@ import {
 } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
 import { FORM_LIMITS, JOB_LIMITS, PROCEDURE_LIMITS } from './defaults'
+import { TOKEN_MAX_DAYS } from './token'
 import { webhookSchemeSchema } from './webhook-scheme'
 
 const name = z.string().min(1)
@@ -75,6 +76,7 @@ export const schemaShapeSchema: z.ZodType<SchemaShape> = z.lazy(() =>
 		z.strictObject({ type: z.literal('optional'), inner: schemaShapeSchema }),
 		z.strictObject({ type: z.literal('nullable'), inner: schemaShapeSchema }),
 		z.strictObject({ type: z.literal('union'), options: z.array(schemaShapeSchema) }),
+		z.strictObject({ type: z.literal('token'), purpose: name }),
 		z.strictObject({ type: z.literal('file'), kind: z.string().min(1) }),
 	])
 )
@@ -363,6 +365,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		actions: actions.nonempty().optional(),
 		kicks: z.array(name).nonempty().optional(),
 		binds: name.optional(),
+		signs: z.array(name).nonempty().optional(),
 	})).superRefine((declared, context) => {
 		for (const [site, reach] of Object.entries(declared)) {
 			if (reach.actions !== undefined && !isOwnWorkloadName('public', site)) {
@@ -388,6 +391,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		timeoutMs: z.int().positive().max(PROCEDURE_LIMITS.maxTimeoutMs),
 		query: schemaShapeSchema.optional(),
 	})).optional(),
+	tokens: record(z.strictObject({ claims: schemaShapeSchema, maxDays: z.int().positive().max(TOKEN_MAX_DAYS) })).optional(),
 }).superRefine((artifact, context) => {
 	for (const row of artifact.endpoints) {
 		if (row.kind === 'public' && artifact.declared?.[row.id]?.actions === undefined) {

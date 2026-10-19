@@ -68,6 +68,8 @@ const MANAGED_DEFAULTS: ManagedValues = {
 	FABRIKA_PROXY_SECRET: 'private-proxy-secret',
 	FABRIKA_IAM_RPC_URL: null,
 	FABRIKA_IAM_RPC_KEY: null,
+	FABRIKA_APP_ORIGIN: null,
+	FABRIKA_TOKEN_KEYS: null,
 }
 const checkpointFor = (triggered: boolean): JsonValue => ({ appVersionId: 'version-1', triggered })
 const PROXY_SOURCE = {

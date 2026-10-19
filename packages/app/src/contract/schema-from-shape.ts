@@ -4,6 +4,7 @@
 
 import type { SchemaShape, StringShape } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
+import { SIGNED_TOKEN_MAX_LENGTH } from './token'
 
 /** The zod schema that admits what `shape` describes; `describeSchema` reads it back into the same shape. */
 export function schemaFromShape(shape: SchemaShape): z.ZodType {
@@ -55,6 +56,9 @@ export function schemaFromShape(shape: SchemaShape): z.ZodType {
 			return z.nullable(schemaFromShape(shape.inner))
 		case 'union':
 			return z.union(shape.options.map(schemaFromShape))
+		case 'token':
+			// The text of a signed token; the runtime verifies it and hands the handler its claims.
+			return z.string().min(1).max(SIGNED_TOKEN_MAX_LENGTH)
 		case 'file':
 			// No export carries a file: the build refuses one, so a description that holds one admits nothing.
 			return z.never()

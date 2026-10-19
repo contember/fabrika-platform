@@ -20,6 +20,7 @@ import type { OperationsReleaseProjectionDeps } from './operations-releases'
 import { type ProxySecrets, VaultProxySecrets } from './proxy-secret'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
+import { type TokenKeysPort, VaultTokenKeys } from './token-keys'
 import { Vault } from './vault'
 import { iamWorkloadKeyIssuer, VaultWorkloadCredentials, type WorkloadCredentialsPort } from './workload-credentials'
 
@@ -98,7 +99,13 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		...proxySecretDeps(env),
 		...workloadCredentialDeps(env),
 		...membershipTransportDeps(env),
+		...tokenKeyDeps(env),
 	}
+}
+
+/** The token keys live in the vault, so an installation without one keeps none, and a contract with a purpose does not deploy. */
+export function tokenKeyDeps(env: Env): { tokenKeys?: TokenKeysPort } {
+	return env.FABRIKA_CONTROL_VAULT_KEY === undefined ? {} : { tokenKeys: new VaultTokenKeys(repositories(env).tokenKeys, () => vault(env)) }
 }
 
 /**

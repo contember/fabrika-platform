@@ -38,6 +38,7 @@ import {
 	type ImportArtifact,
 	isLocale,
 	isMessageKind,
+	isSchemaOutput,
 	JOB_MAILERS,
 	JOB_SITE_PREFIX,
 	type JobArtifact,
@@ -57,6 +58,7 @@ import {
 	type ScopeBinding,
 	tableActions,
 	type TablePolicyArtifact,
+	type TokenPurposeArtifact,
 	type WebhookScheme,
 } from '@fabrika/auth-core'
 import type { InboxColumns } from '@fabrika/db/tables'
@@ -115,6 +117,7 @@ import {
 	WEBHOOKS_PREFIX,
 } from './defaults'
 import { ContractError, Problems } from './problems'
+import { TOKEN_MAX_DAYS } from './token'
 import { hmacSchemeSchema, WEBHOOK_SCHEME_ALLOWED, webhookSchemeSchema } from './webhook-scheme'
 
 const APP_ID = /^[a-z0-9][a-z0-9-]*$/
@@ -139,7 +142,7 @@ const IMPORT_FIELDS = ['app', 'export', 'version', 'digest', 'procedures', 'used
 /** Tables the framework keeps in the application's schema; no site reaches them unscoped. */
 const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
 const DECLARED_ALLOWED =
-	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>'"
+	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>']"
 const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc']
 /** An environment variable an application reads; a form's challenge names its secret by one. */
 const APPLICATION_VARIABLE = /^[A-Z][A-Z0-9_]*$/
@@ -273,6 +276,7 @@ class ArtifactBuilder {
 		const actions = this.#actions()
 		const dimensions = this.#dimensions()
 		const roles = this.#roles()
+		const tokens = this.#tokens()
 		this.#fileKinds = this.#readFileKinds()
 		const mounts: Record<string, MountArtifact> = {}
 		for (const [name, mount] of Object.entries(contract.mounts)) {
@@ -326,6 +330,7 @@ class ArtifactBuilder {
 			...(mail === null ? {} : { mail }),
 			...people,
 			...(Object.keys(this.#procedureRules).length === 0 ? {} : { procedures: this.#procedureRules }),
+			...(Object.keys(tokens).length === 0 ? {} : { tokens }),
 		}
 		try {
 			assertNoAmbiguity(artifact)
@@ -1084,7 +1089,7 @@ class ArtifactBuilder {
 		const files = this.#inputFiles(where, procedure)
 		const limits = this.#limits(where, procedure.limits, PROCEDURE_LIMITS, files)
 		const admission = this.#admission(id, procedure, kind, files)
-		const http = this.#http(where, procedure, files)
+		const http = this.#http(where, procedure, kind, files)
 		this.#procedureRules[id] = {
 			rate: admission.rate,
 			challenge: admission.challenge,
@@ -1150,20 +1155,21 @@ class ArtifactBuilder {
 
 	/**
 	 * A procedure's HTTP shape (`http: { method?, query?, body? }`): `POST` with a JSON body by default. A query may be
-	 * `GET`, its input then read from flat scalar URL parameters; a POST may read a flat `query` from the URL beside its
-	 * body, and take a native form's `urlencoded` body of flat scalar fields. A `GET` mutation and `cache` wait for
-	 * signed tokens and caching, a later step of this release.
+	 * `GET`, its input then read from flat scalar URL parameters; so may a public mutation whose input holds a signed
+	 * token, which answers a redirect or a schema. A POST may read a flat `query` from the URL beside its body, and take a
+	 * native form's `urlencoded` body of flat scalar fields. `cache` waits for caching, a later step of this release.
 	 */
 	#http(
 		where: string,
 		procedure: ProcedureDeclaration<SchemaShape, unknown>,
+		kind: 'public' | 'credentialed' | 'link',
 		files: InputFiles | null = null,
 	): { readonly method: 'GET' | 'POST'; readonly body: ProcedureBody | null; readonly query: SchemaShape | null } {
 		const fallback = { method: 'POST' as const, body: files === null ? ('json' as const) : ('multipart' as const), query: null }
 		const value = procedure.http
 		// A query that answers a file is a GET, so `<img src>` and `<a download>` reach it.
 		if (value === undefined && procedure.type === 'query' && procedure.output.type === 'file') {
-			return this.#http(where, { ...procedure, http: { method: 'GET' } }, files)
+			return this.#http(where, { ...procedure, http: { method: 'GET' } }, kind, files)
 		}
 		if (value === undefined) {
 			return fallback
@@ -1187,13 +1193,10 @@ class ArtifactBuilder {
 			return fallback
 		}
 		const body = value['body'] ?? (method === 'GET' ? null : files === null ? 'json' : 'multipart')
-		const flat = (shape: SchemaShape | null) => shape === null || (shape.type === 'object' && Object.values(shape.fields).every(isCell))
+		const flat = (shape: SchemaShape | null) => shape === null || (shape.type === 'object' && Object.values(shape.fields).every(isParameter))
 		if (method === 'GET') {
 			if (procedure.type === 'mutation') {
-				this.#problem(
-					where,
-					'is a GET mutation, which needs a public procedure with a signedToken in its input; this release does not verify signed tokens yet (allowed: POST)',
-				)
+				this.#getMutation(where, procedure, kind)
 			}
 			if (value['query'] !== undefined || value['body'] !== undefined) {
 				this.#problem(where, 'is GET, which reads its input from the URL: it declares no http.query and no http.body')
@@ -1226,7 +1229,30 @@ class ArtifactBuilder {
 			this.#problem(where, 'http.query is not a strict object of flat scalar fields (allowed: z.strictObject({ t: z.string() }))')
 			return { method, body, query: null }
 		}
+		this.#tokenFields(`${where} http.query`, query, true)
 		return { method, body, query }
+	}
+
+	/**
+	 * A mutation answers `GET` only when it is public and a verified signed token in its input names what it changes: a
+	 * link scanner may follow it, and a session's top-level navigation would carry the cookie. It answers a redirect or a
+	 * schema.
+	 */
+	#getMutation(where: string, procedure: ProcedureDeclaration<SchemaShape, unknown>, kind: 'public' | 'credentialed' | 'link'): void {
+		if (kind !== 'public') {
+			this.#problem(
+				where,
+				"is a GET mutation, which only a public procedure is: a session's top-level navigation carries its cookie (allowed: POST, or access: { public: true } with a signedToken)",
+			)
+			return
+		}
+		const fields = procedure.input?.type === 'object' ? Object.values(procedure.input.fields) : []
+		if (!fields.some((field) => field.type === 'token')) {
+			this.#problem(where, "is a GET mutation, so its input holds a required signedToken('<purpose>') that names what it changes")
+		}
+		if (procedure.attachment !== undefined || procedure.output.type === 'file') {
+			this.#problem(where, 'is a GET mutation, which answers redirect() or a schema, never a file')
+		}
 	}
 
 	/**
@@ -1502,7 +1528,93 @@ class ArtifactBuilder {
 
 	/** A row that answers a stored file carries the file-response profile, which its digest covers. */
 	#row(row: EndpointRow): void {
+		const where = `endpoint '${row.id}'`
+		// A token travels only as a top-level field of a procedure's own input, never into an export's consumer.
+		const carries = (row.kind === 'query' || row.kind === 'mutation' || row.kind === 'public') && row.source.kind === 'mount'
+		if (row.input !== null) {
+			this.#tokenFields(`${where} input`, row.input, carries)
+		}
+		if (row.output !== null && isSchemaOutput(row.output)) {
+			this.#tokenFields(`${where} output`, row.output, false)
+		}
 		this.#endpoints.push(row.output?.type === 'file' ? { ...row, response: 'file' } : row)
+	}
+
+	/**
+	 * Every signed token field of `shape`: a declared purpose, and, where `topLevel` allows it, a field of the object
+	 * itself (optional or not); anywhere else a token is refused, since the framework verifies only those.
+	 */
+	#tokenFields(where: string, shape: SchemaShape, topLevel: boolean): void {
+		const visit = (at: SchemaShape, top: boolean): void => {
+			switch (at.type) {
+				case 'token':
+					if (!top) {
+						this.#problem(
+							where,
+							`carries signedToken('${at.purpose}') where the framework does not verify it (allowed: a top-level field of a procedure's input or http.query)`,
+						)
+					}
+					this.#knownPurpose(where, at.purpose)
+					return
+				case 'object':
+					for (const field of Object.values(at.fields)) visit(field, top && at === shape)
+					return
+				case 'optional':
+					visit(at.inner, top)
+					return
+				case 'nullable':
+				case 'array':
+					visit(at.type === 'array' ? at.items : at.inner, false)
+					return
+				case 'tuple':
+					for (const item of [...at.items, ...(at.rest === null ? [] : [at.rest])]) visit(item, false)
+					return
+				case 'record':
+					visit(at.value, false)
+					return
+				case 'union':
+					for (const option of at.options) visit(option, false)
+					return
+				default:
+					return
+			}
+		}
+		visit(shape, topLevel)
+	}
+
+	#knownPurpose(where: string, purpose: string): void {
+		const tokens = this.#contract.tokens ?? {}
+		if (!Object.hasOwn(tokens, purpose)) {
+			this.#problem(
+				where,
+				`signedToken('${purpose}') names no token purpose of defineApp's options${
+					suggestion(purpose, Object.keys(tokens))
+				} (allowed: tokens: { ${purpose}: token(Claims, { maxDays }) })`,
+			)
+		}
+	}
+
+	/**
+	 * The token purposes: each a name, its claims a strict object that carries no token, its `maxDays` a whole number of
+	 * days up to `TOKEN_MAX_DAYS`.
+	 */
+	#tokens(): Record<string, TokenPurposeArtifact> {
+		const tokens: Record<string, TokenPurposeArtifact> = {}
+		for (const [purpose, declared] of Object.entries(this.#contract.tokens ?? {})) {
+			const where = `token '${purpose}'`
+			if (!this.#name(where, purpose)) {
+				continue
+			}
+			if (!isRecord(declared) || !hasExactKeys(declared, ['claims', 'maxDays'])) {
+				this.#problem(where, 'is not built with token(Claims, { maxDays })')
+				continue
+			}
+			this.#objectSchema(`${where} claims`, declared.claims)
+			this.#tokenFields(`${where} claims`, declared.claims, false)
+			const maxDays = this.#bounded(where, 'maxDays', declared.maxDays, 1, TOKEN_MAX_DAYS, 'days')
+			tokens[purpose] = { claims: declared.claims, maxDays }
+		}
+		return tokens
 	}
 
 	#reserve(prefix: string | null): void {
@@ -2222,7 +2334,7 @@ class ArtifactBuilder {
 		if (workload !== null) {
 			for (const field of ['sql', 'unscoped', 'connect', 'issues', 'binds'] as const) {
 				if (value[field] !== undefined) {
-					this.#problem(where, `is public and declares ${field}: a public procedure reaches its actions only (allowed: kicks)`)
+					this.#problem(where, `is public and declares ${field}: a public procedure reaches its actions only (allowed: kicks, signs)`)
 				}
 			}
 		}
@@ -2230,6 +2342,7 @@ class ArtifactBuilder {
 		const mailer = this.#mailer(where, value['mailer'], place)
 		const kicks = this.#kicks(where, value['kicks'], place)
 		const binds = this.#binds(where, value['binds'], place)
+		const signs = this.#signs(where, value['signs'], place)
 		const reach: DeclaredReach = {
 			sql: this.#sqlMode(where, value['sql'], place.readOnly),
 			unscoped: this.#unscoped(where, value['unscoped'], place.readOnly),
@@ -2244,6 +2357,7 @@ class ArtifactBuilder {
 			...(workload === null || workload.length === 0 ? {} : { actions: workload }),
 			...(kicks.length === 0 ? {} : { kicks }),
 			...(binds === undefined ? {} : { binds }),
+			...(signs.length === 0 ? {} : { signs }),
 		}
 		if (place.kind !== 'rpc') {
 			this.#rpcOnly(where, 'connect', value['connect'])
@@ -2254,6 +2368,7 @@ class ArtifactBuilder {
 		if (
 			reach.sql !== null || Object.keys(reach.unscoped).length > 0 || reach.connect.length > 0 || reach.issues !== null || reach.then !== undefined
 			|| reach.mailer !== undefined || reach.actions !== undefined || reach.kicks !== undefined || reach.binds !== undefined
+			|| reach.signs !== undefined
 		) {
 			this.#declared[site] = reach
 		}
@@ -2410,6 +2525,35 @@ class ArtifactBuilder {
 			return undefined
 		}
 		return value
+	}
+
+	/**
+	 * The token purposes a site signs (`ctx.tokens.sign`): a procedure of an RPC mount, a webhook or a job, never an export
+	 * or a link procedure. Each names a purpose of `defineApp`'s options, once; `[]` when it declares none or after a problem.
+	 */
+	#signs(where: string, value: unknown, place: DeclaringSite): string[] {
+		if (value === undefined) {
+			return []
+		}
+		if (place.kind === 'export' || place.kind === 'link') {
+			this.#problem(
+				where,
+				`declares signs, which ${
+					place.kind === 'export' ? 'an export procedure' : 'a link procedure'
+				} never does: a procedure of an RPC mount, a webhook or a job signs`,
+			)
+			return []
+		}
+		if (!Array.isArray(value) || value.length === 0 || !value.every((purpose) => typeof purpose === 'string')) {
+			this.#problem(where, "signs is not a list of token purposes (allowed: signs: ['<token purpose>'])")
+			return []
+		}
+		const purposes: string[] = value.filter((purpose) => typeof purpose === 'string')
+		this.#unique(where, 'signs', purposes)
+		for (const purpose of purposes) {
+			this.#knownPurpose(where, purpose)
+		}
+		return [...new Set(purposes)].sort()
 	}
 
 	/** The cron job a mutation kicks once its transaction committed; `undefined` when it declares none or after a problem. */
@@ -2861,6 +3005,11 @@ function accessForm(access: AccessDeclaration): ResolvedAccess | null {
 		return hasExactKeys(access, ['action', 'app']) && access.app === true ? { form: 'action', action: access.action, access: { form: 'app' } } : null
 	}
 	return null
+}
+
+/** A value one URL or urlencoded parameter carries: a scalar, or a signed token, possibly absent. */
+function isParameter(shape: SchemaShape): boolean {
+	return isCell(shape) || shape.type === 'token' || (shape.type === 'optional' && shape.inner.type === 'token')
 }
 
 /** A value one CSV field holds: a scalar, possibly absent. */

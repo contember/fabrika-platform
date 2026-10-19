@@ -32,5 +32,6 @@ export {
 	SourceBindingError,
 } from './db/registry-types'
 export { parseProviderJson, RunRepository, type RunRow, type RunStatus, type RunTrigger, serializeProviderJson } from './db/runs'
+export { TokenKeyRepository, type TokenKeyRow } from './db/token-keys'
 export { WorkloadCredentialRepository, type WorkloadCredentialRow } from './db/workload-credentials'
 export { type WorkspaceInput, WorkspaceRepository, type WorkspaceRow } from './db/workspaces'

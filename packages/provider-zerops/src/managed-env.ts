@@ -32,6 +32,8 @@ export type ManagedKey = Extract<
 	| 'FABRIKA_PROXY_SECRET'
 	| 'FABRIKA_IAM_RPC_URL'
 	| 'FABRIKA_IAM_RPC_KEY'
+	| 'FABRIKA_APP_ORIGIN'
+	| 'FABRIKA_TOKEN_KEYS'
 >
 
 export const MANAGED_KEYS: readonly ManagedKey[] = [
@@ -45,6 +47,8 @@ export const MANAGED_KEYS: readonly ManagedKey[] = [
 	'FABRIKA_PROXY_SECRET',
 	'FABRIKA_IAM_RPC_URL',
 	'FABRIKA_IAM_RPC_KEY',
+	'FABRIKA_APP_ORIGIN',
+	'FABRIKA_TOKEN_KEYS',
 ]
 
 /** The managed keys written as service variables; `FABRIKA_RELEASE` travels only in the execution descriptor (ADR-0044). */
@@ -58,6 +62,8 @@ export const SERVICE_MANAGED_KEYS: readonly Exclude<ManagedKey, 'FABRIKA_RELEASE
 	'FABRIKA_PROXY_SECRET',
 	'FABRIKA_IAM_RPC_URL',
 	'FABRIKA_IAM_RPC_KEY',
+	'FABRIKA_APP_ORIGIN',
+	'FABRIKA_TOKEN_KEYS',
 ]
 
 /** The managed keys that carry a credential, written sensitive and therefore never compared. */
@@ -66,6 +72,7 @@ export const SENSITIVE_MANAGED_KEYS: ReadonlySet<ManagedKey> = new Set<ManagedKe
 	'FABRIKA_SERVICE_KEY',
 	'FABRIKA_PROXY_SECRET',
 	'FABRIKA_IAM_RPC_KEY',
+	'FABRIKA_TOKEN_KEYS',
 ])
 
 /** A workload or connect key and every mail transport variable are written sensitive; a connect URL is an origin. */
@@ -85,16 +92,20 @@ const managedValuesSchema = z.object({
 	// IAM's membership transport (ADR-0022 rule 6): its public origin and this environment's key, or both null.
 	FABRIKA_IAM_RPC_URL: z.string().nullable(),
 	FABRIKA_IAM_RPC_KEY: z.string().nullable(),
+	// The environment's canonical origin (`ctx.url`), or null when it has no public origin.
+	FABRIKA_APP_ORIGIN: z.string().nullable(),
+	// The keys of the application's signed tokens, or null when its contract declares no token purpose.
+	FABRIKA_TOKEN_KEYS: z.string().nullable(),
 }).strict()
 
 export function parseManagedValues(value: unknown): ManagedValues {
 	const result = managedValuesSchema.safeParse(value)
-	if (!result.success) throw new Error('zerops: managed environment must name exactly the ten managed keys')
+	if (!result.success) throw new Error('zerops: managed environment must name exactly the twelve managed keys')
 	return result.data
 }
 
 /**
- * What Control hands a deploy: the ten managed keys, the key of each job and webhook of the approved contract, the
+ * What Control hands a deploy: the twelve managed keys, the key of each job and webhook of the approved contract, the
  * key and owner origin of each connector import, and the installation's mail transport when a job sends through it.
  */
 export interface ManagedEnvironment {

@@ -123,6 +123,9 @@ function schemaSource(shape: SchemaShape, where: string): string {
 			return `z.${shape.type}(${schemaSource(shape.inner, where)})`
 		case 'union':
 			return `z.union([${shape.options.map((option) => schemaSource(option, where)).join(', ')}])`
+		case 'token':
+			// The build refuses a signed token in an export, so no description it vendors holds one.
+			throw new ContractError([`procedure '${where}': a signed token has no zod source in a connector snapshot`])
 		case 'file':
 			throw new ContractError([`procedure '${where}': an export carries no file`])
 	}

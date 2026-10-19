@@ -35,7 +35,7 @@ import { providerEnvelopeSchema } from './api/provider-envelope'
 import { createAppUseCase, deleteAppUseCase, getAppUseCase, listAppsUseCase, updateAppUseCase } from './api/registry/apps'
 import { deleteAppVarUseCase, listAppSecretsUseCase, listAppVarsUseCase, putAppVarUseCase } from './api/registry/configuration'
 import { type RegistryUseCaseContext } from './api/registry/context'
-import { deleteAppEnvUseCase, listAppEnvsUseCase, putAppEnvUseCase } from './api/registry/environments'
+import { deleteAppEnvUseCase, listAppEnvsUseCase, putAppEnvUseCase, rotateTokenKeyUseCase } from './api/registry/environments'
 import { registerAppUseCase } from './api/registry/registration'
 import { APP_VAR_VALUE_MAX_LENGTH, assertAppVarValue } from './api/registry/validation'
 import {
@@ -267,6 +267,9 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 				protect: rpc.procedure.input(protectEnvironmentInput).mutation(({ ctx, input }) =>
 					controlCall(() => setEnvironmentProtectionUseCase(approvalContext(ctx), input))
 				),
+				rotateTokenKey: rpc.procedure.input(appEnvironment).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation((
+					{ ctx, input },
+				) => controlCall(() => rotateTokenKeyUseCase(registryContext(ctx), input.appId, input.env, Math.floor(Date.now() / 1000)))),
 			}),
 			secrets: rpc.router({
 				list: rpc.procedure.input(appId).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).query(({ ctx, input }) =>

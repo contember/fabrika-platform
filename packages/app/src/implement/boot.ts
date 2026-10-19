@@ -42,7 +42,7 @@ import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import { exportBase, FORM_CHALLENGE_FIELD, FORM_FILE_LIMITS, FORM_LIMITS, spaPrefixRowId } from '../contract/defaults'
-import type { Schema } from '../contract/define'
+import type { AnyContract, Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
 import { schemaFromShape } from '../contract/schema-from-shape'
 import type { RequestExecutionContext } from '../fetch'
@@ -77,6 +77,7 @@ import type { ContractDatabase, ContractImplementation, ImplementationDatabase }
 import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration } from './invocation'
 import type { ReadDirectory } from './membership'
 import { type AdmissionOptions, InFlightShare, type ProcedureAdmission, procedureAdmission, publicShareOf } from './public'
+import { readTokenKeys, type RuntimePurpose, SignedTokens } from './tokens'
 import { type BindableWebhook, bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
 import { type WorkloadCredential, workloadCredentials, workloadSite, type WorkloadTokenSource } from './workload'
 
@@ -722,12 +723,26 @@ function bindWebhookBindings(
 	}
 }
 
+/** Each approved token purpose with the claims schema the application declared for it. */
+function runtimePurposes(contract: AnyContract, artifact: ContractArtifact): ReadonlyMap<string, RuntimePurpose> {
+	const declared = contract.surface.tokens ?? {}
+	const purposes = new Map<string, RuntimePurpose>()
+	for (const [purpose, approved] of Object.entries(artifact.tokens ?? {})) {
+		const own = Object.hasOwn(declared, purpose) ? declared[purpose] : undefined
+		if (own !== undefined) {
+			purposes.set(purpose, { claims: own.claims, maxDays: approved.maxDays })
+		}
+	}
+	return purposes
+}
+
 export function boot(app: ContractImplementation, options: BootOptions): ContractApp {
 	const problems: string[] = []
 	const variables = readFramework(options.environment.framework, app.contract.vocabulary.app, problems)
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
 	checkContractDigest(options.environment.framework, artifact, problems)
 	const proxySecret = readProxySecret(options.environment.framework, options.requireProxySecret === true, problems)
+	const tokens = new SignedTokens(runtimePurposes(app.contract, artifact), readTokenKeys(options.environment.framework, artifact, problems))
 	const operations = operationsSettings(options.environment.framework, problems)
 	const scrubber = environmentScrubber(options.environment)
 	const reporterFor = (source: ReportSource): OperationsReporter | null =>
@@ -932,6 +947,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		containers,
 		...(options.revealHandlerErrors === undefined ? {} : { revealHandlerErrors: options.revealHandlerErrors }),
 		mail,
+		tokens,
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)
@@ -1013,6 +1029,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		actions: Object.freeze(Object.keys(artifact.actions).sort()),
 		publicShare: new InFlightShare(publicShareOf(options.connections ?? DEFAULT_CONNECTIONS)),
 		clientVouched: options.clientAddress === 'vouched',
+		tokens,
 	})
 	return Object.freeze({
 		fetch: (request: Request, exec?: RequestExecutionContext) => runtime.fetch(request, exec),

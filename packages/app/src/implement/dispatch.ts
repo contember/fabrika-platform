@@ -118,6 +118,7 @@ import { paramsObject, urlParams } from './params'
 import { pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
+import type { SignedTokens } from './tokens'
 import { githubAccounts, verifyDelivery } from './verifiers'
 import {
 	APP_BINDING_SCOPE,
@@ -317,6 +318,8 @@ export interface RuntimeParts {
 	readonly publicShare: InFlightShare
 	/** Whether the proxy's `X-Fabrika-Client-Ip` is the visitor's, so `ctx.client.ip` reads it. */
 	readonly clientVouched: boolean
+	/** The environment's signed tokens: verified in each input and query, signed by `ctx.tokens`. */
+	readonly tokens: SignedTokens
 }
 
 interface Caller {
@@ -565,7 +568,10 @@ export class ContractRuntime {
 		const admission = served.admission ?? DEFAULT_ADMISSION
 		await this.#admit(served.row, admission, request, caller.subject)
 		const body = await procedureBody(served, request, this.#parts.fileKinds)
-		const query = readQuery(served.row, served.query?.schema, served.query?.shape, request)
+		// Signed tokens are verified as the input is parsed; the texts they carry are what the request may redirect to.
+		const carried = new Set<string>()
+		const fields = this.#parts.tokens.verifyFields(served.row.input, body.multipart === null ? body.input : body.multipart.json, carried)
+		const query = this.#verifiedQuery(served.row, served.query, request, carried)
 		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.readOnly === true, endpoint: served.row.id })
 		const work = new FileWork(frame, frame.id)
 		const site = served.site
@@ -573,7 +579,9 @@ export class ContractRuntime {
 		const kicks = kickRecorder(`'${served.row.id}'`, site?.declaration.kicks ?? [])
 		let outcome: 'open' | 'committing' = 'open'
 		try {
-			const input = body.multipart === null ? body.input : await this.#fileInput(served, body.multipart, work)
+			const input = body.multipart === null
+				? fields
+				: this.#parts.tokens.verifyFields(served.row.input, await this.#fileInput(served, body.multipart, work), carried)
 			// The handler's time starts after the last body byte, so a slow upload does not eat it.
 			const signal = handlerSignal(request, admission.timeoutMs)
 			let result: unknown
@@ -601,6 +609,7 @@ export class ContractRuntime {
 						...(served.binds === undefined || invocation === null
 							? {}
 							: { webhooks: this.#webhookBindings(served.row.id, served.binds, invocation, caller.subject) }),
+						...this.#signing(`'${served.row.id}'`, site?.declaration.signs ?? []),
 						kick: kicks.kick,
 					})
 					return await served.handler({ input: access.input, ctx, ...(query === undefined ? {} : { query }) })
@@ -608,7 +617,7 @@ export class ContractRuntime {
 			} finally {
 				frame.end()
 			}
-			const answer = await this.#answerOf(served, result, request, work)
+			const answer = await this.#answerOf(served, result, request, work, carried)
 			outcome = 'committing'
 			await commitAnswer(invocation, signal, answer)
 			this.#kickAll([...(served.then === undefined ? [] : [served.then]), ...kicks.kicked()], exec)
@@ -645,6 +654,7 @@ export class ContractRuntime {
 		result: unknown,
 		request: Request,
 		work: FileWork,
+		carried: ReadonlySet<string>,
 	): Promise<Response | FileDownload> {
 		const output = served.row.output
 		if (output !== null && isFileShape(output)) {
@@ -654,7 +664,23 @@ export class ContractRuntime {
 		if (file !== null) {
 			return attachmentResponse(served.row.id, file, served.output, result)
 		}
-		return outputResponse(served.row, served.output, result, request)
+		return outputResponse(served.row, served.output, result, request, carried)
+	}
+
+	/** A POST's `query`, parsed from the URL, each signed token in it verified; `undefined` without one. */
+	#verifiedQuery(
+		row: EndpointRow,
+		query: ProcedureQuery | undefined,
+		request: Request,
+		carried: Set<string>,
+	): Readonly<Record<string, unknown>> | undefined {
+		const read = readQuery(row, query?.schema, query?.shape, request)
+		return read === undefined ? undefined : this.#parts.tokens.verifyFields(query?.shape ?? null, read, carried)
+	}
+
+	/** `ctx.tokens` of a site that declares `signs`; nothing for one that declares none, whose type has no such member. */
+	#signing(site: string, signs: readonly string[]): { readonly tokens?: object } {
+		return signs.length === 0 ? {} : { tokens: this.#parts.tokens.context(site, signs) }
 	}
 
 	#fileKinds(endpoint: string): StoredFileKinds {
@@ -1165,7 +1191,10 @@ export class ContractRuntime {
 			await this.#admit(served.row, admission, request, null)
 			const body = await procedureBody({ row: served.row, input: served.input }, request, this.#parts.fileKinds)
 			multipart = body.multipart
-			const fields = body.multipart === null ? body.input : body.multipart.json
+			// Signed tokens are verified as the input is parsed, before the workload token and the challenge.
+			const carried = new Set<string>()
+			const fields = this.#parts.tokens.verifyFields(served.row.input, body.multipart === null ? body.input : body.multipart.json, carried)
+			const query = this.#verifiedQuery(served.row, served.query, request, carried)
 			const authority = await served.credential.authority()
 			if (!authority.ok) {
 				throw new ServerFault('workload_unauthorized', `the key of public procedure '${served.row.id}' gives it no authority: ${authority.reason}`, 503)
@@ -1181,8 +1210,7 @@ export class ContractRuntime {
 					403,
 				)
 			}
-			const query = readQuery(served.row, served.query?.schema, served.query?.shape, request)
-			return await this.#publicInvocation(served, request, body, query, authority.perms, exec)
+			return await this.#publicInvocation(served, request, body, fields, query, carried, authority.perms, exec)
 		} finally {
 			await multipart?.close()
 			release()
@@ -1227,7 +1255,9 @@ export class ContractRuntime {
 		served: Extract<ServedEndpoint, { kind: 'public' }>,
 		request: Request,
 		body: Awaited<ReturnType<typeof procedureBody>>,
+		fields: Readonly<Record<string, unknown>>,
 		query: Readonly<Record<string, unknown>> | undefined,
+		carried: Set<string>,
 		perms: readonly PermissionEntry[],
 		exec: RequestExecutionContext | undefined,
 	): Promise<Response | FileDownload> {
@@ -1251,7 +1281,9 @@ export class ContractRuntime {
 		let outcome: 'open' | 'committing' = 'open'
 		try {
 			// The file parts come after the challenge, so a refused visitor stores nothing.
-			const input = body.multipart === null ? body.input : await this.#fileInput(served, body.multipart, work)
+			const input = body.multipart === null
+				? fields
+				: this.#parts.tokens.verifyFields(served.row.input, await this.#fileInput(served, body.multipart, work), carried)
 			// The handler's time starts after the last body byte, so a slow upload does not eat it.
 			const signal = handlerSignal(request, served.admission.timeoutMs)
 			let result: unknown
@@ -1266,6 +1298,7 @@ export class ContractRuntime {
 						client: requestClient(request, this.#parts.clientVouched),
 						app,
 						db: Object.freeze({ app: (action: string) => handles.app(app(action)) }),
+						...this.#signing(`'${served.row.id}'`, served.site.declaration.signs),
 						files: storedFilesHandle(this.#parts.fileKinds, work, {
 							where,
 							check: boundTo(frame, () => false, 'ctx.files'),
@@ -1281,7 +1314,7 @@ export class ContractRuntime {
 			const output = served.row.output
 			const answer = output !== null && isFileShape(output)
 				? await this.#fileKinds(served.row.id).download(work, served.row.id, output.kind, result)
-				: outputResponse(served.row, served.output, result, request)
+				: outputResponse(served.row, served.output, result, request, carried)
 			outcome = 'committing'
 			await commitAnswer(invocation, signal, answer)
 			this.#kickAll(kicks.kicked(), exec)
@@ -1391,6 +1424,7 @@ export class ContractRuntime {
 								check: boundTo(frame, () => false, 'ctx.files'),
 								writes: true,
 							}),
+							...this.#signing(`webhook '${served.webhook}'`, site?.signs ?? []),
 							kick: kicks.kick,
 							...data,
 						}),
@@ -1505,14 +1539,17 @@ function holdsOnChain(perms: PermissionEntry[], action: string, dimension: strin
 	return scopes.some(([type, scope]) => permits(perms, action, { type, value: scope }))
 }
 
-/** The output, projected and validated whole: JSON, or a redirect to its validated target. */
-function outputResponse(row: EndpointRow, schema: Schema, result: unknown, request: Request): Response {
+/**
+ * The output, projected and validated whole: JSON, or a redirect to its validated target. `carried` are the texts the
+ * request's verified tokens carry: a URL among them is a target the application signed.
+ */
+function outputResponse(row: EndpointRow, schema: Schema, result: unknown, request: Request, carried: ReadonlySet<string>): Response {
 	const output = z.safeParse(schema, projectSchema(row.id, schema, result))
 	if (!output.success) {
 		throw new ServerFault('output_refused', `'${row.id}' returned a value its output schema refuses`)
 	}
 	if (row.output !== null && isRedirectShape(row.output)) {
-		return redirectResponse(row, row.output, output.data, request)
+		return redirectResponse(row, row.output, output.data, request, carried)
 	}
 	return jsonResponse({ result: output.data }, 200)
 }
@@ -1843,23 +1880,28 @@ function readQuery(
 }
 
 /**
- * A redirect's answer: 303 after a POST, 302 after a GET, to a path of the application's own origin or a URL of an
- * origin the output lists. Any other target fails the invocation, so the procedure is never an open redirect.
+ * A redirect's answer: 303 after a POST, 302 after a GET, to a path of the application's own origin, a URL of an origin
+ * the output lists, or an http(s) URL a verified token of this request carries as it is. Any other target fails the
+ * invocation, so the procedure is never an open redirect.
  */
-function redirectResponse(row: EndpointRow, shape: RedirectShape, output: unknown, request: Request): Response {
+function redirectResponse(row: EndpointRow, shape: RedirectShape, output: unknown, request: Request, carried: ReadonlySet<string>): Response {
 	const to = isRecord(output) && typeof output['to'] === 'string' ? output['to'] : ''
 	const own = to.startsWith('/') && !to.startsWith('//') && !to.includes('\\')
 	let listed = false
 	if (!own) {
 		try {
 			const url = new URL(to)
-			listed = url.protocol === 'https:' && shape.origins.includes(url.origin)
+			listed = (url.protocol === 'https:' && shape.origins.includes(url.origin))
+				|| ((url.protocol === 'https:' || url.protocol === 'http:') && carried.has(to))
 		} catch {
 			listed = false
 		}
 	}
 	if (!own && !listed) {
-		throw new ServerFault('redirect_refused', `'${row.id}' redirected to a target that is neither its own origin's path nor a listed origin's URL`)
+		throw new ServerFault(
+			'redirect_refused',
+			`'${row.id}' redirected to a target that is neither its own origin's path, a listed origin's URL nor a URL a verified token carries`,
+		)
 	}
 	return new Response(null, { status: request.method === 'GET' ? 302 : 303, headers: { Location: to } })
 }

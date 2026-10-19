@@ -13,6 +13,7 @@ import {
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
+	FABRIKA_TOKEN_KEYS,
 	type IamMembershipRpc,
 	isNormalizedMailbox,
 	type Jwks,
@@ -33,9 +34,11 @@ import { type IamGateway, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrik
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import type { z } from 'zod/v4'
 import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
 import type { AnyContract, DimensionOf } from '../contract/define'
+import type { TokenPurpose } from '../contract/token'
 import { diskAssets } from '../disk-assets'
 import type { RequestExecutionContext } from '../fetch'
 import type { FILE_SWEEP_JOB } from '../files/collections'
@@ -45,6 +48,7 @@ import type { ChallengeFetch } from '../implement/challenge'
 import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
+import { readTokenKeys, SignedTokens } from '../implement/tokens'
 import type { WorkloadKindOf, WorkloadTokenSource } from '../implement/workload'
 import type { MailKeyScope } from '../jobs/mail'
 import type { HandlerErrorSink } from '../jobs/runner'
@@ -182,10 +186,23 @@ export interface TestKit<C extends AnyContract> {
 	readonly mail: MemoryEmailSender
 	/** Whose keys this kit's prefix separates: `mailKeyPrefix(kit.mailKeyScope)` is what a job's key gets in front. */
 	readonly mailKeyScope: MailKeyScope
+	/**
+	 * A token of `purpose`, signed with the key the kit handed the application, as a site's `ctx.tokens.sign` signs it:
+	 * what a test sends where an input carries `signedToken('<purpose>')`.
+	 */
+	signToken<const P extends TokenPurposeName<C>>(purpose: P, claims: TokenClaimsInput<C, P>, options: { readonly days: number }): string
 }
 
 /** The names of the contract's cron jobs. */
 export type JobName<C> = C extends { readonly surface: { readonly jobs: infer J } } ? keyof J & string : never
+
+type TokensOf<C> = C extends { readonly surface: { readonly tokens: infer T } } ? T : Record<never, never>
+
+/** The token purposes of the contract's kit. */
+export type TokenPurposeName<C> = keyof TokensOf<C> & string
+
+/** What a token of purpose `P` carries, as a site passes it to `sign`. */
+export type TokenClaimsInput<C, P extends string> = TokensOf<C> extends { readonly [K in P]: TokenPurpose<infer Claims> } ? z.input<Claims> : never
 
 /** Each SPA mount from its built directory under `root` when one exists, as the deploy serves it; an empty page otherwise. */
 function builtAssets(root: string): SpaAssets {
@@ -350,6 +367,19 @@ export function bootTestKit<C extends AnyContract>(
 	const membership = options.membership ?? standIn?.rpc
 	const mail = options.mail === undefined || options.mail === 'none' ? new MemoryEmailSender() : options.mail
 	const mailKeyScope: MailKeyScope = Object.freeze({ issuer: TEST_ISSUER, appId })
+	// The kit stands in for Control's token key too: one random key, which signs and verifies.
+	const tokenKey = `${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}:${
+		Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url')
+	}`
+	const tokenVariables: Record<string, string> = artifact.tokens === undefined ? {} : { [FABRIKA_TOKEN_KEYS]: tokenKey }
+	const kitTokens = new SignedTokens(
+		new Map(
+			Object.entries(app.contract.surface.tokens ?? {}).map(([purpose, declared]) => [purpose, { claims: declared.claims, maxDays: declared.maxDays }]),
+		),
+		readTokenKeys({ [FABRIKA_TOKEN_KEYS]: tokenKey }, { ...artifact, tokens: artifact.tokens ?? {} }, []),
+	)
+	const signToken = (purpose: string, claims: unknown, signOptions: { readonly days: number }): string =>
+		kitTokens.context('the test kit', [purpose]).sign(purpose, claims, signOptions)
 	const application: ContractApp = boot(app, {
 		environment: {
 			// The deploy writes the approved contract's digest; the kit's contract is the approved one by definition.
@@ -359,6 +389,7 @@ export function bootTestKit<C extends AnyContract>(
 				[FABRIKA_CONTRACT_DIGEST]: contractDigest(artifact),
 				...connectVariablesOf,
 				...workloadVariables,
+				...tokenVariables,
 			},
 			application: options.env ?? {},
 		},
@@ -653,6 +684,7 @@ export function bootTestKit<C extends AnyContract>(
 			acceptInvitation,
 			mail,
 			mailKeyScope,
+			signToken,
 		}),
 		standIn,
 		callerOf: (value) => [...memberships.keys()].find((caller) => caller === value),
