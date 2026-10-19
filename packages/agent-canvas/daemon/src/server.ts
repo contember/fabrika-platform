@@ -9,6 +9,7 @@ import { createStaticHandlers } from './handlers/static'
 import { createUploadHandlers } from './handlers/uploads'
 import { CLI_AUTH_FILE, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR } from './paths'
 import { startRemoteFeedbackPoller } from './remote-feedback'
+import { ReviewProxies } from './review/proxy'
 import { createReviewServer, type ReviewSocketData } from './review/server'
 import { ReviewStore } from './review/store'
 
@@ -25,7 +26,9 @@ chmodSync(CLI_AUTH_FILE, 0o600)
 
 const sessionManager = new SessionManager(SESSIONS_DIR)
 const wsManager = createWebSocketManager(sessionManager)
-const review = createReviewServer(new ReviewStore(REVIEWS_DIR))
+const reviewStore = new ReviewStore(REVIEWS_DIR)
+const reviewProxies = new ReviewProxies(reviewStore, `http://localhost:${PORT}/assets/review.js`)
+const review = createReviewServer(reviewStore, reviewProxies)
 
 type SocketData = WSData | ReviewSocketData
 type Socket = Bun.ServerWebSocket<SocketData>
@@ -127,5 +130,7 @@ export const broadcastPlanUpdate = wsManager.broadcastPlanUpdate
 // Start polling for remote feedback from shared canvases.
 // No-ops if CANVAS_SHARE_ENDPOINT is not set.
 startRemoteFeedbackPoller(sessionManager, wsManager.broadcastRemoteFeedback, VERSION)
+
+reviewProxies.restore()
 
 console.log(`Planner daemon listening on http://localhost:${PORT}`)

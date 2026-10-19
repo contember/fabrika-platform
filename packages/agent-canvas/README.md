@@ -75,13 +75,16 @@ Secret resolution requires a daemon capability available to the CLI but not to c
 
 ### Review mode
 
-Review mode puts the same comment loop on a running web application: a prototype, a mock or any dev server. Add the
-widget's script tag to the application's page in development:
+Review mode puts the same comment loop on a running web application: a prototype, a mock or any dev server. Open the
+application through the daemon's review proxy:
 
 ```bash
-bunx agent-canvas review snippet --project my-app
-# <script src="http://localhost:19400/assets/review.js" data-project="my-app"></script>
+bunx agent-canvas review open http://localhost:5173/ --project my-app
 ```
+
+The daemon serves the application on a port of its own with the widget added to every HTML page (hot reload passes
+through) and opens it in the browser. To keep the application's own address, add the widget's tag to its page in
+development instead: `bunx agent-canvas review snippet --project my-app`.
 
 The widget mounts a toolbar in its own shadow root. The reviewer clicks **Comment**, picks an element or selects text,
 and saves the comment as a note or sends it to the agent. The agent waits with `bunx agent-canvas review watch` (`--follow` keeps waiting),

@@ -5,10 +5,13 @@ import {
 	addCommentBodySchema,
 	agentReplyBodySchema,
 	createThreadBodySchema,
+	isLoopbackOrigin,
+	openProxyBodySchema,
 	PROJECT_RE,
 	type ReviewBrowserFrame,
 	type ReviewWaitFrame,
 } from './model'
+import type { ReviewProxies } from './proxy'
 import { ReviewError, type ReviewStore } from './store'
 
 export interface ReviewSocketData {
@@ -19,21 +22,6 @@ export interface ReviewSocketData {
 
 export interface ReviewSocket extends ChannelSocket {
 	data: ReviewSocketData
-}
-
-/**
- * Loopback origins only: a page on any other origin must not be able to put a request in front of the agent.
- * The application under review runs on its own dev server, so its port is not the daemon's.
- */
-export function isLoopbackOrigin(origin: string): boolean {
-	let url: URL
-	try {
-		url = new URL(origin)
-	} catch {
-		return false
-	}
-	if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
-	return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname.endsWith('.localhost')
 }
 
 function corsHeaders(origin: string): Record<string, string> {
@@ -70,7 +58,7 @@ function threadIdOf(match: URLPatternResult): string {
 type Audience = 'browser' | 'agent'
 
 /** Review mode: threads a person leaves on a running application through the injected widget, and their delivery to the agent. */
-export function createReviewServer(store: ReviewStore) {
+export function createReviewServer(store: ReviewStore, proxies: ReviewProxies) {
 	const channel = createNotificationChannel<ReviewSocket>({
 		roleOf: (socket) => socket.data.role,
 		topicOf: (socket) => socket.data.project,
@@ -166,6 +154,10 @@ export function createReviewServer(store: ReviewStore) {
 			if (threads.length === 0) return { found: false }
 			publish(project)
 			return { found: true, markdown: renderReviewRequests(project, threads) }
+		}),
+		route('POST', '/api/review/:project/proxy', 'agent', async (req, match) => {
+			const body = await parseBody(req, openProxyBodySchema)
+			return { url: proxies.open(projectOf(match), body.target) }
 		}),
 		route('POST', '/api/review/:project/threads/:thread/reply', 'agent', async (req, match) => {
 			const project = projectOf(match)

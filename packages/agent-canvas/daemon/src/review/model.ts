@@ -7,6 +7,21 @@ import { z } from 'zod'
 
 export const PROJECT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
+/**
+ * Loopback origins only: a page on any other origin must not be able to put a request in front of the agent.
+ * The application under review runs on its own dev server, so its port is not the daemon's.
+ */
+export function isLoopbackOrigin(origin: string): boolean {
+	let url: URL
+	try {
+		url = new URL(origin)
+	} catch {
+		return false
+	}
+	if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+	return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname.endsWith('.localhost')
+}
+
 const shortText = z.string().max(500)
 
 export const MAX_HTML = 4000
@@ -95,6 +110,16 @@ export const createThreadBodySchema = z.object({
 })
 export const addCommentBodySchema = z.object({ body: commentBody, send: z.boolean() })
 export const agentReplyBodySchema = z.object({ body: commentBody, resolve: z.boolean() })
+
+/** An application on this machine: the review proxy forwards to its origin and refuses any other host. */
+const loopbackUrlSchema = z.string().url().refine((url) => isLoopbackOrigin(url), 'must be an http(s) URL on localhost')
+
+/** The CLI's request to open an application for review through the daemon's proxy. */
+export const openProxyBodySchema = z.object({ target: loopbackUrlSchema })
+
+/** A project's review proxy, kept so a restarted daemon serves it on the same port: the reviewer's tab keeps working. */
+export const reviewProxySchema = z.object({ target: loopbackUrlSchema, port: z.number().int().min(1).max(65_535) })
+export type ReviewProxy = z.infer<typeof reviewProxySchema>
 
 /** Frames the daemon sends to browsers on a project's topic. */
 export type ReviewBrowserFrame =

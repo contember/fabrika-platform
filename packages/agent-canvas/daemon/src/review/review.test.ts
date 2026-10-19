@@ -3,9 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { renderReviewRequests } from './markdown'
-import type { ReviewAnchor } from './model'
-import { createReviewServer, isLoopbackOrigin } from './server'
+import { isLoopbackOrigin, type ReviewAnchor } from './model'
+import { ReviewProxies } from './proxy'
+import { createReviewServer } from './server'
 import { ReviewStore } from './store'
+
+const WIDGET = 'http://localhost:19400/assets/review.js'
 
 const anchor: ReviewAnchor = {
 	url: 'http://localhost:4317/#/products',
@@ -126,7 +129,8 @@ describe('review routes', () => {
 	const noUpgrade = { upgrade: () => false }
 
 	async function call(method: string, path: string, options: { origin?: string; body?: unknown } = {}) {
-		const review = createReviewServer(store)
+		const proxies = new ReviewProxies(store, WIDGET)
+		const review = createReviewServer(store, proxies)
 		const headers = new Headers({ 'Content-Type': 'application/json' })
 		if (options.origin !== undefined) headers.set('Origin', options.origin)
 		const req = new Request(`http://localhost:19400${path}`, {
@@ -136,6 +140,7 @@ describe('review routes', () => {
 		})
 		const result = review.fetch(req, new URL(req.url), noUpgrade)
 		review.channel.stop()
+		proxies.stop()
 		if (result === null || result === 'upgraded') throw new Error(`${method} ${path} was not a review route`)
 		return await result
 	}
@@ -180,9 +185,97 @@ describe('review routes', () => {
 		expect(response.status).toBe(403)
 	})
 
+	test('the proxy forwards to applications on this machine only', async () => {
+		const response = await call('POST', '/api/review/demo/proxy', { body: { target: 'https://example.com/' } })
+		expect(response.status).toBe(400)
+		expect(JSON.stringify(await response.json())).toContain('localhost')
+	})
+
 	test('an invalid body is a 400 with the failing field', async () => {
 		const response = await call('POST', '/api/review/demo/threads', { origin: 'http://localhost:4317', body: { anchor, body: '  ', send: false } })
 		expect(response.status).toBe(400)
 		expect(JSON.stringify(await response.json())).toContain('body')
+	})
+})
+
+describe('ReviewProxies', () => {
+	let app: Bun.Server<undefined>
+	let proxies: ReviewProxies
+
+	beforeEach(() => {
+		app = Bun.serve<undefined>({
+			port: 0,
+			hostname: 'localhost',
+			fetch(req, server) {
+				const url = new URL(req.url)
+				if (url.pathname === '/hmr') {
+					return server.upgrade(req, { data: undefined, headers: { 'Sec-WebSocket-Protocol': 'vite-hmr' } })
+						? undefined
+						: new Response(null, { status: 400 })
+				}
+				if (url.pathname === '/socket') return server.upgrade(req, { data: undefined }) ? undefined : new Response(null, { status: 400 })
+				if (url.pathname === '/old') return Response.redirect(`${url.origin}/new`, 302)
+				if (url.pathname === '/data.json') return Response.json({ search: url.search })
+				return new Response('<html><body><h1>App</h1></body></html>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+			},
+			websocket: {
+				message(socket, message) {
+					socket.send(`echo ${String(message)}`)
+				},
+			},
+		})
+		proxies = new ReviewProxies(store, WIDGET)
+	})
+
+	afterEach(() => {
+		proxies.stop()
+		app.stop(true)
+	})
+
+	test('serves the application with the widget on its HTML pages and nothing else changed', async () => {
+		const url = proxies.open('demo', `http://localhost:${app.port}/admin?tab=1`)
+		expect(url).toMatch(/^http:\/\/localhost:\d+\/admin\?tab=1$/)
+		expect(await (await fetch(url)).text()).toBe(`<html><body><h1>App</h1><script src="${WIDGET}" data-project="demo"></script></body></html>`)
+		expect(await (await fetch(new URL('/data.json?x=1', url))).json()).toEqual({ search: '?x=1' })
+	})
+
+	test('keeps redirects on the proxy', async () => {
+		const origin = new URL(proxies.open('demo', `http://localhost:${app.port}/`)).origin
+		const response = await fetch(`${origin}/old`, { redirect: 'manual' })
+		expect(response.headers.get('Location')).toBe(`${origin}/new`)
+	})
+
+	async function echoThrough(url: string, protocols: string[]): Promise<{ protocol: string; reply: string }> {
+		const socket = new WebSocket(url, protocols)
+		const reply = await new Promise<string>((resolve, reject) => {
+			socket.onopen = () => socket.send('ping')
+			socket.onmessage = (event) => resolve(String(event.data))
+			socket.onerror = () => reject(new Error('WebSocket failed'))
+		})
+		socket.close()
+		return { protocol: socket.protocol, reply }
+	}
+
+	test('relays WebSockets with the subprotocol the application chose', async () => {
+		const origin = new URL(proxies.open('demo', `http://localhost:${app.port}/`)).origin.replace('http:', 'ws:')
+		expect(await echoThrough(`${origin}/hmr`, ['vite-hmr'])).toEqual({ protocol: 'vite-hmr', reply: 'echo ping' })
+		expect(await echoThrough(`${origin}/socket`, [])).toEqual({ protocol: '', reply: 'echo ping' })
+	})
+
+	test('a restarted daemon serves the proxy on the same port', () => {
+		const target = `http://localhost:${app.port}/`
+		const url = proxies.open('demo', target)
+		proxies.stop()
+		proxies = new ReviewProxies(store, WIDGET)
+		proxies.restore()
+		expect(proxies.open('demo', target)).toBe(url)
+	})
+
+	test('an application that is not running answers 502', async () => {
+		const url = proxies.open('demo', `http://localhost:${app.port}/`)
+		app.stop(true)
+		const response = await fetch(url)
+		expect(response.status).toBe(502)
+		expect(await response.text()).toContain('Is the application running?')
 	})
 })
