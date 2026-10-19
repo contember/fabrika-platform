@@ -1243,7 +1243,7 @@ export class ContractRuntime {
 		if (chain === null) {
 			throw new NotFoundError('The bound value no longer exists')
 		}
-		// Asked before the delivery is recorded: a delivery that cannot run is not one GitHub must not redeliver.
+		// Asked before the delivery is claimed: a delivery that cannot run is one the provider must redeliver.
 		const authority = await served.credential.authority()
 		if (!authority.ok) {
 			throw new ServerFault('workload_unauthorized', `the key of webhook '${served.webhook}' gives it no authority: ${authority.reason}`, 503)
