@@ -4,7 +4,7 @@ import { z } from 'zod/v4'
 import { app } from '../app-kit'
 
 /** A PNG's signature and IHDR head: enough bytes for the sniff. */
-export const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52])
+export const PNG_BYTES = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]
 
 const Saved = z.strictObject({ id: z.string() })
 const Versioned = z.strictObject({ id: z.string(), version: z.int() })
@@ -67,7 +67,7 @@ export const catalog = app.group({ callers: ['human'] }, (r) => ({
 		output: Versioned,
 		access: { action: 'catalog.write', app: true },
 	}).handle(async ({ input, ctx }) => {
-		const image = await ctx.files.put('catalog', PNG, { type: 'image/png', name: `${input.name}.png` })
+		const image = await ctx.files.put('catalog', new Uint8Array(PNG_BYTES), { type: 'image/png', name: `${input.name}.png` })
 		return ctx.db.app.products.insert({ name: input.name, image })
 	}),
 	measure: r.mutation({
@@ -85,7 +85,7 @@ export const catalog = app.group({ callers: ['human'] }, (r) => ({
 		output: Empty,
 		access: { action: 'catalog.write', app: true },
 	}).handle(async ({ input, ctx }) => {
-		await ctx.files.put('catalog', PNG, { type: 'image/png', name: input.name })
+		await ctx.files.put('catalog', new Uint8Array(PNG_BYTES), { type: 'image/png', name: input.name })
 		return {}
 	}),
 }))

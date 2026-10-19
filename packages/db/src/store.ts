@@ -1,5 +1,6 @@
 import { BinaryOperationNode, type OperationNode, OperatorNode, type ReturningNode, ValueNode } from 'kysely'
 import {
+	defineValue,
 	freeze,
 	hasOwn,
 	inSet,
@@ -43,6 +44,7 @@ import {
 } from './description'
 import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
 import { answerFiles, type FileBinding, fileValue, referenceFiles, rowScope, storedRowScope } from './file-columns'
+import { fileReference } from './file-references'
 import { fileTables } from './file-tables'
 import { formAdmissions, type InboxQuota, takeFromBucket } from './form-admissions'
 import { formFiles, type HeldFormFiles, holdFormFiles } from './form-files'
@@ -101,7 +103,7 @@ import {
 } from './policy'
 import { frameworkSideOf, type Locator, register } from './registry'
 import type { ScopeTerms, ScopeTest, ScopeUse } from './sql'
-import { storedFiles } from './stored-files'
+import { storedFiles, storedFilesMetadata } from './stored-files'
 import { type TablePolicies, tablePolicies } from './tables'
 import { answerDays, dayInput, timestampInput } from './temporal'
 
@@ -1638,6 +1640,37 @@ export class ChildTable<DB, P, T extends string> {
 Object.freeze(ChildTable.prototype)
 
 /**
+ * The runner of `@fabrika/db/testing`'s probe: a store's own, with a file binding of its own, and `held`, which turns
+ * each stored file's id in a file column of `values` into a reference the probe holds. The probe writes the file the
+ * isolation fixture seeded as a handler writes a reference it read; an id of no stored file stays an id, and is refused.
+ */
+function probeRunner(context: TableContext): { readonly run: Runner; readonly held: (values: unknown) => Promise<unknown> } {
+	const holder = {}
+	const run: Runner = { ...storeRunner(context), files: { holder, request: 'probe', graceMs: 1, scans: () => false } }
+	const held = async (values: unknown): Promise<unknown> => {
+		const columns = ownKeys(context.model.files)
+		if (columns.length === 0 || typeof values !== 'object' || values === null) {
+			return values
+		}
+		const ids = columns.flatMap((column) => {
+			const value: unknown = ownDescriptor(values, column)?.value
+			return typeof value === 'string' ? [value] : []
+		})
+		const metadata = ids.length === 0 ? new Map() : await storedFilesMetadata(await run.read(), ids)
+		const copy = { ...values }
+		for (const column of columns) {
+			const value: unknown = ownDescriptor(values, column)?.value
+			const meta = typeof value === 'string' ? metadata.get(value) : undefined
+			if (meta !== undefined) {
+				defineValue(copy, column, fileReference(meta, holder, true))
+			}
+		}
+		return copy
+	}
+	return { run, held }
+}
+
+/**
  * One table's operations without the store types, for `@fabrika/db/testing` only: the generated isolation tests address
  * a table by name. Every runtime check of a store applies; a child row is addressed by its parent's capability and
  * `key`, a dimension row by its capability alone.
@@ -1675,7 +1708,7 @@ function probeOf(context: TableContext): TableProbe {
 	}
 	// A capability reads the columns of its own action, as ctx.db does.
 	const visible = (capability: unknown): readonly string[] => visibleFor(context.model, heldAction(context, capability))
-	const run = storeRunner(context)
+	const { run, held } = probeRunner(context)
 	return freeze({
 		mode: child ? 'child' : 'dimension',
 		get: async (capability: unknown, key?: string) => selectOne<Readonly<Record<string, unknown>>>(context, run, object(capability, key, 'read')),
@@ -1709,10 +1742,12 @@ function probeOf(context: TableContext): TableProbe {
 			return typeof count === 'string' ? count : '0'
 		},
 		insert: async (capability: unknown, values: unknown) =>
-			child ? insertIntoChild(context, run, capability, values) : insertIntoDimension(context, run, capability, values),
+			child
+				? insertIntoChild(context, run, capability, await held(values))
+				: insertIntoDimension(context, run, capability, await held(values)),
 		update: async (capability: unknown, key: string | undefined, values: unknown, expectVersion?: number) => {
 			const scope = object(capability, key, 'update')
-			const changes = readValues(values, context.model.update, 'update', context.model)
+			const changes = readValues(await held(values), context.model.update, 'update', context.model)
 			return updateRow(context, run, addressed(scope), changes, versionArgument(context, expectVersion === undefined ? [] : [{ expectVersion }]))
 		},
 		remove: async (capability: unknown, key?: string) => removeRow(context, run, addressed(object(capability, key, 'delete'))),
@@ -1724,7 +1759,7 @@ function probeOf(context: TableContext): TableProbe {
  * also takes a scoped site's `Ref` or `Within` of the table's read action.
  */
 function appProbeOf(context: TableContext): TableProbe {
-	const run = storeRunner(context)
+	const { run, held } = probeRunner(context)
 	// A scoped site reads an application table too: the probe answers both, as ctx.db.app does.
 	const scoped = (capability: unknown): boolean => runtimeOf(context.connection).capabilities.resolve(capability).kind !== 'app'
 	const every = (capability: unknown): OperationNode =>
@@ -1764,10 +1799,10 @@ function appProbeOf(context: TableContext): TableProbe {
 				groupBy: columns,
 				count: true,
 			}),
-		insert: async (capability: unknown, values: unknown) => insertIntoApplication(context, run, capability, values),
+		insert: async (capability: unknown, values: unknown) => insertIntoApplication(context, run, capability, await held(values)),
 		update: async (capability: unknown, key: string | undefined, values: unknown, expectVersion?: number) => {
 			const scope = appRowPredicate(context, capability, key, 'update')
-			const changes = readValues(values, context.model.update, 'update', context.model)
+			const changes = readValues(await held(values), context.model.update, 'update', context.model)
 			return updateRow(context, run, addressed(scope), changes, versionArgument(context, expectVersion === undefined ? [] : [{ expectVersion }]))
 		},
 		remove: async (capability: unknown, key?: string) => removeRow(context, run, addressed(appRowPredicate(context, capability, key, 'delete'))),

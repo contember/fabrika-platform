@@ -20,7 +20,7 @@ import { inSet, namesOf } from './builtins'
 import { type CatalogColumn, introspectSchema } from './codegen'
 import { applicationSchema, Database, openFirstConnection } from './database'
 import type { Primitive } from './description'
-import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from './migrations'
+import { FILES_TABLE, FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from './migrations'
 import { type Container, type ForeignKey, modelOf, type TableModel, type TableModels, tableModels, type Tables } from './policy'
 import { refuseInProduction } from './production'
 import { frameworkSideOf } from './registry'
@@ -133,8 +133,13 @@ export interface TestDatabase {
 	 * the markers it holds.
 	 */
 	seedUnder<DB, P>(tables: Tables<DB, P>, table: string, under: WorldRow): Promise<SeededRow>
-	/** Values for the policy's insert columns of `table` that its schema accepts: every required one, sampled. */
+	/** Values for the policy's insert columns of `table` that its schema accepts: every required one, sampled; a file column a seeded file. */
 	sampleInsert<DB, P>(tables: Tables<DB, P>, table: string): Promise<Readonly<Record<string, SampleValue>>>
+	/**
+	 * The object key of every file the fixture seeded into a file column, oldest first. Each stands for an empty object,
+	 * which a test's object store holds when a handler serves or opens the file.
+	 */
+	seededObjects(): readonly string[]
 	/** Closes the connections and drops the schema and its roles. */
 	close(): Promise<void>
 }
@@ -258,6 +263,8 @@ function ownerOf(models: TableModels, dimension: string): TableModel | undefined
 
 /** How many referenced rows deep the fixture follows required foreign keys outside the chain before it gives up. */
 const MAX_REFERENCE_DEPTH = 4
+/** The digest of the empty object a seeded file stands for. */
+const EMPTY_SHA256 = createHash('sha256').digest('hex')
 
 /** A CHECK or foreign key violation of a seeded row, as the generator limit it is; `undefined` for any other failure. */
 function seedLimit(error: unknown, table: string): SeedLimitError | undefined {
@@ -375,6 +382,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	}
 	const { schema, lock, seeder, catalog } = opened
 	let checks: Promise<readonly CheckConstraint[]> | undefined
+	const seededObjects: string[] = []
 
 	/** The CHECK constraints that name `column` of `table`. */
 	async function checksOn(table: string, column: string): Promise<readonly CheckConstraint[]> {
@@ -475,8 +483,21 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 		throw new Error(`${table}.${column} holds a ${dimension} as ${type}; a key or containment column holds its scope value as text or uuid`)
 	}
 
+	/** A live, empty file of `kind`, as the framework's put leaves one once a reference claims it: what a seeded file column holds. */
+	async function seedFile(kind: string): Promise<string> {
+		const id = crypto.randomUUID()
+		const objectKey = `${kind}/${id}`
+		seededObjects.push(objectKey)
+		await seeder.unsafe(
+			`INSERT INTO ${quoted(schema)}.${quoted(FILES_TABLE)} (id, kind, status, object_key, size, sha256, content_type, name, created_at)
+			VALUES ($1, $2, 'live', $3, 0, $4, 'application/octet-stream', 'seeded', now())`,
+			[id, kind, objectKey, EMPTY_SHA256],
+		)
+		return id
+	}
+
 	/**
-	 * Inserts one row: `assigned` as given, a foreign key outside the chain `null` or referencing a row, a column a CHECK
+	 * Inserts one row: `assigned` as given, a file column a seeded file, a foreign key outside the chain `null` or referencing a row, a column a CHECK
 	 * names its `IN` list's first value or `null`, every other text column a marker and every other required column a
 	 * sample. Answers what the fixture wrote, and the row as stored (its database defaults filled). A CHECK or a foreign
 	 * key the values still fail is a `SeedLimitError` that names the constraint.
@@ -508,8 +529,11 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 				continue
 			}
 			if (column.generated !== 'no') continue
-			const checked = await checkedValue(table, column)
-			if (checked !== undefined) {
+			const kind = model !== undefined && Object.hasOwn(model.files, name) ? model.files[name] : undefined
+			const checked = kind === undefined ? await checkedValue(table, column) : undefined
+			if (kind !== undefined) {
+				row.set(name, await seedFile(kind))
+			} else if (checked !== undefined) {
 				row.set(name, checked)
 			} else if (await holdsMarker(model, table, column)) {
 				const marker = `m${randomHex()}${randomHex()}`
@@ -666,10 +690,13 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 				for (const [name, value] of await referencedKey(models, table, key, open, 0)) values[name] = value
 			}
 			for (const column of required) {
-				if (!(column.column_name in values)) values[column.column_name] = await requiredSample(table, column)
+				const name = column.column_name
+				const kind = Object.hasOwn(model.files, name) ? model.files[name] : undefined
+				if (!(name in values)) values[name] = kind === undefined ? await requiredSample(table, column) : await seedFile(kind)
 			}
 			return values
 		},
+		seededObjects: () => [...seededObjects],
 		// Its own connections end first, so the drop finds a slot even in a database at its limit.
 		close: () => closeTestDatabase(url, opened, (drop) => withConnectionCapacity(drop, { waitMs })),
 	}

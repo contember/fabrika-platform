@@ -217,6 +217,12 @@ export const GENERATED_LINK = 'fabrika:link'
  */
 export const GENERATED_ROW_PREFIX = 'fabrika:row:'
 
+/**
+ * The prefix of the value a generated endpoint access case sends in a file field, followed by the field's file kind:
+ * `fabrika:file:attachments`. The endpoint access kit sends a small file of the kind's first type it can write in its place.
+ */
+export const GENERATED_FILE_PREFIX = 'fabrika:file:'
+
 export const JSON_ADMISSION: BodyAdmission = { contentTypes: ['application/json'], maxBytes: null }
 
 /** `/api` + `notes.list` → `/api/notes.list`; a root prefix does not double the `/`. */

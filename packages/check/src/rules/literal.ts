@@ -6,8 +6,8 @@ import { isRelativeSpecifier } from '../layout'
 /**
  * What a call root builds. `surface` is the parameter of a `defineContract` callback (`c`, `l`); `app` is
  * `defineApp`, `kit` a const it returned, `shell` the parameter of `app.contract`'s callback and `endpoints` that of
- * a group's, a link's or an export's; `attachment` is the output `attachment({ … })`; `value` is a schema the package
- * exports, read as it is (`WebhookSecret`).
+ * a group's, a link's or an export's; `attachment` is the output `attachment({ … })`, `file` a file field or output;
+ * `value` is a schema the package exports, read as it is (`WebhookSecret`).
  */
 export type BuilderKind =
 	| 'zod'
@@ -21,6 +21,7 @@ export type BuilderKind =
 	| 'endpoints'
 	| 'attachment'
 	| 'redirect'
+	| 'file'
 	| 'value'
 
 /** The only imported names a literal module may use: the builders the platform reads without executing them. */
@@ -32,6 +33,7 @@ export const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, Bu
 		defineApp: 'app',
 		attachment: 'attachment',
 		redirect: 'redirect',
+		file: 'file',
 		WebhookSecret: 'value',
 	},
 	'@fabrika/db/tables': { defineTables: 'tables' },
@@ -344,6 +346,10 @@ const shapeProblem = (kind: BuilderKind, root: AstNode, links: readonly Link[]):
 			return links.length === 1 && calls === 1
 				? undefined
 				: { node: root, message: 'redirect used other than as one call', allowed: "redirect() or redirect({ origins: ['https://…'] })" }
+		case 'file':
+			return links.length === 1 && calls === 1
+				? undefined
+				: { node: root, message: 'file used other than as one call', allowed: "file('<kind>')" }
 		case 'value':
 			return { node: root, message: `${identifierName(root) ?? 'the schema'} used other than as it is`, allowed: 'output: WebhookSecret' }
 		case 'tables':

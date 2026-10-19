@@ -1,3 +1,4 @@
+import { type TablePolicies, tablePolicies } from '@fabrika/db/tables'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type ParsedModule, parseModule, walk } from './ast'
@@ -17,6 +18,8 @@ import {
 	ZEROPS_FILES,
 } from './layout'
 import type { PackedSet } from './packed'
+import { ReaderProblems } from './reader/problems'
+import { readTablesValue } from './reader/tables'
 import { type ModuleReference, moduleReferences } from './references'
 import { type ImportMappings, readImportMappings } from './resolution'
 import { checkContractRead } from './rules/contract'
@@ -26,7 +29,7 @@ import { checkClientIdentity } from './rules/identity'
 import { checkGeneratedTests } from './rules/isolation'
 import { checkJsonStrings } from './rules/json'
 import { checkLiteralGraph } from './rules/literal'
-import { checkMigrationNames, checkScanMigrations } from './rules/migrations'
+import { checkFileColumnMigrations, checkMigrationNames, checkScanMigrations, type FileColumn } from './rules/migrations'
 import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
 import { checkRuntimeNode, rawSqlBindings } from './rules/runtime'
@@ -35,6 +38,10 @@ import { checkGeneratedTest, checkMockModule, checkTestNode, checkTestSuiteConfi
 import { checkComments, checkTypeNode } from './rules/types'
 import { moduleSlice, sliceFinding } from './slice'
 import { BUNFIG_FILE, checkTrustedResolution } from './trust'
+
+/** Every file column the table policies declare, with its kind. */
+const fileColumns = (policies: TablePolicies): FileColumn[] =>
+	Object.entries(policies).flatMap(([table, policy]) => Object.entries(policy.files ?? {}).map(([column, kind]) => ({ table, column, kind })))
 
 export interface CheckInput {
 	/** The application's root directory. */
@@ -171,6 +178,10 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	if (read?.ok === true) {
 		const scanning = Object.entries(read.contract.surface.files ?? {}).filter(([, collection]) => collection.scan === true).map(([name]) => name)
 		findings.push(...checkScanMigrations(tree.files, scanning))
+	}
+	const declaredTables = tables !== undefined && literal.length === 0 ? readTablesValue(graph, tables, new ReaderProblems()) : null
+	if (declaredTables !== null) {
+		findings.push(...checkFileColumnMigrations(tree.files, fileColumns(tablePolicies(declaredTables))))
 	}
 	const bunfig = tree.files.get(BUNFIG_FILE)
 	if (bunfig !== undefined) findings.push(...checkTestSuiteConfig(bunfig))

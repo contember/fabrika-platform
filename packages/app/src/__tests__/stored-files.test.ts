@@ -5,7 +5,7 @@
 // when FABRIKA_TEST_S3_* is set.
 
 import { createClient, download, DownloadedFile } from '@fabrika/app/client'
-import { compileContract } from '@fabrika/app/contract'
+import { compileContract, GENERATED_FILE_PREFIX, GENERATED_ROW_PREFIX } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { scoped } from '@fabrika/db'
@@ -21,11 +21,14 @@ import { z } from 'zod/v4'
 import { FILE_SWEEP_JOB } from '../files/collections'
 import { FILE_SCAN_JOB, type FileScanner, type ScanBatchResult } from '../files/scan'
 import { passingChallenge } from '../testing/challenge'
+import { endpointAccessKit } from '../testing/endpoint-access'
+import { appPolicyIsolationKit, policyIsolationKit } from '../testing/policy-isolation'
 import { contract } from './stored-files-fixture/fabrika.contract'
 import { tables } from './stored-files-fixture/src/db/tables'
-import { FileInfo, PNG } from './stored-files-fixture/src/deals/endpoints'
+import { FileInfo, PNG_BYTES } from './stored-files-fixture/src/deals/endpoints'
 
 const PDF = new TextEncoder().encode('%PDF-1.7\n%%EOF\n')
+const PNG = new Uint8Array(PNG_BYTES)
 
 describe('the artifact of files as values', () => {
 	const artifact = compileContract(contract, tables)
@@ -272,6 +275,36 @@ if (postgres !== null) {
 			expect(photo).toMatchObject({ status: 'quarantined', scope: null })
 			await kit.runJob(FILE_SCAN_JOB)
 			expect((await files()).find((row) => row.id === photo?.id)?.status).toBe('live')
+		})
+	})
+
+	describe('the isolation fixture', () => {
+		test("seeds a live file of the column's kind into a required file column", async () => {
+			const worlds = await postgres.seedWorlds(tables, 'deals')
+			const seeded = await postgres.seedUnder(tables, 'deal_attachments', worlds.own)
+			const [row] = await admin((sql) => sql.unsafe(`select file::text as file from ${schema}.deal_attachments where id = $1`, [seeded.key]))
+			expect((await files()).find((file) => file.id === row.file)).toMatchObject({ status: 'live', kind: 'attachments' })
+		})
+
+		test('lets the policy isolation probes write a seeded file into a file column, in their own scope only', async () => {
+			const attachments = policyIsolationKit(contract, tables, 'deal_attachments', postgres)
+			expect([(await attachments.insert('own')).status, (await attachments.insert('other')).status]).toEqual([200, 403])
+			const products = appPolicyIsolationKit(contract, tables, 'products', postgres)
+			expect([(await products.insert('global')).status, (await products.update('global')).status]).toEqual([200, 200])
+		})
+
+		test('lets the endpoint access kit send a generated file and download a seeded one, in its own scope only', async () => {
+			const access = endpointAccessKit(serve(contract, { database: scoped(tables) }), tables, postgres)
+			const upload = { name: 'generated', file: `${GENERATED_FILE_PREFIX}attachments` }
+			expect([(await access.own('api.attachments.upload', upload)).status, (await access.denied('api.attachments.upload', upload)).status]).toEqual([
+				200,
+				404,
+			])
+			const many = { files: [`${GENERATED_FILE_PREFIX}attachments`, `${GENERATED_FILE_PREFIX}attachments`] }
+			expect((await access.own('api.attachments.uploadMany', many)).status).toBe(200)
+			const download = { id: `${GENERATED_ROW_PREFIX}deal_attachments` }
+			expect([(await access.own('api.attachments.download', download)).status, (await access.denied('api.attachments.download', download)).status])
+				.toEqual([200, 404])
 		})
 	})
 }

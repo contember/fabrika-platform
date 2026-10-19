@@ -1,6 +1,7 @@
 // A fixed input that a schema shape admits, written into a generated test as a literal. Deterministic, so the checker
 // regenerates the same text; `undefined` when the scaffold cannot build one (a pattern, contradictory bounds).
 
+import { GENERATED_FILE_PREFIX } from '@fabrika/app/contract'
 import type { NumberShape, SchemaShape, StringShape } from '@fabrika/auth-core'
 
 export type Sample = null | boolean | number | string | readonly Sample[] | { readonly [key: string]: Sample }
@@ -81,6 +82,8 @@ export function sample(shape: SchemaShape): Sample | undefined {
 			const items = shape.items.map(sample)
 			return items.every((item) => item !== undefined) ? items.filter((item) => item !== undefined) : undefined
 		}
+		case 'file':
+			return `${GENERATED_FILE_PREFIX}${shape.kind}`
 		case 'object': {
 			const entries: [string, Sample][] = []
 			for (const [name, inner] of Object.entries(shape.fields).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {

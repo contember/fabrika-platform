@@ -33,6 +33,8 @@ export {
 export { lexSql, type SqlToken, sqlTokens, type Statement, topLevelStatements, upperWord } from './migration-sql'
 export { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
 export {
+	afterName,
+	closingParenthesis,
 	ddlForeignSchema,
 	dmlForeignSchema,
 	dmlRelations,
@@ -40,13 +42,17 @@ export {
 	type FunctionUse,
 	functionUse,
 	isFrameworkName,
+	isPunct,
 	type NameReference,
 	nameReferences,
 	type NameRole,
 	nameText,
 	nestedStatement,
+	objectNameAt,
 	parenthesizedTarget,
 	refusedFunctionCall,
+	skipWords,
+	splitAtCommas,
 	statementKind,
 	unicodeIdentifier,
 } from './sql-names'

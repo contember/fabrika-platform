@@ -13,6 +13,7 @@ import {
 	endpointMembers,
 	type EndpointMethod,
 	type FileCollectionArtifact,
+	type FormChallenge,
 	type SchemaShape,
 	type Scope,
 } from '@fabrika/auth-core'
@@ -23,13 +24,21 @@ import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { z } from 'zod/v4'
 import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
-import { GENERATED_INVITATION, GENERATED_LINK, GENERATED_MEMBER, GENERATED_ROW_PREFIX } from '../contract/defaults'
+import {
+	FILE_INPUT_PART,
+	GENERATED_FILE_PREFIX,
+	GENERATED_INVITATION,
+	GENERATED_LINK,
+	GENERATED_MEMBER,
+	GENERATED_ROW_PREFIX,
+} from '../contract/defaults'
 import type { AnyContract } from '../contract/define'
 import { FILE_SCAN_JOB, type FileScanner, type ScanVerdict } from '../files/scan'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import type { TestCaller, TestGrant } from './caller'
 import { standInIamKit } from './kit'
 import { scopeTypeOf } from './policy-isolation'
+import { sampleFile } from './sample-file'
 
 export interface DeniedOutcome {
 	readonly status: number
@@ -163,35 +172,20 @@ export type Grant =
 
 const randomHex = (): string => crypto.randomUUID().replaceAll('-', '').slice(0, 8)
 
-const ascii = (text: string): number[] => [...text].map((char) => char.charCodeAt(0))
-const ZIP_HEAD = [0x50, 0x4b, 0x03, 0x04]
-
-/** The leading bytes `files/sniff.ts` accepts for each binary type it verifies; a text type needs none. */
-const SAMPLE_HEADS: Readonly<Record<string, readonly number[]>> = {
-	'image/png': [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
-	'image/jpeg': [0xff, 0xd8, 0xff, 0xe0],
-	'image/gif': ascii('GIF89a'),
-	'image/webp': [...ascii('RIFF'), 0, 0, 0, 0, ...ascii('WEBP')],
-	'application/pdf': ascii('%PDF-1.7\n'),
-	'application/gzip': [0x1f, 0x8b, 0x08],
-	'application/zip': ZIP_HEAD,
-	'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ZIP_HEAD,
-	'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ZIP_HEAD,
-	'application/vnd.openxmlformats-officedocument.presentationml.presentation': ZIP_HEAD,
-}
-const TEXT_TYPES: ReadonlySet<string> = new Set(['text/plain', 'text/csv', 'text/markdown', 'application/json', 'image/svg+xml'])
-
-/** A small file of the collection's first type the kit can write: the type's leading bytes, then a text marker. */
-function sampleFile(name: string, types: readonly string[]): { readonly type: string; readonly bytes: Uint8Array<ArrayBuffer> } {
-	for (const type of types) {
-		const head = SAMPLE_HEADS[type] ?? (TEXT_TYPES.has(type) ? [] : undefined)
-		if (head !== undefined) return { type, bytes: new Uint8Array([...head, ...ascii(`fabrika endpoint access file ${randomHex()}`)]) }
-	}
-	throw new Error(`files.${name}: none of its types is one the endpoint access kit can write a file of`)
-}
-
 const uploadedSchema = z.strictObject({ result: z.strictObject({ id: z.string() }) })
 const errorSchema = z.object({ error: z.object({ type: z.string() }) })
+
+/** The file fields of a procedure's input: a file, an optional one, or an array of them, each sent as a part of its own. */
+function fileFields(input: SchemaShape | null): ReadonlySet<string> {
+	const isFile = (shape: SchemaShape): boolean =>
+		shape.type === 'file' || ((shape.type === 'optional' || shape.type === 'array') && isFile(shape.type === 'array' ? shape.items : shape.inner))
+	return new Set(input?.type === 'object' ? Object.entries(input.fields).filter(([, shape]) => isFile(shape)).map(([name]) => name) : [])
+}
+
+/** The file kind a generated file field's marker names, or `undefined` for any other value. */
+function fileKindOf(value: unknown): string | undefined {
+	return typeof value === 'string' && value.startsWith(GENERATED_FILE_PREFIX) ? value.slice(GENERATED_FILE_PREFIX.length) : undefined
+}
 
 /** The `type` of an error envelope, or `undefined` for any other body. */
 function errorType(text: string): string | undefined {
@@ -245,13 +239,18 @@ const cleanScanner: FileScanner = {
  */
 function unusedVariables(app: ContractImplementation<AnyContract>): ApplicationEnvironment {
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
+	const challengeVariables = (challenge: FormChallenge): readonly string[] =>
+		challenge.siteKey === undefined ? [challenge.secret] : [challenge.secret, challenge.siteKey]
 	const names = Object.values(artifact.mounts).flatMap((mount): readonly string[] => {
 		if (mount.kind === 'form' && mount.challenge !== undefined) {
-			return mount.challenge.siteKey === undefined ? [mount.challenge.secret] : [mount.challenge.secret, mount.challenge.siteKey]
+			return challengeVariables(mount.challenge)
 		}
 		return mount.kind === 'spa' ? (mount.public ?? []) : []
 	})
-	return Object.fromEntries(names.map((name) => [name, 'unused']))
+	const procedures = Object.values(artifact.procedures ?? {}).flatMap((procedure) =>
+		procedure.challenge === null ? [] : challengeVariables(procedure.challenge)
+	)
+	return Object.fromEntries([...names, ...procedures].map((name) => [name, 'unused']))
 }
 
 /**
@@ -292,9 +291,10 @@ export const managerGrants = (
  */
 export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract>, tables: Tables<DB, P>, postgres: TestDatabase): EndpointAccessKit {
 	// The objects of the files the cases seed live in memory; their rows are the application's own tables.
+	const objects = new MemoryFileObjects()
 	const { kit, standIn } = standInIamKit(app, {
 		database: postgres.database,
-		files: new MemoryFileObjects(),
+		files: objects,
 		scanner: cleanScanner,
 		env: unusedVariables(app),
 		challengeFetch: () => Promise.resolve(Response.json({ success: false, 'error-codes': ['invalid-input-response'] })),
@@ -420,11 +420,56 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		return { ...(await askAs(row, asker.fetch, asked.input)), marks: asked.marks }
 	}
 
-	const askAs = async (row: ActionEndpoint, fetch: RpcFetch, body: unknown): Promise<{ readonly status: number; readonly text: string }> => {
-		if (row.method !== 'POST') {
-			throw new Error(`${row.id} is not a procedure`)
+	// A seeded file column references an empty object, which a handler that serves or opens the file reads here.
+	let stocked = 0
+	const stockSeededObjects = (): void => {
+		const seeded = postgres.seededObjects()
+		for (const key of seeded.slice(stocked)) objects.replace(key, new Uint8Array(0))
+		stocked = seeded.length
+	}
+
+	/** The request of a case: a GET's input in its URL, a file field's marker as a file of its kind in a multipart body. */
+	const requestOf = (row: ActionEndpoint, body: Readonly<Record<string, unknown>>): readonly [string, RequestInit] => {
+		if (row.method === 'GET') {
+			const params = new URLSearchParams(Object.entries(body).map(([name, value]) => [name, value === null ? 'null' : String(value)]))
+			return [params.size === 0 ? row.path : `${row.path}?${params}`, { method: 'GET' }]
 		}
-		const response = await fetch(row.path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+		const fields = fileFields(row.input)
+		if (fields.size === 0) {
+			return [row.path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }]
+		}
+		const json: Record<string, unknown> = {}
+		const files: [string, File][] = []
+		for (const [name, value] of Object.entries(body)) {
+			if (!fields.has(name)) {
+				json[name] = value
+				continue
+			}
+			for (const item of Array.isArray(value) ? value : [value]) {
+				const kind = fileKindOf(item)
+				if (kind === undefined) throw new Error(`${row.id}: the file field ${name} holds ${JSON.stringify(item)}, not a generated file`)
+				files.push([name, generatedFile(kind)])
+			}
+		}
+		const form = new FormData()
+		form.append(FILE_INPUT_PART, JSON.stringify(json))
+		for (const [name, file] of files) form.append(name, file)
+		return [row.path, { method: 'POST', body: form }]
+	}
+
+	const generatedFile = (kind: string): File => {
+		const sample = sampleFile(kind, kit.artifact.fileKinds?.[kind]?.types ?? [])
+		return new File([sample.bytes], `generated-${kind}`, { type: sample.type })
+	}
+
+	const askAs = async (
+		row: ActionEndpoint,
+		fetch: RpcFetch,
+		body: Readonly<Record<string, unknown>>,
+	): Promise<{ readonly status: number; readonly text: string }> => {
+		stockSeededObjects()
+		const [url, init] = requestOf(row, body)
+		const response = await fetch(url, init)
 		const text = await response.text()
 		// A 400 hides what the case is about: input is parsed before the access form runs, and a handler's refusal of
 		// the input it was given is no answer to another scope. Either is what the generator could not build.

@@ -17,6 +17,7 @@ import {
 	type Export,
 	type ExportAccessDeclaration,
 	type FileCollection,
+	type FileKind,
 	type ImportDeclaration,
 	type KitImportDeclaration,
 	kitImportsSection,
@@ -595,13 +596,23 @@ class SurfaceReader {
 
 	// ── Sections ────────────────────────────────────────────────────────────────────────────────
 
-	#files(value: LiteralValue, form: Form): FileCollection<string> {
+	/** `c.files({ … })`: a kind of stored file without an `owner`, a file collection with one. */
+	#files(value: LiteralValue, form: Form): FileCollection<string> | FileKind {
 		const at =
 			surfaceBuilder(form === 'kit' && value.kind === 'builder' && value.kit === 'shell' ? asSurface(value) : value, ['files'], 'c.files({ … })').value
 		const [collection] = args(at, 'c.files', 1, 1)
 		const options = builderOptions(collection, at, 'c.files')
 		const link = options.get('link')
 		const scan = options.get('scan')
+		if (!options.has('owner')) {
+			return {
+				kind: 'file-kind',
+				types: texts(options.get('types'), at, 'types'),
+				maxBytes: numeric(options.get('maxBytes'), at, 'maxBytes'),
+				scan: scan === undefined ? undefined : boolean(scan, 'scan'),
+				unknownOptions: optionKeys(options, 'fileKind'),
+			}
+		}
 		return {
 			kind: 'files',
 			owner: text(options.get('owner'), at, 'owner'),

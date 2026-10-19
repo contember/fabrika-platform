@@ -1,7 +1,7 @@
 // Reads the literal subset of `rules/literal.ts` into values, without executing the application: names resolve through
 // `ModuleGraph`, `z` chains build real zod schemas, `c.*` calls stay unapplied for `surface.ts`.
 
-import { WebhookSecret } from '@fabrika/app/contract'
+import { file, WebhookSecret } from '@fabrika/app/contract'
 import type { z } from 'zod/v4'
 import { type AstNode, child, children, identifierName, isConstAssertion, type ParsedModule, staticKey } from '../ast'
 import type { Located, ModuleGraph } from '../graph'
@@ -336,6 +336,8 @@ export class ValueReader {
 				return this.#attachmentCall(located, links, scope)
 			case 'redirect':
 				return this.#redirectCall(located, links, scope)
+			case 'file':
+				return this.#fileCall(located, links, scope)
 			case 'value':
 				this.#problems.add(located, `${rootName} used other than as it is`, 'output: WebhookSecret')
 				return null
@@ -487,6 +489,18 @@ export class ValueReader {
 		}
 		const args = this.#arguments(located.module, call.node, scope, () => null)
 		return args === null ? null : { kind: 'redirect', args, at: located }
+	}
+
+	/** `file('<kind>')`: the schema `@fabrika/app`'s `file` builds, so the artifact reads the file field as the runtime does. */
+	#fileCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
+		const [call] = links
+		const args = call?.kind === 'call' && links.length === 1 ? this.#arguments(located.module, call.node, scope, () => null) : null
+		const [kind] = args ?? []
+		if (args === null || args.length !== 1 || kind?.kind !== 'string') {
+			this.#problems.add(located, 'file used other than as one call with the kind', "file('<kind>')")
+			return null
+		}
+		return { kind: 'schema', schema: file(kind.value), nodes: 1, depth: 1, steps: ['file'], at: located }
 	}
 
 	#contractCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {

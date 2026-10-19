@@ -27,6 +27,7 @@ export const REFUSAL_RULE_IDS = [
 	'dynamic-code',
 	'migration-name',
 	'file-scan-migration',
+	'file-column-migration',
 	'crontab',
 	'package-replacement',
 	'skipped-test',

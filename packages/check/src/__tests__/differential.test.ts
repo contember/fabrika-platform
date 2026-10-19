@@ -39,6 +39,8 @@ import { contract as kitContract } from '../../../app/src/__tests__/kit-fixture/
 import { tables as kitTables } from '../../../app/src/__tests__/kit-fixture/src/db/tables'
 import { contract as publicContract } from '../../../app/src/__tests__/public-fixture/fabrika.contract'
 import { tables as publicTables } from '../../../app/src/__tests__/public-fixture/src/db/tables'
+import { contract as storedFilesContract } from '../../../app/src/__tests__/stored-files-fixture/fabrika.contract'
+import { tables as storedFilesTables } from '../../../app/src/__tests__/stored-files-fixture/src/db/tables'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { ContractSourceError, readContractSource, readTablesSource } from '../contract'
 import {
@@ -198,6 +200,11 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app mutation-kick (a mutation whose then kicks a job, read from source)',
 		root: join(APP_TESTS, 'fixtures', 'mutation-kick'),
 		evaluated: () => compileContract(mutationKickContract, mutationKickTables),
+	},
+	{
+		name: '@fabrika/app stored-files (file kinds, file fields and outputs, file columns, read from source)',
+		root: join(APP_TESTS, 'stored-files-fixture'),
+		evaluated: () => compileContract(storedFilesContract, storedFilesTables),
 	},
 	{
 		name: '@fabrika/app connect/shop, whose import reads its digest from the vendored snapshot',

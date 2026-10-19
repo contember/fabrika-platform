@@ -5,7 +5,16 @@ import { RULE_IDS } from '../finding'
 import { STRUCTURE_RULE_IDS } from '../rules/structure'
 import { generatedTestHeader } from '../rules/tests'
 import { generatedTests, scaffoldInputs } from '../scaffold'
-import { check, CLEAN_APPLICATION, CLEAN_CONTRACT, CLEAN_GENERATED_TESTS, CLEAN_SCHEMAS, CLEAN_TABLES, locations } from './helpers'
+import {
+	check,
+	CLEAN_APPLICATION,
+	CLEAN_CONTRACT,
+	CLEAN_GENERATED_TESTS,
+	CLEAN_SCHEMA_GENERATED,
+	CLEAN_SCHEMAS,
+	CLEAN_TABLES,
+	locations,
+} from './helpers'
 
 /** The clean contract with a collection that scans, and its table as an earlier `fileTableSql` created it. */
 const SCANNING_CONTRACT = CLEAN_CONTRACT.replace(
@@ -23,6 +32,26 @@ const SCANNING_APPLICATION: Readonly<Record<string, string>> = {
 }
 const EARLIER_FILE_TABLE =
 	"CREATE TABLE fabrika_files_attachments (id UUID PRIMARY KEY, status TEXT NOT NULL CHECK (status IN ('pending', 'live')));\n"
+
+/** The clean application with a file kind and a nullable file column of it on notes. */
+const FILE_COLUMN_SOURCES: Readonly<Record<string, string>> = {
+	...CLEAN_APPLICATION,
+	'fabrika.contract.ts': CLEAN_CONTRACT.replace(
+		"\thealth: c.health('/healthz'),\n",
+		"\tfiles: { pictures: c.files({ types: ['image/png'], maxBytes: 1024 }) },\n\thealth: c.health('/healthz'),\n",
+	),
+	'src/db/tables.ts': CLEAN_TABLES.replace("\t\tinsert: ['title'],\n", "\t\tinsert: ['title'],\n\t\tfiles: { picture: 'pictures' },\n"),
+	'src/db/schema.generated.ts': CLEAN_SCHEMA_GENERATED.replace('title: string }', 'title: string; picture: string | null }').replace(
+		"'title']",
+		"'title', 'picture']",
+	),
+}
+const fileColumnInputs = scaffoldInputs(new Map(Object.entries(FILE_COLUMN_SOURCES)))
+const FILE_COLUMN_APPLICATION: Readonly<Record<string, string>> = {
+	...FILE_COLUMN_SOURCES,
+	...Object.fromEntries([...(await generatedTests(fileColumnInputs.policies, fileColumnInputs.artifact))].map(([file, test]) => [file, test.text])),
+}
+const NOTES_TABLE = 'CREATE TABLE notes (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL, picture UUID'
 
 interface RuleCase {
 	readonly rule: RuleId
@@ -557,6 +586,15 @@ const cases: readonly RuleCase[] = [
 			...SCANNING_APPLICATION,
 			'db/migrations/20261001000000_files.sql': EARLIER_FILE_TABLE,
 			'db/migrations/20261012000000_scan_files.sql': fileScanSql('attachments'),
+		},
+	},
+	{
+		rule: 'file-column-migration',
+		bad: { ...FILE_COLUMN_APPLICATION, 'db/migrations/20261001000000_notes.sql': `${NOTES_TABLE});\n` },
+		expected: ['db/migrations/20261001000000_notes.sql:1:1'],
+		good: {
+			...FILE_COLUMN_APPLICATION,
+			'db/migrations/20261001000000_notes.sql': `${NOTES_TABLE} REFERENCES fabrika_files (id));\nCREATE INDEX notes_picture ON notes (picture);\n`,
 		},
 	},
 	{
