@@ -8,18 +8,17 @@ import { posix } from 'node:path'
 import { type AstNode, child, staticString } from '../ast'
 import type { Finding, Report } from '../finding'
 import { parseJsonc } from '../jsonc'
+import { EXACT_VERSION, LOCKFILE, lockfileEntry, lockfilePackages } from '../lockfile'
 import type { PackedSet } from '../packed'
 import { isKey, parseToml } from '../toml'
 import { BUNFIG_FILE, isTrustedSpecifier } from '../trust'
 
-export const LOCKFILE = 'bun.lock'
 export const NPMRC_FILE = '.npmrc'
 
 const REPLACEMENT_FIELDS = ['patchedDependencies', 'overrides', 'resolutions'] as const
 const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const
 /** An exact version or a caret/tilde range of one: what `bun add` writes for a registry package. */
 const REGISTRY_RANGE = /^[~^]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
-const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 
 const REGISTRY_ALLOWED = 'a registry version of the package, such as "^1.2.3", resolved by bun install from the npm registry'
 
@@ -112,19 +111,15 @@ function checkManifest(path: string, text: string, finding: Finder, packed: Pack
 }
 
 function checkLockfile(text: string, finding: Finder, packed: PackedSet | undefined): void {
-	const lockfile = parseJsonc(text)
-	const packages = isRecord(lockfile) ? lockfile['packages'] : undefined
-	if (!isRecord(packages)) {
+	const packages = lockfilePackages(text)
+	if (packages === null) {
 		finding(LOCKFILE, '', `${LOCKFILE} has no packages the check can read`, 'a bun.lock written by bun install')
 		return
 	}
 	for (const [key, entry] of Object.entries(packages)) {
 		const name = lockfilePackage(key)
 		if (!isTrustedSpecifier(name)) continue
-		const resolution = Array.isArray(entry) ? entry[0] : undefined
-		const registry = Array.isArray(entry) ? entry[1] : undefined
-		const integrity = Array.isArray(entry) ? entry.at(-1) : undefined
-		const version = typeof resolution === 'string' && resolution.startsWith(`${name}@`) ? resolution.slice(name.length + 1) : ''
+		const { version, registry, integrity } = lockfileEntry(name, entry)
 		// Bun records a tarball as `<name>@<path>`, its dependencies and the sha512 of its bytes, with no registry.
 		if (isPackedTarball(packed, name, version) && integrity === packed?.packages.get(name)?.integrity) continue
 		if (!EXACT_VERSION.test(version) || registry !== '' || typeof integrity !== 'string' || !integrity.startsWith('sha512-')) {

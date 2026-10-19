@@ -23,6 +23,7 @@ export { type Finding, formatFinding } from './finding'
 export { contractReaderInputs } from './inputs'
 export { CONTRACT_FILE, MIGRATIONS_DIR, TABLES_FILE } from './layout'
 export { CONTRACT_LIMITS } from './limits'
+export { lockedRegistryVersion, LOCKFILE } from './lockfile'
 export { CHECKER_VERSION } from './version'
 
 /** Every form the reader refuses, each with its file, line, column and the allowed form. */
