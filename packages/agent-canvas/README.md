@@ -5,7 +5,7 @@ Interactive browser-based visual canvas for [Claude Code](https://docs.anthropic
 ![License](https://img.shields.io/npm/l/agent-canvas)
 ![npm](https://img.shields.io/npm/v/agent-canvas)
 
-![Agent Canvas](.github/light.png)
+![Agent Canvas](docs/light.png)
 
 ## What it does
 
@@ -27,6 +27,7 @@ bunx agent-canvas install local     # for current project only
 ```
 
 This installs:
+
 - The `/canvas` skill so Claude knows how to use it
 - A `SessionStart` hook that sets up session IDs automatically
 
@@ -48,14 +49,14 @@ Claude creates a JSX document, pushes it to a local daemon, and opens it in your
 
 Claude uses different canvas flows depending on the task:
 
-| Flow | When | Rounds |
-|------|------|--------|
-| **Feature** | Vague requests ("add auth") | Discovery → Requirements → Plan → Implementation → Summary |
-| **Plan** | Clear requirements | Plan → Implementation → Summary |
-| **Explain** | "How does X work?" | Single canvas |
-| **Review** | Code/architecture review | Findings → Fix Plan → Summary |
-| **Decision** | Choosing between options | Single canvas with comparison |
-| **Runbook** | User must complete manual setup or provide a secret | Instructions → secure handoff → command → result |
+| Flow         | When                                                | Rounds                                                     |
+| ------------ | --------------------------------------------------- | ---------------------------------------------------------- |
+| **Feature**  | Vague requests ("add auth")                         | Discovery → Requirements → Plan → Implementation → Summary |
+| **Plan**     | Clear requirements                                  | Plan → Implementation → Summary                            |
+| **Explain**  | "How does X work?"                                  | Single canvas                                              |
+| **Review**   | Code/architecture review                            | Findings → Fix Plan → Summary                              |
+| **Decision** | Choosing between options                            | Single canvas with comparison                              |
+| **Runbook**  | User must complete manual setup or provide a secret | Instructions → secure handoff → command → result           |
 
 ### Local secret handoff
 
@@ -78,21 +79,21 @@ Agent Canvas supports light and dark themes, automatically matching your system 
 
 **Dark mode**
 
-![](.github/dark.png)
+![](docs/dark.png)
 
 ## Development
 
 ### Reusable packages
 
-| Package | Use without the Agent Canvas shell |
-| --- | --- |
-| [`@fabrika/daemon-kit`](https://github.com/contember/fabrika-platform/tree/main/packages/daemon-kit) | Bun daemon lifecycle, HTTP routing, WebSocket channels and CLI waiters |
-| [`@fabrika/annotations`](https://github.com/contember/fabrika-platform/tree/main/packages/annotations) | Annotation state, editors and text/block/region locators |
-| [`@fabrika/canvas-kernel`](https://github.com/contember/fabrika-platform/tree/main/packages/canvas-kernel) | JSX compiler, revisions, renderer and interactive canvas components |
+| Package                                                                                                    | Use without the Agent Canvas shell                                     |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| [`@fabrika/daemon-kit`](https://github.com/contember/fabrika-platform/tree/main/packages/daemon-kit)       | Bun daemon lifecycle, HTTP routing, WebSocket channels and CLI waiters |
+| [`@fabrika/annotations`](https://github.com/contember/fabrika-platform/tree/main/packages/annotations)     | Annotation state, editors and text/block/region locators               |
+| [`@fabrika/canvas-kernel`](https://github.com/contember/fabrika-platform/tree/main/packages/canvas-kernel) | JSX compiler, revisions, renderer and interactive canvas components    |
 
 The kernel depends on the other two; neither depends on the kernel. All ship as
-TypeScript sources from the [`fabrika-platform`](https://github.com/contember/fabrika-platform)
-repository. See the kernel README for the breaking 0.2 import migration.
+TypeScript sources and are released together with `agent-canvas` from the
+[`fabrika-platform`](https://github.com/contember/fabrika-platform) repository.
 
 ### Local commands
 

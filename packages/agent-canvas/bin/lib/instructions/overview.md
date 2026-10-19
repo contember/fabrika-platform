@@ -17,17 +17,17 @@ Use the **Write** tool to create `.jsx` files in `${TMPDIR:-/tmp}/agent-canvas/<
 // ${TMPDIR:-/tmp}/agent-canvas/<session-id>/plan.jsx
 
 <Section title="Authentication Redesign">
-  A proposal to replace session-based auth with JWT tokens.
+	A proposal to replace session-based auth with JWT tokens.
 
-  <Item id="current" label="Current state" badge="context" badgeVariant="info">
-    The app uses express-session with Redis store.
-    <FilePreview path="src/auth/session.ts" lines={[1, 45]} />
-  </Item>
+	<Item id="current" label="Current state" badge="context" badgeVariant="info">
+		The app uses express-session with Redis store.
+		<FilePreview path="src/auth/session.ts" lines={[1, 45]} />
+	</Item>
 
-  <Item id="proposal" label="Proposed change" badge="proposal">
-    Switch to stateless JWT with refresh token rotation.
-    <Callout type="warning">This will invalidate all existing sessions.</Callout>
-  </Item>
+	<Item id="proposal" label="Proposed change" badge="proposal">
+		Switch to stateless JWT with refresh token rotation.
+		<Callout type="warning">This will invalidate all existing sessions.</Callout>
+	</Item>
 </Section>
 ```
 
@@ -35,7 +35,7 @@ Components are auto-available — no imports needed. The file can be a JSX fragm
 
 **Content is JSX, not markdown.** Children of components are plain JSX text and nested components — NOT markdown. If you want to render markdown (lists, bold, headings, etc.), use the `<Markdown>` component explicitly. Raw `**bold**` or `- list items` in JSX children will render as literal text.
 
-**JSX escaping rules.** Content is in a JSX context. You MUST escape: `<` as `{'<'}` or `&lt;`, `>` as `{'>'}` or `&gt;`, `{` as `{'{'}`  and `}` as `{'}'}`. This is critical when writing code snippets, type signatures like `Option<String>`, or any text containing angle brackets. Alternatively, put such content inside `<CodeBlock>` or `<Markdown>` which handle escaping for you.
+**JSX escaping rules.** Content is in a JSX context. You MUST escape: `<` as `{'<'}` or `&lt;`, `>` as `{'>'}` or `&gt;`, `{` as `{'{'}` and `}` as `{'}'}`. This is critical when writing code snippets, type signatures like `Option<String>`, or any text containing angle brackets. Alternatively, put such content inside `<CodeBlock>` or `<Markdown>` which handle escaping for you.
 
 ### 2. Push
 
@@ -48,6 +48,7 @@ bunx agent-canvas push ${TMPDIR:-/tmp}/agent-canvas/<session-id>/ --session <ses
 All `*.jsx` files in the directory are pushed as a snapshot. Each file appears as a separate tab. **Always show the `browserUrl` from the output to the user.**
 
 Options:
+
 - `--label <text>` — revision label shown in the UI
 - `--response <text>` — short banner explaining how you addressed prior feedback (2-4 sentences, focus on "why" not "what")
 
@@ -123,9 +124,11 @@ All components are globally available in canvas JSX — no imports needed. For i
 **Never hardcode hex colors** — use CSS variables: `var(--color-text-primary)`, `var(--color-bg-surface)`, `var(--color-accent-blue)`, etc.
 
 ### Layout
+
 - **Section** — top-level collapsible grouping with serif heading. Props: `title`, `collapsed`
 
 ### Content
+
 - **Item** — primary content block (tasks, findings, requirements). Props: `id`, `label`, `badge`, `badgeVariant`, `status`
 - **CodeBlock** — syntax-highlighted code. Props: `language`
 - **FilePreview** — project file preview. Props: `path`, `lines` ([start, end])
@@ -140,6 +143,7 @@ All components are globally available in canvas JSX — no imports needed. For i
 - **Priority** — inline priority badge. Props: `level` (high/medium/low)
 
 ### Interactive (User Input)
+
 - **Choice** — single-select radio group. Props: `id`, `label`, `options`, `required`
 - **MultiChoice** — multi-select checkboxes. Props: `id`, `label`, `options`, `required`
 - **UserInput** — free text input. Props: `id`, `label`, `placeholder`, `required`
@@ -147,6 +151,7 @@ All components are globally available in canvas JSX — no imports needed. For i
 - **RangeInput** — numeric slider. Props: `id`, `label`, `min`, `max`, `minLabel`, `maxLabel`, `required`
 
 ### Advanced
+
 - **useFeedback** — hook for custom components to contribute computed data to feedback
 - **Custom components** — use `export default function Canvas()` module format to define helpers
 
@@ -174,14 +179,14 @@ Agent needs the user to complete manual steps? → RUNBOOK flow
 
 **Adapt dynamically**: flows are guidelines, not rigid pipelines. Skip or combine phases when appropriate:
 
-| Situation | Action |
-|---|---|
-| User gave a detailed spec | Skip to PLAN (skip discovery + requirements) |
-| User said "just do it" with clear instructions | Implement directly, push summary after |
-| Simple change (< 3 files) | Probably skip canvas entirely |
-| User explicitly says "don't plan, just code" | Implement, push summary |
-| Mid-flow user says "looks good, go ahead" | Skip remaining review rounds |
-| Discovery reveals it's trivial | Collapse remaining phases into one canvas |
+| Situation                                      | Action                                       |
+| ---------------------------------------------- | -------------------------------------------- |
+| User gave a detailed spec                      | Skip to PLAN (skip discovery + requirements) |
+| User said "just do it" with clear instructions | Implement directly, push summary after       |
+| Simple change (< 3 files)                      | Probably skip canvas entirely                |
+| User explicitly says "don't plan, just code"   | Implement, push summary                      |
+| Mid-flow user says "looks good, go ahead"      | Skip remaining review rounds                 |
+| Discovery reveals it's trivial                 | Collapse remaining phases into one canvas    |
 
 **Always push a summary after implementation** unless the change was trivially small (1-2 file edit).
 

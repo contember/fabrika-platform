@@ -21,23 +21,33 @@ Previously called "Task" — Item is the generalized version.
 ```jsx
 {/* As a plan task */}
 <Item id="migrate-db" label="Run database migration" badge="todo">
-  Execute the migration script against staging first.
-  <CodeBlock language="bash">npm run migrate:staging</CodeBlock>
+	Execute the migration script against staging first.
+	<CodeBlock language="bash">npm run migrate:staging</CodeBlock>
 </Item>
 
 {/* As a review finding */}
-<Item id="finding-1" label="Missing null check in auth handler" badge="critical" badgeVariant="danger">
-  The handler doesn't check for missing tokens.
-  <FilePreview path="src/auth.ts" lines={[42, 48]} />
+<Item
+	id="finding-1"
+	label="Missing null check in auth handler"
+	badge="critical"
+	badgeVariant="danger"
+>
+	The handler doesn't check for missing tokens.
+	<FilePreview path="src/auth.ts" lines={[42, 48]} />
 </Item>
 
 {/* As a requirement */}
-<Item id="req-auth" label="JWT authentication" badge="must-have" badgeVariant="danger">
-  All API endpoints must require a valid JWT token.
+<Item
+	id="req-auth"
+	label="JWT authentication"
+	badge="must-have"
+	badgeVariant="danger"
+>
+	All API endpoints must require a valid JWT token.
 </Item>
 
 {/* As an architecture component */}
 <Item label="API Gateway" badge="core" badgeVariant="info">
-  Routes requests to downstream services. Handles rate limiting.
+	Routes requests to downstream services. Handles rate limiting.
 </Item>
 ```

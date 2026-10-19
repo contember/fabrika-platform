@@ -20,27 +20,29 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.env }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
       # Build the daemon bundles first. The root build script auto-mirrors
-      # them into workers/canvas-share/public/assets/ so the worker's
+      # them into packages/canvas-share/public/assets/ so the worker's
       # `[assets]` binding always ships the exact runtime that was pushed
       # to npm for this version — no risk of drift between the client code
       # inside a share payload and the runtime bundles served by the worker.
       - name: Build runtime bundles
-        run: bun run build
+        run: bun run --filter agent-canvas build
 
       # Ask oblaka to create/update the Cloudflare resources (R2 bucket,
       # KV namespace) for this environment and emit a fresh wrangler.jsonc
       # pointed at them. `--remote` is what triggers the actual CF API
       # calls; without it oblaka just regenerates the config file locally.
       - name: Provision Cloudflare resources
-        working-directory: workers/canvas-share
+        working-directory: packages/canvas-share
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -51,7 +53,7 @@ jobs:
       # keeps the value out of the generated wrangler.jsonc. Skipped
       # silently when no token is configured (dev envs).
       - name: Set worker secrets
-        working-directory: workers/canvas-share
+        working-directory: packages/canvas-share
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -65,7 +67,7 @@ jobs:
             | bunx wrangler secret bulk
 
       - name: Deploy worker
-        working-directory: workers/canvas-share
+        working-directory: packages/canvas-share
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

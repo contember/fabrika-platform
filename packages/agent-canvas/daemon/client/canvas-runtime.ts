@@ -1,1 +1,1 @@
-export * from "@fabrika/canvas-kernel/runtime";
+export * from '@fabrika/canvas-kernel/runtime'

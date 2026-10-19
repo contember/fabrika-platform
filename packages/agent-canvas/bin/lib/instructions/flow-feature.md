@@ -44,11 +44,28 @@ If the user selects interview areas, push follow-up canvases with deep questions
 
 ```jsx
 <Section title="Backend Deep Dive">
-  <UserInput id="data-shape" label="Describe the data shape / entities involved" required />
-  <Choice id="mutation-pattern" label="How should mutations work?"
-    options={["Sync — mutate and return", "Async — queue and process", "Event-driven — publish and react"]} />
-  <UserInput id="invariants" label="What business rules / invariants must always hold?" />
-  <UserInput id="existing-patterns" label="Any existing patterns in the codebase I should follow?" />
+	<UserInput
+		id="data-shape"
+		label="Describe the data shape / entities involved"
+		required
+	/>
+	<Choice
+		id="mutation-pattern"
+		label="How should mutations work?"
+		options={[
+			'Sync — mutate and return',
+			'Async — queue and process',
+			'Event-driven — publish and react',
+		]}
+	/>
+	<UserInput
+		id="invariants"
+		label="What business rules / invariants must always hold?"
+	/>
+	<UserInput
+		id="existing-patterns"
+		label="Any existing patterns in the codebase I should follow?"
+	/>
 </Section>
 ```
 

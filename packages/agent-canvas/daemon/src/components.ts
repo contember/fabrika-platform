@@ -6,8 +6,8 @@
  * through `#canvas/components`. A name here with no matching export renders as
  * undefined.
  */
-import type { CanvasComponents } from "@fabrika/canvas-kernel/server";
+import type { CanvasComponents } from '@fabrika/canvas-kernel/server'
 
 export const HOST_COMPONENTS: CanvasComponents = {
-  SecretInput: { requiredProps: { id: "string", label: "string", env: "string" } },
-};
+	SecretInput: { requiredProps: { id: 'string', label: 'string', env: 'string' } },
+}

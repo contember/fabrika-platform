@@ -5,6 +5,7 @@ Canvas supports light/dark themes. **Never hardcode hex colors** — use CSS var
 ## CSS Variables
 
 ### Text
+
 - `--color-text-primary` — main text
 - `--color-text-secondary` — supporting text
 - `--color-text-tertiary` — meta text, labels
@@ -12,6 +13,7 @@ Canvas supports light/dark themes. **Never hardcode hex colors** — use CSS var
 - `--color-text-inverse` — text on dark backgrounds
 
 ### Backgrounds
+
 - `--color-bg-base` — page background
 - `--color-bg-surface` — card/section background
 - `--color-bg-elevated` — floating elements
@@ -19,17 +21,20 @@ Canvas supports light/dark themes. **Never hardcode hex colors** — use CSS var
 - `--color-bg-input` — form input background
 
 ### Accents
+
 - `--color-accent-green`, `--color-accent-green-muted`
 - `--color-accent-amber`, `--color-accent-amber-muted`
 - `--color-accent-red`, `--color-accent-red-muted`
 - `--color-accent-blue`, `--color-accent-blue-muted`
 
 ### Borders
+
 - `--color-border-subtle` — light separators
 - `--color-border-medium` — visible borders
 - `--color-border-hover` — interactive hover state
 
 ### Fonts
+
 - `--font-heading` — section headings (Instrument Serif)
 - `--font-body` — body text (Inter)
 - `--font-mono` — code (JetBrains Mono)

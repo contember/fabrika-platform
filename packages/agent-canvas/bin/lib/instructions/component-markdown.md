@@ -5,7 +5,8 @@ Renders markdown content with full GFM support (headings, lists, tables, code bl
 ## Inline source — markdown as children
 
 ```jsx
-<Markdown>{`
+<Markdown>
+	{`
 # Summary
 
 This is **bold** and *italic*. Here's a list:
@@ -17,7 +18,8 @@ This is **bold** and *italic*. Here's a list:
 \`\`\`typescript
 const x = 42;
 \`\`\`
-`}</Markdown>
+`}
+</Markdown>
 ```
 
 ## File reference — loads file content at compile time

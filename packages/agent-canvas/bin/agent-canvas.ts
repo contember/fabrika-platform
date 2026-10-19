@@ -1,16 +1,16 @@
 #!/usr/bin/env bun
 
-import { handlePush } from "./lib/commands/push.ts";
-import { handleFetch } from "./lib/commands/fetch.ts";
-import { handleWatch } from "./lib/commands/watch.ts";
-import { handleDaemon } from "./lib/commands/daemon.ts";
-import { handleInstall } from "./lib/commands/install.ts";
-import { handleInstructions } from "./lib/commands/instructions.ts";
-import { handleExec } from "./lib/commands/exec.ts";
-import { VERSION } from "./lib/config.ts";
+import { handleDaemon } from './lib/commands/daemon.ts'
+import { handleExec } from './lib/commands/exec.ts'
+import { handleFetch } from './lib/commands/fetch.ts'
+import { handleInstall } from './lib/commands/install.ts'
+import { handleInstructions } from './lib/commands/instructions.ts'
+import { handlePush } from './lib/commands/push.ts'
+import { handleWatch } from './lib/commands/watch.ts'
+import { VERSION } from './lib/config.ts'
 
 function printUsage() {
-  console.log(`agent-canvas v${VERSION} — Interactive visual canvas for Claude Code
+	console.log(`agent-canvas v${VERSION} — Interactive visual canvas for Claude Code
 
 Commands:
   agent-canvas install [local|global]  Install skill for Claude Code
@@ -26,41 +26,48 @@ Commands:
   agent-canvas daemon restart          Restart the daemon
 
 Environment:
-  CANVAS_PORT           Daemon port (default: 19400)`);
+  CANVAS_PORT           Daemon port (default: 19400)`)
 }
 
 async function main() {
-  const args = process.argv.slice(2);
+	const args = process.argv.slice(2)
 
-  if (args[0] === "--version" || args[0] === "-v") {
-    console.log(VERSION);
-    return;
-  }
+	if (args[0] === '--version' || args[0] === '-v') {
+		console.log(VERSION)
+		return
+	}
 
-  if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
-    printUsage();
-    process.exit(args.length === 0 ? 1 : 0);
-  }
+	if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+		printUsage()
+		process.exit(args.length === 0 ? 1 : 0)
+	}
 
-  const command = args[0];
-  const rest = args.slice(1);
+	const command = args[0]
+	const rest = args.slice(1)
 
-  switch (command) {
-    case "push": return handlePush(rest);
-    case "fetch": return handleFetch(rest);
-    case "watch": return handleWatch(rest);
-    case "exec": return handleExec(rest);
-    case "instructions": return handleInstructions(rest);
-    case "install": return handleInstall(rest);
-    case "daemon": return handleDaemon(rest);
-    default:
-      console.error(`Unknown command: ${command}`);
-      printUsage();
-      process.exit(1);
-  }
+	switch (command) {
+		case 'push':
+			return handlePush(rest)
+		case 'fetch':
+			return handleFetch(rest)
+		case 'watch':
+			return handleWatch(rest)
+		case 'exec':
+			return handleExec(rest)
+		case 'instructions':
+			return handleInstructions(rest)
+		case 'install':
+			return handleInstall(rest)
+		case 'daemon':
+			return handleDaemon(rest)
+		default:
+			console.error(`Unknown command: ${command}`)
+			printUsage()
+			process.exit(1)
+	}
 }
 
 main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+	console.error(e)
+	process.exit(1)
+})

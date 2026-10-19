@@ -17,11 +17,11 @@ using [`oblaka-iac`](https://github.com/contember/oblaka). The committed
 [`oblaka.ts`](oblaka.ts) is the source of truth; `wrangler.jsonc` is
 auto-generated and **gitignored** — never edit it by hand.
 
-| Command | Generates | Used for |
-|---|---|---|
-| `bun run oblaka` | `wrangler.jsonc` (env `local`) | local dev via Miniflare |
-| `bun run oblaka:stage` | `wrangler.jsonc` (env `stage`) | staging deploy |
-| `bun run oblaka:prod` | `wrangler.jsonc` (env `prod`) | production deploy |
+| Command                | Generates                      | Used for                |
+| ---------------------- | ------------------------------ | ----------------------- |
+| `bun run oblaka`       | `wrangler.jsonc` (env `local`) | local dev via Miniflare |
+| `bun run oblaka:stage` | `wrangler.jsonc` (env `stage`) | staging deploy          |
+| `bun run oblaka:prod`  | `wrangler.jsonc` (env `prod`)  | production deploy       |
 
 `oblaka-iac` auto-prefixes R2 bucket and KV namespace names with the env
 (e.g. `canvas-share-blobs` becomes `stage-canvas-share-blobs`) so the same
@@ -30,7 +30,7 @@ config produces isolated stage and prod resources.
 ## Local development
 
 ```bash
-cd workers/canvas-share
+cd packages/canvas-share
 bun install
 
 # Build daemon bundles AND auto-copy them into ./public/assets
@@ -40,7 +40,7 @@ bun run build
 # Start the worker locally via Miniflare (no Cloudflare account needed).
 # `bun run dev` runs `oblaka` first to regenerate wrangler.jsonc, then
 # starts wrangler dev --local.
-cd workers/canvas-share
+cd packages/canvas-share
 bun run dev
 
 # Point the daemon at it
@@ -53,7 +53,7 @@ Then click **Share** on any revision in the canvas UI.
 ## Testing
 
 ```bash
-cd workers/canvas-share
+cd packages/canvas-share
 bun test            # unit tests for validation, util
 bun run typecheck   # typecheck src/
 ```
@@ -62,12 +62,12 @@ bun run typecheck   # typecheck src/
 
 The repo ships GitHub Actions workflows that deploy the worker automatically:
 
-| Workflow | Trigger | Env |
-|---|---|---|
-| `deploy-worker-stage.yml` | Push to `main` touching `workers/canvas-share/**`, `daemon/client/**`, or `daemon/build.ts` | `stage` |
-| `deploy-worker-prod.yml` | Version tag push (`v*`) | `prod` |
+| Workflow                        | Trigger                                                                                                                                  | Env     |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `canvas-share-deploy-stage.yml` | Push to `main` touching `packages/canvas-share/**`, `packages/agent-canvas/daemon/client/**`, or `packages/agent-canvas/daemon/build.ts` | `stage` |
+| `canvas-share-deploy-prod.yml`  | Release tag push (`v*`)                                                                                                                  | `prod`  |
 
-Both call the reusable `deploy-worker.yml` which:
+Both call the reusable `canvas-share-deploy.yml`, which:
 
 1. Installs deps + builds the daemon runtime bundles (auto-mirrored into `public/assets/`)
 2. Runs `bunx oblaka oblaka.ts --env <env> --remote` to create or update the R2 bucket and KV namespace on Cloudflare
@@ -76,12 +76,12 @@ Both call the reusable `deploy-worker.yml` which:
 
 ### Required GitHub secrets
 
-| Secret | Purpose |
-|---|---|
-| `CLOUDFLARE_API_TOKEN` | Token with Workers + R2 + KV permissions on the target account |
-| `CLOUDFLARE_ACCOUNT_ID` | Account id the worker deploys to |
-| `SHARE_AUTH_TOKEN_STAGE` | Bearer token daemons must use to POST to stage (optional) |
-| `SHARE_AUTH_TOKEN_PROD` | Bearer token daemons must use to POST to prod (optional) |
+| Secret                   | Purpose                                                        |
+| ------------------------ | -------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`   | Token with Workers + R2 + KV permissions on the target account |
+| `CLOUDFLARE_ACCOUNT_ID`  | Account id the worker deploys to                               |
+| `SHARE_AUTH_TOKEN_STAGE` | Bearer token daemons must use to POST to stage (optional)      |
+| `SHARE_AUTH_TOKEN_PROD`  | Bearer token daemons must use to POST to prod (optional)       |
 
 Both stage and prod use the same Cloudflare account; oblaka auto-prefixes resource names so stage and prod get separate `stage-canvas-share-blobs` and `prod-canvas-share-blobs` buckets (same for KV).
 
@@ -110,7 +110,7 @@ If you'd rather deploy by hand instead of via CI:
    ```bash
    cd ../..
    bun run build
-   cd workers/canvas-share
+   cd packages/canvas-share
    bun run deploy:prod   # or deploy:stage
    ```
 
@@ -125,28 +125,28 @@ The Share button in the canvas UI lights up once the daemon sees `CANVAS_SHARE_E
 
 ## Endpoints
 
-| Method | Path                               | Purpose                                         | Auth                |
-|--------|------------------------------------|-------------------------------------------------|---------------------|
-| GET    | `/health`                          | Health check                                    | none                |
-| POST   | `/shares`                          | Create a new share                              | `SHARE_AUTH_TOKEN`  |
-| POST   | `/shares/:shareId/revoke`          | Revoke / delete a share                         | `ownerToken`        |
-| GET    | `/shares/:shareId/feedback?since=` | List feedback entries (called by daemon poller) | none (capability)   |
-| GET    | `/s/:shareId`                      | HTML shell for reviewers                        | none (capability)   |
-| GET    | `/s/:shareId/meta`                 | Share metadata                                  | none                |
-| GET    | `/s/:shareId/canvas/:filename`     | Serve compiled canvas JS / JSX source           | none                |
-| POST   | `/s/:shareId/feedback`             | Submit feedback (called by reviewer browser)    | none                |
-| POST   | `/s/:shareId/upload`               | Upload annotation image                         | none                |
-| GET    | `/s/:shareId/uploads/:filename`    | Serve uploaded image                            | none                |
+| Method | Path                               | Purpose                                         | Auth               |
+| ------ | ---------------------------------- | ----------------------------------------------- | ------------------ |
+| GET    | `/health`                          | Health check                                    | none               |
+| POST   | `/shares`                          | Create a new share                              | `SHARE_AUTH_TOKEN` |
+| POST   | `/shares/:shareId/revoke`          | Revoke / delete a share                         | `ownerToken`       |
+| GET    | `/shares/:shareId/feedback?since=` | List feedback entries (called by daemon poller) | none (capability)  |
+| GET    | `/s/:shareId`                      | HTML shell for reviewers                        | none (capability)  |
+| GET    | `/s/:shareId/meta`                 | Share metadata                                  | none               |
+| GET    | `/s/:shareId/canvas/:filename`     | Serve compiled canvas JS / JSX source           | none               |
+| POST   | `/s/:shareId/feedback`             | Submit feedback (called by reviewer browser)    | none               |
+| POST   | `/s/:shareId/upload`               | Upload annotation image                         | none               |
+| GET    | `/s/:shareId/uploads/:filename`    | Serve uploaded image                            | none               |
 
 ## Rate limits
 
 Per-IP, per-minute, sliding window (KV-backed). Tweak in [`src/types.ts`](src/types.ts).
 
-| Bucket          | Limit |
-|-----------------|-------|
-| Share creation  | 5/min |
-| Feedback POST   | 20/min/share |
-| Upload          | 30/min/share |
+| Bucket         | Limit        |
+| -------------- | ------------ |
+| Share creation | 5/min        |
+| Feedback POST  | 20/min/share |
+| Upload         | 30/min/share |
 
 ## Security model
 

@@ -12,8 +12,12 @@ Multi-select checkboxes.
 ## Usage
 
 ```jsx
-<MultiChoice id="affected-areas" label="Which areas need changes?" required
-  options={["Models", "API", "Frontend", "Tests"]} />
+<MultiChoice
+	id="affected-areas"
+	label="Which areas need changes?"
+	required
+	options={['Models', 'API', 'Frontend', 'Tests']}
+/>
 ```
 
 Appears in feedback as: `[affected-areas]: Models, API, Tests`

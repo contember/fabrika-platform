@@ -1,9 +1,0 @@
-node_modules/
-dist/
-*.compiled.js
-~/.planner/
-.DS_Store
-.claude/settings.local.json
-.claude/agent-canvas
-**/*.tsbuildinfo
-
