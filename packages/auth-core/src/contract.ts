@@ -471,6 +471,11 @@ export interface DeclaredReach {
 	readonly then?: string
 	/** The mail transport this job reaches: the installation's or its own; absent unless declared. */
 	readonly mailer?: JobMailer
+	/**
+	 * A public procedure's workload actions, sorted: all its handler holds, through the key Control issues for the
+	 * endpoint (`contractWorkloads`). Present only on a public procedure's entry, so every other digest stays.
+	 */
+	readonly actions?: readonly string[]
 }
 
 /** The mail transports a job may declare: the installation's default, or the application's own. */

@@ -87,7 +87,7 @@ function appSchemaError(issues: readonly z.ZodIssue[]): string {
 	}
 	if (field === 'workloads') {
 		return typeof key === 'number'
-			? "each workload needs a kind of 'job' or 'webhook', a name and an array of exact actions"
+			? "each workload needs a kind of 'job', 'webhook', 'public' or 'app', a name and an array of exact actions"
 			: 'workloads must be an array'
 	}
 	if (field === 'members' || field === 'directory') {

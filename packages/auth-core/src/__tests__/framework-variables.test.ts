@@ -55,6 +55,18 @@ describe('framework-only variable names', () => {
 		}
 	})
 
+	test("name a public procedure's key after its endpoint id, apart from every other id and from FABRIKA_PUBLIC_*", () => {
+		const cta = workloadKeyVariable('public', 'api.stats.cta')
+		expect(cta).toMatch(/^FABRIKA_PROCEDURE_API_STATS_CTA_[0-9A-F]{8}_KEY$/)
+		expect(cta).toBe(workloadKeyVariable('public', 'api.stats.cta'))
+		expect(isWorkloadKeyVariable(cta)).toBe(true)
+		expect(isFrameworkVariableName(cta)).toBe(true)
+		const lookalikes = ['api.stats_cta', 'api_stats.cta', 'api.statsCta', 'api.stats.Cta', 'apiStats.cta']
+		const variables = new Set([cta, ...lookalikes.map((id) => workloadKeyVariable('public', id))])
+		expect(variables.size).toBe(lookalikes.length + 1)
+		expect(isFrameworkVariableName('FABRIKA_PUBLIC_API_ORIGIN')).toBe(false)
+	})
+
 	test("name a connector import's variables and binding after the import", () => {
 		expect(connectVariables('productCatalog')).toEqual({
 			url: 'FABRIKA_CONNECT_PRODUCT_CATALOG_URL',

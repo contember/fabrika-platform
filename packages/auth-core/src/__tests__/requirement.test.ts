@@ -53,10 +53,11 @@ describe('callerOf', () => {
 		expect(callerOf(base)).toBe('link')
 	})
 
-	test('a connector key of application <id> is the caller app:<id>; a job or a webhook key is no caller', () => {
+	test('a connector key of application <id> is the caller app:<id>; a job, webhook or public procedure key is no caller', () => {
 		expect(callerOf({ ...base, ptype: 'app', workload: 'shop' })).toBe('app:shop')
 		expect(callerOf({ ...base, ptype: 'job', workload: 'nightly' })).toBeNull()
 		expect(callerOf({ ...base, ptype: 'webhook', workload: 'github' })).toBeNull()
+		expect(callerOf({ ...base, ptype: 'public', workload: 'api.stats.cta' })).toBeNull()
 		expect(callerOf({ ...base, ptype: 'app' })).toBeNull()
 	})
 

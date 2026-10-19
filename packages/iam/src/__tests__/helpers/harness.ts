@@ -262,10 +262,11 @@ export async function adminTokenFor(repositories: IamRepositories, principalId: 
 	}))
 }
 
-export function createHarness(): Harness {
+/** A harness over a fresh in-memory database with `schema` applied: every shipped migration by default. */
+export function createHarness(schema = migration): Harness {
 	const sqlite = new Database(':memory:')
 	sqlite.exec('PRAGMA foreign_keys = ON')
-	sqlite.exec(migration)
+	sqlite.exec(schema)
 	const repositories = createIamRepositories(new TestSqlDatabase(sqlite))
 
 	function makeServices(options: MakeServicesOptions = {}): Services {

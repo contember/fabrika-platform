@@ -8,13 +8,14 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import { createLocalJWKSet, jwtVerify } from 'jose'
 import { resolveAdmin } from '../admin/router'
 import { createIamApp } from '../app'
-import { resolveCaller } from '../auth'
+import { resolveCaller, resolveLinkCaller } from '../auth'
 import type { Env } from '../env'
 import { prop } from '../json'
 import { WorkloadGrantError } from '../repositories/grants'
 import { getSigner } from '../signing'
 import { mintFromKey } from '../tokens'
 import { CONSOLE_APP, createHarness, type Harness, seedGrant, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
+import { migrationFile, migrationsBefore } from './helpers/migrations'
 
 const ISSUER = 'https://propustka.test'
 const PROVISIONING_KEY = `px_${'p'.repeat(43)}`
@@ -70,7 +71,7 @@ interface Issued {
 }
 
 interface IssueInput {
-	kind: 'job' | 'webhook' | 'app'
+	kind: 'job' | 'webhook' | 'public' | 'app'
 	name: string
 	expiresAt?: number
 	app?: string
@@ -157,6 +158,87 @@ describe('a workload key', () => {
 		expect(await resolveCaller(services, { ...TEST_SIGNING_ENV, FABRIKA_IAM_PROVISIONING_KEY: '' }, { app: APP, credential: job.key, requestId: 'r' }))
 			.toEqual({ ok: false, reason: 'invalid_token' })
 		expect((await call(h, '/admin/rpc', { method: 'POST', bearer: job.key, body: { method: 'me', input: undefined } })).status).toBe(401)
+	})
+})
+
+describe("a public procedure's key", () => {
+	const publicSchema = (workloads: AppSchema['workloads'], roles: AppSchema['roles'] = {}): AppSchema => ({
+		...schema(workloads),
+		actions: [{ action: 'notes.read' }, { action: 'stats.click' }],
+		roles: { editor: { name: 'Editor', permissions: ['notes.read'] }, ...roles },
+	})
+
+	test('mints a public token naming the full endpoint id, with exactly the actions the schema declares', async () => {
+		const h = createHarness()
+		expect((await reconcile(h, publicSchema([{ kind: 'public', name: 'api.stats.cta', actions: ['stats.click'] }]))).status).toBe(200)
+		const cta = await issued(h, { kind: 'public', name: 'api.stats.cta' })
+		const claims = await minted(h, cta.key)
+		if (typeof claims === 'string') throw new Error(claims)
+		expect(claims.ptype).toBe('public')
+		expect(claims.workload).toBe('api.stats.cta')
+		expect(actionsOf(claims)).toEqual(['stats.click@global'])
+		const answer = await call(h, WORKLOAD_TOKEN_PATH, { method: 'POST', bearer: cta.key, body: { app: APP } })
+		expect(prop(await answer.json(), 'ok')).toBe(true)
+	})
+
+	test('one group mounted twice is two workloads, each with its own key and its own actions', async () => {
+		const h = createHarness()
+		const workloads: AppSchema['workloads'] = [
+			{ kind: 'public', name: 'api.stats.cta', actions: ['stats.click'] },
+			{ kind: 'public', name: 'site.stats.cta', actions: ['notes.read', 'stats.click'] },
+		]
+		expect((await reconcile(h, publicSchema(workloads, { editor: { name: 'Editor', permissions: [] } }))).status).toBe(200)
+		const api = await issued(h, { kind: 'public', name: 'api.stats.cta' })
+		const site = await issued(h, { kind: 'public', name: 'site.stats.cta' })
+		expect(api.principalId).not.toBe(site.principalId)
+		expect(actionsOf(await minted(h, api.key))).toEqual(['stats.click@global'])
+		expect(actionsOf(await minted(h, site.key))).toEqual(['notes.read@global', 'stats.click@global'])
+	})
+
+	test('is revoked when the schema stops declaring the procedure, and calls no management or link operation', async () => {
+		const h = createHarness()
+		expect((await reconcile(h, publicSchema([{ kind: 'public', name: 'api.stats.cta', actions: ['stats.click'] }]))).status).toBe(200)
+		const cta = await issued(h, { kind: 'public', name: 'api.stats.cta' })
+		const services = h.makeServices({ environment: 'stage', issuer: ISSUER })
+		const signing = { ...TEST_SIGNING_ENV, FABRIKA_IAM_PROVISIONING_KEY: '' }
+		expect(await resolveCaller(services, signing, { app: APP, credential: cta.key, requestId: 'r' })).toEqual({ ok: false, reason: 'invalid_token' })
+		expect(await resolveLinkCaller(services, signing, { app: APP, credential: cta.key, requestId: 'r' })).toEqual({
+			ok: false,
+			reason: 'invalid_token',
+		})
+		expect((await call(h, '/admin/rpc', { method: 'POST', bearer: cta.key, body: { method: 'me', input: undefined } })).status).toBe(401)
+		expect((await reconcile(h, publicSchema([]))).status).toBe(200)
+		expect(await minted(h, cta.key)).toBe('invalid_key')
+	})
+
+	test('is refused for an action a role grants, a name that is no endpoint id, or no action at all', async () => {
+		const h = createHarness()
+		expect((await reconcile(h, publicSchema([{ kind: 'public', name: 'api.stats.cta', actions: ['notes.read'] }]))).status).toBe(400)
+		expect((await reconcile(h, publicSchema([{ kind: 'public', name: 'cta', actions: ['stats.click'] }]))).status).toBe(400)
+		expect((await reconcile(h, publicSchema([{ kind: 'public', name: 'api.stats.cta', actions: [] }]))).status).toBe(400)
+		expect((await issueKey(h, { kind: 'public', name: 'cta' })).status).toBe(400)
+		expect((await issueKey(h, { kind: 'job', name: 'api.stats.cta' })).status).toBe(400)
+	})
+})
+
+describe('an installation upgraded to the public workload kind', () => {
+	test('keeps every job, webhook and connector workload, and each key still mints what it minted', async () => {
+		const h = createHarness(migrationsBefore('0020_public_workloads.sql'))
+		const workloads: AppSchema['workloads'] = [
+			{ kind: 'job', name: 'nightly', actions: ['notes.purge'] },
+			{ kind: 'webhook', name: 'github', actions: ['notes.read'] },
+			{ kind: 'app', name: 'shop', actions: ['notes.read'] },
+		]
+		expect((await reconcile(h, schema(workloads))).status).toBe(200)
+		const keys = await Promise.all(workloads.map((workload) => issued(h, { kind: workload.kind, name: workload.name })))
+		const before = await Promise.all(keys.map(async (key) => actionsOf(await minted(h, key.key))))
+		h.sqlite.exec(migrationFile('0020_public_workloads.sql'))
+		expect(await Promise.all(keys.map(async (key) => actionsOf(await minted(h, key.key))))).toEqual(before)
+		expect(before).toEqual([['notes.purge@global'], ['notes.read@global'], ['notes.read@global']])
+		const job = await minted(h, keys[0]?.key ?? '')
+		expect(typeof job === 'string' ? job : [job.ptype, job.workload]).toEqual(['job', 'nightly'])
+		expect((await reconcile(h, schema([...workloads, { kind: 'public', name: 'api.notes.submit', actions: ['notes.purge'] }]))).status).toBe(200)
+		expect(actionsOf(await minted(h, (await issued(h, { kind: 'public', name: 'api.notes.submit' })).key))).toEqual(['notes.purge@global'])
 	})
 })
 

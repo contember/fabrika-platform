@@ -3,9 +3,11 @@ import {
 	BUILTIN_ROLE_KEYS,
 	displayNameProblem,
 	isActionAllowed,
+	isOwnWorkloadName,
 	LOCALES,
 	mailTemplateProblems,
 	type MessageKind,
+	WORKLOAD_NAME,
 } from '@fabrika/auth-core'
 import { z } from 'zod'
 
@@ -46,8 +48,10 @@ const delegationSchema = z.object({
 	purpose: z.enum(['members', 'creates']),
 })
 
-/** A job or webhook name of a contract; an `app` workload is named by the consuming application's id. */
-const WORKLOAD_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/
+/**
+ * A job or webhook name of a contract; a public procedure is named by its endpoint id, an `app` workload by the
+ * consuming application's id.
+ */
 const APP_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
 const workloadSchema = z.discriminatedUnion('kind', [
 	z.object({
@@ -57,6 +61,11 @@ const workloadSchema = z.discriminatedUnion('kind', [
 		issues: z.string().min(1).optional(),
 	}),
 	z.object({ kind: z.literal('webhook'), name: z.string().regex(WORKLOAD_NAME), actions: z.array(z.string().min(1)) }),
+	z.object({
+		kind: z.literal('public'),
+		name: z.string().refine((name) => isOwnWorkloadName('public', name), 'a public procedure is named by its endpoint id'),
+		actions: z.array(z.string().min(1)).min(1),
+	}),
 	z.object({ kind: z.literal('app'), name: z.string().regex(APP_ID), actions: z.array(z.string().min(1)) }),
 ])
 
@@ -164,6 +173,19 @@ function membershipIssues(schema: z.infer<typeof appSchemaShape>): Issue[] {
 				issues.push({
 					path: ['workloads', index, 'issues'],
 					message: `job ${quote(workload.name)} issues links of ${quote(workload.issues)} without holding its issuedBy and every grant`,
+				})
+			}
+		}
+	}
+	// A role change would otherwise widen what anyone may reach through a public procedure, unseen by its approval.
+	const granted = new Set(Object.values(schema.roles).flatMap((role) => role.permissions))
+	for (const [index, workload] of (schema.workloads ?? []).entries()) {
+		if (workload.kind !== 'public') continue
+		for (const [position, action] of workload.actions.entries()) {
+			if (granted.has(action)) {
+				issues.push({
+					path: ['workloads', index, 'actions', position],
+					message: `public procedure ${quote(workload.name)} holds ${quote(action)}, which a role grants; a public action is held by no role`,
 				})
 			}
 		}

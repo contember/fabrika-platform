@@ -22,6 +22,7 @@ import type {
 	PrincipalAffiliation,
 	PrincipalType,
 	RoleDef,
+	WorkloadKind,
 } from '@fabrika/auth-core'
 
 // ── Common wrappers ───────────────────────────────────────────────────────────
@@ -487,7 +488,7 @@ export interface ListAuthLogInput {
 type RpcProcedure<TInput, TOutput> = RpcProcedureContract<TInput, TOutput>
 
 /** Browser-safe typed contract for the IAM administration API. */
-// ── Workload keys (Control's reconcile of jobs and webhooks) ──────────────────
+// ── Workload keys (Control's reconcile of jobs, webhooks and public procedures) ──────────────────
 
 /**
  * Issue a fresh key for one workload of an application (ADR-0022 "Principal kinds"). The key resolves to the actions
@@ -496,8 +497,11 @@ type RpcProcedure<TInput, TOutput> = RpcProcedureContract<TInput, TOutput>
 export interface IssueWorkloadKeyRequest {
 	/** The IAM application id `<app>@<env>`. */
 	app: string
-	/** `app` is the connector of the application named `name`, which consumes an export of `app`. */
-	kind: 'job' | 'webhook' | 'app'
+	/**
+	 * `public` is a public procedure, named by its endpoint id; `app` is the connector of the application named `name`,
+	 * which consumes an export of `app`.
+	 */
+	kind: WorkloadKind
 	name: string
 	/** Absolute expiry (unix seconds), after now and at most 30 days ahead. */
 	expiresAt: number
@@ -522,7 +526,7 @@ export interface IssueWorkloadKeyResponse {
  */
 export interface RevokeWorkloadKeysRequest {
 	app: string
-	kind: 'job' | 'webhook' | 'app'
+	kind: WorkloadKind
 	name: string
 }
 

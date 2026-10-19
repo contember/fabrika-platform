@@ -1,5 +1,5 @@
 import { type AuthContext, ForbiddenError, initRpc, type RpcRouterFor, toErrorResponse, UnauthorizedError } from '@fabrika/app'
-import { permits, scopedValues } from '@fabrika/auth-core'
+import { permits, scopedValues, WORKLOAD_KINDS } from '@fabrika/auth-core'
 import type { IamAdminRpcContract } from '@fabrika/iam-contract'
 import { z } from 'zod'
 import type { IamAppContext } from '../app'
@@ -139,12 +139,12 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	workloads: t.router({
 		issueKey: t.procedure
 			.input(
-				z.object({ app: nonEmpty, kind: z.enum(['job', 'webhook', 'app']), name: nonEmpty, expiresAt: z.number().int(), keep: nonEmpty.nullable() }),
+				z.object({ app: nonEmpty, kind: z.enum(WORKLOAD_KINDS), name: nonEmpty, expiresAt: z.number().int(), keep: nonEmpty.nullable() }),
 			)
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.issueWorkloadKey(context(ctx), input)),
 		revokeKeys: t.procedure
-			.input(z.object({ app: nonEmpty, kind: z.enum(['job', 'webhook', 'app']), name: nonEmpty }))
+			.input(z.object({ app: nonEmpty, kind: z.enum(WORKLOAD_KINDS), name: nonEmpty }))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.revokeWorkloadKeys(context(ctx), input)),
 	}),

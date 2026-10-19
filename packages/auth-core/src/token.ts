@@ -26,7 +26,8 @@ import { numberField, prop, stringField } from './json'
 import { isNormalizedMailbox } from './membership'
 import { isCimdClientId, isOAuthResourceUri, parseOAuthScopes } from './oauth'
 import type { ResolvedPrincipal } from './rpc'
-import { isWorkloadKind, type PermissionEntry, type PermissionSource, type Scope, type TokenPrincipalType } from './types'
+import { isWorkloadKind, type PermissionEntry, type PermissionSource, type Scope, type TokenPrincipalType, type WorkloadKind } from './types'
+import { isOwnWorkloadName } from './workloads'
 
 // ── Names & knobs on the wire (both sides agree) ───────────────────────────────
 
@@ -99,8 +100,8 @@ export interface AccessTokenClaims {
 	/** Present only when the token is bound to a principal (`sub` is that principal). */
 	ptype?: TokenPrincipalType
 	/**
-	 * Present exactly when `ptype` is a workload kind: the job's or the webhook's name, or for `app` the id of the
-	 * consuming application, which the proxy admits as the caller `app:<id>`.
+	 * Present exactly when `ptype` is a workload kind: the job's or the webhook's name, a public procedure's endpoint id,
+	 * or for `app` the id of the consuming application, which the proxy admits as the caller `app:<id>`.
 	 */
 	workload?: string
 	/** Audit actor label — the principal's label, or the credential label, or null (anonymous). */
@@ -266,7 +267,8 @@ export function buildAccessClaims(params: AccessTokenParams): AccessTokenClaims 
 	if (params.type !== undefined) {
 		claims.ptype = params.type
 	}
-	if (isWorkloadKind(params.type) !== (params.workload !== undefined) || (params.workload !== undefined && !isWorkloadName(params.workload))) {
+	const kind = isWorkloadKind(params.type) ? params.type : null
+	if (kind === null ? params.workload !== undefined : params.workload === undefined || !isWorkloadName(kind, params.workload)) {
 		throw new Error('A workload token names its workload, and only a workload token does')
 	}
 	if (params.workload !== undefined) {
@@ -356,8 +358,9 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 /** A job, webhook or mount name, or an application id. */
 const WORKLOAD_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 
-function isWorkloadName(value: string): boolean {
-	return WORKLOAD_NAME.test(value)
+/** A public procedure is named by its endpoint id; every other workload by a name or an application id. */
+function isWorkloadName(kind: WorkloadKind, value: string): boolean {
+	return kind === 'public' ? isOwnWorkloadName('public', value) : WORKLOAD_NAME.test(value)
 }
 
 /** A workload kind requires its name and every other kind refuses one: the name → the name, none → null, else undefined. */
@@ -365,7 +368,7 @@ function parseWorkload(value: unknown, ptype: TokenPrincipalType | null): string
 	if (!isWorkloadKind(ptype)) {
 		return value === undefined ? null : undefined
 	}
-	return typeof value === 'string' && isWorkloadName(value) ? value : undefined
+	return typeof value === 'string' && isWorkloadName(ptype, value) ? value : undefined
 }
 
 /** Absent → null; a normalized mailbox on a user token → it; anything else → undefined. */

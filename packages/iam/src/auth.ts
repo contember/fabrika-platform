@@ -87,7 +87,7 @@ export async function resolveCaller(services: Services, env: CallerEnv, input: C
 
 /**
  * The caller of `issueLink` or `revokeLink`: a member caller, or a job (`type: 'job'`), which IAM then holds to the link
- * mount its current declaration names. A webhook or a connector key calls neither.
+ * mount its current declaration names. A webhook, a public procedure or a connector key calls neither.
  */
 export async function resolveLinkCaller(services: Services, env: CallerEnv, input: CallerInput): Promise<CallerResolution<PrincipalType | 'job'>> {
 	const resolution = await resolveAnyCaller(services, env, input)
@@ -95,7 +95,7 @@ export async function resolveLinkCaller(services: Services, env: CallerEnv, inpu
 		return resolution
 	}
 	const { type, ...caller } = resolution.caller
-	if (type === 'webhook' || type === 'app') {
+	if (type === 'webhook' || type === 'public' || type === 'app') {
 		return INVALID_TOKEN
 	}
 	return { ok: true, caller: { ...caller, ...(type === undefined ? {} : { type }) }, verifiedApp: resolution.verifiedApp }

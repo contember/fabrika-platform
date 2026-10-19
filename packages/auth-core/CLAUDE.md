@@ -9,7 +9,7 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # app-environment · canonical-path · contract-canonical · device · endpoint-digest · endpoints · environment · framework-variables · json · locale · permissions · requirement · resource-token · sha256 · token · wire
+bun test               # app-environment · canonical-path · contract-canonical · device · endpoint-digest · endpoints · environment · framework-variables · json · locale · permissions · requirement · resource-token · sha256 · token · wire · workloads
 ```
 
 | Module                     | What it owns                                                                                                                                                                                                              |
@@ -32,6 +32,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `oauth.ts`                 | The OAuth 2.1 primitives IAM, the proxy and resource servers share: resource URIs, CIMD client ids, scopes.                                                                                                               |
 | `membership.ts`            | `IamMembershipRpc` — delegation grants, scope creation, membership and share links — and its input/result types; `endpointMembers`, `endpointDirectory` and `endpointAppDirectory` (what `ctx.members` an endpoint gets). |
 | `types.ts`                 | `AppSchema`, `Scope`, `PermissionEntry`, `PrincipalType`, `WorkloadKind`.                                                                                                                                                 |
+| `workloads.ts`             | `contractWorkloads` — a contract's jobs, webhooks and public procedures with their actions — and the workload name rules.                                                                                                 |
 | `wire.ts`                  | The proxy→app header names, `FABRIKA_HOP_HEADERS` (every one, all stripped), the proxy secret and `proxySecretVariable`.                                                                                                  |
 | `environment.ts`           | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.                                                                                                                             |
 | `framework-variables.ts`   | `FRAMEWORK_VARIABLE_NAMES` — the names only the platform writes — and `frameworkVariableReference`, a Zerops reference to one.                                                                                            |
@@ -54,12 +55,15 @@ bun test               # app-environment · canonical-path · contract-canonical
 - **The membership RPC is a SEPARATE interface too.** `IamMembershipRpc` is what an application's IAM
   entrypoint serves on top of the SDK's `IamRpc` subset; a platform component implementing `IamRpc`
   does not implement it. Its requests carry the caller's own credential and never an actor.
-- **A workload token has `ptype` `job`, `webhook` or `app` and names its workload in `workload`** (ADR-0022
+- **A workload token has `ptype` `job`, `webhook`, `public` or `app` and names its workload in `workload`** (ADR-0022
   "Principal kinds"); `parseAccessClaims` refuses a workload kind without a name, a name on any other kind, and an
-  unknown kind. `callerOf` maps `app` to `app:<workload>` and the other two to no caller; `callerAdmittedAt` admits
+  unknown kind. A `public` workload is a public procedure, named by its full endpoint id (`PUBLIC_WORKLOAD_NAME`).
+  `callerOf` maps `app` to `app:<workload>` and the other three to no caller; `callerAdmittedAt` admits
   `app:<id>` only under `CONNECT_PREFIX`. `PrincipalType` stays `user | service` (what IAM stores);
   `TokenPrincipalType` adds the workload kinds, so a consumer that builds a principal from a token must decide what a
-  workload token is. `FRAMEWORK_VARIABLE_PREFIXES` reserves the job, webhook and connector families
+  workload token is. `contractWorkloads` (`workloads.ts`) is the one enumeration of a contract's own workloads, which
+  IAM's schema, Control's keys and the application's boot read. `FRAMEWORK_VARIABLE_PREFIXES` reserves the job, webhook,
+  public procedure (`FABRIKA_PROCEDURE_`, never `FABRIKA_PUBLIC_`, an application's build values) and connector families
   (`workloadKeyVariable`, `isWorkloadKeyVariable`; `connectVariables`, `isConnectKeyVariable`, `isConnectUrlVariable`).
   `RpcCaller` is `human | machine`: an `app:<id>` reaches only an export row, a `link` only its own link mount.
 - **Only a user token carries `email`, the principal's normalized mailbox** (`isNormalizedMailbox`), beside `label`,

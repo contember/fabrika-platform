@@ -10,19 +10,19 @@ export type PrincipalType = 'user' | 'service'
 export type PrincipalAffiliation = 'internal' | 'external'
 
 /**
- * The principal kind of a workload credential (ADR-0022 "Principal kinds"): a contract job, a webhook, or the connector
- * of a consuming application. IAM stores a workload principal as a `service` row and mints its key with this kind, so
- * a workload key is never a `machine` caller.
+ * The principal kind of a workload credential (ADR-0022 "Principal kinds"): a contract job, a webhook, a public
+ * procedure (named by its endpoint id), or the connector of a consuming application. IAM stores a workload principal as
+ * a `service` row and mints its key with this kind, so a workload key is never a `machine` caller.
  */
-export type WorkloadKind = 'job' | 'webhook' | 'app'
+export type WorkloadKind = 'job' | 'webhook' | 'public' | 'app'
 
-export const WORKLOAD_KINDS: readonly WorkloadKind[] = ['job', 'webhook', 'app']
+export const WORKLOAD_KINDS = ['job', 'webhook', 'public', 'app'] as const satisfies readonly WorkloadKind[]
 
 /** The principal kind a token carries in `ptype`: a stored principal type, or a workload kind. */
 export type TokenPrincipalType = PrincipalType | WorkloadKind
 
 export function isWorkloadKind(value: unknown): value is WorkloadKind {
-	return value === 'job' || value === 'webhook' || value === 'app'
+	return value === 'job' || value === 'webhook' || value === 'public' || value === 'app'
 }
 
 /**
@@ -180,8 +180,8 @@ export interface AppSchema {
 }
 
 /**
- * A job or a webhook of a contract application, or a consuming application of its exports (`app`, named by that
- * application's id): the actions its credential carries.
+ * A job, a webhook or a public procedure (`public`, named by its endpoint id) of a contract application, or a consuming
+ * application of its exports (`app`, named by that application's id): the actions its credential carries.
  */
 export interface AppWorkloadDef {
 	kind: WorkloadKind

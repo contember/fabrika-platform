@@ -27,8 +27,8 @@ export function satisfies(requirement: EndpointRequirement | AuthenticatedRequir
 /**
  * The caller kind a verified token presents: a `user` principal is `human`, a `service` principal is `machine`, a
  * connector key of application `<id>` is `app:<id>`, and a token bound to no principal is a share link. An OAuth
- * resource token is `oauth`, which only an installation row admits. A job or webhook token is no caller: `null` is
- * refused by every endpoint.
+ * resource token is `oauth`, which only an installation row admits. A job, webhook or public procedure token is no
+ * caller: `null` is refused by every endpoint.
  */
 export function callerOf(claims: AccessTokenClaims): TokenCaller | null {
 	if (claims.oauth !== undefined) {
@@ -43,6 +43,7 @@ export function callerOf(claims: AccessTokenClaims): TokenCaller | null {
 			return claims.workload === undefined ? null : `app:${claims.workload}`
 		case 'job':
 		case 'webhook':
+		case 'public':
 			return null
 		case undefined:
 			return 'link'

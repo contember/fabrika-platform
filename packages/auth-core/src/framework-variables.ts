@@ -1,6 +1,8 @@
 import { FABRIKA_IAM_APP_ID } from './app-environment'
 import { FABRIKA_CONTRACT_DIGEST } from './endpoint-digest'
 import { FABRIKA_IAM_ISSUER } from './environment'
+import { sha256Hex } from './sha256'
+import type { WorkloadKind } from './types'
 import { FABRIKA_PROXY_SECRET } from './wire'
 
 /** Where a platform build uploads its source maps: the destination without its bearer, and the asset roots (JSON). */
@@ -41,11 +43,12 @@ export const FRAMEWORK_VARIABLE_NAMES = [
 export type FrameworkVariableName = (typeof FRAMEWORK_VARIABLE_NAMES)[number]
 
 /**
- * The name families only the platform writes: one variable per job or webhook, named after it (`workloadKeyVariable`),
- * a connector import's address, key and Worker binding (`connectVariables`), and the installation's mail transport
- * (`isEmailTransportVariable`). Every name under one is framework-only.
+ * The name families only the platform writes: one variable per job, webhook or public procedure, named after it
+ * (`workloadKeyVariable`), a connector import's address, key and Worker binding (`connectVariables`), and the
+ * installation's mail transport (`isEmailTransportVariable`). Every name under one is framework-only. A public
+ * procedure's family is `FABRIKA_PROCEDURE_`, because `FABRIKA_PUBLIC_*` names an application's public build values.
  */
-export const FRAMEWORK_VARIABLE_PREFIXES = ['FABRIKA_JOB_', 'FABRIKA_WEBHOOK_', 'FABRIKA_CONNECT_', 'FABRIKA_EMAIL_'] as const
+export const FRAMEWORK_VARIABLE_PREFIXES = ['FABRIKA_JOB_', 'FABRIKA_WEBHOOK_', 'FABRIKA_PROCEDURE_', 'FABRIKA_CONNECT_', 'FABRIKA_EMAIL_'] as const
 
 const FRAMEWORK_VARIABLES: ReadonlySet<string> = new Set(FRAMEWORK_VARIABLE_NAMES)
 
@@ -59,15 +62,25 @@ export function variableSegment(name: string): string {
 	return name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()
 }
 
-const WORKLOAD_KEY_VARIABLE = /^FABRIKA_(?:JOB|WEBHOOK)_[A-Z0-9][A-Z0-9_]*_KEY$/
+const WORKLOAD_KEY_VARIABLE = /^FABRIKA_(?:JOB|WEBHOOK|PROCEDURE)_[A-Z0-9][A-Z0-9_]*_KEY$/
 
-/** Whether `name` is the variable of a job's or a webhook's credential, as `workloadKeyVariable` names one. */
+/** Whether `name` is the variable of a job's, a webhook's or a public procedure's credential, as `workloadKeyVariable` names one. */
 export function isWorkloadKeyVariable(name: string): boolean {
 	return WORKLOAD_KEY_VARIABLE.test(name)
 }
 
-/** The variable a job's or a webhook's credential travels under: `FABRIKA_JOB_NIGHTLY_DIGEST_KEY`. */
-export function workloadKeyVariable(kind: 'job' | 'webhook', name: string): string {
+/** The workload kinds an application holds its own key of; an `app` key is a connector's (`connectVariables`). */
+export type OwnWorkloadKind = Exclude<WorkloadKind, 'app'>
+
+/**
+ * The variable a workload's credential travels under: `FABRIKA_JOB_NIGHTLY_DIGEST_KEY`. A public procedure's endpoint id
+ * has dots and may differ from another only by case or `_`, so its readable segment carries the first 8 hex digits of
+ * the id's SHA-256 as well: `api.stats.cta` → `FABRIKA_PROCEDURE_API_STATS_CTA_<8 hex>_KEY`.
+ */
+export function workloadKeyVariable(kind: OwnWorkloadKind, name: string): string {
+	if (kind === 'public') {
+		return `FABRIKA_PROCEDURE_${variableSegment(name.replaceAll('.', '_'))}_${sha256Hex(name).slice(0, 8).toUpperCase()}_KEY`
+	}
 	return `FABRIKA_${kind.toUpperCase()}_${variableSegment(name)}_KEY`
 }
 

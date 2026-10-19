@@ -224,8 +224,26 @@ describe('workload claims', () => {
 		expect(parseAccessClaims({ ...principalClaims(), workload: 'nightly' })).toBeNull()
 	})
 
+	test("a public procedure's token names its full endpoint id, and only an endpoint id", () => {
+		const built = buildAccessClaims({ ...workloadParams, type: 'public', workload: 'api.stats.cta' })
+		const parsed = parseAccessClaims(JSON.parse(JSON.stringify(built)))
+		expect(parsed).toEqual(built)
+		expect(parsed === null ? null : principalKind(parsed)).toBe('public')
+		expect(parsed === null ? 'unparsed' : accessClaimsToResolved(parsed, 'req-1')).toBeNull()
+		for (const workload of ['nightly', 'api..cta', 'api.stats.', '.api.stats', 'api.stats-cta', `api.${'a'.repeat(130)}`]) {
+			expect(() => buildAccessClaims({ ...workloadParams, type: 'public', workload })).toThrow()
+			expect(parseAccessClaims({ ...built, workload })).toBeNull()
+		}
+	})
+
+	test('a job, webhook or connector token keeps the names it had, a dotted one refused', () => {
+		const job = buildAccessClaims({ ...workloadParams, type: 'job', workload: 'nightly_digest-2' })
+		expect(parseAccessClaims(job)).toEqual(job)
+		expect(parseAccessClaims({ ...job, workload: 'api.stats.cta' })).toBeNull()
+	})
+
 	test('an unknown principal kind rejects the whole token', () => {
-		for (const ptype of ['robot', 'App', 'link', 'machine']) {
+		for (const ptype of ['robot', 'App', 'link', 'machine', 'Public']) {
 			expect(parseAccessClaims({ ...principalClaims(), ptype })).toBeNull()
 		}
 	})

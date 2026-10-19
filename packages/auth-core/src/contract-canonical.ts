@@ -53,7 +53,13 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 		reservedPrefixes: sorted(artifact.reservedPrefixes),
 		...(artifact.declared === undefined
 			? {}
-			: { declared: mapValues(artifact.declared, (reach) => ({ ...reach, connect: sorted(reach.connect) })) }),
+			: {
+				declared: mapValues(artifact.declared, (reach) => ({
+					...reach,
+					connect: sorted(reach.connect),
+					...(reach.actions === undefined ? {} : { actions: sorted(reach.actions) }),
+				})),
+			}),
 		...(artifact.directories === undefined ? {} : { directories: artifact.directories }),
 		...(artifact.locale === undefined ? {} : { locale: artifact.locale }),
 		...(artifact.displayName === undefined ? {} : { displayName: artifact.displayName }),
