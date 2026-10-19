@@ -37,7 +37,9 @@ The release set is derived from workspace manifests and checked against an expli
 
 ## The source version
 
-The source tree carries the version of its next release. An installation does not install the tarballs: it runs the git checkout of its pinned tag, so code that reads its own `package.json` there reads the source version. The Zerops build fetches `@fabrika/check` at that version (`FABRIKA_CHECK_VERSION`), and Control records it as the checker of every approval snapshot (`CHECKER_VERSION`). Both are right only when the tag's commit carries the tag's version.
+The source tree carries the version of its next release. An installation does not install the tarballs: it runs the git checkout of its pinned tag, so code that reads its own `package.json` there reads the source version. Control reads an application of its own minor with its own reader and records that version as the snapshot's checker (`CHECKER_VERSION`), and `platform install` asks npm for `@fabrika/check` at that version (`FABRIKA_CHECK_VERSION`). Both are right only when the tag's commit carries the tag's version.
+
+When the development of a minor that breaks the framework starts, the source version moves to that minor first (`release:bump --tag=v0.7.0`, before the first breaking change). Otherwise the source still carries the previous minor's newest release, and bun links the bundled reader of that minor to the working tree instead of installing it from npm ([The framework window](#the-framework-window)).
 
 `release:validate` therefore refuses a tag whose version differs from the source version, and the release workflow stops before anything is packed. Set the version before tagging:
 
@@ -48,6 +50,17 @@ bun run release:bump --tag=v1.2.3
 `bump` refuses a version that is not newer than the source. It writes the version into every workspace package that declares one, pins the `@fabrika/*` dependencies of `examples/*` to exactly `1.2.3`, which keeps bun linking the workspace, and stamps the application skill: `SKILL.md`'s version and the example pins of its references. It renders the template's `AGENTS.md` from that skill again, runs `bun install` for the lockfile, and re-pins the local stack's Notes source fixture (`fixtures:pin`), whose tree holds that template. It commits nothing.
 
 Between the bump commit and the publish of its tag, the source names a version npm does not have yet. On Zerops `fabrika platform install` and `deploy` refuse such a checkout ([`zerops-platform.md`](zerops-platform.md#the-checker-version)), so a source install from `main` works again once the tag is published.
+
+## The framework window
+
+A platform release deploys applications on every framework minor of its window ([ADR-0062](../decisions/0062-a-platform-release-serves-older-framework-releases.md)): the six months before it, never fewer than the two minors before its own. Control reads an application's `@fabrika/app` release from the `bun.lock` at its root and reads the contract with the reader of that minor (`packages/control/src/approval/readers.ts`). It refuses a release outside the window, or newer than the platform, at deploy with one line; the running version keeps running.
+
+- **Readers.** This release's own `@fabrika/check` reads its own minor. Each older minor's newest patch is bundled in `packages/control/package.json` as exact npm aliases: `@fabrika/check-0.5`, and `@fabrika/app-0.5` and `@fabrika/auth-core-0.5` for its artifact schema and digest. Raise an alias when that minor gets a newer patch. When a minor leaves the window, delete its aliases, its reader and its upcast rule in the release that names what it retired.
+- **Artifact formats.** The artifact names its `format`; the 0.5 artifact has none. A release that changes the artifact raises `CONTRACT_FORMAT` and adds an upcast rule from every older format of the window to the new model (`packages/control/src/approval/formats.ts`). A snapshot stores and digests the artifact as its release read it, and the application's contract digest is the one its own release computes.
+- **The build step.** A Zerops build runs `fabrika-check` and `fabrika-source-maps` of `@fabrika/check` at the application's pinned release, not the installation's.
+- **The compatibility test.** `packages/control/src/__tests__/framework-compat.test.ts` reads the CRM of the window's oldest release (`fixtures/crm-0.5.4.json`) through Control's read path and compares it with that release's npm packages and with what its own platform recorded. When the oldest minor of the window changes, record the fixture again from that release's tag.
+
+An application pins an exact release inside its installation's window. The MCP authoring rules describe the installation's own release; an application on an older one follows the skill in its own `node_modules`.
 
 ## The Bun version
 
@@ -130,7 +143,7 @@ The workflow refuses to start publication while any package name is absent from 
 
 ## Pinning the standalone example
 
-The standalone example repository described in [`examples/zerops-app/README.md`](../../examples/zerops-app/README.md) is a real consumer: it installs `@fabrika/*` from npm rather than from the workspace. An application installs the release its installation runs, so every `@fabrika/*` pin is an exact version, never a range. A range such as `^0.4.5` resolves a later patch, and the co-versioned set then mixes releases. The packed packages pin their `@fabrika/*` dependencies exactly for the same reason.
+The standalone example repository described in [`examples/zerops-app/README.md`](../../examples/zerops-app/README.md) is a real consumer: it installs `@fabrika/*` from npm rather than from the workspace. An application pins an exact release inside its installation's window ([The framework window](#the-framework-window)), so every `@fabrika/*` pin is an exact version, never a range. A range such as `^0.4.5` resolves a later patch, and the co-versioned set then mixes releases. The packed packages pin their `@fabrika/*` dependencies exactly for the same reason.
 
 `example-pin` writes those pins in a checkout of another repository:
 

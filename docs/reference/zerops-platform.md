@@ -1415,13 +1415,17 @@ release artifacts incomplete. The variable stays readable to the runtime until t
 
 ### The checker version
 
-Every contract application build fetches the checker by version: `bun x -p @fabrika/check@<version>`, where
-`<version>` is `FABRIKA_CHECK_VERSION`, the `package.json` version of `@fabrika/provider-zerops`. Control runs the
-git checkout of the installation's tag, not the published tarballs, so that version is the source version of the
-checkout. A release sets it before it is tagged
-([`release-process.md`](release-process.md#the-source-version)).
+Every contract application build fetches the checker by version: `bun x -p @fabrika/check@<version>`, for
+`fabrika-check` and `fabrika-source-maps`. `<version>` is the `@fabrika/app` release the application's `bun.lock`
+pins, which Control reads at the run's commit (`ProviderApprovedAccess.framework`), so an application is checked by
+the rules of the release it was written against ([ADR-0062](../decisions/0062-a-platform-release-serves-older-framework-releases.md)).
+A snapshot a 0.5.4 Control stored names no release; its build uses the snapshot's checker, as that platform did.
 
-`platform install` and `platform deploy` ask npm for `@fabrika/check@<version>` after they prepare the source and
+`FABRIKA_CHECK_VERSION` is the `package.json` version of `@fabrika/provider-zerops`. Control runs the git checkout of
+the installation's tag, not the published tarballs, so that version is the source version of the checkout. A release
+sets it before it is tagged ([`release-process.md`](release-process.md#the-source-version)).
+
+`platform install` and `platform deploy` ask npm for `@fabrika/check` at `FABRIKA_CHECK_VERSION` after they prepare the source and
 before they contact Zerops. A 404 refuses the checkout (`this checkout is version X, which is not published yet`);
 any other answer or no answer is an error, never a pass. Between a release's bump commit and its publish, `main`
 is refused this way. An earlier tag carries the source version `0.0.4`, which npm never had, so an installation

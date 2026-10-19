@@ -87,7 +87,8 @@ bun run test:browser  # the opice suites in tests/browser/
   its own `buildCommands`, which is where a service's build belongs. Reach this from `local:up`,
   `local:reset` and `browser:up` only.
 - **Notes is the example, deployed and served as a contract application.** The application source fixture is the
-  complete example as its repository holds it, plus the generated entrypoint (`applicationFixtureSource`), pinned by
+  complete example as its repository holds it, plus the generated entrypoint and a `bun.lock` that resolves its
+  `@fabrika/*` pins at the source version the container runs (`applicationFixtureSource`), pinned by
   tree in `fixtures/source/manifest.json`, so Control approves the contract the composed container serves. An edit of
   the example moves the pin: run `bun run fixtures:pin` here. `deployable.test.ts` runs the build's checker and, on
   Postgres, the start script's steps over the archive itself. The container runs

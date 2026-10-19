@@ -124,11 +124,14 @@ bun test
   `runtimePackages` from `ZEROPS_RUNTIME_PACKAGES`. `lockedAuthoredBuild` refuses every key of the selected
   setup except `build.base`, `build.os` and `build.buildCommands`, in `parseFabrikaManifest`, so on build AND
   decode. The manifest must also carry the endpoint table of the same contract (`proxy.snapshot` equals
-  `contract.digest`, from `contractDigest`), and an endpoint table without the contract is refused.
+  `contract.digest`, from `contractDigest`), and an endpoint table without the contract is refused. A deploy writes
+  `FABRIKA_CONTRACT_DIGEST` and the namespace proxy's `snapshot` from `ProviderApprovedAccess.contractDigest`, never
+  from the approved contract: Control may have upcast it from an older release's artifact.
   `renderLockedExecutionDescriptor` sends ONLY the generated setup: the SPA commands, the frozen install, the
   application's tests, then — because the tests are authored code — a reinstall, the regenerated entrypoint,
-  the checker fetched by THIS package's version (`FABRIKA_CHECK_VERSION`: Control runs the git checkout of its
-  tag, so it is the source version, which a release bumps before tagging), `tsc` with the platform tsconfig and
+  the checker fetched at the application's own release (`ZeropsLockedExecution.checkRelease`, from
+  `ProviderApprovedAccess.framework`, which Control reads from the application's `bun.lock`; ADR-0062), `tsc` with
+  the platform tsconfig and
   the scripts. Keep the tests before every step that produces or checks what deploys. The start script runs
   `fabrika db migrate`, then `fabrika db codegen --verify`, then `fabrika db test-isolation` (the generated tests on
   a throwaway schema), then `exec`s the server, so a failed migration, a stale `schema.generated.ts` or a generated
@@ -151,7 +154,7 @@ bun test
   `build.envVariables: ${RUNTIME_FABRIKA_SOURCE_MAP_UPLOAD_KEY}` beside the literal `FABRIKA_SOURCE_MAP_UPLOAD` (the
   destination without the bearer, and `zeropsAssetRoots` of the APPROVED contract: each SPA mount and share link, by
   prefix). The descriptor never holds the bearer; a directory or prefix carrying `${` is refused. The last build command is
-  `fabrika-source-maps` of `@fabrika/check@FABRIKA_CHECK_VERSION`, `|| true`. The relay reads its report line from the build
+  `fabrika-source-maps` of `@fabrika/check` at the same release, `|| true`. The relay reads its report line from the build
   log (`readSourceMapUploadReport`): a succeeded run reports `artifactState: 'complete'` only when that line said so, else
   `incomplete`. Every build command, the authored ones included, can read the bearer, and so can the runtime until the
   next deploy replaces it: it reaches only this run's release and expires two hours after the run started.
