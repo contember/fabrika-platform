@@ -101,8 +101,8 @@ upgraded first.
   an exact release inside the window.
 - The approval snapshot's `checker` field (`approval/read.ts`) names the reader that read the commit.
 - **Rollout path.** No generated installation file, environment variable or provider state changes. The first platform
-  release under this rule bundles readers only from its own minor on. An application on an older minor redeploys only
-  after it raises its pin to that minor.
+  release under this rule (0.6) bundles the readers of 0.4 and 0.5, the minors of the window that published
+  `@fabrika/check`. An application on 0.3 or older redeploys only after it raises its pin into the window.
 
 ## Alternatives considered
 

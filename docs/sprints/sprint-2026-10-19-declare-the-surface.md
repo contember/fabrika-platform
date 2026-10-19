@@ -20,12 +20,14 @@ and `examples/crm` at tag `v0.5.4` installed from npm, unchanged.
   build step): additive only. Everything a 0.5.4 application produces must still be read, approved, compiled, served
   and deployed. A row mode, header, claim or artifact field that 0.5.4 uses stays served. When in doubt whether
   something is protocol, treat it as protocol.
-- **The window for the first release under ADR-0062 is 0.5 and 0.6.** 0.5.4 is published on npm. Control reads a 0.5
-  application with the 0.5.4 reader, bundled as an exact npm alias, and upcasts its artifact.
-- **PR #11 (form files) is merged on `main` but unreleased** (not in `v0.5.4`). No released application produced its
-  artifact fields, row-mode extensions or framework migrations. The platform need not keep them. Its framework
-  migrations (`0005_form_files.sql`, `0006_form_bytes.sql` or their actual names) may be deleted in place instead of
-  dropped forward. Port its streaming multipart parser, its proxy origin check and its byte budget.
+- **The window for the first release under ADR-0062 is 0.4, 0.5 and 0.6.** Every minor of the last six months that
+  has a published `@fabrika/check` is in it; `@fabrika/check` was first published at 0.4.0. The intake application pins
+  0.4, so a narrower window would force its upgrade. Control reads a 0.4 or 0.5 application with the newest patch of
+  that minor (0.4.8, 0.5.5), bundled as an exact npm alias, and upcasts its artifact.
+- **PR #11 (form files) is released in 0.5.5.** Its artifact fields, its row-mode extensions and its framework
+  migrations (`0005_form_files.sql`, `0006_form_bytes.sql`) are protocol now: the platform keeps serving them inside
+  the window, and the framework drains them forward into `fabrika_files` (the idea's "PR #11" section, "if it lands
+  first"). Port its streaming multipart parser, its proxy origin check and its byte budget.
 
 ## Work units
 
@@ -77,3 +79,13 @@ back and runs `bun run check:ci` on the integration branch.
   `onConflict: 'update'` runs a second guarded update, not `DO UPDATE`.
 - **WU-4 open.** The checker does not verify that `onConflict.columns` is a unique index (Postgres answers 42P10). A row
   past `maxAttempts` has no staff path to requeue it.
+- **Merged WU-4, WU-1, WU-0.** WU-0 reads the release from `@fabrika/app` in the root `bun.lock` (the ADR said
+  `@fabrika/check`, an optional dev dependency); other lockfiles are refused with a line. The refusal names
+  `docs/reference/framework-migrations.md`, which WU-8 writes. The Notes fixture writes a `bun.lock` that names the
+  source version.
+- **WU-1 choices.** A public procedure's actions live at `declared[<endpoint id>].actions`; WU-2 fills them. Its key
+  variable is `FABRIKA_PROCEDURE_<ID>_<8 hex>_KEY` (`FABRIKA_PUBLIC_*` is taken by public build values). IAM refuses a
+  schema where an application role grants a public action. Open: refuse a custom IAM policy that grants one; refuse a
+  deploy whose namespace proxy pin cannot read a capabilities or public row.
+- **0.5.5 was released with PR #11** while the sprint started; the window grows to 0.4 for the intake application
+  (above). WU-0b adds the 0.4 reader, moves the 0.5 alias to 0.5.5, and records a v0.4.8 CRM fixture.
