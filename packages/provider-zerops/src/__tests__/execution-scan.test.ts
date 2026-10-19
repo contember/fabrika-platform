@@ -111,7 +111,7 @@ describe('a scanning contract on Zerops', () => {
 					contract: SCANNING,
 					contractDigest: contractDigest(SCANNING),
 					schema: { scopes: [], actions: [], roles: {} },
-					framework: FABRIKA_CHECK_VERSION,
+					checker: FABRIKA_CHECK_VERSION,
 				},
 			}, false)
 		).toThrow(

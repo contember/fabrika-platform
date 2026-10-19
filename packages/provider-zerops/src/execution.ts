@@ -91,8 +91,8 @@ export interface ZeropsLockedExecution {
 	readonly appId: string
 	readonly contract: ZeropsContractRun
 	/**
-	 * The framework release the application pins (`ProviderApprovedAccess.framework`): the build runs `fabrika-check`
-	 * and `fabrika-source-maps` of `@fabrika/check` at this release, whose rules the application was written against.
+	 * The release of the reader that read the application (`ProviderApprovedAccess.checker`), the newest patch of the
+	 * framework minor it pins: the build runs `fabrika-check` and `fabrika-source-maps` of `@fabrika/check` at it.
 	 */
 	readonly checkRelease: string
 	/** A `${host_…}` reference to the application's PostgreSQL service, or null when it has none. */

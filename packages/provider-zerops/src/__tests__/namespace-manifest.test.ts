@@ -23,7 +23,7 @@ const approved = (artifact: ContractArtifact): ProviderApprovedAccess => ({
 	contract: artifact,
 	contractDigest: contractDigest(artifact),
 	schema: schemaFromContract(artifact),
-	framework: FABRIKA_CHECK_VERSION,
+	checker: FABRIKA_CHECK_VERSION,
 })
 
 /** A member whose artifact is a contract application behind its table; Control approved that contract unless `access: null`. */

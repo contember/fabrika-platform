@@ -4,7 +4,9 @@
 
 import type { AuthContext } from '@fabrika/auth'
 import { CONTRACT_FORMAT, contractDigest, permits, type Scope } from '@fabrika/auth-core'
+import { contractDigest as contractDigest04 } from '@fabrika/auth-core-0.4'
 import { contractDigest as contractDigest05 } from '@fabrika/auth-core-0.5'
+import { readContractSource as readContractSource04 } from '@fabrika/check-0.4/contract'
 import { readContractSource as readContractSource05 } from '@fabrika/check-0.5/contract'
 import { CHECKER_VERSION, readContractSource } from '@fabrika/check/contract'
 import type { BlobStore } from '@fabrika/platform'
@@ -1001,11 +1003,11 @@ describe('the framework release an application pins (ADR-0062)', () => {
 		expect(first.status).toBe('succeeded')
 		const before = await published(w, 'stage')
 
-		w.files['bun.lock'] = frameworkLockfile('0.4.2')
+		w.files['bun.lock'] = frameworkLockfile('0.3.9')
 		const refused = await deploy(w, 'stage')
 		expect(refused.status).toBe('failed')
 		expect(w.logs.get(`runs/${refused.runId}/logs.ndjson`)).toContain(
-			`access: the application pins @fabrika/app 0.4.2, outside this platform's window; the oldest release it deploys is 0.5.0. Raise the pin as ${MIGRATION_GUIDE} describes`,
+			`access: the application pins @fabrika/app 0.3.9, outside this platform's window; the oldest release it deploys is 0.4.0. Raise the pin as ${MIGRATION_GUIDE} describes`,
 		)
 		expect(await published(w, 'stage')).toEqual(before)
 		expect(w.deploys).toHaveLength(1)
@@ -1029,14 +1031,27 @@ describe('the framework release an application pins (ADR-0062)', () => {
 		w.files['bun.lock'] = frameworkLockfile('0.5.2')
 		expect((await deploy(w, 'stage')).status).toBe('succeeded')
 		const snapshot = approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'stage'))
-		expect(snapshot?.checker).toBe('0.5.4')
+		expect(snapshot?.checker).toBe('0.5.5')
 		expect(snapshot?.framework).toBe('0.5.2')
 		expect(snapshot?.older).toBeDefined()
 		const access = w.deploys[0]?.environment.access
-		expect(access?.framework).toBe('0.5.2')
+		expect(access?.checker).toBe('0.5.5')
 		expect(access?.contract.format).toBe(CONTRACT_FORMAT)
 		expect(access?.contractDigest).toBe(contractDigest05(readContractSource05(new Map([['fabrika.contract.ts', BASE]]))))
 		expect(access?.contractDigest).not.toBe(DIGEST)
+	})
+
+	test('a 0.4 application is read by the 0.4 reader, and its build checks with the newest 0.4 patch', async () => {
+		const w = world()
+		await seed(w)
+		w.files['bun.lock'] = frameworkLockfile('0.4.1')
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+		const snapshot = approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'stage'))
+		expect(snapshot?.checker).toBe('0.4.8')
+		expect(snapshot?.framework).toBe('0.4.1')
+		const access = w.deploys[0]?.environment.access
+		expect(access?.checker).toBe('0.4.8')
+		expect(access?.contractDigest).toBe(contractDigest04(readContractSource04(new Map([['fabrika.contract.ts', BASE]]))))
 	})
 })
 

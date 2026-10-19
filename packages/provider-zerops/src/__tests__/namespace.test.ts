@@ -1376,7 +1376,7 @@ describe('Zerops namespace lifecycle', () => {
 				contract: notesArtifact,
 				contractDigest: contractDigest(notesArtifact),
 				schema: schemaFromContract(notesArtifact),
-				framework: FABRIKA_CHECK_VERSION,
+				checker: FABRIKA_CHECK_VERSION,
 			},
 		}
 		const events = { checkpoint: async () => {}, boundary: async () => {} }

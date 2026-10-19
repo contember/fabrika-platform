@@ -749,7 +749,7 @@ describe('Zerops provider', () => {
 			contract: notesArtifact,
 			contractDigest: contractDigest(notesArtifact),
 			schema: schemaFromContract(notesArtifact),
-			framework: FABRIKA_CHECK_VERSION,
+			checker: FABRIKA_CHECK_VERSION,
 		}
 		const run = { ...base, appId: 'notes', artifact, access, managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_PROXY_SECRET: null } }
 		await expect(provider(run)).rejects.toThrow('a contract application needs its proxy secret')
@@ -1565,7 +1565,7 @@ describe('a contract application deploy', () => {
 		contract: notesArtifact,
 		contractDigest: contractDigest(notesArtifact),
 		schema: schemaFromContract(notesArtifact),
-		framework: FABRIKA_CHECK_VERSION,
+		checker: FABRIKA_CHECK_VERSION,
 	}
 	const contractArtifact = async (contract: boolean, services: ZeropsServiceSpec[]) => {
 		const config: ZeropsAppConfig = {
@@ -1627,8 +1627,8 @@ describe('a contract application deploy', () => {
 		)
 	})
 
-	test("an application on an older framework release builds with its own release's checker and starts with its own digest", async () => {
-		const older: ProviderApprovedAccess = { ...approved, contractDigest: `sha256:${'5'.repeat(64)}`, framework: '0.5.4' }
+	test("an application on an older framework release builds with its minor's checker and starts with its own digest", async () => {
+		const older: ProviderApprovedAccess = { ...approved, contractDigest: `sha256:${'5'.repeat(64)}`, checker: '0.5.5' }
 		const result = await contractRun(true, older, [API], {}, {
 			url: 'https://errors.test/api/artifacts/source-maps/',
 			bearer: 'a'.repeat(64),
@@ -1642,14 +1642,14 @@ describe('a contract application deploy', () => {
 		expect(result.status).toBe('succeeded')
 		const sent = recorded.builds[0]?.zeropsYaml ?? ''
 		expect(sent).toContain(`FABRIKA_CONTRACT_DIGEST: "${older.contractDigest}"`)
-		expect(sent).toContain('bun x --bun -p @fabrika/check@0.5.4 fabrika-check /build/source')
-		expect(sent).toContain('bun x --bun -p @fabrika/check@0.5.4 fabrika-source-maps /build/source || true')
+		expect(sent).toContain('bun x --bun -p @fabrika/check@0.5.5 fabrika-check /build/source')
+		expect(sent).toContain('bun x --bun -p @fabrika/check@0.5.5 fabrika-source-maps /build/source || true')
 		expect(sent).not.toContain(`@fabrika/check@${FABRIKA_CHECK_VERSION}`)
-		expect(recorded.logs).toContain(`  generated run section; build checks @fabrika/check@0.5.4, typescript@${PLATFORM_TYPESCRIPT_VERSION}`)
+		expect(recorded.logs).toContain(`  generated run section; build checks @fabrika/check@0.5.5, typescript@${PLATFORM_TYPESCRIPT_VERSION}`)
 	})
 
 	test('a checker release that is not a release version never reaches the build command', async () => {
-		const result = await contractRun(true, { ...approved, framework: '0.5.4; curl evil' })
+		const result = await contractRun(true, { ...approved, checker: '0.5.5; curl evil' })
 		expect(result.status).toBe('failed')
 		expect(recorded.builds).toEqual([])
 	})

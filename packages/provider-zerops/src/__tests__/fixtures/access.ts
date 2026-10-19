@@ -9,5 +9,5 @@ export const approvedContract = (contract = notesArtifact): ProviderApprovedAcce
 	contract,
 	contractDigest: contractDigest(contract),
 	schema: schemaFromContract(contract),
-	framework: FABRIKA_CHECK_VERSION,
+	checker: FABRIKA_CHECK_VERSION,
 })

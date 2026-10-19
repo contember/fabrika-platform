@@ -35,10 +35,7 @@ export interface AccessSnapshot {
 	readonly databaseCode?: readonly MigrationDeviation[]
 	/** The `@fabrika/check` release of the reader that read it; empty for the empty snapshot. */
 	readonly checker: string
-	/**
-	 * The `@fabrika/app` release the application's `bun.lock` pins, which its build checks with. Absent in a snapshot
-	 * read before Control recorded it: that platform built with the checker's release.
-	 */
+	/** The `@fabrika/app` release the application's `bun.lock` pins. Absent in a snapshot read before Control recorded it. */
 	readonly framework?: string
 }
 
@@ -108,7 +105,7 @@ export const compareText = (a: string, b: string): number => (a < b ? -1 : a > b
 
 /**
  * What a provider publishes for a snapshot: the contract in this release's model and the IAM schema compiled from it,
- * the digest the application's own release computes, and the release its build checks with.
+ * the digest the application's own release computes, and the reader's release, which its build checks with.
  */
 export function approvedAccess(snapshot: AccessSnapshot): ProviderApprovedAccess | undefined {
 	const contract = snapshot.contract
@@ -117,7 +114,7 @@ export function approvedAccess(snapshot: AccessSnapshot): ProviderApprovedAccess
 		contract,
 		contractDigest: applicationContractDigest(contract, snapshot.older),
 		schema: schemaFromContract(contract),
-		framework: snapshot.framework ?? snapshot.checker,
+		checker: snapshot.checker,
 	}
 }
 

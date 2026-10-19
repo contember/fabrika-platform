@@ -6,6 +6,7 @@
 import { parseContractArtifact as parseContractArtifact05 } from '@fabrika/app-0.5/contract'
 import { parseContractArtifact } from '@fabrika/app/contract'
 import { canonicalArtifactJson, CONTRACT_FORMAT, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
+import type { ContractArtifact as ContractArtifact04 } from '@fabrika/auth-core-0.4'
 import {
 	canonicalArtifactJson as canonicalArtifactJson05,
 	type ContractArtifact as ContractArtifact05,
@@ -32,6 +33,14 @@ export function parseStoredArtifact(value: unknown): SnapshotContract {
 
 export function fromOlder(older: OlderArtifact): SnapshotContract {
 	return { contract: upcast05(older), older }
+}
+
+/**
+ * A 0.4 artifact is a 0.5 one: 0.5 added only optional fields, and its canonical form and contract digest are 0.4's
+ * for an artifact without them. So it is kept, digested and upcast as the 0.5 format.
+ */
+export function from04(artifact: ContractArtifact04): SnapshotContract {
+	return fromOlder(artifact)
 }
 
 /**

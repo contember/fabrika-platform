@@ -33,7 +33,7 @@ const member = (appId: string, options: { routed: boolean; proxySecret?: string 
 		domain: `${appId}.example.com`,
 		artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
 		...(options.routed
-			? { access: { contract, contractDigest: contractDigest(contract), schema: schemaFromContract(contract), framework: FABRIKA_CHECK_VERSION } }
+			? { access: { contract, contractDigest: contractDigest(contract), schema: schemaFromContract(contract), checker: FABRIKA_CHECK_VERSION } }
 			: {}),
 		...(options.proxySecret === undefined ? {} : { proxySecret: options.proxySecret }),
 	}

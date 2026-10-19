@@ -500,7 +500,7 @@ export function lockedExecutionFor(
 	return {
 		appId: manifest.app.id,
 		contract,
-		checkRelease: access.framework,
+		checkRelease: access.checker,
 		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
 		databaseConnections: null,
 		storageHostname: applicationStorageHostname(manifest.target.importDocument.services),

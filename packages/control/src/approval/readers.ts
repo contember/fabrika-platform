@@ -2,9 +2,10 @@
 // release its `bun.lock` pins: this release's own reader for its own minor, and for every older minor of the window
 // the newest patch of `@fabrika/check`, bundled as an exact npm alias, so Control fetches no code at run time.
 
+import * as reader04 from '@fabrika/check-0.4/contract'
 import * as reader05 from '@fabrika/check-0.5/contract'
 import { CHECKER_VERSION, ContractError, contractReaderInputs, ContractSourceError, readContractSource } from '@fabrika/check/contract'
-import { fromOlder, type SnapshotContract } from './formats'
+import { from04, fromOlder, type SnapshotContract } from './formats'
 
 /** The package whose locked version is the application's framework release: every contract imports it. */
 export const FRAMEWORK_PACKAGE = '@fabrika/app'
@@ -57,6 +58,20 @@ const reader05Release: ContractReader = {
 	},
 }
 
+const reader04Release: ContractReader = {
+	checker: reader04.CHECKER_VERSION,
+	inputs: reader04.contractReaderInputs,
+	read(files) {
+		try {
+			return { ok: true, contract: from04(reader04.readContractSource(files)) }
+		} catch (error) {
+			if (error instanceof reader04.ContractSourceError) return { ok: false, problems: error.findings.length }
+			if (error instanceof reader04.ContractError) return { ok: false, problems: error.problems.length }
+			throw error
+		}
+	},
+}
+
 interface Release {
 	readonly text: string
 	readonly major: number
@@ -87,7 +102,7 @@ export interface ReaderWindow {
 }
 
 /** This platform's window: its own minor and every older one it bundles a reader for. */
-export const PLATFORM_WINDOW: ReaderWindow = { platform: CHECKER_VERSION, readers: [currentReader, reader05Release] }
+export const PLATFORM_WINDOW: ReaderWindow = { platform: CHECKER_VERSION, readers: [currentReader, reader05Release, reader04Release] }
 
 /** The application pins a framework release this platform does not deploy, or pins none it can read. One line. */
 export class FrameworkReleaseRefused extends Error {

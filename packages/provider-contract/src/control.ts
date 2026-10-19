@@ -59,8 +59,11 @@ export interface ProviderApprovedAccess {
 	 */
 	readonly contractDigest: string
 	readonly schema: AppSchema
-	/** The `@fabrika/app` release the application pins (`FRAMEWORK_RELEASE_PATTERN`); its build checks with that release. */
-	readonly framework: string
+	/**
+	 * The `@fabrika/check` release whose reader read the application (`FRAMEWORK_RELEASE_PATTERN`): the newest patch of
+	 * the framework minor it pins (ADR-0062). Its build checks with that release.
+	 */
+	readonly checker: string
 }
 
 /** Persisted deploy data for one app environment. */

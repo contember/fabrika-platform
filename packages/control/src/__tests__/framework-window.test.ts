@@ -34,9 +34,14 @@ describe('the reader of a framework release', () => {
 		expect(readerFor('0.5.9', WINDOW).checker).toBe('0.5.4')
 	})
 
-	test("is this platform's own for its own release, and the bundled 0.5.4 one for 0.5", () => {
+	test("is this platform's own for its own release, and the bundled newest patch for 0.5 and 0.4", () => {
 		expect(readerFor(CHECKER_VERSION).checker).toBe(CHECKER_VERSION)
-		expect(readerFor('0.5.1').checker).toBe('0.5.4')
+		expect(readerFor('0.5.1').checker).toBe('0.5.5')
+		expect(readerFor('0.4.1').checker).toBe('0.4.8')
+	})
+
+	test('this platform refuses 0.3, below its window of 0.4, 0.5 and its own minor', () => {
+		expect(refusal('0.3.9')).toContain('the oldest release it deploys is 0.4.0')
 	})
 
 	test('a release outside the window is refused with the oldest release the platform deploys and the migration guide', () => {
@@ -76,7 +81,7 @@ describe("the framework release of an application's commit", () => {
 	test('is the registry release its bun.lock resolves, which the snapshot records with the reader', async () => {
 		const snapshot = await snapshotOf({ 'bun.lock': frameworkLockfile('0.5.3') })
 		expect(snapshot.framework).toBe('0.5.3')
-		expect(snapshot.checker).toBe('0.5.4')
+		expect(snapshot.checker).toBe('0.5.5')
 	})
 
 	test('a commit without a bun.lock at the application root is refused, and another lockfile is named', async () => {
