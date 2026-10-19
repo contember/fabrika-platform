@@ -3,6 +3,7 @@
 // request and how its provider answers; a local sender says where it stores what it took.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { type EmailAttachmentContent, emailContentOf } from './content.js'
 import {
 	EMAIL_DELIVERY_ERRORS,
 	EmailDeliveryError,
@@ -23,6 +24,13 @@ export interface WireMessage {
 	readonly idempotencyKey?: string
 	/** The URL of the `List-Unsubscribe` header, when `List-Unsubscribe-Post` says one click. */
 	readonly unsubscribeUrl?: string
+	/** Each attachment with its bytes as base64. */
+	readonly attachments?: readonly EmailAttachmentContent[]
+}
+
+/** A stored or sent message in wire terms: what a local harness answers for an `EmailMessage` it kept. */
+export function wireMessageOf(message: EmailMessage): WireMessage {
+	return { ...emailContentOf(message), idempotencyKey: message.idempotencyKey }
 }
 
 /** How the provider answers. `inProgress` and `idempotencyConflict` are required when the sender is idempotent. */
@@ -91,6 +99,28 @@ const UNSUBSCRIBE_MESSAGE: EmailMessage = {
 	unsubscribeUrl: 'https://app.example.test/api/mail.unsubscribe?t=conformance-token-6c2e',
 }
 
+const ATTACHMENT_MESSAGE: EmailMessage = {
+	...MINIMAL_MESSAGE,
+	idempotencyKey: 'conformance/attachment-1',
+	attachments: [{ filename: 'conformance report.txt', contentType: 'text/plain', content: new TextEncoder().encode('Conformance attachment 9d4e') }],
+}
+
+/** The same message under its key, with other bytes in its one attachment. */
+const OTHER_ATTACHMENT_MESSAGE: EmailMessage = {
+	...ATTACHMENT_MESSAGE,
+	attachments: [{ filename: 'conformance report.txt', contentType: 'text/plain', content: new TextEncoder().encode('Conformance attachment 0f1a') }],
+}
+
+function oversizedMessage(maxAttachmentBytes: number): EmailMessage {
+	return {
+		...MINIMAL_MESSAGE,
+		idempotencyKey: 'conformance/oversized-1',
+		attachments: [{ filename: 'large.bin', contentType: 'application/octet-stream', content: new Uint8Array(maxAttachmentBytes + 1) }],
+	}
+}
+
+const ONE_BYTE = new Uint8Array([0x61])
+
 const INVALID_MESSAGES: readonly { readonly problem: string; readonly message: EmailMessage }[] = [
 	{ problem: 'a bad recipient', message: { ...MINIMAL_MESSAGE, to: 'not-an-address' } },
 	{ problem: 'an empty subject', message: { ...MINIMAL_MESSAGE, subject: '' } },
@@ -104,6 +134,21 @@ const INVALID_MESSAGES: readonly { readonly problem: string; readonly message: E
 	{ problem: 'a sender name over 128 characters', message: { ...MINIMAL_MESSAGE, fromName: 'x'.repeat(129) } },
 	{ problem: 'an unsubscribe URL over http', message: { ...MINIMAL_MESSAGE, unsubscribeUrl: 'http://app.example.test/u' } },
 	{ problem: 'an unsubscribe URL with a bracket', message: { ...MINIMAL_MESSAGE, unsubscribeUrl: 'https://app.example.test/u>x' } },
+	{
+		problem: 'an attachment name with a path',
+		message: { ...MINIMAL_MESSAGE, attachments: [{ filename: '../etc/passwd', contentType: 'text/plain', content: ONE_BYTE }] },
+	},
+	{
+		problem: 'an attachment type with a line break',
+		message: { ...MINIMAL_MESSAGE, attachments: [{ filename: 'a.txt', contentType: 'text/plain\r\nX-Bad: 1', content: ONE_BYTE }] },
+	},
+	{
+		problem: 'more than 20 attachments',
+		message: {
+			...MINIMAL_MESSAGE,
+			attachments: Array.from({ length: 21 }, () => ({ filename: 'a.txt', contentType: 'text/plain', content: ONE_BYTE })),
+		},
+	},
 ]
 
 /**
@@ -183,6 +228,25 @@ function describeHttpSender(harness: EmailSenderHttpHarness): void {
 			return
 		}
 		await expectRejection(() => current.sender.send(UNSUBSCRIBE_MESSAGE, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
+		expect(current.requests).toHaveLength(0)
+	})
+
+	test('hands the attachments it says it sends to the provider, and refuses them otherwise', async () => {
+		const current = httpCase(async (request) => harness.answers.accepted(request))
+		if (current.sender.capabilities.maxAttachmentBytes !== undefined) {
+			await current.sender.send(ATTACHMENT_MESSAGE, new AbortController().signal)
+			expect((await harness.readRequest(only(current.requests))).attachments).toEqual(wireMessageOf(ATTACHMENT_MESSAGE).attachments)
+			return
+		}
+		await expectRejection(() => current.sender.send(ATTACHMENT_MESSAGE, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
+		expect(current.requests).toHaveLength(0)
+	})
+
+	test('refuses attachments over its limit without a request', async () => {
+		const current = httpCase(async (request) => harness.answers.accepted(request))
+		const limit = current.sender.capabilities.maxAttachmentBytes
+		if (limit === undefined) return
+		await expectRejection(() => current.sender.send(oversizedMessage(limit), new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
 		expect(current.requests).toHaveLength(0)
 	})
 
@@ -318,6 +382,27 @@ function describeLocalSender(harness: EmailSenderLocalHarness): void {
 		expect(await harness.stored()).toHaveLength(0)
 	})
 
+	test('stores the attachments it says it sends, and refuses them otherwise', async () => {
+		const limit = current().capabilities.maxAttachmentBytes
+		if (limit !== undefined) {
+			await current().send(ATTACHMENT_MESSAGE, new AbortController().signal)
+			expect(only(await harness.stored()).attachments).toEqual(wireMessageOf(ATTACHMENT_MESSAGE).attachments)
+			await expectRejection(() => current().send(oversizedMessage(limit), new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
+			expect(await harness.stored()).toHaveLength(1)
+			return
+		}
+		await expectRejection(() => current().send(ATTACHMENT_MESSAGE, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
+		expect(await harness.stored()).toHaveLength(0)
+	})
+
+	test('an idempotent sender refuses other attachment bytes under the same key', async () => {
+		const target = current()
+		if (!target.capabilities.idempotent || target.capabilities.maxAttachmentBytes === undefined) return
+		await target.send(ATTACHMENT_MESSAGE, new AbortController().signal)
+		await expectRejection(() => target.send(OTHER_ATTACHMENT_MESSAGE, new AbortController().signal), 'idempotency_conflict', () => MESSAGE_MARKERS)
+		expect(await harness.stored()).toHaveLength(1)
+	})
+
 	test.each(INVALID_MESSAGES)('refuses $problem as invalid_message and stores nothing', async ({ message }) => {
 		await expectRejection(() => current().send(message, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
 		expect(await harness.stored()).toHaveLength(0)
@@ -362,6 +447,7 @@ function expectOptionalFieldsAbsent(wire: WireMessage): void {
 	expect(wire.replyTo).toBeUndefined()
 	expect(wire.fromName).toBeUndefined()
 	expect(wire.unsubscribeUrl).toBeUndefined()
+	expect(wire.attachments).toBeUndefined()
 }
 
 function contentOf(message: EmailMessage): WireMessage {

@@ -1,5 +1,12 @@
 export type EmailFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
+/** One file a message carries: the name the recipient sees, its media type and its bytes. */
+export interface EmailAttachment {
+	readonly filename: string
+	readonly contentType: string
+	readonly content: Uint8Array
+}
+
 export interface EmailMessage {
 	readonly to: string
 	readonly subject: string
@@ -16,6 +23,11 @@ export interface EmailMessage {
 	 * <url>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. A transport without `listUnsubscribe` refuses it.
 	 */
 	readonly unsubscribeUrl?: string
+	/**
+	 * Files the message carries, at most `MAX_EMAIL_ATTACHMENTS`, together at most the transport's `maxAttachmentBytes`.
+	 * A transport without `maxAttachmentBytes` refuses a message that has any; an empty list is none.
+	 */
+	readonly attachments?: readonly EmailAttachment[]
 }
 
 export interface EmailDeliveryResult {
@@ -33,6 +45,8 @@ export interface EmailSenderCapabilities {
 	readonly maxBatch: number
 	/** Whether it writes a message's one-click unsubscribe headers (`unsubscribeUrl`); absent is no. */
 	readonly listUnsubscribe?: boolean
+	/** The most attachment bytes one message carries, every file together; absent: it sends no attachments. */
+	readonly maxAttachmentBytes?: number
 }
 
 export interface EmailSender {
@@ -94,4 +108,9 @@ export function oneClickUnsubscribeHeaders(url: string): Readonly<Record<string,
 /** The one retry rule: an unknown outcome is retried only over an idempotent transport. */
 export function mayRetryDelivery(error: EmailDeliveryError, capabilities: EmailSenderCapabilities): boolean {
 	return error.retryable && (error.outcome === 'not_sent' || capabilities.idempotent)
+}
+
+/** The bytes of every attachment of `message` together. */
+export function attachmentBytes(message: EmailMessage): number {
+	return (message.attachments ?? []).reduce((total, attachment) => total + attachment.content.byteLength, 0)
 }

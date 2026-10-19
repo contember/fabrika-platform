@@ -1,5 +1,5 @@
 import type { EmailSenderIdentity } from './config.js'
-import { EmailDeliveryError, type EmailMessage } from './email.js'
+import { attachmentBytes, EmailDeliveryError, type EmailMessage, type EmailSenderCapabilities } from './email.js'
 
 /** The longest subject a message may have, in UTF-16 code units: RFC 5322's line limit. */
 export const MAX_EMAIL_SUBJECT_LENGTH = 998
@@ -64,6 +64,34 @@ export function validateEmailMessage(message: EmailMessage): void {
 	if (message.replyTo !== undefined && !isValidEmailAddress(message.replyTo)) throw invalidMessage('Email reply-to address is invalid')
 	if (message.fromName !== undefined && !isValidEmailDisplayName(message.fromName)) throw invalidMessage('Email sender name is invalid')
 	if (message.unsubscribeUrl !== undefined && !isUnsubscribeUrl(message.unsubscribeUrl)) throw invalidMessage('Email unsubscribe URL is invalid')
+	const attachments = message.attachments ?? []
+	if (attachments.length > MAX_EMAIL_ATTACHMENTS) throw invalidMessage(`Email has more than ${MAX_EMAIL_ATTACHMENTS} attachments`)
+	for (const attachment of attachments) {
+		if (!isValidAttachmentFilename(attachment.filename)) throw invalidMessage('Email attachment name is invalid')
+		if (!MEDIA_TYPE.test(attachment.contentType)) throw invalidMessage('Email attachment type is invalid')
+	}
+}
+
+/**
+ * Refuses a message whose attachments `capabilities` does not carry: any attachment where the transport sends none, or
+ * more bytes together than its `maxAttachmentBytes`. `label` names the transport in the message.
+ */
+export function validateEmailAttachments(message: EmailMessage, capabilities: EmailSenderCapabilities, label: string): void {
+	if ((message.attachments ?? []).length === 0) return
+	const limit = capabilities.maxAttachmentBytes
+	if (limit === undefined) throw invalidMessage(`${label} sends no attachments`)
+	const bytes = attachmentBytes(message)
+	if (bytes > limit) throw invalidMessage(`Email attachments have ${bytes} bytes, more than the ${limit} ${label} sends`)
+}
+
+/** The most files one message carries. */
+export const MAX_EMAIL_ATTACHMENTS = 20
+
+const MEDIA_TYPE = /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$/
+
+/** 1..255 characters, no control characters, no path separator and no `"`, so every transport can quote it. */
+export function isValidAttachmentFilename(value: string): boolean {
+	return value.length > 0 && value.length <= 255 && value.trim() === value && !containsControlCharacter(value) && !/[/\\"]/.test(value)
 }
 
 /** The longest unsubscribe URL a header carries: one header line, with room for its name. */

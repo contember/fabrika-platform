@@ -11,7 +11,7 @@ import {
 	type EmailSender,
 	type EmailSenderCapabilities,
 } from './email.js'
-import { validateEmailMessage } from './validation.js'
+import { validateEmailAttachments, validateEmailMessage } from './validation.js'
 
 export interface MemoryEmail {
 	readonly message: EmailMessage
@@ -51,6 +51,9 @@ interface KeyedEmail {
 	readonly messageId: string
 }
 
+/** Resend's bound, so a test meets the limit a production transport has. */
+const MEMORY_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
 const FAULT_MESSAGES: Readonly<Record<MemoryFault, string>> = {
 	provider_rejected: 'The memory sender rejected the message',
 	provider_unauthorized: 'The memory sender refused the credentials',
@@ -73,7 +76,14 @@ export class MemoryEmailSender implements EmailSender {
 	#taken = 0
 
 	constructor(options: MemoryEmailSenderOptions = {}) {
-		this.capabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1, listUnsubscribe: true, ...options.capabilities }
+		this.capabilities = {
+			idempotent: true,
+			confirmation: 'sync',
+			maxBatch: 1,
+			listUnsubscribe: true,
+			maxAttachmentBytes: MEMORY_MAX_ATTACHMENT_BYTES,
+			...options.capabilities,
+		}
 		if (!Number.isSafeInteger(this.capabilities.maxBatch) || this.capabilities.maxBatch < 1) {
 			throw new EmailDeliveryError('The memory sender batch size is invalid', { code: 'invalid_configuration' })
 		}
@@ -127,6 +137,7 @@ export class MemoryEmailSender implements EmailSender {
 		if (message.unsubscribeUrl !== undefined && this.capabilities.listUnsubscribe !== true) {
 			throw new EmailDeliveryError('The memory sender writes no List-Unsubscribe header', { code: 'invalid_message' })
 		}
+		validateEmailAttachments(message, this.capabilities, 'The memory sender')
 		if (signal.aborted) throw failure('aborted')
 		const handoff: MutableHandoff = { message, at: this.#now(), taken: false, answer: 'network_error' }
 		this.#handoffs.push(handoff)

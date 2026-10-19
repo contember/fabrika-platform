@@ -10,6 +10,7 @@ const requestSchema = z.object({
 	text: z.string(),
 	html: z.string().optional(),
 	reply_to: z.string().optional(),
+	attachments: z.array(z.object({ filename: z.string(), content: z.string(), content_type: z.string() }).strict()).optional(),
 	headers: z.object({ 'List-Unsubscribe': z.string(), 'List-Unsubscribe-Post': z.literal('List-Unsubscribe=One-Click') }).strict().optional(),
 })
 
@@ -32,6 +33,15 @@ describeEmailSenderConformance('ResendEmailSender', {
 			...(body.reply_to === undefined ? {} : { replyTo: body.reply_to }),
 			...(fromName === undefined ? {} : { fromName }),
 			...(body.headers === undefined ? {} : { unsubscribeUrl: body.headers['List-Unsubscribe'].replace(/^<(.*)>$/, '$1') }),
+			...(body.attachments === undefined
+				? {}
+				: {
+					attachments: body.attachments.map((attachment) => ({
+						filename: attachment.filename,
+						contentType: attachment.content_type,
+						content: attachment.content,
+					})),
+				}),
 			idempotencyKey: request.headers.get('idempotency-key') ?? undefined,
 		}
 	},

@@ -9,7 +9,10 @@ import { z } from 'zod'
 import { type EmailProvider, parseProviderVariables } from './config.js'
 import { emailContentOf, sameEmailContent } from './content.js'
 import { EmailDeliveryError, type EmailDeliveryResult, type EmailMessage, type EmailSender, type EmailSenderCapabilities } from './email.js'
-import { validateEmailMessage } from './validation.js'
+import { validateEmailAttachments, validateEmailMessage } from './validation.js'
+
+/** Resend's bound, so a local composition meets the limit a production transport has. */
+const DIRECTORY_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 const capturedEmailSchema = z.object({
 	messageId: z.string().min(1),
@@ -21,6 +24,7 @@ const capturedEmailSchema = z.object({
 	replyTo: z.string().optional(),
 	fromName: z.string().optional(),
 	unsubscribeUrl: z.string().optional(),
+	attachments: z.array(z.object({ filename: z.string(), contentType: z.string(), content: z.string() })).readonly().optional(),
 	capturedAt: z.number().int(),
 })
 
@@ -33,7 +37,13 @@ export interface DirectoryEmailSenderOptions {
 }
 
 export class DirectoryEmailSender implements EmailSender {
-	readonly capabilities: EmailSenderCapabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1, listUnsubscribe: true }
+	readonly capabilities: EmailSenderCapabilities = {
+		idempotent: true,
+		confirmation: 'sync',
+		maxBatch: 1,
+		listUnsubscribe: true,
+		maxAttachmentBytes: DIRECTORY_MAX_ATTACHMENT_BYTES,
+	}
 	readonly #directory: string
 	readonly #now: () => number
 
@@ -48,6 +58,7 @@ export class DirectoryEmailSender implements EmailSender {
 	/** One file per idempotency key: a repeated send of the same message answers the first id, as a provider does. */
 	async send(message: EmailMessage, signal: AbortSignal): Promise<EmailDeliveryResult> {
 		validateEmailMessage(message)
+		validateEmailAttachments(message, this.capabilities, 'The mail capture')
 		if (signal.aborted) throw new EmailDeliveryError('The mail capture was aborted by the caller', { code: 'aborted' })
 		const messageId = createHash('sha256').update(message.idempotencyKey).digest('hex')
 		const captured: CapturedEmail = { messageId, idempotencyKey: message.idempotencyKey, ...emailContentOf(message), capturedAt: this.#now() }

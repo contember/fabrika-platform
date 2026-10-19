@@ -4,7 +4,7 @@
 // that is not available; a misconfigured transport does not boot.
 // The job runs need FABRIKA_TEST_POSTGRES_URL, since a job's lease lives in @fabrika/db.
 
-import { compileContract, ContractError, defineApp } from '@fabrika/app/contract'
+import { compileContract, ContractError, defineApp, type FileRef } from '@fabrika/app/contract'
 import {
 	type ApplicationEnvironment,
 	type AppMail,
@@ -25,7 +25,9 @@ import type { EmailProvider } from '@fabrika/email'
 import { resendEmailProvider } from '@fabrika/email/resend'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
-import { NO_MAIL, resolveMailTransports } from '../jobs/mail'
+import { HttpError } from '../errors'
+import type { OpenedFile } from '../files/handle'
+import { jobMail, NO_MAIL, resolveMailTransports } from '../jobs/mail'
 import { bootApp, environment, frameworkEnvFor, ISSUER, workloadTokensFor } from './fixtures/implement/harness'
 import { tables } from './kit-fixture/src/db/tables'
 import { vocabulary } from './kit-fixture/src/vocabulary'
@@ -193,6 +195,51 @@ describe('the key prefix', () => {
 		expect(mailKeyPrefix({ ...DEPLOYED, issuer: 'https://iam.other.example' })).not.toBe(mailKeyPrefix(DEPLOYED))
 		expect(mailKeyPrefix({ ...DEPLOYED, issuer: LOCAL_ISSUER })).not.toBe(mailKeyPrefix(DEPLOYED))
 		expect(transportMailKey(DEPLOYED, 'n-1')).toBe(`${mailKeyPrefix(DEPLOYED)}n-1`)
+	})
+})
+
+describe('attachments', () => {
+	const bytes = (size: number): Uint8Array => new Uint8Array(size).fill(0x61)
+	const stored: Readonly<Record<string, OpenedFile>> = {
+		a: { id: 'a', name: 'report/2026 "final".pdf', type: 'application/pdf', size: 3, bytes: bytes(3) },
+		b: { id: 'b', name: null, type: 'text/plain', size: 4, bytes: bytes(4) },
+	}
+	/** `ctx.files.open` over two stored files: a file over `maxBytes` is refused as open refuses it, any other id as not ready. */
+	const open = async (file: unknown, options: { readonly maxBytes: number }): Promise<OpenedFile> => {
+		const id: unknown = typeof file === 'object' && file !== null ? Reflect.get(file, 'id') : undefined
+		const opened = typeof id === 'string' ? stored[id] : undefined
+		if (opened === undefined) throw new HttpError(409, 'file_not_ready', 'The file is not ready yet')
+		if (opened.size > options.maxBytes) throw new HttpError(413, 'too_large', 'too large')
+		return opened
+	}
+	const mailOver = (sender: MemoryEmailSender) =>
+		jobMail({ transport: { sender, available: true }, keyPrefix: 'p:', signal: new AbortController().signal, assertLive: () => {}, open })
+	const refFor = (id: string): FileRef => ({ id, name: null, type: 'text/plain', size: 0, status: 'live' })
+
+	test('reads each file, names it for a header and passes the bytes; no file is none', async () => {
+		const sender = new MemoryEmailSender()
+		await mailOver(sender).send({ ...message, attachments: ['a', 'b'].map(refFor) })
+		expect(sender.accepted[0]?.message.attachments).toEqual([
+			{ filename: 'report_2026 _final_.pdf', contentType: 'application/pdf', content: bytes(3) },
+			{ filename: 'attachment', contentType: 'text/plain', content: bytes(4) },
+		])
+		await mailOver(sender).send({ ...message, idempotencyKey: 'n-2', attachments: [] })
+		expect(sender.accepted[1]?.message).not.toHaveProperty('attachments')
+	})
+
+	test("bounds the bytes together by the transport's limit, and refuses them over a transport that sends none", async () => {
+		const small = new MemoryEmailSender({ capabilities: { maxAttachmentBytes: 5 } })
+		await expect(mailOver(small).send({ ...message, attachments: ['a', 'b'].map(refFor) })).rejects.toMatchObject({ code: 'invalid_message' })
+		const none = new MemoryEmailSender({ capabilities: { maxAttachmentBytes: undefined } })
+		await expect(mailOver(none).send({ ...message, attachments: ['a'].map(refFor) })).rejects.toMatchObject({ code: 'invalid_message' })
+		expect([small.accepted, none.accepted]).toEqual([[], []])
+	})
+
+	test('a file that is not ready refuses the send, and an installation without a transport reads none', async () => {
+		const sender = new MemoryEmailSender()
+		await expect(mailOver(sender).send({ ...message, attachments: ['pending'].map(refFor) })).rejects.toBeInstanceOf(HttpError)
+		const absent = jobMail({ transport: NO_MAIL, keyPrefix: 'p:', signal: new AbortController().signal, assertLive: () => {}, open })
+		await expect(absent.send({ ...message, attachments: ['pending'].map(refFor) })).rejects.toMatchObject({ code: 'mail_not_configured' })
 	})
 })
 

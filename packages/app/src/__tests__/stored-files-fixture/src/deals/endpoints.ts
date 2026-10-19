@@ -135,3 +135,29 @@ export const scans = app.webhook('/hooks/scans', {
 	const image = await ctx.files.put('catalog', new Uint8Array(PNG_BYTES), { type: 'image/png', name: `${input.id}.png` })
 	await ctx.db.app('catalog.write').products.insert({ name: input.type, image })
 })
+
+/** Mails the catalog's images as attachments: each a live file whose reference the job read from its column. */
+export const catalogMail = app.cron('0 7 * * *', { actions: ['catalog.read'], scope: 'app', mailer: 'installation' }).handle(async ({ ctx }) => {
+	const { items } = await ctx.db.app('catalog.read').products.list()
+	await ctx.mail.send({
+		to: 'buyer@example.com',
+		subject: 'The catalog',
+		text: 'The images of the catalog are attached.',
+		idempotencyKey: `catalog-${ctx.runId}`,
+		attachments: items.flatMap((product) => (product.image === null ? [] : [product.image])),
+	})
+})
+
+/** Mails the photos of the submissions; a photo the scan has not cleared yet is refused. */
+export const intakeMail = app.cron('0 8 * * *', { actions: ['intake.drain'], scope: 'app', mailer: 'installation', retries: 0 }).handle(
+	async ({ ctx }) => {
+		const { items } = await ctx.db.app('intake.drain').submissions.list()
+		await ctx.mail.send({
+			to: 'reviewer@example.com',
+			subject: 'New submissions',
+			text: 'The photos of the submissions are attached.',
+			idempotencyKey: `intake-${ctx.runId}`,
+			attachments: items.flatMap((submission) => (submission.photo === null ? [] : [submission.photo])),
+		})
+	},
+)

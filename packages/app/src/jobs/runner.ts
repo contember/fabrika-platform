@@ -863,16 +863,14 @@ function jobMailOf(job: BoundJob, mailer: JobMailer, frame: RequestFrame, signal
 	if (transport === null) {
 		throw new ServerFault('facility_unbound', `job '${job.name}' declares mailer: '${mailer}', and boot resolved no transport for it`)
 	}
-	return jobMail({
-		transport,
-		keyPrefix: context.mail.keyPrefix,
-		signal,
-		assertLive: () => {
-			if (frame.ended) {
-				throw new CapabilityRefusedError('ended', `attempt ${frame.id} of job '${job.name}' has ended; it sends no mail`)
-			}
-		},
-	})
+	const assertLive = (): void => {
+		if (frame.ended) {
+			throw new CapabilityRefusedError('ended', `attempt ${frame.id} of job '${job.name}' has ended; it sends no mail`)
+		}
+	}
+	// The attempt's holdings belong to its frame, so this work opens what `ctx.files.open` of the attempt opens.
+	const files = storedFilesHandle(context.fileKinds, new FileWork(frame, frame.id), { where: `job '${job.name}'`, check: assertLive, writes: false })
+	return jobMail({ transport, keyPrefix: context.mail.keyPrefix, signal, assertLive, open: files.open })
 }
 
 /**

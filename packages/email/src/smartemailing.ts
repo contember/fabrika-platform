@@ -12,7 +12,7 @@ import {
 	type EmailSenderCapabilities,
 } from './email.js'
 import { parseTimeout, postToProvider } from './http.js'
-import { isValidEmailSenderIdentity, isVisibleAscii, validateEmailMessage } from './validation.js'
+import { isValidEmailSenderIdentity, isVisibleAscii, validateEmailAttachments, validateEmailMessage } from './validation.js'
 
 const SMARTEMAILING_SEND_URL = 'https://app.smartemailing.cz/api/v3/send/transactional-emails-bulk'
 const LABEL = 'SmartEmailing'
@@ -68,6 +68,7 @@ export class SmartEmailingEmailSender implements EmailSender {
 		if (message.unsubscribeUrl !== undefined) {
 			throw new EmailDeliveryError('SmartEmailing cannot write the List-Unsubscribe headers', { code: 'invalid_message' })
 		}
+		validateEmailAttachments(message, this.capabilities, LABEL)
 
 		const senderName = message.fromName ?? this.#from.name
 		const response = await postToProvider({

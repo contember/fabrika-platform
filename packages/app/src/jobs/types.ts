@@ -3,6 +3,7 @@
 
 import type { EmailDeliveryResult, EmailSenderCapabilities } from '@fabrika/email'
 import type { CronJob, DimensionOf } from '../contract/define'
+import type { FileRef } from '../contract/file'
 import type { AppCapability, Ref, Within } from '../implement/capability'
 import type { AppUrl } from '../implement/urls'
 
@@ -53,6 +54,12 @@ export interface AppMailMessage {
 	 * an `https:` link, usually `ctx.url` of a public procedure that verifies a signed token.
 	 */
 	readonly unsubscribe?: { readonly url: string }
+	/**
+	 * Files the message carries: references this attempt holds and may read, as `ctx.files.open` takes them. Only a
+	 * `live` file is sent; the bytes of all of them together stay within the transport's `maxAttachmentBytes`, and a
+	 * transport without it refuses the message. The idempotency key covers the attachments.
+	 */
+	readonly attachments?: readonly FileRef[]
 }
 
 /** `ctx.mail` of a job that declares `mailer`. */

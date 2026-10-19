@@ -18,7 +18,13 @@ describe('MemoryEmailSender', () => {
 		expect(await sender.send(message, signal)).toEqual({ status: 'accepted', provider: 'stand-in', messageId: 'memory-1' })
 		expect(sender.accepted).toEqual([{ message, messageId: 'memory-1', acceptedAt: 42 }])
 		expect(sender.handoffs).toEqual([{ message, at: 42, taken: true, answer: 'accepted' }])
-		expect(sender.capabilities).toEqual({ idempotent: true, confirmation: 'sync', maxBatch: 1, listUnsubscribe: true })
+		expect(sender.capabilities).toEqual({
+			idempotent: true,
+			confirmation: 'sync',
+			maxBatch: 1,
+			listUnsubscribe: true,
+			maxAttachmentBytes: 25 * 1024 * 1024,
+		})
 	})
 
 	const faults: { name: string; fault: (sender: MemoryEmailSender) => void; code: EmailDeliveryErrorCode }[] = [
@@ -121,7 +127,13 @@ describe('MemoryEmailSender', () => {
 		const second = await sender.send(message, signal)
 		expect(second.messageId).not.toBe(first.messageId)
 		expect(sender.accepted.map((email) => email.message)).toEqual([message, message])
-		expect(sender.capabilities).toEqual({ idempotent: false, confirmation: 'queued', maxBatch: 1, listUnsubscribe: true })
+		expect(sender.capabilities).toEqual({
+			idempotent: false,
+			confirmation: 'queued',
+			maxBatch: 1,
+			listUnsubscribe: true,
+			maxAttachmentBytes: 25 * 1024 * 1024,
+		})
 	})
 
 	test('refuses an invalid message without a handoff', async () => {

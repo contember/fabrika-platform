@@ -7,17 +7,21 @@
 import { type ContractArtifact, JOB_SITE_PREFIX, type JobMailer, sha256Hex } from '@fabrika/auth-core'
 import {
 	EMAIL_PROVIDER_VARIABLE,
+	type EmailAttachment,
 	EmailDeliveryError,
 	type EmailDeliveryResult,
 	type EmailMessage,
 	type EmailProviderRegistry,
 	type EmailSender,
 	emailSenderFromEnv,
+	MAX_EMAIL_ATTACHMENTS,
 	mayRetryDelivery,
 	NO_EMAIL_PROVIDER,
 	pickEmailEnvironment,
 } from '@fabrika/email'
 import { z } from 'zod/v4'
+import { HttpError } from '../errors'
+import type { OpenedFile } from '../files/handle'
 import type { ApplicationEnvironment } from '../implement/implement'
 import type { AppMail, AppMailMessage } from './types'
 
@@ -72,10 +76,12 @@ export interface JobMailInput {
 	readonly signal: AbortSignal
 	/** Throws once the attempt has ended. */
 	readonly assertLive: () => void
+	/** `ctx.files.open` of the attempt: the bytes of a live file whose reference it holds, at most `maxBytes`. */
+	readonly open: (file: unknown, options: { readonly maxBytes: number }) => Promise<OpenedFile>
 }
 
 export function jobMail(input: JobMailInput): AppMail {
-	const { transport: { sender, available }, keyPrefix, signal: attempt, assertLive } = input
+	const { transport: { sender, available }, keyPrefix, signal: attempt, assertLive, open } = input
 	return Object.freeze({
 		available,
 		capabilities: sender.capabilities,
@@ -85,6 +91,8 @@ export function jobMail(input: JobMailInput): AppMail {
 			if (typeof key !== 'string' || !APP_MAIL_KEY.test(key)) {
 				throw new EmailDeliveryError(`Email idempotency key is not 1..${MAX_APP_MAIL_KEY_LENGTH} visible ASCII characters`, { code: 'invalid_message' })
 			}
+			// Without a transport the send fails `mail_not_configured` below, and no file is read for it.
+			const attachments = available ? await readAttachments(message.attachments ?? [], sender.capabilities.maxAttachmentBytes, open) : []
 			const transported: EmailMessage = {
 				to: message.to,
 				subject: message.subject,
@@ -94,6 +102,7 @@ export function jobMail(input: JobMailInput): AppMail {
 				...(message.replyTo === undefined ? {} : { replyTo: message.replyTo }),
 				...(message.fromName === undefined ? {} : { fromName: message.fromName }),
 				...(message.unsubscribe === undefined ? {} : { unsubscribeUrl: message.unsubscribe.url }),
+				...(attachments.length === 0 ? {} : { attachments }),
 			}
 			try {
 				return await sender.send(transported, signal === undefined ? attempt : AbortSignal.any([attempt, signal]))
@@ -107,6 +116,52 @@ export function jobMail(input: JobMailInput): AppMail {
 		},
 		mayRetry: (error: unknown): boolean => error instanceof EmailDeliveryError && mayRetryDelivery(error, sender.capabilities),
 	})
+}
+
+/**
+ * The bytes of each file of `files`, read through `ctx.files.open` (which refuses a file that is not live, or whose
+ * reference the attempt does not hold) and bounded together by the transport's limit.
+ */
+async function readAttachments(
+	files: readonly unknown[],
+	maxBytes: number | undefined,
+	open: JobMailInput['open'],
+): Promise<readonly EmailAttachment[]> {
+	if (files.length === 0) {
+		return []
+	}
+	if (maxBytes === undefined) {
+		throw new EmailDeliveryError('This mail transport sends no attachments', { code: 'invalid_message' })
+	}
+	if (files.length > MAX_EMAIL_ATTACHMENTS) {
+		throw new EmailDeliveryError(`Email has more than ${MAX_EMAIL_ATTACHMENTS} attachments`, { code: 'invalid_message' })
+	}
+	const attachments: EmailAttachment[] = []
+	let remaining = maxBytes
+	for (const file of files) {
+		const opened = await open(file, { maxBytes: remaining }).catch((error: unknown) => {
+			if (error instanceof HttpError && error.type === 'too_large') {
+				throw new EmailDeliveryError(`Email attachments have more than the ${maxBytes} bytes this transport sends`, { code: 'invalid_message' })
+			}
+			throw error
+		})
+		remaining -= opened.size
+		attachments.push({ filename: attachmentName(opened), contentType: opened.type, content: opened.bytes })
+	}
+	return attachments
+}
+
+const MAX_ATTACHMENT_NAME_LENGTH = 255
+
+/** The uploader's name with no path separator or quote, which every transport quotes; `attachment` without one. */
+function attachmentName(file: OpenedFile): string {
+	let name = ''
+	for (const character of (file.name ?? '').replace(/[/\\"]/g, '_')) {
+		if (name.length + character.length > MAX_ATTACHMENT_NAME_LENGTH) break
+		name += character
+	}
+	const trimmed = name.trim()
+	return trimmed === '' ? 'attachment' : trimmed
 }
 
 export interface MailTransportInput {
@@ -222,7 +277,13 @@ function ownTransport(names: readonly string[], input: MailTransportInput, probl
 	return null
 }
 
-const SenderCapabilities = z.object({ idempotent: z.boolean(), confirmation: z.enum(['sync', 'queued']), maxBatch: z.int().positive() })
+const SenderCapabilities = z.object({
+	idempotent: z.boolean(),
+	confirmation: z.enum(['sync', 'queued']),
+	maxBatch: z.int().positive(),
+	listUnsubscribe: z.boolean().optional(),
+	maxAttachmentBytes: z.int().positive().optional(),
+})
 
 /** What `serve`'s `mail` returned: a sender, `null` for none, `undefined` for anything else. */
 function parseSender(value: unknown): EmailSender | null | undefined {

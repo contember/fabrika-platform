@@ -1,4 +1,4 @@
-import { describeEmailSenderConformance } from '../conformance.js'
+import { describeEmailSenderConformance, wireMessageOf } from '../conformance.js'
 import { MemoryEmailSender } from '../memory.js'
 
 let sender = new MemoryEmailSender()
@@ -10,6 +10,6 @@ describeEmailSenderConformance('MemoryEmailSender', {
 		return sender
 	},
 	async stored() {
-		return sender.accepted.map((email) => email.message)
+		return sender.accepted.map((email) => wireMessageOf(email.message))
 	},
 })

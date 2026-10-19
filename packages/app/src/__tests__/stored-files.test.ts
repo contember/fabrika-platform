@@ -255,6 +255,33 @@ if (postgres !== null) {
 		})
 	})
 
+	describe('a mail attachment', () => {
+		test('a mailer job attaches the live files it read from a column, each with its name, type and bytes', async () => {
+			await json('catalog.render', { name: 'desk' })
+			expect((await kit.runJob('catalogMail')).status).toBe('succeeded')
+			const sent = kit.mail.accepted.at(-1)?.message
+			expect(sent?.subject).toBe('The catalog')
+			expect(sent?.attachments?.map((attachment) => attachment.filename)).toContain('desk.png')
+			for (const attachment of sent?.attachments ?? []) {
+				expect(attachment).toMatchObject({ contentType: 'image/png', content: PNG })
+			}
+		})
+
+		test('refuses a photo the scan has not cleared, and sends it once the scan has', async () => {
+			const registered = await kit.fetch('/api/intake.register', {
+				method: 'POST',
+				body: multipart({ name: 'Cy', challengeToken: crypto.randomUUID() }, [['photo', PNG, 'cy.png', 'image/png']]),
+			})
+			expect(registered.status).toBe(200)
+			const before = kit.mail.accepted.length
+			expect(await kit.runJob('intakeMail')).toMatchObject({ status: 'failed', code: 'handler_failed' })
+			expect(kit.mail.accepted).toHaveLength(before)
+			await kit.runJob(FILE_SCAN_JOB)
+			expect((await kit.runJob('intakeMail')).status).toBe('succeeded')
+			expect(kit.mail.accepted.at(-1)?.message.attachments?.map((attachment) => attachment.filename)).toContain('cy.png')
+		})
+	})
+
 	describe('a public procedure', () => {
 		test('serves a catalog image to anyone by a GET whose input names the file', async () => {
 			const rendered = await json('catalog.render', { name: 'chair' })
