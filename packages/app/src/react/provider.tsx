@@ -6,7 +6,7 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react'
 import { z } from 'zod/v4'
 import { type PageCaller, parsePageCaller } from '../client/caller'
-import { attachmentAt, type ClientNode, clientNodeOf, downloadFile } from '../client/contract'
+import { attachmentAt, type ClientNode, clientNodeOf, type DownloadedFile, downloadFile } from '../client/contract'
 import { startErrorReporting } from '../client/error-reporting'
 import { RpcError, type RpcFetch } from '../client/transport'
 import { BROWSER_CONFIG_FILE, joinPath, PAGE_CALLER_FILE } from '../contract/defaults'
@@ -62,7 +62,7 @@ export interface Fabrika {
 	/** The call of `procedure` on the provider's client of its mount. */
 	target(procedure: unknown, hook: string): ResolvedProcedure
 	/** The download of attachment `procedure` on the provider's client of its mount. */
-	attachment(procedure: unknown, hook: string): (input: unknown) => Promise<File>
+	attachment(procedure: unknown, hook: string): (input: unknown) => Promise<DownloadedFile>
 }
 
 export interface ResolvedProcedure extends StoreTarget {

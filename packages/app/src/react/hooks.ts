@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { z } from 'zod/v4'
-import type { AttachmentProcedure, DownloadInput } from '../client/contract'
+import type { AttachmentProcedure, DownloadedFile, DownloadInput, FileProcedure } from '../client/contract'
 import type { Schema } from '../contract/define'
 import { type FabrikaError, toFabrikaError } from './errors'
 import { parentOf, prefixOf, useFabrika } from './provider'
@@ -170,7 +170,7 @@ export type DownloadArgument<I> = DownloadInput<I>[0]
  * that hands the provider a client over the kit downloads over the kit. `mutate(input)` saves the file in a browser and
  * answers it as `data`; a refusal is the state's `error`, as for `useMutation`. It refetches nothing.
  */
-export function useDownload<I>(procedure: AttachmentProcedure<I>): MutationState<DownloadArgument<I>, File> {
+export function useDownload<I>(procedure: AttachmentProcedure<I> | FileProcedure<I>): MutationState<DownloadArgument<I>, DownloadedFile> {
 	const fabrika = useFabrika('useDownload')
 	const run = useMemo(() => fabrika.attachment(procedure, 'useDownload'), [fabrika, procedure])
 	return useRun(run, NOTHING_AFTER)

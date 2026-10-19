@@ -4,6 +4,7 @@
 // everywhere; the requests skip cleanly when FABRIKA_TEST_POSTGRES_URL is unset. A real bucket backs the object store
 // when FABRIKA_TEST_S3_* is set.
 
+import { createClient, download, DownloadedFile } from '@fabrika/app/client'
 import { compileContract } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
@@ -203,6 +204,30 @@ if (postgres !== null) {
 			})
 			expect(response.status).toBe(404)
 			expect((await files()).length).toBe(before)
+		})
+	})
+
+	describe('the typed client', () => {
+		const api = createClient(contract, 'api', { fetch: call })
+
+		test('sends a file field as a part of a multipart body, links a GET file procedure and downloads it', async () => {
+			const saved = await api.attachments.upload({ dealId: 'd1', name: 'Brief', file: new File([PDF], 'brief.pdf', { type: 'application/pdf' }) })
+			const url = api.attachments.download.url({ dealId: 'd1', id: saved.id })
+			expect(url).toBe(`/api/attachments.download?dealId=d1&id=${saved.id}`)
+			expect((await call(url)).status).toBe(200)
+			const file = await download(api.attachments.download, { dealId: 'd1', id: saved.id })
+			expect(file).toBeInstanceOf(DownloadedFile)
+			expect(file.name).toBe('brief.pdf')
+			expect(new Uint8Array(await file.blob().arrayBuffer())).toEqual(PDF)
+		})
+
+		test('sends an input whose every file is left out as JSON', async () => {
+			expect(await api.catalog.addProduct({ name: 'Plain' })).toMatchObject({ version: 1 })
+		})
+
+		test('a client with a key has no URL of a file: the key never goes into one', () => {
+			const keyed = createClient(contract, 'api', { fetch: call, key: 'px_secret' })
+			expect(() => keyed.attachments.download.url({ dealId: 'd1', id: 'x' })).toThrow(/never goes into a URL/)
 		})
 	})
 

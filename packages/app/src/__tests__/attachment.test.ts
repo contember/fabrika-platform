@@ -409,7 +409,7 @@ describe('the client downloads the file', () => {
 		expect(refusal instanceof RpcError ? refusal.httpStatus : null).toBe(403)
 	})
 
-	test('download takes only a client attachment procedure', async () => {
-		await expect(download({ id: 'api.forged', filename: 'x.csv' })).rejects.toThrow("'api.forged' is not an attachment procedure of a client")
+	test('download takes only a client procedure that answers a file', async () => {
+		await expect(download({ id: 'api.forged', filename: 'x.csv' })).rejects.toThrow("'api.forged' answers no file")
 	})
 })

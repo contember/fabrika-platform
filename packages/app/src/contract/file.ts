@@ -68,3 +68,11 @@ export function fileOf(schema: Schema | z.core.$ZodType): FileMark | null {
 function isMark(value: unknown): value is FileMark {
 	return typeof value === 'object' && value !== null && marks.has(value)
 }
+
+type ClientValue<V> = V extends FileRef ? Blob : V extends readonly FileRef[] ? readonly Blob[] : V
+
+/**
+ * An input as a client sends it: each file field takes the `Blob` (or `File`) the page holds, which the client sends as
+ * a part of its own. An input without a file field is the input itself.
+ */
+export type ClientInput<T> = [Extract<T[keyof T], FileRef | readonly FileRef[]>] extends [never] ? T : { [K in keyof T]: ClientValue<T[K]> }

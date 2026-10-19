@@ -1,13 +1,16 @@
 // The typed client of one contract mount: `api.notes.remove({ id })` POSTs the input to `/api/notes.remove`, the
 // path `compileContract` gives that procedure. Built from the contract value, so it can call only declared
-// procedures, and it checks each answer against the procedure's output schema before handing it out. An attachment
-// procedure answers a file, which `download(api.<procedure>, input)` fetches and saves.
+// procedures, and it checks each answer against the procedure's output schema before handing it out. An input with a
+// file field goes as `multipart/form-data`: its JSON first, then each file. An attachment procedure and a procedure
+// whose output is a file answer a file, which `download(api.<procedure>, input)` fetches; a GET one also has `url`.
 
 import { z } from 'zod/v4'
 import { type AttachmentBrand, attachmentOf } from '../contract/attachment'
 import { isProcedure, type ProcedureTreeDeclaration, type ProcedureType, SURFACE_SECTIONS } from '../contract/declaration'
+import { FILE_INPUT_PART } from '../contract/defaults'
 import { joinPath, LINK_API_SEGMENT } from '../contract/defaults'
 import type { AnyContract, InputSchema, Procedure, Schema, Surface } from '../contract/define'
+import { type ClientInput, type FileBrand, fileOf } from '../contract/file'
 import { type FileClient, type FileTransport, type LinkCollections, type LinkFileClient, linkFiles, sessionFiles } from './files'
 import { type BounceConfig, type BounceOption, exchange, exchangeFile, resolveBounce, RpcError, type RpcFetch } from './transport'
 
@@ -23,12 +26,12 @@ export type ClientMount<C> =
  * it parses with (`@fabrika/app/react` reads a cached answer back through it).
  */
 export type ProcedureCall<I, O extends Schema> =
-	& ([I] extends [InputSchema] ? (input: z.input<I>) => Promise<z.output<O>> : (input?: Record<never, never>) => Promise<z.output<O>>)
+	& ([I] extends [InputSchema] ? (input: ClientInput<z.input<I>>) => Promise<z.output<O>> : (input?: Record<never, never>) => Promise<z.output<O>>)
 	& { readonly output: O }
 
 export type ClientTree<T> = {
 	readonly [K in keyof T]: T[K] extends Procedure<'query' | 'mutation', infer I, infer O, unknown>
-		? O extends AttachmentBrand ? AttachmentProcedure<I> : ProcedureCall<I, O>
+		? O extends AttachmentBrand ? AttachmentProcedure<I> : O extends FileBrand<string> ? FileProcedure<I> : ProcedureCall<I, O>
 		: ClientTree<T[K]>
 }
 
@@ -54,12 +57,14 @@ export type ContractClient<C, M> = MountOf<C, M> extends { readonly kind: 'link'
 	: MountOf<C, M> extends { readonly callers: infer Callers; readonly procedures: infer T } ? ClientTree<T> & SessionFiles<C, Callers>
 	: never
 
-/** The answer of a client procedure: `ResultOf<typeof api.tasks.get>`; an attachment procedure answers a `File`. */
-export type ResultOf<F> = F extends (...args: never[]) => Promise<infer R> ? R : F extends AttachmentProcedure<unknown> ? File : never
+/** The answer of a client procedure: `ResultOf<typeof api.tasks.get>`; a procedure that answers a file, a `DownloadedFile`. */
+export type ResultOf<F> = F extends (...args: never[]) => Promise<infer R> ? R
+	: F extends AttachmentProcedure<unknown> | FileProcedure<unknown> ? DownloadedFile
+	: never
 
 /** The input of a client procedure as the caller writes it: `InputOf<typeof api.tasks.create>`. */
 export type InputOf<F> = F extends (...args: infer A) => Promise<unknown> ? A[0]
-	: F extends AttachmentProcedure<infer I> ? DownloadInput<I>[0]
+	: F extends AttachmentProcedure<infer I> | FileProcedure<infer I> ? DownloadInput<I>[0]
 	: never
 
 export interface ClientOptions {
@@ -126,12 +131,44 @@ function getRequestOf(options: ClientOptions): () => RequestInit {
 
 function requestOf(options: ClientOptions, input: unknown): () => RequestInit {
 	return () => {
-		const headers = new Headers({ 'Content-Type': 'application/json' })
+		const files = fileValues(input)
+		// A multipart body's boundary is the one `fetch` writes, so its Content-Type is left to it.
+		const headers = new Headers(files === null ? { 'Content-Type': 'application/json' } : {})
 		if (options.key !== undefined) {
 			headers.set('Authorization', `Bearer ${options.key}`)
 		}
-		return { method: 'POST', credentials: options.key === undefined ? 'same-origin' : 'omit', headers, body: JSON.stringify(input ?? {}) }
+		const body = files === null ? JSON.stringify(input ?? {}) : multipartBody(files)
+		return { method: 'POST', credentials: options.key === undefined ? 'same-origin' : 'omit', headers, body }
 	}
+}
+
+/** An input's file fields and the rest: `null` when it holds no `Blob`, so it goes as JSON. */
+function fileValues(input: unknown): { readonly json: Record<string, unknown>; readonly files: readonly (readonly [string, Blob])[] } | null {
+	if (typeof input !== 'object' || input === null) {
+		return null
+	}
+	const json: Record<string, unknown> = {}
+	const files: (readonly [string, Blob])[] = []
+	for (const [name, value] of Object.entries(input)) {
+		if (value instanceof Blob) {
+			files.push([name, value])
+		} else if (Array.isArray(value) && value.length > 0 && value.every((item) => item instanceof Blob)) {
+			for (const item of value) files.push([name, item])
+		} else {
+			json[name] = value
+		}
+	}
+	return files.length === 0 ? null : { json, files }
+}
+
+/** The multipart body of an input with files: the JSON input part first, then each file under its field's name. */
+function multipartBody(input: { readonly json: Record<string, unknown>; readonly files: readonly (readonly [string, Blob])[] }): FormData {
+	const form = new FormData()
+	form.append(FILE_INPUT_PART, JSON.stringify(input.json))
+	for (const [name, file] of input.files) {
+		form.append(name, file, file instanceof File ? file.name : name)
+	}
+	return form
 }
 
 /** A GET's input as the URL's parameters: each scalar field in its canonical spelling; an absent one left out. */
@@ -160,9 +197,12 @@ function caller(target: CallTarget, at: TreeAt, options: ClientOptions, bounce: 
 	return call
 }
 
-/** The method a procedure's `http` declares: `GET` only where written, `POST` otherwise. */
-function httpMethodOf(http: unknown): 'GET' | 'POST' {
-	return typeof http === 'object' && http !== null && Reflect.get(http, 'method') === 'GET' ? 'GET' : 'POST'
+/** The method a procedure's `http` declares: `GET` where written, and for a query that answers a file; `POST` otherwise. */
+function httpMethodOf(http: unknown, type: ProcedureType, output: Schema): 'GET' | 'POST' {
+	if (typeof http === 'object' && http !== null && Reflect.get(http, 'method') !== undefined) {
+		return Reflect.get(http, 'method') === 'GET' ? 'GET' : 'POST'
+	}
+	return type === 'query' && fileOf(output) !== null ? 'GET' : 'POST'
 }
 
 interface TreeAt {
@@ -185,7 +225,7 @@ function clientTree(
 			? make({
 				id: `${at.mount}.${path}`,
 				url: `${at.origin}${joinPath(at.base, path)}`,
-				method: httpMethodOf(node.http),
+				method: httpMethodOf(node.http, node.type, node.output),
 				type: node.type,
 				input: node.input,
 				output: node.output,
@@ -215,10 +255,29 @@ export interface AttachmentProcedure<I> {
 	readonly [attachmentInput]?: I
 }
 
-/** The request each attachment procedure sends and where it lies, kept beside it so the value itself carries no key. */
+/**
+ * A procedure whose output is a file (`file('<kind>')`): not a function, because its answer is a file.
+ * `download(api.<procedure>, input)` fetches it with the caller's credential, and a GET one's `url(input)` is where a
+ * same-origin page links to it (`<img src>`, `<a download>`).
+ */
+export interface FileProcedure<I> {
+	/** `<mount>.<path>` */
+	readonly id: string
+	/**
+	 * The URL of the file a GET procedure answers, for a page signed in on the same origin. A client with a key has none:
+	 * a key never goes into a URL, so it downloads instead.
+	 */
+	url(...input: DownloadInput<I>): string
+	/** Carries the input schema for `download`; never present at runtime. */
+	readonly [attachmentInput]?: I
+}
+
+/** The request each file procedure sends and where it lies, kept beside it so the value itself carries no key. */
 interface DownloadRequest {
 	readonly url: string
-	readonly filename: string
+	readonly method: 'GET' | 'POST'
+	/** The name an attachment declares; `null` where the answer names its file. */
+	readonly filename: string | null
 	readonly options: ClientOptions
 	readonly bounce: BounceConfig | null
 	readonly at: { readonly mount: string; readonly path: string }
@@ -234,8 +293,49 @@ function attachmentProcedure(
 	bounce: BounceConfig | null,
 ): AttachmentProcedure<unknown> {
 	const procedure = Object.freeze({ id: target.id, filename })
-	downloads.set(procedure, { url: target.url, filename, options, bounce, at: { mount: at.mount, path: at.path } })
+	downloads.set(procedure, { url: target.url, method: 'POST', filename, options, bounce, at: { mount: at.mount, path: at.path } })
 	return procedure
+}
+
+function fileProcedure(target: CallTarget, at: TreeAt, options: ClientOptions, bounce: BounceConfig | null): FileProcedure<unknown> {
+	const url = (input?: unknown): string => {
+		if (target.method !== 'GET') {
+			throw new Error(`'${target.id}' answers its file to a POST; fetch it with download(…)`)
+		}
+		if (options.key !== undefined) {
+			throw new Error(`'${target.id}': a client with a key fetches the file with download(…); a key never goes into a URL`)
+		}
+		return withParams(target.url, input)
+	}
+	const procedure = Object.freeze({ id: target.id, url })
+	downloads.set(procedure, { url: target.url, method: target.method, filename: null, options, bounce, at: { mount: at.mount, path: at.path } })
+	return procedure
+}
+
+/** A downloaded file: a `File`, and the page's offer to save it. */
+export class DownloadedFile extends File {
+	/** The file as a `Blob`. */
+	blob(): Blob {
+		return this
+	}
+
+	/** Offers the file as a download under its name; nothing where there is no page. */
+	save(): void {
+		saveFile(this)
+	}
+}
+
+/** The name of a file from its `Content-Disposition` (`filename*=UTF-8''…`), or `null`. */
+function dispositionName(disposition: string | null): string | null {
+	const encoded = disposition?.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+	if (encoded === undefined) {
+		return null
+	}
+	try {
+		return decodeURIComponent(encoded)
+	} catch {
+		return null
+	}
 }
 
 /** The mount and path of an attachment procedure of a client, or `null` for any other value. */
@@ -247,25 +347,31 @@ export function attachmentAt(value: unknown): { readonly mount: string; readonly
 export type DownloadInput<I> = [I] extends [InputSchema] ? [input: z.input<I>] : [input?: Record<never, never>]
 
 /**
- * Calls an attachment procedure and saves its file: in a browser the page offers it as a download under the declared
- * name. Answers the file, also where there is no page to save it from (a script, a test). A refusal is an `RpcError`.
+ * Calls a procedure that answers a file (an attachment, or a `file('<kind>')` output) with the caller's credential, and
+ * answers the file: `blob()`, `stream()`, `save()`. An attachment is also offered as a download in a browser, under the
+ * declared name. A refusal is an `RpcError`.
  */
-export function download<I>(procedure: AttachmentProcedure<I>, ...input: DownloadInput<I>): Promise<File> {
+export function download<I>(procedure: AttachmentProcedure<I> | FileProcedure<I>, ...input: DownloadInput<I>): Promise<DownloadedFile> {
 	if (!downloads.has(procedure)) {
-		return Promise.reject(new Error(`'${procedure.id}' is not an attachment procedure of a client`))
+		return Promise.reject(new Error(`'${procedure.id}' answers no file`))
 	}
 	return downloadFile(procedure, input[0])
 }
 
-/** `download` of any attachment procedure of a client, its input unchecked: the provider's `useDownload` runs it. */
-export async function downloadFile(procedure: object, input: unknown): Promise<File> {
+/** `download` of any file procedure of a client, its input unchecked: the provider's `useDownload` runs it. */
+export async function downloadFile(procedure: object, input: unknown): Promise<DownloadedFile> {
 	const request = downloads.get(procedure)
 	if (request === undefined) {
-		throw new Error('download takes an attachment procedure of a client createClient made')
+		throw new Error('download takes a procedure of a client createClient made that answers a file')
 	}
-	const { body } = await exchangeFile(request.options.fetch ?? fetch, request.url, requestOf(request.options, input), request.bounce)
-	const file = new File([body], request.filename, { type: body.type })
-	saveFile(file)
+	const doFetch = request.options.fetch ?? fetch
+	const { body, disposition } = request.method === 'GET'
+		? await exchangeFile(doFetch, withParams(request.url, input), getRequestOf(request.options), request.bounce)
+		: await exchangeFile(doFetch, request.url, requestOf(request.options, input), request.bounce)
+	const file = new DownloadedFile([body], request.filename ?? dispositionName(disposition) ?? 'download', { type: body.type })
+	if (request.filename !== null) {
+		saveFile(file)
+	}
 	return file
 }
 
@@ -292,7 +398,7 @@ function coversTree(value: unknown, tree: ProcedureTreeDeclaration<Schema, unkno
 		if (!isProcedure(node)) {
 			return coversTree(member, node)
 		}
-		return attachmentOf(node.output) === null
+		return attachmentOf(node.output) === null && fileOf(node.output) === null
 			? typeof member === 'function' && Reflect.get(member, 'output') === node.output
 			: typeof member === 'object' && member !== null && downloads.has(member)
 	})
@@ -345,7 +451,10 @@ export function createClient<const C extends AnyContract, const M extends Client
 	}
 	const procedures = clientTree(node.procedures, { mount, origin, base, path: '' }, (target, at) => {
 		const mark = attachmentOf(target.output)
-		return mark === null ? caller(target, at, options, bounce) : attachmentProcedure(target, at, mark.declaration.filename, options, bounce)
+		if (mark !== null) {
+			return attachmentProcedure(target, at, mark.declaration.filename, options, bounce)
+		}
+		return fileOf(target.output) === null ? caller(target, at, options, bounce) : fileProcedure(target, at, options, bounce)
 	})
 	const transport: FileTransport = { origin, fetch: options.fetch ?? fetch, key: options.key, bounce }
 	const collections = Object.entries(surface.files ?? {}).flatMap(([name, collection]): (readonly [string, FileClient | LinkFileClient])[] => {
