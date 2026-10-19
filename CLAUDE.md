@@ -88,6 +88,7 @@ implementation set to one provider bundle.
 ```
 packages/
   daemon-kit annotations canvas-kernel  # Reusable daemon, annotation, and interactive canvas foundations
+  agent-canvas canvas-share         # the `agent-canvas` CLI, daemon and browser UI · its Cloudflare share worker
   builder                         # Guided specification and agent-assisted application builder
   auth-core auth jwks app         # authz kernel · app-facing IAM SDK (verify only) · the shared token verifier · application runtime
   iam iam-contract                # Access plane: login, token minting, /admin API
@@ -193,6 +194,8 @@ contract note (`*-contract`), the substantial ones are:
   `packages/iam/` — the Access service, on both runtimes.
 - `packages/daemon-kit/` — reusable Bun daemon primitives · `packages/annotations/` — runtime-neutral
   annotation state and UI · `packages/canvas-kernel/` — the Agent Canvas compiler, store, renderer, and components.
+  `packages/agent-canvas/` — the published `agent-canvas` host over those three, under its unscoped npm name ·
+  `packages/canvas-share/` — the Cloudflare worker that serves shared canvases.
 - `packages/builder/` — the guided application builder behind `fabrika builder …`, including its
   deterministic phase machine, local daemon/dashboard, agent skill, and stack decision catalog.
 - `packages/control/` — API/ACL, vault, secret resolution, run lifecycle, webhook (+ `DATABASE.md`

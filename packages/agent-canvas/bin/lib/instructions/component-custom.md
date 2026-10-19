@@ -6,23 +6,29 @@ When you use the full module format (`export default function Canvas()`), you ca
 
 ```jsx
 function Metric({ label, value, trend }) {
-  const color = trend === 'up' ? 'var(--color-accent-green)' : trend === 'down' ? 'var(--color-accent-red)' : 'var(--color-text-secondary)';
-  return (
-    <div style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
-      <span style={{ color: 'var(--color-text-tertiary)', fontSize: '0.75rem' }}>{label}</span>
-      <span style={{ color, fontSize: '1.25rem', fontWeight: 600 }}>{value}</span>
-    </div>
-  );
+	const color = trend === 'up'
+		? 'var(--color-accent-green)'
+		: trend === 'down'
+		? 'var(--color-accent-red)'
+		: 'var(--color-text-secondary)'
+	return (
+		<div style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
+			<span style={{ color: 'var(--color-text-tertiary)', fontSize: '0.75rem' }}>
+				{label}
+			</span>
+			<span style={{ color, fontSize: '1.25rem', fontWeight: 600 }}>{value}</span>
+		</div>
+	)
 }
 
 export default function Canvas() {
-  return (
-    <Section title="Performance Summary">
-      <Metric label="P95 Latency" value="42ms" trend="down" />
-      <Metric label="Error Rate" value="0.3%" trend="up" />
-      <Metric label="Throughput" value="1.2k rps" trend="up" />
-    </Section>
-  );
+	return (
+		<Section title="Performance Summary">
+			<Metric label="P95 Latency" value="42ms" trend="down" />
+			<Metric label="Error Rate" value="0.3%" trend="up" />
+			<Metric label="Throughput" value="1.2k rps" trend="up" />
+		</Section>
+	)
 }
 ```
 

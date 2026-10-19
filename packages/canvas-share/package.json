@@ -1,0 +1,25 @@
+{
+	"name": "@fabrika/canvas-share",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"oblaka": "bunx oblaka oblaka.ts",
+		"oblaka:stage": "bunx oblaka oblaka.ts --env stage",
+		"oblaka:prod": "bunx oblaka oblaka.ts --env prod",
+		"dev": "bun run oblaka && wrangler dev --local",
+		"deploy:stage": "bun run oblaka:stage && wrangler deploy --env stage",
+		"deploy:prod": "bun run oblaka:prod && wrangler deploy --env prod",
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"zod": "^3.25.76"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20260702.1",
+		"oblaka-iac": "^0.0.18",
+		"typescript": "^5.9.3",
+		"wrangler": "^4.24.0"
+	}
+}

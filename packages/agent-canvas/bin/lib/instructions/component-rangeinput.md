@@ -15,6 +15,13 @@ Slider for numeric ranges or scales.
 ## Usage
 
 ```jsx
-<RangeInput id="effort-tolerance" label="How much refactoring is acceptable?"
-  min={1} max={5} minLabel="Minimal changes" maxLabel="Full rewrite OK" required />
+<RangeInput
+	id="effort-tolerance"
+	label="How much refactoring is acceptable?"
+	min={1}
+	max={5}
+	minLabel="Minimal changes"
+	maxLabel="Full rewrite OK"
+	required
+/>
 ```

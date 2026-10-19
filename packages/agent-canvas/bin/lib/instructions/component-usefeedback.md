@@ -19,15 +19,15 @@ Registers on mount, updates on change, unregisters on unmount.
 
 ```jsx
 function ProConList() {
-  const [pros, setPros] = React.useState(["Fast builds"]);
-  const [cons, setCons] = React.useState(["New runtime"]);
+	const [pros, setPros] = React.useState(['Fast builds'])
+	const [cons, setCons] = React.useState(['New runtime'])
 
-  useFeedback(
-    "pro-con",
-    `**Pros:** ${pros.join(", ")}\n**Cons:** ${cons.join(", ")}`,
-    { label: "Pro/Con Analysis" },
-  );
+	useFeedback(
+		'pro-con',
+		`**Pros:** ${pros.join(', ')}\n**Cons:** ${cons.join(', ')}`,
+		{ label: 'Pro/Con Analysis' },
+	)
 
-  return <div>{/* UI for managing pros/cons */}</div>;
+	return <div>{/* UI for managing pros/cons */}</div>
 }
 ```

@@ -87,6 +87,30 @@
         "typescript": "^5.9.3",
       },
     },
+    "packages/agent-canvas": {
+      "name": "agent-canvas",
+      "version": "0.5.4",
+      "bin": {
+        "agent-canvas": "./bin/agent-canvas.js",
+      },
+      "dependencies": {
+        "@fabrika/annotations": "workspace:*",
+        "@fabrika/canvas-kernel": "workspace:*",
+        "@fabrika/daemon-kit": "workspace:*",
+        "marked": "^17.0.4",
+        "mermaid-parser-bundle": "^0.1.2",
+        "preact": "^10.25.0",
+        "preact-render-to-string": "^6.6.6",
+      },
+      "devDependencies": {
+        "@tailwindcss/cli": "4",
+        "@types/bun": "latest",
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        "tailwindcss": "4",
+        "typescript": "^5.9.3",
+      },
+    },
     "packages/annotations": {
       "name": "@fabrika/annotations",
       "version": "0.5.5",
@@ -212,6 +236,19 @@
       "peerDependencies": {
         "react": ">=18",
         "react-dom": ">=18",
+      },
+    },
+    "packages/canvas-share": {
+      "name": "@fabrika/canvas-share",
+      "version": "0.1.0",
+      "dependencies": {
+        "zod": "^3.25.76",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "^4.20260702.1",
+        "oblaka-iac": "^0.0.18",
+        "typescript": "^5.9.3",
+        "wrangler": "^4.24.0",
       },
     },
     "packages/check": {
@@ -823,6 +860,8 @@
 
     "@fabrika/canvas-kernel": ["@fabrika/canvas-kernel@workspace:packages/canvas-kernel"],
 
+    "@fabrika/canvas-share": ["@fabrika/canvas-share@workspace:packages/canvas-share"],
+
     "@fabrika/check": ["@fabrika/check@workspace:packages/check"],
 
     "@fabrika/cli": ["@fabrika/cli@workspace:packages/cli"],
@@ -1096,6 +1135,8 @@
     "@types/ws": ["@types/ws@8.18.1", "", { "dependencies": { "@types/node": "*" } }, "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg=="],
 
     "@vitejs/plugin-react": ["@vitejs/plugin-react@5.2.0", "", { "dependencies": { "@babel/core": "^7.29.0", "@babel/plugin-transform-react-jsx-self": "^7.27.1", "@babel/plugin-transform-react-jsx-source": "^7.27.1", "@rolldown/pluginutils": "1.0.0-rc.3", "@types/babel__core": "^7.20.5", "react-refresh": "^0.18.0" }, "peerDependencies": { "vite": "^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0" } }, "sha512-YmKkfhOAi3wsB1PhJq5Scj3GXMn3WvtQ/JC0xoopuHoXSdmtdStOpFrYaT1kie2YgFBcIe64ROzMYRjCrYOdYw=="],
+
+    "agent-canvas": ["agent-canvas@workspace:packages/agent-canvas"],
 
     "baseline-browser-mapping": ["baseline-browser-mapping@2.11.5", "", { "bin": { "baseline-browser-mapping": "dist/cli.cjs" } }, "sha512-xJo6a6YZnwZfnyGmQKWMbVOcii7XRibjOskRh+WJ9UHQoX16xrQrcIgAMQOzfvs8XiLMx6ih/fsLPF73iY2D1A=="],
 
@@ -1411,6 +1452,8 @@
 
     "@types/babel__traverse/@babel/types": ["@babel/types@7.29.7", "", { "dependencies": { "@babel/helper-string-parser": "^7.29.7", "@babel/helper-validator-identifier": "^7.29.7" } }, "sha512-4zBIxpPzowiZpusoFkyGVwakdRJUyuH5PxQ/PrqghfdFWWasvnCdPfQXHrenDai+gyLARulZjZowCOj6fjT4pA=="],
 
+    "agent-canvas/@types/bun": ["@types/bun@1.4.3", "", { "dependencies": { "bun-types": "1.4.3" } }, "sha512-N67Pqy8JXbAY/j0tNraS3V5mubGvc6rrrNDmDCtZLlFzccbUJPDb0tvgUBC5q4m8ybkP93Jcn1QB+RYQ6PvBhw=="],
+
     "fabrika-example-app/@types/bun": ["@types/bun@1.4.3", "", { "dependencies": { "bun-types": "1.4.3" } }, "sha512-N67Pqy8JXbAY/j0tNraS3V5mubGvc6rrrNDmDCtZLlFzccbUJPDb0tvgUBC5q4m8ybkP93Jcn1QB+RYQ6PvBhw=="],
 
     "fabrika-example-app/oblaka-iac": ["oblaka-iac@0.0.19", "", { "dependencies": { "jsonc-parser": "^3.3.1" }, "peerDependencies": { "typescript": "^5" }, "bin": { "oblaka": "src/commands/run.ts" } }, "sha512-Je3IaI6BcGfVxbtwOTnnri35h42crxGsiDExxH/Y2haLqtLBbIpRmOWsNW3UyDQMXwCOeXjL5H9BSKlgYMOcMA=="],
@@ -1524,6 +1567,8 @@
     "@types/babel__traverse/@babel/types/@babel/helper-string-parser": ["@babel/helper-string-parser@7.29.7", "", {}, "sha512-Pb5ijPrZ89GDH8223L4UP8i6QApWxs04RbPQJTeWDV0/keR2E36MeKnyr6LYmUUvqRRI+Iv87SuF1W6ErINzYw=="],
 
     "@types/babel__traverse/@babel/types/@babel/helper-validator-identifier": ["@babel/helper-validator-identifier@7.29.7", "", {}, "sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg=="],
+
+    "agent-canvas/@types/bun/bun-types": ["bun-types@1.4.3", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-tinRJNGOmUN+tEAsn2y2e942n9JHRHR42iUYzDH75NmhJqVBokGSQkkfSFdNWwsANIdrK6ACH9t01M452YyTwg=="],
 
     "fabrika-example-app/@types/bun/bun-types": ["bun-types@1.4.3", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-tinRJNGOmUN+tEAsn2y2e942n9JHRHR42iUYzDH75NmhJqVBokGSQkkfSFdNWwsANIdrK6ACH9t01M452YyTwg=="],
 

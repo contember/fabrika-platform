@@ -9,7 +9,6 @@ description: >
   implementation summaries, proposals, decision documents, explanations, and
   runbooks that hand local secrets to commands without putting values in context.
 disable-model-invocation: true
-
 ---
 
 ## Session

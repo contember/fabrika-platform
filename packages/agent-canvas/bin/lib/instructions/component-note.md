@@ -6,6 +6,6 @@ Softer than Callout. For asides, context, non-critical info.
 
 ```jsx
 <Note>
-  This pattern is also used in the payment service — see src/payments/auth.ts.
+	This pattern is also used in the payment service — see src/payments/auth.ts.
 </Note>
 ```

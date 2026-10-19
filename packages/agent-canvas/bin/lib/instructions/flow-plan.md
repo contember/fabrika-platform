@@ -96,11 +96,11 @@ Push AFTER implementation is complete. Always do this, even briefly. **After pus
 
 ## Skipping & Combining
 
-| Situation | Action |
-|---|---|
+| Situation                                      | Action                                 |
+| ---------------------------------------------- | -------------------------------------- |
 | User said "just do it" with clear instructions | Implement directly, push summary after |
-| Simple change (< 3 files) | Probably skip canvas entirely |
-| User explicitly says "don't plan, just code" | Implement, push summary |
-| Mid-flow user says "looks good, go ahead" | Skip remaining review rounds |
+| Simple change (< 3 files)                      | Probably skip canvas entirely          |
+| User explicitly says "don't plan, just code"   | Implement, push summary                |
+| Mid-flow user says "looks good, go ahead"      | Skip remaining review rounds           |
 
 **Always push a summary after implementation** (unless trivially small) **and watch for feedback** — the user may want to respond with follow-ups or corrections.

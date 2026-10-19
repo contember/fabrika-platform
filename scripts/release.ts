@@ -35,7 +35,12 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/provider-zerops',
 	'@fabrika/proxy-core',
 	'@fabrika/ui',
+	'agent-canvas',
 ]
+/** Public packages published under a name they had before they moved into this repository. */
+const UNSCOPED_PUBLIC_PACKAGES: ReadonlySet<string> = new Set(['agent-canvas'])
+/** Public packages that ship only a command, so the consumer smoke runs it instead of importing a main entry. */
+const COMMAND_ONLY_PACKAGES: ReadonlySet<string> = new Set(['agent-canvas'])
 const TAG_PATTERN =
 	/^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$/
 
@@ -184,7 +189,9 @@ export const packageGraph = (
 	}
 	const sourceVersions = new Set<string>()
 	for (const item of publicPackages) {
-		if (!item.name.startsWith('@fabrika/')) throw new Error(`${item.name}: public package must use the @fabrika scope`)
+		if (!item.name.startsWith('@fabrika/') && !UNSCOPED_PUBLIC_PACKAGES.has(item.name)) {
+			throw new Error(`${item.name}: public package must use the @fabrika scope`)
+		}
 		const sourceVersion = item.manifest['version']
 		if (typeof sourceVersion !== 'string') throw new Error(`${item.name}: version must be a non-empty string`)
 		if (!TAG_PATTERN.test(`v${sourceVersion}`)) throw new Error(`${item.name}: version must be valid semver`)
@@ -629,7 +636,7 @@ const runConsumerSmoke = async (dependencies: Readonly<Record<string, string>>, 
 		await writeFile(
 			join(consumer, 'smoke.ts'),
 			[
-				entryImportSmoke(Object.keys(dependencies)),
+				entryImportSmoke(Object.keys(dependencies).filter((name) => !COMMAND_ONLY_PACKAGES.has(name))),
 				"const modules = await Promise.all([import('@fabrika/annotations'), import('@fabrika/app'), import('@fabrika/builder'), import('@fabrika/canvas-kernel'), import('@fabrika/daemon-kit'), import('@fabrika/provider-cloudflare'), import('@fabrika/provider-cloudflare/installation'), import('@fabrika/provider-zerops'), import('@fabrika/provider-zerops/installation')])",
 				"if (modules.some((module) => Object.keys(module).length === 0)) throw new Error('A public entry point has no exports')",
 				"const builder = await import('@fabrika/builder')",
@@ -651,6 +658,7 @@ const runConsumerSmoke = async (dependencies: Readonly<Record<string, string>>, 
 		await run(['bun', 'run', 'smoke.ts'], { cwd: consumer })
 		await run([join(consumer, 'node_modules', '.bin', 'fabrika'), '--help'], { cwd: consumer })
 		await run([join(consumer, 'node_modules', '.bin', 'fabrika'), 'builder', '--help'], { cwd: consumer })
+		for (const name of COMMAND_ONLY_PACKAGES) await run([join(consumer, 'node_modules', '.bin', name), '--help'], { cwd: consumer })
 		console.info(`${label} passed for ${Object.keys(dependencies).length} packages in an isolated consumer`)
 	} finally {
 		await rm(consumer, { recursive: true, force: true })

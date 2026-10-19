@@ -1,114 +1,115 @@
-import { mkdirSync, cpSync, writeFileSync, readFileSync, existsSync, watch as fsWatch } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-import { $ } from "bun";
+import { $ } from 'bun'
+import { cpSync, existsSync, mkdirSync, readFileSync, watch as fsWatch, writeFileSync } from 'fs'
+import { dirname, join } from 'path'
+import { fileURLToPath } from 'url'
 
-const ROOT = dirname(import.meta.path);
-const DIST = join(ROOT, "dist");
+const ROOT = dirname(import.meta.path)
+const DIST = join(ROOT, 'dist')
 /** The kernel ships the runtime, the component library and the base stylesheet. */
-const KERNEL_CLIENT = dirname(fileURLToPath(import.meta.resolve("@fabrika/canvas-kernel/runtime")));
-const ANNOTATIONS_RUNTIME = fileURLToPath(import.meta.resolve("@fabrika/annotations/runtime"));
+const KERNEL_CLIENT = dirname(fileURLToPath(import.meta.resolve('@fabrika/canvas-kernel/runtime')))
+const ANNOTATIONS_RUNTIME = fileURLToPath(import.meta.resolve('@fabrika/annotations/runtime'))
 
 async function build() {
-  console.log("Building canvas client...");
+	console.log('Building canvas client...')
 
-  mkdirSync(DIST, { recursive: true });
+	mkdirSync(DIST, { recursive: true })
 
-  const REACT_EXTERNALS = ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime"];
-  const ANNOTATION_EXTERNALS = [...REACT_EXTERNALS, "@fabrika/annotations/runtime"];
+	const REACT_EXTERNALS = ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime']
+	const ANNOTATION_EXTERNALS = [...REACT_EXTERNALS, '@fabrika/annotations/runtime']
 
-  const annotationResult = await Bun.build({
-    entrypoints: [ANNOTATIONS_RUNTIME],
-    outdir: DIST,
-    format: "esm",
-    external: REACT_EXTERNALS,
-    naming: "annotations-runtime.js",
-    minify: true,
-  });
-  if (!annotationResult.success) {
-    console.error("Annotation runtime build failed:", annotationResult.logs);
-    process.exit(1);
-  }
+	const annotationResult = await Bun.build({
+		entrypoints: [ANNOTATIONS_RUNTIME],
+		outdir: DIST,
+		format: 'esm',
+		external: REACT_EXTERNALS,
+		naming: 'annotations-runtime.js',
+		minify: true,
+	})
+	if (!annotationResult.success) {
+		console.error('Annotation runtime build failed:', annotationResult.logs)
+		process.exit(1)
+	}
 
-  // 0. Build preact-compat bundle
-  console.log("  Building preact-compat...");
-  const preactResult = await Bun.build({
-    entrypoints: [join(KERNEL_CLIENT, "preact-all.ts")],
-    outdir: DIST,
-    format: "esm",
-    naming: "preact-compat.js",
-    minify: true,
-  });
+	// 0. Build preact-compat bundle
+	console.log('  Building preact-compat...')
+	const preactResult = await Bun.build({
+		entrypoints: [join(KERNEL_CLIENT, 'preact-all.ts')],
+		outdir: DIST,
+		format: 'esm',
+		naming: 'preact-compat.js',
+		minify: true,
+	})
 
-  if (!preactResult.success) {
-    console.error("Preact-compat build failed:", preactResult.logs);
-    process.exit(1);
-  }
+	if (!preactResult.success) {
+		console.error('Preact-compat build failed:', preactResult.logs)
+		process.exit(1)
+	}
 
-  // Write jsx-runtime shim
-  writeFileSync(join(DIST, "jsx-runtime.js"),
-    `import { jsx, jsxs, Fragment } from "./preact-compat.js";\nexport { jsx, jsxs, Fragment };\nexport const jsxDEV = jsx;\n`
-  );
+	// Write jsx-runtime shim
+	writeFileSync(
+		join(DIST, 'jsx-runtime.js'),
+		`import { jsx, jsxs, Fragment } from "./preact-compat.js";\nexport { jsx, jsxs, Fragment };\nexport const jsxDEV = jsx;\n`,
+	)
 
-  // 1. Build runtime (shared context between app and components)
-  console.log("  Building #canvas/runtime...");
-  const runtimeResult = await Bun.build({
-    entrypoints: [join(KERNEL_CLIENT, "runtime.ts")],
-    outdir: DIST,
-    format: "esm",
-    external: ANNOTATION_EXTERNALS,
-    naming: "runtime.js",
-    minify: true,
-  });
+	// 1. Build runtime (shared context between app and components)
+	console.log('  Building #canvas/runtime...')
+	const runtimeResult = await Bun.build({
+		entrypoints: [join(KERNEL_CLIENT, 'runtime.ts')],
+		outdir: DIST,
+		format: 'esm',
+		external: ANNOTATION_EXTERNALS,
+		naming: 'runtime.js',
+		minify: true,
+	})
 
-  if (!runtimeResult.success) {
-    console.error("Runtime build failed:", runtimeResult.logs);
-    process.exit(1);
-  }
+	if (!runtimeResult.success) {
+		console.error('Runtime build failed:', runtimeResult.logs)
+		process.exit(1)
+	}
 
-  // 2. Build the components library (ESM, React + runtime external)
-  console.log("  Building #canvas/components...");
-  const componentsResult = await Bun.build({
-    entrypoints: [join(ROOT, "client/components/index.ts")],
-    outdir: DIST,
-    format: "esm",
-    external: [...ANNOTATION_EXTERNALS, "#canvas/runtime"],
-    naming: "components.js",
-    minify: true,
-  });
+	// 2. Build the components library (ESM, React + runtime external)
+	console.log('  Building #canvas/components...')
+	const componentsResult = await Bun.build({
+		entrypoints: [join(ROOT, 'client/components/index.ts')],
+		outdir: DIST,
+		format: 'esm',
+		external: [...ANNOTATION_EXTERNALS, '#canvas/runtime'],
+		naming: 'components.js',
+		minify: true,
+	})
 
-  if (!componentsResult.success) {
-    console.error("Components build failed:", componentsResult.logs);
-    process.exit(1);
-  }
+	if (!componentsResult.success) {
+		console.error('Components build failed:', componentsResult.logs)
+		process.exit(1)
+	}
 
-  // 3. Build the main client app (ESM, React + components + runtime external)
-  console.log("  Building client app...");
-  const clientResult = await Bun.build({
-    entrypoints: [join(ROOT, "client/App.tsx")],
-    outdir: DIST,
-    format: "esm",
-    external: [...ANNOTATION_EXTERNALS, "#canvas/components", "#canvas/runtime"],
-    naming: "client.js",
-    minify: true,
-  });
+	// 3. Build the main client app (ESM, React + components + runtime external)
+	console.log('  Building client app...')
+	const clientResult = await Bun.build({
+		entrypoints: [join(ROOT, 'client/App.tsx')],
+		outdir: DIST,
+		format: 'esm',
+		external: [...ANNOTATION_EXTERNALS, '#canvas/components', '#canvas/runtime'],
+		naming: 'client.js',
+		minify: true,
+	})
 
-  if (!clientResult.success) {
-    console.error("Client build failed:", clientResult.logs);
-    process.exit(1);
-  }
+	if (!clientResult.success) {
+		console.error('Client build failed:', clientResult.logs)
+		process.exit(1)
+	}
 
-  // 4. Build Tailwind CSS
-  console.log("  Building CSS...");
-  await $`cd ${ROOT} && npx @tailwindcss/cli -i client/styles.css -o dist/client.css --minify`.quiet();
+	// 4. Build Tailwind CSS
+	console.log('  Building CSS...')
+	await $`cd ${ROOT} && bunx @tailwindcss/cli -i client/styles.css -o dist/client.css --minify`.quiet()
 
-  // 5. Read theme.css to inline into HTML for browser Tailwind runtime
-  const themeCss = readFileSync(join(KERNEL_CLIENT, "theme.css"), "utf-8");
+	// 5. Read theme.css to inline into HTML for browser Tailwind runtime
+	const themeCss = readFileSync(join(KERNEL_CLIENT, 'theme.css'), 'utf-8')
 
-  // 6. Create index.html
-  console.log("  Creating index.html...");
+	// 6. Create index.html
+	console.log('  Creating index.html...')
 
-  const indexHtml = `<!DOCTYPE html>
+	const indexHtml = `<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
@@ -143,52 +144,55 @@ ${themeCss}
   </script>
   <script type="module" src="/assets/client.js"></script>
 </body>
-</html>`;
+</html>`
 
-  writeFileSync(join(DIST, "index.html"), indexHtml);
+	writeFileSync(join(DIST, 'index.html'), indexHtml)
 
-  // 7. Mirror runtime bundles into the canvas-share worker's static assets
-  // dir so the worker serves the same version of the runtime as the daemon.
-  // This is critical: a version drift between worker assets and the
-  // compiled canvas JS in a share payload would silently break shared
-  // canvases. Doing the copy as part of the daemon build keeps them in
-  // lockstep automatically.
-  const WORKER_PUBLIC = join(ROOT, "..", "workers", "canvas-share", "public", "assets");
-  if (existsSync(join(ROOT, "..", "workers", "canvas-share"))) {
-    console.log("  Copying runtime bundles to canvas-share worker...");
-    mkdirSync(WORKER_PUBLIC, { recursive: true });
-    for (const f of [
-      "preact-compat.js",
-      "jsx-runtime.js",
-      "runtime.js",
-      "annotations-runtime.js",
-      "components.js",
-      "client.js",
-      "client.css",
-    ]) {
-      cpSync(join(DIST, f), join(WORKER_PUBLIC, f));
-    }
-  }
+	// 7. Mirror runtime bundles into the canvas-share worker's static assets
+	// dir so the worker serves the same version of the runtime as the daemon.
+	// This is critical: a version drift between worker assets and the
+	// compiled canvas JS in a share payload would silently break shared
+	// canvases. Doing the copy as part of the daemon build keeps them in
+	// lockstep automatically.
+	const WORKER = join(ROOT, '..', '..', 'canvas-share')
+	const WORKER_PUBLIC = join(WORKER, 'public', 'assets')
+	if (existsSync(WORKER)) {
+		console.log('  Copying runtime bundles to canvas-share worker...')
+		mkdirSync(WORKER_PUBLIC, { recursive: true })
+		for (
+			const f of [
+				'preact-compat.js',
+				'jsx-runtime.js',
+				'runtime.js',
+				'annotations-runtime.js',
+				'components.js',
+				'client.js',
+				'client.css',
+			]
+		) {
+			cpSync(join(DIST, f), join(WORKER_PUBLIC, f))
+		}
+	}
 
-  console.log("Build complete! Output in dist/");
+	console.log('Build complete! Output in dist/')
 }
 
 build().then(() => {
-  if (process.argv.includes("--watch")) {
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-    console.log("Watching for changes in client/ and the kernel client...");
-    for (const dir of [join(ROOT, "client"), KERNEL_CLIENT, dirname(ANNOTATIONS_RUNTIME)]) {
-      fsWatch(dir, { recursive: true }, (_event: string, filename: string | null) => {
-        if (!filename || filename.endsWith("~")) return;
-        if (timeout) clearTimeout(timeout);
-        timeout = setTimeout(() => {
-          console.log(`\n  Changed: ${filename}`);
-          build().catch((e) => console.error("Rebuild failed:", e));
-        }, 200);
-      });
-    }
-  }
+	if (process.argv.includes('--watch')) {
+		let timeout: ReturnType<typeof setTimeout> | null = null
+		console.log('Watching for changes in client/ and the kernel client...')
+		for (const dir of [join(ROOT, 'client'), KERNEL_CLIENT, dirname(ANNOTATIONS_RUNTIME)]) {
+			fsWatch(dir, { recursive: true }, (_event: string, filename: string | null) => {
+				if (!filename || filename.endsWith('~')) return
+				if (timeout) clearTimeout(timeout)
+				timeout = setTimeout(() => {
+					console.log(`\n  Changed: ${filename}`)
+					build().catch((e) => console.error('Rebuild failed:', e))
+				}, 200)
+			})
+		}
+	}
 }).catch((e) => {
-  console.error("Build failed:", e);
-  process.exit(1);
-});
+	console.error('Build failed:', e)
+	process.exit(1)
+})

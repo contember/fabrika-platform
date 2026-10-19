@@ -12,6 +12,10 @@ Free text input.
 ## Usage
 
 ```jsx
-<UserInput id="constraints" label="Any constraints I should know about?"
-  placeholder="e.g. must work with existing Redis setup" required />
+<UserInput
+	id="constraints"
+	label="Any constraints I should know about?"
+	placeholder="e.g. must work with existing Redis setup"
+	required
+/>
 ```

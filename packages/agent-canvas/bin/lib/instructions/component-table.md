@@ -11,11 +11,11 @@ Simple data table.
 
 ```jsx
 <Table
-  headers={["Endpoint", "Method", "Auth"]}
-  rows={[
-    ["/users", "GET", "Required"],
-    ["/users/:id", "PUT", "Owner only"],
-    ["/health", "GET", "None"],
-  ]}
+	headers={['Endpoint', 'Method', 'Auth']}
+	rows={[
+		['/users', 'GET', 'Required'],
+		['/users/:id', 'PUT', 'Owner only'],
+		['/health', 'GET', 'None'],
+	]}
 />
 ```

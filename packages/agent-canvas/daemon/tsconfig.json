@@ -1,21 +1,21 @@
 {
-  "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "jsx": "react-jsx",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "noEmit": true,
-    "types": ["@types/bun"],
-    "paths": {
-      "#canvas/runtime": ["./client/canvas-runtime.ts"],
-      "#canvas/components": ["./client/components/index.ts"]
-    }
-  },
-  "include": ["src/**/*", "client/**/*"],
-  "exclude": [
-    "src/share-e2e.test.ts"
-  ]
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"jsx": "react-jsx",
+		"strict": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"types": ["@types/bun"],
+		"paths": {
+			"#canvas/runtime": ["./client/canvas-runtime.ts"],
+			"#canvas/components": ["./client/components/index.ts"]
+		}
+	},
+	"include": ["src/**/*", "client/**/*"],
+	"exclude": [
+		"src/share-e2e.test.ts"
+	]
 }

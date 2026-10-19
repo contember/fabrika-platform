@@ -12,31 +12,34 @@ Give the user ordered, concrete steps. Include the exact destination, required p
 
 ```jsx
 <Section title="Connect the service">
-  <Callout type="info">
-    Complete these steps in order. The token value will stay outside agent feedback and model context.
-  </Callout>
+	<Callout type="info">
+		Complete these steps in order. The token value will stay outside agent
+		feedback and model context.
+	</Callout>
 
-  <Item id="open-token-page" label="1. Open token settings" status="todo">
-    Open https://service.example/settings/tokens while signed in to the target account.
-  </Item>
+	<Item id="open-token-page" label="1. Open token settings" status="todo">
+		Open https://service.example/settings/tokens while signed in to the target
+		account.
+	</Item>
 
-  <Item id="create-token" label="2. Create a scoped token" status="todo">
-    Name it for this task. Grant only read:projects and write:deployments. Set the shortest practical expiry.
-  </Item>
+	<Item id="create-token" label="2. Create a scoped token" status="todo">
+		Name it for this task. Grant only read:projects and write:deployments. Set the
+		shortest practical expiry.
+	</Item>
 
-  <SecretInput
-    id="service-token"
-    label="3. Paste the token"
-    env="SERVICE_TOKEN"
-    required
-  />
+	<SecretInput
+		id="service-token"
+		label="3. Paste the token"
+		env="SERVICE_TOKEN"
+		required
+	/>
 
-  <Choice
-    id="target-confirmation"
-    label="Which environment did you configure?"
-    options={["Staging", "Production"]}
-    required
-  />
+	<Choice
+		id="target-confirmation"
+		label="Which environment did you configure?"
+		options={['Staging', 'Production']}
+		required
+	/>
 </Section>
 ```
 

@@ -4,16 +4,16 @@ on:
   push:
     branches: [main]
     paths:
-      - "workers/canvas-share/**"
-      - "daemon/client/**"
-      - "daemon/build.ts"
-      - ".github/workflows/deploy-worker.yml"
-      - ".github/workflows/deploy-worker-stage.yml"
+      - "packages/canvas-share/**"
+      - "packages/agent-canvas/daemon/client/**"
+      - "packages/agent-canvas/daemon/build.ts"
+      - ".github/workflows/canvas-share-deploy.yml"
+      - ".github/workflows/canvas-share-deploy-stage.yml"
   workflow_dispatch:
 
 jobs:
   deploy:
-    uses: ./.github/workflows/deploy-worker.yml
+    uses: ./.github/workflows/canvas-share-deploy.yml
     with:
       env: stage
     # inherit so the reusable workflow can resolve secrets; the env-scoped

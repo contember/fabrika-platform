@@ -11,8 +11,9 @@ Shows a diff view between two code snippets.
 ## Usage
 
 ```jsx
-<Diff language="typescript"
-  before={`function auth(req) {\n  return true;\n}`}
-  after={`function auth(req) {\n  const token = req.headers.authorization;\n  if (!token) throw new Error('Unauthorized');\n  return verify(token);\n}`}
+<Diff
+	language="typescript"
+	before={`function auth(req) {\n  return true;\n}`}
+	after={`function auth(req) {\n  const token = req.headers.authorization;\n  if (!token) throw new Error('Unauthorized');\n  return verify(token);\n}`}
 />
 ```

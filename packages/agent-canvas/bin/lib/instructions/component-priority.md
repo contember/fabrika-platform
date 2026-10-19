@@ -10,6 +10,6 @@ Inline badge. Use inside Item labels or body text.
 
 ```jsx
 <Item label="Fix the race condition">
-  <Priority level="high" /> This causes data corruption under load.
+	<Priority level="high" /> This causes data corruption under load.
 </Item>
 ```

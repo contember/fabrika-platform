@@ -16,17 +16,18 @@ The value stays outside normal canvas response state. It is not written to `loca
 
 ```jsx
 <Section title="Create an API token">
-  <Item id="open-settings" label="1. Open token settings">
-    Open the service's token settings. Create a token with the minimum scopes needed for this task.
-  </Item>
+	<Item id="open-settings" label="1. Open token settings">
+		Open the service's token settings. Create a token with the minimum scopes
+		needed for this task.
+	</Item>
 
-  <SecretInput
-    id="service-token"
-    label="2. Paste the new token"
-    env="SERVICE_TOKEN"
-    placeholder="Paste token"
-    required
-  />
+	<SecretInput
+		id="service-token"
+		label="2. Paste the new token"
+		env="SERVICE_TOKEN"
+		placeholder="Paste token"
+		required
+	/>
 </Section>
 ```
 
