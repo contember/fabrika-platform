@@ -14,6 +14,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { readTokenKeys, SignedTokens } from '../implement/tokens'
+import { appUrl, readAppOrigin } from '../implement/urls'
 import { contract } from './token-fixture/fabrika.contract'
 import { app, Recipient } from './token-fixture/src/app-kit'
 import { tables } from './token-fixture/src/db/tables'
@@ -142,6 +143,27 @@ describe('the keys and the token format', () => {
 	})
 })
 
+describe('ctx.url', () => {
+	const url = appUrl(artifact, 'https://mailing.example')
+
+	test('links a GET procedure with its input and a POST with its query, each value spelled as the procedure reads it', () => {
+		expect(url('api.mail.click', { input: { t: 'abc.def.ghi' } })).toBe('https://mailing.example/api/mail.click?t=abc.def.ghi')
+		expect(url('api.mail.unsubscribe', { query: { t: 'a b' } })).toBe('https://mailing.example/api/mail.unsubscribe?t=a+b')
+		expect(url('api.bookings.book')).toBe('https://mailing.example/api/bookings.book')
+	})
+
+	test('refuses an unknown endpoint, a parameter the HTTP shape does not read and an environment without an origin', () => {
+		expect(() => url('api.mail.nothing')).toThrow(/no procedure of the contract/)
+		expect(() => url('health')).toThrow(/no procedure of the contract/)
+		expect(() => url('api.mail.click', { query: { t: 'x' } })).toThrow(/does not read from the URL/)
+		expect(() => url('api.bookings.book', { query: { t: 'x' } })).toThrow(/does not read from the URL/)
+		expect(() => appUrl(artifact, null)('api.mail.click')).toThrow(/no public origin/)
+		const problems: string[] = []
+		expect(readAppOrigin({ FABRIKA_APP_ORIGIN: 'https://mailing.example/path' }, problems)).toBeNull()
+		expect(problems).toEqual([expect.stringContaining('is not an origin')])
+	})
+})
+
 const postgres = await testDatabase({ migrations: join(import.meta.dir, 'token-fixture', 'db', 'migrations'), label: 'signed-tokens.test.ts' })
 
 afterAll(async () => {
@@ -215,6 +237,15 @@ if (postgres !== null) {
 			expect(await slotOf(other.id)).toBe('fri-8')
 			expect((await post('bookings.cancel', { t: booked.manage, version })).status).toBe(200)
 			expect(await slotOf(booked.id)).toBeNull()
+		})
+
+		test("a newsletter's one-click unsubscribe link is the environment's own URL, and posting to it unsubscribes", async () => {
+			expect((await kit.runJob('newsletter')).status).toBe('succeeded')
+			const sent = kit.mail.accepted.at(-1)?.message
+			expect(sent?.unsubscribeUrl).toStartWith(`${kit.origin}/api/mail.unsubscribe?t=`)
+			const query = new URL(sent?.unsubscribeUrl ?? kit.origin).search.slice(1)
+			expect((await unsubscribe(query)).status).toBe(200)
+			expect(await unsubscribed()).toContainEqual({ email: 'reader@example.com', campaign: 'weekly' })
 		})
 
 		test('a booking procedure answers its own management link, signed with the environment key', async () => {

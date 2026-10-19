@@ -10,6 +10,7 @@ import {
 	type ContractArtifact,
 	contractDigest,
 	contractWorkloads,
+	FABRIKA_APP_ORIGIN,
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
@@ -387,6 +388,8 @@ export function bootTestKit<C extends AnyContract>(
 				[FABRIKA_IAM_APP_ID]: appId,
 				[FABRIKA_IAM_ISSUER]: TEST_ISSUER,
 				[FABRIKA_CONTRACT_DIGEST]: contractDigest(artifact),
+				// The deploy writes the environment's public origin; the kit's is its own.
+				[FABRIKA_APP_ORIGIN]: origin,
 				...connectVariablesOf,
 				...workloadVariables,
 				...tokenVariables,

@@ -10,6 +10,7 @@ const requestSchema = z.object({
 	text: z.string(),
 	html: z.string().optional(),
 	reply_to: z.string().optional(),
+	headers: z.object({ 'List-Unsubscribe': z.string(), 'List-Unsubscribe-Post': z.literal('List-Unsubscribe=One-Click') }).strict().optional(),
 })
 
 function errorAnswer(status: number, name: string): Response {
@@ -30,6 +31,7 @@ describeEmailSenderConformance('ResendEmailSender', {
 			...(body.html === undefined ? {} : { html: body.html }),
 			...(body.reply_to === undefined ? {} : { replyTo: body.reply_to }),
 			...(fromName === undefined ? {} : { fromName }),
+			...(body.headers === undefined ? {} : { unsubscribeUrl: body.headers['List-Unsubscribe'].replace(/^<(.*)>$/, '$1') }),
 			idempotencyKey: request.headers.get('idempotency-key') ?? undefined,
 		}
 	},

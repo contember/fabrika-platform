@@ -11,6 +11,11 @@ export interface EmailMessage {
 	readonly replyTo?: string
 	/** Replaces the transport's display name for this message. */
 	readonly fromName?: string
+	/**
+	 * An `https:` URL that unsubscribes the recipient in one click (RFC 8058): the transport writes `List-Unsubscribe:
+	 * <url>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. A transport without `listUnsubscribe` refuses it.
+	 */
+	readonly unsubscribeUrl?: string
 }
 
 export interface EmailDeliveryResult {
@@ -26,6 +31,8 @@ export interface EmailSenderCapabilities {
 	readonly confirmation: 'sync' | 'queued'
 	/** The most messages one call carries. `send` carries one, so every built-in adapter reports 1. */
 	readonly maxBatch: number
+	/** Whether it writes a message's one-click unsubscribe headers (`unsubscribeUrl`); absent is no. */
+	readonly listUnsubscribe?: boolean
 }
 
 export interface EmailSender {
@@ -77,6 +84,11 @@ export class EmailDeliveryError extends Error {
 		this.outcome = EMAIL_DELIVERY_ERRORS[options.code].outcome
 		this.httpStatus = options.httpStatus
 	}
+}
+
+/** The two headers of a one-click unsubscribe (RFC 8058), as a transport writes them for `unsubscribeUrl`. */
+export function oneClickUnsubscribeHeaders(url: string): Readonly<Record<string, string>> {
+	return { 'List-Unsubscribe': `<${url}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' }
 }
 
 /** The one retry rule: an unknown outcome is retried only over an idempotent transport. */

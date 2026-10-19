@@ -64,6 +64,10 @@ export class SmartEmailingEmailSender implements EmailSender {
 
 	async send(message: EmailMessage, signal: AbortSignal): Promise<EmailDeliveryResult> {
 		validateEmailMessage(message)
+		// Its API documents no message headers, so a one-click unsubscribe is refused rather than sent without one.
+		if (message.unsubscribeUrl !== undefined) {
+			throw new EmailDeliveryError('SmartEmailing cannot write the List-Unsubscribe headers', { code: 'invalid_message' })
+		}
 
 		const senderName = message.fromName ?? this.#from.name
 		const response = await postToProvider({

@@ -119,6 +119,7 @@ import { pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
 import type { SignedTokens } from './tokens'
+import type { AppUrl } from './urls'
 import { githubAccounts, verifyDelivery } from './verifiers'
 import {
 	APP_BINDING_SCOPE,
@@ -320,6 +321,8 @@ export interface RuntimeParts {
 	readonly clientVouched: boolean
 	/** The environment's signed tokens: verified in each input and query, signed by `ctx.tokens`. */
 	readonly tokens: SignedTokens
+	/** `ctx.url`: absolute links to the application's own procedures. */
+	readonly url: AppUrl
 }
 
 interface Caller {
@@ -595,6 +598,7 @@ export class ContractRuntime {
 						requestId: frame.id,
 						signal,
 						client: requestClient(request, this.#parts.clientVouched),
+						url: this.#parts.url,
 						...access.context,
 						...this.#facilities(served.facilities, served.row, membership, access.context['target'], {
 							credential: caller.token,
@@ -1302,6 +1306,7 @@ export class ContractRuntime {
 						requestId: frame.id,
 						signal,
 						client: requestClient(request, this.#parts.clientVouched),
+						url: this.#parts.url,
 						app,
 						db: Object.freeze({ app: (action: string) => handles.app(app(action)) }),
 						...this.#signing(`'${served.row.id}'`, served.site.declaration.signs),
@@ -1423,6 +1428,7 @@ export class ContractRuntime {
 							requestId: frame.id,
 							signal,
 							client,
+							url: this.#parts.url,
 							...reach.context,
 							delivery,
 							files: storedFilesHandle(this.#parts.fileKinds, work, {

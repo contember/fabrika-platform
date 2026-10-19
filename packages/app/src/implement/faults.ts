@@ -36,6 +36,8 @@ export const SERVER_FAULTS = {
 		"the handler redirected to a target that is neither its own origin's path, an origin its redirect() lists, nor a URL a verified token of the request carries",
 	token_claims_refused: "the claims a site signed are not what the token purpose's claims schema admits",
 	token_keys_missing: 'a site signed a token, and the environment holds no token key',
+	url_unbuildable:
+		'ctx.url named no procedure of the contract, passed a parameter its HTTP shape does not read, or the environment has no public origin',
 } as const
 
 export type ServerFaultReason = keyof typeof SERVER_FAULTS

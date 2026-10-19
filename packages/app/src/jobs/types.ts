@@ -4,6 +4,7 @@
 import type { EmailDeliveryResult, EmailSenderCapabilities } from '@fabrika/email'
 import type { CronJob, DimensionOf } from '../contract/define'
 import type { AppCapability, Ref, Within } from '../implement/capability'
+import type { AppUrl } from '../implement/urls'
 
 /** Who a job's writes are stamped with (`createdBy`): the job itself, never a person. */
 export interface JobPrincipal {
@@ -33,6 +34,8 @@ export interface JobContext<A extends string, D extends string> {
 	ref<const Act extends A, const Dim extends D>(action: Act, dimension: Dim, id: string): Promise<Ref<Dim, Act>>
 	/** A declared action, application-wide: what `ctx.db.app('<action>')` reads and writes the application tables with. */
 	app<const Act extends A>(action: Act): AppCapability<Act>
+	/** An absolute link to a procedure of this application: `ctx.url('api.mail.unsubscribe', { query: { t } })`. */
+	readonly url: AppUrl
 }
 
 /** One message a job sends. The framework prefixes `idempotencyKey` before the transport sees it. */
@@ -45,6 +48,11 @@ export interface AppMailMessage {
 	readonly idempotencyKey: string
 	readonly replyTo?: string
 	readonly fromName?: string
+	/**
+	 * A one-click unsubscribe (RFC 8058): the transport writes `List-Unsubscribe` and `List-Unsubscribe-Post`. `url` is
+	 * an `https:` link, usually `ctx.url` of a public procedure that verifies a signed token.
+	 */
+	readonly unsubscribe?: { readonly url: string }
 }
 
 /** `ctx.mail` of a job that declares `mailer`. */

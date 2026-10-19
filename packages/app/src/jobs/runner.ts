@@ -41,6 +41,7 @@ import {
 } from '../implement/invocation'
 import { jobLinkIssuing, type JobLinkMount } from '../implement/membership'
 import type { SignedTokens } from '../implement/tokens'
+import { type AppUrl, appUrl } from '../implement/urls'
 import { type WorkloadCredential, workloadSite } from '../implement/workload'
 import { jobMail, type MailTransports } from './mail'
 import type { OperationsReporter } from './report'
@@ -185,6 +186,7 @@ interface RunnerContext {
 	readonly kick: (name: string) => Promise<void>
 	/** The environment's signed tokens: `ctx.tokens` of a job that declares `signs`. */
 	readonly tokens: SignedTokens | null
+	readonly url: AppUrl
 }
 
 /** Where `fabrika app dev` shows what a handler threw, on the developer's own machine; nothing else sets one. */
@@ -224,6 +226,8 @@ export interface JobBindingInput {
 	readonly mail: MailTransports
 	/** The environment's signed tokens, which a job that declares `signs` signs with. */
 	readonly tokens?: SignedTokens
+	/** `ctx.url`: absolute links to the application's own procedures; without it every link is refused. */
+	readonly url?: AppUrl
 }
 
 interface BoundFrameworkJob {
@@ -323,6 +327,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		revealHandlerErrors: input.revealHandlerErrors ?? null,
 		mail: input.mail,
 		tokens: input.tokens ?? null,
+		url: input.url ?? appUrl(input.artifact, null),
 		// A job's kicks run only after the job is bound, so `kick` below is defined by then.
 		kick: (name: string) => kick(name),
 	})
@@ -792,6 +797,7 @@ function jobContext(
 		runId: frame.id,
 		attempt,
 		signal,
+		url: context.url,
 		...(job.site === null || context.data === null
 			? {}
 			: kitJobContext(

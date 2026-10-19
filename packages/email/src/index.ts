@@ -14,7 +14,7 @@ export type {
 	EmailSenderIdentity,
 	EmailTransportConfig,
 } from './config.js'
-export { EMAIL_DELIVERY_ERRORS, EmailDeliveryError, mayRetryDelivery } from './email.js'
+export { EMAIL_DELIVERY_ERRORS, EmailDeliveryError, mayRetryDelivery, oneClickUnsubscribeHeaders } from './email.js'
 export type {
 	EmailDeliveryErrorCode,
 	EmailDeliveryErrorOptions,
@@ -25,4 +25,12 @@ export type {
 	EmailSender,
 	EmailSenderCapabilities,
 } from './email.js'
-export { isValidEmailAddress, isValidEmailDisplayName, isValidEmailFrom, MAX_EMAIL_SUBJECT_LENGTH, validateEmailMessage } from './validation.js'
+export {
+	isUnsubscribeUrl,
+	isValidEmailAddress,
+	isValidEmailDisplayName,
+	isValidEmailFrom,
+	MAX_EMAIL_SUBJECT_LENGTH,
+	MAX_UNSUBSCRIBE_URL_LENGTH,
+	validateEmailMessage,
+} from './validation.js'

@@ -93,6 +93,7 @@ export function jobMail(input: JobMailInput): AppMail {
 				idempotencyKey: `${keyPrefix}${key}`,
 				...(message.replyTo === undefined ? {} : { replyTo: message.replyTo }),
 				...(message.fromName === undefined ? {} : { fromName: message.fromName }),
+				...(message.unsubscribe === undefined ? {} : { unsubscribeUrl: message.unsubscribe.url }),
 			}
 			try {
 				return await sender.send(transported, signal === undefined ? attempt : AbortSignal.any([attempt, signal]))

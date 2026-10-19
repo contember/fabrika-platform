@@ -63,6 +63,21 @@ export function validateEmailMessage(message: EmailMessage): void {
 	}
 	if (message.replyTo !== undefined && !isValidEmailAddress(message.replyTo)) throw invalidMessage('Email reply-to address is invalid')
 	if (message.fromName !== undefined && !isValidEmailDisplayName(message.fromName)) throw invalidMessage('Email sender name is invalid')
+	if (message.unsubscribeUrl !== undefined && !isUnsubscribeUrl(message.unsubscribeUrl)) throw invalidMessage('Email unsubscribe URL is invalid')
+}
+
+/** The longest unsubscribe URL a header carries: one header line, with room for its name. */
+export const MAX_UNSUBSCRIBE_URL_LENGTH = 2048
+
+/** An absolute `https:` URL as it is written, which a `<…>` header value carries unchanged. */
+export function isUnsubscribeUrl(value: string): boolean {
+	if (value.length > MAX_UNSUBSCRIBE_URL_LENGTH || containsControlCharacter(value) || /[\s<>"]/.test(value)) return false
+	try {
+		const url = new URL(value)
+		return url.protocol === 'https:' && url.href === value && url.username === '' && url.password === ''
+	} catch {
+		return false
+	}
 }
 
 function invalidMessage(message: string): EmailDeliveryError {

@@ -20,6 +20,7 @@ const capturedEmailSchema = z.object({
 	html: z.string().optional(),
 	replyTo: z.string().optional(),
 	fromName: z.string().optional(),
+	unsubscribeUrl: z.string().optional(),
 	capturedAt: z.number().int(),
 })
 
@@ -32,7 +33,7 @@ export interface DirectoryEmailSenderOptions {
 }
 
 export class DirectoryEmailSender implements EmailSender {
-	readonly capabilities: EmailSenderCapabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1 }
+	readonly capabilities: EmailSenderCapabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1, listUnsubscribe: true }
 	readonly #directory: string
 	readonly #now: () => number
 

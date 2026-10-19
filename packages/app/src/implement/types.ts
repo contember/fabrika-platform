@@ -10,6 +10,7 @@ import type { AppCapability, Ref, Within } from './capability'
 import type { ConnectResult } from './connect'
 import type { LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from './membership'
 import type { AppPrincipal, LinkHolder, PrincipalOf, ServicePrincipal } from './principal'
+import type { AppUrl } from './urls'
 import type { WebhookDelivery, WebhookPrincipal } from './webhook'
 
 /** What every handler gets: who called, this request's id, the client the proxy saw, and the signal that ends it. */
@@ -23,6 +24,8 @@ export interface RequestContext<P> {
 	readonly signal: AbortSignal
 	/** The client the proxy saw. Information to record, never a check. */
 	readonly client: RequestClient
+	/** An absolute link to a procedure of this application: `ctx.url('api.mail.unsubscribe', { query: { t } })`. */
+	readonly url: AppUrl
 }
 
 /**

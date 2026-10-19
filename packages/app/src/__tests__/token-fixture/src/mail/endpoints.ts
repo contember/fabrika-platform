@@ -94,3 +94,17 @@ export const staff = app.group({ callers: ['human'] }, (r) => ({
 		count: await ctx.db.app.clicks.count(),
 	})),
 }))
+
+/** A newsletter of one message, whose one-click unsubscribe link carries a signed token. */
+export const newsletter = app.cron('0 6 * * 1', { actions: ['mail.read'], scope: 'app', mailer: 'installation', signs: ['unsubscribe'] }).handle(
+	async ({ ctx }) => {
+		const t = ctx.tokens.sign('unsubscribe', { email: 'reader@example.com', campaign: 'weekly' }, { days: 400 })
+		await ctx.mail.send({
+			to: 'reader@example.com',
+			subject: 'This week',
+			text: 'This week in the catalog.',
+			idempotencyKey: `weekly-${ctx.runId}`,
+			unsubscribe: { url: ctx.url('api.mail.unsubscribe', { query: { t } }) },
+		})
+	},
+)

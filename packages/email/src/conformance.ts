@@ -21,6 +21,8 @@ export interface WireMessage {
 	readonly replyTo?: string
 	readonly fromName?: string
 	readonly idempotencyKey?: string
+	/** The URL of the `List-Unsubscribe` header, when `List-Unsubscribe-Post` says one click. */
+	readonly unsubscribeUrl?: string
 }
 
 /** How the provider answers. `inProgress` and `idempotencyConflict` are required when the sender is idempotent. */
@@ -83,6 +85,12 @@ const MINIMAL_MESSAGE: EmailMessage = {
 	idempotencyKey: 'conformance/minimal-1',
 }
 
+const UNSUBSCRIBE_MESSAGE: EmailMessage = {
+	...MINIMAL_MESSAGE,
+	idempotencyKey: 'conformance/unsubscribe-1',
+	unsubscribeUrl: 'https://app.example.test/api/mail.unsubscribe?t=conformance-token-6c2e',
+}
+
 const INVALID_MESSAGES: readonly { readonly problem: string; readonly message: EmailMessage }[] = [
 	{ problem: 'a bad recipient', message: { ...MINIMAL_MESSAGE, to: 'not-an-address' } },
 	{ problem: 'an empty subject', message: { ...MINIMAL_MESSAGE, subject: '' } },
@@ -94,6 +102,8 @@ const INVALID_MESSAGES: readonly { readonly problem: string; readonly message: E
 	{ problem: 'a bad reply-to', message: { ...MINIMAL_MESSAGE, replyTo: 'not-an-address' } },
 	{ problem: 'a sender name with brackets', message: { ...MINIMAL_MESSAGE, fromName: 'Bad <name>' } },
 	{ problem: 'a sender name over 128 characters', message: { ...MINIMAL_MESSAGE, fromName: 'x'.repeat(129) } },
+	{ problem: 'an unsubscribe URL over http', message: { ...MINIMAL_MESSAGE, unsubscribeUrl: 'http://app.example.test/u' } },
+	{ problem: 'an unsubscribe URL with a bracket', message: { ...MINIMAL_MESSAGE, unsubscribeUrl: 'https://app.example.test/u>x' } },
 ]
 
 /**
@@ -163,6 +173,17 @@ function describeHttpSender(harness: EmailSenderHttpHarness): void {
 		const current = httpCase(async (request) => harness.answers.accepted(request))
 		await current.sender.send(MINIMAL_MESSAGE, new AbortController().signal)
 		expectOptionalFieldsAbsent(await harness.readRequest(only(current.requests)))
+	})
+
+	test('writes the one-click unsubscribe headers it says it writes, and refuses them otherwise', async () => {
+		const current = httpCase(async (request) => harness.answers.accepted(request))
+		if (current.sender.capabilities.listUnsubscribe === true) {
+			await current.sender.send(UNSUBSCRIBE_MESSAGE, new AbortController().signal)
+			expect((await harness.readRequest(only(current.requests))).unsubscribeUrl).toBe(UNSUBSCRIBE_MESSAGE.unsubscribeUrl)
+			return
+		}
+		await expectRejection(() => current.sender.send(UNSUBSCRIBE_MESSAGE, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
+		expect(current.requests).toHaveLength(0)
 	})
 
 	test.each(INVALID_MESSAGES)('refuses $problem as invalid_message without a request', async ({ message }) => {
@@ -287,6 +308,16 @@ function describeLocalSender(harness: EmailSenderLocalHarness): void {
 		expectOptionalFieldsAbsent(only(await harness.stored()))
 	})
 
+	test('stores the one-click unsubscribe URL it says it writes, and refuses it otherwise', async () => {
+		if (current().capabilities.listUnsubscribe === true) {
+			await current().send(UNSUBSCRIBE_MESSAGE, new AbortController().signal)
+			expect(only(await harness.stored()).unsubscribeUrl).toBe(UNSUBSCRIBE_MESSAGE.unsubscribeUrl)
+			return
+		}
+		await expectRejection(() => current().send(UNSUBSCRIBE_MESSAGE, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
+		expect(await harness.stored()).toHaveLength(0)
+	})
+
 	test.each(INVALID_MESSAGES)('refuses $problem as invalid_message and stores nothing', async ({ message }) => {
 		await expectRejection(() => current().send(message, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
 		expect(await harness.stored()).toHaveLength(0)
@@ -330,6 +361,7 @@ function expectOptionalFieldsAbsent(wire: WireMessage): void {
 	expect(wire.html).toBeUndefined()
 	expect(wire.replyTo).toBeUndefined()
 	expect(wire.fromName).toBeUndefined()
+	expect(wire.unsubscribeUrl).toBeUndefined()
 }
 
 function contentOf(message: EmailMessage): WireMessage {

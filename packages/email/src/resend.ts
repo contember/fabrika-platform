@@ -7,6 +7,7 @@ import {
 	type EmailMessage,
 	type EmailSender,
 	type EmailSenderCapabilities,
+	oneClickUnsubscribeHeaders,
 } from './email.js'
 import { parseTimeout, postToProvider, type ProviderResponse } from './http.js'
 import { isValidEmailSenderIdentity, isVisibleAscii, validateEmailMessage } from './validation.js'
@@ -27,7 +28,7 @@ export interface ResendEmailSenderOptions {
 }
 
 export class ResendEmailSender implements EmailSender {
-	readonly capabilities: EmailSenderCapabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1 }
+	readonly capabilities: EmailSenderCapabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1, listUnsubscribe: true }
 	readonly #apiKey: string
 	readonly #from: EmailSenderIdentity
 	readonly #fetch: EmailFetch
@@ -62,6 +63,7 @@ export class ResendEmailSender implements EmailSender {
 				text: message.text,
 				...(message.html === undefined ? {} : { html: message.html }),
 				...(message.replyTo === undefined ? {} : { reply_to: message.replyTo }),
+				...(message.unsubscribeUrl === undefined ? {} : { headers: oneClickUnsubscribeHeaders(message.unsubscribeUrl) }),
 			},
 			signal,
 			timeoutMs: this.#timeoutMs,

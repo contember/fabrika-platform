@@ -157,6 +157,7 @@ src/
     webhook.ts        a webhook's bindings (ctx.webhooks, a GitHub webhook's generated endpoints) and a delivery's principal
     verifiers.ts      a delivery's signature: the presets and the hmac shape, constant-time
     tokens.ts         signed tokens: FABRIKA_TOKEN_KEYS, ctx.tokens.sign, the verification of each token field
+    urls.ts           ctx.url: an absolute link to a procedure, on FABRIKA_APP_ORIGIN, with the parameters its URL carries
     faults.ts         ServerFault: a framework failure whose message only the log sees
     failures.ts       FailureReports: a 5xx as one log line and one rate-limited Operations event, by code
     crashes.ts        a boot that throws, an uncaught exception, an unhandled rejection: one crash report each

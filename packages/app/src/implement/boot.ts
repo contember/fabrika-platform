@@ -78,6 +78,7 @@ import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration
 import type { ReadDirectory } from './membership'
 import { type AdmissionOptions, InFlightShare, type ProcedureAdmission, procedureAdmission, publicShareOf } from './public'
 import { readTokenKeys, type RuntimePurpose, SignedTokens } from './tokens'
+import { appUrl, readAppOrigin } from './urls'
 import { type BindableWebhook, bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
 import { type WorkloadCredential, workloadCredentials, workloadSite, type WorkloadTokenSource } from './workload'
 
@@ -743,6 +744,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	checkContractDigest(options.environment.framework, artifact, problems)
 	const proxySecret = readProxySecret(options.environment.framework, options.requireProxySecret === true, problems)
 	const tokens = new SignedTokens(runtimePurposes(app.contract, artifact), readTokenKeys(options.environment.framework, artifact, problems))
+	const url = appUrl(artifact, readAppOrigin(options.environment.framework, problems))
 	const operations = operationsSettings(options.environment.framework, problems)
 	const scrubber = environmentScrubber(options.environment)
 	const reporterFor = (source: ReportSource): OperationsReporter | null =>
@@ -948,6 +950,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		...(options.revealHandlerErrors === undefined ? {} : { revealHandlerErrors: options.revealHandlerErrors }),
 		mail,
 		tokens,
+		url,
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)
@@ -1030,6 +1033,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		publicShare: new InFlightShare(publicShareOf(options.connections ?? DEFAULT_CONNECTIONS)),
 		clientVouched: options.clientAddress === 'vouched',
 		tokens,
+		url,
 	})
 	return Object.freeze({
 		fetch: (request: Request, exec?: RequestExecutionContext) => runtime.fetch(request, exec),

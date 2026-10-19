@@ -73,7 +73,7 @@ export class MemoryEmailSender implements EmailSender {
 	#taken = 0
 
 	constructor(options: MemoryEmailSenderOptions = {}) {
-		this.capabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1, ...options.capabilities }
+		this.capabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1, listUnsubscribe: true, ...options.capabilities }
 		if (!Number.isSafeInteger(this.capabilities.maxBatch) || this.capabilities.maxBatch < 1) {
 			throw new EmailDeliveryError('The memory sender batch size is invalid', { code: 'invalid_configuration' })
 		}
@@ -124,6 +124,9 @@ export class MemoryEmailSender implements EmailSender {
 
 	async send(message: EmailMessage, signal: AbortSignal): Promise<EmailDeliveryResult> {
 		validateEmailMessage(message)
+		if (message.unsubscribeUrl !== undefined && this.capabilities.listUnsubscribe !== true) {
+			throw new EmailDeliveryError('The memory sender writes no List-Unsubscribe header', { code: 'invalid_message' })
+		}
 		if (signal.aborted) throw failure('aborted')
 		const handoff: MutableHandoff = { message, at: this.#now(), taken: false, answer: 'network_error' }
 		this.#handoffs.push(handoff)

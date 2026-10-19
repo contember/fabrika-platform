@@ -13,6 +13,7 @@ const requestSchema = z.object({
 	text: z.string(),
 	html: z.string().optional(),
 	reply_to: z.string().optional(),
+	headers: z.object({ 'List-Unsubscribe': z.string() }).optional(),
 })
 
 function errorAnswer(status: number, name: string): Response {
@@ -52,6 +53,7 @@ describeEmailSenderConformance('LeakyEmailSender', {
 			text: body.text,
 			...(body.html === undefined ? {} : { html: body.html }),
 			...(body.reply_to === undefined ? {} : { replyTo: body.reply_to }),
+			...(body.headers === undefined ? {} : { unsubscribeUrl: body.headers['List-Unsubscribe'].replace(/^<(.*)>$/, '$1') }),
 			...(body.from === 'auth@example.test' ? {} : { fromName: body.from.replace(/^"?(.*?)"? <auth@example\.test>$/, '$1') }),
 			idempotencyKey: request.headers.get('idempotency-key') ?? undefined,
 		}
