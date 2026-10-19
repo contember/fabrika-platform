@@ -48,6 +48,7 @@ import {
 	type ZeropsNamespaceTarget,
 	zeropsNamespaceTargetCodec,
 } from './namespace'
+import { assertNamespaceProxyReads } from './namespace/proxy-reads'
 import { createZeropsDeployer, ZEROPS_VERSION_DEADLINE_MS } from './provider'
 import { allowedReferenceHosts, assertNoPlatformOnlyReference, foreignReferenceHost, serviceReferenceHosts } from './service-references'
 import { normalizeZeropsSourceRepository } from './source'
@@ -345,6 +346,12 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			const binding = privateBinding(input.sourceBinding)
 			assertEnvironmentOfApp(input.app, input.environment)
 			const placement = resolvedEnvironment(input.environment, { requireReady: true })
+			assertNamespaceProxyReads(
+				placement.namespace.id,
+				input.environment.access?.contract,
+				placement.namespaceTarget.proxySource,
+				options.namespaces?.proxySource,
+			)
 			const artifact = artifactFor(input.environment)
 			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 			let source: ZeropsRuntimeTarget['source']
