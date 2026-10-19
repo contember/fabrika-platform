@@ -1,9 +1,26 @@
 import { existsSync, statSync } from 'fs'
 import { basename, resolve } from 'path'
 import { parseArgs } from 'util'
+import { z } from 'zod'
 import { BASE_URL } from '../config.ts'
 import { ensureDaemon, startDaemon, stopDaemon } from '../daemon-lifecycle.ts'
 import { getSessionId, openBrowser } from '../helpers.ts'
+
+const pushResponseSchema = z.union([
+	z.object({
+		ok: z.literal(true),
+		browserUrl: z.string(),
+		isNew: z.boolean(),
+		revision: z.number(),
+		canvasFiles: z.array(z.string()),
+	}),
+	z.object({
+		ok: z.literal(false).optional(),
+		error: z.string().optional(),
+		errors: z.record(z.unknown()).optional(),
+		unconsumedFeedback: z.string().optional(),
+	}),
+])
 
 export async function handlePush(args: string[]) {
 	const { values, positionals } = parseArgs({
@@ -52,13 +69,13 @@ export async function handlePush(args: string[]) {
 		}),
 	})
 
-	let result = await response.json() as any
+	let result = pushResponseSchema.parse(await response.json())
 
 	// Bun.build() / Bun.Transpiler can fail in long-running daemons due to
 	// internal state corruption, CWD unlinking, etc. Restart and retry once.
 	// Skip restart only for clear user errors (syntax errors with line/col,
 	// runtime validation errors) — those won't be fixed by a restart.
-	const isUserError = !result.ok && result.errors && Object.values(result.errors).every((e: any) =>
+	const isUserError = !result.ok && result.errors && Object.values(result.errors).every((e) =>
 		typeof e === 'string' && (
 			/\(line \d+, col \d+\)/.test(e)
 			|| /Syntax Error|Parse error|Mermaid syntax error/i.test(e)
@@ -80,7 +97,7 @@ export async function handlePush(args: string[]) {
 				...(values.response ? { response: values.response } : {}),
 			}),
 		})
-		result = await retryResponse.json() as any
+		result = pushResponseSchema.parse(await retryResponse.json())
 	}
 
 	if (!result.ok) {

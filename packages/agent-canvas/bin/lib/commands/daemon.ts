@@ -1,6 +1,9 @@
 import { parseArgs } from 'util'
+import { z } from 'zod'
 import { BASE_URL, DAEMON_PORT } from '../config.ts'
 import { isDaemonRunning, startDaemon, stopDaemon } from '../daemon-lifecycle.ts'
+
+const healthResponseSchema = z.object({ sessions: z.array(z.string()) })
 
 export async function handleDaemon(args: string[]) {
 	const { positionals } = parseArgs({
@@ -14,7 +17,7 @@ export async function handleDaemon(args: string[]) {
 		case 'status': {
 			try {
 				const res = await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(2000) })
-				const data = await res.json() as any
+				const data = healthResponseSchema.parse(await res.json())
 				console.log(`Daemon: running on port ${DAEMON_PORT}`)
 				console.log(`Sessions: ${data.sessions.length > 0 ? data.sessions.join(', ') : 'none'}`)
 			} catch {

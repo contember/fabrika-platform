@@ -1,6 +1,6 @@
 import { SessionContext } from '#canvas/runtime'
 import { PlanRenderer } from '@fabrika/canvas-kernel/client'
-import { ActiveViewContext, type CanvasFileInfo, RevisionContext, type RevisionInfo } from '@fabrika/canvas-kernel/client'
+import { ActiveViewContext, RevisionContext, type RevisionInfo } from '@fabrika/canvas-kernel/client'
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { ComparePanelRenderer } from './CompareView'
 import { runDomDiff } from './domDiff'

@@ -15,8 +15,10 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { SessionManager } from '@fabrika/canvas-kernel/server'
+import { z } from 'zod'
 import workerHandler from '../../../canvas-share/src/index'
 import type { Env } from '../../../canvas-share/src/types'
+import { validateSharePayload } from '../../../canvas-share/src/validation'
 import { decryptString, ENCRYPTION_META, encryptString, exportShareKey, generateShareKey, importShareKey } from '../client/shareCrypto'
 import { buildSharePayload, encryptSharePayload } from './share'
 
@@ -25,14 +27,14 @@ import { buildSharePayload, encryptSharePayload } from './share'
 function makeR2(): R2Bucket {
 	const store = new Map<string, { body: Uint8Array; contentType?: string }>()
 	return {
-		async put(key: string, value: any, opts?: any) {
+		async put(key: string, value: BodyInit, opts?: { httpMetadata?: { contentType?: string } }) {
 			const bytes = typeof value === 'string'
 				? new TextEncoder().encode(value)
 				: value instanceof Uint8Array
 				? value
 				: new Uint8Array(await new Response(value).arrayBuffer())
 			store.set(key, { body: bytes, contentType: opts?.httpMetadata?.contentType })
-			return null as any
+			return null
 		},
 		async get(key: string) {
 			const v = store.get(key)
@@ -49,26 +51,26 @@ function makeR2(): R2Bucket {
 					return v.body.buffer
 				},
 				httpMetadata: { contentType: v.contentType },
-			} as any
+			}
 		},
 		async delete(key: string) {
 			store.delete(key)
 		},
-		async list(opts?: any) {
+		async list(opts?: { prefix?: string }) {
 			const prefix = opts?.prefix ?? ''
 			const objects = []
 			for (const k of store.keys()) {
 				if (k.startsWith(prefix)) objects.push({ key: k })
 			}
-			return { objects, truncated: false, delimitedPrefixes: [] } as any
+			return { objects, truncated: false, delimitedPrefixes: [] }
 		},
 	} as unknown as R2Bucket
 }
 
 function makeKV(): KVNamespace {
-	const store = new Map<string, { value: string; meta?: any; expireAt?: number }>()
+	const store = new Map<string, { value: string; meta?: unknown; expireAt?: number }>()
 	return {
-		async put(key: string, value: string, opts?: any) {
+		async put(key: string, value: string, opts?: { expirationTtl?: number; metadata?: unknown }) {
 			const expireAt = opts?.expirationTtl ? Date.now() + opts.expirationTtl * 1000 : undefined
 			store.set(key, { value, meta: opts?.metadata, expireAt })
 		},
@@ -84,7 +86,7 @@ function makeKV(): KVNamespace {
 		async delete(key: string) {
 			store.delete(key)
 		},
-		async list(opts?: any) {
+		async list(opts?: { prefix?: string }) {
 			const prefix = opts?.prefix ?? ''
 			const keys = []
 			for (const [k, v] of store.entries()) {
@@ -92,7 +94,7 @@ function makeKV(): KVNamespace {
 				if (v.expireAt && v.expireAt < Date.now()) continue
 				keys.push({ name: k, metadata: v.meta })
 			}
-			return { keys, list_complete: true, cursor: '' } as any
+			return { keys, list_complete: true, cursor: '' }
 		},
 	} as unknown as KVNamespace
 }
@@ -101,9 +103,23 @@ function makeEnv(): Env {
 	return {
 		BLOBS: makeR2(),
 		FEEDBACK: makeKV(),
-		ASSETS: { fetch: async () => new Response('asset', { status: 200 }) } as any,
+		ASSETS: { fetch: async () => new Response('asset', { status: 200 }) } as unknown as Fetcher,
 	}
 }
+
+const shareMetaSchema = z.object({
+	encryption: z.unknown(),
+	origin: z.object({ sessionId: z.string(), label: z.string() }),
+})
+
+const polledFeedbackSchema = z.object({
+	entries: z.array(z.object({
+		encryption: z.unknown(),
+		author: z.object({ name: z.string() }),
+		annotations: z.array(z.object({ snippet: z.string(), note: z.string(), canvasFile: z.string() })),
+		generalNote: z.string(),
+	})),
+})
 
 // ---- The full flow ---------------------------------------------------------
 
@@ -144,7 +160,8 @@ describe('encrypted share e2e (daemon → worker → browser → reviewer → da
 
 			// ----- 4. Confirm what's stored in R2 is ciphertext, NOT plaintext ----
 			const storedPayloadObj = await env.BLOBS.get(`shares/${created.shareId}/payload.json`)
-			const storedPayload = JSON.parse(await storedPayloadObj!.text()) as any
+			const storedPayload = validateSharePayload(JSON.parse(await storedPayloadObj!.text()))
+			if (typeof storedPayload === 'string') throw new Error(storedPayload)
 			expect(storedPayload.encryption).toEqual({ alg: 'AES-GCM', v: 1 })
 			expect(storedPayload.origin.sessionId).not.toBe(sid)
 			expect(storedPayload.origin.label).not.toBe(SECRET_LABEL)
@@ -163,7 +180,7 @@ describe('encrypted share e2e (daemon → worker → browser → reviewer → da
 				env,
 			)
 			expect(metaRes.status).toBe(200)
-			const meta = await metaRes.json() as any
+			const meta = shareMetaSchema.parse(await metaRes.json())
 			expect(meta.encryption).toEqual({ alg: 'AES-GCM', v: 1 })
 
 			const browserKey = await importShareKey(encodedKey)
@@ -214,7 +231,7 @@ describe('encrypted share e2e (daemon → worker → browser → reviewer → da
 			expect(submitRes.status).toBe(200)
 
 			// ----- 8. Confirm KV-stored feedback has no plaintext leakage --------
-			const kvList = await (env.FEEDBACK as any).list({ prefix: `fb:${created.shareId}:` })
+			const kvList = await env.FEEDBACK.list({ prefix: `fb:${created.shareId}:` })
 			expect(kvList.keys.length).toBe(1)
 			const kvValueRaw = await env.FEEDBACK.get(kvList.keys[0].name)
 			expect(kvValueRaw).not.toBeNull()
@@ -229,7 +246,7 @@ describe('encrypted share e2e (daemon → worker → browser → reviewer → da
 				env,
 			)
 			expect(pollRes.status).toBe(200)
-			const polled = await pollRes.json() as { entries: any[] }
+			const polled = polledFeedbackSchema.parse(await pollRes.json())
 			expect(polled.entries.length).toBe(1)
 			const wireEntry = polled.entries[0]
 			expect(wireEntry.encryption).toEqual({ alg: 'AES-GCM', v: 1 })
@@ -261,10 +278,12 @@ describe('encrypted share e2e (daemon → worker → browser → reviewer → da
 			expect(legacyCreate.status).toBe(200)
 			const legacy = await legacyCreate.json() as { shareId: string }
 
-			const legacyMeta = await (await workerHandler.fetch(
-				new Request(`https://example.com/s/${legacy.shareId}/meta`),
-				legacyEnv,
-			)).json() as any
+			const legacyMeta = shareMetaSchema.parse(
+				await (await workerHandler.fetch(
+					new Request(`https://example.com/s/${legacy.shareId}/meta`),
+					legacyEnv,
+				)).json(),
+			)
 			expect(legacyMeta.encryption).toBeUndefined()
 			expect(legacyMeta.origin.sessionId).toBe(sid)
 			expect(legacyMeta.origin.label).toBe(SECRET_LABEL)

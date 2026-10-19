@@ -1,5 +1,5 @@
 import { ActiveViewCtx, SessionContext } from '#canvas/runtime'
-import type { Annotation } from '#canvas/runtime'
+import type { Annotation, AnnotationContext } from '#canvas/runtime'
 import {
 	AnnotationCreatePopover,
 	AnnotationEditPopover,
@@ -24,6 +24,8 @@ import {
 	carryUnsubmittedDraft,
 	clearPersistedDraft,
 	FileIcon,
+	filePreviewResponseSchema,
+	parsePersistedState,
 	PlanRenderer,
 	RenderErrorContext,
 	RevisionContext,
@@ -31,10 +33,22 @@ import {
 	useAnnotations,
 } from '@fabrika/canvas-kernel/client'
 import { marked } from 'marked'
-import React, { createContext, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { canvasHost, fetchMeta, FS_AVAILABLE, getReviewerIdentity, MODE, setReviewerIdentity, submitSharedFeedback, WS_AVAILABLE } from './clientApi'
+import { type RemoteFeedbackEntry, remoteFeedbackResponseSchema, type ShareEntry } from './apiSchemas'
+import {
+	canvasHost,
+	fetchMeta,
+	FS_AVAILABLE,
+	getReviewerIdentity,
+	MODE,
+	setReviewerIdentity,
+	type SharedFeedbackPayload,
+	submitSharedFeedback,
+	WS_AVAILABLE,
+} from './clientApi'
 import { CompareView } from './CompareView'
+import { errorMessage } from './errorMessage'
 import { exportCanvasToMarkdown } from './exportMarkdown'
 import { FileBrowser } from './FileBrowser'
 import { FileViewer } from './FileViewer'
@@ -42,21 +56,7 @@ import { categorizeChanges, getAffectedFiles, OverviewView } from './OverviewVie
 import { ReviewerIdentityDialog } from './ReviewerIdentityDialog'
 import { RevisionSelect } from './RevisionSelect'
 import { SessionSwitcher } from './SessionSwitcher'
-import { ShareButton, ShareDialog, type ShareEntry } from './ShareDialog'
-
-/**
- * Wire shape of a remote feedback entry as delivered by the daemon
- * (polled from CF Worker). Mirrors RemoteFeedbackEntry on the server side.
- */
-interface RemoteFeedbackEntry {
-	id: string
-	shareId: string
-	revision: number
-	submittedAt: string
-	author: { id: string; name: string }
-	annotations: Array<Omit<Annotation, 'source' | 'author'>>
-	generalNote?: string
-}
+import { ShareButton, ShareDialog } from './ShareDialog'
 
 /**
  * Flatten an array of remote feedback entries into a list of Annotations
@@ -306,7 +306,7 @@ function App() {
 	useEffect(() => {
 		if (!sessionId) return
 		fetchMeta()
-			.then((data: any) => {
+			.then((data) => {
 				if (data.currentRevision) {
 					const nextRevisions: RevisionInfo[] = data.revisions || []
 					for (const revision of nextRevisions) {
@@ -318,7 +318,7 @@ function App() {
 					setRevisions(nextRevisions)
 				}
 				if (data.canvasFiles) {
-					const files = (data.canvasFiles as string[]).sort()
+					const files = data.canvasFiles.sort()
 					setCanvasFiles(files)
 					setActiveViewRaw((prev) => {
 						if (prev.type === 'overview') {
@@ -346,9 +346,10 @@ function App() {
 		if (!sessionId || !selectedRevision || isSharedMode) return
 		fetch(`/api/session/${sessionId}/revision/${selectedRevision}/remote-feedback`)
 			.then((r) => r.json())
-			.then((data: any) => {
-				if (!Array.isArray(data.entries)) return
-				const anns = remoteFeedbackToAnnotations(data.entries)
+			.then((raw) => {
+				const data = remoteFeedbackResponseSchema.safeParse(raw)
+				if (!data.success) return
+				const anns = remoteFeedbackToAnnotations(data.data.entries)
 				setRemoteAnnotationsByRev((prev) => {
 					const next = new Map(prev)
 					next.set(selectedRevision, anns)
@@ -451,11 +452,11 @@ function App() {
 	const submitSharedFeedbackWithIdentity = useCallback(async (feedback: string, identity: { id: string; name: string }) => {
 		try {
 			const raw = localStorage.getItem(`canvas:${sessionId}:rev:${selectedRevision}`)
-			let structuredAnnotations: any[] = []
+			let structuredAnnotations: SharedFeedbackPayload['annotations'] = []
 			if (raw) {
 				try {
-					const parsed = JSON.parse(raw)
-					structuredAnnotations = (parsed.annotations || []).filter((a: any) => a.source !== 'remote')
+					const parsed = parsePersistedState(JSON.parse(raw))
+					structuredAnnotations = (parsed?.annotations ?? []).filter((a) => a.source !== 'remote')
 				} catch {}
 			}
 			await submitSharedFeedback({
@@ -467,8 +468,8 @@ function App() {
 			clearPersistedDraft(localStorage, sessionId, selectedRevision)
 			setSharedFeedbackSubmitted(true)
 			setToast({ kind: 'success', message: 'Feedback submitted. The canvas author will see it shortly.' })
-		} catch (e: any) {
-			setToast({ kind: 'error', message: `Failed to submit feedback: ${e.message || e}` })
+		} catch (e) {
+			setToast({ kind: 'error', message: `Failed to submit feedback: ${errorMessage(e)}` })
 		}
 	}, [sessionId, selectedRevision])
 
@@ -901,8 +902,8 @@ function ResizableSidebar({ children, collapsed, onToggle }: { children: React.R
 					style={{ marginLeft: '-2px' }}
 				/>
 				{React.Children.map(children, (child) =>
-					React.isValidElement(child)
-						? React.cloneElement(child as React.ReactElement<any>, {
+					React.isValidElement<{ collapseButton?: React.ReactNode }>(child)
+						? React.cloneElement(child, {
 							collapseButton: (
 								<button
 									onClick={onToggle}
@@ -945,7 +946,7 @@ function ResponseBanner({ markdown }: { markdown: string }) {
 		activeAnnotationId,
 		setActiveAnnotationId,
 	} = useAnnotations()
-	const [createPopover, setCreatePopover] = useState<{ anchorEl: HTMLElement; tempId: string; snippet: string; ctx: any } | null>(null)
+	const [createPopover, setCreatePopover] = useState<{ anchorEl: HTMLElement; tempId: string; snippet: string; ctx: AnnotationContext } | null>(null)
 	const [editPopover, setEditPopover] = useState<{ anchorEl: HTMLElement; annId: string } | null>(null)
 
 	const responseAnnotations = useMemo(() => annotations.filter((a) => a.filePath === RESPONSE_ANNOTATION_PATH), [annotations])
@@ -1063,6 +1064,7 @@ function ResponseBanner({ markdown }: { markdown: string }) {
 					</svg>
 					<span className="text-[11px] font-medium uppercase tracking-widest text-accent-blue font-body">Agent Response</span>
 				</div>
+				{/* biome-ignore lint/security/noDangerouslySetInnerHtml: The response is the local agent's markdown, the same author whose canvas modules already execute as code here. */}
 				<div ref={contentRef} className="prose-canvas text-sm" dangerouslySetInnerHTML={{ __html: html }} />
 			</div>
 
@@ -1218,8 +1220,8 @@ function ContentTabs() {
 							const path = activeView.path
 							try {
 								const res = await fetch(`/api/file?session=${sessionId}&path=${encodeURIComponent(path)}`)
-								const data = await res.json() as any
-								if (!data.error) {
+								const data = filePreviewResponseSchema.parse(await res.json())
+								if ('content' in data) {
 									const preview = data.content.split('\n').slice(0, 3).join('\n') + (data.content.split('\n').length > 3 ? '\n...' : '')
 									const id = generateAnnotationId()
 									addAnnotationWithId(id, preview, '', path)

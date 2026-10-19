@@ -2,7 +2,6 @@ import { createWebSocketManager, SessionManager, type WSData } from '@fabrika/ca
 import { corsHeaders, dispatch, jsonResponse } from '@fabrika/daemon-kit'
 import { randomBytes } from 'crypto'
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { createApiHandlers } from './handlers/api'
 import { createFileHandlers } from './handlers/files'
@@ -55,7 +54,7 @@ const server = Bun.serve<WSData>({
 		if (wsBrowserMatch) {
 			const upgraded = server.upgrade(req, { data: { type: 'browser', sessionId: wsBrowserMatch[1] } })
 			if (!upgraded) return new Response('WebSocket upgrade failed', { status: 400 })
-			return undefined as any
+			return undefined
 		}
 
 		// WebSocket upgrade: /ws/wait/:id
@@ -63,7 +62,7 @@ const server = Bun.serve<WSData>({
 		if (wsWaitMatch) {
 			const upgraded = server.upgrade(req, { data: { type: 'wait', sessionId: wsWaitMatch[1] } })
 			if (!upgraded) return new Response('WebSocket upgrade failed', { status: 400 })
-			return undefined as any
+			return undefined
 		}
 
 		// Route dispatch

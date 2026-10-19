@@ -22,6 +22,7 @@
  */
 
 import type { CanvasHost } from '@fabrika/canvas-kernel/client'
+import { type SessionMeta, sessionMetaSchema } from './apiSchemas'
 import { decryptString, ENCRYPTION_META, type EncryptionMeta, encryptString, importShareKey } from './shareCrypto'
 
 declare global {
@@ -156,24 +157,18 @@ export async function clearLocalSecret(fieldId: string): Promise<void> {
 
 // --- Meta fetch (with optional decryption) ---------------------------------
 
-interface RawMetaResponse {
-	encryption?: EncryptionMeta
-	origin?: { sessionId?: string; label?: string; revision?: number; createdAt?: string }
-	[key: string]: unknown
-}
-
 /** Fetch + parse meta, decrypting origin.sessionId/label for encrypted
  *  shares. The shape returned is the same as the worker/daemon emits, so
  *  callers don't have to branch. */
-export async function fetchMeta(): Promise<any> {
+export async function fetchMeta(): Promise<SessionMeta> {
 	const res = await fetch(metaUrl())
 	if (!res.ok) throw new Error(`meta ${res.status}`)
-	const data = (await res.json()) as RawMetaResponse
+	const data = sessionMetaSchema.parse(await res.json())
 
 	if (data.encryption && MODE.isShared && MODE.encryptionKey) {
 		const key = await MODE.encryptionKey
 		if (data.origin) {
-			const o: any = { ...data.origin }
+			const o = { ...data.origin }
 			if (o.sessionId) o.sessionId = await decryptString(key, o.sessionId)
 			if (o.label) o.label = await decryptString(key, o.label)
 			data.origin = o
@@ -181,14 +176,11 @@ export async function fetchMeta(): Promise<any> {
 		// The worker synthesizes a one-element revisions array from the same
 		// ShareRecord.origin, so its `label` is also ciphertext — decrypt it
 		// in lockstep with origin.label above.
-		const revs = (data as any).revisions
-		if (Array.isArray(revs)) {
-			for (const r of revs) {
-				if (r.label) {
-					try {
-						r.label = await decryptString(key, r.label)
-					} catch {}
-				}
+		for (const r of data.revisions ?? []) {
+			if (r.label) {
+				try {
+					r.label = await decryptString(key, r.label)
+				} catch {}
 			}
 		}
 	}
@@ -203,7 +195,7 @@ export async function fetchMeta(): Promise<any> {
  *  Import maps still apply to Blob-URL module imports, so the resulting
  *  module's `#canvas/runtime` / `#canvas/components` imports resolve
  *  exactly as they would for an in-place script. */
-export async function loadCanvasModule(filename: string, revision?: number): Promise<any> {
+export const loadCanvasModule: CanvasHost['loadCanvasModule'] = async (filename, revision) => {
 	const url = canvasJsUrl(filename, revision)
 	if (!isEncryptedShare()) {
 		return import(/* @vite-ignore */ url)

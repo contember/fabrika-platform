@@ -1,4 +1,5 @@
 import type { RemoteAnnotation, RemoteFeedbackEntry, SessionManager } from '@fabrika/canvas-kernel/server'
+import { errorMessage } from '../client/errorMessage'
 import { decryptString, importShareKey } from '../client/shareCrypto'
 import { loadShareConfig } from './share'
 
@@ -149,8 +150,8 @@ export function startRemoteFeedbackPoller(
 					try {
 						const key = await getKey(share.shareId, share.encryptionKey)
 						decrypted.push(await decryptFeedbackEntry(e, key))
-					} catch (err: any) {
-						console.warn(`[remote-feedback] ${share.shareId}: failed to decrypt entry ${e.id}: ${err.message || err}`)
+					} catch (err) {
+						console.warn(`[remote-feedback] ${share.shareId}: failed to decrypt entry ${e.id}: ${errorMessage(err)}`)
 					}
 				} else {
 					decrypted.push(e as RemoteFeedbackEntry)
@@ -175,9 +176,9 @@ export function startRemoteFeedbackPoller(
 			if (latest) {
 				sessionManager.updateShareLastFeedback(sessionId, share.shareId, latest)
 			}
-		} catch (e: any) {
+		} catch (e) {
 			errorCounts.set(share.shareId, (errorCounts.get(share.shareId) || 0) + 1)
-			console.warn(`[remote-feedback] ${share.shareId}: ${e.message || e} (will retry with backoff)`)
+			console.warn(`[remote-feedback] ${share.shareId}: ${errorMessage(e)} (will retry with backoff)`)
 		}
 	}
 
@@ -210,8 +211,8 @@ export function startRemoteFeedbackPoller(
 		while (!stopped) {
 			try {
 				await pollOnce()
-			} catch (e: any) {
-				console.warn(`[remote-feedback] loop error: ${e.message || e}`)
+			} catch (e) {
+				console.warn(`[remote-feedback] loop error: ${errorMessage(e)}`)
 			}
 			await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
 		}

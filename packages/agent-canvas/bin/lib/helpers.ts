@@ -1,6 +1,7 @@
 import { type WaiterSocket, waitForEvent, type WaitVerdict } from '@fabrika/daemon-kit'
 import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
+import { z } from 'zod'
 import { BASE_URL, TIMEOUT_MS, WS_URL } from './config.ts'
 
 export function getSessionId(session?: string): string {
@@ -12,9 +13,14 @@ export function getSessionId(session?: string): string {
 	})()
 }
 
+const consumeResponseSchema = z.discriminatedUnion('found', [
+	z.object({ found: z.literal(true), feedback: z.string() }),
+	z.object({ found: z.literal(false) }),
+])
+
 export async function consumeFeedback(sessionId: string): Promise<string | null> {
 	const res = await fetch(`${BASE_URL}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
-	const data = await res.json() as any
+	const data = consumeResponseSchema.parse(await res.json())
 	if (data.found) return data.feedback
 	return null
 }
