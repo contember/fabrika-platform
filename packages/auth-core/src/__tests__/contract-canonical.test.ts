@@ -59,9 +59,9 @@ describe('canonicalArtifactJson', () => {
 })
 
 describe('table actions', () => {
-	test('a table whose every operation names one action keeps the encoding it had before a table action took a list', () => {
-		// The digest the fixture had before lists existed, with the format field it gained after: the 0.5 digest itself is
-		// framework-compat.test.ts's, read by the 0.5 reader.
+	test('a table whose every operation names one action keeps the digest it had before a table action took a list', () => {
+		// The digest the fixture had before lists existed, with its `format`. A 0.5 application's digest is computed by
+		// its own release (ADR-0062); `endpoint-digest.test.ts` pins the same value.
 		expect(contractDigest(notesArtifact)).toBe('sha256:dad8ca49edae6e5d84b9ea45fde5657e53385301b917efbf68e659457c178940')
 	})
 
