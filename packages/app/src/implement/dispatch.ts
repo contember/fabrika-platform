@@ -59,7 +59,7 @@ import {
 import type { RequestExecutionContext } from '../fetch'
 import type { FileCollections, ReceivedFormFile } from '../files/collections'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
-import { abortedBody, bootstrapPath, bootstrapResponse, githubAccounts, readBoundedBody, verifyGithubSignature, withBootstrap } from './anonymous'
+import { abortedBody, bodyDeadlineMs, bootstrapPath, bootstrapResponse, githubAccounts, readBoundedBody, verifyGithubSignature, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
 import { handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
@@ -1432,7 +1432,9 @@ async function readInput(
 	request: Request,
 ): Promise<Readonly<Record<string, unknown>>> {
 	const limit = served.row.admission?.maxBytes ?? null
-	const text = limit === null ? await request.text() : new TextDecoder().decode(await readBoundedBody(request, limit))
+	const text = limit === null
+		? await request.text()
+		: new TextDecoder().decode(await readBoundedBody(request, limit, AbortSignal.timeout(bodyDeadlineMs(limit))))
 	let body: unknown = {}
 	if (text.trim() !== '') {
 		try {
