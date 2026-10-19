@@ -6,9 +6,13 @@ import { z } from 'zod'
 import { PROJECT_RE, reviewThreadSchema } from '../../../daemon/src/review/model.ts'
 import { BASE_URL, TIMEOUT_MS, WS_URL } from '../config.ts'
 import { ensureDaemon } from '../daemon-lifecycle.ts'
+import { openBrowser } from '../helpers.ts'
 
 const USAGE = `agent-canvas review — comments on a running application
 
+  agent-canvas review open <url> [--follow] [--no-open]
+                                            Serve the app at <url> with the review widget, open it in the
+                                            browser and print the address; --follow then watches as below
   agent-canvas review snippet               Print the <script> tag that adds the review widget to the app
   agent-canvas review watch                 Wait for threads the reviewer sends (blocks)
   agent-canvas review watch --follow        Keep waiting; print every batch the reviewer sends
@@ -21,6 +25,7 @@ Every command takes --project <name>; it defaults to CANVAS_REVIEW_PROJECT, then
 
 const claimSchema = z.union([z.object({ found: z.literal(false) }), z.object({ found: z.literal(true), markdown: z.string() })])
 const threadsSchema = z.object({ threads: z.array(reviewThreadSchema) })
+const proxySchema = z.object({ url: z.string() })
 const errorSchema = z.object({ error: z.string() })
 
 function defaultProject(): string {
@@ -126,12 +131,23 @@ export async function handleReview(args: string[]) {
 			project: { type: 'string' },
 			resolve: { type: 'boolean', default: false },
 			follow: { type: 'boolean', default: false },
+			'no-open': { type: 'boolean', default: false },
 		},
 	})
 	const project = values.project ?? defaultProject()
 	if (!PROJECT_RE.test(project)) throw new Error(`Invalid project name "${project}"; use letters, digits, ".", "_" and "-"`)
 
 	switch (subcommand) {
+		case 'open': {
+			const [target] = positionals
+			if (target === undefined) throw new Error('Usage: agent-canvas review open <url> [--follow] [--no-open]')
+			await ensureDaemon()
+			const { url } = proxySchema.parse(await call(project, 'POST', '/proxy', { target: new URL(target).href }))
+			console.log(`Review ${target} at ${url}`)
+			if (!values['no-open']) openBrowser(url)
+			if (values.follow) return followRequests(project)
+			return
+		}
 		case 'snippet':
 			console.log(`<script src="${BASE_URL}/assets/review.js" data-project="${project}"></script>`)
 			return

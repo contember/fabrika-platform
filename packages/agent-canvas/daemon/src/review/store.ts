@@ -1,6 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { PROJECT_RE, type ReviewAnchor, type ReviewAuthor, type ReviewThread, reviewThreadsFileSchema, type ReviewThreadState } from './model'
+import {
+	PROJECT_RE,
+	type ReviewAnchor,
+	type ReviewAuthor,
+	type ReviewProxy,
+	reviewProxySchema,
+	type ReviewThread,
+	reviewThreadsFileSchema,
+	type ReviewThreadState,
+} from './model'
 
 export class ReviewError extends Error {
 	constructor(message: string, readonly status: 400 | 404 | 409) {
@@ -8,7 +17,10 @@ export class ReviewError extends Error {
 	}
 }
 
-/** Review threads of each project: `<directory>/<project>/threads.json`, attached screenshots beside it. */
+/**
+ * Review threads of each project: `<directory>/<project>/threads.json`, attached screenshots beside it, and the
+ * project's review proxy in `proxy.json`.
+ */
 export class ReviewStore {
 	constructor(private readonly directory: string, private readonly now: () => Date = () => new Date()) {}
 
@@ -77,6 +89,22 @@ export class ReviewStore {
 		return this.update(project, threadId, (thread) => ({ ...this.withComment(thread, 'agent', body), state: resolve ? 'resolved' : 'open' }))
 	}
 
+	proxyOf(project: string): ReviewProxy | undefined {
+		const path = join(this.projectDirectory(project), 'proxy.json')
+		if (!existsSync(path)) return undefined
+		return reviewProxySchema.parse(JSON.parse(readFileSync(path, 'utf-8')))
+	}
+
+	saveProxy(project: string, proxy: ReviewProxy): void {
+		this.writeJson(project, 'proxy.json', proxy)
+	}
+
+	/** Projects that have a review proxy, for a starting daemon to serve again. */
+	proxiedProjects(): string[] {
+		if (!existsSync(this.directory)) return []
+		return readdirSync(this.directory).filter((name) => PROJECT_RE.test(name) && existsSync(join(this.directory, name, 'proxy.json')))
+	}
+
 	private update(project: string, threadId: string, change: (thread: ReviewThread) => ReviewThread): ReviewThread {
 		const threads = this.list(project)
 		const current = threads.find((thread) => thread.id === threadId)
@@ -100,11 +128,15 @@ export class ReviewStore {
 	}
 
 	private save(project: string, threads: readonly ReviewThread[]): void {
+		this.writeJson(project, 'threads.json', { threads })
+	}
+
+	private writeJson(project: string, file: string, value: unknown): void {
 		const directory = this.projectDirectory(project)
 		mkdirSync(directory, { recursive: true })
-		const path = join(directory, 'threads.json')
+		const path = join(directory, file)
 		const temporary = `${path}.${process.pid}.tmp`
-		writeFileSync(temporary, `${JSON.stringify({ threads }, null, '\t')}\n`)
+		writeFileSync(temporary, `${JSON.stringify(value, null, '\t')}\n`)
 		renameSync(temporary, path)
 	}
 
