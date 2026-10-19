@@ -295,10 +295,11 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	if (!input.dryRun && approvedAccess === undefined) {
 		throw new Error('Cloudflare deploy requires the access Control approved for this environment')
 	}
-	// A job and a webhook need `@fabrika/db` on Postgres, which a Worker has not; their keys would only sit in a config.
+	// A job, a webhook and a public procedure need `@fabrika/db` on Postgres, which a Worker has not; their keys would only
+	// sit in a config.
 	const workloadKey = Object.keys(input.managedEnvironment).find(isWorkloadKeyVariable)
 	if (workloadKey !== undefined) {
-		throw new Error(`cloudflare: the contract declares a job or a webhook (${workloadKey}); they run on Zerops only`)
+		throw new Error(`cloudflare: the contract declares a job, a webhook or a public procedure (${workloadKey}); they run on Zerops only`)
 	}
 	// A dry run hands no workload key, and a mail credential must not land in a plain Worker var either way.
 	const mailVariable = Object.keys(input.managedEnvironment).find(isEmailTransportVariable)

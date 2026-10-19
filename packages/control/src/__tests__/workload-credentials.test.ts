@@ -2,11 +2,17 @@
 // one per job and webhook, sealed in the vault, rotated before IAM stops honouring them, and forgotten with the
 // workload.
 
-import { type ContractArtifact, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
+import { type ContractArtifact, MAX_KEY_LIFETIME_SECONDS, workloadKeyVariable } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { Vault } from '../vault'
-import { declaredWorkloads, VaultWorkloadCredentials, WORKLOAD_KEY_ROTATE_BELOW_SECONDS, type WorkloadKeyIssuer } from '../workload-credentials'
+import {
+	type CredentialKind,
+	declaredWorkloads,
+	VaultWorkloadCredentials,
+	WORKLOAD_KEY_ROTATE_BELOW_SECONDS,
+	type WorkloadKeyIssuer,
+} from '../workload-credentials'
 import { createHarness, queryRows } from './helpers/harness'
 
 const KEY = btoa(String.fromCharCode(...new Uint8Array(32).fill(5)))
@@ -25,7 +31,7 @@ class RecordingIssuer implements WorkloadKeyIssuer {
 	readonly valid = new Map<string, string>()
 	failRevoke = false
 
-	issue(input: { app: string; kind: 'job' | 'webhook' | 'app'; name: string; expiresAt: number; keep: string | null }) {
+	issue(input: { app: string; kind: CredentialKind; name: string; expiresAt: number; keep: string | null }) {
 		this.issued.push({ ...input })
 		const workload = `${input.app}/${input.kind}:${input.name}`
 		const credentialId = `${input.kind}:${input.name}:${this.issued.length}`
@@ -36,7 +42,7 @@ class RecordingIssuer implements WorkloadKeyIssuer {
 		return Promise.resolve({ key: `px_${input.kind}_${input.name}_${this.issued.length}`, credentialId, expiresAt: input.expiresAt })
 	}
 
-	revoke(input: { app: string; kind: 'job' | 'webhook' | 'app'; name: string }) {
+	revoke(input: { app: string; kind: CredentialKind; name: string }) {
 		if (this.failRevoke) return Promise.reject(new Error('IAM could not be asked'))
 		this.revoked.push({ ...input })
 		for (const [id, of] of [...this.valid]) {
@@ -154,6 +160,39 @@ describe('VaultWorkloadCredentials', () => {
 		expect(queryRows(harness.sqlite, 'SELECT * FROM app_env_workload_credentials')).toEqual([])
 		expect(queryRows(harness.sqlite, 'SELECT * FROM vault')).toEqual([])
 		expect(issuer.issued).toHaveLength(2)
+	})
+})
+
+describe('VaultWorkloadCredentials for public procedures', () => {
+	const reach = { sql: null, unscoped: {}, connect: [], issues: null }
+	/** The notes contract with one public procedure, `api.stats.cta`, beside its jobs and webhook. */
+	const withPublic: ContractArtifact = {
+		...workloadsOnly,
+		declared: { 'api.notes.list': reach, 'api.stats.cta': { ...reach, actions: ['notes.read'] } },
+	}
+	const cta = workloadKeyVariable('public', 'api.stats.cta')
+
+	test('issues one key per public procedure, named by its endpoint id, under its own variable', async () => {
+		const { issuer, credentials } = await setup()
+		const keys = await credentials.reconcile('notes', 'prod', withPublic)
+		expect(Object.keys(keys).sort()).toEqual(['FABRIKA_JOB_PURGE_DELETED_KEY', 'FABRIKA_WEBHOOK_GITHUB_KEY', cta].sort())
+		expect(keys[cta]).toBe('px_public_api.stats.cta_3')
+		expect(issuer.issued[2]).toEqual({ app: 'notes@prod', kind: 'public', name: 'api.stats.cta', expiresAt: T0 + MAX_KEY_LIFETIME_SECONDS, keep: null })
+	})
+
+	test('rotates the key like a job key, and forgets it once the contract no longer declares the procedure', async () => {
+		const { harness, issuer, clock, credentials } = await setup()
+		await credentials.reconcile('notes', 'prod', withPublic)
+		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS - WORKLOAD_KEY_ROTATE_BELOW_SECONDS + 1
+		const rotated = await credentials.reconcile('notes', 'prod', withPublic)
+		expect(rotated[cta]).toBe('px_public_api.stats.cta_6')
+		expect(issuer.issued[5]?.keep).toBe('public:api.stats.cta:3')
+		expect(Object.keys(await credentials.reconcile('notes', 'prod', workloadsOnly))).not.toContain(cta)
+		expect(queryRows(harness.sqlite, "SELECT * FROM app_env_workload_credentials WHERE kind = 'public'")).toEqual([])
+		expect(queryRows(harness.sqlite, 'SELECT label FROM vault ORDER BY label').map((row) => row['label'])).toEqual([
+			'platform:workload-key:notes@prod:job:purgeDeleted',
+			'platform:workload-key:notes@prod:webhook:github',
+		])
 	})
 })
 

@@ -9,6 +9,7 @@ import {
 	CLIENT_ADDRESS_HEADER,
 	type ContractArtifact,
 	contractDigest,
+	contractWorkloads,
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
@@ -283,7 +284,7 @@ export function bootTestKit<C extends AnyContract>(
 		connectVariablesOf[variables.key] = connection.key
 		connectBindings[variables.binding] = connection.fetch
 	}
-	// The kit stands in for Control too: every job and webhook gets a key, which its stand-in IAM signs the declared actions for.
+	// The kit stands in for Control too: every workload gets a key, which its stand-in IAM signs the declared actions for.
 	const workloadVariables: Record<string, string> = {}
 	const workloadsByKey = new Map<string, { readonly kind: WorkloadKindOf; readonly name: string; readonly actions: readonly string[] }>()
 	// A job's key and the tokens signed for it are its credential at the stand-in IAM's link operations, as at IAM's.
@@ -292,13 +293,7 @@ export function bootTestKit<C extends AnyContract>(
 		const job = Object.hasOwn(artifact.jobs, name) ? artifact.jobs[name] : undefined
 		return job === undefined ? undefined : { id: `job-${name}`, actions: job.actions, issues: artifact.declared?.[`job:${name}`]?.issues ?? null }
 	}
-	const declaredWorkloads = [
-		...Object.entries(artifact.jobs).map(([workload, job]) => ({ kind: 'job' as const, name: workload, actions: job.actions })),
-		...Object.entries(artifact.mounts).flatMap(([workload, mount]) =>
-			mount.kind === 'webhook' ? [{ kind: 'webhook' as const, name: workload, actions: mount.actions }] : []
-		),
-	]
-	for (const workload of declaredWorkloads) {
+	for (const workload of contractWorkloads(artifact)) {
 		const key = `${API_KEY_PREFIX}test_${crypto.randomUUID().replaceAll('-', '')}`
 		workloadVariables[workloadKeyVariable(workload.kind, workload.name)] = key
 		workloadsByKey.set(key, workload)

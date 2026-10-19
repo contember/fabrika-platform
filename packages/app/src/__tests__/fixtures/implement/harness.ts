@@ -17,12 +17,15 @@ import {
 	buildAccessClaims,
 	compileEndpointTable,
 	contractDigest,
+	type ContractWorkload,
+	contractWorkloads,
 	ENDPOINT_HEADER,
 	endpointDigest,
 	FABRIKA_CONTRACT_DIGEST,
 	formatEndpointHeader,
 	type Jwks,
 	type LinkTokenClaims,
+	type OwnWorkloadKind,
 	type PermissionEntry,
 	planEndpoint,
 	PROXY_TOKEN_HEADER,
@@ -62,30 +65,20 @@ function artifactOf(app: ContractImplementation) {
 	return compileContract(app.contract, app.database?.tables ?? {})
 }
 
-interface Workload {
-	readonly kind: 'job' | 'webhook'
-	readonly name: string
-	readonly actions: readonly string[]
-}
+type Workload = ContractWorkload
 
-function workloadsOf(app: ContractImplementation): Workload[] {
-	const artifact = artifactOf(app)
-	return [
-		...Object.entries(artifact.jobs).map(([name, job]): Workload => ({ kind: 'job', name, actions: job.actions })),
-		...Object.entries(artifact.mounts).flatMap(([name, mount]): Workload[] =>
-			mount.kind === 'webhook' ? [{ kind: 'webhook', name, actions: mount.actions }] : []
-		),
-	]
+function workloadsOf(app: ContractImplementation): readonly Workload[] {
+	return contractWorkloads(artifactOf(app))
 }
 
 /** The key Control would write for a workload; the stand-in IAM below signs its declared actions for it. */
-export function workloadKey(kind: 'job' | 'webhook', name: string): string {
+export function workloadKey(kind: OwnWorkloadKind, name: string): string {
 	return `px_harness_${kind}_${name}`
 }
 
 /**
  * The framework variables a deploy of `app` gets: `FRAMEWORK_ENV`, the digest of the contract it was approved with,
- * and a key for every job and webhook.
+ * and a key for every workload.
  */
 export function frameworkEnvFor(app: ContractImplementation): Record<string, string> {
 	const keys = Object.fromEntries(

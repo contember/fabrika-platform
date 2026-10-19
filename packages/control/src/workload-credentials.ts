@@ -1,19 +1,30 @@
 // The workload credentials of one application environment (ADR-0022 "Principal kinds"). A deploy reconciles them from
-// the APPROVED snapshot: one IAM-issued key per job and per webhook of the contract, handed to the provider as
-// `FABRIKA_<KIND>_<NAME>_KEY`, and one connector key per owner application the contract imports from, handed as each
-// import's `FABRIKA_CONNECT_<IMPORT>_KEY`. Each is sealed in the vault. What a key may do is not decided here: IAM resolves
+// the APPROVED snapshot: one IAM-issued key per job, per webhook and per public procedure of the contract, handed to the
+// provider under `workloadKeyVariable`, and one connector key per owner application the contract imports from, handed as
+// each import's `FABRIKA_CONNECT_<IMPORT>_KEY`. Each is sealed in the vault. What a key may do is not decided here: IAM resolves
 // it to the actions the approved schema declares for the workload — the owner's, for a connector key. A key is never
 // logged and never returned over the API.
 
 import { createRpcClient, type RpcFetch } from '@fabrika/app'
-import { appEnvironmentId, connectVariables, type ContractArtifact, MAX_KEY_LIFETIME_SECONDS, workloadKeyVariable } from '@fabrika/auth-core'
+import {
+	appEnvironmentId,
+	connectVariables,
+	type ContractArtifact,
+	contractWorkloads,
+	MAX_KEY_LIFETIME_SECONDS,
+	type OwnWorkloadKind,
+	workloadKeyVariable,
+} from '@fabrika/auth-core'
 import type { IamAdminRpcContract } from '@fabrika/iam-contract'
 import type { WorkloadCredentialRepository, WorkloadCredentialRow } from './db'
 import type { Vault, VaultSecretPurpose } from './vault'
 
-export type WorkloadKind = 'job' | 'webhook'
+export type WorkloadKind = OwnWorkloadKind
 
-/** A recorded key: a job's, a webhook's, or the connector key at an owner application (`app`, named by the owner). */
+/**
+ * A recorded key: a job's, a webhook's, a public procedure's (named by its endpoint id), or the connector key at an
+ * owner application (`app`, named by the owner).
+ */
 export type CredentialKind = WorkloadKind | 'app'
 
 /** A key with less than this left is replaced, so a running version never holds one that IAM stops honouring. */
@@ -43,8 +54,8 @@ export interface WorkloadKeyIssuer {
 export interface WorkloadCredentialsPort {
 	/**
 	 * The keys `artifact` needs, by framework variable: each recorded key that is still fresh, or a newly issued one;
-	 * the record of a workload or an owner the contract no longer names is dropped. A contract with no job, webhook or
-	 * import needs none.
+	 * the record of a workload or an owner the contract no longer names is dropped. A contract with no job, webhook,
+	 * public procedure or import needs none.
 	 */
 	reconcile(appId: string, env: string, artifact: ContractArtifact | null): Promise<Readonly<Record<string, string>>>
 }
@@ -54,23 +65,22 @@ export function workloadKeyPurpose(appId: string, env: string, kind: CredentialK
 	return { scope: 'platform', label: `platform:workload-key:${appEnvironmentId(appId, env)}:${kind}:${name}` }
 }
 
-/** Every job and webhook of the contract, by the variable its key travels under. Two that share one are refused. */
+/**
+ * Every job, webhook and public procedure of the contract, by the variable its key travels under. Two that share one
+ * are refused.
+ */
 export function declaredWorkloads(artifact: ContractArtifact | null): ReadonlyMap<string, { readonly kind: WorkloadKind; readonly name: string }> {
 	const workloads = new Map<string, { readonly kind: WorkloadKind; readonly name: string }>()
 	if (artifact === null) {
 		return workloads
 	}
-	const all: { kind: WorkloadKind; name: string }[] = [
-		...Object.keys(artifact.jobs).map((name) => ({ kind: 'job' as const, name })),
-		...Object.entries(artifact.mounts).flatMap(([name, mount]) => (mount.kind === 'webhook' ? [{ kind: 'webhook' as const, name }] : [])),
-	]
-	for (const workload of all) {
+	for (const workload of contractWorkloads(artifact)) {
 		const variable = workloadKeyVariable(workload.kind, workload.name)
 		const taken = workloads.get(variable)
 		if (taken !== undefined) {
 			throw new Error(`the ${workload.kind} '${workload.name}' and the ${taken.kind} '${taken.name}' would share the variable ${variable}; rename one`)
 		}
-		workloads.set(variable, workload)
+		workloads.set(variable, { kind: workload.kind, name: workload.name })
 	}
 	return workloads
 }
@@ -140,7 +150,7 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 				keys[variable] = key
 			}
 		}
-		// IAM revokes the keys of a job or webhook the reconciled schema no longer declares. An import removed here is
+		// IAM revokes the keys of a job, webhook or public procedure the reconciled schema no longer declares. An import removed here is
 		// still declared by its owner, so Control revokes the pair's keys itself, before it forgets the record: a failed
 		// revocation fails the deploy and keeps the record, and the retry revokes again.
 		for (const row of recorded) {

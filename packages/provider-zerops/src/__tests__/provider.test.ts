@@ -1,4 +1,4 @@
-import { type AppSchema, contractDigest } from '@fabrika/auth-core'
+import { type AppSchema, contractDigest, workloadKeyVariable } from '@fabrika/auth-core'
 import type { JsonValue, ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
@@ -632,6 +632,20 @@ describe('Zerops provider', () => {
 		expect(log).toContain('FABRIKA_JOB_WEEKLY_KEY: removed')
 		expect(log).not.toContain('private-')
 		expect(recorded.builds[0]?.zeropsYaml ?? '').not.toContain('FABRIKA_JOB_')
+	})
+
+	test("writes a public procedure's key under its own family, and removes it once the procedure is gone", async () => {
+		const cta = workloadKeyVariable('public', 'api.stats.cta')
+		const gone = workloadKeyVariable('public', 'api.stats.gone')
+		const provider = createZeropsDeployer(() =>
+			makeCollaborators(recorded, {
+				serviceEnv: [{ id: 'env-gone', key: gone, content: 'px_private-gone', type: 'USER', sensitive: true }],
+			})
+		)
+		await execute({ ...deployRun(recorded), managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_RELEASE: RELEASE, [cta]: 'px_private-cta' } }, provider)
+		expect(recorded.envWrites).toContainEqual({ key: cta, value: 'px_private-cta', sensitive: true })
+		expect(recorded.envDeletes).toEqual(['env-gone'])
+		expect(recorded.logs.join('\n')).not.toContain('private-')
 	})
 
 	test('refuses a workload key that is not a px_ key, before any platform call', async () => {

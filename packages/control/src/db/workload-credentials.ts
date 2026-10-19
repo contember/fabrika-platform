@@ -1,13 +1,14 @@
+import type { WorkloadKind } from '@fabrika/auth-core'
 import type { SqlDatabase } from '@fabrika/platform'
 
 /**
- * One workload key of an application environment; the key itself lives in the vault (`value_ref`). Kind `app` is the
- * connector key at the owner application `name`.
+ * One workload key of an application environment; the key itself lives in the vault (`value_ref`). Kind `public` is a
+ * public procedure's, `name` its endpoint id; kind `app` is the connector key at the owner application `name`.
  */
 export interface WorkloadCredentialRow {
 	app_id: string
 	env: string
-	kind: 'job' | 'webhook' | 'app'
+	kind: WorkloadKind
 	name: string
 	value_ref: string
 	/** IAM's id of the active key: what the next issuance keeps. */

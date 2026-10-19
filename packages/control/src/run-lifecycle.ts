@@ -740,7 +740,7 @@ async function reconcileWorkloadKeys(
 	}
 	if (declaredWorkloads(contract).size > 0 || declaredConnectors(contract).size > 0) {
 		throw new Error(
-			'the contract declares jobs, webhooks or imports, and this installation cannot issue their keys (it needs FABRIKA_CONTROL_VAULT_KEY, FABRIKA_IAM_ISSUER and FABRIKA_IAM_PROVISIONING_KEY)',
+			'the contract declares jobs, webhooks, public procedures or imports, and this installation cannot issue their keys (it needs FABRIKA_CONTROL_VAULT_KEY, FABRIKA_IAM_ISSUER and FABRIKA_IAM_PROVISIONING_KEY)',
 		)
 	}
 	return {}

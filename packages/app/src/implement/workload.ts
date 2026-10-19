@@ -1,12 +1,14 @@
-// A job's and a webhook's authority (ADR-0022 "Principal kinds"): Control reconciles one `px_` key per workload from
-// the approved snapshot and writes it as `FABRIKA_<KIND>_<NAME>_KEY`; IAM signs a token from it carrying the actions
-// the reconciled schema declares. The framework mints a capability only for an action that token carries, so the
+// A job's, a webhook's and a public procedure's authority (ADR-0022 "Principal kinds"): Control reconciles one `px_` key
+// per workload from the approved snapshot and writes it under `workloadKeyVariable`; IAM signs a token from it carrying
+// the actions the reconciled schema declares. The framework mints a capability only for an action that token carries, so the
 // authority comes from IAM, not from the application's own copy of the contract.
 
 import {
 	API_KEY_PREFIX,
 	type ContractArtifact,
+	contractWorkloads,
 	type MintFromKeyResult,
+	type OwnWorkloadKind,
 	type PermissionEntry,
 	TOKEN_REFRESH_SKEW_SECONDS,
 	WORKLOAD_TOKEN_PATH,
@@ -15,7 +17,7 @@ import {
 import type { TokenVerifier } from '@fabrika/jwks'
 import { z } from 'zod/v4'
 
-export type WorkloadKindOf = 'job' | 'webhook'
+export type WorkloadKindOf = OwnWorkloadKind
 
 /** Where a workload exchanges its key for a token: IAM's public `WORKLOAD_TOKEN_PATH`, or a stand-in in a test. */
 export interface WorkloadTokenSource {
@@ -124,6 +126,11 @@ export class WorkloadCredential {
 	}
 }
 
+/** The key a workload's credential is found under: `job:<name>`, `webhook:<name>`, `public:<endpoint id>`. */
+export function workloadSite(kind: WorkloadKindOf, name: string): string {
+	return `${kind}:${name}`
+}
+
 export interface WorkloadCredentialsInput {
 	readonly artifact: ContractArtifact
 	readonly framework: Readonly<Record<string, string>>
@@ -132,26 +139,21 @@ export interface WorkloadCredentialsInput {
 	readonly verifier: TokenVerifier
 }
 
-/** `job:<name>` and `webhook:<name>` → the workload's credential, or why one cannot start to `problems`. */
+/** `workloadSite(kind, name)` → the workload's credential, or why one cannot start to `problems`. */
 export function workloadCredentials(input: WorkloadCredentialsInput, problems: string[]): ReadonlyMap<string, WorkloadCredential> {
-	const workloads: [WorkloadKindOf, string][] = [
-		...Object.keys(input.artifact.jobs).map((name): [WorkloadKindOf, string] => ['job', name]),
-		...Object.entries(input.artifact.mounts).flatMap((
-			[name, mount],
-		): [WorkloadKindOf, string][] => (mount.kind === 'webhook' ? [['webhook', name]] : [])),
-	]
+	const workloads = contractWorkloads(input.artifact)
 	const credentials = new Map<string, WorkloadCredential>()
 	if (workloads.length > 0 && input.source === undefined) {
-		problems.push('the contract declares jobs or webhooks, and the runtime adapter supplies no IAM token exchange for their keys')
+		problems.push('the contract declares jobs, webhooks or public procedures, and the runtime adapter supplies no IAM token exchange for their keys')
 	}
-	for (const [kind, name] of workloads) {
+	for (const { kind, name } of workloads) {
 		const variable = workloadKeyVariable(kind, name)
 		const key = input.framework[variable]?.trim() ?? ''
 		if (!key.startsWith(API_KEY_PREFIX) || key.length <= API_KEY_PREFIX.length) {
 			problems.push(`${variable} is not set to a px_ key; Control writes the credential of the ${kind} '${name}' into every deploy`)
 		} else if (input.source !== undefined) {
 			credentials.set(
-				`${kind}:${name}`,
+				workloadSite(kind, name),
 				new WorkloadCredential({ kind, name, key, audience: input.audience, source: input.source, verifier: input.verifier }),
 			)
 		}

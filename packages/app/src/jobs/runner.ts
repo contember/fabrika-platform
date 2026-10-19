@@ -30,7 +30,7 @@ import {
 	undeclaredSql,
 } from '../implement/invocation'
 import { jobLinkIssuing, type JobLinkMount } from '../implement/membership'
-import type { WorkloadCredential } from '../implement/workload'
+import { type WorkloadCredential, workloadSite } from '../implement/workload'
 import { jobMail, type MailTransports } from './mail'
 import type { OperationsReporter } from './report'
 import { type CronSchedule, parseCron, periodAt } from './schedule'
@@ -272,7 +272,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		const node = ownChild(tree, name)
 		const handler = isSiteHandler(node) ? node.handler : node
 		const site = isSiteHandler(node) ? approvedDeclaration(where, `${JOB_SITE_PREFIX}${name}`, node.declared, 'job', input.artifact, problems) : null
-		const credential = input.credentials.get(`job:${name}`)
+		const credential = input.credentials.get(workloadSite('job', name))
 		const links = jobLinks(where, `${JOB_SITE_PREFIX}${name}`, site, input, problems)
 		const mailer = input.artifact.declared?.[`${JOB_SITE_PREFIX}${name}`]?.mailer ?? null
 		if (typeof handler !== 'function') {

@@ -9,6 +9,7 @@ import {
 	type AppScopeDef,
 	type AppWorkloadDef,
 	type ContractArtifact,
+	contractWorkloads,
 	type DimensionArtifact,
 	directoryLookups,
 	endpointDelegation,
@@ -49,17 +50,15 @@ export function schemaFromContract(artifact: ContractArtifact): AppSchema {
 }
 
 /**
- * Every job and webhook with its exact actions, a job with the link mount it declares it `issues`, and every consumer of
- * an export with the actions of the export rows it may call: what each workload key carries (ADR-0022 "Principal kinds").
+ * Every job, webhook and public procedure with its exact actions, a job with the link mount it declares it `issues`, and
+ * every consumer of an export with the actions of the export rows it may call: what each workload key carries (ADR-0022
+ * "Principal kinds").
  */
 function workloadsOf(artifact: ContractArtifact): AppWorkloadDef[] {
-	const jobs = Object.entries(artifact.jobs).map(([name, job]): AppWorkloadDef => {
-		const issues = artifact.declared?.[`${JOB_SITE_PREFIX}${name}`]?.issues ?? null
-		return { kind: 'job', name, actions: [...job.actions].sort(byCodeUnit), ...(issues === null ? {} : { issues }) }
+	const own = contractWorkloads(artifact).map((workload): AppWorkloadDef => {
+		const issues = workload.kind === 'job' ? (artifact.declared?.[`${JOB_SITE_PREFIX}${workload.name}`]?.issues ?? null) : null
+		return { kind: workload.kind, name: workload.name, actions: [...workload.actions], ...(issues === null ? {} : { issues }) }
 	})
-	const webhooks = Object.entries(artifact.mounts).flatMap(([name, mount]): AppWorkloadDef[] =>
-		mount.kind === 'webhook' ? [{ kind: 'webhook', name, actions: [...mount.actions].sort(byCodeUnit) }] : []
-	)
 	const consumers = new Map<string, Set<string>>()
 	for (const row of artifact.endpoints) {
 		if (row.source.kind !== 'export' || row.requirement?.kind !== 'action') continue
@@ -70,7 +69,7 @@ function workloadsOf(artifact: ContractArtifact): AppWorkloadDef[] {
 		}
 	}
 	const apps = [...consumers].map(([name, actions]): AppWorkloadDef => ({ kind: 'app', name, actions: [...actions].sort(byCodeUnit) }))
-	return [...jobs, ...webhooks, ...apps].sort((a, b) => byCodeUnit(`${a.kind}:${a.name}`, `${b.kind}:${b.name}`))
+	return [...own, ...apps].sort((a, b) => byCodeUnit(`${a.kind}:${a.name}`, `${b.kind}:${b.name}`))
 }
 
 /** Key order differs between the two producers of an artifact; the schema must not. */

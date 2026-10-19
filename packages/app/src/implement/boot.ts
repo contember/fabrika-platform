@@ -74,7 +74,7 @@ import type { ContractDatabase, ContractImplementation, ImplementationDatabase }
 import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration } from './invocation'
 import type { ReadDirectory } from './membership'
 import { bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
-import { type WorkloadCredential, workloadCredentials, type WorkloadTokenSource } from './workload'
+import { type WorkloadCredential, workloadCredentials, workloadSite, type WorkloadTokenSource } from './workload'
 
 /** Where the token verifier gets IAM's public keys: the IAM binding on Cloudflare, the issuer's JWKS elsewhere. */
 export interface IamKeySource {
@@ -754,7 +754,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			declared.add(name)
 			const row = rows.get(name)
 			const bound = boundHandler(childAt(handlers, name), name, `webhook '${name}'`, 'mutation', artifact, problems)
-			const credential: WorkloadCredential | undefined = workloads.get(`webhook:${name}`)
+			const credential: WorkloadCredential | undefined = workloads.get(workloadSite('webhook', name))
 			if (row === undefined || bound === null) {
 				problems.push(`webhook '${name}' has no handler; add handlers.${name}: ({ input, ctx }) => …`)
 			} else if (credential !== undefined) {

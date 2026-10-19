@@ -10,6 +10,7 @@ import {
 	CROSS_ORIGIN_KINDS,
 	displayNameProblem,
 	type EndpointRow,
+	isOwnWorkloadName,
 	JOB_MAILERS,
 	LOCALES,
 	mailTemplateProblems,
@@ -313,7 +314,14 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		issues: nullableName,
 		then: name.optional(),
 		mailer: z.enum(JOB_MAILERS).optional(),
-	})).optional(),
+		actions: actions.nonempty().optional(),
+	})).superRefine((declared, context) => {
+		for (const [site, reach] of Object.entries(declared)) {
+			if (reach.actions !== undefined && !isOwnWorkloadName('public', site)) {
+				context.addIssue({ code: 'custom', path: [site, 'actions'], message: 'workload actions belong to a public procedure, keyed by its endpoint id' })
+			}
+		}
+	}).optional(),
 	directories: record(z.strictObject({ dimension: name, lists: z.boolean() })).optional(),
 	locale: z.enum(LOCALES).optional(),
 	displayName: z.string().refine((value) => displayNameProblem(value) === null, 'not a display name').optional(),
