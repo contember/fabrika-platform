@@ -89,3 +89,15 @@ back and runs `bun run check:ci` on the integration branch.
   deploy whose namespace proxy pin cannot read a capabilities or public row.
 - **0.5.5 was released with PR #11** while the sprint started; the window grows to 0.4 for the intake application
   (above). WU-0b adds the 0.4 reader, moves the 0.5 alias to 0.5.5, and records a v0.4.8 CRM fixture.
+- **Merged WU-2** (public procedures, admission, limits on procedures, `http`, `redirect()`, `ctx.client`, kicks).
+  `CONTRACT_FORMAT` stays 2; the new artifact fields are absent unless declared, so 0.4/0.5 digests do not change. A
+  Zerops deploy whose contract has a public or capabilities row is refused while the namespace proxy pin is another
+  source than Control's; contracts without such rows are unaffected. Moved on: `limits` on jobs and webhooks → WU-5;
+  the checker rules, the client's redirect handling, `http.cache`, GET mutations, public update/delete → WU-6;
+  `bytesPerHour` → WU-3.
+- **WU-2 deviations.** Each bucket is charged with its own `take`, not in one admission transaction. The in-flight
+  share is a per-process counter (a quarter of `FABRIKA_APP_DATABASE_CONNECTIONS`, default 10). `ctx.client.ip` is
+  `null` on Bun and Zerops. The challenge token arrives as the input field `challengeToken`; the Turnstile action is
+  the endpoint id with `.` → `_`. Public procedures do not reach record (dimension, child) tables.
+- **Open.** Should IAM refuse a custom policy that grants a public action? Should the Zerops pin check compare proxy
+  capabilities instead of the exact source?
