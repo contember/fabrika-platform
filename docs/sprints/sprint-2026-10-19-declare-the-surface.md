@@ -111,3 +111,10 @@ back and runs `bun run check:ci` on the integration branch.
 - **WU-5 open.** Stripe and Standard Webhooks senders issue their own secret, but `bind` generates it: a set-secret
   operation is missing. Slack and Twilio signatures do not fit `{ hmac }`. Inbound mail with attachments exceeds the
   1 MiB webhook ceiling. `put` in webhooks waits for WU-3.
+- **Merged WU-3.** `0008_files.sql` creates `fabrika_files` and `fabrika_file_deletions`, copies each collection's held
+  rows as legacy files, moves a form's held files, and adds `fabrika_files_release`; no released migration or table is
+  changed or dropped. File columns, staging, `put`/`open`, the deletion protocol, file outputs with the derived GET,
+  the client's codec, `url()`/`download()`, the `file-column-migration` checker rule, approval lines, `bytesPerHour`
+  (charged from the declared Content-Length, or the whole body limit without one), and `put`/`open` in webhooks.
+- **WU-3 notes.** `bytesPerHour` and the procedure buckets reuse the form admission tables (`fabrika_form_bytes`, the
+  per-minute table): WU-7 keeps or moves them. The ClamAV suites were not run. Mail attachments moved to WU-6.
