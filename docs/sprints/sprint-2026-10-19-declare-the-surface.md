@@ -118,3 +118,12 @@ back and runs `bun run check:ci` on the integration branch.
   (charged from the declared Content-Length, or the whole body limit without one), and `put`/`open` in webhooks.
 - **WU-3 notes.** `bytesPerHour` and the procedure buckets reuse the form admission tables (`fabrika_form_bytes`, the
   per-minute table): WU-7 keeps or moves them. The ClamAV suites were not run. Mail attachments moved to WU-6.
+- **Merged WU-6.** Signed tokens (`FABRIKA_TOKEN_KEYS`, Control migration `0012_token_keys`, `rotateTokenKey`), GET
+  mutations, token-carried redirect targets and public update/delete, `ctx.url` on `FABRIKA_APP_ORIGIN`, one-click
+  unsubscribe, mail attachments (only `live` files, `maxAttachmentBytes` per transport), `egress` with a fetch guard
+  and the `cross-app-fetch` rule, `compatibility: 'backward'`, `http.cache`, the client's `redirect()` answer, the
+  `on-conflict-index` and `url-endpoint` rules. `check:ci` green on the integration branch after the merge.
+- **WU-6 deviations.** Token purposes are declared in `defineApp(…, { tokens })`, not `c.token` in the contract.
+  Cloudflare refuses a non-null `FABRIKA_TOKEN_KEYS` (Worker variables are plain text). A row with `cache` fails
+  closed on an older proxy; the Cloudflare proxy Worker must be redeployed first. A dropped `compatibility` promise
+  still binds the deploy that drops it.
