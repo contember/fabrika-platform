@@ -4,7 +4,13 @@ import { mailer } from '../mail'
 
 const Requested = z.strictObject({ email: z.string() })
 
-export const welcome = app.cron('0 * * * *', { actions: ['signups.process'], scope: 'app', retries: 0, sql: 'read' })
+export const welcome = app.cron('0 * * * *', {
+	actions: ['signups.process'],
+	scope: 'app',
+	retries: 0,
+	sql: 'read',
+	egress: ['https://outbox.invalid'],
+})
 	.handle(async ({ ctx }) => {
 		const rows = await ctx.transaction((tx) => tx.sql(Requested)`select email from requests order by email`)
 		for (const row of rows) await mailer.get().send(row.email, ctx.signal)
