@@ -3,9 +3,11 @@
 
 import { checkApplication, formatFinding, generatedTestHeader } from '@fabrika/check'
 import { generateSchema } from '@fabrika/db/codegen'
+import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import {
 	applicationDatabaseSchema,
 	createTestProvisioner,
+	databaseCodeQuery,
 	definePostgresApplicationMigrations,
 	dropApplicationDatabase,
 	PostgresDatabase,
@@ -332,19 +334,27 @@ afterAll(async () => {
 	for (const appId of appIds) await dropApplicationDatabase(url, appId)
 })
 
-const application = (): { root: string; source: DbCommandDependencies['source']; schema: string } => {
+const application = (): { root: string; source: DbCommandDependencies['source']; schema: string; appId: string } => {
 	const appId = `cli-${crypto.randomUUID().replaceAll('-', '').slice(0, 10)}`
 	const schema = applicationDatabaseSchema(appId)
 	appIds.push(appId)
-	return { root: appRoot(), source: { FABRIKA_APP_ID: appId, FABRIKA_APP_DATABASE_URL: url }, schema }
+	return { root: appRoot(), source: { FABRIKA_APP_ID: appId, FABRIKA_APP_DATABASE_URL: url }, schema, appId }
 }
+
+/** The manifest `fabrika db codegen` checks the schema against: the framework's migrations, then the application's. */
+const manifestOf = (root: string, appId: string) =>
+	definePostgresApplicationMigrations({
+		appId,
+		directory: join(root, 'db', 'migrations'),
+		framework: { bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: FRAMEWORK_MIGRATIONS },
+	}).objects()
 
 describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 	test('migrate applies new files once and refuses an edited one', async () => {
 		const { root, source } = application()
 		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL)')
 		expect(await run(root, 'migrate', [], { source })).toBe(
-			'migrations applied: fabrika/0001_webhooks.sql, fabrika/0002_job_leases.sql, fabrika/0003_form_admissions.sql, fabrika/0004_job_kicks.sql, fabrika/0005_form_files.sql, fabrika/0006_form_bytes.sql, fabrika/0007_webhook_delivery_claims.sql, app/20261008120000_init.sql\n',
+			'migrations applied: fabrika/0001_webhooks.sql, fabrika/0002_job_leases.sql, fabrika/0003_form_admissions.sql, fabrika/0004_job_kicks.sql, fabrika/0005_form_files.sql, fabrika/0006_form_bytes.sql, fabrika/0007_webhook_delivery_claims.sql, fabrika/0008_files.sql, app/20261008120000_init.sql\n',
 		)
 		expect(await run(root, 'migrate', [], { source })).toBe('migrations: already up to date\n')
 
@@ -534,8 +544,28 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		)
 	})
 
+	test("a migrated schema holds exactly the database code its manifest declares, the framework's functions included", async () => {
+		const { root, source, schema, appId } = application()
+		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL)')
+		// The runner's pre-commit check ran this query after every file, the framework's 0008_files.sql included.
+		await run(root, 'migrate', [], { source })
+		const code = async (declared: Parameters<typeof databaseCodeQuery>[1]) => {
+			const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+			try {
+				return z.array(z.object({ violation: z.string() })).parse(await sql.unsafe(databaseCodeQuery(schema, declared)))
+			} finally {
+				await sql.close()
+			}
+		}
+		expect(await code(manifestOf(root, appId))).toEqual([])
+		expect(await code([])).toEqual([
+			{ violation: 'function fabrika_files_copy_legacy (no migration declares it)' },
+			{ violation: 'function fabrika_files_release (no migration declares it)' },
+		])
+	})
+
 	test('codegen writes the schema module and --verify fails once it is stale', async () => {
-		const { root, source, schema } = application()
+		const { root, source, schema, appId } = application()
 		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL)')
 		expect(await failure(run(root, 'codegen', [], { source }))).toBe(`schema ${schema} does not exist; run fabrika db migrate first`)
 		await run(root, 'migrate', [], { source })
@@ -545,7 +575,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		)
 		expect(await run(root, 'codegen', [], { source })).toBe('src/db/schema.generated.ts\n')
 		const generated = readFileSync(join(root, 'src', 'db', 'schema.generated.ts'), 'utf8')
-		expect(generated).toBe(await generateSchema(url, schema, []))
+		expect(generated).toBe(await generateSchema(url, schema, manifestOf(root, appId)))
 		expect(generated).toContain('export interface NotesTable {\n\tid: string\n\ttitle: string\n}\n')
 		expect(await run(root, 'codegen', ['--verify'], { source })).toBe('src/db/schema.generated.ts is current\n')
 
