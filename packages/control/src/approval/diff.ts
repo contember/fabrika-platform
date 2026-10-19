@@ -32,6 +32,8 @@ import {
 	type RoleArtifact,
 	type SchemaShape,
 	type StringShape,
+	type TableActionArtifact,
+	tableActions,
 	type TablePolicyArtifact,
 } from '@fabrika/auth-core'
 import type { DeviationSubjectDto } from '@fabrika/control-contract'
@@ -1020,15 +1022,32 @@ function appReachClauses(table: TablePolicyArtifact): string {
 	].join('')
 }
 
+/** One operation's actions as the approver reads them: `` `a` `` or `` `a` or `b` ``. */
+function actionsText(actions: TableActionArtifact): string {
+	return tableActions(actions).map((action) => `\`${action}\``).join(' or ')
+}
+
 function newTableLine(name: string, table: TablePolicyArtifact): string {
-	if (table.scope.mode !== 'app') return `New table policy \`${name}\` read with \`${table.actions.read}\`${appReachClauses(table)}`
+	if (table.scope.mode !== 'app') return `New table policy \`${name}\` read with ${actionsText(table.actions.read)}${appReachClauses(table)}`
 	const { read, insert, update, delete: remove } = table.actions
 	const writes = [
-		...(insert === null ? [] : [`inserted with \`${insert}\``]),
-		...(update === null ? [] : [`updated with \`${update}\``]),
-		...(remove === null ? [] : [`removed with \`${remove}\``]),
+		...(insert === null ? [] : [`inserted with ${actionsText(insert)}`]),
+		...(update === null ? [] : [`updated with ${actionsText(update)}`]),
+		...(remove === null ? [] : [`removed with ${actionsText(remove)}`]),
 	]
-	return `New application table \`${name}\` (${table.scope.reason}), read with \`${read}\`${writes.map((write) => `, ${write}`).join('')}`
+	return `New application table \`${name}\` (${table.scope.reason}), read with ${actionsText(read)}${writes.map((write) => `, ${write}`).join('')}`
+}
+
+/**
+ * One operation's actions: a single action replaced by another reads as the change it always was; otherwise each action
+ * the operation gains widens and each it loses narrows.
+ */
+function operationChanges(table: string, operation: string, from: TableActionArtifact | null, to: TableActionArtifact | null): AccessChange[] {
+	if ((from === null || typeof from === 'string') && (to === null || typeof to === 'string')) {
+		return valueChange(`${table} ${operation} action`, from, to)
+	}
+	const verb = operation === 'read' ? 'read' : operation === 'delete' ? 'removed' : `${operation}d`
+	return setChanges(table, tableActions(from), tableActions(to), `is ${verb} with`, `is no longer ${verb} with`)
 }
 
 function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyArtifact): AccessChange[] {
@@ -1039,10 +1058,10 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		const before: ColumnPolicyArtifact = from.columns[column] ?? {}
 		const after: ColumnPolicyArtifact = to.columns[column] ?? {}
 		if (before.read === undefined && after.read !== undefined) {
-			columns.push(narrowing(`${subject} is read with \`${after.read}\` instead of \`${from.actions.read}\``))
+			columns.push(narrowing(`${subject} is read with \`${after.read}\` instead of ${actionsText(from.actions.read)}`))
 		} else if (before.read !== undefined && after.read === undefined) {
 			// Without its own policy the column falls back to the table's read action (ADR-0050 §3).
-			columns.push(widening(`${subject} loses its read policy \`${before.read}\` and is read with \`${to.actions.read}\``))
+			columns.push(widening(`${subject} loses its read policy \`${before.read}\` and is read with ${actionsText(to.actions.read)}`))
 		} else if (before.read !== undefined && after.read !== undefined) {
 			columns.push(...valueChange(`${subject} read action`, before.read, after.read))
 		}
@@ -1057,10 +1076,10 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 	}
 	return [
 		...valueChange(`${table} scope`, from.scope, to.scope),
-		...valueChange(`${table} read action`, from.actions.read, to.actions.read),
-		...valueChange(`${table} insert action`, from.actions.insert, to.actions.insert),
-		...valueChange(`${table} update action`, from.actions.update, to.actions.update),
-		...valueChange(`${table} delete action`, from.actions.delete, to.actions.delete),
+		...operationChanges(table, 'read', from.actions.read, to.actions.read),
+		...operationChanges(table, 'insert', from.actions.insert, to.actions.insert),
+		...operationChanges(table, 'update', from.actions.update, to.actions.update),
+		...operationChanges(table, 'delete', from.actions.delete, to.actions.delete),
 		// An appRead action reads every row app-wide and an appCount action counts it: each new one widens.
 		...setChanges(table, from.actions.appRead ?? [], to.actions.appRead ?? [], 'is read app-wide with', 'is no longer read app-wide with'),
 		...setChanges(table, from.actions.appCount ?? [], to.actions.appCount ?? [], 'is counted app-wide with', 'is no longer counted app-wide with'),

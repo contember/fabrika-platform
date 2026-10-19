@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { ContractArtifact, SchemaShape } from '../contract'
-import { canonicalArtifactJson, canonicalizeArtifact } from '../contract-canonical'
+import { canonicalArtifactJson, canonicalizeArtifact, tableActions } from '../contract-canonical'
+import { contractDigest } from '../endpoint-digest'
 import { notesArtifact } from './fixtures/notes-artifact'
 
 /** Every key order and every unordered list of the artifact reversed. */
@@ -53,5 +54,34 @@ describe('canonicalArtifactJson', () => {
 		expect(canonicalArtifactJson(withOutput({ type: 'tuple', items: [a, b], rest: null }))).not.toBe(
 			canonicalArtifactJson(withOutput({ type: 'tuple', items: [b, a], rest: null })),
 		)
+	})
+})
+
+describe('table actions', () => {
+	test('a table whose every operation names one action keeps the digest it had before a table action took a list', () => {
+		// The digest the fixture had before lists existed: an approval of a 0.5 application names it.
+		expect(contractDigest(notesArtifact)).toBe('sha256:ff117b4a84bd00e4501b10fc3c222e8bd6e47dd6d7b10fae8e6277807ad6b023')
+	})
+
+	test('a list of actions is sorted, and one action stays its text', () => {
+		const notes = notesArtifact.tables['notes']
+		if (notes === undefined) throw new Error('the fixture has a notes table')
+		const listed: ContractArtifact = {
+			...notesArtifact,
+			tables: { ...notesArtifact.tables, notes: { ...notes, actions: { ...notes.actions, read: ['notes.read', 'notes.admin'] } } },
+		}
+		const reordered: ContractArtifact = {
+			...notesArtifact,
+			tables: { ...notesArtifact.tables, notes: { ...notes, actions: { ...notes.actions, read: ['notes.admin', 'notes.read'] } } },
+		}
+		expect(canonicalizeArtifact(listed).tables['notes']?.actions.read).toEqual(['notes.admin', 'notes.read'])
+		expect(canonicalArtifactJson(listed)).toBe(canonicalArtifactJson(reordered))
+		expect(canonicalizeArtifact(notesArtifact).tables['notes']?.actions.read).toBe('notes.read')
+	})
+
+	test('tableActions reads one action, a list, and none alike', () => {
+		expect(tableActions('notes.read')).toEqual(['notes.read'])
+		expect(tableActions(['notes.read', 'notes.admin'])).toEqual(['notes.read', 'notes.admin'])
+		expect(tableActions(null)).toEqual([])
 	})
 })

@@ -499,14 +499,20 @@ export interface CspSource {
 
 // ── Table policies ──────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The actions of one table operation, any one of which allows it: one action as its text, several as a list of at least
+ * two. A single action stays text, so the artifact of a policy that names one keeps its shape and digest.
+ */
+export type TableActionArtifact = string | readonly string[]
+
 export interface TablePolicyArtifact {
 	readonly scope: TableScope
 	/** An inbox's read action is `read`; it has no write action, because only its form appends. */
 	readonly actions: {
-		readonly read: string
-		readonly insert: string | null
-		readonly update: string | null
-		readonly delete: string | null
+		readonly read: TableActionArtifact
+		readonly insert: TableActionArtifact | null
+		readonly update: TableActionArtifact | null
+		readonly delete: TableActionArtifact | null
 		/**
 		 * A dimension or child table's actions besides `read` with which an `app` endpoint reads every row, read-only;
 		 * present only when the policy names one.

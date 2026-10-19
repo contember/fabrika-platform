@@ -11,6 +11,7 @@ import type {
 	OutputShape,
 	RoleArtifact,
 	SchemaShape,
+	TableActionArtifact,
 	TablePolicyArtifact,
 } from './contract'
 
@@ -95,12 +96,32 @@ function canonicalMount(mount: MountArtifact): MountArtifact {
 	}
 }
 
+/** Each action of one table operation, `[]` for none: how a reader of the artifact reads `actions.read` and the others. */
+export function tableActions(actions: TableActionArtifact | null): readonly string[] {
+	if (actions === null) {
+		return []
+	}
+	return typeof actions === 'string' ? [actions] : actions
+}
+
+/** A list of actions sorted; one action as it is. */
+function canonicalActions(actions: TableActionArtifact): TableActionArtifact {
+	return typeof actions === 'string' ? actions : sorted(actions)
+}
+
+function canonicalOptionalActions(actions: TableActionArtifact | null): TableActionArtifact | null {
+	return actions === null ? null : canonicalActions(actions)
+}
+
 function canonicalTable(table: TablePolicyArtifact): TablePolicyArtifact {
 	const { appRead, appCount } = table.actions
 	return {
 		...table,
 		actions: {
-			...table.actions,
+			read: canonicalActions(table.actions.read),
+			insert: canonicalOptionalActions(table.actions.insert),
+			update: canonicalOptionalActions(table.actions.update),
+			delete: canonicalOptionalActions(table.actions.delete),
 			...(appRead === undefined ? {} : { appRead: sorted(appRead) }),
 			...(appCount === undefined ? {} : { appCount: sorted(appCount) }),
 		},

@@ -5,6 +5,7 @@
 // application's handlers and stores never run. Each attempt seeds two fresh rows that share no scope value and asks as
 // a caller holding every action of the table in the scope of one of them.
 
+import { tableActions, type TablePolicyArtifact } from '@fabrika/auth-core'
 import { scoped, type Tables } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
 import { type IsolationWorlds, type SampleValue, tableProbe, type TestDatabase, withoutInboxes } from '@fabrika/db/testing'
@@ -141,6 +142,20 @@ interface ProbeActions {
 	readonly insert: string | null
 	readonly update: string | null
 	readonly delete: string | null
+	/** Every read action of the table: an action besides them is another action. */
+	readonly reads: readonly string[]
+}
+
+/** The actions a probe holds: the first of each operation, as the generated cases name them. */
+function probeActions(actions: TablePolicyArtifact['actions']): ProbeActions {
+	const reads = tableActions(actions.read)
+	return {
+		read: reads[0] ?? '',
+		insert: tableActions(actions.insert)[0] ?? null,
+		update: tableActions(actions.update)[0] ?? null,
+		delete: tableActions(actions.delete)[0] ?? null,
+		reads,
+	}
 }
 
 function isCapabilityError(error: unknown): boolean {
@@ -195,7 +210,7 @@ function childProbe(vocabulary: Vocabulary<string, string, string>, parent: stri
 
 /** An action the table names besides its read action, or `null` when it names none. */
 function otherAction(actions: ProbeActions): string | null {
-	return [actions.insert, actions.update, actions.delete].find((action) => action !== null && action !== actions.read) ?? null
+	return [actions.insert, actions.update, actions.delete].find((action) => action !== null && !actions.reads.includes(action)) ?? null
 }
 
 function appProbe(vocabulary: Vocabulary<string, string, string>, actions: ProbeActions) {
@@ -241,7 +256,7 @@ export function appPolicyIsolationKit<C extends AnyContract, DB, P>(
 	if (scope.mode !== 'app') {
 		throw new Error(`${table} is a ${scope.mode} table; policyIsolationKit probes a dimension or child table`)
 	}
-	const actions: ProbeActions = policy.actions
+	const actions = probeActions(policy.actions)
 	const layer = scoped(withoutInboxes(tables))
 	const probe = tableProbe(layer, table)
 	const expectVersion = policy.version === null ? undefined : 1
@@ -557,7 +572,7 @@ export function policyIsolationKit<C extends AnyContract, DB, P>(
 	if (scope.mode !== 'dimension' && scope.mode !== 'child') {
 		throw new Error(`${table} is a ${scope.mode} table; no store reaches it, so it has no isolation tests`)
 	}
-	const actions: ProbeActions = policy.actions
+	const actions = probeActions(policy.actions)
 	// The probe serves no form, so it compiles against the policies without the forms' inboxes.
 	const layer = scoped(withoutInboxes(tables))
 	const probe = tableProbe(layer, table)

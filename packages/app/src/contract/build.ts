@@ -47,6 +47,7 @@ import {
 	type RoleArtifact,
 	type SchemaShape,
 	type ScopeBinding,
+	tableActions,
 	type TablePolicyArtifact,
 } from '@fabrika/auth-core'
 import type { InboxColumns } from '@fabrika/db/tables'
@@ -1819,10 +1820,8 @@ class ArtifactBuilder {
 		for (const [name, table] of Object.entries(this.#tables)) {
 			const where = `table '${name}'`
 			const { read, insert, update, delete: remove, appRead = [], appCount = [] } = table.actions
-			for (const action of [read, insert, update, remove, ...appRead, ...appCount]) {
-				if (action !== null) {
-					this.#knownAction(where, action)
-				}
+			for (const action of [read, insert, update, remove].flatMap(tableActions).concat(appRead, appCount)) {
+				this.#knownAction(where, action)
 			}
 			const scope = table.scope
 			if (scope.mode === 'dimension') {
@@ -1849,8 +1848,8 @@ class ArtifactBuilder {
 				if (form?.kind !== 'form' || form.appendTo !== name) {
 					this.#problem(where, `is the inbox of '${scope.form}', which is not a c.form mount that appends to '${name}'`)
 				}
-				if (memberActions.has(read)) {
-					this.#problem(where, `its read action '${read}' is granted by a membership role (allowed: an action only application-level roles grant)`)
+				for (const action of tableActions(read).filter((held) => memberActions.has(held))) {
+					this.#problem(where, `its read action '${action}' is granted by a membership role (allowed: an action only application-level roles grant)`)
 				}
 			}
 			tables[name] = table

@@ -243,6 +243,17 @@ describe('parseContractArtifact', () => {
 		expect(() => parseContractArtifact(withoutCsp)).toThrow()
 	})
 
+	test("reads a table operation's one action as text (a 0.5 artifact's form) and several as a list of at least two", () => {
+		const notes = artifact.tables['notes']
+		if (notes === undefined) throw new Error('the fixture has a notes table')
+		const withRead = (read: unknown) => ({ ...artifact, tables: { ...artifact.tables, notes: { ...notes, actions: { ...notes.actions, read } } } })
+		expect(parseContractArtifact(artifact).tables['notes']?.actions.read).toBe('notes.read')
+		expect(parseContractArtifact(withRead(['notes.read', 'notes.admin'])).tables['notes']?.actions.read).toEqual(['notes.read', 'notes.admin'])
+		expect(() => parseContractArtifact(withRead(['notes.read']))).toThrow()
+		expect(() => parseContractArtifact(withRead(['notes.read', 'notes.read']))).toThrow()
+		expect(() => parseContractArtifact(withRead(['notes.*', 'notes.read']))).toThrow()
+	})
+
 	test('refuses every form only an installation row may use (ADR-0022 "Installation entries")', () => {
 		const credentialed = artifact.endpoints.findIndex((row) => row.requirement !== null)
 		const anonymous = artifact.endpoints.findIndex((row) => row.requirement === null)

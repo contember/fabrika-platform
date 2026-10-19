@@ -31,7 +31,6 @@ const names = z.array(name)
 const record = <T extends z.core.$ZodType>(value: T) => z.record(z.string().min(1), value)
 /** A contract's actions are exact: IAM treats `*` as a pattern, which would widen every grant naming it. */
 const action = name.refine((value) => !value.includes('*'), 'an action is exact; * is not an action')
-const nullableAction = action.nullable()
 const actions = z.array(action)
 /** IAM's own role keys win over an application role of the same key at resolution. */
 const roleKey = name.refine((key) => !BUILTIN_ROLE_KEYS.includes(key), 'a built-in IAM role key is not a contract role name')
@@ -200,6 +199,12 @@ const mount = z.discriminatedUnion('kind', [
 
 const cspSource = z.strictObject({ origin: name, purpose: name })
 
+/** One action as its text (every release's form), or several distinct ones as a list of at least two. */
+const tableAction = z.union([
+	action,
+	z.array(action).min(2).refine((list) => new Set(list).size === list.length, 'a table operation names each action once'),
+])
+
 const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 	scope: z.discriminatedUnion('mode', [
 		z.strictObject({
@@ -214,10 +219,10 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 		z.strictObject({ mode: z.literal('app'), reason: name, key: name }),
 	]),
 	actions: z.strictObject({
-		read: action,
-		insert: nullableAction,
-		update: nullableAction,
-		delete: nullableAction,
+		read: tableAction,
+		insert: tableAction.nullable(),
+		update: tableAction.nullable(),
+		delete: tableAction.nullable(),
 		appRead: z.array(action).nonempty().optional(),
 		appCount: z.array(action).nonempty().optional(),
 	}),

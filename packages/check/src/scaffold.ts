@@ -10,6 +10,7 @@ import {
 	endpointMembers,
 	type EndpointRow,
 	type SchemaShape,
+	tableActions,
 	type TablePolicyArtifact,
 } from '@fabrika/auth-core'
 import { tablePolicies } from '@fabrika/db/tables'
@@ -53,8 +54,38 @@ const grantDimension = (policies: Policies, policy: TablePolicyArtifact): string
 	return parent?.mode === 'dimension' ? (parent.container?.dimension ?? parent.dimension) : undefined
 }
 
+/**
+ * The actions the generated cases probe: the first of each operation, whose kit endpoint holds it. A refusal case runs
+ * only where the probed read action is not also an action of the operation it is refused.
+ */
+interface ProbedActions {
+	readonly read: string
+	readonly insert: string | null
+	readonly update: string | null
+	readonly delete: string | null
+	readonly updateRefusesRead: boolean
+	readonly deleteRefusesRead: boolean
+	readonly appRead?: readonly string[]
+	readonly appCount?: readonly string[]
+}
+
+const probedActions = (actions: TablePolicyArtifact['actions']): ProbedActions => {
+	const read = tableActions(actions.read)[0] ?? ''
+	return {
+		read,
+		insert: tableActions(actions.insert)[0] ?? null,
+		update: tableActions(actions.update)[0] ?? null,
+		delete: tableActions(actions.delete)[0] ?? null,
+		updateRefusesRead: !tableActions(actions.update).includes(read),
+		deleteRefusesRead: !tableActions(actions.delete).includes(read),
+		...(actions.appRead === undefined ? {} : { appRead: actions.appRead }),
+		...(actions.appCount === undefined ? {} : { appCount: actions.appCount }),
+	}
+}
+
 const isolationCases = (policy: TablePolicyArtifact, dimension: string): readonly Case[] => {
-	const { actions, scope } = policy
+	const { scope } = policy
+	const actions = probedActions(policy.actions)
 	const child = scope.mode === 'child'
 	const contained = scope.mode === 'child' || (scope.mode === 'dimension' && scope.container !== null)
 	const other = `another ${dimension}`
@@ -82,7 +113,7 @@ const isolationCases = (policy: TablePolicyArtifact, dimension: string): readonl
 		if (child) {
 			cases.push(testCase(`update of a key in ${other} through its own parent is 404`, "expect((await kit.update('crossed')).status).toBe(404)"))
 		}
-		if (actions.update !== actions.read) {
+		if (actions.updateRefusesRead) {
 			cases.push(testCase(`update refuses a Ref for ${actions.read}`, 'expect(await kit.updateWithRead()).toEqual({ status: 200, refused: true })'))
 		}
 	}
@@ -92,7 +123,7 @@ const isolationCases = (policy: TablePolicyArtifact, dimension: string): readonl
 		if (child) {
 			cases.push(testCase(`remove of a key in ${other} through its own parent is 404`, "expect((await kit.remove('crossed')).status).toBe(404)"))
 		}
-		if (actions.delete !== actions.read) {
+		if (actions.deleteRefusesRead) {
 			cases.push(testCase(`remove refuses a Ref for ${actions.read}`, 'expect(await kit.removeWithRead()).toEqual({ status: 200, refused: true })'))
 		}
 	}
@@ -130,7 +161,7 @@ const isolationCases = (policy: TablePolicyArtifact, dimension: string): readonl
  * the vocabulary has a dimension, a scoped site of the read action reads every row, and one of another action none.
  */
 const appIsolationCases = (policy: TablePolicyArtifact, scopedSites: boolean): readonly Case[] => {
-	const { actions } = policy
+	const actions = probedActions(policy.actions)
 	const writes = policy.update.length > 0 || policy.version !== null
 	const pair = (operation: string, call: string, done: string): Case[] => [
 		testCase(`${operation} by a global holder succeeds`, `expect(${call.replace('CALLER', "'global'")}).${done}`),
@@ -143,7 +174,7 @@ const appIsolationCases = (policy: TablePolicyArtifact, scopedSites: boolean): r
 	if (actions.insert !== null) cases.push(...pair('insert', 'await kit.insert(CALLER)', 'toEqual({ status: 200 })'))
 	if (actions.update !== null) {
 		if (writes) cases.push(...pair('update', 'await kit.update(CALLER)', 'toEqual({ status: 200 })'))
-		if (actions.update !== actions.read) {
+		if (actions.updateRefusesRead) {
 			cases.push(
 				testCase(`update refuses a capability of ${actions.read}`, 'expect(await kit.updateWithRead()).toEqual({ status: 200, refused: true })'),
 			)
@@ -151,7 +182,7 @@ const appIsolationCases = (policy: TablePolicyArtifact, scopedSites: boolean): r
 	}
 	if (actions.delete !== null) {
 		cases.push(...pair('remove', 'await kit.remove(CALLER)', 'toEqual({ status: 200 })'))
-		if (actions.delete !== actions.read) {
+		if (actions.deleteRefusesRead) {
 			cases.push(
 				testCase(`remove refuses a capability of ${actions.read}`, 'expect(await kit.removeWithRead()).toEqual({ status: 200, refused: true })'),
 			)
@@ -159,7 +190,8 @@ const appIsolationCases = (policy: TablePolicyArtifact, scopedSites: boolean): r
 	}
 	if (scopedSites) {
 		cases.push(testCase(`a scoped site of ${actions.read} reads every row`, "expect(await kit.scopedList()).toEqual({ status: 200, rows: ['own'] })"))
-		const other = [actions.insert, actions.update, actions.delete].find((action) => action !== null && action !== actions.read)
+		const reads = tableActions(policy.actions.read)
+		const other = [actions.insert, actions.update, actions.delete].find((action) => action !== null && !reads.includes(action))
 		if (other !== undefined) {
 			cases.push(
 				testCase(`a scoped site of ${other} reads no row`, 'expect(await kit.scopedListWithOther()).toEqual({ status: 200, refused: true })'),
@@ -277,7 +309,9 @@ const liesDirectlyIn = (policies: Policies, table: string, dimension: string): b
 
 /** The read action of the table that owns `dimension`, or `undefined` when no table owns it. */
 const ownerRead = (policies: Policies, dimension: string): string | undefined =>
-	Object.values(policies).find((policy) => policy.scope.mode === 'dimension' && policy.scope.dimension === dimension)?.actions.read
+	tableActions(
+		Object.values(policies).find((policy) => policy.scope.mode === 'dimension' && policy.scope.dimension === dimension)?.actions.read ?? null,
+	)[0]
 
 /**
  * What the `own` case's caller holds: the endpoint's action, plus what IAM requires of a link's issuer (the actions the
