@@ -8,6 +8,7 @@ import type { App, KitTypes, PublicContext, Unavailable } from '@fabrika/app/con
 import { compileContract } from '@fabrika/app/contract'
 import { type AppCapability, serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
+import { endpointAccessKit } from '@fabrika/app/testing/isolation'
 import { scoped } from '@fabrika/db'
 import { testDatabase } from '@fabrika/db/testing'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
@@ -119,6 +120,14 @@ if (postgres !== null) {
 			expect(Submitted.parse((await listed.json()).result).items).toContainEqual({ name, clientIp: '198.51.100.7', userAgent: 'probe/1.0' })
 		})
 
+		test('a filled honeypot answers as a real submission and writes nothing', async () => {
+			const name = `bot ${crypto.randomUUID()}`
+			const response = await post('intake.register', { name, website: 'https://spam.example' })
+			expect(await response.json()).toEqual({ result: {} })
+			const listed = await kit.browser(reader)('/api/staff.submissions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+			expect(Submitted.parse((await listed.json()).result).items.map((item) => item.name)).not.toContain(name)
+		})
+
 		test('every credential is discarded: a signed-in caller calls it as anyone', async () => {
 			const response = await kit.browser(reader)('/api/intake.register', {
 				method: 'POST',
@@ -154,6 +163,12 @@ if (postgres !== null) {
 			const statuses = [await add(writer), await add(writer), await add(writer), await add(writer)].map((response) => response.status)
 			expect(statuses).toEqual([200, 200, 200, 429])
 			expect((await add(kit.testCaller([{ action: 'catalog.write' }]))).status).toBe(200)
+		})
+
+		test("the generated case's kit asks a public procedure as anyone", async () => {
+			const access = endpointAccessKit(serve(contract, { database: scoped(tables) }), tables, postgres)
+			expect(await access.anyone('api.intake.register', { name: 'generated', website: '' })).toEqual({ answered: true })
+			expect(await access.anyone('api.intake.undeclared', {})).toEqual({ answered: false, status: 500 })
 		})
 
 		test('a body past its limit is refused', async () => {

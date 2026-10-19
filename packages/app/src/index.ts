@@ -30,6 +30,9 @@ export {
 // ─── Rows ────────────────────────────────────────────────────────────
 export { fromPage, fromRow, type RowInput } from './from-row.js'
 
+// ─── Public procedures ───────────────────────────────────────────────
+export { honeypot } from './honeypot.js'
+
 // ─── Auth contract ───────────────────────────────────────────────────
 export type { AuthContext, Scope } from '@fabrika/auth'
 

@@ -91,6 +91,11 @@ export interface EndpointAccessKit {
 	 * object (404) or value (403); for `over` it holds the named action nowhere (403). `seed` is the named one's.
 	 */
 	capability(endpoint: string, capability: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<DeniedOutcome>
+	/**
+	 * A public procedure asked by anyone, with no credential, from a page of its own origin: `answered` unless the answer
+	 * is a 401, a 403 or a 5xx. A procedure with a challenge is a 403: the kit's challenge never passes.
+	 */
+	anyone(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
 }
 
 export type FileOperation = 'upload' | 'download' | 'remove'
@@ -835,6 +840,19 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			const { status } = await ask(row, [{ action: row.action, scope: { type: dimension, value: freshValue(dimension, 'own', undefined) } }], input, [])
 			return { status }
 		},
+		async anyone(endpoint, input) {
+			const row = kit.artifact.endpoints.find((candidate) => candidate.id === endpoint)
+			if (row?.kind !== 'public') {
+				throw new Error(`${endpoint} is not a public procedure of the contract`)
+			}
+			const response = await kit.fetch(row.path, {
+				method: row.method,
+				headers: { 'Content-Type': 'application/json', Origin: kit.origin, 'Sec-Fetch-Site': 'same-origin' },
+				body: JSON.stringify(input),
+			})
+			const status = response.status
+			return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
+		},
 		async global(endpoint, input) {
 			const row = globalEndpointOf(endpoint)
 			const { status } = await askAs(row, callerFor(row, [], [{ action: row.action }]).fetch, input)
@@ -885,6 +903,7 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		file: drained(accessKit.file),
 		scoped: drained(accessKit.scoped),
 		global: drained(accessKit.global),
+		anyone: drained(accessKit.anyone),
 		capability: drained(accessKit.capability),
 	})
 }

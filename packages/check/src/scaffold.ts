@@ -429,6 +429,24 @@ const capabilityCases = (row: EndpointRow, fixtures: EndpointFixtures): readonly
 }
 
 /**
+ * A public procedure's case: anyone reaches it with no credential, or, behind a challenge, is refused without a solved
+ * one. Its name carries the workload's actions, so a change of them makes the committed test stale.
+ */
+const publicCases = (row: EndpointRow, artifact: ContractArtifact, fixtures: EndpointFixtures): readonly Case[] => {
+	if (row.kind !== 'public') return []
+	const input = inputOf(row, fixtures)
+	if (input === undefined) return []
+	const call = `await kit.anyone(${quote(row.id)}, ${renderSample(input)})`
+	const actions = artifact.declared?.[row.id]?.actions ?? []
+	if (artifact.procedures?.[row.id]?.challenge != null) {
+		return [testCase(`${row.id}: anyone without a solved challenge is 403`, `expect(${call}).toEqual({ answered: false, status: 403 })`)]
+	}
+	return [
+		testCase(`${row.id}: anyone reaches it with no credential, running with ${actions.join(', ')}`, `expect(${call}).toEqual({ answered: true })`),
+	]
+}
+
+/**
  * A file endpoint's own cases, over a file the kit seeds in each scope. Their names carry the collection's actions, so a
  * change of one makes the committed test stale; a read action that also writes or removes loses its refusal case.
  */
@@ -473,7 +491,12 @@ const endpointTestBody = (
 ): { readonly body: string; readonly cases: readonly string[] } | undefined => {
 	const cases = [...artifact.endpoints].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).flatMap((
 		row,
-	) => [...endpointCases(row, artifact, policies, fixtures), ...capabilityCases(row, fixtures), ...fileCases(row, artifact)])
+	) => [
+		...endpointCases(row, artifact, policies, fixtures),
+		...capabilityCases(row, fixtures),
+		...fileCases(row, artifact),
+		...publicCases(row, artifact, fixtures),
+	])
 	if (cases.length === 0) return undefined
 	const body = [
 		'// The endpoint access tests of this application, written by fabrika db test-scaffold from fabrika.contract.ts and',

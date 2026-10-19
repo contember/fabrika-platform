@@ -1,6 +1,7 @@
 // Public procedures beside the staff who read what they wrote: an anonymous intake, a capped one, two that overreach,
 // and a public catalog read.
 
+import { honeypot } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 
@@ -14,7 +15,7 @@ export const Submitted = z.strictObject({
 export const intake = app.group({}, (r) => ({
 	register: r.mutation({ input: Register, output: Empty, access: { public: true }, actions: ['intake.register'] })
 		.handle(async ({ input, ctx }) => {
-			if (input.website !== '') return {}
+			if (honeypot(input.website)) return {}
 			await ctx.db.app('intake.register').submissions.insert({
 				name: input.name,
 				client_ip: ctx.client.ip,
