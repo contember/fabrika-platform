@@ -80,3 +80,4 @@ a commit message suffices.
 | [0059](0059-application-server-errors-carry-their-stack-and-message.md) | Application server errors carry their stack and message, scrubbed                        |
 | [0060](0060-a-mutation-kicks-a-cron-job-after-its-commit.md)            | A mutation kicks a cron job after its commit; the outbox row stays the record            |
 | [0061](0061-a-form-takes-files-beside-its-input.md)                     | A form takes files beside its input; the job that drains its inbox attaches them         |
+| [0062](0062-a-platform-release-serves-older-framework-releases.md)      | A platform release runs and deploys applications on older framework releases             |

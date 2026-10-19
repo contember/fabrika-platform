@@ -183,6 +183,17 @@ installation converges on upgrade. Answer each question that applies:
 If no upgrade step converges an existing installation, add that step, or document the operator step in
 `docs/reference/`. Test the upgrade path where a test can reach it.
 
+## Framework API versus platform protocol
+
+The framework API (what an application's author writes: contract kinds, `ctx`, the data layer, the UI kit, the
+checker's rules) may break in a minor release before 1.0, with a migration guide; an application meets the break only
+when it raises its own pin. The protocol between an application and the platform (the contract artifact and digest,
+manifest rows and row modes, `X-Fabrika-*` headers, token claims, workload key exchange, the IAM schema, `FABRIKA_*`
+variables, the build step) must not break for any framework release inside the platform's support window: a platform
+upgrade never forces an application to upgrade, redeploy or change code. Change the protocol additively, keep the old
+side served until no release in the window uses it, and never let a platform release read an application's contract
+with a reader other than its own release's ([ADR-0062](./docs/decisions/0062-a-platform-release-serves-older-framework-releases.md)).
+
 ## Module-Specific Context
 
 Read the package's own CLAUDE.md before editing it. Beyond the packages that only carry a short
