@@ -1,6 +1,7 @@
 // Publishing a run's snapshot (ADR-0050 §2): classify it against the environment's active snapshot, park a widening
 // on a protected environment until a human approves it, and publish with a compare-and-swap on the generation.
 
+import { incompatibleMountChanges } from '@fabrika/app/contract'
 import { z } from 'zod'
 import { consumerEdgeProblems, ownerEdgeProblems } from '../connectors'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
@@ -122,6 +123,7 @@ export async function publishRunSnapshot(
 		const appEnv = await requireAppEnv(deps.repositories, run)
 		const active = approvedSnapshot(appEnv)
 		await assertConnectorEdges(deps.repositories.registry, run, candidate, active, input.log)
+		assertMountCompatibility(candidate, active, input.log)
 		const classification = classify(active, candidate, appEnv)
 		logClassification(input.log, classification, appEnv.env)
 		const serialized = JSON.stringify(classification)
@@ -214,6 +216,22 @@ async function assertConnectorEdges(
 	if (problems.length === 0) return
 	for (const problem of problems) log(`access: connector: ${problem}`)
 	throw new ConnectorEdgeRefused(problems)
+}
+
+/** A deploy that breaks a mount's promise of backward compatibility fails, whoever approves it: its callers would break. */
+export class MountCompatibilityRefused extends Error {
+	constructor(readonly problems: readonly string[]) {
+		super(`the deploy breaks ${problems.length} promise${problems.length === 1 ? '' : 's'} of a backward-compatible mount`)
+		this.name = 'MountCompatibilityRefused'
+	}
+}
+
+function assertMountCompatibility(candidate: AccessSnapshot, active: ActiveSnapshot, log: (line: string) => void): void {
+	const before = active.snapshot.contract
+	const problems = before === null || candidate.contract === null ? [] : incompatibleMountChanges(before, candidate.contract)
+	if (problems.length === 0) return
+	for (const problem of problems) log(`access: compatibility: ${problem}`)
+	throw new MountCompatibilityRefused(problems)
 }
 
 /** The approval on the run counts only for the candidate and baseline it was given for. */

@@ -447,7 +447,15 @@ export interface RpcMountArtifact {
 	readonly prefix: string
 	/** The callers of its credentialed procedures; none when every procedure it mounts is public. */
 	readonly callers: readonly RpcCaller[]
+	/**
+	 * `backward`: Control refuses a publication that breaks a caller of a procedure it mounts (`incompatibleMountChanges`).
+	 * Absent for the default, `unchecked`, so every other mount keeps its digest.
+	 */
+	readonly compatibility?: MountCompatibility
 }
+
+/** The promise a mount makes its callers; only `backward` is recorded. */
+export type MountCompatibility = 'backward'
 
 export interface LinkMountArtifact {
 	readonly kind: 'link'

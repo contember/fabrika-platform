@@ -33,6 +33,7 @@ import {
 	LOCALES,
 	MESSAGE_KINDS,
 	type MountArtifact,
+	type MountCompatibility,
 	type NumberShape,
 	type OutputShape,
 	planEndpoint,
@@ -1537,6 +1538,11 @@ function servedNames(mount: MountArtifact): readonly string[] {
  * get a line each, by name. The rest of a mount is compared as a value.
  */
 function mountChanges(name: string, from: MountArtifact, to: MountArtifact): AccessChange[] {
+	if (from.kind === 'rpc' && to.kind === 'rpc') {
+		const { compatibility: before, ...fromRest } = from
+		const { compatibility: after, ...toRest } = to
+		return [...valueChange(`Mount \`${name}\``, fromRest, toRest), ...compatibilityChange(name, before, after)]
+	}
 	if (from.kind === 'webhook' && to.kind === 'webhook') {
 		const { timeoutMs: before, ...fromRest } = from
 		const { timeoutMs: after, ...toRest } = to
@@ -1622,6 +1628,18 @@ function kickChange(name: string, before: string | undefined, after: string | un
 }
 
 /** Any change of a value the diff does not order widens. */
+/** A mount's promise to its callers reaches no data: it is shown, and Control enforces it at publication. */
+function compatibilityChange(name: string, before: MountCompatibility | undefined, after: MountCompatibility | undefined): AccessChange[] {
+	if (before === after) return []
+	return [
+		neutral(
+			after === 'backward'
+				? `Mount \`${name}\` promises its callers backward compatibility: a deploy that breaks one of its procedures is refused`
+				: `Mount \`${name}\` no longer promises backward compatibility; this deploy is the last one held to it`,
+		),
+	]
+}
+
 function valueChange(subject: string, before: unknown, after: unknown): AccessChange[] {
 	const from = canonicalJson(before)
 	const to = canonicalJson(after)

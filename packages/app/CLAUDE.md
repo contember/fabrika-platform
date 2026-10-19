@@ -808,6 +808,9 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **`incompatibleChanges` (`contract/connect.ts`) is the rule Control applies to an owner deploy.** Over the
   procedures a consumer imports, a removed procedure, less accepted input, any output change and a changed
   audience break the edge; an output may not gain a field, because `schemaFromShape` builds strict objects.
+  `incompatibleMountChanges` applies the same rule to every procedure of an RPC mount whose approved artifact says
+  `compatibility: 'backward'`, and adds its query, HTTP shape, file answer and access. It reads the approved side's
+  promise, so the publication that drops it is still held to it.
 - The header policy and the file treatment are ADR-0022's, defined once in
   `@fabrika/proxy-core/headers`; `headers.ts` and `files/treatment.ts` only apply them, and the
   proxy applies the same definition. Never restate a header value here.

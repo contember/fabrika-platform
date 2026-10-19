@@ -3,9 +3,12 @@
 // Browser-safe: the snapshot is imported by the contract, which the SPA imports.
 
 import {
+	canonicalAdmission,
 	canonicalJson,
+	canonicalOutput,
 	canonicalShape,
 	type ContractArtifact,
+	type EndpointRow,
 	type ExportDescription,
 	exportDigest,
 	type ExportProcedureDescription,
@@ -143,6 +146,71 @@ export function incompatibleChanges(before: ExportDescription, after: ExportDesc
 		}
 	}
 	return problems
+}
+
+/**
+ * What `after` breaks for the callers of each mount `before` promises `compatibility: 'backward'`: a procedure it
+ * removes, an input or a query that accepts less, another output, another HTTP shape (method, path, body codec), file
+ * answer or access (its kind, callers, requirement and cross-origin form), or a mount moved. The promise binds the
+ * publication that drops it too, so a breaking change is a new mount beside the old one. Empty when compatible.
+ */
+export function incompatibleMountChanges(before: ContractArtifact, after: ContractArtifact): string[] {
+	const problems: string[] = []
+	for (const [name, mount] of Object.entries(before.mounts)) {
+		if (mount.kind !== 'rpc' || mount.compatibility !== 'backward') {
+			continue
+		}
+		const now = Object.hasOwn(after.mounts, name) ? after.mounts[name] : undefined
+		if (now?.kind !== 'rpc' || now.prefix !== mount.prefix) {
+			problems.push(`mount '${name}' promises backward compatibility, and this deploy removes or moves it`)
+			continue
+		}
+		for (const row of before.endpoints.filter((endpoint) => isMountProcedure(endpoint, name))) {
+			const next = after.endpoints.find((candidate) => candidate.id === row.id)
+			if (next === undefined || !isMountProcedure(next, name)) {
+				problems.push(`removes '${row.id}'`)
+				continue
+			}
+			problems.push(...procedureBreaks(row, next, before.procedures?.[row.id]?.query, after.procedures?.[row.id]?.query))
+		}
+	}
+	return problems
+}
+
+function isMountProcedure(row: EndpointRow, mount: string): boolean {
+	return row.source.kind === 'mount' && row.source.name === mount && (row.kind === 'query' || row.kind === 'mutation' || row.kind === 'public')
+}
+
+function procedureBreaks(
+	before: EndpointRow,
+	after: EndpointRow,
+	queryBefore: SchemaShape | undefined,
+	queryAfter: SchemaShape | undefined,
+): string[] {
+	const id = before.id
+	const breaks: string[] = []
+	if (!acceptsEveryInput(before.input, after.input) || !acceptsEveryInput(queryBefore ?? null, queryAfter ?? null)) {
+		breaks.push(`'${id}' accepts less input than before`)
+	}
+	if (
+		canonicalJson(before.output === null ? null : canonicalOutput(before.output))
+			!== canonicalJson(after.output === null ? null : canonicalOutput(after.output))
+	) {
+		breaks.push(`'${id}' answers another output than before`)
+	}
+	const admission = (row: EndpointRow) => (row.admission === null ? null : canonicalAdmission(row.admission).contentTypes)
+	if (before.method !== after.method || before.path !== after.path || canonicalJson(admission(before)) !== canonicalJson(admission(after))) {
+		breaks.push(`'${id}' changes its HTTP shape`)
+	}
+	if (before.response !== after.response) {
+		breaks.push(`'${id}' changes its file answer`)
+	}
+	const access = (row: EndpointRow) =>
+		canonicalJson({ kind: row.kind, callers: [...row.callers].sort(), requirement: row.requirement, crossOrigin: row.crossOrigin ?? null })
+	if (access(before) !== access(after)) {
+		breaks.push(`'${id}' changes its access`)
+	}
+	return breaks
 }
 
 function acceptsEveryInput(before: SchemaShape | null, after: SchemaShape | null): boolean {

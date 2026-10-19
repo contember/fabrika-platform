@@ -212,7 +212,7 @@ const bucket = z.int().positive().max(PROCEDURE_LIMITS.maxPerMinute).nullable()
 const challenge = z.strictObject({ provider: z.literal('turnstile'), secret: applicationVariable, siteKey: applicationVariable.optional() })
 
 const mount = z.discriminatedUnion('kind', [
-	z.strictObject({ kind: z.literal('rpc'), prefix: name, callers: z.array(rpcCaller) }),
+	z.strictObject({ kind: z.literal('rpc'), prefix: name, callers: z.array(rpcCaller), compatibility: z.literal('backward').optional() }),
 	z.strictObject({
 		kind: z.literal('link'),
 		prefix: name,

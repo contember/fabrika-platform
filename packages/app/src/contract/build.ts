@@ -546,7 +546,8 @@ class ArtifactBuilder {
 						actions,
 					})
 				}
-				return { kind: 'rpc', prefix: mount.prefix, callers: [...mount.callers] }
+				const compatibility = this.#compatibility(where, mount.compatibility)
+				return { kind: 'rpc', prefix: mount.prefix, callers: [...mount.callers], ...(compatibility === 'backward' ? { compatibility } : {}) }
 			}
 			case 'link':
 				return this.#link(name, mount)
@@ -2311,6 +2312,15 @@ class ArtifactBuilder {
 		}
 		this.#unique(where, 'origins', sources.map((source) => source.origin))
 		return sources.map((source) => ({ origin: source.origin, purpose: source.purpose }))
+	}
+
+	/** An RPC mount's promise to its callers; `unchecked` when it makes none. */
+	#compatibility(where: string, value: unknown): 'backward' | 'unchecked' {
+		if (value === undefined || value === 'unchecked' || value === 'backward') {
+			return value ?? 'unchecked'
+		}
+		this.#problem(where, `compatibility ${JSON.stringify(value)} is not a promise (allowed: compatibility: 'backward' or 'unchecked')`)
+		return 'unchecked'
 	}
 
 	// ── Declared reach ──────────────────────────────────────────────────────────────────────────

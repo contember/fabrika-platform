@@ -243,6 +243,8 @@ export interface RpcMountDeclaration<S> extends OptionsRecord {
 	/** The callers of its credentialed procedures; none when every procedure is public. */
 	readonly callers: readonly RpcCaller[]
 	readonly procedures: ProcedureTreeDeclaration<S>
+	/** The kit's `c.rpc` options, as written; `buildArtifact` takes `'backward'` and `'unchecked'`. */
+	readonly compatibility?: unknown
 }
 
 export interface LinkMountDeclaration<S> extends OptionsRecord {

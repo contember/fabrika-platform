@@ -1,7 +1,8 @@
-// Signed tokens in the conservative access diff (ADR-0050): a new token purpose and a site that starts signing one widen,
-// a longer lifetime widens, and a dropped purpose or `signs` narrows.
+// What the surface revision declares, in the conservative access diff (ADR-0050): a new token purpose, a site that
+// starts signing one and a longer lifetime widen; a GET mutation and a new egress origin widen with closer review; a
+// mount's promise of backward compatibility is shown and widens nothing.
 
-import type { ContractArtifact, DeclaredReach, ProcedureArtifact, TokenPurposeArtifact } from '@fabrika/auth-core'
+import type { ContractArtifact, DeclaredReach, MountArtifact, ProcedureArtifact, TokenPurposeArtifact } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { classifyAccess } from '../approval/diff'
@@ -74,6 +75,28 @@ describe('a GET mutation in the approval diff', () => {
 		])
 		expect(classifyAccess(withRules({ ...rules, changesStateOnGet: true }), withRules(rules)).changes).toEqual([
 			{ effect: 'narrows', line: '`api.mail.click` no longer changes state on GET' },
+		])
+	})
+})
+
+describe('a mount promise in the approval diff', () => {
+	const mounted = (partners: MountArtifact): AccessSnapshot => ({
+		version: 1,
+		contract: { ...notesArtifact, mounts: { ...notesArtifact.mounts, partners } },
+		migrations: [],
+		checker: '0.0.0',
+	})
+	const unchecked: MountArtifact = { kind: 'rpc', prefix: '/api/v1', callers: ['machine'] }
+
+	test('a promise made or dropped is shown, and widens nothing', () => {
+		expect(classifyAccess(mounted(unchecked), mounted({ ...unchecked, compatibility: 'backward' })).changes).toEqual([
+			{
+				effect: 'neutral',
+				line: 'Mount `partners` promises its callers backward compatibility: a deploy that breaks one of its procedures is refused',
+			},
+		])
+		expect(classifyAccess(mounted({ ...unchecked, compatibility: 'backward' }), mounted(unchecked)).changes).toEqual([
+			{ effect: 'neutral', line: 'Mount `partners` no longer promises backward compatibility; this deploy is the last one held to it' },
 		])
 	})
 })

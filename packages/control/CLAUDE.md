@@ -286,7 +286,8 @@ other environment, before the provider prepares anything, and the write maps a r
   (`consumerEdgeProblems`), or when an owner's candidate breaks an approved consumer's import
   (`ownerEdgeProblems`, the rule in `incompatibleChanges`). The two sides publish independently, so two
   concurrent publications can each pass against the other's previous snapshot; the next deploy of either sees
-  the break. `connectors.describe` answers the approved export to its consumer for `fabrika connect`, behind
+  the break. `assertMountCompatibility` refuses, the same way, a candidate that breaks a procedure of a mount the
+  approved contract promises `compatibility: 'backward'` (`incompatibleMountChanges`). `connectors.describe` answers the approved export to its consumer for `fabrika connect`, behind
   `deploy.read` on the consumer, and the same 404 for anything else.
 - **No authored value may copy a framework-only variable, and no run log keeps a secret Control handed out.**
   `assertNoFrameworkReference` refuses an app variable or secret VALUE that references a

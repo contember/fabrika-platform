@@ -19,6 +19,7 @@ export {
 	exportDescription,
 	exportDescriptionSchema,
 	incompatibleChanges,
+	incompatibleMountChanges,
 	parseExportDescription,
 	type SnapshotProcedure,
 } from './connect'

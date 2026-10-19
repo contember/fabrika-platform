@@ -281,6 +281,40 @@ describe('an owner deploy', () => {
 	})
 })
 
+/** The partner API of the CRM: one procedure for integrations, under a mount that promises backward compatibility. */
+const partnerSource = (output: string, promise = ", { compatibility: 'backward' }") =>
+	`import { defineApp, defineVocabulary } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
+
+const vocabulary = defineVocabulary({
+	app: 'crm',
+	dimensions: { org: {} },
+	actions: { 'deals.read': 'Read deals' },
+	roles: { partner: { grants: ['deals.read'] } },
+})
+const app = defineApp(vocabulary)
+
+const deals = app.group({ callers: ['machine'] }, (r) => ({
+	get: r.query({ input: z.strictObject({ id: z.string() }), output: z.strictObject(${output}), access: { action: 'deals.read', app: true } })
+		.handle(() => { throw new Error('not run') }),
+}))
+
+export const contract = app.contract((c) => ({ partners: c.rpc('/api/v1', { deals }${promise}), health: c.health('/healthz') }))
+`
+
+describe('a mount that promises backward compatibility', () => {
+	test('refuses a deploy that changes a procedure it mounts, whoever approves it; one that drops the promise first deploys', async () => {
+		const w = await world()
+		expect(await deploy(w, 'crm', partnerSource('{ id: z.string(), name: z.string() }'))).toBe('succeeded')
+		const deploys = w.deploys.length
+		expect(await deploy(w, 'crm', partnerSource('{ id: z.string() }'))).toBe('failed')
+		expect(runLog(w)).toContain("access: compatibility: 'partners.deals.get' answers another output than before")
+		expect(w.deploys).toHaveLength(deploys)
+		expect(await deploy(w, 'crm', partnerSource('{ id: z.string(), name: z.string() }', ''))).toBe('succeeded')
+		expect(await deploy(w, 'crm', partnerSource('{ id: z.string() }', ''))).toBe('succeeded')
+	})
+})
+
 describe('describeConnector', () => {
 	test("answers the owner's approved export to its consumer, and the same nothing for any other request", async () => {
 		const w = await world()

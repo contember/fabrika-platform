@@ -262,11 +262,20 @@ export interface ContractKit<K extends KitTypes> extends Pick<Kit<K['action'], K
 			readonly files?: F
 		},
 	): FormMount<I, NoInfer<Then>>
-	/** The groups' endpoints at `POST <prefix>/<group>.<endpoint>`, to the callers the groups name. */
+	/**
+	 * The groups' endpoints at `POST <prefix>/<group>.<endpoint>`, to the callers the groups name. `compatibility:
+	 * 'backward'` promises their callers that a later deploy breaks none of them; Control refuses one that does.
+	 */
 	rpc<const G extends MountedGroups>(
 		prefix: MountPrefix<G>,
 		groups: G,
+		options?: RpcMountOptions,
 	): RpcMount<Callers<G>, Endpoints<G>>
+}
+
+/** The options of `c.rpc`: the promise the mount makes its callers, `'unchecked'` by default. */
+export interface RpcMountOptions {
+	readonly compatibility?: 'backward' | 'unchecked'
 }
 
 /** The `imports` section the contract carries: the kit's imports, with `usedBy` from the endpoints' `connect`. */
@@ -507,7 +516,7 @@ interface ExportSiteOptions {
 type MountedGroupsValue = GroupDeclaration | { readonly [name: string]: MountedGroupsValue }
 
 interface RuntimeContractKit extends Pick<Kit<string, string, string>, 'spa' | 'health' | 'form' | 'files'> {
-	rpc(prefix: Path, groups: MountedGroupsValue): RpcMountDeclaration<Schema>
+	rpc(prefix: Path, groups: MountedGroupsValue, options?: object): RpcMountDeclaration<Schema>
 }
 
 interface RuntimeApp {
@@ -620,8 +629,11 @@ function runtimeApp(vocabulary: AnyAppVocabulary, options: KitOptions | undefine
 	}
 }
 
-/** `c.rpc(prefix, groups)`: the groups' endpoints under the prefix, nested by the names `groups` gives them. */
-function rpc(prefix: Path, groups: MountedGroupsValue): RpcMountDeclaration<Schema> {
+/**
+ * `c.rpc(prefix, groups, options?)`: the groups' endpoints under the prefix, nested by the names `groups` gives them.
+ * `compatibility` is copied as written, and `buildArtifact` checks it.
+ */
+function rpc(prefix: Path, groups: MountedGroupsValue, options: object = {}): RpcMountDeclaration<Schema> {
 	const mounted = mountedGroups(groups)
 	if (mounted.length === 0) {
 		throw new ContractError([`c.rpc('${prefix}'): mounts no group (allowed: c.rpc('${prefix}', { <name>: <group> }))`])
@@ -637,8 +649,19 @@ function rpc(prefix: Path, groups: MountedGroupsValue): RpcMountDeclaration<Sche
 		prefix,
 		callers,
 		procedures: mountedProcedures(groups),
+		...rpcMountOptions(prefix, options),
 		unknownOptions: [...new Set(mounted.flatMap((group) => isRuntimeGroup(group) ? group.unknownOptions : []))],
 	}
+}
+
+/** The `compatibility` of `c.rpc`'s options, only when written; it takes no other option. */
+function rpcMountOptions(prefix: Path, options: object): { readonly compatibility?: unknown } {
+	const unknown = Object.keys(options).filter((key) => key !== 'compatibility')
+	if (unknown.length > 0) {
+		throw new ContractError([`c.rpc('${prefix}'): ${unknown.map((key) => `'${key}'`).join(', ')} is not an option (allowed: compatibility)`])
+	}
+	const compatibility: unknown = Reflect.get(options, 'compatibility')
+	return compatibility === undefined ? {} : { compatibility }
 }
 
 function isPublicAccess(access: unknown): boolean {

@@ -430,7 +430,17 @@ class SurfaceReader {
 	#kitMount(value: LiteralValue): AnyMount {
 		const builder = value.kind === 'builder' ? { name: value.name, kit: value.kit, args: value.args, at: value.at } : undefined
 		if (builder?.kit === 'shell' && builder.name === 'rpc') {
-			const [prefix, groupsValue] = args(builder, 'c.rpc', 2, 2)
+			const [prefix, groupsValue, optionsValue] = args(builder, 'c.rpc', 2, 3)
+			const options = optionsValue === undefined ? new Map<string, LiteralValue>() : builderOptions(optionsValue, builder, 'c.rpc')
+			const compatibility = options.get('compatibility')
+			const unknown = [...options.keys()].filter((key) => key !== 'compatibility')
+			if (unknown.length > 0) {
+				throw new Refused(
+					optionsValue?.at ?? builder.at,
+					`c.rpc('${text(prefix, builder, 'the prefix')}') takes no option '${unknown[0]}'`,
+					'compatibility',
+				)
+			}
 			const path = text(prefix, builder, 'the prefix')
 			const read = this.#groups(groupsValue, builder)
 			const [first] = read.groups
@@ -451,6 +461,7 @@ class SurfaceReader {
 				prefix: path,
 				callers,
 				procedures: read.procedures,
+				...(compatibility === undefined ? {} : { compatibility: plain(compatibility) }),
 				unknownOptions: [...new Set(read.groups.flatMap((group) => group.unknownOptions))],
 			}
 		}
