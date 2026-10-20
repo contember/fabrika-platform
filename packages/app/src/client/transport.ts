@@ -107,14 +107,15 @@ async function envelope(response: Response): Promise<{ result?: unknown; error?:
 }
 
 /**
- * Sends one request and answers the envelope's `result`; every failure is an `RpcError`. `init` builds the request
- * inside the guard, so an input that does not serialize rejects like a failed request instead of throwing.
+ * Sends one request and answers the envelope's `result`; every failure is an `RpcError`, and so is every answer that is
+ * not 2xx, whatever its body holds. `init` builds the request inside the guard, so an input that does not serialize
+ * rejects like a failed request instead of throwing.
  */
 export async function exchange(doFetch: RpcFetch, url: string, init: () => RequestInit, bounce: BounceConfig | null): Promise<unknown> {
 	const response = await send(doFetch, url, init)
 	const data = await envelope(response)
-	if (data.error !== undefined) {
-		return await refused(data.error, response, bounce)
+	if (!response.ok || data.error !== undefined) {
+		return await refused(data.error ?? `HTTP ${response.status}`, response, bounce)
 	}
 	clearBounce(bounce)
 	return data.result
