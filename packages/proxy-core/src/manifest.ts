@@ -101,7 +101,7 @@ export type ProxyEndpointRow =
 	| (
 		& Pick<
 			Extract<EndpointRow, { requirement: null }>,
-			'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin' | 'response' | 'cache'
+			'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin' | 'response' | 'cache' | 'authorization'
 		>
 		& {
 			digest: string
@@ -209,6 +209,7 @@ export const proxyEndpointRowSchema = z.union([
 		crossOrigin: z.enum(['environment', 'any']).optional(),
 		response: z.literal('file').optional(),
 		cache: z.union([z.literal('immutable'), z.object({ maxAgeSeconds: z.number().int().min(1).max(MAX_CACHE_AGE_SECONDS) }).strict()]).optional(),
+		authorization: z.literal('forward').optional(),
 	}).strict(),
 	// A public SPA is a fixed static row: it serves GET only and admits no body.
 	z.object({
@@ -229,6 +230,9 @@ export const proxyEndpointRowSchema = z.union([
 ).refine(
 	(row) => !('cache' in row) || row.cache === undefined || (row.kind === 'public' && row.method === 'GET'),
 	'only a public GET query caches its answer',
+).refine(
+	(row) => !('authorization' in row) || row.authorization === undefined || row.kind === 'webhook',
+	"only a webhook forwards the request's Authorization",
 ).refine(
 	(row) => row.digest === requirementDigest(row),
 	'endpoint digest does not match its rules',
@@ -382,7 +386,8 @@ export function contractProxyTable(artifact: ContractArtifact, digest: string = 
 			}
 			if (row.requirement === null) {
 				const cache = row.cache === undefined ? {} : { cache: row.cache }
-				const anonymous = { ...rules, ...cache, kind: row.kind, callers: row.callers, requirement: null, delegation: null }
+				const authorization = row.authorization === undefined ? {} : { authorization: row.authorization }
+				const anonymous = { ...rules, ...cache, ...authorization, kind: row.kind, callers: row.callers, requirement: null, delegation: null }
 				return { ...anonymous, digest: requirementDigest(anonymous) }
 			}
 			const credentialed = {

@@ -37,7 +37,7 @@ import {
 } from '@fabrika/auth-core'
 import { cacheKey, type TokenCache } from './cache'
 import { LOGIN_REDIRECT_PARAM } from './constants'
-import { readBearer, readCookie } from './credentials'
+import { carriesPlatformKey, readBearer, readCookie } from './credentials'
 import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams } from './handoff'
 import { type DelegationIssuer, type IamGateway, IamUnavailableError } from './iam'
 import {
@@ -110,6 +110,11 @@ export type Decision =
 		delegation: string | null
 		/** The `Access-Control-Allow-Origin` the answer carries: the request's admitted origin, `*`, or none. */
 		crossOrigin: string | null
+		/**
+		 * Whether the request's own `Authorization` reaches the application: on a webhook row that forwards it, unless it
+		 * carries a platform key. Every other anonymous request loses it (ADR-0022 rule 3).
+		 */
+		forwardsAuthorization: boolean
 	}
 	| {
 		outcome: 'deny'
@@ -307,7 +312,15 @@ export class Authorizer {
 		const endpoint = formatEndpointHeader(row.id, row.digest)
 		if (row.requirement === null) {
 			return admitBody(row, request.headers) ?? admitFormOrigin(app, row, request, crossOrigin)
-				?? { outcome: 'allow', token: null, subject: null, endpoint, delegation: null, crossOrigin }
+				?? {
+					outcome: 'allow',
+					token: null,
+					subject: null,
+					endpoint,
+					delegation: null,
+					crossOrigin,
+					forwardsAuthorization: forwardsAuthorization(row, request),
+				}
 		}
 		const oauth = oauthBindingOf(app, row)
 		if (oauth === 'unregistered') {
@@ -345,6 +358,7 @@ export class Authorizer {
 			endpoint,
 			delegation: delegation?.grant ?? null,
 			crossOrigin,
+			forwardsAuthorization: false,
 		}
 	}
 
@@ -721,4 +735,13 @@ function admitBody(row: ManifestEndpointRow, headers: Headers): Denial | null {
 function isDocumentNavigation(headers: Headers): boolean {
 	const mode = headers.get(FETCH_MODE_HEADER)
 	return mode === null || mode === '' || mode === 'navigate'
+}
+
+/**
+ * The `Authorization` of an anonymous request is the application's only on a row that forwards it, and never when it
+ * carries a platform key. The proxy reads no credential from it either way: no key lookup, no session.
+ */
+function forwardsAuthorization(row: ManifestEndpointRow, request: ForwardedRequest): boolean {
+	const authorization = request.headers.get('Authorization')
+	return 'authorization' in row && row.authorization === 'forward' && authorization !== null && !carriesPlatformKey(authorization, API_KEY_PREFIX)
 }

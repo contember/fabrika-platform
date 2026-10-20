@@ -22,6 +22,7 @@ export {
 	DEFAULT_VERIFY_PATH,
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
+	FORWARD_AUTHORIZATION_HEADER,
 	FORWARDED_HOST_HEADER,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_PROTO_HEADER,
@@ -33,7 +34,7 @@ export {
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
 } from './constants'
-export { readBearer, readCookie } from './credentials'
+export { carriesPlatformKey, readBearer, readCookie } from './credentials'
 export { stripFabrikaCookies } from './handoff'
 export { HttpIamGateway, IamUnavailableError } from './iam'
 export type { DelegationIssuer, DelegationRequest, HttpIamGatewayOptions, IamGateway } from './iam'

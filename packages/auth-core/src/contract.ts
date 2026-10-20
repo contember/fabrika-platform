@@ -188,7 +188,17 @@ interface EndpointRowBase {
 	 * every other row, which answers `no-store`, so every row without it keeps its digest.
 	 */
 	readonly cache?: EndpointCache
+	/**
+	 * `forward`: the proxy passes the request's own `Authorization` to the application, never reading it as a platform
+	 * credential: a webhook row whose verifier (`basic`, `bearer`) compares it with the binding's secret. A value that
+	 * carries a `px_` key is still removed, and every other anonymous row loses the header (ADR-0022 rule 3). Absent
+	 * otherwise, so every other row keeps its digest.
+	 */
+	readonly authorization?: EndpointAuthorization
 }
+
+/** What the proxy does with an anonymous request's `Authorization` on a row that names it: forward it to the application. */
+export type EndpointAuthorization = 'forward'
 
 /** The answer profile of a row that answers a stored file. */
 export type EndpointResponse = 'file'

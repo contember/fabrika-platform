@@ -82,6 +82,19 @@ describe('the rows of this release, for a namespace proxy pinned to an older sou
 				},
 			},
 		}],
+		['a webhook that forwards its own Authorization to a basic or bearer verifier', {
+			id: 'billing',
+			source: { kind: 'mount', name: 'billing' },
+			kind: 'webhook',
+			method: 'POST',
+			path: '/hooks/billing/:bindingId',
+			callers: [],
+			requirement: null,
+			admission: json,
+			input: empty,
+			output: null,
+			authorization: 'forward',
+		}],
 	])('refuses %s, which no older proxy parses', (_name, row) => {
 		expect(rowsNeedingCurrentProxy(access([row]), OLDER_PROXY_ROW_READERS)).toEqual([row.id])
 	})

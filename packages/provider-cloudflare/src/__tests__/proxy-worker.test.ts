@@ -10,7 +10,7 @@ import {
 	requirementDigest,
 	RESOURCE_ACCESS_TOKEN_TYP,
 } from '@fabrika/auth-core'
-import type { DelegationRequest } from '@fabrika/proxy-core'
+import { type DelegationRequest, FORWARD_AUTHORIZATION_HEADER } from '@fabrika/proxy-core'
 import { FILE_TREATMENT, headerPolicy, STRICT_TRANSPORT_SECURITY } from '@fabrika/proxy-core/headers'
 import {
 	contractProxyTable,
@@ -588,6 +588,18 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		delegation: null,
 		cache: { maxAgeSeconds: 60 },
 	} satisfies EndpointRules & { id: string }
+	/** A webhook whose verifier reads the sender's own `Authorization` (`{ bearer }`): the decision forwards it. */
+	const billing = {
+		id: 'billing',
+		kind: 'webhook',
+		method: 'POST',
+		path: '/hooks/billing/:binding',
+		callers: [],
+		requirement: null,
+		admission: { contentTypes: ['application/json'], maxBytes: 1_048_576 },
+		delegation: null,
+		authorization: 'forward',
+	} satisfies EndpointRules & { id: string }
 	const csp = { connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: [], scriptSrc: [], frameSrc: [], styleSrc: [], fontSrc: [] }
 	/** The application's own headers per path: a weaker policy than the proxy's, and downloads it labels itself. */
 	const answers: Record<string, Record<string, string>> = {
@@ -611,6 +623,7 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 					{ ...invite, digest: requirementDigest(invite) },
 					{ ...download, digest: requirementDigest(download) },
 					{ ...products, digest: requirementDigest(products) },
+					{ ...billing, digest: requirementDigest(billing) },
 				],
 				reservedPrefixes: ['/api'],
 				snapshot: `sha256:${'0'.repeat(64)}`,
@@ -814,6 +827,25 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		expect(seen[0]?.headers.get(ENDPOINT_HEADER)).toBe(formatEndpointHeader(health.id, requirementDigest(health)))
 		expect(seen[0]?.headers.get('Authorization')).toBeNull()
 		expect(seen[0]?.headers.get(DELEGATION_HEADER)).toBeNull()
+		expect(seen[0]?.headers.get('X-Fabrika-Token')).toBeNull()
+		expect(iam.mintFromKeyCalls).toBe(0)
+	})
+
+	test("a webhook that forwards reaches the app with the sender's own Authorization, which IAM never sees", async () => {
+		const seen: Request[] = []
+		const iam = new FakeIam()
+		const deliver = (authorization: string) =>
+			createCloudflareProxyHandler(contractEnvironment(iam, seen))(
+				new Request(`https://${HOST}/hooks/billing/b1`, {
+					method: 'POST',
+					body: '{}',
+					headers: { Authorization: authorization, 'Content-Type': 'application/json' },
+				}),
+			)
+		expect((await deliver('Bearer provider-token')).status).toBe(200)
+		expect((await deliver('Bearer px_key')).status).toBe(200)
+		expect(seen.map((request) => request.headers.get('Authorization'))).toEqual(['Bearer provider-token', null])
+		expect(seen[0]?.headers.get(FORWARD_AUTHORIZATION_HEADER)).toBeNull()
 		expect(seen[0]?.headers.get('X-Fabrika-Token')).toBeNull()
 		expect(iam.mintFromKeyCalls).toBe(0)
 	})

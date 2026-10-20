@@ -10,12 +10,14 @@ import {
 	formatEndpointHeader,
 	type MintTokenResult,
 	type PermissionEntry,
+	requirementDigest,
 	type TokenPrincipalType,
 } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { MemoryTokenCache } from '../cache'
-import { PROXY_TOKEN_HEADER } from '../constants'
+import { FORWARD_AUTHORIZATION_HEADER, PROXY_TOKEN_HEADER } from '../constants'
 import type { DelegationIssuer, DelegationRequest } from '../iam'
+import { proxyEndpointRowSchema } from '../manifest'
 import { createVerifyService, type VerifyService } from '../service'
 import {
 	anonymousRow,
@@ -457,6 +459,75 @@ describe('anonymous kinds', () => {
 		expectDenied(await verify(verifyRequest({ method: 'POST', path: '/contact', headers: { 'Content-Type': 'application/json' } })), 400)
 		const admitted = await verify(verifyRequest({ method: 'POST', path: '/contact', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }))
 		expect(admitted.status).toBe(204)
+	})
+})
+
+describe("a webhook's own Authorization", () => {
+	const WEBHOOK_JSON: BodyAdmission = { contentTypes: ['application/json'], maxBytes: 1_048_576 }
+	const BEARER_HOOK = anonymousRow({
+		id: 'mail',
+		kind: 'webhook',
+		method: 'POST',
+		path: '/hooks/mail/:bindingId',
+		admission: WEBHOOK_JSON,
+		authorization: 'forward',
+	})
+	const SIGNED_HOOK = anonymousRow({ id: 'github', kind: 'webhook', method: 'POST', path: '/hooks/github/:bindingId', admission: WEBHOOK_JSON })
+	const binding = '0190a0a0-0000-7000-8000-0000000000a1'
+	const deliver = (path: string, authorization?: string) =>
+		verifyRequest({
+			method: 'POST',
+			path,
+			headers: { 'Content-Type': 'application/json', ...(authorization === undefined ? {} : { Authorization: authorization }) },
+		})
+	const basic = (credentials: string) => `Basic ${btoa(credentials)}`
+
+	async function hooked(): Promise<{ iam: FakeIam; verify: VerifyService }> {
+		const iam = new FakeIam({ mintToken: await minted('user'), mintFromKey: await minted('service') })
+		return { iam, verify: createVerifyService({ manifest: { apps: [contractAppWith([BEARER_HOOK, SIGNED_HOOK, HEALTH])] }, iam, issuer: ISSUER }) }
+	}
+
+	test('is forwarded on the row that names it, read as no credential: no key lookup, no session, no token', async () => {
+		const { iam, verify } = await hooked()
+		for (const authorization of [`Bearer ${'a'.repeat(64)}`, basic(`provider:${'b'.repeat(64)}`)]) {
+			const response = await verify(deliver(`/hooks/mail/${binding}`, authorization))
+			expect(response.status).toBe(204)
+			expect(response.headers.get(FORWARD_AUTHORIZATION_HEADER)).toBe('1')
+			expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
+			expect(response.headers.get(ENDPOINT_HEADER)).toBe(formatEndpointHeader(BEARER_HOOK.id, BEARER_HOOK.digest))
+		}
+		expect(iam.mintTokenCalls + iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
+	})
+
+	test('is never forwarded when it carries a platform key, as a bearer or inside Basic credentials', async () => {
+		const { iam, verify } = await hooked()
+		for (const authorization of ['Bearer px_key', basic('provider:px_key'), basic('px_key:secret'), 'Token px_key']) {
+			const response = await verify(deliver(`/hooks/mail/${binding}`, authorization))
+			expect(response.status).toBe(204)
+			expect(response.headers.get(FORWARD_AUTHORIZATION_HEADER)).toBeNull()
+		}
+		expect(iam.mintTokenCalls + iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
+	})
+
+	test('is stripped on every other anonymous row, and nothing is marked without a header to pass on', async () => {
+		const { verify } = await hooked()
+		const signed = await verify(deliver(`/hooks/github/${binding}`, `Bearer ${'a'.repeat(64)}`))
+		expect(signed.status).toBe(204)
+		expect(signed.headers.get(FORWARD_AUTHORIZATION_HEADER)).toBeNull()
+		const health = await verify(verifyRequest({ path: '/healthz', bearer: 'a'.repeat(64) }))
+		expect(health.headers.get(FORWARD_AUTHORIZATION_HEADER)).toBeNull()
+		const bare = await verify(deliver(`/hooks/mail/${binding}`))
+		expect(bare.status).toBe(204)
+		expect(bare.headers.get(FORWARD_AUTHORIZATION_HEADER)).toBeNull()
+	})
+
+	test('a manifest refuses the field on any row but a webhook', () => {
+		const forged = { id: 'health', kind: 'health', method: 'GET', path: '/healthz', admission: null, callers: [], requirement: null } as const
+		const rules = { ...forged, authorization: 'forward', delegation: null } as const
+		expect(proxyEndpointRowSchema.safeParse({ ...rules, digest: requirementDigest(rules) }).success).toBe(false)
+		expect(proxyEndpointRowSchema.safeParse(BEARER_HOOK).success).toBe(true)
+		// The digest covers it: a row that drops it is another row.
+		expect(proxyEndpointRowSchema.safeParse({ ...BEARER_HOOK, authorization: undefined }).success).toBe(false)
 	})
 })
 

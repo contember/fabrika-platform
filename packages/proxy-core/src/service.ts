@@ -40,6 +40,7 @@ import {
 	APP_QUERY_PARAM,
 	DEFAULT_HEALTH_PATH,
 	DEFAULT_VERIFY_PATH,
+	FORWARD_AUTHORIZATION_HEADER,
 	FORWARDED_HOST_HEADER,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_PROTO_HEADER,
@@ -183,6 +184,9 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				}
 				if (decision.delegation !== null) {
 					headers.set(DELEGATION_HEADER, decision.delegation)
+				}
+				if (decision.forwardsAuthorization) {
+					headers.set(FORWARD_AUTHORIZATION_HEADER, '1')
 				}
 				// The composition writes it onto the application's answer, after the policy deleted the application's own.
 				if (decision.crossOrigin !== null) {

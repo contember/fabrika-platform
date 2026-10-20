@@ -7,6 +7,7 @@ import {
 	DEFAULT_VERIFY_PATH,
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
+	FORWARD_AUTHORIZATION_HEADER,
 	FORWARDED_HOST_HEADER,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_PROTO_HEADER,
@@ -183,8 +184,10 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 			const value = verification.headers.get(header)
 			if (value !== null && value !== '') upstreamHeaders.set(header, value)
 		}
-		// An anonymous endpoint mints no token, and the proxy forwards no key it read nothing from (ADR-0022 rule 3).
-		if (isApplicationEntry(app) && !upstreamHeaders.has(PROXY_TOKEN_HEADER)) upstreamHeaders.delete('Authorization')
+		// An anonymous endpoint mints no token, and the proxy forwards no key it read nothing from (ADR-0022 rule 3), except
+		// the credential of a webhook row the decision marked to pass on.
+		const forwards = verification.headers.get(FORWARD_AUTHORIZATION_HEADER) === '1'
+		if (isApplicationEntry(app) && !upstreamHeaders.has(PROXY_TOKEN_HEADER) && !forwards) upstreamHeaders.delete('Authorization')
 
 		let answer: Response
 		try {

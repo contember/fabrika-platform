@@ -14,6 +14,7 @@ import {
 	CLIENT_ADDRESS_HEADER,
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
+	FORWARD_AUTHORIZATION_HEADER,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
@@ -449,11 +450,18 @@ describe('a contract app — the endpoint table', () => {
 		}
 	})
 
-	test('an allow without a token — an anonymous endpoint — forwards no Authorization header', () => {
+	test('an allow without a token — an anonymous endpoint — forwards no Authorization header, unless the decision forwards it', () => {
 		expect(copies[1]).toEqual({
-			match: [{ vars: { [placeholder(PROXY_TOKEN_HEADER)]: [''] } }],
+			match: [{ vars: { [placeholder(PROXY_TOKEN_HEADER)]: [''] }, not: [{ vars: { [placeholder(FORWARD_AUTHORIZATION_HEADER)]: ['1'] } }] }],
 			handle: [{ handler: 'headers', request: { delete: ['Authorization'] } }],
 		})
+	})
+
+	test('the forwarding marker is not copied onto the request the application receives', () => {
+		const copied = copies.flatMap((route) => route.handle).flatMap((
+			handler,
+		) => (handler.handler === 'headers' ? Object.keys(handler.request?.set ?? {}) : []))
+		expect(copied).not.toContain(FORWARD_AUTHORIZATION_HEADER)
 	})
 
 	test('an installation entry keeps its Authorization header: IAM reads its own bearer', () => {

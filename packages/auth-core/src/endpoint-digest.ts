@@ -27,9 +27,12 @@ export type EndpointDelegation = 'members' | 'creates'
  * installation row adds its OAuth scopes; an application row has no `oauth` field.
  */
 export type EndpointRules =
-	| (Pick<EndpointRow, 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin' | 'response' | 'cache'> & {
-		readonly delegation: EndpointDelegation | null
-	})
+	| (
+		& Pick<EndpointRow, 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin' | 'response' | 'cache' | 'authorization'>
+		& {
+			readonly delegation: EndpointDelegation | null
+		}
+	)
 	| (Pick<InstallationEndpointRow, 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'oauth'> & {
 		readonly delegation: null
 	})
@@ -64,7 +67,8 @@ export function endpointDigest(artifact: Pick<ContractArtifact, 'dimensions'>, r
 
 /**
  * The digest of what the proxy applies to an endpoint: its kind, method, path, callers, requirement, admission and
- * delegation, an installation row's OAuth scopes, and an application row's cross-origin form, file-response profile and cache.
+ * delegation, an installation row's OAuth scopes, and an application row's cross-origin form, file-response profile, cache
+ * and `Authorization` forwarding.
  * Caller, content-type and scope order carry no meaning, so they do not change it; input and output schemas are not
  * part of it, because the proxy does not apply them.
  */
@@ -79,18 +83,20 @@ export function requirementDigest(rules: EndpointRules): string {
 		admission: rules.admission === null ? null : canonicalAdmission(rules.admission),
 		delegation: rules.delegation,
 	}
-	// Only a row that admits `oauth` or another origin, answers a file or caches adds the key, so every other row keeps
-	// its digest byte for byte.
+	// Only a row that admits `oauth` or another origin, answers a file, caches or forwards `Authorization` adds the key, so
+	// every other row keeps its digest byte for byte.
 	const oauth = 'oauth' in rules ? rules.oauth : null
 	const crossOrigin = 'crossOrigin' in rules ? rules.crossOrigin : undefined
 	const response = 'response' in rules ? rules.response : undefined
 	const cache = 'cache' in rules ? rules.cache : undefined
+	const authorization = 'authorization' in rules ? rules.authorization : undefined
 	return digestOf(canonicalJson({
 		...applied,
 		...(oauth === null ? {} : { oauth: { scopes: sortedCodeUnits(oauth.scopes) } }),
 		...(crossOrigin === undefined ? {} : { crossOrigin }),
 		...(response === undefined ? {} : { response }),
 		...(cache === undefined ? {} : { cache }),
+		...(authorization === undefined ? {} : { authorization }),
 	}))
 }
 

@@ -27,6 +27,13 @@ export const DEFAULT_VERIFY_PATH = '/verify'
  */
 export const PREFLIGHT_HEADER = 'X-Fabrika-Preflight'
 
+/**
+ * Set on the auth service's 2xx when the request's own `Authorization` goes on to the application: an anonymous webhook
+ * row that forwards it. Every composition deletes `Authorization` from an anonymous request without it, and passes the
+ * marker on to no one.
+ */
+export const FORWARD_AUTHORIZATION_HEADER = 'X-Fabrika-Forward-Authorization'
+
 /** Liveness endpoint on the auth service itself — never routed publicly. */
 export const DEFAULT_HEALTH_PATH = '/healthz'
 /**

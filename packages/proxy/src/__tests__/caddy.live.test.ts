@@ -4,6 +4,7 @@
 //   id=$(docker create caddy:2.10.2-alpine) && docker cp "$id":/usr/bin/caddy ./caddy && docker rm "$id"
 
 import { proxySecretVariable } from '@fabrika/auth-core'
+import { FORWARD_AUTHORIZATION_HEADER } from '@fabrika/proxy-core'
 import {
 	appFileTreatment,
 	appHeaderPolicy,
@@ -410,9 +411,14 @@ describe.skipIf(CADDY === '')('an installation entry beside an application in a 
 		port: 0,
 		fetch(request) {
 			const installation = request.headers.get('X-Forwarded-Host')?.startsWith('iam.') === true
+			const webhook = request.headers.get('X-Forwarded-Uri')?.startsWith('/webhooks/') === true
 			return new Response(null, {
 				status: 200,
-				headers: { 'X-Request-Id': 'proxy-request', 'X-Fabrika-Endpoint': installation ? PROTOCOL_ENDPOINT : ENDPOINT },
+				headers: {
+					'X-Request-Id': 'proxy-request',
+					'X-Fabrika-Endpoint': installation ? PROTOCOL_ENDPOINT : ENDPOINT,
+					...(webhook ? { [FORWARD_AUTHORIZATION_HEADER]: '1' } : {}),
+				},
 			})
 		},
 	})
@@ -491,6 +497,16 @@ describe.skipIf(CADDY === '')('an installation entry beside an application in a 
 		const answer = await rawRequest(port, { Connection: 'close' }, '/admin/apps', 'iam.example.com')
 		seenByApp.splice(0)
 		expect(answer.headers.get('Content-Security-Policy')).toBe(SERVICE_CSP)
+	})
+
+	test("a webhook the decision forwards keeps the request's own Authorization; the marker never reaches the app", async () => {
+		const answer = await rawRequest(port, { Connection: 'close', Authorization: 'Bearer provider-token' }, '/webhooks/billing', 'notes.example.com')
+		expect(answer.status).toBe(200)
+		const [seen] = seenByApp.splice(0)
+		expect(seen?.headers.get('Authorization')).toBe('Bearer provider-token')
+		expect(seen?.headers.get(FORWARD_AUTHORIZATION_HEADER)).toBeNull()
+		expect(seen?.headers.get('X-Fabrika-Token')).toBeNull()
+		expect(answer.headers.get(FORWARD_AUTHORIZATION_HEADER)).toBeNull()
 	})
 
 	test("an application's anonymous endpoint loses the Authorization the proxy did not read, and gets the secret", async () => {

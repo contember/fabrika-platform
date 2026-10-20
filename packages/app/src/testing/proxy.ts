@@ -7,6 +7,7 @@ import {
 	createVerifyService,
 	DEFAULT_VERIFY_PATH,
 	type DelegationIssuer,
+	FORWARD_AUTHORIZATION_HEADER,
 	FORWARDED_HOST_HEADER,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_PROTO_HEADER,
@@ -26,7 +27,10 @@ export type ProxyOutcome =
 		readonly outcome: 'forward'
 		/** Every header only the proxy may assert, with the value the decision gave it. */
 		readonly asserted: ReadonlyMap<string, string>
-		/** Whether the request's own `Authorization` reaches the application: not on an anonymous endpoint. */
+		/**
+		 * Whether the request's own `Authorization` reaches the application: not on an anonymous endpoint, except a webhook
+		 * row the decision marked to pass it on.
+		 */
 		readonly keepsAuthorization: boolean
 		/** What the application's answer is given for an admitted cross-origin request, over its own headers. */
 		readonly decorate: (headers: Headers) => void
@@ -104,7 +108,7 @@ export function endpointProxy(options: EndpointProxyOptions): TestProxy {
 		return {
 			outcome: 'forward',
 			asserted,
-			keepsAuthorization: asserted.has(PROXY_TOKEN_HEADER),
+			keepsAuthorization: asserted.has(PROXY_TOKEN_HEADER) || verification.headers.get(FORWARD_AUTHORIZATION_HEADER) === '1',
 			decorate: (answer) => {
 				if (allowOrigin !== null) applyCrossOriginHeaders(answer, crossOriginHeaders(allowOrigin))
 			},

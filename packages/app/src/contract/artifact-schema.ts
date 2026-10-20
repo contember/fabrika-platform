@@ -173,7 +173,8 @@ const endpointRow: z.ZodType<EndpointRow> = z.union([
 		callers: z.tuple([]),
 		requirement: z.null(),
 		crossOrigin: z.enum(['environment', 'any']).optional(),
-	}),
+		authorization: z.literal('forward').optional(),
+	}).refine((row) => row.authorization === undefined || row.kind === 'webhook', "only a webhook forwards the request's Authorization"),
 	// A public procedure is a mount's procedure anyone calls: it admits a body and answers its output.
 	z.strictObject({
 		...rowBase,

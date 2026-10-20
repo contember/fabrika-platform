@@ -31,6 +31,7 @@ import {
 	DEFAULT_VERIFY_PATH,
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
+	FORWARD_AUTHORIZATION_HEADER,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_URI_HEADER,
 	LOGIN_REDIRECT_PARAM,
@@ -629,12 +630,16 @@ const PROXY_ASSERTED_HEADERS = [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, ENDPOINT_
 
 /**
  * A contract app's anonymous endpoint mints no token, and the proxy forwards no `px_` key it read nothing from
- * (ADR-0022 rule 3). An allow without a token is exactly that case, so the key header goes; the session cookie
- * is stripped on every upstream hop anyway.
+ * (ADR-0022 rule 3). An allow without a token is exactly that case, so the key header goes, unless the decision marked
+ * it as a webhook's own credential to pass on; the session cookie is stripped on every upstream hop anyway. One `vars`
+ * matcher ORs its keys, so the marker is a separate `not` in the same set, which Caddy ANDs.
  */
 function withoutCredentialUnlessMinted(): CaddyRoute {
 	return {
-		match: [{ vars: { [`{http.reverse_proxy.header.${PROXY_TOKEN_HEADER}}`]: [''] } }],
+		match: [{
+			vars: { [`{http.reverse_proxy.header.${PROXY_TOKEN_HEADER}}`]: [''] },
+			not: [{ vars: { [`{http.reverse_proxy.header.${FORWARD_AUTHORIZATION_HEADER}}`]: ['1'] } }],
+		}],
 		handle: [{ handler: 'headers', request: { delete: ['Authorization'] } }],
 	}
 }
