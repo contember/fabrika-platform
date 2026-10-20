@@ -405,8 +405,12 @@ the SPA is added with it.
   `@fabrika/*` package: a linked package resolves its dependencies and peers from the checkout, so the application
   runs a second React (every hook fails), a second zod and a second kysely. Installed from `vendor/`, the packages
   resolve `react`, `zod` and `kysely` from the application's own `node_modules`. The pack's version names the
-  checkout's commit: after a change in the platform, commit it, pack again, and replace the block with the new
-  `install.json`.
+  checkout's commit: after a change in the platform, commit it, pack again, replace the tarballs in `vendor/`, and
+  replace the block with the new `install.json`. `bun.lock` still names the old tarballs, and `bun install` then fails
+  with `ENOENT extracting tarball`. Before it, delete each line of `bun.lock` that names `vendor/`
+  (`grep -v 'vendor/' bun.lock > bun.lock.next && mv bun.lock.next bun.lock`): each is one entry of a packed package,
+  and `bun install` writes them again from `package.json`. Deleting the whole `bun.lock` also works, but it resolves
+  every other package again.
 
 ```json tsconfig.json
 {
