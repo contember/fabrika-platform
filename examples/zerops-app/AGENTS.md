@@ -1,4 +1,4 @@
-<!-- Generated from skill/ of @fabrika/app 0.5.5. Change those files, not this one. -->
+<!-- Generated from skill/ of @fabrika/app 0.6.0. Change those files, not this one. -->
 
 # Fabrika application rules
 
@@ -340,20 +340,20 @@ the SPA is added with it.
 		"test": "bun test --isolate"
 	},
 	"dependencies": {
-		"@fabrika/app": "0.5.5",
-		"@fabrika/db": "0.5.5",
-		"@fabrika/provider-zerops": "0.5.5",
-		"@fabrika/proxy-core": "0.5.5",
-		"@fabrika/ui": "0.5.5",
+		"@fabrika/app": "0.6.0",
+		"@fabrika/db": "0.6.0",
+		"@fabrika/provider-zerops": "0.6.0",
+		"@fabrika/proxy-core": "0.6.0",
+		"@fabrika/ui": "0.6.0",
 		"kysely": "0.29.6",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
-		"@fabrika/check": "0.5.5",
-		"@fabrika/cli": "0.5.5",
-		"@fabrika/platform": "0.5.5",
+		"@fabrika/check": "0.6.0",
+		"@fabrika/cli": "0.6.0",
+		"@fabrika/platform": "0.6.0",
 		"@happy-dom/global-registrator": "^20.11.2",
 		"@types/bun": "latest",
 		"@types/react": "^19.0.0",

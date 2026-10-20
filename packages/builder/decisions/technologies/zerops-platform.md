@@ -7,7 +7,7 @@ provides: [platform, private-services, managed-deploy]
 requires: [bun, postgres]
 recommends: []
 conflicts: [cloudflare]
-npm: ["@fabrika/provider-zerops@0.5.5", "@fabrika/app@0.5.5", "@fabrika/cli@0.5.5"]
+npm: ["@fabrika/provider-zerops@0.6.0", "@fabrika/app@0.6.0", "@fabrika/cli@0.6.0"]
 status: wip
 sources:
   - where: "examples/zerops-app/fabrika.config.ts + zerops.yaml in fabrika-platform"
