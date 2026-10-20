@@ -11,16 +11,16 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@fabrika/app": "0.6.0",
-		"@fabrika/auth-core": "0.6.0",
-		"@fabrika/provider-cloudflare": "0.6.0",
-		"@fabrika/proxy-core": "0.6.0",
+		"@fabrika/app": "0.7.0",
+		"@fabrika/auth-core": "0.7.0",
+		"@fabrika/provider-cloudflare": "0.7.0",
+		"@fabrika/proxy-core": "0.7.0",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
-		"@fabrika/check": "0.6.0",
-		"@fabrika/cli": "0.6.0",
+		"@fabrika/check": "0.7.0",
+		"@fabrika/cli": "0.7.0",
 		"@types/bun": "latest",
 		"lopata": "^0.21.0",
 		"oblaka-iac": "latest",
