@@ -489,7 +489,9 @@ export const visitors = app.group({}, (r) => ({
   past either limit; `null` turns one off. A public query counts nothing unless it declares a bucket, since each
   bucket is a database write per call: a page of twenty images costs no write. All public procedures of an instance
   hold at most a quarter of its database connections together; past that the answer is 503, and staff keep the rest.
-  `limits: { maxBytes, timeoutMs }` bounds the body (64 KiB by default) and the handler (10 s).
+  `limits: { maxBytes, timeoutMs }` bounds the body (64 KiB by default, plus each file field's files) and the handler
+  (10 s). With file fields the JSON `input` part takes up to that limit, and the whole body, files included, stays
+  within it.
 - **The order of a public request**, each refusal with its answer: the origin rule (403), the in-flight share (503),
   every bucket (429), the bounded body and the strict input with its signed tokens (413, 400), the workload token (503
   while the platform's identity service is down), the challenge (400, 503 when the provider is unreachable), the staged file parts, then the handler, the
@@ -517,8 +519,9 @@ export const visitors = app.group({}, (r) => ({
   file no column references any more (a known address, a registration an operator deleted) is deleted by the
   framework's sweep. A file the kind refuses (a type it does not admit, bytes that are not that type, too large) is
   415 or 413 after the challenge was spent, so the page checks the type and the size before it submits, and solves
-  the challenge again after a refusal. The files of the procedure write at most `bytesPerHour` in all (512 MiB here),
-  each file reserving its kind's `maxBytes` first, so with a 15 MiB photo about 34 maximal photos fit in an hour;
+  the challenge again after a refusal. The procedure's bodies take at most `bytesPerHour` in all (512 MiB here).
+  Each request is charged its declared `Content-Length` before its body is read, which a browser sends for a form,
+  or the whole body limit when it declares none, so with a 15 MiB photo about 34 maximal requests fit in an hour;
   past it the procedure answers 429 until the hour ends. Size the budget for the expected peak: a flood that spends
   it costs that hour's photos, not the storage.
 - **The kick.** `kicks: ['intake']` and `ctx.kick('intake')` start a run of the job within seconds, once the row

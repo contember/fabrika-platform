@@ -144,7 +144,9 @@ export const attachments = app.group({ callers: ['human'] }, (r) => ({
 - An input field `file('<kind>')` of a mutation makes the body multipart; the file is bounded by the kind's `types`
   (sniffed, not trusted) and `maxBytes`. `z.optional(file(k))` is an optional file, `z.array(file(k)).max(n)` up to
   `n` files, each a top-level field; one request carries at most 20 files. The body limit grows by each file at its kind's `maxBytes`, up to 48
-  MiB (`limits.maxBytes`, `references/endpoint.md`). The handler writes the reference into the column, in its
+  MiB (`limits.maxBytes`, `references/endpoint.md`). The JSON `input` part takes up to that whole limit, and the
+  input part and the files together never exceed it: a large input beside its files declares a `limits.maxBytes` that
+  covers both. The handler writes the reference into the column, in its
   transaction; a rolled-back request keeps no file.
 - A row read through the data layer carries a file reference in each file column, with `id`, `name`, `type`, `size`
   and `status`, so a list shows them without a call per file.

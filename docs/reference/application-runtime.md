@@ -596,7 +596,10 @@ deal_attachments: {
   file name and holds the other fields as JSON; each further part is named after its file field, with a file name and a
   `Content-Type` the kind admits. While every file field is optional, the row also admits JSON. A request carries at most
   20 files. The body limit defaults to 64 KiB plus each field's files at its kind's `maxBytes`, at most 48 MiB, and
-  must arrive within `max(30 s, maxBytes at 16 KiB/s)`. A broken body is 400 `multipart`, a connection closed before
+  must arrive within `max(30 s, maxBytes at 16 KiB/s)`. The `input` part takes up to the whole body limit; it is read,
+  parsed and checked (strict input, honeypot, challenge) before any file byte. The whole body, each part's headers and
+  delimiter included, holds at most the body limit plus 8 KiB and 128 bytes per part: a declared `Content-Length` past
+  that is refused unread, and a body streamed without one is cut off once it passes it (413 `too_large` either way). A broken body is 400 `multipart`, a connection closed before
   its end 400 `aborted` (the sender's, never a reported failure), a body not complete in time 408. In the handler a
   file field is a file reference; on the typed client it is a `Blob`.
 - **Staging.** An incoming file and `ctx.files.put('<kind>', bytes, { type, name })` are staged the same way. A
@@ -946,7 +949,10 @@ artifact records each procedure's effective rules (`procedures[<id>]`), and the 
   /64, and a request without the address header shares one `unknown` client; on Zerops that is every request until
   backlog 05, so there `perClient` counts one client and the approval says so.
 - **`bytesPerHour`** is charged the body's declared `Content-Length`, at most the body limit, or the body limit without
-  one, before the body is read (`fabrika_form_bytes`, 429 once it no longer fits).
+  one, before the body is read (`fabrika_form_bytes`, 429 once it no longer fits). A browser declares the length of a
+  string, a form or a `Blob` body, so an honest request is charged what it sends; a body streamed without a length
+  (chunked) is charged the whole limit. The test kit's `fetch` declares the length of such a body too, and leaves a
+  `ReadableStream` body without one.
 - **The challenge**: `challenge: { provider: 'turnstile', secret: '<VARIABLE>', siteKey?: '<VARIABLE>' }`, on a public
   procedure only. The input carries the widget's token as the string field `challengeToken`. Turnstile's siteverify
   checks it (5 s, a 16 KiB answer, the request's host, the endpoint id with `_` for `.` as `action`, a token at most
