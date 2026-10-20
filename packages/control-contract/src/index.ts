@@ -6,6 +6,7 @@ export * from './access.js'
 export * from './builder-bootstrap.js'
 export * from './builder-connections.js'
 export * from './builder-pairing.js'
+export * from './mail.js'
 
 export type { JsonValue }
 

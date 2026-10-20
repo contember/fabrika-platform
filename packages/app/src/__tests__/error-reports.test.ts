@@ -65,6 +65,17 @@ describe('the scrubber', () => {
 		expect(secretValues(environment({ FABRIKA_SERVICE_KEY: 'short', API_TOKEN: 'tiny' }))).toEqual([])
 	})
 
+	test("the platform transport's provider and URL stay, and its key is removed", () => {
+		const platform = environmentScrubber(environment({
+			FABRIKA_EMAIL_PROVIDER: 'platform',
+			FABRIKA_PLATFORM_MAIL_URL: 'http://control:3000',
+			FABRIKA_PLATFORM_MAIL_KEY: 'px_platform-mail-key-0123456789',
+		}))
+		expect(platform.scrub('platform mail at http://control:3000 refused px_platform-mail-key-0123456789')).toBe(
+			`platform mail at http://control:3000 refused ${REDACTED}`,
+		)
+	})
+
 	test('a JWT, an authorization scheme and a credential header are removed', () => {
 		const jwt = 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.c2lnbmF0dXJl'
 		expect(noSecrets.scrub(`token ${jwt} expired`)).toBe(`token ${REDACTED} expired`)

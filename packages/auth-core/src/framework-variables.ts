@@ -53,11 +53,19 @@ export type FrameworkVariableName = (typeof FRAMEWORK_VARIABLE_NAMES)[number]
 
 /**
  * The name families only the platform writes: one variable per job, webhook or public procedure, named after it
- * (`workloadKeyVariable`), a connector import's address, key and Worker binding (`connectVariables`), and the
- * installation's mail transport (`isEmailTransportVariable`). Every name under one is framework-only. A public
- * procedure's family is `FABRIKA_PROCEDURE_`, because `FABRIKA_PUBLIC_*` names an application's public build values.
+ * (`workloadKeyVariable`), a connector import's address, key and Worker binding (`connectVariables`), the
+ * installation's mail transport (`isEmailTransportVariable`), and a platform receiver's address and key
+ * (`platformTransportVariables`). Every name under one is framework-only. A public procedure's family is
+ * `FABRIKA_PROCEDURE_`, because `FABRIKA_PUBLIC_*` names an application's public build values.
  */
-export const FRAMEWORK_VARIABLE_PREFIXES = ['FABRIKA_JOB_', 'FABRIKA_WEBHOOK_', 'FABRIKA_PROCEDURE_', 'FABRIKA_CONNECT_', 'FABRIKA_EMAIL_'] as const
+export const FRAMEWORK_VARIABLE_PREFIXES = [
+	'FABRIKA_JOB_',
+	'FABRIKA_WEBHOOK_',
+	'FABRIKA_PROCEDURE_',
+	'FABRIKA_CONNECT_',
+	'FABRIKA_EMAIL_',
+	'FABRIKA_PLATFORM_',
+] as const
 
 const FRAMEWORK_VARIABLES: ReadonlySet<string> = new Set(FRAMEWORK_VARIABLE_NAMES)
 
@@ -149,4 +157,30 @@ export function frameworkVariableReference(text: string): string | null {
 		}
 	}
 	return null
+}
+
+/** The platform's receivers an application reaches over the platform transport. */
+export const PLATFORM_RECEIVERS = ['mail'] as const
+
+export type PlatformReceiver = (typeof PLATFORM_RECEIVERS)[number]
+
+/** The variables that carry one platform receiver: its base URL, which is public, and the application's key, which is secret. */
+export interface PlatformTransportVariables {
+	readonly url: string
+	readonly key: string
+}
+
+/** `mail` → `FABRIKA_PLATFORM_MAIL_URL` and `FABRIKA_PLATFORM_MAIL_KEY`. */
+export function platformTransportVariables(receiver: PlatformReceiver): PlatformTransportVariables {
+	const prefix = `FABRIKA_PLATFORM_${variableSegment(receiver)}`
+	return { url: `${prefix}_URL`, key: `${prefix}_KEY` }
+}
+
+const PLATFORM_TRANSPORT_VARIABLES: ReadonlySet<string> = new Set(
+	PLATFORM_RECEIVERS.flatMap((receiver) => Object.values(platformTransportVariables(receiver))),
+)
+
+/** Whether `name` carries a platform receiver's URL or key, as `platformTransportVariables` names them. */
+export function isPlatformTransportVariable(name: string): boolean {
+	return PLATFORM_TRANSPORT_VARIABLES.has(name)
 }

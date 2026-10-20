@@ -45,6 +45,11 @@
 			"types": "./src/providers.ts",
 			"default": "./src/providers.ts"
 		},
+		"./platform": {
+			"bun": "./src/platform.ts",
+			"types": "./src/platform.ts",
+			"default": "./src/platform.ts"
+		},
 		"./conformance": {
 			"bun": "./src/conformance.ts",
 			"types": "./src/conformance.ts",

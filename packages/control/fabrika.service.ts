@@ -43,6 +43,7 @@ export function controlServiceContract(options: ControlServiceOptions) {
 			'builder-discovery': s.protocol('*', '/.well-known/fabrika-builder'),
 			'builder-connect': s.protocol('*', '/builder/connect'),
 			'github-webhook': s.protocol('POST', '/webhooks/github/:connectionId'),
+			'mail-relay': s.protocol('POST', '/platform/mail/*'),
 			'webhooks-root': s.service('*', '/webhooks', { callers: ['human'] }),
 			'github-manifest': s.service('GET', '/api/source/github/manifest/:connectionId', { callers: ['human'] }),
 			'github-callback': s.service('GET', '/api/source/github/callback', { callers: ['human'] }),

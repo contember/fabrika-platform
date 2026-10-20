@@ -13,6 +13,7 @@ import { handleWebhook } from './github/triggers/webhook'
 import { error } from './http'
 import { controlAuthenticator } from './iam'
 import { forwardIamAdmin } from './iam-admin'
+import { handleMailRelay } from './mail-relay/handler'
 import { forwardOperationsApi } from './operations-gateway'
 import { connectionWebhookVerifier, repositories } from './services'
 
@@ -57,6 +58,7 @@ export function createControlApp(mcp: McpRoute | null): FetchService<ControlAppE
 		'builder-discovery': builder,
 		'builder-connect': builder,
 		'github-webhook': serve((ctx, params) => webhook(ctx, params['connectionId'] ?? '')),
+		'mail-relay': serve(handleMailRelay),
 		'webhooks-root': notFound,
 		'github-manifest': authenticated((ctx, params) => sourceConnectionBrowserCall(ctx, (deps) => manifestHandoff(deps, params['connectionId'] ?? ''))),
 		'github-callback': authenticated((ctx) => sourceConnectionBrowserCall(ctx, manifestCallback)),

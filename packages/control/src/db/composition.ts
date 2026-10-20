@@ -1,9 +1,12 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { GitHubConnectionStore } from '../github/connections/store'
 import { BuilderConnectionRepository } from './builder-connections'
+import { MailMessageRepository } from './mail-messages'
+import { MailRuleRepository } from './mail-rules'
 import { MembershipKeyRepository } from './membership-keys'
 import { OperationsCatalogRepository } from './operations-catalog'
 import { OperationsReleaseRepository } from './operations-releases'
+import { PlatformTransportKeyRepository } from './platform-transport-keys'
 import { RepoPollingRepository } from './polling'
 import { ControlRegistryRepository } from './registry'
 import { RunRepository } from './runs'
@@ -24,6 +27,9 @@ export interface ControlRepositories {
 	workloadCredentials: WorkloadCredentialRepository
 	membershipKeys: MembershipKeyRepository
 	tokenKeys: TokenKeyRepository
+	platformTransportKeys: PlatformTransportKeyRepository
+	mailMessages: MailMessageRepository
+	mailRules: MailRuleRepository
 }
 
 /** The portable repository bundle. */
@@ -41,5 +47,8 @@ export function createControlRepositories(db: SqlDatabase, options: { now?: () =
 		workloadCredentials: new WorkloadCredentialRepository(db),
 		membershipKeys: new MembershipKeyRepository(db),
 		tokenKeys: new TokenKeyRepository(db),
+		platformTransportKeys: new PlatformTransportKeyRepository(db),
+		mailMessages: new MailMessageRepository(db),
+		mailRules: new MailRuleRepository(db),
 	}
 }

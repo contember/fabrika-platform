@@ -9,7 +9,10 @@ import {
 	isConnectUrlVariable,
 	isEmailTransportVariable,
 	isFrameworkVariableName,
+	isPlatformTransportVariable,
 	isWorkloadKeyVariable,
+	PLATFORM_RECEIVERS,
+	platformTransportVariables,
 	workloadKeyVariable,
 } from '../framework-variables'
 
@@ -96,6 +99,24 @@ describe('framework-only variable names', () => {
 		for (const name of ['FABRIKA_EMAIL_', 'FABRIKA_EMAIL_from', 'FABRIKA_EMAILS', 'FABRIKA_JOB_NIGHTLY_KEY']) {
 			expect(isEmailTransportVariable(name)).toBe(false)
 		}
+	})
+
+	test("name a platform receiver's address and key, and reserve the whole family", () => {
+		expect(PLATFORM_RECEIVERS).toEqual(['mail'])
+		expect(platformTransportVariables('mail')).toEqual({ url: 'FABRIKA_PLATFORM_MAIL_URL', key: 'FABRIKA_PLATFORM_MAIL_KEY' })
+		for (const name of Object.values(platformTransportVariables('mail'))) {
+			expect(isPlatformTransportVariable(name)).toBe(true)
+			expect(isFrameworkVariableName(name)).toBe(true)
+			expect(isWorkloadKeyVariable(name)).toBe(false)
+			expect(isEmailTransportVariable(name)).toBe(false)
+			expect(frameworkVariableReference(`\${RUNTIME_${name}}`)).not.toBeNull()
+		}
+		expect(isFrameworkVariableName('FABRIKA_PLATFORM_ANYTHING')).toBe(true)
+		for (const name of ['FABRIKA_PLATFORM_', 'FABRIKA_PLATFORM_MAIL', 'FABRIKA_PLATFORM_AUDIT_KEY', 'FABRIKA_EMAIL_PROVIDER']) {
+			expect(isPlatformTransportVariable(name)).toBe(false)
+		}
+		expect(isFrameworkVariableName('FABRIKA_PLATFORM_')).toBe(false)
+		expect(isFrameworkVariableName('FABRIKA_PLATFORMS')).toBe(false)
 	})
 
 	test('list each name once', () => {

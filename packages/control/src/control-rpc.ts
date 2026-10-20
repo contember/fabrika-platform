@@ -201,6 +201,15 @@ const startSourceConnectionInput = z.object({
 	repositories: z.array(z.object({ owner: githubOwner, name: githubRepositoryName }).strict()).max(100),
 }).strict()
 
+const mailMessageState = z.enum(['held', 'queued', 'sent', 'failed', 'unknown', 'dropped'])
+const mailMessageListInput = z.object({ state: mailMessageState.optional(), scope: nonEmpty.optional(), cursor: nonEmpty.optional() }).strict()
+const mailId = z.object({ id: nonEmpty }).strict()
+const setMailRuleInput = z.object({ scope: nonEmpty, domain: nonEmpty, action: z.enum(['pass', 'hold', 'drop']) }).strict()
+
+function mailNotImplemented(): never {
+	throw new HttpError(501, 'not_implemented', 'not implemented (WU-4)')
+}
+
 export const controlRpcRouter = createControlRpcRouter(buildControlRpcDeps)
 
 export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): RpcRouterFor<ControlRpcContext, ControlRpcContract> {
@@ -359,6 +368,20 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 					return description ?? fail(404, `${input.app}@${input.env} has approved no export ${input.export}@${input.version} for ${input.consumer}`)
 				})
 			),
+		}),
+		// Placeholders until the console's mail procedures land (WU-4): every call answers 501.
+		mail: rpc.router({
+			messages: rpc.router({
+				list: rpc.procedure.input(mailMessageListInput).query(mailNotImplemented),
+				get: rpc.procedure.input(mailId).query(mailNotImplemented),
+				release: rpc.procedure.input(mailId).mutation(mailNotImplemented),
+				drop: rpc.procedure.input(mailId).mutation(mailNotImplemented),
+			}),
+			rules: rpc.router({
+				list: rpc.procedure.query(mailNotImplemented),
+				set: rpc.procedure.input(setMailRuleInput).mutation(mailNotImplemented),
+				remove: rpc.procedure.input(mailId).mutation(mailNotImplemented),
+			}),
 		}),
 	})
 

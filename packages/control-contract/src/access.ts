@@ -36,6 +36,15 @@ export const CONTROL_ACTIONS = Object.freeze({
 	 * the operator role does not hold it; only a human user principal in the console may use it. Scoped by app/environment.
 	 */
 	ACCESS_APPROVE: 'access.approve',
+	/**
+	 * List relayed mail and read its metadata. Scoped by app/environment for an application's messages; an installation
+	 * sender's messages need a global grant.
+	 */
+	MAIL_READ: 'mail.read',
+	/** Read a relayed message's recipient, subject and bodies. Global. */
+	MAIL_CONTENT_READ: 'mail.content.read',
+	/** Release or drop a held message and change the gate's rules. Global. */
+	MAIL_MANAGE: 'mail.manage',
 })
 
 /**

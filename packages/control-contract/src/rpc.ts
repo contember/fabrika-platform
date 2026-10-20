@@ -47,6 +47,15 @@ import type {
 	UpdateAppRequest,
 	UpdateDeploymentNamespaceRequest,
 } from './index.js'
+import type {
+	MailMessageDetailDto,
+	MailMessageDto,
+	MailMessageIdInput,
+	MailMessageListInput,
+	MailRuleDto,
+	MailRuleIdInput,
+	SetMailRuleInput,
+} from './mail.js'
 
 type RpcProcedure<TInput, TOutput> = RpcProcedureContract<TInput, TOutput>
 
@@ -220,6 +229,23 @@ export interface ControlRpcContract {
 	/** What a consumer vendors (`fabrika connect add`): the export its owner's environment approved for it. */
 	connectors: {
 		describe: RpcProcedure<DescribeConnectorRequest, ExportDescription>
+	}
+	/** The mail relay: `mail.read`, `mail.content.read` and `mail.manage`. */
+	mail: {
+		messages: {
+			list: RpcProcedure<MailMessageListInput, CursorList<MailMessageDto>>
+			/** The content only with `mail.content.read`. */
+			get: RpcProcedure<MailMessageIdInput, MailMessageDetailDto>
+			/** A held message only. */
+			release: RpcProcedure<MailMessageIdInput, MailMessageDto>
+			/** A held message only. */
+			drop: RpcProcedure<MailMessageIdInput, MailMessageDto>
+		}
+		rules: {
+			list: RpcProcedure<void, ListResponse<MailRuleDto>>
+			set: RpcProcedure<SetMailRuleInput, MailRuleDto>
+			remove: RpcProcedure<MailRuleIdInput, OkResponse>
+		}
 	}
 }
 
