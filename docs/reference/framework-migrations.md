@@ -149,6 +149,11 @@ Steps:
    | `then: '<job>'`                | `kicks: ['<job>']` and `ctx.kick('<job>')`                                   |
    | the constant answer            | the output schema; keep the answer the clients read (step 6)                 |
 
+   - **The honeypot comes after the challenge.** A form checked its honeypot before the challenge: a filled one got the
+     200 and its token was not verified. A public procedure verifies the challenge before the handler runs, so a bot
+     that fills the honeypot and fails the challenge now gets 400 `challenge_failed`. A filled honeypot with a valid
+     token still gets the 200 and writes nothing.
+
 5. Check the bounds. A public mutation counts 10 calls per client and 100 for the endpoint per minute unless it
    declares its own buckets; `null` turns one off. A form with files counted 20 per minute by default: declare
    `perEndpoint: 20` to keep that bound. `bytesPerHour` now charges the body's declared length before the body is read,
@@ -160,12 +165,14 @@ Steps:
      `maxBytes` was 64 KiB or less: the default already adds the files to 64 KiB. Otherwise declare the form's
      `maxBytes` plus each file field's files at its kind's `maxBytes`. The JSON input part may take the whole limit,
      and the input with the files together never pass it.
-6. Move the pages. The path moves under the RPC prefix: `POST /register` becomes `POST /api/visitors.register`. Call
-   it through the typed client (`api.visitors.register(input)`), which sends a JSON body, or a multipart body when the
-   input holds a `Blob`: the JSON input in the first part, named `input`, then each file in a part named after its
-   field. The challenge token stays the input field `challengeToken`. The widget's `action` is now the endpoint id
-   with `_` for `.` (`api_visitors_register`), not the form's name; the provider admits at most 32 characters. A
-   failed or replayed token stays a 400 `challenge_failed`, as the form answered.
+6. Move the pages. Without `http.path`, the path moves under the RPC prefix: `POST /register` becomes
+   `POST /api/visitors.register`. Without `challenge.action`, the widget's `action` is the endpoint id with `_` for `.`
+   (`api_visitors_register`), not the form's name; the provider admits at most 32 characters. A client that you cannot
+   change keeps both: declare them as "Clients on another origin" shows. Call the procedure through the typed client
+   (`api.visitors.register(input)`), which sends a JSON body, or a multipart body when the input holds a `Blob`: the
+   JSON input in the first part, named `input`, then each file in a part named after its field. The challenge token
+   stays the input field `challengeToken`. A failed or replayed token stays a 400 `challenge_failed`, as the form
+   answered.
    - **The answer.** The answer is the RPC envelope of the output. A 0.6 form answered `{ result: { received: true } }`;
      the example keeps it with `output: z.strictObject({ received: z.literal(true) })`. Keep the answer that your
      clients read. An output of `{}` answers `{ result: {} }`, and a client that reads `received` breaks.
@@ -203,7 +210,13 @@ form directly, and so does a caller of a URL published elsewhere. Keep what it s
   `api.visitors.register`, and the typed client calls `/register`. `challenge.action` takes at most 32 letters,
   digits, `_` and `-`, and no two procedures share one.
 - **The statuses.** A failed challenge answers 400 `challenge_failed`, a body past the limit 413 and a full bucket 429,
-  as before.
+  as before. Two answers change:
+  - **An input past the form's `maxBytes`.** The form answered 413. A public procedure reads an input up to its whole
+    `limits.maxBytes`, and the input schema decides: a field past its `.max()` answers 400 `validation`, and an input
+    that the schema admits is accepted. To keep the bound, give each field of the schema a `.max()`, as the example
+    does. Without files, a `limits.maxBytes` of the form's `maxBytes` also keeps the 413 (step 5). With files, that
+    limit bounds the input and the files together, so only the schema bounds the input alone.
+  - **A filled honeypot with a failed challenge.** The form answered 200, and the procedure answers 400 (step 4).
 - **The answer.** Keep the one it reads (step 6 above).
 
 Such a page also needs `admission.origins` (`'listed'` or `'any'`, see "Cross-origin procedures").
@@ -377,12 +390,31 @@ Steps:
    SELECT fabrika_files_release('attachments');
    ```
 
-   It copies what an older instance wrote since, refuses while a copied file is referenced by no file column, clears
-   the legacy marker of the rest, records for deletion the objects only the old table knew (a file whose owner was
-   deleted), and drops `fabrika_files_<collection>`. Until the release, the sweep never deletes a copied file. When it
-   refuses, add one more adoption migration before it, which inserts the rows not adopted yet
-   (`WHERE NOT EXISTS (SELECT 1 FROM deal_attachments a WHERE a.id = s.id)`). The release may ship in the same
-   release as the adoption or in a later one. On a fresh install both migrations do nothing.
+   It copies what an older instance wrote since the adoption, refuses while a copied file is referenced by no file
+   column, clears the legacy marker of the rest, records for deletion the objects only the old table knew (a file whose
+   owner was deleted), and drops `fabrika_files_<collection>`. Until the release, the sweep never deletes a copied
+   file. On a fresh install both migrations do nothing.
+   - **Adopt again right before the release.** A file that an older instance attached after the adoption ran is in the
+     collection's table only. The release copies it, no file column references it, and the release refuses. So when
+     an older instance can attach files during the rollout window, the release's migration always repeats the
+     adoption first, for the rows not adopted yet:
+
+     ```sql
+     SELECT fabrika_files_copy_legacy('attachments');
+     INSERT INTO deal_attachments (id, deal_id, company_id, org_id, file, name, created_by, created_at)
+     SELECT s.id, s.owner_id, s.company_id, s.org_id, s.id, COALESCE(s.original_name, 'attachment'), s.created_by, s.created_at
+     FROM fabrika_files_attachments s
+     WHERE s.owner_id IS NOT NULL AND s.deleted_at IS NULL AND s.status <> 'pending'
+     	AND NOT EXISTS (SELECT 1 FROM deal_attachments a WHERE a.id = s.id);
+     SELECT fabrika_files_release('attachments');
+     ```
+
+     The copy comes first again: without it, the insert names a file that `fabrika_files` does not hold, and the
+     foreign key refuses it.
+   - **Ship the release once no older instance runs** ("The rollout window"). The catch-up then adopts every file the
+     window wrote. In the same release as the adoption, an older instance can still attach a file between the catch-up
+     and the release: the release refuses, the migration's transaction rolls back, and the deploy fails until a later
+     deploy runs it again.
 5. **Replace the generated endpoints with procedures.** Each operation is a procedure of a few lines:
 
    ```ts
@@ -621,15 +653,18 @@ Keep the window short, or keep the release out of it:
 1. Migrate and deploy in one step: the deploy that runs the migrations is the one that starts 0.7. Never run the 0.7
    migrations against a database that a 0.6 instance keeps serving for longer.
 2. Ship `fabrika_files_release(…)` in the next deploy, once no 0.6 instance runs. Until the release the collection's
-   table stays, and the release copies what the old instance wrote since the adoption.
+   table stays. The release copies what the old instance wrote since the adoption and refuses it until a file column
+   references it, so its migration adopts those rows first (step 4 of "File collections become file kinds and file
+   columns").
 
 ### An application that used forms as event logs
 
 An application that took anonymous submissions through forms, drained them with a job and kept files in collections
 moves in one release:
 
-1. Each form becomes a public procedure with one action that no role holds. Its path moves under the RPC prefix, its
-   pages switch to the typed client in the same release, and the challenge's widget `action` follows the endpoint id.
+1. Each form becomes a public procedure with one action that no role holds. It keeps the form's path and the
+   challenge's widget `action` with `http.path` and `challenge.action` (see "Clients on another origin"), so a page
+   that posts to it needs no change. Its own pages may switch to the typed client in the same release.
 2. One migration turns each inbox table into an application table (a primary key `id`, `version`, and the queue's
    columns) and keeps its rows. Recording `ctx.client.ip` and `ctx.client.userAgent` as consent evidence is an
    addition of that application, not an upgrade step.

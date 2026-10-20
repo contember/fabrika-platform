@@ -158,8 +158,9 @@ Nothing the framework stored is dropped by a framework release:
    copies what an older instance wrote after `0008` (an older version keeps serving during a rollout), then fills its
    new table from the old one by id.
 4. Its last adoption migration calls `select fabrika_files_release('<collection>')`. The function copies again, refuses
-   while a copied file is referenced by no file column (the application then adds one more adoption migration), clears
-   the marker of the rest, records for deletion the objects only the old table knew, and drops the old table.
+   while a copied file is referenced by no file column, clears the marker of the rest, records for deletion the objects
+   only the old table knew, and drops the old table. An older instance can attach a file after the adoption, so the
+   release's migration repeats the adoption first for the rows not adopted yet.
 
 The migration classifier admits the two calls, the file column's foreign key, and an adoption `INSERT` that reads a
 collection's table ([ADR-0017](0017-service-owned-postgres-migrations.md)). The steps for an author are in
