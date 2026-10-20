@@ -477,7 +477,7 @@ class ArtifactBuilder {
 						this.#row({ id, source, kind: 'spa', method: 'GET', path, callers: ['human'], requirement, admission: null, input: null, output: null })
 					}
 				}
-				const publicVariables = this.#spaPublic(where, mount.public)
+				const publicVariables = this.#browserConfig(where, mount.browserConfig)
 				return { kind: 'spa', prefix: mount.prefix, dir: mount.dir, ...(publicVariables.length === 0 ? {} : { public: publicVariables }) }
 			}
 			case 'health':
@@ -558,17 +558,17 @@ class ArtifactBuilder {
 	}
 
 	/** The variables an SPA mount serves its pages; `[]` when it declares none. */
-	#spaPublic(where: string, declared: readonly string[] | undefined): readonly string[] {
+	#browserConfig(where: string, declared: readonly string[] | undefined): readonly string[] {
 		if (declared === undefined) {
 			return []
 		}
 		if (declared.length === 0) {
-			this.#problem(where, "public names no variable (allowed: public: ['SIGNUP_URL'], or no public)")
+			this.#problem(where, "browserConfig names no variable (allowed: browserConfig: ['SIGNUP_URL'], or no browserConfig)")
 		}
-		this.#unique(where, 'public', declared)
-		const names = declared.filter((name) => this.#applicationVariable(where, 'public', name, 'SIGNUP_URL'))
+		this.#unique(where, 'browserConfig', declared)
+		const names = declared.filter((name) => this.#applicationVariable(where, 'browserConfig', name, 'SIGNUP_URL'))
 		for (const name of names) {
-			this.#publicVariables.push({ where, field: 'public', name })
+			this.#publicVariables.push({ where, field: 'browserConfig', name })
 		}
 		return names
 	}

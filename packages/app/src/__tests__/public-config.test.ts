@@ -32,7 +32,7 @@ const Empty = z.strictObject({})
 
 /** A public site that lists one public variable, and a member SPA beside it that lists none: no tables, no database. */
 const sites = defineApp(vocabulary).contract((c) => ({
-	site: c.spa('/', { dir: 'dist/site', access: { public: true }, public: ['SIGNUP_URL', 'GREETING_PREFIX'] }),
+	site: c.spa('/', { dir: 'dist/site', access: { public: true }, browserConfig: ['SIGNUP_URL', 'GREETING_PREFIX'] }),
 	hr: c.spa('/hr', { dir: 'dist/hr', access: { member: true } }),
 }))
 
@@ -53,7 +53,7 @@ const applying = (siteKey: string) =>
 /** The same sites, beside the public procedure. */
 const intake = app.contract((c) => ({
 	api: c.rpc('/api', { join: applying('TURNSTILE_SITE_KEY') }),
-	site: c.spa('/', { dir: 'dist/site', access: { public: true }, public: ['SIGNUP_URL'] }),
+	site: c.spa('/', { dir: 'dist/site', access: { public: true }, browserConfig: ['SIGNUP_URL'] }),
 	hr: c.spa('/hr', { dir: 'dist/hr', access: { member: true } }),
 }))
 
@@ -82,13 +82,13 @@ describe('public variables in the artifact', () => {
 	test('a variable named both as a secret and as public is refused, and so is a name that is no application variable', () => {
 		const leaking = app.contract((c) => ({
 			api: c.rpc('/api', { join: applying('TURNSTILE_SECRET') }),
-			site: c.spa('/', { dir: 'dist/site', access: { public: true }, public: ['TURNSTILE_SECRET', 'FABRIKA_PROXY_SECRET', 'signup url'] }),
+			site: c.spa('/', { dir: 'dist/site', access: { public: true }, browserConfig: ['TURNSTILE_SECRET', 'FABRIKA_PROXY_SECRET', 'signup url'] }),
 		}))
 		expect(problemsOf(() => compileContract(leaking, tables))).toEqual([
-			"mount 'site': public \"FABRIKA_PROXY_SECRET\" is not the name of an application variable (allowed: 'SIGNUP_URL'; never a value, never FABRIKA_*)",
-			"mount 'site': public \"signup url\" is not the name of an application variable (allowed: 'SIGNUP_URL'; never a value, never FABRIKA_*)",
+			"mount 'site': browserConfig \"FABRIKA_PROXY_SECRET\" is not the name of an application variable (allowed: 'SIGNUP_URL'; never a value, never FABRIKA_*)",
+			"mount 'site': browserConfig \"signup url\" is not the name of an application variable (allowed: 'SIGNUP_URL'; never a value, never FABRIKA_*)",
 			"procedure 'api.join.apply': challenge siteKey 'TURNSTILE_SECRET' is the secret of the challenge of 'api.join.apply'; a secret is never public",
-			"mount 'site': public 'TURNSTILE_SECRET' is the secret of the challenge of 'api.join.apply'; a secret is never public",
+			"mount 'site': browserConfig 'TURNSTILE_SECRET' is the secret of the challenge of 'api.join.apply'; a secret is never public",
 		])
 	})
 })

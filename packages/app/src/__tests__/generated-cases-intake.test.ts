@@ -62,7 +62,7 @@ const hr = app.group({ callers: ['human'] }, (r) => ({
 
 /** The intake with the challenged registration, a scanning kind, and a public page that serves a config variable. */
 const guarded = app.contract((c) => ({
-	site: c.spa('/', { dir: 'dist/site', access: { public: true }, public: ['SIGNUP_URL'] }),
+	site: c.spa('/', { dir: 'dist/site', access: { public: true }, browserConfig: ['SIGNUP_URL'] }),
 	api: c.rpc('/api', { visitors, challenged, hr }),
 	files: { attachments: c.files({ maxBytes: 65536, types: ['application/pdf'], scan: true }) },
 }))

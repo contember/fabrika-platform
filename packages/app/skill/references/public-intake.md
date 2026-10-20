@@ -472,7 +472,7 @@ export const visitors = app.group({}, (r) => ({
   Turnstile's origin to the CSP. `TURNSTILE_SECRET` is an application variable the human sets; without it the
   application does not boot. `siteKey` names the variable with the widget's public site key, which every SPA mount
   serves its pages; without it the application does not boot either. Another public value a page needs per
-  environment (a link target) goes in the SPA mount's own list: `c.spa('/', { …, public: ['SIGNUP_URL'] })`. Both
+  environment (a link target) goes in the SPA mount's own list: `c.spa('/', { …, browserConfig: ['SIGNUP_URL'] })`. Both
   reach the page in `<prefix>/__fabrika-config.json` as `public: { <VARIABLE>: <value> }`, and the approver sees each
   name. Never name a secret there: the contract refuses a variable that is both.
   `admission.rate: { perClient, perEndpoint }` (per minute, 10 and 100 by default for a public mutation) answers 429

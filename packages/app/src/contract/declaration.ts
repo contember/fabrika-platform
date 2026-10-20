@@ -52,7 +52,7 @@ export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
 	procedure: { options: ['input', 'output', 'access', 'actions', 'admission', 'limits', 'http'], owned: ['~kind', 'type'] },
 	rpc: { options: ['callers'], owned: ['kind', 'prefix', 'procedures'] },
 	link: { options: ['spa', 'dimension', 'grants', 'issuedBy', 'maxDays', 'procedures'], owned: ['kind', 'prefix'] },
-	spa: { options: ['dir', 'access', 'public'], owned: ['kind', 'prefix'] },
+	spa: { options: ['dir', 'access', 'browserConfig'], owned: ['kind', 'prefix'] },
 	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'limits'], owned: ['kind', 'path'] },
 	fileKind: { options: ['types', 'maxBytes', 'scan'], owned: ['kind'] },
 	cron: { options: ['actions', 'limits', 'retries'], owned: ['kind', 'schedule'] },
@@ -257,7 +257,7 @@ export interface SpaMountDeclaration extends OptionsRecord {
 	readonly dir: string
 	readonly access: SpaAccessDeclaration
 	/** Application variables whose values the mount's pages read from `<prefix>/__fabrika-config.json`. */
-	readonly public?: readonly string[]
+	readonly browserConfig?: readonly string[]
 }
 
 export interface HealthMountDeclaration {

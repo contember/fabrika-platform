@@ -177,7 +177,7 @@ describe('a removed mount takes more than its routes', () => {
 	test('an SPA mount that served public variables narrows, and the line names them, though its paths reach the same callers', () => {
 		const withSignup = edited(
 			MEMBER_SPA,
-			"app: c.spa('/', { dir: 'dist/app', access: { public: true } }),\n\tinterest: c.spa('/interest', { dir: 'dist/interest', access: { public: true }, public: ['SIGNUP_URL'] }),",
+			"app: c.spa('/', { dir: 'dist/app', access: { public: true } }),\n\tinterest: c.spa('/interest', { dir: 'dist/interest', access: { public: true }, browserConfig: ['SIGNUP_URL'] }),",
 		)
 		expect(classifyAccess(snapshot(withSignup), snapshot(edited(MEMBER_SPA, "app: c.spa('/', { dir: 'dist/app', access: { public: true } }),"))))
 			.toEqual({

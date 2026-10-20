@@ -285,7 +285,7 @@ src/
   (kind `public-spa`, no token) with `access: { public: true }`,
   which takes no other key, and answers `<prefix>/__fabrika-config.json` itself with `{ dsn, release, environment, public }` (the
   browser-safe `FABRIKA_OPERATIONS_DSN`, `FABRIKA_RELEASE` and `FABRIKA_ENVIRONMENT`, `null` when unset; `public`, present only when non-empty, the values of
-  every public procedure's challenge `siteKey` and of the mount's own `public` list, `browserConfigs` in `browser-config.ts`, each one
+  every public procedure's challenge `siteKey` and of the mount's own `browserConfig` list, `browserConfigs` in `browser-config.ts`, each one
   required at boot) and nothing else of the environment, and
   `<prefix>/__fabrika-me.json` (`PAGE_CALLER_FILE`) with the caller document (`pageCallerOf` in `principal.ts`) under
   the mount's own access, 401 on a public SPA; no SPA or link mount serves a path ending in `.map` (404: the platform

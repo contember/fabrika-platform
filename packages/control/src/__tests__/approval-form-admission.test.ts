@@ -123,7 +123,7 @@ describe('public variables in the approval diff', () => {
 	const SPA = "app: c.spa('/', { dir: 'dist/app', access: { member: true } }),"
 
 	test("an SPA mount's public variable is shown by name, and so is a challenge's site key", () => {
-		const listed = snapshot(edited(SPA, "app: c.spa('/', { dir: 'dist/app', access: { member: true }, public: ['SIGNUP_URL'] }),"))
+		const listed = snapshot(edited(SPA, "app: c.spa('/', { dir: 'dist/app', access: { member: true }, browserConfig: ['SIGNUP_URL'] }),"))
 		expect(classifyAccess(snapshot(), listed).changes).toEqual([
 			{ effect: 'widens', line: 'Mount `app` serves its pages the public variable `SIGNUP_URL`' },
 		])

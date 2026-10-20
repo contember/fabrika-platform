@@ -352,7 +352,7 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 			readonly dir: string
 			readonly access: Acc
 			/** Application variables whose values the pages read from `<prefix>/__fabrika-config.json`: public values only. */
-			readonly public?: readonly [string, ...string[]]
+			readonly browserConfig?: readonly [string, ...string[]]
 		} & Owned<'kind' | 'prefix'>,
 	): SpaMount<Acc>
 	health(path: Path): HealthMount
@@ -460,7 +460,7 @@ export function surfaceKit<A extends string, D extends string, CD extends string
 			prefix,
 			dir: options.dir,
 			access: options.access,
-			public: options.public,
+			browserConfig: options.browserConfig,
 			unknownOptions: unknownOptions(options, 'spa'),
 		}),
 		health: (path) => ({ kind: 'health', path }),

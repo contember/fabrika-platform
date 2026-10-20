@@ -51,7 +51,7 @@ the SPA is added with it.
   `FabrikaProvider` reads the DSN, release and environment the framework serves at `<prefix>/__fabrika-config.json`
   and sends every uncaught error and unhandled rejection there; add no error-reporting SDK. The same file carries
   `public: { <VARIABLE>: <value> }`: each public procedure's challenge `siteKey`, and the variables the SPA mount lists in
-  `c.spa(prefix, { …, public: ['SIGNUP_URL'] })`. A page reads a per-environment public value (a site key, a link
+  `c.spa(prefix, { …, browserConfig: ['SIGNUP_URL'] })`. A page reads a per-environment public value (a site key, a link
   target) there, never as a build-time constant; it holds no other variable, and the contract refuses a secret in it.
   `react`, `react-dom` and `@fabrika/ui` (with `@types/react`, `@types/react-dom` and `@happy-dom/global-registrator`
   for the screen tests) are the SPA's: add them with it.

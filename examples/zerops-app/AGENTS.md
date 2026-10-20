@@ -371,7 +371,7 @@ the SPA is added with it.
   `FabrikaProvider` reads the DSN, release and environment the framework serves at `<prefix>/__fabrika-config.json`
   and sends every uncaught error and unhandled rejection there; add no error-reporting SDK. The same file carries
   `public: { <VARIABLE>: <value> }`: each public procedure's challenge `siteKey`, and the variables the SPA mount lists in
-  `c.spa(prefix, { …, public: ['SIGNUP_URL'] })`. A page reads a per-environment public value (a site key, a link
+  `c.spa(prefix, { …, browserConfig: ['SIGNUP_URL'] })`. A page reads a per-environment public value (a site key, a link
   target) there, never as a build-time constant; it holds no other variable, and the contract refuses a secret in it.
   `react`, `react-dom` and `@fabrika/ui` (with `@types/react`, `@types/react-dom` and `@happy-dom/global-registrator`
   for the screen tests) are the SPA's: add them with it.
@@ -2690,7 +2690,7 @@ export const visitors = app.group({}, (r) => ({
   Turnstile's origin to the CSP. `TURNSTILE_SECRET` is an application variable the human sets; without it the
   application does not boot. `siteKey` names the variable with the widget's public site key, which every SPA mount
   serves its pages; without it the application does not boot either. Another public value a page needs per
-  environment (a link target) goes in the SPA mount's own list: `c.spa('/', { …, public: ['SIGNUP_URL'] })`. Both
+  environment (a link target) goes in the SPA mount's own list: `c.spa('/', { …, browserConfig: ['SIGNUP_URL'] })`. Both
   reach the page in `<prefix>/__fabrika-config.json` as `public: { <VARIABLE>: <value> }`, and the approver sees each
   name. Never name a secret there: the contract refuses a variable that is both.
   `admission.rate: { perClient, perEndpoint }` (per minute, 10 and 100 by default for a public mutation) answers 429

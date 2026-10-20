@@ -378,7 +378,7 @@ class SurfaceReader {
 					prefix: text(prefix, at, 'the prefix'),
 					dir: text(options.get('dir'), at, 'dir'),
 					access: spaAccessDeclaration(options.get('access'), at),
-					public: options.has('public') ? texts(options.get('public'), at, 'public') : undefined,
+					browserConfig: options.has('browserConfig') ? texts(options.get('browserConfig'), at, 'browserConfig') : undefined,
 					unknownOptions: optionKeys(options, 'spa'),
 				}
 			}
