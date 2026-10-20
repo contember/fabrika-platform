@@ -313,28 +313,64 @@ if (postgres !== null) {
 			expect((await files()).find((row) => row.id === photo?.id)?.status).toBe('live')
 		})
 
-		test('charges bytesPerHour the declared body length, or the body limit without one, and refuses past the budget', async () => {
-			await admin((sql) => sql.unsafe(`delete from ${schema}.fabrika_form_bytes where form = 'api.intake.register'`))
+		/** A form as a browser sends it, with its length; or as a stream, without one. */
+		const posted = (form: FormData, streamed: boolean): RequestInit => {
+			if (!streamed) return { method: 'POST', body: form }
+			const encoded = new Response(form)
+			return { method: 'POST', headers: { 'Content-Type': encoded.headers.get('Content-Type') ?? '' }, body: encoded.body }
+		}
+
+		/** Empties the endpoint's buckets: its calls this minute and its bytes this hour. */
+		const resetBuckets = () =>
+			admin(async (sql) => {
+				await sql.unsafe(`delete from ${schema}.fabrika_form_admissions where form = 'api.intake.register'`)
+				await sql.unsafe(`delete from ${schema}.fabrika_form_bytes where form = 'api.intake.register'`)
+			})
+
+		test('takes an input part past 64 KiB up to the body limit, and refuses a body past it, declared or streamed', async () => {
+			// The body limit is 64 KiB of input and one 256 KiB photo: 327680 bytes. Each call is charged up to it, so each
+			// starts on an empty budget.
+			const send = async (name: string, streamed: boolean, photo: Uint8Array<ArrayBuffer> = PNG) => {
+				await resetBuckets()
+				const form = multipart({ name, challengeToken: crypto.randomUUID() }, [['photo', photo, 'big.png', 'image/png']])
+				return kit.fetch('/api/intake.register', posted(form, streamed))
+			}
+			expect((await send('a'.repeat(100 * 1024), false)).status).toBe(200)
+			const [stored] = await admin((sql) =>
+				sql.unsafe(`select length(name)::int as length from ${schema}.submissions order by length(name) desc limit 1`)
+			)
+			expect(stored?.length).toBe(100 * 1024)
+			const tooLong = 'a'.repeat(400 * 1024)
+			const declared = await send(tooLong, false)
+			expect([declared.status, (await declared.json()).error?.type]).toEqual([413, 'too_large'])
+			const streamed = await send(tooLong, true)
+			expect([streamed.status, (await streamed.json()).error?.type]).toEqual([413, 'too_large'])
+			// Each part within its own bound, the whole stream past the body limit.
+			const photo = new Uint8Array(200 * 1024)
+			photo.set(PNG)
+			const parts = await send('a'.repeat(200 * 1024), true, photo)
+			expect([parts.status, (await parts.json()).error?.type]).toEqual([413, 'too_large'])
+		})
+
+		test('charges bytesPerHour what an honest request sends, the body limit for a stream without a length, and refuses past the budget', async () => {
+			await resetBuckets()
 			const charged = async (): Promise<number> => {
 				const [row] = await admin((sql) => sql.unsafe(`select bytes::int as bytes from ${schema}.fabrika_form_bytes where form = 'api.intake.register'`))
 				return row?.bytes ?? 0
 			}
-			const register = async (declared: boolean) => {
+			const register = async (streamed: boolean) => {
 				const form = multipart({ name: 'Bo', challengeToken: crypto.randomUUID() }, [['photo', PNG, 'bo.png', 'image/png']])
-				const encoded = new Response(form)
-				const headers = new Headers({ 'Content-Type': encoded.headers.get('Content-Type') ?? '' })
-				const bytes = new Uint8Array(await encoded.arrayBuffer())
-				if (declared) headers.set('Content-Length', String(bytes.byteLength))
-				const response = await kit.fetch('/api/intake.register', { method: 'POST', headers, body: bytes })
-				return { status: response.status, length: bytes.byteLength }
+				const length = (await new Response(form).arrayBuffer()).byteLength
+				const response = await kit.fetch('/api/intake.register', posted(form, streamed))
+				return { status: response.status, length }
 			}
-			const declared = await register(true)
-			expect(declared).toMatchObject({ status: 200 })
-			expect(await charged()).toBe(declared.length)
+			const honest = await register(false)
+			expect(honest).toMatchObject({ status: 200 })
+			expect(await charged()).toBe(honest.length)
 			// The body limit is 64 KiB of input and one 256 KiB photo; the budget of 1 MiB holds three such charges more.
-			for (let call = 0; call < 3; call++) expect((await register(false)).status).toBe(200)
-			expect(await charged()).toBe(declared.length + 3 * 327680)
-			expect((await register(false)).status).toBe(429)
+			for (let call = 0; call < 3; call++) expect((await register(true)).status).toBe(200)
+			expect(await charged()).toBe(honest.length + 3 * 327680)
+			expect((await register(true)).status).toBe(429)
 		})
 	})
 

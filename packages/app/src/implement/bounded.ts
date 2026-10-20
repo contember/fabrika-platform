@@ -70,3 +70,26 @@ export async function readBoundedBytes(stream: ReadableStream<Uint8Array> | null
 		signal?.removeEventListener('abort', cancel)
 	}
 }
+
+/** `body` passed on as it streams, failed once more than `maxBytes` went through; `exceeded` tells that failure apart. */
+export function boundedStream(body: ReadableStream<Uint8Array>, maxBytes: number): {
+	readonly stream: ReadableStream<Uint8Array>
+	exceeded(): boolean
+} {
+	let size = 0
+	let over = false
+	const stream = body.pipeThrough(
+		new TransformStream<Uint8Array, Uint8Array>({
+			transform(chunk, controller) {
+				size += chunk.byteLength
+				if (size > maxBytes) {
+					over = true
+					controller.error(new Error(`the body is longer than ${maxBytes} bytes`))
+					return
+				}
+				controller.enqueue(chunk)
+			},
+		}),
+	)
+	return { stream, exceeded: () => over }
+}

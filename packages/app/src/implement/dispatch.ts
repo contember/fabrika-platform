@@ -70,7 +70,7 @@ import { FileWork, type StoredFileKinds, storedFilesHandle } from '../files/kind
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
 import { abortedBody, bodyDeadlineMs, bootstrapPath, bootstrapResponse, readBoundedBody, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
-import { handlerSignal, readBoundedBytes } from './bounded'
+import { boundedStream, handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
 import {
 	type AppCapability,
@@ -1504,9 +1504,10 @@ interface MultipartInput {
 }
 
 /**
- * Opens a procedure's `multipart/form-data` body: its first part is the input as JSON (named `input`, at most the JSON
- * input's limit), and each later part a file of a file field, under the field's name. The whole body arrives within the
- * deadline its `maxBytes` derives; a declared length past every part together is refused unread.
+ * Opens a procedure's `multipart/form-data` body: its first part is the input as JSON (named `input`, at most the
+ * procedure's `maxBytes`), and each later part a file of a file field, under the field's name. The whole body arrives
+ * within the deadline its `maxBytes` derives and holds at most `maxBytes` and each part's overhead: a declared length
+ * past that is refused unread, and a body without one is cut off once it passes it.
  */
 async function openMultipart(
 	row: EndpointRow,
@@ -1520,12 +1521,16 @@ async function openMultipart(
 	}
 	const maxBytes = maxBytesOf(row)
 	const files = [...fields.values()].reduce((sum, field) => sum + field.max, 0)
+	const tooLarge = () => new HttpError(413, 'too_large', `The body is larger than the ${maxBytes} bytes '${row.id}' admits`)
+	const bodyBytes = maxBytes + (files + 1) * MULTIPART_PART_OVERHEAD
 	const declared = Number(request.headers.get('Content-Length') ?? '')
-	if (Number.isFinite(declared) && declared > maxBytes + (files + 1) * MULTIPART_PART_OVERHEAD) {
-		throw new HttpError(413, 'too_large', `The body is larger than the ${maxBytes} bytes '${row.id}' admits`)
+	if (Number.isFinite(declared) && declared > bodyBytes) {
+		throw tooLarge()
 	}
 	const deadline = AbortSignal.any([request.signal, AbortSignal.timeout(bodyDeadlineMs(maxBytes))])
-	const parts = multipartParts(request.body ?? new Blob([]).stream(), boundary, { maxHeaderBytes: PROCEDURE_LIMITS.maxPartHeaderBytes })
+	const body = boundedStream(request.body ?? new Blob([]).stream(), bodyBytes)
+	const parts = multipartParts(body.stream, boundary, { maxHeaderBytes: PROCEDURE_LIMITS.maxPartHeaderBytes })
+	const failure = (error: unknown) => (body.exceeded() ? tooLarge() : multipartFailure(error, parts, deadline, request))
 	const stop = () => {
 		parts.cancel().catch(() => {})
 	}
@@ -1541,9 +1546,9 @@ async function openMultipart(
 			await first?.body.cancel()
 			throw new HttpError(400, 'multipart', `'${row.id}': the first part is the input as JSON, named '${FILE_INPUT_PART}', without a filename`)
 		}
-		const bytes = await readBoundedBytes(first.body, { maxBytes: PROCEDURE_LIMITS.maxBytes })
+		const bytes = await readBoundedBytes(first.body, { maxBytes })
 		if (bytes === null) {
-			throw new HttpError(413, 'too_large', `The input is larger than ${PROCEDURE_LIMITS.maxBytes} bytes`)
+			throw tooLarge()
 		}
 		const parsed = parseJson(bytes)
 		if (!isRecord(parsed) || Object.keys(parsed).some((name) => fields.has(name))) {
@@ -1551,9 +1556,9 @@ async function openMultipart(
 		}
 		json = parsed
 	} catch (error) {
-		const failure = multipartFailure(error, parts, deadline, request)
+		const refused = failure(error)
 		await close()
-		throw failure
+		throw refused
 	}
 	return {
 		json,
@@ -1585,7 +1590,7 @@ async function openMultipart(
 					values[part.name] = field.many ? [...(Array.isArray(taken) ? taken : []), file] : file
 				}
 			} catch (error) {
-				throw multipartFailure(error, parts, deadline, request)
+				throw failure(error)
 			}
 			return values
 		},

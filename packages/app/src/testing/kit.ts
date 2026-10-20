@@ -214,13 +214,27 @@ function builtAssets(root: string): SpaAssets {
 	}
 }
 
-function toRequest(origin: string, input: RequestInfo | URL, init: RequestInit | undefined): Request {
+function toRequest(origin: string, input: RequestInfo | URL, init: RequestInit | undefined): Promise<Request> {
 	if (!(input instanceof Request)) {
-		return new Request(new URL(input, origin), init)
+		return withLength(new Request(new URL(input, origin), init), init?.body)
 	}
 	// Never `new Request(request, …)`: Bun would buffer the body the application must meet as a stream.
 	const base = { method: input.method, headers: input.headers, body: input.body, signal: input.signal, redirect: input.redirect }
-	return init === undefined ? input : new Request(input.url, { ...base, ...init })
+	return init === undefined ? Promise.resolve(input) : withLength(new Request(input.url, { ...base, ...init }), init.body)
+}
+
+/**
+ * `request` as a browser sends a body it knows the length of (a string, a form, bytes): with `Content-Length`, which a
+ * `bytesPerHour` budget charges. A stream goes without one, as `fetch` sends it chunked, and is charged the body limit.
+ */
+async function withLength(request: Request, body: BodyInit | null | undefined): Promise<Request> {
+	if (body === undefined || body === null || body instanceof ReadableStream || request.headers.has('Content-Length')) {
+		return request
+	}
+	const headers = new Headers(request.headers)
+	const bytes = await request.arrayBuffer()
+	headers.set('Content-Length', String(bytes.byteLength))
+	return new Request(request.url, { method: request.method, headers, body: bytes, signal: request.signal, redirect: request.redirect })
 }
 
 /**
@@ -593,7 +607,7 @@ export function bootTestKit<C extends AnyContract>(
 	}
 
 	const kitFetch: RpcFetch = async (input, init) => {
-		const request = toRequest(origin, input, init)
+		const request = await toRequest(origin, input, init)
 		if (new URL(request.url).origin !== origin) {
 			throw new TypeError(`the test kit serves only ${origin}, not ${new URL(request.url).origin}`)
 		}
@@ -622,8 +636,8 @@ export function bootTestKit<C extends AnyContract>(
 		if (caller !== undefined && caller.cookie === null) {
 			throw new Error(`a browser carries a session; pass the ${caller.kind}'s key to createClient instead`)
 		}
-		return (input, init) => {
-			const request = toRequest(origin, input, init)
+		return async (input, init) => {
+			const request = await toRequest(origin, input, init)
 			// Bun's Request does not keep its credentials mode, so `init` is the only reliable reading of it.
 			const credentials = init?.credentials ?? (input instanceof Request ? input.credentials : undefined)
 			const headers = new Headers(request.headers)
