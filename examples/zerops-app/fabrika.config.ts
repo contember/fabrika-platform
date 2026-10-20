@@ -15,7 +15,7 @@ import { tables } from './src/db/tables'
 export const NOTES_SERVICE = 'notesapi'
 /** Its database, reached over the project's private network only. */
 export const NOTES_DATABASE_SERVICE = 'notesdb'
-/** The bucket of the `attachments` collection; the platform hands the runtime `FABRIKA_APP_STORAGE_*` from it. */
+/** The bucket of the stored files; the platform hands the runtime `FABRIKA_APP_STORAGE_*` from it. */
 export const NOTES_FILES_SERVICE = 'notesfiles'
 /** The port the generated entrypoint listens on; the proxy dials it once a request passes the endpoint table. */
 export const NOTES_UPSTREAM = `${NOTES_SERVICE}:3000`

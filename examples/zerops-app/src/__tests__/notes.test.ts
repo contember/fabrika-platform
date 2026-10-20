@@ -7,13 +7,11 @@ import { statusOf, type TestCaller, testKit } from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { afterAll, describe, expect, test } from 'bun:test'
-import { z } from 'zod/v4'
 import { contract } from '../../fabrika.contract'
 import app from '../app'
+import { MAX_ATTACHMENTS_PER_NOTE } from '../schemas'
 
 const postgres = await testDatabase({ migrations: new URL('../../db/migrations/', import.meta.url), label: 'notes.test.ts' })
-
-const Uploaded = z.strictObject({ result: z.strictObject({ id: z.string() }) })
 
 if (postgres !== null) {
 	afterAll(() => postgres.close())
@@ -99,65 +97,53 @@ if (postgres !== null) {
 	})
 
 	describe('attachments', () => {
-		test("a file reaches what its note reaches: the author's workspace downloads it, another workspace does not", async () => {
-			const { id } = await authorApi.notes.create({ workspaceId: 'w1', title: 'With a file' })
-			const upload = await kit.browser(author)(`/api/files.attachments.upload/${id}?name=hello.txt`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'text/plain' },
-				body: 'hello',
-			})
-			expect(upload.status).toBe(200)
-			const fileId = Uploaded.parse(await upload.json()).result.id
+		const hello = () => new File(['hello'], 'hello.txt', { type: 'text/plain' })
+		const apiOf = (caller: TestCaller) => createClient(contract, 'api', { fetch: kit.browser(caller) })
+		const otherWorkspace = () => kit.testCaller([{ role: 'editor', scope: { type: 'workspace', value: 'w2' } }])
 
-			const download = await kit.browser(author)(`/api/files.attachments/${fileId}`)
+		test("a file reaches what its note reaches: the author's workspace downloads it, another workspace does not", async () => {
+			const { id: noteId } = await authorApi.notes.create({ workspaceId: 'w1', title: 'With a file' })
+			const { id } = await authorApi.attachments.upload({ noteId, file: hello() })
+			const [listed] = (await authorApi.attachments.list({ noteId })).items
+			expect(listed).toMatchObject({ id, file: { name: 'hello.txt', type: 'text/plain', size: 5, status: 'live' } })
+
+			const download = await kit.browser(author)(authorApi.attachments.download.url({ noteId, id }))
 			expect(download.status).toBe(200)
 			expect(await download.text()).toBe('hello')
 
-			const outsider = kit.testCaller([{ role: 'editor', scope: { type: 'workspace', value: 'w2' } }])
-			expect((await kit.browser(outsider)(`/api/files.attachments/${fileId}`)).status).toBe(404)
+			expect((await kit.browser(otherWorkspace())(authorApi.attachments.download.url({ noteId, id }))).status).toBe(404)
 		})
 
-		const uploadAs = (caller: TestCaller, noteId: string) =>
-			kit.browser(caller)(`/api/files.attachments.upload/${noteId}?name=hello.txt`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'text/plain' },
-				body: 'hello',
-			})
-		const removeAs = (caller: TestCaller, fileId: string) =>
-			kit.browser(caller)('/api/files.attachments.remove', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ id: fileId }),
-			})
-
 		test('an author uploads; a reader of the workspace and an editor of another store nothing', async () => {
-			const { id } = await authorApi.notes.create({ workspaceId: 'w1', title: 'Uploads' })
+			const { id: noteId } = await authorApi.notes.create({ workspaceId: 'w1', title: 'Uploads' })
 			const stored = objects.objects.size
-			expect((await uploadAs(inW1('reader'), id)).status).toBe(403)
-			expect((await uploadAs(kit.testCaller([{ role: 'editor', scope: { type: 'workspace', value: 'w2' } }]), id)).status).toBe(404)
+			expect(await statusOf(apiOf(inW1('reader')).attachments.upload({ noteId, file: hello() }))).toBe(403)
+			expect(await statusOf(apiOf(otherWorkspace()).attachments.upload({ noteId, file: hello() }))).toBe(404)
 			expect(objects.objects.size).toBe(stored)
-			expect((await uploadAs(author, id)).status).toBe(200)
+			await authorApi.attachments.upload({ noteId, file: hello() })
 			expect(objects.objects.size).toBe(stored + 1)
 		})
 
 		test('an editor removes a file; an author of the workspace and an editor of another remove nothing', async () => {
-			const { id } = await authorApi.notes.create({ workspaceId: 'w1', title: 'Removals' })
-			const fileId = Uploaded.parse(await (await uploadAs(author, id)).json()).result.id
-			expect((await removeAs(author, fileId)).status).toBe(403)
-			expect((await removeAs(kit.testCaller([{ role: 'editor', scope: { type: 'workspace', value: 'w2' } }]), fileId)).status).toBe(404)
-			expect((await kit.browser(author)(`/api/files.attachments/${fileId}`)).status).toBe(200)
-			expect((await removeAs(inW1('editor'), fileId)).status).toBe(200)
-			expect((await kit.browser(author)(`/api/files.attachments/${fileId}`)).status).toBe(404)
+			const { id: noteId } = await authorApi.notes.create({ workspaceId: 'w1', title: 'Removals' })
+			const { id } = await authorApi.attachments.upload({ noteId, file: hello() })
+			expect(await statusOf(authorApi.attachments.remove({ noteId, id }))).toBe(403)
+			expect(await statusOf(apiOf(otherWorkspace()).attachments.remove({ noteId, id }))).toBe(404)
+			expect((await kit.browser(author)(authorApi.attachments.download.url({ noteId, id }))).status).toBe(200)
+			expect(await apiOf(inW1('editor')).attachments.remove({ noteId, id })).toEqual({ id })
+			expect((await kit.browser(author)(authorApi.attachments.download.url({ noteId, id }))).status).toBe(404)
 		})
 
-		test('a type the collection does not declare is refused', async () => {
-			const { id } = await authorApi.notes.create({ workspaceId: 'w1', title: 'Wrong type' })
-			const upload = await kit.browser(author)(`/api/files.attachments.upload/${id}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'text/html' },
-				body: '<p>hi</p>',
-			})
-			expect(upload.status).toBe(400)
+		test('a note holds at most its limit of attachments', async () => {
+			const { id: noteId } = await authorApi.notes.create({ workspaceId: 'w1', title: 'Full' })
+			for (let held = 0; held < MAX_ATTACHMENTS_PER_NOTE; held++) await authorApi.attachments.upload({ noteId, file: hello() })
+			expect(await statusOf(authorApi.attachments.upload({ noteId, file: hello() }))).toBe(409)
+		})
+
+		test('a type the kind does not declare is refused', async () => {
+			const { id: noteId } = await authorApi.notes.create({ workspaceId: 'w1', title: 'Wrong type' })
+			const page = new File(['<p>hi</p>'], 'page.html', { type: 'text/html' })
+			expect(await statusOf(authorApi.attachments.upload({ noteId, file: page }))).toBe(415)
 		})
 	})
 }

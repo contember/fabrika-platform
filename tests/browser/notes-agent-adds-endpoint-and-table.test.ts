@@ -36,8 +36,8 @@ const EXPECTED_CHANGES = [
 	`Migration \`20261010090100_note_titles.sql\` declares trigger \`notes.notes_trim_title\` ${CLOSER_REVIEW}`,
 ]
 
-/** Subjects the agent's change must not touch: the existing endpoints, file endpoints and roles. */
-const UNTOUCHED = [/api\.notes\.(list|get|create|trash|remove)\b/, /files\.attachments/, /\b(reader|author|editor)\b/]
+/** Subjects the agent's change must not touch: the existing note and attachment endpoints, and the roles. */
+const UNTOUCHED = [/api\.notes\.(list|get|create|trash|remove)\b/, /api\.attachments\./, /\b(reader|author|editor)\b/]
 
 const keys: NotesKey[] = []
 let writer: NotesKey | null = null

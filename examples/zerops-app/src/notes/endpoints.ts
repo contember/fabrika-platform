@@ -1,5 +1,5 @@
 // The notes: each handler reaches its rows through `ctx.db`, bound to the capability its access form minted, in the
-// invocation's one transaction. The file endpoints of `attachments` are the framework's and take no handler.
+// invocation's one transaction.
 
 import { ConflictError, fromRow } from '@fabrika/app'
 import { app } from '../app-kit'
@@ -30,7 +30,7 @@ export const notes = app.group({ callers: ['human', 'machine'] }, (r) => ({
 }))
 
 /** Deletes every note in the trash, nightly. A retried attempt lists again, so it deletes no note twice. */
-export const purge = app.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', limits: { timeoutMs: 300000 }, retries: 2 })
+export const purge = app.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], limits: { timeoutMs: 300000 }, retries: 2 })
 	.handle(async ({ ctx }) => {
 		const trashed = await ctx.db.over(ctx.within('notes.read', 'workspace')).notes.list({ where: [['trashed', '=', true]], limit: 200 })
 		await ctx.transaction(async (tx) => {

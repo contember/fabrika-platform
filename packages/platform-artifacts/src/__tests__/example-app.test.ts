@@ -610,16 +610,16 @@ describe("the contract's endpoint table is enforced by the proxy, and survives t
 		expect(parsed?.apps[0]).toMatchObject({ upstream: NOTES_UPSTREAM, endpoints: table.endpoints, snapshot: contractDigest(notesContract) })
 		expect(parsed?.apps[0]).not.toHaveProperty('gates')
 		expect(table.endpoints.map((row) => row.id).sort()).toEqual([
+			'api.attachments.download',
+			'api.attachments.list',
+			'api.attachments.remove',
+			'api.attachments.upload',
 			'api.notes.create',
 			'api.notes.get',
 			'api.notes.list',
 			'api.notes.remove',
 			'api.notes.restore',
 			'api.notes.trash',
-			'files.attachments.download',
-			'files.attachments.list',
-			'files.attachments.remove',
-			'files.attachments.upload',
 			'health',
 			'people.guests.invite',
 			'site',

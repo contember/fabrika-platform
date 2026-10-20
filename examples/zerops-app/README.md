@@ -15,17 +15,18 @@ directly.
 | File                                                         | What it is                                                                                         |
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
 | `src/vocabulary.ts`                                          | The authorization vocabulary: dimensions, actions, roles.                                          |
-| `src/db/tables.ts`                                           | The table policy of `notes`: its scope, the action of each operation, the writable columns.        |
+| `src/db/tables.ts`                                           | The table policies of `notes` and `note_attachments`: scope, actions, writable and file columns.   |
 | `src/app-kit.ts`                                             | `defineApp(vocabulary, tables)`: the kit every endpoint is built with.                             |
 | `src/schemas.ts`                                             | The inputs, outputs and limits the shell and the SPA share.                                        |
 | `src/notes/endpoints.ts`                                     | The notes slice: each endpoint with its `.handle(…)`, and the `purge` job.                         |
+| `src/attachments/endpoints.ts`                               | A note's attachments: upload a file into a row, list, download and remove them.                    |
 | `src/guests/endpoints.ts`                                    | Staff invite a guest, a person from outside the organization, into a workspace by e-mail.          |
 | `fabrika.contract.ts`                                        | Who may call what: the `/api` and `/people` mounts, the SPA, `attachments`, `purge`, the health.   |
 | `src/app.ts`                                                 | `serve(contract, { database: scoped(tables) })`, which the generated entrypoint boots.             |
-| `db/migrations/`                                             | Plain SQL of the application's schema, the file collection's table included.                       |
+| `db/migrations/`                                             | Plain SQL of the application's schema; the last two adopt the old `attachments` file collection.   |
 | `src/db/schema.generated.ts`                                 | Written by `fabrika db codegen` from the migrated schema.                                          |
 | `src/db/__tests__/`, `src/__tests__/endpoint-access.test.ts` | Written by `fabrika db test-scaffold`; the platform runs them at container start. Never edited.    |
-| `src/__tests__/endpoint-access.fixtures.ts`                  | The seed the generated tests need: only a note in the trash is restored.                           |
+| `src/__tests__/endpoint-access.fixtures.ts`                  | The state the generated tests seed: a note in the trash, and an attachment row of the note.        |
 | `src/__tests__/notes.test.ts`                                | The author's own tests, through `testKit`: each allowed call has a refused twin; the job runs too. |
 | `web/`, `build-web.ts`                                       | The SPA, its error reporting, and its build through `@fabrika/check/bun-plugin` (no handlers).     |
 | `fabrika.config.ts`                                          | The deploy surface: a database, a bucket and the runtime, the compiled contract, its proxy table.  |
