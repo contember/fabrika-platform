@@ -16,6 +16,7 @@ Run these from the repository ROOT, not from this package:
 bun run local:up      # generate credentials, build the console, start, migrate, wait for health
 bun run local:status  # docker compose ps
 bun run local:smoke   # intentionally disruptive end-to-end (kills control mid-deploy, etc.)
+bun run local:compat  # Notes at v0.5.5 and v0.4.8 from npm, deployed and upgraded (ADR-0062); empties the Notes database
 bun run local:reset   # down --volumes + wipe .state/ + fresh up
 bun run local:down
 bun run browser:up    # the separate browser-test stack; browser:reset, browser:down
@@ -122,6 +123,14 @@ bun run test:browser  # the opice suites in tests/browser/
   input. Never give Control an environment variable or config field that moves its GitHub origins to
   make this work: ADR-0029 fixes them, and control's `fixed-origins.test.ts` asserts it. The double
   verifies every App JWT against that fixture App's own public key; keep it refusing what GitHub refuses.
+- **`local:compat` deploys released code, not the workspace's.** A release fixture is the example as its tag holds it,
+  recorded in `fixtures/source/releases/` with the `bun.lock` npm resolves for it (`bun run fixtures:release <tag>`,
+  then `fixtures:pin`), because a CI checkout holds no tags. `followNotesDeploy` stages such a commit as its platform
+  build does: `bun install --frozen-lockfile` from npm, the entrypoint its own framework writes, its SPA; the container
+  runs its own `./node_modules/.bin/fabrika`, as the generated start script does. Never point a release fixture at a
+  workspace package: the suite exists to run what an operator's application runs. Each release starts from an empty
+  Notes database (`dropApplicationDatabase`), and the suite ages files past the pending grace before the sweep, so
+  only a reference keeps one.
 - **`local:smoke` is disruptive by design** — it hard-kills control mid-pipeline to prove that the
   maintenance cron (`control/src/zerops/cron.ts`, the production crontab command) reconciles the run once
   the dead holder's deploy lease expires, and exactly-once counting. Do not soften a step to make it pass; a failure there is

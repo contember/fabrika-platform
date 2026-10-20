@@ -74,7 +74,15 @@ export const signInToConsole = async (consoleOrigin: string, login?: IamLogin): 
 	return `${SESSION_COOKIE}=${session}`
 }
 
-const approvalSchema = z.object({ candidateDigest: z.string().min(1), baselineDigest: z.string().min(1) })
+const approvalSchema = z.object({
+	candidateDigest: z.string().min(1),
+	baselineDigest: z.string().min(1),
+	outcome: z.enum(['none', 'no-widening', 'widening']),
+	changes: z.array(z.object({ effect: z.enum(['widens', 'narrows', 'neutral']), line: z.string(), review: z.literal('closer').optional() })),
+})
+
+/** What the approval page shows: the digests the decision is bound to, and the diff's lines. */
+export type ConsoleApproval = z.infer<typeof approvalSchema>
 
 const consoleRpc = async (consoleOrigin: string, cookie: string, method: string, input: unknown): Promise<unknown> => {
 	const response = await fetch(`${consoleOrigin}/api/rpc`, {
@@ -96,14 +104,15 @@ const consoleRpc = async (consoleOrigin: string, cookie: string, method: string,
 	return body.data.result
 }
 
-/** Approve one parked run as the signed-in admin, naming the two digests the approval page shows. */
-export const approveInConsole = async (consoleOrigin: string, runId: string, login?: IamLogin): Promise<void> => {
+/** Approve one parked run as the signed-in admin, naming the two digests the approval page shows; answers what it showed. */
+export const approveInConsole = async (consoleOrigin: string, runId: string, login?: IamLogin): Promise<ConsoleApproval> => {
 	const cookie = await signInToConsole(consoleOrigin, login)
 	const approval = approvalSchema.parse(await consoleRpc(consoleOrigin, cookie, 'approvals.get', { runId }))
+	const { candidateDigest, baselineDigest } = approval
 	for (let attempt = 1;; attempt++) {
 		try {
-			await consoleRpc(consoleOrigin, cookie, 'approvals.complete', { runId, decision: 'approve', ...approval })
-			return
+			await consoleRpc(consoleOrigin, cookie, 'approvals.complete', { runId, decision: 'approve', candidateDigest, baselineDigest })
+			return approval
 		} catch (error) {
 			if (!(error instanceof ConsoleConflict) || attempt >= APPROVAL_ATTEMPTS) throw error
 			await Bun.sleep(APPROVAL_RETRY_MS)

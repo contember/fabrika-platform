@@ -33,7 +33,7 @@ bun run format             # dprint fmt  (format:check to verify only)
 bun run check:ci           # every step of CI's verify workflow, with throwaway Postgres + SeaweedFS; run before pushing to main
 
 bun run local:up           # the Docker stack: both Postgres, SeaweedFS, a Zerops emulator, all planes
-bun run local:status       # …:smoke (disruptive end-to-end), :reset (wipes volumes), :down
+bun run local:status       # …:smoke (disruptive end-to-end), :compat (older releases, ADR-0062), :reset (wipes volumes), :down
 bun run test:browser       # opice suites in tests/browser/ (browser:up/reset/down manage the stack)
 
 bun run release:bump --tag=v1.2.3   # set the next release's version in the source, before tagging

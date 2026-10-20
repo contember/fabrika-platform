@@ -4,20 +4,26 @@
 // the deployed commit.
 // Nothing here decides access: an approved snapshot is the only thing Control publishes (ADR-0050).
 
-import { FABRIKA_CONTRACT_DIGEST } from '@fabrika/auth-core'
+import { FABRIKA_CONTRACT_DIGEST, isWorkloadKeyVariable } from '@fabrika/auth-core'
 import { ZEROPS_NAMESPACE_PROXY_HOSTNAME } from '@fabrika/provider-zerops'
 import { isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
-import { cp, rm, symlink } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { cp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
 import { compose, type ComposeOptions } from './compose'
-import { LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY, LOCAL_SOURCE_FIXTURE_DIRECTORY } from './local-source-contract'
-import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
+import {
+	LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY,
+	LOCAL_SOURCE_FIXTURE_DIRECTORY,
+	LOCAL_SOURCE_RELEASE_KINDS,
+	type LocalSourceReleaseKind,
+} from './local-source-contract'
+import { loadLocalSourceFixtures, readFixtureFiles } from './local-source-fixtures/fixture'
+import { releaseFixtureSource } from './local-source-fixtures/generate'
 import { requireMachineKey } from './machine-key'
 import { MEMBERSHIP_KEY_VARIABLE, MEMBERSHIP_URL_VARIABLE, writeNotesMembershipTransport } from './membership-key'
 import { controlRequest, type EmulatorSnapshot, emulatorSnapshot, notesServiceId } from './notes-deploy'
 import { buildNotesSpa, LOCAL_NOTES_IAM_APP_ID, localAppsProxyManifest, STATE_DIR, writeAppsProxyConfig, writeNotesContractDigest } from './prepare'
 import { completedRunSchema } from './smoke-schemas'
-import { notesWorkloadKeys, writeNotesWorkloadKeys } from './workload-keys'
+import { writeNotesWorkloadKeys } from './workload-keys'
 
 /** Where the composed container runs a fixture commit other than the workspace example; rewritten by every follow. */
 const NOTES_SOURCE_DIRECTORY = 'notes-source'
@@ -52,9 +58,33 @@ async function stageAgentChangeSource(): Promise<string> {
 	return `${CONTAINER_STATE_DIR}/${NOTES_SOURCE_DIRECTORY}`
 }
 
+const run = async (command: string[], cwd: string): Promise<void> => {
+	const child = Bun.spawn(command, { cwd, stdout: 'ignore', stderr: 'pipe', stdin: 'ignore' })
+	const [code, errors] = await Promise.all([child.exited, new Response(child.stderr).text()])
+	if (code !== 0) throw new Error(`${command.slice(0, 2).join(' ')} in the staged Notes source failed:\n${errors}`)
+}
+
 /**
- * Make the composition serve what the emulator's active Notes version deployed, and answer its commit. Only the two
- * pinned application commits can be followed: the workspace example, and the agent change.
+ * Stage a release fixture's commit as its platform build does: its packages from npm by its own `bun.lock`, the
+ * entrypoint written by its own framework, and its SPA. The container then runs its own `fabrika` for the start script.
+ */
+async function stageReleaseSource(kind: LocalSourceReleaseKind, files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>): Promise<string> {
+	const target = resolve(STATE_DIR, NOTES_SOURCE_DIRECTORY)
+	await rm(target, { recursive: true, force: true })
+	for (const [path, bytes] of files) {
+		await mkdir(dirname(resolve(target, path)), { recursive: true })
+		await writeFile(resolve(target, path), bytes)
+	}
+	await run(['bun', 'install', '--frozen-lockfile', '--ignore-scripts'], target)
+	await run(['bun', '-e', "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"], target)
+	await buildNotesSpa(target)
+	console.info(`Notes source staged as ${kind} holds it, installed from npm`)
+	return `${CONTAINER_STATE_DIR}/${NOTES_SOURCE_DIRECTORY}`
+}
+
+/**
+ * Make the composition serve what the emulator's active Notes version deployed, and answer its commit. Only the
+ * pinned application commits can be followed: the workspace example, the agent change, and each release fixture.
  */
 export async function followNotesDeploy(options: Pick<ComposeOptions, 'browser'> = {}): Promise<string> {
 	const fixtures = await loadLocalSourceFixtures(resolve(STATE_DIR, LOCAL_SOURCE_FIXTURE_DIRECTORY))
@@ -81,12 +111,16 @@ export async function followNotesDeploy(options: Pick<ComposeOptions, 'browser'>
 		throw new Error('the namespace proxy does not serve the endpoint table of the active Notes contract')
 	}
 
+	const release = LOCAL_SOURCE_RELEASE_KINDS.find((kind) => fixtures[kind].commitSha === commitSha)
 	let root: string | undefined
 	if (commitSha === fixtures.agentChange.commitSha) root = await stageAgentChangeSource()
+	else if (release !== undefined) root = await stageReleaseSource(release, readFixtureFiles(fixtures[release], await releaseFixtureSource(release)))
 	else if (commitSha !== fixtures.application.commitSha) throw new Error(`deploy ${runId} is of commit ${commitSha}, which no local fixture holds`)
 
+	// The deploy removes the key of a workload its contract no longer declares, so the service holds exactly its keys.
 	const keys = new Map<string, string>()
-	for (const variable of notesWorkloadKeys().keys()) keys.set(variable, soleVariable(snapshot, serviceId, variable))
+	const variables = new Set(snapshot.serviceEnv.filter((record) => record.serviceStackId === serviceId).map((record) => record.key))
+	for (const variable of [...variables].filter(isWorkloadKeyVariable)) keys.set(variable, soleVariable(snapshot, serviceId, variable))
 	await writeNotesWorkloadKeys(keys)
 	const membershipUrl = optionalVariable(snapshot, serviceId, MEMBERSHIP_URL_VARIABLE)
 	const membershipKey = optionalVariable(snapshot, serviceId, MEMBERSHIP_KEY_VARIABLE)

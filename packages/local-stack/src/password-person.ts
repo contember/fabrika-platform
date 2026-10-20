@@ -32,7 +32,8 @@ export interface NotesPrincipal {
 	readonly roles: readonly { readonly role: string; readonly workspace: string | null }[]
 }
 
-async function adminRpc(method: string, input: unknown): Promise<unknown> {
+/** A call to IAM's `/admin/rpc` with the provisioning key, as an installation administrator makes it. */
+export async function adminRpc(method: string, input: unknown): Promise<unknown> {
 	const provisioningKey = envValue(resolve(STATE_DIR, 'iam.env'), 'FABRIKA_IAM_PROVISIONING_KEY')
 	return rpcResponseSchema.parse(await requestJson(IAM_ORIGIN, '/admin/rpc', { bearer: provisioningKey, body: { method, input } })).result
 }

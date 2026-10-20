@@ -260,13 +260,15 @@ services:
     image: fabrika-local-app:clamav
     build: app-image
     working_dir: ${FABRIKA_LOCAL_NOTES_ROOT:-/workspace/examples/zerops-app}
+    # The generated start script's steps, with the source's own `fabrika` as the platform runs it: a release fixture
+    # (`local:compat`) migrates and checks with the framework it pins.
     command:
       - sh
       - -c
       - >-
-        bun /workspace/packages/cli/src/index.ts db migrate &&
-        bun /workspace/packages/cli/src/index.ts db codegen --verify &&
-        bun /workspace/packages/cli/src/index.ts db test-isolation &&
+        ./node_modules/.bin/fabrika db migrate &&
+        ./node_modules/.bin/fabrika db codegen --verify &&
+        ./node_modules/.bin/fabrika db test-isolation &&
         exec bun fabrika/entry.generated.ts
     # `notes-workloads.env` holds the jobs' and webhooks' keys (`workload-keys.ts`), `notes-membership.env` IAM's
     # membership transport (`membership-key.ts`); `up` writes both before Notes starts.

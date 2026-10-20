@@ -18,6 +18,7 @@ Run these commands from the repository root:
 bun run local:up
 bun run local:status
 bun run local:smoke
+bun run local:compat
 bun run local:down
 ```
 
@@ -64,6 +65,9 @@ machine API key described below.
 11. proves the notes container cannot reach the private control or Operations
     networks.
 
+`local:compat` is [ADR-0062](../decisions/0062-a-platform-release-serves-older-framework-releases.md)'s
+compatibility suite on this stack; see [The compatibility suite](#the-compatibility-suite).
+
 To discard all local databases, object data, emulator state, and generated
 credentials, use:
 
@@ -96,8 +100,8 @@ discards all local data, including the retained MinIO volume and credentials.
 ## The Notes container
 
 The `notes` service runs `examples/zerops-app` as the platform starts a contract
-application on Zerops: `fabrika db migrate`, `fabrika db codegen --verify`,
-`fabrika db test-isolation`, then the generated entrypoint
+application on Zerops: the source's own `./node_modules/.bin/fabrika` runs `db migrate`, `db codegen --verify` and
+`db test-isolation`, then the generated entrypoint
 (`fabrika/entry.generated.ts`, which preparation writes, as the platform build does).
 Preparation writes the variables a deploy writes: `notes.env` holds the database URL,
 the proxy secret and the bucket credentials, `notes-contract.env` the digest of the
@@ -148,8 +152,9 @@ Notes example as its repository holds it, plus the entrypoint the build writes
 that one, `agentChange`: an agent's change to Notes under the fabrika-app skill
 (`fixtures/source/notes-agent-change.patch`) — the endpoint `api.notes.rename`, the child
 table `note_labels` with its policy and migration, a migration that declares a trigger (database code, which the
-approval marks "needs closer review"), and the regenerated code and tests.
-`deployable.test.ts` checks both archives as a production build does: the checker, and
+approval marks "needs closer review"), and the regenerated code and tests. It also holds one commit per
+release fixture, the example as a released tag holds it ([The compatibility suite](#the-compatibility-suite)).
+`deployable.test.ts` checks the application and agent change archives as a production build does: the checker, and
 on Postgres `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db
 test-isolation`. Preparation stores their manifests and archives
 under `.state/source-fixtures/`. Their commits do not depend on the enclosing
@@ -201,6 +206,41 @@ count and digest, not archive contents or bearer capability. Deleted reservation
 cannot be resurrected by late uploads. It does not compile uploaded code: the
 separately composed Notes container tests application and access behavior, while
 the source fixture tests commit/digest/archive and lifecycle behavior.
+
+## The compatibility suite
+
+`local:compat` proves on the composition that this platform deploys and runs an application on an older framework
+release, unchanged, and that the application's next deploy upgrades it on its own data
+([ADR-0062](../decisions/0062-a-platform-release-serves-older-framework-releases.md)). It complements
+`framework-compat.test.ts` in `packages/control`, which compares the readers, digests, rows and schemas without running
+anything. For each recorded release (v0.5.5, then v0.4.8; `bun run compat v0.5.5` in `packages/local-stack` runs one),
+it:
+
+1. drops the Notes schema and role family (`dropApplicationDatabase`), so the release's own framework migrates an
+   empty database;
+2. pushes the release's commit through the keyed connection's webhook. Control reads it with the bundled reader of its
+   minor, the suite approves the diff in the console, and the deploy runs to the emulator. The composition follows it:
+   the release's source with its packages installed from npm, the entrypoint its own framework writes, its own
+   `fabrika` for the start script, and the digest and endpoint table the deploy wrote. A healthy container means the
+   release's startup digest check passed;
+3. calls Notes through the proxy: a service key creates and lists notes, a path no row serves and a key without
+   `notes.write` are refused with 403, an anonymous call is sent to sign in, and the local admin, signed in on the
+   Notes host and granted the notes actions, uploads three files to the `attachments` collection, removes a fourth, and
+   downloads each byte for byte. The collection's endpoints admit only people;
+4. pushes the workspace example as the next deploy and prints its approval diff. The suite then checks the ledger
+   (`fabrika/0008_files.sql` and both adoption migrations applied), lists and downloads the three files through
+   `api.attachments.*` byte for byte, uploads a new one and removes another, ages every file past the one-hour pending
+   grace, and runs `fabrika-file-sweep` in the container: it must keep every referenced file and delete the removed one.
+
+A release fixture is the example as its tag holds it, recorded in
+`packages/local-stack/fixtures/source/releases/notes-<tag>.json`, except its `bun.lock`: the example's own is the
+standalone mirror's, so the record holds the one a `bun install` of the tag's pins writes from npm.
+`bun run fixtures:release <tag>` (in `packages/local-stack`) records one, from the tag of the enclosing checkout; it is
+committed because a CI checkout holds no tags. Each is a commit of the application repository of its own, pinned in
+`fixtures/source/manifest.json` like the others, so a new record needs `fixtures:pin` and a `local:reset`.
+
+The suite needs npm to install the release's packages. It ends with Notes on the workspace example, as `local:smoke`
+expects it. It leaves the Notes database holding the suite's rows; `local:up` keeps them.
 
 ## Endpoints
 
