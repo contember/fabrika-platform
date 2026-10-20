@@ -1,3 +1,21 @@
+> **OUTCOME: the code shipped on 2026-10-08; the live acceptance is open.** An employee authors an application from
+> Claude or ChatGPT through MCP in Control: IAM OAuth, Git workspaces, stage deploys and pull requests on Zerops
+> ([ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md)).
+>
+> **Shipped.** WU0 to WU7: workspace branch writes, workspace operations through the connection's own GitHub App,
+> workspaces and stage deploys in Control, IAM OAuth for MCP clients, the MCP endpoint, and an in-process witness. WU6
+> needed no code: `examples/zerops-app` is the template. The branch was rebased onto the second simplification pass on
+> 2026-10-08, which removed the Source workspace route.
+>
+> **Commits** from `e757965b` on; after the rebase the work interleaves on main with other changes of 2026-10-07 to
+> 2026-10-09.
+>
+> **Verification** (run log, 2026-10-07): `bun run test` 4,512 + 323 + 180 pass, 0 fail, 293 skipped for want of
+> Postgres and S3.
+>
+> **Backlog.** Open: [196](../backlog/196-mcp-authoring-has-no-live-acceptance.md) (the live acceptance and the known
+> limits of the run log).
+
 # Sprint — MCP application authoring on Zerops (2026-10-07)
 
 **Goal.** An employee uses their own Claude or ChatGPT account through MCP to edit an application,
