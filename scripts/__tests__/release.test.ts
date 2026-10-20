@@ -16,9 +16,11 @@ import {
 	LOCAL_TARBALL_DIRECTORY,
 	localInstallBlock,
 	localVersion,
+	packageGraph,
 	packageInfo,
 	parseOptions,
 	parseReleaseManifest,
+	readPackages,
 	REGISTRY_BACKOFF_MS,
 	REGISTRY_DEADLINE_MS,
 	type RegistryWaitDeps,
@@ -229,7 +231,7 @@ describe('the source version', () => {
 })
 
 describe('a local pack', () => {
-	test('is a prerelease of the last published version, named after the commit', () => {
+	test('is a prerelease of the source version, named after the commit', () => {
 		expect(localVersion('0.3.3', 'abc1234')).toBe('0.3.3-local.gabc1234')
 		expect(() => localVersion('0.3.3-next.1', 'abc1234')).toThrow('is not a release')
 		expect(() => localVersion('0.3.3', 'HEAD')).toThrow('is not a git object name')
@@ -290,7 +292,10 @@ describe.skipIf(!runPackWitness)('an application outside the repository on a loc
 			expect(packed.code).toBe(0)
 			const manifestPath = join(artifacts, 'release-manifest.json')
 			const manifest = parseReleaseManifest(await readFile(manifestPath, 'utf8'), manifestPath)
-			expect(manifest.version).toMatch(/^\d+\.\d+\.\d+-local\.g[0-9a-f]+$/)
+			// The source's minor, not the last one npm has: the checker and the platform read the pack as that release.
+			const { sourceVersion } = packageGraph(await readPackages())
+			const commit = (await exec(['git', 'rev-parse', '--short', 'HEAD'], ROOT)).stdout.trim()
+			expect(manifest.version).toBe(`${sourceVersion}-local.g${commit}`)
 			const block = z.object({ dependencies: z.record(z.string()), overrides: z.record(z.string()) })
 				.parse(JSON.parse(await readFile(join(artifacts, LOCAL_INSTALL_FILE), 'utf8')))
 			expect(block).toEqual(localInstallBlock(manifest.packages))

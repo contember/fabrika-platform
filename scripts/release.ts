@@ -285,26 +285,28 @@ const parseReleaseTag = (tag: string): { readonly tag: string; readonly version:
 
 const COMMANDS: readonly string[] = ['validate', 'pack', 'smoke', 'publish', 'registry-smoke', 'example-pin', 'bump']
 
-/** The package whose published version a local pack builds on. */
+/** The package whose published version the skill's example pins keep naming in a local pack. */
 const LOCAL_BASE_PACKAGE = '@fabrika/app'
 
 /**
- * The version of a local pack: a prerelease of the last published version, named after the commit. npm never has it,
- * so nothing resolves it from the registry by accident. The `g` keeps an all-digit abbreviation such as `0123456`
- * from being a numeric identifier, which SemVer refuses with a leading zero.
+ * The version of a local pack: a prerelease of the source version, named after the commit. It names the minor the
+ * checkout's code is, so the checker and the platform see the release it belongs to. npm never has it, so nothing
+ * resolves it from the registry by accident. The `g` keeps an all-digit abbreviation such as `0123456` from being a
+ * numeric identifier, which SemVer refuses with a leading zero.
  */
-export const localVersion = (published: string, commit: string): string => {
-	if (!/^\d+\.\d+\.\d+$/.test(published)) throw new Error(`${LOCAL_BASE_PACKAGE}: the published version ${JSON.stringify(published)} is not a release`)
+export const localVersion = (source: string, commit: string): string => {
+	if (!/^\d+\.\d+\.\d+$/.test(source)) throw new Error(`the source version ${JSON.stringify(source)} is not a release`)
 	if (!/^[0-9a-f]{7,40}$/.test(commit)) throw new Error(`the commit ${JSON.stringify(commit)} is not a git object name`)
-	return `${published}-local.g${commit}`
+	return `${source}-local.g${commit}`
 }
 
-/** `pack --local`'s version and the published version it builds on, which the skill's example pins keep naming. */
+/** `pack --local`'s version and the published version the skill's example pins keep naming, which npm has. */
 const resolveLocalVersion = async (): Promise<{ readonly version: string; readonly published: string }> => {
+	const { sourceVersion } = packageGraph(await readPackages())
 	const published = await distTagVersion(LOCAL_BASE_PACKAGE, 'latest')
-	if (published === undefined) throw new Error(`${LOCAL_BASE_PACKAGE} has no latest version on npm to build a local pack on`)
+	if (published === undefined) throw new Error(`${LOCAL_BASE_PACKAGE} has no latest version on npm for the skill's example pins`)
 	const commit = (await run(['git', 'rev-parse', '--short', 'HEAD'])).stdout.trim()
-	return { version: localVersion(published, commit), published }
+	return { version: localVersion(sourceVersion, commit), published }
 }
 
 /** The one command that takes a path. Everywhere else a bare word is a typo, and `publish oops` must not publish. */
