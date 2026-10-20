@@ -32,11 +32,15 @@ import {
 	DEFAULT_VERIFY_PATH,
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
+	errorPage,
+	type ErrorPageStatus,
+	FETCH_MODE_HEADER,
 	FORWARD_AUTHORIZATION_HEADER,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_URI_HEADER,
 	LOGIN_REDIRECT_PARAM,
 	OAUTH_METADATA_VERIFY_PATH,
+	PAGE_CONTENT_TYPE,
 	PREFLIGHT_HEADER,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
@@ -280,7 +284,7 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 		return appRoute(app, options.authUpstream, ownsIamSession)
 	})
 	// Nothing falls off the end: an unmatched Host is a 404, never a pass-through to anything.
-	routes.push({ handle: [{ handler: 'static_response', status_code: 404, headers: headerValues(BASE_HEADER_POLICY), body: 'not found' }] })
+	routes.push({ handle: [refusal(404, 'not found', BASE_HEADER_POLICY)] })
 
 	return {
 		// ADR-0022 keeps the proxy thin and stateless, and `docs/archive/08` chose redeploy over live
@@ -413,7 +417,7 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 			routes: [
 				{
 					match: [{ header_regexp: { Connection: { pattern: connectionNominationPattern() } } }],
-					handle: [{ handler: 'static_response', status_code: 400, headers: headerValues(policy), body: 'bad request' }],
+					handle: [refusal(400, 'bad request', policy)],
 					terminal: true,
 				},
 				{
@@ -433,6 +437,29 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 			],
 		}],
 	}
+}
+
+/** A top-level navigation, the one request that reads a page in place of the text (`isPageNavigation`). */
+const NAVIGATION: CaddyMatcherSet = { header: { [FETCH_MODE_HEADER]: ['navigate'] } }
+
+/**
+ * A refusal Caddy writes itself, under a policy: the status's page to a navigation, its fixed text to anything else.
+ * One handler, so the refusal stays one route of the chain.
+ */
+function refusal(status: ErrorPageStatus, text: string, policy: HeaderPolicy): CaddySubrouteHandler {
+	return navigationChoice(
+		pageHandler(status, errorPage(status), policy),
+		{ handler: 'static_response', status_code: status, headers: headerValues(policy), body: text },
+	)
+}
+
+/** `page` when the request is a navigation, `otherwise` for everything else. */
+function navigationChoice(page: CaddyHandler, otherwise: CaddyStaticResponseHandler): CaddySubrouteHandler {
+	return { handler: 'subroute', routes: [{ match: [NAVIGATION], handle: [page], terminal: true }, { handle: [otherwise] }] }
+}
+
+function pageHandler(status: number | string, body: string, policy: HeaderPolicy): CaddyStaticResponseHandler {
+	return { handler: 'static_response', status_code: status, headers: { ...headerValues(policy), 'Content-Type': [PAGE_CONTENT_TYPE] }, body }
 }
 
 /** A header policy as Caddy's `set` and `static_response` headers: one value per name, replacing any other. */
@@ -526,24 +553,54 @@ function removedHeaders(app: ContractProxyApp): string[] {
 /**
  * Caddy's own failures — an upstream it cannot dial, the app's or the auth service's — answer with no header unless
  * an error route writes one. Each contract app's host gets its policy (a download endpoint its file treatment, by the
- * endpoint the decision asserted), every other host the base policy; the status stays Caddy's and the body is empty.
+ * endpoint the decision asserted), every other host the base policy; the status stays Caddy's. A navigation reads the
+ * page of an application that does not answer, anything else an empty body, and a download always the empty body:
+ * the file treatment would save a page as a file.
  */
 function errorRoutes(manifest: ProxyManifest): CaddyRoute[] {
 	const failure = (policy: HeaderPolicy): CaddyStaticResponseHandler => ({
 		handler: 'static_response',
-		status_code: '{http.error.status_code}',
+		status_code: ERROR_STATUS,
 		headers: headerValues(policy),
 	})
+	const failureOrPage = (policy: HeaderPolicy) => navigationChoice(failurePage(policy), failure(policy))
 	const routes = manifest.apps.filter(isApplicationEntry).flatMap((app): CaddyRoute[] => {
 		const downloads = app.endpoints.filter(answersFile).map((row) => `${row.id}@*`)
 		return [
 			...(downloads.length === 0
 				? []
 				: [{ match: [{ host: app.hosts, header: { [ENDPOINT_HEADER]: downloads } }], handle: [failure(appFileTreatment(app))], terminal: true }]),
-			{ match: [{ host: app.hosts }], handle: [failure(appHeaderPolicy(app))], terminal: true },
+			{ match: [{ host: app.hosts }], handle: [failureOrPage(appHeaderPolicy(app))], terminal: true },
 		]
 	})
-	return [...routes, { handle: [failure(BASE_HEADER_POLICY)] }]
+	return [...routes, { handle: [failureOrPage(BASE_HEADER_POLICY)] }]
+}
+
+/** The status of the error an error route answers. */
+const ERROR_STATUS = '{http.error.status_code}'
+
+/** The failures whose page has words of its own: nothing to route the request to, and an upstream that did not answer in time. */
+const OWN_FAILURE_PAGES: readonly (503 | 504)[] = [503, 504]
+
+/**
+ * The page of a failure Caddy answers. A 503 and a 504 read their own words; every other status, a 502 above all (an
+ * upstream it cannot dial, the application's or the auth service's), reads the page of an application that does not
+ * answer and prints the status: the placeholder is expanded in a `static_response` body as in its status, and the
+ * page's CSS holds no `{name}` that could be read as one. A `vars` matcher reads the status from the same placeholder
+ * (verified on 2.10.2).
+ */
+function failurePage(policy: HeaderPolicy): CaddySubrouteHandler {
+	return {
+		handler: 'subroute',
+		routes: [
+			...OWN_FAILURE_PAGES.map((status): CaddyRoute => ({
+				match: [{ vars: { [ERROR_STATUS]: [String(status)] } }],
+				handle: [pageHandler(status, errorPage(status), policy)],
+				terminal: true,
+			})),
+			{ handle: [pageHandler(ERROR_STATUS, errorPage(502, ERROR_STATUS), policy)] },
+		],
+	}
 }
 
 /**

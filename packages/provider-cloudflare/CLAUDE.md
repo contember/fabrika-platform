@@ -164,7 +164,7 @@ this one import.
   the application's answer, or applies the file treatment for a download endpoint or a `response: 'file'` row, sets a cacheable row's lifetime
   on its 200 (`applyAnswerCache`), deletes the reporting
   headers, and answers a throwing `APP` binding with a fixed 502 and a missing one with a 503 under the same
-  treatment; on an `https` entry both carry HSTS, and on `http` the application's own is dropped. A Worker that
+  treatment (to a navigation that selects no download, the status's page from `@fabrika/proxy-core`); on an `https` entry both carry HSTS, and on `http` the application's own is dropped. A Worker that
   cannot initialize (no `IAM`, no issuer) answers its fixed 503 with the treatment of the host the manifest names
   (ADR-0022).
   `createCloudflareProxyWorker` takes exactly one of `endpoints` or `installation`. `installation`

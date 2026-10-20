@@ -10,7 +10,7 @@ import {
 	requirementDigest,
 	RESOURCE_ACCESS_TOKEN_TYP,
 } from '@fabrika/auth-core'
-import { type DelegationRequest, FORWARD_AUTHORIZATION_HEADER } from '@fabrika/proxy-core'
+import { type DelegationRequest, errorPage, FORWARD_AUTHORIZATION_HEADER } from '@fabrika/proxy-core'
 import { FILE_TREATMENT, headerPolicy, STRICT_TRANSPORT_SECURITY } from '@fabrika/proxy-core/headers'
 import {
 	contractProxyTable,
@@ -714,6 +714,31 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 			expect(download.headers.get(name)).toBe(value)
 		}
 		expect(download.headers.get('Content-Disposition')).toBe('attachment')
+	})
+
+	test('a navigation reads the page of a failure the Worker answers itself, except on a download, whose file treatment would save it', async () => {
+		const handler = createCloudflareProxyHandler({
+			...contractEnvironment(await keyIam(), []),
+			APP: { fetch: () => Promise.reject(new Error('upstream exploded')) },
+		})
+		const navigate = { 'Sec-Fetch-Mode': 'navigate' }
+		const page = await handler(new Request(`https://${HOST}/healthz`, { headers: navigate }))
+		expect(page.status).toBe(502)
+		expect(page.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+		expect(await page.text()).toBe(errorPage(502))
+		for (const [name, value] of POLICY) {
+			expect(page.headers.get(name)).toBe(value)
+		}
+		const download = await handler(new Request(`https://${HOST}/api/files.avatar/photo`, { headers: { ...navigate, Authorization: 'Bearer px_key' } }))
+		expect(download.status).toBe(502)
+		expect(await download.text()).toBe('bad gateway')
+		expect(download.headers.get('Content-Disposition')).toBe('attachment')
+
+		const withoutIam = createCloudflareProxyHandler({ ...contractEnvironment(new FakeIam(), []), IAM: undefined })
+		const unavailable = await withoutIam(new Request(`https://${HOST}/api/me`, { headers: navigate }))
+		expect(unavailable.status).toBe(503)
+		expect(await unavailable.text()).toBe(errorPage(503))
+		expect(unavailable.headers.get('Content-Security-Policy')).toBe(POLICY[0]?.[1] ?? '')
 	})
 
 	test('the reporting headers an application sends are dropped, on an answer and a download', async () => {

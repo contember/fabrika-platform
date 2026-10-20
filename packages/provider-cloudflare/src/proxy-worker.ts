@@ -7,11 +7,14 @@ import {
 	DEFAULT_VERIFY_PATH,
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
+	errorAnswer,
+	type ErrorPageStatus,
 	FORWARD_AUTHORIZATION_HEADER,
 	FORWARDED_HOST_HEADER,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_PROTO_HEADER,
 	FORWARDED_URI_HEADER,
+	isPageNavigation,
 	MemoryTokenCache,
 	OAUTH_METADATA_VERIFY_PATH,
 	PREFLIGHT_HEADER,
@@ -61,10 +64,13 @@ interface WorkerService {
 
 type ProxyFetch = (request: Request) => Promise<Response>
 
-const UNAVAILABLE = new Response('proxy unavailable', {
-	status: 503,
-	headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
-})
+/**
+ * A failure the Worker answers itself: the status's page to a navigation that does not select a download endpoint
+ * (whose file treatment would save the page as a file), its fixed text to everything else.
+ */
+function failure(status: ErrorPageStatus, text: string, request: Request, download: boolean): Response {
+	return errorAnswer(status, text, !download && isPageNavigation(request.headers))
+}
 
 let cached: {
 	readonly manifestJson: string
@@ -124,7 +130,7 @@ export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: Pr
 function unavailable(manifest: ProxyManifest | null): ProxyFetch {
 	return (request) => {
 		const app = manifest === null ? null : findApp(manifest, new URL(request.url))
-		const answer = UNAVAILABLE.clone()
+		const answer = failure(503, 'proxy unavailable', request, false)
 		return Promise.resolve(
 			app === null || !isApplicationEntry(app) ? answer : withResponseHeaders(answer, contractAnswerHeaders(app)(null, answer.status)),
 		)
@@ -165,14 +171,14 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		// An admitted preflight: the decision's 2xx is the whole answer, and the application never sees the request.
 		if (verification.headers.get(PREFLIGHT_HEADER) === '1') return withResponseHeaders(verification, (headers) => headers.delete(PREFLIGHT_HEADER))
 
-		if (app === null) return new Response('not found', { status: 404 })
+		if (app === null) return failure(404, 'not found', request, false)
 		const treatment = answerHeaders.get(app.id)
+		const endpoint = verification.headers.get(ENDPOINT_HEADER)
+		const download = selectsDownload(app, endpoint)
 		const upstream = env[app.upstream]
 		if (!isWorkerService(upstream)) {
-			const unavailable = UNAVAILABLE.clone()
-			return treatment === undefined
-				? unavailable
-				: withResponseHeaders(unavailable, treatment(verification.headers.get(ENDPOINT_HEADER), unavailable.status))
+			const unavailable = failure(503, 'proxy unavailable', request, download)
+			return treatment === undefined ? unavailable : withResponseHeaders(unavailable, treatment(endpoint, unavailable.status))
 		}
 
 		// Built from the ORIGINAL headers, so it is stripped again here — the set above was applied to the
@@ -199,13 +205,13 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 			answer = await upstream.fetch(new Request(request, { headers: upstreamHeaders }))
 		} catch {
 			// Nothing of the error is answered or logged: it can carry the upstream request, a token header included.
-			answer = new Response('bad gateway', { status: 502, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } })
+			answer = failure(502, 'bad gateway', request, download)
 		}
 		if (treatment === undefined) return answer
 		// The treatment deleted the application's own `Access-Control-*`; only the origin the decision admitted is set.
 		const allowOrigin = verification.headers.get(ALLOW_ORIGIN_HEADER)
 		return withResponseHeaders(answer, (headers) => {
-			treatment(verification.headers.get(ENDPOINT_HEADER), answer.status)(headers)
+			treatment(endpoint, answer.status)(headers)
 			if (allowOrigin !== null) applyCrossOriginHeaders(headers, crossOriginHeaders(allowOrigin))
 		})
 	}
@@ -237,6 +243,13 @@ function contractAnswerHeaders(app: ContractProxyApp): AnswerHeaders {
 			if (cache !== undefined) applyAnswerCache(headers, { cache }, status)
 		}
 	}
+}
+
+/** Whether the decision selected a download endpoint of a contract application. */
+function selectsDownload(app: ProxyApp, endpoint: string | null): boolean {
+	if (!isApplicationEntry(app) || endpoint === null) return false
+	const id = parseEndpointHeader(endpoint)?.id
+	return app.endpoints.some((row) => row.kind === 'download' && row.id === id)
 }
 
 /** What only the decision may assert to the app; each is copied from an allow, the way Caddy's `copy_headers` does. */

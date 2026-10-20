@@ -114,11 +114,19 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   The `Connection` refusal and the unmatched-host 404 carry the policy as `static_response` headers; the
   auth service's denials carry the one `@fabrika/proxy-core` set. Caddy's own failures (a dial to the app or the
   auth service refused) answer through the server's `errors` routes: per contract app host its policy, a download
-  endpoint's its file treatment, any other host the base policy, with Caddy's status and no body. Both policy and
+  endpoint's its file treatment, any other host the base policy, with Caddy's status and no body (a navigation's page
+  aside, below). Both policy and
   file treatment carry HSTS on an `https` entry (`appHeaderPolicy`, `appFileTreatment`), whose `set` replaces the
   application's own; an `http` entry deletes `TRANSPORT_HEADERS` instead (`removedHeaders`): a named delete runs
   after the set, so `https` cannot list it. An installation service's answers are
   untouched: IAM and Control set their own per-response CSPs.
+- **A navigation reads a page where everything else reads the text** (`@fabrika/proxy-core/src/pages.ts`). Each
+  refusal Caddy writes itself (the `Connection` 400, the unmatched-host 404) and each error route is ONE handler, a
+  subroute whose first route matches `Sec-Fetch-Mode: navigate` exactly and answers the status's page, and whose second
+  is the old answer. An absent header keeps the text: curl and scripts read what they always read. An error route's
+  page prints `{http.error.status_code}`, which Caddy expands in a `static_response` body, and the page's CSS holds no
+  `{` followed by a non-space, so no part of it is read as a placeholder (served byte for byte by caddy 2.10.2). A
+  download endpoint's failure never gets a page: its file treatment would save it as a file.
 - **A cross-origin preflight and its decoration are the decision's, written by Caddy** (ADR-0022 "Cross-origin
   endpoints"). Only an entry with a `crossOrigin` row gets them, so every other entry's config is byte for byte what
   it was. `forward_auth`'s first `handle_response` entry matches a 2xx carrying `PREFLIGHT_HEADER` and answers it with
