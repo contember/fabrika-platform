@@ -21,6 +21,7 @@ import {
 	requirementDigest,
 } from '@fabrika/auth-core'
 import { z } from 'zod'
+import { type InstallationBrand, installationBrandSchema } from './brand'
 import { type CspOrigins, cspOrigins, isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS, MAX_CSP_ORIGINS, WORKER_BLOB_SOURCE } from './headers'
 import { type OAuthProtectedResource, oauthProtectedResourceSchema, oauthScopesSchema } from './oauth-resource'
 
@@ -118,6 +119,11 @@ export type ManifestEndpointRow = ProxyEndpointRow | InstallationProxyEndpointRo
 
 export interface ProxyManifest {
 	apps: ProxyApp[]
+	/**
+	 * The installation's client logo for the pages the proxy answers with (ADR-0065). Absent, a page draws the fabrika
+	 * mark. A producer sends it only to a proxy whose source parses it: an older parser refuses the key.
+	 */
+	brand?: InstallationBrand
 }
 
 const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
@@ -441,6 +447,7 @@ export function findDuplicateProxyHost(apps: readonly Pick<ProxyApp, 'hosts'>[])
 
 export const proxyManifestSchema = z.object({
 	apps: z.array(proxyAppSchema),
+	brand: installationBrandSchema.optional(),
 }).strict().superRefine(({ apps }, ctx) => {
 	if (new Set(apps.map((app) => app.id)).size !== apps.length) ctx.addIssue({ code: 'custom', message: 'duplicate proxy app id' })
 	if (findDuplicateProxyHost(apps) !== null) ctx.addIssue({ code: 'custom', message: 'duplicate proxy host' })

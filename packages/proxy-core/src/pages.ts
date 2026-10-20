@@ -1,3 +1,4 @@
+import type { InstallationBrand } from './brand'
 import { PAGE_STYLE, pageBody } from './page-style'
 
 /**
@@ -92,17 +93,24 @@ const STATUS_PAGES: Record<ErrorPageStatus, PageContent> = {
 	},
 }
 
-/**
- * The page of a status. `shownStatus` is the code printed on it, the status itself by default; the Caddy configuration
- * passes `{http.error.status_code}`, a placeholder Caddy fills in for the status it answers with.
- */
-export function errorPage(status: ErrorPageStatus, shownStatus: string = String(status)): string {
-	return renderPage(STATUS_PAGES[status], shownStatus)
+export interface ErrorPageOptions {
+	/**
+	 * The code printed on the page, the status itself by default; the Caddy configuration passes
+	 * `{http.error.status_code}`, a placeholder Caddy fills in for the status it answers with.
+	 */
+	readonly shownStatus?: string
+	/** The installation's client logo (ADR-0065), from the manifest; the fabrika mark without one. */
+	readonly brand?: InstallationBrand | null
+}
+
+/** The page of a status. */
+export function errorPage(status: ErrorPageStatus, options: ErrorPageOptions = {}): string {
+	return renderPage(STATUS_PAGES[status], options.shownStatus ?? String(status), options.brand ?? null)
 }
 
 /** The answer of a status: its page when `asPage`, `text` as plain text otherwise. The caller applies the header policy. */
-export function errorAnswer(status: ErrorPageStatus, text: string, asPage: boolean): Response {
-	return asPage ? pageResponse(status, errorPage(status)) : textAnswer(status, text)
+export function errorAnswer(status: ErrorPageStatus, text: string, asPage: boolean, brand: InstallationBrand | null = null): Response {
+	return asPage ? pageResponse(status, errorPage(status, { brand })) : textAnswer(status, text)
 }
 
 /** A rendered page as an answer; the caller applies the header policy. */
@@ -121,7 +129,7 @@ function textAnswer(status: number, body: string): Response {
  * panel, the status in the footer for whoever reports it. Every string that reaches the markup is a constant of this
  * module or a status code; nothing of the request is printed, so nothing is escaped.
  */
-export function renderPage(content: PageContent, shownStatus: string): string {
+export function renderPage(content: PageContent, shownStatus: string, brand: InstallationBrand | null = null): string {
 	const action = content.action === undefined
 		? ''
 		: `\n<a class="button" href="${content.action.href}">${content.action.retry === true ? REFRESH : ''}${content.action.label}</a>`
@@ -135,7 +143,7 @@ export function renderPage(content: PageContent, shownStatus: string): string {
 <style>${PAGE_STYLE}</style>
 </head>
 <body>
-${pageBody(`<h1>${content.title}</h1>\n<p>${content.detail}</p>${action}`, { runsOn: 'Runs on', status: `Status ${shownStatus}` })}
+${pageBody(`<h1>${content.title}</h1>\n<p>${content.detail}</p>${action}`, { runsOn: 'Runs on', status: `Status ${shownStatus}` }, brand)}
 </body>
 </html>
 `

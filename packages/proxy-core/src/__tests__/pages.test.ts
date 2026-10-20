@@ -132,7 +132,7 @@ describe('the page', () => {
 	test('holds no `{name}` Caddy could expand as a placeholder, only the status it is given', () => {
 		for (const status of statuses) {
 			expect(errorPage(status)).not.toMatch(/\{\S/)
-			expect(errorPage(status, '{http.error.status_code}').match(/\{\S[^}]*\}/g)).toEqual(['{http.error.status_code}'])
+			expect(errorPage(status, { shownStatus: '{http.error.status_code}' }).match(/\{\S[^}]*\}/g)).toEqual(['{http.error.status_code}'])
 		}
 	})
 
