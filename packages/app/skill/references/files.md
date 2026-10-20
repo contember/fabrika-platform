@@ -7,15 +7,15 @@ writes the column. There are no generated file endpoints: each operation is a pr
 
 ```ts fabrika.contract.ts
 import { app } from './src/app-kit'
+import { archive } from './src/archiving/endpoints'
+import { attachments } from './src/attachments/endpoints'
 import { comments } from './src/comments/endpoints'
+import { erase } from './src/erasure/endpoints'
 import { members } from './src/members/endpoints'
 import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
-import { archive } from './src/tasks/archive'
-import { attachments } from './src/tasks/attachments'
 import { tasks } from './src/tasks/endpoints'
-import { erase } from './src/tasks/erase'
 
 export const contract = app.contract((c) => ({
 	api: c.rpc('/api', {
@@ -78,7 +78,7 @@ task_attachments: {
 - A file column takes only a file reference: an input file (`file('<kind>')`), a `ctx.files.put` of this request, or a
   reference this request read from a file column under that table's `read` action. A string id is refused.
 
-```ts src/tasks/attachments.ts
+```ts src/attachments/endpoints.ts
 import { file } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
@@ -216,7 +216,7 @@ a view that maps them.
 A job reads each task's rows with a `Ref` it minted and opens each live file, here to hand it to an archive service of
 `deps`. A file can also leave as an e-mail attachment (`attachments` of `ctx.mail.send`, `references/jobs.md`):
 
-```ts src/tasks/archive.ts
+```ts src/archiving/endpoints.ts
 import { app } from '../app-kit'
 import { archiver } from '../archive'
 
@@ -313,7 +313,7 @@ The `PUT` under the task's id makes a repeated run replace the same object, so a
 An erasure removes the rows that hold the files in the same transaction as its other writes: it keeps both or
 neither. The framework's sweep then deletes each file no column references, within the hour.
 
-```ts src/tasks/erase.ts
+```ts src/erasure/endpoints.ts
 import { app } from '../app-kit'
 
 /** Blanks the title of every task closed more than a year ago, and removes its attachments with it. */

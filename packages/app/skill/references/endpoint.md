@@ -19,6 +19,11 @@ export const Versioned = z.strictObject({
 })
 export const Cursor = z.string().max(500)
 export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
+export const WorkloadRow = z.strictObject({
+	assignee: z.nullable(z.string()),
+	open: z.int(),
+	overdue: z.int(),
+})
 ```
 
 - `z` comes from `zod/v4`. Objects are `z.strictObject`, never `z.object`. No `transform`, `refine`, `pipe`,
@@ -372,13 +377,15 @@ Mount every group in `fabrika.contract.ts`:
 ## Shared data access: `queries.ts`
 
 A function of the slice's `queries.ts` takes the handle as a parameter typed with `DbHandle` and returns plain values.
-It decides no authorization: the capability already bounds the handle.
+It decides no authorization: the capability already bounds the handle. `queries.ts` exports only functions: a schema
+that the contract also reads (`WorkloadRow`, an output) lives in `src/schemas.ts`, or the contract would load
+`queries.ts` and refuse its functions (`literal`).
 
 ```ts src/reports/queries.ts
 import type { DbHandle, SqlHandle } from '@fabrika/app/contract'
 import type { Ref } from '@fabrika/app/implement'
-import { z } from 'zod/v4'
 import type { app } from '../app-kit'
+import { WorkloadRow } from '../schemas'
 
 export const statusCounts = async (
 	within: DbHandle<typeof app, 'over', 'project', 'tasks.read'>,
@@ -388,12 +395,6 @@ export const statusCounts = async (
 		Number(rows.find((row) => row.status === status)?.count ?? 0)
 	return { open: count('open'), doing: count('doing'), done: count('done') }
 }
-
-export const WorkloadRow = z.strictObject({
-	assignee: z.nullable(z.string()),
-	open: z.int(),
-	overdue: z.int(),
-})
 
 export const workloadRows = (
 	sql: SqlHandle<typeof app, 'read'>,
@@ -426,8 +427,8 @@ Raw SQL is legitimate for a join, a report, an `OR` or `IS NULL` filter, or a bu
 import { attachment } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
-import { TaskStatus } from '../schemas'
-import { statusCounts, WorkloadRow, workloadRows } from './queries'
+import { TaskStatus, WorkloadRow } from '../schemas'
+import { statusCounts, workloadRows } from './queries'
 
 const Workload = z.strictObject({
 	orgId: z.string().min(1).max(100),

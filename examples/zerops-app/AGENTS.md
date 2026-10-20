@@ -835,6 +835,11 @@ export const Versioned = z.strictObject({
 })
 export const Cursor = z.string().max(500)
 export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
+export const WorkloadRow = z.strictObject({
+	assignee: z.nullable(z.string()),
+	open: z.int(),
+	overdue: z.int(),
+})
 ```
 
 - `z` comes from `zod/v4`. Objects are `z.strictObject`, never `z.object`. No `transform`, `refine`, `pipe`,
@@ -1188,13 +1193,15 @@ Mount every group in `fabrika.contract.ts`:
 ## Shared data access: `queries.ts`
 
 A function of the slice's `queries.ts` takes the handle as a parameter typed with `DbHandle` and returns plain values.
-It decides no authorization: the capability already bounds the handle.
+It decides no authorization: the capability already bounds the handle. `queries.ts` exports only functions: a schema
+that the contract also reads (`WorkloadRow`, an output) lives in `src/schemas.ts`, or the contract would load
+`queries.ts` and refuse its functions (`literal`).
 
 ```ts src/reports/queries.ts
 import type { DbHandle, SqlHandle } from '@fabrika/app/contract'
 import type { Ref } from '@fabrika/app/implement'
-import { z } from 'zod/v4'
 import type { app } from '../app-kit'
+import { WorkloadRow } from '../schemas'
 
 export const statusCounts = async (
 	within: DbHandle<typeof app, 'over', 'project', 'tasks.read'>,
@@ -1204,12 +1211,6 @@ export const statusCounts = async (
 		Number(rows.find((row) => row.status === status)?.count ?? 0)
 	return { open: count('open'), doing: count('doing'), done: count('done') }
 }
-
-export const WorkloadRow = z.strictObject({
-	assignee: z.nullable(z.string()),
-	open: z.int(),
-	overdue: z.int(),
-})
 
 export const workloadRows = (
 	sql: SqlHandle<typeof app, 'read'>,
@@ -1242,8 +1243,8 @@ Raw SQL is legitimate for a join, a report, an `OR` or `IS NULL` filter, or a bu
 import { attachment } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
-import { TaskStatus } from '../schemas'
-import { statusCounts, WorkloadRow, workloadRows } from './queries'
+import { TaskStatus, WorkloadRow } from '../schemas'
+import { statusCounts, workloadRows } from './queries'
 
 const Workload = z.strictObject({
 	orgId: z.string().min(1).max(100),
@@ -1735,15 +1736,15 @@ writes the column. There are no generated file endpoints: each operation is a pr
 
 ```ts fabrika.contract.ts
 import { app } from './src/app-kit'
+import { archive } from './src/archiving/endpoints'
+import { attachments } from './src/attachments/endpoints'
 import { comments } from './src/comments/endpoints'
+import { erase } from './src/erasure/endpoints'
 import { members } from './src/members/endpoints'
 import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
-import { archive } from './src/tasks/archive'
-import { attachments } from './src/tasks/attachments'
 import { tasks } from './src/tasks/endpoints'
-import { erase } from './src/tasks/erase'
 
 export const contract = app.contract((c) => ({
 	api: c.rpc('/api', {
@@ -1806,7 +1807,7 @@ task_attachments: {
 - A file column takes only a file reference: an input file (`file('<kind>')`), a `ctx.files.put` of this request, or a
   reference this request read from a file column under that table's `read` action. A string id is refused.
 
-```ts src/tasks/attachments.ts
+```ts src/attachments/endpoints.ts
 import { file } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
@@ -1944,7 +1945,7 @@ a view that maps them.
 A job reads each task's rows with a `Ref` it minted and opens each live file, here to hand it to an archive service of
 `deps`. A file can also leave as an e-mail attachment (`attachments` of `ctx.mail.send`, `references/jobs.md`):
 
-```ts src/tasks/archive.ts
+```ts src/archiving/endpoints.ts
 import { app } from '../app-kit'
 import { archiver } from '../archive'
 
@@ -2041,7 +2042,7 @@ The `PUT` under the task's id makes a repeated run replace the same object, so a
 An erasure removes the rows that hold the files in the same transaction as its other writes: it keeps both or
 neither. The framework's sweep then deletes each file no column references, within the hour.
 
-```ts src/tasks/erase.ts
+```ts src/erasure/endpoints.ts
 import { app } from '../app-kit'
 
 /** Blanks the title of every task closed more than a year ago, and removes its attachments with it. */
@@ -2763,7 +2764,6 @@ export const tables = defineTables(vocabulary, columns)({
 ## The contract
 
 ```ts src/schemas.ts
-import { file } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 
 export const CandidateStatus = z.enum([
@@ -2773,14 +2773,6 @@ export const CandidateStatus = z.enum([
 	'hired',
 	'rejected',
 ])
-export const Register = z.strictObject({
-	email: z.email().max(200),
-	fullName: z.string().min(1).max(200),
-	website: z.optional(z.string().max(200)),
-	challengeToken: z.string().max(4096),
-	photo: z.optional(file('photos')),
-})
-export const Resend = z.strictObject({ email: z.email().max(200) })
 export const Me = z.strictObject({
 	name: z.string(),
 	email: z.string(),
@@ -2793,11 +2785,11 @@ export const Verified = z.strictObject({ verifiedAt: z.iso.datetime() })
 import { app } from './src/app-kit'
 import { candidates } from './src/candidates/endpoints'
 import { intake } from './src/intake/endpoints'
-import { visitors } from './src/intake/visitors'
 import { portal } from './src/portal/endpoints'
 import { positions } from './src/positions/endpoints'
 import { reasons } from './src/reasons/endpoints'
 import { settings, testMails } from './src/settings/endpoints'
+import { visitors } from './src/visitors/endpoints'
 
 export const contract = app.contract((c) => ({
 	site: c.spa('/', { dir: 'dist/site', access: { public: true } }),
@@ -2824,12 +2816,20 @@ export const contract = app.contract((c) => ({
 }))
 ```
 
-```ts src/intake/visitors.ts
+```ts src/visitors/endpoints.ts
 import { honeypot } from '@fabrika/app'
+import { file } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
-import { Register, Resend } from '../schemas'
 
+const Register = z.strictObject({
+	email: z.email().max(200),
+	fullName: z.string().min(1).max(200),
+	website: z.optional(z.string().max(200)),
+	challengeToken: z.string().max(4096),
+	photo: z.optional(file('photos')),
+})
+const Resend = z.strictObject({ email: z.email().max(200) })
 const Empty = z.strictObject({})
 
 /** Each inserts one row and answers the same, whatever the database holds: no answer tells who registered. */
@@ -2881,6 +2881,9 @@ export const visitors = app.group({}, (r) => ({
   At `/` it answers every `GET` that no more specific endpoint serves, so the HR SPA (`/hr`) and the link's SPA (`/p`)
   keep their own. The approver sees it as "for anyone, without signing in". Put nothing on it that only members may
   read: the page calls only the public procedures.
+- **A schema with a file field** stays in the slice's `endpoints.ts`, as `Register` does here. `src/schemas.ts` is
+  loaded by the SPA and by `queries.ts`, and both are refused `@fabrika/app/contract`, where `file` comes from
+  (`spa-server-import`, `layer-import`).
 - **A public procedure** sits in a group with no callers (`app.group({}, …)`), declares `access: { public: true }`
   and the `actions` it holds, and is served at `POST /api/visitors.register`. `access` says anyone may call it;
   `actions` say what its handler may do. It runs as its own workload, with those actions only, whoever calls: the

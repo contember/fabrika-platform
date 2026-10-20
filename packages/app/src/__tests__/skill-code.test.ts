@@ -5,6 +5,7 @@
 // application of its own over the base's shared files. Each application's migrations are classified as the runner
 // classifies them and, on Postgres, migrate to the catalog its generated schema is rendered from.
 
+import { checkApplication, formatFinding } from '@fabrika/check'
 import { introspectCatalog, renderSchema } from '@fabrika/db/codegen'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { testDatabase } from '@fabrika/db/testing'
@@ -202,6 +203,33 @@ describe('the code blocks of the agent skill', () => {
 		test(`${app.name} compiles clean as an application of its own`, () => {
 			const shared = [...base].filter(([path]) => app.shared.includes(path))
 			expect(compile(app, new Map([...shared, ...filesOf(app.sources)]))).toEqual([])
+		}, 120_000)
+	}
+
+	// An agent that copies a recipe runs fabrika-check next: a recipe the checker refuses, or hints at, teaches the wrong
+	// form. The skill shows no generated test; `fabrika db test-scaffold` writes them. The base application and each
+	// variant show their own slices, not one contract and one migration history that compose every reference file, so
+	// over them the rules of the whole application are left out.
+	const WHOLE_APPLICATION_RULES: readonly string[] = ['contract', 'file-column-migration']
+	const checkerFindings = async (app: SkillApp, files: ReadonlyMap<string, string>, skipped: readonly string[] = []): Promise<string[]> => {
+		const findings = await checkApplication({ root: appRoot, files: new Map([...generatedFiles(app), ...files]) })
+		return findings.filter((finding) => finding.rule !== 'generated-test-hash' && !skipped.includes(finding.rule)).map(formatFinding)
+	}
+
+	test('the checker finds nothing in the application', async () => {
+		expect(await checkerFindings(application, base, WHOLE_APPLICATION_RULES)).toEqual([])
+	}, 120_000)
+
+	for (const source of sources.filter((source) => variants.includes(source.path) && !BASE.includes(source.path) && filesOf([source.path]).size > 0)) {
+		test(`the checker finds nothing in ${source.path} over the application`, async () => {
+			expect(await checkerFindings(application, new Map([...base, ...filesOf([source.path])]), WHOLE_APPLICATION_RULES)).toEqual([])
+		}, 120_000)
+	}
+
+	for (const app of others) {
+		test(`the checker finds nothing in ${app.name}`, async () => {
+			const shared = [...base].filter(([path]) => app.shared.includes(path))
+			expect(await checkerFindings(app, new Map([...shared, ...filesOf(app.sources)]))).toEqual([])
 		}, 120_000)
 	}
 
