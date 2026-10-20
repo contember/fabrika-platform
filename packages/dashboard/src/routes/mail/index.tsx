@@ -176,7 +176,7 @@ function MessageTable({ messages, current }: { messages: readonly MailMessageDto
 		<Table
 			colSpan={6}
 			isEmpty={messages.length === 0}
-			empty={<EmptyState icon="history" title="No messages match" body="An application sends through the relay once it runs on framework 0.6." />}
+			empty={<EmptyState icon="history" title="No messages match" body="An application sends through the relay once it runs on framework 0.7." />}
 			head={
 				<tr>
 					<th>State</th>

@@ -254,7 +254,7 @@ never sends. `mailer: 'own'` takes the application's own `EmailSender` from
 - Control reads its transport from its own `FABRIKA_EMAIL_*` at boot
   (`readInstallationMail`, `packages/control/src/mail-transport.ts`): none, a
   transport, or invalid.
-- A Zerops deploy whose approved snapshot records framework 0.6.0 or newer (a
+- A Zerops deploy whose approved snapshot records framework 0.7.0 or newer (a
   prerelease compares as its release) hands the relay (`relaysInstallationMail`,
   `platformMailEnvironment`): `FABRIKA_EMAIL_PROVIDER=platform`,
   `FABRIKA_PLATFORM_MAIL_URL=http://control:3000` and the environment's
@@ -266,7 +266,7 @@ never sends. `mailer: 'own'` takes the application's own `EmailSender` from
   whole set (`installationMailEnvironment`), its credentials among the values the
   run's logs redact. Zerops writes every name service-level and sensitive.
 - Zerops removes the variables a deploy no longer hands, so an environment that moves
-  to framework 0.6 loses the provider's credential at that deploy. A Cloudflare deploy
+  to framework 0.7 loses the provider's credential at that deploy. A Cloudflare deploy
   refuses any `FABRIKA_EMAIL_*` or `FABRIKA_PLATFORM_*`, so a credential never lands in
   a plain Worker variable.
 - Without a transport, a deploy that hands the set hands
@@ -313,7 +313,7 @@ URL and `FABRIKA_EMAIL_PROVIDER` and redacts the key.
 
 ## The relay
 
-Control's mail relay receives installation mail from applications on framework 0.6
+Control's mail relay receives installation mail from applications on framework 0.7
 and from IAM on Zerops, records it, gates it and dispatches it through Control's own
 transport (`packages/control/src/mail-relay/`). Only the Bun process (Zerops and the
 local stack) runs it; on the Worker its row answers 404.
@@ -434,7 +434,7 @@ Only `admin` holds them by default. The procedures (`controlRpc.mail`):
   `mail_rules`. The `mail-relay` row changes the console table, so `platform deploy`
   rewrites `FABRIKA_SERVICE_TABLE_DIGEST`.
 - An installation starts with no rules: every application message passes.
-- An application environment moves to the relay at its first deploy on framework 0.6.
+- An application environment moves to the relay at its first deploy on framework 0.7.
   An older release keeps the set and sends directly; the gate does not cover it.
 - IAM moves to the relay with the release whose `zerops.yaml` gives it
   `FABRIKA_CONTROL_URL`. Its `FABRIKA_EMAIL_*` stay.

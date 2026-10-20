@@ -1,16 +1,16 @@
 # Sprint — the platform transport and the gated mail relay (2026-10-20)
 
-**Goal.** An application on framework 0.6 sends installation mail to Control over a platform transport, and Control
+**Goal.** An application on framework 0.7 sends installation mail to Control over a platform transport, and Control
 records, gates and dispatches it; IAM on Zerops sends through the same relay, always passed.
 
 **Theme.** The idea that specified this sprint graduated into [ADR-0064](../decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md) (the platform transport) and [ADR-0019](../decisions/0019-portable-outbound-email.md) §8 (the relay). Zerops only.
-Base: `feat/declare-the-surface` (framework 0.6.0). The success condition: a 0.6 application's job sends a mail, the
+Base: `feat/declare-the-surface` (framework 0.7.0). The success condition: a 0.7 application's job sends a mail, the
 relay holds it under a `hold` rule, an operator releases it in the console, the provider (the local stack's
 `directory`) receives it; a 0.5 application on the same Control still gets the direct credential and sends as before.
 
 ## Binding rules for every WU
 
-- ADR-0062: everything is additive on the platform side. A 0.4 or 0.5 application, and a 0.6 snapshot without
+- ADR-0062: everything is additive on the platform side. A 0.4, 0.5 or 0.6 application, and a 0.7 snapshot without
   `framework`, keeps today's `FABRIKA_EMAIL_*` with the provider credential.
 - No `as`, `any`, `@ts-ignore`, `@ts-expect-error`. Parse at boundaries (the relay's request body, stored rows).
 - Never log a key, a mail body, a subject or a recipient. A log line is a fixed code plus ids.
@@ -52,7 +52,7 @@ relay holds it under a `hold` rule, an operator releases it in the console, the 
   `platform_transport_keys`, the value sealed in the vault (`platform:platform-key:<app>@<env>:mail`). Rotated when
   less than half of its 30-day life is left; the old hash stays valid until its own expiry.
 - A deploy of an environment that has a `mailer: 'installation'` job, on Zerops (the namespace-proxy path), whose
-  approved snapshot's `framework` is `>= 0.6.0`, hands `FABRIKA_EMAIL_PROVIDER=platform`,
+  approved snapshot's `framework` is `>= 0.7.0`, hands `FABRIKA_EMAIL_PROVIDER=platform`,
   `FABRIKA_PLATFORM_MAIL_URL` (Control's private origin, `http://control:3000` on Zerops) and the key, and nothing of
   the provider. Every other case keeps `installationMailEnvironment` as it is. When the environment stops needing the
   key, its rows and vault entry are deleted.
@@ -136,8 +136,8 @@ relay holds it under a `hold` rule, an operator releases it in the console, the 
 - WU-1: the conformance kit no longer counts a delivery error code in an answer body as leaked provider content.
 - WU-1: `PlatformEmailSender` requires the URL to be exactly an http(s) origin (no path, no trailing slash).
 - WU-1 review findings → [backlog 194](../backlog/194-mail-relay-follow-ups.md).
-- WU-2: a prerelease compares as its release (`0.6.0-rc.1` gets the relay).
-- WU-2: without a vault, a deploy of a 0.6 application with a mailer job is refused → ADR-0064 §2.
+- WU-2: a prerelease compares as its release (`0.7.0-rc.1` gets the relay).
+- WU-2: without a vault, a deploy of a 0.7 application with a mailer job is refused → ADR-0064 §2.
 - WU-2: a dry run hands the provider and the URL without a key → ADR-0064 §2.
 - WU-2: issuing a key deletes expired key rows installation-wide → [backlog 194](../backlog/194-mail-relay-follow-ups.md).
 - WU-3: an oversized body answers 400 `invalid_message`; the wire has no 413 → `reference/outbound-email.md`.

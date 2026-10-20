@@ -116,18 +116,18 @@ describe('the installation mail transport', () => {
 describe("the platform's relay for a job that sends through the installation", () => {
 	const needs = artifact({ 'job:digest': { ...REACH, mailer: 'installation' } })
 
-	test('a framework release from 0.6.0 on reads the relay; an older one, or a snapshot that records none, does not', () => {
-		for (const framework of ['0.6.0', '0.6.3', '0.7.0', '1.0.0', '0.6.0-rc.1']) {
+	test('a framework release from 0.7.0 on reads the relay; an older one, or a snapshot that records none, does not', () => {
+		for (const framework of ['0.7.0', '0.7.3', '0.8.0', '1.0.0', '0.7.0-rc.1']) {
 			expect(relaysInstallationMail(needs, framework)).toBe(true)
 		}
-		for (const framework of ['0.5.9', '0.4.8', undefined]) {
+		for (const framework of ['0.6.0', '0.6.3', '0.5.9', '0.4.8', undefined]) {
 			expect(relaysInstallationMail(needs, framework)).toBe(false)
 		}
 	})
 
 	test('only a contract with a job that sends through the installation needs it', () => {
-		expect(relaysInstallationMail(artifact({ 'job:own': { ...REACH, mailer: 'own' } }), '0.6.0')).toBe(false)
-		expect(relaysInstallationMail(null, '0.6.0')).toBe(false)
+		expect(relaysInstallationMail(artifact({ 'job:own': { ...REACH, mailer: 'own' } }), '0.7.0')).toBe(false)
+		expect(relaysInstallationMail(null, '0.7.0')).toBe(false)
 	})
 
 	test("hands Control's private origin and the key, and nothing of a provider; a dry run's has no key", () => {

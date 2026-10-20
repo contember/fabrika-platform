@@ -48,7 +48,7 @@ We will publish a separate `@fabrika/email` package with one runtime-neutral `Em
 Email availability is an explicit optional service capability. A missing sender never silently drops a message and never changes whether an authentication or notification feature is enabled. The consuming domain must select a defined non-email flow or report that delivery is unavailable. An application
 that declares a mailer has no such flow, so it does not start without a sender (§3).
 
-Installation mail from an application on framework 0.6 and from IAM on Zerops goes through Control's relay (§8). The
+Installation mail from an application on framework 0.7 and from IAM on Zerops goes through Control's relay (§8). The
 relay records every message. A `drop` rule sends nothing, but the message stays recorded and visible in the console
 as `dropped`: an operator's decision, never a silent loss.
 
@@ -113,7 +113,7 @@ as `dropped`: an operator's decision, never a silent loss.
   installations, on one provider account never share a key. An application key is 1 to 200 visible ASCII characters;
   with the 41-character prefix it stays within the contract's 256.
 - An application sets `replyTo` and `fromName` per message. The sending address is the transport's.
-- On framework 0.6, `FABRIKA_EMAIL_PROVIDER=platform` makes the `installation` transport a `PlatformEmailSender` to
+- On framework 0.7, `FABRIKA_EMAIL_PROVIDER=platform` makes the `installation` transport a `PlatformEmailSender` to
   Control's relay (§8), built from `FABRIKA_PLATFORM_MAIL_URL` and `FABRIKA_PLATFORM_MAIL_KEY`
   ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)), not from the provider
   registry. It needs no `FABRIKA_EMAIL_FROM`, and a missing URL or key refuses the boot. Its capabilities are the
@@ -145,7 +145,7 @@ as `dropped`: an operator's decision, never a silent loss.
   passes it to IAM. Control on Cloudflare holds no transport, because Cloudflare runs no jobs.
 - Control is the source for applications. A deploy of an environment whose approved contract has a job that declares
   `mailer: 'installation'` hands it one of two things:
-  - **the relay**, on Zerops, when the approved snapshot records framework 0.6.0 or newer:
+  - **the relay**, on Zerops, when the approved snapshot records framework 0.7.0 or newer:
     `FABRIKA_EMAIL_PROVIDER=platform`, the platform transport's URL and key, and nothing of the provider (ADR-0064).
     Control hands it whether or not its own transport is valid, because the relay holds what it cannot send;
   - **the set**, for an older release or a snapshot that records no release: every `FABRIKA_EMAIL_*` Control holds,
@@ -182,7 +182,7 @@ job declaring `mailer: 'own'` uses refuses the boot.
 - `fabrika app dev` shows one structured mail view for IAM's and the application's messages: recipient, subject,
   text, the HTML body in a sandboxed frame, the key and the outcome. A seed reads the same list.
 - The local stack captures the applications' mail in the same directory as IAM's. Its Control holds a `directory`
-  transport. It hands it to an older application like any installation transport, and its relay dispatches a 0.6
+  transport. It hands it to an older application like any installation transport, and its relay dispatches a 0.7
   application's mail to it. There is no SMTP catcher.
 
 ### 7. Applications word IAM's e-mails
@@ -202,7 +202,7 @@ application its variables. The relay runs in Control's Bun process, on Zerops an
 none and answers its row with 404. Its senders reach it over the platform transport
 ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)).
 
-- **Senders.** An application environment on framework 0.6 (`<app>@<env>`, by its transport key), and IAM on Zerops
+- **Senders.** An application environment on framework 0.7 (`<app>@<env>`, by its transport key), and IAM on Zerops
   (`installation:iam`, by its derived key). IAM sends through the relay when it has an email provider configured and
   `FABRIKA_CONTROL_URL` is set; otherwise it sends as before. Its manual action-link flow without a provider is
   unchanged.
@@ -243,7 +243,7 @@ none and answers its row with 404. Its senders reach it over the platform transp
   non-idempotent transport is not retried at all.
 - IAM keeps an invitation whose email outcome is `unknown`: the link may have arrived. Over the relay, IAM's send is
   idempotent and only queued, so `unknown` means only that the relay was unreachable.
-- An application on framework 0.6 holds no provider credential, only a key to the relay. An application on an older
+- An application on framework 0.7 holds no provider credential, only a key to the relay. An application on an older
   release inside the ADR-0062 window still holds the credential and sends directly: it could send as the
   installation's address to anyone, and the gate does not cover it until the release leaves the window.
 - With the relay, Control is on the path of every installation mail. An outage delays mail; the sender retries the
@@ -264,7 +264,7 @@ none and answers its row with 404. Its senders reach it over the platform transp
   its next deploy, and the refusal says how to delete it.
 - **Rollout of the relay.** An existing installation has no rules, so every application message passes and nothing
   changes until an operator adds a `hold`. A Control without a transport holds application messages instead of
-  handing `none`. An application environment moves to the relay at its first deploy on framework 0.6, which replaces
+  handing `none`. An application environment moves to the relay at its first deploy on framework 0.7, which replaces
   its `FABRIKA_EMAIL_*` with the platform variables. IAM keeps its `FABRIKA_EMAIL_*`: it still reads them to decide
   whether it sends mail at all, and Control dispatches with its own copy. ADR-0064 answers the rest of the rollout.
 - On Zerops, every `FABRIKA_EMAIL_*` an application gets is sensitive, its provider name and address too, so the

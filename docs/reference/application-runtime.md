@@ -1836,7 +1836,7 @@ commits them nor sets them, and an application VARIABLE of the same name is refu
 | `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY` | The ingest coordinates that DSN reports under                                   |
 
 A deploy of an approved contract with a job that declares `mailer: 'installation'` also writes the mail transport
-([outbound email](outbound-email.md#applications)). An application on framework 0.6 on Zerops gets the relay:
+([outbound email](outbound-email.md#applications)). An application on framework 0.7 on Zerops gets the relay:
 `FABRIKA_EMAIL_PROVIDER=platform`, `FABRIKA_PLATFORM_MAIL_URL` (Control's private origin, plain) and
 `FABRIKA_PLATFORM_MAIL_KEY` (its environment's transport key, sensitive). An older release gets every `FABRIKA_EMAIL_*`
 name Control holds, sensitive on Zerops, or `FABRIKA_EMAIL_PROVIDER=none` when Control has no transport; with an

@@ -91,7 +91,7 @@ export function installationMailSecrets(mail: InstallationMail, handed: Readonly
 }
 
 /** The first framework release whose `ctx.mail` sends through the platform's relay (`FABRIKA_EMAIL_PROVIDER=platform`). */
-const PLATFORM_MAIL_SINCE: Release = { text: '0.6.0', major: 0, minor: 6, patch: 0 }
+const PLATFORM_MAIL_SINCE: Release = { text: '0.7.0', major: 0, minor: 7, patch: 0 }
 
 /**
  * Whether a deploy hands the application the relay instead of the installation's credential: a job declares mailer

@@ -93,7 +93,7 @@ caller's idempotency key. Mail is the first receiver.**
 
 - Zerops only, on the namespace-proxy path. On Cloudflare a deploy refuses every `FABRIKA_PLATFORM_*` variable, as it
   refuses `FABRIKA_EMAIL_*`: Cloudflare runs no job.
-- Only an application whose approved snapshot records framework release 0.6.0 or newer gets the platform transport. A
+- Only an application whose approved snapshot records framework release 0.7.0 or newer gets the platform transport. A
   prerelease compares as its release.
 - An older release, and a snapshot that records no framework release, keeps what it had: for mail, the installation's
   `FABRIKA_EMAIL_*` with the provider credential. The platform transport is additive under ADR-0062.
@@ -108,7 +108,7 @@ What the relay does with the message, its gate and its dispatcher, is [ADR-0019]
 
 ## Consequences
 
-- An application on framework 0.6 holds no provider credential. Its key reaches one receiver, as one application
+- An application on framework 0.7 holds no provider credential. Its key reaches one receiver, as one application
   environment, and Control can revoke it at the next deploy.
 - Adding a receiver is a name in `PLATFORM_RECEIVERS`, a `protocol` row on the receiver and a key reconcile in the
   deploy. It needs no new variable family and no change in IAM or the proxy. Membership, audit and job reports may
@@ -116,7 +116,7 @@ What the relay does with the message, its gate and its dispatcher, is [ADR-0019]
 - The receiver is a dependency of every call. While Control is unreachable, a relayed send fails
   `provider_unavailable` (retryable, outcome `unknown`), and the application retries it, because the receiver is
   idempotent.
-- A deploy of a 0.6 application with a mailer job needs Control's vault. An installation without one cannot deploy it.
+- A deploy of a 0.7 application with a mailer job needs Control's vault. An installation without one cannot deploy it.
 - A deploy that issues a key also deletes every expired key row of the installation. It deletes only its own
   environment's vault values, so other environments' expired values stay in the vault
   ([backlog 194](../backlog/194-mail-relay-follow-ups.md)).
@@ -129,7 +129,7 @@ What the relay does with the message, its gate and its dispatcher, is [ADR-0019]
    row, so `platform deploy` rewrites `FABRIKA_SERVICE_TABLE_DIGEST` with the regenerated manifest. IAM's setup in
    the release's generated `zerops.yaml` gains `FABRIKA_CONTROL_URL`; the sidecar builds IAM from the tag's checkout,
    so `platform upgrade` carries it.
-2. **Environment variables.** An existing application environment converges at its next deploy. A 0.6 release gets
+2. **Environment variables.** An existing application environment converges at its next deploy. A 0.7 release gets
    `FABRIKA_EMAIL_PROVIDER=platform` and the `FABRIKA_PLATFORM_MAIL_*` pair, and the deploy removes the provider's
    variables, which it no longer hands. The key is sensitive and cannot be read back, so every deploy writes it.
    An older release keeps its `FABRIKA_EMAIL_*`.
@@ -155,6 +155,6 @@ credential at that service. A transport key names its receiver and nothing else.
 
 ### Keep the provider credential in the application
 
-What framework 0.5 does. Rejected for new releases because the platform then has no record and no gate. It cannot
+What framework 0.6 and older do. Rejected for new releases because the platform then has no record and no gate. It cannot
 hold a new application's mail, drop mail to a domain, or show an operator what left. The credential also spreads to
 every application that sends.

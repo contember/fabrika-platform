@@ -306,7 +306,7 @@ runs `packages/local-stack/src/iam-server.ts`, the production server, with
 Zerops. So forgot-password, invitations and an administrator's enrollment and reset all work
 here, and the console's Mail page lists every message.
 
-An application's mail lands in the same directory. A deploy of an application on framework 0.6
+An application's mail lands in the same directory. A deploy of an application on framework 0.7
 whose job declares `mailer: 'installation'` hands it the relay, as a deployed Control does, and
 the relay dispatches its mail to the directory. An older application gets the `x-local-mail`
 set itself; it runs the generated production entrypoint, which takes nothing but its

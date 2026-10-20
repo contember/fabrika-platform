@@ -80,7 +80,7 @@ sends again only when it is. Log a `markSent` that answers `false`.
 
 ### The older releases
 
-18. **The console does not say which environments the gate covers.** An application on a release older than 0.6
+18. **The console does not say which environments the gate covers.** An application on a release older than 0.7
     still sends directly. The Mail page shows only relayed messages and does not list the environments outside the
     gate.
 

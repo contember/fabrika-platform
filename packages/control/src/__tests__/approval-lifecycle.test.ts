@@ -806,7 +806,7 @@ export const contract = app.contract((c) => ({
 	const INVALID_REFUSAL =
 		"the contract's job `digest` sends mail through the installation (mailer: 'installation'), and Control's mail transport is invalid"
 
-	/** A release before the relay hands the installation's credential itself, as every release did before 0.6. */
+	/** A release before the relay hands the installation's credential itself, as every release did before 0.7. */
 	function mailingWorld(framework = '0.5.2'): World {
 		const w = world()
 		const { 'fabrika.contract.ts': _contract, ...files } = kitFiles()
@@ -851,8 +851,8 @@ export const contract = app.contract((c) => ({
 		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toEqual([])
 	})
 
-	test("a 0.6 application behind a namespace proxy sends through Control's relay: its key, and nothing of the provider", async () => {
-		const w = mailingWorld('0.6.0')
+	test("a 0.7 application behind a namespace proxy sends through Control's relay: its key, and nothing of the provider", async () => {
+		const w = mailingWorld('0.7.0')
 		await seed(w)
 		const { workloadCredentials } = await credentialed(w)
 		const loggingProvider = provider(w)
@@ -896,9 +896,9 @@ export const contract = app.contract((c) => ({
 		expect(w.deploys[1]?.managedEnvironment['FABRIKA_PLATFORM_MAIL_KEY']).toBe(key)
 	})
 
-	test("the relay holds what Control cannot send, so a 0.6 application deploys where Control's transport is invalid or absent", async () => {
+	test("the relay holds what Control cannot send, so a 0.7 application deploys where Control's transport is invalid or absent", async () => {
 		for (const transport of [{ mailTransport: invalidTransport }, {}]) {
-			const w = mailingWorld('0.6.0')
+			const w = mailingWorld('0.7.0')
 			await seed(w)
 			const { workloadCredentials } = await credentialed(w)
 			const result = await executeDeploy({ ...deps(w), workloadCredentials, ...transport, platformTransport: await relayed(w) }, {
@@ -910,8 +910,8 @@ export const contract = app.contract((c) => ({
 		}
 	})
 
-	test('a 0.6 application does not deploy behind a namespace proxy where Control cannot issue the key', async () => {
-		const w = mailingWorld('0.6.0')
+	test('a 0.7 application does not deploy behind a namespace proxy where Control cannot issue the key', async () => {
+		const w = mailingWorld('0.7.0')
 		await seed(w)
 		const { workloadCredentials } = await credentialed(w)
 		const quiet = spyOn(console, 'error').mockImplementation(() => {})
@@ -925,7 +925,7 @@ export const contract = app.contract((c) => ({
 	})
 
 	test('a snapshot read before Control recorded the framework release is an older application: it gets the credential', async () => {
-		const w = mailingWorld('0.6.0')
+		const w = mailingWorld('0.7.0')
 		await seed(w)
 		const { workloadCredentials } = await credentialed(w)
 		expect(
@@ -937,7 +937,7 @@ export const contract = app.contract((c) => ({
 		const recorded = approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'stage'))
 		if (recorded === null) throw new Error('nothing is published')
 		const { framework, ...unrecorded } = recorded
-		expect(framework).toBe('0.6.0')
+		expect(framework).toBe('0.7.0')
 		w.sqlite.query("UPDATE app_envs SET published_snapshot_json = ? WHERE app_id = 'notes' AND env = 'stage'").run(serializeSnapshot(unrecorded))
 		// A dry run deploys the approved snapshot as stored, without reading the commit again.
 		const dryRun = await executeDeploy({ ...deps(w), mailTransport, platformTransport: await relayed(w) }, {
@@ -948,8 +948,8 @@ export const contract = app.contract((c) => ({
 		expect(mailVariables(w.deploys[1])).toEqual(['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_RESEND_API_KEY'])
 	})
 
-	test('a dry run of a 0.6 application hands the relay and issues no key; dropping the job forgets the key', async () => {
-		const w = mailingWorld('0.6.0')
+	test('a dry run of a 0.7 application hands the relay and issues no key; dropping the job forgets the key', async () => {
+		const w = mailingWorld('0.7.0')
 		await seed(w)
 		const { workloadCredentials } = await credentialed(w)
 		const platformTransport = await relayed(w)
