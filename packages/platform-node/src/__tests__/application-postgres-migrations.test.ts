@@ -52,7 +52,7 @@ describe('application migration identity', () => {
 	test("the example application's migrations are accepted", () => {
 		const directory = join(import.meta.dir, '..', '..', '..', '..', 'examples', 'zerops-app', 'db', 'migrations')
 		const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory })
-		expect(migrations.plan().bundles.map((bundle) => bundle.migrations.length)).toEqual([1])
+		expect(migrations.plan().bundles.map((bundle) => bundle.migrations.length)).toEqual([3])
 	})
 
 	test('composes one app bundle, a ledger in the application schema and the default timeouts', () => {
