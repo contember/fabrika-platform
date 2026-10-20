@@ -6,8 +6,8 @@ import { MemoryEmailSender } from '@fabrika/email/memory'
 import { encodePlatformMailRequest, platformMailFingerprint } from '@fabrika/email/platform'
 import { type JobQueue, uuidv7 } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
-import type { MailMessageRepository, MailMessageState } from '../db'
-import { dispatchMail, MAIL_MAX_ATTEMPTS, relayIdempotencyKey } from '../mail-relay/dispatch'
+import { MailMessageRepository, type MailMessageState } from '../db'
+import { dispatchMail, MAIL_DISPATCH_INTERRUPTED, MAIL_MAX_ATTEMPTS, MAIL_STALE_CLAIM_S, relayIdempotencyKey } from '../mail-relay/dispatch'
 import type { MailDispatchMessage } from '../mail-relay/queue'
 import { createHarness } from './helpers/harness'
 
@@ -19,9 +19,16 @@ interface Sent {
 	delaySeconds: number | undefined
 }
 
-function dispatcher(sender: MemoryEmailSender | null = new MemoryEmailSender()) {
+/** A database write that fails after the provider took the message. */
+class FailingMarkSent extends MailMessageRepository {
+	override markSent(): Promise<boolean> {
+		return Promise.reject(new Error('database unavailable'))
+	}
+}
+
+function dispatcher(sender: MemoryEmailSender | null = new MemoryEmailSender(), options: { failMarkSent?: boolean } = {}) {
 	const harness = createHarness()
-	const messages = harness.repositories.mailMessages
+	const messages = options.failMarkSent === true ? new FailingMarkSent(harness.d1) : harness.repositories.mailMessages
 	const jobs: Sent[] = []
 	const queue: JobQueue<MailDispatchMessage> = {
 		send(message, options) {
@@ -175,6 +182,71 @@ describe('the mail dispatcher', () => {
 		expect(await d.dispatch(sent)).toEqual({ status: 'skipped' })
 		expect(await d.dispatch(uuidv7())).toEqual({ status: 'skipped' })
 		expect(d.sender?.handoffs).toHaveLength(1)
+	})
+})
+
+describe('the claim before the send', () => {
+	test('two dispatches of one message, one while the other sends, send it once', async () => {
+		const d = dispatcher(new MemoryEmailSender({ capabilities: { idempotent: false } }))
+		const id = await stored(d.messages)
+		const during: Promise<unknown>[] = []
+		d.sender?.during(async () => {
+			during.push(d.dispatch(id))
+			await Promise.resolve()
+		})
+		const results = await Promise.all([d.dispatch(id), d.dispatch(id)])
+		expect(await Promise.all(during)).toEqual([{ status: 'skipped' }])
+		expect(results.filter((result) => result.status === 'sent')).toHaveLength(1)
+		expect(d.sender?.handoffs).toHaveLength(1)
+		expect(await d.messages.get(id)).toMatchObject({ state: 'sent', attempts: 1 })
+	})
+
+	test('a claimed attempt that a live consumer still holds is left to it', async () => {
+		const d = dispatcher()
+		const id = await stored(d.messages)
+		expect(await d.messages.claim(id, 0, d.now())).toBe(true)
+		d.advance(MAIL_STALE_CLAIM_S - 1)
+		expect(await d.dispatch(id)).toEqual({ status: 'skipped' })
+		expect(d.sender?.handoffs).toEqual([])
+		expect(await d.messages.get(id)).toMatchObject({ state: 'sending', attempts: 1 })
+	})
+
+	test('over a non-idempotent transport, a send whose outcome was not recorded is never sent again: it ends unknown', async () => {
+		const d = dispatcher(new MemoryEmailSender({ capabilities: { idempotent: false } }), { failMarkSent: true })
+		const id = await stored(d.messages)
+		await expect(d.dispatch(id)).rejects.toThrow('database unavailable')
+		// The consumer retries the job at once: the claim is still held.
+		expect(await d.dispatch(id)).toEqual({ status: 'skipped' })
+		d.advance(MAIL_STALE_CLAIM_S)
+		expect(await d.dispatch(id)).toEqual({ status: 'unknown', code: MAIL_DISPATCH_INTERRUPTED })
+		expect(await d.messages.get(id)).toMatchObject({ state: 'unknown', attempts: 1, error_code: MAIL_DISPATCH_INTERRUPTED })
+		expect(d.sender?.handoffs).toHaveLength(1)
+		expect(d.jobs).toEqual([])
+	})
+
+	test('over an idempotent transport, an interrupted attempt goes again under the same key', async () => {
+		const d = dispatcher()
+		const id = await stored(d.messages)
+		expect(await d.messages.claim(id, 0, d.now())).toBe(true)
+		d.advance(MAIL_STALE_CLAIM_S)
+		expect(await d.dispatch(id)).toEqual({ status: 'sent' })
+		expect(await d.messages.get(id)).toMatchObject({ state: 'sent', attempts: 2 })
+		expect(d.sender?.handoffs.map((handoff) => handoff.message.idempotencyKey)).toEqual(['relay:notes@prod:invite:1'])
+	})
+
+	test('over an idempotent transport, an interrupted last attempt ends unknown', async () => {
+		const d = dispatcher()
+		const id = await stored(d.messages)
+		d.sender?.unavailable()
+		for (let attempt = 1; attempt < MAIL_MAX_ATTEMPTS; attempt++) {
+			const result = await d.dispatch(id)
+			if (result.status !== 'requeued') throw new Error(`attempt ${attempt}: ${result.status}`)
+			d.advance(result.delaySeconds)
+		}
+		expect(await d.messages.claim(id, MAIL_MAX_ATTEMPTS - 1, d.now())).toBe(true)
+		d.advance(MAIL_STALE_CLAIM_S)
+		expect(await d.dispatch(id)).toEqual({ status: 'unknown', code: MAIL_DISPATCH_INTERRUPTED })
+		expect(await d.messages.get(id)).toMatchObject({ state: 'unknown', attempts: MAIL_MAX_ATTEMPTS })
 	})
 })
 

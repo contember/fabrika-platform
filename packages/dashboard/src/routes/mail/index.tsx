@@ -22,7 +22,7 @@ interface MailFilter {
 	sender?: string
 }
 
-export const MAIL_STATES: readonly MailMessageState[] = ['held', 'queued', 'sent', 'failed', 'unknown', 'dropped']
+export const MAIL_STATES: readonly MailMessageState[] = ['held', 'queued', 'sending', 'sent', 'failed', 'unknown', 'dropped']
 
 const MAIL_QUERY: QueryLanguage<keyof MailFilter> = {
 	qualifiers: [
@@ -154,6 +154,7 @@ function mailLamp(state: MailMessageState): Lamp {
 		case 'sent':
 			return 'ok'
 		case 'queued':
+		case 'sending':
 			return 'run'
 		case 'failed':
 		case 'unknown':

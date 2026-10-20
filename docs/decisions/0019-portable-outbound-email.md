@@ -219,7 +219,10 @@ none and answers its row with 404. Its senders reach it over the platform transp
 - **A person decides a held message.** In the console an operator releases it (`held` → `queued`) or drops it. A
   release on a Control without a transport fails the message as `mail_not_configured`.
 - **The dispatcher** sends each queued message through Control's own transport, under a key of its own
-  (`relay:<sender>:<key>`), so two senders' keys never meet at the provider. A retryable failure that
+  (`relay:<sender>:<key>`), so two senders' keys never meet at the provider. It claims each attempt before the send
+  (`queued` → `sending`, guarded on the state and the attempts it read), so of two jobs or two consumers exactly one
+  sends. A claim that never recorded an outcome (the consumer stopped) goes again under the same key only over an
+  idempotent transport; over any other the message is `unknown`. A retryable failure that
   `mayRetryDelivery` allows is retried with backoff, a bounded number of times; then the message is `failed` (it did
   not leave) or `unknown` (it may have). Over a non-idempotent provider an `unknown` message stays for a person, as
   §1 says.

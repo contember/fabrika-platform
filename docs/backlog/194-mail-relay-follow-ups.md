@@ -8,31 +8,15 @@ blocked-by: []
 
 **Summary.** Gaps the review of the platform transport and the mail relay found and did not block on
 ([ADR-0064](../decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md),
-[ADR-0019](../decisions/0019-portable-outbound-email.md) §8). Two can send a message twice over a provider without
-idempotency; the rest are small.
+[ADR-0019](../decisions/0019-portable-outbound-email.md) §8). All of them are small.
 
 ## Problem
 
-### The dispatcher can send a message twice
-
-1. **No claim before the send.** `dispatchMail` (`packages/control/src/mail-relay/dispatch.ts`) sends first and then
-   writes `sent` and `attempts`. When the process crashes, or the database write fails, after the provider took the
-   message, the job is delivered again and sends again, and no attempt was counted. Over a provider without
-   idempotency (SmartEmailing) the recipient gets two messages.
-2. **Two jobs for one message both send.** A message can have more than one dispatch job: maintenance re-enqueues a
-   stale `queued` row, a release enqueues, a retry enqueues a delayed job. Two consumers can pick two jobs of one
-   message and both send. A `markSent` that answers `false` after a send is not logged.
-
-**Fix for both:** claim before the send. A guarded update raises `attempts` (and sets a claim time) only on a `queued`,
-due row whose `attempts` is still the value read; a job that loses the claim does nothing. A job that finds a claimed
-row it did not settle (a crash after the claim) settles it as `unknown` when the transport is not idempotent, and
-sends again only when it is. Log a `markSent` that answers `false`.
-
 ### The dispatcher and maintenance
 
-3. **Maintenance re-enqueues the same rows on every run while the consumer is behind.** `listDueQueued` selects by
-   `updated_at`, and an enqueue does not bump it, so the jobs grow without bound. Bump `updated_at` on re-enqueue, or
-   select by a separate enqueue time.
+3. **Maintenance re-enqueues the same rows on every run while the consumer is behind.** `listStalled` selects a queued
+   row by `updated_at`, and an enqueue does not bump it, so the jobs grow without bound. Bump `updated_at` on
+   re-enqueue, or select by a separate enqueue time.
 4. **A failed purge keeps IAM's link for 30 days.** The dispatcher purges an installation message's content right
    after its final state; when that write fails, the content waits for the 30-day purge. Maintenance should purge a
    final `installation:*` row at any age.
@@ -92,16 +76,14 @@ sends again only when it is. Log a `markSent` that answers `false`.
 
 ### Tests
 
-20. Missing cases: a key of another receiver; the body cap on a chunked body; duplicate and concurrent dispatch jobs;
+20. Missing cases: a key of another receiver; the body cap on a chunked body;
     `runMaintenance`'s mail summary; an application-scoped `mail.content.read` that reads `withheld`; an environment
     grant that reads another environment (403); a non-ASCII key; an error body under 200; an acceptance with an empty
     `messageId`. `mail.test.ts`'s `<script>` check is trivial.
 
 ## Approach / acceptance
 
-Items 1 and 2 first, with one test that crashes after the provider accepted and one that runs two jobs of one message,
-each over a `MemoryEmailSender` with `idempotent: false`: the recipient gets one message, and the row ends `sent` or
-`unknown`. The rest are independent and small.
+The items are independent and small.
 
 ## Touch points
 

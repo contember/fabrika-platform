@@ -1,9 +1,10 @@
-// The relay's share of maintenance: lost queued messages are re-enqueued, and final messages forget their content
-// after the retention. Against the shipped SQLite schema.
+// The relay's share of maintenance: lost queued messages and stale claims are re-enqueued, and final messages forget
+// their content after the retention. Against the shipped SQLite schema.
 
 import { type JobQueue, uuidv7 } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import type { MailMessageRepository, MailMessageState } from '../db'
+import { MAIL_STALE_CLAIM_S } from '../mail-relay/dispatch'
 import { MAIL_CONTENT_RETENTION_S, MAIL_STALE_QUEUED_S, runMailMaintenance } from '../mail-relay/maintenance'
 import type { MailDispatchMessage } from '../mail-relay/queue'
 import { createHarness } from './helpers/harness'
@@ -43,16 +44,28 @@ describe('mail maintenance', () => {
 		await message(m.messages, 'queued', NOW - MAIL_STALE_QUEUED_S + 1)
 		await message(m.messages, 'held', NOW - 3600)
 		const deferred = await message(m.messages, 'queued', NOW - 3600)
-		await m.messages.requeue(deferred, 0, NOW + 60, 'provider_unavailable', NOW - 3600)
+		await m.messages.claim(deferred, 0, NOW - 3600)
+		await m.messages.defer(deferred, 1, NOW + 60, 'provider_unavailable', NOW - 3600)
 
 		expect(await runMailMaintenance({ messages: m.messages, queue: m.queue, now: NOW })).toEqual({ requeued: 1, purged: 0 })
 		expect(m.jobs).toEqual([{ messageId: lost }])
 	})
 
+	test('re-enqueues an attempt whose claim went stale, and not one a consumer may still hold', async () => {
+		const m = maintenance()
+		const stale = await message(m.messages, 'queued', NOW - 3600)
+		await m.messages.claim(stale, 0, NOW - MAIL_STALE_CLAIM_S)
+		const fresh = await message(m.messages, 'queued', NOW - 3600)
+		await m.messages.claim(fresh, 0, NOW - MAIL_STALE_CLAIM_S + 1)
+		await runMailMaintenance({ messages: m.messages, queue: m.queue, now: NOW })
+		expect(m.jobs).toEqual([{ messageId: stale }])
+	})
+
 	test('re-enqueues a deferred message whose next attempt is overdue', async () => {
 		const m = maintenance()
 		const overdue = await message(m.messages, 'queued', NOW - 3600)
-		await m.messages.requeue(overdue, 0, NOW - 1, 'provider_unavailable', NOW - 3600)
+		await m.messages.claim(overdue, 0, NOW - 3600)
+		await m.messages.defer(overdue, 1, NOW - 1, 'provider_unavailable', NOW - 3600)
 		await runMailMaintenance({ messages: m.messages, queue: m.queue, now: NOW })
 		expect(m.jobs).toEqual([{ messageId: overdue }])
 	})
@@ -70,6 +83,7 @@ describe('mail maintenance', () => {
 			(['failed', 'unknown', 'dropped'] satisfies MailMessageState[]).map((state) => message(m.messages, state, old)),
 		)
 		const sentOld = await message(m.messages, 'queued', old)
+		await m.messages.claim(sentOld, 0, old)
 		await m.messages.markSent(sentOld, 'provider-1', 1, old)
 		const recent = await message(m.messages, 'failed', old + 1)
 		const heldOld = await message(m.messages, 'held', old)

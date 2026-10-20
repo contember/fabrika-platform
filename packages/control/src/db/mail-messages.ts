@@ -1,10 +1,10 @@
 import type { SqlDatabase } from '@fabrika/platform'
 
 /**
- * `held` waits for a person, `queued` for the dispatcher. `sent`, `failed` (not sent), `unknown` (may have left) and
- * `dropped` are final.
+ * `held` waits for a person, `queued` for the dispatcher, `sending` is one attempt a dispatcher claimed. `sent`,
+ * `failed` (not sent), `unknown` (may have left) and `dropped` are final.
  */
-export type MailMessageState = 'held' | 'queued' | 'sent' | 'failed' | 'unknown' | 'dropped'
+export type MailMessageState = 'held' | 'queued' | 'sending' | 'sent' | 'failed' | 'unknown' | 'dropped'
 
 export const FINAL_MAIL_MESSAGE_STATES = ['sent', 'failed', 'unknown', 'dropped'] as const satisfies readonly MailMessageState[]
 
@@ -23,14 +23,16 @@ export interface MailMessageRow {
 	rule_id: string | null
 	/** Who released or dropped a held message. */
 	decided_by: string | null
+	/** Attempts claimed so far; the claimed attempt's number while `sending`. */
 	attempts: number
-	/** Unix seconds before which a requeued message is not sent again. */
+	/** Unix seconds before which a deferred message is not sent again. */
 	next_attempt_at: number | null
 	provider_message_id: string | null
 	error_code: string | null
 	/** The canonical request body; `null` once purged. The only column that carries recipient, subject or bodies. */
 	content: string | null
 	created_at: number
+	/** The last change; while `sending`, when the attempt was claimed. */
 	updated_at: number
 }
 
@@ -133,57 +135,85 @@ export class MailMessageRepository {
 		return result.meta.changes > 0
 	}
 
-	/** The provider took a queued message after `attempts` attempts. `false`: it is not queued (any more). */
-	async markSent(id: string, providerMessageId: string, attempts: number, now: number): Promise<boolean> {
+	/**
+	 * Claims the next attempt of a queued, due message: `queued` → `sending`, one more attempt. Guarded on the attempts
+	 * the caller read, so of two consumers exactly one claims it. `false`: another consumer did, or it is not due.
+	 */
+	async claim(id: string, expectedAttempts: number, now: number): Promise<boolean> {
 		const result = await this.d1
 			.prepare(
-				`UPDATE mail_messages SET state = 'sent', provider_message_id = ?, attempts = ?, next_attempt_at = NULL, error_code = NULL, updated_at = ?
-				WHERE id = ? AND state = 'queued'`,
+				`UPDATE mail_messages SET state = 'sending', attempts = attempts + 1, updated_at = ?
+				WHERE id = ? AND state = 'queued' AND attempts = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`,
 			)
-			.bind(providerMessageId, attempts, now, id)
-			.run()
-		return result.meta.changes > 0
-	}
-
-	/** A queued message ends unsent (`failed`) or perhaps sent (`unknown`). `false`: it is not queued (any more). */
-	async markUndelivered(id: string, state: 'failed' | 'unknown', errorCode: string, attempts: number, now: number): Promise<boolean> {
-		const result = await this.d1
-			.prepare(
-				`UPDATE mail_messages SET state = ?, error_code = ?, attempts = ?, next_attempt_at = NULL, updated_at = ?
-				WHERE id = ? AND state = 'queued'`,
-			)
-			.bind(state, errorCode, attempts, now, id)
+			.bind(now, id, expectedAttempts, now)
 			.run()
 		return result.meta.changes > 0
 	}
 
 	/**
-	 * Counts one more attempt of a queued message and defers the next to `nextAttemptAt`. Guarded on the attempts the
-	 * caller read, so a redelivered job cannot count one attempt twice. `false`: the guard did not match.
+	 * Claims one more attempt of a message whose claim is older than `claimedBefore`: the consumer that held it stopped
+	 * before it recorded an outcome. `false`: another consumer settled or claimed it again.
 	 */
-	async requeue(id: string, expectedAttempts: number, nextAttemptAt: number, errorCode: string, now: number): Promise<boolean> {
+	async reclaim(id: string, expectedAttempts: number, claimedBefore: number, now: number): Promise<boolean> {
 		const result = await this.d1
 			.prepare(
-				`UPDATE mail_messages SET attempts = attempts + 1, next_attempt_at = ?, error_code = ?, updated_at = ?
-				WHERE id = ? AND state = 'queued' AND attempts = ?`,
+				`UPDATE mail_messages SET attempts = attempts + 1, updated_at = ?
+				WHERE id = ? AND state = 'sending' AND attempts = ? AND updated_at <= ?`,
 			)
-			.bind(nextAttemptAt, errorCode, now, id, expectedAttempts)
+			.bind(now, id, expectedAttempts, claimedBefore)
+			.run()
+		return result.meta.changes > 0
+	}
+
+	/** The provider took the claimed attempt `attempt`. `false`: the claim is no longer held. */
+	async markSent(id: string, providerMessageId: string, attempt: number, now: number): Promise<boolean> {
+		const result = await this.d1
+			.prepare(
+				`UPDATE mail_messages SET state = 'sent', provider_message_id = ?, next_attempt_at = NULL, error_code = NULL, updated_at = ?
+				WHERE id = ? AND state = 'sending' AND attempts = ?`,
+			)
+			.bind(providerMessageId, now, id, attempt)
+			.run()
+		return result.meta.changes > 0
+	}
+
+	/** The claimed attempt `attempt` ends the message unsent (`failed`) or perhaps sent (`unknown`). `false`: the claim is no longer held. */
+	async markUndelivered(id: string, state: 'failed' | 'unknown', errorCode: string, attempt: number, now: number): Promise<boolean> {
+		const result = await this.d1
+			.prepare(
+				`UPDATE mail_messages SET state = ?, error_code = ?, next_attempt_at = NULL, updated_at = ?
+				WHERE id = ? AND state = 'sending' AND attempts = ?`,
+			)
+			.bind(state, errorCode, now, id, attempt)
+			.run()
+		return result.meta.changes > 0
+	}
+
+	/** The claimed attempt `attempt` failed and may go again: `sending` → `queued`, due at `nextAttemptAt`. `false`: the claim is no longer held. */
+	async defer(id: string, attempt: number, nextAttemptAt: number, errorCode: string, now: number): Promise<boolean> {
+		const result = await this.d1
+			.prepare(
+				`UPDATE mail_messages SET state = 'queued', next_attempt_at = ?, error_code = ?, updated_at = ?
+				WHERE id = ? AND state = 'sending' AND attempts = ?`,
+			)
+			.bind(nextAttemptAt, errorCode, now, id, attempt)
 			.run()
 		return result.meta.changes > 0
 	}
 
 	/**
-	 * Queued messages the dispatcher may have lost: unchanged since `staleBefore`, and due at `now` (no deferred next
-	 * attempt still ahead), the oldest first.
+	 * Messages the dispatcher may have lost, the oldest first: queued, unchanged since `queuedBefore` and due at `now`
+	 * (no deferred next attempt still ahead), or claimed before `claimedBefore` and never settled.
 	 */
-	async listDueQueued(staleBefore: number, now: number, limit: number): Promise<MailMessageRow[]> {
+	async listStalled(queuedBefore: number, claimedBefore: number, now: number, limit: number): Promise<MailMessageRow[]> {
 		const { results } = await this.d1
 			.prepare(
 				`SELECT * FROM mail_messages
-				WHERE state = 'queued' AND updated_at <= ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+				WHERE (state = 'queued' AND updated_at <= ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
+					OR (state = 'sending' AND updated_at <= ?)
 				ORDER BY id LIMIT ?`,
 			)
-			.bind(staleBefore, now, limit)
+			.bind(queuedBefore, now, claimedBefore, limit)
 			.all<MailMessageRow>()
 		return results
 	}

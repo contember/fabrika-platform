@@ -218,7 +218,7 @@ const MAIL_RULE_ANY = '*'
 const MAIL_PAGE_SIZE = 50
 const INSTALLATION_SENDER_PREFIX = 'installation:'
 
-const mailMessageState = z.enum(['held', 'queued', 'sent', 'failed', 'unknown', 'dropped'])
+const mailMessageState = z.enum(['held', 'queued', 'sending', 'sent', 'failed', 'unknown', 'dropped'])
 const mailMessageListInput = z.object({ state: mailMessageState.optional(), scope: nonEmpty.optional(), cursor: nonEmpty.optional() }).strict()
 const mailId = z.object({ id: nonEmpty }).strict()
 const setMailRuleInput = z.object({

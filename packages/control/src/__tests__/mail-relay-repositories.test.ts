@@ -159,14 +159,22 @@ for (const backend of backends) {
 				expect(await messages.get(other.id)).toMatchObject({ state: 'dropped', decided_by: 'user:bob' })
 			})
 
-			test('a queued message is requeued with backoff, then ends sent, failed or unknown', async () => {
+			test('one consumer claims a queued, due attempt; only the claim settles it', async () => {
 				const repositories = await open()
 				const messages = repositories.mailMessages
 				const sent = (await messages.insertOrFind(message(), T0)).row
-				expect(await messages.requeue(sent.id, 0, T0 + 60, 'provider_unavailable', T0 + 1)).toBe(true)
-				// A redelivered job that read the same attempts counts nothing.
-				expect(await messages.requeue(sent.id, 0, T0 + 60, 'provider_unavailable', T0 + 1)).toBe(false)
-				expect(await messages.get(sent.id)).toMatchObject({ attempts: 1, next_attempt_at: T0 + 60, error_code: 'provider_unavailable' })
+				expect(await messages.claim(sent.id, 0, T0 + 1)).toBe(true)
+				// A second consumer that read the same attempts claims nothing.
+				expect(await messages.claim(sent.id, 0, T0 + 1)).toBe(false)
+				expect(await messages.get(sent.id)).toMatchObject({ state: 'sending', attempts: 1, updated_at: T0 + 1 })
+				expect(await messages.defer(sent.id, 1, T0 + 60, 'provider_unavailable', T0 + 2)).toBe(true)
+				expect(await messages.defer(sent.id, 1, T0 + 60, 'provider_unavailable', T0 + 2)).toBe(false)
+				expect(await messages.get(sent.id)).toMatchObject({ state: 'queued', attempts: 1, next_attempt_at: T0 + 60, error_code: 'provider_unavailable' })
+				// Not due before its next attempt.
+				expect(await messages.claim(sent.id, 1, T0 + 59)).toBe(false)
+				expect(await messages.claim(sent.id, 1, T0 + 60)).toBe(true)
+				// A settle under an older claim is refused.
+				expect(await messages.markSent(sent.id, 'provider-0', 1, T0 + 61)).toBe(false)
 				expect(await messages.markSent(sent.id, 'provider-1', 2, T0 + 61)).toBe(true)
 				expect(await messages.get(sent.id)).toMatchObject({
 					state: 'sent',
@@ -175,16 +183,30 @@ for (const backend of backends) {
 					next_attempt_at: null,
 					error_code: null,
 				})
-				expect(await messages.markSent(sent.id, 'provider-2', 3, T0 + 62)).toBe(false)
-				expect(await messages.requeue(sent.id, 2, T0 + 120, 'network_error', T0 + 62)).toBe(false)
+				expect(await messages.markSent(sent.id, 'provider-2', 2, T0 + 62)).toBe(false)
+				expect(await messages.defer(sent.id, 2, T0 + 120, 'network_error', T0 + 62)).toBe(false)
 
 				const failed = (await messages.insertOrFind(message({ idempotency_key: 'invite:2' }), T0)).row
-				expect(await messages.markUndelivered(failed.id, 'unknown', 'request_timeout', 5, T0 + 3)).toBe(true)
-				expect(await messages.get(failed.id)).toMatchObject({ state: 'unknown', error_code: 'request_timeout', attempts: 5 })
-				expect(await messages.markUndelivered(failed.id, 'failed', 'provider_rejected', 6, T0 + 4)).toBe(false)
+				expect(await messages.markUndelivered(failed.id, 'unknown', 'request_timeout', 1, T0 + 3)).toBe(false)
+				await messages.claim(failed.id, 0, T0 + 3)
+				expect(await messages.markUndelivered(failed.id, 'unknown', 'request_timeout', 1, T0 + 3)).toBe(true)
+				expect(await messages.get(failed.id)).toMatchObject({ state: 'unknown', error_code: 'request_timeout', attempts: 1 })
+				expect(await messages.markUndelivered(failed.id, 'failed', 'provider_rejected', 1, T0 + 4)).toBe(false)
 
 				const held = (await messages.insertOrFind(message({ idempotency_key: 'invite:3', state: 'held' }), T0)).row
-				expect(await messages.markSent(held.id, 'provider-3', 1, T0 + 1)).toBe(false)
+				expect(await messages.claim(held.id, 0, T0 + 1)).toBe(false)
+				expect(await messages.markSent(held.id, 'provider-3', 0, T0 + 1)).toBe(false)
+			})
+
+			test('a stale claim is claimed again once, and a fresh one not', async () => {
+				const repositories = await open()
+				const messages = repositories.mailMessages
+				const row = (await messages.insertOrFind(message(), T0)).row
+				await messages.claim(row.id, 0, T0)
+				expect(await messages.reclaim(row.id, 1, T0 - 1, T0 + 600)).toBe(false)
+				expect(await messages.reclaim(row.id, 1, T0, T0 + 600)).toBe(true)
+				expect(await messages.reclaim(row.id, 1, T0 + 600, T0 + 600)).toBe(false)
+				expect(await messages.get(row.id)).toMatchObject({ state: 'sending', attempts: 2, updated_at: T0 + 600 })
 			})
 
 			test('lists newest first, filtered by state and sender, a page at a time', async () => {
@@ -205,18 +227,22 @@ for (const backend of backends) {
 				expect((await messages.list({ limit: 10, sender: 'notes@prod', state: 'queued' })).map((row) => row.id)).toEqual([ids[0]])
 			})
 
-			test('lists queued messages the dispatcher may have lost: stale and due, the oldest first', async () => {
+			test('lists messages the dispatcher may have lost: stale and due queued ones, and stale claims, the oldest first', async () => {
 				const repositories = await open()
 				const messages = repositories.mailMessages
 				const lost = (await messages.insertOrFind(message({ idempotency_key: 'lost' }), T0)).row
 				const deferred = (await messages.insertOrFind(message({ idempotency_key: 'deferred' }), T0)).row
-				await messages.requeue(deferred.id, 0, T0 + 3600, 'rate_limited', T0)
+				await messages.claim(deferred.id, 0, T0)
+				await messages.defer(deferred.id, 1, T0 + 3600, 'rate_limited', T0)
+				const claimed = (await messages.insertOrFind(message({ idempotency_key: 'claimed' }), T0)).row
+				await messages.claim(claimed.id, 0, T0 + 300)
 				const recent = (await messages.insertOrFind(message({ idempotency_key: 'recent' }), T0 + 590)).row
 				await messages.insertOrFind(message({ idempotency_key: 'held', state: 'held' }), T0)
 				const now = T0 + 600
-				expect((await messages.listDueQueued(now - 600, now, 10)).map((row) => row.id)).toEqual([lost.id])
-				expect((await messages.listDueQueued(T0 + 3600, T0 + 3600, 10)).map((row) => row.id)).toEqual([lost.id, deferred.id, recent.id])
-				expect((await messages.listDueQueued(T0 + 3600, T0 + 3600, 1)).map((row) => row.id)).toEqual([lost.id])
+				expect((await messages.listStalled(now - 600, now - 600, now, 10)).map((row) => row.id)).toEqual([lost.id])
+				expect((await messages.listStalled(now - 600, now - 300, now, 10)).map((row) => row.id)).toEqual([lost.id, claimed.id])
+				expect((await messages.listStalled(T0 + 3600, T0, T0 + 3600, 10)).map((row) => row.id)).toEqual([lost.id, deferred.id, recent.id])
+				expect((await messages.listStalled(T0 + 3600, T0, T0 + 3600, 1)).map((row) => row.id)).toEqual([lost.id])
 			})
 
 			test('content is purged only from final rows: one at once, or every one older than a cutoff', async () => {
@@ -227,6 +253,7 @@ for (const backend of backends) {
 				const dropped = (await messages.insertOrFind(message({ idempotency_key: 'dropped', state: 'held' }), T0)).row
 				const late = (await messages.insertOrFind(message({ idempotency_key: 'late', state: 'held' }), T0)).row
 				expect(await messages.purgeContent(queued.id)).toBe(false)
+				await messages.claim(sent.id, 0, T0 + 1)
 				await messages.markSent(sent.id, 'provider-1', 1, T0 + 1)
 				expect(await messages.purgeContent(sent.id)).toBe(true)
 				expect(await messages.purgeContent(sent.id)).toBe(false)

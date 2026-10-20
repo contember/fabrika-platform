@@ -22,7 +22,7 @@ CREATE TABLE mail_messages (
 	idempotency_key     TEXT NOT NULL,
 	fingerprint         TEXT NOT NULL,
 	recipient_domain    TEXT NOT NULL,
-	state               TEXT NOT NULL CHECK (state IN ('held', 'queued', 'sent', 'failed', 'unknown', 'dropped')),
+	state               TEXT NOT NULL CHECK (state IN ('held', 'queued', 'sending', 'sent', 'failed', 'unknown', 'dropped')),
 	rule_id             TEXT,
 	decided_by          TEXT,
 	attempts            INTEGER NOT NULL,

@@ -383,6 +383,7 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
 | --------- | ------------------------------------------------------ |
 | `held`    | waits for a person in the console                      |
 | `queued`  | waits for the dispatcher                               |
+| `sending` | a dispatcher claimed one attempt and sends it          |
 | `sent`    | the provider took it; final                            |
 | `failed`  | it did not leave; final                                |
 | `unknown` | it may have left; final, for a person                  |
@@ -393,6 +394,16 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
 - The dispatcher consumes the `vozka-mail` queue (`PostgresJobQueue`, in Control's jobs
   table) on its own loop beside `vozka-deploy`, so a long deploy never delays a sign-in
   link. One job sends one `queued`, due message.
+- A message can have more than one job (a retry, a release, maintenance), and Control can
+  run two consumers. Before the send, a job claims the attempt: one guarded update moves
+  the message `queued` → `sending` and counts the attempt, only while the message is due
+  and its attempts are the value the job read. A job that loses the claim does nothing. The
+  outcome is recorded against that claim; a write that finds the claim gone is logged.
+- A claim older than 10 minutes (`MAIL_STALE_CLAIM_S`) belongs to a consumer that stopped
+  before it recorded the outcome, so the provider may have taken the message. Over an
+  idempotent transport the next job claims one more attempt and sends again under the same
+  key. Over any other transport, or when the attempts are spent, the message ends `unknown`
+  with `dispatch_interrupted`: it is never sent twice automatically.
 - It sends through `emailSenderFromEnv` of Control's own `FABRIKA_EMAIL_*`, with a
   30-second deadline, under the key `relay:<sender>:<key>`; a key longer than 256
   characters becomes `relay:` and the SHA-256 hex of `<sender>:<key>`.
@@ -404,8 +415,9 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
 - An installation message's content is purged right after it is sent: it holds a
   one-time link.
 - Control's maintenance pass (cron) re-enqueues `queued` messages unchanged for 10
-  minutes whose retry is due, at most 100 a pass, and purges the content of final
-  messages 30 days after their last change. A held message keeps its content.
+  minutes whose retry is due, and `sending` messages whose claim is stale, at most 100 a
+  pass. It purges the content of final messages 30 days after their last change. A held
+  message keeps its content.
 
 ### The console
 

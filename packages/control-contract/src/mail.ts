@@ -1,10 +1,10 @@
 /** The mail relay as the console reads and steers it. */
 
 /**
- * `held` waits for a person, `queued` for the dispatcher. `sent`, `failed` (not sent), `unknown` (may have left) and
- * `dropped` are final.
+ * `held` waits for a person, `queued` for the dispatcher, `sending` is one attempt a dispatcher claimed. `sent`,
+ * `failed` (not sent), `unknown` (may have left) and `dropped` are final.
  */
-export type MailMessageState = 'held' | 'queued' | 'sent' | 'failed' | 'unknown' | 'dropped'
+export type MailMessageState = 'held' | 'queued' | 'sending' | 'sent' | 'failed' | 'unknown' | 'dropped'
 
 export type MailRuleAction = 'pass' | 'hold' | 'drop'
 
@@ -22,7 +22,10 @@ export interface MailMessageDto {
 	readonly attempts: number
 	readonly nextAttemptAt: number | null
 	readonly providerMessageId: string | null
-	/** The `EmailDeliveryErrorCode` of the last failed attempt. */
+	/**
+	 * The `EmailDeliveryErrorCode` of the last failed attempt, or `dispatch_interrupted`: the dispatcher stopped after it
+	 * claimed the attempt, before it recorded an outcome.
+	 */
 	readonly errorCode: string | null
 	readonly createdAt: number
 	readonly updatedAt: number

@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { createControlRepositories } from '../db'
 import type { Env } from '../env'
 import { handleMailRelay } from '../mail-relay/handler'
-import { type MailDispatchMessage, releaseMailMessage } from '../mail-relay/queue'
+import { enqueueMailDispatch, type MailDispatchMessage, releaseMailMessage } from '../mail-relay/queue'
 import { createMailConsumer } from '../zerops/server'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 import { fakeControlProvider } from './helpers/provider'
@@ -26,7 +26,7 @@ describe.skipIf(!hasPostgres)('the mail relay on Postgres', () => {
 		fixture = null
 	})
 
-	async function relay() {
+	async function relay(sender = new MemoryEmailSender()) {
 		fixture = await createPostgres('vozka_mail_relay')
 		const repositories = createControlRepositories(fixture.db)
 		await repositories.registry.createApp({ id: 'notes', repoUrl: 'github.com/acme/notes' })
@@ -49,7 +49,6 @@ describe.skipIf(!hasPostgres)('the mail relay on Postgres', () => {
 			created_at: NOW,
 		})
 		const queue = new PostgresJobQueue<MailDispatchMessage>(fixture.db, { queue: 'vozka-mail', maxAttempts: 3 })
-		const sender = new MemoryEmailSender()
 		const env: Env = {
 			DB: fixture.db,
 			REPOSITORIES: repositories,
@@ -73,7 +72,7 @@ describe.skipIf(!hasPostgres)('the mail relay on Postgres', () => {
 			if (typeof messageId !== 'string') throw new Error(`not accepted: ${response.status}`)
 			return messageId
 		}
-		return { repositories, queue, sender, consumer: createMailConsumer(env, queue), send }
+		return { repositories, queue, sender, consumer: createMailConsumer(env, queue), otherConsumer: () => createMailConsumer(env, queue), send }
 	}
 
 	test('a passed message is queued, consumed and sent', async () => {
@@ -99,5 +98,15 @@ describe.skipIf(!hasPostgres)('the mail relay on Postgres', () => {
 		expect(await r.consumer.poll()).toBe(0)
 		expect(await r.repositories.mailMessages.get(id)).toMatchObject({ state: 'sent', decided_by: 'user:ops' })
 		expect(r.sender.accepted).toHaveLength(1)
+	})
+
+	test('two consumers with two jobs of one message send it once over a transport without idempotency', async () => {
+		const r = await relay(new MemoryEmailSender({ capabilities: { idempotent: false } }))
+		const id = await r.send('ada@example.com', 'invite:3')
+		await enqueueMailDispatch(r.queue, id)
+		const polled = await Promise.all([r.consumer.poll(), r.otherConsumer().poll()])
+		expect(polled.reduce((sum, count) => sum + count, 0)).toBe(2)
+		expect(r.sender.handoffs).toHaveLength(1)
+		expect(await r.repositories.mailMessages.get(id)).toMatchObject({ state: 'sent', attempts: 1 })
 	})
 })
