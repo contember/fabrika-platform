@@ -3,7 +3,7 @@
 **Goal.** An application on framework 0.6 sends installation mail to Control over a platform transport, and Control
 records, gates and dispatches it; IAM on Zerops sends through the same relay, always passed.
 
-**Theme.** [The idea](../ideas/application-platform-channels.md) is the spec, with its "Decisions taken". Zerops only.
+**Theme.** The idea that specified this sprint graduated into [ADR-0064](../decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md) (the platform transport) and [ADR-0019](../decisions/0019-portable-outbound-email.md) §8 (the relay). Zerops only.
 Base: `feat/declare-the-surface` (framework 0.6.0). The success condition: a 0.6 application's job sends a mail, the
 relay holds it under a `hold` rule, an operator releases it in the console, the provider (the local stack's
 `directory`) receives it; a 0.5 application on the same Control still gets the direct credential and sends as before.
@@ -132,3 +132,21 @@ relay holds it under a `hold` rule, an operator releases it in the console, the 
 ## Run log
 
 <!-- Append as you work: discoveries, deviations, blockers. -->
+
+- WU-1: the conformance kit no longer counts a delivery error code in an answer body as leaked provider content.
+- WU-1: `PlatformEmailSender` requires the URL to be exactly an http(s) origin (no path, no trailing slash).
+- WU-1 review findings → [backlog 194](../backlog/194-mail-relay-follow-ups.md).
+- WU-2: a prerelease compares as its release (`0.6.0-rc.1` gets the relay).
+- WU-2: without a vault, a deploy of a 0.6 application with a mailer job is refused → ADR-0064 §2.
+- WU-2: a dry run hands the provider and the URL without a key → ADR-0064 §2.
+- WU-2: issuing a key deletes expired key rows installation-wide → [backlog 194](../backlog/194-mail-relay-follow-ups.md).
+- WU-3: an oversized body answers 400 `invalid_message`; the wire has no 413 → `reference/outbound-email.md`.
+- WU-3: maintenance re-enqueues a queued row only when it is stale AND due → `reference/outbound-email.md`.
+- WU-3: the dispatcher purges an installation message's content right after `sent` → ADR-0019 §8.
+- WU-3: an idempotency key over 256 characters becomes `relay:` + SHA-256 → `reference/outbound-email.md`.
+- WU-3: a queued message with no transport ends `failed` (`mail_not_configured`) → ADR-0019 §8.
+- WU-3 review findings (two double-send paths first) → [backlog 194](../backlog/194-mail-relay-follow-ups.md).
+- WU-4: the list's authorization follows `runs.list` → `reference/outbound-email.md`.
+- WU-4: `buzola.gen.ts` is gitignored, so it is not in the commit.
+- WU-4 review findings → [backlog 194](../backlog/194-mail-relay-follow-ups.md).
+- WU-6: backlog 178 rewritten to what stays open (a relay outside the repository); the idea is deleted.

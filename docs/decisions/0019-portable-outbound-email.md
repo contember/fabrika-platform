@@ -35,6 +35,9 @@ The facts that shape the extension to applications:
   service through its composition, at build time.
 - **Secrets stay service-level** ([ADR-0004](0004-secrets-live-in-the-platform.md)): each service that sends holds the
   configuration itself.
+- **An application that holds the credential is ungated.** When every mailer application held the installation's
+  provider credential, the platform kept no record of what it sent. It could not hold a new application's mail while
+  an operator read it, drop mail to a domain, or show what left.
 
 ## Decision
 
@@ -44,6 +47,10 @@ We will publish a separate `@fabrika/email` package with one runtime-neutral `Em
 
 Email availability is an explicit optional service capability. A missing sender never silently drops a message and never changes whether an authentication or notification feature is enabled. The consuming domain must select a defined non-email flow or report that delivery is unavailable. An application
 that declares a mailer has no such flow, so it does not start without a sender (§3).
+
+Installation mail from an application on framework 0.6 and from IAM on Zerops goes through Control's relay (§8). The
+relay records every message. A `drop` rule sends nothing, but the message stays recorded and visible in the console
+as `dropped`: an operator's decision, never a silent loss.
 
 ### 1. The public contract
 
@@ -106,6 +113,12 @@ that declares a mailer has no such flow, so it does not start without a sender (
   installations, on one provider account never share a key. An application key is 1 to 200 visible ASCII characters;
   with the 41-character prefix it stays within the contract's 256.
 - An application sets `replyTo` and `fromName` per message. The sending address is the transport's.
+- On framework 0.6, `FABRIKA_EMAIL_PROVIDER=platform` makes the `installation` transport a `PlatformEmailSender` to
+  Control's relay (§8), built from `FABRIKA_PLATFORM_MAIL_URL` and `FABRIKA_PLATFORM_MAIL_KEY`
+  ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)), not from the provider
+  registry. It needs no `FABRIKA_EMAIL_FROM`, and a missing URL or key refuses the boot. Its capabilities are the
+  relay's: idempotent and `queued`, because the relay records the message and dispatches it later, perhaps after a
+  person releases it. An accepted send means "the platform took it", not "the provider took it".
 - **No mail is a state, a misconfiguration fails closed.** An installation may have no transport. Control then hands
   a job that declares `installation` the explicit `FABRIKA_EMAIL_PROVIDER=none` (§4), and the application boots. Its
   `ctx.mail.available` is false, and every send fails `mail_not_configured`, outcome `not_sent`, without I/O. An
@@ -131,17 +144,23 @@ that declares a mailer has no such flow, so it does not start without a sender (
   rewrite IAM and restart it blind. On Cloudflare the installation's GitHub Environment holds the set, and the workflow
   passes it to IAM. Control on Cloudflare holds no transport, because Cloudflare runs no jobs.
 - Control is the source for applications. A deploy of an environment whose approved contract has a job that declares
-  `mailer: 'installation'` hands it the set, service-level and always sensitive; once the contract stops declaring it,
-  the deploy hands nothing and Zerops removes the stale variables with the rest of the framework's families. The names
-  are framework variables ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)), so no application
-  sets them itself.
+  `mailer: 'installation'` hands it one of two things:
+  - **the relay**, on Zerops, when the approved snapshot records framework 0.6.0 or newer:
+    `FABRIKA_EMAIL_PROVIDER=platform`, the platform transport's URL and key, and nothing of the provider (ADR-0064).
+    Control hands it whether or not its own transport is valid, because the relay holds what it cannot send;
+  - **the set**, for an older release or a snapshot that records no release: every `FABRIKA_EMAIL_*` Control holds,
+    service-level and always sensitive ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
+
+  Once the contract stops declaring it, the deploy hands nothing and Zerops removes the stale variables with the rest
+  of the framework's families. The names are framework variables
+  ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)), so no application sets them itself.
 - As framework variables, the `FABRIKA_EMAIL_*` values are secrets to the error-report scrubber of
   [ADR-0059](0059-application-server-errors-carry-their-stack-and-message.md): it removes each value of eight or more
   characters from an application's reports.
 - An installation without a transport deploys such a contract: Control hands `FABRIKA_EMAIL_PROVIDER=none` and no
   other mail variable, so the application tells "this installation has no mail" from "no deploy wrote the variable".
 - Control starts with an invalid transport. It logs one line that names the variables, never a value, and refuses
-  only the deploys that hand the transport, before any effect, naming the jobs and the operator step. One mistyped
+  only the deploys that hand the set, before any effect, naming the jobs and the operator step. One mistyped
   variable must not stop the whole Delivery plane. It refuses at deploy, not at approval: the transport is installation
   state that can change after a contract was approved. IAM still refuses to start on an invalid transport: it has no
   deploy to refuse instead.
@@ -163,7 +182,8 @@ job declaring `mailer: 'own'` uses refuses the boot.
 - `fabrika app dev` shows one structured mail view for IAM's and the application's messages: recipient, subject,
   text, the HTML body in a sandboxed frame, the key and the outcome. A seed reads the same list.
 - The local stack captures the applications' mail in the same directory as IAM's. Its Control holds a `directory`
-  transport and hands it to an application like any installation transport. There is no SMTP catcher.
+  transport. It hands it to an older application like any installation transport, and its relay dispatches a 0.6
+  application's mail to it. There is no SMTP catcher.
 
 ### 7. Applications word IAM's e-mails
 
@@ -175,6 +195,42 @@ and IAM renders the body from its tokens, never from its source, with every valu
 application's first registered return origin, built when IAM sends the message; a template that names it while no
 origin is registered is sent in IAM's own wording.
 
+### 8. Control relays installation mail
+
+Control owns the relay. It already holds the installation's transport, the console, and the deploy that hands an
+application its variables. The relay runs in Control's Bun process, on Zerops and in the local stack; the Worker has
+none and answers its row with 404. Its senders reach it over the platform transport
+([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)).
+
+- **Senders.** An application environment on framework 0.6 (`<app>@<env>`, by its transport key), and IAM on Zerops
+  (`installation:iam`, by its derived key). IAM sends through the relay when it has an email provider configured and
+  `FABRIKA_CONTROL_URL` is set; otherwise it sends as before. Its manual action-link flow without a provider is
+  unchanged.
+- **Every message is a row.** The relay records the canonical request, its fingerprint, the sender, the recipient's
+  domain, the rule that decided it and its state, with or without a provider. A repeat under the same key answers the
+  first message id; other content under the key is `idempotency_conflict`.
+- **The gate decides once, at acceptance.** An installation sender always passes: IAM's sign-in links do not wait for
+  a person. A Control without a valid transport holds every application message. Otherwise the most specific rule by
+  sender scope and recipient domain decides: the exact environment with the exact domain, then the environment with
+  `*`, then `*` with the domain, then `*` with `*`. `pass` queues the message, `hold` holds it, `drop` records it as
+  `dropped` and sends nothing. No rule passes. A rule changed later does not touch a message already decided.
+- **The application's send answers accepted for every decision.** `held` and `dropped` are the platform's business,
+  not the application's: its outbox row is done once the relay took the message.
+- **A person decides a held message.** In the console an operator releases it (`held` → `queued`) or drops it. A
+  release on a Control without a transport fails the message as `mail_not_configured`.
+- **The dispatcher** sends each queued message through Control's own transport, under a key of its own
+  (`relay:<sender>:<key>`), so two senders' keys never meet at the provider. A retryable failure that
+  `mayRetryDelivery` allows is retried with backoff, a bounded number of times; then the message is `failed` (it did
+  not leave) or `unknown` (it may have). Over a non-idempotent provider an `unknown` message stays for a person, as
+  §1 says.
+- **Bodies are secrets.** Reading a message's metadata (`mail.read`) is scoped like runs: an application's messages
+  at its application or environment, an installation sender's only globally. Reading the recipient, the subject and
+  the bodies is a permission of its own (`mail.content.read`, global), and so is deciding (`mail.manage`, global).
+  Only `admin` holds them by default.
+- **Content has a retention.** An installation message's content is purged as soon as it is sent, because it carries
+  a one-time link. Every other final message keeps its content for 30 days. A held message keeps it until a person
+  decides.
+
 ## Consequences
 
 - IAM, Operations, applications and future services share one set of adapters without sharing templates or lifecycle state.
@@ -185,12 +241,17 @@ origin is registered is sent in IAM's own wording.
 - A caller must choose stable idempotency keys and decide when to retry a retryable failure. An outbox retries after a
   backoff ([ADR-0060](0060-a-handler-kicks-a-declared-job-after-its-commit.md)), and an `unknown` outcome over a
   non-idempotent transport is not retried at all.
-- IAM keeps an invitation whose email outcome is `unknown`: the link may have arrived.
-- Every application that declares `installation` mail holds the installation's provider credential, and Control holds
-  it too. An application could send as the installation's address to anyone. The approver sees the declaration; an
-  HTTP relay would keep the credential in one service ([backlog 178](../backlog/178-an-http-mail-relay-protocol-and-a-relay-adapter.md)).
-- An installation transport can use only a built-in provider. Another provider needs the relay or a platform
-  distribution that bundles it ([backlog 179](../backlog/179-build-a-platform-distribution-that-bundles-extra-email-adapters.md)).
+- IAM keeps an invitation whose email outcome is `unknown`: the link may have arrived. Over the relay, IAM's send is
+  idempotent and only queued, so `unknown` means only that the relay was unreachable.
+- An application on framework 0.6 holds no provider credential, only a key to the relay. An application on an older
+  release inside the ADR-0062 window still holds the credential and sends directly: it could send as the
+  installation's address to anyone, and the gate does not cover it until the release leaves the window.
+- With the relay, Control is on the path of every installation mail. An outage delays mail; the sender retries the
+  idempotent send, and the dispatcher's queue survives a restart.
+- An `unknown` or `failed` message is final. The console shows it; it has no action to send it again.
+- An installation transport can use only a built-in provider. Another provider needs a relay outside the repository
+  ([backlog 178](../backlog/178-an-installation-transport-through-an-outside-relay.md)) or a platform distribution that
+  bundles it ([backlog 179](../backlog/179-build-a-platform-distribution-that-bundles-extra-email-adapters.md)).
 - A changed installation transport reaches an application only at its next deploy. Until then the application sends
   with the old one, and a provider key that was revoked fails its mail with `provider_unauthorized`
   ([backlog 187](../backlog/187-set-or-rotate-the-installation-mail-transport.md)). The same holds for a transport
@@ -201,6 +262,11 @@ origin is registered is sent in IAM's own wording.
   hand survives an upgrade. Adding a transport later is a manual operator step (the Zerops guide, "Set or rotate the
   mail transport"). An application variable or secret an older release accepted under `FABRIKA_EMAIL_` is refused at
   its next deploy, and the refusal says how to delete it.
+- **Rollout of the relay.** An existing installation has no rules, so every application message passes and nothing
+  changes until an operator adds a `hold`. A Control without a transport holds application messages instead of
+  handing `none`. An application environment moves to the relay at its first deploy on framework 0.6, which replaces
+  its `FABRIKA_EMAIL_*` with the platform variables. IAM keeps its `FABRIKA_EMAIL_*`: it still reads them to decide
+  whether it sends mail at all, and Control dispatches with its own copy. ADR-0064 answers the rest of the rollout.
 - On Zerops, every `FABRIKA_EMAIL_*` an application gets is sensitive, its provider name and address too, so the
   console cannot show them; the provider contract has no way to mark only some of a family secret.
 - Renaming the installation's IAM origin changes the key prefix of every application. A message whose send was in
@@ -226,8 +292,19 @@ Rejected because a working sender performs external I/O, while the platform pack
 
 IAM already holds the configuration, so applications could post their messages to it. That makes IAM, the identity
 service, carry every application's content, its volume and its failures. IAM would need an outbox and retries for
-mail it does not own. A relay, if wanted, is a service of its own
-([backlog 178](../backlog/178-an-http-mail-relay-protocol-and-a-relay-adapter.md)).
+mail it does not own. Control relays it instead (§8): it already holds the transport, the console and the deploy.
+
+### A relay service of its own
+
+A new installation service would hold the transport and the queue. Rejected because it adds a service to deploy,
+upgrade and secure, while Control already has the transport, a job queue, the console and the deploy that hands an
+application its key.
+
+### Drop a message without a record
+
+A `drop` rule that discards the message on arrival would be cheaper. Rejected because a mail an operator cannot see
+would contradict the rule that a message is never silently lost. A dropped message keeps its row, its rule and, for
+the retention, its content.
 
 ### IAM loads adapters by package name
 

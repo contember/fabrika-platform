@@ -2318,8 +2318,9 @@ Only a cron job that declares `mailer` sends e-mail, through `ctx.mail`. An endp
 that says so): it records an outbox row and kicks the job (below). `references/public-intake.md` shows both jobs whole.
 
 - `mailer: 'installation'` sends through the installation's transport: the operator configures one provider, and
-  Control hands it to each application whose job declares it. The application holds no provider key and writes no
-  transport code. An installation without a transport still deploys it, and `ctx.mail.available` is then false.
+  each message goes to the platform's mail relay, which records it and sends it with that provider. The application
+  holds no provider key and writes no transport code. An accepted send means the platform took the message
+  (`ctx.mail.capabilities.confirmation` is `'queued'`): an operator may hold it, or drop it by a rule, before it leaves.
 - `mailer: 'own'` sends through the application's own transport: `serve(contract, { database, mail: (env) => sender })`,
   where `sender` is an `EmailSender` (`@fabrika/app/implement`) built from the application's own variables, or `null`
   when they configure none. Never name a variable `FABRIKA_EMAIL_*`: those are the installation's.
@@ -2342,9 +2343,10 @@ that says so): it records an outbox row and kicks the job (below). `references/p
 - `idempotencyKey` is 1 to 200 visible ASCII characters, unique per message in the application environment, and
   derived from the outbox row (`intake-link-<link id>`), never random. `ctx.mail` puts a prefix of the installation
   and the environment in front of it, so no other application on the same provider account shares it.
-- `ctx.mail.available` is false where the installation has no transport. Every send then fails `mail_not_configured`
-  (`not_sent`). Check it before the batch: when it is false, return and leave every row as it is, so no attempt is
-  spent. The rows leave on the first run after the operator adds a transport and redeploys the application.
+- `ctx.mail.available` is false where no transport reaches the job: a local composition that configures none, or a
+  test kit with `mail: 'none'`. Every send then fails `mail_not_configured` (`not_sent`). Check it before the batch:
+  when it is false, return and leave every row as it is, so no attempt is spent. The rows leave on the first run after
+  a transport is configured.
 - A refused send throws `EmailDeliveryError` (`@fabrika/app/implement`): a fixed `code` and an `outcome`, `not_sent`
   (the message did not leave) or `unknown` (it may have). `ctx.mail.mayRetry(error)` says whether the message may go
   again: false for a refused message or configuration, and for an `unknown` outcome over a transport that does not

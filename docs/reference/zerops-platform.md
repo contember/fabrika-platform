@@ -1177,10 +1177,13 @@ descriptor's bytes and digest are unchanged. The other managed keys (`FABRIKA_OP
 service variables, overwritten before the build, and so are the membership transport's `FABRIKA_IAM_RPC_URL` and
 `FABRIKA_IAM_RPC_KEY` of an application whose approved contract needs one, and each job's and webhook's key
 (`FABRIKA_<KIND>_<NAME>_KEY`); a key of a workload the deploy no longer hands is deleted. Application-authored inputs and
-secret writes may not use a framework-only name (`FRAMEWORK_VARIABLE_NAMES` and the job, webhook, connector and mail
-families of `FRAMEWORK_VARIABLE_PREFIXES` in `@fabrika/auth-core`). The mail family (`FABRIKA_EMAIL_*`) is the
-installation's transport, which a deploy writes, sensitive, only to an application whose approved contract has a job
-that declares `mailer: 'installation'`. The run checkpoint is `{ appVersionId, triggered }`; recovery polls a triggered
+secret writes may not use a framework-only name (`FRAMEWORK_VARIABLE_NAMES` and the job, webhook, public procedure,
+connector, mail and platform transport families of `FRAMEWORK_VARIABLE_PREFIXES` in `@fabrika/auth-core`). The mail
+family (`FABRIKA_EMAIL_*`) is the installation's transport, which a deploy writes, sensitive, only to an application
+on an older framework release whose approved contract has a job that declares `mailer: 'installation'`. On framework
+0.6 that application gets the platform transport instead: `FABRIKA_EMAIL_PROVIDER=platform` and
+`FABRIKA_PLATFORM_MAIL_URL` plain, `FABRIKA_PLATFORM_MAIL_KEY` sensitive
+([ADR-0064](../decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)). The run checkpoint is `{ appVersionId, triggered }`; recovery polls a triggered
 version and deletes an untriggered one
 ([ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md),
 `packages/provider-zerops/src/managed-env.ts`).

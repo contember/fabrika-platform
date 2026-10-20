@@ -117,8 +117,9 @@ bun test
   `FABRIKA_APP_ORIGIN` is read back and compared; `FABRIKA_TOKEN_KEYS` is sensitive, rewritten every deploy, and
   removed by a null. Beside them Control hands each job's and webhook's key (`FABRIKA_<KIND>_<NAME>_KEY`), each public
   procedure's (`FABRIKA_PROCEDURE_<ID>_<8 hex>_KEY`) and each connector
-  import's `FABRIKA_CONNECT_<IMPORT>_KEY` and `_URL` (`parseManagedEnvironment`: a `px_` key, an https origin, or
-  the deploy is refused, and so is any other family name): `write-service-env` writes each and deletes every
+  import's `FABRIKA_CONNECT_<IMPORT>_KEY` and `_URL`, and the platform transport's `FABRIKA_PLATFORM_<RECEIVER>_KEY`
+  (sensitive) and `_URL` (plain, http allowed: a private origin) (`parseManagedEnvironment`: a `px_` key, an origin,
+  or the deploy is refused, and so is any other family name): `write-service-env` writes each and deletes every
   service variable of those families that this deploy did not hand, so a removed workload's or import's key does
   not stay readable.
 - **A contract application's setup is the platform's (ADR-0043, `src/execution.ts`).** A config with

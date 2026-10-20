@@ -78,9 +78,11 @@ Mail is optional. Without `--email-provider` (or `FABRIKA_EMAIL_PROVIDER`) the i
 application whose job declares `mailer: 'installation'` still deploys, and its mail waits until a transport is added. With one
 (`--email-provider`, `--email-from`, optionally `--email-from-name`, and the provider's own variables from
 the environment only), the command validates the set and writes it on `iam` and `control` alone, the
-credentials sensitive and not in the secrets file: the operator already holds them. IAM sends its own mail
-with it, and Control hands it to every application whose job declares `mailer: 'installation'`
-([outbound email](outbound-email.md#the-installations-transport)). Nothing writes it again later; changing
+credentials sensitive and not in the secrets file: the operator already holds them. Control's mail relay sends
+IAM's mail and the mail of applications on framework 0.6 with it, and Control hands it to an application on an older
+release whose job declares `mailer: 'installation'`
+([outbound email](outbound-email.md#the-installations-transport)). Without a transport the relay holds every
+application message in the console. Nothing writes it again later; changing
 it is the manual step in `platform guide` ([backlog 187](../backlog/187-set-or-rotate-the-installation-mail-transport.md)).
 
 Both passes and the integration-token mint have run live on a fresh account

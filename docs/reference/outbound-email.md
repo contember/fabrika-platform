@@ -203,6 +203,14 @@ link may have arrived, so the invitation stays open. Any other failure deletes
 it. Both answer `delivery_failed`. When the message cannot be rendered, nothing
 was sent: IAM deletes the new invitation and the call fails.
 
+On Zerops, when IAM has a provider configured and `FABRIKA_CONTROL_URL` is set
+(`http://control:3000`, in IAM's setup of the generated `zerops.yaml`), its sender is a
+`PlatformEmailSender` to Control's relay with the installation key
+`installationMailKey(FABRIKA_IAM_RPC_KEY)` ([the relay](#the-relay)). The relay always
+passes IAM's mail and dispatches it with Control's copy of the transport. An `unknown`
+outcome then means only that the relay was unreachable. Without a provider, IAM keeps
+its manual action-link flow.
+
 IAM owns its enrollment and reset templates, one-time action state, and delivery
 behavior. An installation without a sender uses an explicit manual action-link
 flow; it does not silently drop an email. Operations still owns its notification
@@ -246,28 +254,197 @@ never sends. `mailer: 'own'` takes the application's own `EmailSender` from
 - Control reads its transport from its own `FABRIKA_EMAIL_*` at boot
   (`readInstallationMail`, `packages/control/src/mail-transport.ts`): none, a
   transport, or invalid.
-- A deploy whose approved contract has such a job hands the application the whole
-  set (`installationMailEnvironment`), its credentials among the values the run's
-  logs redact. Zerops writes every name service-level and sensitive, and removes them
-  once a deploy hands none. A Cloudflare deploy refuses any `FABRIKA_EMAIL_*`, so a
-  credential never lands in a plain Worker variable.
-- Without a transport, the deploy hands `FABRIKA_EMAIL_PROVIDER=none` and nothing
-  else. The application boots, its mailer jobs see `ctx.mail.available` false, and
-  every send fails `mail_not_configured`. An installation from before the transport
-  has no `FABRIKA_EMAIL_*` on `control`, so it lands here with no operator step.
-- With an invalid transport, Control refuses that deploy before any effect, naming
-  the jobs and the operator step. It does not refuse the approval: the transport
-  can change after it.
-- `FABRIKA_EMAIL_` is a framework-only family (`isEmailTransportVariable`,
-  `@fabrika/auth-core`): an application's own variable or secret under it is refused
-  at deploy, and the refusal says how to delete it.
+- A Zerops deploy whose approved snapshot records framework 0.6.0 or newer (a
+  prerelease compares as its release) hands the relay (`relaysInstallationMail`,
+  `platformMailEnvironment`): `FABRIKA_EMAIL_PROVIDER=platform`,
+  `FABRIKA_PLATFORM_MAIL_URL=http://control:3000` and the environment's
+  `FABRIKA_PLATFORM_MAIL_KEY`, and no provider variable. Control hands them whatever
+  its own transport is: the relay holds what it cannot send. A dry run hands the
+  provider and the URL without a key. A Control without a vault
+  (`FABRIKA_CONTROL_VAULT_KEY`) cannot issue the key and refuses the deploy.
+- Any other deploy whose approved contract has such a job hands the application the
+  whole set (`installationMailEnvironment`), its credentials among the values the
+  run's logs redact. Zerops writes every name service-level and sensitive.
+- Zerops removes the variables a deploy no longer hands, so an environment that moves
+  to framework 0.6 loses the provider's credential at that deploy. A Cloudflare deploy
+  refuses any `FABRIKA_EMAIL_*` or `FABRIKA_PLATFORM_*`, so a credential never lands in
+  a plain Worker variable.
+- Without a transport, a deploy that hands the set hands
+  `FABRIKA_EMAIL_PROVIDER=none` and nothing else. The application boots, its mailer
+  jobs see `ctx.mail.available` false, and every send fails `mail_not_configured`. An
+  installation from before the transport has no `FABRIKA_EMAIL_*` on `control`, so it
+  lands here with no operator step.
+- With an invalid transport, Control refuses a deploy that hands the set before any
+  effect, naming the jobs and the operator step. It does not refuse the approval: the
+  transport can change after it.
+- `FABRIKA_EMAIL_` and `FABRIKA_PLATFORM_` are framework-only families
+  (`isEmailTransportVariable`, `isPlatformTransportVariable`, `@fabrika/auth-core`): an
+  application's own variable or secret under one is refused at deploy, and the
+  refusal says how to delete it.
 - A changed transport reaches IAM and Control when they restart, and an application
-  at its next deploy.
+  that holds the set at its next deploy. The relay dispatches with Control's transport,
+  so a relayed application gets the change when Control restarts.
 
 `ctx.mail` puts a prefix of the installation and the application environment in
 front of each key, so applications on one provider account never share one. Over a
 transport that is not idempotent, an outbox never resends a message whose outcome
 is `unknown`.
+
+## The platform transport key
+
+The key an application environment calls the relay with
+([ADR-0064](../decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md),
+`packages/control/src/platform-transport.ts`):
+
+- one per `<app>@<env>` and receiver (`mail`): `px_` and 160 random bits, which Control
+  generates;
+- stored as its SHA-256 hash in `platform_transport_keys`; the value is sealed in the
+  vault under `platform:platform-key:<app>@<env>:mail`;
+- 30 days of life. A deploy reuses the newest key while more than 15 days are left and
+  issues a new one otherwise. A replaced key stays valid by its hash until it expires;
+  its vault value is deleted at once. Issuing a key also deletes every expired key row
+  of the installation.
+- A deploy that no longer needs the key deletes its rows and vault values. Deleting the
+  application environment deletes its rows.
+
+On Zerops the URL is a plain service variable and the key a sensitive one
+(`packages/provider-zerops/src/managed-env.ts`). The error-report scrubber keeps the
+URL and `FABRIKA_EMAIL_PROVIDER` and redacts the key.
+
+## The relay
+
+Control's mail relay receives installation mail from applications on framework 0.6
+and from IAM on Zerops, records it, gates it and dispatches it through Control's own
+transport (`packages/control/src/mail-relay/`). Only the Bun process (Zerops and the
+local stack) runs it; on the Worker its row answers 404.
+
+### The wire
+
+`@fabrika/email/platform` holds both sides of the wire (`platform-wire.ts`):
+
+- `POST <url>/platform/mail/send`, `Authorization: Bearer <key>`,
+  `Content-Type: application/json`. Control serves it on the `protocol` row
+  `mail-relay` (`POST /platform/mail/*`); any other path under it answers 404.
+- The body is the `EmailMessage` fields; each attachment is
+  `{ filename, contentType, contentBase64 }` (standard padded base64).
+  `encodePlatformMailRequest` writes it in a fixed field order, so the same message
+  is the same text. `parsePlatformMailRequest` is the one parser: strict (an unknown
+  field is refused) and ending in the package's own message validation.
+- The relay reads at most the base64 of 10 MiB of attachments plus 4 MiB. A larger
+  body, invalid JSON, and a message that fails validation answer 400
+  `invalid_message`.
+- The answer is `200 { status: 'accepted', messageId }` or `{ error: { code } }`:
+
+  | status | code                    | when                                          |
+  | ------ | ----------------------- | --------------------------------------------- |
+  | 400    | `invalid_message`       | the body is too large, malformed or invalid   |
+  | 401    | `provider_unauthorized` | no bearer, or a key the relay does not know   |
+  | 409    | `idempotency_conflict`  | another message was accepted under the key    |
+  | 503    | `provider_unavailable`  | the relay cannot look up the key or record it |
+
+`PlatformEmailSender({ url, key, fetch?, timeoutMs? })` (`@fabrika/email/platform`)
+is the sender's side. `url` is exactly an http(s) origin. It reads any
+`EmailDeliveryErrorCode` from an answer, so the relay's `retryable` and `outcome`
+reach the caller unchanged; an answer it cannot read is `malformed_response`. It
+passes the conformance kit. Its capabilities (`PLATFORM_MAIL_CAPABILITIES`):
+idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` of
+10 MiB.
+
+### Acceptance and the gate
+
+- The bearer is an application environment's transport key (hash lookup, unexpired,
+  receiver `mail`), recorded as the sender `<app>@<env>`, or IAM's installation key,
+  `px_` and the hex of `HMAC-SHA256(FABRIKA_IAM_RPC_KEY, 'fabrika-platform-mail')`
+  (`installationMailKey`), compared in constant time and recorded as
+  `installation:iam`.
+- The relay records the message in `mail_messages` under
+  `UNIQUE (sender, idempotency_key)`, with the SHA-256 of the canonical body as its
+  fingerprint. A repeat with the same fingerprint answers the first `messageId`; a
+  different one answers `idempotency_conflict`. The recipient, the subject, the bodies
+  and the attachments live only in `content`; the row also keeps the recipient's
+  domain, lowercase.
+- The gate decides once, when the message is first recorded:
+  1. an installation sender: `queued`;
+  2. Control has no valid transport (`MAIL_TRANSPORT` none or invalid): `held`;
+  3. otherwise the most specific rule of `mail_rules`: the sender's scope with the
+     exact domain, then that scope with `*`, then `*` with the domain, then `*`/`*`.
+     `pass` → `queued`, `hold` → `held`, `drop` → `dropped`. No rule: `queued`. The
+     rule's id is recorded on the message.
+- Every decision answers `accepted`. A `queued` message gets one dispatch job.
+
+| state     | meaning                                                |
+| --------- | ------------------------------------------------------ |
+| `held`    | waits for a person in the console                      |
+| `queued`  | waits for the dispatcher                               |
+| `sent`    | the provider took it; final                            |
+| `failed`  | it did not leave; final                                |
+| `unknown` | it may have left; final, for a person                  |
+| `dropped` | a rule or a person dropped it; nothing was sent; final |
+
+### Dispatch and maintenance
+
+- The dispatcher consumes the `vozka-mail` queue (`PostgresJobQueue`, in Control's jobs
+  table) on its own loop beside `vozka-deploy`, so a long deploy never delays a sign-in
+  link. One job sends one `queued`, due message.
+- It sends through `emailSenderFromEnv` of Control's own `FABRIKA_EMAIL_*`, with a
+  30-second deadline, under the key `relay:<sender>:<key>`; a key longer than 256
+  characters becomes `relay:` and the SHA-256 hex of `<sender>:<key>`.
+- Success marks the message `sent` with the provider's message id. A retryable error
+  that `mayRetryDelivery` allows is retried after 1, 2, 4 and 8 minutes, at most five
+  attempts. Any other error, and the fifth, makes the message `failed` (outcome
+  `not_sent`) or `unknown`. Without a transport a queued message fails as
+  `mail_not_configured`; content that no longer parses fails as `invalid_message`.
+- An installation message's content is purged right after it is sent: it holds a
+  one-time link.
+- Control's maintenance pass (cron) re-enqueues `queued` messages unchanged for 10
+  minutes whose retry is due, at most 100 a pass, and purges the content of final
+  messages 30 days after their last change. A held message keeps its content.
+
+### The console
+
+The Delivery section's **Mail** page lists messages by state, held first, with a
+filter by state and sender. A message's detail shows its metadata and, with
+`mail.content.read`, the recipient, subject, text, the HTML body in a sandboxed frame
+that runs no script, and each attachment's name, type and size. A held message has
+**Release** and **Drop**, each with a confirmation. The rules section sets and removes
+rules.
+
+| action              | grants                                              | scope                                                                |
+| ------------------- | --------------------------------------------------- | -------------------------------------------------------------------- |
+| `mail.read`         | the list and a message's metadata                   | an application's messages at its app or environment; others globally |
+| `mail.content.read` | the recipient, subject, bodies and attachment names | global                                                               |
+| `mail.manage`       | release, drop, and the rules                        | global                                                               |
+
+Only `admin` holds them by default. The procedures (`controlRpc.mail`):
+
+- `messages.list({ state?, scope?, cursor? })`: without `scope` it needs a global
+  `mail.read`, with one the grant that reads that sender (as `runs.list`); 50 a page.
+- `messages.get({ id })`: the content is `withheld` without `mail.content.read`,
+  `purged` once it is gone.
+- `messages.release({ id })` and `messages.drop({ id })`: act on a `held` message only,
+  else 409; record who decided. A release enqueues the dispatch, so on the Worker it
+  answers 503.
+- `rules.list()`, `rules.set({ scope, domain, action })` (one rule per scope and
+  domain; `scope` is `*` or an existing `<app>@<env>`, `domain` is `*` or a lowercase
+  domain) and `rules.remove({ id })`.
+
+### Rollout of an existing installation
+
+- Migration `0013_mail_relay.sql` adds `platform_transport_keys`, `mail_messages` and
+  `mail_rules`. The `mail-relay` row changes the console table, so `platform deploy`
+  rewrites `FABRIKA_SERVICE_TABLE_DIGEST`.
+- An installation starts with no rules: every application message passes.
+- An application environment moves to the relay at its first deploy on framework 0.6.
+  An older release keeps the set and sends directly; the gate does not cover it.
+- IAM moves to the relay with the release whose `zerops.yaml` gives it
+  `FABRIKA_CONTROL_URL`. Its `FABRIKA_EMAIL_*` stay.
+- Before the upgrade, give Control the same `FABRIKA_EMAIL_*` as IAM. Without a
+  transport, Control refuses IAM's messages with `mail_not_configured`, and IAM
+  falls back to the manual link.
+- IAM deploys before Control. Until Control runs the new release, IAM's messages
+  fail `delivery_failed`, and IAM falls back to the manual link.
+- A provider's refusal of a relayed message shows in Control's Mail page, not in
+  IAM's log.
 
 See [ADR-0019](../decisions/0019-portable-outbound-email.md) for the package
 boundary and rejected alternatives.

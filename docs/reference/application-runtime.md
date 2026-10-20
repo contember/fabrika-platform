@@ -1279,11 +1279,14 @@ artifact; the approval diff shows a new `installation` for closer review and a n
   `ctx.url('<endpoint id>', { query: { t: token } })` of a public procedure that takes the signed token
   ([Signed tokens](#signed-tokens)).
 - `ctx.mail.available` is false where the installation has no transport: Control handed `FABRIKA_EMAIL_PROVIDER=none`,
-  a local installation configures none, or the kit runs with `mail: 'none'`. Every send then fails
+  a local installation configures none, or the kit runs with `mail: 'none'`. Control never hands `none` to an
+  application on the relay: the relay holds what it cannot send, so `available` is true there and an accepted message
+  waits for an operator. Every send then fails
   `mail_not_configured`, outcome `not_sent`, with no I/O. An outbox checks it first and leaves its rows queued without
   spending an attempt; they leave on the first run after a transport is added and the application is deployed again.
 - `ctx.mail.capabilities` are the transport's (`idempotent`, `confirmation`, `maxBatch`, `listUnsubscribe`,
-  `maxAttachmentBytes`), and `ctx.mail.mayRetry(error)`
+  `maxAttachmentBytes`); over the relay they are `PLATFORM_MAIL_CAPABILITIES`: idempotent, `queued`, one message a
+  call, `listUnsubscribe`, 10 MiB of attachments. `ctx.mail.mayRetry(error)`
   is `mayRetryDelivery` over them ([outbound email](outbound-email.md)). A send rejects with `EmailDeliveryError`; any
   other rejection of an application's own transport becomes `provider_unavailable`, its message dropped unread.
   `@fabrika/app/implement` re-exports `EmailDeliveryError`, `mayRetryDelivery` and the email types, so an application
@@ -1292,8 +1295,11 @@ artifact; the approval diff shows a new `installation` for closer review and a n
   the runner retries the attempt only where `mayRetryDelivery` holds. Nothing logs or reports a message field, a key,
   a transport's message, a credential or a `messageId`.
 - `boot` resolves each transport once (`resolveMailTransports`). `installation` reads the framework's `FABRIKA_EMAIL_*`,
-  which Control hands a deploy ([outbound email](outbound-email.md#applications)), against `BootOptions.emailProviders`
-  (the built-in providers by default). `own` calls `serve(contract, { mail: (env) => EmailSender | null })` once with
+  which Control hands a deploy ([outbound email](outbound-email.md#applications)). `FABRIKA_EMAIL_PROVIDER=platform`
+  builds a `PlatformEmailSender` to Control's relay from `FABRIKA_PLATFORM_MAIL_URL` and `FABRIKA_PLATFORM_MAIL_KEY`
+  ([outbound email](outbound-email.md#the-relay)) and needs no `FABRIKA_EMAIL_FROM`; a missing or invalid URL or key
+  refuses the boot as `invalid_configuration`, naming the variables. Any other provider is read against
+  `BootOptions.emailProviders` (the built-in providers by default). `own` calls `serve(contract, { mail: (env) => EmailSender | null })` once with
   the application's variables. `FABRIKA_EMAIL_PROVIDER=none` resolves to no mail, and boot logs it once per job. Boot
   refuses an `own` job without `mail`, a `mail` that no `own` job uses, an invalid installation configuration (its
   message names variables, never values), an absent `FABRIKA_EMAIL_PROVIDER` for an `installation` job (Control writes
@@ -1829,10 +1835,14 @@ commits them nor sets them, and an application VARIABLE of the same name is refu
 | `FABRIKA_OPERATIONS_DSN`                                       | The browser-safe public ingest DSN for this application environment             |
 | `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY` | The ingest coordinates that DSN reports under                                   |
 
-A deploy of an approved contract with a job that declares `mailer: 'installation'` also writes the installation's
-mail transport, every `FABRIKA_EMAIL_*` name Control holds, sensitive on Zerops; without one, Control refuses that
-deploy before any effect. A deploy after the contract stops declaring it removes them. An application cannot set a
-`FABRIKA_EMAIL_*` variable of its own: the family is framework-only.
+A deploy of an approved contract with a job that declares `mailer: 'installation'` also writes the mail transport
+([outbound email](outbound-email.md#applications)). An application on framework 0.6 on Zerops gets the relay:
+`FABRIKA_EMAIL_PROVIDER=platform`, `FABRIKA_PLATFORM_MAIL_URL` (Control's private origin, plain) and
+`FABRIKA_PLATFORM_MAIL_KEY` (its environment's transport key, sensitive). An older release gets every `FABRIKA_EMAIL_*`
+name Control holds, sensitive on Zerops, or `FABRIKA_EMAIL_PROVIDER=none` when Control has no transport; with an
+invalid one, Control refuses that deploy before any effect. A deploy after the contract stops declaring it removes
+them. An application cannot set a `FABRIKA_EMAIL_*` or `FABRIKA_PLATFORM_*` variable of its own: both families are
+framework-only.
 
 Every deploy also writes `FABRIKA_APP_ORIGIN`, the environment's public origin that `ctx.url` builds links on (`null`
 removes it from an environment without one), and `FABRIKA_TOKEN_KEYS`, the environment's signed-token keys, `null`

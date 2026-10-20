@@ -38,7 +38,7 @@ It requires:
 Witness: a distribution that adds a stub provider builds both images, the stub passes the conformance kit, and an
 installation configured with `FABRIKA_EMAIL_PROVIDER=<stub>` sends IAM's and an application's mail through it.
 
-Consider [backlog 178](178-an-http-mail-relay-protocol-and-a-relay-adapter.md) first: a relay reaches any adapter
+Consider [backlog 178](178-an-installation-transport-through-an-outside-relay.md) first: a relay reaches any adapter
 without changing how the platform is built.
 
 ## Touch points

@@ -32,8 +32,9 @@ second, after a 2,500-request burst) makes such a run slow.
 Witness: the Resend and SmartEmailing adapters pass the batch cases of the conformance kit, and a job that sends 10
 messages makes `ceil(10 / maxBatch)` requests.
 
-Batches fit the relay protocol too; design both together if
-[backlog 178](178-an-http-mail-relay-protocol-and-a-relay-adapter.md) is taken first.
+The platform mail wire (`@fabrika/email/platform`) carries one message a request, and Control's relay dispatches one
+message a job. A batch needs a batch request on that wire too; design it together with
+[backlog 178](178-an-installation-transport-through-an-outside-relay.md) if that is taken first.
 
 ## Touch points
 

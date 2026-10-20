@@ -63,7 +63,9 @@ bun test               # app-environment · canonical-path · contract-canonical
   `TokenPrincipalType` adds the workload kinds, so a consumer that builds a principal from a token must decide what a
   workload token is. `contractWorkloads` (`workloads.ts`) is the one enumeration of a contract's own workloads, which
   IAM's schema, Control's keys and the application's boot read. `FRAMEWORK_VARIABLE_PREFIXES` reserves the job, webhook,
-  public procedure (`FABRIKA_PROCEDURE_`, never `FABRIKA_PUBLIC_`, an application's build values) and connector families
+  public procedure (`FABRIKA_PROCEDURE_`, never `FABRIKA_PUBLIC_`, an application's build values), connector, mail
+  (`FABRIKA_EMAIL_`, `isEmailTransportVariable`) and platform transport families (`FABRIKA_PLATFORM_`,
+  `platformTransportVariables`, `isPlatformTransportVariable`; ADR-0064)
   (`workloadKeyVariable`, `isWorkloadKeyVariable`; `connectVariables`, `isConnectKeyVariable`, `isConnectUrlVariable`).
   `RpcCaller` is `human | machine`: an `app:<id>` reaches only an export row, a `link` only its own link mount.
 - **Only a user token carries `email`, the principal's normalized mailbox** (`isNormalizedMailbox`), beside `label`,

@@ -22,6 +22,8 @@ For raising an application's framework pin to the next minor, see [framework mig
 
 ## Active sprints
 
+[Platform transport and mail relay](sprints/sprint-2026-10-20-platform-transport-mail-relay.md) is active: applications on framework 0.6 send installation mail to Control over a transport key ([ADR-0064](decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)); Control records, gates and dispatches it, and IAM sends through it ([ADR-0019](decisions/0019-portable-outbound-email.md) §8).
+
 [Declare the surface](sprints/sprint-2026-10-19-declare-the-surface.md) is active: the revision of the contract kinds, now in [ADR-0012](decisions/0012-fabrika-app-runtime.md) §9–§16, [ADR-0060](decisions/0060-a-handler-kicks-a-declared-job-after-its-commit.md), [ADR-0061](decisions/0061-a-file-is-a-value-in-a-table-column.md) and [ADR-0063](decisions/0063-a-public-procedure-runs-as-its-own-workload.md), with the platform serving framework 0.4, 0.5 and 0.6 ([ADR-0062](decisions/0062-a-platform-release-serves-older-framework-releases.md)).
 
 [MCP application authoring](sprints/sprint-2026-10-07-mcp-authoring.md) is active: MCP in Control, IAM OAuth for Claude/ChatGPT, Git workspaces, stage deploys and pull requests on Zerops ([ADR-0049](decisions/0049-author-applications-through-mcp-in-control.md)).
