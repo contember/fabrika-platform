@@ -470,10 +470,13 @@ Only `admin` holds them by default. The procedures (`controlRpc.mail`):
 - IAM moves to the relay with the release whose `zerops.yaml` gives it
   `FABRIKA_CONTROL_URL`. Its `FABRIKA_EMAIL_*` stay.
 - Before the upgrade, give Control the same `FABRIKA_EMAIL_*` as IAM. Without a
-  transport, Control refuses IAM's messages with `mail_not_configured`, and IAM
-  falls back to the manual link.
+  transport, Control refuses IAM's messages with `mail_not_configured`.
 - IAM deploys before Control. Until Control runs the new release, IAM's messages
-  fail `delivery_failed`, and IAM falls back to the manual link.
+  fail.
+- IAM offers the manual link only when it has no sender of its own. While the relay
+  refuses, an administrator's enrollment, reset or invitation answers 502
+  `password action email delivery failed`, and a self-service password reset shows
+  its usual answer while no mail leaves (backlog 194).
 - A provider's refusal of a relayed message shows in Control's Mail page, not in
   IAM's log.
 

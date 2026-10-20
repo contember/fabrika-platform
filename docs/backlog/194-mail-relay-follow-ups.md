@@ -74,6 +74,26 @@ blocked-by: []
     when the dispatcher later ends the message `failed` or `unknown`, IAM does not offer the manual link. Only Control's
     Mail page shows it.
 
+### Upgrade, keys and senders
+
+21. **IAM has no fallback while the relay refuses.** IAM moves to the relay with the `zerops.yaml` that gives it
+    `FABRIKA_CONTROL_URL`, and IAM deploys before Control. Until Control runs the new release, or while Control has no
+    transport (`mail_not_configured`), an administrator's enrollment, reset or invitation answers 502 and a self-service
+    reset sends nothing. IAM still holds its provider credential: send directly on a definite refusal (404 from an older
+    Control, `mail_not_configured`), never on an unknown outcome; or have `platform upgrade` refuse when `iam` has
+    `FABRIKA_EMAIL_PROVIDER` and `control` does not.
+22. **A retry after Control loses its transport answers `mail_not_configured`** instead of the recorded message id: the
+    refusal in the relay's handler runs before the idempotency lookup.
+23. **`installation:iam` means "anyone who holds `FABRIKA_IAM_RPC_KEY`".** Operations holds that key too, so it can
+    send mail that always passes the gate. Derive a mail key per installation service.
+24. **A quiet environment's key expires.** The 30-day key is renewed only by a deploy, as membership keys are; an
+    environment that is not deployed for 30 days has its mail refused. Renew it from maintenance, or warn.
+25. **The reserved `FABRIKA_PLATFORM_` prefix reaches older applications.** A 0.6 or older application's own variable
+    under that prefix is refused at deploy and removed as stale, a narrow break of ADR-0062. Reserve it only for a
+    release that reads it.
+26. **The retry horizon follows the dispatch tick.** Ten attempts from a 60 s base doubled reach about 8.5 hours at the
+    default tick, not the 30-day cap; a longer provider outage ends `failed` and needs a person's requeue.
+
 ### Tests
 
 20. Missing cases: a key of another receiver; the body cap on a chunked body;

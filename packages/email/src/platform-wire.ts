@@ -162,7 +162,7 @@ export const PLATFORM_MAIL_ERROR_STATUS = {
 	invalid_message: 400,
 	provider_unauthorized: 401,
 	idempotency_conflict: 409,
-	// An installation sender's message when Control has no transport: refused at once, so IAM offers its manual link.
+	// An installation sender's message when Control has no transport: refused at once, as `not_sent`.
 	mail_not_configured: 503,
 	provider_unavailable: 503,
 } as const satisfies Partial<Record<EmailDeliveryErrorCode, number>>
