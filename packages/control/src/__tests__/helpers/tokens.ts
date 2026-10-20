@@ -13,6 +13,7 @@ import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 export const TEST_ISSUER = 'https://propustka.test'
 
 const KEY_ID = 'control-test'
+const TEST_TOKEN_SECONDS = 24 * 60 * 60
 const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
 const publicJwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
 
@@ -76,7 +77,8 @@ export async function testToken(input: {
 		aud: 'vozka',
 		sub: input.subject ?? `${type}-${input.label}`,
 		iat: now,
-		exp: now + 300,
+		// The role tokens below are minted once, at import, and the full suite outlasts minutes.
+		exp: now + TEST_TOKEN_SECONDS,
 		perms: input.actions.map((action) => ({ action, scope: null, source: 'grant' })),
 		...(type === 'link' ? {} : { ptype: type }),
 		...(type === 'job' ? { workload: 'nightly' } : {}),
