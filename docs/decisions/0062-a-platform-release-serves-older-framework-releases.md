@@ -69,6 +69,8 @@ upgraded first.
    `bun.lock` does not resolve `@fabrika/app` from the registry, is refused with one line. Each platform release
    bundles, as exact npm aliases, `@fabrika/check`, `@fabrika/app` and `@fabrika/auth-core` at the newest patch of
    every older framework minor in its window, so Control fetches no code at run time, on Bun and in a Worker alike.
+   It bundles `@fabrika/proxy-core` of the same releases too: a Zerops namespace whose proxy is pinned to an older
+   source runs that release's strict manifest parser, so Control refuses a deploy of a row none of them parses.
    The reader's artifact carries `format: <n>` (a 0.4 or 0.5 artifact has none and is format 1). The snapshot stores
    the artifact as its release read it and digests it by that release's canonical form, and the providers write that
    digest into `FABRIKA_CONTRACT_DIGEST` and the proxy table instead of recomputing it, so the application's startup

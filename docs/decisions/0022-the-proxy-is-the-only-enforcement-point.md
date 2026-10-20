@@ -716,19 +716,22 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   Cloudflare, like a changed domain. **Rollout:** nothing converges on upgrade, because nothing needs to: a contract
   without the flag keeps every digest byte for byte, `crossOrigins` is absent from every manifest until an operator
   sets one, and Control's new column starts empty, so an upgraded installation answers exactly as before. One
-  operator step remains on Zerops: `upgrade` does not move a namespace's proxy source pin, and a proxy built from an
-  older pin refuses a manifest with either field. Before an application of a namespace declares
-  `admission.origins` or its environment lists an origin, the operator re-pins that namespace
-  (`namespaces update --proxy-source=current`).
+  operator step remains on Zerops: `upgrade` does not move a namespace's proxy source pin, and a proxy built from a
+  pin older than 0.5.3, which added both fields, refuses a manifest with either. Before an application of such a
+  namespace declares `admission.origins` or its environment lists an origin, the operator re-pins that namespace
+  (`namespaces update --proxy-source=current`). Control cannot refuse this deploy: it does not record the pin's
+  release, and the 0.5 proxy of the window reads the field.
 - **A new row form needs a proxy that reads it.** A `public` row, a `capabilities` requirement, a file-response
   profile and a `cache` field are each refused by an older proxy's strict parser, so a manifest that holds one never
   reaches a proxy that would serve it without its rule. **Rollout:** a contract without them keeps every digest byte
-  for byte. On Cloudflare the runner deploys the proxy Worker with the application. On Zerops Control refuses a
-  deploy whose contract holds a public row or a `capabilities` requirement while the namespace's proxy source is
-  another than the one it deploys new placements from, and names the re-pin
-  (`fabrika control namespaces update --namespace=<id> --proxy-source=current`). It does not check a file-response
-  profile or `admission.origins`: an old pin refuses such a manifest at its republish, so the operator re-pins the
-  namespace before an application declares either.
+  for byte. On Cloudflare the runner deploys the proxy Worker with the application. On Zerops Control refuses, before
+  any effect, a deploy whose contract holds a row that no older release's proxy parses, while the namespace's proxy
+  source is another than the one it deploys new placements from, and names the re-pin
+  (`fabrika control namespaces update --namespace=<id> --proxy-source=current`). It judges each row with the strict
+  row parser of the newest patch of every older minor in the window
+  ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)), so the four forms above are refused, and so
+  is any later one, without a list to keep. A row one of them parses deploys: every row of a 0.4 or 0.5 application,
+  and every row of a 0.6 one that uses none of the new forms.
 - **The platform keeps serving the rows of older framework releases**: a 0.4/0.5 form row with its content types,
   its cross-origin form and its multipart origin check, a collection's `upload` and `download` rows, and a webhook's
   generated binding rows, until no framework release in the window produces them

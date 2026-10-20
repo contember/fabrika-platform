@@ -166,9 +166,9 @@ The application then takes a public request in this order, each refusal with its
 - A custom IAM policy is not checked against public actions; only the schema's roles are.
 - **Rollout.** IAM must know the workload kind (its migration 0020) and Control must issue its keys (its migration
   0011) before an application declares a public procedure, so `fabrika platform upgrade` comes first. On Zerops a
-  namespace's proxy pin must read the `public` row. Control refuses a deploy whose contract holds a public row (or a
-  `capabilities` requirement) while the namespace's proxy source is another than the one it deploys new placements
-  from, and names the re-pin (`fabrika control namespaces update --namespace=<id> --proxy-source=current`). No generated
+  namespace's proxy pin must read the `public` row. Control refuses a deploy whose contract holds a row no older
+  release's proxy parses, a public row among them, while the namespace's proxy source is another than the one it
+  deploys new placements from, and names the re-pin (`fabrika control namespaces update --namespace=<id> --proxy-source=current`). No generated
   installation file changes. A 0.4 or 0.5 application has no public row, so nothing changes for it.
 
 ## Alternatives considered

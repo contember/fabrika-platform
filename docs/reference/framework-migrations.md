@@ -53,8 +53,8 @@ now a procedure with a handler, or a table with a policy ([ADR-0012](../decision
   signs and Control keys ([ADR-0063](../decisions/0063-a-public-procedure-runs-as-its-own-workload.md)). The platform
   upgrade of step 1 brings both.
 - **On Zerops, re-pin the namespace's proxy.** A namespace proxy's manifest parser is strict, so a proxy pinned before
-  the upgrade refuses a public row or a row with several capabilities. Control refuses such a deploy while the
-  namespace's proxy source is not its own, and names the command:
+  the upgrade refuses a row of a form this release added: a public procedure, `http.cache`, a file output, several
+  capabilities. Control refuses such a deploy while the namespace's proxy source is not its own, and names the command:
   `fabrika control namespaces update --namespace=<id> --proxy-source=current`
   ([`deployment-namespaces.md`](deployment-namespaces.md)).
 - **On Cloudflare**, a row with `http.cache` needs a proxy Worker of the new release, and token purposes are refused.

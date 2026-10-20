@@ -116,21 +116,28 @@ namespace proxy, the next deploy of the environment builds the proxy Worker with
 
 A namespace proxy parses its manifest strictly, and `fabrika platform upgrade` does
 not move a namespace's proxy source pin. A proxy built from a pin older than the
-release that added a row field or a row kind refuses a manifest that carries it: the rebuild fails, the previous
-proxy version keeps serving, and every deploy that republishes the namespace fails until the pin moves. Re-pin the
-namespace with `fabrika control namespaces update --namespace=<id> --proxy-source=current` before an application of an
-upgraded namespace declares one of these:
+release that added a row field or a row kind refuses a manifest that carries it: the rebuild would fail, the previous
+proxy version would keep serving, and every deploy that republishes the namespace would fail until the pin moved.
 
-- a cross-origin endpoint (`admission.origins: 'listed'` or `'any'`, the row's `crossOrigin`), or an environment that
-  lists an origin (the entry's `crossOrigins`);
+Control refuses such a deploy itself, before any effect, while the namespace's proxy source is another than the one
+this control plane deploys new placements from (`assertNamespaceProxyReads`,
+`packages/provider-zerops/src/namespace/proxy-reads.ts`). It refuses a row that no older release's proxy parses,
+judged by the strict row parser of the newest patch of each older minor in the window (`@fabrika/proxy-core` 0.4.8
+and 0.5.5, which Control bundles as npm aliases, `packages/control/src/zerops/older-proxies.ts`). The refusal names the
+rows and the re-pin: `fabrika control namespaces update --namespace=<id> --proxy-source=current`. Today that covers:
+
+- a public procedure, also with `http.cache` (the row kind `public` and its `cache`);
 - a procedure with a file output (the row's `response: 'file'`);
-- a public procedure, also with `http.cache` (the row kind `public` and its `cache`), or an endpoint of several
-  capabilities (the requirement kind `capabilities`).
+- an endpoint of several capabilities (the requirement kind `capabilities`).
 
-Control refuses a deploy of the last group itself, before any effect, while the namespace's proxy source is another
-than the one this control plane deploys new placements from (`assertNamespaceProxyReads`,
-`packages/provider-zerops/src/namespace/proxy-reads.ts`); the refusal names the command. A contract without such rows,
-every 0.4 and 0.5 one included, deploys as before.
+A later row form is covered without a change here. A row one of those parsers reads deploys as before: every row of a
+0.4 or 0.5 application, and every row of a newer one that uses none of these forms. A GET mutation is such a row: an
+older proxy parses it and applies the same rules to it.
+
+One case still needs the operator, because Control does not record the release a pin was built from. A pin older than
+0.5.3 refuses a cross-origin endpoint (`admission.origins: 'listed'` or `'any'`, the row's `crossOrigin`) and an
+environment that lists an origin (the entry's `crossOrigins`), which the 0.5.5 parser reads. Re-pin such a namespace
+before an application declares one or its environment lists an origin.
 
 A form of a 0.5 application that takes files ([ADR-0061](../decisions/0061-a-file-is-a-value-in-a-table-column.md))
 fails open on an old pin instead: its row only admits `multipart/form-data`, which an older proxy parses, and that
