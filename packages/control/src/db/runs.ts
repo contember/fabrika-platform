@@ -304,9 +304,10 @@ export class RunRepository {
 
 	/** Refuse a parked run: it fails without touching the provider. */
 	async rejectParkedRun(id: string, classificationJson: string, fence: LeaseFence): Promise<boolean> {
+		// A refusal decides the run: an approval that lapsed before it approved nothing this run ran with.
 		return this.mutateRun(
 			id,
-			`UPDATE runs SET status = 'failed', finished_at = ?
+			`UPDATE runs SET status = 'failed', finished_at = ?, approval_json = NULL
 			WHERE id = ? AND status = 'awaiting_approval' AND cancel_requested_at IS NULL AND classification_json = ?`,
 			[this.now(), id, classificationJson],
 			fence,
@@ -376,11 +377,15 @@ export class RunRepository {
 		)
 	}
 
-	/** Finish a run only after cancellation has durably claimed and settled provider work; activation may have won first. */
+	/**
+	 * Finish a run only after cancellation has durably claimed and settled provider work; activation may have won first.
+	 * A run cancelled while it waited for approval drops the approval it held: that one lapsed, it approved nothing.
+	 */
 	async markRunCancellationFinished(id: string, status: 'succeeded' | 'failed', fence: LeaseFence): Promise<boolean> {
 		return this.mutateRun(
 			id,
-			`UPDATE runs SET status = ?, exit_code = NULL, finished_at = ?
+			`UPDATE runs SET status = ?, exit_code = NULL, finished_at = ?,
+				approval_json = CASE WHEN status = 'awaiting_approval' THEN NULL ELSE approval_json END
 			WHERE id = ? AND status IN ('pending','running','awaiting_approval') AND cancel_requested_at IS NOT NULL`,
 			[status, this.now(), id],
 			fence,

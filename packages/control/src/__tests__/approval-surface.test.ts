@@ -81,7 +81,7 @@ describe('the surface of a published snapshot', () => {
 				?.notes
 		const rate = { perClient: 10, perCaller: null, perEndpoint: 100, bytesPerHour: null }
 		expect(notesOf({ rate, challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', action: 'api_stats_cta' }, timeoutMs: 10_000 })).toEqual([
-			'at most 10 calls a minute per client',
+			'at most 10 calls a minute per client (one client on Zerops)',
 			'at most 100 calls a minute in all',
 			'turnstile challenge',
 		])

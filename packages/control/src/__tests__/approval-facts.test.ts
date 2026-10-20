@@ -92,6 +92,51 @@ describe('the facts of a change line', () => {
 		})
 	})
 
+	test('a removal that widens is placed with whoever reaches its paths now: a signed-in page falling to a public SPA', () => {
+		const site: EndpointRow = {
+			id: 'site',
+			source: { kind: 'mount', name: 'site' },
+			kind: 'public-spa',
+			method: 'GET',
+			path: '/pub/*',
+			callers: [],
+			requirement: null,
+			admission: null,
+			input: null,
+			output: null,
+		}
+		const admin: EndpointRow = {
+			...site,
+			id: 'admin',
+			source: { kind: 'mount', name: 'admin' },
+			kind: 'spa',
+			path: '/pub/admin/*',
+			callers: ['human'],
+			requirement: { kind: 'member' },
+		}
+		const mounts = { ...notesArtifact.mounts, site: { kind: 'spa' as const, prefix: '/pub', dir: 'dist/site' } }
+		const before = snapshot({ ...notesArtifact, declared: {}, mounts, endpoints: [...notesArtifact.endpoints, site, admin] })
+		const pages = { ...notesArtifact, declared: {}, mounts, endpoints: [...notesArtifact.endpoints, site] }
+		expect(lineOf(classifyAccess(before, snapshot(pages)).changes, 'Endpoint `admin`')).toMatchObject({
+			effect: 'widens',
+			subject: { kind: 'endpoint', name: 'admin', path: '/pub/admin/*' },
+			audience: { reach: 'anyone', requirement: null },
+		})
+		const withMount = snapshot({
+			...pages,
+			endpoints: [...pages.endpoints, admin],
+			mounts: { ...mounts, admin: { kind: 'spa', prefix: '/pub/admin', dir: 'dist/admin' } },
+		})
+		expect(lineOf(classifyAccess(withMount, snapshot(pages)).changes, 'Mount `admin` is removed')).toMatchObject({
+			effect: 'widens',
+			subject: { kind: 'mount', name: 'admin' },
+			audience: { reach: 'anyone', requirement: null },
+		})
+		// A removal that only narrows keeps the removed row's audience.
+		const withoutApi = { ...notesArtifact, declared: {}, endpoints: notesArtifact.endpoints.filter((row) => row.id !== 'api.me') }
+		expect(lineOf(classifyAccess(base, snapshot(withoutApi)).changes, 'Endpoint `api.me`').audience).toMatchObject({ reach: 'human' })
+	})
+
 	test('a line about a table, a role or the application has no audience', () => {
 		const role = notesArtifact.roles.editor
 		if (role === undefined) throw new Error('the fixture has no editor role')

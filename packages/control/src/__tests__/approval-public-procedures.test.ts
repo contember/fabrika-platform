@@ -2,8 +2,10 @@
 // public endpoint widens with closer review, each procedure shows its effective bounds where the baseline records none,
 // and a bound that admits more or runs longer widens.
 
+import { bodyDeadlineMs } from '@fabrika/app/contract'
 import type { ContractArtifact, DeclaredReach, EndpointRow, ProcedureArtifact } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { AccessSnapshot } from '../approval/snapshot'
 import { classifyAccess } from './helpers/access'
@@ -60,6 +62,27 @@ describe('a public procedure in the approval diff', () => {
 		expect(classifyAccess(snapshot(null, null), snapshot(DEFAULT_RULES, upload)).changes.at(-1)?.line).toEndWith(
 			'it waits at most 640 s for a body of at most 10485760 bytes, then runs at most 10 s',
 		)
+	})
+
+	test('the body deadline the line names is the one every bundled release that serves procedures applies', async () => {
+		// The diff names the platform's own deadline, which is right while every release in the window derives it alike. A
+		// bundled older release whose deadline differs needs the diff to read it from that release (ADR-0062): this fails then.
+		const manifest = z.object({ dependencies: z.record(z.string()) }).parse(await Bun.file(new URL('../../package.json', import.meta.url)).json())
+		const older = Object.keys(manifest.dependencies).filter((name) => /^@fabrika\/app-\d+\.\d+$/.test(name))
+		expect(older.length).toBeGreaterThanOrEqual(3)
+		let compared = 0
+		// The platform's own release is read the same way, so the check is known to reach a release that has one.
+		for (const release of ['@fabrika/app', ...older]) {
+			const contract: unknown = await import(`${release}/contract`)
+			const deadline: unknown = typeof contract === 'object' && contract !== null ? Reflect.get(contract, 'bodyDeadlineMs') : undefined
+			if (typeof deadline !== 'function') continue
+			for (const maxBytes of [1, 64 * 1024, 1024 * 1024, 10 * 1024 * 1024]) {
+				const theirs: unknown = Reflect.apply(deadline, undefined, [maxBytes])
+				expect([release, theirs]).toEqual([release, bodyDeadlineMs(maxBytes)])
+			}
+			compared++
+		}
+		expect(compared).toBeGreaterThanOrEqual(1)
 	})
 
 	test('a bucket raised or turned off widens, one lowered narrows', () => {

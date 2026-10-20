@@ -278,8 +278,9 @@ widens. A dimension that opts its member directory into labels (`directory: 'lab
 holder there reads each member's email-derived label and every endpoint below it the label of a member it looks up,
 widens too. Each of these widening lines carries
 `review: 'closer'`: the approval page marks it "needs closer review",
-because the approver must read the code behind the line, not only the line. A diff that cannot classify a change
-also marks it for closer review. A closer-review line names its reason (below), so the mark is the result of a rule
+because the approver must read the code behind the line, not only the line. The diff leaves no change unclassified:
+a change it has no finer rule for (`valueChange`, a union, an equivalent rewrite of a schema) widens, so it waits
+like any other widening, without a closer-review mark. A closer-review line names its reason (below), so the mark is the result of a rule
 the approver can read, never a label. On an unprotected environment the run publishes at once, with the same lines.
 
 **An endpoint's input and output are compared by the values they admit.** A change that can only admit
@@ -308,12 +309,14 @@ carries:
   the application itself.
 - `audience`, on an endpoint subject: who reaches it, in the surface's terms (section 5): its reach, the link mount of a
   `link` reach, and its requirement in words. It is read from the candidate's row, or from the baseline's for a removed
-  endpoint, whose line itself says who reaches its paths now.
+  endpoint. A removal that widens (an endpoint, or a mount, whose paths now reach an endpoint that admits more) takes
+  the audience of the most exposed endpoint that answers them now, so its line stands with whoever gains access; that
+  is the one line about a mount that has an audience.
 - `consequence`, when the line says what a call sets off: the job it starts.
 - `reason`, on a closer-review line: `off-road` (a site's declared reach, database code, a contract that leaves the
   staged kit), `anyone-calls` (a public procedure, a workload action or a job kick that anyone without signing in
   sets off), `get-mutation`, `people` (who holds the application's roles, or labels that spell users' email addresses,
-  become visible), `adoption` (a file collection adopted into a table, or released), or `unclassified`.
+  become visible), or `adoption` (a file collection adopted into a table, or released).
 
 The diff builds each fact where it builds the line, so the words and the fact cannot drift apart, and nothing parses a
 line. A line gets its rule where a comparison composes it and its subject where it is placed, and only a line that has
@@ -399,11 +402,12 @@ A deploy of an agent-authored change can carry hundreds of lines, most of them h
 glance who gains access to what, and the few lines that decide it. The page is built from the facts of section 3,
 never from the words of a line:
 
-- **Impact first.** The head counts the changed endpoints per caller group and the new or changed migrations, for
+- **Impact first.** The head counts the changed endpoints per caller group and the migrations the change adds or edits, for
   example "5 endpoints anyone calls, 2 endpoints a share link of `student` reaches".
 - **Grouped by caller.** The facts of an endpoint fall under its audience, in the order and words of the environment
   page's surface: anyone, the share links of each link mount, another application, machines, and signed-in people,
-  each endpoint's requirement on its row. Facts on any other subject form a second part, data and runtime, grouped by
+  each endpoint's requirement on its row. A removed mount whose paths now reach a more exposed endpoint stands there
+  too, and the head counts it apart from the endpoints. Facts on any other subject form a second part, data and runtime, grouped by
   subject kind: tables, roles, jobs, migrations, the application. A group is named by the contract's identifiers (a
   link mount name, a requirement's action); the contract declares no display label for them.
 - **Rank is derived, there is no severity field.** Groups and facts are ordered by effect and review (a widening with
@@ -430,7 +434,8 @@ never from the words of a line:
   to run; published; or the approval lapsed, because the environment published another change first and the change
   still widens against it, so the run waits for a new approval. A refused or cancelled run says so. Parking a run again
   keeps the approval it held: it names the digests it approved, so it approves nothing the new classification shows,
-  and `ApprovalDto.approval.holds` says it lapsed.
+  and `ApprovalDto.approval.holds` says it lapsed. Refusing or cancelling such a run drops the approval, so a decided
+  run never reads as approved for what nobody approved.
 
 ## Consequences
 

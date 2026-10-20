@@ -94,8 +94,6 @@ export function reviewReason(change: AccessChangeDto): string | null {
 			return 'It shows who people are: who holds a role, or labels that spell their email addresses.'
 		case 'adoption':
 			return "It moves stored files under a table's policy, or deletes the ones no column took."
-		case 'unclassified':
-			return 'The diff cannot classify this change: read the code behind it.'
 		case undefined:
 			return null
 	}

@@ -524,9 +524,9 @@ export interface ChangeAudienceDto {
 
 /**
  * Why a line needs closer review: a step off the paved road, something anyone without signing in sets off, a mutation
- * served on `GET`, people becoming visible, a file collection adopted or released, or a change the diff cannot classify.
+ * served on `GET`, people becoming visible, or a file collection adopted or released.
  */
-export const REVIEW_REASONS = ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption', 'unclassified'] as const
+export const REVIEW_REASONS = ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption'] as const
 
 export type ReviewReason = (typeof REVIEW_REASONS)[number]
 
@@ -539,8 +539,8 @@ export interface ChangeConsequenceDto {
 /**
  * One plain-language line of an access change. `effect` is `widens` when it can grant access the baseline did not,
  * `narrows` when it can only take access away, and `neutral` when it admits no one new and takes nothing away.
- * `review: 'closer'` marks a step off the paved road (declared reach, database code) or a change the diff cannot classify,
- * and `reason` says which. A line classified before lines carried facts has no `rule`, `subject` or `reason`.
+ * `review: 'closer'` marks a line the approver reads the code behind (a step off the paved road, a call anyone sets off,
+ * …), and `reason` says which. A line classified before lines carried facts has no `rule`, `subject` or `reason`.
  */
 export interface AccessChangeDto {
 	effect: 'widens' | 'narrows' | 'neutral'
@@ -579,12 +579,13 @@ export interface ApprovalDto {
 	/**
 	 * The candidate's endpoints the change names, as the environment page's surface words them: who reaches each, what it
 	 * requires, and what else opens it or stands in front of it (another origin, a body limit, rate buckets, a challenge).
-	 * A removed endpoint is not among them. Empty for a run that stored no snapshot.
+	 * A removed endpoint is not among them. Empty for a run that stored no snapshot, and on the approvals list.
 	 */
 	endpoints: SurfaceEndpointDto[]
 	/**
 	 * The human who approved it, once one did. `holds` is false once the approval lapsed: the environment published
-	 * another change first, the change still widens against it, and the run waits for a new approval (ADR-0050 §2).
+	 * another change first, the change still widens against it, and the run waits for a new approval (ADR-0050 §2). A
+	 * refusal or a cancellation of such a run drops the approval, so a decided run's approval always held.
 	 */
 	approval: { principalId: string; label: string; approvedAt: number; holds: boolean } | null
 }
