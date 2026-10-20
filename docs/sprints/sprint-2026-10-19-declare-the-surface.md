@@ -141,3 +141,8 @@ back and runs `bun run check:ci` on the integration branch.
 - **Merged WU-2b.** Zerops refuses a deploy whose rows neither the 0.4.8 nor the 0.5.5 proxy-core parser reads while
   the namespace proxy is pinned to another source; the old parsers are Control dependencies (Zerops process only).
   Open: Control does not record a pin's release, so a pin older than 0.5.3 still breaks on a 0.5 cross-origin field.
+- **Merged WU-9.** `bun run local:compat` deploys the unchanged Notes of v0.5.5 and v0.4.8 (npm packages) through the
+  local Control, checks boot, proxy rows, refusals and file collections, then deploys HEAD as the next deploy on the
+  same data: `0008_files.sql` and the adoption migrations apply, old files download byte-identical, the sweep keeps
+  them. `local:smoke` had been red (it did not expect `FABRIKA_SOURCE_MAP_UPLOAD_KEY`); fixed. Not proven: the build
+  step over an old release's source. Open points → [backlog 193](../backlog/193-loose-ends-of-the-declared-surface.md).

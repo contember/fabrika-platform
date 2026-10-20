@@ -81,4 +81,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [190](190-the-overview-reads-each-applications-environments-separately.md): The console overview calls Control once per application for its environments; one read for many applications.
 - [191](191-the-audit-log-cannot-leave-out-admin-reads.md): `audit.list` cannot leave out admin reads, so the console pages past them in the browser.
 - [192](192-a-signed-in-person-cannot-manage-their-own-account.md): No self-service password change or sign-in list; an IAM account page, after rewriting ADR-0020.
+- [193](193-loose-ends-of-the-declared-surface.md): The approval of a 0.5 → 0.6 upgrade, admission buckets, webhook verifiers, tokens on Cloudflare and other P2s of the surface revision.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
