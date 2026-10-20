@@ -6,6 +6,8 @@ import { z } from 'zod'
 import type { EmailMessage } from '../email'
 import {
 	encodePlatformMailRequest,
+	hashPlatformKey,
+	installationMailKey,
 	parsePlatformMailAnswer,
 	parsePlatformMailRequest,
 	PLATFORM_MAIL_CAPABILITIES,
@@ -168,5 +170,18 @@ describe('the answer', () => {
 			[500, 'internal error'],
 		]
 		for (const [status, value] of cases) expect(parsePlatformMailAnswer(status, value)).toBeNull()
+	})
+})
+
+describe('the transport keys', () => {
+	test('hashPlatformKey is the SHA-256 hex of the key', async () => {
+		expect(await hashPlatformKey('px_abc')).toBe(new Bun.CryptoHasher('sha256').update('px_abc').digest('hex'))
+	})
+
+	test('installationMailKey is stable per secret and differs between secrets', async () => {
+		const key = await installationMailKey('secret-one')
+		expect(key).toMatch(/^px_[0-9a-f]{64}$/)
+		expect(await installationMailKey('secret-one')).toBe(key)
+		expect(await installationMailKey('secret-two')).not.toBe(key)
 	})
 })

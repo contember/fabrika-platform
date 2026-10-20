@@ -1,5 +1,7 @@
 export {
 	encodePlatformMailRequest,
+	hashPlatformKey,
+	installationMailKey,
 	parsePlatformMailAnswer,
 	parsePlatformMailRequest,
 	PLATFORM_MAIL_CAPABILITIES,

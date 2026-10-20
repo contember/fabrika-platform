@@ -74,7 +74,24 @@ export function encodePlatformMailRequest(message: EmailMessage): string {
 
 /** The SHA-256 (hex) of the canonical request body: what tells a repeated send from a different one under the same key. */
 export async function platformMailFingerprint(message: EmailMessage): Promise<string> {
-	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(encodePlatformMailRequest(message)))
+	return hexOf(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(encodePlatformMailRequest(message))))
+}
+
+/** The SHA-256 (hex) of a transport key: the only form the receiver stores. */
+export async function hashPlatformKey(key: string): Promise<string> {
+	return hexOf(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key)))
+}
+
+/**
+ * The key an installation service (IAM) sends to the relay with: derived from the installation secret both it and
+ * Control already hold, so an existing installation needs no new secret.
+ */
+export async function installationMailKey(installationSecret: string): Promise<string> {
+	const secret = await crypto.subtle.importKey('raw', new TextEncoder().encode(installationSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+	return `px_${hexOf(await crypto.subtle.sign('HMAC', secret, new TextEncoder().encode('fabrika-platform-mail')))}`
+}
+
+function hexOf(digest: ArrayBuffer): string {
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
