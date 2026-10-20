@@ -4,6 +4,7 @@ import { quotedNote } from './quoted-note'
 
 export const en: Catalog = {
 	pages: {
+		runsOn: 'Runs on',
 		showPassword: 'Show',
 		hidePassword: 'Hide',
 		email: 'Email',

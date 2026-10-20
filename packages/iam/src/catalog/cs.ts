@@ -4,6 +4,7 @@ import { quotedNote } from './quoted-note'
 
 export const cs: Catalog = {
 	pages: {
+		runsOn: 'Běží na platformě',
 		showPassword: 'Zobrazit',
 		hidePassword: 'Skrýt',
 		email: 'E-mail',

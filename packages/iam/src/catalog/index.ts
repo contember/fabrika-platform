@@ -9,6 +9,8 @@ import { cs } from './cs'
 import { en } from './en'
 
 export interface PageText {
+	/** The words before fabrika's mark and name in the footer of every page: "Runs on [mark] fabrika". */
+	readonly runsOn: string
 	readonly showPassword: string
 	readonly hidePassword: string
 	readonly email: string
