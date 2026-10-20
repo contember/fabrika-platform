@@ -31,7 +31,8 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@fabrika/auth-core": "workspace:*"
+		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/proxy-core": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.4.3"

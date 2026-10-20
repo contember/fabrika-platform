@@ -10,6 +10,7 @@ import { GitHubConnectionWebhookSecretProvider } from './github/connections/webh
 import type { CommitSource } from './github/source/commit-files'
 import { ConnectionWebhookVerifier, type PushWebhookVerifier } from './github/triggers/push-event'
 import { controlPublicOrigin } from './iam'
+import { iamBrandSource, type InstallationBrandSource } from './installation-brand'
 import type { MailRelay } from './mail-relay/queue'
 import { iamMembershipKeyIssuer, type MembershipTransportPort, VaultMembershipTransport } from './membership-transport'
 import {
@@ -101,6 +102,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { iamIssuer: env.FABRIKA_IAM_ISSUER }),
 		...controlOriginDeps(env),
 		...proxySecretDeps(env),
+		...installationBrandDeps(env),
 		...workloadCredentialDeps(env),
 		...membershipTransportDeps(env),
 		...platformTransportDeps(env),
@@ -155,6 +157,16 @@ export function workloadCredentialDeps(env: Env): { workloadCredentials?: Worklo
 	return { workloadCredentials: new VaultWorkloadCredentials(repositories(env).workloadCredentials, () => vault(env), issuer) }
 }
 
+/**
+ * The installation's client logo is read from IAM with the provisioning key (ADR-0065); an installation without the
+ * issuer or the key publishes its proxies with the fabrika mark.
+ */
+export function installationBrandDeps(env: Env): { brand?: InstallationBrandSource } {
+	const origin = env.FABRIKA_IAM_ISSUER?.trim() ?? ''
+	const provisioningKey = env.FABRIKA_IAM_PROVISIONING_KEY?.trim() ?? ''
+	return origin === '' || provisioningKey === '' ? {} : { brand: iamBrandSource({ origin, provisioningKey }) }
+}
+
 /** The proxy secrets live in the vault, so an installation without one hands the providers none. */
 export function proxySecretDeps(env: Env): { proxySecrets?: ProxySecrets } {
 	return env.FABRIKA_CONTROL_VAULT_KEY === undefined ? {} : { proxySecrets: new VaultProxySecrets(repositories(env).registry, () => vault(env)) }
@@ -177,6 +189,8 @@ export interface ControlRpcDeps {
 	vault?: () => Promise<Vault>
 	catalogChanged?: () => void
 	namespaceProxyChanged?: NamespaceProxyChanged
+	/** The installation's client logo, which IAM keeps (ADR-0065). */
+	brand?: InstallationBrandSource
 	/** GitHub as a deploy reads it; `register` probes an anonymous source with it. */
 	commits?: CommitSource
 	/**
@@ -200,14 +214,22 @@ export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: A
 		catalogChanged: () => scheduleOperationsCatalogChange(env),
 		...(env.COMMITS === undefined ? {} : { commits: env.COMMITS }),
 		...(env.MAIL_RELAY === undefined ? {} : { mailRelay: env.MAIL_RELAY }),
+		...installationBrandDeps(env),
 		...(provider.namespaces?.republish === undefined
 			? {}
 			: {
-				namespaceProxyChanged: (namespaceId: string) =>
+				namespaceProxyChanged: (namespaceId, options) =>
 					republishNamespace(
-						{ repositories: repositories(env), provider, lock: locks(env), queue: env.DEPLOY_QUEUE, ...proxySecretDeps(env) },
+						{
+							repositories: repositories(env),
+							provider,
+							lock: locks(env),
+							queue: env.DEPLOY_QUEUE,
+							...proxySecretDeps(env),
+							...installationBrandDeps(env),
+						},
 						namespaceId,
-						{ wait: 'started' },
+						{ wait: 'started', ...(options?.brand === undefined ? {} : { brand: options.brand }) },
 					),
 			}),
 	}

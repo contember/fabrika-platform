@@ -8,15 +8,19 @@ import type {
 	ProviderNamespaceRepublishInput,
 	ProviderRegistrationInput,
 } from '@fabrika/provider-contract'
+import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { describe, expect, spyOn, test } from 'bun:test'
 import {
 	enqueueUnsettledNamespaces,
 	type NamespaceJobResult,
+	type NamespaceProxyChanged,
 	type NamespaceUseCaseContext,
 	reconcileNamespaceUseCase,
+	republishAllNamespacesUseCase,
 	republishNamespace,
 	runNamespaceJob,
 } from '../api/namespaces'
+import type { InstallationBrandSource } from '../installation-brand'
 import { acquireLease, namespaceLeaseKey } from '../lease'
 import { proxySecretPurpose, VaultProxySecrets } from '../proxy-secret'
 import { type ControlJobMessage, executeDeploy } from '../run-lifecycle'
@@ -154,6 +158,11 @@ interface NamespaceHarness {
 	sent: ControlJobMessage[]
 	/** Run every enqueued namespace job exactly as a consumer would, and forget the messages. */
 	drain(): Promise<NamespaceJobResult[]>
+}
+
+/** A one-pixel PNG, the smallest image the brand validator admits. */
+const LOGO: InstallationBrand = {
+	light: { type: 'image/png', base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=' },
 }
 
 function makeDeps(
@@ -840,6 +849,8 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		memberOrigins: (string | undefined)[][]
 		memberCrossOrigins: (readonly string[] | undefined)[][]
 		deploySecrets: (string | null | undefined)[]
+		/** The installation's client logo each republish handed the provider (ADR-0065). */
+		brands: (InstallationBrand | null | undefined)[]
 		/** Held open inside source resolution, while the deploy holds the namespace lease but has not republished. */
 		resolving: Promise<void> | null
 	}
@@ -866,6 +877,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 					record.memberSecrets.push(input.members.map((member) => member.proxySecret))
 					record.memberOrigins.push(input.members.map((member) => member.operationsOrigin))
 					record.memberCrossOrigins.push(input.members.map((member) => member.crossOrigins))
+					record.brands.push(input.brand)
 					record.entered()
 					const checkpoint = withTarget(input.namespace, target('rebuilding'))
 					await input.events.checkpoint(checkpoint)
@@ -890,6 +902,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 			memberOrigins: [],
 			memberCrossOrigins: [],
 			deploySecrets: [],
+			brands: [],
 			resolving: null,
 		}
 	}
@@ -940,6 +953,128 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		])
 		expect(await state(harness)).toBe('ready')
 		expect(harness.sent).toEqual([])
+	})
+
+	test("hands the provider the installation's client logo IAM keeps, and the mark without a source (ADR-0065)", async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness, ['alpha'])
+		const reads: string[] = []
+		const brand: InstallationBrandSource = {
+			read: () => {
+				reads.push('read')
+				return Promise.resolve(LOGO)
+			},
+		}
+		await republishNamespace({ ...republishDeps(harness), brand }, 'apps-prod', { wait: 'active' })
+		await republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'active' })
+		expect(record.brands).toEqual([LOGO, null])
+		expect(reads).toEqual(['read'])
+	})
+
+	test("a logo IAM does not answer for publishes fabrika's mark: the republish, and the deploy behind it, go on", async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness, ['alpha'])
+		const brand: InstallationBrandSource = { read: () => Promise.reject(new Error('IAM is unavailable')) }
+		await republishNamespace({ ...republishDeps(harness), brand }, 'apps-prod', { wait: 'active' })
+		expect(record.brands).toEqual([null])
+		expect(await state(harness)).toBe('ready')
+		expect(harness.sent).toEqual([])
+	})
+
+	test('a logo the caller already read is published as it is, without a second read', async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness, ['alpha'])
+		const brand: InstallationBrandSource = { read: () => Promise.reject(new Error('read again')) }
+		await republishNamespace({ ...republishDeps(harness), brand }, 'apps-prod', { wait: 'active', brand: LOGO })
+		expect(record.brands).toEqual([LOGO])
+	})
+
+	describe('republishAll', () => {
+		async function seedNamespace(harness: NamespaceHarness, id: string, namespaceState: 'pending' | 'provisioning' | 'failed' | 'ready') {
+			await harness.deps.repositories.registry.createDeploymentNamespaceWithResourceClaims({
+				id,
+				env: id.replace(/^apps-/, ''),
+				provider: 'harbor',
+				exclusiveAppId: null,
+				providerTargetJson: JSON.stringify(target(namespaceState)),
+				state: namespaceState,
+			}, [`service:proxy-${id}`])
+		}
+
+		function republishAllContext(harness: NamespaceHarness, hook: NamespaceProxyChanged, brand?: InstallationBrandSource): NamespaceUseCaseContext {
+			return {
+				repositories: harness.deps.repositories,
+				provider: harness.deps.provider,
+				auth: harness.deps.auth,
+				signal: new AbortController().signal,
+				queue: harness.deps.queue,
+				namespaceProxyChanged: hook,
+				...(brand === undefined ? {} : { brand }),
+			}
+		}
+
+		test('reads the logo once and publishes it to every ready namespace, a reconcile to one mid-change, and audits each', async () => {
+			const harness = makeDeps(namespacedProvider(providerRecording()))
+			await seedNamespace(harness, 'apps-prod', 'ready')
+			await seedNamespace(harness, 'apps-qa', 'ready')
+			await seedNamespace(harness, 'apps-stage', 'provisioning')
+			await seedNamespace(harness, 'apps-dev', 'pending')
+			await seedNamespace(harness, 'apps-old', 'failed')
+			const reads: string[] = []
+			const brand: InstallationBrandSource = {
+				read: () => {
+					reads.push('read')
+					return Promise.resolve(LOGO)
+				},
+			}
+			const published: [string, InstallationBrand | null | undefined][] = []
+			const context = republishAllContext(harness, (namespaceId, options) => {
+				published.push([namespaceId, options?.brand])
+				return Promise.resolve()
+			}, brand)
+
+			expect(await republishAllNamespacesUseCase(context)).toEqual({ namespaceIds: ['apps-prod', 'apps-qa', 'apps-stage'] })
+			expect(reads).toEqual(['read'])
+			expect(published.sort()).toEqual([['apps-prod', LOGO], ['apps-qa', LOGO]])
+			expect(harness.sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-stage', mutation: 'reconcile' }])
+			expect(harness.audits.map((audit) => `${audit.action} ${audit.resourceId}`).sort()).toEqual([
+				'namespace.reconcile apps-stage',
+				'namespace.republish apps-prod',
+				'namespace.republish apps-qa',
+			])
+			// A provider that cannot republish has nothing to do here.
+			expect(await republishAllNamespacesUseCase({ ...context, namespaceProxyChanged: undefined })).toEqual({ namespaceIds: [] })
+
+			const denied = makeDeps(namespacedProvider(providerRecording()), ['app.manage'])
+			expect((await rpcResult(rpcRequest('namespaces.republishAll'), denied.deps)).status).toBe(403)
+		})
+
+		test('audits every namespace that published before it reports the one that did not', async () => {
+			const harness = makeDeps(namespacedProvider(providerRecording()))
+			await seedNamespace(harness, 'apps-prod', 'ready')
+			await seedNamespace(harness, 'apps-qa', 'ready')
+			const context = republishAllContext(harness, (namespaceId) => namespaceId === 'apps-qa' ? Promise.reject(new Error('busy')) : Promise.resolve())
+
+			await expect(republishAllNamespacesUseCase(context)).rejects.toThrow('apps-qa')
+			expect(harness.audits.map((audit) => `${audit.action} ${audit.resourceId}`)).toEqual(['namespace.republish apps-prod'])
+		})
+
+		test('publishes nothing when IAM does not answer with the logo it was asked to publish', async () => {
+			const harness = makeDeps(namespacedProvider(providerRecording()))
+			await seedNamespace(harness, 'apps-prod', 'ready')
+			const published: string[] = []
+			const context = republishAllContext(harness, (namespaceId) => {
+				published.push(namespaceId)
+				return Promise.resolve()
+			}, { read: () => Promise.reject(new Error('IAM is unavailable')) })
+
+			await expect(republishAllNamespacesUseCase(context)).rejects.toThrow("IAM did not answer with the installation's logo")
+			expect(published).toEqual([])
+			expect(harness.audits).toEqual([])
+		})
 	})
 
 	test("a member carries the origin of its active Operations ingest DSN, never the DSN's key", async () => {

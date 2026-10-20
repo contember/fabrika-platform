@@ -254,6 +254,41 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 		expect((await harness.repositories.registry.getDeploymentNamespace('apps-prod'))?.state).toBe('ready')
 	})
 
+	test("a logo IAM does not answer for publishes fabrika's mark and never fails the namespace (ADR-0065)", async () => {
+		const record = recording()
+		const harness = createHarness()
+		const provider = namespacedProvider(record)
+		const namespaces = provider.namespaces
+		if (namespaces === undefined) throw new Error('test provider must support namespaces')
+		const brands: unknown[] = []
+		const reading: ControlProvider = {
+			...provider,
+			namespaces: {
+				...namespaces,
+				reconcile(input) {
+					brands.push(input.brand)
+					return namespaces.reconcile(input)
+				},
+			},
+		}
+		await harness.repositories.registry.createDeploymentNamespace({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(target('checkpoint')),
+			state: 'provisioning',
+		})
+		const deps: NamespaceJobDeps = { ...jobDeps(harness, reading), brand: { read: () => Promise.reject(new Error('IAM is unavailable')) } }
+
+		expect(await runNamespaceJob(deps, { kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' })).toEqual({
+			namespaceId: 'apps-prod',
+			status: 'ready',
+		})
+		expect(brands).toEqual([null])
+		expect((await harness.repositories.registry.getDeploymentNamespace('apps-prod'))?.state).toBe('ready')
+	})
+
 	test('a provider refusal is a handled job, recorded on the row rather than thrown', async () => {
 		const record = recording()
 		record.fail = true

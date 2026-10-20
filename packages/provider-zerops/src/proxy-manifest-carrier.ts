@@ -30,3 +30,21 @@ export const zeropsProxyManifestCarrier = (descriptorContents: string, setup = '
 	}
 	return 'archive'
 }
+
+/** The build variable that marks a proxy source whose manifest parser knows `brand` (ADR-0065). */
+export const FABRIKA_PROXY_MANIFEST_BRAND = 'FABRIKA_PROXY_MANIFEST_BRAND'
+
+/**
+ * Whether a pinned descriptor's proxy reads a manifest that carries the installation's client logo. An older parser
+ * refuses the unknown key and fails the build, so a namespace kept on such a pin gets no logo and keeps the fabrika
+ * mark until it is re-pinned (`--proxy-source=current`). Decided by the build section Zerops applies, as the carrier is.
+ */
+export const zeropsProxyAcceptsBrand = (descriptorContents: string, setup = 'proxy'): boolean => {
+	const parsed = parseZeropsDescriptor(descriptorContents)
+	for (const entry of appliedZeropsSetups(parsed, selectZeropsDescriptorSetup(parsed, setup))) {
+		const read = buildSectionSchema.safeParse(entry)
+		if (!read.success) continue
+		return read.data.build.envVariables?.[FABRIKA_PROXY_MANIFEST_BRAND] === '1'
+	}
+	return false
+}

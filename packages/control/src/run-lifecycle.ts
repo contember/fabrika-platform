@@ -45,6 +45,7 @@ import {
 	serializeProviderJson,
 } from './db'
 import type { CommitSource } from './github/source/commit-files'
+import type { InstallationBrandSource } from './installation-brand'
 import { acquireLease, type Lease, type LeaseClock, type LeaseFence, namespaceLeaseKey, runLeaseKey } from './lease'
 import {
 	type InstallationMail,
@@ -92,6 +93,8 @@ export interface RunDeps {
 	iamIssuer?: string
 	/** The proxy secret of an environment behind a namespace proxy (ADR-0022 rule 5); absent without a vault. */
 	proxySecrets?: ProxySecrets
+	/** The installation's client logo for the namespace proxy a deploy republishes (ADR-0065); absent, the mark. */
+	brand?: InstallationBrandSource
 	/**
 	 * The keys of the approved contract's jobs and webhooks (ADR-0022 "Principal kinds"); absent without a vault, an IAM
 	 * issuer or a provisioning key, and then a contract that declares one does not deploy.

@@ -12,6 +12,7 @@ import type {
 	PlanDeploymentNamespaceRequest,
 	PlanDeploymentNamespaceResponse,
 	RemoveDeploymentNamespaceResponse,
+	RepublishAllNamespacesResponse,
 	UpdateDeploymentNamespaceRequest,
 } from '@fabrika/control-contract'
 import type { DeployLocks, JobQueue } from '@fabrika/platform'
@@ -31,6 +32,7 @@ import {
 	type ProviderNamespaceUpdatePlan,
 	type ProviderNamespaceUpdates,
 } from '@fabrika/provider-contract'
+import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { approvedProviderAccess } from '../approval/snapshot'
 import {
 	type ControlRepositories,
@@ -40,6 +42,7 @@ import {
 	isUnconfirmedNamespaceUpdate,
 	NamespaceResourceClaimConflictError,
 } from '../db'
+import type { InstallationBrandSource } from '../installation-brand'
 import { acquireLease, type Lease, type LeaseClock, namespaceLeaseKey } from '../lease'
 import type { ProxySecrets } from '../proxy-secret'
 import type { ControlJobMessage, NamespaceJobMessage, NamespaceJobMutation } from '../run-lifecycle'
@@ -62,7 +65,7 @@ export async function enqueueUnsettledNamespaces(
  * The proxy is the only enforcement point (ADR-0022), so its manifest — not the registry — is the live
  * authorization state; every registry change the manifest routes on has to reach it.
  */
-export type NamespaceProxyChanged = (namespaceId: string) => Promise<void>
+export type NamespaceProxyChanged = (namespaceId: string, options?: { readonly brand?: InstallationBrand | null }) => Promise<void>
 
 export interface NamespaceUseCaseContext {
 	readonly repositories: ControlRepositories
@@ -71,6 +74,8 @@ export interface NamespaceUseCaseContext {
 	readonly auth: AuthContext
 	readonly queue: JobQueue<ControlJobMessage>
 	readonly namespaceProxyChanged?: NamespaceProxyChanged
+	/** The installation's client logo (ADR-0065), which `republishAll` reads once for every namespace. */
+	readonly brand?: InstallationBrandSource
 }
 
 /**
@@ -338,6 +343,27 @@ export interface NamespaceJobDeps {
 	readonly leaseClock?: LeaseClock
 	/** Absent without a vault; then no member carries a proxy secret, and the provider refuses a contract member. */
 	readonly proxySecrets?: ProxySecrets
+	/** The installation's client logo (ADR-0065); absent without IAM's provisioning key, and the proxy draws the mark. */
+	readonly brand?: InstallationBrandSource
+}
+
+/**
+ * Read once per mutation. The logo is presentation, so a failed read publishes fabrika's mark and is logged, never
+ * thrown: an IAM that does not answer must hold up no namespace and no deploy. The next publish draws it again.
+ */
+async function installationBrand(deps: Pick<NamespaceJobDeps, 'brand'>, namespaceId: string): Promise<InstallationBrand | null> {
+	if (deps.brand === undefined) return null
+	try {
+		return await deps.brand.read()
+	} catch (cause) {
+		const described = cause instanceof Error ? cause.message : 'unknown error'
+		console.warn(
+			`namespace ${namespaceId}: IAM did not answer with the installation's logo, so the proxy publishes fabrika's mark: ${
+				redactNamespaceErrorText(described)
+			}`,
+		)
+		return null
+	}
 }
 
 /**
@@ -466,7 +492,8 @@ async function mutateNamespace(
 		},
 	}
 	try {
-		const result = mutation === 'provision' ? await capabilities.provision(providerInput) : await capabilities.reconcile(providerInput)
+		const input = { ...providerInput, brand: await installationBrand(deps, row.id) }
+		const result = mutation === 'provision' ? await capabilities.provision(input) : await capabilities.reconcile(input)
 		if (!sameCoordinates(result, current, deps.provider.id)) throw new Error('provider result changed namespace coordinates')
 		current = result
 		await writeNamespace(deps.repositories, lease, row, current, 'ready')
@@ -491,6 +518,8 @@ export interface NamespaceRepublishOptions {
 	readonly signal?: AbortSignal
 	/** The caller's own step boundary, e.g. a deploy's cancellation read. */
 	readonly boundary?: () => Promise<void>
+	/** The logo a caller already read for several namespaces; absent, this republish reads it. */
+	readonly brand?: InstallationBrand | null
 }
 
 /**
@@ -542,6 +571,7 @@ export async function republishUnderLease(
 		const result = await capabilities.republish({
 			namespace: current,
 			members,
+			brand: options.brand === undefined ? await installationBrand(deps, row.id) : options.brand,
 			wait: options.wait,
 			signal: options.signal === undefined ? lease.signal : AbortSignal.any([lease.signal, options.signal]),
 			events: {
@@ -580,7 +610,7 @@ async function enqueueNamespaceJob(c: NamespaceUseCaseContext, row: DeploymentNa
 
 async function auditMutation(
 	c: NamespaceUseCaseContext,
-	action: 'namespace.create' | 'namespace.adopt' | 'namespace.reconcile' | 'namespace.update' | 'namespace.remove',
+	action: 'namespace.create' | 'namespace.adopt' | 'namespace.reconcile' | 'namespace.republish' | 'namespace.update' | 'namespace.remove',
 	row: DeploymentNamespaceRow,
 	extra: Readonly<Record<string, unknown>> = {},
 ): Promise<void> {
@@ -590,6 +620,50 @@ async function auditMutation(
 		resourceId: row.id,
 		metadata: { env: row.env, provider: row.provider, exclusiveAppId: row.exclusive_app_id, state: row.state, ...extra },
 	})
+}
+
+/**
+ * Publish the installation's current client logo (ADR-0065) to the proxy of every namespace: what the console runs after
+ * the logo changes in IAM, whose proxy pages show it only once their manifest is published again.
+ *
+ * The logo is read ONCE, and here a failed read is the answer, because the change it was asked to publish would not
+ * reach a proxy. A ready namespace republishes with it, all of them at once; one mid-change may have read the logo
+ * before it changed, so it gets a reconcile, which reads it again under the lease. A failed namespace publishes
+ * nothing until it is repaired, and reads the logo then. Every namespace is attempted, and each one that publishes is
+ * audited, before a failure is reported; the answer names the ones that will show the logo.
+ */
+export async function republishAllNamespacesUseCase(c: NamespaceUseCaseContext): Promise<RepublishAllNamespacesResponse> {
+	const hook = c.namespaceProxyChanged
+	if (hook === undefined) return { namespaceIds: [] }
+	let brand: InstallationBrand | null = null
+	if (c.brand !== undefined) {
+		try {
+			brand = await c.brand.read()
+		} catch {
+			fail(502, "IAM did not answer with the installation's logo, so no proxy was republished; try again")
+		}
+	}
+	const rows = (await c.repositories.registry.listDeploymentNamespaces()).filter((row) => row.provider === c.provider.id)
+	const failed = new Set<string>()
+	await Promise.all(
+		rows.filter((row) => row.state === 'ready').map(async (row) => {
+			try {
+				await hook(row.id, { brand })
+			} catch (cause) {
+				failed.add(row.id)
+				const described = cause instanceof Error ? cause.message : 'unknown error'
+				console.error(`namespace proxy sync failed for ${row.id}: ${redactNamespaceErrorText(described)}`)
+				return
+			}
+			await auditMutation(c, 'namespace.republish', row)
+		}),
+	)
+	for (const row of rows.filter((candidate) => candidate.state === 'provisioning')) {
+		await c.queue.send({ kind: 'namespace', namespaceId: row.id, mutation: 'reconcile' })
+		await auditMutation(c, 'namespace.reconcile', row)
+	}
+	if (failed.size > 0) fail(502, `the proxy manifest did not publish for deployment namespace ${[...failed].join(', ')}: reconcile the namespace`)
+	return { namespaceIds: rows.filter((row) => row.state === 'provisioning' || row.state === 'ready').map((row) => row.id) }
 }
 
 export async function listNamespacesUseCase(c: NamespaceUseCaseContext): Promise<DeploymentNamespaceListResponse> {

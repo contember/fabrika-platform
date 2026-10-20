@@ -237,6 +237,7 @@ const deployProxy = async (
 		namespaceId: namespace.id,
 		target,
 		manifest,
+		brand: input.brand ?? null,
 		proxySecrets: namespaceProxySecrets(manifest, input.members),
 		...(options.source === undefined ? {} : { source: options.source }),
 		api: options.api,

@@ -617,6 +617,7 @@
       "version": "0.8.2",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/proxy-core": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.4.3",
