@@ -4,6 +4,7 @@
  */
 import { installationConsole } from '../app-presentation'
 import type { RequestContext } from '../env'
+import { installationBrand } from '../installation-brand'
 import { INVITATION_ACCEPT_PATH } from '../membership'
 import { ACCOUNT_CHOICE_PATH, logoutPage } from '../password-pages'
 import { generateRequestId } from '../request-id'
@@ -73,7 +74,11 @@ export async function handleAuth(
 		if (request.method === 'POST') return handleLogout(request, services, requestId)
 		if (request.method === 'GET') {
 			const redirect = safeRedirect(url.searchParams.get('redirect'), services.config)
-			return logoutPage({ redirect, landingOrigin: redirect === null ? await installationConsole(services) : null })
+			return logoutPage({
+				redirect,
+				landingOrigin: redirect === null ? await installationConsole(services) : null,
+				brand: await installationBrand(services),
+			})
 		}
 		return methodNotAllowed()
 	}

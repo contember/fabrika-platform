@@ -13,6 +13,7 @@ import { currentSession } from './auth/sessions'
 import { principalStatus } from './db'
 import type { Env } from './env'
 import { escapeHtml } from './html'
+import { installationBrand } from './installation-brand'
 import { establishClient, type EstablishedClient, exchangeOAuthToken, grantAuthorization, revokeOAuthToken, scopeCeiling } from './oauth'
 import type { OAuthConfig } from './oauth-config'
 import { normalizeOrigin } from './origin'
@@ -89,7 +90,7 @@ async function checkAuthorization(config: OAuthConfig, input: Record<string, str
 async function showConsent(request: Request, services: Services, config: OAuthConfig): Promise<Response> {
 	const url = new URL(request.url)
 	const check = await checkAuthorization(config, singleValued(url.searchParams))
-	if (check.kind === 'refused') return errorPage(check.message, 400)
+	if (check.kind === 'refused') return errorPage(services, check.message, 400)
 	if (check.kind === 'redirect') return check.response
 	const session = await currentSession(request, services)
 	if (session === null) {
@@ -98,23 +99,23 @@ async function showConsent(request: Request, services: Services, config: OAuthCo
 	}
 	const principal = await services.repositories.principals.getPrincipalById(session.principal_id)
 	if (principal === null || principal.type !== 'user' || principalStatus(principal) !== 'active') {
-		return errorPage('This account cannot authorize applications.', 403)
+		return errorPage(services, 'This account cannot authorize applications.', 403)
 	}
-	return consentPage(check, principal.label)
+	return consentPage(services, check, principal.label)
 }
 
 async function decideConsent(request: Request, services: Services, config: OAuthConfig, requestId: string): Promise<Response> {
-	if (!sameOrigin(request, services.config)) return errorPage('The consent was not submitted from this page.', 403)
+	if (!sameOrigin(request, services.config)) return errorPage(services, 'The consent was not submitted from this page.', 403)
 	const form = await readForm(request)
 	const fields = form === null ? null : singleValued(form)
 	const decision = fields?.['decision']
 	const check = await checkAuthorization(config, fields)
-	if (check.kind === 'refused') return errorPage(check.message, 400)
+	if (check.kind === 'refused') return errorPage(services, check.message, 400)
 	if (check.kind === 'redirect') return check.response
 	if (decision === 'deny') return clientRedirect(check.request, { error: 'access_denied' })
-	if (decision !== 'approve') return errorPage('The consent decision is missing.', 400)
+	if (decision !== 'approve') return errorPage(services, 'The consent decision is missing.', 400)
 	const session = await currentSession(request, services)
-	if (session === null) return errorPage('Your sign-in has ended. Start the authorization again.', 401)
+	if (session === null) return errorPage(services, 'Your sign-in has ended. Start the authorization again.', 401)
 	const code = await grantAuthorization(services, { request: check.request, resource: check.resource, scopes: check.scopes, session, requestId })
 	return clientRedirect(check.request, { code })
 }
@@ -137,7 +138,7 @@ async function revoke(request: Request, services: Services, env: SigningEnv, con
 	return new Response(null, { status: 200, headers: { 'cache-control': 'no-store' } })
 }
 
-function consentPage(check: Extract<AuthorizationCheck, { kind: 'valid' }>, signedInAs: string): Response {
+async function consentPage(services: Services, check: Extract<AuthorizationCheck, { kind: 'valid' }>, signedInAs: string): Promise<Response> {
 	const { request, client, resource, scopes } = check
 	const clientName = client.metadata.client_name ?? client.registration.clientId
 	const permissions = (scopeCeiling(resource, scopes) ?? []).map((permission) => {
@@ -157,6 +158,7 @@ function consentPage(check: Extract<AuthorizationCheck, { kind: 'valid' }>, sign
 	const hidden = fields.flatMap(([name, value]) => value === undefined ? [] : [`<input type="hidden" name="${name}" value="${escapeHtml(value)}">`])
 	return htmlPage({
 		locale: DEFAULT_LOCALE,
+		brand: await installationBrand(services),
 		title: 'Authorize application',
 		content: `<h1>Authorize ${escapeHtml(clientName)}</h1>
 		<p>Signed in as <strong>${escapeHtml(signedInAs)}</strong>.</p>
@@ -192,9 +194,10 @@ function singleValued(params: URLSearchParams): Record<string, string> | null {
 	return result
 }
 
-function errorPage(message: string, status: number): Response {
+async function errorPage(services: Services, message: string, status: number): Promise<Response> {
 	return htmlPage({
 		locale: DEFAULT_LOCALE,
+		brand: await installationBrand(services),
 		title: 'Authorization failed',
 		content: `<h1>Authorization failed</h1><p>${escapeHtml(message)}</p>`,
 		status,

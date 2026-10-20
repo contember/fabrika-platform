@@ -525,7 +525,8 @@ async function invitationEmail(
 	token: string,
 	idempotencyKey: string,
 ): Promise<EmailMessage> {
-	const presentation = await presentationFor(services, invitation.app)
+	// An e-mail shows no logo, so the brand is not read.
+	const presentation = await presentationFor(services, invitation.app, null)
 	// The query names the application for the page's language; the fragment never reaches an access log, and the
 	// page copies it into its POST form in the browser.
 	const url = new URL(`${INVITATION_ACCEPT_PATH}${appQuery(presentation)}`, services.config.issuer)

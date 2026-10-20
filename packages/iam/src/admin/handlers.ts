@@ -8,6 +8,7 @@ import {
 } from './api-keys'
 import { getAppSchemaUseCase, listAppsUseCase, listRolesUseCase, setReturnOriginsUseCase } from './app-schema'
 import { listAuditUseCase, listAuthLogUseCase } from './audit'
+import { clearInstallationBrandUseCase, getInstallationBrandUseCase, setInstallationBrandUseCase } from './brand'
 import { type AdminContext } from './context'
 import { createGrantUseCase, deleteGrantUseCase, updateGrantUseCase } from './grants'
 import { json, readJson } from './http'
@@ -85,6 +86,9 @@ export const adminUseCases = {
 	issueWorkloadKey: issueWorkloadKeyUseCase,
 	revokeWorkloadKeys: revokeWorkloadKeysUseCase,
 	issueMembershipKey: issueMembershipKeyUseCase,
+	getInstallationBrand: getInstallationBrandUseCase,
+	setInstallationBrand: setInstallationBrandUseCase,
+	clearInstallationBrand: clearInstallationBrandUseCase,
 }
 
 export { putAppSchema } from './app-schema'

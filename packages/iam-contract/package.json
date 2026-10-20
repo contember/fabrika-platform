@@ -25,6 +25,7 @@
 	},
 	"dependencies": {
 		"@fabrika/app": "workspace:*",
-		"@fabrika/auth-core": "workspace:*"
+		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/proxy-core": "workspace:*"
 	}
 }

@@ -1,5 +1,5 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
-import { type AppPresentation, INSTALLATION_PRESENTATION, presentationFor } from '../app-presentation'
+import { type AppPresentation, installationPresentation, presentationFor } from '../app-presentation'
 import { LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID } from '../auth'
 import { type SessionRow } from '../db'
 
@@ -94,9 +94,9 @@ async function loginChoseApp(services: Services, login: SessionRow, app: string)
  * same handoff, whose verifier the app's proxy still holds.
  */
 export async function handleAccountChoice(request: Request, services: Services, requestId: string): Promise<Response> {
-	if (!sameOrigin(request, services.config)) return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'cross_origin' }, 403)
+	if (!sameOrigin(request, services.config)) return authFailurePage(await installationPresentation(services), { kind: 'cross_origin' }, 403)
 	const form = await readForm(request)
-	if (form === null) return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'malformed_form' }, 400)
+	if (form === null) return authFailurePage(await installationPresentation(services), { kind: 'malformed_form' }, 400)
 	const app = stringValue(form.get('app'))
 	const reading = await readHandoff(
 		services,

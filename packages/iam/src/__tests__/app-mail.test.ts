@@ -117,7 +117,11 @@ describe("an application's e-mail template", () => {
 				text: '{{displayName}} for {{companyLabel}}\n\n{{message}}\n\n{{actionUrl}}',
 			}],
 		})
-		const render = await messageTemplateFor(services, { app: PORTAL, locale: 'en', displayName: '<b>Q&A</b>', landing: null }, 'invitation')
+		const render = await messageTemplateFor(
+			services,
+			{ app: PORTAL, locale: 'en', displayName: '<b>Q&A</b>', landing: null, brand: null },
+			'invitation',
+		)
 		const rendered = render({
 			appName: '<b>Q&A</b>',
 			role: 'Partner',
@@ -180,7 +184,7 @@ describe("an application's e-mail template", () => {
 		})
 		const render = await messageTemplateFor(
 			services,
-			{ app: PORTAL, locale: 'en', displayName: '<b>Q&A</b>', landing: 'https://portal.test' },
+			{ app: PORTAL, locale: 'en', displayName: '<b>Q&A</b>', landing: 'https://portal.test', brand: null },
 			'invitation',
 		)
 		const rendered = render({
@@ -203,7 +207,7 @@ describe("an application's e-mail template", () => {
 		)
 
 		// Without a registered return origin there is no {{appUrl}} to build: the mail is IAM's own wording.
-		const unlanded = await messageTemplateFor(services, { app: PORTAL, locale: 'en', displayName: null, landing: null }, 'invitation')
+		const unlanded = await messageTemplateFor(services, { app: PORTAL, locale: 'en', displayName: null, landing: null, brand: null }, 'invitation')
 		expect(unlanded).toBe(catalogFor('en').messages.invitation)
 	})
 
@@ -236,7 +240,7 @@ describe("an application's e-mail template", () => {
 			presentation: { locale: 'en', displayName },
 			mail: [{ kind: 'reset', locale: 'en', subject: `R ${'{{displayName}}'.repeat(13)}`, text: '{{actionUrl}}' }],
 		})
-		const render = await messageTemplateFor(services, { app: PORTAL, locale: 'en', displayName, landing: null }, 'reset')
+		const render = await messageTemplateFor(services, { app: PORTAL, locale: 'en', displayName, landing: null, brand: null }, 'reset')
 		const rendered = render({ appName: displayName, recipient: 'partner@example.test', actionUrl: 'https://iam.test/r#token=t', expiresAt: 0 })
 		expect(rendered.subject).toHaveLength(MAX_EMAIL_SUBJECT_LENGTH)
 		expect(rendered.subject).toStartWith(`R ${displayName}`)

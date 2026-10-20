@@ -466,6 +466,7 @@
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/proxy-core": "workspace:*",
       },
     },
     "packages/installation-init": {

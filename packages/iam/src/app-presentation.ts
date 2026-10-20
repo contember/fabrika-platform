@@ -1,4 +1,6 @@
 import { DEFAULT_LOCALE, displayNameProblem, isLocale, type Locale } from '@fabrika/auth-core'
+import type { InstallationBrand } from '@fabrika/proxy-core/brand'
+import { installationBrand } from './installation-brand'
 import { normalizeOrigin } from './origin'
 import type { AppPresentationRow } from './repositories/app-schema'
 import type { Services } from './services'
@@ -13,9 +15,21 @@ export interface AppPresentation {
 	readonly displayName: string | null
 	/** The app's first registered return origin (Control registers one, its public origin), or null for none. */
 	readonly landing: string | null
+	/**
+	 * The installation's client logo, which every page draws in place of the fabrika mark, or null for the mark. It is
+	 * the installation's and not the application's; it rides here because every page already takes its presentation.
+	 * An e-mail does not show it.
+	 */
+	readonly brand: InstallationBrand | null
 }
 
-export const INSTALLATION_PRESENTATION: AppPresentation = { app: null, locale: DEFAULT_LOCALE, displayName: null, landing: null }
+/** The installation's words with no logo, for an e-mail. A page takes `installationPresentation`, which reads the brand. */
+export const INSTALLATION_PRESENTATION: AppPresentation = { app: null, locale: DEFAULT_LOCALE, displayName: null, landing: null, brand: null }
+
+/** The presentation of IAM's own page, in the installation's language and with its logo. */
+export async function installationPresentation(services: Services): Promise<AppPresentation> {
+	return { ...INSTALLATION_PRESENTATION, brand: await installationBrand(services) }
+}
 
 /** An app id is far shorter; a longer query value names no application and is not looked up. */
 const MAX_APP_ID_LENGTH = 200
@@ -25,22 +39,32 @@ const MAX_APP_ID_LENGTH = 200
  * when IAM knows one by that id — a reconciled locale or display name, or a registered return origin — and is the
  * installation's otherwise. It decides words and the landing, never authority: the landing is a registered origin, so a
  * forged `app` can only pick another registered application's language and address.
+ *
+ * `known` is the brand a caller already holds, a request's earlier presentation's or `null` for an e-mail, which shows
+ * none; given, the brand is not read again.
  */
-export async function presentationFor(services: Services, app: string | null): Promise<AppPresentation> {
+export async function presentationFor(services: Services, app: string | null, known?: InstallationBrand | null): Promise<AppPresentation> {
+	const brandOf = (): Promise<InstallationBrand | null> => known === undefined ? installationBrand(services) : Promise.resolve(known)
 	if (app === null || app === '' || app.length > MAX_APP_ID_LENGTH) {
-		return INSTALLATION_PRESENTATION
+		return { ...INSTALLATION_PRESENTATION, brand: await brandOf() }
 	}
-	const [row, origins] = await Promise.all([
+	const [row, landing, brand] = await Promise.all([
 		services.repositories.appSchema.getPresentation(app),
-		services.repositories.handoff.listReturnOrigins(app),
+		registeredLanding(services, app),
+		brandOf(),
 	])
-	// A stored origin is written into a CSP directive and a `Location`; one the rule no longer admits is no landing.
-	const landing = origins.find((origin) => normalizeOrigin(origin) === origin) ?? null
 	if (row === null && landing === null) {
-		return INSTALLATION_PRESENTATION
+		return { ...INSTALLATION_PRESENTATION, brand }
 	}
 	const declared = parsePresentation(row)
-	return { app, locale: declared.locale ?? DEFAULT_LOCALE, displayName: declared.displayName, landing }
+	return { app, locale: declared.locale ?? DEFAULT_LOCALE, displayName: declared.displayName, landing, brand }
+}
+
+/** The app's first registered return origin that the origin rule still admits, or null. */
+async function registeredLanding(services: Services, app: string): Promise<string | null> {
+	const origins = await services.repositories.handoff.listReturnOrigins(app)
+	// A stored origin is written into a CSP directive and a `Location`; one the rule no longer admits is no landing.
+	return origins.find((origin) => normalizeOrigin(origin) === origin) ?? null
 }
 
 /** A stored row read back: a locale IAM no longer speaks, or a name the rule refuses, counts as not declared. */
@@ -61,7 +85,8 @@ export function landingUrl(presentation: AppPresentation): string | null {
 /** The installation's console: the registered origin of the first admin audience that has one, or null for none. */
 export async function installationConsole(services: Services): Promise<string | null> {
 	for (const app of services.config.adminAudiences) {
-		const { landing } = await presentationFor(services, app)
+		if (app === '' || app.length > MAX_APP_ID_LENGTH) continue
+		const landing = await registeredLanding(services, app)
 		if (landing !== null) return landing
 	}
 	return null
