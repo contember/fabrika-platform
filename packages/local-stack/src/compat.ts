@@ -197,7 +197,10 @@ const json = async (response: Response, description: string): Promise<unknown> =
 	return response.json()
 }
 
-const sameBytes = (left: Uint8Array, right: Uint8Array): boolean => Buffer.from(left).equals(Buffer.from(right))
+/** The download answers the uploaded bytes under the type recorded at upload. */
+const downloadsAsUploaded = async (response: Response, file: Attachment): Promise<boolean> =>
+	response.status === 200 && response.headers.get('content-type')?.split(';')[0] === file.type
+	&& Buffer.from(await response.arrayBuffer()).equals(Buffer.from(file.bytes))
 
 const createNote = async (key: Caller, title: string): Promise<string> =>
 	createdNoteSchema.parse(
@@ -255,7 +258,7 @@ const proveRelease = async (tag: string, key: Caller, reader: Caller, person: Ca
 	)
 	for (const file of attached) {
 		const download = await call(person, `/api/files.attachments/${file.id}`, { method: 'GET' })
-		if (download.status !== 200 || !sameBytes(new Uint8Array(await download.arrayBuffer()), file.bytes)) {
+		if (!await downloadsAsUploaded(download, file)) {
 			throw new Error(`the file ${file.id} at ${tag} does not download as it was uploaded (${download.status})`)
 		}
 	}
@@ -294,7 +297,7 @@ const proveAdopted = async (key: Caller, attached: readonly Attachment[], moment
 	}
 	for (const file of attached) {
 		const response = await download(key, file)
-		if (response.status !== 200 || !sameBytes(new Uint8Array(await response.arrayBuffer()), file.bytes)) {
+		if (!await downloadsAsUploaded(response, file)) {
 			throw new Error(`the adopted file ${file.id} ${moment} does not download as it was uploaded (${response.status})`)
 		}
 	}
