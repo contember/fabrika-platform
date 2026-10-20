@@ -35,7 +35,7 @@ const LIST_LIMIT = 100
 
 export async function listApprovalsUseCase(c: ApprovalUseCaseContext): Promise<ListResponse<ApprovalDto>> {
 	const rows = await c.repositories.runs.listRunsAwaitingApproval(LIST_LIMIT)
-	return { items: rows.filter((row) => mayApprove(c.auth, row)).map(toApprovalDto) }
+	return { items: rows.filter((row) => mayApprove(c.auth, row)).map((row) => toApprovalDto(row, 'list')) }
 }
 
 export async function getApprovalUseCase(c: ApprovalUseCaseContext, runId: string): Promise<ApprovalDto> {
@@ -150,7 +150,11 @@ function namedEndpoints(run: RunRow, changes: readonly AccessChangeDto[]): Appro
 	return snapshotSurface(parseSnapshot(run.snapshot_json)).filter((endpoint) => named.has(endpoint.id))
 }
 
-function toApprovalDto(run: RunRow): ApprovalDto {
+/**
+ * The approval as the console reads it. The list reads no snapshot: it shows no endpoint, and one stored snapshot that
+ * no longer parses must not take the whole list down with it.
+ */
+function toApprovalDto(run: RunRow, view: 'list' | 'detail' = 'detail'): ApprovalDto {
 	if (run.classification_json === null) throw new Error(`run ${run.id} has no classification`)
 	const classification = parseClassification(run.classification_json)
 	const approval = run.approval_json === null ? null : parseApproval(run.approval_json)
@@ -158,7 +162,7 @@ function toApprovalDto(run: RunRow): ApprovalDto {
 		run: toRunDto(run),
 		outcome: classification.outcome,
 		changes: [...classification.changes],
-		endpoints: namedEndpoints(run, classification.changes),
+		endpoints: view === 'list' ? [] : namedEndpoints(run, classification.changes),
 		candidateDigest: classification.candidateDigest,
 		baselineDigest: classification.baselineDigest,
 		baselineRunId: classification.baselineRunId,
@@ -167,7 +171,10 @@ function toApprovalDto(run: RunRow): ApprovalDto {
 			principalId: approval.principalId,
 			label: approval.label,
 			approvedAt: approval.approvedAt,
-			holds: approval.candidateDigest === classification.candidateDigest && approval.baselineDigest === classification.baselineDigest,
+			// Only a run that waits again can hold a lapsed approval: a refusal or a cancellation drops it, and a run that
+			// published after it ran with what it was approved for, or with no widening left.
+			holds: run.status !== 'awaiting_approval'
+				|| (approval.candidateDigest === classification.candidateDigest && approval.baselineDigest === classification.baselineDigest),
 		},
 	}
 }

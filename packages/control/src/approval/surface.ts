@@ -90,7 +90,8 @@ function formProtection(form: FormMountArtifact): string[] {
 function procedureProtection(row: EndpointRow, rules: ProcedureArtifact): string[] {
 	const { perClient, perCaller, perEndpoint, bytesPerHour } = rules.rate
 	const notes = [
-		...(perClient === null ? [] : [`at most ${perClient} calls a minute per client`]),
+		// On Zerops the proxy sees the balancer, not the visitor, until its range is trusted: every visitor is one client.
+		...(perClient === null ? [] : [`at most ${perClient} calls a minute per client (one client on Zerops)`]),
 		...(perCaller === null ? [] : [`at most ${perCaller} calls a minute per caller`]),
 		...(perEndpoint === null ? [] : [`at most ${perEndpoint} calls a minute in all`]),
 		...(bytesPerHour === null ? [] : [`at most ${bytesPerHour} bytes an hour`]),

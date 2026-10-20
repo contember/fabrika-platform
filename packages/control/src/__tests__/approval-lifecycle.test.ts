@@ -213,6 +213,36 @@ async function approve(w: World, runId: string, caller: AuthContext = auth(), re
 	})
 }
 
+/** A person refuses the parked run, against the classification it shows now. */
+async function refuse(w: World, runId: string) {
+	const row = await run(w, runId)
+	const classification = parseClassification(row.classification_json ?? '')
+	return completeApprovalUseCase(approvals(w, auth()), {
+		runId,
+		decision: 'reject',
+		candidateDigest: classification.candidateDigest,
+		baselineDigest: classification.baselineDigest,
+	})
+}
+
+/**
+ * A run approved against the empty baseline, which waits again because `BASE` published first. The publication in
+ * between is an OLDER run, so it does not supersede the approved one.
+ */
+async function lapsed(w: World): Promise<string> {
+	await seed(w)
+	const firstId = uuidv7()
+	w.contract = WITH_EXPORT
+	const wider = await deploy(w, 'prod')
+	await approve(w, wider.runId)
+	w.contract = BASE
+	const first = await deploy(w, 'prod', firstId)
+	await approve(w, first.runId)
+	await executeDeploy(deps(w), { runId: first.runId })
+	expect((await executeDeploy(deps(w), { runId: wider.runId })).status).toBe('awaiting_approval')
+	return wider.runId
+}
+
 const status = async (promise: Promise<unknown>): Promise<number> => {
 	try {
 		await promise
@@ -498,6 +528,8 @@ describe('approved access through the run lifecycle', () => {
 		expect((await read()).crossOrigins).toEqual(['https://shop.example.test'])
 		// The list renders no origins, so it reads none; a decided run shows none, since the list may have moved since.
 		expect((await listApprovalsUseCase(approvals(w, auth()))).items.map((item) => item.crossOrigins)).toEqual([undefined])
+		// Nor does it read the snapshot for the endpoints, which only the approval's own page shows.
+		expect((await listApprovalsUseCase(approvals(w, auth()))).items.map((item) => item.endpoints)).toEqual([[]])
 		expect((await approve(w, parked.runId)).crossOrigins).toBeUndefined()
 		expect((await read()).crossOrigins).toBeUndefined()
 	})
@@ -566,6 +598,34 @@ describe('approved access through the run lifecycle', () => {
 		expect(await published(w, 'prod')).toEqual({ runId: first.runId, generation: 1 })
 		// The approval stays on the run, bound to the digests it approved, so the page says it lapsed.
 		expect((await getApprovalUseCase(approvals(w, auth()), wider.runId)).approval).toMatchObject({ principalId: 'p-ada', holds: false })
+	})
+
+	test('refusing or cancelling a run whose approval lapsed drops the approval: nobody approved what it showed', async () => {
+		const refused = world()
+		const runId = await lapsed(refused)
+		expect((await refuse(refused, runId)).approval).toBeNull()
+		expect((await run(refused, runId)).status).toBe('failed')
+
+		const cancelled = world()
+		const parked = await lapsed(cancelled)
+		await cancelDeploy(deps(cancelled), await run(cancelled, parked))
+		expect(await run(cancelled, parked)).toMatchObject({ status: 'failed', approval_json: null })
+	})
+
+	test('an approved run that publishes against a newer baseline, where it no longer widens, keeps an approval that held', async () => {
+		const w = world()
+		await seed(w)
+		// The publication in between is an OLDER run, so it does not supersede the approved one.
+		const sameId = uuidv7()
+		w.contract = WITH_EXPORT
+		const approved = await deploy(w, 'prod')
+		await approve(w, approved.runId)
+		const same = await deploy(w, 'prod', sameId)
+		await approve(w, same.runId)
+		expect((await executeDeploy(deps(w), { runId: same.runId })).status).toBe('succeeded')
+
+		expect((await executeDeploy(deps(w), { runId: approved.runId })).status).toBe('succeeded')
+		expect((await getApprovalUseCase(approvals(w, auth()), approved.runId)).approval).toMatchObject({ principalId: 'p-ada', holds: true })
 	})
 
 	test('a publication that loses the compare-and-swap classifies again against the snapshot that won', async () => {

@@ -65,9 +65,18 @@ export type ChangeGroup = (CallerGroup | SubjectGroup) & {
 }
 
 export interface ApprovalView {
-	/** The endpoints that change per caller group, and the migration files the change adds or edits. */
+	/**
+	 * Per caller group the endpoints that change and the removed mounts whose paths now reach it, and the migration files
+	 * the change adds or edits.
+	 */
 	readonly impact: {
-		readonly callers: readonly { readonly key: string; readonly reach: SurfaceReach; readonly mount?: string; readonly endpoints: number }[]
+		readonly callers: readonly {
+			readonly key: string
+			readonly reach: SurfaceReach
+			readonly mount?: string
+			readonly endpoints: number
+			readonly mounts: number
+		}[]
 		readonly migrations: number
 	}
 	readonly callers: readonly ChangeGroup[]
@@ -94,29 +103,44 @@ export function approvalView(changes: readonly AccessChangeDto[]): ApprovalView 
 	const callers = new Map<string, { readonly head: CallerGroup; readonly changes: AccessChangeDto[] }>()
 	const data = new Map<ChangeSubjectKind, AccessChangeDto[]>()
 	const unsorted: AccessChangeDto[] = []
+	// A line with an audience is about who reaches something: an endpoint, or a removed mount whose paths now reach a
+	// more exposed endpoint. Every other line is about data and runtime.
 	for (const change of changes) {
 		const subject = change.subject
 		if (subject === undefined) unsorted.push(change)
-		else if (subject.kind === 'endpoint' && change.audience !== undefined) {
+		else if (change.audience !== undefined) {
 			const { reach, mount } = change.audience
 			const key = mount === undefined ? reach : `${reach}:${mount}`
-			const group = callers.get(key) ?? { head: { kind: 'caller', key, reach, ...(mount === undefined ? {} : { mount }) }, changes: [] }
-			group.changes.push(change)
-			callers.set(key, group)
-		} else data.set(subject.kind, [...(data.get(subject.kind) ?? []), change])
+			const group = callers.get(key)
+			if (group === undefined) callers.set(key, { head: { kind: 'caller', key, reach, ...(mount === undefined ? {} : { mount }) }, changes: [change] })
+			else group.changes.push(change)
+		} else {
+			const kind = data.get(subject.kind)
+			if (kind === undefined) data.set(subject.kind, [change])
+			else kind.push(change)
+		}
 	}
-	const callerGroups = [...callers.values()]
-		.map(({ head, changes }) => group(head, changes))
-		.sort((a, b) => leadRank(a) - leadRank(b) || reachIndex(a) - reachIndex(b) || compareText(a.key, b.key))
-	const dataGroups = [...data]
-		.map(([subject, changes]) => group({ kind: 'subject', key: subject, subject }, changes))
-		.sort((a, b) => leadRank(a) - leadRank(b) || subjectIndex(a) - subjectIndex(b))
-	const migrations = new Set(changes.flatMap((change) => (change.subject?.kind === 'migration' ? [change.subject.name] : [])))
+	const callerGroups = sortGroups([...callers.values()].map(({ head, changes }) => group(head, changes)), reachIndex)
+	const dataGroups = sortGroups([...data].map(([subject, changes]) => group({ kind: 'subject', key: subject, subject }, changes)), subjectIndex)
+	// A migration file the change adds or edits; a removed file runs nowhere.
+	const migrations = new Set(
+		changes.flatMap((change) =>
+			change.subject?.kind === 'migration' && (change.rule === 'migration.added' || change.rule === 'migration.changed') ? [change.subject.name] : []
+		),
+	)
+	const counted = (entry: ChangeGroup, kind: 'endpoint' | 'mount') =>
+		new Set(entry.rows.flatMap(rowChanges).flatMap((change) => (change.subject?.kind === kind ? [change.subject.name] : []))).size
 	return {
 		impact: {
 			callers: callerGroups.flatMap((entry) =>
 				entry.kind === 'caller'
-					? [{ key: entry.key, reach: entry.reach, ...(entry.mount === undefined ? {} : { mount: entry.mount }), endpoints: entry.subjects }]
+					? [{
+						key: entry.key,
+						reach: entry.reach,
+						...(entry.mount === undefined ? {} : { mount: entry.mount }),
+						endpoints: counted(entry, 'endpoint'),
+						mounts: counted(entry, 'mount'),
+					}]
 					: []
 			),
 			migrations: migrations.size,
@@ -132,14 +156,22 @@ export function rowChanges(row: ChangeRow): readonly AccessChangeDto[] {
 	return row.kind === 'subject' ? row.changes : row.subjects.flatMap((subject) => subject.changes)
 }
 
+/** Groups in rank order: the group whose most important line ranks first, then by `index` (reach or subject kind). */
+function sortGroups(groups: readonly ChangeGroup[], index: (entry: ChangeGroup) => number): ChangeGroup[] {
+	const ranked = groups.map((entry) => ({ entry, rank: Math.min(...entry.rows.flatMap(rowChanges).map(changeRank)) }))
+	return ranked.sort((a, b) => a.rank - b.rank || index(a.entry) - index(b.entry) || compareText(a.entry.key, b.entry.key)).map(({ entry }) => entry)
+}
+
 function group(head: CallerGroup | SubjectGroup, changes: readonly AccessChangeDto[]): ChangeGroup {
 	const bySubject = new Map<string, { subject: ChangeSubjectDto; audience?: ChangeAudienceDto; changes: AccessChangeDto[] }>()
 	for (const change of changes) {
 		const subject = change.subject
 		if (subject === undefined) continue
-		const entry = bySubject.get(subject.name) ?? { subject, ...(change.audience === undefined ? {} : { audience: change.audience }), changes: [] }
-		entry.changes.push(change)
-		bySubject.set(subject.name, entry)
+		// A removed mount and an endpoint may share a name; a subject is its kind and its name.
+		const key = `${subject.kind}:${subject.name}`
+		const entry = bySubject.get(key)
+		if (entry === undefined) bySubject.set(key, { subject, ...(change.audience === undefined ? {} : { audience: change.audience }), changes: [change] })
+		else entry.changes.push(change)
 	}
 	const rows = [...bySubject.values()].map((entry): SubjectRow => ({
 		kind: 'subject',
@@ -163,15 +195,18 @@ function group(head: CallerGroup | SubjectGroup, changes: readonly AccessChangeD
  * so every widening and every line for closer review is in view without expanding anything.
  */
 function fold(rows: readonly SubjectRow[]): ChangeRow[] {
+	const keys = new Map(rows.map((row) => [row, quietKey(row)]))
 	const families = new Map<string, SubjectRow[]>()
-	for (const row of rows) {
-		const key = quietKey(row)
-		if (key !== undefined) families.set(key, [...(families.get(key) ?? []), row])
+	for (const [row, key] of keys) {
+		if (key === undefined) continue
+		const family = families.get(key)
+		if (family === undefined) families.set(key, [row])
+		else family.push(row)
 	}
 	const folded: ChangeRow[] = []
 	const placed = new Set<string>()
 	for (const row of rows) {
-		const key = quietKey(row)
+		const key = keys.get(row)
 		const family = key === undefined ? [] : (families.get(key) ?? [])
 		if (key === undefined || family.length < FOLD_AT) folded.push(row)
 		else if (!placed.has(key)) {
@@ -208,10 +243,6 @@ function tallyOf(changes: readonly AccessChangeDto[]): EffectTally {
 
 function rowRank(row: SubjectRow): number {
 	return Math.min(...row.changes.map(changeRank))
-}
-
-function leadRank(entry: ChangeGroup): number {
-	return Math.min(...entry.rows.flatMap(rowChanges).map(changeRank))
 }
 
 function reachIndex(entry: ChangeGroup): number {

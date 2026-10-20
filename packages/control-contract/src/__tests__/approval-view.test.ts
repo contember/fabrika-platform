@@ -39,6 +39,8 @@ const intake: AccessChangeDto[] = [
 	...Array.from({ length: 3 }, (_, index) => endpoint(`staff.e0${index}`, staff, { effect: 'neutral', rule: 'procedure.admission' })),
 	endpoint('staff.files.remove', staff, { effect: 'widens', rule: 'endpoint.added' }),
 	endpoint('student.upload', student, { effect: 'widens', rule: 'endpoint.added' }),
+	{ effect: 'widens', line: 'New migration `0002.sql`', rule: 'migration.added', subject: { kind: 'migration', name: '0002.sql' } },
+	{ effect: 'narrows', line: 'Migration `0001.sql` is removed', rule: 'migration.removed', subject: { kind: 'migration', name: '0001.sql' } },
 	{
 		effect: 'widens',
 		line: 'Migration `0002.sql` adopts …',
@@ -80,10 +82,11 @@ describe('the approval view', () => {
 		expect(view.callers.map((entry) => entry.key)).toEqual(['anyone', 'link:student', 'human'])
 		expect(view.impact).toEqual({
 			callers: [
-				{ key: 'anyone', reach: 'anyone', endpoints: 5 },
-				{ key: 'link:student', reach: 'link', mount: 'student', endpoints: 1 },
-				{ key: 'human', reach: 'human', endpoints: 41 },
+				{ key: 'anyone', reach: 'anyone', endpoints: 5, mounts: 0 },
+				{ key: 'link:student', reach: 'link', mount: 'student', endpoints: 1, mounts: 0 },
+				{ key: 'human', reach: 'human', endpoints: 41, mounts: 0 },
 			],
+			// The added file counts; the removed one runs nowhere.
 			migrations: 1,
 		})
 		expect(view.data.map((entry) => entry.key)).toEqual(['migration', 'table'])
@@ -103,6 +106,20 @@ describe('the approval view', () => {
 		])
 		const pair = approvalView(intake.filter((change) => change.rule !== 'endpoint.body-limit' && change.subject?.name !== 'staff.e02'))
 		expect(rowsOf(pair).every((row) => row.kind === 'subject')).toBe(true)
+	})
+
+	test('places a removed mount whose paths now reach a public endpoint with anyone, and counts it as a mount', () => {
+		const removal: AccessChangeDto = {
+			effect: 'widens',
+			line: 'Mount `admin` is removed: GET /admin/* now reaches `site` for anyone, where it was for human callers who are members',
+			rule: 'mount.removed',
+			subject: { kind: 'mount', name: 'admin' },
+			audience: anyone,
+		}
+		const removed = approvalView([removal, ...intake])
+		expect(removed.callers[0]?.rows.map(label)).toContain('admin')
+		expect(removed.impact.callers[0]).toEqual({ key: 'anyone', reach: 'anyone', endpoints: 5, mounts: 1 })
+		expect(removed.data.some((entry) => entry.key === 'mount')).toBe(false)
 	})
 
 	test('puts lines stored before lines carried facts apart, in their order', () => {

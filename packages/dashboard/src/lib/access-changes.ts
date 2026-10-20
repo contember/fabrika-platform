@@ -96,8 +96,6 @@ export function reviewReason(change: AccessChangeDto): string | null {
 			return "It moves stored files under a table's policy, or deletes the ones no column took."
 		case 'terminal':
 			return "The application decides who is signed in on a shared computer, within the terminal's ceiling."
-		case 'unclassified':
-			return 'The diff cannot classify this change: read the code behind it.'
 		case undefined:
 			return null
 	}

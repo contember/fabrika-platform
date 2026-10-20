@@ -146,9 +146,9 @@ function Impact({ view }: { view: ApprovalView }) {
 					<div className="instrument-label">
 						<Words text={callerGroupTitle(entry.reach, entry.mount)} />
 					</div>
-					<div className="instrument-value">{entry.endpoints}</div>
+					<div className="instrument-value">{entry.endpoints + entry.mounts}</div>
 					<div className="instrument-note">
-						{entry.endpoints === 1 ? 'endpoint' : 'endpoints'}
+						{reachedThings(entry.endpoints, entry.mounts)}
 						{closerIn(entry.key) > 0 && (
 							<>
 								{', '}
@@ -169,6 +169,16 @@ function Impact({ view }: { view: ApprovalView }) {
 			)}
 		</section>
 	)
+}
+
+/** `endpoints`, or `2 endpoints, 1 removed mount` when a removed mount's paths now reach the group too. */
+function reachedThings(endpoints: number, mounts: number): string {
+	if (mounts === 0) return endpoints === 1 ? 'endpoint' : 'endpoints'
+	const counted = [
+		...(endpoints === 0 ? [] : [`${endpoints} ${endpoints === 1 ? 'endpoint' : 'endpoints'}`]),
+		`${mounts} removed ${mounts === 1 ? 'mount' : 'mounts'}`,
+	]
+	return counted.join(', ')
 }
 
 /** One group: a caller group's endpoints with what each requires and what stands in front of it, or one kind of subject. */
@@ -226,11 +236,11 @@ function GroupRow(
 					<details className="folded-row">
 						<summary>
 							<strong>{row.subjects.length}</strong> {callers ? 'endpoints' : 'subjects'} {foldedEffect(row)}:{' '}
-							{row.rules.map((rule) => <code key={rule.rule}>{rule.rule}</code>)}
+							{row.rules.map((rule) => <code key={`${rule.rule} ${rule.effect}`}>{rule.rule}</code>)}
 						</summary>
 						<ul className="change-list">
 							{row.subjects.map((subject) => (
-								<li key={subject.subject.name}>
+								<li key={`${subject.subject.kind}:${subject.subject.name}`}>
 									<SubjectName row={subject} />
 									<ChangeLines changes={subject.changes} crossOrigins={crossOrigins} />
 								</li>
@@ -280,10 +290,11 @@ function SubjectName({ row }: { row: SubjectRow }) {
 function ChangeLines({ changes, crossOrigins }: { changes: readonly AccessChangeDto[]; crossOrigins: readonly string[] | undefined }) {
 	return (
 		<ul className="change-lines">
-			{changes.map((change) => {
+			{changes.map((change, index) => {
 				const reason = reviewReason(change)
 				return (
-					<li key={change.line} className={`change-${change.effect}`}>
+					// Two lines of one subject may read alike (two statements adopting one collection), so the place keys them.
+					<li key={`${index}:${change.line}`} className={`change-${change.effect}`}>
 						<Icon name={EFFECT_ICONS[change.effect]} size={13} />
 						<span>
 							<Words text={change.line} />
@@ -316,7 +327,9 @@ export function Words({ text }: { text: string }) {
 const EFFECT_ICONS: Record<AccessChangeDto['effect'], IconName> = { widens: 'alert', narrows: 'check', neutral: 'arrow-right' }
 
 function rowKey(row: ChangeRow): string {
-	return row.kind === 'subject' ? row.subject.name : `folded:${row.rules.map((rule) => `${rule.rule} ${rule.effect}`).join('|')}`
+	return row.kind === 'subject'
+		? `${row.subject.kind}:${row.subject.name}`
+		: `folded:${row.rules.map((rule) => `${rule.rule} ${rule.effect}`).join('|')}`
 }
 
 /** `2 widen · 1 for closer review · 40 narrow`, leaving out what the group does not have. */
@@ -392,8 +405,8 @@ export function ChangeList(
 			</div>
 			{hint !== undefined && <p className="hint">{hint}</p>}
 			<ul className="change-list">
-				{changes.map((change) => (
-					<li key={change.line}>
+				{changes.map((change, index) => (
+					<li key={`${index}:${change.line}`}>
 						{change.line}
 						{change.environmentOrigins === true && crossOrigins !== undefined && <EnvironmentOrigins origins={crossOrigins} />}
 						{change.review === 'closer' && (

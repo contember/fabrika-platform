@@ -590,6 +590,31 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(await owned.approve(second.id, '{"a":1}', '{"by":"ada"}')).toBe(true)
 		expect(await db.runs.getRun(second.id)).toMatchObject({ status: 'pending', approval_json: '{"by":"ada"}' })
 		expect(await owned.reject(second.id, '{"a":1}')).toBe(false)
+
+		// Parked again, the run keeps the approval it held, which a refusal drops.
+		await owned.start(second.id, 'logs')
+		expect(await owned.park(second.id, '{"a":2}')).toBe(true)
+		expect(await db.runs.getRun(second.id)).toMatchObject({ status: 'awaiting_approval', approval_json: '{"by":"ada"}' })
+		expect(await owned.reject(second.id, '{"a":2}')).toBe(true)
+		expect(await db.runs.getRun(second.id)).toMatchObject({ status: 'failed', approval_json: null })
+
+		// A cancellation drops it too, but only from a run that waits again: an approved run keeps the approval it ran with.
+		const third = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:ada' })
+		await owned.start(third.id, 'logs')
+		await owned.park(third.id, '{"c":1}')
+		await owned.approve(third.id, '{"c":1}', '{"by":"ada"}')
+		await owned.start(third.id, 'logs')
+		await owned.park(third.id, '{"c":2}')
+		await db.runs.requestRunCancellation(third.id)
+		expect(await owned.finishCancellation(third.id, 'failed')).toBe(true)
+		expect(await db.runs.getRun(third.id)).toMatchObject({ status: 'failed', approval_json: null })
+		const fourth = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:ada' })
+		await owned.start(fourth.id, 'logs')
+		await owned.park(fourth.id, '{"d":1}')
+		await owned.approve(fourth.id, '{"d":1}', '{"by":"ada"}')
+		await db.runs.requestRunCancellation(fourth.id)
+		expect(await owned.finishCancellation(fourth.id, 'failed')).toBe(true)
+		expect(await db.runs.getRun(fourth.id)).toMatchObject({ status: 'failed', approval_json: '{"by":"ada"}' })
 	})
 
 	test('approved access: stale registry writes and a stale publication lose to a protection change', async () => {

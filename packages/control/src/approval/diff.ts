@@ -51,14 +51,15 @@ import {
 	type TablePolicyArtifact,
 	type WebhookScheme,
 } from '@fabrika/auth-core'
-import type {
-	ChangeAudienceDto,
-	ChangeConsequenceDto,
-	ChangeSubjectDto,
-	ChangeSubjectKind,
-	DeviationSubjectDto,
-	ReviewReason,
-	SurfaceReach,
+import {
+	type ChangeAudienceDto,
+	type ChangeConsequenceDto,
+	type ChangeSubjectDto,
+	type ChangeSubjectKind,
+	type DeviationSubjectDto,
+	type ReviewReason,
+	SURFACE_REACHES,
+	type SurfaceReach,
 } from '@fabrika/control-contract'
 import type { MigrationDeviation } from '@fabrika/platform-node/sql'
 import { type AccessSnapshot, deviationKey } from './snapshot'
@@ -71,9 +72,8 @@ import { type AccessSnapshot, deviationKey } from './snapshot'
 export type AccessEffect = 'widens' | 'narrows' | 'neutral'
 
 /**
- * One plain-language line before it is placed: its effect and words. `review: 'closer'` marks a step off the paved road
- * (declared reach, database code) or a change the diff cannot classify, and `reason` says which: the approver reads the
- * code behind it, not only the line. `environmentOrigins` marks a line that opens an endpoint to the pages on the origins
+ * One plain-language line before it is placed: its effect and words. `review: 'closer'` marks a line the approver reads
+ * the code behind, not only the line (a step off the paved road, a call anyone sets off, …), and `reason` says which. `environmentOrigins` marks a line that opens an endpoint to the pages on the origins
  * the environment lists (`crossOrigin: 'environment'`): the list is the environment's, not the contract's, so the
  * approval page shows it beside this line.
  */
@@ -131,6 +131,11 @@ class Changes {
 	add(subject: ChangeSubjectDto, ...changes: readonly RuledLine[]): void {
 		this.list.push(...changes.map((change) => ({ ...change, subject })))
 	}
+
+	/** Lines whose audience is not the subject's own row: a removal whose paths now reach a more exposed endpoint. */
+	addReaching(subject: ChangeSubjectDto, audience: ChangeAudienceDto, ...changes: readonly RuledLine[]): void {
+		this.list.push(...changes.map((change) => ({ ...change, subject, audience })))
+	}
 }
 
 const widening = (line: string): Line => ({ effect: 'widens', line })
@@ -155,13 +160,32 @@ function withAudience(change: AccessChange, baseline: ContractArtifact | null, c
 	const id = change.subject.name
 	const row = candidate?.endpoints.find((endpoint) => endpoint.id === id) ?? baseline?.endpoints.find((endpoint) => endpoint.id === id)
 	if (row === undefined) return change
+	return { ...change, subject: { ...change.subject, method: row.method, path: row.path }, audience: change.audience ?? audienceOf(row) }
+}
+
+/** Who reaches a row, in the surface's terms. */
+function audienceOf(row: EndpointRow): ChangeAudienceDto {
 	const reach = endpointReach(row)
-	const audience: ChangeAudienceDto = {
+	return {
 		reach,
 		...(reach === 'link' && row.source.kind === 'mount' ? { mount: row.source.name } : {}),
 		requirement: row.requirement === null ? null : requirementPhrase(row.requirement),
 	}
-	return { ...change, subject: { ...change.subject, method: row.method, path: row.path }, audience }
+}
+
+/** The most exposed of the rows, the first among equals. */
+function mostExposed(rows: readonly EndpointRow[]): EndpointRow | undefined {
+	const rank = (row: EndpointRow) => SURFACE_REACHES.indexOf(endpointReach(row))
+	return rows.reduce<EndpointRow | undefined>((best, row) => (best === undefined || rank(row) < rank(best) ? row : best), undefined)
+}
+
+/**
+ * The audience of a removal that widens: the most exposed endpoint its paths reach now, so the approval page places the
+ * line with whoever gains access. A removal that does not widen keeps the removed row's.
+ */
+function wideningAudience(fates: readonly Fate[]): ChangeAudienceDto | undefined {
+	const exposed = mostExposed(fates.filter((fate) => fate.effect === 'widens').flatMap((fate) => fate.answering))
+	return exposed === undefined ? undefined : audienceOf(exposed)
 }
 
 /** Who reaches an endpoint, its most exposed caller: anyone for an anonymous kind, `app` for an `app:<id>` caller. */
@@ -383,7 +407,8 @@ function challengePhrase(challenge: ProcedureChallenge | null): string {
 
 /**
  * How long a call may take: the body's deadline, which the runtime derives from its limit, then the handler's time
- * limit, which starts after the last byte.
+ * limit, which starts after the last byte. The deadline is the platform's own release's; a test holds every bundled
+ * older release that serves procedures to the same one, so a release that changes it is read with its own (ADR-0062).
  */
 function runPhrase(row: EndpointRow | undefined, timeoutMs: number): string {
 	const limit = row?.admission?.maxBytes ?? null
@@ -815,15 +840,18 @@ function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidat
 			continue
 		}
 		const fate = fallThrough(row, baseline, candidate)
-		changes.add(
-			subjectOf('endpoint', row.id),
-			...ruled('endpoint.removed', [
-				withOrigins({ effect: fate.effect, line: `Endpoint \`${row.id}\` (${route(row)}) is removed; its paths ${fate.words(true)}` }, fate),
-			]),
-		)
+		const lines = ruled('endpoint.removed', [
+			withOrigins({ effect: fate.effect, line: `Endpoint \`${row.id}\` (${route(row)}) is removed; its paths ${fate.words(true)}` }, fate),
+		])
+		const exposed = wideningAudience([fate])
+		if (exposed === undefined) changes.add(subjectOf('endpoint', row.id), ...lines)
+		else changes.addReaching(subjectOf('endpoint', row.id), exposed, ...lines)
 	}
 	for (const [mount, rows] of removedMounts) {
-		changes.add(subjectOf('mount', mount), ...ruled('mount.removed', [removedMountChange(mount, rows, baseline, candidate)]))
+		const removal = removedMountChange(mount, rows, baseline, candidate)
+		const lines = ruled('mount.removed', [removal.line])
+		if (removal.audience === undefined) changes.add(subjectOf('mount', mount), ...lines)
+		else changes.addReaching(subjectOf('mount', mount), removal.audience, ...lines)
 	}
 	return new Set(removedMounts.keys())
 }
@@ -834,7 +862,12 @@ function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidat
  * more than its routes with it (the public variables its pages read, a form's admission, a link mount's grants), so
  * only an SPA mount that served no public variable can leave access unchanged; any other narrows at least.
  */
-function removedMountChange(mount: string, rows: readonly EndpointRow[], baseline: ContractArtifact, candidate: ContractArtifact): Line {
+function removedMountChange(
+	mount: string,
+	rows: readonly EndpointRow[],
+	baseline: ContractArtifact,
+	candidate: ContractArtifact,
+): { readonly line: Line; readonly audience?: ChangeAudienceDto } {
 	const artifact: MountArtifact | undefined = baseline.mounts[mount]
 	const groups = new Map<string, { readonly fate: Fate; readonly routes: string[] }>()
 	for (const row of rows) {
@@ -856,7 +889,11 @@ function removedMountChange(mount: string, rows: readonly EndpointRow[], baselin
 		? 'narrows'
 		: 'neutral'
 	const line = `Mount \`${mount}\` is removed: ${parts.map((part) => part.text).join('; ')}`
-	return withOrigins({ effect, line }, { environmentOrigins: [...groups.values()].some(({ fate }) => fate.environmentOrigins) })
+	const audience = wideningAudience([...groups.values()].map(({ fate }) => fate))
+	return {
+		line: withOrigins({ effect, line }, { environmentOrigins: [...groups.values()].some(({ fate }) => fate.environmentOrigins) }),
+		...(audience === undefined ? {} : { audience }),
+	}
 }
 
 /** A change, marked when its paths now reach an endpoint open to the environment's cross-origin list. */
@@ -872,6 +909,8 @@ interface Fate {
 	readonly effect: AccessEffect
 	words(plural: boolean): string
 	readonly environmentOrigins: boolean
+	/** The endpoints that answer the paths now. */
+	readonly answering: readonly EndpointRow[]
 }
 
 /**
@@ -894,7 +933,9 @@ function fallThrough(row: EndpointRow, baseline: ContractArtifact, candidate: Co
 		if (now.outcome === 'endpoint') reached.set(now.endpoint.id, now.endpoint)
 		else denied = true
 	}
-	if (reached.size === 0) return { effect: 'narrows', words: (plural) => (plural ? 'are denied' : 'is denied'), environmentOrigins: false }
+	if (reached.size === 0) {
+		return { effect: 'narrows', words: (plural) => (plural ? 'are denied' : 'is denied'), environmentOrigins: false, answering: [] }
+	}
 	const answering = [...reached.values()]
 	const reach = (plural: boolean) => (plural ? 'now reach' : 'now reaches')
 	const rest = (plural: boolean) => (denied ? `, and ${plural ? 'are' : 'is'} otherwise denied` : '')
@@ -907,13 +948,14 @@ function fallThrough(row: EndpointRow, baseline: ContractArtifact, candidate: Co
 	const effect: AccessEffect = !fewer ? 'widens' : same && !denied ? 'neutral' : 'narrows'
 	if (same && answering.every((other) => audience(other) === was)) {
 		const ids = listOf(answering.map((other) => other.id), 'none')
-		return { effect, words: (plural) => `${reach(plural)} ${ids} ${was}, as before${rest(plural)}`, environmentOrigins }
+		return { effect, words: (plural) => `${reach(plural)} ${ids} ${was}, as before${rest(plural)}`, environmentOrigins, answering }
 	}
 	const answers = answering.map((other) => `\`${other.id}\` ${audience(other)}`).join(', ')
 	return {
 		effect,
 		words: (plural) => `${reach(plural)} ${answers}, where ${plural ? 'they were' : 'it was'} ${was}${rest(plural)}`,
 		environmentOrigins,
+		answering,
 	}
 }
 
