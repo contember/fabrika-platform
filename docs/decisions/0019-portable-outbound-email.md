@@ -12,7 +12,7 @@ date: 2026-10-15
 IAM needs email for password enrollment and recovery. Operations also needs email notification targets, but that work was deferred because the imported Poplach implementation used a Cloudflare Email Routing binding that has no Bun/Zerops equivalent. Implementing delivery inside either domain would create two provider integrations, two retry classifications, and two places where credentials or message bodies might leak.
 
 Applications send email too. An application writes an outbox row from an endpoint and sends it from a cron job
-([ADR-0060](0060-a-mutation-kicks-a-cron-job-after-its-commit.md)). Without a shared transport, each application
+([ADR-0060](0060-a-handler-kicks-a-declared-job-after-its-commit.md)). Without a shared transport, each application
 builds its own transport: a `fetch` to a provider URL from its own variables, its own error classification, its own
 idempotency handling and its own test stand-in. Each one holds its own provider key, and nothing refuses a deploy that
 cannot send.
@@ -50,11 +50,16 @@ that declares a mailer has no such flow, so it does not start without a sender (
 `EmailSender` is a public interface. Another package can implement it.
 
 - `send(message, signal)` takes one message and the caller's `AbortSignal`. A message has one recipient, a subject, a
-  plain text, an optional HTML body, a required idempotency key, an optional `replyTo` address and an optional
-  `fromName` that replaces the transport's display name.
+  plain text, an optional HTML body, a required idempotency key, an optional `replyTo` address, an optional
+  `fromName` that replaces the transport's display name, optional `attachments` (name, media type, bytes; at most 20)
+  and an optional `unsubscribeUrl`. The attachments and the URL are part of the content a repeated idempotency key must
+  match. There are no free headers.
 - A sender states its **capabilities**: `idempotent` (a repeated send under one key with the same message is not
   delivered again), `confirmation` (`'sync'`: the provider took the message; `'queued'`: it queued the request and
-  may still drop it) and `maxBatch`.
+  may still drop it), `maxBatch`, `maxAttachmentBytes` (the bytes of all attachments together; absent: none) and
+  `listUnsubscribe` (it writes `List-Unsubscribe` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, RFC 8058).
+  A sender without one refuses a message that needs it as invalid, on the send. A mailer job attaches stored files by
+  their references ([ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)): only a `live` file the attempt holds.
 - A failure is an `EmailDeliveryError` with a code. One table maps each code to `retryable` and to an `outcome`:
   `not_sent` (the message did not leave) or `unknown` (it may have). An adapter chooses the code; it cannot pair the
   flags wrongly. Authentication failures, quota, rate limits, an idempotency conflict and the caller's abort each
@@ -178,7 +183,7 @@ origin is registered is sent in IAM's own wording.
   its own.
 - Operations still needs its own notification-target, outbox, retry, and operator-UI work; this decision supplies the transport but does not complete that feature.
 - A caller must choose stable idempotency keys and decide when to retry a retryable failure. An outbox retries after a
-  backoff ([ADR-0060](0060-a-mutation-kicks-a-cron-job-after-its-commit.md)), and an `unknown` outcome over a
+  backoff ([ADR-0060](0060-a-handler-kicks-a-declared-job-after-its-commit.md)), and an `unknown` outcome over a
   non-idempotent transport is not retried at all.
 - IAM keeps an invitation whose email outcome is `unknown`: the link may have arrived.
 - Every application that declares `installation` mail holds the installation's provider credential, and Control holds

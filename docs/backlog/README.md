@@ -42,7 +42,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [94](94-an-older-iam-schema-can-land-after-a-newer-one.md) — IAM holds one vocabulary per app but runs are serialized per environment, so two environments (or a run recovered late) can leave the older schema in IAM.
 - [95](95-close-release-recovery-without-frozen-context.md) — Decide durable release intent, exact artifact evidence and expiry semantics before repairing runs whose original release context is absent.
 - [96](96-operations-sees-only-failed-job-runs.md) — Operations ingest takes error events only, so a successful job run, its duration and its start never reach the console; job reports ride the public ingest key.
-- [97](97-the-generated-tests-have-no-move-case.md) — No access form hands a handler the two `Ref`s a move needs, so the generated tests have no `move` case.
+- [97](97-the-generated-tests-have-no-move-case.md) — The generated tests have no `move` case, though `capabilities` now hands an endpoint the two `Ref`s a move needs.
 - [98](98-application-migrations-have-no-destructive-change-rules.md) — The checker accepts a dropped column, a rename or a `GRANT` in an application migration; the expand-only rules are not built (the runner already refuses the `GRANT`).
 - [99](99-no-check-builds-the-runner-image.md) — No CI job builds or smoke-tests the runner image, and its `bun install` runs without a lockfile.
 - [100](100-a-principal-in-many-scopes-gets-no-token.md) — One permission entry per action and scope meets the 8 KiB token bound at a few dozen workspaces; the 1000-value `Within` cap sits behind it.
@@ -53,20 +53,18 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
 - [154](154-an-endpoint-reads-its-own-target-only-under-an-action-its-table-names.md) — The skill's "reads its own target, whatever its action" holds only for actions the table names.
 - [155](155-creating-a-top-level-value-makes-the-creator-its-member.md) — `creates` makes the creator a member; staff cannot create a value without joining it.
-- [157](157-an-endpoint-holds-one-capability.md) — An operation across two dimensions needs raw SQL and `unscoped` reads.
 - [159](159-an-application-directory-page-and-an-expired-role-regrant.md) — A 100-person directory page exceeds D1's bind limit; an expired global role cannot be regranted.
 - [161](161-app-dev-review-findings.md) — The kit's share links never expire, and an app dev seed error can print a record key.
-- [160](160-a-link-client-lists-other-mounts-collections-and-an-xlsx-loses-carriage-returns.md) — A link client offers collections bound to other mounts, and an XLSX text cell loses its CR.
+- [160](160-an-xlsx-text-cell-loses-carriage-returns.md) — An XLSX text cell loses its CR.
 - [162](162-the-generated-tests-have-no-column-write-case.md) — A column's own write action is enforced, but no generated policy test proves it.
 - [163](163-the-installation-hosts-send-no-hsts.md) — Only an `https` application host gets HSTS; IAM's and Control's hosts get none.
 - [164](164-a-job-without-handle-prints-the-builders-type.md) — A job, webhook, link or export procedure without `.handle` prints the builder's type, not a one-line fix.
 - [165](165-app-dev-has-no-stand-in-for-an-import.md) — `fabrika app dev` stands in for a form's challenge and an outside HTTP provider, not for a `connect` import.
 - [166](166-the-ui-kit-has-no-prop-or-token-for-common-layout-rules.md) — `DataTable`, `PageHeader` and `Checkbox` lack a prop, a wrapped column breaks inside words, and many layout rules read no token.
 - [167](167-a-mutations-mutate-is-new-every-render-and-the-screen-test-dom-empties-a-form.md) — `mutate` cannot drive an effect, there is no `useQueries`, and `installDom` makes `Form` submit an empty `FormData`.
-- [168](168-a-public-form-has-no-typed-client-and-the-error-union-drops-the-refusals-type.md) — A failed challenge reads as any 400, issue codes are dropped, and a public form posts through a plain `fetch`.
+- [168](168-the-error-union-drops-the-refusals-type.md) — A failed challenge reads as any 400, and issue codes are dropped.
 - [169](169-app-dev-runs-no-cron-job-and-the-stand-in-iam-lists-no-invitation.md) — `app dev` runs cron jobs only from the seed or a `then` kick, and the stand-in IAM lists no open invitation.
 - [170](170-a-column-write-scoped-update-cannot-bump-the-version.md) — A raw UPDATE under a column's write action is refused when it also bumps `version`.
-- [171](171-an-application-table-cannot-own-a-file-collection.md) — Staff-only records cannot carry attachments, and nothing bounds one owner's total bytes.
 - [172](172-a-list-of-values-cannot-show-each-values-last-sign-in.md) — A last sign-in per value needs one call per row and `members.manage`; needs a privacy decision.
 - [173](173-the-skills-test-recipes-leak-a-files-globals-and-render-outside-act.md) — The `fetch` stand-in recipe leaks under `--isolate`, and the screen example renders outside `act`.
 - [175](175-a-scoped-user-administrator-lists-every-principal.md) — A user administrator scoped to one application still reads the whole directory.

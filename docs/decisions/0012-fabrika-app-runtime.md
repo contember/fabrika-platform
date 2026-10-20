@@ -2,7 +2,7 @@
 id: 0012
 title: An application declares one contract with the staged kit and serves it through serve
 status: accepted
-date: 2026-10-12
+date: 2026-10-20
 ---
 
 # 0012 — An application declares one contract with the staged kit and serves it through `serve`
@@ -59,8 +59,10 @@ visible to the person who approves the deploy.
 ## Decision
 
 **We will make one contract, built with the staged kit of `@fabrika/app`, the whole access surface of an
-application, and serve it with `serve`. Handlers sit beside their endpoints on a paved road scoped by the
-endpoint's capability; every step off that road is declared in the contract, allowed, and shown to the approver.**
+application, and serve it with `serve`. A declaration states where a request enters, who may send it, how it is
+admitted, what it carries and what reach the code behind it holds; it never encodes an application operation (§9).
+Handlers sit beside their endpoints on a paved road scoped by the endpoint's capabilities; every step off that road is
+declared in the contract, allowed, and shown to the approver.**
 
 ### 1. The contract is the declaration, built in stages
 
@@ -73,14 +75,15 @@ imports `typeof contract` to type a table:
 2. `src/db/tables.ts`: `defineTables(vocabulary, columns)({ … })` — the table policies. Action and dimension names
    come from the vocabulary, and each table's containment (its key, its container column, a child's parent column
    and chain) is derived from the vocabulary and the generated column list unless the policy states it.
-3. `src/app-kit.ts`: `defineApp(vocabulary, tables, { imports }?)` — the kit, typed by the vocabulary, the
-   database and the policies. An application without tables writes `defineApp(vocabulary)`.
+3. `src/app-kit.ts`: `defineApp(vocabulary, tables, { imports, tokens }?)` — the kit, typed by the vocabulary, the
+   database and the policies, with the contracts it imports and its signed-token purposes (§14). An application
+   without tables writes `defineApp(vocabulary)`.
 4. `src/<slice>/endpoints.ts`: `app.group({ callers }, (r) => ({ … }))` — endpoints with their access requirement,
    their input and output schemas, and a handler beside each; `app.cron`, `app.webhook`, `app.link` and
    `app.export` the same way.
-5. `fabrika.contract.ts`: `app.contract((c) => ({ … }))` — the mounts (`c.rpc(prefix, groups)`, once per mount,
-   each with its callers `human`, `machine`, `link` or `app:<id>`), the SPA, health, forms, files, jobs, webhooks
-   and exports.
+5. `fabrika.contract.ts`: `app.contract((c) => ({ … }))` — the mounts (`c.rpc(prefix, groups, { compatibility? })`,
+   once per mount, each with its callers `human`, `machine`, `link` or `app:<id>`), the SPA, health, file kinds
+   (`c.files`), jobs, webhooks and exports.
 6. `src/app.ts`: `serve(contract, { database, deps })` — the composition entry (§2).
 
 Rules of the shell:
@@ -93,12 +96,13 @@ Rules of the shell:
   enforces the rule in the application's build, and Control's reader applies the same one.
 - **Schemas are zod 4** (`zod/v4`), restricted to a serializable subset: strict objects, no
   transforms, no `passthrough`. Validation inside a handler stays library-neutral.
-- **Nothing is open by omission.** Every endpoint of a credentialed mount declares `access`. There is
-  no default, no `none` and no `public` caller. Every endpoint for a signed-in caller requires an
-  action or membership in this application. Anonymous traffic exists only through fixed kinds
-  (`c.health`, `c.form`, `app.webhook`, `app.link`).
-- **One path per procedure.** A procedure is served at `POST <mount>/<procedure>`, for example
-  `POST /api/notes.remove`. The `{ batch }` request form is removed.
+- **Nothing is open by omission.** Every procedure declares `access`. There is no default, no `none` and no
+  `public` caller. Every endpoint for a signed-in caller requires an action or membership in this application.
+  Anonymous traffic exists only where the contract says so: a procedure that declares `access: { public: true }`
+  (§10), an SPA with `access: { public: true }`, and the fixed kinds `c.health`, `app.webhook` and `app.link`.
+- **One path per procedure.** A procedure is served at `<mount>/<procedure>`, for example
+  `POST /api/notes.remove`, with `POST` unless its HTTP shape says `GET` (§11). The `{ batch }` request form is
+  removed.
 - **A role may not take a name IAM reserves** (`admin`); `defineVocabulary` refuses it as a type error at the role.
 
 ### 2. Handlers sit beside their endpoints; `serve` is the only serving surface
@@ -123,7 +127,9 @@ query are type errors at the endpoint's line.
   ([ADR-0013](0013-explicit-runtime-adapter-entrypoints.md)) takes the framework's variables out of `process.env`
   before it imports the application, then calls `boot`, which binds the data layer and serves.
 - A handler receives authorized capabilities, not raw ids: `Ref<dim, action>` for one object (`ctx.target`) and
-  `Within<dim, action>` for the scopes where the caller holds the action. They are bound to their
+  `Within<dim, action>` for the scopes where the caller holds the action. An endpoint of several capabilities gets
+  each by its name (`ctx.capabilities.<name>`, §10). A workload site (a job, a webhook bound to `'app'`, a public
+  procedure) mints `ctx.app('<action>')` for a declared action its token carries. Capabilities are bound to their
   request and checked at runtime too, because TypeScript cannot prevent every widening.
 - Errors come from `@fabrika/app` (`ConflictError`, `NotFoundError`, `BadRequestError`) and map to 400, 403, 404
   and 409 with one envelope.
@@ -175,11 +181,16 @@ Per request, after the proxy has admitted it, the framework runs these steps in 
    ([ADR-0040](0040-share-one-token-verifier.md)).
 3. Check that the token's principal kind is one of the mount's callers.
 4. Check the endpoint's requirement: `member` (any permission of this application), the action in
-   some scope, or, for the `app` form, the action held as a global grant.
-5. For a session request that is not `GET`, require `Sec-Fetch-Site: same-origin`, and
-   `Content-Type: application/json` for RPC.
-6. Parse the input strictly, run the access form (`on`, `in`, `over`, `creates`, `app`), remove the `from`
-   field, call the handler, and project the output through its schema.
+   some scope, for the `app` form the action held as a global grant, and for `capabilities` each of its actions.
+5. For a session request that is not `GET`, require `Sec-Fetch-Site: same-origin`, and the body codec of the
+   endpoint's HTTP shape (§11): `application/json`, `multipart/form-data` for an input with file fields, or
+   `application/x-www-form-urlencoded` where declared.
+6. Charge the endpoint's rate buckets (§11), read the body within its limit, parse the input strictly, run the access
+   form (`on`, `in`, `over`, `creates`, `app`, each capability of `capabilities`), remove the `from` fields, call the
+   handler within its time limit, and project the output through its schema.
+
+A public procedure has no caller and no requirement: the framework skips steps 2 to 4 and runs the handler as the
+endpoint's own workload ([ADR-0063](0063-a-public-procedure-runs-as-its-own-workload.md)).
 
 The caller-kind check (step 3), the requirement check (step 4) and the access form (step 6) are
 **authorization**. The same-origin and content-type check (step 5) is **admission**. Neither is a
@@ -223,10 +234,12 @@ metadata from the application's schema: containment, the creator role, the membe
   job issues for an object it located with `ctx.ref(<issuedBy>, <dimension>, id)` and presents its own token; IAM
   admits it only for the mount the approved schema records with the job, and lets it revoke only links it issued.
   The job is app-wide for that mount: the link is bound to one object, the job is not. This is how an anonymous
-  visitor gets a credential: a form appends a row and answers a constant, and the job creates the record and issues
-  the link. A form may also take files with the submission; each waits owned by nobody until the job attaches it to the
-  record in the transaction that creates it ([ADR-0061](0061-a-form-takes-files-beside-its-input.md)). Single use stays application state (a `verified_at` set once under `getForUpdate`); IAM's revocation is
-  the stop, effective within the token lifetime of 300 s.
+  visitor gets a credential: a public procedure inserts a submission row and kicks a job
+  ([ADR-0063](0063-a-public-procedure-runs-as-its-own-workload.md)), and the job claims the row, creates the record and
+  issues the link. A file of the submission is a file column that the job copies into the record in the same
+  transaction ([ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)). Single use stays application state (a
+  `verified_at` set once under `getForUpdate`); IAM's revocation is the stop, effective within the token lifetime of
+  300 s.
 
 `endpointMembers` (`@fabrika/auth-core`) decides which members facility an endpoint has, for the types, `boot` and
 Control alike. An invitation by email is accepted on IAM's own page by the principal that owns the invited mailbox,
@@ -249,7 +262,11 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   granted apart from reading. An `on`, `in` or `over` endpoint reads an application table too, read-only and every
   row, where its action is the table's read action: the table's read action decides who reads it. So a code list an
   administrator edits, the check of a value against it in a scoped mutation, and the log row of an export across
-  every record stay on the road; a reference table stays migration-managed and read-only. A
+  every record stay on the road; a reference table stays migration-managed and read-only. A workload site reaches the
+  application tables by the actions its token carries, `ctx.db.app('<action>').<table>`; a public procedure's reach is
+  narrower still ([ADR-0063](0063-a-public-procedure-runs-as-its-own-workload.md)). Each operation of a table policy
+  names one action or a list, any one of which allows it, so staff and a public procedure can read one table under
+  their own actions. A
   capability reads its own target, except a column that declares another action's read
   ([ADR-0050](0050-approved-access.md) §3). Writes answer `{ id, version }`; `update` and `remove` take
   `expectVersion`; `getForUpdate()` is the precondition read a concurrent write waits behind. `fromRow(Schema, row)`
@@ -270,13 +287,18 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   no per-table `sql` declaration, so a write without a fragment is the declared deviation, not a checked one.
 - **Every step off the road is declared in the shell**, as a plain literal the contract digest covers:
 
-  | Field                                      | On                           | What exists only there                                       |
-  | ------------------------------------------ | ---------------------------- | ------------------------------------------------------------ |
-  | `sql: 'read' \| 'write'`                   | endpoint, job, webhook       | `ctx.sql` (`tx.sql` in a job), in that mode                  |
-  | `unscoped: { <table>: 'read' \| 'write' }` | endpoint, job, webhook       | `ctx.db.unscoped.<table>`: no scope predicate, still guarded |
-  | `connect: ['<import>']`                    | endpoint                     | `ctx.connect.<import>`                                       |
-  | `issues: '<mount>'`                        | endpoint, job                | `ctx.links.issue` and `revoke`                               |
-  | `mailer: 'installation' \| 'own'`          | cron job (kit contract only) | `ctx.mail` ([ADR-0019](0019-portable-outbound-email.md))     |
+  | Field                                      | On                                       | What exists only there                                       |
+  | ------------------------------------------ | ---------------------------------------- | ------------------------------------------------------------ |
+  | `sql: 'read' \| 'write'`                   | endpoint, job, webhook                   | `ctx.sql` (`tx.sql` in a job), in that mode                  |
+  | `unscoped: { <table>: 'read' \| 'write' }` | endpoint, job, webhook                   | `ctx.db.unscoped.<table>`: no scope predicate, still guarded |
+  | `connect: ['<import>']`                    | endpoint                                 | `ctx.connect.<import>`                                       |
+  | `issues: '<mount>'`                        | endpoint, job                            | `ctx.links.issue` and `revoke`                               |
+  | `mailer: 'installation' \| 'own'`          | cron job (kit contract only)             | `ctx.mail` ([ADR-0019](0019-portable-outbound-email.md))     |
+  | `actions: ['<action>']`                    | public procedure, job, webhook           | `ctx.app('<action>')` and `ctx.db.app('<action>')`           |
+  | `kicks: ['<job>']`                         | mutation, job, webhook                   | `ctx.kick` (§12)                                             |
+  | `binds: '<webhook>'`                       | credentialed mutation                    | `ctx.webhooks('<webhook>').bind` and `unbind` (§13)          |
+  | `signs: ['<purpose>']`                     | procedure of an RPC mount, job, webhook  | `ctx.tokens.sign` (§14)                                      |
+  | `egress: ['https://<host>']`               | credentialed RPC procedure, job, webhook | `fetch` to those origins (§15)                               |
 
   The runtime builds each handle only for the declaring site and enforces its mode. It takes the declaration from
   the approved artifact (`ContractArtifact.declared`), not from the handler module, and refuses to boot a site whose
@@ -347,6 +369,170 @@ is not read by the checker at all. Object-level access independent of applicatio
 host or a platform data executor, both rejected for now (Alternatives); within Postgres, the role family bounds the
 damage to the application's own schema.
 
+### 9. A declaration states the surface, never an operation
+
+A declaration is read by the platform without running application code: the static reader, the artifact, the proxy
+table and the approval diff all work from it. So it describes the surface:
+
+| Belongs in a declaration   | Examples                                                                                                    |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Where a request enters     | path, method, mount prefix                                                                                  |
+| Who may send it            | callers, access forms, `public`                                                                             |
+| How it is admitted         | body codec, body and time limits, origins, rate buckets, challenge, signature                               |
+| What it carries            | input and output shapes, file fields, a file answer, a redirect and its allowed targets                     |
+| What reach the code holds  | capabilities, workload actions, `sql`, `unscoped`, `connect`, `issues`, `binds`, `signs`, `kicks`, `egress` |
+| What platform state exists | tables and their policies (file columns included), file kinds, token purposes, job schedules                |
+
+Never in a declaration: which rows a request writes or reads, how input maps to them, what an answer is computed from,
+or a lifecycle step written as an option flag. The framework still does the platform work a declaration asks for: it
+parses, admits, encodes, quarantines, verifies signatures, schedules and cleans up.
+
+The test for a new option: **does it bound what code may do, or does it make the framework perform an application
+operation?** `kicks: ['intake']` bounds; a `then: 'intake'` that kicks on every commit performs. A table's `insert`
+action bounds; a generated upload endpoint performs.
+
+Corollary: **every request that touches application data runs a handler**, with its caller's capabilities or as a
+declared workload (a job, a webhook, a public procedure). The framework serves on its own only what the platform owns:
+SPA files, the browser config, the caller document, health and signature verification. So the framework has no form
+kind, no inbox table, no generated file endpoint and no generated webhook binding endpoint.
+
+The procedure kinds follow the credential, not the encoding. An RPC procedure (a session or a service key), a link
+procedure (an IAM link key with its share SPA) and an export procedure (a consumer application with a versioned
+contract) share one procedure engine. Public access is an access form, not a kind (§10). The body codec follows the
+input and the HTTP shape (§11).
+
+### 10. Access forms: public, and several capabilities
+
+- **`access: { public: true }`** on an RPC procedure says anyone may call it. Its top-level `actions` say what the
+  handler may do. It runs as the endpoint's own workload, which IAM signs for, and the data layer narrows its reach
+  ([ADR-0063](0063-a-public-procedure-runs-as-its-own-workload.md)). A group whose procedures are all public declares
+  no callers: `app.group({}, (r) => …)`.
+- **`access: { capabilities: { <name>: <form>, … } }`** hands a handler at least two capabilities, each `{ action,
+  over }`, `{ action, in, from }` or `{ action, on, from }`. An operation that reads one dimension and writes another
+  then stays on the road. The proxy checks every requirement; the runtime mints each capability through the one issuer,
+  in declared order, the first refusal answering (`on` 404, `in` and `over` 403); the handler reads
+  `ctx.capabilities.<name>` and binds each with `ctx.db.on`, `.in` or `.over`. An endpoint of several capabilities has
+  no `ctx.target`, `ctx.within`, `ctx.db.app`, members or links. The generated tests add a denied case per
+  capability. `creates`, `app` and an export take no `capabilities`.
+
+`capabilities` removes one cause of off-road reach, not all. Reads across tables (joins, filters over related tables,
+aggregates) and locks over many rows still need `sql`.
+
+### 11. Admission, limits and the HTTP shape
+
+- **`admission: { origins?, rate?, challenge? }`** on every procedure. `rate` holds `perClient` (by the client
+  address, public procedures only), `perCaller` (by principal or link key, credentialed and link procedures only),
+  `perEndpoint` (every call) and `bytesPerHour`. Every bucket is charged before the body is read and stays charged
+  whatever the handler does. A public mutation counts 10 per client and 100 for the endpoint per minute unless it
+  declares its own; a declared `rate` merges into that default, and `null` turns one bucket off. A public query and a
+  credentialed procedure have no bucket unless they declare one: a bucket is a database write per call. `origins` is
+  `'same-origin'` by default, `'listed'` for the environment's listed origins (bearer only when credentialed), or
+  `'any'` (public only). `challenge` (public only) names its provider and the variables of its secret and site key.
+- **`limits: { maxBytes?, timeoutMs? }`** on every procedure, webhook and job, and nothing else. A procedure's body is
+  64 KiB by default and at most 1 MiB; with file fields its default adds each field's files at the kind's `maxBytes`,
+  at most 48 MiB. The body must arrive within `max(30 s, maxBytes at 16 KiB/s)`, which stays below the hour a pending
+  file is safe from the sweep ([ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)). The handler's time starts
+  after the last body byte: 10 s by default, at most 60 s, on a procedure and a webhook. A webhook's body is 1 MiB. A
+  job runs 15 min by default, at most 24 h. The file count comes from the schema's `.max(n)` (at most 20), the
+  per-file size from the kind.
+- **`http: { method?, query?, body?, cache? }`** describes the wire independently of the output.
+  - `method` is `POST` by default. A query may declare `GET`, and is `GET` by default when its output is a file or it
+    declares `cache`; its input is then read from flat scalar URL parameters in their canonical spelling, a name sent
+    twice refused, the URL bounded. A mutation is `GET` only when it is public and its input holds a required signed
+    token (§14), and it answers `redirect()` or a schema; the approval reads "changes state on GET; link scanners may
+    trigger it". A session mutation is never `GET`: a top-level navigation carries the session cookie.
+  - `query`, on a `POST` only, is a flat schema of the URL's parameters, passed to the handler as `query`.
+  - `body` is JSON by default, multipart when the input has a file field, and `'urlencoded'` for flat scalar fields
+    without files, which a native HTML form sends.
+  - `cache`, on a public `GET` query only, is `{ maxAgeSeconds }` (1 s to a year) or `'immutable'` (a year, for an
+    input that names a value that never changes, such as a file id). A successful answer gets `Cache-Control: public`;
+    every other answer and every other procedure is `no-store`.
+- **`redirect({ origins? })`** is an output. The handler returns `{ to }`, and the framework answers 303 after a
+  `POST` and 302 after a `GET`, to a path of the application's own origin, a URL of a listed origin, or a URL that a
+  verified signed token of this request carries. Any other target is a 500 and a log line, never an open redirect. A
+  request whose `Accept` names JSON and not HTML (the typed client) gets `200 { result: { to } }` instead.
+- **`ctx.client`** is `{ ip, userAgent }` on every request context: information, never a check.
+
+Each of these compiles into the artifact, and the effective value of every bound, derived ones included, is shown in
+the approval ([ADR-0050](0050-approved-access.md)). The proxy applies the browser admission matrix from the row
+([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md), "Cross-origin endpoints").
+
+### 12. Kicks, claims and idempotent writes
+
+A mutation, a webhook or a job declares `kicks: ['<job>']` and calls `ctx.kick('<job>')`; the framework sends the kick
+after the commit. A job drains its rows with the data layer's `claim` over a table whose policy declares `queue`, and
+finishes each through `row.ref` in a transaction of its own
+([ADR-0060](0060-a-handler-kicks-a-declared-job-after-its-commit.md)). `insert(values, { onConflict })` writes
+idempotently without `sql`.
+
+### 13. Webhooks
+
+- **`scheme`** is a preset (`github-sha256`, `standard-webhooks`, `stripe`) or a shape the framework computes:
+  `{ hmac: { header, algorithm, encoding, prefix?, timestamp?, signed: 'body' | 'timestamp.body', id? } }`, checked
+  against the binding's secret over the raw body. A signed timestamp must be within five minutes. A verifier is never
+  application code. `{ basic: true }` and `{ bearer: true }` are refused at build: the proxy removes `Authorization`
+  from an anonymous row's request ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) rule 3), so they could
+  never verify.
+- **`boundTo`** is a dimension or `'app'`. One binding of an `'app'` webhook serves the whole application, and its
+  handler mints `ctx.app('<action>')` like a job.
+- **Binding** is a procedure's: a credentialed mutation that declares `binds: '<webhook>'` calls
+  `ctx.webhooks('<webhook>').bind(capability, account)` or `.unbind(capability, id)` with this request's `Ref` of the
+  bound dimension or its `AppCapability`, in its transaction, and answers the secret once (`WebhookSecret`). The
+  framework owns the secret, the binding storage, the replay records and the signature check. Only a `github-sha256`
+  webhook of an older framework release keeps generated binding endpoints, which the platform still serves.
+- **The delivery claim is recoverable.** The replay key is claimed with a lease (the handler's time limit plus 30 s)
+  and completed in the handler's transaction, right before it commits. A failure gives the claim back; a claim whose
+  lease passed without completion is taken over by the provider's redelivery. Delivery stays at-least-once, so a
+  handler writes idempotently (§12).
+- A webhook handler may `put` files ([ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)).
+
+### 14. Signed tokens and links to the application
+
+- **A purpose is declared once**, in the kit's options: `defineApp(…, { tokens: { unsubscribe: token(Recipient, {
+  maxDays: 400 }) } })`. The claims schema and the longest lifetime live there, not at each use. The contract carries
+  the kit's purposes; a handler types the claims it verifies and a site the claims it signs without importing the
+  contract.
+- **Verifying.** `signedToken('<purpose>')` is a top-level field type of a procedure's input or its `http.query`. The
+  framework verifies an HMAC-SHA256 over the key id, the purpose, the expiry and the claims as it parses the input,
+  parses the claims again by the purpose's schema, and the handler receives the typed claims.
+- **Signing.** A procedure of an RPC mount, a job or a webhook that declares `signs: ['<purpose>']` calls
+  `ctx.tokens.sign('<purpose>', claims, { days })`, `days` at most the purpose's `maxDays`. An export and a link
+  procedure never sign.
+- **Keys.** Each application environment has its own keys. Control keeps them in its vault and hands them as
+  `FABRIKA_TOKEN_KEYS`, the signing key first. `apps.environments.rotateTokenKey` asks the next deploy to rotate; a
+  platform upgrade never rotates. A retired key verifies until its retirement plus the largest `maxDays` the contract
+  had while it signed, so a 400-day unsubscribe link survives a rotation and a later shorter `maxDays` cannot cut it
+  off.
+- A token is single-purpose and no credential: it opens no mount. Single use and revocation are the application's
+  state. A token fits one action without a session (unsubscribe, a tracked click, managing one booking); a link mount
+  fits a holder who works over an object across visits.
+- **`ctx.url('<endpoint id>', { input?, query? })`** on every site builds an absolute link to one of the application's
+  own procedures: the environment's canonical origin (`FABRIKA_APP_ORIGIN`, which every deploy writes), the
+  procedure's path, and the parameters its HTTP shape reads from the URL. The checker's `url-endpoint` rule refuses a
+  literal id that names no procedure.
+
+### 15. Egress and mail
+
+- **`egress: ['https://<host>']`** on a credentialed RPC procedure, a webhook or a job declares the exact HTTPS origins
+  its code calls: no path, no wildcard, at most 16. `boot` wraps the global `fetch` once; while a site's handler runs,
+  a call to an origin the site does not declare is refused (`undeclared_egress`). A site that declares none reaches no
+  origin. The framework's own requests (mail, connectors, IAM, the object store) run outside the site's scope. This
+  stops mistakes and makes a bypass conspicuous; it is no sandbox (§8): code that kept the `fetch` it found before
+  boot, or opens its own sockets, escapes it. The checker's `cross-app-fetch` rule accepts an absolute URL under an
+  origin some site declares.
+- **Mail.** `ctx.mail.send` in a mailer job takes `attachments: [fileRef]` (only a `live` file the attempt holds, within
+  the transport's `maxAttachmentBytes`) and `unsubscribe: { url }`, from which the transport writes `List-Unsubscribe`
+  and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058). There are no free headers. A transport without
+  the capability refuses the message on the send ([ADR-0019](0019-portable-outbound-email.md)).
+
+### 16. A mount may promise backward compatibility
+
+`c.rpc('/api/v1', groups, { compatibility: 'backward' })` gets the export's rule: Control refuses a publication that
+removes a procedure of the mount, narrows its input or `http.query`, changes its output, its HTTP shape, its file
+answer or its access, or removes or moves the mount, whoever approves it. The approved side's promise binds, so the
+deploy that drops the promise is still held to it. A breaking change is a new mount (`/api/v2`) beside the old one.
+The default is `'unchecked'`.
+
 ## Consequences
 
 - An application declares its access surface once. The proxy's endpoint table, the IAM vocabulary, the
@@ -377,6 +563,22 @@ damage to the application's own schema.
   and the review are the only checks.
 - Data security is not statically provable. A handler with `sql: 'write'` can write any row the runtime role can;
   the proxy, the approval and the role are what bound it, not the framework.
+- The framework generates no data endpoint. Each operation an application wants (an upload, a file list, a webhook
+  binding, an anonymous submission) is a procedure of a few lines that the approval reads like any other and the
+  generated access tests cover. A helper the handler calls keeps it short; a helper adds no reach, because the
+  capability it uses comes from `ctx`.
+- Less reach goes off the road: an operation over two dimensions (`capabilities`), an outbox drain (`claim`) and an
+  idempotent write (`onConflict`) stay on it. Reads across tables (joins, filters over related tables, aggregates) and
+  locks over many rows still need `sql`; a read block for the road is its own decision.
+- Anonymous entry, signed one-action links, outbound calls and file storage each have one declared, reviewable form,
+  and the approval shows the effective value of every bound.
+- `{ basic }` and `{ bearer }` webhook verifiers wait for a proxy decision on `Authorization` for anonymous rows. A
+  provider that issues its own secret (Stripe, Standard Webhooks senders) needs a set-secret operation that `bind`
+  does not have: `bind` generates the secret. Slack and Twilio signatures do not fit `{ hmac }`.
+- An application on framework 0.4 or 0.5 keeps its forms, inbox tables, `then`, file collections, generated file and
+  webhook endpoints and job options: Control reads it with its own release's reader, and the platform keeps serving
+  them inside the window ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)). An author moves to
+  this form when raising the pin ([`framework-migrations.md`](../reference/framework-migrations.md)).
 
 ## Alternatives considered
 
@@ -429,8 +631,22 @@ damage to the application's own schema.
 - **A computed contract.** Rejected: the platform could read it only by executing application code.
 - **Accept any Standard Schema validator in contracts.** Rejected: the contract must be readable
   without evaluation, which needs one known set of schema calls.
-- **Slack and Stripe webhooks beside GitHub's.** Rejected for v1: Slack signs with one secret per Slack app and its
-  signature does not cover the URL, so one tenant could replay its own signed delivery to another tenant's binding;
-  Stripe generates its own secrets, so the framework cannot issue one per binding.
+- **A closed list of named webhook providers.** Rejected: one framework release per provider. Presets plus a
+  framework-owned `{ hmac }` shape cover most providers. Slack stays out: it signs with one secret per Slack app and
+  its signature does not cover the URL, so one tenant could replay its own signed delivery to another tenant's binding.
+- **Keep `c.form`, the inbox scope, `then` and generated file and webhook endpoints.** Rejected: each encodes an
+  operation, and anything it needs beyond that becomes a new option with its own runtime (§9). A declaration macro
+  that expands `c.form` into a procedure keeps the inbox concept and hides the handler to save four lines.
+- **Fixed HTTP rules per use** (`GET` only for a file query, an `inputFrom` for unsubscribe, a `GET` mutation only with
+  `redirect()`). Fewer knobs, but each rule exists for one scenario. One `http` shape, independent of the output,
+  covers them all.
+- **Rate buckets on every public procedure by default.** Rejected: a database write per image of a page. A public read
+  is bounded by the in-flight share and its cache.
+- **A token schema at each use and a short rotation overlap.** Two uses may disagree, and a rotation breaks year-long
+  unsubscribe links. A purpose declares its claims and lifetime once, and keys verify until their last token expires.
+- **A link key in an e-mail's URL.** A credential in logs and referrers. A single-purpose signed token opens no mount.
+- **Undeclared outbound calls**, or a provider network policy. Undeclared calls are invisible to the approver; a
+  network policy is stronger and stays possible later. Dynamic destinations (outbound webhooks to customer URLs) need
+  approved destination bindings, a decision of their own.
 - **Keep `@trasa/core` independent and add a Fabrika integration package.** Rejected: the shared auth
   contracts and the framework are one product surface and must change together.

@@ -85,8 +85,8 @@ name. `@fabrika/app/testing/isolation` builds the policy isolation and endpoint 
 column the seeding fills holds a distinct marker, so a leaked value is recognised anywhere in an answer, except a
 foreign key outside the chain (`null`, or the key of a reference or application row) and a column a CHECK names (an
 `IN` list's first value, or `null`). What the seeding cannot satisfy is a `SeedLimitError` naming the constraint.
-There is no generated `move` case yet: an access form hands a handler one capability, and `t.move` needs the source
-and the target `Ref`, so no handler can call it.
+There is no generated `move` case yet ([backlog 97](../../docs/backlog/97-the-generated-tests-have-no-move-case.md)):
+`t.move` needs the source and the target `Ref`, which an endpoint gets through `access: { capabilities }`.
 
 ## Invariants
 

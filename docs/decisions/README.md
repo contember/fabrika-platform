@@ -22,11 +22,14 @@ a commit message suffices.
   approved and published, [0051](0051-external-principals.md) for people from outside the organization, and
   [0058](0058-user-administration-is-grantable-on-its-own.md) for who may manage people without administering IAM.
 - **Application framework:** [0012](0012-fabrika-app-runtime.md) — one contract built with the staged kit,
-  handlers beside their endpoints on a paved road, and every step off it (raw SQL, `unscoped`, connectors, link
-  issuing, database code) declared; [0017](0017-service-owned-postgres-migrations.md) for migrations and the
-  application's database roles, the privilege boundary under raw SQL;
-  [0060](0060-a-mutation-kicks-a-cron-job-after-its-commit.md) for a mutation that kicks a job, and
-  [0019](0019-portable-outbound-email.md) for e-mail sent through `ctx.mail`.
+  a declaration that states the surface and never an operation, handlers beside their endpoints on a paved road, and
+  every step off it (raw SQL, `unscoped`, connectors, link issuing, database code) declared;
+  [0017](0017-service-owned-postgres-migrations.md) for migrations and the application's database roles, the
+  privilege boundary under raw SQL; [0063](0063-a-public-procedure-runs-as-its-own-workload.md) for public
+  procedures; [0060](0060-a-handler-kicks-a-declared-job-after-its-commit.md) for kicks and claims;
+  [0061](0061-a-file-is-a-value-in-a-table-column.md) for files; [0019](0019-portable-outbound-email.md) for e-mail
+  sent through `ctx.mail`; and [0062](0062-a-platform-release-serves-older-framework-releases.md) for applications on
+  older framework releases.
 - **Zerops delivery:** [0003](0003-no-deploy-runner-on-zerops.md) (Control drives Zerops over HTTP),
   [0029](0029-github-app-sources.md) (GitHub App sources, multiple connections),
   [0044](0044-zerops-delivery-ownership-and-recovery.md) (release binding, recovery, one lease).
@@ -78,6 +81,7 @@ a commit message suffices.
 | [0052](0052-react-and-an-own-component-kit-for-application-spas.md)     | Build application SPAs with React, hooks over the typed client, and an own component kit |
 | [0058](0058-user-administration-is-grantable-on-its-own.md)             | User administration is grantable on its own, and stops at the installation               |
 | [0059](0059-application-server-errors-carry-their-stack-and-message.md) | Application server errors carry their stack and message, scrubbed                        |
-| [0060](0060-a-mutation-kicks-a-cron-job-after-its-commit.md)            | A mutation kicks a cron job after its commit; the outbox row stays the record            |
-| [0061](0061-a-form-takes-files-beside-its-input.md)                     | A form takes files beside its input; the job that drains its inbox attaches them         |
+| [0060](0060-a-handler-kicks-a-declared-job-after-its-commit.md)         | A handler kicks a declared job after its commit; a job drains its rows with `claim`      |
+| [0061](0061-a-file-is-a-value-in-a-table-column.md)                     | A file is a value in a table column; the table's policy is its authority                 |
 | [0062](0062-a-platform-release-serves-older-framework-releases.md)      | A platform release runs and deploys applications on older framework releases             |
+| [0063](0063-a-public-procedure-runs-as-its-own-workload.md)             | A public procedure runs as its own workload, which IAM signs for                         |

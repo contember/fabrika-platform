@@ -2,7 +2,7 @@
 id: 0022
 title: The proxy is the only enforcement point
 status: accepted
-date: 2026-10-08
+date: 2026-10-20
 ---
 
 # 0022 — The proxy is the only enforcement point
@@ -77,7 +77,7 @@ endpoint. Two other layers refuse requests and are not the enforcement decision:
 - **Authorization** — `.require`, `can()`, a contract application's caller-kind, requirement and
   access-form checks, and Control's scoped use-case checks (rule 5).
 - **Admission** — the proxy's `Sec-Fetch-Site` and content-type checks (rule 3, step 6) and its answer to a
-  cross-origin request (rule 3, "Cross-origin endpoints"). They resolve no principal and read no policy. Control
+  cross-origin request (rule 3, "Cross-origin endpoints", with the browser admission matrix). They resolve no principal and read no policy. Control
   reads no `Origin`, and IAM's `/admin/*` is bearer-only.
 
 `docs/reference/overview.md` defines all three; keep the vocabulary.
@@ -173,10 +173,13 @@ The policy:
   approvable ([ADR-0050](0050-approved-access.md)). `frame-src` appears only when it names an origin, and then as
   `frame-src 'self' <origins>`: without it frames fall back to `default-src 'self'`, so an extension never
   takes the same origin away and removing the last one narrows. A
-  form's challenge provider adds its own fixed origins to `script-src` and `frame-src`, which the
-  approval diff shows like any other.
+  challenge provider of a public procedure (or of a 0.4/0.5 form) adds its own fixed origins to `script-src` and
+  `frame-src`, which the approval diff shows like any other.
 - `X-Content-Type-Options: nosniff`.
-- `Cache-Control: no-store`, static assets included.
+- `Cache-Control: no-store`, static assets included. The one exception is a public `GET` query that declares
+  `http.cache`: its row carries `cache`, and a `200` answer gets `Cache-Control: public, max-age=<n>` or
+  `public, max-age=31536000, immutable` instead. An error or a redirect keeps `no-store`. The framework, the
+  Cloudflare proxy Worker and Caddy apply the same header values (`@fabrika/proxy-core/headers`).
 - `Referrer-Policy: no-referrer`.
 - `Cross-Origin-Opener-Policy: same-origin`.
 - `Permissions-Policy` with every powerful feature off: `accelerometer`, `ambient-light-sensor`,
@@ -188,8 +191,12 @@ The policy:
   `window-management` and `xr-spatial-tracking`, each `=()`. `clipboard-write` stays on: copying is
   an ordinary application feature and reads nothing.
 
-A download endpoint gets the **file treatment** instead. The proxy recognises it by the endpoint the
-decision selected, never by a path of its own:
+An endpoint that answers a stored file gets the **file treatment** instead. The proxy recognises it by the row the
+decision selected, never by a path of its own: a procedure whose output is a file carries the **file-response
+profile** (`response: 'file'`) in its row and in the row's digest
+([ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)), and a 0.4/0.5 collection's `download` row is one by its
+kind. The application applies the same treatment from the row, denials included. An older proxy's strict parser
+refuses a row with the profile instead of serving it without the treatment.
 
 - `Content-Disposition: attachment` for every type except the inert images `image/png`, `image/jpeg`,
   `image/gif` and `image/webp`, which are served `inline`. SVG and HTML are always attachments. The
@@ -199,7 +206,8 @@ decision selected, never by a path of its own:
 - `Content-Type` from the recorded, sniffed type, never from the upload request.
 - `X-Content-Type-Options: nosniff`.
 - `Content-Security-Policy: sandbox; default-src 'none'`.
-- `Cache-Control: private, no-store`, so a revoked user cannot read a cached copy.
+- `Cache-Control: private, no-store`, so a revoked user cannot read a cached copy, unless the row declares `cache`
+  (a public file, such as a catalog image).
 - `Strict-Transport-Security` on an `https` host, as above.
 
 **Invariant: a header a client can set never reaches a decision.**
@@ -220,8 +228,10 @@ entry, and as nothing else. It refuses an unknown key — `gates` among them —
 **Application tables.** The manifest carries `{ id, hosts, upstream, scheme, endpoints,
 reservedPrefixes, snapshot, csp, operationsOrigin?, crossOrigins? }` per application; `snapshot` is the contract
 digest, `csp` the contract's named origins and `crossOrigins` the environment's. Each endpoint row is `{ id, kind,
-method, path, callers, requirement, admission, delegation, crossOrigin?, digest }`, and the manifest parser refuses a row whose digest does
-not describe its rules. Array order has no meaning. The proxy makes one pass over one selected endpoint:
+method, path, callers, requirement, admission, delegation, crossOrigin?, response?, cache?, digest }`, and the
+manifest parser refuses a row whose digest does not describe its rules. `response` and `cache` are absent unless
+declared, so every other row keeps its digest. Array order has no meaning. The proxy makes one pass over one selected
+endpoint:
 
 1. **Canonical path.** The raw path must have no empty segment, no `.` or `..`, no encoded `/` or `\`
    and no literal `\`. Otherwise the answer is 400. A request without a method is denied. A trailing
@@ -235,36 +245,47 @@ not describe its rules. Array order has no meaning. The proxy makes one pass ove
 4. **No key.** When `human` is a caller, the proxy uses the session, or answers with the login
    redirect of rule 4. When `human` is not a caller, the answer is 401, never a login redirect.
 5. **Requirement.** The token must satisfy the endpoint's requirement: `member` (any permission of this
-   application), the action in some scope, or, for the `app` access form, the action held as a global grant (an
-   entry without a scope), because the endpoint reaches data of the whole application. Otherwise the answer is 403.
+   application), the action in some scope, for the `app` access form the action held as a global grant (an
+   entry without a scope), because the endpoint reaches data of the whole application, and for `capabilities` each of
+   its actions in some scope ([ADR-0012](0012-fabrika-app-runtime.md) §10). Otherwise the answer is 403. A
+   `capabilities` requirement derives no delegation.
    This is `satisfies` of `@fabrika/auth-core`; the application repeats it as authorization and adds no check.
 6. **Admission.** A session-authenticated request that is not `GET` must carry
-   `Sec-Fetch-Site: same-origin`. An RPC request must carry `Content-Type: application/json`. An upload
-   admits only its declared content types. A request with a bearer is not session-authenticated, cookie or
+   `Sec-Fetch-Site: same-origin`. A request with a body must carry one of the row's declared content types:
+   `application/json` by default, `multipart/form-data` for a procedure with file fields, and
+   `application/x-www-form-urlencoded` for one that declares it. A request with a bearer is not session-authenticated, cookie or
    not: a page cannot attach `Authorization` to another site's request without a preflight, and the proxy
    answers one only for an origin the environment lists on an endpoint the contract opens ("Cross-origin
    endpoints" below), so a bearer is explicit authority and needs no `Sec-Fetch-Site`.
 
-**Anonymous kinds.** An endpoint of an anonymous kind (`c.health`, `c.form`, `c.webhook`, the shell
-of a link SPA, and a public SPA, `c.spa` with `access: { public: true }`) has no callers. The proxy skips steps 3 to 5, mints no token and forwards the request.
-It does not forward a `px_` key or a session that arrives on such a request; only an installation
-entry's `protocol` row keeps the `Authorization` header (below). Admission still applies:
-a form admits only its content type, and a form that takes files also refuses a browser's request from an origin
-its row does not admit ("Cross-origin endpoints", item 5). Its body limit is the framework's, because `forward_auth`
-hands the proxy the headers and never the body. A webhook's signature is verified by the framework, not by
-the proxy.
+**Anonymous kinds.** An endpoint of an anonymous kind (`c.health`, `app.webhook`, the shell of a link SPA, a public
+SPA, `c.spa` with `access: { public: true }`, a public procedure, and a 0.4/0.5 `c.form`) has no callers. The proxy
+skips steps 3 to 5, mints no token and forwards the request. It does not forward a `px_` key or a session that arrives
+on such a request; only an installation entry's `protocol` row keeps the `Authorization` header (below). Admission
+still applies: the row admits only its content types, and a body a browser sends without a preflight is refused from
+an origin the row does not admit (the browser admission matrix below). The body limit is the framework's, because
+`forward_auth` hands the proxy the headers and never the body. A webhook's signature is verified by the framework,
+not by the proxy.
+
+A **public procedure** ([ADR-0063](0063-a-public-procedure-runs-as-its-own-workload.md)) compiles to its own row kind,
+`public`: no callers, no requirement, no delegation, and every credential discarded, on any mount. The kind is new, so
+an older proxy's strict parser refuses the manifest instead of serving the row without its admission rules. The
+handler holds what IAM signs for the endpoint's own workload key, never anything of the caller. The proxy sets
+`X-Fabrika-Client-Ip` where it knows the visitor's address (the Cloudflare proxy Worker today), and the application
+reads it as information.
 
 **Cross-origin endpoints.** Applications are isolated from each other by their own hosts, host-only cookies and
 the absence of CORS. A page on another origin calls an application's endpoint only where two separate facts allow
 it, and the proxy decides both:
 
-- **The contract opens the endpoint.** An RPC procedure (`query` or `mutation` of a `c.rpc` mount) or a form may
-  declare `crossOrigin: true`; a form may instead declare `crossOrigin: '*'`. The artifact records it on the row as
-  `crossOrigin: 'environment'` or `'any'`, only when declared, so every other row and contract keeps its digest. The
+- **The contract opens the endpoint.** A procedure of a `c.rpc` mount declares `admission: { origins: 'listed' }`, and
+  a public procedure may instead declare `origins: 'any'`. The artifact records it on the row as
+  `crossOrigin: 'environment'` or `'any'`, only when declared, so every other row and contract keeps its digest. A
+  0.4/0.5 procedure's `crossOrigin: true` and a form's `crossOrigin: true | '*'` compile to the same two values. The
   row's digest covers it, and an approval shows it like any other change of the access surface
   ([ADR-0050](0050-approved-access.md)). No other kind may declare it: a link procedure, an export, an SPA, a
   download, an upload, a webhook and a health endpoint are refused by the contract build, the artifact schema and the
-  manifest parser.
+  manifest parser. `'any'` is for an anonymous row only.
 - **The environment names the origins.** Which pages may call differs between staging and production, so the
   origins are a fact of the environment, not of the contract. Control keeps them in the environment's registry row,
   beside its domain (`fabrika control register` or `fabrika control apps environments put` with `--cross-origin=<origin>`,
@@ -272,7 +293,7 @@ it, and the proxy decides both:
   builder key of a local agent ([ADR-0042](0042-connect-local-builders-through-human-consent.md)). Each is an exact `https://` origin with a literal host (`http://` for a local
   host), never the environment's own domain, at most `MAX_CROSS_ORIGINS` (16). Control hands them to the provider,
   which writes them into the application's manifest entry as `crossOrigins`; the manifest parser refuses a malformed
-  one and the entry of an installation service carries none. A `crossOrigin: true` endpoint of an environment that
+  one and the entry of an installation service carries none. An `environment` row of an environment that
   lists no origin answers no preflight, as before. A change of the list applies at once and is not approval-gated, on
   a protected environment too, because a listed origin grants no authority: its requests are bearer-only (rule 3
   below). The page of an approval that waits for a decision names the list beside each line that opens an endpoint
@@ -301,44 +322,58 @@ The proxy then decides, in the same pass as every other request of a contract ap
    and the framework does the same in-process. On Zerops the auth service tells Caddy which origin to admit, and
    Caddy writes the preflight's `204` and the decoration from that answer; Caddy's configuration names no origin and
    decides nothing.
-5. **A multipart form refuses an origin it does not admit at the request.** A form that takes files
-   ([ADR-0061](0061-a-form-takes-files-beside-its-input.md)) admits `multipart/form-data`, which a browser sends from
-   any page without a preflight. On such a row a request whose `Origin` is neither the application's own
-   (`<scheme>://<host>` of the entry) nor admitted by the row is 403 `cross_origin`, before it reaches the application:
-   what the preflight refuses for a JSON form. A request without `Origin` passes, as a script's JSON request does. The
-   application does not repeat the check; it does not know the environment's origins.
+5. **A body sent without a preflight is refused from an origin the row does not admit, at the request.** A browser
+   sends `multipart/form-data` and `application/x-www-form-urlencoded` from any page without a preflight. On a public
+   row such a request, and any request to a 0.5.5 form row that admits `multipart/form-data`, whose `Origin` is neither
+   the application's own (`<scheme>://<host>` of the entry) nor admitted by the row is 403 `cross_origin`, before it
+   reaches the application: what the preflight refuses for a JSON body. A request without `Origin` passes, as a
+   script's request does; `Origin: null` names no origin and is refused. The application does not repeat the check; it
+   does not know the environment's origins.
+
+**The browser admission matrix.** Together, steps 6 above and the items above admit a browser's request as follows.
+The proxy enforces every row but the last, which needs the application's token keys:
+
+| Request                                          | Rule                                                                                                                                 |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Session, non-`GET` (any body codec)              | `Sec-Fetch-Site: same-origin`                                                                                                        |
+| Session, `GET`                                   | a query only: a session mutation is never `GET`                                                                                      |
+| Bearer, cross-origin                             | the proxy's preflight for an `environment` row and a listed origin; never a session                                                  |
+| Public, multipart or `urlencoded` (no preflight) | `Origin` must be the application's own, a listed origin (`environment`) or any (`any`); no `Origin` passes, `Origin: null` does not  |
+| Public, `GET` mutation                           | in the application: a valid signed token in the input, verified as the input is parsed ([ADR-0012](0012-fabrika-app-runtime.md) §14) |
 
 Operations' error ingest keeps its own `Access-Control-Allow-Origin: *` on preflight-free simple requests: it is an
 installation service's `protocol` row, which authenticates itself, and an installation entry has no cross-origin
 form.
 
 **Principal kinds.** A `px_` key has its own principal kind. The kinds are `user` and `service`, plus
-`link`, `app`, `job` and `webhook`, each added with the feature that needs it. The caller `human`
+`link`, `app`, `job`, `webhook` and `public`, each added with the feature that needs it. The caller `human`
 admits a session or a `user` key; `machine` a `service` key; `link` a `link` key; `app:<id>` the
-connector key of application `<id>`, and only on export paths. Job and webhook keys are accepted by no
+connector key of application `<id>`, and only on export paths. Job, webhook and public keys are accepted by no
 mount. The proxy refuses an unknown kind, on cached paths too. An OAuth resource token is no `px_` key:
 `callerOf` maps it to the caller `oauth`, which only an installation entry's row may admit, so every
 application endpoint refuses it.
 
 A workload token carries its kind in `ptype` and names its workload in `workload`: the job's or the
-webhook's name, or for `app` the consuming application's id. `callerOf` maps `app` to `app:<workload>`
-and `job` and `webhook` to no caller; `callerAdmittedAt` admits `app:<id>` only under
+webhook's name, a public procedure's endpoint id, or for `app` the consuming application's id. `callerOf` maps `app`
+to `app:<workload>` and `job`, `webhook` and `public` to no caller; `callerAdmittedAt` admits `app:<id>` only under
 `/__fabrika/connect/`. The caller `machine` refuses a workload token too, and neither `@fabrika/auth` nor
 IAM's management and membership operations accept one, with one exception: a **job** that the approved contract
 declares `issues: '<link mount>'` calls `issueLink` for that mount and `revokeLink` for a link it issued. The schema
 reconcile records the mount with the job (`AppSchema.workloads[].issues`, from the approved artifact); IAM reads that
-declaration at every call and refuses a job without it, another mount, another application, and every webhook or
-connector token. The job holds the mount's `issuedBy` and grants app-wide, so it issues for any object of the
+declaration at every call and refuses a job without it, another mount, another application, and every webhook,
+public or connector token. The job holds the mount's `issuedBy` and grants app-wide, so it issues for any object of the
 mount's dimension: the link is bound to one object, the job is not. IAM stores a workload principal as a `service`
 row whose `workload_principals` row names its kind. A workload key resolves to exactly the actions the
 reconciled schema declares for the workload (`AppSchema.workloads`, app-wide), never to a grant, and a
-reconcile that no longer declares the workload revokes its keys. Control issues one key per job and per
-webhook declaration of the approved contract (`workloads.issueKey` on IAM's admin RPC, with the
-provisioning key), seals it in its vault and writes it as `FABRIKA_<KIND>_<NAME>_KEY`; it rotates a key
+reconcile that no longer declares the workload revokes its keys. Control issues one key per job, per
+webhook and per public procedure of the approved contract (`workloads.issueKey` on IAM's admin RPC, with the
+provisioning key), seals it in its vault and writes it as `FABRIKA_<KIND>_<NAME>_KEY`, or for a public procedure as
+`FABRIKA_PROCEDURE_<ID>_<8 hex of the id's SHA-256>_KEY`; it rotates a key
 once less than half of its 30 days is left. Each issuance names the key Control recorded as active, and IAM revokes
 every other key of the workload but the new one, so the running version keeps its key until Control records the
-replacement. A workload principal resolves no grant and can be given none.
-The application exchanges its own job or webhook key at `POST /auth/workload/token` on IAM's public
+replacement. A workload principal resolves no grant and can be given none, and the schema reconcile refuses a public
+workload whose action an application role grants.
+The application exchanges its own job, webhook or public procedure key at `POST /auth/workload/token` on IAM's public
 origin, which signs only for a workload key of the named application: it checks the key's format and the per-client
 bucket before any lookup, answers every other key the same `invalid_key`, and answers a storage failure 503.
 
@@ -476,7 +511,8 @@ For a contract application, the hop carries more facts, and the application chec
   variable to the proxy and to the application. On Cloudflare the service binding takes its place
   (rule 1).
 - **The endpoint.** The allow response carries `X-Fabrika-Endpoint: <id>@<digest>`. The digest covers
-  the endpoint's kind, method, path, callers, requirement, admission, delegation and cross-origin form. The application serves the
+  the endpoint's kind, method, path, callers, requirement, admission, delegation, cross-origin form, file-response
+  profile and cache. The application serves the
   endpoint the id names, and only when its own `planEndpoint` selects the same endpoint and the digest
   equals its own; a missing header or any disagreement is a 503. A request is therefore never served by
   code that expects different rules than the proxy applied. A health endpoint alone may arrive without
@@ -681,8 +717,20 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   without the flag keeps every digest byte for byte, `crossOrigins` is absent from every manifest until an operator
   sets one, and Control's new column starts empty, so an upgraded installation answers exactly as before. One
   operator step remains on Zerops: `upgrade` does not move a namespace's proxy source pin, and a proxy built from an
-  older pin refuses a manifest with either field. Before an application of a namespace declares `crossOrigin` or its
-  environment lists an origin, the operator re-pins that namespace (`namespaces update --proxy-source=current`).
+  older pin refuses a manifest with either field. Before an application of a namespace declares
+  `admission.origins` or its environment lists an origin, the operator re-pins that namespace
+  (`namespaces update --proxy-source=current`).
+- **A new row form needs a proxy that reads it.** A `public` row, a `capabilities` requirement, a file-response
+  profile and a `cache` field are each refused by an older proxy's strict parser, so a manifest that holds one never
+  reaches a proxy that would serve it without its rule. **Rollout:** a contract without them keeps every digest byte
+  for byte. On Cloudflare the runner deploys the proxy Worker with the application. On Zerops Control refuses a
+  deploy whose contract holds a public row or a `capabilities` requirement while the namespace's proxy source is
+  another than the one it deploys new placements from, and names the re-pin
+  (`fabrika control namespaces update --namespace=<id> --proxy-source=current`).
+- **The platform keeps serving the rows of older framework releases**: a 0.4/0.5 form row with its content types,
+  its cross-origin form and its multipart origin check, a collection's `upload` and `download` rows, and a webhook's
+  generated binding rows, until no framework release in the window produces them
+  ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
 - **A cross-origin page reaches an endpoint only with a key.** A page that wants a person's own authority asks the
   person for a `user` key; the session never crosses origins.
 - **The proxy's public scheme comes from the manifest** (absent means `https`); behind a TLS-terminating
@@ -739,7 +787,8 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   installation's environment names, and moving a partner's page to a new host would be a new approval of the
   application rather than an operator's change.
 - **Let an environment list `*`.** Rejected: one entry would open every cross-origin form and, if honoured there,
-  every credentialed endpoint. A form meant for any site says so in its contract (`'*'`), where it is approved.
+  every credentialed endpoint. A public procedure meant for any site says so in its contract (`origins: 'any'`), where
+  it is approved.
 - **Send `Access-Control-Allow-Credentials` and let a session cross origins.** Rejected: any listed page could then
   act as the signed-in person without the person's knowledge, which is what the `cross_site` rule exists to stop.
 - **Let the application answer the preflight, or Caddy from its configuration.** Rejected: the first is a second

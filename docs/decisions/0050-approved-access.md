@@ -2,7 +2,7 @@
 id: 0050
 title: Publish only approved access
 status: accepted
-date: 2026-10-12
+date: 2026-10-20
 ---
 
 # 0050 — Publish only approved access
@@ -87,8 +87,9 @@ files with the classifier the runner applies them with ([ADR-0017](0017-service-
 run stores the result as its **snapshot**:
 
 - the parsed contract and table policies, with each site's **declared reach** (`ContractArtifact.declared`): the
-  `sql` mode, the `unscoped` tables and their modes, the `connect` imports and the `issues` mount of each endpoint,
-  job and webhook that declares any;
+  `sql` mode, the `unscoped` tables and their modes, the `connect` imports, the `issues` mount, the `kicks` jobs, the
+  `binds` webhook, the `signs` purposes, the `egress` origins and a public procedure's workload `actions` of each
+  endpoint, job and webhook that declares any;
 - the migration list with checksums;
 - the **database code** the migrations declare (`databaseCode`): each function, procedure, trigger, view, rule,
   policy, `DO` block and expression that calls database code, by file, kind and object;
@@ -150,21 +151,50 @@ Control compares the normalized access data of the candidate snapshot with the e
 snapshot. An environment with no published run has the empty snapshot as its baseline. The comparison
 covers:
 
-- endpoint callers, access forms (the `app` form named as a global grant), input domains and output shapes;
+- endpoint callers, access forms (the `app` form named as a global grant, each capability of `capabilities` by its
+  name and form), input domains and output shapes (a file output by its kind, a `redirect()` by where it may send a
+  caller), and each endpoint's HTTP shape;
 - containment, roles and their actions, membership rules;
 - table and column policies, with the actions each column is read and written with; a new application table
-  (`scope: { app }`) is shown with its reason and every action;
-- anonymous kinds (a new public SPA, or an SPA that becomes public, widens), link mounts and link-reachable file collections;
-- a file collection's malware scan: turning `scan` off widens;
-- job and webhook actions, connector exports and imports;
-- a form's admission (its rate, honeypot and challenge): any change is shown and widens;
-- a form's or a mutation's `then` (the job a submission or a committed mutation kicks): shown, and it leaves access
-  unchanged, because it reaches only a job of the same approved contract, which runs under its own declared actions;
+  (`scope: { app }`) is shown with its reason and every action. A table operation that names a list of actions is
+  compared by action: an action the list gains widens, one it loses narrows;
+- anonymous kinds (a new public SPA, or an SPA that becomes public, widens) and link mounts;
+- **public procedures**: a new one, or an endpoint that becomes public, widens with closer review ("for anyone,
+  without signing in"), and so does each workload action it gains ("runs as its own workload with `<action>`, for
+  anyone who calls it"); a lost action narrows. These actions are no step off the road, so the environment's deviation
+  list does not show them ([ADR-0063](0063-a-public-procedure-runs-as-its-own-workload.md));
+- **each procedure's admission and limits, by their effective values**: its buckets, its challenge, its time limit and
+  its body limit, derived ones included, on every new procedure and on every procedure the baseline records no rules
+  for (every one, when an application moves from an older framework release). A bucket raised or turned off, a dropped
+  challenge, a longer time limit and a larger body limit widen; the reverse narrows. On Zerops the per-client bucket is
+  shown as counting one client. A public `GET` query's `http.cache` shows how long its answers are reused, and that
+  `immutable` needs an input that names a value that never changes. A `GET` mutation reads "changes state on GET; link
+  scanners may trigger it" and widens with closer review;
+- **file kinds and file columns** ([ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)): a new kind is a neutral
+  line with its types, size limit and scan, since a kind adds no authority; a new type, a larger limit and a dropped
+  scan widen. File reach follows table reach: each action that writes a file column is shown as "`deals.write` writes
+  `deal_attachments.file` (attachments)", and a column that starts or stops holding files, or changes its kind, is its
+  own line;
+- job and webhook actions and time limits (a longer one widens), a new webhook's verifier and binding, connector
+  exports and imports;
+- **kick edges** ([ADR-0060](0060-a-handler-kicks-a-declared-job-after-its-commit.md)): a new edge is shown and leaves
+  access unchanged, because it reaches only a job of the same approved contract, which runs under its own declared
+  actions; from a public procedure it widens with closer review, because anyone who calls it then decides when the job
+  runs. A dropped edge narrows;
+- **token purposes**: a new purpose with its lifetime, a longer lifetime and a change of its claims; a site that
+  starts signing a purpose widens, because whoever holds such a token may call what verifies one;
+- a mount's compatibility promise (`compatibility: 'backward'`), made or dropped, as a line that leaves access
+  unchanged. A publication that breaks the promise is refused before classification, whoever approves it
+  ([ADR-0012](0012-fabrika-app-runtime.md) §16);
 - CSP extensions, `script-src`, `frame-src`, `style-src` and `font-src` included;
-- each public variable a page reads from its browser config (an SPA mount's `public` list, a form challenge's
+- each public variable a page reads from its browser config (an SPA mount's `browserConfig` list, a challenge's
   `siteKey`): shown by name, and a new one widens, because its value reaches anyone who opens a page;
 - each site's declared reach;
 - migrations: any new or changed file, and the database code they declare.
+
+An application on framework 0.4 or 0.5 is compared with the same rules after Control upcasts its artifact
+([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)): its forms' admission and files, `then`,
+file collections, their scan and their link-reachable rows keep the lines they had.
 
 Each line carries one effect: it **widens** (it can grant access the baseline did not), it **narrows** (it can only
 take access away), or it leaves access **unchanged** (it admits no one new and takes nothing away, but the approver
@@ -196,13 +226,15 @@ compares the callers each endpoint that now answers one admits with the callers 
 same requirement, the same caller kinds and the same delegation (`endpointDelegation`, which the proxy applies too). A requirement whose scope is read from a path parameter is never the same,
 because a broader route reads it from another segment. A `link` caller is the same only on an endpoint of the same link
 mount, because a link key reaches only its own mount. An anonymous health check or public SPA admits anyone, so a
-signed-in endpoint after it admits fewer and another of those two kinds the same. A form and a webhook turn callers
-away themselves, with a challenge or a signature, so whatever takes over their paths widens.
+signed-in endpoint after it admits fewer and another of those two kinds the same. A public procedure, a form and a
+webhook turn callers away themselves, with a challenge, a bucket or a signature, so whatever takes over their paths
+widens.
 
 The line names who could open the paths before and who can now, so the approver does not have to know which
 endpoint is public. A removed mount takes all its endpoints with it, so it is one line: its routes, grouped by where
 they go now and by their effect, and the strongest effect among them. The mount also takes what is not a route: the
-public variables its pages read (named on the line), a form's admission, a link mount's grants. So only an SPA mount
+public variables its pages read (named on the line), a public procedure's or a form's admission, a link mount's
+grants. So only an SPA mount
 that served no public variable can leave access unchanged; any other removed mount narrows at least.
 
 **A removed column read policy widens access.** Without its own read policy, a column falls back to the
@@ -230,9 +262,9 @@ whole table or a whole column stays a removal.
 
 **Steps off the paved road widen with closer review.** A site is keyed by its identity — the endpoint id, or the
 job — and each effect of its declaration is compared on its own, so a handler body that moves with the same
-declaration is unchanged. A new `sql` mode, a new `unscoped` table, `read` → `write` in either, a new connector and
-a new link mount to issue (an endpoint's, or a job's `issues`, keyed by the job) each widen; a removal and `write` →
-`read` narrow. Database code is keyed by file, kind and
+declaration is unchanged. A new `sql` mode, a new `unscoped` table, `read` → `write` in either, a new connector,
+a new link mount to issue (an endpoint's, or a job's `issues`, keyed by the job), a new `egress` origin, a new `binds`
+webhook and a job that starts sending through the installation's mail transport each widen; a removal and `write` → `read` narrow. Database code is keyed by file, kind and
 object: new code widens, code in a file whose text changed widens again (the diff cannot tell what changed in it),
 and removed code narrows. A contract that leaves the staged kit, whose sites' reach is then no longer declared,
 widens. A dimension that opts its member directory into labels (`directory: 'labels'`), so every `members.list`
@@ -258,7 +290,7 @@ The diff is a pure function. It produces plain-language lines for the approver, 
 `editor` gains `notes.delete`" or "New endpoint `api.notes.export` for editors".
 
 **The environment's cross-origin list is not part of the change.** Which pages on other origins may call an endpoint
-the contract opens to them (`crossOrigin: true`) is a fact of the environment, not of the contract
+the contract opens to them (`admission.origins`) is a fact of the environment, not of the contract
 ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) "Cross-origin endpoints"). Whoever holds `app.manage` on
 the application sets it, and that includes the builder key the local agent holds
 ([ADR-0042](0042-connect-local-builders-through-human-consent.md)), which carries `app.manage` on every environment of its application. Control
@@ -319,7 +351,7 @@ outside the `deploy.*` wildcard, so the `operator` role does not grant it.
   that mark belongs to the access change of a deploy.
 - **The environment page lists the published snapshot's surface**: every endpoint under its most exposed caller
   (anyone, share links, other apps, machines, signed-in people), in the approval's words, with what else opens it —
-  another origin, a file it answers, an upload's body limit, a form's rate limit and challenge, a webhook's signature
+  another origin, a file it answers, its body limit, its rate buckets and challenge, a webhook's signature
   (`AppEnvDto.surface`, `snapshotSurface`). It reads only the published snapshot, so it shows what the proxy serves.
 
 **Invariant: only a human user principal approves an access change.** No credential that an agent or a

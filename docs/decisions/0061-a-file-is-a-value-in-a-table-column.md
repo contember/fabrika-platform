@@ -1,163 +1,216 @@
 ---
 id: 0061
-title: A form takes files beside its input
+title: A file is a value in a table column
 status: accepted
-date: 2026-10-18
+date: 2026-10-20
 ---
 
-# 0061 — A form takes files beside its input
+# 0061 — A file is a value in a table column
 
 ## Context
 
-A public intake ([ADR-0012](0012-fabrika-app-runtime.md) §6) lets a visitor without an account submit `c.form`, which
-appends one row to its inbox and answers a constant. A cron job drains the inbox into records. Files reached an
-application only through a `c.files` collection, uploaded by a signed-in person or by a link holder after the job
-e-mailed the link. A registration that must carry a photo (a phone camera picture, several MB) had no way in: the
-visitor has no owner record to upload under until the job created it.
+Framework 0.5 stored files in collections. `c.files({ owner, read, write, delete, maxPerOwner, link })` declared a
+collection owned by one dimension table, and the framework generated its endpoints (`/api/files.<name>.upload`,
+`.list`, `.download`, `.remove`, and the same under link mounts), with no hook. A row of `fabrika_files_<name>` copied
+its owner's whole scope chain. Framework 0.5.5 added files to `c.form`: a received file waited, owned by nobody, in
+`fabrika_form_files` for seven days until a job attached it to a record.
 
-What already holds and must keep holding:
+That model had these limits:
 
-- **The proxy is the only enforcement point** ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)). A form is
-  an anonymous kind: the proxy reads no credential, and its admission is the content type and the cross-origin rule.
-  The body limit, the honeypot, the challenge and the rate buckets are the framework's, because `forward_auth` hands
-  the proxy the headers and never the body.
-- **A cross-origin form relies on the browser's preflight.** A JSON body is not CORS-safelisted, so a page on an
-  unlisted origin never gets its request sent. `multipart/form-data` is safelisted: a browser sends it from any page
-  without a preflight.
-- **A file reaches what its owner reaches.** A row of `fabrika_files_<name>` carries its owner's key and chain under a
-  foreign key, every operation takes a `Ref`, an owner-less row is orphaned and swept, and a `scan: true` upload is
-  served only after a clean ClamAV verdict.
-- **An inbox row is the only record of the work**, and the job consumes it in its own transaction.
+- The owner row had to exist before the file, and a file could not be written in the same transaction as its data.
+- No handler or job could write a file. A handler could only list, open and remove the owner's files.
+- A file belonged to exactly one owner. A file shared by two records, an attachment reused by many e-mails, a
+  versioned document and a handover between owners each needed a new operation.
+- An application table had no file collection at all ([ADR-0012](0012-fabrika-app-runtime.md) §7: an application
+  table has no dimension to own it).
+- The generated endpoints were operations encoded in a declaration ([ADR-0012](0012-fabrika-app-runtime.md) §9).
+  Anything a collection needed beyond them became an option with its own runtime: the form's files added a table, a
+  hold, a sweep path and a job-only `attach`.
+
+What must keep holding:
+
+- **The proxy is the only enforcement point** ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)). A file is
+  served only by an endpoint the decision selected, with the file treatment of its row.
+- **A file reaches only what a capability reaches.** No request names a file by a raw id.
+- **A scanning kind's file is served only after a clean verdict**, by its scanned object version.
+- **A framework release drops nothing an application stored.** An application may skip framework releases.
 
 ## Decision
 
-**A form may declare file fields. Its request is then one `multipart/form-data` body: the input as JSON in the first
-part, each file in a part of its field. A received file waits owned by nobody, its id in the inbox row, until the job
-that drains the inbox attaches it to the record it creates, in the same transaction.**
+**A file is a value in a table column. A file kind declares storage policy; the table's policy is the file's
+authority. Reading the column under the table's `read` action lets a request serve the file; writing it needs the
+action that writes that column. The framework generates no file endpoint.**
 
 ### 1. The declaration
 
 ```ts
-register: c.form('/register', {
-	input: Register,
-	appendTo: 'registrations',
-	maxBytes: 32768,
-	challenge: {
-		provider: 'turnstile',
-		secret: 'TURNSTILE_SECRET',
-		siteKey: 'TURNSTILE_SITE_KEY',
-	},
-	files: { photo: { collection: 'photos' } }, // required: true refuses a submission without it
-})
+// contract
+files: {
+	attachments: c.files({ types: ['application/pdf', 'image/png'], maxBytes: 10485760, scan: true }),
+},
+
+// table policy
+deal_attachments: {
+	scope: { child: 'deals' },
+	actions: { read: 'crm.read', insert: 'deals.write', delete: 'crm.delete' },
+	insert: ['file', 'name'],
+	files: { file: 'attachments' },
+	createdBy: 'created_by',
+},
 ```
 
-- At most four file fields, one file each. A field name is a lowercase column name, and its inbox has a column of that
-  name (`uuid`, nullable unless `required`), which receives the file's id or `null`. It may not be an input field, the
-  honeypot, `challengeToken` or `input`.
-- Each field lands in a declared collection that has `scan: true`. The collection's `types`, `maxBytes` and
-  `maxPerOwner` bound the file; `maxBytes` of the form bounds only its input part.
-- **A form with files declares a challenge.** An anonymous upload costs storage and reaches the people who read the
-  collection; the per-client bucket does not stop a flood on Zerops ([backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md)),
-  and the challenge is the defense that does not depend on the address.
-- The artifact records `files` on the form's mount only when declared, so every other form keeps its digest. The row
-  admits `multipart/form-data`, and `application/json` as well while no file is `required`: a form that gains an
-  optional photo keeps taking the JSON its existing pages send, so the application ships first and each page switches
-  to multipart when it is ready. A required file makes the row multipart only. The approval shows each field and its
-  collection as a widening, and requiring a file as a narrowing ([ADR-0050](0050-approved-access.md)).
-- **Its files write within a budget.** Such a form accepts `FORM_FILE_LIMITS.perForm` (20) submissions a minute
-  unless it declares `rate.perForm`, and all its files write at most `rate.bytesPerHour` an hour (512 MiB unless
-  declared, at most 64 GiB, never less than its largest file). The budget is counted in `fabrika_form_bytes`
-  (`0006_form_bytes.sql`), shared by every instance.
+- A **file kind** (`c.files({ types, maxBytes, scan? })` under `files: { <kind>: … }`) has no owner, no actions and no
+  endpoint. A `scan: true` kind admits files of at most 100 MiB, the most the scanner reads.
+- A **file column** (`files: { <column>: '<kind>' }` in a table policy) holds the id of a row of `fabrika_files`. The
+  application's migration writes `<column> uuid references fabrika_files (id)` and an index the column leads; the
+  checker's `file-column-migration` rule verifies both for every declared file column.
+- A procedure takes a file as an input field: `file('<kind>')`, `z.optional(file('<kind>'))` or
+  `z.array(file('<kind>')).max(n)` at the top level of a mutation's input. Its body is then `multipart/form-data`: the
+  JSON input in the first part, named `input`, then one part per file under its field's name. One request carries at
+  most 20 files.
+- A procedure answers a file with `output: file('<kind>')`. A query with a file output is a `GET`, its input read from
+  flat scalar URL parameters, so `<img src>` and `<a download>` work for a same-origin session. A mutation with a file
+  output is a `POST` that answers the file after its commit, which is how a download writes an audit row.
 
-### 2. The request, in order
+### 2. The storage
 
-The framework reads the body as it streams (`implement/multipart.ts`), never whole:
+One framework table, `fabrika_files`: id, kind, status (`pending`, `quarantined`, `live`, `rejected`), size, SHA-256,
+sniffed type, name, object key, the scanned object version and scan state, the scope value of its first dimensional
+reference, the creating request, the creation time, and a `legacy` marker for a migrated file (§6). Bytes live in the
+object store under `<kind>/<id>`. No two rows share an object.
 
-1. The client's request bucket, before the body is read. A declared `Content-Length` past what the input and the files
-   can hold is 413. A JSON body (no file is required) takes the form's JSON path from here, its file columns `null`.
-2. The first part is `input`, without a filename, as JSON within the form's `maxBytes`; the strict input parse, the
-   honeypot (a filled one answers the constant and reads no file) and the challenge come next, all before a byte of a
-   file is read.
-3. Each further part names a file field once and carries a filename. Its declared `Content-Type` must be one the
-   collection admits and its first 512 bytes that type (415). It then reserves its collection's `maxBytes` of the hourly
-   budget (429 when they no longer fit), its row in `fabrika_form_files` is written `pending` before its object
-   `<collection>/<id>`, which stops at the collection's `maxBytes` (413), and the reservation gives back what the file
-   did not use. An empty part without a filename is an empty file input: absent. Any other part, a repeated field and a
-   broken body are 400 `multipart`; a body whose connection closed before its end is 400 `aborted`, the sender's and
-   never a reported failure, on a JSON form too.
-4. A missing required file is 400. One transaction then takes from the form's accepted bucket, inserts the inbox row
-   and makes every file `held` for seven days (`FORM_FILE_LIMITS.holdMs`). A submission refused before that append
-   deletes the objects it wrote and their rows; a failed delete is the sweep's. One whose append failed leaves its files
-   to the sweep: the row may have committed before its answer was lost, and the sweep deletes a file only while its row
-   is still pending an hour later, never a held one.
-5. The whole body arrives within five minutes (408). The answer is the constant, and `then` kicks as for any form.
+### 3. Writing
 
-### 3. The proxy refuses a multipart form's request from an origin its row does not admit
+A file column accepts four values. The data layer refuses anything else, a string id included:
 
-A browser sends `multipart/form-data` from any page without a preflight, so the proxy refuses at the request what it
-refuses at a JSON form's preflight: on a form row that admits `multipart/form-data`, a request whose `Origin` is neither
-the application's own (`<scheme>://<host>`) nor admitted by the row (`crossOrigin`, the environment's list or `any`)
-is 403 `cross_origin`. A request without `Origin` is no browser's cross-origin request and passes, as a script's JSON
-request does. This is admission (ADR-0022 rule 3), decided in the same pass, and the application does not repeat it:
-it does not know the environment's origins.
+- an incoming file of this request's input;
+- a file that `ctx.files.put('<kind>', bytes, { type, name })` of this request staged;
+- a file reference this request read from another file column under that table's `read` action;
+- `null`, which clears a nullable column.
 
-### 4. The job attaches
+Every file must be of the column's kind. Its row is locked `FOR SHARE` while the write checks its status, so a file
+being deleted cannot gain a reference. The first reference from a table scoped by a dimension stamps the file's scope
+value (the top-level value of the chain) with a conditional update; a reference from an application table stamps
+none. A reference from another top-level scope is then refused.
 
-- `fabrika_form_files` (the framework bundle's `0005_form_files.sql`) holds a received file until it has an owner. No
-  endpoint serves it.
-- The job declares the collection's `write` action and creates the record in `ctx.transaction`. Only a job's
-  transaction attaches: a mutation's `ctx.files` has no `attach`, in its type and at runtime, so no endpoint a person
-  calls moves a visitor's file. `tx.ref(action,
-  dimension, id)` locates in that transaction, so it finds the record it just wrote, and
-  `tx.files('<collection>').attach(ref, id)` takes the held row out of `fabrika_form_files` and inserts the file's row
-  under the owner in the collection's own table, `quarantined` until the scan job's verdict. The two are one
-  transaction with the record: a rollback leaves the file held.
-- `attach` answers `false` when no file of the collection waits under the id (none was sent, another collection's, or
-  its hold ended) and `true` again for a file this owner attached before, so a retried attempt answers alike. A file
-  another owner holds stays that owner's. The owner's files are counted under its lock; past `maxPerOwner` it throws
-  (409), and the record's transaction rolls back with the file still held.
-- A file nobody attached — a known address, a dead registration — is deleted by the framework's hourly sweep an hour
-  after its hold ended; a pending row of a submission that never committed, after an hour. The claim reads the
-  statement's clock (`clock_timestamp()`), so a transaction that began before the hold ended claims nothing after it,
-  and the hour keeps the sweep off a claim in flight.
+**Staging** is the same for an incoming file and a `put`:
+
+1. A `pending` row is committed on a connection of its own, never the handler's transaction, before any byte is
+   written. That row is the cleanup intent. So `put` works inside a transaction too. Its connection counts against the
+   pool and, on a public procedure, against the in-flight share. A job puts a large file before its transaction.
+2. The object is written, sniffed against the kind's types and bounded by the kind's `maxBytes`; size and SHA-256 are
+   recorded.
+3. The first write of the file into a column, in the handler's transaction, claims it: still `pending`, of this request
+   and kind, within the pending grace (one hour). It becomes `quarantined` (a scanning kind) or `live`.
+4. After a known rollback the request deletes its unclaimed rows and objects. After an uncertain outcome (a lost commit
+   answer, a crash) it deletes nothing; the sweep decides from the database.
+
+`put` exists in a mutation, a public mutation, a job and a webhook delivery.
+
+### 4. Reading and serving
+
+- A row read through the data layer carries a **file reference** in each file column, with its metadata (`id`,
+  `name`, `type`, `size`, `status`). The data layer loads the metadata of every row in one statement per read, so a
+  list shows it without a call per file.
+- A reference read under an action other than the table's `read` (a `getForUpdate` under `update`) carries the
+  metadata only.
+- A handler passes a readable reference on: `ctx.files.open(ref)` gives the bytes, a file output returns it, and a
+  mailer job's `ctx.mail.send({ attachments: [ref] })` attaches it. A file list is a query of the table that holds
+  the column.
+- Every byte consumer reads only a `live` file, by its scanned object version. A `pending` or `quarantined` file
+  answers 409 `file_not_ready`, a `rejected` one 409 `file_rejected`, and a reference whose file the sweep has deleted
+  since the read answers 404. The framework applies these from the reference's status; the handler writes no check.
+- A file output compiles to a **file-response profile** (`response: 'file'`) in its manifest row and in the row's
+  endpoint digest. The proxy and the application apply the file treatment of ADR-0022 rule 2 from the row, denials
+  included. A public `GET` query may cache a file answer (`http.cache`, ADR-0012 §11); inline display stays limited to
+  inert images.
+- The typed client gives `api.<group>.<procedure>.url(input)` for a `GET` file procedure and a same-origin session,
+  and `download(api.<group>.<procedure>, input)` for any file output, with the caller's credential. A link holder's
+  key never goes into a URL, so a link page uses `download`.
+
+### 5. Removing
+
+Clearing the column or deleting the row removes the reference. The framework's sweep job finds, in bounded batches
+over an indexed column per file column, the files past the grace that no declared column references, pending files
+included. It deletes each in three steps:
+
+1. In one transaction, it deletes the file's row and records the object key in `fabrika_file_deletions`. The foreign
+   key refuses the delete while any reference exists, and a reference write that holds the row `FOR SHARE` makes the
+   delete wait, so a file that gains a reference survives.
+2. After that commit, it deletes the object.
+3. It deletes the deletion record. A crash between the steps leaves the record, and the next sweep finishes it.
+
+The grace counts from the file's creation, so an old file goes at the next sweep once nothing references it.
+
+**Rule: a handover writes the new reference before it deletes the old one, in one transaction.** Written in two
+transactions, the sweep can delete the file between them, and the second write fails on the foreign key.
+
+### 6. Existing files
+
+Nothing the framework stored is dropped by a framework release:
+
+1. The framework migration `0008_files.sql` creates `fabrika_files` and copies every held row of each
+   `fabrika_files_<collection>` table into it with the same id, object key, status and scan state, marked `legacy`
+   with its collection. A row whose owner was deleted is not copied. The old tables stay; they hold the owner mapping.
+   A form's held file (`fabrika_form_files`, framework 0.5.5) moves too, its grace counted from the end of its hold.
+2. The sweep never deletes a legacy file.
+3. The application's own adoption migration first calls `select fabrika_files_copy_legacy('<collection>')`, which
+   copies what an older instance wrote after `0008` (an older version keeps serving during a rollout), then fills its
+   new table from the old one by id.
+4. Its last adoption migration calls `select fabrika_files_release('<collection>')`. The function copies again, refuses
+   while a copied file is referenced by no file column (the application then adds one more adoption migration), clears
+   the marker of the rest, records for deletion the objects only the old table knew, and drops the old table.
+
+The migration classifier admits the two calls, the file column's foreign key, and an adoption `INSERT` that reads a
+collection's table ([ADR-0017](0017-service-owned-postgres-migrations.md)). The steps for an author are in
+[`framework-migrations.md`](../reference/framework-migrations.md).
+
+### 7. A public file field
+
+A public procedure that takes a file declares `admission.rate.bytesPerHour`, a challenge and a scanning kind. Its
+files are staged after the challenge (ADR-0063). `bytesPerHour` is charged from the declared `Content-Length`, at most
+the body limit (the whole body limit without one), before the body is read, and stays charged whatever the request
+does next.
 
 ## Consequences
 
-- A registration carries its photo in one request, with one challenge, and the record and its photo appear together.
-- The photo is unreadable until the scan's clean verdict, a minute or so after the job ran.
-- A challenge token is spent before the files arrive: a file the collection refuses (type, size) makes the visitor
-  solve the challenge again. The page should check the type and the size before it submits.
-- Memory stays bounded: no part is buffered whole except the input. Bun refuses a request body over 128 MiB.
-- **Storage is bounded by the budget, not by the challenge alone.** Each submission makes a new owner, so `maxPerOwner`
-  bounds nothing here, and on Zerops the per-client bucket counts one client. Without a budget a form with a 15 MiB
-  photo would admit 100 submissions × 15 MiB = 1.5 GB a minute, each needing only a solved challenge. With the defaults
-  a form writes at most 20 × 15 MiB = 300 MiB in a minute and 512 MiB in an hour, so at most 12 GiB a day and, since an
-  unattached file is held seven days, at most about 86 GiB at rest in the worst case; a form that expects more
-  declares `rate.bytesPerHour`. A flood that spends the budget refuses the form's files (429) until the hour ends,
-  while JSON submissions without a file still go through: the budget trades the storage of a flood for the photos of
-  that hour.
-- **Rollout.** Nothing converges on upgrade, because nothing needs to: a form without `files` keeps its artifact, row
-  and digest byte for byte. `fabrika db migrate` applies `0005_form_files.sql` with the framework bundle on an
-  application's next deploy, and `0006_form_bytes.sql` beside it; both tables stay empty until a form declares files. On Cloudflare the proxy Worker deploys
-  with the application. On Zerops `upgrade` does not move a namespace's proxy source pin, and a proxy built from an
-  older pin admits a multipart form row without the origin check of §3 (the challenge's host check still stops a
-  foreign page). Before an application of a namespace declares a form with files, the operator re-pins that namespace
-  (`namespaces update --proxy-source=current`), as for `crossOrigin` (ADR-0022,
-  [`reference/deployment-namespaces.md`](../reference/deployment-namespaces.md)). Control does not refuse such a deploy
-  into a namespace with an older pin: it would need to know which proxy commits carry the check. That stays the
-  operator's step.
+- A file is written in the same transaction as its data, by any site that holds the action that writes the column.
+- A file shared by two records, an attachment reused by many e-mails, versioned documents, a thumbnail, metadata
+  beside an attachment and a handover between owners need no new operation: they are columns and rows.
+- An application table holds file columns, so a mail template or a bulk send carries attachments.
+- Each file operation an application wants is a procedure of a few lines, which the approval reads like any other and
+  the generated access tests cover. The approval shows file reach as table reach: "`deals.write` writes
+  `deal_attachments.file` (attachments)" ([ADR-0050](0050-approved-access.md)). A file kind adds no authority.
+- A limit per owner (0.5's `maxPerOwner`) is the handler's: a count of the owner's rows under the owner's lock.
+- An unreferenced file lives at most the pending grace. A referenced file lives until the application deletes its
+  row; the application's retention is its own, not a framework timer.
+- An `sql: 'write'` site can write any file id into a column. The approval already treats it as full reach.
+- **Mixed proxy versions.** A row with the file-response profile is refused by an older proxy's strict manifest
+  parser, instead of served without the file treatment.
+- **0.4 and 0.5 applications.** The platform keeps serving their collection rows, their link-served collection rows
+  and the form rows of 0.5.5 with files, and keeps `0005_form_files.sql` and `0006_form_bytes.sql` in the framework
+  bundle: migration identity is `(bundle, filename)` (ADR-0017), and no released migration is changed or dropped
+  ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
+- **Rollout.** `fabrika db migrate` applies `0008_files.sql` before the application's own bundle at the next deploy
+  of an application on framework 0.6. The Zerops provider adds the sweep and the scan to the crontab of an
+  application that declares file kinds. No generated installation file or variable changes.
 
 ## Alternatives considered
 
-- **Upload first, then submit the form with the upload's id.** Rejected: two anonymous requests need two challenge
-  tokens or an unchallenged upload endpoint, and binding the upload to the submission needs a secret the page carries.
-- **The file base64 in the JSON body.** Rejected: a third more bytes over a phone's connection, the whole body decoded
-  in memory, and nothing gained but keeping one content type.
-- **Buffer the body and parse it with `Request.formData()`.** Rejected: an anonymous request without a solved
-  challenge would make the application hold every file's bytes before it could refuse it.
-- **The held file as an owner-less row of the collection's own table.** Rejected: that row is "orphaned" to the sweep,
-  the scan and every locator, each of which would need an exception, and every existing collection table a migration.
-- **Let a file field land in a collection without `scan`, or make the challenge optional.** Rejected for now: an
-  anonymous visitor's file reaches staff; both can be relaxed later if a real need shows.
-- **Check the origin of every form in the proxy.** Not needed: a JSON form's browser request already stops at the
-  preflight, so the rule stays where the preflight does not run.
+- **An owner chain on the file row, with `move`/`moveTo`** (the 0.5 model). One owner per file, no sharing, and every
+  operation shaped by one handover.
+- **Immutable blobs plus attachment records with `share`/`transfer`.** Keeps collection policies, but adds a second
+  record type and two operations to the same end.
+- **One generated download route per file kind.** The last generated data endpoint, with no audit row. A procedure
+  with a file output covers it.
+- **Delete the object first, then the row** (the 0.5 sweep). A reference written between the check and the row delete
+  points at lost bytes. The deletion record keeps the order safe.
+- **Migrate collections through a view the next release drops.** An application that skips that release loses the
+  owner mapping, and the sweep deletes every migrated file. Legacy copies the application releases itself lose
+  nothing.
+- **Presigned uploads.** They win for large media, resumable uploads and high volume. They hand a credential to a
+  client and move the sniff and the size bound out of the framework. Not now.
+- **Upload first, then submit with the upload's id.** Two anonymous requests need two challenge tokens or an
+  unchallenged upload endpoint. One multipart request carries both.
+- **The file base64 in a JSON body.** A third more bytes over a phone's connection, and the whole body decoded in
+  memory.

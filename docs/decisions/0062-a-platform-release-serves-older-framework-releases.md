@@ -1,8 +1,8 @@
 ---
 id: 0062
 title: A platform release runs and deploys applications on older framework releases
-status: proposed
-date: 2026-10-19
+status: accepted
+date: 2026-10-20
 ---
 
 # 0062 — A platform release runs and deploys applications on older framework releases
@@ -28,7 +28,8 @@ Today the two are coupled to the exact release:
 So a platform release that changes the contract language, the artifact or the digest breaks every application that has
 not upgraded its framework. Its next deploy is refused by the reader, or its new instance refuses to start. Before 1.0
 the framework changes in most minor releases (four minors between 2026-09-07 and 2026-10-16), and the pre-1.0 revision
-of the contract kinds (`ideas/declare-the-surface-not-the-behavior.md`) deletes whole kinds. Without a rule, an
+of the contract kinds in 0.6 deletes whole kinds: forms, file collections, `then` and the generated endpoints
+([ADR-0012](0012-fabrika-app-runtime.md) §9). Without a rule, an
 installation upgrade forces every application to rewrite its code first.
 
 ## Decision
@@ -63,10 +64,15 @@ upgraded first.
 **How the platform holds it:**
 
 1. **The artifact is versioned, and the reader of the application's release produces it.** Control reads the
-   application's `@fabrika/check` version from the lockfile at the pinned commit and runs the reader of that release.
-   Each platform release bundles, as exact npm aliases, the newest patch of every framework minor in its window, so
-   Control fetches no code at run time, on Bun and in a Worker alike. The reader's artifact carries `format: <n>`, and
-   the digest is the one that release computes, which the application's startup check then matches.
+   application's `@fabrika/app` release from the `bun.lock` at the root of the pinned commit (`@fabrika/check` is an
+   optional dev dependency) and runs the reader of that release's minor. A commit without a `bun.lock`, or whose
+   `bun.lock` does not resolve `@fabrika/app` from the registry, is refused with one line. Each platform release
+   bundles, as exact npm aliases, `@fabrika/check`, `@fabrika/app` and `@fabrika/auth-core` at the newest patch of
+   every older framework minor in its window, so Control fetches no code at run time, on Bun and in a Worker alike.
+   The reader's artifact carries `format: <n>` (a 0.4 or 0.5 artifact has none and is format 1). The snapshot stores
+   the artifact as its release read it and digests it by that release's canonical form, and the providers write that
+   digest into `FABRIKA_CONTRACT_DIGEST` and the proxy table instead of recomputing it, so the application's startup
+   check matches.
 2. **A patch release never changes the contract language, the artifact or the digest.** That keeps one reader per
    minor sufficient.
 3. **The platform upcasts.** Control converts an artifact of any format in the window to its current model, as a data
@@ -79,9 +85,15 @@ upgraded first.
    descriptor, variables or deployed version. An application changes on its own next deploy.
 6. **Below the window, Control refuses the deploy** with one line naming the application's release, the oldest
    supported one and the migration guide. The running version keeps running.
-7. **A compatibility suite proves it.** CI deploys the acceptance CRM pinned to the oldest framework release of the
-   window, installed from npm, against the platform at HEAD, and runs its smoke. `examples/crm` in the workspace stays
-   on HEAD and is rewritten in the same change as a framework break.
+7. **A compatibility suite proves it.** `framework-compat.test.ts` (`packages/control`) reads a fixture of each
+   minor in the window through Control's read path: an application installed from npm at that release, with what that
+   release's own platform recorded for it. It compares the reader, the contract and snapshot digests, the proxy rows
+   and the IAM schema, and the next unchanged deploy shows no change. `examples/crm` in the workspace stays on HEAD
+   and is rewritten in the same change as a framework break.
+8. **The source version moves first.** A breaking framework minor sets the repository's source version to the next
+   minor before anything else. Bun links an `npm:` alias to the workspace when name and version match, so while the
+   source said the previous minor, its reader alias would resolve to the working tree instead of npm
+   (`reference/release-process.md`).
 
 ## Consequences
 
@@ -89,20 +101,27 @@ upgraded first.
   framework when it chooses, inside six months.
 - A framework break costs two steps. The framework drops the old form at once. The platform keeps its side (a row mode,
   a header, a claim, an upcast rule) until the window passes, then deletes it in a release that names what it retired.
-- Control and the providers carry one reader per supported minor. Each Worker bundle of a reader is about 153 KiB
-  gzip (ADR-0005), so a window of six minors adds about 1 MiB to the Cloudflare Control.
-- The build step changes: a Zerops build runs `@fabrika/check` and `fabrika-source-maps` at the application's pinned
-  release, which the platform reads from the lockfile, not at the installation's.
+- Control and the providers carry one reader per supported minor. The 0.4 reader added 84 KiB gzip to the
+  Cloudflare Control bundle (617 KiB with the 0.4 and 0.5 readers).
+- The build step changes: a Zerops build runs `@fabrika/check` and `fabrika-source-maps` at the bundled reader's
+  release, the newest patch of the application's minor, not at the installation's release and not at the exact patch
+  the application pins (`@fabrika/check@0.4.1` has no `fabrika-source-maps`). The snapshot's `checker` names it. The
+  Cloudflare build runs no checker.
 - The migration classifier may only tighten for migrations an application adds after the platform release. A framework
   bundle migration of a release in the window keeps the verdict it had.
 - The MCP authoring rules describe the installation's release. An application pinned to an older one follows the skill
   in its own `node_modules`, as the existing pin warning already says.
 - `reference/release-process.md` stops saying that an application installs the release its installation runs. It pins
   an exact release inside the window.
-- The approval snapshot's `checker` field (`approval/read.ts`) names the reader that read the commit.
+- The approval snapshot's `checker` field (`approval/read.ts`) names the reader that read the commit, and
+  `framework` the release the application pins.
+- An artifact of an older format is upcast in `packages/control/src/approval/formats.ts`. A 0.4 artifact is read as
+  the 0.5 format: 0.5 added only optional fields. A 0.5 job's `timeout` becomes `limits.timeoutMs` (15 min without
+  one) and a 0.5 webhook gets the 10 s its handler ran with, so its next deploy shows only what it changed.
 - **Rollout path.** No generated installation file, environment variable or provider state changes. The first platform
-  release under this rule (0.6) bundles the readers of 0.4 and 0.5, the minors of the window that published
-  `@fabrika/check`. An application on 0.3 or older redeploys only after it raises its pin into the window.
+  release under this rule (0.6) has the window 0.4, 0.5 and 0.6, every minor of the last six months that published
+  `@fabrika/check`, and bundles the readers 0.4.8 and 0.5.5. An application on 0.3 or older redeploys only after it
+  raises its pin into the window ([`framework-migrations.md`](../reference/framework-migrations.md)).
 
 ## Alternatives considered
 

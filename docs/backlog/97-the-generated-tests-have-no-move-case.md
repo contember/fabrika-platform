@@ -6,28 +6,26 @@ blocked-by: []
 
 # 97 — The generated tests have no move case
 
-**Summary.** The policy isolation and endpoint access tests cover get, list, insert, update and remove, but never `move`,
-because no access form gives a handler the two capabilities a move needs. Medium effort; needs a contract access form
-first.
+**Summary.** The policy isolation and endpoint access tests cover get, list, insert, update and remove, but never
+`move`. Medium effort.
 
 ## Problem
 
-`DimensionTable.move` (`packages/db/src/store.ts:661`) takes two capabilities: a `Ref` for the delete action at the
-source and a `Ref` for the insert action at the target container. An access form hands a handler one capability
-(`ctx.target`), so no endpoint can call `t.move`, and neither generated kit has a case for it:
+`DimensionTable.move` (`packages/db/src/store.ts`) takes two capabilities: a `Ref` for the delete action at the
+source and a `Ref` for the insert action at the target container. An endpoint gets both through `access: {
+capabilities: { … } }` ([ADR-0012](../decisions/0012-fabrika-app-runtime.md) §10), but neither generated kit has a
+move case:
 `policyIsolationKit` (`packages/app/src/testing/policy-isolation.ts`) probes get, list, insert, update and remove only,
-and `endpointAccessKit` (`packages/app/src/testing/endpoint-access.ts`) asks only endpoints that exist. Both
-`packages/db/CLAUDE.md:60` and `docs/reference/application-runtime.md:609` record the deferral. A job can mint two
-`Ref`s (`ctx.ref`) and move a row today, with no generated test behind it.
+and `endpointAccessKit` (`packages/app/src/testing/endpoint-access.ts`) adds a denied case per capability, not a
+move case. `packages/db/CLAUDE.md` records the deferral. A job can mint two `Ref`s (`ctx.ref`) and move a row too, with
+no generated test behind it.
 
 ## Approach / acceptance
 
-- A contract access form that names two capabilities (the object `on` its dimension, the target `in` its container),
-  checked by the dispatcher like every other form and handed to the handler as two minted `Ref`s.
 - A probe case in `policyIsolationKit` for every table with a container: a move from the other scope is 404, a move
   into the other scope is 403, a move with a read `Ref` is refused by the data layer, and a `Ref` minted before the
   move reaches nothing.
-- An endpoint access case for every endpoint with the new form, written by `fabrika db test-scaffold`.
+- An endpoint access case for every endpoint that moves, written by `fabrika db test-scaffold`.
 - Witness: the cases above in the kits' own suites, and the regenerated fixture tests in `packages/cli`.
 
 ## Touch points
