@@ -4,8 +4,8 @@
 import type { CredentialedEndpoint, EndpointRow } from '@fabrika/auth-core'
 import { readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
-import { classifyAccess } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
+import { classifyAccess } from './helpers/access'
 import { BASE, edited } from './helpers/contracts'
 
 function snapshot(contract = BASE): AccessSnapshot {

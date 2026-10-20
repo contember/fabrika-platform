@@ -451,7 +451,7 @@ describe('approved access through the run lifecycle', () => {
 
 		const approval = await approve(w, parked.runId, caller)
 		expect(approval.run.status).toBe('pending')
-		expect(approval.approval).toMatchObject({ principalId: 'p-ada', label: 'ada@example.test' })
+		expect(approval.approval).toMatchObject({ principalId: 'p-ada', label: 'ada@example.test', holds: true })
 		expect(caller.audited).toEqual(['access.approve'])
 		expect(w.queued).toEqual([{ runId: parked.runId }])
 
@@ -562,6 +562,8 @@ describe('approved access through the run lifecycle', () => {
 			'New endpoint `api.export` (POST /api/export) for human callers with `notes.read` (on `note`)',
 		])
 		expect(await published(w, 'prod')).toEqual({ runId: first.runId, generation: 1 })
+		// The approval stays on the run, bound to the digests it approved, so the page says it lapsed.
+		expect((await getApprovalUseCase(approvals(w, auth()), wider.runId)).approval).toMatchObject({ principalId: 'p-ada', holds: false })
 	})
 
 	test('a publication that loses the compare-and-swap classifies again against the snapshot that won', async () => {

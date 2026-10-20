@@ -4,9 +4,9 @@
 import type { ContractArtifact, EndpointRow } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import { classifyAccess } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
 import { snapshotSurface } from '../approval/surface'
+import { classifyAccess } from './helpers/access'
 
 const handover = (records: 'over' | 'in'): EndpointRow => ({
 	id: 'api.requests.handover',

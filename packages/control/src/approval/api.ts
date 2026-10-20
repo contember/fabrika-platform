@@ -141,16 +141,16 @@ function toApprovalDto(run: RunRow): ApprovalDto {
 	return {
 		run: toRunDto(run),
 		outcome: classification.outcome,
-		changes: classification.changes.map((change) => ({
-			effect: change.effect,
-			line: change.line,
-			...(change.review === undefined ? {} : { review: change.review }),
-			...(change.environmentOrigins === undefined ? {} : { environmentOrigins: change.environmentOrigins }),
-		})),
+		changes: [...classification.changes],
 		candidateDigest: classification.candidateDigest,
 		baselineDigest: classification.baselineDigest,
 		baselineRunId: classification.baselineRunId,
 		protected: classification.protected,
-		approval: approval === null ? null : { principalId: approval.principalId, label: approval.label, approvedAt: approval.approvedAt },
+		approval: approval === null ? null : {
+			principalId: approval.principalId,
+			label: approval.label,
+			approvedAt: approval.approvedAt,
+			holds: approval.candidateDigest === classification.candidateDigest && approval.baselineDigest === classification.baselineDigest,
+		},
 	}
 }
