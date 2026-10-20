@@ -13,3 +13,5 @@ decided work or status.
   observability, alerting, and response beyond the initial Errors capability.
 - [A foreign runtime behind the platform](foreign-runtime.md) — another framework keeps its own data layer; the
   platform reads only its surface and access, and delivers, fronts and authenticates it.
+- [Application–platform channels](application-platform-channels.md) — inventory of how an application reaches the
+  platform; one platform call over the connector wire, and a gated mail relay in Control as its first consumer.
