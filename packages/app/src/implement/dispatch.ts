@@ -46,7 +46,6 @@ import { fileFieldsOf } from '../contract/build'
 import {
 	BROWSER_CONFIG_FILE,
 	CHALLENGE_FIELD,
-	challengeAction,
 	FILE_INPUT_PART,
 	FORM_MULTIPART_TYPE,
 	joinPath,
@@ -898,8 +897,8 @@ export class ContractRuntime {
 			if (admission.challenge !== null) {
 				const token = fields[CHALLENGE_FIELD]
 				await this.#challenge(
-					challengeAction(served.row.id),
-					admission.challenge,
+					admission.challenge.action,
+					admission.challenge.verifier,
 					typeof token === 'string' ? token : null,
 					request,
 					admission.repeatableToken,

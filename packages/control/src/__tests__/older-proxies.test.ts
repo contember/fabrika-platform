@@ -5,9 +5,14 @@
 import { type BodyAdmission, type ContractArtifact, contractDigest, type EndpointRow } from '@fabrika/auth-core'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { rowsNeedingCurrentProxy } from '@fabrika/provider-zerops'
+import { proxyEndpointRowSchema as proxyEndpointRowSchema05 } from '@fabrika/proxy-core-0.5/manifest'
+import { contractProxyTable, type ProxyEndpointRow, proxyEndpointRowSchema } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
+import { contract as intakeContract } from '../../../app/src/__tests__/fixtures/intake/fabrika.contract'
+import { tables as intakeTables } from '../../../app/src/__tests__/fixtures/intake/src/db/tables'
+import { compileContract } from '../../../app/src/contract/compile'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { readAccessSnapshot } from '../approval/read'
@@ -117,6 +122,31 @@ describe('the rows of this release, for a namespace proxy pinned to an older sou
 
 	test('deploys an application of this release that uses none of them', () => {
 		expect(rowsNeedingCurrentProxy(access([]), OLDER_PROXY_ROW_READERS)).toEqual([])
+	})
+})
+
+describe('a public procedure at a path of its own (http.path)', () => {
+	const artifact = compileContract(intakeContract, intakeTables)
+	const rowAt = (path: string): ProxyEndpointRow => {
+		const row = contractProxyTable(artifact).endpoints.find((candidate) => candidate.id === 'api.intake.register')
+		if (row === undefined) throw new Error('the intake fixture has no api.intake.register')
+		return { ...row, path }
+	}
+
+	test("is a row the current proxy parses; the 0.5.5 parser judges its path as the derived one's, refusing only its kind", () => {
+		const own = rowAt('/register')
+		expect(proxyEndpointRowSchema.safeParse(own).success).toBe(true)
+		// Every branch of the 0.5.5 union refuses the two rows alike: a literal path is a path to it, and `public` no kind.
+		const issues = (row: ProxyEndpointRow) => JSON.stringify(proxyEndpointRowSchema05.safeParse(row).error?.issues)
+		expect(issues(own)).toBe(issues(rowAt('/api/intake.register')))
+		expect(issues(own)).toContain('"received":"public"')
+		const approved: ProviderApprovedAccess = {
+			contract: artifact,
+			contractDigest: contractDigest(artifact),
+			schema: schemaFromContract(artifact),
+			checker: '0.6.0',
+		}
+		expect(rowsNeedingCurrentProxy(approved, OLDER_PROXY_ROW_READERS)).toContain('api.intake.register')
 	})
 })
 

@@ -88,7 +88,7 @@ export interface TokenPurposeArtifact {
 export interface ProcedureArtifact {
 	readonly rate: AdmissionRate
 	/** The challenge the framework verifies before the handler; a public procedure only. */
-	readonly challenge: FormChallenge | null
+	readonly challenge: ProcedureChallenge | null
 	/** How long the handler may run after the last body byte, in ms. */
 	readonly timeoutMs: number
 	/** A POST's flat schema of the URL's parameters, the handler's `query`; absent without one, so digests stay. */
@@ -556,6 +556,12 @@ export interface FormChallenge {
 	readonly secret: string
 	/** The application variable holding the widget's public site key, which every SPA mount's browser config serves. */
 	readonly siteKey?: string
+}
+
+/** A public procedure's challenge: a form's, and the widget `action` the verification expects back. */
+export interface ProcedureChallenge extends FormChallenge {
+	/** The declared `action`, or the endpoint id with `_` for `.`. */
+	readonly action: string
 }
 
 export interface WebhookMountArtifact {

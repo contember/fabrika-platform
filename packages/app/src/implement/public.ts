@@ -19,11 +19,17 @@ export const MAX_USER_AGENT_LENGTH = 256
 export interface ProcedureAdmission {
 	readonly rate: AdmissionRate
 	/** The challenge's verifier, with the secret its application variable holds; `null` without a challenge. */
-	readonly challenge: ChallengeVerifier | null
+	readonly challenge: AdmittedChallenge | null
 	/** The one token the challenge does not record, so it passes again: `fabrika app dev`'s test widget's. */
 	readonly repeatableToken: string | null
 	/** How long the handler may run after the last body byte. */
 	readonly timeoutMs: number
+}
+
+/** A challenge's verifier and the widget action the verification expects back. */
+export interface AdmittedChallenge {
+	readonly verifier: ChallengeVerifier
+	readonly action: string
 }
 
 /** A procedure the artifact holds no rules for (a `defineContract` one): no bucket, the request budget. */
@@ -51,7 +57,7 @@ export function procedureAdmission(id: string, artifact: ContractArtifact, optio
 	if (rules === undefined) {
 		return DEFAULT_ADMISSION
 	}
-	let challenge: ChallengeVerifier | null = null
+	let challenge: AdmittedChallenge | null = null
 	if (rules.challenge !== null) {
 		const secret = options.application[rules.challenge.secret]
 		if (typeof secret !== 'string' || secret.trim() === '') {
@@ -60,7 +66,10 @@ export function procedureAdmission(id: string, artifact: ContractArtifact, optio
 			)
 			return null
 		}
-		challenge = turnstileVerifier(secret.trim(), options.challengeFetch ?? ((request) => fetch(request)))
+		challenge = {
+			verifier: turnstileVerifier(secret.trim(), options.challengeFetch ?? ((request) => fetch(request))),
+			action: rules.challenge.action,
+		}
 	}
 	return Object.freeze({
 		rate: rules.rate,

@@ -74,6 +74,7 @@ describe('public variables in the artifact', () => {
 			provider: 'turnstile',
 			secret: 'TURNSTILE_SECRET',
 			siteKey: 'TURNSTILE_SITE_KEY',
+			action: 'api_join_apply',
 		})
 		expect(artifact.mounts['site']).toEqual({ kind: 'spa', prefix: '/', dir: 'dist/site', public: ['SIGNUP_URL'] })
 		expect(artifact.mounts['hr']).toEqual({ kind: 'spa', prefix: '/hr', dir: 'dist/hr' })

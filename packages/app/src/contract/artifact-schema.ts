@@ -28,7 +28,7 @@ import {
 } from '@fabrika/auth-core'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
-import { JOB_LIMITS, PROCEDURE_LIMITS } from './defaults'
+import { CHALLENGE_ACTION, JOB_LIMITS, PROCEDURE_LIMITS } from './defaults'
 import { TOKEN_MAX_DAYS } from './token'
 import { webhookSchemeSchema } from './webhook-scheme'
 
@@ -219,6 +219,7 @@ const formRate = z.int().positive().max(10_000)
 const applicationVariable = z.string().regex(/^[A-Z][A-Z0-9_]*$/)
 const bucket = z.int().positive().max(PROCEDURE_LIMITS.maxPerMinute).nullable()
 const challenge = z.strictObject({ provider: z.literal('turnstile'), secret: applicationVariable, siteKey: applicationVariable.optional() })
+const procedureChallenge = challenge.extend({ action: z.string().regex(CHALLENGE_ACTION) })
 
 const mount = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('rpc'), prefix: name, callers: z.array(rpcCaller), compatibility: z.literal('backward').optional() }),
@@ -398,7 +399,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 			perEndpoint: bucket,
 			bytesPerHour: z.int().positive().max(PROCEDURE_LIMITS.maxBytesPerHour).nullable(),
 		}),
-		challenge: challenge.nullable(),
+		challenge: procedureChallenge.nullable(),
 		timeoutMs: z.int().positive().max(PROCEDURE_LIMITS.maxTimeoutMs),
 		query: schemaShapeSchema.optional(),
 		changesStateOnGet: z.literal(true).optional(),

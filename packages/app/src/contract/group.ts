@@ -195,8 +195,17 @@ export type EndpointDef<I, O, Acc, S, U, Cn, Is, Ix extends AnyDbIndex> =
 	}
 	& DeclaredFields<S, U, Cn, Is, Ix>
 
-/** A group procedure's HTTP shape, its `query` schema inferred: what its handler then reads as `query`. */
-type HttpField<Q> = { readonly http?: HttpOption<Q & NoInfer<NotLoose<Q>>> }
+/**
+ * A group procedure's HTTP shape, its `query` schema inferred: what its handler then reads as `query`. Only a public
+ * procedure has a path of its own.
+ */
+type HttpField<Q, Acc> = { readonly http?: HttpOption<Q & NoInfer<NotLoose<Q>>> & OwnPathOption<Acc> }
+
+/**
+ * `http.path`: a public procedure served at a literal path of its own instead of `<prefix>/<name>`, so a caller outside
+ * the application keeps its URL. It lies outside every mount's prefix and under no `/__fabrika`.
+ */
+export type OwnPathOption<Acc> = [Acc] extends [PublicAccess] ? { readonly path?: `/${string}` } : unknown
 
 type Returned<F> = F extends (args: never) => infer R ? Awaited<R> : never
 
@@ -324,7 +333,7 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		def:
 			& EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']>
 			& PublicFields<Acc, Acts>
-			& HttpField<Q>
+			& HttpField<Q, Acc>
 			& NoKick
 			& SignsField<Sg, keyof K['tokens'] & string>
 			& EgressField,
@@ -355,7 +364,7 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		def:
 			& EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']>
 			& PublicFields<Acc, Acts>
-			& HttpField<Q>
+			& HttpField<Q, Acc>
 			& KicksField<Ks>
 			& BindsField<Bs>
 			& SignsField<Sg, keyof K['tokens'] & string>

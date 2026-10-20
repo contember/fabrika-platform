@@ -309,6 +309,11 @@ export interface ChallengeOption {
 	readonly secret: string
 	/** Served by every SPA mount at `<prefix>/__fabrika-config.json`, so the page renders the widget with it. */
 	readonly siteKey?: string
+	/**
+	 * The widget's `action`, which the verification expects back: at most 32 letters, digits, `_` and `-`. The endpoint id
+	 * with `_` for `.` by default (`api_visitors_register`).
+	 */
+	readonly action?: string
 }
 
 export interface LinkKit<A extends string> {

@@ -65,10 +65,36 @@ describe('a public procedure in the approval diff', () => {
 	})
 
 	test('a challenge dropped widens, and a longer time limit widens', () => {
-		const challenged = { ...DEFAULT_RULES, challenge: { provider: 'turnstile' as const, secret: 'TURNSTILE_SECRET' } }
+		const challenged = { ...DEFAULT_RULES, challenge: { provider: 'turnstile' as const, secret: 'TURNSTILE_SECRET', action: 'api_stats_cta' } }
 		expect(classifyAccess(snapshot(challenged), snapshot({ ...DEFAULT_RULES, timeoutMs: 30_000 })).changes).toEqual([
 			{ effect: 'widens', line: '`api.stats.cta` no longer asks for a challenge' },
 			{ effect: 'widens', line: '`api.stats.cta` time limit changes from 10 s to 30 s' },
+		])
+	})
+
+	test('a path of its own shows as any route does: on the new endpoint, and as a changed route', () => {
+		const own: EndpointRow = { ...CTA, path: '/register' }
+		expect(classifyAccess(snapshot(null, null), snapshot(DEFAULT_RULES, own)).changes[0]).toEqual({
+			effect: 'widens',
+			line: 'New endpoint `api.stats.cta` (POST /register) for anyone, without signing in',
+			review: 'closer',
+		})
+		expect(classifyAccess(snapshot(DEFAULT_RULES), snapshot(DEFAULT_RULES, own)).changes).toEqual([
+			{ effect: 'widens', line: 'Endpoint `api.stats.cta` route changes from `"POST /api/stats.cta"` to `"POST /register"`' },
+		])
+	})
+
+	test('a challenge action of its own shows as a change of the challenge, which widens as every change of it does', () => {
+		const challenged = (action: string): ProcedureArtifact => ({
+			...DEFAULT_RULES,
+			challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', action },
+		})
+		expect(classifyAccess(snapshot(challenged('api_stats_cta')), snapshot(challenged('register'))).changes).toEqual([
+			{
+				effect: 'widens',
+				line:
+					'`api.stats.cta` challenge changes from `{"action":"api_stats_cta","provider":"turnstile","secret":"TURNSTILE_SECRET"}` to `{"action":"register","provider":"turnstile","secret":"TURNSTILE_SECRET"}`',
+			},
 		])
 	})
 

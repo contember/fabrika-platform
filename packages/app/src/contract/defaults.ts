@@ -54,9 +54,12 @@ export const JOB_LIMITS = {
 /** A public mutation's buckets per minute unless it declares its own: per client and for the endpoint. */
 export const PUBLIC_MUTATION_RATE = { perClient: 10, perEndpoint: 100 } as const
 
+/** What Turnstile admits as a widget's `action`: at most 32 letters, digits, `_` and `-`. */
+export const CHALLENGE_ACTION = /^[A-Za-z0-9_-]{1,32}$/
+
 /**
- * The challenge widget's `action` of a public procedure: its endpoint id with `_` for `.`, as the provider admits at most
- * 32 letters, digits, `_` and `-`.
+ * The challenge widget's `action` of a public procedure that declares none (`challenge.action`): its endpoint id with
+ * `_` for `.`.
  */
 export function challengeAction(endpoint: string): string {
 	return endpoint.replaceAll('.', '_')
@@ -179,4 +182,13 @@ export const JSON_ADMISSION: BodyAdmission = { contentTypes: ['application/json'
 /** `/api` + `notes.list` → `/api/notes.list`; a root prefix does not double the `/`. */
 export function joinPath(prefix: string, rest: string): string {
 	return prefix === '/' ? `/${rest}` : `${prefix}/${rest}`
+}
+
+/**
+ * The path of an RPC mount's procedure: its own `http.path` when it declares one (a public procedure only, which
+ * `buildArtifact` checks), else `<prefix>/<dotted.path>`. The typed client calls the path the artifact's row carries.
+ */
+export function procedurePath(prefix: string, dotted: string, http: unknown): string {
+	const own: unknown = typeof http === 'object' && http !== null ? Reflect.get(http, 'path') : undefined
+	return typeof own === 'string' ? own : joinPath(prefix, dotted)
 }

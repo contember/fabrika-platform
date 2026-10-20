@@ -30,7 +30,6 @@ import {
 	type FileKindArtifact,
 	type FileShape,
 	FORM_URLENCODED_TYPE,
-	type FormChallenge,
 	type ImportArtifact,
 	isLocale,
 	isMessageKind,
@@ -50,6 +49,7 @@ import {
 	type MountArtifact,
 	type OutputShape,
 	type ProcedureArtifact,
+	type ProcedureChallenge,
 	type RoleArtifact,
 	type SchemaShape,
 	type ScopeBinding,
@@ -83,6 +83,7 @@ import {
 } from './declaration'
 import {
 	ATTACHMENT_LIMITS,
+	CHALLENGE_ACTION,
 	CHALLENGE_FIELD,
 	CHALLENGE_ORIGINS,
 	challengeAction,
@@ -97,6 +98,7 @@ import {
 	JSON_ADMISSION,
 	LINK_API_SEGMENT,
 	PROCEDURE_LIMITS,
+	procedurePath,
 	PUBLIC_MUTATION_RATE,
 	spaPrefixRowId,
 	WEBHOOK_BINDING_PARAMETER,
@@ -135,7 +137,6 @@ const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'fram
 /** An environment variable an application reads; a challenge names its secret by one. */
 const APPLICATION_VARIABLE = /^[A-Z][A-Z0-9_]*$/
 /** Turnstile's `action`: the procedure's endpoint id, which the verification expects back. */
-const CHALLENGE_ACTION = /^[A-Za-z0-9_-]{1,32}$/
 
 /** Validates a described contract against its table policies and normalizes it; throws `ContractError` with every problem. */
 export function buildArtifact(contract: ContractDeclaration<SchemaShape>, tables: Readonly<Record<string, TablePolicyArtifact>>): ContractArtifact {
@@ -164,7 +165,9 @@ class ArtifactBuilder {
 	/** The endpoints that declare `connect`, by the import they name. */
 	readonly #connected = new Map<string, string[]>()
 	/** The procedures that declare a challenge: their provider's fixed origins join the CSP, and their secret stays private. */
-	readonly #challenges: { readonly site: string; readonly provider: ChallengeProvider; readonly secret: string }[] = []
+	readonly #challenges: { readonly site: string; readonly provider: ChallengeProvider; readonly secret: string; readonly action: string }[] = []
+	/** The public procedures served at a path of their own (`http.path`), checked against every mount once all are read. */
+	readonly #ownPaths: { readonly where: string; readonly path: string }[] = []
 	/** Each variable a browser config serves, and where the contract names it. */
 	readonly #publicVariables: { readonly where: string; readonly field: string; readonly name: string }[] = []
 	/** The file kinds the contract declares, by name: read before the mounts, whose file fields and outputs name them. */
@@ -200,6 +203,7 @@ class ArtifactBuilder {
 			}
 		}
 		this.#checkPublicVariables()
+		this.#checkOwnPaths()
 		for (const row of this.#endpoints) {
 			if (row.kind === 'webhook' && row.input !== null && containsFile(row.input)) {
 				this.#problem(`mount '${row.id}'`, "takes a file in its input, which only a procedure's top-level field does (file('<kind>'))")
@@ -446,7 +450,7 @@ class ArtifactBuilder {
 				for (const [path, procedure] of procedures(mount.procedures)) {
 					const id = `${name}.${path}`
 					const callers = nonEmpty(mount.callers)
-					const actions = this.#procedure({ kind: 'mount', name }, id, joinPath(mount.prefix, path), callers, procedure)
+					const actions = this.#procedure({ kind: 'mount', name }, id, procedurePath(mount.prefix, path, procedure.http), callers, procedure)
 					this.#declare(`procedure '${id}'`, id, procedure.declared, {
 						kind: 'rpc',
 						readOnly: procedure.type === 'query',
@@ -532,12 +536,16 @@ class ArtifactBuilder {
 		return name
 	}
 
-	/** A public procedure's challenge; `id` is its endpoint id, whose widget action is `challengeAction(id)`. */
-	#challenge(id: string, where: string, challenge: object, fields: Readonly<Record<string, SchemaShape>>): FormChallenge | undefined {
-		this.#keys(`${where} challenge`, challenge, ['provider', 'secret', 'siteKey'])
+	/**
+	 * A public procedure's challenge; `id` is its endpoint id, whose widget action is `challengeAction(id)` unless it
+	 * declares its own `action`.
+	 */
+	#challenge(id: string, where: string, challenge: object, fields: Readonly<Record<string, SchemaShape>>): ProcedureChallenge | undefined {
+		this.#keys(`${where} challenge`, challenge, ['provider', 'secret', 'siteKey', 'action'])
 		const provider: unknown = Reflect.get(challenge, 'provider')
 		const secret: unknown = Reflect.get(challenge, 'secret')
 		const siteKey: unknown = Reflect.get(challenge, 'siteKey')
+		const declaredAction: unknown = Reflect.get(challenge, 'action')
 		if (provider !== 'turnstile') {
 			this.#problem(where, `challenge provider ${JSON.stringify(provider)} is not one the framework verifies (allowed: 'turnstile')`)
 			return undefined
@@ -551,22 +559,45 @@ class ArtifactBuilder {
 			)
 			return undefined
 		}
-		if (!CHALLENGE_ACTION.test(challengeAction(id))) {
-			this.#problem(
-				where,
-				`a procedure with a challenge is named as the widget's action (its endpoint id, '.' as '_'), at most 32 letters, digits, '_' or '-'`,
-			)
-		}
+		const action = this.#challengeAction(id, where, declaredAction)
 		const token = fields[CHALLENGE_FIELD]
 		if (token === undefined || token.type !== 'string') {
 			this.#problem(where, `declares a challenge, so its input needs the required field ${CHALLENGE_FIELD}: z.string(), the widget's token`)
 		}
-		this.#challenges.push({ site: id, provider, secret })
+		const sharing = this.#challenges.find((other) => other.action === action)
+		if (sharing !== undefined) {
+			this.#problem(
+				where,
+				`its challenge action '${action}' is the action of '${sharing.site}' too, so a token solved for one would pass the other (allowed: challenge.action unique to each procedure)`,
+			)
+		}
+		this.#challenges.push({ site: id, provider, secret, action })
 		if (siteKey === undefined || !this.#applicationVariable(where, 'challenge siteKey', siteKey, 'TURNSTILE_SITE_KEY')) {
-			return { provider, secret }
+			return { provider, secret, action }
 		}
 		this.#publicVariables.push({ where, field: 'challenge siteKey', name: siteKey })
-		return { provider, secret, siteKey }
+		return { provider, secret, action, siteKey }
+	}
+
+	/** The widget action a challenge's verification expects back: the declared `action`, else the endpoint id with `_` for `.`. */
+	#challengeAction(id: string, where: string, declared: unknown): string {
+		if (declared !== undefined) {
+			if (typeof declared !== 'string' || !CHALLENGE_ACTION.test(declared)) {
+				this.#problem(
+					where,
+					`challenge.action ${JSON.stringify(declared)} is not a widget action (allowed: at most 32 letters, digits, '_' or '-', such as 'register')`,
+				)
+			}
+			return typeof declared === 'string' ? declared : challengeAction(id)
+		}
+		const derived = challengeAction(id)
+		if (!CHALLENGE_ACTION.test(derived)) {
+			this.#problem(
+				where,
+				`its challenge action is its endpoint id with '_' for '.', '${derived}', longer than the 32 characters the provider admits (allowed: challenge.action, such as 'register')`,
+			)
+		}
+		return derived
 	}
 
 	/** The variables an SPA mount serves its pages; `[]` when it declares none. */
@@ -812,6 +843,7 @@ class ArtifactBuilder {
 		const limits = this.#limits(where, procedure.limits, PROCEDURE_LIMITS, files)
 		const admission = this.#admission(id, procedure, kind, files)
 		const http = this.#http(where, procedure, kind, files)
+		this.#ownPath(where, procedure, kind)
 		this.#procedureRules[id] = {
 			rate: admission.rate,
 			challenge: admission.challenge,
@@ -891,19 +923,21 @@ class ArtifactBuilder {
 	): { readonly method: 'GET' | 'POST'; readonly body: ProcedureBody | null; readonly query: SchemaShape | null; readonly cache?: EndpointCache } {
 		const fallback = { method: 'POST' as const, body: files === null ? ('json' as const) : ('multipart' as const), query: null }
 		const value = procedure.http
+		// `http.path` says where the procedure is served, not how: declared alone, it keeps every default of the wire.
+		const wire = isRecord(value) && Object.keys(value).every((key) => key === 'path') ? undefined : value
 		// A query that answers a file is a GET, so `<img src>` and `<a download>` reach it.
-		if (value === undefined && procedure.type === 'query' && procedure.output.type === 'file') {
+		if (wire === undefined && procedure.type === 'query' && procedure.output.type === 'file') {
 			return this.#http(where, { ...procedure, http: { method: 'GET' } }, kind, files)
 		}
-		if (value === undefined) {
+		if (wire === undefined) {
 			return fallback
 		}
-		const allowed = "http: { method?: 'GET' | 'POST', query?: z.strictObject({ … }), body?: 'json' | 'urlencoded' }"
+		const allowed = "http: { method?: 'GET' | 'POST', query?: z.strictObject({ … }), body?: 'json' | 'urlencoded', path?: '/register' }"
 		if (!isRecord(value)) {
 			this.#problem(where, `http is not an object (allowed: ${allowed})`)
 			return fallback
 		}
-		this.#keys(`${where} http`, value, ['method', 'query', 'body', 'cache'])
+		this.#keys(`${where} http`, value, ['method', 'query', 'body', 'cache', 'path'])
 		const method = value['method'] ?? (value['cache'] !== undefined && procedure.type === 'query' ? 'GET' : 'POST')
 		if (method !== 'GET' && method !== 'POST') {
 			this.#problem(where, `http.method ${JSON.stringify(method)} is not a method (allowed: 'GET' or 'POST')`)
@@ -956,6 +990,51 @@ class ArtifactBuilder {
 		}
 		this.#tokenFields(`${where} http.query`, query, true)
 		return { method, body, query }
+	}
+
+	/**
+	 * `http.path`: a public procedure's own literal path instead of `<prefix>/<name>`, for a caller outside the application
+	 * that keeps a URL (a 0.5 form's). Recorded for `#checkOwnPaths`, which needs every mount.
+	 */
+	#ownPath(where: string, procedure: ProcedureDeclaration<SchemaShape, unknown>, kind: 'public' | 'credentialed' | 'link'): void {
+		const path = isRecord(procedure.http) ? procedure.http['path'] : undefined
+		if (path === undefined) {
+			return
+		}
+		if (kind !== 'public') {
+			this.#problem(
+				where,
+				'declares http.path, which only a public procedure does: its caller is outside the application, and every other caller uses the typed client',
+			)
+		} else if (typeof path !== 'string' || !LITERAL_PATH.test(path)) {
+			this.#problem(
+				where,
+				`http.path ${JSON.stringify(path)} is not a literal path (allowed: '/register', segments of letters, digits and '._~-', no trailing '/')`,
+			)
+		} else if (path === FRAMEWORK_PREFIX || path.startsWith(`${FRAMEWORK_PREFIX}/`)) {
+			this.#problem(where, `http.path '${path}' is under ${FRAMEWORK_PREFIX}, which the framework reserves`)
+		} else {
+			this.#ownPaths.push({ where, path })
+		}
+	}
+
+	/**
+	 * An own path lies outside every mount's prefix but the root SPA's, whose `/*` answers only what no endpoint claims:
+	 * a public row never takes a path that a mount, credentialed or not, serves under its own prefix. Two endpoints on one
+	 * path are `assertNoAmbiguity`'s.
+	 */
+	#checkOwnPaths(): void {
+		for (const own of this.#ownPaths) {
+			for (const [name, mount] of Object.entries(this.#contract.mounts)) {
+				const prefix = mountPath(mount)
+				if (prefix !== '/' && (own.path === prefix || own.path.startsWith(`${prefix}/`))) {
+					this.#problem(
+						own.where,
+						`http.path '${own.path}' lies under mount '${name}' ('${prefix}'), which serves its paths itself (allowed: a path outside every mount's prefix, such as '/register')`,
+					)
+				}
+			}
+		}
 	}
 
 	/**
@@ -1061,7 +1140,7 @@ class ArtifactBuilder {
 		procedure: ProcedureDeclaration<SchemaShape, unknown>,
 		kind: 'public' | 'credentialed' | 'link',
 		files: InputFiles | null = null,
-	): { readonly origins: AdmissionOrigins; readonly rate: AdmissionRate; readonly challenge: FormChallenge | null } {
+	): { readonly origins: AdmissionOrigins; readonly rate: AdmissionRate; readonly challenge: ProcedureChallenge | null } {
 		const where = `procedure '${id}'`
 		const admitted = this.#declaredAdmission(id, procedure, kind, files)
 		if (kind === 'public' && files !== null) {
@@ -1087,7 +1166,7 @@ class ArtifactBuilder {
 		procedure: ProcedureDeclaration<SchemaShape, unknown>,
 		kind: 'public' | 'credentialed' | 'link',
 		files: InputFiles | null,
-	): { readonly origins: AdmissionOrigins; readonly rate: AdmissionRate; readonly challenge: FormChallenge | null } {
+	): { readonly origins: AdmissionOrigins; readonly rate: AdmissionRate; readonly challenge: ProcedureChallenge | null } {
 		const where = `procedure '${id}'`
 		const rate: Record<keyof AdmissionRate, number | null> = kind === 'public' && procedure.type === 'mutation'
 			? { perClient: PUBLIC_MUTATION_RATE.perClient, perCaller: null, perEndpoint: PUBLIC_MUTATION_RATE.perEndpoint, bytesPerHour: null }
@@ -2380,6 +2459,11 @@ type DeclaringSite =
 	| { readonly kind: 'rpc'; readonly readOnly: boolean; readonly access: AccessDeclaration; readonly actions: readonly string[] | null }
 	| { readonly kind: 'job'; readonly readOnly: boolean; readonly actions: readonly string[] }
 	| { readonly kind: 'link' | 'export' | 'webhook'; readonly readOnly: boolean }
+
+/** The prefix a mount serves under, or a health or webhook mount's own path. */
+function mountPath(mount: MountDeclaration<SchemaShape>): string {
+	return mount.kind === 'health' || mount.kind === 'webhook' ? mount.path : mount.prefix
+}
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null && !Array.isArray(value)
 

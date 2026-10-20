@@ -1,14 +1,15 @@
 // The typed client of one contract mount: `api.notes.remove({ id })` POSTs the input to `/api/notes.remove`, the
-// path `compileContract` gives that procedure. Built from the contract value, so it can call only declared
-// procedures, and it checks each answer against the procedure's output schema before handing it out. An input with a
-// file field goes as `multipart/form-data`: its JSON first, then each file. An attachment procedure and a procedure
-// whose output is a file answer a file, which `download(api.<procedure>, input)` fetches; a GET one also has `url`.
+// path `compileContract` gives that procedure (`procedurePath`, a public procedure's own `http.path` included). Built
+// from the contract value, so it can call only declared procedures, and it checks each answer against the procedure's
+// output schema before handing it out. An input with a file field goes as `multipart/form-data`: its JSON first, then
+// each file. An attachment procedure and a procedure whose output is a file answer a file, which
+// `download(api.<procedure>, input)` fetches; a GET one also has `url`.
 
 import { z } from 'zod/v4'
 import { type AttachmentBrand, attachmentOf } from '../contract/attachment'
 import { isProcedure, type ProcedureTreeDeclaration, type ProcedureType, SURFACE_SECTIONS } from '../contract/declaration'
 import { FILE_INPUT_PART } from '../contract/defaults'
-import { joinPath, LINK_API_SEGMENT } from '../contract/defaults'
+import { joinPath, LINK_API_SEGMENT, procedurePath } from '../contract/defaults'
 import type { AnyContract, InputSchema, Procedure, Schema, Surface } from '../contract/define'
 import { type ClientInput, type FileBrand, fileOf } from '../contract/file'
 import { type BounceConfig, type BounceOption, exchange, exchangeFile, resolveBounce, RpcError, type RpcFetch } from './transport'
@@ -211,7 +212,7 @@ function clientTree(
 		client[name] = isProcedure(node)
 			? make({
 				id: `${at.mount}.${path}`,
-				url: `${at.origin}${joinPath(at.base, path)}`,
+				url: `${at.origin}${procedurePath(at.base, path, node.http)}`,
 				method: httpMethodOf(node.http, node.type, node.output),
 				type: node.type,
 				input: node.input,

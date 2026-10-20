@@ -94,6 +94,20 @@ describe('public procedures in the static reader', () => {
 		expect(problems).toContain("csp frameSrc: 'https://*.example.com' is not an https origin")
 	})
 
+	test('reads a path of its own and a challenge action, and refuses them where the runtime build does', () => {
+		const declaring = (http: string, action: string) =>
+			withProducts(
+				`products: r.query({ input: z.strictObject({ challengeToken: z.string() }), output: Products, access: { public: true }, actions: ['catalog.read'], http: { path: '${http}' }, admission: { challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', action: '${action}' } } })`,
+			)
+		const read = readContractSource(declaring('/products', 'products'))
+		expect(read.endpoints.find((row) => row.id === 'api.catalog.products')?.path).toBe('/products')
+		expect(read.procedures?.['api.catalog.products']?.challenge?.action).toBe('products')
+		expect(problemsOf(declaring('/api/products', 'a.b'))).toEqual([
+			"procedure 'api.catalog.products': challenge.action \"a.b\" is not a widget action (allowed: at most 32 letters, digits, '_' or '-', such as 'register')",
+			"procedure 'api.catalog.products': http.path '/api/products' lies under mount 'api' ('/api'), which serves its paths itself (allowed: a path outside every mount's prefix, such as '/register')",
+		])
+	})
+
 	test('the scaffold writes a case per public procedure: anyone reaches it, or is refused without a solved challenge', async () => {
 		const challenged = withProducts(
 			"products: r.query({ input: z.strictObject({ challengeToken: z.string() }), output: Products, access: { public: true }, actions: ['catalog.read'], admission: { challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' } } })",

@@ -220,6 +220,21 @@ describe.skipIf(!hasPostgres)('the challenge', () => {
 		expect(await count('applications')).toBe(0)
 	})
 
+	test('a procedure at its own path verifies the action it declares, and answers only there', async () => {
+		const verify = siteverify()
+		verify.answer = (token) => passed(token, { action: 'register' })
+		const app = start(verify)
+		const registration = { name: 'Visitor', email: 'visitor@example.com', challengeToken: 'token-register' }
+		const sent = await send(app, '/register', { body: registration, headers: fromClient('203.0.113.90') })
+		expect(sent.status).toBe(200)
+		expect(sent.body).toEqual({ result: { received: true } })
+		expect((await send(app, '/api/intake.register', { body: registration, headers: fromClient('203.0.113.91') })).status).toBe(404)
+		verify.answer = (token) => passed(token, { action: 'api_intake_register' })
+		const derived = { ...registration, challengeToken: 'token-derived' }
+		expect((await send(app, '/register', { body: derived, headers: fromClient('203.0.113.92') })).status).toBe(400)
+		expect(await count('applications')).toBe(1)
+	})
+
 	test('an unreachable provider is a 503 and writes no row', async () => {
 		const verify = siteverify()
 		verify.answer = () => Promise.reject(new TypeError('connection refused'))
