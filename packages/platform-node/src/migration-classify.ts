@@ -3,7 +3,7 @@
 // does not recognise: an allowlist at every level, so a form a later Postgres adds is refused, not executed.
 // Runtime-neutral: Control classifies a commit's migrations in a Worker, the runner before it applies them.
 
-import { FILE_TABLE_PREFIX, FILES_RELEASE_FUNCTION, fileScanAlterTable, legacyStatusCheckName, STORED_FILES_TABLE } from './file-table-ddl'
+import { FILE_TABLE_PREFIX, FILES_COPY_FUNCTION, FILES_RELEASE_FUNCTION, fileScanAlterTable, legacyStatusCheckName, STORED_FILES_TABLE } from './file-table-ddl'
 import { lexSql, type SqlToken, topLevelStatements, upperWord } from './migration-sql'
 import { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
 import {
@@ -856,9 +856,9 @@ function classifyComment(tokens: readonly SqlToken[], context: Context): void {
 }
 
 /**
- * The framework names a statement may use: a file collection's table (`fabrika_files_<name>`, `fileTableSql`) is
- * created by the application's own migration, with its status check and its indexes, and `fileScanSql` replaces an
- * earlier status check. Every other framework name is refused.
+ * The framework names a statement may use: a file collection's table (`fabrika_files_<name>`) was created by the
+ * application's own migration under an older release's `fileTableSql`, with its status check and its indexes, and its
+ * `fileScanSql` replaced the status check. Every other framework name is refused.
  */
 function fileTableNames(tokens: readonly SqlToken[]): ReadonlySet<string> {
 	const [first, second] = [upperWord(tokens[0]), upperWord(tokens[1])]
@@ -878,8 +878,8 @@ function fileTableNames(tokens: readonly SqlToken[]): ReadonlySet<string> {
 }
 
 /**
- * The names of `@fabrika/db`'s `fileScanSql` statement, which replaces the status check of a file table an earlier
- * `fileTableSql` created and adds the scan columns: that exact statement, and no other `ALTER` of a file table.
+ * The names of an older release's `fileScanSql` statement, which replaces the status check of its collection table
+ * and adds the scan columns: that exact statement, and no other `ALTER` of a file table.
  */
 function fileScanNames(tokens: readonly SqlToken[]): ReadonlySet<string> {
 	const table = fileScanAlterTable(tokens)
@@ -907,10 +907,15 @@ function adoptedTableNames(tokens: readonly SqlToken[]): ReadonlySet<string> {
 	}))
 }
 
-/** `SELECT fabrika_files_release('<collection>');`: the one call of a framework function an application migration makes. */
-function isFileRelease(tokens: readonly SqlToken[]): boolean {
+/**
+ * `SELECT fabrika_files_copy_legacy('<collection>');` and `SELECT fabrika_files_release('<collection>');`: the only
+ * calls of a framework function an application migration makes, each a statement of its own.
+ */
+function isFileAdoptionCall(tokens: readonly SqlToken[]): boolean {
 	const [select, name, open, collection, close] = tokens
-	return tokens.length === 5 && upperWord(select) === 'SELECT' && nameText(name) === FILES_RELEASE_FUNCTION && isPunct(open, '(')
+	const called = nameText(name)
+	return tokens.length === 5 && upperWord(select) === 'SELECT' && (called === FILES_COPY_FUNCTION || called === FILES_RELEASE_FUNCTION)
+		&& isPunct(open, '(')
 		&& collection?.kind === 'string' && /^[a-z_][a-z0-9_]*$/.test(collection.text ?? '') && isPunct(close, ')')
 }
 
@@ -918,7 +923,7 @@ function classifyStatement(tokens: readonly SqlToken[], context: Context, out: C
 	const line = tokens[0]?.line ?? 1
 	const unicode = unicodeIdentifier(tokens)
 	if (unicode !== undefined) throw new Refused('a Unicode-escaped identifier (U&"…")', unicode.line)
-	if (!context.framework && isFileRelease(tokens)) return
+	if (!context.framework && isFileAdoptionCall(tokens)) return
 	const allowed = new Set([...fileTableNames(tokens), ...adoptedTableNames(tokens)])
 	const framework = context.framework ? undefined : frameworkReference(withoutFileReferences(tokens), allowed)
 	if (framework !== undefined) throw new Refused(`a reference to the framework's ${framework.name}`, framework.line)

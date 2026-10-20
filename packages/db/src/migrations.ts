@@ -17,7 +17,11 @@ export const FILES_TABLE = 'fabrika_files'
 export const FILE_DELETIONS_TABLE = 'fabrika_file_deletions'
 /** The function an application's last adoption migration calls with the name of a file collection it adopted. */
 export const FILES_RELEASE_FUNCTION = 'fabrika_files_release'
-const FILES_COPY_FUNCTION = 'fabrika_files_copy_legacy'
+/**
+ * The function an adoption migration calls right before it reads a collection's table: it copies the rows an older
+ * instance wrote since 0008 ran, so each one it adopts has its `fabrika_files` row. Idempotent.
+ */
+export const FILES_COPY_FUNCTION = 'fabrika_files_copy_legacy'
 
 export interface FrameworkMigration {
 	/** Ordered by name; an applied one is immutable, like an application's. */

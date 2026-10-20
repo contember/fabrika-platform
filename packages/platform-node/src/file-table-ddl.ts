@@ -1,6 +1,6 @@
-// The SQL of a file collection's table that three readers must agree on: `@fabrika/db`'s `fileTableSql` and
-// `fileScanSql` write it, the migration classifier admits exactly the scan migration, and `@fabrika/check` recognizes
-// a table that can hold the scan states. Pure: tokens in, answers out.
+// The SQL of a file collection's table, which an application on an older framework release (up to 0.5) created with
+// that release's `fileTableSql` and widened with its `fileScanSql`. The migration classifier admits exactly those
+// statements and an adoption migration's calls of the framework's copy and release functions. Pure: tokens in, answers out.
 
 import { type SqlToken, sqlTokens, topLevelStatements, upperWord } from './migration-sql'
 import { nameText } from './sql-names'
@@ -19,6 +19,12 @@ export const STORED_FILES_TABLE = 'fabrika_files'
 /** What an application's last adoption migration of a file collection calls, with the collection's name. */
 export const FILES_RELEASE_FUNCTION = 'fabrika_files_release'
 
+/**
+ * What an adoption migration calls right before it reads a collection's table: it copies the rows an older instance
+ * wrote after `0008_files.sql` ran, so every row the migration adopts has its `fabrika_files` row.
+ */
+export const FILES_COPY_FUNCTION = 'fabrika_files_copy_legacy'
+
 /** The columns the scan job keeps: the scanned object's version, and the retry count and time of a file without a verdict. */
 export const FILE_SCAN_COLUMNS = ['object_version TEXT', 'scan_attempts INTEGER NOT NULL DEFAULT 0', 'scan_after TIMESTAMPTZ'] as const
 
@@ -35,14 +41,14 @@ export function fileScanIndex(table: string): string {
 }
 
 /**
- * The name Postgres gave the unnamed status check of a table an earlier `fileTableSql` created:
+ * The name Postgres gave the unnamed status check of a table an older release's `fileTableSql` created:
  * `<table>_status_check`, the table's name cut to 50 characters first (`makeObjectName`).
  */
 export function legacyStatusCheckName(table: string): string {
 	return `${table.slice(0, 63 - '_status_check'.length)}_status_check`
 }
 
-/** The statement of `fileScanSql` that widens a table an earlier `fileTableSql` created: its check and its columns. */
+/** The statement of an older release's `fileScanSql` that widens its collection table: its check and its columns. */
 export function fileScanAlter(table: string): string {
 	const columns = FILE_SCAN_COLUMNS.map((column) => `ADD COLUMN ${column}`).join(', ')
 	return `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${legacyStatusCheckName(table)}, ADD ${fileStatusCheck(table)}, ${columns}`

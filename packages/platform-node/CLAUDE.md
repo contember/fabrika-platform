@@ -86,9 +86,11 @@ Read this before moving a service onto this driver.
   schema and hold webhook secrets, deliveries and job leases; `isFrameworkName` refuses every reference,
   case-insensitive, quoted or not, in bodies too. Only the bundle the plan marks `frameworkBundle` (the
   first of several) is exempt, and a file collection's own `fabrika_files_<name>` table, its `_status` check and its
-  indexes, and the exact `ALTER TABLE` of `@fabrika/db`'s `fileScanSql` (`fileScanAlterTable` in `file-table-ddl.ts`,
-  which also holds the DDL fragments `@fabrika/db` writes and `fileTableScanReady`, the checker's question); no other
-  `ALTER` of one.
+  indexes, and the exact `ALTER TABLE` an older release's `fileScanSql` wrote (`fileScanAlterTable` in
+  `file-table-ddl.ts`, which also holds those DDL fragments and `fileTableScanReady`, the checker's question); no other
+  `ALTER` of one. An adoption migration may also reference `fabrika_files` as a file column's foreign key, read a
+  collection table in an `INSERT … SELECT`, and call `SELECT fabrika_files_copy_legacy('<collection>');` and
+  `SELECT fabrika_files_release('<collection>');`, each as a statement of its own.
 - **Function calls are an allowlist** (`functionUse`, `refusedFunctionCall`): a paved or reviewed
   `pg_catalog` built-in, or a function the migration set declares. A declaration may not take a
   `pg_catalog` function name or a keyword (`pg-catalog-names.ts`, the union over every supported major — 17

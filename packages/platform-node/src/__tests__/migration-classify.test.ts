@@ -57,12 +57,13 @@ describe('a paved migration', () => {
 		expect(classify(sql).refused).toEqual([])
 	})
 
-	test('a file column references fabrika_files, an adoption copies from a collection table, and the release is called by name', () => {
+	test('a file column references fabrika_files, an adoption copies from a collection table, and the copy and the release are called by name', () => {
 		const sql = [
 			'CREATE TABLE deal_attachments (id uuid PRIMARY KEY, file uuid NOT NULL REFERENCES fabrika_files (id), name text);',
 			'CREATE INDEX deal_attachments_file ON deal_attachments (file);',
 			'ALTER TABLE products ADD COLUMN image uuid REFERENCES fabrika_files (id);',
 			'ALTER TABLE products ADD CONSTRAINT products_image FOREIGN KEY (image) REFERENCES fabrika_files (id);',
+			"SELECT fabrika_files_copy_legacy('attachments');",
 			'INSERT INTO deal_attachments (deal_id, file, name) SELECT owner_id, id, original_name FROM fabrika_files_attachments WHERE deleted_at IS NULL;',
 			"SELECT fabrika_files_release('attachments');",
 		].join('\n')
@@ -72,6 +73,8 @@ describe('a paved migration', () => {
 				['INSERT INTO fabrika_files_attachments (id) SELECT id FROM fabrika_files_other;', 'fabrika_files_attachments'],
 				["SELECT fabrika_files_release('attachments'), 1;", 'fabrika_files_release'],
 				['SELECT fabrika_files_release(name) FROM notes;', 'fabrika_files_release'],
+				["SELECT fabrika_files_copy_legacy('attachments'), fabrika_files_release('attachments');", 'fabrika_files_copy_legacy'],
+				['SELECT fabrika_files_copy_legacy(name) FROM notes;', 'fabrika_files_copy_legacy'],
 				['CREATE TABLE x (id uuid REFERENCES fabrika_files (id), y text REFERENCES fabrika_job_leases (job));', 'fabrika_job_leases'],
 				['INSERT INTO x (id) SELECT id FROM fabrika_files;', 'fabrika_files'],
 				['UPDATE fabrika_files SET legacy = null;', 'fabrika_files'],

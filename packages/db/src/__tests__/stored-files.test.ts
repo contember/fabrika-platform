@@ -346,18 +346,34 @@ describeDb('the migration of a collection', () => {
 		expect(await fileRow('01900000-0000-7000-8000-000000000003')).toBeUndefined()
 		// An orphan, whose owner was deleted, is not copied: no application could adopt it.
 		expect(await fileRow('01900000-0000-7000-8000-000000000006')).toBeUndefined()
-		const release = () => admin((sql) => sql.unsafe(`set search_path to ${schema}; select fabrika_files_release('attachments')`))
-		await expect(release()).rejects.toThrow(/referenced by no file column/)
-		await admin((sql) =>
-			sql.unsafe(
-				`set search_path to ${schema};
-				insert into deal_attachments (id, deal_id, org_id, file, name)
-				select gen_random_uuid()::text, owner_id, org_id, id, coalesce(original_name, '') from fabrika_files_attachments
-				where deleted_at is null and status <> 'pending' and owner_id is not null`,
+		const run = (statements: string) => admin((sql) => sql.unsafe(`set search_path to ${schema}; ${statements}`))
+		const release = () => run(`select fabrika_files_release('attachments')`)
+		const lateRow = (id: string) =>
+			run(
+				`insert into fabrika_files_attachments values ('${id}', 'd1', 'o1', 'live', 'attachments/${id}', 3, 'application/pdf', '${
+					'd'.repeat(64)
+				}', 'late.pdf', 'u1', now(), null)`,
 			)
-		)
+		// What an adoption migration runs: the copy of what an older instance wrote since 0008, then the insert.
+		const adoption = `select fabrika_files_copy_legacy('attachments');
+			insert into deal_attachments (id, deal_id, org_id, file, name)
+			select gen_random_uuid()::text, owner_id, org_id, id, coalesce(original_name, '') from fabrika_files_attachments
+			where deleted_at is null and status <> 'pending' and owner_id is not null and id not in (select file from deal_attachments)`
+		await expect(release()).rejects.toThrow(/referenced by no file column/)
+		// An older instance, still serving during the rollout, uploads after 0008 copied the collection.
+		await lateRow('01900000-0000-7000-8000-000000000007')
+		expect(await fileRow('01900000-0000-7000-8000-000000000007')).toBeUndefined()
+		// Without the copy, the adoption's insert names a file fabrika_files does not hold.
+		await expect(run(adoption.slice(adoption.indexOf('insert')))).rejects.toThrow(/foreign key/)
+		await run(adoption)
+		expect(await fileRow('01900000-0000-7000-8000-000000000007')).toEqual({ status: 'live', scope: null, legacy: 'attachments' })
+		// A row written after the adoption: the release copies it, refuses while it is unreferenced, and one more
+		// adoption takes it.
+		await lateRow('01900000-0000-7000-8000-000000000008')
+		await expect(release()).rejects.toThrow(/1 files of the collection are referenced by no file column/)
+		await run(adoption)
 		// The sweep adopts a migrated file a declared column references: it is an ordinary file from then on.
-		expect(await files.adoptReferenced([{ table: 'deal_attachments', column: 'file' }])).toBe(1)
+		expect(await files.adoptReferenced([{ table: 'deal_attachments', column: 'file' }])).toBe(3)
 		expect(await fileRow('01900000-0000-7000-8000-000000000001')).toEqual({ status: 'live', scope: null, legacy: null })
 		await release()
 		const deletions: { object_key: string }[] = await admin((sql) =>

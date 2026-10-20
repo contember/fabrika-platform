@@ -16,7 +16,9 @@ CREATE TABLE deal_attachments (
 CREATE INDEX deal_attachments_deal ON deal_attachments (deal_id);
 CREATE INDEX deal_attachments_file ON deal_attachments (file);
 
--- The rows the framework copied (not deleted, not pending) that still have a deal.
+-- The files an older instance, still serving during the rollout, wrote after 0008 are copied too, so every row the
+-- insert reads has its fabrika_files row: the rows not deleted, not pending, that still have a deal.
+SELECT fabrika_files_copy_legacy('attachments');
 INSERT INTO deal_attachments (id, deal_id, company_id, org_id, file, name, created_by, created_at)
 SELECT s.id, s.owner_id, s.company_id, s.org_id, s.id, COALESCE(s.original_name, 'attachment'), s.created_by, s.created_at
 FROM fabrika_files_attachments s

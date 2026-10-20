@@ -13,7 +13,9 @@ CREATE TABLE note_attachments (
 CREATE INDEX note_attachments_note ON note_attachments (note_id);
 CREATE INDEX note_attachments_file ON note_attachments (file);
 
--- The rows the framework copied (not deleted, not pending) that still have a note.
+-- The files an older instance, still serving during the rollout, wrote after 0008 are copied too, so every row the
+-- insert reads has its fabrika_files row: the rows not deleted, not pending, that still have a note.
+SELECT fabrika_files_copy_legacy('attachments');
 INSERT INTO note_attachments (id, note_id, workspace_id, file, created_at)
 SELECT s.id, s.owner_id, s.workspace_id, s.id, s.created_at
 FROM fabrika_files_attachments s
