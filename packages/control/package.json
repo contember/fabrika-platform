@@ -108,13 +108,13 @@
 		"@fabrika/provider-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*",
 		"@fabrika/proxy-core": "workspace:*",
+		"@fabrika/proxy-core-0.4": "npm:@fabrika/proxy-core@0.4.8",
+		"@fabrika/proxy-core-0.5": "npm:@fabrika/proxy-core@0.5.5",
 		"@fabrika/runner-cloudflare": "workspace:*",
 		"@modelcontextprotocol/server": "2.2.0",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
-		"@fabrika/proxy-core-0.4": "npm:@fabrika/proxy-core@0.4.8",
-		"@fabrika/proxy-core-0.5": "npm:@fabrika/proxy-core@0.5.5",
 		"@cloudflare/workers-types": "^4.20260702.1",
 		"@types/bun": "latest",
 		"lopata": "^0.21.0",

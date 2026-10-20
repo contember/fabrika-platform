@@ -19,6 +19,7 @@ import { createZeropsControlProvider, type ZeropsControlProviderOptions, zeropsS
 import type { ManagedValues } from '../managed-env'
 import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, zeropsArtifactCodec } from '../manifest'
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
+import type { OlderProxyRowReaders } from '../namespace/proxy-reads'
 import { zeropsSharedServiceHostname } from '../service-names'
 import type { ZeropsSourcePort, ZeropsSourceUploadInput } from '../source/port'
 import type { ZeropsAppConfig } from '../types'
@@ -77,6 +78,8 @@ const PROXY_SOURCE = {
 	commitSha: COMMIT_SHA,
 	descriptor: await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: proxy\n'),
 }
+/** These deploys run on the namespace's own pin, so no older proxy is consulted. */
+const OLDER_PROXIES: OlderProxyRowReaders = [() => true]
 
 const app: ProviderApp = {
 	id: 'notes',
@@ -281,7 +284,13 @@ describe('Zerops ControlProvider registration', () => {
 			const control = createTestControlProvider({
 				accessToken: 'zt-secret',
 				api: makeApi(recorded),
-				namespaces: { clientId: 'client-1', proxySource: PROXY_SOURCE, iamUrl: 'https://iam.example.test', iamKey: 'proxy-key' },
+				namespaces: {
+					clientId: 'client-1',
+					proxySource: PROXY_SOURCE,
+					iamUrl: 'https://iam.example.test',
+					iamKey: 'proxy-key',
+					olderProxies: OLDER_PROXIES,
+				},
 			})
 			const invalidEnvironment = environment({
 				artifact: {
@@ -406,6 +415,7 @@ describe('Zerops ControlProvider registration', () => {
 				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
+				olderProxies: OLDER_PROXIES,
 			},
 		})
 		const value: ProviderDeploymentNamespace = {
@@ -442,6 +452,7 @@ describe('Zerops ControlProvider registration', () => {
 				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
+				olderProxies: OLDER_PROXIES,
 			},
 		})
 		const prepare = control.namespaces?.prepareRegistration
@@ -501,7 +512,13 @@ describe('Zerops ControlProvider registration', () => {
 					}
 				},
 			},
-			namespaces: { clientId: 'client-1', proxySource: PROXY_SOURCE, iamUrl: 'https://iam.example.test', iamKey: 'proxy-key' },
+			namespaces: {
+				clientId: 'client-1',
+				proxySource: PROXY_SOURCE,
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+				olderProxies: OLDER_PROXIES,
+			},
 		})
 		const prepare = control.namespaces?.prepareRegistration
 		if (prepare === undefined) throw new Error('expected registration preparation')
@@ -541,7 +558,13 @@ describe('Zerops ControlProvider registration', () => {
 				...api,
 				findService: async ({ hostname }) => ({ id: hostname === 'files' ? 'bucket-1' : 'service-1', name: hostname, subdomainAccess: false }),
 			},
-			namespaces: { clientId: 'client-1', proxySource: PROXY_SOURCE, iamUrl: 'https://iam.example.test', iamKey: 'proxy-key' },
+			namespaces: {
+				clientId: 'client-1',
+				proxySource: PROXY_SOURCE,
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+				olderProxies: OLDER_PROXIES,
+			},
 		})
 		const prepare = control.namespaces?.prepareRegistration
 		if (prepare === undefined) throw new Error('expected registration preparation')
@@ -581,6 +604,7 @@ describe('Zerops ControlProvider registration', () => {
 				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
+				olderProxies: OLDER_PROXIES,
 			},
 		})
 		const prepare = control.namespaces?.prepareRegistration
@@ -646,6 +670,7 @@ describe('Zerops ControlProvider registration', () => {
 					proxySource: PROXY_SOURCE,
 					iamUrl: 'https://iam.example.test',
 					iamKey: 'proxy-key',
+					olderProxies: OLDER_PROXIES,
 				},
 			})
 			const prepare = control.namespaces?.prepareRegistration
@@ -723,6 +748,7 @@ describe('Zerops ControlProvider registration', () => {
 				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
+				olderProxies: OLDER_PROXIES,
 			},
 		})
 		const prepare = control.namespaces?.prepareRegistration
@@ -742,6 +768,7 @@ describe('Zerops ControlProvider registration', () => {
 				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
+				olderProxies: OLDER_PROXIES,
 			},
 		})
 		const prepare = control.namespaces?.prepareRegistration
@@ -783,6 +810,7 @@ describe('Zerops ControlProvider registration', () => {
 				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
+				olderProxies: OLDER_PROXIES,
 			},
 		})
 		const prepare = control.namespaces?.prepareRegistration
@@ -814,6 +842,7 @@ describe('Zerops ControlProvider registration', () => {
 				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
+				olderProxies: OLDER_PROXIES,
 			},
 		})
 		if (control.namespaces === undefined) throw new Error('expected namespace capabilities')
@@ -869,6 +898,7 @@ describe('Zerops ControlProvider registration', () => {
 				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
+				olderProxies: OLDER_PROXIES,
 			},
 		})
 		if (control.namespaces === undefined) throw new Error('expected namespace capabilities')
