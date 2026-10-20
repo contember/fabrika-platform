@@ -918,7 +918,7 @@ const stats = app.group({}, (r) => ({
    follows (429).
 4. The bounded body and the strict input, signed tokens verified as it is parsed (413, 408, 400).
 5. The workload token, before the challenge spends a token (503).
-6. The challenge (403).
+6. The challenge (400).
 7. The file parts, staged as pending files ([Stored files](#stored-files)), so a refused visitor stores nothing.
 8. The handler, the output, the commit and the kicks, in one transaction.
 
@@ -953,11 +953,14 @@ artifact records each procedure's effective rules (`procedures[<id>]`), and the 
   string, a form or a `Blob` body, so an honest request is charged what it sends; a body streamed without a length
   (chunked) is charged the whole limit. The test kit's `fetch` declares the length of such a body too, and leaves a
   `ReadableStream` body without one.
-- **The challenge**: `challenge: { provider: 'turnstile', secret: '<VARIABLE>', siteKey?: '<VARIABLE>' }`, on a public
-  procedure only. The input carries the widget's token as the string field `challengeToken`. Turnstile's siteverify
-  checks it (5 s, a 16 KiB answer, the request's host, the endpoint id with `_` for `.` as `action`, a token at most
+- **The challenge**: `challenge: { provider: 'turnstile', secret: '<VARIABLE>', siteKey?: '<VARIABLE>', action? }`, on
+  a public procedure only. The input carries the widget's token as the string field `challengeToken`. `action` is the
+  widget's action, at most 32 letters, digits, `_` and `-` (what Turnstile admits); by default the endpoint id with `_`
+  for `.`, and the build refuses a default longer than that and an action two procedures share. The artifact records
+  the effective one. Turnstile's siteverify
+  checks it (5 s, a 16 KiB answer, the request's host, the procedure's `action`, a token at most
   300 s old); its digest is recorded in `fabrika_form_challenges`, so a second use is a replay. A failed or replayed
-  token is 403 `challenge_failed`, an unreachable provider or a refused secret 503. Only `fabrika app dev` admits one
+  token is 400 `challenge_failed`, an unreachable provider or a refused secret 503. Only `fabrika app dev` admits one
   token again (`BootOptions.repeatableChallengeToken`), the one Turnstile's always-passing test widget hands out. The
   secret is the application variable the contract names; without it the application does not boot. Every SPA mount
   serves the site key in its browser config ([Browser error reporting](#browser-error-reporting)), and Turnstile's
@@ -970,7 +973,7 @@ artifact records each procedure's effective rules (`procedures[<id>]`), and the 
 
 ### The HTTP shape
 
-`http: { method?, query?, body?, cache? }` describes the wire independently of the output:
+`http: { method?, query?, body?, cache?, path? }` describes the wire independently of the output:
 
 | Field    | Rule                                                                                                                                                                                                                                                                                                 |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -978,6 +981,7 @@ artifact records each procedure's effective rules (`procedures[<id>]`), and the 
 | `query`  | a `POST` only: a flat schema of URL parameters, handed to the handler as `query` beside the body's `input`.                                                                                                                                                                                          |
 | `body`   | `json` by default; `multipart/form-data` when the input has a file field; `urlencoded` for flat scalar fields without files.                                                                                                                                                                         |
 | `cache`  | a public `GET` query only: `{ maxAgeSeconds }` (1 s to a year) or `'immutable'` (a year, for an input that names a value that never changes, such as a file id).                                                                                                                                     |
+| `path`   | a public procedure only: a literal path of its own (`'/register'`) instead of `<prefix>/<dotted.path>`, for a caller on another origin or a published URL. Not under `/__fabrika`, and not equal to or under any mount's prefix or path but the root SPA's. The endpoint id stays the procedure's.   |
 
 - **URL parameters.** A `GET` input and a `query` are flat scalar fields in their canonical spelling (a number as
   `String(n)`, `true`/`false`, `null`). A name sent twice and an unknown name are refused (400); a URL over 8192
@@ -1489,8 +1493,8 @@ const shared = createClient(contract, 'shared', { key }) // POST /s/api/<procedu
 ```
 
 - The path is the one `compileContract` gives the procedure: `<prefix>/<dotted.path>`,
-  and `<prefix>/api/<dotted.path>` for a link mount. A procedure without input sends
-  `{}`.
+  a public procedure's own `http.path`, and `<prefix>/api/<dotted.path>` for a link mount
+  (`procedurePath`). A procedure without input sends `{}`.
 - Only declared procedures exist, the input is typed by the input schema, and the
   answer is parsed with the output schema; an answer it refuses is an `RpcError` of
   type `invalid-response`, never a value.
@@ -1716,8 +1720,8 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   - **Several capabilities.** For every endpoint of several capabilities, one denied case per capability: the caller
     holds every other one, and the named one is refused (`kit.capability`).
   - **Public.** For every public procedure, anyone with no credential, from a page of its own origin, gets an answer
-    of the application: anything but 401, 403 or a 5xx (`kit.anyone`). Behind a challenge the case is a 403 instead:
-    the kit's challenge never passes. The case name carries the actions the procedure runs with.
+    of the application: anything but 401, 403, a 5xx or a 400 `challenge_failed` (`kit.anyone`). Behind a challenge
+    the case is that 400 instead: the kit's challenge never passes. The case name carries the actions the procedure runs with.
   - **Files.** A file field's sample is `fabrika:file:<kind>`, and the kit sends a generated file of the kind in a
     multipart body; a `GET` procedure's input goes into its URL. The kit serves each seeded file as an empty object, in
     memory. The policy isolation fixture seeds a live, empty file into each file column, so its probes write file

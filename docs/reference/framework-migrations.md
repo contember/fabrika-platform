@@ -165,7 +165,7 @@ Steps:
    input holds a `Blob`: the JSON input in the first part, named `input`, then each file in a part named after its
    field. The challenge token stays the input field `challengeToken`. The widget's `action` is now the endpoint id
    with `_` for `.` (`api_visitors_register`), not the form's name; the provider admits at most 32 characters. A
-   failed or replayed token answered 400 `challenge_failed` in 0.5 and answers 403 now.
+   failed or replayed token stays a 400 `challenge_failed`, as the form answered.
    - **The answer.** The answer is the RPC envelope of the output. A 0.5 form answered `{ result: { received: true } }`;
      the example keeps it with `output: z.strictObject({ received: z.literal(true) })`. Keep the answer that your
      clients read. An output of `{}` answers `{ result: {} }`, and a client that reads `received` breaks.
@@ -177,17 +177,36 @@ Steps:
 ### Clients on another origin
 
 A page that the application does not serve (a marketing site, a partner's page, a mobile application) posts to the
-form directly. It meets three changes at once, so it changes in the same release as the application:
+form directly, and so does a caller of a URL published elsewhere. Keep what it sends and reads, and it sees no change:
 
-- **The path.** `POST /register` becomes `POST /api/visitors.register`.
-- **The challenge action.** The widget's `action` becomes the endpoint id with `_` for `.` (`api_visitors_register`).
-  A token solved for the old action fails the challenge.
-- **The statuses.** A failed challenge answers 403, not 400. A body past the limit answers 413 and a full bucket 429,
-  as before. A client that branches on a status reads the new one.
+- **The path and the challenge action.** Declare the form's own on the public procedure. Without them, the path
+  becomes `POST /api/visitors.register` and the widget's `action` the endpoint id with `_` for `.`
+  (`api_visitors_register`), and a token solved for the old action fails the challenge.
 
-Such a page also needs `admission.origins` (`'listed'` or `'any'`, see "Cross-origin procedures"). Keep the answer it
-reads (step 6 above). 0.6 serves a public procedure only under its mount's prefix, so nothing answers the old path
-once the 0.6 release runs: deploy the page's change with it.
+  ```ts
+  register: r.mutation({
+  	// …
+  	http: { path: '/register' },
+  	admission: {
+  		challenge: {
+  			provider: 'turnstile',
+  			secret: 'TURNSTILE_SECRET',
+  			siteKey: 'TURNSTILE_SITE_KEY',
+  			action: 'register',
+  		},
+  		// …
+  	},
+  })
+  ```
+
+  `http.path` is a literal path outside every mount's prefix (the root SPA's excepted); the endpoint id stays
+  `api.visitors.register`, and the typed client calls `/register`. `challenge.action` takes at most 32 letters,
+  digits, `_` and `-`, and no two procedures share one.
+- **The statuses.** A failed challenge answers 400 `challenge_failed`, a body past the limit 413 and a full bucket 429,
+  as before.
+- **The answer.** Keep the one it reads (step 6 above).
+
+Such a page also needs `admission.origins` (`'listed'` or `'any'`, see "Cross-origin procedures").
 
 ### Inbox tables become application tables
 

@@ -488,8 +488,9 @@ export default serve(contract, { database: scoped(tables) })
   `challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' }`. `honeypot(value)`
   of `@fabrika/app` is true for a filled field the page hides: answer the same and write nothing. A challenge needs the
   input field `challengeToken: z.string()`, which the page fills from the Turnstile widget rendered with `action` set
-  to the endpoint id with `_` for `.` (`api_visitors_register`); the framework verifies it on the server (a failed
-  or replayed token 403 `challenge_failed`, an unreachable provider 503, no row either way) and adds Turnstile's origin to the CSP. `secret` names an
+  to the endpoint id with `_` for `.` (`api_visitors_register`), or to the challenge's own `action: 'register'` (at most
+  32 letters, digits, `_` and `-`, one per procedure); the framework verifies it on the server (a failed or replayed
+  token 400 `challenge_failed`, an unreachable provider 503, no row either way) and adds Turnstile's origin to the CSP. `secret` names an
   application variable the human sets, never the value; without it the application does not boot. `siteKey` names
   the variable with the widget's public site key, which every SPA mount serves its pages (below). On Zerops every
   visitor still shares one client address (the balancer), so `perClient` acts as a second per-endpoint limit: raise
@@ -1387,7 +1388,7 @@ Every procedure takes `admission` (who may send it, how often) and `limits` (how
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
 | `admission.rate` (calls per minute) | `perCaller`, `perEndpoint`; none by default                                                            | `perClient`, `perEndpoint`, `bytesPerHour`; a mutation 10 and 100 |
 | `admission.origins`                 | `'same-origin'` (default) or `'listed'`                                                                | `'same-origin'`, `'listed'` or `'any'`                            |
-| `admission.challenge`               | —                                                                                                      | `{ provider: 'turnstile', secret, siteKey }`                      |
+| `admission.challenge`               | —                                                                                                      | `{ provider: 'turnstile', secret, siteKey, action? }`             |
 | `limits.maxBytes`                   | 64 KiB, at most 1 MiB; with file fields 64 KiB plus each file at its kind's `maxBytes`, at most 48 MiB | the same                                                          |
 | `limits.timeoutMs`                  | 10 s, at most 60 s                                                                                     | the same                                                          |
 
@@ -1417,7 +1418,7 @@ list different pages. The approver sees the change like any other access change.
 ## The HTTP shape: `http`
 
 A procedure is `POST <prefix>/<group>.<procedure>` with a JSON body by default. `http: { method?, query?, body?,
-cache? }` changes the wire, never what the handler does:
+cache?, path? }` changes the wire, never what the handler does:
 
 - `method: 'GET'` on a query reads its input from flat scalar URL parameters (a number as written, `true`/`false`,
   `null`; a name twice is refused). A query whose output is a file is `GET` by default. A session mutation is never
@@ -1429,6 +1430,10 @@ cache? }` changes the wire, never what the handler does:
 - `cache: { maxAgeSeconds }` or `cache: 'immutable'` on a public `GET` query lets a browser or a CDN reuse a
   successful answer (`Cache-Control: public, …`). Every other answer is `no-store`. `'immutable'` needs an input that
   names a value that never changes (a file id), so a new value changes the URL.
+- `path: '/register'` on a public procedure serves it at that literal path instead, for a caller you do not ship: a
+  page on another origin, or a URL published elsewhere (a 0.5 form's). It lies outside every mount's prefix (the root
+  SPA's excepted) and under no `/__fabrika`; the endpoint id and the typed client's call stay the same. Any other
+  procedure takes no `path`: its caller is your own page, through the typed client.
 - `api.<group>.<procedure>.url(input)` is the URL of a `GET` procedure for a same-origin page.
 
 **A redirect.** `output: redirect({ origins? })` (`@fabrika/app/contract`): the handler returns `{ to }`, and the
@@ -2908,7 +2913,7 @@ export const visitors = app.group({}, (r) => ({
   `null` on Zerops. Never decide on either.
 - **Its abuse control.** `honeypot(input.website)` is true when the field the page hides is filled: answer the same
   and write no row. `admission.challenge` makes the framework verify the Turnstile token in the input field
-  `challengeToken` before the handler runs (a failed or replayed token 403 `challenge_failed`, an unreachable provider 503, no row either way) and adds
+  `challengeToken` before the handler runs (a failed or replayed token 400 `challenge_failed`, an unreachable provider 503, no row either way) and adds
   Turnstile's origin to the CSP. `TURNSTILE_SECRET` is an application variable the human sets; without it the
   application does not boot. `siteKey` names the variable with the widget's public site key, which every SPA mount
   serves its pages; without it the application does not boot either. Another public value a page needs per
@@ -2924,12 +2929,14 @@ export const visitors = app.group({}, (r) => ({
   within it.
 - **The order of a public request**, each refusal with its answer: the origin rule (403), the in-flight share (503),
   every bucket (429), the bounded body and the strict input with its signed tokens (413, 400), the workload token (503
-  while the platform's identity service is down), the challenge (403, 503 when the provider is unreachable), the staged file parts, then the handler, the
+  while the platform's identity service is down), the challenge (400, 503 when the provider is unreachable), the staged file parts, then the handler, the
   commit and the kicks.
 - **A form on someone else's page.** A page served from this application's own origin needs nothing. A partner's page
   or a separate marketing site needs `admission.origins`: `'listed'` for the origins an operator lists for the
   environment in Control, `'any'` for any site (an embeddable widget). Keep the honeypot, the challenge and the rate
-  limit: `'any'` invites every site.
+  limit: `'any'` invites every site. Such a page is not yours to change in step with the application, so give it a URL
+  and a widget action that do not follow your group names: `http: { path: '/register' }` and
+  `challenge: { …, action: 'register' }`. The path lies outside every mount's prefix (the root SPA's excepted).
 - **Zerops shares one client address.** Until the platform reads the visitor's address behind the Zerops balancer,
   every visitor counts as one client there, so `perClient` acts as a second per-endpoint limit: set it to the expected
   peak, never lower it to stop a flood. The challenge is the defense that does not depend on the address.

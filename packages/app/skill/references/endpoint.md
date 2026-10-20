@@ -562,7 +562,7 @@ Every procedure takes `admission` (who may send it, how often) and `limits` (how
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
 | `admission.rate` (calls per minute) | `perCaller`, `perEndpoint`; none by default                                                            | `perClient`, `perEndpoint`, `bytesPerHour`; a mutation 10 and 100 |
 | `admission.origins`                 | `'same-origin'` (default) or `'listed'`                                                                | `'same-origin'`, `'listed'` or `'any'`                            |
-| `admission.challenge`               | —                                                                                                      | `{ provider: 'turnstile', secret, siteKey }`                      |
+| `admission.challenge`               | —                                                                                                      | `{ provider: 'turnstile', secret, siteKey, action? }`             |
 | `limits.maxBytes`                   | 64 KiB, at most 1 MiB; with file fields 64 KiB plus each file at its kind's `maxBytes`, at most 48 MiB | the same                                                          |
 | `limits.timeoutMs`                  | 10 s, at most 60 s                                                                                     | the same                                                          |
 
@@ -592,7 +592,7 @@ list different pages. The approver sees the change like any other access change.
 ## The HTTP shape: `http`
 
 A procedure is `POST <prefix>/<group>.<procedure>` with a JSON body by default. `http: { method?, query?, body?,
-cache? }` changes the wire, never what the handler does:
+cache?, path? }` changes the wire, never what the handler does:
 
 - `method: 'GET'` on a query reads its input from flat scalar URL parameters (a number as written, `true`/`false`,
   `null`; a name twice is refused). A query whose output is a file is `GET` by default. A session mutation is never
@@ -604,6 +604,10 @@ cache? }` changes the wire, never what the handler does:
 - `cache: { maxAgeSeconds }` or `cache: 'immutable'` on a public `GET` query lets a browser or a CDN reuse a
   successful answer (`Cache-Control: public, …`). Every other answer is `no-store`. `'immutable'` needs an input that
   names a value that never changes (a file id), so a new value changes the URL.
+- `path: '/register'` on a public procedure serves it at that literal path instead, for a caller you do not ship: a
+  page on another origin, or a URL published elsewhere (a 0.5 form's). It lies outside every mount's prefix (the root
+  SPA's excepted) and under no `/__fabrika`; the endpoint id and the typed client's call stay the same. Any other
+  procedure takes no `path`: its caller is your own page, through the typed client.
 - `api.<group>.<procedure>.url(input)` is the URL of a `GET` procedure for a same-origin page.
 
 **A redirect.** `output: redirect({ origins? })` (`@fabrika/app/contract`): the handler returns `{ to }`, and the

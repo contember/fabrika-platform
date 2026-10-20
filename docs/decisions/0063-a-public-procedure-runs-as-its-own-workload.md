@@ -122,8 +122,9 @@ The application then takes a public request in this order, each refusal with its
    call (ADR-0012 §11).
 3. The bounded body and the strict input, signed tokens verified as the input is parsed (413, 400).
 4. The workload token, before the challenge spends a token (503).
-5. The challenge (403). Its token arrives as the input field `challengeToken`; the provider's action is the endpoint id
-   with `_` for `.`. Every SPA mount's browser config serves the site key, never the secret, and `boot` refuses to start
+5. The challenge (400 `challenge_failed`, as a 0.5 form answered). Its token arrives as the input field
+   `challengeToken`; the provider's action is the procedure's `challenge.action`, by default the endpoint id with `_`
+   for `.`. Every SPA mount's browser config serves the site key, never the secret, and `boot` refuses to start
    without the variable.
 6. The file parts, staged as pending files (ADR-0061).
 7. The handler in one transaction, the output, the commit, and the kicks

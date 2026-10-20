@@ -43,11 +43,6 @@ From upgrading an application from 0.5.5 to 0.6:
     inserts child rows (an upload) therefore cannot count them under the owner's lock (`maxPerOwner` of a 0.5 file
     collection), unless the owner's table names the link's action for another reason. Decide whether a link procedure
     may lock its target under any action the link grants.
-13. **A form on another origin has no transition path.** A 0.6 public procedure is served only under its mount's
-    prefix, so the old form path stops answering when the 0.6 release runs, and a page on another origin must change
-    in the same release.
-14. **The failed-challenge status changed.** 0.5.5 answered a failed or replayed challenge token with 400
-    `challenge_failed`; 0.6 answers 403. The migration guide records it. Decide whether the change stays.
 
 ## Approach / acceptance
 

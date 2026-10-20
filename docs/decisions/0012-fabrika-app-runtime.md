@@ -427,7 +427,10 @@ aggregates) and locks over many rows still need `sql`.
   declares its own; a declared `rate` merges into that default, and `null` turns one bucket off. A public query and a
   credentialed procedure have no bucket unless they declare one: a bucket is a database write per call. `origins` is
   `'same-origin'` by default, `'listed'` for the environment's listed origins (bearer only when credentialed), or
-  `'any'` (public only). `challenge` (public only) names its provider and the variables of its secret and site key.
+  `'any'` (public only). `challenge` (public only) names its provider and the variables of its secret and site key,
+  and may name the widget's `action`. The action is the endpoint id with `_` for `.` by default; the artifact records
+  the effective one, at most the 32 letters, digits, `_` and `-` the provider admits, and no two procedures share one,
+  so a token solved for one never passes another.
 - **`limits: { maxBytes?, timeoutMs? }`** on every procedure, webhook and job, and nothing else. A procedure's body is
   64 KiB by default and at most 1 MiB; with file fields its default adds each field's files at the kind's `maxBytes`,
   at most 48 MiB. The body must arrive within `max(30 s, maxBytes at 16 KiB/s)`, which stays below the hour a pending
@@ -436,7 +439,7 @@ aggregates) and locks over many rows still need `sql`.
   default and at most 48 MiB, the ceiling of a procedure with file fields: an inbound mail carries its attachments in
   the body for the handler to `put`, each within its kind's `maxBytes`. A job runs 15 min by default, at most 24 h.
   The file count comes from the schema's `.max(n)` (at most 20), the per-file size from the kind.
-- **`http: { method?, query?, body?, cache? }`** describes the wire independently of the output.
+- **`http: { method?, query?, body?, cache?, path? }`** describes the wire independently of the output.
   - `method` is `POST` by default. A query may declare `GET`, and is `GET` by default when its output is a file or it
     declares `cache`; its input is then read from flat scalar URL parameters in their canonical spelling, a name sent
     twice refused, the URL bounded. A mutation is `GET` only when it is public and its input holds a required signed
@@ -448,6 +451,13 @@ aggregates) and locks over many rows still need `sql`.
   - `cache`, on a public `GET` query only, is `{ maxAgeSeconds }` (1 s to a year) or `'immutable'` (a year, for an
     input that names a value that never changes, such as a file id). A successful answer gets `Cache-Control: public`;
     every other answer and every other procedure is `no-store`.
+  - `path`, on a public procedure only, is a literal path of its own in place of `<prefix>/<name>`; the endpoint id
+    stays the procedure's. It serves a caller the application does not ship: a page on another origin or a published
+    URL, such as a 0.5 form's, which with `challenge.action` keeps working unchanged across the upgrade. A credentialed
+    or link procedure's caller is the application's own page, which the typed client keeps in step, so it takes none.
+    The path lies under no `/__fabrika` and outside every mount's prefix or path but the root SPA's, whose `/*` answers
+    only what no endpoint claims, as for a 0.5 form; so a public row never takes a path a mount serves, credentialed
+    or not. The typed client calls the path the artifact's row carries.
 - **`redirect({ origins? })`** is an output. The handler returns `{ to }`, and the framework answers 303 after a
   `POST` and 302 after a `GET`, to a path of the application's own origin, a URL of a listed origin, or a URL that a
   verified signed token of this request carries. Any other target is a 500 and a log line, never an open redirect. A

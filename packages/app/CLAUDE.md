@@ -279,7 +279,8 @@ src/
 - `tables` is what `defineTables` returned or the artifact form of each table
   policy (`TablePolicyArtifact`); `@fabrika/db/tables`' `tablePolicies` converts
   the one into the other, so both paths share `@fabrika/db`'s one policy parse.
-- Generated endpoints: a procedure is `POST <prefix>/<dotted.path>`; an SPA serves
+- Generated endpoints: a procedure is `POST <prefix>/<dotted.path>`, or a public procedure's own literal `http.path`
+  (`procedurePath`, which the typed client calls too; outside every mount's prefix but the root SPA's); an SPA serves
   `GET <prefix>/*`, and below the root also `GET <prefix>` (row `<mount>.prefix`, `spaPrefixRowId`) under the same
   access, which answers 308 to `<prefix>/` so the bare prefix never falls through to the root SPA; both are anonymous
   (kind `public-spa`, no token) with `access: { public: true }`,
@@ -633,9 +634,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   passed** (`challenge.ts`). The provider list is closed (`turnstile`) and its origins are fixed (`CHALLENGE_ORIGINS`,
   which `buildArtifact` adds to `scriptSrc`/`frameSrc`). Turnstile's siteverify gets one deadline for the call and the
   body (`CHALLENGE_LIMITS`), a byte budget and no redirect; it passes only `success` for the request's host, the
-  endpoint's widget action (`challengeAction`) and a fresh `challenge_ts`. A token the visitor got wrong is 403
-  (`challenge_failed`); an unreachable provider or one that refuses the secret is a 503 `ServerFault`. A passed token's
-  digest is recorded under the endpoint (`recordChallenge`): a second use is a replay, whatever the provider answers.
+  widget action the artifact records (`challenge.action`, by default `challengeAction` of the endpoint id; `buildArtifact`
+  refuses one two procedures share) and a fresh `challenge_ts`. A token the visitor got wrong is 400
+  (`challenge_failed`), as a 0.5 form answered; an unreachable provider or one that refuses the secret is a 503
+  `ServerFault`. A passed token's digest is recorded under the action (`recordChallenge`): a second use is a replay,
+  whatever the provider answers.
   Only `devKit` exempts one token (`repeatableChallengeToken`, Turnstile's test-widget token, which never changes);
   never set it outside `app dev`. The secret is the application variable the contract names (`challenge.secret`), read
   by `boot`, which refuses to start without it; never put the value in the contract or a log.
