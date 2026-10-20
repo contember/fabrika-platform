@@ -85,4 +85,28 @@ describe('webhooks in the approval diff', () => {
 			{ effect: 'narrows', line: 'Job `nightly` time limit changes from 3600 s to 60 s' },
 		])
 	})
+
+	test("a verifier that reads the sender's Authorization widens with the row that forwards it, and names it", () => {
+		const verified = (scheme: 'hmac' | 'bearer'): AccessSnapshot => {
+			const hook = app.webhook('/hooks/ledger', {
+				scheme: scheme === 'bearer'
+					? { bearer: true }
+					: { hmac: { header: 'X-Ledger-Signature', algorithm: 'sha256', encoding: 'hex', signed: 'body' } },
+				boundTo: 'app',
+				actions: ['crm.write'],
+				input: Push,
+			}).handle(async () => {})
+			const contract = app.contract((c) => ({ api: c.rpc('/api', { ledgers: GROUPS.plain }), ledger: hook }))
+			return { version: 1, contract: compileContract(contract, tables), migrations: [], checker: '0.0.0' }
+		}
+		const opened = classifyAccess(verified('hmac'), verified('bearer')).changes
+		expect(opened).toContainEqual({
+			effect: 'widens',
+			line: "Endpoint `ledger` receives the sender's own Authorization header, unless it carries a platform key",
+		})
+		expect(classifyAccess(verified('bearer'), verified('hmac')).changes).toContainEqual({
+			effect: 'narrows',
+			line: "Endpoint `ledger` no longer receives the sender's own Authorization header",
+		})
+	})
 })

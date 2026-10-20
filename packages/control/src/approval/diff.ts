@@ -14,6 +14,7 @@ import {
 	type CrossOriginForm,
 	type DeclaredReach,
 	type DimensionArtifact,
+	type EndpointAuthorization,
 	type EndpointCache,
 	endpointDelegation,
 	type EndpointDirectory,
@@ -831,6 +832,8 @@ const ADMITS_NO_MORE: { readonly [Field in keyof EndpointRow]-?: (after: Endpoin
 	response: (after, before) => after.response === before.response,
 	// A cache keeps a copy of a public answer beyond a change: a row that caches where the removed one did not is shown.
 	cache: (after, before) => canonicalJson(after.cache ?? null) === canonicalJson(before.cache ?? null),
+	// A forwarded `Authorization` reaches application code: a row that forwards where the removed one did not is shown.
+	authorization: (after, before) => after.authorization === undefined || after.authorization === before.authorization,
 	// The rows that answer the removed row's paths now were selected by its method; the paths are the removed row's.
 	method: (after, before) => after.method === before.method,
 	path: () => true,
@@ -882,6 +885,7 @@ function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): Access
 		...admissionChanges(name, from, to),
 		...crossOriginChanges(name, from.crossOrigin, to.crossOrigin),
 		...cacheChange(name, from.cache, to.cache),
+		...authorizationChange(name, from.authorization, to.authorization),
 		...schemaChanges({ endpoint: name, side: 'input', path: '' }, from.input, to.input),
 		...outputChanges(name, from.output, to.output),
 	]
@@ -924,6 +928,14 @@ function reusedFor(cache: EndpointCache | undefined): string {
 function cacheChange(name: string, from: EndpointCache | undefined, to: EndpointCache | undefined): AccessChange[] {
 	if (canonicalJson(from ?? null) === canonicalJson(to ?? null)) return []
 	return [neutral(to === undefined ? `${name} answers are no longer reused` : `${name}${reusedFor(to)}`)]
+}
+
+/** A webhook row that forwards the sender's `Authorization` hands application code a credential the proxy never reads. */
+function authorizationChange(name: string, from: EndpointAuthorization | undefined, to: EndpointAuthorization | undefined): AccessChange[] {
+	if (from === to) return []
+	return to === undefined
+		? [narrowing(`${name} no longer receives the sender's own Authorization header`)]
+		: [widening(`${name} receives the sender's own Authorization header, unless it carries a platform key`)]
 }
 
 /** `, answering the file …` for an endpoint whose output is an attachment: the approver sees that data leaves as a file. */
