@@ -341,7 +341,8 @@ describe.skipIf(!hasPostgres)('a date column is a YYYY-MM-DD string end to end; 
 
 	test('east of UTC, a day past 9999 is refused in a row, an aggregate and ctx.sql, never answered as a neighbouring day', async () => {
 		// Bun decodes 10000-01-01 as 9999-12-31T23:00Z in Prague: a valid-looking day one off.
-		const originalTimeZone = process.env['TZ']
+		// Restored by assignment: after `delete process.env.TZ`, Bun ignores every later TZ, so the next file's would not apply.
+		const originalTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 		process.env['TZ'] = 'Europe/Prague'
 		try {
 			expect(new Date(2026, 0, 1).getTimezoneOffset()).toBe(-60)
@@ -361,11 +362,7 @@ describe.skipIf(!hasPostgres)('a date column is a YYYY-MM-DD string end to end; 
 			await transaction.rollback()
 			await admin((sql) => sql.unsafe(`delete from ${schema}.tasks where id = $1`, [id]))
 		} finally {
-			if (originalTimeZone === undefined) {
-				delete process.env['TZ']
-			} else {
-				process.env['TZ'] = originalTimeZone
-			}
+			process.env['TZ'] = originalTimeZone
 		}
 	})
 
