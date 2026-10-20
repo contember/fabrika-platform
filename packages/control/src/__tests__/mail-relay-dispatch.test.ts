@@ -76,11 +76,26 @@ describe('the mail dispatcher', () => {
 		})
 	})
 
-	test("an installation message's content is forgotten once it is sent", async () => {
-		const d = dispatcher()
-		const id = await stored(d.messages, { sender: 'installation:iam' })
-		await d.dispatch(id)
-		expect(await d.messages.get(id)).toMatchObject({ state: 'sent', content: null })
+	test("an installation message's content is forgotten once it is final, sent or not, and an app message's is kept", async () => {
+		const sent = dispatcher()
+		const delivered = await stored(sent.messages, { sender: 'installation:iam' })
+		await sent.dispatch(delivered)
+		expect(await sent.messages.get(delivered)).toMatchObject({ state: 'sent', content: null })
+
+		const rejected = dispatcher()
+		rejected.sender?.refuse('provider_rejected')
+		const failed = await stored(rejected.messages, { sender: 'installation:iam' })
+		const appFailed = await stored(rejected.messages, { message: { ...MESSAGE, idempotencyKey: 'app' } })
+		await rejected.dispatch(failed)
+		await rejected.dispatch(appFailed)
+		expect(await rejected.messages.get(failed)).toMatchObject({ state: 'failed', content: null })
+		expect((await rejected.messages.get(appFailed))?.content).not.toBeNull()
+
+		const lost = dispatcher(new MemoryEmailSender({ capabilities: { idempotent: false } }))
+		lost.sender?.unreachable()
+		const unknown = await stored(lost.messages, { sender: 'installation:iam' })
+		await lost.dispatch(unknown)
+		expect(await lost.messages.get(unknown)).toMatchObject({ state: 'unknown', content: null })
 	})
 
 	test('a retryable failure is requeued with a doubling delay, and the fifth attempt is final by its outcome', async () => {

@@ -5,7 +5,7 @@ import { EmailDeliveryError, type EmailMessage, type EmailSender, mayRetryDelive
 import { parsePlatformMailRequest } from '@fabrika/email/platform'
 import type { JobQueue } from '@fabrika/platform'
 import type { MailMessageRepository, MailMessageRow } from '../db'
-import { enqueueMailDispatch, type MailDispatchMessage } from './queue'
+import { enqueueMailDispatch, isInstallationSender, type MailDispatchMessage } from './queue'
 
 export const MAIL_SEND_TIMEOUT_MS = 30_000
 /** Attempts of one message, the first included, before a retryable failure becomes final. */
@@ -45,8 +45,7 @@ export async function dispatchMail(deps: MailDispatchDeps, job: MailDispatchMess
 	try {
 		const result = await deps.sender.send(message, AbortSignal.timeout(deps.timeoutMs ?? MAIL_SEND_TIMEOUT_MS))
 		if (!(await deps.messages.markSent(row.id, result.messageId, attempts, deps.now()))) return { status: 'skipped' }
-		// An installation message (IAM's sign-in links) is not kept once it left.
-		if (row.sender.startsWith('installation:')) await deps.messages.purgeContent(row.id)
+		await forgetInstallationContent(deps, row)
 		console.info(`mail relay: message ${row.id} sent`)
 		return { status: 'sent' }
 	} catch (cause) {
@@ -70,8 +69,14 @@ async function settleUndelivered(
 	attempts: number,
 ): Promise<MailDispatchResult> {
 	if (!(await deps.messages.markUndelivered(row.id, state, code, attempts, deps.now()))) return { status: 'skipped' }
+	await forgetInstallationContent(deps, row)
 	console.warn(`mail relay: message ${row.id} ${state} (${code})`)
 	return { status: state, code }
+}
+
+/** An installation message carries a one-time link (IAM's sign-in), so its content is not kept once it is final. */
+async function forgetInstallationContent(deps: MailDispatchDeps, row: MailMessageRow): Promise<void> {
+	if (isInstallationSender(row.sender)) await deps.messages.purgeContent(row.id)
 }
 
 /** The stored request, parsed again at the row boundary, under the relay's own key. `null`: none, or unreadable. */

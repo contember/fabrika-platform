@@ -19,12 +19,10 @@ import type { ControlAppContext } from '../app'
 import type { MailMessageRepository, MailMessageState, MailRuleAction, MailRuleRepository, PlatformTransportKeyRepository } from '../db'
 import { error } from '../http'
 import { repositories } from '../services'
-import { enqueueMailDispatch, type MailDispatchMessage } from './queue'
+import { enqueueMailDispatch, isInstallationSender, type MailDispatchMessage } from './queue'
 
 /** The sender IAM's derived key authenticates as. */
 export const INSTALLATION_IAM_SENDER = 'installation:iam'
-
-const INSTALLATION_SENDER_PREFIX = 'installation:'
 
 const MAIL_RECEIVER = 'mail'
 
@@ -95,6 +93,8 @@ export async function acceptMail(deps: MailAcceptDeps, request: Request): Promis
 }
 
 async function record(deps: MailAcceptDeps, sender: string, message: EmailMessage): Promise<Response> {
+	// Nothing would ever send it, and an accepted answer would keep IAM from offering its manual link instead.
+	if (isInstallationSender(sender) && !deps.hasTransport) return refuse('mail_not_configured')
 	const domain = recipientDomain(message.to)
 	const fingerprint = await platformMailFingerprint(message)
 	const decision = await gate(deps, sender, domain)
@@ -118,7 +118,7 @@ async function record(deps: MailAcceptDeps, sender: string, message: EmailMessag
 
 /** An installation sender always passes; without a transport a message waits for a person; else the most specific rule. */
 async function gate(deps: MailAcceptDeps, sender: string, domain: string): Promise<{ state: MailMessageState; ruleId: string | null }> {
-	if (sender.startsWith(INSTALLATION_SENDER_PREFIX)) return { state: 'queued', ruleId: null }
+	if (isInstallationSender(sender)) return { state: 'queued', ruleId: null }
 	if (!deps.hasTransport) return { state: 'held', ruleId: null }
 	const rule = await deps.rules.resolve(sender, domain)
 	if (rule === null) return { state: 'queued', ruleId: null }

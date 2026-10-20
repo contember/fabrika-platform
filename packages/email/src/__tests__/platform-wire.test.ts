@@ -144,9 +144,10 @@ describe('the answer', () => {
 			invalid_message: 400,
 			provider_unauthorized: 401,
 			idempotency_conflict: 409,
+			mail_not_configured: 503,
 			provider_unavailable: 503,
 		})
-		for (const code of ['invalid_message', 'provider_unauthorized', 'idempotency_conflict', 'provider_unavailable'] as const) {
+		for (const code of ['invalid_message', 'provider_unauthorized', 'idempotency_conflict', 'mail_not_configured', 'provider_unavailable'] as const) {
 			const response = platformMailAnswerResponse({ error: { code } })
 			expect(response.status).toBe(PLATFORM_MAIL_ERROR_STATUS[code])
 			expect(parsePlatformMailAnswer(response.status, await response.json())).toEqual({ error: { code } })

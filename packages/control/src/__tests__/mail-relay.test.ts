@@ -255,13 +255,21 @@ describe('the mail relay: the gate', () => {
 		expect(r.jobs).toEqual([])
 	})
 
-	test('an installation message is queued whatever the rules say, and without a transport', async () => {
-		for (const transport of [TRANSPORT, { kind: 'none' } satisfies InstallationMail]) {
+	test('an installation message is queued whatever the rules say', async () => {
+		const r = await relay()
+		await rule(r.harness, '*', '*', 'drop')
+		const response = await r.send({ key: await installationMailKey(RPC_SECRET) })
+		expect(await decided(r, response)).toEqual({ state: 'queued', ruleId: null })
+		expect(r.jobs).toHaveLength(1)
+	})
+
+	test('without a transport, or with an invalid one, an installation message is refused as mail_not_configured and not recorded', async () => {
+		for (const transport of [{ kind: 'none' }, { kind: 'invalid', reason: 'FABRIKA_EMAIL_FROM is missing' }] satisfies InstallationMail[]) {
 			const r = await relay({ transport })
-			await rule(r.harness, '*', '*', 'drop')
 			const response = await r.send({ key: await installationMailKey(RPC_SECRET) })
-			expect(await decided(r, response)).toEqual({ state: 'queued', ruleId: null })
-			expect(r.jobs).toHaveLength(1)
+			expect(await answer(response)).toEqual({ status: 503, answer: { error: { code: 'mail_not_configured' } } })
+			expect(await r.harness.repositories.mailMessages.list({ limit: 10 })).toEqual([])
+			expect(r.jobs).toEqual([])
 		}
 	})
 

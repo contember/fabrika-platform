@@ -3,6 +3,11 @@ import type { JobQueue } from '@fabrika/platform'
 import { z } from 'zod'
 import type { MailMessageRepository } from '../db'
 
+/** Whether a sender is an installation service (`installation:<service>`), not an application environment. */
+export function isInstallationSender(sender: string): boolean {
+	return sender.startsWith('installation:')
+}
+
 /** One dispatch job: the id of a `queued` message. The row, not the job, holds the message and its state. */
 export interface MailDispatchMessage {
 	readonly messageId: string
