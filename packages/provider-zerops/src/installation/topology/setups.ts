@@ -216,7 +216,11 @@ const iam: ZeropsYamlSetupSpec = {
 		// The Cloudflare `scheduled` handler's replacement, running the same code path. `allContainers:
 		// false` so a horizontally scaled service still prunes once.
 		crontab: [{ timing: '0 3 * * *', command: 'bun packages/iam/src/node/prune.ts', allContainers: false }],
-		envVariables: { PORT: '3000' },
+		envVariables: {
+			PORT: '3000',
+			// Control's private origin: with a provider configured, IAM hands its mail to Control's relay.
+			FABRIKA_CONTROL_URL: 'http://control:3000',
+		},
 	},
 }
 

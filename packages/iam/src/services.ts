@@ -183,5 +183,6 @@ function buildEmailSender(env: Env, environment: string): EmailSender | null {
 		}
 		return env.EMAIL_SENDER
 	}
+	if (env.PLATFORM_EMAIL_SENDER !== undefined) return env.PLATFORM_EMAIL_SENDER
 	return emailSenderFromEnv(config, providers)
 }

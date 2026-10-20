@@ -42,22 +42,22 @@ describe('process transport secrets', () => {
 		FABRIKA_IAM_PASSWORD_ENABLED: 'true',
 	}
 
-	test('a SHORT key fails the boot rather than standing in front of an HTTP surface', () => {
+	test('a SHORT key fails the boot rather than standing in front of an HTTP surface', async () => {
 		for (const name of ['FABRIKA_IAM_RPC_KEY', 'FABRIKA_IAM_PROXY_KEY']) {
-			expect(() => createRuntime({ ...base, [name]: 'too-short' })).toThrow(new RegExp(`${name} must be at least 32 characters`))
+			await expect(createRuntime({ ...base, [name]: 'too-short' })).rejects.toThrow(new RegExp(`${name} must be at least 32 characters`))
 		}
 	})
 
-	test('an ABSENT key is legal — it means that surface is off, which is the fail-closed default', () => {
+	test('an ABSENT key is legal — it means that surface is off, which is the fail-closed default', async () => {
 		// No throw, and nothing is logged about the value either way (`rpc-http.ts` 404s the surface).
-		const runtime = createRuntime(base)
+		const runtime = await createRuntime(base)
 		expect(runtime.config.rpcKey).toBe('')
 		expect(runtime.config.proxyKey).toBe('')
 	})
 
-	test('a long enough key is accepted', () => {
+	test('a long enough key is accepted', async () => {
 		const key = `px_${'k'.repeat(40)}`
-		const runtime = createRuntime({ ...base, FABRIKA_IAM_RPC_KEY: key, FABRIKA_IAM_PROXY_KEY: key })
+		const runtime = await createRuntime({ ...base, FABRIKA_IAM_RPC_KEY: key, FABRIKA_IAM_PROXY_KEY: key })
 		expect(runtime.config.rpcKey).toBe(key)
 		expect(runtime.config.proxyKey).toBe(key)
 	})
@@ -74,18 +74,18 @@ describe('the environment name', () => {
 		FABRIKA_IAM_PASSWORD_ENABLED: 'true',
 	}
 
-	test('a process serving a PUBLIC issuer refuses to boot as `local`', () => {
-		expect(() => createRuntime({ ...base, ENVIRONMENT: 'local', ISSUER: 'https://iam-abcd-3000.prg1.zerops.app' }))
-			.toThrow(/ENVIRONMENT=local is refused/)
+	test('a process serving a PUBLIC issuer refuses to boot as `local`', async () => {
+		await expect(createRuntime({ ...base, ENVIRONMENT: 'local', ISSUER: 'https://iam-abcd-3000.prg1.zerops.app' }))
+			.rejects.toThrow(/ENVIRONMENT=local is refused/)
 	})
 
-	test('the local stack still boots — it serves `*.fabrika.localhost`', () => {
+	test('the local stack still boots — it serves `*.fabrika.localhost`', async () => {
 		// If this breaks, `bun run local:up` breaks with it. The issuer is compose.yaml's, verbatim.
-		expect(createRuntime({ ...base, ENVIRONMENT: 'local', ISSUER: 'http://iam.fabrika.localhost:18080' }).env.ENVIRONMENT).toBe('local')
+		expect((await createRuntime({ ...base, ENVIRONMENT: 'local', ISSUER: 'http://iam.fabrika.localhost:18080' })).env.ENVIRONMENT).toBe('local')
 	})
 
-	test('a named installation on the same public issuer boots — the rule is about `local` alone', () => {
-		expect(createRuntime({ ...base, ENVIRONMENT: 'stage', ISSUER: 'https://iam-abcd-3000.prg1.zerops.app' }).env.ENVIRONMENT).toBe('stage')
+	test('a named installation on the same public issuer boots — the rule is about `local` alone', async () => {
+		expect((await createRuntime({ ...base, ENVIRONMENT: 'stage', ISSUER: 'https://iam-abcd-3000.prg1.zerops.app' })).env.ENVIRONMENT).toBe('stage')
 	})
 })
 

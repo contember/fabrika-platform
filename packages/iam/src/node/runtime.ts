@@ -12,6 +12,7 @@
 
 import { LOCAL_ENVIRONMENT, readEnvironmentName } from '@fabrika/auth-core'
 import { type EmailProviderRegistry, type EmailSender, emailSenderFromEnv, pickEmailEnvironment, readEmailTransportConfig } from '@fabrika/email'
+import { installationMailKey, PlatformEmailSender } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import { createPostgresIamRepositories } from '../db'
@@ -62,13 +63,14 @@ const MIN_RPC_KEY_LENGTH = 32
 
 /**
  * Read `process.env`, open the Postgres pool, mount the asset directory, and return the pair of
- * handles every shared entrypoint function takes.
+ * handles every shared entrypoint function takes. Asynchronous only because the relay's key is derived
+ * with WebCrypto; everything that can refuse the boot runs before the pool opens.
  *
  * Fails LOUDLY and early on missing required configuration: a service that boots half-configured and
  * then refuses logins at 3am is strictly worse than one that never came up. Nothing here ever logs a
  * value — the database URL and the RPC key are credentials, and only their absence is reportable.
  */
-export function createRuntime(source: Record<string, string | undefined> = process.env, overrides: RuntimeOverrides = {}): Runtime {
+export async function createRuntime(source: Record<string, string | undefined> = process.env, overrides: RuntimeOverrides = {}): Promise<Runtime> {
 	const databaseUrl = required(source, 'FABRIKA_IAM_DATABASE_URL')
 	const issuer = required(source, 'ISSUER')
 	// Checked at BOOT as well as in `buildServices`: a process that comes up and then throws per request
@@ -90,6 +92,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	}
 	// Built once here as well as per request in `buildServices`, for the same readiness-probe reason as above.
 	emailSenderFromEnv(emailConfig, emailProviders)
+	const controlUrl = httpOrigin(source, 'FABRIKA_CONTROL_URL')
 
 	// Parsed here as well as per request in `buildServices`, for the same readiness-probe reason as above.
 	parseOAuthConfig(source['FABRIKA_IAM_OAUTH_CONFIG'])
@@ -105,6 +108,8 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		rpcKey: sharedSecret(source, 'FABRIKA_IAM_RPC_KEY'),
 		proxyKey: sharedSecret(source, 'FABRIKA_IAM_PROXY_KEY'),
 	}
+	// IAM keeps its provider's configuration as the switch for delivery; Control holds the transport that delivers.
+	const platformEmailSender = controlUrl !== undefined && emailConfigured ? await relaySender(controlUrl, config.rpcKey) : undefined
 
 	const db = PostgresDatabase.connect(databaseUrl)
 	const tasks = createBackgroundTasks({ label: 'iam background task' })
@@ -137,6 +142,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		EMAIL_CONFIG: emailConfig,
 		EMAIL_PROVIDERS: emailProviders,
 		...(overrides.emailSender === undefined ? {} : { EMAIL_SENDER: overrides.emailSender }),
+		...(platformEmailSender === undefined ? {} : { PLATFORM_EMAIL_SENDER: platformEmailSender }),
 	}
 
 	return {
@@ -172,6 +178,23 @@ function sharedSecret(source: Record<string, string | undefined>, name: string):
 		throw new Error(`${name} must be at least ${MIN_RPC_KEY_LENGTH} characters (it is the only thing guarding its HTTP surface)`)
 	}
 	return value
+}
+
+/** The relay authenticates IAM by a key derived from the secret both hold, so the relay needs that secret set. */
+async function relaySender(controlUrl: string, rpcKey: string): Promise<PlatformEmailSender> {
+	if (rpcKey === '') throw new Error('FABRIKA_CONTROL_URL needs FABRIKA_IAM_RPC_KEY, which the mail relay authenticates IAM by')
+	return new PlatformEmailSender({ url: controlUrl, key: await installationMailKey(rpcKey) })
+}
+
+/** An optional http(s) origin: no path, no trailing slash. Absent or empty is undefined. */
+function httpOrigin(source: Record<string, string | undefined>, name: string): string | undefined {
+	const raw = source[name]
+	if (raw === undefined || raw === '') return undefined
+	const url = URL.parse(raw)
+	if (url === null || (url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin !== raw) {
+		throw new Error(`${name} must be an http(s) origin, such as http://control:3000`)
+	}
+	return raw
 }
 
 function required(source: Record<string, string | undefined>, name: string): string {

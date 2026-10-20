@@ -7,8 +7,9 @@ x-bun: &bun
     - ../..:/workspace
 
 # The installation's mail transport in this composition, which Control holds: a deploy hands it only to an application
-# whose job declares `mailer: 'installation'`, and the `directory` provider writes each message to `.state/mail/`. Only
-# Control's composition and an application under a loopback issuer accept that provider.
+# whose job declares `mailer: 'installation'`, and the `directory` provider writes each message to `.state/mail/`. IAM
+# holds the same set as its switch for delivery and hands its mail to Control's relay. Only the local IAM and Control
+# compositions and an application under a loopback issuer accept that provider.
 x-local-mail: &local-mail
   FABRIKA_EMAIL_PROVIDER: directory
   FABRIKA_EMAIL_FROM: Fabrika local <mail@local.test>
@@ -86,7 +87,7 @@ services:
 
   iam:
     <<: *bun
-    # The production server with its mail written to `.state/mail/` instead of delivered (`src/iam-server.ts`).
+    # The production server with the `directory` provider registered (`src/iam-server.ts`); its mail goes through Control.
     command: [sh, -c, "bun packages/iam/src/node/migrate.ts && exec bun packages/local-stack/src/iam-server.ts"]
     # `iam-oauth.env` is rewritten by every prepare: empty unless FABRIKA_LOCAL_MCP_CLIENTS_JSON is set.
     env_file:
@@ -94,6 +95,7 @@ services:
       - path: .state/iam-oauth.env
         required: false
     environment:
+      <<: *local-mail
       PORT: "18080"
       ENVIRONMENT: local
       ISSUER: http://iam.fabrika.localhost:18080
@@ -102,8 +104,8 @@ services:
       LOCAL_DEV_LOGIN: "true"
       FABRIKA_IAM_OIDC_ENABLED: "false"
       FABRIKA_IAM_PASSWORD_ENABLED: "true"
-      # The captured mail replaces a provider, which IAM then requires to stay none.
-      FABRIKA_EMAIL_PROVIDER: none
+      # With a provider configured, IAM sends through Control's mail relay, as on Zerops.
+      FABRIKA_CONTROL_URL: http://control:3000
       HUMAN_EMAIL_DOMAINS: "[]"
       HUMAN_EMAILS: "[]"
       IAM_BOOTSTRAP_ADMINS: '["admin@local.test"]'

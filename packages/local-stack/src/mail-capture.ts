@@ -1,12 +1,17 @@
-// The mail of the local composition, IAM's and the applications'. `iam-server.ts` hands IAM a sender that writes each
-// message to `.state/mail/` instead of delivering it, and an application's `directory` provider writes there too; a
-// browser suite reads a person's message back here and opens its link. The messages hold one-time links, so nothing
-// here prints one.
+// The mail of the local composition, IAM's and the applications'. Control and an application whose job declares
+// `mailer: 'installation'` name the `directory` provider, which writes each message to `.state/mail/` instead of
+// delivering it; IAM hands its mail to Control's relay, which delivers it the same way. A browser suite reads a person's
+// message back here and opens its link. The messages hold one-time links, so nothing here prints one.
 
-import { type CapturedEmail, readCapturedEmails } from '@fabrika/email/directory'
+import type { EmailProviderRegistry } from '@fabrika/email'
+import { type CapturedEmail, directoryEmailProvider, readCapturedEmails } from '@fabrika/email/directory'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import { resolve } from 'node:path'
 
-/** The same path in the IAM container, which mounts the workspace, and on the host. */
+/** The providers IAM and Control accept here: the built-in ones and the composition's capture. */
+export const LOCAL_EMAIL_PROVIDERS = { ...builtinEmailProviders, directory: directoryEmailProvider } satisfies EmailProviderRegistry
+
+/** The same path in the IAM and Control containers, which mount the workspace, and on the host. */
 export const MAIL_DIRECTORY = resolve(import.meta.dir, '..', '.state', 'mail')
 
 const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
@@ -17,7 +22,10 @@ export interface MailQuery {
 	readonly to: string
 	/** Only a message captured at or after this time (ms since the epoch, the host's clock that the container shares). */
 	readonly since: number
-	/** Only the message sent under this transport key: an app's is `transportMailKey({ issuer, appId: '<app>@<env>' }, key)`, IAM's `iam-…`. */
+	/**
+	 * Only the message the provider received under this key: an app's own is `transportMailKey({ issuer, appId: '<app>@<env>' }, key)`,
+	 * one Control's relay dispatched (IAM's among them) `relay:…`.
+	 */
 	readonly idempotencyKey?: string
 	readonly timeoutMs?: number
 }

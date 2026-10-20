@@ -56,6 +56,7 @@ zerops:
           allContainers: false
       envVariables:
         PORT: "3000"
+        FABRIKA_CONTROL_URL: "http://control:3000"
   - setup: operations
     build:
       base:

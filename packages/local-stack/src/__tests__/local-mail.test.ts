@@ -1,14 +1,16 @@
 // The composition's mail transport, without Docker: Control holds the `directory` set, Notes (which declares no
-// mailer) gets none, IAM keeps its own capture and `none`, Control's registry accepts the set, and it writes where the
-// suites read. A suite finds a message by its mailbox, its time and, for an application's, its transport key.
+// mailer) gets none, IAM holds the same set and Control's private origin, so it sends through the relay, the local
+// registry accepts the set, and it writes where the suites read. A suite finds a message by its mailbox, its time and,
+// for an application's, its transport key.
 
 import { readEmailTransportConfig } from '@fabrika/email'
 import type { CapturedEmail } from '@fabrika/email/directory'
+import { PlatformEmailSender } from '@fabrika/email/platform'
+import { createRuntime } from '@fabrika/iam/node/runtime'
 import { describe, expect, test } from 'bun:test'
 import { relative, resolve } from 'node:path'
 import { z } from 'zod'
-import { LOCAL_CONTROL_EMAIL_PROVIDERS } from '../control-server'
-import { MAIL_DIRECTORY, newestMatching } from '../mail-capture'
+import { LOCAL_EMAIL_PROVIDERS, MAIL_DIRECTORY, newestMatching } from '../mail-capture'
 
 const WORKSPACE = resolve(import.meta.dir, '..', '..', '..', '..')
 const MAIL_VARIABLES = ['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_DIRECTORY']
@@ -29,17 +31,38 @@ const mailOf = (environment: Readonly<Record<string, unknown>>): Record<string, 
 	)
 
 describe("the composition's mail transport", () => {
-	test('Control holds the directory set; Notes, which declares no mailer, has none; IAM keeps none beside its own capture', () => {
+	test('Control holds the directory set; Notes, which declares no mailer, has none', () => {
 		const control = mailOf(compose.services.control.environment)
 		expect(Object.keys(control).sort()).toEqual([...MAIL_VARIABLES].sort())
 		expect(control['FABRIKA_EMAIL_PROVIDER']).toBe('directory')
 		expect(mailOf(compose.services.notes.environment)).toEqual({})
-		expect(mailOf(compose.services.iam.environment)).toEqual({ FABRIKA_EMAIL_PROVIDER: 'none' })
 	})
 
-	test("Control's registry accepts the set, and it captures where the suites read, as the containers mount the workspace", () => {
+	test("IAM holds Control's set and Control's private origin, so its mail goes through the relay", () => {
+		const iam = compose.services.iam.environment
+		expect(mailOf(iam)).toEqual(mailOf(compose.services.control.environment))
+		expect(iam['FABRIKA_CONTROL_URL']).toBe(`http://control:${compose.services.control.environment['PORT']}`)
+	})
+
+	test("IAM's composition boots with that environment and picks the relay's sender", async () => {
+		const strings = Object.fromEntries(
+			Object.entries(compose.services.iam.environment).flatMap(([name, value]) => typeof value === 'string' ? [[name, value]] : []),
+		)
+		const runtime = await createRuntime({
+			...strings,
+			FABRIKA_IAM_DATABASE_URL: 'postgres://postgres:postgres@127.0.0.1:1/iam',
+			FABRIKA_IAM_RPC_KEY: 'rpc-key-with-at-least-thirty-two-characters',
+		}, { emailProviders: LOCAL_EMAIL_PROVIDERS })
+		try {
+			expect(runtime.env.PLATFORM_EMAIL_SENDER).toBeInstanceOf(PlatformEmailSender)
+		} finally {
+			await runtime.shutdown()
+		}
+	})
+
+	test('the local registry accepts the set, and it captures where the suites read, as the containers mount the workspace', () => {
 		const variables = mailOf(compose.services.control.environment)
-		expect(readEmailTransportConfig(variables, LOCAL_CONTROL_EMAIL_PROVIDERS)).toMatchObject({ kind: 'provider', provider: 'directory' })
+		expect(readEmailTransportConfig(variables, LOCAL_EMAIL_PROVIDERS)).toMatchObject({ kind: 'provider', provider: 'directory' })
 		expect(variables['FABRIKA_EMAIL_DIRECTORY']).toBe(`/workspace/${relative(WORKSPACE, MAIL_DIRECTORY)}`)
 	})
 })

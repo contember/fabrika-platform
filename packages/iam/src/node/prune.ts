@@ -15,7 +15,7 @@ import { runIamMaintenance } from '../cron'
 import { createRuntime } from './runtime'
 
 async function main(): Promise<void> {
-	const runtime = createRuntime()
+	const runtime = await createRuntime()
 	try {
 		// Maintenance registers the deletes through `waitUntil`; `shutdown()` drains them before the pool
 		// closes, so the process exits only once the prune has actually finished.

@@ -63,7 +63,7 @@ describe('the Bun composition passes ADMIN_AUDIENCES through', () => {
 	}
 
 	test('unset stays undefined, so the default applies rather than an empty registry', async () => {
-		const runtime = createRuntime(base)
+		const runtime = await createRuntime(base)
 		try {
 			expect(runtime.env.ADMIN_AUDIENCES).toBeUndefined()
 		} finally {
@@ -72,7 +72,7 @@ describe('the Bun composition passes ADMIN_AUDIENCES through', () => {
 	})
 
 	test('an explicit value reaches the env verbatim', async () => {
-		const runtime = createRuntime({ ...base, FABRIKA_IAM_ADMIN_AUDIENCES: 'vozka,console' })
+		const runtime = await createRuntime({ ...base, FABRIKA_IAM_ADMIN_AUDIENCES: 'vozka,console' })
 		try {
 			expect(runtime.env.ADMIN_AUDIENCES).toBe('vozka,console')
 		} finally {

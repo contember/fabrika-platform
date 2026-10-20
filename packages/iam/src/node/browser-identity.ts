@@ -20,7 +20,7 @@ function parseOutputId(value: string | undefined): string {
 }
 
 async function createBrowserIdentity(role: BrowserIdentityRole, outputId: string): Promise<void> {
-	const runtime = createRuntime()
+	const runtime = await createRuntime()
 	try {
 		const email = `browser-${role}-${outputId}@fabrika.local`
 		const principal = await runtime.env.REPOSITORIES.principals.createUser(`browser-${outputId}`, email)

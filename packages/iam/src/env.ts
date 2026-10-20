@@ -67,6 +67,11 @@ export interface Env {
 	 * not a variable, and refused by `buildServices` outside `ENVIRONMENT=local` or beside a configured provider.
 	 */
 	EMAIL_SENDER?: EmailSender
+	/**
+	 * The platform mail relay's sender, which replaces the configured provider's: the Bun composition builds it when
+	 * `FABRIKA_CONTROL_URL` is set beside a configured provider. Control then delivers through its own transport.
+	 */
+	PLATFORM_EMAIL_SENDER?: EmailSender
 
 	// ── propustka-native auth (propustka issues its own tokens; see token.ts / signing.ts) ──
 

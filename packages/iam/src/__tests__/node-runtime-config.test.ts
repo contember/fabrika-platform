@@ -18,7 +18,7 @@ const base = {
 
 describe('the IAM Bun runtime environment', () => {
 	test('reads its configuration', async () => {
-		const runtime = createRuntime({
+		const runtime = await createRuntime({
 			...base,
 			FABRIKA_IAM_DATABASE_URL: DATABASE_URL,
 			FABRIKA_IAM_RPC_KEY: RPC_KEY,
@@ -41,12 +41,12 @@ describe('the IAM Bun runtime environment', () => {
 		}
 	})
 
-	test('names the variable it needs when the database URL is unset', () => {
-		expect(() => createRuntime(base)).toThrow('FABRIKA_IAM_DATABASE_URL is required')
+	test('names the variable it needs when the database URL is unset', async () => {
+		await expect(createRuntime(base)).rejects.toThrow('FABRIKA_IAM_DATABASE_URL is required')
 	})
 
 	test('supports password-only authentication without OIDC configuration', async () => {
-		const runtime = createRuntime({
+		const runtime = await createRuntime({
 			FABRIKA_IAM_DATABASE_URL: DATABASE_URL,
 			ENVIRONMENT: 'local',
 			ISSUER: 'http://localhost:18191',
@@ -62,22 +62,22 @@ describe('the IAM Bun runtime environment', () => {
 		}
 	})
 
-	test('rejects disabled and invalid authentication methods', () => {
-		expect(() =>
+	test('rejects disabled and invalid authentication methods', async () => {
+		await expect(
 			createRuntime({
 				...base,
 				FABRIKA_IAM_DATABASE_URL: DATABASE_URL,
 				FABRIKA_IAM_OIDC_ENABLED: 'false',
 				FABRIKA_IAM_PASSWORD_ENABLED: 'false',
-			})
-		).toThrow('At least one IAM authentication method must be enabled')
-		expect(() =>
+			}),
+		).rejects.toThrow('At least one IAM authentication method must be enabled')
+		await expect(
 			createRuntime({
 				...base,
 				FABRIKA_IAM_DATABASE_URL: DATABASE_URL,
 				FABRIKA_IAM_PASSWORD_ENABLED: 'yes',
-			})
-		).toThrow('FABRIKA_IAM_PASSWORD_ENABLED must be true or false')
+			}),
+		).rejects.toThrow('FABRIKA_IAM_PASSWORD_ENABLED must be true or false')
 	})
 
 	test('requires and maps Resend configuration only when enabled', async () => {
@@ -88,7 +88,7 @@ describe('the IAM Bun runtime environment', () => {
 			FABRIKA_EMAIL_FROM: 'Fabrika <auth@example.com>',
 			FABRIKA_EMAIL_RESEND_API_KEY: 'private-resend-key',
 		}
-		const runtime = createRuntime(source)
+		const runtime = await createRuntime(source)
 		try {
 			expect(runtime.env.EMAIL_CONFIG).toEqual({
 				FABRIKA_EMAIL_PROVIDER: 'resend',
@@ -100,9 +100,9 @@ describe('the IAM Bun runtime environment', () => {
 			await runtime.shutdown()
 		}
 
-		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_FROM: '' })).toThrow('FABRIKA_EMAIL_FROM is missing')
-		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_RESEND_API_KEY: '' })).toThrow('FABRIKA_EMAIL_RESEND_API_KEY is missing')
-		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow(
+		await expect(createRuntime({ ...source, FABRIKA_EMAIL_FROM: '' })).rejects.toThrow('FABRIKA_EMAIL_FROM is missing')
+		await expect(createRuntime({ ...source, FABRIKA_EMAIL_RESEND_API_KEY: '' })).rejects.toThrow('FABRIKA_EMAIL_RESEND_API_KEY is missing')
+		await expect(createRuntime({ ...source, FABRIKA_EMAIL_PROVIDER: 'smtp' })).rejects.toThrow(
 			'FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing',
 		)
 	})
@@ -110,19 +110,19 @@ describe('the IAM Bun runtime environment', () => {
 	test('a composition may name its own provider registry', async () => {
 		const sender = new MemoryEmailSender()
 		const source = { ...base, FABRIKA_IAM_DATABASE_URL: DATABASE_URL, FABRIKA_EMAIL_PROVIDER: 'stand-in', FABRIKA_EMAIL_FROM: 'auth@example.com' }
-		const runtime = createRuntime(source, { emailProviders: { 'stand-in': { variables: [], create: () => sender } } })
+		const runtime = await createRuntime(source, { emailProviders: { 'stand-in': { variables: [], create: () => sender } } })
 		try {
 			expect(buildServices(runtime.env).email).toBe(sender)
 		} finally {
 			await runtime.shutdown()
 		}
-		expect(() => createRuntime(source)).toThrow('FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing')
+		await expect(createRuntime(source)).rejects.toThrow('FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing')
 	})
 
 	test('a composition email sender serves only a local IAM with no provider configured', async () => {
 		const sender = new MemoryEmailSender()
 		const source = { ...base, FABRIKA_IAM_DATABASE_URL: DATABASE_URL }
-		const runtime = createRuntime(source, { emailSender: sender })
+		const runtime = await createRuntime(source, { emailSender: sender })
 		try {
 			expect(runtime.env.EMAIL_SENDER).toBe(sender)
 			expect(buildServices(runtime.env).email).toBe(sender)
@@ -138,19 +138,21 @@ describe('the IAM Bun runtime environment', () => {
 		}
 
 		const refusal = 'A composition email sender needs ENVIRONMENT=local and FABRIKA_EMAIL_PROVIDER=none'
-		expect(() => createRuntime({ ...source, ENVIRONMENT: 'stage', ISSUER: 'https://iam.example.com' }, { emailSender: sender })).toThrow(refusal)
-		expect(() =>
+		await expect(createRuntime({ ...source, ENVIRONMENT: 'stage', ISSUER: 'https://iam.example.com' }, { emailSender: sender })).rejects.toThrow(
+			refusal,
+		)
+		await expect(
 			createRuntime({
 				...source,
 				FABRIKA_EMAIL_PROVIDER: 'resend',
 				FABRIKA_EMAIL_FROM: 'auth@example.com',
 				FABRIKA_EMAIL_RESEND_API_KEY: 'private-resend-key',
-			}, { emailSender: sender })
-		).toThrow(refusal)
+			}, { emailSender: sender }),
+		).rejects.toThrow(refusal)
 	})
 
 	test('maps the retention settings, and a bad value refuses the boot', async () => {
-		const runtime = createRuntime({
+		const runtime = await createRuntime({
 			...base,
 			FABRIKA_IAM_DATABASE_URL: DATABASE_URL,
 			FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS: '14',
@@ -164,9 +166,11 @@ describe('the IAM Bun runtime environment', () => {
 		}
 
 		const source = { ...base, FABRIKA_IAM_DATABASE_URL: DATABASE_URL }
-		expect(() => createRuntime({ ...source, FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS: '30d' })).toThrow(
+		await expect(createRuntime({ ...source, FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS: '30d' })).rejects.toThrow(
 			'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS must be a whole number',
 		)
-		expect(() => createRuntime({ ...source, FABRIKA_IAM_AUDIT_RETENTION_DAYS: '0' })).toThrow('FABRIKA_IAM_AUDIT_RETENTION_DAYS must be a whole number')
+		await expect(createRuntime({ ...source, FABRIKA_IAM_AUDIT_RETENTION_DAYS: '0' })).rejects.toThrow(
+			'FABRIKA_IAM_AUDIT_RETENTION_DAYS must be a whole number',
+		)
 	})
 })

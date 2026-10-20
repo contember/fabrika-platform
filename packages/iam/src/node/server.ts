@@ -92,7 +92,7 @@ export function startIamServer(runtime: Runtime): void {
 }
 
 async function main(): Promise<void> {
-	startIamServer(createRuntime())
+	startIamServer(await createRuntime())
 }
 
 if (import.meta.main) {
