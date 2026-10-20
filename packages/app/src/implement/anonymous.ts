@@ -6,15 +6,6 @@ import { LINK_BOOTSTRAP_FILE, SHARE_KEY_GLOBAL } from '../contract/defaults'
 import { HttpError } from '../errors'
 import { readBoundedBytes } from './bounded'
 
-/** The slowest body a procedure waits for, in bytes per second: its deadline is `maxBytes` at this rate, 30 s at least. */
-export const BODY_RATE_FLOOR = 16 * 1024
-const MIN_BODY_DEADLINE_MS = 30_000
-
-/** How long a body of at most `maxBytes` may take to arrive. */
-export function bodyDeadlineMs(maxBytes: number): number {
-	return Math.max(MIN_BODY_DEADLINE_MS, Math.ceil((maxBytes / BODY_RATE_FLOOR) * 1000))
-}
-
 /**
  * The body as bytes, read until `maxBytes`; a longer one stops the read and is a 413. A body whose stream fails before
  * its end (the client closed the connection) is the sender's 400 `aborted`, never a failure of the application.

@@ -49,10 +49,17 @@ describe('a public procedure in the approval diff', () => {
 				{
 					effect: 'neutral',
 					line:
-						'`api.stats.cta` admits calls per minute: 10 per client (one client on Zerops) and 100 in all; it runs at most 10 s, with a body of at most 1024 bytes',
+						'`api.stats.cta` admits calls per minute: 10 per client (one client on Zerops) and 100 in all; it waits at most 30 s for a body of at most 1024 bytes, then runs at most 10 s',
 				},
 			],
 		})
+	})
+
+	test("a large body's deadline is named before the handler's time limit, which starts after the last byte", () => {
+		const upload: EndpointRow = { ...CTA, admission: { contentTypes: ['multipart/form-data'], maxBytes: 10 * 1024 * 1024 } }
+		expect(classifyAccess(snapshot(null, null), snapshot(DEFAULT_RULES, upload)).changes.at(-1)?.line).toEndWith(
+			'it waits at most 640 s for a body of at most 10485760 bytes, then runs at most 10 s',
+		)
 	})
 
 	test('a bucket raised or turned off widens, one lowered narrows', () => {

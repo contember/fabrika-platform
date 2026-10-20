@@ -46,7 +46,7 @@ describe('a paved migration', () => {
 			'DROP EXTENSION IF EXISTS citext;',
 			'-- CREATE TRIGGER t',
 		].join('\n')
-		expect(classify(sql)).toEqual({ file: FILE, refused: [], deviations: [], objects: [], changes: expect.any(Array) })
+		expect(classify(sql)).toEqual({ file: FILE, refused: [], deviations: [], adoptions: [], objects: [], changes: expect.any(Array) })
 	})
 
 	test("a file collection's table and its indexes may use their framework names", () => {
@@ -67,7 +67,23 @@ describe('a paved migration', () => {
 			'INSERT INTO deal_attachments (deal_id, file, name) SELECT owner_id, id, original_name FROM fabrika_files_attachments WHERE deleted_at IS NULL;',
 			"SELECT fabrika_files_release('attachments');",
 		].join('\n')
-		expect(classify(sql)).toEqual({ file: FILE, refused: [], deviations: [], objects: [], changes: expect.any(Array) })
+		expect(classify(sql)).toEqual({
+			file: FILE,
+			refused: [],
+			deviations: [],
+			// The copy of the rows an older instance wrote is part of the adoption, not a step the approver reads.
+			adoptions: [
+				{ step: 'adopt', collection: 'attachments', table: 'deal_attachments', file: FILE, line: 6 },
+				{ step: 'release', collection: 'attachments', file: FILE, line: 7 },
+			],
+			objects: [],
+			changes: expect.any(Array),
+		})
+		const framework = classifyMigration('INSERT INTO fabrika_files (id) SELECT id FROM fabrika_files_attachments;', SCHEMA, {
+			file: FILE,
+			framework: true,
+		})
+		expect(framework.adoptions).toEqual([])
 		for (
 			const [refused, name] of [
 				['INSERT INTO fabrika_files_attachments (id) SELECT id FROM fabrika_files_other;', 'fabrika_files_attachments'],

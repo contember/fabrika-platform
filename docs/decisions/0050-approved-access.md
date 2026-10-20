@@ -93,6 +93,9 @@ run stores the result as its **snapshot**:
 - the migration list with checksums;
 - the **database code** the migrations declare (`databaseCode`): each function, procedure, trigger, view, rule,
   policy, `DO` block and expression that calls database code, by file, kind and object;
+- the **file adoptions** the migrations make (`fileAdoptions`, [ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)):
+  each `INSERT … SELECT` that copies a file collection's files into a table, and each release of a collection. They
+  follow from the migration files, so the digest does not cover them beyond the files' checksums;
 - the checker version;
 - the baseline the candidate was compared with;
 - the approval, when one was needed.
@@ -163,8 +166,9 @@ covers:
   without signing in"), and so does each workload action it gains ("runs as its own workload with `<action>`, for
   anyone who calls it"); a lost action narrows. These actions are no step off the road, so the environment's deviation
   list does not show them ([ADR-0063](0063-a-public-procedure-runs-as-its-own-workload.md));
-- **each procedure's admission and limits, by their effective values**: its buckets, its challenge, its time limit and
-  its body limit, derived ones included, on every new procedure and on every procedure the baseline records no rules
+- **each procedure's admission and limits, by their effective values**: its buckets, its challenge, its body limit,
+  how long it waits for that body (the deadline the runtime derives from the limit) and its time limit, which starts
+  after the last byte, derived ones included, on every new procedure and on every procedure the baseline records no rules
   for (every one, when an application moves from an older framework release). A bucket raised or turned off, a dropped
   challenge, a longer time limit and a larger body limit widen; the reverse narrows. On Zerops the per-client bucket is
   shown as counting one client. A public `GET` query's `http.cache` shows how long its answers are reused, and that
@@ -190,7 +194,10 @@ covers:
 - each public variable a page reads from its browser config (an SPA mount's `browserConfig` list, a challenge's
   `siteKey`): shown by name, and a new one widens, because its value reaches anyone who opens a page;
 - each site's declared reach;
-- migrations: any new or changed file, and the database code they declare.
+- migrations: any new or changed file, and the database code they declare;
+- **file adoptions** in a new or changed migration file: an adoption widens with closer review, because whoever the
+  table's policy lets read a row now reads its file, and a release narrows with closer review, because it drops the
+  collection with every file no column adopted. A file the baseline holds unchanged has run already, and adds no line.
 
 An application on framework 0.4, 0.5 or 0.6 is compared with the same rules after Control upcasts its artifact
 ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)): its forms' admission and files, `then`,
