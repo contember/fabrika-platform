@@ -412,7 +412,8 @@ other environment, before the provider prepares anything, and the write maps a r
   `namespaces.republishAll` (`namespace.manage`) is the one exception: it reads the logo once, refuses with a 502 when
   IAM does not answer (the change it was asked to publish would reach no proxy), republishes every ready namespace at
   once with it, queues a reconcile for one still `provisioning`, and audits each before it reports a failure; the
-  console calls it after a logo change. Control keeps no copy.
+  console calls it after a logo change. Control keeps no copy. Control's calls to IAM as itself (the brand, membership
+  keys, workload keys) share one client, `iamProvisioningClient` (`src/iam-provisioning.ts`).
 - **`namespaces.update` runs in the request, not behind the queue** (backlog 79). The provider PLANS the
   merged target first (pure; an unknown field → 400; `PROVIDER_NAMESPACE_IMMUTABLE` → 409 naming a new
   namespace id, because removal keeps the provider project and recreating the id adopts it). Then, under the

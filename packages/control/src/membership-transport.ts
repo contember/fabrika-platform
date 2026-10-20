@@ -5,7 +5,6 @@
 // and pins its application id; the authority of each operation stays the end user's token, plus the proxy's delegation
 // grant for scope creation and membership changes. Never logged, never returned over the API.
 
-import { createRpcClient, type RpcFetch } from '@fabrika/app'
 import {
 	appEnvironmentId,
 	type ContractArtifact,
@@ -14,8 +13,8 @@ import {
 	endpointDirectory,
 	MAX_KEY_LIFETIME_SECONDS,
 } from '@fabrika/auth-core'
-import type { IamAdminRpcContract } from '@fabrika/iam-contract'
 import type { MembershipKeyRepository } from './db'
+import { iamProvisioningClient, type IamProvisioningOptions } from './iam-provisioning'
 import type { Vault, VaultSecretPurpose } from './vault'
 
 /** A key with less than this left is replaced, so a running version never holds one that IAM stops honouring. */
@@ -101,26 +100,11 @@ export class VaultMembershipTransport implements MembershipTransportPort {
 	}
 }
 
-export interface IamMembershipKeyIssuerOptions {
-	/** IAM's public origin, the installation's `FABRIKA_IAM_ISSUER`. */
-	readonly origin: string
-	/** The installation's provisioning key: the credential every deploy reconciles IAM with. */
-	readonly provisioningKey: string
-	readonly fetch?: RpcFetch
-}
+export type IamMembershipKeyIssuerOptions = IamProvisioningOptions
 
 /** `membershipKeys.issue` on IAM's admin RPC, with the provisioning key as the bearer and nothing else. */
 export function iamMembershipKeyIssuer(options: IamMembershipKeyIssuerOptions): MembershipKeyIssuer {
-	const call = options.fetch ?? fetch
-	const client = createRpcClient<IamAdminRpcContract>({
-		baseUrl: `${options.origin.replace(/\/+$/, '')}/admin/rpc`,
-		bounceOnAuth: false,
-		fetch: (input, init) => {
-			const headers = new Headers(init?.headers)
-			headers.set('authorization', `Bearer ${options.provisioningKey}`)
-			return call(input, { ...init, headers })
-		},
-	})
+	const client = iamProvisioningClient(options)
 	return {
 		async issue(input) {
 			const issued = await client.membershipKeys.issue({ app: input.app, expiresAt: input.expiresAt, keep: input.keep })

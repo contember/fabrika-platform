@@ -5,7 +5,6 @@
 // it to the actions the approved schema declares for the workload — the owner's, for a connector key. A key is never
 // logged and never returned over the API.
 
-import { createRpcClient, type RpcFetch } from '@fabrika/app'
 import {
 	appEnvironmentId,
 	connectVariables,
@@ -15,8 +14,8 @@ import {
 	type OwnWorkloadKind,
 	workloadKeyVariable,
 } from '@fabrika/auth-core'
-import type { IamAdminRpcContract } from '@fabrika/iam-contract'
 import type { WorkloadCredentialRepository, WorkloadCredentialRow } from './db'
+import { iamProvisioningClient, type IamProvisioningOptions } from './iam-provisioning'
 import type { Vault, VaultSecretPurpose } from './vault'
 
 export type WorkloadKind = OwnWorkloadKind
@@ -209,26 +208,11 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 	}
 }
 
-export interface IamWorkloadKeyIssuerOptions {
-	/** IAM's public origin, the installation's `FABRIKA_IAM_ISSUER`. */
-	readonly origin: string
-	/** The installation's provisioning key: the credential every deploy reconciles IAM with. */
-	readonly provisioningKey: string
-	readonly fetch?: RpcFetch
-}
+export type IamWorkloadKeyIssuerOptions = IamProvisioningOptions
 
 /** `workloads.issueKey` on IAM's admin RPC, with the provisioning key as the bearer and nothing else. */
 export function iamWorkloadKeyIssuer(options: IamWorkloadKeyIssuerOptions): WorkloadKeyIssuer {
-	const call = options.fetch ?? fetch
-	const client = createRpcClient<IamAdminRpcContract>({
-		baseUrl: `${options.origin.replace(/\/+$/, '')}/admin/rpc`,
-		bounceOnAuth: false,
-		fetch: (input, init) => {
-			const headers = new Headers(init?.headers)
-			headers.set('authorization', `Bearer ${options.provisioningKey}`)
-			return call(input, { ...init, headers })
-		},
-	})
+	const client = iamProvisioningClient(options)
 	return {
 		async issue(input) {
 			const issued = await client.workloads.issueKey({
