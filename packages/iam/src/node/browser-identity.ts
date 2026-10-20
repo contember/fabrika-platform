@@ -20,7 +20,8 @@ function parseOutputId(value: string | undefined): string {
 }
 
 async function createBrowserIdentity(role: BrowserIdentityRole, outputId: string): Promise<void> {
-	const runtime = await createRuntime()
+	// The local IAM's provider is registered only by its server (`local-stack/src/iam-server.ts`); seeding sends no mail.
+	const runtime = await createRuntime({ ...process.env, FABRIKA_EMAIL_PROVIDER: 'none' })
 	try {
 		const email = `browser-${role}-${outputId}@fabrika.local`
 		const principal = await runtime.env.REPOSITORIES.principals.createUser(`browser-${outputId}`, email)
