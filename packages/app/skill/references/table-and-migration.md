@@ -251,7 +251,9 @@ export const tables = defineTables(vocabulary, columns)({
 - The key (`id`), the container column (`<container>_id`), a child's column (`<parent dimension>_id`) and the chain
   are derived. State `in: { column }` or `column` only off that convention.
 - `actions` maps `read`, `insert`, `update` and `delete` to vocabulary actions. `insert` and `update` list the columns
-  that those actions write; nothing else is writable.
+  that those actions write; nothing else is writable. Each operation names one action or a list, any of which allows
+  it: a table that staff and a public procedure both read names both (`read: ['crm.read', 'catalog.read']`). Never let
+  a role hold a public procedure's action to share a table: list the actions.
 - A dimension or child table may also list `appRead: ['<action>', …]`, actions besides `read` with which an `app: true`
   endpoint lists every row, read-only (an export, a bulk send), with the columns of that action, and
   `appCount: ['<action>', …]`, actions with which it only counts rows (`count({ where })`) and reads none, no aggregate
@@ -260,7 +262,18 @@ export const tables = defineTables(vocabulary, columns)({
   and in the types. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
   action updates nothing else); the column is then not in `update`.
 - `files: { <column>: '<kind>' }` makes a column a file column of a kind the contract declares (`c.files`):
-  `task_attachments.file` holds the files of a task (`references/files.md`).
+  `task_attachments.file` holds the files of a task (`references/files.md`). Its migration writes
+  `<column> UUID REFERENCES fabrika_files (id)` and an index the column leads; the checker's `file-column-migration`
+  refuses a file column without either.
+- `queue: { attempts: '<column>', due: '<column>', maxAttempts? }` makes the table a queue a job claims
+  (`references/jobs.md`). It needs `version` and an `update` action; `<due>` is a timestamp with a default of `now()`
+  that allows `null`, `<attempts>` an integer with a default of 0. The data layer writes both; an insert may set
+  `<due>`, never `<attempts>`.
+- `insert(values, { onConflict: { columns, do: 'nothing' | 'update' } })` writes idempotently (a webhook delivery, an
+  unsubscribe): `columns` must be a unique index the migrations create (`UNIQUE`, a primary key, or a
+  `CREATE UNIQUE INDEX` without `WHERE`), which the checker's `on-conflict-index` verifies. `'nothing'` needs the
+  insert action and answers `{ inserted: false }` on a conflict; `'update'` also needs the update action and writes
+  only the table's update columns.
 - A column has one write action. A state that two actions change is two columns: in `references/public-intake.md` the
   link holder's `candidates.verify` sets `verified_at`, HR's `candidates.review` sets `status`, and `logic.ts` derives
   the stage HR sees from both (`stageOf`).

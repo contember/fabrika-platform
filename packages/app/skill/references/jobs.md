@@ -2,9 +2,10 @@
 
 Background work is a cron job: `app.cron(schedule, { actions })` with its `.handle(…)` in the
 `endpoints.ts` of the slice whose data it works on, mounted under `jobs` in the contract. There are no timers, loops,
-`setInterval` or self-scheduled work, and no `ctx.jobs.enqueue`: work for later is a row that a run picks up. A
-mutation that declares `kicks: ['<job>']` and calls `ctx.kick('<job>')` starts a run within seconds of its commit (the outbox below); the schedule
-picks up whatever that run leaves.
+`setInterval` or self-scheduled work, and no `ctx.jobs.enqueue`: work for later is a row that a run picks up, usually
+from a queue table with `claim` (below). A mutation, a webhook or another job that declares `kicks: ['<job>']` and
+calls `ctx.kick('<job>')` starts a run within seconds of its commit (the outbox below); the schedule picks up whatever
+that run leaves.
 
 ```ts src/overdue/endpoints.ts
 import { app } from '../app-kit'
@@ -105,7 +106,8 @@ export const contract = app.contract((c) => ({
 - The schedule is five cron fields, UTC. A job is application-wide: it reaches every value.
 - A job holds exactly its `actions`. `ctx.within(action, dimension)` is a `Within` of every value;
   `ctx.ref(action, dimension, id)` locates one object (404 when it is gone). Bind them with `ctx.db.over(within)`,
-  `ctx.db.in(ref)` and `ctx.db.on(ref)`.
+  `ctx.db.in(ref)` and `ctx.db.on(ref)`. `ctx.db.app('<action>')` reads the application tables with one of its
+  actions, and `tx.db.app('<action>')` writes them; `ctx.app('<action>')` is that capability.
 - `ctx.within` names the dimension an endpoint's `over` would: the nearest of the rows' chain (tasks lie in a
   project: `'project'`; `references/endpoint.md`). A job holds every value, so a farther one reaches the same rows;
   the rule keeps a job's capability the same as the list endpoint's. `ctx.ref` names the row's own dimension (`'task'`).
@@ -139,6 +141,9 @@ export const contract = app.contract((c) => ({
 - A job reads a file column through a capability it minted and opens a file with `ctx.files.open(ref)`, to hand it to
   another service; it removes files by deleting the rows that hold them, inside its transaction (`references/files.md`).
   The framework's own `fabrika-file-sweep` then deletes a file no column references; never write a sweep.
+- A job may also declare `kicks` (another job; the edges never form a cycle), `signs` (`ctx.tokens.sign`),
+  `egress` (the HTTPS origins its `fetch` calls) and `issues` (`references/endpoint.md`). `ctx.url('<endpoint id>', …)`
+  builds an absolute link to one of the application's procedures, for an e-mail.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
   each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
 - A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, a framework refusal
@@ -162,8 +167,16 @@ that says so): it records an outbox row and kicks the job (below). `references/p
 - `ctx.mail.send({ to, subject, text, html?, replyTo?, fromName?, idempotencyKey }, signal?)` hands one message to the
   transport and answers `{ status: 'accepted', provider, messageId }`. It always aborts with the attempt's
   `ctx.signal`; pass `AbortSignal.timeout(ms)` for a deadline of the message's own. The sending address is the
-  transport's; `fromName` and `replyTo` are the application's, per message. `attachments: [ref]` attaches files the
-  job read from a file column; a transport that sends none refuses the message.
+  transport's; `fromName` and `replyTo` are the application's, per message.
+- `attachments: [ref]` attaches files the job read from a file column (at most 20). Only a live file is sent: a
+  pending or quarantined one fails the send with 409 `file_not_ready`, a rejected one with `file_rejected`. The
+  transport bounds the bytes of all attachments together (`maxAttachmentBytes`), and a transport without attachments
+  refuses the message as `invalid_message`.
+- `unsubscribe: { url }` writes `List-Unsubscribe` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
+  (RFC 8058), so a mailbox offers one-click unsubscribe. The URL is a public procedure of your own with a signed token
+  (`ctx.url('api.mail.unsubscribe', { query: { t: ctx.tokens.sign('unsubscribe', claims, { days: 400 }) } })`,
+  `references/endpoint.md`). There are no free headers. A transport without the header refuses the message.
+- The idempotency key covers the attachments and the unsubscribe URL: a repeated key with other content is refused.
 - `idempotencyKey` is 1 to 200 visible ASCII characters, unique per message in the application environment, and
   derived from the outbox row (`intake-link-<link id>`), never random. `ctx.mail` puts a prefix of the installation
   and the environment in front of it, so no other application on the same provider account shares it.
@@ -178,6 +191,39 @@ that says so): it records an outbox row and kicks the job (below). `references/p
 - A send error the handler does not catch fails the attempt as `mail_failed`, and the runner retries the attempt only
   where `mayRetry` holds. Catch it per row instead, as the outbox below does.
 - Never log a message, its address or its key: log the row's id and the error's `code`.
+
+## Queue tables: `queue` and `claim`
+
+A table whose rows are work declares `queue: { attempts: '<column>', due: '<column>', maxAttempts? }` and a `version`
+column (`references/table-and-migration.md`). The migration gives `<due>` a default of `now()` and allows `null`. A
+row is waiting while `<due>` is set, and done when it is `null`.
+
+```text
+for (const row of await ctx.db.app('mail.send').outbox.claim({ limit: 50 })) {
+	await send(ctx, row)
+	await ctx.transaction((tx) =>
+		tx.db.on(row.ref).update({}, { expectVersion: row.version, done: true })
+	)
+}
+```
+
+- `claim({ limit, where? })` (`limit` at most 500) leases due rows in a short transaction of its own, before the work: rows whose `<due>`
+  has come and whose attempts are below `maxAttempts` (10 by default), `for update skip locked`. It adds one attempt
+  and moves `<due>` by the backoff: the job's schedule period (60 s without one), doubled per attempt, at most 30
+  days. Each row answers its columns, its new `version` and `ref`.
+- Claim through the capability you read the table with: `ctx.db.app('<action>').<table>` for an application table,
+  `ctx.db.over(ctx.within('<action>', '<dimension>')).<table>` for a scoped one. The action is the table's `update`
+  action. `claim` runs only in a job and never inside `ctx.transaction`.
+- Finish each row in its own transaction through `tx.db.on(row.ref)`: `.update(values, { expectVersion, done: true })`
+  writes and clears `<due>`; `.remove({ expectVersion })` deletes the row (the table's delete action);
+  `.requeue({ at? })` makes it due again at `at` (now by default) with no attempts, for a dead row or a reminder moved
+  later.
+- A failure or a crash leaves the row as the claim left it, due again after the backoff; nothing retries at once.
+  Attempts count claims, so claim only what the run will reach.
+- A row past `maxAttempts` stays in the table, no longer due, for the application to show or requeue.
+- One recipe covers an outbox, a per-record reminder (`<due>` is the reminder time) and asynchronous work: a mutation
+  inserts a request row and kicks; the job claims it, renders, puts the result into a file column with
+  `ctx.files.put` and marks it done; the page polls the row and downloads the file.
 
 ## An outbox: what a request asks a job to do
 
@@ -196,17 +242,17 @@ The rules of the job:
 
 - **Bounded batches.** Each run takes at most a fixed number of records (`order by received_at, id limit 50`), oldest
   first; the next run takes the rest.
-- **Claim a record where you consume it**: a queue table's `claim` (`references/public-intake.md`), or a read
-  `for update skip locked` in the transaction that writes it, so a row another session holds waits for a later run and
-  blocks nothing behind it.
+- **Claim a record where you consume it**: a queue table's `claim` (above), or a read `for update skip locked` in the
+  transaction that writes it (`sql: 'write'`), so a row another session holds waits for a later run and blocks nothing
+  behind it.
 - **Each record is its own work.** Run it in its own transactions, inside a `try`: a failure adds one to the record's
   `attempts`, keeps a fixed step code in `last_failure` (never the error's message, which can quote a value), and the
   run goes on with the next record. Rethrow when `ctx.signal` aborted: that failure is the attempt's, and the next
   run meets the record as it is. So give each external call a deadline of its own inside the attempt's
   (`AbortSignal.any([ctx.signal, AbortSignal.timeout(ms)])` for a `fetch`; `ctx.mail.send` adds `ctx.signal` itself,
   so it takes only `AbortSignal.timeout(ms)`): a call that hangs then fails its record, not the run.
-- **A backoff per record.** A failure sets the record's `next_attempt_at` one minute ahead, doubled per attempt up to
-  an hour (`now() + least(interval '1 minute' * power(2, attempts), interval '1 hour')`), and a run takes only records
+- **A backoff per record.** `claim` sets it for you. Without a queue table, a failure sets the record's
+  `next_attempt_at` one minute ahead, doubled per attempt up to an hour (`now() + least(interval '1 minute' * power(2, attempts), interval '1 hour')`), and a run takes only records
   whose time has come (`where next_attempt_at <= now()`). Kicks start runs seconds apart: without the wait, a short
   provider outage spends every attempt of a record at once. Set it, with the attempt, in the transaction that claims
   the record before the call (the test e-mail), and a run that dies during the call waits too. A record a person

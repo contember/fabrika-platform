@@ -50,9 +50,11 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 | `{ member: true }`                             | any member, no application data   | nothing                                                     | nothing                                                                                     |
 
 - Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal`
-  (`{ kind: 'user', id, label, email }` for a `human` caller), `ctx.requestId` and `ctx.signal`, which aborts when
-  the client leaves or the request runs past its budget (10 s); its transaction then rolls back. Pass it to every
-  outbound call. An `on`, `in` or `over` endpoint also reads `ctx.db.app.<table>`: each application table whose read
+  (`{ kind: 'user', id, label, email }` for a `human` caller), `ctx.requestId`, `ctx.client` and `ctx.signal`, which
+  aborts when the client leaves or the request runs past its time limit (`limits.timeoutMs`, 10 s by default); its
+  transaction then rolls back. Pass it to every outbound call. `ctx.client` is `{ ip, userAgent }` as the proxy saw
+  them: record it (consent evidence), never decide on it. `ip` is `null` where the platform cannot vouch for the
+  address (behind the Zerops balancer), and `userAgent` is cut to 256 characters. An `on`, `in` or `over` endpoint also reads `ctx.db.app.<table>`: each application table whose read
   action is the endpoint's action, every row, read-only (below).
 - `ctx.principal.email` is the mailbox IAM recorded for the person, lower-cased, from the token: the address to mail,
   not a proof that the person controls it. Mail "send it to me"
@@ -109,6 +111,35 @@ dimension value takes `access: { action, app: true }`.
 - An `app` endpoint has no `ctx.target`, `ctx.within`, `ctx.members` or `ctx.links`. A link procedure and an export
   keep their own forms.
 - The approver sees it as "app-wide: a global grant", and a change of an endpoint to or from `app: true` widens.
+
+### Several capabilities: `capabilities`
+
+An operation that reads one object and writes another (a copy from one deal to another, a handover between two
+records) needs two capabilities. Declare each by name instead of reaching off the road with `sql` or `unscoped`:
+
+```text
+copyToTask: r.mutation({
+	input: z.strictObject({ id: z.uuid(), fromTaskId: z.uuid(), toTaskId: z.uuid() }),
+	output: Saved,
+	access: {
+		capabilities: {
+			from: { action: 'tasks.read', on: 'task', from: 'fromTaskId' },
+			to: { action: 'tasks.write', on: 'task', from: 'toTaskId' },
+		},
+	},
+}).handle(async ({ input, ctx }) => {
+	const source = await ctx.db.on(ctx.capabilities.from).task_attachments.get(input.id)
+	return ctx.db.on(ctx.capabilities.to).task_attachments.insert({ file: source.file, name: source.name })
+})
+```
+
+- At least two, each `{ action, on, from }`, `{ action, in, from }` or `{ action, over }`. `creates`, `app` and
+  `member` are single forms only.
+- The proxy checks every requirement. The framework mints them in the declared order, and the first refusal answers
+  (`on` 404, `in` and `over` 403).
+- The handler binds each with `ctx.db.on(…)`, `ctx.db.in(…)` or `ctx.db.over(…)`. It has no `ctx.target`,
+  `ctx.within`, `ctx.db.app`, `ctx.members` or `ctx.links`.
+- The generated tests add a denied case per capability. A join or a lock over many rows still needs `sql`.
 
 ### The methods of each handle
 
@@ -522,22 +553,112 @@ the invocation's transaction. `'write'` (a mutation, a job, a webhook) also inse
 then names the chain columns itself. Use it for an operator's cross-scope view, never to dodge a capability the caller
 should hold. The generated tests skip the other-scope leak case for such an endpoint.
 
-## Another origin: `admission.origins`
+## Admission and limits
+
+Every procedure takes `admission` (who may send it, how often) and `limits` (how large, how long):
+
+| Option                              | Credentialed and link procedures                                                                       | Public procedures (`references/public-intake.md`)                 |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `admission.rate` (calls per minute) | `perCaller`, `perEndpoint`; none by default                                                            | `perClient`, `perEndpoint`, `bytesPerHour`; a mutation 10 and 100 |
+| `admission.origins`                 | `'same-origin'` (default) or `'listed'`                                                                | `'same-origin'`, `'listed'` or `'any'`                            |
+| `admission.challenge`               | —                                                                                                      | `{ provider: 'turnstile', secret, siteKey }`                      |
+| `limits.maxBytes`                   | 64 KiB, at most 1 MiB; with file fields 64 KiB plus each file at its kind's `maxBytes`, at most 48 MiB | the same                                                          |
+| `limits.timeoutMs`                  | 10 s, at most 60 s                                                                                     | the same                                                          |
+
+- A declared `rate` merges into the default; `null` turns one bucket off. Past a bucket the answer is 429.
+- Every bucket is charged before the body is read and stays charged whatever the handler does. A bucket is a database
+  write per call, so a query declares one only where it needs one.
+- The body must arrive within `max(30 s, maxBytes at 16 KiB/s)`: a stalled body is 408. The handler's time starts
+  after the last byte, so a slow upload still commits.
+- The approver sees every effective value. A higher bucket, a dropped challenge or a longer time limit widens.
+
+## Another origin: `admission.origins: 'listed'`
 
 A page on another site (a partner's page, a separate marketing site, another application in the browser) calls an RPC
-endpoint only when the endpoint says `admission: { origins: 'listed' }` beside its `access`, and an operator lists that
-page's origin for the environment in Control (`--cross-origin=https://partner.example` on
-`fabrika control apps environments put`). Both halves are needed: the contract says which endpoints, the environment
-says from where, so staging and production can list different pages. The approver sees the rule like any other access
-change.
+procedure only when it declares `admission: { origins: 'listed' }`, and an operator lists that page's origin for the
+environment in Control (`--cross-origin=https://partner.example` on `fabrika control apps environments put`). Both
+halves are needed: the contract says which procedures, the environment says from where, so staging and production can
+list different pages. The approver sees the change like any other access change.
 
 - **A key, never a session.** The page sends `Authorization: Bearer px_…` (a machine key, or a person's own key). A
   person's session is never read for a request from a listed origin: the answer is 401 without a login bounce.
 - **The proxy answers CORS, the handler never does.** The proxy answers the preflight and sets
   `Access-Control-Allow-Origin` on the answer; it deletes every `Access-Control-*` header a handler sets.
-- **Only RPC procedures.** A link procedure and an export take only `'same-origin'`. A public procedure also takes
-  `'any'` (`references/public-intake.md`).
+- **Only RPC procedures.** A link procedure, an export, an SPA and a webhook have no other origin. A public procedure
+  may also declare `'any'` (`references/public-intake.md`).
 - **Test it** with `testKit(app, { crossOrigins: ['https://partner.example'] })` and a request carrying that `Origin`.
+
+## The HTTP shape: `http`
+
+A procedure is `POST <prefix>/<group>.<procedure>` with a JSON body by default. `http: { method?, query?, body?,
+cache? }` changes the wire, never what the handler does:
+
+- `method: 'GET'` on a query reads its input from flat scalar URL parameters (a number as written, `true`/`false`,
+  `null`; a name twice is refused). A query whose output is a file is `GET` by default. A session mutation is never
+  `GET`.
+- `query: z.strictObject({ … })` on a `POST` reads a flat schema from the URL beside the body; the handler gets it as
+  `query`, beside `input`.
+- `body: 'urlencoded'` takes a native `<form>` post of flat scalar fields. A file field makes the body multipart by
+  itself: its JSON input part first, then the files.
+- `cache: { maxAgeSeconds }` or `cache: 'immutable'` on a public `GET` query lets a browser or a CDN reuse a
+  successful answer (`Cache-Control: public, …`). Every other answer is `no-store`. `'immutable'` needs an input that
+  names a value that never changes (a file id), so a new value changes the URL.
+- `api.<group>.<procedure>.url(input)` is the URL of a `GET` procedure for a same-origin page.
+
+**A redirect.** `output: redirect({ origins? })` (`@fabrika/app/contract`): the handler returns `{ to }`, and the
+framework answers 303 after a `POST` and 302 after a `GET`. A target is a path of the application's own origin, a URL
+of an origin `origins` lists, or a URL a verified signed token of this request carries; anything else is a 500 and a
+log line, never an open redirect. A native form then posts, redirects and loads the next page. The typed client gets
+`{ to }` instead and decides whether to navigate.
+
+## Signed tokens: `signs` and `signedToken`
+
+A token is a signed, single-purpose value in a URL: an unsubscribe link, a tracked click, the link that manages one
+booking. It is no credential and opens no mount. Declare each purpose once, in the kit:
+
+```text
+export const app = defineApp(vocabulary, tables, {
+	tokens: { unsubscribe: token(Recipient, { maxDays: 400 }) },
+})
+```
+
+- `token(Claims, { maxDays })` (`@fabrika/app/contract`): the claims are a strict object, `maxDays` the longest
+  lifetime.
+- A site that issues tokens declares `signs: ['<purpose>']` and calls
+  `ctx.tokens.sign('<purpose>', claims, { days })`, `days` at most `maxDays`. An RPC procedure, a job and a webhook
+  sign; an export and a link procedure never do.
+- `signedToken('<purpose>')` is a top-level field of an input or of `http.query`. The framework verifies it as it
+  parses the input (a bad or expired token is 400), and the handler gets the typed claims.
+- A public mutation whose input holds a required `signedToken` may be `http: { method: 'GET' }` and answer
+  `redirect()` or a schema. The approver reads "changes state on GET; link scanners may trigger it". A page that
+  needs certainty keeps a `POST` behind a button.
+- A public procedure updates or removes a row only by an id a verified token of its request carries, with
+  `expectVersion`.
+- Single use and revocation are your state (a row the token names). The keys are the platform's: Control generates
+  and rotates them, and an old key verifies until its last token expires. Cloudflare has no signed tokens.
+
+## Outside calls: `egress`
+
+A credentialed procedure, a webhook or a job that calls an outside HTTPS API declares its origins:
+`egress: ['https://api.example.com']`, exact origins, no path or wildcard, at most 16. `fetch` to any other origin is
+refused while the site runs (`capability_refused: undeclared_egress`). A public, link or export procedure declares
+none. The checker's `cross-app-fetch` accepts an absolute URL only under an origin some site declares. The approver
+sees every origin. The guard stops mistakes; it is no sandbox.
+
+## Links to your own procedures: `ctx.url`
+
+`ctx.url('<endpoint id>', { input?, query? })` builds an absolute URL of one of the application's own procedures, on
+every site: the environment's public origin, the procedure's path, and the parameters its HTTP shape reads from the
+URL (the input of a `GET`, the `query` of a `POST`). The endpoint id is `<mount>.<group>.<procedure>`
+(`'api.mail.unsubscribe'`). The checker's `url-endpoint` refuses a literal id that names no procedure. Never build an
+origin from a variable of your own.
+
+## A promise to integrations: `compatibility`
+
+An integration calls RPC procedures with a service key (caller `machine`). Promise it a stable API with
+`c.rpc('/api/v1', groups, { compatibility: 'backward' })`: Control then refuses a deploy that removes a procedure,
+narrows its input, changes its output, its HTTP shape, its file answer or its access. A breaking change is a new mount
+(`/api/v2`) beside the old one. The default is `'unchecked'`.
 
 ## Members
 

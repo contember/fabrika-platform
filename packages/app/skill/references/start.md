@@ -73,7 +73,8 @@ export default serve(contract, { database: null })
 - `defineApp(vocabulary)` declares no tables, so `serve` takes `database: null`, and only then. A handler has no
   `ctx.db`, `ctx.sql` or `unscoped` (a type error that names `defineApp(vocabulary, tables)`); it answers from the
   caller's grants (`ctx.within.values`, `ctx.principal`), the member directory, or a connector.
-- Forms, jobs and file collections keep their rows in tables, so an application gets them with its first table.
+- Jobs, queue tables, file columns and public procedures that record a row all need tables, so an application gets
+  them with its first table.
 
 ```ts fabrika.config.ts
 import { compileContract, schemaFromContract } from '@fabrika/app/contract'

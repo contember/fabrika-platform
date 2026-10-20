@@ -204,7 +204,9 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
   `@fabrika/app`. Any thrown value with a numeric `httpStatus` below 500, a `type` and a `message` answers that status
   (the framework's other errors are such values); any other throw is a 500.
 - One action per endpoint. A column that another action writes gets its own write action and its own endpoint
-  (`assign` above). Never check a second action inside a handler: split the endpoint.
+  (`assign` above). Never check a second action inside a handler: split the endpoint. An operation that reads one
+  object and writes another (a copy from one deal to another) declares both under
+  `access: { capabilities: { <name>: <form>, … } }` (`references/endpoint.md`).
 - Never take a user, owner or tenant id from the input, nor the caller's own address. The scope comes from the access
   form; `ctx.principal.id` is the caller, and `ctx.principal.email` its address. A person someone picks (`assign` above) is checked with `ctx.members.get(id)`, which answers `null` for
   anyone outside the org, and its label comes from that answer, never from the input.
@@ -228,6 +230,10 @@ the access check. `references/spa.md` shows the stack.
 | a share link                   | `issues: '<link mount>'`                                | `ctx.links.issue`                                  |
 | e-mail (a cron job only)       | `mailer: 'installation'`                                | `ctx.mail.send`                                    |
 | a file from a public procedure | `file('<kind>')` input, `admission` with `bytesPerHour` | a reference the handler writes into a file column  |
+| an outside HTTPS API           | `egress: ['https://api.example.com']`                   | `fetch` to exactly those origins                   |
+| a signed link (unsubscribe)    | `signs: ['<purpose>']`                                  | `ctx.tokens.sign`                                  |
+| a webhook binding              | `binds: '<webhook>'`                                    | `ctx.webhooks('<webhook>').bind` and `.unbind`     |
+| a job run after the commit     | `kicks: ['<job>']`                                      | `ctx.kick('<job>')`                                |
 | a trigger, function or view    | its migration                                           | —                                                  |
 
 Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
@@ -308,10 +314,12 @@ and the application's jobs sent. Write the seed and use it as `references/dev.md
 Read the one you need before you write that part. Together they are one application to copy from: `app-setup.md`
 (`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA's build), `spa.md` (the hooks, forms and
 their errors, the caller, the components, routing, theming, screen tests), `table-and-migration.md`, `endpoint.md`
-(access forms, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`, `ctx.sql`, audited CSV
-downloads, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
+(access forms, several capabilities, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`,
+`ctx.sql`, audited CSV downloads, `admission` and `limits`, the HTTP shape and `redirect()`, signed tokens, `egress`,
+`ctx.url`, a mount's `compatibility`, another origin, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
 `errors.md` (checker findings, type errors, runtime answers), `dev.md` (the seed and the preview), `jobs.md` (which dimension `ctx.within` names, the UTC
-day, e-mail through `ctx.mail`, the outbox and `kicks`), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
+day, queue tables and `claim`, e-mail through `ctx.mail` with attachments and unsubscribe, the outbox and `kicks`),
+`files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
 `start.md`, a new application before its first table (its first test, adding the first table, installing and updating
 this skill), and `public-intake.md`, a public page, public procedures, a job that claims their rows, issues links and
 e-mails them, a link holder's files, HR's review with its history.
@@ -319,7 +327,8 @@ e-mails them, a link holder's files, HR's review with its history.
 ## Not built yet
 
 - The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
-- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A mutation's `ctx.kick` starts a run of
-  its job; it carries nothing. A list write is off the road (`sql`).
+- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job; it
+  carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
+- A read across tables (a join, a filter over a related table, an aggregate over several) is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.

@@ -464,19 +464,36 @@ export const visitors = app.group({}, (r) => ({
   keep their own. The approver sees it as "for anyone, without signing in". Put nothing on it that only members may
   read: the page calls only the public procedures.
 - **A public procedure** sits in a group with no callers (`app.group({}, …)`), declares `access: { public: true }`
-  and the `actions` it holds, and is served at `POST /api/visitors.register`. Its `ctx.db.app('<action>')` inserts and
-  reads back nothing; it never locks or claims a row.
+  and the `actions` it holds, and is served at `POST /api/visitors.register`. `access` says anyone may call it;
+  `actions` say what its handler may do. It runs as its own workload, with those actions only, whoever calls: the
+  approver reads "anyone may call `api.visitors.register`; it runs with `candidates.register`".
+- **What its handler reaches.** `ctx.db.app('<action>')` of an application table: an insert reads back nothing (the
+  id is generated before the insert), a read needs the table's `read` action, and an update or a remove takes only a
+  row id a verified signed token of the request carries (`references/endpoint.md`). It never locks or claims a row. It
+  declares only `kicks` and `signs`: no `sql`, `unscoped`, `issues`, `connect`, `egress`, `binds` or mail. No role may
+  grant its action, so a role change cannot widen it; a table staff read too lists both actions.
+- **Constant work.** Answer and work the same for a new and a known visitor (`{}` here, one inserted row): an answer
+  or a delay that depends on what exists tells a stranger who registered. The job decides later.
+- **`ctx.client`** is `{ ip, userAgent }` as the proxy saw them, for consent evidence in a column of the row; `ip` is
+  `null` on Zerops. Never decide on either.
 - **Its abuse control.** `honeypot(input.website)` is true when the field the page hides is filled: answer the same
   and write no row. `admission.challenge` makes the framework verify the Turnstile token in the input field
   `challengeToken` before the handler runs (a failed token 400, an unreachable provider 503, no row either way) and adds
   Turnstile's origin to the CSP. `TURNSTILE_SECRET` is an application variable the human sets; without it the
   application does not boot. `siteKey` names the variable with the widget's public site key, which every SPA mount
   serves its pages; without it the application does not boot either. Another public value a page needs per
-  environment (a link target) goes in the SPA mount's own list: `c.spa('/', { …, browserConfig: ['SIGNUP_URL'] })`. Both
+  environment (a link target) goes in the SPA mount's `browserConfig` list: `c.spa('/', { …, browserConfig: ['SIGNUP_URL'] })`. Both
   reach the page in `<prefix>/__fabrika-config.json` as `public: { <VARIABLE>: <value> }`, and the approver sees each
   name. Never name a secret there: the contract refuses a variable that is both.
   `admission.rate: { perClient, perEndpoint }` (per minute, 10 and 100 by default for a public mutation) answers 429
-  past either limit.
+  past either limit; `null` turns one off. A public query counts nothing unless it declares a bucket, since each
+  bucket is a database write per call: a page of twenty images costs no write. All public procedures of an instance
+  hold at most a quarter of its database connections together; past that the answer is 503, and staff keep the rest.
+  `limits: { maxBytes, timeoutMs }` bounds the body (64 KiB by default) and the handler (10 s).
+- **The order of a public request**, each refusal with its answer: the origin rule (403), the in-flight share (503),
+  every bucket (429), the bounded body and the strict input with its signed tokens (413, 400), the workload token (503
+  while the platform's identity service is down), the challenge (400, 503 when the provider is unreachable), the staged file parts, then the handler, the
+  commit and the kicks.
 - **A form on someone else's page.** A page served from this application's own origin needs nothing. A partner's page
   or a separate marketing site needs `admission.origins`: `'listed'` for the origins an operator lists for the
   environment in Control, `'any'` for any site (an embeddable widget). Keep the honeypot, the challenge and the rate

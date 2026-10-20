@@ -67,8 +67,11 @@ task_attachments: {
 },
 ```
 
-- A file column is `UUID REFERENCES fabrika_files (id)` with an index on it; the checker verifies both for every
-  column the policy names in `files`. `fabrika_files` is the framework's table: never write it.
+- A file column is `UUID REFERENCES fabrika_files (id)` with an index on it; the checker's `file-column-migration`
+  verifies both for every column the policy names in `files`. `fabrika_files` is the framework's table: never write
+  it.
+- A file kind (`c.files({ types, maxBytes, scan? })`) has no owner, no actions and no endpoint. The table's actions
+  are the file's authority, and the approver reads "`tasks.write` writes `task_attachments.file` (attachments)".
 - A file reaches what its row reaches, now: a moved task moves its files. Deleting the row (here with its task, by the
   cascade) or clearing a nullable column removes the reference; the framework's sweep deletes a file no column
   references.
@@ -138,14 +141,21 @@ export const attachments = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
-- An input field `file('<kind>')` makes the body multipart; the file is bounded by the kind's `types` (sniffed, not
-  trusted) and `maxBytes`. The handler writes the reference into the column, in its transaction; a rolled-back
-  request keeps no file.
+- An input field `file('<kind>')` of a mutation makes the body multipart; the file is bounded by the kind's `types`
+  (sniffed, not trusted) and `maxBytes`. `z.optional(file(k))` is an optional file, `z.array(file(k)).max(n)` up to
+  `n` files, each a top-level field; one request carries at most 20 files. The body limit grows by each file at its kind's `maxBytes`, up to 48
+  MiB (`limits.maxBytes`, `references/endpoint.md`). The handler writes the reference into the column, in its
+  transaction; a rolled-back request keeps no file.
 - A row read through the data layer carries a file reference in each file column, with `id`, `name`, `type`, `size`
   and `status`, so a list shows them without a call per file.
 - A query whose output is `file('<kind>')` returns the reference, and the framework streams the file. It is a `GET`
-  with its input in flat query parameters. A `pending` or `quarantined` file answers 409 `file_not_ready`, a `rejected`
-  one 409 `file_rejected`, and one the sweep deleted 404.
+  with its input in flat query parameters. A mutation with a file output is a `POST` that answers the file after its
+  commit, so a download that writes an audit row is a mutation. The handler never returns a `Response`. A `pending`
+  or `quarantined` file answers 409 `file_not_ready`, a `rejected` one 409 `file_rejected`, and one the sweep deleted
+  404.
+- A public image (a catalog picture in a page or an e-mail) is a public `GET` query with `http: { cache: 'immutable' }`
+  whose input names the file as well as its row (`{ product, file }`), so a new image changes the URL. The handler
+  refuses a file id that is not the row's.
 
 The SPA calls them through the typed client, never a hand-written `fetch`. `api.attachments.download.url(input)` is
 the URL of a `GET` file procedure for a same-origin page (`<img src>`, `<a download>`), and
@@ -342,7 +352,11 @@ export const erase = app.cron('30 2 * * *', {
 
 - Never write a sweep or delete an object yourself: a file goes when no column references it.
 - **A handover writes the new reference before it deletes the old one, in one transaction.** Written in two
-  transactions, the sweep can delete the file between them.
+  transactions, the sweep can delete the file between them. The same covers a file two records share, a versioned
+  document (a versions table with a file column) and a thumbnail (a second column of another kind): there is no move or
+  copy operation.
+- A file referenced from a dimension-scoped table belongs to that top-level scope: a reference from another one is
+  refused.
 
 ## Malware scan
 

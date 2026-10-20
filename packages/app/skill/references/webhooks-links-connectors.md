@@ -3,7 +3,7 @@
 Each of these lets someone in who is not a signed-in member of the scope. Ask the human before you add one, and say
 what it lets that caller do.
 
-## Webhooks (GitHub)
+## Webhooks
 
 ```ts src/github/endpoints.ts
 import { WebhookSecret } from '@fabrika/app/contract'
@@ -61,6 +61,28 @@ export const integrations = app.group({ callers: ['human'] }, (r) => ({
   again. A handler that throws commits nothing, and a process that dies before the commit leaves the lease to expire,
   so GitHub's redelivery runs it again from nothing. So make every effect idempotent, and key an external effect after
   the data work on `ctx.delivery.key`; never rely on exactly one run.
+- An idempotent write needs no `sql`: `insert(values, { onConflict: { columns: ['<unique column>'], do: 'nothing' } })`
+  (or `do: 'update'`) on a unique index (`references/table-and-migration.md`).
+- **The verifier.** `scheme` is a preset or a shape the framework computes against the binding's secret; never verify
+  a signature yourself:
+
+  | `scheme`                                                                                                  | For                                   |
+  | --------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+  | `'github-sha256'`                                                                                         | GitHub; it also checks the account    |
+  | `'standard-webhooks'`                                                                                     | senders of the Standard Webhooks spec |
+  | `'stripe'`                                                                                                | Stripe                                |
+  | `{ hmac: { header, algorithm, encoding, prefix?, timestamp?, signed: 'body' \| 'timestamp.body', id? } }` | most other HMAC senders (Shopify, …)  |
+
+  A signed timestamp must be within five minutes. `{ basic: true }` and `{ bearer: true }` are refused at build: the
+  proxy removes `Authorization` from an anonymous request, so they could never verify.
+- **`boundTo: 'app'`** gives one binding for the whole application, for a provider with one endpoint per account
+  (Stripe). Its handler holds its `actions` application-wide, as a job does: `ctx.db.app('<action>')`. The procedure
+  that binds it takes an `app` capability: `access: { action, app: true }`, `binds`, and
+  `ctx.webhooks('<webhook>').bind(ctx.app, account)`.
+- `limits: { maxBytes?, timeoutMs? }`: the body is 1 MiB by default and at most; the handler runs 10 s by default, at
+  most 60 s. A webhook may declare `kicks`, `signs`, `egress`, `sql` and `unscoped`, and `ctx.files.put` stores a file
+  a provider sends (an inbound e-mail's attachment) for a file column.
+- Not covered: a provider that validates its URL with a `GET`, or that needs a custom answer body.
 
 ## Share links
 

@@ -156,6 +156,10 @@ export default serve(contract, { database: scoped(tables) })
   the variable with the widget's public site key, which every SPA mount serves its pages (below). On Zerops every
   visitor still shares one client address (the balancer), so `perClient` acts as a second per-endpoint limit: raise
   it, and use the challenge. `references/public-intake.md` builds a whole public intake on it.
+- `defineApp(vocabulary, tables, { imports?, tokens? })`: `imports` names other applications' exports
+  (`references/webhooks-links-connectors.md`), `tokens` the purposes of signed tokens (`references/endpoint.md`).
+- `c.rpc('/api/v1', groups, { compatibility: 'backward' })` promises a mount's callers a stable API
+  (`references/endpoint.md`).
 - `kicks: ['<job>']` on a mutation names cron jobs of the same contract (`jobs`), and `ctx.kick('<job>')` in its
   handler starts one once its transaction committed: a run starts within seconds, under the job's own key, and the
   answer never waits for it (`references/jobs.md`). Kicks coalesce on the job's lease (at most one run and one
