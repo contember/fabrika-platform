@@ -1,8 +1,8 @@
 // The approval page's view of a classification (ADR-0050 §7): it keeps every line, shows every widening without
-// expanding anything, folds only what neither widens nor needs closer review, and decides nothing.
+// expanding anything, folds only quiet subjects that changed alike, and decides nothing.
 
 import { describe, expect, test } from 'bun:test'
-import { type ApprovalView, approvalView, type ChangeRow } from '../approval-view'
+import { type ApprovalView, approvalView, type ChangeRow, rowChanges } from '../approval-view'
 import type { AccessChangeDto, ChangeAudienceDto } from '../index'
 
 const anyone: ChangeAudienceDto = { reach: 'anyone', requirement: null }
@@ -17,7 +17,10 @@ function endpoint(
 	return { line: `Endpoint \`${name}\` ${line.rule}`, subject: { kind: 'endpoint', name, method: 'POST', path: `/${name}` }, audience, ...line }
 }
 
-/** Five public procedures, two that start a job; forty signed-in endpoints narrowed to a body limit; a link upload; a migration. */
+/**
+ * Five public procedures, one that starts a job; forty signed-in endpoints narrowed to a body limit, three of them with
+ * their admission shown too; a new signed-in endpoint; a link upload; an adopting migration; a table.
+ */
 const intake: AccessChangeDto[] = [
 	...['cta', 'interest', 'register', 'resend', 'unsubscribe'].map((name) =>
 		endpoint(name, anyone, { effect: 'widens', rule: 'endpoint.added', review: 'closer', reason: 'anyone-calls' })
@@ -29,10 +32,13 @@ const intake: AccessChangeDto[] = [
 		reason: 'anyone-calls',
 		consequence: { kind: 'starts-job', job: 'intake' },
 	}),
-	...Array.from({ length: 40 }, (_, index) => endpoint(`staff.e${index}`, staff, { effect: 'narrows', rule: 'endpoint.body-limit' })),
+	...Array.from(
+		{ length: 40 },
+		(_, index) => endpoint(`staff.e${String(index).padStart(2, '0')}`, staff, { effect: 'narrows', rule: 'endpoint.body-limit' }),
+	),
+	...Array.from({ length: 3 }, (_, index) => endpoint(`staff.e0${index}`, staff, { effect: 'neutral', rule: 'procedure.admission' })),
 	endpoint('staff.files.remove', staff, { effect: 'widens', rule: 'endpoint.added' }),
 	endpoint('student.upload', student, { effect: 'widens', rule: 'endpoint.added' }),
-	...Array.from({ length: 3 }, (_, index) => endpoint(`staff.e${index}`, staff, { effect: 'neutral', rule: 'procedure.admission' })),
 	{
 		effect: 'widens',
 		line: 'Migration `0002.sql` adopts …',
@@ -45,29 +51,29 @@ const intake: AccessChangeDto[] = [
 ]
 
 const rowsOf = (view: ApprovalView): ChangeRow[] => [...view.callers, ...view.data].flatMap((entry) => entry.rows)
-const linesOf = (rows: readonly ChangeRow[]): AccessChangeDto[] => rows.flatMap((row) => (row.kind === 'line' ? [row.change] : row.changes))
+const label = (row: ChangeRow): string =>
+	row.kind === 'subject' ? row.subject.name : `${row.rules.map((rule) => rule.rule).join('+')} ×${row.subjects.length}`
 
 describe('the approval view', () => {
 	const view = approvalView(intake)
 
 	test('keeps every line exactly once', () => {
-		const shown = [...linesOf(rowsOf(view)), ...view.unsorted]
+		const shown = [...rowsOf(view).flatMap(rowChanges), ...view.unsorted]
 		expect(shown).toHaveLength(intake.length)
 		expect(new Set(shown)).toEqual(new Set(intake))
 	})
 
-	test('shows every widening on a row of its own, in a group the page does not collapse', () => {
+	test('shows every widening and every closer review on a row of its own, in a group the page does not collapse', () => {
 		for (const entry of [...view.callers, ...view.data]) {
 			for (const row of entry.rows) {
-				if (row.kind === 'folded') expect(row.changes.every((change) => change.effect !== 'widens' && change.review !== 'closer')).toBe(true)
+				if (row.kind === 'folded') expect(rowChanges(row).every((change) => change.effect !== 'widens' && change.review !== 'closer')).toBe(true)
 			}
-			expect(entry.collapsed).toBe(!linesOf(entry.rows).some((change) => change.effect === 'widens'))
+			expect(entry.collapsed).toBe(!entry.rows.flatMap(rowChanges).some((change) => change.effect === 'widens'))
 		}
-		const widenings = intake.filter((change) => change.effect === 'widens')
 		const inView = [...view.callers, ...view.data].filter((entry) => !entry.collapsed).flatMap((entry) =>
-			entry.rows.flatMap((row) => (row.kind === 'line' ? [row.change] : []))
+			entry.rows.flatMap((row) => (row.kind === 'subject' ? row.changes : []))
 		)
-		expect(widenings.every((change) => inView.includes(change))).toBe(true)
+		expect(intake.filter((change) => change.effect === 'widens').every((change) => inView.includes(change))).toBe(true)
 	})
 
 	test('groups endpoints by who reaches them, a closer review first, and each link mount apart', () => {
@@ -84,15 +90,19 @@ describe('the approval view', () => {
 		expect(view.data.find((entry) => entry.key === 'table')?.collapsed).toBe(true)
 	})
 
-	test('folds forty body limits into one row, after the widening that leads the group, and keeps a pair apart', () => {
-		const staffRows = view.callers.find((entry) => entry.key === 'human')?.rows ?? []
-		expect(staffRows.map((row) => (row.kind === 'line' ? row.change.rule : `${row.rule} ×${row.changes.length}`))).toEqual([
-			'endpoint.added',
-			'procedure.admission ×3',
-			'endpoint.body-limit ×40',
+	test("keeps each endpoint's lines on its row, its widening first", () => {
+		const register = view.callers[0]?.rows.find((row) => row.kind === 'subject' && row.subject.name === 'register')
+		expect(register?.kind === 'subject' && register.changes.map((change) => change.rule)).toEqual(['endpoint.added', 'reach.kicks'])
+	})
+
+	test('folds quiet endpoints that changed alike, after the widening that leads the group, and keeps a pair apart', () => {
+		expect(view.callers.find((entry) => entry.key === 'human')?.rows.map(label)).toEqual([
+			'staff.files.remove',
+			'procedure.admission+endpoint.body-limit ×3',
+			'endpoint.body-limit ×37',
 		])
-		const pair = approvalView(intake.filter((change) => change.rule !== 'endpoint.body-limit').slice(0, 7))
-		expect(rowsOf(pair).every((row) => row.kind === 'line')).toBe(true)
+		const pair = approvalView(intake.filter((change) => change.rule !== 'endpoint.body-limit' && change.subject?.name !== 'staff.e02'))
+		expect(rowsOf(pair).every((row) => row.kind === 'subject')).toBe(true)
 	})
 
 	test('puts lines stored before lines carried facts apart, in their order', () => {

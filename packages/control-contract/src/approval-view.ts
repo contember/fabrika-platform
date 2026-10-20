@@ -1,8 +1,17 @@
 // How the approval page shows one access change (ADR-0050 §7): the classification's facts grouped by who reaches an
-// endpoint and by what else they are about, ranked by effect, review and reach, with repeated lines folded. Pure, and it
-// decides nothing: whether a run waits is the classification's outcome alone.
+// endpoint and by what else they are about, one row per subject with all its lines, ranked by effect, review and
+// reach, and quiet subjects that changed alike folded into one row. Pure, and it decides nothing: whether a run waits is
+// the classification's outcome alone.
 
-import { type AccessChangeDto, CHANGE_SUBJECT_KINDS, type ChangeSubjectKind, SURFACE_REACHES, type SurfaceReach } from './index.js'
+import {
+	type AccessChangeDto,
+	CHANGE_SUBJECT_KINDS,
+	type ChangeAudienceDto,
+	type ChangeSubjectDto,
+	type ChangeSubjectKind,
+	SURFACE_REACHES,
+	type SurfaceReach,
+} from './index.js'
 
 /** The endpoints of one caller group: everyone a reach admits, or the holders of one link mount's share links. */
 export interface CallerGroup {
@@ -19,10 +28,25 @@ export interface SubjectGroup {
 	readonly subject: ChangeSubjectKind
 }
 
-/** A line, or the lines of one rule and one effect on several subjects, which neither widen nor need closer review. */
-export type ChangeRow =
-	| { readonly kind: 'line'; readonly change: AccessChangeDto }
-	| { readonly kind: 'folded'; readonly rule: string; readonly effect: 'narrows' | 'neutral'; readonly changes: readonly AccessChangeDto[] }
+/** One subject and its lines, most important first. */
+export interface SubjectRow {
+	readonly kind: 'subject'
+	readonly subject: ChangeSubjectDto
+	readonly audience?: ChangeAudienceDto
+	readonly changes: readonly AccessChangeDto[]
+}
+
+/**
+ * Quiet subjects that changed alike: each has lines of exactly these rules and effects, and none of them widens or needs
+ * closer review (`rules` in order, as `rule` and `effect`).
+ */
+export interface FoldedRow {
+	readonly kind: 'folded'
+	readonly rules: readonly { readonly rule: string; readonly effect: 'narrows' | 'neutral' }[]
+	readonly subjects: readonly SubjectRow[]
+}
+
+export type ChangeRow = SubjectRow | FoldedRow
 
 export interface EffectTally {
 	readonly widens: number
@@ -33,6 +57,8 @@ export interface EffectTally {
 
 export type ChangeGroup = (CallerGroup | SubjectGroup) & {
 	readonly rows: readonly ChangeRow[]
+	/** How many subjects the group holds, folded ones included. */
+	readonly subjects: number
 	readonly tally: EffectTally
 	/** Whether the page collapses the group by default: only when it holds no widening line. */
 	readonly collapsed: boolean
@@ -50,7 +76,7 @@ export interface ApprovalView {
 	readonly unsorted: readonly AccessChangeDto[]
 }
 
-/** Lines of one rule and one effect fold from this many subjects on. */
+/** Quiet subjects that changed alike fold from this many on. */
 export const FOLD_AT = 3
 
 /**
@@ -90,7 +116,7 @@ export function approvalView(changes: readonly AccessChangeDto[]): ApprovalView 
 		impact: {
 			callers: callerGroups.flatMap((entry) =>
 				entry.kind === 'caller'
-					? [{ key: entry.key, reach: entry.reach, ...(entry.mount === undefined ? {} : { mount: entry.mount }), endpoints: endpointsOf(entry) }]
+					? [{ key: entry.key, reach: entry.reach, ...(entry.mount === undefined ? {} : { mount: entry.mount }), endpoints: entry.subjects }]
 					: []
 			),
 			migrations: migrations.size,
@@ -101,42 +127,74 @@ export function approvalView(changes: readonly AccessChangeDto[]): ApprovalView 
 	}
 }
 
+/** Every line a row holds. */
+export function rowChanges(row: ChangeRow): readonly AccessChangeDto[] {
+	return row.kind === 'subject' ? row.changes : row.subjects.flatMap((subject) => subject.changes)
+}
+
 function group(head: CallerGroup | SubjectGroup, changes: readonly AccessChangeDto[]): ChangeGroup {
-	const ranked = changes.map((change, index) => ({ change, index }))
-		.sort((a, b) => changeRank(a.change) - changeRank(b.change) || compareText(subjectName(a.change), subjectName(b.change)) || a.index - b.index)
-		.map(({ change }) => change)
-	return { ...head, rows: fold(ranked), tally: tallyOf(changes), collapsed: !changes.some((change) => change.effect === 'widens') }
+	const bySubject = new Map<string, { subject: ChangeSubjectDto; audience?: ChangeAudienceDto; changes: AccessChangeDto[] }>()
+	for (const change of changes) {
+		const subject = change.subject
+		if (subject === undefined) continue
+		const entry = bySubject.get(subject.name) ?? { subject, ...(change.audience === undefined ? {} : { audience: change.audience }), changes: [] }
+		entry.changes.push(change)
+		bySubject.set(subject.name, entry)
+	}
+	const rows = [...bySubject.values()].map((entry): SubjectRow => ({
+		kind: 'subject',
+		subject: entry.subject,
+		...(entry.audience === undefined ? {} : { audience: entry.audience }),
+		changes: entry.changes.map((change, index) => ({ change, index })).sort((a, b) => changeRank(a.change) - changeRank(b.change) || a.index - b.index)
+			.map(({ change }) => change),
+	}))
+	return {
+		...head,
+		rows: fold(rows.sort((a, b) => rowRank(a) - rowRank(b) || compareText(a.subject.name, b.subject.name))),
+		subjects: rows.length,
+		tally: tallyOf(changes),
+		collapsed: !changes.some((change) => change.effect === 'widens'),
+	}
 }
 
 /**
- * Lines of one rule and one effect on `FOLD_AT` subjects or more become one row at the place of the first of them. A
- * widening or a line for closer review never folds, so every one of them is in view without expanding anything.
+ * A subject is quiet when none of its lines widens or needs closer review. Quiet subjects whose lines have the same rules
+ * and effects become one row, from `FOLD_AT` of them on, at the place of the first; every other subject keeps its row,
+ * so every widening and every line for closer review is in view without expanding anything.
  */
-function fold(ranked: readonly AccessChangeDto[]): ChangeRow[] {
-	const foldable = (change: AccessChangeDto): change is AccessChangeDto & { effect: 'narrows' | 'neutral'; rule: string } =>
-		change.effect !== 'widens' && change.review !== 'closer' && change.rule !== undefined
-	const families = new Map<string, AccessChangeDto[]>()
-	for (const change of ranked) {
-		if (!foldable(change)) continue
-		const key = `${change.rule} ${change.effect}`
-		families.set(key, [...(families.get(key) ?? []), change])
+function fold(rows: readonly SubjectRow[]): ChangeRow[] {
+	const families = new Map<string, SubjectRow[]>()
+	for (const row of rows) {
+		const key = quietKey(row)
+		if (key !== undefined) families.set(key, [...(families.get(key) ?? []), row])
 	}
-	const rows: ChangeRow[] = []
+	const folded: ChangeRow[] = []
 	const placed = new Set<string>()
-	for (const change of ranked) {
-		if (!foldable(change)) {
-			rows.push({ kind: 'line', change })
-			continue
-		}
-		const key = `${change.rule} ${change.effect}`
-		const family = families.get(key) ?? []
-		if (family.length < FOLD_AT) rows.push({ kind: 'line', change })
+	for (const row of rows) {
+		const key = quietKey(row)
+		const family = key === undefined ? [] : (families.get(key) ?? [])
+		if (key === undefined || family.length < FOLD_AT) folded.push(row)
 		else if (!placed.has(key)) {
 			placed.add(key)
-			rows.push({ kind: 'folded', rule: change.rule, effect: change.effect, changes: family })
+			folded.push({ kind: 'folded', rules: quietRules(row), subjects: family })
 		}
 	}
-	return rows
+	return folded
+}
+
+function quietRules(row: SubjectRow): { rule: string; effect: 'narrows' | 'neutral' }[] {
+	const rules = new Map<string, { rule: string; effect: 'narrows' | 'neutral' }>()
+	for (const change of row.changes) {
+		if (change.rule !== undefined && change.effect !== 'widens') {
+			rules.set(`${change.rule} ${change.effect}`, { rule: change.rule, effect: change.effect })
+		}
+	}
+	return [...rules.values()]
+}
+
+function quietKey(row: SubjectRow): string | undefined {
+	const quiet = row.changes.every((change) => change.effect !== 'widens' && change.review !== 'closer' && change.rule !== undefined)
+	return quiet ? quietRules(row).map(({ rule, effect }) => `${rule} ${effect}`).join('|') : undefined
 }
 
 function tallyOf(changes: readonly AccessChangeDto[]): EffectTally {
@@ -148,15 +206,12 @@ function tallyOf(changes: readonly AccessChangeDto[]): EffectTally {
 	}
 }
 
-function endpointsOf(entry: ChangeGroup): number {
-	const lines = entry.rows.flatMap((row) => (row.kind === 'line' ? [row.change] : row.changes))
-	return new Set(lines.map(subjectName)).size
+function rowRank(row: SubjectRow): number {
+	return Math.min(...row.changes.map(changeRank))
 }
 
 function leadRank(entry: ChangeGroup): number {
-	const first = entry.rows[0]
-	if (first === undefined) return Number.POSITIVE_INFINITY
-	return changeRank(first.kind === 'line' ? first.change : { effect: first.effect })
+	return Math.min(...entry.rows.flatMap(rowChanges).map(changeRank))
 }
 
 function reachIndex(entry: ChangeGroup): number {
@@ -166,7 +221,5 @@ function reachIndex(entry: ChangeGroup): number {
 function subjectIndex(entry: ChangeGroup): number {
 	return entry.kind === 'subject' ? CHANGE_SUBJECT_KINDS.indexOf(entry.subject) : 0
 }
-
-const subjectName = (change: AccessChangeDto): string => change.subject?.name ?? ''
 
 const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
