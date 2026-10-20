@@ -18,6 +18,7 @@ import {
 	replayOperationsCatalog,
 } from './operations-catalog'
 import type { OperationsReleaseProjectionDeps } from './operations-releases'
+import { type PlatformTransportPort, VaultPlatformTransport } from './platform-transport'
 import { type ProxySecrets, VaultProxySecrets } from './proxy-secret'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
@@ -100,6 +101,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		...proxySecretDeps(env),
 		...workloadCredentialDeps(env),
 		...membershipTransportDeps(env),
+		...platformTransportDeps(env),
 		...tokenKeyDeps(env),
 	}
 }
@@ -122,6 +124,14 @@ export function membershipTransportDeps(env: Env): { membershipTransport?: Membe
 	}
 	const issuer = iamMembershipKeyIssuer({ origin, provisioningKey })
 	return { membershipTransport: new VaultMembershipTransport(repositories(env).membershipKeys, () => vault(env), issuer) }
+}
+
+/** Control issues the platform transport keys itself and seals them in the vault; without a vault it issues none. */
+export function platformTransportDeps(env: Env): { platformTransport?: PlatformTransportPort } {
+	if (env.FABRIKA_CONTROL_VAULT_KEY === undefined) {
+		return {}
+	}
+	return { platformTransport: new VaultPlatformTransport(repositories(env).platformTransportKeys, () => vault(env)) }
 }
 
 /**

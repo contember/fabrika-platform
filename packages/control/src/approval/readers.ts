@@ -87,14 +87,14 @@ const reader04Release: ContractReader = {
 	},
 }
 
-interface Release {
+export interface Release {
 	readonly text: string
 	readonly major: number
 	readonly minor: number
 	readonly patch: number
 }
 
-function parseRelease(text: string): Release | null {
+export function parseRelease(text: string): Release | null {
 	const match = RELEASE.exec(text)
 	if (match === null) return null
 	return { text, major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) }
@@ -108,7 +108,7 @@ function requireRelease(text: string): Release {
 
 const minorOf = (release: Release): string => `${release.major}.${release.minor}`
 
-const compareReleases = (a: Release, b: Release): number => a.major - b.major || a.minor - b.minor || a.patch - b.patch
+export const compareReleases = (a: Release, b: Release): number => a.major - b.major || a.minor - b.minor || a.patch - b.patch
 
 /** A framework window: the platform's own release and the reader of each minor it deploys. */
 export interface ReaderWindow {

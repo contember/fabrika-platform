@@ -7,7 +7,9 @@ import {
 	installationMailJobs,
 	installationMailSecrets,
 	NO_INSTALLATION_MAIL,
+	platformMailEnvironment,
 	readInstallationMail,
+	relaysInstallationMail,
 } from '../mail-transport'
 
 const REACH: DeclaredReach = { sql: null, unscoped: {}, connect: [], issues: null }
@@ -108,5 +110,32 @@ describe('the installation mail transport', () => {
 		)
 		const both = artifact({ 'job:b': { ...REACH, mailer: 'installation' }, 'job:a': { ...REACH, mailer: 'installation' } })
 		expect(() => installationMailEnvironment(INVALID, both)).toThrow("the contract's jobs `a`, `b` send mail through the installation")
+	})
+})
+
+describe("the platform's relay for a job that sends through the installation", () => {
+	const needs = artifact({ 'job:digest': { ...REACH, mailer: 'installation' } })
+
+	test('a framework release from 0.6.0 on reads the relay; an older one, or a snapshot that records none, does not', () => {
+		for (const framework of ['0.6.0', '0.6.3', '0.7.0', '1.0.0', '0.6.0-rc.1']) {
+			expect(relaysInstallationMail(needs, framework)).toBe(true)
+		}
+		for (const framework of ['0.5.9', '0.4.8', undefined]) {
+			expect(relaysInstallationMail(needs, framework)).toBe(false)
+		}
+	})
+
+	test('only a contract with a job that sends through the installation needs it', () => {
+		expect(relaysInstallationMail(artifact({ 'job:own': { ...REACH, mailer: 'own' } }), '0.6.0')).toBe(false)
+		expect(relaysInstallationMail(null, '0.6.0')).toBe(false)
+	})
+
+	test("hands Control's private origin and the key, and nothing of a provider; a dry run's has no key", () => {
+		expect(platformMailEnvironment('px_relay')).toEqual({
+			FABRIKA_EMAIL_PROVIDER: 'platform',
+			FABRIKA_PLATFORM_MAIL_URL: 'http://control:3000',
+			FABRIKA_PLATFORM_MAIL_KEY: 'px_relay',
+		})
+		expect(platformMailEnvironment(null)).toEqual({ FABRIKA_EMAIL_PROVIDER: 'platform', FABRIKA_PLATFORM_MAIL_URL: 'http://control:3000' })
 	})
 })

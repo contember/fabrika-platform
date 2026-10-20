@@ -5,6 +5,7 @@ import {
 	type AppSchema,
 	FABRIKA_TOKEN_KEYS,
 	isEmailTransportVariable,
+	isPlatformTransportVariable,
 	isWorkloadKeyVariable,
 	parseAppEnvironmentId,
 } from '@fabrika/auth-core'
@@ -303,7 +304,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		throw new Error(`cloudflare: the contract declares a job, a webhook or a public procedure (${workloadKey}); they run on Zerops only`)
 	}
 	// A dry run hands no workload key, and a mail credential must not land in a plain Worker var either way.
-	const mailVariable = Object.keys(input.managedEnvironment).find(isEmailTransportVariable)
+	const mailVariable = Object.keys(input.managedEnvironment).find((name) => isEmailTransportVariable(name) || isPlatformTransportVariable(name))
 	if (mailVariable !== undefined) {
 		throw new Error(`cloudflare: the contract declares a job that sends mail through the installation (${mailVariable}); jobs run on Zerops only`)
 	}

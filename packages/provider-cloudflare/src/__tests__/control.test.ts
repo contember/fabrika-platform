@@ -610,6 +610,33 @@ describe('Cloudflare control provider', () => {
 		expect(jobs).toEqual([])
 	})
 
+	test("refuses the platform's mail relay before any runner call, a dry run included: its key would be a plain Worker var", async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async (job) => {
+				jobs.push(job)
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		const input = deployInput()
+		for (const [name, value] of [['FABRIKA_PLATFORM_MAIL_KEY', 'px_private-relay-key'], ['FABRIKA_PLATFORM_MAIL_URL', 'http://control:3000']]) {
+			for (const dryRun of [false, true]) {
+				const refusal = provider.deploy({ ...input, dryRun, managedEnvironment: { ...input.managedEnvironment, [name]: value } })
+				await expect(refusal).rejects.toThrow(
+					`cloudflare: the contract declares a job that sends mail through the installation (${name}); jobs run on Zerops only`,
+				)
+				await expect(refusal).rejects.not.toThrow('px_private-relay-key')
+			}
+		}
+		expect(jobs).toEqual([])
+	})
+
 	test('refuses token keys before any runner call, and passes the canonical origin as a Worker var', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const provider = createCloudflareControlProvider({

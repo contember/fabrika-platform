@@ -9,6 +9,7 @@ import { contractDigest as contractDigest05 } from '@fabrika/auth-core-0.5'
 import { readContractSource as readContractSource04 } from '@fabrika/check-0.4/contract'
 import { readContractSource as readContractSource05 } from '@fabrika/check-0.5/contract'
 import { CHECKER_VERSION, readContractSource } from '@fabrika/check/contract'
+import { hashPlatformKey } from '@fabrika/email/platform'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
 import { checkoutRelativeDirectory } from '@fabrika/provider-cloudflare/runner'
@@ -28,10 +29,11 @@ import {
 } from '../approval/api'
 import { parseClassification } from '../approval/publish'
 import { MIGRATION_GUIDE } from '../approval/readers'
-import { type AccessSnapshot, approvedSnapshot } from '../approval/snapshot'
+import { type AccessSnapshot, approvedSnapshot, serializeSnapshot } from '../approval/snapshot'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import type { InstallationMail } from '../mail-transport'
 import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
+import { VaultPlatformTransport } from '../platform-transport'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { cancelDeploy, executeDeploy, providerEnvironment, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
@@ -39,7 +41,7 @@ import { Vault } from '../vault'
 import { VaultWorkloadCredentials, type WorkloadKeyIssuer } from '../workload-credentials'
 import { frameworkLockfile, memoryCommits } from './helpers/commits'
 import { BASE, edited, WITH_EXPORT, WITHOUT_REMOVE } from './helpers/contracts'
-import { createHarness, harnessDatabase } from './helpers/harness'
+import { createHarness, harnessDatabase, queryRows } from './helpers/harness'
 import { kitFiles } from './helpers/kit-contract'
 import { makeFakeLock } from './helpers/lock'
 import { protectionRaceScenario } from './helpers/protection-race'
@@ -780,6 +782,8 @@ describe('the installation mail transport for a job that declares it', () => {
 
 export const digest = app.cron('0 3 * * *', { actions: ['notes.read'], mailer: 'installation' }).handle(async () => {})
 `
+	/** The same job as a 0.5 application declares it: that release names a job's scope. */
+	const MAILING_05 = MAILING.replace("actions: ['notes.read'],", "actions: ['notes.read'], scope: 'app',")
 	const CONTRACT = `import { app } from './src/app-kit'
 import { digest } from './src/jobs'
 import { notes } from './src/notes/endpoints'
@@ -802,16 +806,22 @@ export const contract = app.contract((c) => ({
 	const INVALID_REFUSAL =
 		"the contract's job `digest` sends mail through the installation (mailer: 'installation'), and Control's mail transport is invalid"
 
-	function mailingWorld(): World {
+	/** A release before the relay hands the installation's credential itself, as every release did before 0.6. */
+	function mailingWorld(framework = '0.5.2'): World {
 		const w = world()
 		const { 'fabrika.contract.ts': _contract, ...files } = kitFiles()
-		w.files = { ...files, 'src/jobs.ts': MAILING }
+		w.files = { ...files, 'src/jobs.ts': framework.startsWith('0.5.') ? MAILING_05 : MAILING, 'bun.lock': frameworkLockfile(framework) }
 		w.contract = CONTRACT
 		return w
 	}
 
 	const mailVariables = (input: ProviderDeployInput | undefined): string[] =>
-		Object.keys(input?.managedEnvironment ?? {}).filter((name) => name.startsWith('FABRIKA_EMAIL_')).sort()
+		Object.keys(input?.managedEnvironment ?? {}).filter((name) => name.startsWith('FABRIKA_EMAIL_') || name.startsWith('FABRIKA_PLATFORM_')).sort()
+
+	async function relayed(w: World) {
+		const vault = await Vault.create(harnessDatabase(w.db), btoa(String.fromCharCode(...new Uint8Array(32).fill(7))))
+		return new VaultPlatformTransport(w.db.platformTransportKeys, () => Promise.resolve(vault))
+	}
 
 	test('a deploy hands the whole transport, and no run log keeps its credential', async () => {
 		const w = mailingWorld()
@@ -822,6 +832,7 @@ export const contract = app.contract((c) => ({
 			...deps(w),
 			workloadCredentials,
 			mailTransport,
+			platformTransport: await relayed(w),
 			provider: {
 				...loggingProvider,
 				deploy: (input) => {
@@ -837,6 +848,124 @@ export const contract = app.contract((c) => ({
 		const stored = [...w.logs.values()].join('\n')
 		expect(stored).toContain('mail=[redacted]')
 		expect(stored).not.toContain(RESEND_KEY)
+		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toEqual([])
+	})
+
+	test("a 0.6 application behind a namespace proxy sends through Control's relay: its key, and nothing of the provider", async () => {
+		const w = mailingWorld('0.6.0')
+		await seed(w)
+		const { workloadCredentials } = await credentialed(w)
+		const loggingProvider = provider(w)
+		const result = await executeDeploy({
+			...deps(w),
+			workloadCredentials,
+			mailTransport,
+			platformTransport: await relayed(w),
+			provider: {
+				...loggingProvider,
+				deploy: (input) => {
+					input.events.log(`relay=${input.managedEnvironment['FABRIKA_PLATFORM_MAIL_KEY'] ?? 'none'}`)
+					return loggingProvider.deploy(input)
+				},
+			},
+		}, { runId: await createdRun(w, 'stage') })
+		expect(result.status).toBe('succeeded')
+		const managed = w.deploys[0]?.managedEnvironment
+		expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_PLATFORM_MAIL_KEY', 'FABRIKA_PLATFORM_MAIL_URL'])
+		expect(managed?.['FABRIKA_EMAIL_PROVIDER']).toBe('platform')
+		expect(managed?.['FABRIKA_PLATFORM_MAIL_URL']).toBe('http://control:3000')
+		const key = managed?.['FABRIKA_PLATFORM_MAIL_KEY'] ?? ''
+		expect(key).toMatch(/^px_[A-Za-z0-9_-]{27}$/)
+		expect(await w.db.platformTransportKeys.findValidByHash(await hashPlatformKey(key), Math.floor(Date.now() / 1000))).toMatchObject({
+			app_id: 'notes',
+			env: 'stage',
+			receiver: 'mail',
+		})
+		const stored = [...w.logs.values()].join('\n')
+		expect(stored).toContain('relay=[redacted]')
+		expect(stored).not.toContain(key)
+		expect(stored).not.toContain(RESEND_KEY)
+
+		// The next deploy hands the same key while it is fresh.
+		expect(
+			(await executeDeploy({ ...deps(w), workloadCredentials, mailTransport, platformTransport: await relayed(w) }, {
+				runId: await createdRun(w, 'stage'),
+			})).status,
+		)
+			.toBe('succeeded')
+		expect(w.deploys[1]?.managedEnvironment['FABRIKA_PLATFORM_MAIL_KEY']).toBe(key)
+	})
+
+	test("the relay holds what Control cannot send, so a 0.6 application deploys where Control's transport is invalid or absent", async () => {
+		for (const transport of [{ mailTransport: invalidTransport }, {}]) {
+			const w = mailingWorld('0.6.0')
+			await seed(w)
+			const { workloadCredentials } = await credentialed(w)
+			const result = await executeDeploy({ ...deps(w), workloadCredentials, ...transport, platformTransport: await relayed(w) }, {
+				runId: await createdRun(w, 'stage'),
+			})
+			expect(result.status).toBe('succeeded')
+			expect(w.deploys[0]?.managedEnvironment['FABRIKA_EMAIL_PROVIDER']).toBe('platform')
+			expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_PLATFORM_MAIL_KEY', 'FABRIKA_PLATFORM_MAIL_URL'])
+		}
+	})
+
+	test('a 0.6 application does not deploy behind a namespace proxy where Control cannot issue the key', async () => {
+		const w = mailingWorld('0.6.0')
+		await seed(w)
+		const { workloadCredentials } = await credentialed(w)
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect((await executeDeploy({ ...deps(w), workloadCredentials, mailTransport }, { runId: await createdRun(w, 'stage') })).status).toBe('failed')
+			expect(quiet.mock.calls.flat().map(String).join('\n')).toContain('cannot issue the platform transport key')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect(w.deploys).toEqual([])
+	})
+
+	test('a snapshot read before Control recorded the framework release is an older application: it gets the credential', async () => {
+		const w = mailingWorld('0.6.0')
+		await seed(w)
+		const { workloadCredentials } = await credentialed(w)
+		expect(
+			(await executeDeploy({ ...deps(w), workloadCredentials, mailTransport, platformTransport: await relayed(w) }, {
+				runId: await createdRun(w, 'stage'),
+			})).status,
+		)
+			.toBe('succeeded')
+		const recorded = approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'stage'))
+		if (recorded === null) throw new Error('nothing is published')
+		const { framework, ...unrecorded } = recorded
+		expect(framework).toBe('0.6.0')
+		w.sqlite.query("UPDATE app_envs SET published_snapshot_json = ? WHERE app_id = 'notes' AND env = 'stage'").run(serializeSnapshot(unrecorded))
+		// A dry run deploys the approved snapshot as stored, without reading the commit again.
+		const dryRun = await executeDeploy({ ...deps(w), mailTransport, platformTransport: await relayed(w) }, {
+			runId: await createdRun(w, 'stage'),
+			dryRun: true,
+		})
+		expect(dryRun.status).toBe('succeeded')
+		expect(mailVariables(w.deploys[1])).toEqual(['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_RESEND_API_KEY'])
+	})
+
+	test('a dry run of a 0.6 application hands the relay and issues no key; dropping the job forgets the key', async () => {
+		const w = mailingWorld('0.6.0')
+		await seed(w)
+		const { workloadCredentials } = await credentialed(w)
+		const platformTransport = await relayed(w)
+		const relayDeps = { ...deps(w), workloadCredentials, mailTransport, platformTransport }
+		expect((await executeDeploy(relayDeps, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
+		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toHaveLength(1)
+
+		expect((await executeDeploy(relayDeps, { runId: await createdRun(w, 'stage'), dryRun: true })).status).toBe('succeeded')
+		expect(mailVariables(w.deploys[1])).toEqual(['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_PLATFORM_MAIL_URL'])
+		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toHaveLength(1)
+
+		w.contract = kitFiles()['fabrika.contract.ts'] ?? null
+		expect((await executeDeploy(relayDeps, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
+		expect(mailVariables(w.deploys[2])).toEqual([])
+		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toEqual([])
+		expect(queryRows(w.sqlite, "SELECT id FROM vault WHERE label LIKE 'platform:platform-key:%'")).toEqual([])
 	})
 
 	test('an installation without a transport deploys the contract, and hands its job the explicit none', async () => {

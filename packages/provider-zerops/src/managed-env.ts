@@ -6,7 +6,10 @@ import {
 	isConnectUrlVariable,
 	isEmailTransportVariable,
 	isFrameworkVariableName,
+	isPlatformTransportVariable,
 	isWorkloadKeyVariable,
+	PLATFORM_RECEIVERS,
+	platformTransportVariables,
 } from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { z } from 'zod'
@@ -75,8 +78,13 @@ export const SENSITIVE_MANAGED_KEYS: ReadonlySet<ManagedKey> = new Set<ManagedKe
 	'FABRIKA_TOKEN_KEYS',
 ])
 
-/** A workload or connect key and every mail transport variable are written sensitive; a connect URL is an origin. */
-export const isSensitiveFamilyVariable = (name: string): boolean => !isConnectUrlVariable(name)
+const PLATFORM_URL_VARIABLES: ReadonlySet<string> = new Set(PLATFORM_RECEIVERS.map((receiver) => platformTransportVariables(receiver).url))
+
+/**
+ * A workload, connect or platform transport key and every mail transport variable are written sensitive; a connect or
+ * platform transport URL is an origin.
+ */
+export const isSensitiveFamilyVariable = (name: string): boolean => !isConnectUrlVariable(name) && !PLATFORM_URL_VARIABLES.has(name)
 
 export type ManagedValues = Record<ManagedKey, string | null>
 
@@ -111,21 +119,26 @@ export function parseManagedValues(value: unknown): ManagedValues {
 export interface ManagedEnvironment {
 	readonly values: ManagedValues
 	/**
-	 * `FABRIKA_<KIND>_<NAME>_KEY` → the workload's `px_` key, `FABRIKA_CONNECT_<IMPORT>_KEY` / `_URL`, and each
-	 * `FABRIKA_EMAIL_*` of the installation's mail transport.
+	 * `FABRIKA_<KIND>_<NAME>_KEY` → the workload's `px_` key, `FABRIKA_CONNECT_<IMPORT>_KEY` / `_URL`, each
+	 * `FABRIKA_EMAIL_*` of the installation's mail transport, and `FABRIKA_PLATFORM_<RECEIVER>_URL` / `_KEY`.
 	 */
 	readonly familyVariables: Readonly<Record<string, string>>
 }
 
 const keySchema = z.string().startsWith('px_').min(4)
 const mailValueSchema = z.string().min(1)
-const originSchema = z.string().refine((value) => {
-	try {
-		return new URL(value).origin === value && value.startsWith('https://')
-	} catch {
-		return false
-	}
-})
+const originSchema = (schemes: readonly string[]) =>
+	z.string().refine((value) => {
+		try {
+			const url = new URL(value)
+			return url.origin === value && schemes.includes(url.protocol)
+		} catch {
+			return false
+		}
+	})
+const connectOriginSchema = originSchema(['https:'])
+// Control's private origin, `http://control:3000`, is a receiver's address on the project's private network.
+const platformOriginSchema = originSchema(['http:', 'https:'])
 
 export function parseManagedEnvironment(value: Readonly<Record<string, string | null>>): ManagedEnvironment {
 	const managed: Record<string, string | null> = {}
@@ -141,11 +154,18 @@ export function parseManagedEnvironment(value: Readonly<Record<string, string | 
 			familyVariables[name] = parsed.data
 			continue
 		}
+		if (isPlatformTransportVariable(name)) {
+			const address = PLATFORM_URL_VARIABLES.has(name)
+			const parsed = (address ? platformOriginSchema : keySchema).safeParse(entry)
+			if (!parsed.success) throw new Error(`zerops: ${name} must be ${address ? 'an http(s) origin' : 'a px_ key'}`)
+			familyVariables[name] = parsed.data
+			continue
+		}
 		const origin = isConnectUrlVariable(name)
 		if (!origin && !isWorkloadKeyVariable(name) && !isConnectKeyVariable(name)) {
 			throw new Error(`zerops: ${name} is not a variable a deploy writes`)
 		}
-		const parsed = (origin ? originSchema : keySchema).safeParse(entry)
+		const parsed = (origin ? connectOriginSchema : keySchema).safeParse(entry)
 		if (!parsed.success) {
 			throw new Error(`zerops: ${name} must be ${origin ? 'an https origin' : 'a px_ key'}`)
 		}
@@ -155,8 +175,8 @@ export function parseManagedEnvironment(value: Readonly<Record<string, string | 
 }
 
 /**
- * A service variable only the platform writes per workload, import or the installation's mail transport: a stale one is
- * removed when the deploy no longer hands it.
+ * A service variable only the platform writes per workload, import, platform receiver or the installation's mail
+ * transport: a stale one is removed when the deploy no longer hands it.
  */
 export function isFrameworkFamilyVariable(name: string): boolean {
 	return FRAMEWORK_VARIABLE_PREFIXES.some((prefix) => name.startsWith(prefix))

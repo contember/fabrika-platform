@@ -28,7 +28,7 @@ import {
 import { namespaceNotReady, redactNamespaceErrorText, republishUnderLease, unconfirmedUpdateRefusal } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { publishRunSnapshot } from './approval/publish'
-import { approvedProviderAccess, type ProviderAccessFields } from './approval/snapshot'
+import { approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
 import {
 	type AppEnvRow,
@@ -46,9 +46,17 @@ import {
 } from './db'
 import type { CommitSource } from './github/source/commit-files'
 import { acquireLease, type Lease, type LeaseClock, type LeaseFence, namespaceLeaseKey, runLeaseKey } from './lease'
-import { type InstallationMail, installationMailEnvironment, installationMailSecrets, NO_INSTALLATION_MAIL } from './mail-transport'
+import {
+	type InstallationMail,
+	installationMailEnvironment,
+	installationMailSecrets,
+	NO_INSTALLATION_MAIL,
+	platformMailEnvironment,
+	relaysInstallationMail,
+} from './mail-transport'
 import { type MembershipTransportPort, needsMembershipTransport } from './membership-transport'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
+import type { PlatformTransportPort } from './platform-transport'
 import type { ProxySecrets } from './proxy-secret'
 import { projectedReturnOrigins } from './return-origins'
 import { appSecretPurpose, type SecretResolver } from './secret-resolver'
@@ -103,6 +111,11 @@ export interface RunDeps {
 	 * `FABRIKA_EMAIL_PROVIDER=none`. An invalid one refuses only the deploys that need it.
 	 */
 	mailTransport?: InstallationMail
+	/**
+	 * The platform transport keys an environment behind a namespace proxy calls Control's relay with; absent without a
+	 * vault, and then a contract whose job sends through the relay does not deploy there.
+	 */
+	platformTransport?: PlatformTransportPort
 }
 
 export interface DeployJobMessage {
@@ -518,6 +531,8 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		const sourceBinding = await loadSourceBinding(deps, app)
 		const appInput = providerApp(app, run)
 		const environmentInput = await providerEnvironment(deps.repositories, appEnv, { requireReadyNamespace: true })
+		// The row the deploy's access was read from: its approved snapshot also names the application's framework release.
+		let approvedRow = appEnv
 		let registration = deps.provider.normalizeRegistration?.({ app: appInput, environment: environmentInput })
 			?? { app: appInput, environment: environmentInput }
 		await assertNamespaceResourceClaims(deps.repositories.registry, deps.provider, registration)
@@ -564,7 +579,8 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 				return { runId, status: 'awaiting_approval' }
 			}
 			startedRun = await invocation.boundary()
-			registration = { ...registration, environment: withAccess(registration.environment, await currentAccess(deps.repositories, appEnv)) }
+			approvedRow = await currentAppEnv(deps.repositories, appEnv)
+			registration = { ...registration, environment: withAccess(registration.environment, approvedProviderAccess(approvedRow)) }
 		}
 		const releaseContext = deps.operations === undefined
 			? null
@@ -619,7 +635,8 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		}
 		// From the approved contract only, like every other access the deploy publishes (ADR-0050); a dry run issues none.
 		const approvedContract = registration.environment.access?.contract ?? null
-		const mailEnvironment = installationMailEnvironment(deps.mailTransport ?? NO_INSTALLATION_MAIL, approvedContract)
+		const relayedMail = namespaceProxy && relaysInstallationMail(approvedContract, approvedSnapshot(approvedRow).snapshot.framework)
+		const mailEnvironment = relayedMail ? {} : installationMailEnvironment(deps.mailTransport ?? NO_INSTALLATION_MAIL, approvedContract)
 		Object.assign(managedEnvironment, mailEnvironment)
 		const workloadKeys = dryRun ? {} : await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract)
 		Object.assign(managedEnvironment, workloadKeys, await connectorAddresses(deps.repositories.registry, appEnv.env, approvedContract))
@@ -628,6 +645,8 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			: await reconcileMembershipKey(deps, app.id, appEnv.env, namespaceProxy && needsMembershipTransport(approvedContract))
 		managedEnvironment[MEMBERSHIP_URL_VARIABLE] = membershipKey === null ? null : membershipTransportOrigin(deps.iamIssuer)
 		managedEnvironment[MEMBERSHIP_KEY_VARIABLE] = membershipKey
+		const platformMailKey = dryRun ? null : await reconcilePlatformMailKey(deps, app.id, appEnv.env, relayedMail)
+		if (relayedMail) Object.assign(managedEnvironment, platformMailEnvironment(platformMailKey))
 		// The canonical origin `ctx.url` builds links on; `null` removes a stale one from an environment that has none.
 		managedEnvironment[FABRIKA_APP_ORIGIN] = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
 		const tokenKeys = dryRun ? null : await reconcileTokenKeys(deps.tokenKeys, app.id, appEnv.env, approvedContract)
@@ -638,6 +657,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			managedEnvironment[FABRIKA_PROXY_SECRET] ?? '',
 			...Object.values(workloadKeys),
 			membershipKey ?? '',
+			platformMailKey ?? '',
 			tokenKeys ?? '',
 			...installationMailSecrets(deps.mailTransport ?? NO_INSTALLATION_MAIL, mailEnvironment),
 			// A Zerops build holds the source-map bearer, and the provider relays the build's log.
@@ -796,6 +816,23 @@ async function reconcileMembershipKey(
 	return null
 }
 
+async function reconcilePlatformMailKey(
+	deps: Pick<RunDeps, 'platformTransport'>,
+	appId: string,
+	env: string,
+	needed: boolean,
+): Promise<string | null> {
+	if (deps.platformTransport !== undefined) {
+		return deps.platformTransport.reconcile(appId, env, 'mail', needed)
+	}
+	if (needed) {
+		throw new Error(
+			"the contract's jobs send mail through the installation's relay, and this installation cannot issue the platform transport key (it needs FABRIKA_CONTROL_VAULT_KEY)",
+		)
+	}
+	return null
+}
+
 function membershipTransportOrigin(iamIssuer: string | undefined): string {
 	const origin = iamIssuer?.trim() ?? ''
 	if (origin === '') {
@@ -804,10 +841,10 @@ function membershipTransportOrigin(iamIssuer: string | undefined): string {
 	return origin
 }
 
-async function currentAccess(repositories: ControlRepositories, appEnv: AppEnvRow): Promise<ProviderAccessFields> {
+async function currentAppEnv(repositories: ControlRepositories, appEnv: AppEnvRow): Promise<AppEnvRow> {
 	const row = await repositories.registry.getAppEnv(appEnv.app_id, appEnv.env)
 	if (row === null) throw new Error(`app environment ${appEnv.app_id}/${appEnv.env} disappeared during the deploy`)
-	return approvedProviderAccess(row)
+	return row
 }
 
 function withAccess(environment: ProviderEnvironment, access: ProviderAccessFields): ProviderEnvironment {

@@ -1,7 +1,7 @@
 // The installation's default mail transport, which Control hands an application whose job declares `mailer:
 // 'installation'`. Control reads it from its own environment and copies it into the deploy: it never writes IAM's copy.
 
-import { type ContractArtifact, JOB_SITE_PREFIX } from '@fabrika/auth-core'
+import { type ContractArtifact, JOB_SITE_PREFIX, platformTransportVariables } from '@fabrika/auth-core'
 import {
 	EMAIL_PROVIDER_VARIABLE,
 	EmailDeliveryError,
@@ -11,6 +11,9 @@ import {
 	NO_EMAIL_PROVIDER,
 	readEmailTransportConfig,
 } from '@fabrika/email'
+import { PLATFORM_EMAIL_PROVIDER } from '@fabrika/email/platform'
+import { compareReleases, parseRelease, type Release } from './approval/readers'
+import { CONTROL_PRIVATE_ORIGIN } from './platform-transport'
 
 /** The installation's default transport: what Control hands an application whose job declares mailer 'installation'. */
 export interface InstallationMailTransport {
@@ -85,4 +88,31 @@ export function installationMailEnvironment(mail: InstallationMail, artifact: Co
 export function installationMailSecrets(mail: InstallationMail, handed: Readonly<Record<string, string>>): string[] {
 	if (mail.kind !== 'transport') return []
 	return [...mail.transport.secretNames].map((name) => handed[name] ?? '')
+}
+
+/** The first framework release whose `ctx.mail` sends through the platform's relay (`FABRIKA_EMAIL_PROVIDER=platform`). */
+const PLATFORM_MAIL_SINCE: Release = { text: '0.6.0', major: 0, minor: 6, patch: 0 }
+
+/**
+ * Whether a deploy hands the application the relay instead of the installation's credential: a job declares mailer
+ * 'installation' and the approved snapshot's framework release reads `FABRIKA_EMAIL_PROVIDER=platform`. A snapshot
+ * without a release was read before Control recorded one, so it is an older application.
+ */
+export function relaysInstallationMail(artifact: ContractArtifact | null, framework: string | undefined): boolean {
+	if (installationMailJobs(artifact).length === 0 || framework === undefined) return false
+	const release = parseRelease(framework)
+	return release !== null && compareReleases(release, PLATFORM_MAIL_SINCE) >= 0
+}
+
+/**
+ * The variables of the relay: no provider, Control's private origin and the environment's key. The relay holds what it
+ * cannot send, so Control hands them whether or not its own transport is valid. A dry run issues no key.
+ */
+export function platformMailEnvironment(key: string | null): Readonly<Record<string, string>> {
+	const variables = platformTransportVariables('mail')
+	return {
+		[EMAIL_PROVIDER_VARIABLE]: PLATFORM_EMAIL_PROVIDER,
+		[variables.url]: CONTROL_PRIVATE_ORIGIN,
+		...(key === null ? {} : { [variables.key]: key }),
+	}
 }
