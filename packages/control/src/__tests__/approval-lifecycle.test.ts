@@ -13,7 +13,7 @@ import { hashPlatformKey } from '@fabrika/email/platform'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
 import { checkoutRelativeDirectory } from '@fabrika/provider-cloudflare/runner'
-import type { ControlProvider, ProviderDeployInput, ProviderNamespaceMember } from '@fabrika/provider-contract'
+import type { ControlProvider, ProviderDeployInput, ProviderDeployOutcome, ProviderNamespaceMember } from '@fabrika/provider-contract'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { ControlApiError } from '../api/domain'
 import { republishNamespace } from '../api/namespaces'
@@ -34,6 +34,7 @@ import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import type { InstallationMail } from '../mail-transport'
 import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
 import { VaultPlatformTransport } from '../platform-transport'
+import { type ProviderReconcileDeps, reconcileProviderRuns } from '../provider-reconcile'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { cancelDeploy, executeDeploy, providerEnvironment, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
@@ -993,6 +994,74 @@ export const contract = app.contract((c) => ({
 		expect(mailVariables(w.deploys[2])).toEqual([])
 		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toEqual([])
 		expect(queryRows(w.sqlite, "SELECT id FROM vault WHERE label LIKE 'platform:platform-key:%'")).toEqual([])
+	})
+
+	/** A 0.7 mailer deployed once, so its key is live, and the contract the next deploy brings without the job. */
+	async function droppingTheJob() {
+		const w = mailingWorld('0.7.0')
+		await seed(w)
+		const { workloadCredentials } = await credentialed(w)
+		const relayDeps = { ...deps(w), workloadCredentials, mailTransport, ...(await relayed(w)) }
+		expect((await executeDeploy(relayDeps, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
+		const key = w.deploys[0]?.managedEnvironment['FABRIKA_PLATFORM_MAIL_KEY'] ?? ''
+		const live = async () => (await w.db.platformTransportKeys.findValidByHash(await hashPlatformKey(key), Math.floor(Date.now() / 1000))) !== null
+		expect(await live()).toBe(true)
+		w.contract = kitFiles()['fabrika.contract.ts'] ?? null
+		return { w, relayDeps, live }
+	}
+
+	test('a failed deploy that drops the job keeps the running version sending: its key stays valid until a deploy succeeds', async () => {
+		const { w, relayDeps, live } = await droppingTheJob()
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const failed = (): Promise<ProviderDeployOutcome> => Promise.resolve({ state: 'failed' })
+			const failing = { ...relayDeps, provider: { ...relayDeps.provider, deploy: failed } }
+			expect((await executeDeploy(failing, { runId: await createdRun(w, 'stage') })).status).toBe('failed')
+			expect(await live()).toBe(true)
+			const throwing = { ...relayDeps, provider: { ...relayDeps.provider, deploy: () => Promise.reject(new Error('the build failed')) } }
+			expect((await executeDeploy(throwing, { runId: await createdRun(w, 'stage') })).status).toBe('failed')
+			expect(await live()).toBe(true)
+		} finally {
+			quiet.mockRestore()
+		}
+		expect((await executeDeploy(relayDeps, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
+		expect(await live()).toBe(false)
+		expect(queryRows(w.sqlite, "SELECT id FROM vault WHERE label LIKE 'platform:platform-key:%'")).toEqual([])
+	})
+
+	test('a deploy the provider accepted revokes the dropped key only when the reconcile or the cancellation settles it succeeded', async () => {
+		const settlements: Record<string, (deps: ProviderReconcileDeps, w: World) => Promise<void>> = {
+			reconcile: async (settleDeps) => void (await reconcileProviderRuns(settleDeps)),
+			cancellation: async (settleDeps, w) => {
+				const [inFlight] = await w.db.runs.listInFlightRuns('harbor')
+				if (inFlight === undefined) throw new Error('no run in flight')
+				await cancelDeploy(settleDeps, inFlight)
+			},
+		}
+		for (const [path, settle] of Object.entries(settlements)) {
+			const { w, relayDeps, live } = await droppingTheJob()
+			const settles: { outcome: 'succeeded' | 'failed' } = { outcome: 'failed' }
+			const accepting: ControlProvider = {
+				...relayDeps.provider,
+				deploy: async (input) => {
+					await input.events.externalId(`version-${input.runId}`)
+					return { state: 'running' }
+				},
+				reconcile: () => Promise.resolve({ state: settles.outcome }),
+				cancel: () => Promise.resolve({ state: 'settled', outcome: settles.outcome }),
+			}
+			const settleDeps = { repositories: w.db, provider: accepting, lock: relayDeps.lock, platformTransport: relayDeps.platformTransport }
+			const outcomes: ReadonlyArray<'failed' | 'succeeded'> = ['failed', 'succeeded']
+			for (const outcome of outcomes) {
+				settles.outcome = outcome
+				const runId = await createdRun(w, 'stage')
+				expect((await executeDeploy({ ...relayDeps, provider: accepting }, { runId })).status).toBe('running')
+				expect(await live()).toBe(true)
+				await settle(settleDeps, w)
+				expect({ path, outcome, status: (await run(w, runId)).status }).toEqual({ path, outcome, status: outcome })
+				expect({ path, outcome, live: await live() }).toEqual({ path, outcome, live: outcome === 'failed' })
+			}
+		}
 	})
 
 	test('an installation without a transport deploys the contract, and hands its job the explicit none', async () => {

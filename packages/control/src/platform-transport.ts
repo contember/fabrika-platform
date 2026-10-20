@@ -5,7 +5,7 @@
 import { appEnvironmentId, MAX_KEY_LIFETIME_SECONDS, type PlatformReceiver } from '@fabrika/auth-core'
 import { hashPlatformKey } from '@fabrika/email/platform'
 import { uuidv7 } from '@fabrika/platform'
-import type { PlatformTransportKeyRepository } from './db'
+import type { PlatformTransportKeyRepository, PlatformTransportKeyRow } from './db'
 import type { Vault, VaultSecretPurpose } from './vault'
 
 export const PLATFORM_KEY_LIFETIME_SECONDS = MAX_KEY_LIFETIME_SECONDS
@@ -14,11 +14,13 @@ export const PLATFORM_KEY_LIFETIME_SECONDS = MAX_KEY_LIFETIME_SECONDS
 export const PLATFORM_KEY_ROTATE_BELOW_SECONDS = PLATFORM_KEY_LIFETIME_SECONDS / 2
 
 export interface PlatformTransportPort {
+	/** The environment's key for `receiver`: the newest one while it is fresh, or a newly issued one. */
+	issue(appId: string, env: string, receiver: PlatformReceiver): Promise<string>
 	/**
-	 * The environment's key for `receiver` while `needed`: the newest one while it is fresh, or a newly issued one.
-	 * Without need every key of the receiver and its vault row is deleted.
+	 * Delete every key of the receiver and its vault row. Called only once a version that holds none of them runs:
+	 * until then the previous version calls the receiver with its key.
 	 */
-	reconcile(appId: string, env: string, receiver: PlatformReceiver, needed: boolean): Promise<string | null>
+	revoke(appId: string, env: string, receiver: PlatformReceiver): Promise<void>
 }
 
 /** The `{ scope, label }` the key is sealed under — the only record of which environment owns its vault row. */
@@ -39,16 +41,8 @@ export class VaultPlatformTransport implements PlatformTransportPort {
 		private readonly now: () => number = () => Math.floor(Date.now() / 1000),
 	) {}
 
-	async reconcile(appId: string, env: string, receiver: PlatformReceiver, needed: boolean): Promise<string | null> {
-		const rows = (await this.records.listForAppEnv(appId, env)).filter((row) => row.receiver === receiver)
-		if (!needed) {
-			if (rows.length > 0) {
-				await this.records.deleteForAppEnv(appId, env, receiver)
-				const vault = await this.vault()
-				for (const row of rows) await vault.delete(row.value_ref)
-			}
-			return null
-		}
+	async issue(appId: string, env: string, receiver: PlatformReceiver): Promise<string> {
+		const rows = await this.receiverKeys(appId, env, receiver)
 		const vault = await this.vault()
 		const purpose = platformKeyPurpose(appId, env, receiver)
 		const now = this.now()
@@ -77,5 +71,17 @@ export class VaultPlatformTransport implements PlatformTransportPort {
 		for (const row of rows) await vault.delete(row.value_ref)
 		await this.records.deleteExpired(now)
 		return key
+	}
+
+	async revoke(appId: string, env: string, receiver: PlatformReceiver): Promise<void> {
+		const rows = await this.receiverKeys(appId, env, receiver)
+		if (rows.length === 0) return
+		await this.records.deleteForAppEnv(appId, env, receiver)
+		const vault = await this.vault()
+		for (const row of rows) await vault.delete(row.value_ref)
+	}
+
+	private async receiverKeys(appId: string, env: string, receiver: PlatformReceiver): Promise<PlatformTransportKeyRow[]> {
+		return (await this.records.listForAppEnv(appId, env)).filter((row) => row.receiver === receiver)
 	}
 }

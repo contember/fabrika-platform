@@ -12,7 +12,7 @@
 
 import { runMaintenance } from '../cron'
 import { reconcileProviderRuns } from '../provider-reconcile'
-import { locks, operationsReleaseDeps, repositories } from '../services'
+import { locks, operationsReleaseDeps, platformTransportDeps, repositories } from '../services'
 import { createRuntime } from './runtime'
 
 async function main(): Promise<void> {
@@ -26,6 +26,7 @@ async function main(): Promise<void> {
 					runLogs: runtime.env.RUN_LOGS,
 					lock: locks(runtime.env),
 					operations: operationsReleaseDeps(runtime.env),
+					...platformTransportDeps(runtime.env),
 				}),
 		})
 	} finally {

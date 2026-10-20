@@ -1,6 +1,6 @@
 // The platform transport key of an application environment: Control issues it, keeps its hash for the relay and its
 // value sealed in the vault, rotates it at half its life while the replaced key stays valid until its own expiry, and
-// forgets it with the need.
+// revokes every key of the receiver once asked.
 
 import { hashPlatformKey } from '@fabrika/email/platform'
 import { describe, expect, test } from 'bun:test'
@@ -31,10 +31,8 @@ async function setup() {
 	return { harness, vault, clock, transport, keys: platformTransportKeys }
 }
 
-async function issued(transport: PlatformTransportPort, env = 'prod'): Promise<string> {
-	const key = await transport.reconcile('notes', env, 'mail', true)
-	if (key === null) throw new Error('no key was issued')
-	return key
+function issued(transport: PlatformTransportPort, env = 'prod'): Promise<string> {
+	return transport.issue('notes', env, 'mail')
 }
 
 describe('VaultPlatformTransport', () => {
@@ -94,7 +92,7 @@ describe('VaultPlatformTransport', () => {
 		const first = await issued(flaky)
 		clock.now = T0 + PLATFORM_KEY_LIFETIME_SECONDS - PLATFORM_KEY_ROTATE_BELOW_SECONDS + 1
 		failNextInsert = true
-		await expect(flaky.reconcile('notes', 'prod', 'mail', true)).rejects.toThrow('the database went away')
+		await expect(flaky.issue('notes', 'prod', 'mail')).rejects.toThrow('the database went away')
 		expect((await keys.listForAppEnv('notes', 'prod')).map((row) => row.key_hash)).toEqual([await hashPlatformKey(first)])
 		expect(queryRows(harness.sqlite, 'SELECT label FROM vault')).toHaveLength(1)
 		const retried = await issued(flaky)
@@ -121,17 +119,18 @@ describe('VaultPlatformTransport', () => {
 		await expect(vault.getSecretForPurpose(row.value_ref, platformKeyPurpose('notes', 'stage', 'mail'))).rejects.toThrow()
 	})
 
-	test("forgets every key of the environment once it needs none, issues none without need, and keeps another environment's", async () => {
+	test("revokes every key of the environment, the rotated one included, and keeps another environment's", async () => {
 		const { harness, clock, transport, keys } = await setup()
-		await issued(transport)
+		const first = await issued(transport)
 		clock.now = T0 + PLATFORM_KEY_LIFETIME_SECONDS - PLATFORM_KEY_ROTATE_BELOW_SECONDS + 1
 		await issued(transport)
 		const stage = await issued(transport, 'stage')
-		expect(await transport.reconcile('notes', 'prod', 'mail', false)).toBeNull()
-		expect(await transport.reconcile('notes', 'prod', 'mail', false)).toBeNull()
+		await transport.revoke('notes', 'prod', 'mail')
+		await transport.revoke('notes', 'prod', 'mail')
 		expect(await keys.listForAppEnv('notes', 'prod')).toEqual([])
+		expect(await keys.findValidByHash(await hashPlatformKey(first), clock.now)).toBeNull()
 		expect(queryRows(harness.sqlite, 'SELECT label FROM vault')).toEqual([{ label: 'platform:platform-key:notes@stage:mail' }])
 		expect(await issued(transport, 'stage')).toBe(stage)
-		expect(await transport.reconcile('notes', 'dev', 'mail', false)).toBeNull()
+		await transport.revoke('notes', 'dev', 'mail')
 	})
 })

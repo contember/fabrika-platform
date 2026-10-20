@@ -59,7 +59,10 @@ caller's idempotency key. Mail is the first receiver.**
 - A key lives 30 days. A deploy reuses the newest key while more than half of its life is left, and issues a new one
   otherwise. A replaced key stays valid by its hash until its own expiry, so a running version keeps working; Control
   never hands its value out again.
-- When an environment stops needing a receiver, its next deploy deletes the receiver's keys and their vault entries.
+- When an environment stops needing a receiver, the deploy that drops it deletes the receiver's keys and their vault
+  entries once it succeeds: when the provider's deploy, its reconcile or a cancellation settles the run succeeded. Until
+  then the previous version runs and calls the receiver with its key. A failed, interrupted or dry run deletes nothing.
+  The membership key follows the same moment: IAM deletes it with the schema reconcile of the version that went live.
   Deleting the application environment deletes its keys (`ON DELETE CASCADE`).
 - A Control without a vault (`FABRIKA_CONTROL_VAULT_KEY`) cannot issue a key, so it refuses a deploy that needs one.
   A dry run issues no key.
@@ -113,7 +116,7 @@ What the relay does with the message, its gate and its dispatcher, is [ADR-0019]
 ## Consequences
 
 - An application on framework 0.7 holds no provider credential. Its key reaches one receiver, as one application
-  environment, and Control can revoke it at the next deploy.
+  environment, and Control revokes it when a deploy that no longer needs it succeeds.
 - Adding a receiver is a name in `PLATFORM_RECEIVERS`, a `protocol` row on the receiver and a key reconcile in the
   deploy. It needs no new variable family and no change in IAM or the proxy. Membership, audit and job reports may
   move onto it later; each is its own decision.

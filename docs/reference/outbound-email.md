@@ -307,8 +307,9 @@ The key an application environment calls the relay with
   issues a new one otherwise. A replaced key stays valid by its hash until it expires;
   its vault value is deleted at once. Issuing a key also deletes every expired key row
   of the installation.
-- A deploy that no longer needs the key deletes its rows and vault values. Deleting the
-  application environment deletes its rows.
+- A deploy that no longer needs the key deletes its rows and vault values once the run
+  succeeds; until then the running version keeps sending with it. A failed, interrupted
+  or dry run deletes nothing. Deleting the application environment deletes its rows.
 
 On Zerops the URL is a plain service variable and the key a sensitive one
 (`packages/provider-zerops/src/managed-env.ts`). The error-report scrubber keeps the

@@ -641,7 +641,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		}
 		// From the approved contract only, like every other access the deploy publishes (ADR-0050); a dry run issues none.
 		const approvedContract = registration.environment.access?.contract ?? null
-		const relayedMail = namespaceProxy && relaysInstallationMail(approvedContract, approvedSnapshot(approvedRow).snapshot.framework)
+		const relayedMail = relaysMail(deps.provider, approvedRow)
 		const mailEnvironment = relayedMail ? {} : installationMailEnvironment(deps.mailTransport ?? NO_INSTALLATION_MAIL, approvedContract)
 		Object.assign(managedEnvironment, mailEnvironment)
 		const workloadKeys = dryRun ? {} : await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract)
@@ -652,7 +652,8 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		managedEnvironment[MEMBERSHIP_URL_VARIABLE] = membershipKey === null ? null : membershipTransportOrigin(deps.iamIssuer)
 		managedEnvironment[MEMBERSHIP_KEY_VARIABLE] = membershipKey
 		const relayOrigin = relayedMail ? platformMailOrigin(deps.controlOrigin) : null
-		const platformMailKey = dryRun ? null : await reconcilePlatformMailKey(deps, app.id, appEnv.env, relayedMail)
+		// A version that no longer relays keeps the running one's key valid until it runs itself (`retirePlatformKeys`).
+		const platformMailKey = dryRun || !relayedMail ? null : await issuePlatformMailKey(deps, app.id, appEnv.env)
 		if (relayOrigin !== null) Object.assign(managedEnvironment, platformMailEnvironment(relayOrigin, platformMailKey))
 		// The canonical origin `ctx.url` builds links on; `null` removes a stale one from an environment that has none.
 		managedEnvironment[FABRIKA_APP_ORIGIN] = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
@@ -734,6 +735,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		if (outcome.state === 'running') return { runId, status: 'running' }
 		const state = outcome.state
 		await invocation.write((fence) => runs.markRunFinished(runId, state, outcome.exitCode ?? null, fence))
+		if (state === 'succeeded' && !dryRun) await retirePlatformKeys(deps, approvedRow, runId)
 		await projectTerminalRun(deps, runId, dryRun, state, outcome.artifactState)
 		return { runId, status: state }
 	} catch (error) {
@@ -823,21 +825,34 @@ async function reconcileMembershipKey(
 	return null
 }
 
-async function reconcilePlatformMailKey(
-	deps: Pick<RunDeps, 'platformTransport'>,
-	appId: string,
-	env: string,
-	needed: boolean,
-): Promise<string | null> {
-	if (deps.platformTransport !== undefined) {
-		return deps.platformTransport.reconcile(appId, env, 'mail', needed)
-	}
-	if (needed) {
+async function issuePlatformMailKey(deps: Pick<RunDeps, 'platformTransport'>, appId: string, env: string): Promise<string> {
+	if (deps.platformTransport === undefined) {
 		throw new Error(
 			"the contract's jobs send mail through the installation's relay, and this installation cannot issue the platform transport key (it needs FABRIKA_CONTROL_VAULT_KEY)",
 		)
 	}
-	return null
+	return deps.platformTransport.issue(appId, env, 'mail')
+}
+
+/** Whether the environment's approved version sends its jobs' mail through Control's relay: only behind a namespace proxy. */
+function relaysMail(provider: ControlProvider, appEnv: AppEnvRow): boolean {
+	const namespaceProxy = appEnv.namespace_id !== null && provider.namespaces?.republish !== undefined
+	const { snapshot } = approvedSnapshot(appEnv)
+	return namespaceProxy && relaysInstallationMail(snapshot.contract, snapshot.framework)
+}
+
+/**
+ * Revoke the relay keys of an environment whose version now runs without the relay. Only a succeeded run does: until
+ * its version runs, the previous one sends with its key. `appEnv` is the run's own publication, which no other run can
+ * replace before this one settles. A failure leaves the keys to their expiry or the next succeeded run.
+ */
+async function retirePlatformKeys(deps: Pick<RunDeps, 'platformTransport' | 'provider'>, appEnv: AppEnvRow, runId: string): Promise<void> {
+	if (deps.platformTransport === undefined || relaysMail(deps.provider, appEnv)) return
+	try {
+		await deps.platformTransport.revoke(appEnv.app_id, appEnv.env, 'mail')
+	} catch {
+		console.error(`deploy run ${runId}: revoking the relay keys its version no longer needs failed; the next succeeded run retries`)
+	}
 }
 
 function membershipTransportOrigin(iamIssuer: string | undefined): string {
@@ -860,7 +875,7 @@ function withAccess(environment: ProviderEnvironment, access: ProviderAccessFiel
 }
 
 async function settleCancelledInvocation(
-	deps: Pick<RunDeps, 'repositories' | 'provider'>,
+	deps: Pick<RunDeps, 'repositories' | 'provider' | 'platformTransport'>,
 	invocation: RunInvocation,
 ): Promise<{ runId: string; status: DeployStatus }> {
 	const settled = await settleRunCancellation(deps, invocation).catch(() => null)
@@ -883,7 +898,7 @@ async function startRun(deps: RunDeps, invocation: RunInvocation, run: RunRow): 
 	return runs.markRunStarted(run.id, logsKey(run.id), invocation.lease.fence())
 }
 
-export type RunSettleDeps = Pick<RunDeps, 'repositories' | 'provider' | 'operations' | 'runLogs'> & {
+export type RunSettleDeps = Pick<RunDeps, 'repositories' | 'provider' | 'operations' | 'runLogs' | 'platformTransport'> & {
 	projectTerminal?: typeof projectTerminalRun
 }
 
@@ -962,6 +977,7 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 		if (outcome.state === 'running') return 'running'
 		const state = outcome.state
 		await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, state, outcome.exitCode ?? null, fence))
+		if (state === 'succeeded' && outcome.dryRun !== true) await retirePlatformKeys(deps, appEnv, run.id)
 		await projectSettled(deps, run.id, state, outcome)
 		return state
 	} catch (error) {
@@ -1002,7 +1018,7 @@ export async function projectTerminalRun(
  * cancellation never implies rollback (ADR-0044).
  */
 export async function settleRunCancellation(
-	deps: Pick<RunDeps, 'repositories' | 'provider'>,
+	deps: Pick<RunDeps, 'repositories' | 'provider' | 'platformTransport'>,
 	invocation: RunInvocation,
 ): Promise<'succeeded' | 'failed' | null> {
 	const cancelling = await invocation.read()
@@ -1010,6 +1026,7 @@ export async function settleRunCancellation(
 		return null
 	}
 	let outcome: 'succeeded' | 'failed' = 'failed'
+	let activated: AppEnvRow | null = null
 	if (cancelling.external_run_id !== null) {
 		if (deps.provider.cancel === undefined) return null
 		const appEnv = await deps.repositories.registry.getAppEnv(cancelling.app_id, cancelling.env)
@@ -1034,12 +1051,17 @@ export async function settleRunCancellation(
 		})
 		if (result.state === 'pending') return null
 		outcome = result.outcome ?? 'failed'
+		if (outcome === 'succeeded') activated = appEnv
 	}
 	await invocation.write((fence) => deps.repositories.runs.markRunCancellationFinished(cancelling.id, outcome, fence))
+	if (activated !== null) await retirePlatformKeys(deps, activated, cancelling.id)
 	return outcome
 }
 
-export async function cancelDeploy(deps: Pick<RunDeps, 'repositories' | 'provider' | 'lock' | 'leaseClock'>, run: RunRow): Promise<void> {
+export async function cancelDeploy(
+	deps: Pick<RunDeps, 'repositories' | 'provider' | 'lock' | 'leaseClock' | 'platformTransport'>,
+	run: RunRow,
+): Promise<void> {
 	const cancelling = await deps.repositories.runs.requestRunCancellation(run.id)
 	if (cancelling === null) return
 	// A live holder settles the request at its next step boundary.

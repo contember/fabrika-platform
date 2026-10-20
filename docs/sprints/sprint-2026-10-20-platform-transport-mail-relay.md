@@ -54,8 +54,9 @@ relay holds it under a `hold` rule, an operator releases it in the console, the 
 - A deploy of an environment that has a `mailer: 'installation'` job, on Zerops (the namespace-proxy path), whose
   approved snapshot's `framework` is `>= 0.7.0`, hands `FABRIKA_EMAIL_PROVIDER=platform`,
   `FABRIKA_PLATFORM_MAIL_URL` (Control's public origin: the application's project has no private network to
-  Control's) and the key, and nothing of the provider. Every other case keeps `installationMailEnvironment` as it is. When the environment stops needing the
-  key, its rows and vault entry are deleted.
+  Control's) and the key, and nothing of the provider. Every other case keeps `installationMailEnvironment` as it is.
+  When the environment stops needing the key, its rows and vault entry are deleted once the deploy that drops it
+  succeeds.
 
 ### Control: the relay
 

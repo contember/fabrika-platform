@@ -161,7 +161,7 @@ export function proxySecretDeps(env: Env): { proxySecrets?: ProxySecrets } {
 }
 
 export async function cancelRun(env: Env, provider: ControlProvider, run: RunRow): Promise<void> {
-	await cancelDeploy({ repositories: repositories(env), provider, lock: locks(env) }, run)
+	await cancelDeploy({ repositories: repositories(env), provider, lock: locks(env), ...platformTransportDeps(env) }, run)
 }
 
 export interface ControlRpcDeps {
