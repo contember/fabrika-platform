@@ -5,7 +5,15 @@ import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
-import { type LocalSourceFixture, type LocalSourceFixtureKind, localSourceFixtureSchema } from '../local-source-contract'
+import {
+	LOCAL_SOURCE_RELEASE_TAGS,
+	type LocalSourceFixture,
+	type LocalSourceFixtureKind,
+	localSourceFixtureSchema,
+	type LocalSourceManifest,
+	localSourceManifestSchema,
+	type LocalSourceReleaseKind,
+} from '../local-source-contract'
 
 export const fixtureInputs = fileURLToPath(new URL('../../fixtures/source/', import.meta.url))
 
@@ -38,6 +46,26 @@ export async function applicationFixtureSource(root: string = applicationFixture
 	if (manifest === undefined) throw new Error('the application fixture has no package.json')
 	files.set('bun.lock', new TextEncoder().encode(sourceVersionLockfile(new TextDecoder().decode(manifest))))
 	return files
+}
+
+/** The Notes example as a released tag holds it, with the `bun.lock` npm resolves for it (`fixtures:release`). */
+export const releaseFixtureRecordSchema = z.object({
+	version: z.literal(1),
+	tag: z.string().regex(/^v\d+\.\d+\.\d+$/),
+	files: z.record(z.string()),
+}).strict()
+
+export type ReleaseFixtureRecord = z.infer<typeof releaseFixtureRecordSchema>
+
+export const releaseFixtureRecordPath = (tag: string): string => join(fixtureInputs, 'releases', `notes-${tag}.json`)
+
+/** Every file of a release fixture's commit: what an author on that release pushes, without a generated file. */
+export async function releaseFixtureSource(kind: LocalSourceReleaseKind): Promise<ReadonlyMap<string, Uint8Array<ArrayBuffer>>> {
+	const tag = LOCAL_SOURCE_RELEASE_TAGS[kind]
+	const record = releaseFixtureRecordSchema.parse(JSON.parse(await readFile(releaseFixtureRecordPath(tag), 'utf8')))
+	if (record.tag !== tag) throw new Error(`the release fixture record of ${tag} names ${record.tag}`)
+	const encoder = new TextEncoder()
+	return new Map(Object.entries(record.files).map(([path, contents]) => [path, encoder.encode(contents)]))
 }
 
 const manifestSchema = z.object({
@@ -130,21 +158,51 @@ const FIXTURE_MESSAGES: Readonly<Record<LocalSourceFixtureKind, string>> = {
 	platform: 'Fabrika local platform source fixture v1',
 	application: 'Fabrika local application source fixture v1',
 	agentChange: 'Rename a note, and give notes a label table',
+	release055: `Notes as ${LOCAL_SOURCE_RELEASE_TAGS.release055} holds it`,
+	release048: `Notes as ${LOCAL_SOURCE_RELEASE_TAGS.release048} holds it`,
+}
+
+async function fixtureSource(kind: LocalSourceFixtureKind): Promise<ReadonlyMap<string, Uint8Array<ArrayBuffer>>> {
+	if (kind === 'platform') return platformFixtureSource()
+	if (kind === 'application' || kind === 'agentChange') return applicationFixtureSource()
+	return releaseFixtureSource(kind)
 }
 
 /**
  * One fixture repository and its archive. The agent change commits the application fixture first, so its parent is
  * exactly the pinned application commit, then applies the patch as the agent's commit.
  */
-export async function generateFixture(directory: string, kind: LocalSourceFixtureKind): Promise<{
+export interface GeneratedFixture {
 	fixture: LocalSourceFixture
 	archive: Uint8Array<ArrayBuffer>
 	/** Every regular file of the commit by path. */
 	files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>
+}
+
+/** Every fixture, each in its own repository under `staging`, and the manifest that pins them. */
+export async function generateFixtures(staging: string): Promise<{
+	manifest: LocalSourceManifest
+	generated: Readonly<Record<LocalSourceFixtureKind, GeneratedFixture>>
 }> {
+	const generate = (kind: LocalSourceFixtureKind) => generateFixture(join(staging, kind), kind)
+	const generated = {
+		platform: await generate('platform'),
+		application: await generate('application'),
+		agentChange: await generate('agentChange'),
+		release055: await generate('release055'),
+		release048: await generate('release048'),
+	}
+	const manifest = localSourceManifestSchema.parse({
+		version: 1,
+		...Object.fromEntries(Object.entries(generated).map(([kind, { fixture }]) => [kind, fixture])),
+	})
+	return { manifest, generated }
+}
+
+export async function generateFixture(directory: string, kind: LocalSourceFixtureKind): Promise<GeneratedFixture> {
 	await mkdir(directory)
 	await git(directory, ['init', '--quiet', '--object-format=sha1', '--initial-branch=main', '--template='])
-	const source = kind === 'platform' ? await platformFixtureSource() : await applicationFixtureSource()
+	const source = await fixtureSource(kind)
 	const files = [...source.keys()]
 	for (const [file, bytes] of source) {
 		await mkdir(dirname(join(directory, file)), { recursive: true })
@@ -198,4 +256,4 @@ export async function generateFixture(directory: string, kind: LocalSourceFixtur
 	}
 }
 
-const archivePrefix = (kind: LocalSourceFixtureKind): string => (kind === 'agentChange' ? 'application' : kind)
+const archivePrefix = (kind: LocalSourceFixtureKind): string => (kind === 'platform' ? kind : 'application')

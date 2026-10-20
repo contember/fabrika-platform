@@ -15,15 +15,17 @@ import {
 	LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY,
 	LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE,
 	LOCAL_SOURCE_APPLICATION_REPOSITORY,
+	LOCAL_SOURCE_ARCHIVE_FILES,
 	LOCAL_SOURCE_BRANCH_HEAD_FILE,
 	LOCAL_SOURCE_FIXTURE_DIRECTORY,
 	LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE,
 	LOCAL_SOURCE_PLATFORM_REPOSITORY,
+	LOCAL_SOURCE_RELEASE_KINDS,
 	localSourceBranchHeadSchema,
 } from './local-source-contract'
 import { loadLocalSourceFixtures, readFixtureFiles } from './local-source-fixtures/fixture'
-import { applicationFixtureSource } from './local-source-fixtures/generate'
-import { createFixtureTransports } from './local-source-transports'
+import { applicationFixtureSource, releaseFixtureSource } from './local-source-fixtures/generate'
+import { createFixtureTransports, type FixtureTransportSource } from './local-source-transports'
 import { readLocalGitHubApps } from './source-connection-fixture'
 
 /** The providers Control accepts here: the built-in ones and the composition's capture. */
@@ -37,6 +39,14 @@ export const LOCAL_CONTROL_EMAIL_PROVIDERS = { ...builtinEmailProviders, directo
 export async function localSourceSeams(stateDirectory: string): Promise<NonNullable<RuntimeOverrides['sourceSeams']>> {
 	const fixtureDirectory = resolve(stateDirectory, LOCAL_SOURCE_FIXTURE_DIRECTORY)
 	const manifest = await loadLocalSourceFixtures(fixtureDirectory)
+	// Notes as each released tag holds it, which `local:compat` pushes (ADR-0062's compatibility suite).
+	const releases = await Promise.all(LOCAL_SOURCE_RELEASE_KINDS.map(async (kind): Promise<FixtureTransportSource> => ({
+		repository: LOCAL_SOURCE_APPLICATION_REPOSITORY,
+		fixture: manifest[kind],
+		archive: Bun.file(resolve(fixtureDirectory, LOCAL_SOURCE_ARCHIVE_FILES[kind])),
+		visibility: 'private',
+		files: readFixtureFiles(manifest[kind], await releaseFixtureSource(kind)),
+	})))
 	const github = await createGitHubDouble({
 		apps: localGitHubDoubleApps(await readLocalGitHubApps(stateDirectory)),
 		privateRepositories: [LOCAL_SOURCE_APPLICATION_REPOSITORY],
@@ -64,6 +74,7 @@ export async function localSourceSeams(stateDirectory: string): Promise<NonNulla
 			visibility: 'private',
 			files: readFixtureFiles(manifest.agentChange, await applicationFixtureSource(resolve(fixtureDirectory, LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY))),
 		},
+		...releases,
 	], {
 		access: github,
 		// Read at every lookup: a push moves the branch while Control runs.

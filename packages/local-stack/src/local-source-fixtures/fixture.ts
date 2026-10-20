@@ -15,7 +15,7 @@ import {
 	type LocalSourceManifest,
 	localSourceManifestSchema,
 } from '../local-source-contract'
-import { fixtureInputs, generateFixture, sha256 } from './generate'
+import { fixtureInputs, generateFixtures, sha256 } from './generate'
 
 async function readBoundedFile(path: string, limit: number): Promise<Buffer> {
 	const stat = await lstat(path)
@@ -57,21 +57,12 @@ export async function prepareLocalSourceFixtures(directory: string): Promise<Loc
 	if ((await readdir(directory)).length !== 0) return loadLocalSourceFixtures(directory)
 	const staging = await mkdtemp(join(directory, '.prepare-'))
 	try {
-		const platform = await generateFixture(join(staging, 'platform'), 'platform')
-		const application = await generateFixture(join(staging, 'application'), 'application')
-		const agentChange = await generateFixture(join(staging, 'agentChange'), 'agentChange')
-		const manifest = localSourceManifestSchema.parse({
-			version: 1,
-			platform: platform.fixture,
-			application: application.fixture,
-			agentChange: agentChange.fixture,
-		})
+		const { manifest, generated } = await generateFixtures(staging)
 		if (JSON.stringify(manifest) !== JSON.stringify(await pinnedManifest())) {
 			throw new Error('local source fixture inputs differ from the pinned identity')
 		}
-		const generated = { platform, application, agentChange }
 		for (const kind of LOCAL_SOURCE_FIXTURE_KINDS) await writeFile(join(staging, LOCAL_SOURCE_ARCHIVE_FILES[kind]), generated[kind].archive)
-		await writeFiles(join(staging, LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY), agentChange.files)
+		await writeFiles(join(staging, LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY), generated.agentChange.files)
 		await writeFile(join(staging, LOCAL_SOURCE_MANIFEST_FILE), `${JSON.stringify(manifest, null, '\t')}\n`)
 		await loadLocalSourceFixtures(staging)
 		for (const kind of LOCAL_SOURCE_FIXTURE_KINDS) {

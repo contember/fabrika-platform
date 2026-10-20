@@ -13,10 +13,12 @@ import {
 	LOCAL_SOURCE_MAX_COMPRESSED_BYTES,
 	LOCAL_SOURCE_MAX_MANIFEST_BYTES,
 	LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE,
+	LOCAL_SOURCE_RELEASE_KINDS,
+	LOCAL_SOURCE_RELEASE_TAGS,
 	type LocalSourceManifest,
 } from '../local-source-contract'
 import { loadLocalSourceFixtures, prepareLocalSourceFixtures, readFixtureFiles } from './fixture'
-import { applicationFixtureSource, generateFixture, sha256 } from './generate'
+import { applicationFixtureSource, generateFixture, releaseFixtureSource, sha256 } from './generate'
 
 const roots: string[] = []
 
@@ -47,7 +49,9 @@ describe('local immutable source fixtures', () => {
 			LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE,
 			LOCAL_SOURCE_MANIFEST_FILE,
 			LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE,
-		])
+			LOCAL_SOURCE_ARCHIVE_FILES.release048,
+			LOCAL_SOURCE_ARCHIVE_FILES.release055,
+		].sort())
 	})
 
 	test('real source tar admission verifies Git PAX identity, descriptors and safe platform symlink', async () => {
@@ -85,6 +89,22 @@ describe('local immutable source fixtures', () => {
 			expect.arrayContaining(manifest.application.tree.map((entry) => entry.path)),
 		)
 	})
+
+	for (const kind of LOCAL_SOURCE_RELEASE_KINDS) {
+		const tag = LOCAL_SOURCE_RELEASE_TAGS[kind]
+		test(`the ${tag} fixture is the example as its tag holds it, with an npm lockfile of that release and nothing generated`, async () => {
+			const root = await directory()
+			const manifest = await prepareLocalSourceFixtures(root)
+			const files = readFixtureFiles(manifest[kind], await releaseFixtureSource(kind))
+			const text = (path: string) => new TextDecoder().decode(files.get(path))
+			const version = tag.slice(1)
+			expect(JSON.parse(text('package.json')).dependencies['@fabrika/app']).toBe(version)
+			expect(text('bun.lock')).toContain(`"@fabrika/app": ["@fabrika/app@${version}", "", `)
+			expect(text('bun.lock')).not.toContain('sha512-unpublished')
+			expect([...files.keys()].filter((path) => path.startsWith('fabrika/') || path.startsWith('dist/'))).toEqual([])
+			expect(manifest[kind].tree.filter(entry => entry.type === 'blob').every(entry => entry.mode === '100644')).toBe(true)
+		})
+	}
 
 	test('inherited Git repository, index, config and author settings cannot alter generation', async () => {
 		const root = await directory()

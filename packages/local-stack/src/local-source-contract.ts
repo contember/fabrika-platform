@@ -47,6 +47,9 @@ export const localSourceManifestSchema = z.object({
 	application: localSourceFixtureSchema,
 	/** A second commit of the application repository, on top of `application`: an agent's change to Notes. */
 	agentChange: localSourceFixtureSchema,
+	/** The Notes example as each tag of `LOCAL_SOURCE_RELEASE_TAGS` holds it: ADR-0062's compatibility suite. */
+	release055: localSourceFixtureSchema,
+	release048: localSourceFixtureSchema,
 }).strict()
 
 /**
@@ -59,14 +62,27 @@ export const localSourceBranchHeadSchema = z.object({ version: z.literal(1), com
 
 export type LocalSourceBranchHead = z.infer<typeof localSourceBranchHeadSchema>
 
-export type LocalSourceFixtureKind = 'platform' | 'application' | 'agentChange'
+/**
+ * The released framework minors of the window an application fixture is recorded for, each at its newest patch: an
+ * application on that release, unchanged, deployed against this platform (`local:compat`). Each is a commit of the
+ * application repository of its own.
+ */
+export const LOCAL_SOURCE_RELEASE_TAGS = { release055: 'v0.5.5', release048: 'v0.4.8' } as const
 
-export const LOCAL_SOURCE_FIXTURE_KINDS: readonly LocalSourceFixtureKind[] = ['platform', 'application', 'agentChange']
+export type LocalSourceReleaseKind = keyof typeof LOCAL_SOURCE_RELEASE_TAGS
+
+export const LOCAL_SOURCE_RELEASE_KINDS: readonly LocalSourceReleaseKind[] = ['release055', 'release048']
+
+export type LocalSourceFixtureKind = 'platform' | 'application' | 'agentChange' | LocalSourceReleaseKind
+
+export const LOCAL_SOURCE_FIXTURE_KINDS: readonly LocalSourceFixtureKind[] = ['platform', 'application', 'agentChange', ...LOCAL_SOURCE_RELEASE_KINDS]
 
 export const LOCAL_SOURCE_ARCHIVE_FILES: Readonly<Record<LocalSourceFixtureKind, string>> = {
 	platform: LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE,
 	application: LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE,
 	agentChange: LOCAL_SOURCE_AGENT_CHANGE_ARCHIVE_FILE,
+	release055: `release-${LOCAL_SOURCE_RELEASE_TAGS.release055}.tar.gz`,
+	release048: `release-${LOCAL_SOURCE_RELEASE_TAGS.release048}.tar.gz`,
 }
 
 export type LocalSourceFixture = z.infer<typeof localSourceFixtureSchema>
