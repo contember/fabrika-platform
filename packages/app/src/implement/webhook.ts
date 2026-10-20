@@ -1,8 +1,8 @@
 // A webhook's bindings and deliveries (docs/reference/application-runtime.md). A procedure that declares `binds`
 // creates a binding through `ctx.webhooks('<name>')`. The framework generates the secret, or the procedure sets the one
-// the provider issued, and keeps the binding in `fabrika_webhook_bindings`. A delivery is checked in a fixed order — the binding,
-// the signature over the raw body, the account, the input, the delivery key — before its handler sees a `Ref` of the
-// bound value, or its application-wide capabilities when the webhook is bound to `'app'`.
+// the provider issued, and keeps the binding in `fabrika_webhook_bindings`. A delivery is checked in a fixed order —
+// the binding, the signature, the account, the input, the delivery key — before its handler sees a `Ref` of the bound
+// value, or its application-wide capabilities when the webhook is bound to `'app'`.
 
 import { API_KEY_PREFIX, type ScopeBinding, type WebhookScheme } from '@fabrika/auth-core'
 import { type CapabilityAuthority, describeGrant } from '@fabrika/db/capability'
