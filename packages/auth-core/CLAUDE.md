@@ -158,7 +158,7 @@ bun test               # app-environment · canonical-path · contract-canonical
   sorted, and the id, source and schemas are not part of it. An installation row's OAuth scopes join it, sorted,
   only when the row carries them, and an application row's `crossOrigin` (`environment` or `any`) only when it is
   declared, so every other row's digest is unchanged byte for byte (`endpoint-digest.test.ts` records them).
-  `CROSS_ORIGIN_KINDS` (`query`, `mutation`, `form`) and `ANY_ORIGIN_KINDS` (`form`) are the one statement of which
+  `CROSS_ORIGIN_KINDS` (`query`, `mutation`, `form`, `public`) and `ANY_ORIGIN_KINDS` (`form`, `public`) are the one statement of which
   kinds may carry it; the contract build, the artifact schema and the manifest parser all read them. The delegation is derived from the artifact by
   `endpointDelegation` alone — the proxy table, the IAM schema's `delegations` and `endpointDigest` all call it. The proxy sends `<id>@<digest>` and the application recomputes it, so a
   new rule the proxy enforces must join the digest in the same change, or the two can disagree unnoticed.

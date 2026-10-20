@@ -114,7 +114,9 @@ bun test
   overwrites (null removes), all written before the build request so it never meets `userDataSyncRunning`.
   App vars, secrets and descriptors may not author any name of `FRAMEWORK_VARIABLE_NAMES` (`@fabrika/auth-core`,
   the one list Control refuses too); `MANAGED_KEYS` is the part of it Control hands every deploy.
-  Beside them Control hands each job's and webhook's key (`FABRIKA_<KIND>_<NAME>_KEY`) and each connector
+  `FABRIKA_APP_ORIGIN` is read back and compared; `FABRIKA_TOKEN_KEYS` is sensitive, rewritten every deploy, and
+  removed by a null. Beside them Control hands each job's and webhook's key (`FABRIKA_<KIND>_<NAME>_KEY`), each public
+  procedure's (`FABRIKA_PROCEDURE_<ID>_<8 hex>_KEY`) and each connector
   import's `FABRIKA_CONNECT_<IMPORT>_KEY` and `_URL` (`parseManagedEnvironment`: a `px_` key, an https origin, or
   the deploy is refused, and so is any other family name): `write-service-env` writes each and deletes every
   service variable of those families that this deploy did not hand, so a removed workload's or import's key does
@@ -230,6 +232,11 @@ bun test
   environment's registry row, ADR-0022 "Cross-origin endpoints"), and omits the field otherwise.
   `compileNamespaceProxyManifest` refuses a list the manifest parser would: an origin that fails `isCrossOrigin`, a
   duplicate, the member's own host, more than `MAX_CROSS_ORIGINS`. Control republishes the namespace when the list changes.
+- **A deploy whose rows the namespace's pinned proxy cannot read is refused.** A namespace proxy's manifest parser is
+  strict, so an approved contract with a `public` row (a public procedure, a cached public `GET`) or a `capabilities`
+  requirement deploys only while the namespace's proxy source is the one this control plane deploys new placements
+  from; the refusal names `fabrika control namespaces update --namespace=<id> --proxy-source=current`. A 0.4/0.5
+  contract has no such row and deploys as before.
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).

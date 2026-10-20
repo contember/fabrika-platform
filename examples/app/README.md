@@ -28,7 +28,7 @@ The rules an agent follows when it changes this application are `@fabrika/app`'s
 
 Cloudflare has no `@fabrika/db` yet, so this application has no tables (`defineApp(vocabulary)`, no `ctx.db`): each endpoint answers from the caller's own
 grants (`member: true` for the caller's identity, `over` for the values it may read in) and reads no application data.
-Files, forms, webhooks and jobs do not boot on Cloudflare.
+Files, webhooks and jobs do not boot on Cloudflare.
 
 ## How it deploys
 

@@ -149,7 +149,8 @@ The proxy is the only hop that can see the real client, so it is the only one th
 It observes and injects; it holds no counter (ADR-0022 forbids proxy state a decision depends on, and
 a per-isolate counter on Cloudflare would be defeated by the next colo anyway). The upstream that owns
 the state keys its per-client abuse bucket on what arrives: IAM (backlog 21 + 49), and a contract
-application's forms, whose buckets `@fabrika/app` keeps in the application's database.
+application's public procedures (and a 0.4/0.5 application's forms), whose buckets `@fabrika/app` keeps in the
+application's database.
 
 | Hop                        | `X-Fabrika-Client-Ip`                         | `X-Forwarded-For`              | `CF-Connecting-IP`         |
 | -------------------------- | --------------------------------------------- | ------------------------------ | -------------------------- |

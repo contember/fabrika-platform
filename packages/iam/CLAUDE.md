@@ -165,12 +165,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   repository with exact actions, and the CLI passes the operator's list. An expiry or action refusal
   is `not_allowed` over RPC and a 400 naming the problem on the admin share-link path
   (`IssueOutcome.problem`).
-- **A WORKLOAD KEY CARRIES EXACTLY WHAT THE SCHEMA DECLARES FOR ITS WORKLOAD (ADR-0022 "Principal kinds").** A job or
-  webhook principal is a `service` row (`external_id` `workload:<app>:<kind>:<name>`) with a `workload_principals`
+- **A WORKLOAD KEY CARRIES EXACTLY WHAT THE SCHEMA DECLARES FOR ITS WORKLOAD (ADR-0022 "Principal kinds").** A job,
+  webhook or public procedure principal (kind `public`, named by its full endpoint id, ADR-0063) is a `service` row (`external_id` `workload:<app>:<kind>:<name>`) with a `workload_principals`
   row naming its kind; a token minted from its key has `ptype` = that kind and `workload` = its name.
   `resolveCredential` resolves it to the actions of its `app_workloads` row (written by the schema reconcile from
   `AppSchema.workloads`, contract applications only, exact catalog actions), app-wide, and to nothing without one. A
-  reconcile that drops a workload revokes its keys in the same batch.
+  reconcile that drops a workload revokes its keys in the same batch. A `public` workload needs at least one action,
+  and the reconcile refuses a schema in which any application role grants one of its actions, so a role change cannot
+  widen what anyone may cause.
 - **A WORKLOAD PRINCIPAL RESOLVES NO GRANT ON ANY PATH, AND HOLDS NONE.** The one grant read every permission goes
   through, `getActiveGrantsForApp`, excludes workload principals in its SQL; `createGrant` and
   `createRoleGrantUnlessHeld` throw `WorkloadGrantError` for one, and `grants.create` answers 409 before anything else.
@@ -179,7 +181,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   `revokeLink` only: it admits a **job**, which `membership.ts` then holds to its current declaration
   (`app_workloads.issues`, reconciled from the approved artifact's `issues`): it issues only links of that mount,
   with its declared actions app-wide (never more than its token carries), and revokes only links it issued of that
-  mount. Without the declaration, for another mount, another app, and for every webhook or connector token, the answer
+  mount. Without the declaration, for another mount, another app, and for every webhook, public or connector token, the answer
   is a refusal. `createLinkCredential` inserts a job's link only while the job's whole checked declaration still holds. An
   issuing job is app-wide for its mount: the link is bound to one object, the job is not. `apiKeys.list`, `get`,
   `rotate` and `revoke` do not see workload principals.
@@ -256,7 +258,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   a token's `perms` (up to five minutes old) count only where `resolvePermissionsAt` still holds them —
   so a token minted from a read-only key stays read-only. An
   anonymous credential, a share link included, is never a member caller; a service principal creates
-  no scope and manages no member (`userOnly`), which closes "a form plus a job that invites the
+  no scope and manages no member (`userOnly`), which closes "a public procedure plus a job that invites the
   submitted email". Membership is ordinary role grants scoped to a value (compatible with backlog 91);
   a value is checked as itself, flat — "there" means that exact `(type, value)`, global grants included.
   Assigning needs the dimension's `members.manage` there, a role that the target role's `assignableBy`

@@ -160,7 +160,7 @@ arguments and reports.
     (`https://outbox.invalid`) only, keeps each request's method, path, content type and body (never a header), and
     answers 200. The seed's second argument reads it (`outbox()`) and every message a job handed to the kit's mail
     stand-in (`mails()`). The mail view lists the stand-in IAM's invitations and the jobs' mail together, newest
-    first; the dev outbox has its own section after it. A form's challenge passes
+    first; the dev outbox has its own section after it. A public procedure's challenge passes
     (`devKit`'s `passingChallenge`), and Turnstile's test-widget token passes at every submission
     (`TURNSTILE_TEST_TOKEN`); any other token is single use.
   - The routes under `/__fabrika/dev`: the picker, `as` (a persona, a role in a scope value, an accepted invitee, or

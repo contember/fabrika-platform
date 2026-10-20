@@ -252,15 +252,17 @@ other environment, before the provider prepares anything, and the write maps a r
   changed manifest never drops what the operator set; the list a put keeps is judged against the put's domain too. It
   reaches the provider as `ProviderEnvironment.crossOrigins` on every deploy and as `ProviderNamespaceMember.crossOrigins`
   on every republish, absent when empty, and a changed list triggers the same `namespaceProxyChanged` a changed domain does.
-- **A job's and a webhook's key come from the APPROVED contract (`src/workload-credentials.ts`, ADR-0022 "Principal
-  kinds").** `executeDeploy` reconciles one key per job and per webhook declaration of
+- **A job's, a webhook's and a public procedure's key come from the APPROVED contract (`src/workload-credentials.ts`,
+  ADR-0022 "Principal kinds", ADR-0063).** `executeDeploy` reconciles one key per workload `contractWorkloads` lists
+  (a job, a webhook, a public procedure under its endpoint id) of
   `registration.environment.access.contract` before the provider runs (never on a dry run): a recorded key with more
   than half its 30 days left is read back from the vault, otherwise IAM's `workloads.issueKey` issues a new one with
   the provisioning key (`iamWorkloadKeyIssuer`, at `FABRIKA_IAM_ISSUER`), sealed under
   `workloadKeyPurpose(app, env, kind, name)` and recorded in `app_env_workload_credentials` (vault ref, IAM's
   credential id and expiry). Every issuance names the recorded credential as `keep`, so IAM never revokes the key
   the running version holds; a key issued by a deploy whose record failed is revoked by the next issuance, and its
-  vault row is deleted at once. A removed workload's record and vault row are deleted. Each key is handed as `FABRIKA_<KIND>_<NAME>_KEY` and redacted
+  vault row is deleted at once. A removed workload's record and vault row are deleted. Each key is handed as
+  `FABRIKA_<KIND>_<NAME>_KEY` (a public procedure's as `FABRIKA_PROCEDURE_<ID>_<8 hex>_KEY`) and redacted
   from the run log. Two workloads whose names map to one variable are refused. Without a vault, an issuer or a
   provisioning key a contract with a workload fails the run. What a key may do is IAM's: the schema reconcile
   declares the actions. An environment not deployed for 30 days loses its workloads' keys.
@@ -289,6 +291,11 @@ other environment, before the provider prepares anything, and the write maps a r
   the break. `assertMountCompatibility` refuses, the same way, a candidate that breaks a procedure of a mount the
   approved contract promises `compatibility: 'backward'` (`incompatibleMountChanges`). `connectors.describe` answers the approved export to its consumer for `fabrika connect`, behind
   `deploy.read` on the consumer, and the same 404 for anything else.
+- **Signed-token keys and the application origin are Control's (migration `0012_token_keys`).** Each environment's
+  token keys live in the vault (`app_env_token_keys`) and are handed as `FABRIKA_TOKEN_KEYS`, the signing key first,
+  only when the approved contract declares a token purpose; `apps.environments.rotateTokenKey` asks the next deploy to
+  rotate, and a retired key verifies until its retirement plus the largest `maxDays` the contract had while it signed.
+  Every deploy writes `FABRIKA_APP_ORIGIN` (the environment's public origin, or `null`, which removes it).
 - **No authored value may copy a framework-only variable, and no run log keeps a secret Control handed out.**
   `assertNoFrameworkReference` refuses an app variable or secret VALUE that references a
   `FRAMEWORK_VARIABLE_NAMES` name in any Zerops form (`${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, a
@@ -450,7 +457,9 @@ other environment, before the provider prepares anything, and the write maps a r
   `contract` is it upcast to this release's model, which the diff, the proxy table and the IAM schema read.
   `approvedAccess` hands the provider the digest the application's release computes (`applicationContractDigest`) and
   the reader's release (`checker`), which the build checks with; never recompute a digest from the upcast contract. A
-  0.4 artifact is a 0.5 one (`from04`). A model change adds its upcast rule in `formats.ts`, and
+  0.4 artifact is a 0.5 one (`from04`). A 0.5 artifact keeps its forms, collection rows, `then` and inbox policies,
+  which the proxy table, the IAM schema and the diff still serve; the upcast gives a job's `timeout` as `timeoutMs`
+  (15 min without one) and a webhook the 10 s it ran with. A model change adds its upcast rule in `formats.ts`, and
   `framework-compat.test.ts` keeps every older minor of the window reading as its own platform read it.
 - **Steps off the paved road are in the reviewed snapshot, never refused by it (`diff.ts`).** Two kinds only: the
   reach a staged-kit site declares (`ContractArtifact.declared`: `sql`, `unscoped`, `connect`, `issues`), and the

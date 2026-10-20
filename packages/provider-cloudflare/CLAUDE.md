@@ -42,8 +42,10 @@ this one import.
   checks its digest. The runner writes it to `<workspace>/<runId>.access.json` beside the checkout and names it in
   `FABRIKA_APPROVED_ACCESS_FILE`, set after every job-supplied name; the executor reads it (`readApprovedAccess`)
   before the config runs. Unset outside a runner (a local deploy).
-- **A deploy that carries a job's or a webhook's key is refused** before the runner is asked: a Worker runs no
-  job and no webhook (they need `@fabrika/db` on Postgres), and the key would only sit in a generated config.
+- **A deploy that carries a job's, a webhook's or a public procedure's key is refused** before the runner is asked:
+  a Worker runs no workload (they need `@fabrika/db` on Postgres), and the key would only sit in a generated config.
+  So is a contract with token purposes: `FABRIKA_TOKEN_KEYS` would be a plain-text Worker variable.
+  `FABRIKA_APP_ORIGIN` passes as a Worker var.
 - **Every framework variable of each generated config is the platform's** (`assertFrameworkVariables` in
   `src/bounds.ts`, before provisioning and before each deploy): a binding's `configureBinding` writes the config
   after the deployer injected its values, so the config is where `FABRIKA_CONTRACT_DIGEST` is checked.
@@ -127,7 +129,7 @@ this one import.
   `FABRIKA_CONTRACT_DIGEST` into the application Worker. An IAM schema whose `contract: true` disagrees with the
   contract is refused. The manifest entry carries the contract's CSP origins and the origin of the run's
   `FABRIKA_OPERATIONS_DSN` (`operationsOrigin`, never the key), and the Worker replaces every header of the policy on
-  the application's answer, or applies the file treatment for a download endpoint, sets a cacheable row's lifetime
+  the application's answer, or applies the file treatment for a download endpoint or a `response: 'file'` row, sets a cacheable row's lifetime
   on its 200 (`applyAnswerCache`), deletes the reporting
   headers, and answers a throwing `APP` binding with a fixed 502 and a missing one with a 503 under the same
   treatment; on an `https` entry both carry HSTS, and on `http` the application's own is dropped. A Worker that

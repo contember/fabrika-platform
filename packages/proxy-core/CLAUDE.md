@@ -83,8 +83,13 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   export path (`callerAdmittedAt`) → 403; a job or webhook key is no caller kind, so every row refuses
   it; no key and no `human` caller → 401, never a bounce; the session or the login bounce; `satisfies` →
   403; admission (a session non-`GET` needs `Sec-Fetch-Site: same-origin` → 403, the media type must be
-  one the row admits → 400). An anonymous kind reads no credential and mints no token. The allow carries
-  `X-Fabrika-Endpoint: <id>@<digest>`.
+  one the row admits → 400). An anonymous kind (`health`, `webhook`, `public`, a 0.4/0.5 `form`) reads no credential
+  and mints no token. The allow carries `X-Fabrika-Endpoint: <id>@<digest>`.
+- **The rows of the surface revision are new kinds or absent fields.** The `public` kind and the `capabilities`
+  requirement (every named action in some scope) are new; a row's `response: 'file'` (the file treatment of
+  `headers.ts` on every answer) and a public `GET` row's `cache` join the digest only when present. So every 0.4/0.5
+  row keeps its digest, and an older proxy's strict parser refuses the new forms instead of serving them without their
+  rule (ADR-0022).
 - **The installation-only forms exist in installation entries alone.** The parser refuses `protocol`,
   `service`, method `*`, caller `oauth`, requirement `authenticated` and an `oauth` row field in an
   application row; and an installation entry whose id holds `@`, that carries `snapshot`, `csp` or
@@ -95,17 +100,19 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   (`withBearerChallenge`). A `protocol` row reads no credential like any anonymous kind; only its hop
   differs.
 - **A cross-origin request is decided from the row and the entry, never by the application** (ADR-0022 "Cross-origin
-  endpoints"). A contract application's row may carry `crossOrigin` (`environment` on a `query`, `mutation` or `form`;
-  `any` on a `form` only), and its entry `crossOrigins`, the environment's exact origins (`isCrossOrigin`, at most
+  endpoints"). A contract application's row may carry `crossOrigin` (`environment` on a `query`, `mutation`, `public`
+  or a 0.4/0.5 `form`; `any` on a `public` or `form` row only; a procedure declares it as `admission.origins`), and its
+  entry `crossOrigins`, the environment's exact origins (`isCrossOrigin`, at most
   `MAX_CROSS_ORIGINS`, each once, never one of its own hosts); the parser refuses either anywhere else. An `OPTIONS`
   with `Origin` and `Access-Control-Request-Method` is a preflight, planned for the REQUESTED method before any
   credential is read (`decidePreflight`): an admitted one is the `preflight` outcome, a 204 carrying the policy,
   `preflightHeaders` and `PREFLIGHT_HEADER`, which both compositions return as the whole answer without dialling the
   app; anything else is 403 (`cross_origin`, or `no_endpoint`). An installation entry's `OPTIONS` is an ordinary
   request. On any other request `admittedOrigin` gives the allow's `crossOrigin` (copied by the composition onto the
-  app's answer with `applyCrossOriginHeaders`) and a denial's (set on it directly). A form row that admits `multipart/form-data` (a form that takes
-  files, ADR-0061) refuses a request whose `Origin` is neither the entry's own (`<scheme>://<host>`) nor admitted
-  (`admitFormOrigin`, 403 `cross_origin`): a browser sends that type without a preflight. A listed origin's request is never
+  app's answer with `applyCrossOriginHeaders`) and a denial's (set on it directly). A `public` row's multipart or `urlencoded` request, and a 0.4/0.5
+  form row that admits `multipart/form-data`, is refused when its `Origin` is neither the entry's own
+  (`<scheme>://<host>`) nor admitted (`admitFormOrigin`, 403 `cross_origin`): a browser sends those types without a
+  preflight. A request without `Origin` passes; `Origin: null` does not (ADR-0022's browser admission matrix). A listed origin's request is never
   session-authenticated: without `Authorization` it is 401 `no_credential`, never a bounce. No answer carries
   `Access-Control-Allow-Credentials`.
 - **A workload key opens no `machine` row.** The caller `machine` admits only a `service` key: a key whose token has
