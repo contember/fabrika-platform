@@ -4,8 +4,8 @@
 
 import type { TablePolicyArtifact } from '@fabrika/auth-core-0.5'
 import { describe, expect, test } from 'bun:test'
-import { classifyAccess } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
+import { classifyAccess } from './helpers/access'
 import { BASE, edited, snapshot05 } from './helpers/contracts'
 
 const NOTES: TablePolicyArtifact = {

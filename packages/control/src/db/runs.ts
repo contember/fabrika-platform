@@ -273,11 +273,15 @@ export class RunRepository {
 		)
 	}
 
-	/** Park a running run whose widening waits for a human (ADR-0050), with the classification the approver reads. */
+	/**
+	 * Park a running run whose widening waits for a human (ADR-0050), with the classification the approver reads. An
+	 * approval the run held stays: it names the digests it approved, so it approves nothing this classification shows,
+	 * and the approval page says it lapsed.
+	 */
 	async parkRunForApproval(id: string, classificationJson: string, fence: LeaseFence): Promise<boolean> {
 		return this.mutateRun(
 			id,
-			`UPDATE runs SET status = 'awaiting_approval', classification_json = ?, approval_json = NULL
+			`UPDATE runs SET status = 'awaiting_approval', classification_json = ?
 			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL`,
 			[classificationJson, id],
 			fence,

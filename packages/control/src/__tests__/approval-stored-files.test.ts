@@ -7,9 +7,9 @@ import { readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import { classifyAccess } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
 import { snapshotSurface } from '../approval/surface'
+import { classifyAccess } from './helpers/access'
 
 const FIXTURE = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'stored-files-fixture')
 

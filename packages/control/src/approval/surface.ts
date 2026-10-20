@@ -1,6 +1,6 @@
-import { APP_CALLER_PREFIX, type ContractArtifact, type EndpointRow, type FormMountArtifact, isFileShape, type SchemaShape } from '@fabrika/auth-core'
+import { type ContractArtifact, type EndpointRow, type FormMountArtifact, isFileShape, type SchemaShape } from '@fabrika/auth-core'
 import { SURFACE_REACHES, type SurfaceEndpointDto, type SurfaceReach } from '@fabrika/control-contract'
-import { attachmentName, crossOriginReach, requirementPhrase, storedFileName } from './diff'
+import { attachmentName, crossOriginReach, endpointReach, requirementPhrase, storedFileName } from './diff'
 import { type AccessSnapshot, compareText } from './snapshot'
 
 /** Every endpoint a snapshot publishes, grouped by who reaches it, most exposed first, then by path and method. */
@@ -18,18 +18,11 @@ function surfaceEndpoint(contract: ContractArtifact, row: EndpointRow): SurfaceE
 		method: row.method,
 		path: row.path,
 		kind: row.kind,
-		reach: reachOf(row),
+		reach: endpointReach(row),
 		callers: [...row.callers],
 		requirement: row.requirement === null ? null : requirementPhrase(row.requirement),
 		notes: notesOf(contract, row),
 	}
-}
-
-function reachOf(row: EndpointRow): SurfaceReach {
-	if (row.requirement === null) return 'anyone'
-	if (row.callers.includes('link')) return 'link'
-	if (row.callers.some((caller) => caller.startsWith(APP_CALLER_PREFIX))) return 'app'
-	return row.callers.includes('machine') ? 'machine' : 'human'
 }
 
 function notesOf(contract: ContractArtifact, row: EndpointRow): string[] {

@@ -10,13 +10,14 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { toAppEnvDto } from '../api/registry/registration'
 import { completeApprovalUseCase } from '../approval/api'
-import { type AccessChange, classifyAccess, snapshotDeviations } from '../approval/diff'
+import { snapshotDeviations } from '../approval/diff'
 import { parseClassification, type StoredClassification } from '../approval/publish'
 import { readAccessSnapshot, snapshotReads, SnapshotRefused } from '../approval/read'
 import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
 import type { ControlRepositories } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
+import { classifyAccess, type WordedChange, wordsOf } from './helpers/access'
 import { memoryCommits } from './helpers/commits'
 import { BASE } from './helpers/contracts'
 import { createHarness } from './helpers/harness'
@@ -134,7 +135,7 @@ const digests = (classification: StoredClassification) => ({
 	baselineDigest: classification.baselineDigest,
 })
 
-const closer = (classification: { readonly changes: readonly AccessChange[] }): string[] =>
+const closer = (classification: { readonly changes: readonly WordedChange[] }): string[] =>
 	classification.changes.filter((change) => change.review === 'closer').map((change) => change.line)
 
 async function snapshotOf(files: Record<string, string>, settled: AccessSnapshot['migrations'] = []): Promise<AccessSnapshot> {
@@ -159,7 +160,7 @@ describe('declared reach in the reviewed snapshot', () => {
 		const stage = await deploy(w, 'stage')
 		expect(stage.status).toBe('succeeded')
 		expect(classified(stage).outcome).toBe('widening')
-		expect(classified(stage).changes).toEqual([{ effect: 'widens', line, review: 'closer' }])
+		expect(wordsOf(classified(stage).changes)).toEqual([{ effect: 'widens', line, review: 'closer' }])
 
 		const prod = await deploy(w, 'prod')
 		expect(prod.status).toBe('awaiting_approval')
@@ -223,7 +224,7 @@ describe('declared reach in the reviewed snapshot', () => {
 		w.files = commitOf()
 		const removal = await deploy(w, 'prod')
 		expect(removal.status).toBe('succeeded')
-		expect(classified(removal).changes).toEqual([{ effect: 'narrows', line: 'Endpoint `api.notes.summary` no longer declares raw SQL' }])
+		expect(wordsOf(classified(removal).changes)).toEqual([{ effect: 'narrows', line: 'Endpoint `api.notes.summary` no longer declares raw SQL' }])
 		expect(toAppEnvDto(await environment(w, 'prod')).deviationSubjects).toEqual([])
 	})
 
@@ -249,7 +250,7 @@ describe('database code in the reviewed snapshot', () => {
 		w.files = commitOf({}, [NOTES_MIGRATION, AUDIT_TRIGGER_MIGRATION])
 		const parked = await deploy(w, 'prod')
 		expect(parked.status).toBe('awaiting_approval')
-		expect(classified(parked).changes).toEqual([
+		expect(wordsOf(classified(parked).changes)).toEqual([
 			{ effect: 'widens', line: `New migration \`${AUDIT_TRIGGER_MIGRATION.name}\`` },
 			{ effect: 'widens', line: `Migration \`${AUDIT_TRIGGER_MIGRATION.name}\` declares function \`record_retitle\``, review: 'closer' },
 			{ effect: 'widens', line: `Migration \`${AUDIT_TRIGGER_MIGRATION.name}\` declares trigger \`notes.audit_retitle\``, review: 'closer' },
@@ -325,7 +326,7 @@ SELECT fabrika_files_release('attachments');
 }
 
 describe('a file collection adopted into a table (ADR-0061)', () => {
-	const pair = (baseline: AccessSnapshot, candidate: AccessSnapshot): readonly AccessChange[] => classifyAccess(baseline, candidate).changes
+	const pair = (baseline: AccessSnapshot, candidate: AccessSnapshot): readonly WordedChange[] => classifyAccess(baseline, candidate).changes
 
 	test('the snapshot records the adoption and the release, keeps them through storage, and leaves the digest as it was', async () => {
 		const snapshot = await snapshotOf(commitOf({}, [NOTES_MIGRATION, ADOPTION_MIGRATION]))

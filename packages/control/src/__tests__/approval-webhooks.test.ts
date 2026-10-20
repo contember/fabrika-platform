@@ -7,8 +7,9 @@ import { z } from 'zod/v4'
 import { tables } from '../../../app/src/__tests__/kit-fixture/src/db/tables'
 import { Push } from '../../../app/src/__tests__/kit-fixture/src/schemas'
 import { vocabulary } from '../../../app/src/__tests__/kit-fixture/src/vocabulary'
-import { classifyAccess, snapshotDeviations } from '../approval/diff'
+import { snapshotDeviations } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
+import { classifyAccess } from './helpers/access'
 
 const app = defineApp(vocabulary, tables)
 
