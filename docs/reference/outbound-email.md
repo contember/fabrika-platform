@@ -17,18 +17,26 @@ An `EmailSender` accepts one message with these fields:
   caller adds must fit inside it);
 - an optional reply-to address;
 - an optional sender display name, which replaces the transport's own for this
-  message.
+  message;
+- an optional one-click unsubscribe URL (`unsubscribeUrl`, an exact `https:` URL): the transport writes
+  `List-Unsubscribe: <url>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058);
+- optional attachments: at most 20 (`MAX_EMAIL_ATTACHMENTS`), each a name without a path separator or a quote, a
+  media type and the bytes. An empty list is none.
+
+The attachments and the unsubscribe URL are part of the content a repeated idempotency key must match.
 
 `send(message, signal)` takes the caller's `AbortSignal`. A successful call
 returns an accepted result with a provider-neutral message ID.
 
 Each sender reports its `capabilities`:
 
-| field          | meaning                                                                                        |
-| -------------- | ---------------------------------------------------------------------------------------------- |
-| `idempotent`   | A repeated send under one key with the same message is not delivered again.                    |
-| `confirmation` | `sync`: accepted means the provider took the message. `queued`: it may still drop the request. |
-| `maxBatch`     | The most messages one call carries. `send` carries one, so every built-in sender reports 1.    |
+| field                | meaning                                                                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `idempotent`         | A repeated send under one key with the same message is not delivered again.                                                           |
+| `confirmation`       | `sync`: accepted means the provider took the message. `queued`: it may still drop the request.                                        |
+| `maxBatch`           | The most messages one call carries. `send` carries one, so every built-in sender reports 1.                                           |
+| `listUnsubscribe`    | Whether it writes the unsubscribe headers. Absent is no: it refuses a message with `unsubscribeUrl` as `invalid_message`.             |
+| `maxAttachmentBytes` | The most attachment bytes of one message, every file together. Absent: it refuses a message with any attachment as `invalid_message`. |
 
 Failures use `EmailDeliveryError`. The adapter names a code; one table,
 `EMAIL_DELIVERY_ERRORS`, derives `retryable` and `outcome` from it, so an adapter
@@ -99,7 +107,9 @@ tooling knows which go to secret storage.
 `ResendEmailSender` (`@fabrika/email/resend`) calls the Resend HTTP API through
 the portable Fetch surface. It sends the idempotency key in Resend's
 idempotency header and quotes a display name that holds RFC 5322 specials. Its
-own timeout is ten seconds by default. Capabilities: idempotent, `sync`.
+own timeout is ten seconds by default. Capabilities: idempotent, `sync`, `listUnsubscribe`, and `maxAttachmentBytes`
+of 25 MiB: it sends attachments as base64 `attachments`, which stays within Resend's 40 MB message bound. It writes the
+unsubscribe URL as the two message headers.
 
 A 409 is `request_in_progress` for `concurrent_idempotent_requests` and
 `idempotency_conflict` for `invalid_idempotent_request`. A 429 is
@@ -112,8 +122,9 @@ A 409 is `request_in_progress` for `concurrent_idempotent_requests` and
 `POST /api/v3/send/transactional-emails-bulk` with HTTP Basic credentials and one
 task per request. It sends the content in `message_contents`, so no stored
 template is needed. The API has no idempotency key and a 201 only queues the
-request. Capabilities: not idempotent, `queued`. The API takes up to five tasks
-per request; `send` carries one.
+request. Capabilities: not idempotent, `queued`, no `listUnsubscribe` and no `maxAttachmentBytes`: its API
+documents no message headers, so it refuses a message with an unsubscribe URL or an attachment. The API takes up to
+five tasks per request; `send` carries one.
 
 The adapter follows the official OpenAPI document and is verified only against a
 stubbed fetch. Not verified: the status codes for 403, 5xx and an account whose
@@ -128,7 +139,7 @@ nothing: it writes each message as a JSON file in an existing directory, one fil
 per idempotency key. A repeated send of the same message answers the same message
 ID; a different message under the key is `idempotency_conflict`.
 `readCapturedEmails` reads them back, oldest first, with the key, reply-to and
-sender name. It exists for a local composition and its tests; the files hold the
+sender name. It keeps an unsubscribe URL and attachments within the same 25 MiB bound as Resend. It exists for a local composition and its tests; the files hold the
 bodies and their one-time links.
 
 `directoryEmailProvider` (same module) selects it with `FABRIKA_EMAIL_PROVIDER=directory`
@@ -142,7 +153,7 @@ an unknown provider.
 
 `MemoryEmailSender` (`@fabrika/email/memory`, runtime-neutral) keeps what it
 accepted in memory, for tests and local development. Its capabilities can be set
-to model any transport. A test can make it refuse, be unavailable or unreachable,
+to model any transport; by default it keeps an unsubscribe URL and attachments within 25 MiB. A test can make it refuse, be unavailable or unreachable,
 lose the answer after it took the message, or run a hook during the call.
 `handoffs` lists every call that reached it, with the answer it gave.
 

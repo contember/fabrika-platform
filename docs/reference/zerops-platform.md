@@ -1241,13 +1241,13 @@ manifest's services and `zerops.yaml`, a deploy-time variable and `secrets.put` 
 
 #### A contract with files sweeps hourly
 
-A contract that declares a file collection gets `fabrika job run fabrika-file-sweep` at minute 41 of every hour, on one
-container (`allContainers: false`): the framework's sweep deletes the objects of removed and orphaned files. The job's
-lease keeps two runs from overlapping.
+A contract that declares a file kind (or, from a 0.5 application, a file collection) gets
+`fabrika job run fabrika-file-sweep` at minute 41 of every hour, on one container (`allContainers: false`): the
+framework's sweep deletes the files no declared column references. The job's lease keeps two runs from overlapping.
 
 #### UNVERIFIED: ClamAV in a scanning application's runtime container
 
-A contract with a `scan: true` file collection gets `sudo apk add --no-cache clamav` and a first `sudo freshclam` in
+A contract with a `scan: true` file kind (or file collection) gets `sudo apk add --no-cache clamav` and a first `sudo freshclam` in
 `run.prepareCommands`, the same `freshclam` in `run.initCommands` (a failure there only logs: a container starts from
 the prepared image, whose signatures are as old as its build), a daily `freshclam` crontab line on every container and
 `fabrika job run fabrika-file-scan` every minute (`packages/provider-zerops/src/execution.ts`). The scanner refuses

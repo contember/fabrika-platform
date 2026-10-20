@@ -233,20 +233,30 @@ An import is judged by the file or package Bun loads for it:
   | `unscoped: { <table>: 'read' \| 'write' }` | `ctx.db.unscoped.<table>`, in that mode          |
   | `connect: ['<connector>']`                 | `ctx.connect.<connector>`                        |
   | `issues: '<mount>'`                        | `ctx.links.issue` and `revoke`; also on a job    |
+  | `binds: '<webhook>'`                       | `ctx.webhooks('<webhook>').bind` and `unbind`    |
+  | `signs: ['<purpose>']`                     | `ctx.tokens.sign`; also on a job and a webhook   |
+  | `kicks: ['<job>']`                         | `ctx.kick`; also on a webhook and a job          |
+  | `egress: ['https://<host>']`               | `fetch` to those origins; also on a job, webhook |
 
 - **Logic** (`logic.ts`) is pure: values in, values out. It does not see `ctx`, a handle or a row it did not get as an
   argument. Its tests need no database.
 - **A query function** (`queries.ts`) takes the handle as a parameter (`ctx.db.target`, `ctx.db.within.<table>`,
   `ctx.sql`), typed by `DbHandle`, `SqlHandle` or by the methods it calls, and returns plain values. It decides no authorization: the capability
   already bounds the handle. It is called from its own slice's handlers.
-- **A job** is a `c.cron` procedure with its `.handle(…)` in the `endpoints.ts` of the slice whose data it works on;
-  the contract's `jobs` section names it. An attempt retries, so its writes are idempotent.
-- **A webhook** is declared and handled the same way; it keys idempotency on `ctx.delivery.key`.
+- **A job** is an `app.cron` declaration with its `.handle(…)` in the `endpoints.ts` of the slice whose data it works
+  on; the contract's `jobs` section names it. An attempt retries, so its writes are idempotent. A queue table's rows
+  are claimed by a job (`claim`).
+- **A webhook** is declared and handled the same way; it keys idempotency on `ctx.delivery.key` or writes with
+  `insert(…, { onConflict })`.
+- **A public procedure** is a procedure of a group like any other, with `access: { public: true }` and its `actions`;
+  a group of public procedures only is `app.group({}, …)`. Its slice holds its handler and the table it inserts into.
 - **A link mount's procedures** and **an export's procedures** (the owner's side of a connector) carry their
   `.handle(…)` in the owning slice's `endpoints.ts`; the contract mounts them with `c.link` and `c.export`.
 - **A connector import** is declared in the contract's `imports`; a procedure that calls it declares `connect`, and
   its handler calls `ctx.connect.<connector>`.
-- **A file collection** is `c.files` in the contract's `files` section. Its endpoints are generated; it has no handler.
+- **A file kind** is `c.files` in the contract's `files` section; it has no endpoint and no handler. A file lives in a
+  table's file column (`files: { <column>: '<kind>' }` in `src/db/tables.ts`), and its upload, list and download are
+  procedures of the slice that owns that table.
 - **`src/app.ts`** composes and does nothing else: no route, no middleware, no handler.
 - **The SPA** builds its client with `createClient(contract, 'api')` from `@fabrika/app/client`. Its bundle is built
   through `@fabrika/check/bun-plugin`, which loads `fabrika.contract.ts` without its handlers. It imports

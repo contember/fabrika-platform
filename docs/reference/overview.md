@@ -417,9 +417,11 @@ enforcement:
   a contract application's endpoints alike. They decide whether a cookie-bearing
   request is considered at all; a bearer is explicit authority and passes without
   them. The proxy's answer to a cross-origin request is admission too: it answers the
-  preflight of an endpoint the contract marks `crossOrigin` for an origin the
-  environment lists, decorates the answer, and never reads a session for such a
-  request (ADR-0022 "Cross-origin endpoints"). Control reads no `Origin`, and IAM's own admin surface reads no cookie — it
+  preflight of an endpoint the contract opens to other origins (`admission.origins`, recorded on the row as
+  `crossOrigin`) for an origin the environment lists, decorates the answer, and never reads a session for such a
+  request (ADR-0022 "Cross-origin endpoints"). So is its origin check of a public procedure's multipart or
+  `urlencoded` body, which a browser sends without a preflight. A public procedure's rate buckets, challenge and
+  in-flight share are the application's admission: they bound how much anyone sends, and decide nothing about who. Control reads no `Origin`, and IAM's own admin surface reads no cookie — it
   accepts only a bearer. They resolve no principal and read no policy, so none of
   them is a second enforcement decision.
 

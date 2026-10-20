@@ -116,19 +116,28 @@ namespace proxy, the next deploy of the environment builds the proxy Worker with
 
 A namespace proxy parses its manifest strictly, and `fabrika platform upgrade` does
 not move a namespace's proxy source pin. A proxy built from a pin older than the
-release that added cross-origin endpoints refuses a manifest whose entry lists
-`crossOrigins` or whose row carries `crossOrigin`: the rebuild fails, the previous
-proxy version keeps serving, and every deploy that republishes the namespace fails
-until the pin moves. Before an application of an upgraded namespace declares
-`crossOrigin`, or its environment lists an origin, re-pin the namespace with
-`fabrika control namespaces update --namespace=<id> --proxy-source=current`.
+release that added a row field or a row kind refuses a manifest that carries it: the rebuild fails, the previous
+proxy version keeps serving, and every deploy that republishes the namespace fails until the pin moves. Re-pin the
+namespace with `fabrika control namespaces update --namespace=<id> --proxy-source=current` before an application of an
+upgraded namespace declares one of these:
 
-A form that takes files ([ADR-0061](../decisions/0061-a-form-takes-files-beside-its-input.md)) fails open on an old
-pin instead: its row only admits `multipart/form-data`, which an older proxy parses, and that proxy forwards such a
-form's request from any origin, because the refusal of an origin the row does not admit is newer than the pin (the
-form's challenge still stops a foreign page, whose widget cannot verify for the application's host). Control does not
-detect this. Before an application of an upgraded namespace declares `files` on a form, re-pin the namespace the same
-way.
+- a cross-origin endpoint (`admission.origins: 'listed'` or `'any'`, the row's `crossOrigin`), or an environment that
+  lists an origin (the entry's `crossOrigins`);
+- a procedure with a file output (the row's `response: 'file'`);
+- a public procedure, also with `http.cache` (the row kind `public` and its `cache`), or an endpoint of several
+  capabilities (the requirement kind `capabilities`).
+
+Control refuses a deploy of the last group itself, before any effect, while the namespace's proxy source is another
+than the one this control plane deploys new placements from (`assertNamespaceProxyReads`,
+`packages/provider-zerops/src/namespace/proxy-reads.ts`); the refusal names the command. A contract without such rows,
+every 0.4 and 0.5 one included, deploys as before.
+
+A form of a 0.5 application that takes files ([ADR-0061](../decisions/0061-a-file-is-a-value-in-a-table-column.md))
+fails open on an old pin instead: its row only admits `multipart/form-data`, which an older proxy parses, and that
+proxy forwards such a form's request from any origin, because the refusal of an origin the row does not admit is newer
+than the pin (the form's challenge still stops a foreign page, whose widget cannot verify for the application's host).
+Control does not detect this. Before such an application deploys into an upgraded namespace, re-pin the namespace the
+same way. A public procedure with a file field is covered by the refusal above.
 
 Deployment then adds control-owned managed environment values independently of
 the namespace and provider artifact. Providers reject an app-authored

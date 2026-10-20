@@ -81,9 +81,13 @@ export default serve(contract, { database: scoped(tables) })
   `columns` from the generated `src/db/schema.generated.ts`.
 - `ctx.target` is the capability (a `Ref`) the access form minted; its id is `ctx.target.value`. `ctx.db.target` is
   the data handle bound to it ([The staged kit's data handles](#the-staged-kits-data-handles-ctxdb)).
-- A handler that needs more than the handles give declares it on its endpoint — `sql`, `unscoped`, `connect` or
-  `issues` — and the approver sees the declaration. Jobs (`app.cron`), webhooks (`app.webhook`), share links
-  (`app.link`) and exports (`app.export`) take their handlers the same way.
+- A handler that needs more than the handles give declares it on its endpoint — `sql`, `unscoped`, `connect`,
+  `issues`, `binds`, `signs`, `kicks` or `egress` — and the approver sees the declaration. Jobs (`app.cron`), webhooks
+  (`app.webhook`), share links (`app.link`) and exports (`app.export`) take their handlers the same way.
+- A declaration states where a request enters, who may send it, how it is admitted, what it carries and what reach the
+  code behind it holds. It never performs an application operation: every request that touches application data runs
+  a handler ([ADR-0012](../decisions/0012-fabrika-app-runtime.md)). A procedure that anyone may call declares
+  `access: { public: true }` and the `actions` its handler holds ([Public procedures](#public-procedures)).
 - The shell is literal: the reader and Control read each module as its slice, without the `.handle(…)` bodies.
 - `defineVocabulary` also takes `locale` (`'en'` or `'cs'`) and `displayName`: the language and the name of the
   application on IAM's sign-in, password and invitation pages and e-mails. The artifact carries each only when it is
@@ -190,7 +194,8 @@ the browser call surface from it. No code generation is required.
 access surface ([ADR-0012](../decisions/0012-fabrika-app-runtime.md)).
 `app.contract((c) => surface)` of the kit types it: actions come from the
 vocabulary, roles list exact actions, every procedure declares `access`, RPC mounts
-have no public or link caller, `from` names a string field of the input, and loose
+have no link caller (anyone reaches a procedure only through `access: { public: true }`), `from` names a string field
+of the input, and loose
 objects do not type-check. The kit's builders produce the same plain declarations as
 `defineContract(vocabulary, (c) => surface)`, which stays the framework's own form:
 `serve` refuses a contract no kit built. `compileContract(contract, tables)` validates what the
@@ -212,8 +217,10 @@ manifest's strict parser refuses any other form, and both providers refuse a con
 manifest that still declares `gates`.
 
 - `contractProxyTable(artifact)` (`@fabrika/proxy-core/manifest`) emits every endpoint row's
-  rules — kind, method, path, callers, requirement, admission — with its delegation and
-  `requirementDigest`, the reserved prefixes, and the contract digest as `snapshot`. The
+  rules — kind, method, path, callers, requirement, admission and, only where declared, its cross-origin form
+  (`crossOrigin`), its file-response profile (`response: 'file'`) and its `cache` — with its delegation and
+  `requirementDigest`, the reserved prefixes, and the contract digest as `snapshot`. A field absent unless declared
+  keeps the digest of every row without it, and an older proxy's strict parser refuses a row that carries one. The
   proxy selects one endpoint per request with `planEndpoint` and decides there
   (ADR-0022 rule 3); there is no fall-through to a broader path.
 - `schemaFromContract(artifact)` emits the dimensions as scopes (with `in`, `creator` and
@@ -263,14 +270,15 @@ to start. `boot` verifies tokens for the audience
 `FABRIKA_IAM_APP_ID` (`<app>@<env>`, whose application must be the contract's), reads
 `FABRIKA_IAM_ISSUER` and `FABRIKA_OPERATIONS_DSN`, and refuses to start when
 `FABRIKA_CONTRACT_DIGEST` is missing or is not `contractDigest` of the compiled contract
-(ADR-0022 rule 5), when the contract
-declares something this version cannot serve yet (a webhook bound to the whole
-application), when a job cannot run (see Jobs), when an
-import has no matching snapshot or no owner, when a file collection
-cannot be served (below), when an `on` dimension or a link mount's dimension has no
+(ADR-0022 rule 5), when a job cannot run (see Jobs), when an
+import has no matching snapshot or no owner, when a file kind
+cannot be served ([Stored files](#stored-files)), when an `on` dimension or a link mount's dimension has no
 table, when an access form reaches a dimension that lies in a container no table can
-locate it in, when a form or a webhook has no `scoped(tables)` layer (a form's input
-field must be a column of its inbox), when an SPA or a link mount has no asset server,
+locate it in, when a webhook or a procedure with a rate bucket has no `scoped(tables)` layer (both write the
+framework's tables), when a challenge's secret or site key variable is not set, when the contract declares token
+purposes and `FABRIKA_TOKEN_KEYS` is not set ([Signed tokens](#signed-tokens)), when `FABRIKA_APP_ORIGIN` is not an
+origin, when a job, a webhook or a public procedure has no workload key or the adapter supplies no token exchange,
+when an SPA or a link mount has no asset server,
 when an endpoint asks IAM for a scope, a membership change or a share link and the
 adapter supplies no membership transport, or when a handler is missing or undeclared.
 The membership transport is IAM's application entrypoint on the `IAM` binding on
@@ -311,11 +319,18 @@ Per request, in this order:
 6. the requirement: `member` is any permission, an action is that action in some
    scope, and under the `app` form that action held as a global grant (403);
 7. admission: a request without `Authorization` that is not a `GET` needs
-   `Sec-Fetch-Site: same-origin` (403), and RPC needs `Content-Type: application/json`
-   (400);
-8. parse the body strictly (400), run the access form, remove the `from` field, call
-   the handler, project the output through its schema (a union through its first
-   branch that accepts the value), answer `{ result }`. An `attachment()` output answers
+   `Sec-Fetch-Site: same-origin` (403), and the body needs a `Content-Type` its row admits (400):
+   `application/json` by default, `multipart/form-data` for an input with a file field (and JSON too while every file
+   field is optional), `application/x-www-form-urlencoded` for `http.body: 'urlencoded'`. A `GET` has no body;
+8. the rate buckets ([Admission and limits](#admission-and-limits)): each is charged before the body is read and stays
+   charged whatever follows (429);
+9. read the body within `limits.maxBytes` (413) and its deadline (408), parse it strictly (400), verify each
+   signed token in it as it is parsed ([Signed tokens](#signed-tokens)), stage its file parts
+   ([Stored files](#stored-files)), run the access form, remove the `from` field, call the handler, project the output
+   through its schema (a union through its first branch that accepts the value), answer `{ result }`. The handler's
+   `ctx.signal` aborts when the client leaves or `limits.timeoutMs` passed, counted from the last body byte. A
+   `file('<kind>')` output answers the stored file the handler returned, and a `redirect()` output answers its target
+   ([The HTTP shape](#the-http-shape)). An `attachment()` output answers
    a file instead: the rows the handler returned, encoded as CSV (`text/csv; charset=utf-8`,
    `Content-Disposition: attachment` with the declared name) or, for `format: 'xlsx'`, as one
    sheet of typed cells (`implement/xlsx.ts`), before the invocation's transaction commits; a
@@ -327,14 +342,24 @@ Per request, in this order:
    value an inline string, which no reader evaluates as a formula, so XLSX needs no `'` escape.
    Characters XML cannot carry are written in SpreadsheetML's `_xHHHH_` escape.
 
-| Form                    | Hands the handler                         | Refuses with                                            |
-| ----------------------- | ----------------------------------------- | ------------------------------------------------------- |
-| `{ member: true }`      | nothing                                   | —                                                       |
-| `{ action, over }`      | `ctx.within`, or `all` for a global grant | 403 when no value holds the action, or over 1000 values |
-| `{ action, in, from }`  | `ctx.target` with its containment chain   | 403 not held, 404 missing                               |
-| `{ action, on, from }`  | `ctx.target` with its containment chain   | 404 when missing or not held                            |
-| `{ action, creates }`   | `ctx.created`, the value IAM generated    | 503 without the proxy's delegation grant; IAM's refusal |
-| `{ action, app: true }` | `ctx.app`, the action application-wide    | 403 (at the proxy) unless the action is a global grant  |
+| Form                                 | Hands the handler                                                     | Refuses with                                            |
+| ------------------------------------ | --------------------------------------------------------------------- | ------------------------------------------------------- |
+| `{ member: true }`                   | nothing                                                               | —                                                       |
+| `{ action, over }`                   | `ctx.within`, or `all` for a global grant                             | 403 when no value holds the action, or over 1000 values |
+| `{ action, in, from }`               | `ctx.target` with its containment chain                               | 403 not held, 404 missing                               |
+| `{ action, on, from }`               | `ctx.target` with its containment chain                               | 404 when missing or not held                            |
+| `{ action, creates }`                | `ctx.created`, the value IAM generated                                | 503 without the proxy's delegation grant; IAM's refusal |
+| `{ action, app: true }`              | `ctx.app`, the action application-wide                                | 403 (at the proxy) unless the action is a global grant  |
+| `{ capabilities: { <name>: … } }`    | `ctx.capabilities.<name>`, one `Ref` or `Within` per named capability | each capability's own refusal, in declared order        |
+| `{ public: true }` (RPC mounts only) | no capability of a caller: the handler runs as its own workload       | — (admission only)                                      |
+
+**Several capabilities.** `access: { capabilities: { request: { action, on, from }, records: { action, over } } }`
+names at least two capabilities, each an `on`, `in` or `over` form. The proxy checks every requirement, and the runtime
+mints each capability as its single form mints it, in declared order; the first refusal answers. Every `from` field is
+removed from the input. The handler binds each with `ctx.db.on`, `ctx.db.in` or `ctx.db.over`; `ctx.target`,
+`ctx.within` and `ctx.db.app` are an `Unavailable` there. An export, a `creates` form and an `app` form take no
+`capabilities`, and no delegation is derived for such an endpoint, so it has no `ctx.members` or `ctx.links`
+(`capabilities.test.ts`).
 
 A grant on a container reaches every value inside it. `on` and `in` read where the
 object or scope lies from the database on every request, with a locator generated from
@@ -374,13 +399,37 @@ whose own `declared` differs does not boot. The API matrix:
 | `member`           | no application data                                                                                                                                                                                                                                                                                                                                    | no application data                                                                                                                                     |
 | any                | `ctx.db.reference.<table>` reads; `ctx.principal`; `ctx.members` on, in or below a dimension with members (management for `manage`)                                                                                                                                                                                                                    | —                                                                                                                                                       |
 | `on`, `in`, `over` | `ctx.db.app.<table>`: an application table's `list`, `count`, `aggregate` and `get(id)`, every row, where the endpoint's action is its read action                                                                                                                                                                                                     | — (no write: an `app` endpoint writes it)                                                                                                               |
+| `capabilities`     | `ctx.db.on(ctx.capabilities.<name>)`, `.in(…)`, `.over(…)`: the handles of each capability's single form                                                                                                                                                                                                                                               | the mutation handles of each capability's single form                                                                                                   |
+| `public`           | `ctx.db.app('<action>').<table>` of an application table: `list`, `count`, `aggregate` and `get(id)` under its read action                                                                                                                                                                                                                             | `insert(v)`, which answers only the new key; `update` and `remove` only of a row whose id a verified signed token carries                               |
 
 "Target subtree" is the target's child tables and the dimension tables it contains. An `over` lists every table whose
 containment chain holds its dimension, through the stamped chain column: `over: 'org'` lists tasks two levels down by
 their `org_id`, with the same keyset pages, projection and hidden columns as the nearest container's tables. A job and a webhook bind the same
-handles to a capability they minted or received: `ctx.db.on(ref)`, `ctx.db.in(ref)`, `ctx.db.over(within)`. A member
+handles to a capability they minted or received: `ctx.db.on(ref)`, `ctx.db.in(ref)`, `ctx.db.over(within)`. A
+workload site (a job, a webhook bound to `'app'`, a public procedure) acts application-wide by its declared actions:
+`ctx.app('<action>')` mints an `AppCapability` of an action the site declares and its IAM token carries (refused
+otherwise, `undeclared_action`), and `ctx.db.app('<action>')` is the `app` form's handle over it. A job reads through it
+outside its transaction and writes through `tx.db.app('<action>')` inside it. A webhook bound to a dimension acts on its
+bound value only: there `ctx.app` and `ctx.db.app` are an `Unavailable`. On a credentialed `{ action, app: true }`
+endpoint `ctx.app` stays the capability its access form minted. A member
 a site may not use is a type error at its call (`Unavailable`) and, should the types be defeated, a refusal that
 names the same fix at runtime.
+
+- **A table action names one action or a list** (`actions: { read: ['crm.read', 'catalog.read'] }`); any one of them
+  allows the operation. With several read actions, a column's own read action hides it from the others, and a handle
+  reads the columns of its own capability's action. The artifact keeps one action as its text and several as a sorted
+  list, so a policy that names one action keeps its digest.
+- **A public procedure's reach is narrow.** Its `ctx.db.app('<action>')` reaches application tables only. A read needs
+  the table's read action. An insert reads nothing back: it answers the new key, which the data layer generated, and
+  takes `onConflict: { do: 'nothing' }` only. An update or a remove needs its action, a versioned table and a row id that
+  a verified signed token of the request carries, under `expectVersion`; an update answers only the new version. It
+  never locks or claims a row, and `sql`, `unscoped`, `issues`, `connect`, `egress`, `binds`, mail and members do not
+  exist there.
+- **`insert(values, { onConflict: { columns, do } })`** writes idempotently on every insert handle: `columns` name a
+  unique index the migrations create (the checker's `on-conflict-index` verifies it), `'nothing'` needs the insert
+  action and writes nothing on a conflict, and `'update'` also needs the update action and updates the table's update
+  columns in the same transaction, within the insert's own containment. It answers whether the row was inserted
+  (`{ inserted }`).
 
 - **A capability reads its own target.** A `Ref` of any action the table names reads its row and the rows of its
   subtree; every column that declares a read action other than exactly the capability's is left out of the
@@ -388,8 +437,9 @@ names the same fix at runtime.
   table does not name reads nothing of it.
 - **Application-wide data is the `app` form's.** An application table (`scope: { app: '<why>' }`, key `id` unless
   `key` names another, generated on insert) belongs to no dimension: no chain, no container, every other policy field
-  as a dimension table's. Only an `app` endpoint reaches it on the road, because the proxy admits that endpoint only
-  for a global grant of its action; `ctx.app` is that capability, and `ctx.sql.scope(ctx.app, table)` is every row of
+  as a dimension table's. Only an `app` endpoint and a workload site write it on the road: the proxy admits an `app`
+  endpoint only for a global grant of its action, and a workload holds only the actions IAM signs for its key.
+  `ctx.app` is that capability, and `ctx.sql.scope(ctx.app, table)` is every row of
   a table `ctx.db.app` lists for that action, refused for any other.
   The same handle reads every dimension and child table whose read action is the endpoint's, or one its policy names
   in `actions.appRead` (an export, a bulk send), with the columns of that action as a `Ref` of it reads them (a column
@@ -422,8 +472,8 @@ names the same fix at runtime.
   reads, for a mapper that takes rows.
 - **`getForUpdate()`** is `SELECT … FOR UPDATE` on the target's whole chain, in a mutation `on` an object only: a
   precondition read that a concurrent write of the same row waits behind, so of two concurrent "reopen a won deal"
-  requests one wins and the other sees the change and answers 409. It is the one lock the guard admits besides a
-  destination's `FOR SHARE`.
+  requests one wins and the other sees the change and answers 409. The guard admits two other locks only: a
+  destination's `FOR SHARE` and a claim's `FOR UPDATE SKIP LOCKED` ([Queues and claims](#queues-and-claims)).
 - **A list is a keyset page**: at most `limit` rows (50 by default, 500 at most) in the order asked, the table's key
   last as the tiebreak, and `next`, the opaque cursor `after` takes, `null` on the last page. Filters and orderings
   name only the columns the capability reads. The cursor holds each order column as the database prints it, so a timestamp keeps its
@@ -431,7 +481,7 @@ names the same fix at runtime.
 - **`ctx.db.unscoped.<table>`** exists only for the tables the site declares, in their mode: the scope predicate is
   `true`, every statement is still guarded and runs in the invocation's transaction, `'read'` refuses every write,
   an insert names the containment columns no capability stamps, and no declaration reaches a `fabrika_*` table. A
-  reference table and a form's inbox have no key, so their `get` is an `Unavailable` (read them with `list`).
+  reference table has no key, so its `get` is an `Unavailable` (read it with `list`).
   `boot` refuses a declaration of a table outside `src/db/tables.ts` and a query's `'write'`.
 - **`fromRow(Schema, row)`** (`@fabrika/app`) turns a row into an output object: snake_case columns become the
   schema's camelCase fields, a `Date` its ISO text, an undeclared column is dropped, and the schema parses the rest,
@@ -447,13 +497,12 @@ run every statement of their handles in one transaction, opened by the first sta
 loses them. It commits after the handler returned, its output passed validation and an attachment's file was
 encoded; a throw, a refused output, a file over its limit, a cancelled request or a statement the database refused
 rolls it back, and nothing the handler wrote is kept. A request handler's `ctx.signal` aborts when the client leaves
-or the request runs past `REQUEST_BUDGET_MS` (10 s, `Bun.serve`'s default `idleTimeout`, which closes such a
-connection anyway); its transaction then cannot commit (`request_cancelled`). An endpoint the generated tests cover
+or the handler runs past its `limits.timeoutMs` (10 s by default, at most 60 s, counted from the last body byte); its
+transaction then cannot commit (`request_cancelled`). An endpoint the generated tests cover
 calls no outside service: it records an outbox row in its transaction and a job makes the call, because the generated
 tests boot without the application's variables and a call does not roll back. A call that is the request's whole
 purpose lives in a `{ member: true }` endpoint, which they do not cover, and takes `ctx.signal`. No endpoint sends
-e-mail: it has no `ctx.mail`, so it records the message and a mutation's `then` starts the job that sends it
-([Jobs](#jobs)). A query
+e-mail: it has no `ctx.mail`, so it records the message and kicks the job that sends it ([Kicks](#kicks)). A query
 and an export run in a `READ ONLY` transaction and refuse every write and lock before anything is sent. IAM (a
 created scope, a membership change, a share link), object storage and a connector call never roll back: do the data
 work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs in the same transaction.
@@ -499,75 +548,117 @@ work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs
   boundary that bounds what an admitted statement does
   ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)).
 
-- **A webhook delivery is one transaction.** The delivery key is recorded first, outside it; a handler that throws
-  rolls its transaction back and forgets the key, so GitHub's redelivery runs it again from nothing. A process that
-  dies between the record and the commit keeps the key and loses the delivery.
+- **A webhook delivery is one transaction.** The delivery key is claimed first, outside it, under a lease (the
+  handler's time limit plus 30 s); the handler's transaction completes the claim right before it commits. A handler
+  that throws rolls its transaction back and gives the claim back, so the provider's redelivery runs it again from
+  nothing. A claim whose lease passed without completion (a process that died before its commit) is taken over by the
+  next redelivery; a completion that a takeover fenced out commits nothing (`webhook_claim_lost`).
 - **A job reads outside its transaction and writes inside it.** `ctx.db` of a job attempt reads, each statement on its
   own; every write and `tx.sql` runs in `ctx.transaction((tx) => …)`, fenced by the attempt's lease. An attempt
-  retries, so its writes are idempotent. There is no `ctx.jobs.enqueue`: work for later is a row a run picks up. A
-  mutation that declares `then` starts a run once it committed, and the schedule picks up the rest. The kick carries
-  no payload, so the row stays the only record of the work
-  ([ADR-0060](../decisions/0060-a-mutation-kicks-a-cron-job-after-its-commit.md)).
+  retries, so its writes are idempotent. There is no `ctx.jobs.enqueue`: work for later is a row a run claims
+  ([Queues and claims](#queues-and-claims)). A site that declares `kicks` starts a run once it committed, and the
+  schedule picks up the rest. The kick carries no payload, so the row stays the only record of the work
+  ([ADR-0060](../decisions/0060-a-handler-kicks-a-declared-job-after-its-commit.md)).
 - **Every handle is bound to its invocation.** A handle kept past its handler, called from another live request, from
   a request of another `boot`, or from an ended job attempt is refused (500, one log line) before it reads its
   arguments.
 
-### File collections
+### Stored files
 
-A `c.files` collection serves four generated endpoints, for signed-in people only, through
-the same pipeline:
+A file is a value in a table column, and the table's policy is the file's authority
+([ADR-0061](../decisions/0061-a-file-is-a-value-in-a-table-column.md)). There is no generated file endpoint: an
+upload, a list and a download are procedures the application declares.
 
-| Endpoint                               | Access                                       | Behaviour                                                                                                                             |
-| -------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/files.<name>.upload/:owner` | `write` `on` the owner's dimension, `:owner` | the body is the file; `Content-Type` must be a declared type; `?name=` is the file name, metadata only. Answers `{ result: { id } }`  |
-| `GET /api/files.<name>/:fileId`        | `read` `on` `file:<name>`, `:fileId`         | streams a `live` file with the file treatment; a `quarantined` one answers 409 `quarantined`, a `rejected` one 404                    |
-| `POST /api/files.<name>.list`          | `read` `on` the owner's dimension, `owner`   | the owner's files, oldest first: `{ items: [{ id, name, type, size, status, createdAt }], next }`, `limit` 1–100 (50), `after` an id  |
-| `POST /api/files.<name>.remove`        | `delete` `on` `file:<name>`, body `{ id }`   | marks the row removed, then sweeps: deletes the objects of removed and orphaned files of the collection (at most 20), then their rows |
+```ts
+// fabrika.contract.ts — a file kind: allowed types, a size bound, the scan. No owner, no actions, no endpoint.
+files: { attachments: c.files({ types: ['application/pdf', 'image/png'], maxBytes: 10485760, scan: true }) },
 
-- **A file reaches what its owner reaches, now.** A file row carries its owner's key and the
-  owner's whole containment chain under a composite foreign key with `ON UPDATE CASCADE`, so
-  a move of the owner moves its files in the same statement. The locator of `file:<name>`
-  reads the live row's chain on every request, and every operation after the access check —
-  the pending insert, its completion, the download read, the remove — takes the minted `Ref`
-  and is scoped by that whole chain in `@fabrika/db`. A move between the check and the
-  operation therefore makes it match nothing (404): the request never acts on a file in a
-  container the caller was not checked against. Deleting the owner orphans its files (every
-  owner column becomes null) for the sweep.
-- **An upload has two phases, and the row is the cleanup intent.** It inserts a `pending` row
-  under a `FOR SHARE` lock of the owner row, matched on the owner `Ref`'s chain, then writes
-  the object `<name>/<id>`, then flips the row to `live` under the same lock and chain. A move
-  that starts during a phase waits for it; one that commits between them fails the
-  completion. Whatever fails after the insert — the write, a lost answer of the store, the
-  completion — deletes the object and the pending row, and when that fails too, the row stays
-  for the sweep. The sweep deletes the objects and rows of removed and orphaned files, and of
-  pending rows older than one hour (an upload fails after ten minutes), so it never touches
-  an upload in progress; a failed delete is retried on its next pass. A remove and an upload sweep their collection
-  (20 files at most), and the framework's sweep job (`fabrika-file-sweep`, `FILE_SWEEP_JOB`, a reserved name like the
-  scan job's) sweeps every collection hourly, batch by batch until nothing removable is left: an orphaned or removed
-  object leaves storage within the hour without any request, in a collection that does not scan too. A collection
-  whose sweep failed fails the run (`file_sweep_failed`), after the others were swept. On Zerops the crontab runs it
-  when the contract declares a collection (`ZeropsContractRun.files`).
-- **The upload is checked while it streams.** A `Content-Length` over `maxBytes` is 413
-  before the body is read; otherwise the object store stops reading past `maxBytes`, keeps
-  nothing and the answer is 413. The first 512 bytes must be the declared type (415):
-  each binary type by its signature, a text type (`text/plain`, `text/csv`,
-  `text/markdown`, `application/json`, `image/svg+xml`) as UTF-8 without NUL bytes or a
-  binary signature. `maxPerOwner` is counted before and again once the file is live (409),
-  so concurrent uploads never leave more; a quarantined or rejected file counts until it is
-  removed. The file name (`?name=`) is cut at 255 code points and loses its control characters.
-  A `scan: true` collection refuses an empty upload (400 `empty`) and keeps nothing: the scanner
-  gives no verdict a file of no bytes needs, and no exception to the scan exists.
-- **`scan: true` holds every upload until a clean malware verdict.** The upload ends
-  `quarantined` instead of `live`. The framework's scan job (`fabrika-file-scan`, a reserved name
-  no `c.cron` job can take) runs every minute under its lease in `fabrika_job_leases`. It takes the
-  due quarantined files of every scanning collection that waited longest first (at most 20 and
-  256 MiB; a file that failed before is scanned alone), so neither a busy collection nor a stream of
-  new uploads holds an older file back. It reads each object whole with its version (an S3 ETag), checks its
-  size and SHA-256 against the upload's, checks it as an archive, and hands the batch to one
-  `clamscan` run in a private temporary directory, all under one five-minute deadline. Each verdict
-  is written in a transaction fenced by the lease.
-  - **Only a clean verdict over verified bytes promotes**, while the file is still quarantined, neither
-    removed nor orphaned, with the same digest; the row records the scanned object's version.
+// src/db/tables.ts — the column that holds the file, and the actions that read and write it
+deal_attachments: {
+	scope: { child: 'deals' },
+	actions: { read: 'crm.read', insert: 'deals.write', delete: 'crm.delete' },
+	insert: ['file', 'name'],
+	files: { file: 'attachments' },
+},
+```
+
+- **The column.** The application's migration writes `file uuid not null references fabrika_files (id)` (or a nullable
+  one) and an index the column leads; the checker's `file-column-migration` refuses a declared file column without
+  both. Reading the column under the table's read action is what lets a request serve or open the file, and writing it
+  needs the action that writes that column.
+- **The storage.** One framework table, `fabrika_files` (`0008_files.sql` of `@fabrika/db`'s migrations): id, kind,
+  status (`pending`, `quarantined`, `live`, `rejected`), size, SHA-256, the sniffed type, the name, the object key
+  `<kind>/<id>`, the scanned object version and the scan state, the scope value of its first dimensional reference,
+  the request that created it, and a `legacy` marker. The bytes live in the object store under the object key; no two
+  rows share an object.
+- **A file field** is `file('<kind>')`, `z.optional(file('<kind>'))` or `z.array(file('<kind>')).max(n)` at the top
+  level of a mutation's input. Such a procedure reads `multipart/form-data`: the first part is named `input`, carries no
+  file name and holds the other fields as JSON; each further part is named after its file field, with a file name and a
+  `Content-Type` the kind admits. While every file field is optional, the row also admits JSON. A request carries at most
+  20 files. The body limit defaults to 64 KiB plus each field's files at its kind's `maxBytes`, at most 48 MiB, and
+  must arrive within `max(30 s, maxBytes at 16 KiB/s)`. A broken body is 400 `multipart`, a connection closed before
+  its end 400 `aborted` (the sender's, never a reported failure), a body not complete in time 408. In the handler a
+  file field is a file reference; on the typed client it is a `Blob`.
+- **Staging.** An incoming file and `ctx.files.put('<kind>', bytes, { type, name })` are staged the same way. A
+  `pending` row is committed first, on a connection of its own, never the handler's transaction; it is the cleanup
+  intent. Then the object is written: its first bytes must be the declared type (415), it is bounded by the kind's
+  `maxBytes` (413), and its size and SHA-256 are recorded. A text type (`text/plain`, `text/csv`, `text/markdown`,
+  `application/json`, `image/svg+xml`) must be UTF-8 without NUL bytes or a binary signature. The name is cut at 255
+  code points and loses its control characters. A `scan: true` kind refuses an empty file (400 `empty`). `put` exists
+  in a mutation, a job, a public mutation and a webhook, never in a query; it works inside a transaction too, and its
+  connection counts against the pool. A job puts a large file before its transaction, so the upload holds no row lock.
+  After a known rollback the request deletes what it staged and nothing claimed; after an uncertain outcome (a lost
+  commit answer, a crash) it deletes nothing, and the sweep decides.
+- **Writing a column.** A file column takes exactly four values: an incoming file of this request's input, a file a
+  `put` of this request created, a file reference this request read from another file column under that table's read
+  action, or `null`. A string id is refused. The file must be of the column's kind, and its row is locked `FOR SHARE`
+  while the write checks its status, so a file being deleted gains no reference. The first write claims a staged file:
+  still `pending`, of this request and kind, within the pending grace (one hour). It becomes `quarantined` for a
+  scanning kind, else `live`. The first reference from a table scoped by a dimension stamps the file's top-level scope
+  value; a later reference from another top-level scope is refused. A reference from an application table stamps
+  none. A handover writes the new reference before it deletes the old row, in one transaction.
+- **Reading.** A row read through the data layer carries a file reference in each file column: `{ id, name, type,
+  size, status }`, loaded for every row of the read in one statement. A reference read under an action that does not
+  read the file (a `getForUpdate` under `update`) carries the metadata only: it can be neither served, opened nor
+  written into another column. A file list is a query of the table that holds the column.
+- **Serving.** `ctx.files.open(ref, { maxBytes? })` reads a file whole (`{ id, name, type, size, bytes }`), at most the
+  kind's `maxBytes` unless the site asks for less (413 `too_large`). A procedure whose output is `file('<kind>')`
+  answers the file its handler returned: a query is a `GET` by default, its input read from flat URL parameters, and a
+  mutation is a `POST` that answers the file after its commit (a download that writes an audit row). The handler
+  returns the reference, never a `Response`, and a file of another kind is a 500. Every byte consumer (a file answer,
+  `open`, a mail attachment) reads only a reference the request holds and may read, and only a `live` file, by its
+  scanned object version: a `pending` or `quarantined` file is 409 `file_not_ready`, a `rejected` one 409
+  `file_rejected`, and one the sweep deleted since the read 404. Downloads always go through the application: there
+  are no presigned URLs.
+- **The file treatment** is on every answer of a row with the file-response profile (`response: 'file'`), its denials
+  and errors included: `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox; default-src 'none'`,
+  `Cache-Control: private, no-store` (or the row's `cache`, [The HTTP shape](#the-http-shape)), and a
+  `Content-Disposition` whose type follows the exact `Content-Type` (`attachment` unless an inert image). The proxy
+  applies the same treatment to the answer of the row it selected. The file itself gets `Content-Type` from the
+  recorded type, `Content-Disposition: inline` only for PNG, JPEG, GIF and WebP, the file name as RFC 8187 `filename*`,
+  and `Accept-Ranges: none`: a `Range` request gets the whole file.
+- **Removing.** Clearing the column or deleting the row removes the reference. The framework's sweep job
+  (`fabrika-file-sweep`, `FILE_SWEEP_JOB`, a reserved name, hourly at minute 41) first finishes the deletions a crash
+  interrupted, then adopts the legacy files a declared column references, then deletes, in batches, every file past the
+  pending grace that no declared column references. Each in three steps: one transaction deletes the file's row and
+  records its object key in `fabrika_file_deletions` (the foreign key refuses the delete while a reference exists, and
+  a write that holds the row `FOR SHARE` makes it wait); then the object is deleted; then the record. A failed sweep
+  fails the run (`file_sweep_failed`), and the next run finishes it. The grace counts from the file's creation. On
+  Zerops the crontab runs the sweep when the contract declares a file kind.
+- **Legacy files.** `0008_files.sql` copies the held files of every file collection of framework 0.5 and earlier into
+  `fabrika_files` with their ids, marked `legacy`; the old `fabrika_files_<collection>` tables stay. The sweep never
+  deletes a legacy file, and drops the marker once a declared column references it. The application adopts the files
+  with its own migration and releases the collection with `fabrika_files_release('<collection>')`
+  ([framework migrations](framework-migrations.md)).
+- **`scan: true` holds every file until a clean malware verdict.** A claimed file is `quarantined` instead of `live`.
+  The framework's scan job (`fabrika-file-scan`, a reserved name no `app.cron` job can take) runs every minute under
+  its lease in `fabrika_job_leases`. It takes the due quarantined files of every scanning kind that waited longest first
+  (at most 20 and 256 MiB; a file that failed before is scanned alone), so neither a busy kind nor a stream of new files
+  holds an older file back. It reads each object whole with its version (an S3 ETag), checks its size and SHA-256
+  against the staged ones, checks it as an archive, and hands the batch to one `clamscan` run in a private temporary
+  directory, all under one five-minute deadline. Each verdict is written in a transaction fenced by the lease.
+  - **Only a clean verdict over verified bytes promotes**, while the file is still quarantined, with the same digest;
+    the row records the scanned object's version.
   - **ClamAV's OK does not vouch for an archive**: it skips entries it cannot decode (an LZMA entry, a
     damaged deflate stream) and still answers OK. So the framework reads every ZIP itself — Office Open
     XML documents are ZIPs — and rejects one with an entry other than stored or deflated, an encrypted
@@ -580,7 +671,7 @@ the same pipeline:
     (`embedded_archive`). Random binary data holds one by chance about once per 1400 MB, so a rare
     compressed PDF or image is falsely rejected; that is the accepted cost. The end record must be the
     only one in the last 64 KiB, and its comment must end exactly at the end of the file and hold no ZIP
-    signature (`ambiguous_directory`). A `scan: true` collection may not admit `application/gzip`.
+    signature (`ambiguous_directory`). A `scan: true` kind may not admit `application/gzip`.
     PDFs and images are ClamAV's to parse; an archive embedded inside a PDF's streams is a residual
     limit of ClamAV's own coverage.
   - **A rejection** (a `FOUND`: EICAR, an encrypted file, a file past ClamAV's size, recursion or time
@@ -588,89 +679,53 @@ the same pipeline:
     failed delete leaves the row quarantined and unserved and waits like a retry (one minute, doubled
     up to an hour), so failing deletes never fill every batch.
   - **No verdict** — a scanner error or timeout, a file the scanner skipped, bytes that differ from the
-    upload — counts a try: the file waits one minute, doubled per try up to an hour, is then scanned
+    staged ones — counts a try: the file waits one minute, doubled per try up to an hour, is then scanned
     alone, and is rejected after five tries. Missing or stale (older than three days) signatures and a
     missing scanner count no try. Every outcome is reported to Operations under a fixed code.
-  - **The download serves only the scanned version**: one conditional read (`If-Match` on the recorded
+  - **A byte consumer reads only the scanned version**: one conditional read (`If-Match` on the recorded
     ETag) answers the bytes, so a replaced object answers 409 without a byte, and the file is quarantined
     again for the next pass; so is a live file without a recorded version. A new object key is written
     once: the store refuses a key that already holds an object.
-  - The pass ends with the sweep, which deletes removed and orphaned files in every state. A
-    `scan: true` collection admits at most 100 MiB per file, the most the scanner reads in full.
-    Turning `scan` off widens in the approval diff; a file left quarantined stays unserved. An existing
-    collection that turns `scan` on needs `fileScanSql(name)` of `@fabrika/db` in a new migration (the
-    checker's `file-scan-migration` names it): the earlier `fileTableSql` checked for `pending` and
-    `live` only and had no scan columns.
-- **The file treatment** is on every answer of the download endpoint, its denials and errors
-  included: `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox;
-  default-src 'none'` and `Cache-Control: private, no-store`, and a `Content-Disposition`
-  whose type follows the exact `Content-Type` (`attachment` unless an inert image). The proxy
-  applies the same treatment to the answer of the endpoint it selected. The file itself gets `Content-Type` from the recorded type,
-  `Content-Disposition: inline` only for PNG, JPEG, GIF and WebP, the file name as RFC 8187
-  `filename*`, and `Accept-Ranges: none`: a `Range` request gets the whole file.
-- **Link holders' files** (`link: true`, or `link: ['<mount>', …]`). Every link mount bound to
-  the owner's dimension, or each one the list names (a mount it does not name has no file
-  row and need not grant the collection's actions: the proxy denies its path as no endpoint, 403, and
-  the dispatcher, reached without the proxy, answers 404), gets `POST <prefix>/api/files.<name>.upload`, `POST <prefix>/api/files.<name>.list`
-  (`{ after?, limit? }`, no owner) and `GET <prefix>/api/files.<name>/:fileId`,
-  caller `link`, `on` the owner's dimension with no parameter: the owner is the link's
-  object. Each checks the key's mount and the object's current chain as a link procedure
-  does (a key of another mount is 403, an object that moved 404), and a download resolves
-  `:fileId` beneath that object, so another object's file is 404. Uploads keep the
-  collection's limits.
-- **Server code reaches a collection through `ctx.files(<name>)`** (`src/files/handle.ts`): every staged-kit
-  endpoint and link procedure (not an export), a job's `ctx`, and its `ctx.transaction`'s `tx`. `list(owner, page?)`
-  answers the owner's held files as the list endpoint does (`createdAt` a `Date`); `open(owner, id, { maxBytes })`
-  reads one live file whole (`{ id, name, type, size, bytes }`), as the download reads it: a scanning collection's
-  only as the scanned version, a quarantined file 409 `quarantined`, a rejected one, another owner's or a removed one
-  404, one over `maxBytes` 413 `too_large` before any byte is read. `removeAll(owner)` marks every file of the owner
-  removed. Each takes a `Ref` of the owner's dimension for one of the collection's actions — `read` for `list` and
-  `open`, `delete` for `removeAll` — of the work running now, and refuses any other (`CapabilityRefusedError`
-  `wrong_capability`): a file reaches what its owner reaches, as through the endpoints, and a write capability alone
-  reads no name or byte of it. A handler that must see the uploads holds the collection's `read`. `open` locates the file
-  now, requires it beneath the owner where the `Ref` says, and reads it under a `file:<name>` `Ref` the runtime mints
-  for the same principal and action. The statements run in the site's session: the invocation's transaction (`READ
-  ONLY` for a query), a job's statement-at-a-time reads, or its fenced transaction. `removeAll` runs only where the
-  site writes, a mutation or `tx.files` (`QueryRefusedError` `read_only` elsewhere, and a type error). A name the
-  contract does not declare is a `ServerFault` `file_collection_unknown`: the name is not typed, because the groups
-  and jobs type themselves before the contract that declares the collections exists. A job mints the `Ref` with
-  `ctx.ref`, or `tx.ref` inside its transaction. The owner is a table
-  with a dimension scope, never an application table, and there is no total of bytes per owner: `maxPerOwner` ×
-  `maxBytes` bounds what one owner holds.
-- **A form's file is attached by the job that drains its inbox** (`attach(owner, id)`, only on a job's `tx.files`, with
-  a `Ref` for the collection's `write` action; a mutation's handle refuses it, in its type and at runtime; [ADR-0061](../decisions/0061-a-form-takes-files-beside-its-input.md)). A
-  form with `files` holds each file it received in `fabrika_form_files`, owned by nobody and served by no endpoint, and
-  writes its id into the inbox column of its field. In the transaction that creates the record, `tx.ref` locates it
-  (it sees what the transaction wrote) and `attach` moves the held file into the collection's table under that owner,
-  `quarantined` until the scan's verdict: the record and its file commit together, and a rollback leaves the file held.
-  `attach` answers `false` when nothing of this collection waits under the id (no file sent, another collection's, or
-  its hold of seven days ended) and `true` again for a file the same owner attached before; a file of another owner is
-  never moved. The owner's files are counted under its lock; past `maxPerOwner` it throws 409 `limit`, which rolls the
-  transaction back. The claim reads the statement's clock, so a transaction that started before the hold ended claims
-  nothing after it; the sweep job deletes a held file an hour after its hold ended, and the pending row of a submission
-  that never committed after an hour.
-- **One table per collection**, `fabrika_files_<name>`, created by an application migration
-  with `fileTableSql(name, { table, key, chain })` of `@fabrika/db`, where `chain` lists the
-  owner's containment columns, nearest first; the owner table needs `UNIQUE (<key>, <chain
-  columns>)`, as a child table's parent does. Codegen leaves the table out; only the
-  framework reads it (`@fabrika/db/framework`'s `fileTablesOf`).
-- `boot` refuses a collection whose name is not lowercase snake_case of at most 39
-  characters, which admits a type the framework cannot sniff, or which has no object storage
-  or no `scoped(tables)` data layer; the contract refuses `link: true` without a link mount
-  bound to the owner's dimension, a named mount that is no link mount bound to it, and a
-  serving mount that does not grant the collection's write and read actions. `serveContract` opens the
-  storage (path-style S3, `@fabrika/platform-node`'s `S3BlobStore`) from
-  `FABRIKA_APP_STORAGE_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY`; a
-  partial set stops the boot. On Zerops the platform writes all four into the generated run
-  section as `${<host>_…}` references to the application's one `object-storage` service,
-  which must be a bucket the platform created for it. Downloads always go through the application: there are no
-  presigned URLs. A job run (`fabrika job run`) gets ClamAV's `clamscan` from `PATH` as its scanner; on Zerops the
-  build installs it for a `scan: true` contract (see [Zerops platform](zerops-platform.md)).
+  - A `scan: true` kind admits at most 100 MiB per file, the most the scanner reads in full. Turning `scan` off widens
+    in the approval diff; a file left quarantined stays unserved.
+- `boot` refuses a kind that admits a type the framework cannot sniff, and file kinds without object storage or
+  without the `scoped(tables)` data layer. `serveContract` opens the storage (path-style S3, `@fabrika/platform-node`'s
+  `S3BlobStore`) from `FABRIKA_APP_STORAGE_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY`; a partial
+  set stops the boot. On Zerops the platform writes all four into the generated run section as `${<host>_…}`
+  references to the application's one `object-storage` service, which must be a bucket the platform created for it. A
+  job run (`fabrika job run`) gets ClamAV's `clamscan` from `PATH` as its scanner; on Zerops the build installs it for
+  a contract with a `scan: true` kind (see [Zerops platform](zerops-platform.md)).
+- A public procedure with a file field also needs `admission.rate.bytesPerHour`, a challenge and scanning kinds
+  ([Public procedures](#public-procedures)). `stored-files.test.ts`, `files-handle.test.ts`, `files-removal.test.ts`
+  and `file-scan.test.ts` of `packages/app` cover the runtime; `packages/db`'s `stored-files.test.ts` the data layer.
+
+### Queues and claims
+
+A table policy declares `queue: { attempts: '<column>', due: '<column>', maxAttempts? }` and a `version` column; it
+needs an update action, and `<due>` is a timestamp column. The migration gives `<due>` a default of `now()` and allows
+`null`. An insert may set `<due>`; `attempts` is the layer's. A row is waiting while `<due>` is set and done when it
+is `null`.
+
+- **A claim is a lease.** A job calls `claim({ limit, where? })` (`limit` at most 500) on `ctx.db.app('<action>').<table>`
+  for an application table or on `ctx.db.over(ctx.within('<action>', '<dimension>')).<table>` for a dimension-scoped
+  one, with the table's update action. It runs in a short transaction of its own, fenced by the attempt's lease, and
+  commits: it selects rows with `<due> <= now()` (the database's clock) and attempts below `maxAttempts` (10 by
+  default), `for update skip locked`, adds one attempt and moves `<due>` by the backoff: the job's schedule period (60 s
+  without one), doubled per earlier claim, at most 30 days. It answers each row with the columns of its action, its new
+  `version` and `ref`, a capability bound to that row.
+- **The job finishes a row through `tx.db.on(row.ref)`** inside `ctx.transaction`: `.update(values, { expectVersion,
+  done: true })` writes and clears `<due>` in one statement, `.remove({ expectVersion })` deletes the row with the
+  table's delete action, and `.requeue({ at? })` sets `<due>` (now by default) and the attempts to zero.
+- **The work runs after the lease, one transaction per row.** A failure or a crash leaves the row as the claim left it,
+  due again after the backoff. Attempts count claims, so a job claims only what its run will reach. ADR-0060's lease
+  keeps two runs of one job off one row.
+- `claim` is refused inside `ctx.transaction`, in a request and in a query. A row past `maxAttempts` stays in the
+  table, not due, for the application to show or requeue (`packages/db`'s `queue.test.ts`).
 
 A `Ref` and a `Within` are classes with private fields, bound to their request with
 `AsyncLocalStorage`. Each `boot` makes its own issuer: a mint, held only by that
 call, and the `CapabilityAuthority` of `@fabrika/db` that its data layer, file
-collections and `deps` are bound to. The authority refuses a capability its runtime
+stored files and `deps` are bound to. The authority refuses a capability its runtime
 did not mint, one whose request has ended and one from another live request. Each
 resolution returns a fresh frozen copy of the facts fixed at mint, so changing a
 returned chain changes nothing the data layer sees. An application that loads
@@ -733,19 +788,21 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   only links it issued. The job is app-wide for that mount: the link is bound to one object,
   the job is not. A webhook issues nothing. The `url` is a path: the job prepends the
   application's public origin from its own configuration before it e-mails the link.
-- **The public intake recipe** (a form, a cron job, a link mount). A form appends a row and
-  answers a constant; the job drains the inbox into records, then delivers each record's
+- **The public intake recipe** (a public page, a public procedure, a cron job, a link mount). A public procedure
+  inserts a registration into an application table and answers `{}`; the job claims the registrations, creates the
+  records, then delivers each record's
   link. It is the skill's outbox recipe: a run takes bounded batches (50, oldest first) and
   each record is its own work, in its own transactions. A record's failure adds one to its
   `attempts`, keeps a fixed step code in `last_failure`, and the run goes on; a delivery's
   failure also sets `next_attempt_at` one minute ahead, doubled per attempt up to an hour, so
   kicks seconds apart cannot spend its attempts during a short outage. A record that failed
-  five times is dead (a registration left in its inbox, a delivery `failed`), and so is a
+  five times is dead (a registration left in its table, no longer due; a delivery `failed`), and so is a
   delivery whose send `ctx.mail.mayRetry` refuses; it is logged once by id and left to an
   operator, and a resend revives a dead delivery. A failure after the
   attempt ended is the attempt's, never the record's, so each e-mail has its own deadline
-  inside the attempt's and a hanging one fails its record. Each record is claimed
-  `for update skip locked` in the transaction that consumes it, so a row another session
+  inside the attempt's and a hanging one fails its record. Each registration is claimed
+  (`claim`, [Queues and claims](#queues-and-claims)) in a short transaction of its own, and the job removes it and
+  inserts the record in one transaction under the version the claim answered, so a row another session
   holds waits for a later run and blocks nothing behind it. A job's statements carry no
   scope fragment (a job is app-wide). IAM and the e-mail do not roll back with a
   transaction, so a delivery keeps four invariants:
@@ -773,10 +830,10 @@ request the schema cannot express); an IAM that cannot be asked is 503.
      it, so an idempotent transport sends one e-mail per link even when its answer or the
      commit after it was lost.
 
-  A resend (a second form, `{ email }`) marks an unverified record due while its budget has
-  an e-mail left; the job revokes the sent link before it issues the next. The recipe's test
+  A resend (a second public procedure, `{ email }`) records a request that marks an unverified record due while its
+  budget has an e-mail left; the job revokes the sent link before it issues the next. The recipe's test
   e-mail is an outbox of its own: a mutation (`access: { action: 'mail.test', app: true }`,
-  `then: 'testMails'`) records a `test_mails` row for the caller's address, and the
+  `kicks: ['testMails']`) records a `test_mails` row for the caller's address, and the
   `testMails` job sends it under the same rules. Verification is
   application state: a link mutation sets `verified_at` once under `getForUpdate`, and every
   later call answers the same; the link itself is not single use, and IAM's revocation is
@@ -797,96 +854,272 @@ request the schema cannot express); an IAM that cannot be asked is 503.
 - `c.spa(prefix, { dir, access: { public: true } })` serves the SPA at `GET <prefix>/*`
   to anyone: the row is the anonymous kind `public-spa`, so the proxy reads no credential,
   forwards no token and never bounces to login. The page reaches only the anonymous endpoints
-  (a form); every other call still needs a session. `{ public: true }` takes no other key.
-- `c.form` appends one row of its declared fields to its inbox table and answers
-  `{ result: { received: true } }`: it reads nothing and runs no handler. The body limit
-  is the framework's (413). Admission is two counters per database minute in
-  `fabrika_form_admissions`, shared by every instance (429 for either): the requests one client
-  sends (`rate.perClient`, 10 by default), taken before the body is read, and the submissions the
-  form accepts in all (`rate.perForm`, 100 by default), taken in the insert's own transaction, so a
-  request refused before it (bad input, a filled honeypot, a failed challenge) or a row the database
-  refuses never empties it. The client
-  is `X-Fabrika-Client-Ip`, the one address header the proxy deletes and sets itself; an IPv6 client
-  counts by its /64, and a request without the header shares one `unknown` client. On Zerops the
-  header is the balancer until [backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md) settles the trusted range, so there the per-client limit
-  is a second per-form one; the challenge is the defense that does not depend on the address.
-  `honeypot: '<field>'` names an input string field that must stay empty: a filled one gets the
-  same answer and writes nothing. `challenge: { provider: 'turnstile', secret: '<VARIABLE>' }`
-  verifies the input field `challengeToken` with Turnstile's siteverify before the insert (5 s, a
-  16 KiB answer, the request's host and the form's name as `action`, a token at most 300 s old),
-  then records its digest in `fabrika_form_challenges`, so a second use is a replay: a failed or
-  replayed token is 400, an unreachable provider or a refused secret 503, and neither writes a row.
-  Only `fabrika app dev` admits one token again (`BootOptions.repeatableChallengeToken`): the one
-  Turnstile's always-passing test widget hands out for every submission.
-  The secret is the application variable the contract names; without it the application does not
-  boot. `siteKey: '<VARIABLE>'` names the widget's public site key, which every SPA mount's
-  `__fabrika-config.json` serves (Operations, below). Turnstile's origin joins `script-src` and `frame-src` (`frame-src 'self' <origins>`, so a
-  declared frame origin only extends the same-origin frames `default-src 'self'` allows).
-- `then: '<job>'` on `c.form` names a cron job of the same contract (the build, the checker and the
-  compiler refuse any other name). Once a submission's row committed, the form kicks that job: the
-  answer is the same constant and does not wait. The serving process starts one run in the background
-  (`waitUntil` where the runtime has one) under the job's own key, never the request's. A kick waits
-  for no lock, so it never holds a connection requests need while a run writes: when it cannot take
-  the lease at once it sets the shared flag `fabrika_job_kicks.pending`, and the run holding the lease
-  runs the job once more after it succeeded. Every run clears the flag when it starts, so at most one
-  run is active and one is pending whatever the number of submissions and instances; after a failed
-  run the flag waits for the schedule. A refused, honeypotted
-  or challenge-failed submission kicks nothing. The schedule stays the recovery path: a kicked run
-  that dies before its commit leaves its rows to the next scheduled run (`form-kick.test.ts`). A kick
-  carries no payload; it is not a queue. On SIGTERM a Bun server first aborts the kicked runs in
-  flight: a stopped run frees its lease as failed with the code `stopped`, logs that its schedule
-  runs it again, and reports nothing to Operations. It then stops accepting requests and waits at
-  most 10 s for the rest of its background work before it closes the database.
-- `files: { <field>: { collection, required? } }` on `c.form` takes files with the submission
-  ([ADR-0061](../decisions/0061-a-form-takes-files-beside-its-input.md)): at most four fields, one file each, each
-  landing in a declared `scan: true` collection, and the form must declare a challenge. Its row admits
-  `multipart/form-data`, and also `application/json` while none of its files is `required`: a page that sends no file
-  posts the JSON it posted before, and every file column gets `null`. The multipart body's first part is named `input`, carries no filename and holds the input as JSON
-  within the form's `maxBytes`; each further part is named after a file field, once, with a filename and a
-  `Content-Type` the collection admits. The framework reads it as it streams: the client bucket, the input, the
-  honeypot and the challenge come before a byte of any file is read; then each file is sniffed (415), written under a
-  `pending` row of `fabrika_form_files` and bounded by the collection's `maxBytes` (413); an empty part without a
-  filename is an empty file input. A part the form does not declare, a field twice, an input that is not first and a
-  broken body are 400 `multipart`, a body whose connection closed before its end 400 `aborted` (on a JSON form too: the
-  sender's, never a reported failure), a missing required file 400 `validation`, a body not complete within five
-  minutes 408, a declared `Content-Length` past what the input and the files can hold 413 unread. Such a form accepts
-  `FORM_FILE_LIMITS.perForm` (20) submissions a minute unless it declares `rate.perForm`, and its files write at most
-  `rate.bytesPerHour` (512 MiB by default) an hour in all, counted in `fabrika_form_bytes`: each file reserves its
-  collection's `maxBytes` before its first byte is written (429 once it no longer fits) and gives back what it did not
-  use. The inbox row, with each file's id
-  in the column of its field (`null` for an absent one), and every file's `held` state commit in the transaction that
-  takes from the form's accepted bucket; a submission refused before that append deletes what it wrote, and one whose
-  append failed leaves its files to the sweep, since the row may have committed. The proxy refuses
-  such a form's request whose `Origin` is neither the application's own nor one the row admits (403 `cross_origin`),
-  because a browser sends `multipart/form-data` without a preflight.
-- `then: '<job>'` on a mutation of an RPC or link mount kicks the job the same way once the
-  mutation's transaction committed, so a row it recorded leaves within seconds
-  (`mutation-kick.test.ts`, [ADR-0060](../decisions/0060-a-mutation-kicks-a-cron-job-after-its-commit.md)).
-  A thrown handler, a refused output, a cancelled request and a failed commit kick nothing; a
-  procedure without a transaction kicks once its answer is built. The build and the checker refuse
-  `then` on a query, on a read-only site, on an export procedure, on a webhook and on a job, and a
-  name that is no cron job of the contract (an unknown one with a suggestion). It is declared reach
-  (`ContractArtifact.declared[<endpoint>].then`), absent unless declared, so a contract without it
-  keeps its digest; the approval diff shows it, and it widens nothing. It gives the handler nothing.
-- `c.webhook` (GitHub) answers `POST <path>/:bindingId`. A holder of the bound
-  dimension's `members.manage` creates a binding with the generated
-  `POST /api/webhooks.<name>.bind` (`{ scope, account }`, where `account` is
-  `installation:<id>` or `repository:<id>`); the framework generates the secret and
-  answers it once with the URL. `webhooks.<name>.unbind` removes one. A delivery is
-  checked in order: the binding (404), `X-Hub-Signature-256` over the raw body with that
-  binding's secret (401), the payload's account (403), the input, parsed with its
-  schema after every undeclared field is dropped (400), the webhook's credential (503
-  when IAM refuses its key, cannot be asked, or signs a token without a declared action;
-  nothing is recorded, so GitHub redelivers), and the delivery key,
-  `sha256(bindingId ‖ raw body)`: a key the binding already received in the last 30 days
-  is answered 200 and not run again, whatever its unsigned `X-GitHub-Delivery` says (the
-  framework reads that header for nothing, not even the log). The handler gets `ctx.refs`, a `Ref` of the
-  bound value for each declared action, and `ctx.delivery.key`. **It runs at least
-  once**: a failing handler forgets the key so GitHub's redelivery runs it again. A
-  delivery runs in one transaction (above), so the failed run kept nothing. Bindings and delivery keys live in the framework's `fabrika_*`
-  tables, which `fabrika db migrate` applies.
+  (a public procedure); every other call still needs a session. `{ public: true }` takes no other key.
 - Revocation takes effect within the token lifetime: a removed member or revoked link
   keeps access until its cached token expires, at most 300 s (ADR-0022 rule 6).
+
+## Public procedures
+
+A procedure that anyone may call declares `access: { public: true }` and the `actions` its handler holds
+([ADR-0063](../decisions/0063-a-public-procedure-runs-as-its-own-workload.md)):
+
+```ts
+const stats = app.group({}, (r) => ({
+	cta: r.mutation({
+		input: CtaClick,
+		output: Empty,
+		access: { public: true },
+		actions: ['stats.click'],
+		admission: { rate: { perClient: 300, perEndpoint: 300 } },
+		limits: { maxBytes: 1024 },
+	}).handle(async ({ input, ctx }) => {
+		await ctx.db.app('stats.click').cta_clicks.insert({
+			campaign: input.campaign,
+		})
+		return {}
+	}),
+}))
+```
+
+- **Where.** Only a procedure of an RPC mount (`app.group`) may be public. A group whose procedures are all public
+  declares no callers (`app.group({}, …)`); a group's `callers` applies to its credentialed procedures. A mount takes
+  the callers of its credentialed groups, `[]` when every group is public. The row is the anonymous kind `public`: no
+  callers, no requirement, no delegation, and the proxy forwards no credential that arrives on it. A proxy that does
+  not know the kind refuses the manifest instead of serving it without the admission rules.
+- **Its own workload.** The handler holds what IAM signs for the endpoint's own key, as a job and a webhook do. The
+  workload is named by the full endpoint id (`api.stats.cta`), so one group mounted twice is two workloads.
+  `schemaFromContract` hands IAM `{ kind: 'public', name, actions }`; IAM refuses a schema in which any role grants a
+  public action, so a role change cannot widen it. Control issues one key per public procedure of the approved
+  contract and writes it as `FABRIKA_PROCEDURE_<ID>_<8 hex of the id's SHA-256>_KEY`, rotated and revoked like a job
+  key. `boot` exchanges it at IAM's workload token path, checks `ptype: 'public'` and the workload name, and keeps the
+  token until shortly before it expires. With IAM down and the cached token expired the call is 503. A Cloudflare
+  deploy refuses a workload key.
+- **What the handler gets.** `ctx.principal` is `{ kind: 'public', endpoint }`. `ctx.app('<action>')` and
+  `ctx.db.app('<action>')` mint only for a declared action the token carries
+  ([The staged kit's data handles](#the-staged-kits-data-handles-ctxdb) says what the handle reaches). `ctx.files` puts
+  and opens stored files, `ctx.kick` and `ctx.tokens` exist where `kicks` and `signs` declare them, and `ctx.client`,
+  `ctx.url` and `ctx.signal` are there as on every procedure. A public procedure declares no other reach: `sql`,
+  `unscoped`, `connect`, `issues`, `binds` and `egress` are refused at build.
+- **`ctx.client`** is `{ ip, userAgent }` on every procedure. `ip` is the proxy's `X-Fabrika-Client-Ip` where the
+  runtime adapter vouches that the proxy saw the visitor (Cloudflare and the test kit); on Bun, and so on Zerops, it is
+  `null` until [backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md) settles the balancer's trusted range.
+  `userAgent` is cut at 256 characters. It is information, never a check.
+- **The honeypot** is a helper: `if (honeypot(input.website)) return {}` (`@fabrika/app`) answers what a real
+  submission answers and does nothing.
+
+**The order of a public request**, with the answer of each refusal:
+
+1. The proxy: the row, the body codec, the origin rule (403).
+2. The proxy secret and the endpoint header (403, 503).
+3. The in-flight share (503), then every bucket the procedure has, charged before the body is read and kept whatever
+   follows (429).
+4. The bounded body and the strict input, signed tokens verified as it is parsed (413, 408, 400).
+5. The workload token, before the challenge spends a token (503).
+6. The challenge (403).
+7. The file parts, staged as pending files ([Stored files](#stored-files)), so a refused visitor stores nothing.
+8. The handler, the output, the commit and the kicks, in one transaction.
+
+`public-procedure.test.ts`, `public-admission.test.ts` and `public-kick.test.ts` of `packages/app` cover it.
+
+### Admission and limits
+
+Every procedure takes `admission: { origins?, rate?, challenge? }` and `limits: { maxBytes?, timeoutMs? }`. The
+artifact records each procedure's effective rules (`procedures[<id>]`), and the approval prints them
+([ADR-0050](../decisions/0050-approved-access.md)).
+
+| Bound                       | Default                                                                                    | Ceiling         |
+| --------------------------- | ------------------------------------------------------------------------------------------ | --------------- |
+| `limits.maxBytes`, no files | 64 KiB                                                                                     | 1 MiB           |
+| `limits.maxBytes`, files    | 64 KiB + each file field's count × its kind's `maxBytes`                                   | 48 MiB          |
+| the body's deadline         | `max(30 s, maxBytes at 16 KiB/s)`: a 10 MiB body gets about 11 min (408 past it)           | —               |
+| `limits.timeoutMs`          | 10 s, counted from the last body byte                                                      | 60 s            |
+| files per request           | each field's `.max(n)` together                                                            | 20              |
+| `admission.rate`            | public mutation: `perClient` 10 and `perEndpoint` 100 a minute; anything else: no bucket   | 10 000 a minute |
+| `rate.bytesPerHour`         | required with a public file field                                                          | 64 GiB          |
+| public in-flight share      | a quarter of `FABRIKA_APP_DATABASE_CONNECTIONS` (10 by default), for all public procedures | —               |
+
+- **Buckets.** `perClient` counts by the client address and exists on public procedures; `perCaller` counts by the
+  verified principal and exists on credentialed and link procedures; `perEndpoint` counts every call. A declared `rate`
+  merges into the default, and `null` turns a default bucket off. Each bucket is a counter per database minute in the
+  framework's `fabrika_form_admissions`, shared by every instance, and taken with its own statement before the body is
+  read. A bucket is a database write, so a public query has none unless it declares one. An IPv6 client counts by its
+  /64, and a request without the address header shares one `unknown` client; on Zerops that is every request until
+  backlog 05, so there `perClient` counts one client and the approval says so.
+- **`bytesPerHour`** is charged the body's declared `Content-Length`, at most the body limit, or the body limit without
+  one, before the body is read (`fabrika_form_bytes`, 429 once it no longer fits).
+- **The challenge**: `challenge: { provider: 'turnstile', secret: '<VARIABLE>', siteKey?: '<VARIABLE>' }`, on a public
+  procedure only. The input carries the widget's token as the string field `challengeToken`. Turnstile's siteverify
+  checks it (5 s, a 16 KiB answer, the request's host, the endpoint id with `_` for `.` as `action`, a token at most
+  300 s old); its digest is recorded in `fabrika_form_challenges`, so a second use is a replay. A failed or replayed
+  token is 403 `challenge_failed`, an unreachable provider or a refused secret 503. Only `fabrika app dev` admits one
+  token again (`BootOptions.repeatableChallengeToken`), the one Turnstile's always-passing test widget hands out. The
+  secret is the application variable the contract names; without it the application does not boot. Every SPA mount
+  serves the site key in its browser config ([Browser error reporting](#browser-error-reporting)), and Turnstile's
+  origin joins `script-src` and `frame-src`.
+- **A public file field** requires `bytesPerHour`, a challenge and scanning file kinds.
+- **`origins`** is `'same-origin'` by default. `'listed'` admits the origins the environment lists
+  ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) "Cross-origin endpoints"): on a credentialed
+  procedure with a `px_` key only, never a session. `'any'` admits every origin, on a public procedure only. The row
+  records it as `crossOrigin: 'environment'` or `'any'`.
+
+### The HTTP shape
+
+`http: { method?, query?, body?, cache? }` describes the wire independently of the output:
+
+| Field    | Rule                                                                                                                                                                                                                                                                                                 |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `method` | `POST` by default. A query may declare `GET`, and is `GET` by default when its output is a file or it declares `cache`. A mutation is `GET` only when it is public and its input holds a required `signedToken`; it then answers `redirect()` or a schema, never a file. An export is always `POST`. |
+| `query`  | a `POST` only: a flat schema of URL parameters, handed to the handler as `query` beside the body's `input`.                                                                                                                                                                                          |
+| `body`   | `json` by default; `multipart/form-data` when the input has a file field; `urlencoded` for flat scalar fields without files.                                                                                                                                                                         |
+| `cache`  | a public `GET` query only: `{ maxAgeSeconds }` (1 s to a year) or `'immutable'` (a year, for an input that names a value that never changes, such as a file id).                                                                                                                                     |
+
+- **URL parameters.** A `GET` input and a `query` are flat scalar fields in their canonical spelling (a number as
+  `String(n)`, `true`/`false`, `null`). A name sent twice and an unknown name are refused (400); a URL over 8192
+  characters is 414.
+- **`cache`.** A successful (200) answer gets `Cache-Control: public, max-age=<n>`, or `public, max-age=31536000,
+  immutable`, in place of `no-store`; an error or a redirect keeps `no-store`. The framework, the Cloudflare proxy
+  Worker and Caddy apply it from the row (`@fabrika/proxy-core/headers`). Every other answer is `no-store`.
+- **`redirect({ origins? })`** is an output: the handler returns `{ to }`, and the framework answers 303 after a `POST`
+  and 302 after a `GET`. A target is a path of the application's own origin, a URL of an origin `origins` lists, or an
+  `http(s)` URL a verified signed token of this request carries. Any other target is a 500 and a log line, never an
+  open redirect, and the transaction rolls back. A request whose `Accept` names JSON and not HTML (the typed client's)
+  gets `200 { result: { to } }` instead, and the caller decides whether to navigate.
+- **A `GET` mutation** changes state on a navigation, which a link scanner may trigger; the approval says so. A session
+  mutation is never `GET`: a top-level navigation carries the session cookie.
+- **Browser admission.** The proxy enforces it per row ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)):
+  a session request that is not a `GET` needs `Sec-Fetch-Site: same-origin`; a session `GET` reaches a query only; a
+  bearer from another origin needs the row's `'listed'` origins and its preflight; a public `multipart/form-data` or
+  `urlencoded` body (no preflight) needs an `Origin` of the application itself or one its row admits, where a request
+  without `Origin` passes and `Origin: null` does not. A public `GET` mutation is admitted by the application: a valid
+  signed token in its input.
+
+## Kicks
+
+A mutation (of an RPC, link or public procedure), a webhook or a cron job declares `kicks: ['<job>']` and calls
+`ctx.kick('<job>')` ([ADR-0060](../decisions/0060-a-handler-kicks-a-declared-job-after-its-commit.md)).
+
+- `ctx.kick` is request-bound and accepts only the declared names. A kick carries no payload: the row it looks at is
+  the only record of the work.
+- Kicks are deduplicated per job and sent after the output validated and the transaction committed. A thrown handler,
+  a refused output, a cancelled request and a failed commit kick nothing. A procedure without a transaction kicks once
+  its answer is built. A job's kicks are sent after its lease is released.
+- The serving process starts one run in the background (`waitUntil` where the runtime has one, detached otherwise)
+  under the job's own key, never the request's. A kick waits for no lock, so it never holds a connection requests
+  need: when it cannot take the lease at once it sets the shared flag `fabrika_job_kicks.pending`, and the run holding
+  the lease runs the job once more after it succeeded. Every run clears the flag when it starts, so at most one run is
+  active and one is pending whatever the number of kicks and instances; after a failed run the flag waits for the
+  schedule.
+- The schedule stays the recovery path: a kicked run that dies before its commit leaves its rows to the next scheduled
+  run (`public-kick.test.ts`, `mutation-kick.test.ts`). On SIGTERM a Bun server first aborts the kicked runs in flight:
+  a stopped run frees its lease as failed with the code `stopped`, logs that its schedule runs it again, and reports
+  nothing to Operations. It then stops accepting requests and waits at most 10 s for the rest of its background work
+  before it closes the database.
+- The build and the checker refuse `kicks` on a query, a read-only site and an export, a name that is no cron job of
+  the contract, and a cycle of kick edges between jobs. The artifact records the edges as
+  `declared[<site>].kicks`, absent unless declared. The approval shows a new edge; from a public procedure it widens
+  with closer review, because anyone who calls it then decides when the job runs.
+
+## Webhooks
+
+```ts
+export const stripe = app.webhook('/hooks/stripe', {
+	scheme: 'stripe',
+	boundTo: 'app',
+	actions: ['billing.record'],
+	input: StripeEvent,
+}).handle(({ input, ctx }) =>
+	ctx.db.app('billing.record').payments.insert(
+		{ stripe_id: input.data.object.id, state: input.type },
+		{ onConflict: { columns: ['stripe_id'], do: 'update' } },
+	)
+)
+```
+
+`app.webhook(path, { scheme, boundTo, actions, input, limits?, kicks?, signs?, egress?, sql?, unscoped? })` answers
+`POST <path>/:bindingId`.
+
+- **The verifier** is `scheme`: a preset (`github-sha256`, `standard-webhooks`, `stripe`) or
+  `{ hmac: { header, algorithm: 'sha1' | 'sha256' | 'sha512', encoding: 'hex' | 'base64', prefix?, timestamp?, signed:
+  'body' | 'timestamp.body', id? } }`, computed by the framework over the raw body with the binding's secret. A signed
+  timestamp must be within five minutes. `{ basic: true }` and `{ bearer: true }` are refused at build: the proxy removes
+  `Authorization` from an anonymous row's request (ADR-0022 rule 3), so they could never verify. A verifier is never
+  application code.
+- **`boundTo`** is a dimension or `'app'`. A webhook bound to a dimension gets `ctx.refs`, a `Ref` of the bound value
+  for each declared action. One bound to `'app'` has one binding for the whole application, and its handler mints
+  `ctx.app('<action>')` and reaches `ctx.db.app('<action>')` as a job does.
+- **Binding.** A credentialed RPC mutation that declares `binds: '<webhook>'` gets `ctx.webhooks('<webhook>')`:
+  `bind(capability, account)` and `unbind(capability, id)` take this request's `Ref` of the bound dimension or its
+  `AppCapability` for `'app'`, and write in the mutation's transaction. `bind` answers the URL and the secret once
+  (`WebhookSecret`). The framework generates the secret and keeps the bindings in its `fabrika_*` tables.
+- **A delivery** is checked in order: the binding (404), the signature (401), for `github-sha256` the account its
+  payload names (403), the input, parsed with its schema after every undeclared field is dropped (400), and the
+  webhook's credential (503 when IAM refuses its key, cannot be asked, or signs a token without a declared action; a
+  delivery that cannot run is one the provider must redeliver). Then the delivery key, `sha256(bindingId ‖ raw body)`,
+  is claimed under a lease ([The staged kit's data handles](#the-staged-kits-data-handles-ctxdb)): a key the binding
+  completed in the last 30 days, or one another delivery holds, is answered 200 and not run again, whatever the
+  provider's unsigned delivery header says. The handler gets `ctx.delivery.key`, and `ctx.files` to put and open
+  stored files. **It runs at least once**, so it writes idempotently: `insert(…, { onConflict })` needs no `sql`.
+- **Limits.** `limits.maxBytes` is 1 MiB by default and at most, read within the deadline it derives; `limits.timeoutMs`
+  is 10 s by default and at most 60 s.
+- A webhook has a key of principal kind `webhook` (`FABRIKA_WEBHOOK_<NAME>_KEY`), one per webhook declaration. Not
+  covered: a provider that validates its URL with a `GET`, or that needs an answer body of its own.
+
+## Signed tokens
+
+A purpose is declared once, in the kit's options, with its claims and its longest lifetime:
+
+```ts
+// src/app-kit.ts
+export const app = defineApp(vocabulary, tables, {
+	tokens: { unsubscribe: token(Recipient, { maxDays: 400 }) },
+})
+```
+
+- **Verifying.** `signedToken('<purpose>')` is a top-level field of a procedure's input or its `http.query`. The
+  framework verifies it as it parses the input: an HMAC-SHA256 over the key id, the purpose, the expiry and the claims,
+  then the claims parsed again by the purpose's schema. The handler receives the typed claims. An invalid token and an
+  expired one are 400, and the answer says nothing about the keys. A token in an export or a webhook input, anywhere
+  but at the top level, or of an undeclared purpose is refused at build.
+- **Signing.** A procedure of an RPC mount, a job or a webhook declares `signs: ['<purpose>']` and calls
+  `ctx.tokens.sign('<purpose>', claims, { days })`, with `days` at most the purpose's `maxDays` (3650 at most). An
+  export and a link procedure never sign.
+- **Keys.** Control keeps each environment's keys in its vault (`app_env_token_keys`) and writes them as
+  `FABRIKA_TOKEN_KEYS`, the signing key first; `boot` refuses a contract with purposes when it is not set. A token
+  carries its key's id. `apps.environments.rotateTokenKey` asks the next deploy of one environment to rotate. A
+  retired key keeps verifying until its retirement plus the largest `maxDays` the contract had while it signed, so a
+  400-day unsubscribe link survives a rotation; a key no token can carry any more is deleted. Cloudflare refuses a
+  contract with token purposes, because a Worker variable is plain text.
+- A token is single-purpose and no credential: it opens no mount. Single use and revocation are the application's
+  state. The artifact records `tokens` (claims and `maxDays`) and `declared[<site>].signs`; the approval shows a new
+  purpose, a lifetime change and a site that starts signing (`signed-tokens.test.ts`).
+
+**Links to the application's own procedures.** `ctx.url('<endpoint id>', { input?, query? })` exists on every site
+(a procedure, a webhook, a job). It answers the environment's canonical origin (`FABRIKA_APP_ORIGIN`, which Control
+writes on every deploy), the procedure's path, and the parameters its HTTP shape reads from the URL: the input of a
+`GET`, the `query` of a `POST`. An unknown endpoint, a parameter the shape does not read and an environment without an
+origin are refused; a malformed origin refuses the boot. The checker's `url-endpoint` refuses a literal endpoint id
+that names no procedure.
+
+## Outbound calls
+
+`egress: ['https://api.example.com']` on a credentialed procedure, a webhook or a job declares the exact HTTPS origins
+its code calls: no path or wildcard, at most 16, each once. `boot` wraps the global `fetch` once; while a staged-kit
+site's handler runs, a call to an origin the site does not declare is refused (`capability_refused`,
+`undeclared_egress`). A site that declares none, a public, link or export procedure included, reaches no origin. The
+framework's own requests (mail, connectors, IAM, workload tokens, the object store, the JWKS) run outside the site's
+scope. The guard stops mistakes and makes a bypass conspicuous; it is no sandbox: code that kept the `fetch` it found
+before boot, or opens its own sockets, escapes it ([ADR-0012](../decisions/0012-fabrika-app-runtime.md) §8). The
+checker's `cross-app-fetch` accepts an absolute URL whose static prefix is an origin some site declares, and the
+approval lists every origin (`egress.test.ts`).
+
+## A mount's compatibility promise
+
+`c.rpc('/api/v1', groups, { compatibility: 'backward' })` promises the export's rule to the callers of an RPC mount
+(`'unchecked'` is the default). Control refuses a publication that removes a procedure, makes its input or `http.query`
+accept less, or changes its output, its HTTP shape (method, path, body codec), its file answer or its access, and one
+that removes or moves the mount (`MountCompatibilityRefused`), whoever approves it. A breaking change is a new mount
+beside the old one. The approved side's promise binds, so a deploy that drops it is still held to it; the next one is
+free (`mount-compatibility.test.ts`).
 
 ## Jobs
 
@@ -896,8 +1129,7 @@ An `app.cron` job takes its handler beside it, and the contract mounts it under 
 // src/notes/endpoints.ts
 export const purge = app.cron('0 3 * * *', {
 	actions: ['notes.read', 'notes.delete'],
-	scope: 'app',
-	timeout: '5m',
+	limits: { timeoutMs: 300000 },
 	retries: 2,
 })
 	.handle(async ({ ctx }) => {
@@ -929,15 +1161,15 @@ process first — and runs one job:
    lease time is the database's clock, so containers whose clocks disagree still agree.
    A run clears the `fabrika_job_kicks.pending` flag a kick leaves when it starts,
    and runs once more when the flag is set again by the time it succeeded.
-2. Each attempt holds one generation of the lease and a deadline (its `timeout`,
-   default 15 minutes). Every insert, update and delete of the data layer checks the
+2. Each attempt holds one generation of the lease and a deadline (its `limits.timeoutMs`,
+   15 minutes by default, at most 24 hours). Every insert, update and delete of the data layer checks the
    generation and the deadline inside its own transaction, before the write and again
    just before `COMMIT`, with `statement_timeout` set to the time left. When an attempt
    ends, the runner cancels the statements it still has running. An attempt that timed
    out, failed or lost the lease commits nothing more (`LeaseLostError`). A staged-kit
    job writes only in `ctx.transaction((tx) => …)`, one fenced transaction for every
    write in it; its `ctx.db` outside reads only.
-3. An attempt that outlives its `timeout` is cancelled (`ctx.signal` aborts, its
+3. An attempt that outlives its `limits.timeoutMs` is cancelled (`ctx.signal` aborts, its
    capabilities are refused) and fails. A failed attempt is retried up to `retries`
    times with jittered exponential backoff, under a new generation each time, except an
    attempt that failed with `mail_failed` the one retry rule refuses and a `stopped` one.
@@ -972,18 +1204,21 @@ seals it in its vault, and writes it as `FABRIKA_JOB_<NAME>_KEY`. At the start o
 attempt the runner exchanges the key at IAM's public `POST /auth/workload/token` for a
 token, which carries the actions IAM's reconciled schema declares for the job. Its
 `ctx` mints a capability only for an action the contract declares **and** the token
-carries: `ctx.within(action, dimension)` reaches every value (`scope: 'app'`), and
+carries: `ctx.within(action, dimension)` reaches every value (a job is application-wide), `ctx.app(action)` mints an
+`AppCapability` for `ctx.db.app(action)`, and
 `ctx.ref(action, dimension, id)` locates one object, 404 when it is missing; `tx.ref` inside `ctx.transaction` locates
 it in that transaction, so it finds an object the transaction wrote. On a first
 deploy IAM's reconcile runs after the new version is active, so an attempt that starts
 before it gets no capability. The principal of its writes is `job:<name>`. A job cannot
-create scopes, manage members or issue share links, and no mount accepts its key.
-`boot` refuses a job scoped to a dimension (per-binding jobs are not built), a job
-without `@fabrika/db`, a job without its key or without a token exchange, a schedule that
+create scopes or manage members, issues share links only for a mount it declares in `issues`, and no mount accepts its
+key. A job may kick another job (`kicks`, [Kicks](#kicks)), claim the rows of a queue table
+([Queues and claims](#queues-and-claims)), put files, sign tokens and call declared origins.
+`boot` refuses a job without `@fabrika/db`, a job without its key or without a token exchange, a schedule that
 is not a five-field cron expression, and a missing or undeclared job handler. A webhook
 has a key of principal kind `webhook` the same way (`FABRIKA_WEBHOOK_<NAME>_KEY`), one
 per webhook declaration: its `ctx.refs` exist only when the token carries every declared
-action. A Cloudflare deploy refuses a workload key, because a Worker runs neither.
+action. A public procedure has one of principal kind `public` ([Public procedures](#public-procedures)). A Cloudflare
+deploy refuses a workload key.
 
 ### E-mail from a job
 
@@ -1001,11 +1236,23 @@ artifact; the approval diff shows a new `installation` for closer review and a n
   characters of `sha256('<FABRIKA_IAM_ISSUER>\n<FABRIKA_IAM_APP_ID>')` and `:`, so two installations, applications or
   environments on one provider account never share a key. Renaming IAM's origin changes every prefix once.
   `transportMailKey(scope, key)` of `@fabrika/app/testing` computes the transport's key.
+- `attachments: [fileRef]` (at most 20) sends stored files: each is read through the attempt's `ctx.files.open`, so
+  only a `live` file whose reference the attempt holds goes out; a pending or quarantined one fails with 409
+  `file_not_ready`, a rejected one with `file_rejected`. All attachments together stay within the transport's
+  `maxAttachmentBytes`, else the send fails `invalid_message`, which is final; a transport without the capability
+  refuses a message that has any, on the send. The attachments are part of the content a repeated idempotency key must
+  match.
+- `unsubscribe: { url }` hands the transport an exact `https` URL; a transport with the `listUnsubscribe` capability
+  writes `List-Unsubscribe: <url>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058), and one
+  without it refuses the message. There are no free headers. The URL is usually
+  `ctx.url('<endpoint id>', { query: { t: token } })` of a public procedure that takes the signed token
+  ([Signed tokens](#signed-tokens)).
 - `ctx.mail.available` is false where the installation has no transport: Control handed `FABRIKA_EMAIL_PROVIDER=none`,
   a local installation configures none, or the kit runs with `mail: 'none'`. Every send then fails
   `mail_not_configured`, outcome `not_sent`, with no I/O. An outbox checks it first and leaves its rows queued without
   spending an attempt; they leave on the first run after a transport is added and the application is deployed again.
-- `ctx.mail.capabilities` are the transport's (`idempotent`, `confirmation`, `maxBatch`), and `ctx.mail.mayRetry(error)`
+- `ctx.mail.capabilities` are the transport's (`idempotent`, `confirmation`, `maxBatch`, `listUnsubscribe`,
+  `maxAttachmentBytes`), and `ctx.mail.mayRetry(error)`
   is `mayRetryDelivery` over them ([outbound email](outbound-email.md)). A send rejects with `EmailDeliveryError`; any
   other rejection of an application's own transport becomes `provider_unavailable`, its message dropped unread.
   `@fabrika/app/implement` re-exports `EmailDeliveryError`, `mayRetryDelivery` and the email types, so an application
@@ -1128,32 +1375,34 @@ that step past a row; each is a closer-review line of the approval diff when it 
 review is what holds. "None" means no declaration lifts it; a migration is then the only way, and its database code is
 reviewed too (`diff.ts:292`).
 
-| Guarantee                                                                                                                                                                                                                                                                                                                     | Enforced by                  | Lifted by                                                                                             | Enforcing code or approval line                                                                                                                                                   |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A handler runs only for a caller the proxy admitted for its endpoint, and reads who it is from the verified token                                                                                                                                                                                                             | proxy, runtime               | none (an anonymous kind is declared as one: review)                                                   | `packages/auth-core/src/requirement.ts:14`; `packages/auth/src/iam.ts:136`; `packages/app/src/implement/dispatch.ts:372`; "Endpoint … becomes public" `diff.ts:361`               |
-| An `app` endpoint runs only for a global grant of its action                                                                                                                                                                                                                                                                  | proxy                        | none                                                                                                  | `packages/auth-core/src/requirement.ts:21`; "the endpoint's audience (app-wide: a global grant)" `diff.ts:651`                                                                    |
-| The handles reach rows only through the capability: every statement they build carries its scope predicate as the top-level conjunct                                                                                                                                                                                          | types, runtime               | `unscoped: { <table>: 'read' \| 'write' }`; `sql: 'read' \| 'write'` (a statement without a fragment) | `packages/db/src/guard.ts:110`; `packages/db/src/orm.ts:575`; "declares table `…` unscoped" `diff.ts:255`; "declares raw SQL" `diff.ts:253`                                       |
-| A handle's operation needs the table's action for it (insert, update, delete; a column's own write action)                                                                                                                                                                                                                    | types, runtime               | `sql: 'write'` (a statement without a fragment); `unscoped: { <table>: 'write' }`                     | `packages/db/src/orm-types.ts:236`; `packages/db/src/store.ts:161`                                                                                                                |
-| A handle reads a column with its own read action only under exactly that action                                                                                                                                                                                                                                               | types, runtime, review       | `sql: 'read' \| 'write'` (an `unscoped` read still omits it)                                          | `packages/db/src/orm-types.ts:219`; `packages/db/src/policy.ts:596`; "Column … loses its read policy" `diff.ts:745`                                                               |
-| The key, the containment chain, `version` and `createdBy` are stamped, never written by a handle                                                                                                                                                                                                                              | types, runtime               | `unscoped: { <table>: 'write' }` takes the chain; `sql: 'write'` (a statement without a fragment)     | `packages/db/src/store.ts:665`; `packages/db/src/policy.ts:825`                                                                                                                   |
-| Every action is the vocabulary's, and a containment column is a foreign key to its container                                                                                                                                                                                                                                  | types, boot, checker         | none                                                                                                  | `packages/db/src/policy.ts:368`, `:448`, `:1099`; the checker reads `src/db/tables.ts` through the same parse                                                                     |
-| A handle writes an application table only from an `app` endpoint, by the table's action for the operation                                                                                                                                                                                                                     | types, runtime               | `sql: 'write'` (a statement without a fragment); `unscoped: { <table>: 'write' }`                     | `packages/db/src/orm-types.ts:428`; `packages/db/src/store.ts:538`                                                                                                                |
-| `ctx.db.app` lists a dimension or child table under its read action or an `appRead` one, with the columns of that action, and only counts it (no aggregate) under an `appCount` one                                                                                                                                           | types, runtime, review       | `actions.appRead`, `actions.appCount` in the policy; `unscoped`, `sql` read it too                    | `packages/db/src/orm-types.ts:405`; `packages/db/src/store.ts:461`; `packages/db/src/orm.ts:427`; "is read app-wide with" `diff.ts:765`; "is counted app-wide with" `diff.ts:766` |
-| A scoped site reads an application table only under its read action, and never writes it                                                                                                                                                                                                                                      | types, runtime               | `unscoped: { <table>: 'read' \| 'write' }`; `sql: 'read' \| 'write'` (a statement without a fragment) | `packages/db/src/orm-types.ts:457`; `packages/db/src/store.ts:565`                                                                                                                |
-| A reference table is read-only: no handle and no statement writes it                                                                                                                                                                                                                                                          | types, runtime               | none (a migration)                                                                                    | `packages/db/src/orm-types.ts:492`; `packages/db/src/orm.ts:136`, `:625`                                                                                                          |
-| A query and an export write nothing                                                                                                                                                                                                                                                                                           | types, runtime               | none                                                                                                  | `packages/db/src/database.ts:200`                                                                                                                                                 |
-| A job writes only inside its fenced transaction, while it holds its lease                                                                                                                                                                                                                                                     | types, runtime               | none                                                                                                  | `packages/db/src/orm-types.ts:236`; `packages/db/src/store.ts:647`                                                                                                                |
-| `ctx.sql` exists only on a site that declares it, in that mode                                                                                                                                                                                                                                                                | types, boot, runtime, review | `sql: 'read' \| 'write'`                                                                              | `packages/app/src/contract/context.ts:128`; `packages/app/src/implement/invocation.ts:313`; "declares raw SQL (`…`)" `diff.ts:253`                                                |
-| Every `ctx.sql` value is a bound parameter; one statement, the application's schema, no DDL, no `fabrika_*` or `pg_*` name                                                                                                                                                                                                    | runtime, checker             | none (a migration)                                                                                    | `packages/db/src/sql.ts:192`, `:591`; the runtime role (ADR-0017); raw SQL outside `ctx.sql` `packages/check/src/rules/runtime.ts:303`                                            |
-| A scope fragment carries its action into its query block: on the relation the block's `UPDATE`, `DELETE` or `ON CONFLICT … DO UPDATE` writes (same table, same alias) it needs that operation's action (an UPDATE also a column's own write action every assigned column declares); elsewhere an action the handles read with | types, runtime               | `sql: 'write'` (a statement without a fragment)                                                       | `packages/db/src/orm-types.ts:591`; `packages/db/src/sql.ts:433`; `packages/db/src/store.ts:348`, `:401`                                                                          |
-| A site's declared reach is the approved contract's, not the handler module's                                                                                                                                                                                                                                                  | boot                         | none                                                                                                  | `packages/app/src/implement/invocation.ts:137`                                                                                                                                    |
-| Another application is called only through a declared import                                                                                                                                                                                                                                                                  | types, runtime, review       | `connect: ['<import>']`                                                                               | `packages/app/src/contract/context.ts:310`; "calls connector `…`" `diff.ts:258`                                                                                                   |
-| A share link is issued only from a site that declares its mount                                                                                                                                                                                                                                                               | types, runtime, review       | `issues: '<link mount>'`                                                                              | `packages/app/src/contract/context.ts:297`; "issues share links of mount `…`" `diff.ts:262`                                                                                       |
-| An endpoint sends no e-mail; a job sends only through the transport it declares, under a key prefixed per installation and application environment                                                                                                                                                                            | types, boot, runtime, review | `mailer: 'installation' \| 'own'` (a cron job)                                                        | `packages/app/src/contract/context.ts:414`; `packages/app/src/jobs/runner.ts:747`, `mail.ts:37`; "sends e-mail through the installation's mail transport" `diff.ts:278`           |
-| A form writes only the declared columns of its inbox                                                                                                                                                                                                                                                                          | boot, runtime                | none                                                                                                  | `packages/app/src/implement/boot.ts:487`; `packages/db/src/store.ts:1559`                                                                                                         |
-| A form's file is read by nobody until the job attaches it to an owner and the scan passes it, and comes only with a solved challenge from an origin the form admits                                                                                                                                                           | build, boot, proxy, runtime  | none                                                                                                  | `packages/app/src/files/collections.ts` (`receiveFormFile`, `attach`); `packages/proxy-core/src/authorize.ts` (`admitFormOrigin`)                                                 |
-| The framework's binding of the data layer and its test kit stay out of application code                                                                                                                                                                                                                                       | checker, runtime             | none                                                                                                  | `packages/check/src/rules/modules.ts:58`, `:108`; `packages/check/src/rules/framework.ts:149`; `packages/db/src/production.ts:22`                                                 |
-| The application reads no environment variable and no other application's origin itself                                                                                                                                                                                                                                        | checker                      | none                                                                                                  | `packages/check/src/rules/runtime.ts:326`, `:131`                                                                                                                                 |
+| Guarantee                                                                                                                                                                                                                                                                                                                     | Enforced by                  | Lifted by                                                                                             | Enforcing code or approval line                                                                                                                                                                                          |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A handler runs only for a caller the proxy admitted for its endpoint, and reads who it is from the verified token                                                                                                                                                                                                             | proxy, runtime               | none (an anonymous kind is declared as one: review)                                                   | `packages/auth-core/src/requirement.ts:14`; `packages/auth/src/iam.ts:136`; `packages/app/src/implement/dispatch.ts:372`; "Endpoint … becomes public" `diff.ts:361`                                                      |
+| An `app` endpoint runs only for a global grant of its action                                                                                                                                                                                                                                                                  | proxy                        | none                                                                                                  | `packages/auth-core/src/requirement.ts:21`; "the endpoint's audience (app-wide: a global grant)" `diff.ts:651`                                                                                                           |
+| The handles reach rows only through the capability: every statement they build carries its scope predicate as the top-level conjunct                                                                                                                                                                                          | types, runtime               | `unscoped: { <table>: 'read' \| 'write' }`; `sql: 'read' \| 'write'` (a statement without a fragment) | `packages/db/src/guard.ts:110`; `packages/db/src/orm.ts:575`; "declares table `…` unscoped" `diff.ts:255`; "declares raw SQL" `diff.ts:253`                                                                              |
+| A handle's operation needs the table's action for it (insert, update, delete; a column's own write action)                                                                                                                                                                                                                    | types, runtime               | `sql: 'write'` (a statement without a fragment); `unscoped: { <table>: 'write' }`                     | `packages/db/src/orm-types.ts:236`; `packages/db/src/store.ts:161`                                                                                                                                                       |
+| A handle reads a column with its own read action only under exactly that action                                                                                                                                                                                                                                               | types, runtime, review       | `sql: 'read' \| 'write'` (an `unscoped` read still omits it)                                          | `packages/db/src/orm-types.ts:219`; `packages/db/src/policy.ts:596`; "Column … loses its read policy" `diff.ts:745`                                                                                                      |
+| The key, the containment chain, `version` and `createdBy` are stamped, never written by a handle                                                                                                                                                                                                                              | types, runtime               | `unscoped: { <table>: 'write' }` takes the chain; `sql: 'write'` (a statement without a fragment)     | `packages/db/src/store.ts:665`; `packages/db/src/policy.ts:825`                                                                                                                                                          |
+| Every action is the vocabulary's, and a containment column is a foreign key to its container                                                                                                                                                                                                                                  | types, boot, checker         | none                                                                                                  | `packages/db/src/policy.ts:368`, `:448`, `:1099`; the checker reads `src/db/tables.ts` through the same parse                                                                                                            |
+| A handle writes an application table only from an `app` endpoint, by the table's action for the operation                                                                                                                                                                                                                     | types, runtime               | `sql: 'write'` (a statement without a fragment); `unscoped: { <table>: 'write' }`                     | `packages/db/src/orm-types.ts:428`; `packages/db/src/store.ts:538`                                                                                                                                                       |
+| `ctx.db.app` lists a dimension or child table under its read action or an `appRead` one, with the columns of that action, and only counts it (no aggregate) under an `appCount` one                                                                                                                                           | types, runtime, review       | `actions.appRead`, `actions.appCount` in the policy; `unscoped`, `sql` read it too                    | `packages/db/src/orm-types.ts:405`; `packages/db/src/store.ts:461`; `packages/db/src/orm.ts:427`; "is read app-wide with" `diff.ts:765`; "is counted app-wide with" `diff.ts:766`                                        |
+| A scoped site reads an application table only under its read action, and never writes it                                                                                                                                                                                                                                      | types, runtime               | `unscoped: { <table>: 'read' \| 'write' }`; `sql: 'read' \| 'write'` (a statement without a fragment) | `packages/db/src/orm-types.ts:457`; `packages/db/src/store.ts:565`                                                                                                                                                       |
+| A reference table is read-only: no handle and no statement writes it                                                                                                                                                                                                                                                          | types, runtime               | none (a migration)                                                                                    | `packages/db/src/orm-types.ts:492`; `packages/db/src/orm.ts:136`, `:625`                                                                                                                                                 |
+| A query and an export write nothing                                                                                                                                                                                                                                                                                           | types, runtime               | none                                                                                                  | `packages/db/src/database.ts:200`                                                                                                                                                                                        |
+| A job writes only inside its fenced transaction, while it holds its lease                                                                                                                                                                                                                                                     | types, runtime               | none                                                                                                  | `packages/db/src/orm-types.ts:236`; `packages/db/src/store.ts:647`                                                                                                                                                       |
+| `ctx.sql` exists only on a site that declares it, in that mode                                                                                                                                                                                                                                                                | types, boot, runtime, review | `sql: 'read' \| 'write'`                                                                              | `packages/app/src/contract/context.ts:128`; `packages/app/src/implement/invocation.ts:313`; "declares raw SQL (`…`)" `diff.ts:253`                                                                                       |
+| Every `ctx.sql` value is a bound parameter; one statement, the application's schema, no DDL, no `fabrika_*` or `pg_*` name                                                                                                                                                                                                    | runtime, checker             | none (a migration)                                                                                    | `packages/db/src/sql.ts:192`, `:591`; the runtime role (ADR-0017); raw SQL outside `ctx.sql` `packages/check/src/rules/runtime.ts:303`                                                                                   |
+| A scope fragment carries its action into its query block: on the relation the block's `UPDATE`, `DELETE` or `ON CONFLICT … DO UPDATE` writes (same table, same alias) it needs that operation's action (an UPDATE also a column's own write action every assigned column declares); elsewhere an action the handles read with | types, runtime               | `sql: 'write'` (a statement without a fragment)                                                       | `packages/db/src/orm-types.ts:591`; `packages/db/src/sql.ts:433`; `packages/db/src/store.ts:348`, `:401`                                                                                                                 |
+| A site's declared reach is the approved contract's, not the handler module's                                                                                                                                                                                                                                                  | boot                         | none                                                                                                  | `packages/app/src/implement/invocation.ts:137`                                                                                                                                                                           |
+| Another application is called only through a declared import                                                                                                                                                                                                                                                                  | types, runtime, review       | `connect: ['<import>']`                                                                               | `packages/app/src/contract/context.ts:310`; "calls connector `…`" `diff.ts:258`                                                                                                                                          |
+| A share link is issued only from a site that declares its mount                                                                                                                                                                                                                                                               | types, runtime, review       | `issues: '<link mount>'`                                                                              | `packages/app/src/contract/context.ts:297`; "issues share links of mount `…`" `diff.ts:262`                                                                                                                              |
+| An endpoint sends no e-mail; a job sends only through the transport it declares, under a key prefixed per installation and application environment                                                                                                                                                                            | types, boot, runtime, review | `mailer: 'installation' \| 'own'` (a cron job)                                                        | `packages/app/src/contract/context.ts:414`; `packages/app/src/jobs/runner.ts:747`, `mail.ts:37`; "sends e-mail through the installation's mail transport" `diff.ts:278`                                                  |
+| A public procedure's handler holds only its declared actions, on application tables: an insert reads nothing back, a read needs the table's read action, an update or a remove needs an id a verified signed token carries; no role holds a public action                                                                     | types, runtime, review       | none                                                                                                  | `packages/db/src/orm-types.ts` (`PublicApplicationRows`); `packages/app/src/implement/dispatch.ts` (`#publicInvocation`); `packages/auth/src/app-schema.ts` (an app schema whose role grants a public action is refused) |
+| A public procedure's file body is challenged, budgeted, and admitted only from an origin its row admits; its files are scanned before any byte is served                                                                                                                                                                      | build, proxy, runtime        | none                                                                                                  | `packages/app/src/contract/build.ts`; `packages/proxy-core/src/authorize.ts` (`admitFormOrigin`); `packages/app/src/files/kinds.ts`                                                                                      |
+| A stored file is served, opened or written into a column only through a reference the request holds and may read, of the column's kind, and served only when `live`                                                                                                                                                           | types, runtime               | `sql: 'write'` (a statement can write any file id)                                                    | `packages/db/src/file-columns.ts`; `packages/app/src/files/kinds.ts`                                                                                                                                                     |
+| A site's `fetch` reaches only the origins it declares                                                                                                                                                                                                                                                                         | runtime, checker, review     | `egress: ['https://…']`                                                                               | `packages/app/src/implement/egress.ts`; `packages/check/src/check.ts` (`cross-app-fetch`)                                                                                                                                |
+| The framework's binding of the data layer and its test kit stay out of application code                                                                                                                                                                                                                                       | checker, runtime             | none                                                                                                  | `packages/check/src/rules/modules.ts:58`, `:108`; `packages/check/src/rules/framework.ts:149`; `packages/db/src/production.ts:22`                                                                                        |
+| The application reads no environment variable and no other application's origin itself                                                                                                                                                                                                                                        | checker                      | none                                                                                                  | `packages/check/src/rules/runtime.ts:326`, `:131`                                                                                                                                                                        |
 
 The generated isolation and endpoint access tests (`fabrika db test-scaffold`) catch a handler that breaks one of
 these rows in a way the layers above cannot see, such as a cache keyed by nothing; they are not an enforcer.
@@ -1226,16 +1475,18 @@ const shared = createClient(contract, 'shared', { key }) // POST /s/api/<procedu
 - An error envelope, or a proxy denial, is an `RpcError` with `type`, `httpStatus`,
   `issues` and `loginUrl`. `bounceOnAuth` sends the browser to sign in on a 401 that
   carries a login URL, as `createRpcClient` does.
-- **File collections** (`client/files.ts`). The client of an RPC mount whose callers include `human` has
-  `files.<name>` for every collection: `upload(owner, blob, { name? })` (the blob's `type` is the `Content-Type`,
-  a `File`'s name the `?name=`), `list({ owner, after?, limit? })`, `download(id)` and `remove({ id })`. A link
-  mount's client has `files.<name>` for every `link: true` collection and every one whose `link` names the mount,
-  without the owner: `upload(blob)`, `list()` and `download(id)`. The paths are `fileCollectionPaths` of `contract/defaults.ts`, the ones the artifact's rows
-  carry; a collection bound to another link mount's dimension answers 404 there. `download` answers a `File` named
-  by the answer's `filename*` and saves nothing; the list answer is parsed with the list endpoint's schema. A mount
-  whose procedures hold a group named `files` refuses the client where collections apply.
-- `ResultOf<F>` and `InputOf<F>` name a client procedure's answer (a `File` for an attachment procedure) and its
-  input as the caller writes it.
+- **The HTTP shape.** A procedure whose `http` declares `GET` (or a query that answers a file or declares `cache`) is
+  called with `GET`, its input in the URL. The client sends no `http.query`: such a procedure is for a native form or
+  a link that `ctx.url` builds.
+- **Files.** An input whose fields hold a `Blob` goes as `multipart/form-data`: the JSON of the other fields first,
+  then each file under its field's name; an input with none stays JSON. A file field's type is a `Blob` on the client.
+  A procedure whose output is a file (or an `attachment()`) is no function: `download(api.x, input)` fetches it with
+  the caller's credential and answers a `DownloadedFile` (a `File` with `blob()`, `stream()` and `save()`), and a `GET`
+  one also has `api.x.url(input)`, the URL a same-origin page links to (`<img src>`, `<a download>`). A client with a
+  key has no `url`: a key never goes into a URL, so a link page downloads.
+- **`redirect()`.** The client sends `Accept: application/json`, so a `redirect()` procedure answers it `{ to }`
+  instead of a redirect that `fetch` would follow; the caller decides whether to navigate.
+- `ResultOf<F>` and `InputOf<F>` name a client procedure's answer and its input as the caller writes it.
 
 ## Testing a contract application
 
@@ -1283,9 +1534,10 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   accepts no invitation.
 - `kit.runJob(name)` runs a cron job once, as `fabrika job run <name>` does: under its lease in
   `fabrika_job_leases`, with the actions IAM signs for its key, its writes fenced. It answers the run's result
-  (`{ status: 'succeeded', attempts }`). It first waits for the runs a form's or a mutation's `then` kicked through
+  (`{ status: 'succeeded', attempts }`). It first waits for the runs a `ctx.kick` started through
   `kit.fetch`. `kit.drain()` waits for them without running a job, and each method of the generated endpoint access
-  kit drains before it answers, so no test closes the database under a kicked run.
+  kit drains before it answers, so no test closes the database under a kicked run. `FILE_SCAN_JOB` runs the scan of
+  `scan: true` file kinds with the kit's `scanner`, and `FILE_SWEEP_JOB` the sweep of stored files.
 - `kit.mail` is the stand-in transport of every job that declares `mailer` (a `MemoryEmailSender` of
   `@fabrika/email/memory`, re-exported by `@fabrika/app/testing`; `TestKitOptions.mail` replaces it, for example with
   `capabilities: { idempotent: false, confirmation: 'queued' }`). `accepted` is what reached the inbox, once per key,
@@ -1299,13 +1551,13 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   its stand-in IAM) on a loopback port, to click through its screens: a throwaway schema of
   `FABRIKA_TEST_POSTGRES_URL` migrated from `db/migrations/` and dropped on exit, the SPAs from their built
   directories, file objects in memory, and the application's variables from `dev/dev.env` over the environment without
-  the `FABRIKA_*` names. A form's challenge passes (`passingChallenge`). A job's mail goes to the kit's stand-in
+  the `FABRIKA_*` names. A public procedure's challenge passes (`passingChallenge`). A job's mail goes to the kit's stand-in
   (`kit.mail`), and the mail view lists it with the invitations the stand-in IAM sent, newest first, at most 200: the
   recipient, the subject, the job's key, the time and the transport's answer. A job's message opens at
   `/__fabrika/dev/mail/<id>` with every field, its text, and its HTML in a `sandbox=""` `srcdoc` frame under the page's
   `default-src 'none'` policy, so it runs no script and loads nothing. Every request the process sends to
   `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN`, the dev outbox, for another outside service) is captured, answered
-  200 and listed in a section of its own. A form's or a mutation's `then` kicks its job; cron schedules do not run.
+  200 and listed in a section of its own. A `ctx.kick` starts its job; cron schedules do not run.
   What the seed or a job's handler throws is printed with its stack. A seed module (`--seed`, or `dev/seed.ts`)
   default-exports a `DevSeed`: it gets the kit and `DevOutside`, whose `outbox()` reads the dev outbox and `mails()`
   the jobs' mail (`DevMail`, oldest first), writes through the endpoints, and answers personas (a person the kit made), link pages (a URL `ctx.links` answered) and labelled scope
@@ -1434,11 +1686,15 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   - **Own target.** For every `on` procedure whose action is not the read action of the table that owns its dimension
     (a write-only role), a caller holding only that action, plus what IAM requires of a member manager or a link's
     issuer (above), asks for its own object and gets 200: the capability reads its own target. A link mount's procedure gets the same case for the holder of a link bound to its object.
-  - **Files.** A file collection's endpoints get the same cases
-    over a file the kit uploads in each scope (`kit.file`, objects in memory): upload,
-    download and remove of an own file pass, of the other scope's are 404, and a caller
-    holding only the collection's `read` action is 403 for upload and remove. Those case
-    names carry the actions, so a changed action makes the committed test stale.
+  - **Several capabilities.** For every endpoint of several capabilities, one denied case per capability: the caller
+    holds every other one, and the named one is refused (`kit.capability`).
+  - **Public.** For every public procedure, anyone with no credential, from a page of its own origin, gets an answer
+    of the application: anything but 401, 403 or a 5xx (`kit.anyone`). Behind a challenge the case is a 403 instead:
+    the kit's challenge never passes. The case name carries the actions the procedure runs with.
+  - **Files.** A file field's sample is `fabrika:file:<kind>`, and the kit sends a generated file of the kind in a
+    multipart body; a `GET` procedure's input goes into its URL. The kit serves each seeded file as an empty object, in
+    memory. The policy isolation fixture seeds a live, empty file into each file column, so its probes write file
+    columns too.
 
   `deps` runs with an empty environment.
 - **Inputs.** A case sends a fixed literal written into the test: a sample of the input
@@ -1487,8 +1743,6 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   non-configurable property of `globalThis` that every installed package copy reads).
 - **What neither kind catches:** an application bug that needs other data or another
   order of requests, such as a cache keyed by something the test does not vary.
-- **`move` has no case yet.** An access form hands a handler one capability, and a move
-  needs the source and the target `Ref`, so no handler can call `t.move`.
 - `@fabrika/check` regenerates every generated test from the contract, the policies and the
   fixtures it reads statically and compares the files byte for byte: a missing, edited or
   replaced one (header or not) and a generated test the scaffold no longer writes are
@@ -1510,8 +1764,8 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
 `@fabrika/app`'s `skill/` (the skill `fabrika-app`) is the one text that tells a coding agent how to write an
 application. `SKILL.md` leads with the paved road in code, the declared steps off it, the loop (migrate, codegen,
 test-scaffold, typecheck, `fabrika-check`, the tests) and when to ask the human; `references/<topic>.md` holds one topic
-each: `app-setup`, `table-and-migration`, `endpoint`, `jobs`, `files`, `webhooks-links-connectors`, `tests` and
-`errors`. Its frontmatter `version` is the package's. Three places carry it, all read through
+each: `start`, `app-setup`, `table-and-migration`, `endpoint`, `jobs`, `files`, `public-intake`, `spa`,
+`webhooks-links-connectors`, `tests`, `dev` and `errors`. Its frontmatter `version` is the package's. Three places carry it, all read through
 `@fabrika/app/agent-skill`:
 
 - `fabrika builder init` installs every file verbatim as `.claude/skills/fabrika-app/` and
@@ -1548,6 +1802,12 @@ A deploy of an approved contract with a job that declares `mailer: 'installation
 mail transport, every `FABRIKA_EMAIL_*` name Control holds, sensitive on Zerops; without one, Control refuses that
 deploy before any effect. A deploy after the contract stops declaring it removes them. An application cannot set a
 `FABRIKA_EMAIL_*` variable of its own: the family is framework-only.
+
+Every deploy also writes `FABRIKA_APP_ORIGIN`, the environment's public origin that `ctx.url` builds links on (`null`
+removes it from an environment without one), and `FABRIKA_TOKEN_KEYS`, the environment's signed-token keys, `null`
+unless the approved contract declares a token purpose. Each workload of the approved contract gets its key: a job
+`FABRIKA_JOB_<NAME>_KEY`, a webhook `FABRIKA_WEBHOOK_<NAME>_KEY` and a public procedure
+`FABRIKA_PROCEDURE_<ID>_<8 hex>_KEY`.
 
 A name whose value the installation cannot supply is REMOVED from the service rather than left stale —
 an app verifying against a previous installation's issuer is worse than one that fails to boot.
@@ -1602,9 +1862,9 @@ runtime values:
 
 Every SPA mount of a contract application (`c.spa`, member or public) serves
 `<prefix>/__fabrika-config.json` with these three values, `{ "dsn": …, "release": …, "environment": … }`
-(`null` when unset), and under `public` (present only when there is one) the public values the contract names: each form challenge's
-`siteKey` on every SPA mount, and the variables the mount lists in `c.spa(prefix, { public: […] })`
-on that mount only, by variable name. Nothing else of the environment reaches it. A named variable
+(`null` when unset), and under `public` (present only when there is one) the public values the contract names: each
+public procedure challenge's `siteKey` on every SPA mount, and the variables the mount lists in
+`c.spa(prefix, { browserConfig: […] })` on that mount only, by variable name. Nothing else of the environment reaches it. A named variable
 that is not set refuses the boot, and the contract refuses a variable that is both a challenge's
 secret and public; a member SPA's answer needs a
 member's session like every file of its mount.
