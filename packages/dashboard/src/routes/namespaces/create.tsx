@@ -1,5 +1,6 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
 import { useState } from 'react'
+import { GateScreen } from '../../components/GateScreen'
 import { Icon } from '../../components/Icon'
 import { NamespaceSignature } from '../../components/NamespaceSignature'
 import {
@@ -32,11 +33,10 @@ export default createPage()
 
 		if (data.operator === null || data.operator.presets.length === 0) {
 			return (
-				<div className="gate-screen">
-					<h1>Namespace provisioning unavailable</h1>
+				<GateScreen icon="bay" title="Namespace provisioning unavailable">
 					<p>The selected provider does not expose an operator placement preset.</p>
 					<button type="button" onClick={() => navigate('namespaces')}>Back to namespaces</button>
-				</div>
+				</GateScreen>
 			)
 		}
 
