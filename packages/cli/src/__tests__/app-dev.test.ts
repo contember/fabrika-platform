@@ -585,6 +585,6 @@ describe.skipIf(url === '')("fabrika app dev's stand-ins for the outside: a publ
 		expect((await join('cleo@signup.example', 'XXXX.DUMMY.TOKEN.XXXX')).status).toBe(200)
 		const once = crypto.randomUUID()
 		expect((await join('dan@signup.example', once)).status).toBe(200)
-		expect((await join('eve@signup.example', once)).status).toBe(403)
+		expect((await join('eve@signup.example', once)).status).toBe(400)
 	})
 })
