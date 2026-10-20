@@ -432,9 +432,10 @@ aggregates) and locks over many rows still need `sql`.
   64 KiB by default and at most 1 MiB; with file fields its default adds each field's files at the kind's `maxBytes`,
   at most 48 MiB. The body must arrive within `max(30 s, maxBytes at 16 KiB/s)`, which stays below the hour a pending
   file is safe from the sweep ([ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)). The handler's time starts
-  after the last body byte: 10 s by default, at most 60 s, on a procedure and a webhook. A webhook's body is 1 MiB. A
-  job runs 15 min by default, at most 24 h. The file count comes from the schema's `.max(n)` (at most 20), the
-  per-file size from the kind.
+  after the last body byte: 10 s by default, at most 60 s, on a procedure and a webhook. A webhook's body is 1 MiB by
+  default and at most 48 MiB, the ceiling of a procedure with file fields: an inbound mail carries its attachments in
+  the body for the handler to `put`, each within its kind's `maxBytes`. A job runs 15 min by default, at most 24 h.
+  The file count comes from the schema's `.max(n)` (at most 20), the per-file size from the kind.
 - **`http: { method?, query?, body?, cache? }`** describes the wire independently of the output.
   - `method` is `POST` by default. A query may declare `GET`, and is `GET` by default when its output is a file or it
     declares `cache`; its input is then read from flat scalar URL parameters in their canonical spelling, a name sent
@@ -467,18 +468,31 @@ idempotently without `sql`.
 
 ### 13. Webhooks
 
-- **`scheme`** is a preset (`github-sha256`, `standard-webhooks`, `stripe`) or a shape the framework computes:
-  `{ hmac: { header, algorithm, encoding, prefix?, timestamp?, signed: 'body' | 'timestamp.body', id? } }`, checked
-  against the binding's secret over the raw body. A signed timestamp must be within five minutes. A verifier is never
-  application code. `{ basic: true }` and `{ bearer: true }` are refused at build: the proxy removes `Authorization`
-  from an anonymous row's request ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) rule 3), so they could
-  never verify.
+- **`scheme`** is a preset (`github-sha256`, `slack`, `standard-webhooks`, `stripe`, `twilio`), a shape the framework
+  computes, `{ hmac: { header, algorithm, encoding, prefix?, timestamp?, signed: 'body' | 'timestamp.body', id? } }`,
+  or the secret itself as a password, `{ basic: true }`, or a token, `{ bearer: true }`. Each is checked with the
+  binding's secret before the body is parsed; a verifier is never application code.
+  - A signed timestamp (Stripe, Standard Webhooks, Slack, an `hmac` over `timestamp.body`) must be within five
+    minutes. Slack signs `v0:<timestamp>:<body>`; its `url_verification` request is answered with its challenge once
+    the signature verifies, and no handler runs.
+  - Twilio signs no timestamp. It signs the URL it posted to, built from `FABRIKA_APP_ORIGIN` and the request's path
+    and query, then a form's parameters sorted by name; a JSON body is covered by the URL's `bodySHA256`.
+  - Slack and Twilio rows admit urlencoded forms as well as JSON; a form's fields are the input as a procedure's are.
+  - `basic` and `bearer` read `Authorization`, so their row declares `authorization: 'forward'` and the proxy passes
+    the header on, never reading it as a platform credential and never passing one that carries a `px_` key
+    ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) rule 3).
+  - A replay is ignored by the delivery claim below, which keys on the binding and the body; without a signed
+    timestamp (GitHub, Twilio, `basic`, `bearer`, an `hmac` over the body) a key is kept 30 days.
 - **`boundTo`** is a dimension or `'app'`. One binding of an `'app'` webhook serves the whole application, and its
   handler mints `ctx.app('<action>')` like a job.
 - **Binding** is a procedure's: a credentialed mutation that declares `binds: '<webhook>'` calls
-  `ctx.webhooks('<webhook>').bind(capability, account)` or `.unbind(capability, id)` with this request's `Ref` of the
-  bound dimension or its `AppCapability`, in its transaction, and answers the secret once (`WebhookSecret`). The
-  framework owns the secret, the binding storage, the replay records and the signature check. Only a `github-sha256`
+  `ctx.webhooks('<webhook>').bind(capability, account)`, `.setSecret(capability, id, secret)` or
+  `.unbind(capability, id)` with this request's `Ref` of the bound dimension or its `AppCapability`, in its
+  transaction. `bind` answers the binding's URL and a generated secret once (`WebhookSecret`). A provider that issues
+  its own secret (Stripe, Slack, Twilio, some Standard Webhooks senders) shows it only after the URL is registered;
+  `setSecret` then replaces the generated one, and deliveries fail until it does. A secret is 1 to 512 printable
+  characters, a Standard Webhooks one is `whsec_` and base64, and a `basic` or `bearer` one never carries `px_`. The
+  framework owns the binding storage, the replay records and the signature check. Only a `github-sha256`
   webhook of an older framework release keeps generated binding endpoints, which the platform still serves.
 - **The delivery claim is recoverable.** The replay key is claimed with a lease (the handler's time limit plus 30 s)
   and completed in the handler's transaction, right before it commits. A failure gives the claim back; a claim whose
@@ -572,9 +586,11 @@ The default is `'unchecked'`.
   locks over many rows still need `sql`; a read block for the road is its own decision.
 - Anonymous entry, signed one-action links, outbound calls and file storage each have one declared, reviewable form,
   and the approval shows the effective value of every bound.
-- `{ basic }` and `{ bearer }` webhook verifiers wait for a proxy decision on `Authorization` for anonymous rows. A
-  provider that issues its own secret (Stripe, Standard Webhooks senders) needs a set-secret operation that `bind`
-  does not have: `bind` generates the secret. Slack and Twilio signatures do not fit `{ hmac }`.
+- A `basic` or `bearer` webhook's row needs a proxy that knows `authorization: 'forward'`: an older proxy's strict
+  parser refuses it, so a Zerops namespace pinned to an older proxy source refuses that deploy, and the Cloudflare
+  proxy Worker is redeployed by the platform's own release.
+- A Slack form whose fields repeat a name is refused, as a procedure's form is; a Twilio callback with repeated
+  parameters is too.
 - An application on framework 0.4 or 0.5 keeps its forms, inbox tables, `then`, file collections, generated file and
   webhook endpoints and job options: Control reads it with its own release's reader, and the platform keeps serving
   them inside the window ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)). An author moves to

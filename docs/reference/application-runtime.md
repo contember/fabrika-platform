@@ -1038,19 +1038,38 @@ export const stripe = app.webhook('/hooks/stripe', {
 `app.webhook(path, { scheme, boundTo, actions, input, limits?, kicks?, signs?, egress?, sql?, unscoped? })` answers
 `POST <path>/:bindingId`.
 
-- **The verifier** is `scheme`: a preset (`github-sha256`, `standard-webhooks`, `stripe`) or
-  `{ hmac: { header, algorithm: 'sha1' | 'sha256' | 'sha512', encoding: 'hex' | 'base64', prefix?, timestamp?, signed:
-  'body' | 'timestamp.body', id? } }`, computed by the framework over the raw body with the binding's secret. A signed
-  timestamp must be within five minutes. `{ basic: true }` and `{ bearer: true }` are refused at build: the proxy removes
-  `Authorization` from an anonymous row's request (ADR-0022 rule 3), so they could never verify. A verifier is never
-  application code.
+- **The verifier** is `scheme`, computed by the framework with the binding's secret; a verifier is never application
+  code.
+
+  | `scheme`                                                | What the delivery carries                                                                                   |
+  | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+  | `'github-sha256'`                                       | `X-Hub-Signature-256: sha256=<hex>` over the body                                                           |
+  | `'stripe'`                                              | `Stripe-Signature: t=<s>,v1=<hex>` over `<t>.<body>`; any `v1` of a rotated secret                          |
+  | `'standard-webhooks'`                                   | `webhook-signature: v1,<base64>` over `<webhook-id>.<webhook-timestamp>.<body>`, with a `whsec_` secret     |
+  | `'slack'`                                               | `X-Slack-Signature: v0=<hex>` over `v0:<X-Slack-Request-Timestamp>:<body>`                                  |
+  | `'twilio'`                                              | `X-Twilio-Signature`: base64 HMAC-SHA1 of the public URL and a form's sorted parameters                     |
+  | `{ hmac: { header, algorithm, encoding, prefix?, … } }` | the declared header: `sha1`, `sha256` or `sha512`, `hex` or `base64`, over the body or `<timestamp>.<body>` |
+  | `{ basic: true }`                                       | `Authorization: Basic …` whose password is the secret; the user name is not checked                         |
+  | `{ bearer: true }`                                      | `Authorization: Bearer <secret>`                                                                            |
+
+  A signed timestamp must be within five minutes. A `slack` or `twilio` row admits an urlencoded form as well as JSON,
+  read into the input as a procedure's form is (a repeated name is 400). Slack's `url_verification` request is answered
+  `{ challenge }` once its signature verifies, and no handler runs. Twilio's public URL is `FABRIKA_APP_ORIGIN` with the
+  request's path and query, and a JSON body is covered by its `bodySHA256` parameter; a `twilio` delivery where the
+  environment has no `FABRIKA_APP_ORIGIN` is a 500 `webhook_unverifiable`. A `basic` or `bearer` row declares `authorization: 'forward'`,
+  so the proxy passes the sender's `Authorization` on without reading it, unless it carries a `px_` key
+  ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) rule 3).
 - **`boundTo`** is a dimension or `'app'`. A webhook bound to a dimension gets `ctx.refs`, a `Ref` of the bound value
   for each declared action. One bound to `'app'` has one binding for the whole application, and its handler mints
   `ctx.app('<action>')` and reaches `ctx.db.app('<action>')` as a job does.
 - **Binding.** A credentialed RPC mutation that declares `binds: '<webhook>'` gets `ctx.webhooks('<webhook>')`:
-  `bind(capability, account)` and `unbind(capability, id)` take this request's `Ref` of the bound dimension or its
-  `AppCapability` for `'app'`, and write in the mutation's transaction. `bind` answers the URL and the secret once
-  (`WebhookSecret`). The framework generates the secret and keeps the bindings in its `fabrika_*` tables.
+  `bind(capability, account)`, `setSecret(capability, id, secret)` and `unbind(capability, id)` take this request's
+  `Ref` of the bound dimension or its `AppCapability` for `'app'`, and write in the mutation's transaction. `bind`
+  answers the URL and a generated secret once (`WebhookSecret`). A provider that issues its own secret (Stripe, Slack,
+  Twilio) shows it after the URL is registered; `setSecret` replaces the generated one with it and answers `false` when
+  the value has no binding of that id. A secret is 1 to 512 printable characters without spaces, a `standard-webhooks`
+  one is `whsec_` and base64, and a `basic` or `bearer` one never contains `px_` (400 otherwise). The framework keeps
+  the bindings in its `fabrika_*` tables.
 - **A delivery** is checked in order: the binding (404), the signature (401), for `github-sha256` the account its
   payload names (403), the input, parsed with its schema after every undeclared field is dropped (400), and the
   webhook's credential (503 when IAM refuses its key, cannot be asked, or signs a token without a declared action; a
@@ -1059,10 +1078,12 @@ export const stripe = app.webhook('/hooks/stripe', {
   completed in the last 30 days, or one another delivery holds, is answered 200 and not run again, whatever the
   provider's unsigned delivery header says. The handler gets `ctx.delivery.key`, and `ctx.files` to put and open
   stored files. **It runs at least once**, so it writes idempotently: `insert(…, { onConflict })` needs no `sql`.
-- **Limits.** `limits.maxBytes` is 1 MiB by default and at most, read within the deadline it derives; `limits.timeoutMs`
-  is 10 s by default and at most 60 s.
+- **Limits.** `limits.maxBytes` is 1 MiB by default and at most 48 MiB, so an inbound mail can carry its attachments
+  for `ctx.files.put` (each within its kind's `maxBytes`); the body is read within the deadline it derives.
+  `limits.timeoutMs` is 10 s by default and at most 60 s.
 - A webhook has a key of principal kind `webhook` (`FABRIKA_WEBHOOK_<NAME>_KEY`), one per webhook declaration. Not
-  covered: a provider that validates its URL with a `GET`, or that needs an answer body of its own.
+  covered: a provider that validates its URL with a `GET`, or that needs an answer body of its own other than Slack's
+  challenge.
 
 ## Signed tokens
 

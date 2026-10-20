@@ -443,9 +443,9 @@ export const integrations = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
-`unbind(ref, id)` removes one. Both write in the mutation's transaction, and the answer carries the secret once.
-Existing bindings keep working. A webhook's `maxBytes` becomes `limits: { maxBytes, timeoutMs }`: 1 MiB and 10 s by
-default, at most 1 MiB and 60 s.
+`unbind(ref, id)` removes one, and `setSecret(ref, id, secret)` replaces its secret with one the provider issued. Each
+writes in the mutation's transaction, and `bind`'s answer carries the secret once. Existing bindings keep working. A
+webhook's `maxBytes` becomes `limits: { maxBytes, timeoutMs }`: 1 MiB and 10 s by default, at most 48 MiB and 60 s.
 
 ### Jobs
 

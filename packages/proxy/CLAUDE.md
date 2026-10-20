@@ -71,7 +71,9 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
 - **The endpoint and the delegation grant are proxy-asserted like the token.** Step 1 deletes a
   client's `X-Fabrika-Endpoint` and `X-Fabrika-Delegation`; the 2xx branch copies them back from the
   auth response. For a contract app, an allow without a token (an anonymous endpoint) also deletes
-  `Authorization`, so a key the proxy did not read never reaches the app. An installation entry
+  `Authorization`, so a key the proxy did not read never reaches the app, unless the auth response carries
+  `X-Fabrika-Forward-Authorization: 1` (a `basic` or `bearer` webhook). One `vars` matcher ORs its keys, so the
+  marker is a `not` beside it in the same matcher set. An installation entry
   (`isApplicationEntry` false) keeps it: IAM's `/admin/*` reads its
   own bearer, and a `protocol` row is one the service authenticates itself.
 - **Caddy's header order is code, not JSON, so the chain is proven in a running Caddy** (`caddy.live.test.ts`).

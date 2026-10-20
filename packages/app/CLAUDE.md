@@ -639,10 +639,12 @@ vocabulary (`packages/db/CLAUDE.md`).
   Only `devKit` exempts one token (`repeatableChallengeToken`, Turnstile's test-widget token, which never changes);
   never set it outside `app dev`. The secret is the application variable the contract names (`challenge.secret`), read
   by `boot`, which refuses to start without it; never put the value in the contract or a log.
-- **A webhook's verifier is framework code** (`verifiers.ts`): a preset (`github-sha256`, `standard-webhooks`, `stripe`)
-  or an `{ hmac }` shape, over the raw body, a signed timestamp within `WEBHOOK_TIMESTAMP_TOLERANCE_MS`. `buildArtifact`
-  refuses `{ basic }` and `{ bearer }`: the proxy removes `Authorization` from an anonymous endpoint's request (ADR-0022
-  rule 3), so they could never verify. Only `github-sha256` checks the account the payload names.
+- **A webhook's verifier is framework code** (`verifiers.ts`): a preset (`github-sha256`, `slack`, `standard-webhooks`,
+  `stripe`, `twilio`), an `{ hmac }` shape, or `{ basic }` / `{ bearer }`, over the raw body, a signed timestamp within
+  `WEBHOOK_TIMESTAMP_TOLERANCE_MS`. Twilio signs the public URL: the delivery's `url` is `FABRIKA_APP_ORIGIN` and the
+  raw request target, never the `Host` header. A `basic` or `bearer` row declares `authorization: 'forward'`, the only
+  way `Authorization` reaches an anonymous endpoint (ADR-0022 rule 3), and a value carrying `px_` never does, so
+  `setSecret` refuses such a secret. Only `github-sha256` checks the account the payload names.
 - **A signed token is verified as its input is parsed** (`implement/tokens.ts`): only a top-level field of a procedure's
   input or `http.query` carries one (`buildArtifact` refuses it anywhere else, an export included). The HMAC covers the
   key id, the purpose, the expiry and the claims; the claims are parsed again by the purpose's schema. The keys are

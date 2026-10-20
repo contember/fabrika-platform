@@ -66,22 +66,32 @@ export const integrations = app.group({ callers: ['human'] }, (r) => ({
 - **The verifier.** `scheme` is a preset or a shape the framework computes against the binding's secret; never verify
   a signature yourself:
 
-  | `scheme`                                                                                                  | For                                   |
-  | --------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-  | `'github-sha256'`                                                                                         | GitHub; it also checks the account    |
-  | `'standard-webhooks'`                                                                                     | senders of the Standard Webhooks spec |
-  | `'stripe'`                                                                                                | Stripe                                |
-  | `{ hmac: { header, algorithm, encoding, prefix?, timestamp?, signed: 'body' \| 'timestamp.body', id? } }` | most other HMAC senders (Shopify, …)  |
+  | `scheme`                                                                                                  | For                                                                      |
+  | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+  | `'github-sha256'`                                                                                         | GitHub; it also checks the account                                       |
+  | `'standard-webhooks'`                                                                                     | senders of the Standard Webhooks spec                                    |
+  | `'stripe'`                                                                                                | Stripe                                                                   |
+  | `'slack'`                                                                                                 | Slack events, slash commands and interactivity (JSON or a form)          |
+  | `'twilio'`                                                                                                | Twilio callbacks (a form, or JSON); signs the public URL                 |
+  | `{ hmac: { header, algorithm, encoding, prefix?, timestamp?, signed: 'body' \| 'timestamp.body', id? } }` | most other HMAC senders (Shopify, …)                                     |
+  | `{ basic: true }`                                                                                         | a sender that sends the secret as a Basic password (an inbound mail API) |
+  | `{ bearer: true }`                                                                                        | a sender that sends the secret as `Authorization: Bearer <secret>`       |
 
-  A signed timestamp must be within five minutes. `{ basic: true }` and `{ bearer: true }` are refused at build: the
-  proxy removes `Authorization` from an anonymous request, so they could never verify.
+  A signed timestamp must be within five minutes. Slack's URL check (`url_verification`) is answered for you. A form's
+  fields are the input, as strings or the scalars the schema reads.
+- **A secret the provider issues.** Stripe, Slack and Twilio show their signing secret only after you register the
+  URL. Bind first, show the URL, then take the provider's secret in a second mutation with the same `binds` and call
+  `ctx.webhooks('<webhook>').setSecret(capability, id, secret)`; until then deliveries are refused (401).
+  `setSecret` answers `false` when the value has no binding of that id. A `basic` or `bearer` secret never contains
+  `px_`: the proxy removes a platform key from every request.
 - **`boundTo: 'app'`** gives one binding for the whole application, for a provider with one endpoint per account
   (Stripe). Its handler holds its `actions` application-wide, as a job does: `ctx.db.app('<action>')`. The procedure
   that binds it takes an `app` capability: `access: { action, app: true }`, `binds`, and
   `ctx.webhooks('<webhook>').bind(ctx.app, account)`.
-- `limits: { maxBytes?, timeoutMs? }`: the body is 1 MiB by default and at most; the handler runs 10 s by default, at
-  most 60 s. A webhook may declare `kicks`, `signs`, `egress`, `sql` and `unscoped`, and `ctx.files.put` stores a file
-  a provider sends (an inbound e-mail's attachment) for a file column.
+- `limits: { maxBytes?, timeoutMs? }`: the body is 1 MiB by default and at most 48 MiB; the handler runs 10 s by
+  default, at most 60 s. A webhook may declare `kicks`, `signs`, `egress`, `sql` and `unscoped`, and `ctx.files.put`
+  stores a file a provider sends (an inbound e-mail's attachment) for a file column: raise `limits.maxBytes` to the
+  mail you accept.
 - Not covered: a provider that validates its URL with a `GET`, or that needs a custom answer body.
 
 ## Share links

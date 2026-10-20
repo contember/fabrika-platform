@@ -228,9 +228,9 @@ entry, and as nothing else. It refuses an unknown key — `gates` among them —
 **Application tables.** The manifest carries `{ id, hosts, upstream, scheme, endpoints,
 reservedPrefixes, snapshot, csp, operationsOrigin?, crossOrigins? }` per application; `snapshot` is the contract
 digest, `csp` the contract's named origins and `crossOrigins` the environment's. Each endpoint row is `{ id, kind,
-method, path, callers, requirement, admission, delegation, crossOrigin?, response?, cache?, digest }`, and the
-manifest parser refuses a row whose digest does not describe its rules. `response` and `cache` are absent unless
-declared, so every other row keeps its digest. Array order has no meaning. The proxy makes one pass over one selected
+method, path, callers, requirement, admission, delegation, crossOrigin?, response?, cache?, authorization?, digest }`,
+and the manifest parser refuses a row whose digest does not describe its rules. `response`, `cache` and
+`authorization` are absent unless declared, so every other row keeps its digest. Array order has no meaning. The proxy makes one pass over one selected
 endpoint:
 
 1. **Canonical path.** The raw path must have no empty segment, no `.` or `..`, no encoded `/` or `\`
@@ -261,11 +261,24 @@ endpoint:
 **Anonymous kinds.** An endpoint of an anonymous kind (`c.health`, `app.webhook`, the shell of a link SPA, a public
 SPA, `c.spa` with `access: { public: true }`, a public procedure, and a 0.4/0.5 `c.form`) has no callers. The proxy
 skips steps 3 to 5, mints no token and forwards the request. It does not forward a `px_` key or a session that arrives
-on such a request; only an installation entry's `protocol` row keeps the `Authorization` header (below). Admission
+on such a request; only an installation entry's `protocol` row keeps the `Authorization` header (below), and a webhook
+row that declares `authorization: 'forward'` keeps the sender's own. Admission
 still applies: the row admits only its content types, and a body a browser sends without a preflight is refused from
 an origin the row does not admit (the browser admission matrix below). The body limit is the framework's, because
 `forward_auth` hands the proxy the headers and never the body. A webhook's signature is verified by the framework,
 not by the proxy.
+
+**A webhook's own `Authorization`.** A webhook whose verifier compares `Authorization` with its binding's secret
+(`{ basic: true }`, `{ bearer: true }`, [ADR-0012](0012-fabrika-app-runtime.md) §13) compiles to a row with
+`authorization: 'forward'`; only a `webhook` row may declare it. On that row the decision keeps the request's
+`Authorization` for the application and never reads it: no key lookup, no session, no token. It still removes a value
+that carries a `px_` key, as the header or inside Basic credentials, because a platform key sent to a webhook URL by
+mistake must not reach application code; a binding's secret therefore never contains `px_`. The decision signals the
+outcome on its 2xx with `X-Fabrika-Forward-Authorization: 1`. Each deployment deletes `Authorization` from an allow
+that carries no token unless that marker is present (Caddy's chain, the Cloudflare proxy Worker, the test kit), and
+passes the marker on to no one. The field is new: an older proxy's strict parser refuses the row, so a Zerops namespace
+pinned to an older proxy source refuses that deploy
+([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
 
 A **public procedure** ([ADR-0063](0063-a-public-procedure-runs-as-its-own-workload.md)) compiles to its own row kind,
 `public`: no callers, no requirement, no delegation, and every credential discarded, on any mount. The kind is new, so

@@ -84,7 +84,9 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   it; no key and no `human` caller → 401, never a bounce; the session or the login bounce; `satisfies` →
   403; admission (a session non-`GET` needs `Sec-Fetch-Site: same-origin` → 403, the media type must be
   one the row admits → 400). An anonymous kind (`health`, `webhook`, `public`, a 0.4/0.5 `form`) reads no credential
-  and mints no token. The allow carries `X-Fabrika-Endpoint: <id>@<digest>`.
+  and mints no token. The allow carries `X-Fabrika-Endpoint: <id>@<digest>`. A `webhook` row with `authorization:
+  'forward'` (a `basic` or `bearer` verifier) adds `X-Fabrika-Forward-Authorization: 1` when the request's
+  `Authorization` goes on to the app, never when it carries `px_` (`carriesPlatformKey`, Basic credentials decoded).
 - **The rows of the surface revision are new kinds or absent fields.** The `public` kind and the `capabilities`
   requirement (every named action in some scope) are new; a row's `response: 'file'` (the file treatment of
   `headers.ts` on every answer) and a public `GET` row's `cache` join the digest only when present. So every 0.4/0.5

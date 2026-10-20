@@ -25,14 +25,11 @@ From the run log of `sprints/sprint-2026-10-19-declare-the-surface.md`:
    marker was already cleared before the sweep ran. Make the doc and the code say one thing.
 5. **Admission buckets** are charged one `take` each, not in one admission transaction as ADR-0012 states.
 6. **Custom IAM policies** may grant a public procedure's action (ADR-0063 consequence). Decide whether IAM refuses it.
-7. **Webhooks.** `{ basic }` and `{ bearer }` are refused because the proxy strips `Authorization` on anonymous rows
-   (ADR-0022 rule 3). Providers that issue their own secret (Stripe, Standard Webhooks) need a set-secret operation.
-   Slack and Twilio signatures do not fit `{ hmac }`. Inbound mail with attachments exceeds the 1 MiB webhook ceiling.
-8. **Signed tokens on Cloudflare** are refused: Worker variables are plain text, and no secret path exists.
-9. **A namespace proxy pin older than 0.5.3** still breaks on a 0.5 cross-origin field: Control does not record a
+7. **Signed tokens on Cloudflare** are refused: Worker variables are plain text, and no secret path exists.
+8. **A namespace proxy pin older than 0.5.3** still breaks on a 0.5 cross-origin field: Control does not record a
    pin's release (backlog 189).
-10. **Queues.** A row past `maxAttempts` has no staff path back into the queue; confirm the 30-day backoff cap.
-11. **The local compatibility suite** does not run the platform's build step over the old release's source.
+9. **Queues.** A row past `maxAttempts` has no staff path back into the queue; confirm the 30-day backoff cap.
+10. **The local compatibility suite** does not run the platform's build step over the old release's source.
 
 ## Approach / acceptance
 
