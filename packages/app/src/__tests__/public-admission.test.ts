@@ -214,7 +214,9 @@ describe.skipIf(!hasPostgres)('the challenge', () => {
 		verify.answer = () => Response.json({ success: false, 'error-codes': ['invalid-input-response'] })
 		const app = start(verify)
 		const sent = await apply(app, '203.0.113.50')
-		expect(sent.status).toBe(403)
+		// A 0.5 form answered a failed challenge so: a caller on another origin sees no change.
+		expect(sent.status).toBe(400)
+		expect(sent.body).toEqual({ error: { type: 'challenge_failed', message: 'The challenge did not verify; solve it again' } })
 		expect(await count('applications')).toBe(0)
 	})
 
@@ -233,7 +235,7 @@ describe.skipIf(!hasPostgres)('the challenge', () => {
 		expect(await count('applications')).toBe(0)
 	})
 
-	test('a token for another host, another action or one too old is a 403', async () => {
+	test('a token for another host, another action or one too old is a 400', async () => {
 		const verify = siteverify()
 		const app = start(verify)
 		const answers = [
@@ -244,23 +246,23 @@ describe.skipIf(!hasPostgres)('the challenge', () => {
 		]
 		for (const [index, overrides] of answers.entries()) {
 			verify.answer = (token) => passed(token, overrides)
-			expect((await apply(app, `203.0.113.${60 + index}`)).status).toBe(403)
+			expect((await apply(app, `203.0.113.${60 + index}`)).status).toBe(400)
 		}
 		expect(await count('applications')).toBe(0)
 	})
 
-	test('a token is accepted once: its replay is a 403, whatever the provider answers', async () => {
+	test('a token is accepted once: its replay is a 400, whatever the provider answers', async () => {
 		const app = start()
 		const token = 'token-replayed'
 		expect((await apply(app, '203.0.113.70', { challengeToken: token })).status).toBe(200)
-		expect((await apply(app, '203.0.113.71', { challengeToken: token })).status).toBe(403)
+		expect((await apply(app, '203.0.113.71', { challengeToken: token })).status).toBe(400)
 		expect(await count('applications')).toBe(1)
 	})
 
 	test("Turnstile's test-widget token is single use too: only app dev admits it again", async () => {
 		const app = start()
 		expect((await apply(app, '203.0.113.72', { challengeToken: 'XXXX.DUMMY.TOKEN.XXXX' })).status).toBe(200)
-		expect((await apply(app, '203.0.113.73', { challengeToken: 'XXXX.DUMMY.TOKEN.XXXX' })).status).toBe(403)
+		expect((await apply(app, '203.0.113.73', { challengeToken: 'XXXX.DUMMY.TOKEN.XXXX' })).status).toBe(400)
 		expect(await count('applications')).toBe(1)
 	})
 
@@ -272,7 +274,7 @@ describe.skipIf(!hasPostgres)('the challenge', () => {
 		for (let index = 0; index < 6; index++) {
 			statuses.push((await apply(app, `198.51.100.${index + 1}`)).status)
 		}
-		expect(statuses).toEqual([403, 403, 403, 403, 403, 429])
+		expect(statuses).toEqual([400, 400, 400, 400, 400, 429])
 		expect(await count('applications')).toBe(0)
 	})
 

@@ -81,7 +81,7 @@ if (postgres !== null) {
 			expect(await kit.anyone('api.visitors.register', { email: 'generated@example.test', name: 'Generated' })).toEqual({ answered: true })
 			expect(await kit.anyone('api.challenged.register', { email: 'generated@example.test', name: 'Generated', challengeToken: 'x' })).toEqual({
 				answered: false,
-				status: 403,
+				status: 400,
 			})
 		})
 

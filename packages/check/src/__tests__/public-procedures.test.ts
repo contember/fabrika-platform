@@ -101,7 +101,7 @@ describe('public procedures in the static reader', () => {
 		const inputs = scaffoldInputs(challenged)
 		const endpoints = (await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures)).get(ENDPOINT_ACCESS_TEST)
 		expect(endpoints?.cases).toContain('api.intake.register: anyone reaches it with no credential, running with intake.register')
-		expect(endpoints?.cases).toContain('api.catalog.products: anyone without a solved challenge is 403')
+		expect(endpoints?.cases).toContain('api.catalog.products: anyone without a solved challenge is 400')
 		expect(endpoints?.text).toContain("await kit.anyone('api.intake.register', ")
 	})
 })

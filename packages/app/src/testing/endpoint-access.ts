@@ -95,7 +95,8 @@ export interface EndpointAccessKit {
 	capability(endpoint: string, capability: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<DeniedOutcome>
 	/**
 	 * A public procedure asked by anyone, with no credential, from a page of its own origin: `answered` unless the answer
-	 * is a 401, a 403 or a 5xx. A procedure with a challenge is a 403: the kit's challenge never passes.
+	 * is a 401, a 403, a 5xx or a failed challenge. A procedure with a challenge is a 400 `challenge_failed`: the kit's
+	 * challenge never passes.
 	 */
 	anyone(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
 }
@@ -810,7 +811,8 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 				body: JSON.stringify(input),
 			})
 			const status = response.status
-			return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
+			const challenged = status === 400 && errorType(await response.text()) === 'challenge_failed'
+			return status >= 500 || status === 401 || status === 403 || challenged ? { answered: false, status } : { answered: true }
 		},
 		async global(endpoint, input) {
 			const row = globalEndpointOf(endpoint)

@@ -439,7 +439,7 @@ const publicCases = (row: EndpointRow, artifact: ContractArtifact, fixtures: End
 	const call = `await kit.anyone(${quote(row.id)}, ${renderSample(input)})`
 	const actions = artifact.declared?.[row.id]?.actions ?? []
 	if (artifact.procedures?.[row.id]?.challenge != null) {
-		return [testCase(`${row.id}: anyone without a solved challenge is 403`, `expect(${call}).toEqual({ answered: false, status: 403 })`)]
+		return [testCase(`${row.id}: anyone without a solved challenge is 400`, `expect(${call}).toEqual({ answered: false, status: 400 })`)]
 	}
 	return [
 		testCase(`${row.id}: anyone reaches it with no credential, running with ${actions.join(', ')}`, `expect(${call}).toEqual({ answered: true })`),

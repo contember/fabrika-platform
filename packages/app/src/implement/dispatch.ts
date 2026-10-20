@@ -847,7 +847,7 @@ export class ContractRuntime {
 
 	/**
 	 * The token verifies for this host and this action, and was not accepted before unless it is the `repeatable` one: a
-	 * failure is 403, an unreachable provider 503.
+	 * failure is 400, as a 0.5 form answered, an unreachable provider 503.
 	 */
 	async #challenge(action: string, verifier: ChallengeVerifier, token: string | null, request: Request, repeatable: string | null): Promise<void> {
 		const outcome = token === null ? 'failed' : await verifier.verify({ token, hostname: new URL(request.url).hostname, action })
@@ -861,14 +861,14 @@ export class ContractRuntime {
 			|| (token !== repeatable
 				&& !(await this.#framework().admissions.recordChallenge(action, sha256Hex(token), CHALLENGE_LIMITS.maxAgeMs + CHALLENGE_LIMITS.maxSkewMs)))
 		if (refused) {
-			throw new HttpError(403, 'challenge_failed', 'The challenge did not verify; solve it again')
+			throw new HttpError(400, 'challenge_failed', 'The challenge did not verify; solve it again')
 		}
 	}
 
 	/**
 	 * A public procedure, in the order of ADR-0063's public request: the in-flight share (503), then every bucket in the
 	 * order of `bucketsOf` (429), each charged before the body is read and kept whatever follows; the bounded body and the
-	 * strict input (413, 400); the workload token, before a challenge spends its token (503); the challenge (403); then
+	 * strict input (413, 400); the workload token, before a challenge spends its token (503); the challenge (400); then
 	 * the handler in one transaction, the output and the commit. The handler's time starts after the last body byte.
 	 */
 	async #public(
