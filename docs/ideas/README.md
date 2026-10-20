@@ -13,6 +13,3 @@ decided work or status.
   observability, alerting, and response beyond the initial Errors capability.
 - [A foreign runtime behind the platform](foreign-runtime.md) — another framework keeps its own data layer; the
   platform reads only its surface and access, and delivers, fronts and authenticates it.
-- [Declare the surface, not the behavior](declare-the-surface-not-the-behavior.md) — pre-1.0 revision of the
-  entrypoint catalog: public procedures with a workload, files as values in table columns, an independent HTTP shape,
-  kicks with a data-layer claim, no generated endpoints, `c.form` and `then` deleted.

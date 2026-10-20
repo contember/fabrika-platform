@@ -864,7 +864,7 @@ export class ContractRuntime {
 	}
 
 	/**
-	 * A public procedure, in the order of the idea's public request: the in-flight share (503), then every bucket in the
+	 * A public procedure, in the order of ADR-0063's public request: the in-flight share (503), then every bucket in the
 	 * order of `bucketsOf` (429), each charged before the body is read and kept whatever follows; the bounded body and the
 	 * strict input (413, 400); the workload token, before a challenge spends its token (503); the challenge (403); then
 	 * the handler in one transaction, the output and the commit. The handler's time starts after the last body byte.

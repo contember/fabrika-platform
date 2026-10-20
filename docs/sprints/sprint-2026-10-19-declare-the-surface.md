@@ -1,10 +1,9 @@
 # Sprint — declare the surface, not the behavior (2026-10-19)
 
-**Goal.** Build the pre-1.0 revision of the contract kinds in
-[`ideas/declare-the-surface-not-the-behavior.md`](../ideas/declare-the-surface-not-the-behavior.md) as one breaking
+**Goal.** Build the pre-1.0 revision of the contract kinds, now recorded in [ADR-0012](../decisions/0012-fabrika-app-runtime.md) sections 9–16, [ADR-0060](../decisions/0060-a-handler-kicks-a-declared-job-after-its-commit.md), [ADR-0061](../decisions/0061-a-file-is-a-value-in-a-table-column.md) and [ADR-0063](../decisions/0063-a-public-procedure-runs-as-its-own-workload.md) as one breaking
 framework minor (0.6), with a platform that still deploys and runs applications on framework 0.5.
 
-**Theme.** The idea document is the spec. Its "Order of work" is the work-unit list below. The success condition is
+**Theme.** The idea document (graduated into those ADRs, in git history) was the spec. Its "Order of work" is the work-unit list below. The success condition is
 two deployments on the local stack against the platform at this branch's HEAD: `examples/crm` rewritten on the new API,
 and `examples/crm` at tag `v0.5.4` installed from npm, unchanged.
 
