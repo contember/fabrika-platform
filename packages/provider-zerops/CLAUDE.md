@@ -249,6 +249,11 @@ bun test
   parses deploys, so every 0.4/0.5/0.6 contract does. They are 0.4.8, 0.5.5 and 0.6.0; never add a parser of a minor newer
   than 0.6 while a pin's release is not recorded, so a form newer than 0.6 deploys only while the namespace's proxy
   source is current.
+- **The manifest carries the installation's client logo only for a proxy source that accepts it** (ADR-0065).
+  `republishProxy` writes `brand` when Control handed one AND the pinned descriptor's proxy build declares
+  `FABRIKA_PROXY_MANIFEST_BRAND` (`zeropsProxyAcceptsBrand`, `src/proxy-manifest-carrier.ts`). An older source's strict
+  parser refuses the key and would fail its build, so it keeps fabrika's mark until the namespace is re-pinned. The
+  logo is inside the manifest digest: a new logo is a new attempt. Never drop the marker from the generated proxy setup.
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).

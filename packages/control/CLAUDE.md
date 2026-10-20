@@ -404,6 +404,15 @@ other environment, before the provider prepares anything, and the write maps a r
   until claim release is decided — releasing them is a USER decision, not a fix: fabrika deletes no provider
   resource (ADR-0034), so a freed name makes an orphaned service adoptable by the next app, carrying its old
   secrets.
+- **Every namespace mutation hands the provider the installation's client logo** (ADR-0065,
+  `src/installation-brand.ts`). IAM keeps it; Control reads it with the provisioning key (`iamBrandSource`, wired by
+  `installationBrandDeps` when `FABRIKA_IAM_ISSUER` and `FABRIKA_IAM_PROVISIONING_KEY` are set) inside each provider
+  mutation and republish. The logo is presentation, so a read that fails publishes fabrika's mark and logs a warning:
+  an IAM that does not answer holds up no namespace and no deploy, and the next publish draws the logo again.
+  `namespaces.republishAll` (`namespace.manage`) is the one exception: it reads the logo once, refuses with a 502 when
+  IAM does not answer (the change it was asked to publish would reach no proxy), republishes every ready namespace at
+  once with it, queues a reconcile for one still `provisioning`, and audits each before it reports a failure; the
+  console calls it after a logo change. Control keeps no copy.
 - **`namespaces.update` runs in the request, not behind the queue** (backlog 79). The provider PLANS the
   merged target first (pure; an unknown field → 400; `PROVIDER_NAMESPACE_IMMUTABLE` → 409 naming a new
   namespace id, because removal keeps the provider project and recreating the id adopts it). Then, under the
