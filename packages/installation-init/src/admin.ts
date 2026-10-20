@@ -140,9 +140,9 @@ const failed = (what: string, cause: unknown): Error => {
  * One admin-RPC call, failing closed on everything that is not a result.
  *
  * The `undefined` guard is not defensive typing. The RPC client unwraps `{ result }`, throws on
- * `{ error }` — and returns `undefined` for a JSON body carrying NEITHER, which is exactly what a
- * misdirected host answers when its own 404 happens to be JSON. Measured: the flow then failed on a
- * property of `undefined` several calls later instead of on the wrong address.
+ * `{ error }` and on any answer that is not 2xx — and returns `undefined` for a 2xx JSON body carrying
+ * NEITHER, which a misdirected host can answer. The flow would then fail on a property of `undefined`
+ * several calls later instead of on the wrong address.
  */
 const step = async <T>(what: string, call: () => Promise<T>): Promise<T> => {
 	let result: T

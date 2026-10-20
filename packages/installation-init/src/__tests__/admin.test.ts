@@ -356,7 +356,7 @@ describe('the first administrator', () => {
 		const iam = fakeIam({ misdirected: 'json' })
 
 		await expect(ensureFirstAdministrator(iam.client, { email: 'operator@example.test' })).rejects.toThrow(
-			'principals.list answered no result — the address answered, but not as an IAM admin RPC surface',
+			"principals.list failed: HTTP 404 — is that IAM's public host?",
 		)
 	})
 

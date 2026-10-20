@@ -122,11 +122,11 @@ describe('an RPC mount client', () => {
 		expect(sent[0]?.credentials).toBe('omit')
 	})
 
-	test('an answer that is not 2xx is an RpcError, even a JSON one with no error field', async () => {
+	test('an answer that is not 2xx is an RpcError, and a JSON one with no error envelope is a transport failure', async () => {
 		const api = createClient(contract, 'api', { fetch: answering({ result: { id: 'u', label: 'x' } }, 502) })
-		expect(await failure(api.me())).toMatchObject({ type: 'error', message: 'HTTP 502', httpStatus: 502 })
+		expect(await failure(api.me())).toMatchObject({ type: 'transport', httpStatus: 502 })
 		const bare = createClient(contract, 'api', { fetch: answering({ received: true }, 400) })
-		expect(await failure(bare.me())).toMatchObject({ type: 'error', message: 'HTTP 400', httpStatus: 400 })
+		expect(await failure(bare.me())).toMatchObject({ type: 'transport', httpStatus: 400 })
 	})
 
 	test('an answer the output schema refuses is an RpcError, never a value', async () => {

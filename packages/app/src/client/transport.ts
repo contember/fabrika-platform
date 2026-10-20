@@ -114,8 +114,12 @@ async function envelope(response: Response): Promise<{ result?: unknown; error?:
 export async function exchange(doFetch: RpcFetch, url: string, init: () => RequestInit, bounce: BounceConfig | null): Promise<unknown> {
 	const response = await send(doFetch, url, init)
 	const data = await envelope(response)
-	if (!response.ok || data.error !== undefined) {
-		return await refused(data.error ?? `HTTP ${response.status}`, response, bounce)
+	if (data.error !== undefined) {
+		return await refused(data.error, response, bounce)
+	}
+	if (!response.ok) {
+		// A JSON answer that is not 2xx and carries no error envelope came from something other than an RPC surface.
+		throw new RpcError({ type: 'transport', message: `HTTP ${response.status}`, httpStatus: response.status })
 	}
 	clearBounce(bounce)
 	return data.result
