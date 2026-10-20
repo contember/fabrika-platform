@@ -6,13 +6,17 @@
 
 import { schemaFromContract as schemaFromContract04 } from '@fabrika/app-0.4/contract'
 import { schemaFromContract as schemaFromContract05 } from '@fabrika/app-0.5/contract'
+import { schemaFromContract as schemaFromContract06 } from '@fabrika/app-0.6/contract'
 import { CONTRACT_FORMAT } from '@fabrika/auth-core'
 import { contractDigest as contractDigest04 } from '@fabrika/auth-core-0.4'
 import { contractDigest as contractDigest05 } from '@fabrika/auth-core-0.5'
+import { contractDigest as contractDigest06 } from '@fabrika/auth-core-0.6'
 import { readContractSource as readContractSource04 } from '@fabrika/check-0.4/contract'
 import { readContractSource as readContractSource05 } from '@fabrika/check-0.5/contract'
+import { readContractSource as readContractSource06 } from '@fabrika/check-0.6/contract'
 import { contractProxyTable as contractProxyTable04 } from '@fabrika/proxy-core-0.4/manifest'
 import { contractProxyTable as contractProxyTable05 } from '@fabrika/proxy-core-0.5/manifest'
+import { contractProxyTable as contractProxyTable06 } from '@fabrika/proxy-core-0.6/manifest'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
@@ -49,6 +53,11 @@ const view04 = (files: ReadonlyMap<string, string>): ReleaseView => {
 const view05 = (files: ReadonlyMap<string, string>): ReleaseView => {
 	const artifact = readContractSource05(files)
 	return { artifact, contractDigest: contractDigest05(artifact), proxyTable: contractProxyTable05(artifact), schema: schemaFromContract05(artifact) }
+}
+
+const view06 = (files: ReadonlyMap<string, string>): ReleaseView => {
+	const artifact = readContractSource06(files)
+	return { artifact, contractDigest: contractDigest06(artifact), proxyTable: contractProxyTable06(artifact), schema: schemaFromContract06(artifact) }
 }
 
 interface Case {
@@ -100,6 +109,15 @@ const CASES: readonly Case[] = [
 		checker: '0.5.5',
 		startupDigest: 'sha256:e2afd0f3d3f482ad8100f5cc92b550085932349564d2319bcf55b8a3cdaef267',
 		view: view05,
+	},
+	{
+		name: 'the CRM at v0.6.0, read by the 0.6 reader although its framework sources are those of 0.5.5',
+		fixture: 'crm-0.6.0.json',
+		app: 'crm',
+		framework: '0.6.0',
+		checker: '0.6.0',
+		startupDigest: 'sha256:88312782b8fe094862492595b599ab4b8e24d439de0b31afe9d6c63d9e536fb2',
+		view: view06,
 	},
 ]
 

@@ -12,6 +12,7 @@ import {
 	type ContractArtifact as ContractArtifact05,
 	contractDigest as contractDigest05,
 } from '@fabrika/auth-core-0.5'
+import type { ContractArtifact as ContractArtifact06 } from '@fabrika/auth-core-0.6'
 
 /** An artifact of a format older than this release's, as its own release's reader produced it. */
 export type OlderArtifact = ContractArtifact05
@@ -40,6 +41,14 @@ export function fromOlder(older: OlderArtifact): SnapshotContract {
  * for an artifact without them. So it is kept, digested and upcast as the 0.5 format.
  */
 export function from04(artifact: ContractArtifact04): SnapshotContract {
+	return fromOlder(artifact)
+}
+
+/**
+ * A 0.6 artifact is a 0.5 one: 0.6.0 released the framework sources of 0.5.5 unchanged, so its artifact, canonical form
+ * and contract digest are 0.5's. It is kept, digested and upcast as the 0.5 format.
+ */
+export function from06(artifact: ContractArtifact06): SnapshotContract {
 	return fromOlder(artifact)
 }
 

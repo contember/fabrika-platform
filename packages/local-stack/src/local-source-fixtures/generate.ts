@@ -158,6 +158,7 @@ const FIXTURE_MESSAGES: Readonly<Record<LocalSourceFixtureKind, string>> = {
 	platform: 'Fabrika local platform source fixture v1',
 	application: 'Fabrika local application source fixture v1',
 	agentChange: 'Rename a note, and give notes a label table',
+	release060: `Notes as ${LOCAL_SOURCE_RELEASE_TAGS.release060} holds it`,
 	release055: `Notes as ${LOCAL_SOURCE_RELEASE_TAGS.release055} holds it`,
 	release048: `Notes as ${LOCAL_SOURCE_RELEASE_TAGS.release048} holds it`,
 }
@@ -189,6 +190,7 @@ export async function generateFixtures(staging: string): Promise<{
 		platform: await generate('platform'),
 		application: await generate('application'),
 		agentChange: await generate('agentChange'),
+		release060: await generate('release060'),
 		release055: await generate('release055'),
 		release048: await generate('release048'),
 	}

@@ -38,7 +38,7 @@ const WORKSPACE = 'compat'
 const LOCAL_DEV_ADMIN_EMAIL = 'admin@local.test'
 /** The framework's reserved sweep job, which the generated crontab runs for a contract with files. */
 const FILE_SWEEP_JOB = 'fabrika-file-sweep'
-/** The framework migration that copies the held files of a 0.5 file collection into `fabrika_files`. */
+/** The framework migration that copies the held files of a 0.5 or 0.6 file collection into `fabrika_files`. */
 const FRAMEWORK_FILES_MIGRATION = '0008_files.sql'
 /** The workspace example's migrations that adopt the `attachments` collection and release it. */
 const ADOPTION_MIGRATIONS = ['20261020120000_note_attachments.sql', '20261020120100_release_attachments.sql']
@@ -160,7 +160,7 @@ interface Person {
 
 /**
  * The local admin (`LOCAL_DEV_LOGIN`) signed in to Notes through the proxy-and-IAM handoff, granted the notes actions
- * application-wide: the file endpoints a 0.4 or 0.5 collection generates admit only people, and check the action on
+ * application-wide: the file endpoints a 0.4, 0.5 or 0.6 collection generates admit only people, and check the action on
  * the note or the file itself, which a workspace grant does not reach.
  */
 const signInPerson = async (): Promise<Person> => {

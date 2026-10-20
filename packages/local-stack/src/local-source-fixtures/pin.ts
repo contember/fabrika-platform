@@ -10,7 +10,7 @@ try {
 	const { manifest } = await generateFixtures(staging)
 	await Bun.write(join(fixtureInputs, 'manifest.json'), `${JSON.stringify(manifest, null, '\t')}\n`)
 	console.info(
-		`pinned application commit ${manifest.application.commitSha}, agent change ${manifest.agentChange.commitSha}, releases ${manifest.release055.commitSha} and ${manifest.release048.commitSha} (platform ${manifest.platform.commitSha})`,
+		`pinned application commit ${manifest.application.commitSha}, agent change ${manifest.agentChange.commitSha}, releases ${manifest.release060.commitSha}, ${manifest.release055.commitSha} and ${manifest.release048.commitSha} (platform ${manifest.platform.commitSha})`,
 	)
 } finally {
 	await rm(staging, { recursive: true, force: true })

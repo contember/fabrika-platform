@@ -1,5 +1,5 @@
 // ADR-0062: an application on an older framework release registers the manifest its own CLI wrote. The fixture is what
-// `fabrika app build --env=prod` of examples/crm wrote with the CLI from npm at 0.4.8; 0.5.5 writes the same bytes.
+// `fabrika app build --env=prod` of examples/crm wrote with the CLI from npm at 0.4.8; 0.5.5 and 0.6.0 write the same bytes.
 // This release must parse it and render its build with the checker release Control read the application with.
 
 import { describe, expect, test } from 'bun:test'
@@ -9,10 +9,10 @@ import { lockedExecutionOf, parseFabrikaManifest, zeropsArtifactCodec } from '..
 
 const RELEASED = JSON.parse(readFileSync(new URL('./fixtures/crm-manifest-0.4.8.json', import.meta.url), 'utf8'))
 
-/** What the CRM computes at startup on 0.4.8 and 0.5.5. */
+/** What the CRM computes at startup on 0.4.8, 0.5.5 and 0.6.0. */
 const STARTUP_DIGEST = 'sha256:88312782b8fe094862492595b599ab4b8e24d439de0b31afe9d6c63d9e536fb2'
 
-describe('the manifest a 0.4.8 or 0.5.5 CLI wrote', () => {
+describe('the manifest a 0.4.8, 0.5.5 or 0.6.0 CLI wrote', () => {
 	test('parses on this release and survives the artifact codec', () => {
 		const manifest = parseFabrikaManifest(RELEASED, { appId: 'crm', env: 'prod' })
 		expect(manifest.target.contract?.digest).toBe(STARTUP_DIGEST)

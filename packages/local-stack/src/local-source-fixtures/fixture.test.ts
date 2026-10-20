@@ -51,6 +51,7 @@ describe('local immutable source fixtures', () => {
 			LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE,
 			LOCAL_SOURCE_ARCHIVE_FILES.release048,
 			LOCAL_SOURCE_ARCHIVE_FILES.release055,
+			LOCAL_SOURCE_ARCHIVE_FILES.release060,
 		].sort())
 	})
 

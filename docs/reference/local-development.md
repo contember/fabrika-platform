@@ -213,7 +213,7 @@ the source fixture tests commit/digest/archive and lifecycle behavior.
 release, unchanged, and that the application's next deploy upgrades it on its own data
 ([ADR-0062](../decisions/0062-a-platform-release-serves-older-framework-releases.md)). It complements
 `framework-compat.test.ts` in `packages/control`, which compares the readers, digests, rows and schemas without running
-anything. For each recorded release (v0.5.5, then v0.4.8; `bun run compat v0.5.5` in `packages/local-stack` runs one),
+anything. For each recorded release (v0.6.0, v0.5.5, then v0.4.8; `bun run compat v0.6.0` in `packages/local-stack` runs one),
 it:
 
 1. drops the Notes schema and role family (`dropApplicationDatabase`), so the release's own framework migrates an

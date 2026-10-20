@@ -1,6 +1,6 @@
 // A Zerops namespace pinned to an older proxy source runs that release's strict manifest parser. A deploy is refused
 // only for a row no proxy of the window reads (`rowsNeedingCurrentProxy`), judged by those releases' own parsers: every
-// row form this release added is refused, and every row a 0.4 or 0.5 application compiles to deploys.
+// row form this release added is refused, and every row a 0.4, 0.5 or 0.6 application compiles to deploys.
 
 import { type BodyAdmission, type ContractArtifact, contractDigest, type EndpointRow } from '@fabrika/auth-core'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
@@ -157,6 +157,7 @@ describe.each([
 	['the CRM at v0.5.4', 'crm-0.5.4.json', 'crm'],
 	['an application with form files at v0.5.5', 'form-files-0.5.5.json', 'signup'],
 	['a GitHub webhook and a job at v0.5.5', 'webhooks-0.5.5.json', 'hooks'],
+	['the CRM at v0.6.0', 'crm-0.6.0.json', 'crm'],
 ])('%s, for a namespace proxy pinned to an older source', (_name, file, app) => {
 	test('deploys: a proxy of the window parses every row', async () => {
 		const fixture = fixtureSchema.parse(JSON.parse(readFileSync(new URL(`./fixtures/${file}`, import.meta.url), 'utf8')))

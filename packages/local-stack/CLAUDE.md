@@ -16,7 +16,7 @@ Run these from the repository ROOT, not from this package:
 bun run local:up      # generate credentials, build the console, start, migrate, wait for health
 bun run local:status  # docker compose ps
 bun run local:smoke   # intentionally disruptive end-to-end (kills control mid-deploy, etc.)
-bun run local:compat  # Notes at v0.5.5 and v0.4.8 from npm, deployed and upgraded (ADR-0062); empties the Notes database
+bun run local:compat  # Notes at v0.6.0, v0.5.5 and v0.4.8 from npm, deployed and upgraded (ADR-0062); empties the Notes database
 bun run local:reset   # down --volumes + wipe .state/ + fresh up
 bun run local:down
 bun run browser:up    # the separate browser-test stack; browser:reset, browser:down
