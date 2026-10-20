@@ -31,9 +31,27 @@ From the run log of `sprints/sprint-2026-10-19-declare-the-surface.md`:
 9. **Queues.** A row past `maxAttempts` has no staff path back into the queue; confirm the 30-day backoff cap.
 10. **The local compatibility suite** does not run the platform's build step over the old release's source.
 
+From upgrading an application from 0.5.5 to 0.6:
+
+11. **Rolling the platform back.** After a 0.6 deploy, a 0.5.5 Control refuses the stored snapshot:
+    `Unrecognized key(s) in object: 'framework'`. ADR-0062 covers an older application on a newer platform, not a
+    platform rolled back to an older release. Decide whether a rollback is supported. If it is, say how a stored
+    snapshot stays readable to the older Control (a reader that ignores unknown keys, or a snapshot written in the
+    older shape until the rollback window closes), and test it.
+12. **A link procedure cannot always lock its owner.** It holds one action. `ctx.db.target.getForUpdate()` needs the
+    owner's table to name that action, and a link procedure cannot declare a second capability. A link that only
+    inserts child rows (an upload) therefore cannot count them under the owner's lock (`maxPerOwner` of a 0.5 file
+    collection), unless the owner's table names the link's action for another reason. Decide whether a link procedure
+    may lock its target under any action the link grants.
+13. **A form on another origin has no transition path.** A 0.6 public procedure is served only under its mount's
+    prefix, so the old form path stops answering when the 0.6 release runs, and a page on another origin must change
+    in the same release.
+14. **The failed-challenge status changed.** 0.5.5 answered a failed or replayed challenge token with 400
+    `challenge_failed`; 0.6 answers 403. The migration guide records it. Decide whether the change stays.
+
 ## Approach / acceptance
 
-Each item is fixed with a test, or decided and recorded in its ADR. Items 1–3 change the approval diff: a 0.5 → 0.6
+Each item is fixed with a test, or decided and recorded in its ADR (item 11 in ADR-0062). Items 1–3 change the approval diff: a 0.5 → 0.6
 upgrade of the local suite's Notes shows an adoption line, no body-limit noise, and the body deadline.
 
 ## Touch points
