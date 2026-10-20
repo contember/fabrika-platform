@@ -35,7 +35,7 @@ export const contract = defineContract({
 		projects: {
 			create: c.mutation({ input: NewProject, output: ById, access: { action: 'projects.create', creates: 'project' } }),
 		},
-		me: c.query({ input: null, output: z.strictObject({ ok: z.boolean() }), access: { member: true }, crossOrigin: true }),
+		me: c.query({ input: null, output: z.strictObject({ ok: z.boolean() }), access: { member: true } }),
 	}),
 	shared: c.link('/share', {
 		spa: 'dist/share',

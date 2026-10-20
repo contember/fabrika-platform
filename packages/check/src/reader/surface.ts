@@ -581,7 +581,6 @@ class SurfaceReader {
 			input: input === undefined || input.kind === 'null' ? null : this.#schema(input, builder, 'input'),
 			output: this.#output(options.get('output'), builder),
 			access: access(options.get('access'), builder),
-			...crossOriginOption(options.get('crossOrigin')),
 			...plainOptions(options, ['actions', 'admission', 'limits']),
 			...this.#http(options.get('http'), builder),
 			...(kit === 'endpoints'
@@ -935,13 +934,6 @@ function directoryOf(value: LiteralValue, owner: Owner): 'labels' {
 		throw new Refused(value.at, `directory is '${directory}'`, "directory: 'labels'")
 	}
 	return directory
-}
-
-/** `crossOrigin` as written, `true` or a string; the build decides which a builder admits. Absent stays absent. */
-function crossOriginOption(value: LiteralValue | undefined): { readonly crossOrigin?: boolean | string } {
-	if (value === undefined) return {}
-	if (value.kind === 'boolean' || value.kind === 'string') return { crossOrigin: value.value }
-	throw new Refused(value.at, `crossOrigin is a ${describeKind(value)}`, 'crossOrigin: true')
 }
 
 function optionalText(value: LiteralValue | undefined, field: string): string | undefined {

@@ -15,7 +15,6 @@ import {
 	type ChallengeProvider,
 	CONTRACT_FORMAT,
 	type ContractArtifact,
-	type CrossOriginForm,
 	type CspExtensions,
 	type CspSource,
 	type DeclaredReach,
@@ -652,7 +651,6 @@ class ArtifactBuilder {
 			const id = `${name}.${path}`
 			const requirement = this.#linkRequirement(`procedure '${id}'`, procedure.access, mount)
 			this.#procedureSchemas(`procedure '${id}'`, procedure)
-			this.#noCrossOrigin(`procedure '${id}'`, procedure.crossOrigin, 'a link holder')
 			if (procedure.actions !== undefined) {
 				this.#problem(`procedure '${id}'`, 'declares actions, which only a public procedure holds; a link procedure holds its link grant')
 			}
@@ -714,13 +712,10 @@ class ArtifactBuilder {
 		}
 		const requirement = this.#requirement(where, procedure)
 		const rules = this.#rules(id, procedure, 'credentialed')
-		const crossOrigin = source.kind === 'mount'
-			? this.#credentialedOrigins(where, procedure.crossOrigin, rules?.origins ?? 'same-origin')
-			: this.#noCrossOrigin(
-				where,
-				procedure.crossOrigin ?? (rules?.origins === 'same-origin' ? undefined : rules?.origins),
-				'a consuming application, from its server',
-			)
+		if (source.kind === 'export' && rules !== null && rules.origins !== 'same-origin') {
+			this.#problem(where, "is called by a consuming application, from its server, never cross-origin (allowed: admission.origins: 'same-origin')")
+		}
+		const crossOrigin = source.kind === 'mount' && rules?.origins === 'listed' ? { crossOrigin: 'environment' as const } : {}
 		if (callers === null) {
 			this.#problem(
 				where,
@@ -754,9 +749,6 @@ class ArtifactBuilder {
 		const where = `procedure '${id}'`
 		if (!hasExactKeys(procedure.access, ['public'])) {
 			this.#problem(where, `access ${JSON.stringify(procedure.access)} is not the public form (allowed: { public: true }, with actions beside it)`)
-		}
-		if (procedure.crossOrigin !== undefined) {
-			this.#problem(where, "is public: its origins are admission.origins ('same-origin', 'listed' or 'any'), never crossOrigin")
 		}
 		const actions = this.#workloadActions(where, procedure.actions)
 		const rules = this.#rules(id, procedure, 'public')
@@ -797,17 +789,6 @@ class ArtifactBuilder {
 			this.#knownAction(where, action)
 		}
 		return actions
-	}
-
-	/** A credentialed procedure's origins: `crossOrigin: true` as before, or `admission.origins: 'listed'`; never both. */
-	#credentialedOrigins(where: string, crossOrigin: unknown, origins: AdmissionOrigins): { readonly crossOrigin?: CrossOriginForm } {
-		if (crossOrigin !== undefined && origins !== 'same-origin') {
-			this.#problem(where, "declares crossOrigin and admission.origins; declare admission.origins: 'listed' alone")
-		}
-		if (origins === 'listed') {
-			return { crossOrigin: 'environment' }
-		}
-		return this.#crossOrigin(where, crossOrigin, false)
 	}
 
 	/**
@@ -1171,33 +1152,6 @@ class ArtifactBuilder {
 	}
 
 	/**
-	 * A procedure's or a form's `crossOrigin` (ADR-0022 "Cross-origin endpoints"): `true` admits the origins the
-	 * environment lists, `'*'` (a form only, `any`) every origin. Absent stays absent, so the row keeps its digest.
-	 */
-	#crossOrigin(where: string, value: unknown, anyOrigin: boolean): { readonly crossOrigin?: CrossOriginForm } {
-		if (value === undefined) {
-			return {}
-		}
-		if (value === true) {
-			return { crossOrigin: 'environment' }
-		}
-		if (anyOrigin && value === '*') {
-			return { crossOrigin: 'any' }
-		}
-		const allowed = anyOrigin ? "crossOrigin: true for the environment's listed origins, or crossOrigin: '*' for any" : 'crossOrigin: true'
-		this.#problem(where, `crossOrigin ${JSON.stringify(value)} is not a cross-origin form (allowed: ${allowed})`)
-		return {}
-	}
-
-	/** A procedure no page on another origin may call: `caller` is who calls it instead. */
-	#noCrossOrigin(where: string, value: unknown, caller: string): { readonly crossOrigin?: CrossOriginForm } {
-		if (value !== undefined) {
-			this.#problem(where, `is called by ${caller}, never cross-origin (only an RPC procedure of c.rpc and a form take crossOrigin)`)
-		}
-		return {}
-	}
-
-	/**
 	 * A procedure's answer: its output schema, or for an `attachment()` the file it encodes from the rows. A column is a
 	 * scalar cell, the name is fixed and safe in a header, and each limit is within `ATTACHMENT_LIMITS`.
 	 */
@@ -1275,12 +1229,11 @@ class ArtifactBuilder {
 
 	#anonymous(
 		name: string,
-		kind: 'health' | 'webhook' | 'public-spa',
+		kind: 'health' | 'webhook',
 		method: 'GET' | 'POST',
 		path: string,
 		admission: BodyAdmission | null,
 		input: SchemaShape | null,
-		crossOrigin: { readonly crossOrigin?: CrossOriginForm } = {},
 	): void {
 		this.#row({
 			id: name,
@@ -1293,7 +1246,6 @@ class ArtifactBuilder {
 			admission,
 			input,
 			output: null,
-			...crossOrigin,
 		})
 	}
 

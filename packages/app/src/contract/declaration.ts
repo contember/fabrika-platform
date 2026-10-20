@@ -49,7 +49,7 @@ export interface BuilderFields {
 }
 
 export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
-	procedure: { options: ['input', 'output', 'access', 'crossOrigin', 'actions', 'admission', 'limits', 'http'], owned: ['~kind', 'type'] },
+	procedure: { options: ['input', 'output', 'access', 'actions', 'admission', 'limits', 'http'], owned: ['~kind', 'type'] },
 	rpc: { options: ['callers'], owned: ['kind', 'prefix', 'procedures'] },
 	link: { options: ['spa', 'dimension', 'grants', 'issuedBy', 'maxDays', 'procedures'], owned: ['kind', 'prefix'] },
 	spa: { options: ['dir', 'access', 'public'], owned: ['kind', 'prefix'] },
@@ -183,8 +183,6 @@ export interface ProcedureDeclaration<S, Access = AccessDeclaration> extends Opt
 	readonly input: S | null
 	readonly output: S
 	readonly access: Access
-	/** `true` opens the procedure to the environment's listed origins, as written; `buildArtifact` refuses anything else. */
-	readonly crossOrigin?: unknown
 	/** A public procedure's workload actions, as written: all its handler holds. Required there, refused elsewhere. */
 	readonly actions?: unknown
 	/** `{ origins?, rate?, challenge? }`, as written; `buildArtifact` merges it into the defaults. */

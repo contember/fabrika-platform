@@ -227,7 +227,7 @@ describe('buildArtifact refuses a declaration the site may not carry', () => {
 			},
 		}))
 		expect(refusals(() => compileContract(contract, tables))).toEqual([
-			"procedure 'api.deals.touch': 'then' is not an option of c.query and c.mutation (allowed: input, output, access, crossOrigin, actions, admission, limits, http)",
+			"procedure 'api.deals.touch': 'then' is not an option of c.query and c.mutation (allowed: input, output, access, actions, admission, limits, http)",
 			"mount 'github': 'then' is not an option of c.webhook (allowed: scheme, boundTo, actions, input, limits)",
 			"job 'hourly': 'then' is not an option of c.cron (allowed: actions, limits, retries)",
 		])

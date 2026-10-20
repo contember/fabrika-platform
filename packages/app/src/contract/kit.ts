@@ -375,7 +375,6 @@ interface EndpointOptions<Access> extends DeclaredDeclaration {
 	readonly input?: Schema | null
 	readonly output: Schema
 	readonly access: Access
-	readonly crossOrigin?: true
 	readonly actions?: readonly string[]
 	readonly admission?: object
 	readonly limits?: object
@@ -389,7 +388,6 @@ function endpoint<Access>(type: ProcedureType, def: EndpointOptions<Access>): Pe
 		input: def.input ?? null,
 		output: def.output,
 		access: def.access,
-		...(def.crossOrigin === undefined ? {} : { crossOrigin: def.crossOrigin }),
 		...(def.actions === undefined ? {} : { actions: def.actions }),
 		...(def.admission === undefined ? {} : { admission: def.admission }),
 		...(def.limits === undefined ? {} : { limits: def.limits }),

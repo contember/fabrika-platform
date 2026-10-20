@@ -3,7 +3,8 @@
 // `@fabrika/app/client`, as an application's own tests do.
 
 import { createClient, RpcError } from '@fabrika/app/client'
-import { defineContract } from '@fabrika/app/contract'
+import { defineApp, defineContract, defineVocabulary } from '@fabrika/app/contract'
+import { serve } from '@fabrika/app/implement'
 import { statusOf, type TestCaller, testKit } from '@fabrika/app/testing'
 import { MAX_ACCESS_TOKEN_BYTES } from '@fabrika/auth-core'
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -520,27 +521,28 @@ describe("the kit's own IAM: an invitation accepted, a member removed, each live
 
 describe('the kit opens a cross-origin endpoint to the origins it is given, as the proxy does', () => {
 	const PARTNER = 'https://partner.example'
-	const open = defineContract({
+	const kit = defineApp(defineVocabulary({
 		app: 'notes',
 		dimensions: {},
 		actions: { 'notes.read': 'Read' },
 		roles: { reader: { grants: ['notes.read'] } },
-	}, (c) => ({
-		api: c.rpc('/api', { callers: ['human', 'machine'] }, {
-			me: c.query({ output: z.strictObject({ ok: z.boolean() }), access: { member: true }, crossOrigin: true }),
-		}),
 	}))
-	const app = implement(open, { database: null, deps: () => null, handlers: () => ({ api: { me: () => ({ ok: true }) } }) })
+	const partner = kit.group({ callers: ['human', 'machine'] }, (r) => ({
+		me: r.query({ output: z.strictObject({ ok: z.boolean() }), access: { member: true }, admission: { origins: 'listed' } }).handle(() => ({
+			ok: true,
+		})),
+	}))
+	const app = serve(kit.contract((c) => ({ api: c.rpc('/api', { partner }) })), { database: null })
 	const preflight = { method: 'OPTIONS', headers: { Origin: PARTNER, 'Access-Control-Request-Method': 'POST' } }
 
 	test('a listed origin is answered the preflight and reads the answer to a key', async () => {
 		const kit = testKit(app, { crossOrigins: [PARTNER] })
-		const answered = await kit.fetch('/api/me', preflight)
+		const answered = await kit.fetch('/api/partner.me', preflight)
 		expect(answered.status).toBe(204)
 		expect(answered.headers.get('Access-Control-Allow-Origin')).toBe(PARTNER)
 		expect(answered.headers.get('X-Fabrika-Preflight')).toBeNull()
 		const machine = kit.testCaller([{ action: 'notes.read' }], { kind: 'machine' })
-		const response = await kit.fetch('/api/me', post({}, { Origin: PARTNER, Authorization: `Bearer ${machine.key}` }))
+		const response = await kit.fetch('/api/partner.me', post({}, { Origin: PARTNER, Authorization: `Bearer ${machine.key}` }))
 		expect(await response.json()).toEqual({ result: { ok: true } })
 		expect(response.headers.get('Access-Control-Allow-Origin')).toBe(PARTNER)
 		expect(response.headers.get('Vary')).toContain('Origin')
@@ -549,14 +551,14 @@ describe('the kit opens a cross-origin endpoint to the origins it is given, as t
 	test("a person's session from a listed origin is not read", async () => {
 		const kit = testKit(app, { crossOrigins: [PARTNER] })
 		const person = kit.testCaller([{ action: 'notes.read' }])
-		const response = await kit.browser(person)('/api/me', post({}, { Origin: PARTNER, 'Sec-Fetch-Site': 'cross-site' }))
+		const response = await kit.browser(person)('/api/partner.me', post({}, { Origin: PARTNER, 'Sec-Fetch-Site': 'cross-site' }))
 		expect(response.status).toBe(401)
 		expect(response.headers.get('Access-Control-Allow-Origin')).toBe(PARTNER)
 	})
 
 	test('without origins the endpoint answers no preflight', async () => {
 		const kit = testKit(app)
-		const answered = await kit.fetch('/api/me', preflight)
+		const answered = await kit.fetch('/api/partner.me', preflight)
 		expect(answered.status).toBe(403)
 		expect(answered.headers.get('Access-Control-Allow-Origin')).toBeNull()
 	})

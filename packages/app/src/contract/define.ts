@@ -243,8 +243,6 @@ export interface ProcedureDef<I, O, Acc> extends Owned<'~kind' | 'type'> {
 	readonly input?: I & NotLoose<I>
 	readonly output: O & NotLoose<O>
 	readonly access: Acc
-	/** A page on one of the environment's listed origins may call it, with a key (ADR-0022). An RPC procedure only. */
-	readonly crossOrigin?: true
 }
 
 /** `C` names the callers of its credentialed procedures; `readonly []` when every procedure is public. */
@@ -423,7 +421,6 @@ function procedure<T extends ProcedureType, I extends InputSchema | null, O exte
 		input: def.input ?? null,
 		output: def.output,
 		access: def.access,
-		...(def.crossOrigin === undefined ? {} : { crossOrigin: def.crossOrigin }),
 		unknownOptions: unknownOptions(def, 'procedure'),
 	}
 }

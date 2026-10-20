@@ -127,7 +127,7 @@ export interface TestKitOptions {
 	 */
 	readonly mail?: MemoryEmailSender | 'none'
 	/**
-	 * The origins the environment lists for the contract's `crossOrigin` endpoints, as an operator sets them in
+	 * The origins the environment lists for the contract's endpoints that admit `origins: 'listed'`, as an operator sets them in
 	 * Control; a page on one of them may call such an endpoint with a key. None when omitted.
 	 */
 	readonly crossOrigins?: readonly string[]

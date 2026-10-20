@@ -391,15 +391,14 @@ describe('approved access through the run lifecycle', () => {
 
 	test("a waiting approval that opens an endpoint to the environment's origins shows the list as it stands now, which no approval covers", async () => {
 		const w = world()
-		w.contract = edited(
-			"get: c.query({ input: z.strictObject({ id: z.uuid() }), output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } }),",
-			"get: c.query({ input: z.strictObject({ id: z.uuid() }), output: Note, access: { action: 'notes.read', on: 'note', from: 'id' }, crossOrigin: true }),",
-		)
+		const { 'fabrika.contract.ts': contract, ...files } = kitFiles({ summary: "admission: { origins: 'listed' }" })
+		w.files = files
+		w.contract = contract
 		await seed(w)
 		const parked = await deploy(w, 'prod')
 		const read = () => getApprovalUseCase(approvals(w, auth()), parked.runId)
 		expect((await read()).changes.filter((change) => change.environmentOrigins === true).map((change) => change.line)).toEqual([
-			'New endpoint `api.get` (POST /api/get) for human callers with `notes.read` (on `note`), callable from a page on an origin the environment lists',
+			'New endpoint `api.notes.summary` (POST /api/notes.summary) for human callers with `notes.read` (on `note`), callable from a page on an origin the environment lists',
 		])
 		expect((await read()).crossOrigins).toEqual([])
 

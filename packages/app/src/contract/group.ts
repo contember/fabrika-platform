@@ -190,8 +190,6 @@ export type EndpointDef<I, O, Acc, S, U, Cn, Is, Ix extends AnyDbIndex> =
 		readonly input?: I & NotLoose<I>
 		readonly output: O & NotLoose<O>
 		readonly access: Acc
-		/** A page on one of the environment's listed origins may call it, with a key (ADR-0022). An RPC endpoint only. */
-		readonly crossOrigin?: true
 		readonly admission?: AdmissionOption<Acc>
 		readonly limits?: LimitsOption
 	}

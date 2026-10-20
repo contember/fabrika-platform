@@ -1325,20 +1325,21 @@ the invocation's transaction. `'write'` (a mutation, a job, a webhook) also inse
 then names the chain columns itself. Use it for an operator's cross-scope view, never to dodge a capability the caller
 should hold. The generated tests skip the other-scope leak case for such an endpoint.
 
-## Another origin: `crossOrigin`
+## Another origin: `admission.origins`
 
 A page on another site (a partner's page, a separate marketing site, another application in the browser) calls an RPC
-endpoint only when the endpoint says `crossOrigin: true` beside its `access`, and an operator lists that page's origin
-for the environment in Control (`--cross-origin=https://partner.example` on `fabrika control apps environments put`). Both halves are
-needed: the contract says which endpoints, the environment says from where, so staging and production can list
-different pages. The approver sees the flag like any other access change.
+endpoint only when the endpoint says `admission: { origins: 'listed' }` beside its `access`, and an operator lists that
+page's origin for the environment in Control (`--cross-origin=https://partner.example` on
+`fabrika control apps environments put`). Both halves are needed: the contract says which endpoints, the environment
+says from where, so staging and production can list different pages. The approver sees the rule like any other access
+change.
 
 - **A key, never a session.** The page sends `Authorization: Bearer px_…` (a machine key, or a person's own key). A
   person's session is never read for a request from a listed origin: the answer is 401 without a login bounce.
 - **The proxy answers CORS, the handler never does.** The proxy answers the preflight and sets
   `Access-Control-Allow-Origin` on the answer; it deletes every `Access-Control-*` header a handler sets.
-- **Only RPC procedures.** A link procedure, an export, an SPA, a download and an upload refuse `crossOrigin`. A public
-  procedure declares `admission.origins` instead (`references/public-intake.md`).
+- **Only RPC procedures.** A link procedure and an export take only `'same-origin'`. A public procedure also takes
+  `'any'` (`references/public-intake.md`).
 - **Test it** with `testKit(app, { crossOrigins: ['https://partner.example'] })` and a request carrying that `Origin`.
 
 ## Members

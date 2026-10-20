@@ -210,40 +210,13 @@ describe('compileContract refuses what the types let through', () => {
 		])
 	})
 
-	test('a link procedure and an export procedure never open to another origin', () => {
-		const contract = defineContract(vocabulary, (c) => ({
-			api: c.rpc('/api', { callers: ['human', 'machine'] }, {
-				open: c.query({ output: Id, access: { member: true }, crossOrigin: true }),
-			}),
-			shared: c.link('/share', {
-				spa: 'dist/share',
-				dimension: 'task',
-				grants: ['tasks.read'],
-				issuedBy: 'tasks.write',
-				maxDays: 7,
-				procedures: (l) => ({ task: l.query({ output: Id, access: { action: 'tasks.read' }, crossOrigin: true }) }),
-			}),
-			exports: {
-				tasks: c.export({
-					version: 1,
-					consumers: ['billing'],
-					audience: 'any consumer user',
-					procedures: { get: c.query({ input: Id, output: Id, access: { action: 'tasks.read', over: 'workspace' }, crossOrigin: true }) },
-				}),
-			},
-		}))
+	test('crossOrigin is no option of a procedure: admission.origins opens one', () => {
+		const options = { output: Id, access: { member: true } } as const
+		Object.defineProperty(options, 'crossOrigin', { value: true, enumerable: true })
+		const contract = defineContract(vocabulary, (c) => ({ api: c.rpc('/api', { callers: ['human', 'machine'] }, { open: c.query(options) }) }))
 		expect(compileProblems(contract)).toEqual([
-			"procedure 'shared.task': is called by a link holder, never cross-origin (only an RPC procedure of c.rpc and a form take crossOrigin)",
-			"procedure 'tasks.v1.get': is called by a consuming application, from its server, never cross-origin (only an RPC procedure of c.rpc and a form take crossOrigin)",
+			"procedure 'api.open': 'crossOrigin' is not an option of c.query and c.mutation (allowed: input, output, access, actions, admission, limits, http)",
 		])
-		expect(
-			compileContract(
-				defineContract(vocabulary, (c) => ({
-					api: c.rpc('/api', { callers: ['human'] }, { open: c.query({ output: Id, access: { member: true }, crossOrigin: true }) }),
-				})),
-				{},
-			).endpoints.find((row) => row.id === 'api.open')?.crossOrigin,
-		).toBe('environment')
 	})
 
 	test('the compiled artifact is parsed before it is returned', () => {
@@ -369,21 +342,62 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		])
 	})
 
-	test('a cross-origin value a builder does not take', () => {
-		const problems = build(withMounts({
-			...base.mounts,
-			api: {
-				...api,
-				procedures: {
-					any: { '~kind': 'procedure', type: 'query', input: null, output, access: { member: true }, crossOrigin: '*' },
-					off: { '~kind': 'procedure', type: 'query', input: null, output, access: { member: true }, crossOrigin: false },
+	test("only an RPC procedure opens to the environment's listed origins", () => {
+		const products = base.exports['products']
+		if (products === undefined) {
+			throw new Error('the notes fixture changed')
+		}
+		const listed = { origins: 'listed' }
+		const problems = build({
+			...withMounts({
+				...base.mounts,
+				api: {
+					...api,
+					procedures: { open: { '~kind': 'procedure', type: 'query', input: null, output, access: { member: true }, admission: listed, declared: {} } },
+				},
+				shared: {
+					...shared,
+					procedures: {
+						note: { '~kind': 'procedure', type: 'query', input: null, output, access: { action: 'notes.read' }, admission: listed, declared: {} },
+					},
+				},
+			}),
+			exports: {
+				...base.exports,
+				products: {
+					...products,
+					procedures: {
+						list: {
+							'~kind': 'procedure',
+							type: 'query',
+							input: null,
+							output,
+							access: { action: 'notes.read', over: 'workspace' },
+							admission: listed,
+							declared: {},
+						},
+					},
 				},
 			},
-		}))
-		expect(problems.filter((problem) => problem.includes('crossOrigin'))).toEqual([
-			`procedure 'api.any': crossOrigin "*" is not a cross-origin form (allowed: crossOrigin: true)`,
-			"procedure 'api.off': crossOrigin false is not a cross-origin form (allowed: crossOrigin: true)",
+		})
+		expect(problems.filter((problem) => problem.includes('origin'))).toEqual([
+			`procedure 'shared.note': admission.origins "listed" is not an origin rule here (allowed: 'same-origin')`,
+			"procedure 'products.v1.list': is called by a consuming application, from its server, never cross-origin (allowed: admission.origins: 'same-origin')",
 		])
+		const opened = buildArtifact(
+			withMounts({
+				...base.mounts,
+				api: {
+					...api,
+					procedures: {
+						...api.procedures,
+						open: { '~kind': 'procedure', type: 'query', input: null, output, access: { member: true }, admission: listed, declared: {} },
+					},
+				},
+			}),
+			noteTables,
+		)
+		expect(opened.endpoints.find((row) => row.id === 'api.open')?.crossOrigin).toBe('environment')
 	})
 
 	test('an app form beside a dimension, on an RPC procedure and on an export procedure', () => {
