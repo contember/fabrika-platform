@@ -17,7 +17,7 @@
 import { HttpIamRpc } from '@fabrika/auth'
 import { readEnvironmentName } from '@fabrika/auth-core'
 import { FABRIKA_SERVICE_TABLE_DIGEST } from '@fabrika/auth-core'
-import { type EmailProviderRegistry, pickEmailEnvironment } from '@fabrika/email'
+import { type EmailProviderRegistry, emailSenderFromEnv, pickEmailEnvironment } from '@fabrika/email'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import {
 	type BackgroundTasks,
@@ -37,6 +37,7 @@ import { gitHubAppClientFactory } from '../github/connections/credentials'
 import { createSourceConnections, type SourceConnectionPort } from '../github/connections/port'
 import { githubWorkspaceSource, workspaceGitHubClientFactory } from '../github/workspace'
 import { controlPublicOrigin } from '../iam'
+import type { MailDispatchMessage } from '../mail-relay/queue'
 import { readInstallationMail } from '../mail-transport'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { vault } from '../services'
@@ -64,6 +65,8 @@ export interface Runtime {
 	config: ProcessConfig
 	/** The control queue (deploys + namespace jobs), as the concrete producer the consumer is built from. */
 	queue: PostgresJobQueue<ControlJobMessage>
+	/** The mail relay's dispatch queue, which its own consumer drains beside the control queue. */
+	mailQueue: PostgresJobQueue<MailDispatchMessage>
 	/** Close the connection pool. Callers stop the consumer and the server first. */
 	shutdown(): Promise<void>
 }
@@ -85,6 +88,10 @@ const DEPLOY_QUEUE_NAME = 'vozka-deploy'
  * `maxRetries: 3` (one delivery plus three retries) declared in `fabrika.config.ts`.
  */
 export const DEPLOY_MAX_ATTEMPTS = 4
+
+const MAIL_QUEUE_NAME = 'vozka-mail'
+/** Deliveries of one dispatch job that THREW; the dispatcher counts a message's send attempts on its row. */
+const MAIL_JOB_MAX_ATTEMPTS = 3
 
 /**
  * Read `process.env`, open the Postgres pool, mount the asset directory and the log bucket, and return
@@ -119,7 +126,9 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		assetsDir: source['FABRIKA_CONTROL_ASSETS_DIR'] ?? './public',
 	}
 
-	const mailTransport = readInstallationMail(pickEmailEnvironment(source), overrides.emailProviders ?? builtinEmailProviders)
+	const emailEnvironment = pickEmailEnvironment(source)
+	const emailProviders = overrides.emailProviders ?? builtinEmailProviders
+	const mailTransport = readInstallationMail(emailEnvironment, emailProviders)
 	if (mailTransport.kind === 'invalid') {
 		// One bad variable must not take the Delivery plane down; the deploys that need the transport are refused instead.
 		console.warn(`control: the installation's mail transport is invalid, and every deploy that needs it is refused: ${mailTransport.reason}`)
@@ -127,6 +136,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 
 	const db = PostgresDatabase.connect(databaseUrl)
 	const queue = new PostgresJobQueue<ControlJobMessage>(db, { queue: DEPLOY_QUEUE_NAME, maxAttempts: DEPLOY_MAX_ATTEMPTS })
+	const mailQueue = new PostgresJobQueue<MailDispatchMessage>(db, { queue: MAIL_QUEUE_NAME, maxAttempts: MAIL_JOB_MAX_ATTEMPTS })
 	const tasks = createBackgroundTasks({ label: 'control background task' })
 	const operations = operationsConfig(source)
 	const controlDomain = source['FABRIKA_CONTROL_DOMAIN']
@@ -135,6 +145,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	const iamProvisioningKey = source['FABRIKA_IAM_PROVISIONING_KEY']
 	const vaultKey = source['FABRIKA_CONTROL_VAULT_KEY']
 	const sourceSeams = overrides.sourceSeams ?? {}
+	const iamRpcConfig = readIamRpcProcessConfig(source)
 	const controlRepositories = createControlRepositories(db)
 
 	const baseEnv: Env = {
@@ -145,7 +156,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		RUN_LOGS: blobStore(source),
 		DEPLOY_QUEUE: queue,
 		WAIT_UNTIL: tasks.waitUntil,
-		IAM: iamRpc(source),
+		IAM: iamRpc(iamRpcConfig),
 		IAM_ADMIN: new HttpIamAdminGateway(required(source, 'FABRIKA_IAM_RPC_URL')),
 		ENVIRONMENT: environment,
 		...(operations === null
@@ -164,6 +175,11 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		...(iamProvisioningKey === undefined ? {} : { FABRIKA_IAM_PROVISIONING_KEY: iamProvisioningKey }),
 		...(vaultKey === undefined || vaultKey === '' ? {} : { FABRIKA_CONTROL_VAULT_KEY: vaultKey }),
 		MAIL_TRANSPORT: mailTransport,
+		MAIL_RELAY: {
+			queue: mailQueue,
+			installationSecret: iamRpcConfig.key,
+			sender: mailTransport.kind === 'transport' ? emailSenderFromEnv(emailEnvironment, emailProviders) : null,
+		},
 	}
 	const github = zeropsGitHubSources(baseEnv, sourceSeams)
 	const env: Env = { ...baseEnv, COMMITS: github.commits }
@@ -179,6 +195,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		mcp: mcp ? controlMcpRoute(env, githubWorkspaceSource(env, workspaceGitHubClientFactory(sourceSeams.githubAppFetch))) : null,
 		config,
 		queue,
+		mailQueue,
 		shutdown: () => shutdownProcess(tasks, db),
 	}
 }
@@ -243,9 +260,8 @@ function blobStore(source: Record<string, string | undefined>): S3BlobStore {
  * OBJECT, so a fresh client per request would re-fetch the JWKS on every request. A service binding
  * lives for the isolate's lifetime; this lives for the process's.
  */
-function iamRpc(source: Record<string, string | undefined>): HttpIamRpc {
-	const { origin, key } = readIamRpcProcessConfig(source)
-	return new HttpIamRpc({ origin, key })
+function iamRpc(config: IamRpcProcessConfig): HttpIamRpc {
+	return new HttpIamRpc({ origin: config.origin, key: config.key })
 }
 
 export interface IamRpcProcessConfig {

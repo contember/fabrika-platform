@@ -22,6 +22,7 @@ import type { IamRpc } from '@fabrika/auth'
 import type { AssetServer, BlobStore, HttpService, JobQueue, SqlDatabase, WaitUntil } from '@fabrika/platform'
 import type { ControlRepositories } from './db'
 import type { CommitSource } from './github/source/commit-files'
+import type { MailRelay } from './mail-relay/queue'
 import type { InstallationMail } from './mail-transport'
 import type { ControlJobMessage } from './run-lifecycle'
 
@@ -69,6 +70,11 @@ export interface Env {
 	 * Zerops root sets it: Cloudflare runs no jobs.
 	 */
 	MAIL_TRANSPORT?: InstallationMail
+	/**
+	 * The mail relay's queue, IAM's key secret and the installation's sender. Only the Zerops root sets it; without it the
+	 * relay's row answers 404 and maintenance re-enqueues nothing.
+	 */
+	MAIL_RELAY?: MailRelay
 
 	// ── Vars ──────────────────────────────────────────────────────────────────
 	ENVIRONMENT: string

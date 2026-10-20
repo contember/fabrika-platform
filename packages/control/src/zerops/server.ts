@@ -8,6 +8,7 @@
 //                                     On Workers the platform calls `queue()` with a batch; here
 //                                     `PostgresJobConsumer` polls a table and calls the same function.
 //                                     See below for the ack/retry mapping.
+//   dispatchMail (src/mail-relay/)  — one relayed message from the `vozka-mail` queue; only this process has one.
 //   runMaintenance(src/cron.ts)     — the `scheduled` handler's work. NOT scheduled from in here: the
 //                                     platform cron drives it (`run.crontab` → `zerops/cron.ts`), which
 //                                     is the same shape as `triggers.crons` driving `scheduled`.
@@ -18,11 +19,13 @@
 // Run it: `bun src/zerops/server.ts` (see `zerops.yaml` → `run.start`).
 
 import { type BunHandler, createBunHandler } from '@fabrika/app/bun'
-import { PostgresJobConsumer } from '@fabrika/platform-node'
+import { PostgresJobConsumer, type PostgresJobQueue } from '@fabrika/platform-node'
 import { createControlApp, type McpRoute } from '../app'
 import { controlJobLogLine, decodeControlJobMessage, runControlJob } from '../consumer'
 import type { Env } from '../env'
 import type { SourceConnectionPort } from '../github/connections/port'
+import { dispatchMail } from '../mail-relay/dispatch'
+import { decodeMailDispatchMessage, type MailDispatchMessage } from '../mail-relay/queue'
 import { closeCatalogProjection, releaseHeldCatalogLeases } from '../operations-catalog'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import type { ControlJobMessage } from '../run-lifecycle'
@@ -97,9 +100,44 @@ export function createConsumer(runtime: Runtime): PostgresJobConsumer<ControlJob
 	})
 }
 
+// Outlasts the dispatcher's 30 s send deadline and its row writes.
+const MAIL_JOB_VISIBILITY_TIMEOUT_MS = 2 * 60 * 1000
+
+/**
+ * The mail relay's dispatcher: one job per queued message, on its own loop so a long deploy never delays a sign-in
+ * link. Every send failure settles or requeues the row and returns; only an unexpected throw is retried here.
+ */
+export function createMailConsumer(env: Env, queue: PostgresJobQueue<MailDispatchMessage>): PostgresJobConsumer<MailDispatchMessage> {
+	return new PostgresJobConsumer(queue, {
+		decode: decodeMailDispatchMessage,
+		handler: async (job) => {
+			await dispatchMail({
+				messages: repositories(env).mailMessages,
+				queue,
+				sender: env.MAIL_RELAY?.sender ?? null,
+				now: () => Math.floor(Date.now() / 1000),
+			}, job.payload)
+		},
+		visibilityTimeoutMs: MAIL_JOB_VISIBILITY_TIMEOUT_MS,
+		onError: (error, job) => {
+			console.error(`mail job ${job.id} failed (attempt ${job.attempts}/${job.maxAttempts}):`, error instanceof Error ? error.message : 'unknown error')
+		},
+		onAbandoned: (job) => {
+			console.warn(`mail job ${job.id} abandoned after ${job.attempts} attempt(s); maintenance re-enqueues its message`)
+		},
+	})
+}
+
 /** Serve an assembled runtime until SIGTERM/SIGINT. The local stack calls this with its fixture source transports. */
 export async function startControlServer(runtime: Runtime): Promise<void> {
-	const consumer = createConsumer(runtime)
+	const deployConsumer = createConsumer(runtime)
+	const mailConsumer = createMailConsumer(runtime.env, runtime.mailQueue)
+	// One stop for both loops: each waits for the pass it has in flight.
+	const consumer = {
+		stop: async (): Promise<void> => {
+			await Promise.all([deployConsumer.stop(), mailConsumer.stop()])
+		},
+	}
 	const reconciliation = await reconcileProviderRuns({
 		repositories: repositories(runtime.env),
 		provider: runtime.provider,
@@ -111,7 +149,8 @@ export async function startControlServer(runtime: Runtime): Promise<void> {
 		`Provider startup reconcile: checked=${reconciliation.checked} succeeded=${reconciliation.succeeded} `
 			+ `failed=${reconciliation.failed} in-progress=${reconciliation.inProgress} waiting=${reconciliation.waiting}`,
 	)
-	consumer.start()
+	deployConsumer.start()
+	mailConsumer.start()
 	const appHandler = createControlBunHandler(runtime.env, runtime.provider, runtime.sourceConnection, runtime.mcp)
 
 	const server = Bun.serve({

@@ -11,6 +11,7 @@ import { enqueueUnsettledNamespaces } from './api/namespaces'
 import type { ControlRegistryRepository } from './db'
 import type { Env } from './env'
 import { type FetchFn, pollPublicRepos, type PollSummary } from './github/triggers/poll'
+import { type MailMaintenanceSummary, runMailMaintenance } from './mail-relay/maintenance'
 import type { OperationsCatalogSyncSummary } from './operations-catalog'
 import type { OperationsReleaseProjectionSummary } from './operations-releases'
 import { replayOperationsReleases } from './operations-releases'
@@ -28,6 +29,8 @@ export interface MaintenanceSummary {
 	operations: OperationsCatalogSyncSummary
 	/** Pending deploy-release projections repaired independently from catalog sync. */
 	releases: OperationsReleaseProjectionSummary
+	/** Relayed mail: queued messages re-enqueued, final messages whose content was forgotten. */
+	mail: MailMaintenanceSummary
 }
 
 /** Seams a test drives. Production passes neither and gets the real clock + the global `fetch`. */
@@ -56,13 +59,14 @@ export interface MaintenanceOptions {
  */
 export async function runMaintenance(env: Env, options: MaintenanceOptions = {}): Promise<MaintenanceSummary> {
 	const persistence = repositories(env)
+	const now = options.now ?? (() => Math.floor(Date.now() / 1000))
 	await enqueueUnsettledNamespaces(persistence.registry, env.DEPLOY_QUEUE)
 	await warnBareTriggerRefs(persistence.registry)
 	const poll = await pollPublicRepos({
 		repositories: persistence,
 		fetch: options.fetch ?? fetch,
 		queue: env.DEPLOY_QUEUE,
-		now: options.now ?? (() => Math.floor(Date.now() / 1000)),
+		now,
 	})
 	console.info(
 		`repo poll: polled=${poll.polled} triggered=${poll.triggered} unchanged=${poll.unchanged} errored=${poll.errored} skipped=${poll.skipped}`,
@@ -84,7 +88,13 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	const operations = await (options.operations ?? (() => replayOperationsCatalogProjection(env)))()
 	const releases = await (options.releases ?? (() => replayOperationsReleases(operationsReleaseDeps(env))))()
 	if (releases.failed > 0) console.warn(`operations release maintenance replay failed for ${releases.failed} run(s)`)
-	return { poll, reconcile, swept, operations, releases }
+	const mail = await runMailMaintenance({
+		messages: persistence.mailMessages,
+		...(env.MAIL_RELAY === undefined ? {} : { queue: env.MAIL_RELAY.queue }),
+		now: now(),
+	})
+	if (mail.requeued > 0 || mail.purged > 0) console.info(`mail maintenance: requeued=${mail.requeued} purged=${mail.purged}`)
+	return { poll, reconcile, swept, operations, releases, mail }
 }
 
 /**
