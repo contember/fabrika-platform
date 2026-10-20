@@ -601,10 +601,10 @@ The default is `'unchecked'`.
   proxy Worker is redeployed by the platform's own release.
 - A Slack form whose fields repeat a name is refused, as a procedure's form is; a Twilio callback with repeated
   parameters is too.
-- An application on framework 0.4 or 0.5 keeps its forms, inbox tables, `then`, file collections, generated file and
-  webhook endpoints and job options: Control reads it with its own release's reader, and the platform keeps serving
-  them inside the window ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)). An author moves to
-  this form when raising the pin ([`framework-migrations.md`](../reference/framework-migrations.md)).
+- An application on framework 0.4, 0.5 or 0.6 keeps its forms, inbox tables, `then`, file collections, generated file
+  and webhook endpoints and job options: Control reads it with its own release's reader, and the platform keeps
+  serving them inside the window ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)). An author
+  moves to this form when raising the pin ([`framework-migrations.md`](../reference/framework-migrations.md)).
 
 ## Alternatives considered
 

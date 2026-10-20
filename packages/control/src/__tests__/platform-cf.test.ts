@@ -47,7 +47,7 @@ const deployInput = (): ProviderDeployInput => ({
 		publicOrigin: 'https://public.example.com',
 		target: envelope(cloudflareStoredTargetCodec, { stateNamespace: 'api-state' }),
 		artifact: envelope(cloudflareArtifactCodec, cloudflareArtifact('deploy.config.ts')),
-		access: { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact), checker: '0.6.0' },
+		access: { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact), checker: '0.7.0' },
 	},
 	secrets: {},
 	vars: {},

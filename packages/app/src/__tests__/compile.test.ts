@@ -13,7 +13,7 @@ import { tables as kitTables } from './kit-fixture/src/db/tables'
 import { ById } from './kit-fixture/src/schemas'
 import { vocabulary as kitVocabulary } from './kit-fixture/src/vocabulary'
 
-/** `notesArtifact` without the auth-core fixture's 0.5 contact form and inbox table, which no 0.6 contract declares. */
+/** `notesArtifact` without the auth-core fixture's 0.5 contact form and inbox table, which no 0.7 contract declares. */
 const { contact_messages: _inbox, ...noteTables } = notesArtifact.tables
 
 /**

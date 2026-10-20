@@ -1,7 +1,7 @@
 # Sprint — declare the surface, not the behavior (2026-10-19)
 
 **Goal.** Build the pre-1.0 revision of the contract kinds, now recorded in [ADR-0012](../decisions/0012-fabrika-app-runtime.md) sections 9–16, [ADR-0060](../decisions/0060-a-handler-kicks-a-declared-job-after-its-commit.md), [ADR-0061](../decisions/0061-a-file-is-a-value-in-a-table-column.md) and [ADR-0063](../decisions/0063-a-public-procedure-runs-as-its-own-workload.md) as one breaking
-framework minor (0.6), with a platform that still deploys and runs applications on framework 0.5.
+framework minor (0.7), with a platform that still deploys and runs applications on framework 0.4, 0.5 and 0.6.
 
 **Theme.** The idea document (graduated into those ADRs, in git history) was the spec. Its "Order of work" is the work-unit list below. The success condition is
 two deployments on the local stack against the platform at this branch's HEAD: `examples/crm` rewritten on the new API,
@@ -19,10 +19,10 @@ and `examples/crm` at tag `v0.5.4` installed from npm, unchanged.
   build step): additive only. Everything a 0.5.4 application produces must still be read, approved, compiled, served
   and deployed. A row mode, header, claim or artifact field that 0.5.4 uses stays served. When in doubt whether
   something is protocol, treat it as protocol.
-- **The window for the first release under ADR-0062 is 0.4, 0.5 and 0.6.** Every minor of the last six months that
-  has a published `@fabrika/check` is in it; `@fabrika/check` was first published at 0.4.0. The intake application pins
-  0.4, so a narrower window would force its upgrade. Control reads a 0.4 or 0.5 application with the newest patch of
-  that minor (0.4.8, 0.5.5), bundled as an exact npm alias, and upcasts its artifact.
+- **The window for the first release under ADR-0062 is 0.4, 0.5, 0.6 and 0.7.** Every minor of the last six months
+  that has a published `@fabrika/check` is in it; `@fabrika/check` was first published at 0.4.0. The intake application
+  pins 0.4, so a narrower window would force its upgrade. Control reads a 0.4, 0.5 or 0.6 application with the newest
+  patch of that minor (0.4.8, 0.5.5, 0.6.0), bundled as an exact npm alias, and upcasts its artifact.
 - **PR #11 (form files) is released in 0.5.5.** Its artifact fields, its row-mode extensions and its framework
   migrations (`0005_form_files.sql`, `0006_form_bytes.sql`) are protocol now: the platform keeps serving them inside
   the window, and the framework drains them forward into `fabrika_files` (the idea's "PR #11" section, "if it lands
@@ -151,3 +151,7 @@ back and runs `bun run check:ci` on the integration branch.
   forwards a value carrying `px_`. `setSecret` for provider-issued secrets; Slack and Twilio presets (Slack's
   `url_verification` is answered after the signature verifies); webhook bodies up to 48 MiB. Open: Twilio behind a
   hostname other than `FABRIKA_APP_ORIGIN` fails verification.
+- **The revision ships as 0.7.** `v0.6.0` was released from `main` without the revision: its framework sources are
+  those of 0.5.5. Earlier run-log entries call the revision "0.6"; read them as 0.7. WU-12 moves the source to 0.7.0,
+  bundles the 0.6.0 reader (read as the 0.5 format, with a v0.6.0 CRM fixture and Notes at v0.6.0 in `local:compat`),
+  and renames "0.6" to "0.7" wherever it meant the revision. The window is 0.4, 0.5, 0.6 and 0.7.

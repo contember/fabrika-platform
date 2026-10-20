@@ -131,20 +131,21 @@ rows and the re-pin: `fabrika control namespaces update --namespace=<id> --proxy
 - an endpoint of several capabilities (the requirement kind `capabilities`).
 
 A later row form is covered without a change here. A row one of those parsers reads deploys as before: every row of a
-0.4 or 0.5 application, and every row of a newer one that uses none of these forms. A GET mutation is such a row: an
-older proxy parses it and applies the same rules to it.
+0.4, 0.5 or 0.6 application, and every row of a newer one that uses none of these forms. A GET mutation is such a row:
+an older proxy parses it and applies the same rules to it.
 
 One case still needs the operator, because Control does not record the release a pin was built from. A pin older than
 0.5.3 refuses a cross-origin endpoint (`admission.origins: 'listed'` or `'any'`, the row's `crossOrigin`) and an
 environment that lists an origin (the entry's `crossOrigins`), which the 0.5.5 parser reads. Re-pin such a namespace
 before an application declares one or its environment lists an origin.
 
-A form of a 0.5 application that takes files ([ADR-0061](../decisions/0061-a-file-is-a-value-in-a-table-column.md))
-fails open on an old pin instead: its row only admits `multipart/form-data`, which an older proxy parses, and that
-proxy forwards such a form's request from any origin, because the refusal of an origin the row does not admit is newer
-than the pin (the form's challenge still stops a foreign page, whose widget cannot verify for the application's host).
-Control does not detect this. Before such an application deploys into an upgraded namespace, re-pin the namespace the
-same way. A public procedure with a file field is covered by the refusal above.
+A form of a 0.5 or 0.6 application that takes files
+([ADR-0061](../decisions/0061-a-file-is-a-value-in-a-table-column.md)) fails open on an old pin instead: its row only
+admits `multipart/form-data`, which an older proxy parses, and that proxy forwards such a form's request from any
+origin, because the refusal of an origin the row does not admit is newer than the pin (the form's challenge still stops
+a foreign page, whose widget cannot verify for the application's host). Control does not detect this. Before such an
+application deploys into an upgraded namespace, re-pin the namespace the same way. A public procedure with a file field
+is covered by the refusal above.
 
 Deployment then adds control-owned managed environment values independently of
 the namespace and provider artifact. Providers reject an app-authored

@@ -12,7 +12,7 @@ this page.
 ## Raising the pin
 
 1. Upgrade the installation first. Control refuses an application whose framework release is newer than the platform.
-2. Set every `@fabrika/*` dependency of the application to one exact release, for example `"@fabrika/app": "0.6.0"`.
+2. Set every `@fabrika/*` dependency of the application to one exact release, for example `"@fabrika/app": "0.7.0"`.
    Never a range: a range mixes releases of the co-versioned set
    ([`release-process.md`](release-process.md#the-framework-window)).
 3. Run `bun install` and commit `bun.lock`. Control reads the release from the `@fabrika/app` entry of the `bun.lock`
@@ -22,13 +22,13 @@ this page.
    tests, then `fabrika-check` and the application's tests. The skill in `node_modules/@fabrika/app/skill/` describes
    the new release.
 
-## 0.5 → 0.6
+## 0.6 → 0.7
 
-0.6 removes every contract form that performed an application operation instead of declaring a surface: forms, inbox
+0.7 removes every contract form that performed an application operation instead of declaring a surface: forms, inbox
 tables, `then`, file collections and their generated endpoints, and the generated webhook binding endpoints. Each is
 now a procedure with a handler, or a table with a policy ([ADR-0012](../decisions/0012-fabrika-app-runtime.md)).
 
-| 0.5                                                       | 0.6                                                                  |
+| 0.6                                                       | 0.7                                                                  |
 | --------------------------------------------------------- | -------------------------------------------------------------------- |
 | `c.form(path, { appendTo, … })`                           | a public procedure in an RPC mount                                   |
 | `scope: { inbox: '<form>', read }`                        | an application table, `scope: { app: '<why>' }`                      |
@@ -45,9 +45,9 @@ now a procedure with a handler, or a table with a policy ([ADR-0012](../decision
 | an outbox drained with `sql: 'write'` and `skip locked`   | optional: a `queue` table and `claim`                                |
 
 `attachment()`, `c.spa(…, { access: { public: true } })`, `c.health`, `app.link`, `app.export`, `connect`, `issues`,
-`mailer`, `sql` and `unscoped` keep their 0.5 form.
+`mailer`, `sql` and `unscoped` keep their 0.6 form.
 
-### Before the first deploy on 0.6
+### Before the first deploy on 0.7
 
 - **IAM and Control must know public procedures.** A public procedure runs as a workload of its own kind, which IAM
   signs and Control keys ([ADR-0063](../decisions/0063-a-public-procedure-runs-as-its-own-workload.md)). The platform
@@ -65,7 +65,7 @@ A form appended its input to an inbox and answered a constant, with no handler. 
 procedure that anyone may call. Its handler runs as the procedure's own workload and holds only the `actions` it
 declares ([ADR-0063](../decisions/0063-a-public-procedure-runs-as-its-own-workload.md)).
 
-0.5:
+0.6:
 
 ```ts
 register: c.form('/register', {
@@ -80,7 +80,7 @@ register: c.form('/register', {
 }),
 ```
 
-0.6:
+0.7:
 
 ```ts
 import { honeypot } from '@fabrika/app'
@@ -93,7 +93,7 @@ const Register = z.strictObject({
 	challengeToken: z.string().max(4096),
 	photo: z.optional(file('photos')),
 })
-// The answer 0.5 gave: the envelope is `{ result: { received: true } }`, as before.
+// The answer 0.6 gave: the envelope is `{ result: { received: true } }`, as before.
 const Received = z.strictObject({ received: z.literal(true) })
 
 export const visitors = app.group({}, (r) => ({
@@ -166,7 +166,7 @@ Steps:
    field. The challenge token stays the input field `challengeToken`. The widget's `action` is now the endpoint id
    with `_` for `.` (`api_visitors_register`), not the form's name; the provider admits at most 32 characters. A
    failed or replayed token stays a 400 `challenge_failed`, as the form answered.
-   - **The answer.** The answer is the RPC envelope of the output. A 0.5 form answered `{ result: { received: true } }`;
+   - **The answer.** The answer is the RPC envelope of the output. A 0.6 form answered `{ result: { received: true } }`;
      the example keeps it with `output: z.strictObject({ received: z.literal(true) })`. Keep the answer that your
      clients read. An output of `{}` answers `{ result: {} }`, and a client that reads `received` breaks.
 7. Optional: record the visitor's evidence. This is not an upgrade step. `ctx.client.ip` and `ctx.client.userAgent` are
@@ -210,13 +210,13 @@ Such a page also needs `admission.origins` (`'listed'` or `'any'`, see "Cross-or
 
 ### Inbox tables become application tables
 
-0.5:
+0.6:
 
 ```ts
 registrations: { scope: { inbox: 'register', read: 'candidates.process' } },
 ```
 
-0.6:
+0.7:
 
 ```ts
 registrations: {
@@ -235,7 +235,7 @@ registrations: {
 },
 ```
 
-One migration turns the inbox into an application table and keeps its rows. Start from what the inbox has. A 0.5
+One migration turns the inbox into an application table and keeps its rows. Start from what the inbox has. A 0.6
 inbox needed no key, so it may have no `id`, no `attempts` and no `last_failure`. Add each column that is missing:
 
 ```sql
@@ -252,28 +252,28 @@ CREATE INDEX registrations_photo ON registrations (photo);
 ```
 
 - An inbox that already has an `id` column without a key takes only `ADD PRIMARY KEY (id)`. Its rows must have
-  distinct, non-null ids; a 0.5 inbox filled `id` from a `DEFAULT gen_random_uuid()`.
-- Keep `DEFAULT gen_random_uuid()` on `id`, and a default on every other new `NOT NULL` column. The 0.5 instance
-  still runs during the rollout and inserts only its input's columns; without a default its insert fails. The 0.6
+  distinct, non-null ids; a 0.6 inbox filled `id` from a `DEFAULT gen_random_uuid()`.
+- Keep `DEFAULT gen_random_uuid()` on `id`, and a default on every other new `NOT NULL` column. The 0.6 instance
+  still runs during the rollout and inserts only its input's columns; without a default its insert fails. The 0.7
   handler sends its own id, so the default serves only the old instance.
 - The handler writes the table under the procedure's action. A job reads it under the `read` action, from
   `ctx.db.app('<action>')`, not through `sql` or `unscoped`.
 - `version` is needed by a queue and by a file column. `queue` is optional (see "Outbox drains on `claim`").
 - A form's held file keeps its id: the framework's `0008_files.sql` migration moves every held file into
   `fabrika_files` as a quarantined file of the kind named like its collection, so the inbox's file column can take the
-  foreign key. Name the file kind as the collection was named. A file the 0.5 sweep already deleted (a held file
+  foreign key. Name the file kind as the collection was named. A file the 0.6 sweep already deleted (a held file
   lived seven days) is no longer there, and the foreign key refuses its row: set that column to `NULL` first, for
   example for every row older than seven days.
 
 ### `then` becomes `kicks`
 
-0.5:
+0.6:
 
 ```ts
 create: r.mutation({ input, output, access, then: 'mailing' }).handle(…)
 ```
 
-0.6:
+0.7:
 
 ```ts
 create: r.mutation({ input, output, access, kicks: ['mailing'] })
@@ -295,7 +295,7 @@ create: r.mutation({ input, output, access, kicks: ['mailing'] })
 A collection owned its files and generated their endpoints. A file is now a value in a table column, and the table's
 policy is its authority ([ADR-0061](../decisions/0061-a-file-is-a-value-in-a-table-column.md)).
 
-0.5:
+0.6:
 
 ```ts
 files: {
@@ -311,7 +311,7 @@ files: {
 },
 ```
 
-0.6:
+0.7:
 
 ```ts
 // fabrika.contract.ts
@@ -433,7 +433,7 @@ Steps:
    }))
    ```
 
-   | 0.5                                           | 0.6                                                                                      |
+   | 0.6                                           | 0.7                                                                                      |
    | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
    | `POST /api/files.<c>.upload/:owner`, `?name=` | a mutation with a `file('<kind>')` input field; the body is multipart                    |
    | `GET /api/files.<c>/:fileId`                  | a query with `output: file('<kind>')`, served at `GET`                                   |
@@ -483,7 +483,7 @@ Steps:
 
 ### `ctx.files` in handlers and jobs
 
-| 0.5 (`ctx.files('<collection>')`) | 0.6                                                                                  |
+| 0.6 (`ctx.files('<collection>')`) | 0.7                                                                                  |
 | --------------------------------- | ------------------------------------------------------------------------------------ |
 | `list(owner, …)`                  | a list of the table that holds the column, under the owner's capability              |
 | `open(owner, id, { maxBytes })`   | `ctx.files.open(row.file, { maxBytes? })` with a reference read from a file column   |
@@ -524,14 +524,14 @@ webhook's `maxBytes` becomes `limits: { maxBytes, timeoutMs }`: 1 MiB and 10 s b
 ### Jobs
 
 ```ts
-// 0.5
+// 0.6
 export const purge = app.cron('0 3 * * *', {
 	actions: ['notes.write'],
 	scope: 'app',
 	timeout: '5m',
 })
 
-// 0.6
+// 0.7
 export const purge = app.cron('0 3 * * *', {
 	actions: ['notes.write'],
 	limits: { timeoutMs: 300000 },
@@ -544,10 +544,10 @@ export const purge = app.cron('0 3 * * *', {
 ### Cross-origin procedures
 
 ```ts
-// 0.5
+// 0.6
 lookup: r.query({ input, output, access, crossOrigin: true })
 
-// 0.6
+// 0.7
 lookup: r.query({ input, output, access, admission: { origins: 'listed' } })
 ```
 
@@ -557,14 +557,14 @@ lookup: r.query({ input, output, access, admission: { origins: 'listed' } })
 ### The browser config of an SPA
 
 ```ts
-// 0.5
+// 0.6
 site: c.spa('/', {
 	dir: 'dist/site',
 	access: { public: true },
 	public: ['SIGNUP_URL'],
 })
 
-// 0.6
+// 0.7
 site: c.spa('/', {
 	dir: 'dist/site',
 	access: { public: true },
@@ -607,10 +607,10 @@ for (const message of await ctx.db.app('mail.send').outbox.claim({ limit: 50 }))
 
 ### The rollout window
 
-A deploy migrates the schema before the 0.6 instance starts, and the 0.5 instance serves until the 0.6 instance is
-ready. For that time the 0.5 instance runs against the migrated schema:
+A deploy migrates the schema before the 0.7 instance starts, and the 0.6 instance serves until the 0.7 instance is
+ready. For that time the 0.6 instance runs against the migrated schema:
 
-- **A form with a file fails.** The 0.5 form holds its file in `fabrika_files_<collection>` and writes the id into the
+- **A form with a file fails.** The 0.6 form holds its file in `fabrika_files_<collection>` and writes the id into the
   inbox's file column. The new foreign key to `fabrika_files (id)` refuses that row, so the form answers 500.
 - **A file removal fails** once `fabrika_files_release('<collection>')` has dropped the collection's table.
 - **An insert without a default fails.** Keep a default on every new `NOT NULL` column of an inbox (see "Inbox
@@ -618,9 +618,9 @@ ready. For that time the 0.5 instance runs against the migrated schema:
 
 Keep the window short, or keep the release out of it:
 
-1. Migrate and deploy in one step: the deploy that runs the migrations is the one that starts 0.6. Never run the 0.6
-   migrations against a database that a 0.5 instance keeps serving for longer.
-2. Ship `fabrika_files_release(…)` in the next deploy, once no 0.5 instance runs. Until the release the collection's
+1. Migrate and deploy in one step: the deploy that runs the migrations is the one that starts 0.7. Never run the 0.7
+   migrations against a database that a 0.6 instance keeps serving for longer.
+2. Ship `fabrika_files_release(…)` in the next deploy, once no 0.6 instance runs. Until the release the collection's
    table stays, and the release copies what the old instance wrote since the adoption.
 
 ### An application that used forms as event logs
@@ -644,7 +644,12 @@ moves in one release:
    `access: { capabilities: { … } }`.
 8. Click tracking becomes a public `GET` mutation with a `signedToken` input and `output: redirect()`.
 
+## 0.5 → 0.6
+
+0.6.0 changed nothing in the framework API: its framework sources are those of 0.5.5. Raise the pin; nothing else
+changes. An application on 0.5 goes 0.5 → 0.6 → 0.7, or raises its pin straight to 0.7 and follows "0.6 → 0.7".
+
 ## 0.4 → 0.5
 
-0.5 changed no 0.4 form: it added `then` and the job's `mailer`. An application on 0.4 raises its pin straight to 0.6
-and follows "0.5 → 0.6"; it has no `then` to replace.
+0.5 changed no 0.4 form: it added `then` and the job's `mailer`. An application on 0.4 raises its pin straight to 0.7
+and follows "0.6 → 0.7"; it has no `then` to replace.

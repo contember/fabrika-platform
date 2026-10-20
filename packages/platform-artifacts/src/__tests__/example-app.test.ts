@@ -272,7 +272,7 @@ const makeRun = (
 	target,
 	artifact: MANIFEST,
 	// Control's approved snapshot of the commit (ADR-0050): it decides the lock-down and the schema, not the artifact.
-	access: { contract: notesContract, contractDigest: contractDigest(notesContract), schema: notesSchema, checker: '0.6.0' },
+	access: { contract: notesContract, contractDigest: contractDigest(notesContract), schema: notesSchema, checker: '0.7.0' },
 	secrets: {},
 	vars: {},
 	managedEnvironment: {

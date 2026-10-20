@@ -34,7 +34,7 @@ const mixedContract = defineContract(mixedVocabulary, (c) => ({
 	health: c.health('/healthz'),
 }))
 
-/** The notes fixture's tables without auth-core's 0.5 form inbox, which a 0.6 contract no longer declares. */
+/** The notes fixture's tables without auth-core's 0.5 form inbox, which a 0.7 contract no longer declares. */
 const { contact_messages: _inbox, ...noteTables } = notesArtifact.tables
 const notes = compileContract(notesContract, noteTables)
 const implemented = compileContract(implementContract, { notes: NOTE_TABLE })

@@ -22,7 +22,7 @@ import { memoryCommits } from './helpers/commits'
 
 const access = (endpoints: readonly EndpointRow[]): ProviderApprovedAccess => {
 	const contract: ContractArtifact = { ...notesArtifact, endpoints: [...notesArtifact.endpoints, ...endpoints] }
-	return { contract, contractDigest: contractDigest(contract), schema: schemaFromContract(contract), checker: '0.6.0' }
+	return { contract, contractDigest: contractDigest(contract), schema: schemaFromContract(contract), checker: '0.7.0' }
 }
 
 const mount: EndpointRow['source'] = { kind: 'mount', name: 'api' }
@@ -144,7 +144,7 @@ describe('a public procedure at a path of its own (http.path)', () => {
 			contract: artifact,
 			contractDigest: contractDigest(artifact),
 			schema: schemaFromContract(artifact),
-			checker: '0.6.0',
+			checker: '0.7.0',
 		}
 		expect(rowsNeedingCurrentProxy(approved, OLDER_PROXY_ROW_READERS)).toContain('api.intake.register')
 	})

@@ -6,7 +6,7 @@ blocked-by: []
 
 # 193 — Loose ends of the declared surface
 
-**Summary.** Gaps found while building the 0.6 revision of the contract kinds (ADR-0012 sections 9–16). None blocks
+**Summary.** Gaps found while building the 0.7 revision of the contract kinds (ADR-0012 sections 9–16). None blocks
 the release; each is a P2 or P3.
 
 ## Problem
@@ -17,7 +17,7 @@ From the run log of `sprints/sprint-2026-10-19-declare-the-surface.md`:
    collection `attachments` is removed" and no line that says its files are adopted. The adoption migrations that call
    `fabrika_files_copy_legacy` and `fabrika_files_release` are not marked "needs closer review".
 2. **An upcast 0.5 artifact narrows every endpoint's body limit "from none".** The diff shows one narrowing line per
-   endpoint on the first 0.6 deploy. The upcast should state the limit the 0.5 runtime applied, so only a real change
+   endpoint on the first 0.7 deploy. The upcast should state the limit the 0.5 runtime applied, so only a real change
    shows.
 3. **The upload's time limit reads as 10 s** in the approval diff, while the body may take
    `max(30 s, maxBytes at 16 KiB/s)` before the handler's 10 s start. The line should name both.
@@ -31,9 +31,9 @@ From the run log of `sprints/sprint-2026-10-19-declare-the-surface.md`:
 9. **Queues.** A row past `maxAttempts` has no staff path back into the queue; confirm the 30-day backoff cap.
 10. **The local compatibility suite** does not run the platform's build step over the old release's source.
 
-From upgrading an application from 0.5.5 to 0.6:
+From upgrading an application from 0.5.5 to 0.7:
 
-11. **Rolling the platform back.** After a 0.6 deploy, a 0.5.5 Control refuses the stored snapshot:
+11. **Rolling the platform back.** After a 0.7 deploy, a 0.5.5 or 0.6.0 Control refuses the stored snapshot:
     `Unrecognized key(s) in object: 'framework'`. ADR-0062 covers an older application on a newer platform, not a
     platform rolled back to an older release. Decide whether a rollback is supported. If it is, say how a stored
     snapshot stays readable to the older Control (a reader that ignores unknown keys, or a snapshot written in the
@@ -46,7 +46,7 @@ From upgrading an application from 0.5.5 to 0.6:
 
 ## Approach / acceptance
 
-Each item is fixed with a test, or decided and recorded in its ADR (item 11 in ADR-0062). Items 1–3 change the approval diff: a 0.5 → 0.6
+Each item is fixed with a test, or decided and recorded in its ADR (item 11 in ADR-0062). Items 1–3 change the approval diff: a 0.5 → 0.7
 upgrade of the local suite's Notes shows an adoption line, no body-limit noise, and the body deadline.
 
 ## Touch points

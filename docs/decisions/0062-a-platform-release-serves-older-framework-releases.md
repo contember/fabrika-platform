@@ -28,7 +28,7 @@ Today the two are coupled to the exact release:
 So a platform release that changes the contract language, the artifact or the digest breaks every application that has
 not upgraded its framework. Its next deploy is refused by the reader, or its new instance refuses to start. Before 1.0
 the framework changes in most minor releases (four minors between 2026-09-07 and 2026-10-16), and the pre-1.0 revision
-of the contract kinds in 0.6 deletes whole kinds: forms, file collections, `then` and the generated endpoints
+of the contract kinds in 0.7 deletes whole kinds: forms, file collections, `then` and the generated endpoints
 ([ADR-0012](0012-fabrika-app-runtime.md) §9). Without a rule, an
 installation upgrade forces every application to rewrite its code first.
 
@@ -71,10 +71,10 @@ upgraded first.
    every older framework minor in its window, so Control fetches no code at run time, on Bun and in a Worker alike.
    It bundles `@fabrika/proxy-core` of the same releases too: a Zerops namespace whose proxy is pinned to an older
    source runs that release's strict manifest parser, so Control refuses a deploy of a row none of them parses.
-   The reader's artifact carries `format: <n>` (a 0.4 or 0.5 artifact has none and is format 1). The snapshot stores
-   the artifact as its release read it and digests it by that release's canonical form, and the providers write that
-   digest into `FABRIKA_CONTRACT_DIGEST` and the proxy table instead of recomputing it, so the application's startup
-   check matches.
+   The reader's artifact carries `format: <n>` (a 0.4, 0.5 or 0.6 artifact has none and is format 1). The snapshot
+   stores the artifact as its release read it and digests it by that release's canonical form, and the providers write
+   that digest into `FABRIKA_CONTRACT_DIGEST` and the proxy table instead of recomputing it, so the application's
+   startup check matches.
 2. **A patch release never changes the contract language, the artifact or the digest.** That keeps one reader per
    minor sufficient.
 3. **The platform upcasts.** Control converts an artifact of any format in the window to its current model, as a data
@@ -118,12 +118,14 @@ upgraded first.
 - The approval snapshot's `checker` field (`approval/read.ts`) names the reader that read the commit, and
   `framework` the release the application pins.
 - An artifact of an older format is upcast in `packages/control/src/approval/formats.ts`. A 0.4 artifact is read as
-  the 0.5 format: 0.5 added only optional fields. A 0.5 job's `timeout` becomes `limits.timeoutMs` (15 min without
-  one) and a 0.5 webhook gets the 10 s its handler ran with, so its next deploy shows only what it changed.
+  the 0.5 format: 0.5 added only optional fields. A 0.6 artifact is the 0.5 format unchanged: 0.6.0 released the
+  framework sources of 0.5.5. A 0.5 job's `timeout` becomes `limits.timeoutMs` (15 min without one) and a 0.5 webhook
+  gets the 10 s its handler ran with, so its next deploy shows only what it changed.
 - **Rollout path.** No generated installation file, environment variable or provider state changes. The first platform
-  release under this rule (0.6) has the window 0.4, 0.5 and 0.6, every minor of the last six months that published
-  `@fabrika/check`, and bundles the readers 0.4.8 and 0.5.5. An application on 0.3 or older redeploys only after it
-  raises its pin into the window ([`framework-migrations.md`](../reference/framework-migrations.md)).
+  release under this rule (0.7) has the window 0.4, 0.5, 0.6 and 0.7, every minor of the last six months that
+  published `@fabrika/check`, and bundles the readers 0.4.8, 0.5.5 and 0.6.0. An application on 0.3 or older
+  redeploys only after it raises its pin into the window
+  ([`framework-migrations.md`](../reference/framework-migrations.md)).
 
 ## Alternatives considered
 

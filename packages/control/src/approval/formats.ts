@@ -56,7 +56,7 @@ export function from06(artifact: ContractArtifact06): SnapshotContract {
  * The 0.5 artifact in this release's model. A release that changes the model adds its rule here, so that the approval
  * diff compares like with like and a 0.5 application's next deploy shows only what it changed itself.
  *
- * - 0.6: a job's `timeout` (`'30s'`, `'10m'`, `'1h'`, or `null`) is its effective `timeoutMs`, and a webhook carries
+ * - 0.7: a job's `timeout` (`'30s'`, `'10m'`, `'1h'`, or `null`) is its effective `timeoutMs`, and a webhook carries
  *   its handler's `timeoutMs`; each is what a 0.5 release ran with.
  */
 function upcast05(artifact: ContractArtifact05): ContractArtifact {

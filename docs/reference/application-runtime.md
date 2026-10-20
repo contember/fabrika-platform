@@ -648,7 +648,7 @@ deal_attachments: {
   a write that holds the row `FOR SHARE` makes it wait); then the object is deleted; then the record. A failed sweep
   fails the run (`file_sweep_failed`), and the next run finishes it. The grace counts from the file's creation. On
   Zerops the crontab runs the sweep when the contract declares a file kind.
-- **Legacy files.** `0008_files.sql` copies the held files of every file collection of framework 0.5 and earlier into
+- **Legacy files.** `0008_files.sql` copies the held files of every file collection of framework 0.6 and earlier into
   `fabrika_files` with their ids, marked `legacy`; the old `fabrika_files_<collection>` tables stay. The sweep never
   deletes a legacy file, and drops the marker once a declared column references it. The application adopts the files
   with its own migration and releases the collection with `fabrika_files_release('<collection>')`

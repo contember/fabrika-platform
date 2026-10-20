@@ -170,7 +170,7 @@ The application then takes a public request in this order, each refusal with its
   namespace's proxy pin must read the `public` row. Control refuses a deploy whose contract holds a row no older
   release's proxy parses, a public row among them, while the namespace's proxy source is another than the one it
   deploys new placements from, and names the re-pin (`fabrika control namespaces update --namespace=<id> --proxy-source=current`). No generated
-  installation file changes. A 0.4 or 0.5 application has no public row, so nothing changes for it.
+  installation file changes. A 0.4, 0.5 or 0.6 application has no public row, so nothing changes for it.
 
 ## Alternatives considered
 

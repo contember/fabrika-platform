@@ -119,7 +119,7 @@ columns. It answers whether the row was inserted.
 - The 10-second drain bound is a guess. Zerops' stop grace period is not verified.
 - The build and the checker refuse a kick that names no job. The contract's types check `ctx.kick` against the site's
   own `kicks`, not against the contract's jobs: walking nested groups costs too much of the compiler's budget.
-- A 0.4 or 0.5 application keeps its `then`: Control reads it with that release's reader and the platform keeps
+- A 0.4, 0.5 or 0.6 application keeps its `then`: Control reads it with that release's reader and the platform keeps
   serving it ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
 
 ## Alternatives considered

@@ -238,7 +238,7 @@ bun test
   source is the one this control plane deploys new placements from; the refusal names
   `fabrika control namespaces update --namespace=<id> --proxy-source=current`. The judges are those releases' own
   row parsers, which Control passes in as `namespaces.olderProxies` (`src/namespace/proxy-reads.ts`); never replace
-  them with a list of fields. A row one of them parses deploys, so every 0.4/0.5 contract does.
+  them with a list of fields. A row one of them parses deploys, so every 0.4/0.5/0.6 contract does.
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).

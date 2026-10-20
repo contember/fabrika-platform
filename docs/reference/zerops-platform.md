@@ -1241,7 +1241,7 @@ manifest's services and `zerops.yaml`, a deploy-time variable and `secrets.put` 
 
 #### A contract with files sweeps hourly
 
-A contract that declares a file kind (or, from a 0.5 application, a file collection) gets
+A contract that declares a file kind (or, from a 0.4, 0.5 or 0.6 application, a file collection) gets
 `fabrika job run fabrika-file-sweep` at minute 41 of every hour, on one container (`allContainers: false`): the
 framework's sweep deletes the files no declared column references. The job's lease keeps two runs from overlapping.
 

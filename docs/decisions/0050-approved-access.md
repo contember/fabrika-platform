@@ -192,7 +192,7 @@ covers:
 - each site's declared reach;
 - migrations: any new or changed file, and the database code they declare.
 
-An application on framework 0.4 or 0.5 is compared with the same rules after Control upcasts its artifact
+An application on framework 0.4, 0.5 or 0.6 is compared with the same rules after Control upcasts its artifact
 ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)): its forms' admission and files, `then`,
 file collections, their scan and their link-reachable rows keep the lines they had.
 

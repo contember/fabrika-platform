@@ -187,12 +187,12 @@ does next.
 - An `sql: 'write'` site can write any file id into a column. The approval already treats it as full reach.
 - **Mixed proxy versions.** A row with the file-response profile is refused by an older proxy's strict manifest
   parser, instead of served without the file treatment.
-- **0.4 and 0.5 applications.** The platform keeps serving their collection rows, their link-served collection rows
-  and the form rows of 0.5.5 with files, and keeps `0005_form_files.sql` and `0006_form_bytes.sql` in the framework
-  bundle: migration identity is `(bundle, filename)` (ADR-0017), and no released migration is changed or dropped
-  ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
+- **0.4, 0.5 and 0.6 applications.** The platform keeps serving their collection rows, their link-served collection rows
+  and the form rows of 0.5.5 and 0.6.0 with files, and keeps `0005_form_files.sql` and `0006_form_bytes.sql` in the
+  framework bundle: migration identity is `(bundle, filename)` (ADR-0017), and no released migration is changed or
+  dropped ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
 - **Rollout.** `fabrika db migrate` applies `0008_files.sql` before the application's own bundle at the next deploy
-  of an application on framework 0.6. The Zerops provider adds the sweep and the scan to the crontab of an
+  of an application on framework 0.7. The Zerops provider adds the sweep and the scan to the crontab of an
   application that declares file kinds. No generated installation file or variable changes. On Zerops a namespace
   proxy pinned before the upgrade refuses a manifest with the file-response profile, so Control refuses a deploy of
   such a row while the namespace's proxy source is not its own, and names the re-pin

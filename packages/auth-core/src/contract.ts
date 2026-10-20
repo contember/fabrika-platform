@@ -6,7 +6,7 @@ import type { MailTemplates } from './mail'
 
 /**
  * The artifact format this release writes. A release that changes the artifact raises it, and Control upcasts every
- * older format of its window to this one (ADR-0062). The 0.5 artifact carries no `format`.
+ * older format of its window to this one (ADR-0062). The 0.4, 0.5 and 0.6 artifacts carry no `format`.
  */
 export const CONTRACT_FORMAT = 2
 

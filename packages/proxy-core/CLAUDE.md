@@ -83,13 +83,13 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   export path (`callerAdmittedAt`) → 403; a job or webhook key is no caller kind, so every row refuses
   it; no key and no `human` caller → 401, never a bounce; the session or the login bounce; `satisfies` →
   403; admission (a session non-`GET` needs `Sec-Fetch-Site: same-origin` → 403, the media type must be
-  one the row admits → 400). An anonymous kind (`health`, `webhook`, `public`, a 0.4/0.5 `form`) reads no credential
+  one the row admits → 400). An anonymous kind (`health`, `webhook`, `public`, a 0.4/0.5/0.6 `form`) reads no credential
   and mints no token. The allow carries `X-Fabrika-Endpoint: <id>@<digest>`. A `webhook` row with `authorization:
   'forward'` (a `basic` or `bearer` verifier) adds `X-Fabrika-Forward-Authorization: 1` when the request's
   `Authorization` goes on to the app, never when it carries `px_` (`carriesPlatformKey`, Basic credentials decoded).
 - **The rows of the surface revision are new kinds or absent fields.** The `public` kind and the `capabilities`
   requirement (every named action in some scope) are new; a row's `response: 'file'` (the file treatment of
-  `headers.ts` on every answer) and a public `GET` row's `cache` join the digest only when present. So every 0.4/0.5
+  `headers.ts` on every answer) and a public `GET` row's `cache` join the digest only when present. So every 0.4/0.5/0.6
   row keeps its digest, and an older proxy's strict parser refuses the new forms instead of serving them without their
   rule (ADR-0022).
 - **The installation-only forms exist in installation entries alone.** The parser refuses `protocol`,
@@ -103,15 +103,15 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   differs.
 - **A cross-origin request is decided from the row and the entry, never by the application** (ADR-0022 "Cross-origin
   endpoints"). A contract application's row may carry `crossOrigin` (`environment` on a `query`, `mutation`, `public`
-  or a 0.4/0.5 `form`; `any` on a `public` or `form` row only; a procedure declares it as `admission.origins`), and its
-  entry `crossOrigins`, the environment's exact origins (`isCrossOrigin`, at most
+  or a 0.4/0.5/0.6 `form`; `any` on a `public` or `form` row only; a procedure declares it as `admission.origins`), and
+  its entry `crossOrigins`, the environment's exact origins (`isCrossOrigin`, at most
   `MAX_CROSS_ORIGINS`, each once, never one of its own hosts); the parser refuses either anywhere else. An `OPTIONS`
   with `Origin` and `Access-Control-Request-Method` is a preflight, planned for the REQUESTED method before any
   credential is read (`decidePreflight`): an admitted one is the `preflight` outcome, a 204 carrying the policy,
   `preflightHeaders` and `PREFLIGHT_HEADER`, which both compositions return as the whole answer without dialling the
   app; anything else is 403 (`cross_origin`, or `no_endpoint`). An installation entry's `OPTIONS` is an ordinary
   request. On any other request `admittedOrigin` gives the allow's `crossOrigin` (copied by the composition onto the
-  app's answer with `applyCrossOriginHeaders`) and a denial's (set on it directly). A `public` row's multipart or `urlencoded` request, and a 0.4/0.5
+  app's answer with `applyCrossOriginHeaders`) and a denial's (set on it directly). A `public` row's multipart or `urlencoded` request, and a 0.4/0.5/0.6
   form row that admits `multipart/form-data`, is refused when its `Origin` is neither the entry's own
   (`<scheme>://<host>`) nor admitted (`admitFormOrigin`, 403 `cross_origin`): a browser sends those types without a
   preflight. A request without `Origin` passes; `Origin: null` does not (ADR-0022's browser admission matrix). A listed origin's request is never

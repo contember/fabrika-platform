@@ -173,7 +173,7 @@ The policy:
   approvable ([ADR-0050](0050-approved-access.md)). `frame-src` appears only when it names an origin, and then as
   `frame-src 'self' <origins>`: without it frames fall back to `default-src 'self'`, so an extension never
   takes the same origin away and removing the last one narrows. A
-  challenge provider of a public procedure (or of a 0.4/0.5 form) adds its own fixed origins to `script-src` and
+  challenge provider of a public procedure (or of a 0.4/0.5/0.6 form) adds its own fixed origins to `script-src` and
   `frame-src`, which the approval diff shows like any other.
 - `X-Content-Type-Options: nosniff`.
 - `Cache-Control: no-store`, static assets included. The one exception is a public `GET` query that declares
@@ -194,7 +194,7 @@ The policy:
 An endpoint that answers a stored file gets the **file treatment** instead. The proxy recognises it by the row the
 decision selected, never by a path of its own: a procedure whose output is a file carries the **file-response
 profile** (`response: 'file'`) in its row and in the row's digest
-([ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)), and a 0.4/0.5 collection's `download` row is one by its
+([ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)), and a 0.4/0.5/0.6 collection's `download` row is one by its
 kind. The application applies the same treatment from the row, denials included. An older proxy's strict parser
 refuses a row with the profile instead of serving it without the treatment.
 
@@ -259,7 +259,7 @@ endpoint:
    endpoints" below), so a bearer is explicit authority and needs no `Sec-Fetch-Site`.
 
 **Anonymous kinds.** An endpoint of an anonymous kind (`c.health`, `app.webhook`, the shell of a link SPA, a public
-SPA, `c.spa` with `access: { public: true }`, a public procedure, and a 0.4/0.5 `c.form`) has no callers. The proxy
+SPA, `c.spa` with `access: { public: true }`, a public procedure, and a 0.4/0.5/0.6 `c.form`) has no callers. The proxy
 skips steps 3 to 5, mints no token and forwards the request. It does not forward a `px_` key or a session that arrives
 on such a request; only an installation entry's `protocol` row keeps the `Authorization` header (below), and a webhook
 row that declares `authorization: 'forward'` keeps the sender's own. Admission
@@ -294,7 +294,7 @@ it, and the proxy decides both:
 - **The contract opens the endpoint.** A procedure of a `c.rpc` mount declares `admission: { origins: 'listed' }`, and
   a public procedure may instead declare `origins: 'any'`. The artifact records it on the row as
   `crossOrigin: 'environment'` or `'any'`, only when declared, so every other row and contract keeps its digest. A
-  0.4/0.5 procedure's `crossOrigin: true` and a form's `crossOrigin: true | '*'` compile to the same two values. The
+  0.4/0.5/0.6 procedure's `crossOrigin: true` and a form's `crossOrigin: true | '*'` compile to the same two values. The
   row's digest covers it, and an approval shows it like any other change of the access surface
   ([ADR-0050](0050-approved-access.md)). No other kind may declare it: a link procedure, an export, an SPA, a
   download, an upload, a webhook and a health endpoint are refused by the contract build, the artifact schema and the
@@ -743,9 +743,9 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   (`fabrika control namespaces update --namespace=<id> --proxy-source=current`). It judges each row with the strict
   row parser of the newest patch of every older minor in the window
   ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)), so the four forms above are refused, and so
-  is any later one, without a list to keep. A row one of them parses deploys: every row of a 0.4 or 0.5 application,
-  and every row of a 0.6 one that uses none of the new forms.
-- **The platform keeps serving the rows of older framework releases**: a 0.4/0.5 form row with its content types,
+  is any later one, without a list to keep. A row one of them parses deploys: every row of a 0.4, 0.5 or 0.6
+  application, and every row of a 0.7 one that uses none of the new forms.
+- **The platform keeps serving the rows of older framework releases**: a 0.4/0.5/0.6 form row with its content types,
   its cross-origin form and its multipart origin check, a collection's `upload` and `download` rows, and a webhook's
   generated binding rows, until no framework release in the window produces them
   ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).

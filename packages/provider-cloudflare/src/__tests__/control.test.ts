@@ -41,7 +41,7 @@ const APPROVED = {
 	contract: notesArtifact,
 	contractDigest: contractDigest(notesArtifact),
 	schema: schemaFromContract(notesArtifact),
-	checker: '0.6.0',
+	checker: '0.7.0',
 }
 
 const RUN_ID = '0192f0c9-4d5e-7a10-9c3b-1f2e3d4c5b6a'

@@ -29,7 +29,7 @@ const vocabulary = {
 } as const
 
 const Id = z.strictObject({ id: z.uuid() })
-/** The notes fixture's tables without its 0.5 form inbox, which a 0.6 contract no longer declares. */
+/** The notes fixture's tables without its 0.5 form inbox, which a 0.7 contract no longer declares. */
 const { contact_messages: _inbox, ...noteTables } = notesArtifact.tables
 
 function problemsOf(compile: () => unknown): readonly string[] {

@@ -19,5 +19,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- [Declare the surface](sprint-2026-10-19-declare-the-surface.md) — the pre-1.0 revision of the contract kinds as one breaking framework minor; the platform keeps serving framework 0.5 (ADR-0062).
+- [Declare the surface](sprint-2026-10-19-declare-the-surface.md) — the pre-1.0 revision of the contract kinds as one breaking framework minor; the platform keeps serving framework 0.4, 0.5 and 0.6 (ADR-0062).
 - [MCP application authoring](sprint-2026-10-07-mcp-authoring.md) — employees author apps from Claude/ChatGPT through MCP in Control: Git workspaces, stage deploys, pull requests; Zerops first. Decisions in ADR-0049.
