@@ -146,3 +146,8 @@ back and runs `bun run check:ci` on the integration branch.
   same data: `0008_files.sql` and the adoption migrations apply, old files download byte-identical, the sweep keeps
   them. `local:smoke` had been red (it did not expect `FABRIKA_SOURCE_MAP_UPLOAD_KEY`); fixed. Not proven: the build
   step over an old release's source. Open points → [backlog 193](../backlog/193-loose-ends-of-the-declared-surface.md).
+- **Merged WU-5b** (the user: every kind of webhook must work). A basic or bearer webhook row carries
+  `authorization: 'forward'`: the proxy keeps `Authorization` for the application there, never reads it, and never
+  forwards a value carrying `px_`. `setSecret` for provider-issued secrets; Slack and Twilio presets (Slack's
+  `url_verification` is answered after the signature verifies); webhook bodies up to 48 MiB. Open: Twilio behind a
+  hostname other than `FABRIKA_APP_ORIGIN` fails verification.
