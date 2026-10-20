@@ -168,7 +168,7 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 	await ensureLocalGitHubApps(directory)
 }
 
-/** The bucket of the Notes example's `attachments` collection, on the apps network's own object storage. */
+/** The bucket of the Notes example's stored files, on the apps network's own object storage. */
 export const NOTES_BUCKET = 'notes-files'
 
 /** The apps object storage's one identity, from the credentials `notes.env` holds; a stack from before them needs a reset. */

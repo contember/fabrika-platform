@@ -212,15 +212,15 @@ the access check. `references/spa.md` shows the stack.
 
 ## Off the road: declare it
 
-| What the handler needs         | Declare on the endpoint                        | It gets                                             |
-| ------------------------------ | ---------------------------------------------- | --------------------------------------------------- |
-| a join, a report, a bulk write | `sql: 'read'` (or `'write'`)                   | `` ctx.sql(Row)`…` ``, scoped with `ctx.sql.scope`  |
-| rows outside its capability    | `unscoped: { <table>: 'read' }`                | `ctx.db.unscoped.<table>`                           |
-| another application's export   | `connect: ['<import>']`                        | `ctx.connect.<import>`                              |
-| a share link                   | `issues: '<link mount>'`                       | `ctx.links.issue`                                   |
-| e-mail (a cron job only)       | `mailer: 'installation'`                       | `ctx.mail.send`                                     |
-| a file with a public form      | `files: { photo: { collection } }` on `c.form` | the id in the inbox; the job's `tx.files(…).attach` |
-| a trigger, function or view    | its migration                                  | —                                                   |
+| What the handler needs         | Declare on the endpoint                                 | It gets                                            |
+| ------------------------------ | ------------------------------------------------------- | -------------------------------------------------- |
+| a join, a report, a bulk write | `sql: 'read'` (or `'write'`)                            | `` ctx.sql(Row)`…` ``, scoped with `ctx.sql.scope` |
+| rows outside its capability    | `unscoped: { <table>: 'read' }`                         | `ctx.db.unscoped.<table>`                          |
+| another application's export   | `connect: ['<import>']`                                 | `ctx.connect.<import>`                             |
+| a share link                   | `issues: '<link mount>'`                                | `ctx.links.issue`                                  |
+| e-mail (a cron job only)       | `mailer: 'installation'`                                | `ctx.mail.send`                                    |
+| a file from a public procedure | `file('<kind>')` input, `admission` with `bytesPerHour` | a reference the handler writes into a file column  |
+| a trigger, function or view    | its migration                                           | —                                                  |
 
 Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
 of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for `over`, a
@@ -238,7 +238,7 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 - Data work first, external calls after. The invocation's one transaction rolls back on a throw; IAM, object storage
   and connector calls do not. An endpoint the generated tests cover calls no outside service (a provider's API): it
   records an outbox row, and a job makes the call (`references/jobs.md`).
-- An endpoint never sends e-mail; it has no `ctx.mail`. It records an outbox row and declares `then: '<job>'`, which
+- An endpoint never sends e-mail; it has no `ctx.mail`. It records an outbox row, declares `kicks: ['<job>']` and calls `ctx.kick('<job>')`, which
   starts that job once its transaction committed. The job declares `mailer` and sends with `ctx.mail`, under a key
   derived from the row, and sends again only where `ctx.mail.mayRetry(error)` allows it (`references/jobs.md`).
 - No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`.
@@ -251,7 +251,7 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 - A 401, a 403 or a failing generated test: never loosen the contract, a role, a policy or a test to pass. Tell the
   human which action or role the caller lacks.
 - When the task does not already ask for it, before you add a role, a grant, an action, a declared deviation, an
-  anonymous endpoint (`c.form`, a form's `files`, a webhook, a link), an export or an import, or a job, or before you drop or rename a
+  anonymous endpoint (a public procedure, its file field, a webhook, a link), an export or an import, or a job, or before you drop or rename a
   column: say in one sentence what it lets someone do, and wait for a yes. A data repair goes to the operator, not
   into a job.
 - A file refused as protected: stop and ask. Do not move the change elsewhere.
@@ -303,17 +303,16 @@ their errors, the caller, the components, routing, theming, screen tests), `tabl
 (access forms, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`, `ctx.sql`, audited CSV
 downloads, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
 `errors.md` (checker findings, type errors, runtime answers), `dev.md` (the seed and the preview), `jobs.md` (which dimension `ctx.within` names, the UTC
-day, e-mail through `ctx.mail`, the outbox and `then`), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
+day, e-mail through `ctx.mail`, the outbox and `kicks`), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
 `start.md`, a new application before its first table (its first test, adding the first table, installing and updating
-this skill), and `public-intake.md`, a public page, a form, a job that issues links and e-mails them, a link holder's
-files, HR's review with its history.
+this skill), and `public-intake.md`, a public page, public procedures, a job that claims their rows, issues links and
+e-mails them, a link holder's files, HR's review with its history.
 
 ## Not built yet
 
 - The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
-- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A mutation's `then` starts a run of its
-  job; it carries nothing. A list write is off the road (`sql`).
-- `ctx.mail` sends no attachments.
+- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A mutation's `ctx.kick` starts a run of
+  its job; it carries nothing. A list write is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.
 
@@ -371,7 +370,7 @@ the SPA is added with it.
 - `kysely` is there for the generated schema's types. The SPA reports its errors to Operations by itself:
   `FabrikaProvider` reads the DSN, release and environment the framework serves at `<prefix>/__fabrika-config.json`
   and sends every uncaught error and unhandled rejection there; add no error-reporting SDK. The same file carries
-  `public: { <VARIABLE>: <value> }`: each form challenge's `siteKey`, and the variables the SPA mount lists in
+  `public: { <VARIABLE>: <value> }`: each public procedure's challenge `siteKey`, and the variables the SPA mount lists in
   `c.spa(prefix, { …, public: ['SIGNUP_URL'] })`. A page reads a per-environment public value (a site key, a link
   target) there, never as a build-time constant; it holds no other variable, and the contract refuses a secret in it.
   `react`, `react-dom` and `@fabrika/ui` (with `@types/react`, `@types/react-dom` and `@happy-dom/global-registrator`
@@ -459,30 +458,30 @@ export default serve(contract, { database: scoped(tables) })
 ```
 
 - Mounts: `c.rpc(prefix, groups)` once per prefix, `c.spa(prefix, { dir, access })`, `c.health('/healthz')` (required
-  on Zerops), `c.form(path, { input, appendTo, then? })` (an anonymous form that appends one row and runs no handler), a
-  webhook, a link mount. An SPA's `access` is `{ member: true }`, `{ action, over }`, or `{ public: true }` for a page
+  on Zerops), a webhook, a link mount. An anonymous visitor reaches a public procedure of an `c.rpc` mount
+  (`access: { public: true }`, `references/public-intake.md`). An SPA's `access` is `{ member: true }`, `{ action, over }`, or `{ public: true }` for a page
   anyone opens without signing in (a landing page, a public form): the approver sees it as "for anyone". A public SPA
   at `/` answers every `GET` no more specific endpoint serves; give a member SPA its own prefix (`/app`). Sections:
   `files`, `jobs`, `exports`, `csp` (`connectSrc`, `imgSrc`, `frameAncestors`, `scriptSrc`, `frameSrc`, `styleSrc`,
   `fontSrc`: exact `https://` origins, each with a `purpose`, at most 16 each). A hosted typeface needs both its
   stylesheet origin in `styleSrc` and its font origin in `fontSrc`; font files under the SPA's `dir` need neither. No path under `/__fabrika`.
-- A public form's abuse control, all optional on `c.form`: `rate: { perClient, perForm }` (per minute, shared by
-  every instance; 10 and 100 by default; 429 past either), `honeypot: '<field>'` (a `z.optional(z.string())` input
-  field the page hides; a filled one gets the same answer and writes nothing) and
-  `challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' }`. A challenge needs the input field
-  `challengeToken: z.string()`, which the page fills from the Turnstile widget rendered with `action` set to the
-  form's mount name; the framework verifies it on the server (a failed token 400, an unreachable provider 503, no
-  row either way) and adds Turnstile's origin to the CSP. `secret` names an application variable the human sets,
-  never the value; without it the application does not boot. `siteKey` names the variable with the widget's public
-  site key, which every SPA mount serves its pages (below). Neither field reaches the inbox, so neither is a
-  column. On Zerops every visitor still shares one client address (the balancer), so `perClient` acts as a second
-  per-form limit: raise it, and use the challenge. `references/public-intake.md` builds a whole public intake on it.
-- `then: '<job>'` on `c.form` names a cron job of the same contract (`jobs`), which each accepted submission kicks
-  once its row committed: a run starts within seconds, under the job's own key, and the answer stays the same constant
-  and never waits for it. A mutation declares the same `then` for the outbox row it records (`references/jobs.md`). Kicks coalesce on the job's lease (at most one run and one pending, however many visitors
-  submit), so the job still drains its inbox in batches under its own budgets. Keep its schedule: it is the recovery
-  path for a kicked run that died. A kick carries nothing; the job reads its inbox. `kit.runJob` first waits for the
-  kicked runs.
+- A public procedure's abuse control is its `admission`: `rate: { perClient, perEndpoint }` (per minute, shared by
+  every instance; 10 and 100 by default for a public mutation; 429 past either) and
+  `challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' }`. `honeypot(value)`
+  of `@fabrika/app` is true for a filled field the page hides: answer the same and write nothing. A challenge needs the
+  input field `challengeToken: z.string()`, which the page fills from the Turnstile widget rendered with `action` set
+  to the endpoint id with `_` for `.` (`api_visitors_register`); the framework verifies it on the server (a failed
+  token 400, an unreachable provider 503, no row either way) and adds Turnstile's origin to the CSP. `secret` names an
+  application variable the human sets, never the value; without it the application does not boot. `siteKey` names
+  the variable with the widget's public site key, which every SPA mount serves its pages (below). On Zerops every
+  visitor still shares one client address (the balancer), so `perClient` acts as a second per-endpoint limit: raise
+  it, and use the challenge. `references/public-intake.md` builds a whole public intake on it.
+- `kicks: ['<job>']` on a mutation names cron jobs of the same contract (`jobs`), and `ctx.kick('<job>')` in its
+  handler starts one once its transaction committed: a run starts within seconds, under the job's own key, and the
+  answer never waits for it (`references/jobs.md`). Kicks coalesce on the job's lease (at most one run and one
+  pending, however many calls arrive), so the job still works in batches under its own budgets. Keep its schedule: it
+  is the recovery path for a kicked run that died. A kick carries nothing; the job reads its rows. `kit.runJob` first
+  waits for the kicked runs.
 - `src/app.ts` composes and does nothing else. A dependency built from the application's own variables is
   `defineDeps(build)`, passed as `serve(contract, { database, deps })` and read in a handler with `get()`. Never read
   `process.env`. `build` runs at every boot, the generated tests' too, which pass no variable: read a variable when
@@ -761,8 +760,8 @@ export default seed
 - `dev/dev.env` holds the application's variables for `app dev`, one `NAME=value` per line (`#` comments, quotes
   optional). They win over the shell's; a `FABRIKA_*` name is refused. Commit it: it holds stand-in values, never a
   real secret.
-- A form's challenge passes in `app dev`: the stand-in answers Turnstile's siteverify for any token. Set the form's
-  `secret` variable to any value in `dev/dev.env`, and send a fresh `challengeToken` with each submission, as a test
+- A public procedure's challenge passes in `app dev`: the stand-in answers Turnstile's siteverify for any token. Set the
+  challenge's `secret` variable to any value in `dev/dev.env`, and send a fresh `challengeToken` with each submission, as a test
   does: a token is single use. For the widget on a page, set the `siteKey` variable to Turnstile's always-passing test
   key `1x00000000000000000000AA`. Its token is the same every time, and `app dev` admits that one token again at each
   submission; a deployed application records it like any other, so there it passes once.
@@ -774,7 +773,7 @@ export default seed
 - The seed's second argument reads what left the application: `outside.mails()` is every message a job handed to the
   stand-in, oldest first (`{ id, at, to, subject, text, html, key, transportKey, answer, outcome, delivered, … }`), so
   the seed can open a link the application mailed. Run the job first (`dev.runJob('<job>')`), or let a mutation's
-  `then` kick it and `await dev.drain()`.
+  `ctx.kick` start it and `await dev.drain()`.
 - Point another outside service at the dev outbox: `app dev` captures every request the process sends to
   `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN` of `@fabrika/app/testing`) and answers `200 {"id": …}`. A section of
   its own lists each one, by the `to` and `subject` of a JSON body, and opens its body; its headers are not kept.
@@ -797,8 +796,8 @@ ARCHIVE_KEY=dev
   is the invited person from then on. A job's message opens at `/__fabrika/dev/mail/<id>`.
 - The choice stays in a cookie the application never sees. The data is gone when the command stops.
 - It serves this machine only (`--host` is a loopback address, `--port=0` picks a free port), answers no request
-  addressed to another host name, and runs no cron job on its schedule: the seed runs one with `dev.runJob`, a test with `kit.runJob`. A form's or a
-  mutation's `then` still starts its job, as deployed.
+  addressed to another host name, and runs no cron job on its schedule: the seed runs one with `dev.runJob`, a test with `kit.runJob`. A mutation's
+  `ctx.kick` still starts its job, as deployed.
 
 ---
 
@@ -868,8 +867,8 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   key (`references/jobs.md`). A call that is the request's whole purpose lives in a `{ member: true }` endpoint, which
   they do not cover. The framework's own calls (IAM, the file store, `ctx.connect`) are not outside.
 - **An endpoint never sends e-mail**, covered or not: it has no `ctx.mail`. It records the message in an outbox row
-  and declares `then: '<job>'` on the mutation, so the job that declares `mailer` sends it within seconds of the
-  commit (`references/jobs.md`; the test e-mail in `references/public-intake.md`). Only a mutation declares `then`.
+  and declares `kicks: ['<job>']` on the mutation and calls `ctx.kick('<job>')`, so the job that declares `mailer`
+  sends it within seconds of the commit (`references/jobs.md`; the test e-mail in `references/public-intake.md`).
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
   shows), or the id when the token carries none. When the caller owns what it writes (the creator of a deal, the
   assignee of a task nobody was picked for), store `ctx.principal.id` and `ctx.principal.label`, never a
@@ -926,7 +925,7 @@ dimension value takes `access: { action, app: true }`.
 | `app.<table>` (`app: true`), an application table      | `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; in a mutation `getForUpdate(id)`, `insert(values)`, `update(id, values, { expectVersion })`, `remove(id, { expectVersion })` |
 | `app.<table>` (`app: true`), a scoped table            | `list(options)` (read action or `appRead`), `count({ where })` (also `appCount`), `aggregate(spec)`                                                                                             |
 | `app.<table>` (`on`, `in`, `over`)                     | an application table whose read action is the endpoint's: `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; no write                                                           |
-| `unscoped.<table>` (declared)                          | `list`, `count`, `aggregate`, `get(id)` (not of a reference table or an inbox, which have no key); with `'write'` also `insert`, `update`, `remove`                                             |
+| `unscoped.<table>` (declared)                          | `list`, `count`, `aggregate`, `get(id)` (not of a reference table, which has no key); with `'write'` also `insert`, `update`, `remove`                                                          |
 
 `{ expectVersion }` is taken only on a table with `version`.
 
@@ -1265,8 +1264,8 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   values, each container grant on its own column, every row for a global grant and none for an empty one. The
   capability is the access form's: `ctx.target` for `on` and `in`, `ctx.within` for `over`; a job passes the `Ref` or
   `Within` it minted to `tx.sql.scope`. A table the capability does not reach is a type error at the table name. A
-  reference table is shared by every scope and needs no fragment, and no statement writes it. A form's inbox needs none either; read it from a site that holds the inbox's
-  `read` action (the intake job of `references/public-intake.md`).
+  reference table is shared by every scope and needs no fragment, and no statement writes it. An application table
+  needs none either (the intake job of `references/public-intake.md`).
 - **A fragment carries its action into the statement.** On the table an `update` or `delete` writes it needs the
   table's own update or delete action (`ctx.within('tasks.write', 'project')` for `update tasks`), so a read action
   never scopes a write. A column's own write action (`columns: { assignee: { write: 'tasks.assign' } }`) scopes an
@@ -1338,8 +1337,8 @@ different pages. The approver sees the flag like any other access change.
   person's session is never read for a request from a listed origin: the answer is 401 without a login bounce.
 - **The proxy answers CORS, the handler never does.** The proxy answers the preflight and sets
   `Access-Control-Allow-Origin` on the answer; it deletes every `Access-Control-*` header a handler sets.
-- **Only RPC procedures.** A link procedure, an export, an SPA, a download and an upload refuse `crossOrigin`. A form
-  takes it too (`references/public-intake.md`).
+- **Only RPC procedures.** A link procedure, an export, an SPA, a download and an upload refuse `crossOrigin`. A public
+  procedure declares `admission.origins` instead (`references/public-intake.md`).
 - **Test it** with `testKit(app, { crossOrigins: ['https://partner.example'] })` and a request carrying that `Origin`.
 
 ## Members
@@ -1532,10 +1531,9 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 
 ## Runtime answers
 
-A procedure, a form, a webhook and a file collection answer JSON in an envelope: a 200 is `{ result: <output> }` (a
-procedure's output, a form's `{ received: true }`, a file list's `{ items, next }`), any other status
-`{ error: { type, message } }`. The typed client unwraps it; a plain `fetch` (a form, a test) reads `result`. A health
-check (`{ status: 'ok' }`) and the SPA's browser configuration answer without one.
+A procedure and a webhook answer JSON in an envelope: a 200 is `{ result: <output> }`, any other status
+`{ error: { type, message } }`. The typed client unwraps it; a plain `fetch` (a test) reads `result`. A file answer,
+a health check (`{ status: 'ok' }`) and the SPA's browser configuration answer without one.
 
 | Answer | Comes from                                                                                                                                                                                                                               |
 | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1589,10 +1587,12 @@ only the SQLSTATE: `23505` is a unique violation, `23503` a foreign key, `23502`
 
 ---
 
-# references/files.md — file collections
+# references/files.md — file kinds and file columns
 
-A file collection attaches uploaded files to the rows of one table that owns a dimension. It is a section of the
-contract with generated endpoints: no handler, no storage client, no URL of your own.
+A file is a value in a table column. The contract declares a file kind (`c.files`): which types, how large, whether it
+is scanned. A table declares a file column of that kind, and the table's policy is the file's authority: reading the
+column under the table's `read` action is what lets a procedure answer the file, and writing it needs the action that
+writes the column. There are no generated file endpoints: each operation is a procedure of a few lines.
 
 ```ts fabrika.contract.ts
 import { app } from './src/app-kit'
@@ -1602,6 +1602,7 @@ import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
 import { archive } from './src/tasks/archive'
+import { attachments } from './src/tasks/attachments'
 import { tasks } from './src/tasks/endpoints'
 import { erase } from './src/tasks/erase'
 
@@ -1613,16 +1614,12 @@ export const contract = app.contract((c) => ({
 		reports,
 		members,
 		priorities,
+		attachments,
 	}),
 	files: {
 		attachments: c.files({
-			owner: 'tasks',
-			read: 'tasks.read',
-			write: 'tasks.write',
-			delete: 'tasks.write',
-			maxBytes: 5242880,
 			types: ['image/png', 'image/jpeg', 'application/pdf', 'text/plain'],
-			maxPerOwner: 20,
+			maxBytes: 5242880,
 		}),
 	},
 	jobs: { archive, erase },
@@ -1630,20 +1627,119 @@ export const contract = app.contract((c) => ({
 }))
 ```
 
-The collection serves, for signed-in people only:
+The table that holds the files is a child of `tasks`, with a file column of the kind `attachments`:
 
-| Endpoint                                     | Access                      | Does                                                                    |
-| -------------------------------------------- | --------------------------- | ----------------------------------------------------------------------- |
-| `POST /api/files.attachments.upload/:taskId` | `write` on the task         | the body is the file, `?name=` its name; answers `{ result: { id } }`   |
-| `GET /api/files.attachments/:fileId`         | `read` on the file's task   | streams the file                                                        |
-| `POST /api/files.attachments.list`           | `read` on the task          | body `{ owner, limit?, after? }`; answers `{ result: { items, next } }` |
-| `POST /api/files.attachments.remove`         | `delete` on the file's task | body `{ id }`                                                           |
+```sql db/migrations/20261012100000_attachments.sql
+CREATE TABLE task_attachments (
+	id UUID PRIMARY KEY,
+	task_id UUID NOT NULL,
+	project_id UUID NOT NULL,
+	org_id TEXT NOT NULL,
+	file UUID NOT NULL REFERENCES fabrika_files (id),
+	created_by TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	FOREIGN KEY (task_id, project_id, org_id) REFERENCES tasks (id, project_id, org_id) ON UPDATE CASCADE ON DELETE CASCADE
+);
+CREATE INDEX task_attachments_task ON task_attachments (task_id);
+CREATE INDEX task_attachments_file ON task_attachments (file);
+```
 
-A file reaches what its task reaches, now: a moved task moves its files. The list answers the task's files oldest
-first, each `{ id, name, type, size, status, createdAt }`, at most `limit` (1–100, default 50) after the id `after`.
+Its policy in `src/db/tables.ts` (`references/table-and-migration.md`) names the column and its kind:
 
-The SPA calls them through the typed client, never a hand-written `fetch`: `api.files.attachments` of
-`createClient(contract, 'api')`, and on a link mount's client the `link: true` collections, without the owner.
+```text
+task_attachments: {
+	scope: { child: 'tasks' },
+	actions: { read: 'tasks.read', insert: 'tasks.write', delete: 'tasks.write' },
+	insert: ['file'],
+	files: { file: 'attachments' },
+	createdBy: 'created_by',
+},
+```
+
+- A file column is `UUID REFERENCES fabrika_files (id)` with an index on it; the checker verifies both for every
+  column the policy names in `files`. `fabrika_files` is the framework's table: never write it.
+- A file reaches what its row reaches, now: a moved task moves its files. Deleting the row (here with its task, by the
+  cascade) or clearing a nullable column removes the reference; the framework's sweep deletes a file no column
+  references.
+- A file column takes only a file reference: an input file (`file('<kind>')`), a `ctx.files.put` of this request, or a
+  reference this request read from a file column under that table's `read` action. A string id is refused.
+
+```ts src/tasks/attachments.ts
+import { file } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
+import { app } from '../app-kit'
+
+const Upload = z.strictObject({ taskId: z.uuid(), file: file('attachments') })
+const OfTask = z.strictObject({ taskId: z.uuid() })
+const OneFile = z.strictObject({ taskId: z.uuid(), id: z.uuid() })
+const Saved = z.strictObject({ id: z.uuid() })
+const Empty = z.strictObject({})
+const Attachments = z.strictObject({
+	items: z.array(z.strictObject({
+		id: z.uuid(),
+		name: z.nullable(z.string()),
+		type: z.string(),
+		size: z.int(),
+		status: z.enum(['pending', 'quarantined', 'live', 'rejected']),
+	})),
+})
+
+export const attachments = app.group({ callers: ['human'] }, (r) => ({
+	upload: r.mutation({
+		input: Upload,
+		output: Saved,
+		access: { action: 'tasks.write', on: 'task', from: 'taskId' },
+	})
+		.handle(({ input, ctx }) =>
+			ctx.db.target.task_attachments.insert({ file: input.file })
+		),
+	list: r.query({
+		input: OfTask,
+		output: Attachments,
+		access: { action: 'tasks.read', on: 'task', from: 'taskId' },
+	})
+		.handle(async ({ ctx }) => ({
+			items: (await ctx.db.target.task_attachments.list()).items.map((row) => ({
+				id: row.id,
+				name: row.file.name,
+				type: row.file.type,
+				size: row.file.size,
+				status: row.file.status,
+			})),
+		})),
+	download: r.query({
+		input: OneFile,
+		output: file('attachments'),
+		access: { action: 'tasks.read', on: 'task', from: 'taskId' },
+	})
+		.handle(async ({ input, ctx }) =>
+			(await ctx.db.target.task_attachments.get(input.id)).file
+		),
+	remove: r.mutation({
+		input: OneFile,
+		output: Empty,
+		access: { action: 'tasks.write', on: 'task', from: 'taskId' },
+	})
+		.handle(async ({ input, ctx }) => {
+			await ctx.db.target.task_attachments.remove(input.id)
+			return {}
+		}),
+}))
+```
+
+- An input field `file('<kind>')` makes the body multipart; the file is bounded by the kind's `types` (sniffed, not
+  trusted) and `maxBytes`. The handler writes the reference into the column, in its transaction; a rolled-back
+  request keeps no file.
+- A row read through the data layer carries a file reference in each file column, with `id`, `name`, `type`, `size`
+  and `status`, so a list shows them without a call per file.
+- A query whose output is `file('<kind>')` returns the reference, and the framework streams the file. It is a `GET`
+  with its input in flat query parameters. A `pending` or `quarantined` file answers 409 `file_not_ready`, a `rejected`
+  one 409 `file_rejected`, and one the sweep deleted 404.
+
+The SPA calls them through the typed client, never a hand-written `fetch`. `api.attachments.download.url(input)` is
+the URL of a `GET` file procedure for a same-origin page (`<img src>`, `<a download>`), and
+`download(api.attachments.download, input)` of `@fabrika/app/client` fetches it with the caller's credential and
+answers a file (`blob()`, `stream()`, `save()`).
 
 ```ts web/attachments.ts
 import { createClient, RpcError } from '@fabrika/app/client'
@@ -1651,18 +1747,20 @@ import { contract } from '../fabrika.contract'
 
 const api = createClient(contract, 'api')
 
-/** Uploads `file` to the task, then lists its files; a file's `type` is the declared media type. */
+/** Uploads `file` to the task, then lists its files, each a link to its download. */
 export const attach = async (
 	taskId: string,
 	file: File,
 	list: HTMLElement,
 ): Promise<void> => {
 	try {
-		await api.files.attachments.upload(taskId, file)
-		const page = await api.files.attachments.list({ owner: taskId })
+		await api.attachments.upload({ taskId, file })
+		const page = await api.attachments.list({ taskId })
 		list.replaceChildren(
 			...page.items.map((item) =>
-				Object.assign(document.createElement('li'), {
+				Object.assign(document.createElement('a'), {
+					href: api.attachments.download.url({ taskId, id: item.id }),
+					download: item.name ?? 'file',
 					textContent: `${item.name ?? 'file'} (${item.status})`,
 				})
 			),
@@ -1675,43 +1773,35 @@ export const attach = async (
 }
 ```
 
-`download(id)` answers a `File` named as it was uploaded (409 `quarantined` while a scan runs), and `remove({ id })`
-removes one. `ResultOf<typeof api.tasks.get>` and `InputOf<typeof api.tasks.create>` of `@fabrika/app/client` name a
-procedure's answer and input for a view that maps them.
+A link holder's client has a key, which never goes into a URL: a link page uses `download`. `ResultOf<typeof
+api.tasks.get>` and `InputOf<typeof api.tasks.create>` of `@fabrika/app/client` name a procedure's answer and input for
+a view that maps them.
 
 ## From a handler or a job: `ctx.files`
 
-`ctx.files('<collection>')` reaches one collection of the contract from a handler, a job's `ctx` and its `tx`. Each
-call takes a `Ref` of the owner (a task here), for one of the collection's actions:
+`ctx.files` of a mutation, a webhook, a job and a job's `tx` has two calls; a query's has `open` only:
 
-| Call                              | Takes the owner's `Ref` for | Answers                                                                    |
-| --------------------------------- | --------------------------- | -------------------------------------------------------------------------- |
-| `list(owner, { after?, limit? })` | `read`                      | `{ items, next }`, the files the list endpoint answers; `createdAt` a Date |
-| `open(owner, id, { maxBytes })`   | `read`                      | `{ id, name, type, size, bytes }` of one live file, read whole             |
-| `removeAll(owner)`                | `delete`                    | how many files it marked removed                                           |
+| Call                                | Does                                                                                           |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `put(kind, bytes, { type, name? })` | stores a new file of the kind and answers its reference; it is pending until a column holds it |
+| `open(ref, { maxBytes? })`          | `{ id, name, type, size, bytes }` of a live file, read whole                                   |
 
-A Ref for another action, or of another dimension, is refused. `open` answers 404 for a file of another owner, a
-removed or a rejected one, 409 `quarantined` while the scan has not called it clean, and 413 for a file over
-`maxBytes`, before any byte is read. Pass the size you hold in memory, at most the collection's `maxBytes`. The name
-is checked when the call runs, not by the types: a name the contract does not declare is a 500.
+`open` takes a reference the site read from a file column under that table's `read` action. It answers 409
+`file_not_ready` until the scan called the file clean, 409 `file_rejected` for a rejected one, and 413 for a file over
+`maxBytes` (the kind's by default), before any byte is read. Pass the size you hold in memory.
 
-Every call needs the collection's `read`, so a write capability alone sees no file. A mutation that requires a
-document is declared with an action that is the collection's `read` too, or the check runs where the caller holds
-`read`: never mint or widen a capability to list.
-
-A job mints the owner's `Ref` with `ctx.ref` and opens each live file, here to hand it to an archive service of
-`deps`. `ctx.mail` carries no attachments, so a file leaves through a service of the application's own:
+A job reads each task's rows with a `Ref` it minted and opens each live file, here to hand it to an archive service of
+`deps`. A file can also leave as an e-mail attachment (`attachments` of `ctx.mail.send`, `references/jobs.md`):
 
 ```ts src/tasks/archive.ts
 import { app } from '../app-kit'
 import { archiver } from '../archive'
 
-/** The largest report the archive takes in one call: the collection's maxBytes. */
+/** The largest report the archive takes in one call: the kind's maxBytes. */
 const REPORT_MAX_BYTES = 5242880
 
 export const archive = app.cron('0 6 * * *', {
 	actions: ['tasks.read'],
-	scope: 'app',
 })
 	.handle(async ({ ctx }) => {
 		const store = archiver.get()
@@ -1719,12 +1809,11 @@ export const archive = app.cron('0 6 * * *', {
 		const done = await tasks.list({ where: [['status', '=', 'done']], limit: 50 })
 		for (const task of done.items) {
 			const owner = await ctx.ref('tasks.read', 'task', task.id)
-			const files = ctx.files('attachments')
-			const page = await files.list(owner)
+			const rows = await ctx.db.on(owner).task_attachments.list()
 			const reports = []
-			for (const file of page.items.filter((item) => item.status === 'live')) {
+			for (const row of rows.items.filter((item) => item.file.status === 'live')) {
 				reports.push(
-					await files.open(owner, file.id, { maxBytes: REPORT_MAX_BYTES }),
+					await ctx.files.open(row.file, { maxBytes: REPORT_MAX_BYTES }),
 				)
 			}
 			ctx.signal.throwIfAborted()
@@ -1798,9 +1887,8 @@ export default serve(contract, { database: scoped(tables), deps: archiver })
 
 The `PUT` under the task's id makes a repeated run replace the same object, so a retried attempt stores nothing twice.
 
-`removeAll` runs in a mutation and in a job's `tx.files`, in the same transaction as the handler's writes: an erasure
-that blanks a record and removes its files keeps both or neither. A query and a job's `ctx.files` only read. The
-framework's sweep deletes the removed files' objects within the hour, and so the objects of a deleted owner's files.
+An erasure removes the rows that hold the files in the same transaction as its other writes: it keeps both or
+neither. The framework's sweep then deletes each file no column references, within the hour.
 
 ```ts src/tasks/erase.ts
 import { app } from '../app-kit'
@@ -1808,7 +1896,6 @@ import { app } from '../app-kit'
 /** Blanks the title of every task closed more than a year ago, and removes its attachments with it. */
 export const erase = app.cron('30 2 * * *', {
 	actions: ['tasks.read', 'tasks.write'],
-	scope: 'app',
 })
 	.handle(async ({ ctx }) => {
 		const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(
@@ -1827,33 +1914,38 @@ export const erase = app.cron('30 2 * * *', {
 		for (const task of stale.items) {
 			const ref = await ctx.ref('tasks.write', 'task', task.id)
 			await ctx.transaction(async (tx) => {
-				const locked = await tx.db.on(ref).getForUpdate()
-				await tx.db.on(ref).update({ title: '' }, { expectVersion: locked.version })
-				await tx.files('attachments').removeAll(ref)
+				const target = tx.db.on(ref)
+				const locked = await target.getForUpdate()
+				await target.update({ title: '' }, { expectVersion: locked.version })
+				let page = await target.task_attachments.list({ limit: 100 })
+				while (page.items.length > 0) {
+					for (const row of page.items) {
+						await target.task_attachments.remove(row.id)
+					}
+					page = await target.task_attachments.list({ limit: 100 })
+				}
 			})
 		}
 	})
 ```
 
-- The owner is a table with a dimension scope; an application table owns no collection.
-- There is no limit on the bytes of one owner's files together: `maxPerOwner` × `maxBytes` bounds them.
+- Never write a sweep or delete an object yourself: a file goes when no column references it.
+- **A handover writes the new reference before it deletes the old one, in one transaction.** Written in two
+  transactions, the sweep can delete the file between them.
 
 ## Malware scan
 
-`scan: true` on a collection holds every upload `quarantined` until ClamAV answers clean; on Zerops the platform
-installs ClamAV and runs the scan job. The download answers 409 `quarantined` until then and 404 once the file is
-`rejected`; the list shows each file's `status`, so show it rather than a broken link. In a test, the scan runs with
+`scan: true` on a kind holds every file of it `quarantined` until ClamAV answers clean; on Zerops the platform
+installs ClamAV and runs the scan job. A file answer is 409 `file_not_ready` until then and 409 `file_rejected` once
+the file is `rejected`; a list shows each file's `status`, so show it rather than a broken link. In a test, the scan runs with
 `kit.runJob(FILE_SCAN_JOB)` and a `scanner` passed to `testKit` (`references/tests.md`); the generated tests pass their
 own seeded files.
 
-- A scanning collection admits at most 100 MiB per file (`maxBytes`) and not `application/gzip`; an empty upload is
+- A scanning kind admits at most 100 MiB per file (`maxBytes`) and not `application/gzip`; an empty upload is
   400 `empty`.
 - A ZIP or Office document must start with the ZIP header. Any other file that holds a ZIP signature anywhere is
   rejected, even a rare harmless PDF or image; that is the fail-closed cost.
-- A table written by the `fileTableSql` below can already hold the scan states: turning `scan` on needs no migration.
-  Only a table created by an earlier two-state `fileTableSql` (its check names `'pending', 'live'` alone) needs
-  `fileScanSql('<name>')` of `@fabrika/db` in a new migration, and `fabrika-check` names it. On a current table that
-  migration fails: it adds the constraint, columns and index again.
+- Turning `scan` on needs no migration: the framework's table holds the scan states.
 - ClamAV holds about 1 GB of signatures in memory. On Zerops the deploy service must declare
   `verticalAutoscaling: { minRam: 2 }` (GB), or the build refuses the application. Zerops ignores a changed `verticalAutoscaling` of an existing service on a re-import:
   raise an existing service's RAM through Zerops itself.
@@ -1871,73 +1963,13 @@ own seeded files.
 }
 ```
 
-## Its table
+## A file from a public procedure
 
-Each collection has a table `fabrika_files_<name>`, created by an application migration. Write exactly the DDL that
-`fileTableSql` of `@fabrika/db` returns. `key` and each `chain` entry are `{ column, type }`, with `type` `'uuid'` or
-`'text'` as the owner table declares the column, the nearest container first:
-
-```bash
-bun -e "import { fileTableSql } from '@fabrika/db'; console.log(fileTableSql('attachments', { table: 'tasks', key: { column: 'id', type: 'uuid' }, chain: [{ column: 'project_id', type: 'uuid' }, { column: 'org_id', type: 'text' }] }))"
-```
-
-```sql db/migrations/20261012100000_attachments.sql
-CREATE TABLE fabrika_files_attachments (
-	id UUID PRIMARY KEY,
-	owner_id UUID,
-	project_id UUID,
-	org_id TEXT,
-	status TEXT NOT NULL CONSTRAINT fabrika_files_attachments_status CHECK (status IN ('pending', 'live', 'quarantined', 'rejected')),
-	object_key TEXT NOT NULL UNIQUE,
-	size BIGINT,
-	content_type TEXT NOT NULL,
-	sha256 TEXT,
-	original_name TEXT,
-	created_by TEXT NOT NULL,
-	created_at TIMESTAMPTZ NOT NULL,
-	deleted_at TIMESTAMPTZ,
-	object_version TEXT,
-	scan_attempts INTEGER NOT NULL DEFAULT 0,
-	scan_after TIMESTAMPTZ,
-	FOREIGN KEY (owner_id, project_id, org_id) REFERENCES tasks (id, project_id, org_id) ON UPDATE CASCADE ON DELETE SET NULL
-);
-CREATE INDEX fabrika_files_attachments_owner ON fabrika_files_attachments (owner_id) WHERE deleted_at IS NULL;
-CREATE INDEX fabrika_files_attachments_removable ON fabrika_files_attachments (created_at) WHERE deleted_at IS NOT NULL OR owner_id IS NULL OR status = 'pending';
-CREATE INDEX fabrika_files_attachments_scan ON fabrika_files_attachments (scan_after) WHERE status = 'quarantined';
-```
-
-- The owner table needs `UNIQUE (<key>, <chain columns>)`; `tasks` has `UNIQUE (id, project_id, org_id)`.
-- Codegen leaves the table out, and no policy names it: only the framework reads it.
-- The name is lowercase snake_case, at most 39 characters.
-- `link: true` serves a link mount's holders, for the mount's own object: `POST <prefix>/api/files.<name>.upload`,
-  `POST <prefix>/api/files.<name>.list` (no `owner`) and `GET <prefix>/api/files.<name>/:fileId` under every link mount bound to the owner's dimension, which must grant the
-  collection's `write` and `read`. The owner is the link's object, never a parameter.
-- `link: ['completion']` serves the named link mounts only. Name them when the owner's dimension has a link meant
-  for something else (a one-click answer): a mount the list does not name has no file route and need not grant
-  the collection's actions. Its holder gets 403 from the proxy, which finds no endpoint for the path.
-
-## A file with a public form
-
-A visitor without an account reaches no collection endpoint. A form takes the file with its submission instead
-(`references/public-intake.md` builds it): `files: { photo: { collection: 'photos' } }` on `c.form`, into a collection
-with `scan: true`, beside a challenge. The file waits owned by nobody, and nothing reads it; its id lands in the inbox
-column of its field (`photo UUID`). The job that drains the inbox creates the record and attaches the file in the same
-transaction, with a `Ref` of the new record for the collection's `write` action, which `tx.ref` locates in that
-transaction:
-
-```text
-const [created] = await tx.sql(Id)`insert into candidates (…) values (…) on conflict (email) do nothing returning id`
-if (created !== undefined && row.photo !== null) {
-	await tx.files('photos').attach(await tx.ref('candidates.attach', 'candidate', created.id), row.photo)
-}
-```
-
-- Only a job's `tx.files` has `attach`; a mutation's has none. `tx.ref` is `ctx.ref` located in the transaction.
-- `attach` answers `false` when no file of the collection waits under the id (none was sent, or its hold of seven days
-  ended) and `true` again for one the same owner attached before; it never moves another owner's file. Past
-  `maxPerOwner` it throws 409, and the transaction rolls back with the file still held.
-- The attached file is `quarantined` until the scan job's clean verdict, like any upload of a scanning collection.
-- A file nobody attached is deleted by the sweep job an hour after its hold of seven days ended.
+A visitor without an account sends a file as a field of a public procedure's input
+(`references/public-intake.md` builds it): `photo: z.optional(file('photos'))`, into a kind with `scan: true`, beside
+a challenge and `admission.rate.bytesPerHour`. The handler writes the reference into a file column of an application
+table (`registrations.photo`), and the job that claims the row writes the same reference into the record's column in
+the transaction that deletes the row. The file is never copied; the sweep deletes it once no column references it.
 
 ## Storage
 
@@ -1956,10 +1988,10 @@ A test that boots an application with files passes `files: new MemoryFileObjects
 
 # references/jobs.md — cron jobs
 
-Background work is a cron job: `app.cron(schedule, { actions, scope: 'app' })` with its `.handle(…)` in the
+Background work is a cron job: `app.cron(schedule, { actions })` with its `.handle(…)` in the
 `endpoints.ts` of the slice whose data it works on, mounted under `jobs` in the contract. There are no timers, loops,
 `setInterval` or self-scheduled work, and no `ctx.jobs.enqueue`: work for later is a row that a run picks up. A
-mutation that declares `then: '<job>'` starts a run within seconds of its commit (the outbox below); the schedule
+mutation that declares `kicks: ['<job>']` and calls `ctx.kick('<job>')` starts a run within seconds of its commit (the outbox below); the schedule
 picks up whatever that run leaves.
 
 ```ts src/overdue/endpoints.ts
@@ -1969,7 +2001,6 @@ import { isOverdue } from './logic'
 /** Marks every open task past its due day, hourly; each is re-read under its lock, so a concurrent change is skipped. */
 export const markOverdue = app.cron('15 * * * *', {
 	actions: ['tasks.read', 'tasks.write'],
-	scope: 'app',
 	limits: { timeoutMs: 600000 },
 	retries: 2,
 })
@@ -2059,7 +2090,7 @@ export const contract = app.contract((c) => ({
 }))
 ```
 
-- The schedule is five cron fields, UTC. `scope: 'app'` is the only scope: a job reaches every value.
+- The schedule is five cron fields, UTC. A job is application-wide: it reaches every value.
 - A job holds exactly its `actions`. `ctx.within(action, dimension)` is a `Within` of every value;
   `ctx.ref(action, dimension, id)` locates one object (404 when it is gone). Bind them with `ctx.db.over(within)`,
   `ctx.db.in(ref)` and `ctx.db.on(ref)`.
@@ -2084,18 +2115,18 @@ export const contract = app.contract((c) => ({
 
   ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where (…) returning id`)``
 
-  The version bump is yours to write. **A job writes no scope fragment**: it is app-wide (`scope: 'app'` is the only
-  scope), so `tx.sql.scope` of its `Within` would be every row.
+  The version bump is yours to write. **A job writes no scope fragment**: it is application-wide, so `tx.sql.scope` of
+  its `Within` would be every row.
 - `bun test --isolate` runs a job with `kit.runJob('markOverdue')` (`references/tests.md`). The platform runs
   `fabrika job run <name>` from the crontab it generates; never write a crontab or read `FABRIKA_JOB_*`.
 - A job cannot create scopes or manage members, and has no `ctx.members`: a job holds no object chain. It issues share
   links only when it declares `issues: '<link mount>'` and its actions hold the mount's `issuedBy` and every grant:
   `ctx.links.issue(await ctx.ref('<issuedBy>', '<dimension>', id), { mount, days })`, and `ctx.links.revoke(id)` for
-  a link it issued. It is a widening for closer review. `references/public-intake.md` is the whole recipe: a form's
-  inbox, the record, the link and its e-mail, each step recorded before the next.
-- A job reads a file collection through `ctx.files('<collection>')` with a `Ref` it minted (`list`, `open` to hand a
-  file to another service), and removes an owner's files only inside its transaction, `tx.files('<collection>').removeAll(ref)`
-  (`references/files.md`). The framework's own `fabrika-file-sweep` then deletes their objects; never write a sweep.
+  a link it issued. It is a widening for closer review. `references/public-intake.md` is the whole recipe: a public
+  procedure's row, the record, the link and its e-mail, each step recorded before the next.
+- A job reads a file column through a capability it minted and opens a file with `ctx.files.open(ref)`, to hand it to
+  another service; it removes files by deleting the rows that hold them, inside its transaction (`references/files.md`).
+  The framework's own `fabrika-file-sweep` then deletes a file no column references; never write a sweep.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
   each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
 - A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, a framework refusal
@@ -2119,7 +2150,8 @@ that says so): it records an outbox row and kicks the job (below). `references/p
 - `ctx.mail.send({ to, subject, text, html?, replyTo?, fromName?, idempotencyKey }, signal?)` hands one message to the
   transport and answers `{ status: 'accepted', provider, messageId }`. It always aborts with the attempt's
   `ctx.signal`; pass `AbortSignal.timeout(ms)` for a deadline of the message's own. The sending address is the
-  transport's; `fromName` and `replyTo` are the application's, per message. There are no attachments.
+  transport's; `fromName` and `replyTo` are the application's, per message. `attachments: [ref]` attaches files the
+  job read from a file column; a transport that sends none refuses the message.
 - `idempotencyKey` is 1 to 200 visible ASCII characters, unique per message in the application environment, and
   derived from the outbox row (`intake-link-<link id>`), never random. `ctx.mail` puts a prefix of the installation
   and the environment in front of it, so no other application on the same provider account shares it.
@@ -2138,22 +2170,23 @@ that says so): it records an outbox row and kicks the job (below). `references/p
 ## An outbox: what a request asks a job to do
 
 A request handler calls no outside service and sends no e-mail (`references/endpoint.md`). It records what to do in a
-row, in its own transaction: a form's inbox row, an outbox row (`test_mails`), or a state of its record
+row, in its own transaction: a public procedure's row (`registrations`), an outbox row (`test_mails`), or a state of its record
 (`link_state = 'due'`). A job does the work and calls the service. `references/public-intake.md` is the whole recipe.
 
-**The kick.** A mutation that records such a row declares `then: '<job>'`: once its transaction committed, the job
-runs within seconds, under its own key, and the answer does not wait for it. A form's `then` does the same for its
-inbox. A thrown handler, a refused answer and a failed commit kick nothing. Kicks coalesce: at most one run is active
-and one pending, however many calls arrive. A kick carries nothing; the job reads its rows, and its schedule stays the
-recovery. `then` names one cron job of the contract, as a literal (`r.mutation({ …, then: 'testMails' })`); a query,
-an export, a webhook and a job declare none.
+**The kick.** A mutation that records such a row declares `kicks: ['<job>']` and calls `ctx.kick('<job>')`: once its
+transaction committed, the job runs within seconds, under its own key, and the answer does not wait for it. A thrown
+handler, a refused answer and a failed commit kick nothing. Kicks coalesce: at most one run is active and one pending,
+however many calls arrive. A kick carries nothing; the job reads its rows, and its schedule stays the recovery.
+`kicks` names cron jobs of the contract, as literals (`r.mutation({ …, kicks: ['testMails'] })`); a mutation, a
+webhook and a job declare it, and the kick edges never form a cycle.
 
 The rules of the job:
 
 - **Bounded batches.** Each run takes at most a fixed number of records (`order by received_at, id limit 50`), oldest
   first; the next run takes the rest.
-- **Claim a record where you consume it**: read it `for update skip locked` in the transaction that writes it, so a
-  row another session holds waits for a later run and blocks nothing behind it.
+- **Claim a record where you consume it**: a queue table's `claim` (`references/public-intake.md`), or a read
+  `for update skip locked` in the transaction that writes it, so a row another session holds waits for a later run and
+  blocks nothing behind it.
 - **Each record is its own work.** Run it in its own transactions, inside a `try`: a failure adds one to the record's
   `attempts`, keeps a fixed step code in `last_failure` (never the error's message, which can quote a value), and the
   run goes on with the next record. Rethrow when `ctx.signal` aborted: that failure is the attempt's, and the next
@@ -2179,8 +2212,6 @@ The rules of the job:
   where `ctx.mail.mayRetry(error)` holds, and is dead at once otherwise; one whose `outcome` is `not_sent` returns to
   the state it had before `sending`.
 - **Each step recorded before the next effect**, so the next run finishes a stopped one.
-- An inbox needs a row key for this: `id UUID NOT NULL DEFAULT gen_random_uuid()`, since a form writes only its input
-  fields.
 
 ---
 
@@ -2196,16 +2227,16 @@ Every piece lets in someone who is not signed in, so ask the human before you bu
 visitor do. The visitor never reaches a handler without a credential:
 
 1. **A public page** (`c.spa('/', { access: { public: true } })`) holds the form. It reads no data.
-2. **A form** appends one row to its inbox table and answers `{ result: { received: true } }`, for a new and a known
-   address alike. It runs no handler: a handler would give every anonymous request a transaction, and a different
-   answer for a known address would tell a stranger who registered.
-3. **A cron job** drains the inbox, creates the record, issues a link bound to it (`issues`), and sends the e-mail
-   through the installation's transport (`mailer: 'installation'`, `ctx.mail`). Each form kicks it (`then: 'intake'`),
-   so it runs within seconds of a submission; its schedule is the recovery. It is the outbox recipe of
+2. **A public procedure** (`access: { public: true }`) inserts one row into an application table and answers `{}`, for
+   a new and a known address alike. It reads no existing row: a different answer for a known address would tell a
+   stranger who registered.
+3. **A cron job** claims the registrations, creates the record, issues a link bound to it (`issues`), and sends the
+   e-mail through the installation's transport (`mailer: 'installation'`, `ctx.mail`). Each submission kicks it
+   (`kicks: ['intake']`, `ctx.kick('intake')`), so it runs within seconds; its schedule is the recovery. It is the outbox recipe of
    `references/jobs.md`: bounded batches, each record its own work with an attempt count and a backoff, a dead state
    for a record that keeps failing, an idempotency key on the e-mail, and a retry only where the transport allows it.
 4. **A link mount** serves the visitor's own record: `verify` and the record's files, under the link's key.
-5. **A second form** asks for a new link. The job revokes the old one and sends a new one, within a budget per address.
+5. **A second public procedure** asks for a new link. The job revokes the old one and sends a new one, within a budget per address.
 
 ## The vocabulary, the migrations and the policies
 
@@ -2223,6 +2254,7 @@ export const vocabulary = defineVocabulary({
 		'candidates.attach': 'Attach files to a candidate record',
 		'candidates.invite': "Issue a candidate's portal link",
 		'candidates.process': 'Register candidates and send their links',
+		'candidates.register': 'Record an anonymous registration or resend request',
 		'positions.read': 'Read the open positions',
 		'positions.manage': 'Edit the open positions',
 		'reasons.manage': 'Edit the reasons a decision records',
@@ -2280,7 +2312,8 @@ export const vocabulary = defineVocabulary({
 - `directory: 'labels'` lets every `people.list` holder read each person's label, for naming the author of a change.
   A label spells a user's address, so the approver reviews it closely.
 - The link's holder and the jobs get their actions from the link mount and each job's `actions`, not from a role.
-  `mail.send` is no role's: only the job that sends the test e-mails holds it.
+  `mail.send` is no role's: only the job that sends the test e-mails holds it. `candidates.register` is no role's
+  either: only the public procedures hold it.
 
 ```sql db/migrations/20261013090000_intake.sql
 CREATE TYPE candidate_status AS ENUM ('new', 'screening', 'interview', 'hired', 'rejected');
@@ -2306,9 +2339,11 @@ CREATE TABLE candidates (
 	attempts INTEGER NOT NULL DEFAULT 0,
 	next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	last_failure TEXT,
+	photo UUID REFERENCES fabrika_files (id),
 	created_by TEXT NOT NULL,
 	version INTEGER NOT NULL
 );
+CREATE INDEX candidates_photo ON candidates (photo);
 
 -- The review's history: one row per decision, written in the decision's own transaction.
 CREATE TABLE candidate_events (
@@ -2322,21 +2357,23 @@ CREATE TABLE candidate_events (
 );
 CREATE INDEX candidate_events_candidate ON candidate_events (candidate_id);
 
--- The forms' inboxes: a column per input field, of its name, except the honeypot and the challenge token, and one per
--- file field, which receives the id of the file the submission carried (NULL without one). A form writes those
--- columns only, so every other column has a default: id names the row for the job, received_at keeps the time of the
--- submission, and a registration counts the job's failed attempts at it.
+-- What the public procedures insert. A registration is a queue row the job claims: attempts counts its claims and
+-- next_attempt_at is when it is due, NULL once done; last_failure names the step that failed last. photo holds the
+-- file the visitor sent, or NULL. received_at keeps the time of the submission.
 CREATE TABLE registrations (
-	id UUID NOT NULL DEFAULT gen_random_uuid(),
+	id UUID PRIMARY KEY,
 	email TEXT NOT NULL,
 	full_name TEXT NOT NULL,
-	photo UUID,
+	photo UUID REFERENCES fabrika_files (id),
 	received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	attempts INTEGER NOT NULL DEFAULT 0,
-	last_failure TEXT
+	next_attempt_at TIMESTAMPTZ DEFAULT now(),
+	last_failure TEXT,
+	version INTEGER NOT NULL
 );
+CREATE INDEX registrations_photo ON registrations (photo);
 CREATE TABLE resend_requests (
-	id UUID NOT NULL DEFAULT gen_random_uuid(),
+	id UUID PRIMARY KEY,
 	email TEXT NOT NULL,
 	received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -2380,53 +2417,19 @@ CREATE TABLE test_mails (
 ```
 
 ```sql db/migrations/20261013090100_attachments.sql
-CREATE TABLE fabrika_files_attachments (
+-- The files a link holder attaches to the candidate's record: one row per file, its reference in a file column.
+CREATE TABLE candidate_files (
 	id UUID PRIMARY KEY,
-	owner_id UUID,
-	status TEXT NOT NULL CONSTRAINT fabrika_files_attachments_status CHECK (status IN ('pending', 'live', 'quarantined', 'rejected')),
-	object_key TEXT NOT NULL UNIQUE,
-	size BIGINT,
-	content_type TEXT NOT NULL,
-	sha256 TEXT,
-	original_name TEXT,
+	candidate_id UUID NOT NULL REFERENCES candidates (id) ON DELETE CASCADE,
+	file UUID NOT NULL REFERENCES fabrika_files (id),
 	created_by TEXT NOT NULL,
-	created_at TIMESTAMPTZ NOT NULL,
-	deleted_at TIMESTAMPTZ,
-	object_version TEXT,
-	scan_attempts INTEGER NOT NULL DEFAULT 0,
-	scan_after TIMESTAMPTZ,
-	FOREIGN KEY (owner_id) REFERENCES candidates (id) ON UPDATE CASCADE ON DELETE SET NULL
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX fabrika_files_attachments_owner ON fabrika_files_attachments (owner_id) WHERE deleted_at IS NULL;
-CREATE INDEX fabrika_files_attachments_removable ON fabrika_files_attachments (created_at) WHERE deleted_at IS NOT NULL OR owner_id IS NULL OR status = 'pending';
-CREATE INDEX fabrika_files_attachments_scan ON fabrika_files_attachments (scan_after) WHERE status = 'quarantined';
+CREATE INDEX candidate_files_candidate ON candidate_files (candidate_id);
+CREATE INDEX candidate_files_file ON candidate_files (file);
 ```
 
-```sql db/migrations/20261013090150_photos.sql
-CREATE TABLE fabrika_files_photos (
-	id UUID PRIMARY KEY,
-	owner_id UUID,
-	status TEXT NOT NULL CONSTRAINT fabrika_files_photos_status CHECK (status IN ('pending', 'live', 'quarantined', 'rejected')),
-	object_key TEXT NOT NULL UNIQUE,
-	size BIGINT,
-	content_type TEXT NOT NULL,
-	sha256 TEXT,
-	original_name TEXT,
-	created_by TEXT NOT NULL,
-	created_at TIMESTAMPTZ NOT NULL,
-	deleted_at TIMESTAMPTZ,
-	object_version TEXT,
-	scan_attempts INTEGER NOT NULL DEFAULT 0,
-	scan_after TIMESTAMPTZ,
-	FOREIGN KEY (owner_id) REFERENCES candidates (id) ON UPDATE CASCADE ON DELETE SET NULL
-);
-CREATE INDEX fabrika_files_photos_owner ON fabrika_files_photos (owner_id) WHERE deleted_at IS NULL;
-CREATE INDEX fabrika_files_photos_removable ON fabrika_files_photos (created_at) WHERE deleted_at IS NOT NULL OR owner_id IS NULL OR status = 'pending';
-CREATE INDEX fabrika_files_photos_scan ON fabrika_files_photos (scan_after) WHERE status = 'quarantined';
-```
-
-The file tables are `fileTableSql('attachments', { table: 'candidates', key: { column: 'id', type: 'uuid' }, chain: [] })`
-and the same for `photos` (`references/files.md`): a top-level owner has no chain.
+A file column is a `UUID` that references `fabrika_files (id)`, with an index on it (`references/files.md`).
 
 ```ts src/db/tables.ts
 import { defineTables } from '@fabrika/db/tables'
@@ -2446,8 +2449,10 @@ export const tables = defineTables(vocabulary, columns)({
 		update: ['verified_at'],
 		version: 'version',
 		createdBy: 'created_by',
+		files: { photo: 'photos' },
 		columns: {
 			status: { write: 'candidates.review' },
+			photo: { write: 'candidates.attach' },
 			link_state: { read: 'candidates.process' },
 			link_id: { read: 'candidates.process' },
 			link_seal: { read: 'candidates.process' },
@@ -2465,8 +2470,40 @@ export const tables = defineTables(vocabulary, columns)({
 		insert: ['status', 'note', 'reason_id'],
 		createdBy: 'created_by',
 	},
-	registrations: { scope: { inbox: 'register', read: 'candidates.process' } },
-	resend_requests: { scope: { inbox: 'resend', read: 'candidates.process' } },
+	candidate_files: {
+		scope: { child: 'candidates' },
+		actions: {
+			read: 'candidates.read',
+			insert: 'candidates.attach',
+			delete: 'candidates.review',
+		},
+		insert: ['file'],
+		files: { file: 'attachments' },
+		createdBy: 'created_by',
+	},
+	registrations: {
+		scope: { app: 'registrations of visitors, until the intake job takes them' },
+		actions: {
+			read: 'candidates.process',
+			insert: 'candidates.register',
+			update: 'candidates.process',
+			delete: 'candidates.process',
+		},
+		insert: ['email', 'full_name', 'photo'],
+		update: ['last_failure'],
+		files: { photo: 'photos' },
+		queue: { attempts: 'attempts', due: 'next_attempt_at', maxAttempts: 5 },
+		version: 'version',
+	},
+	resend_requests: {
+		scope: { app: 'requests for a new link, until the intake job takes them' },
+		actions: {
+			read: 'candidates.process',
+			insert: 'candidates.register',
+			delete: 'candidates.process',
+		},
+		insert: ['email'],
+	},
 	positions: {
 		scope: { app: 'the open positions an HR lead edits' },
 		actions: {
@@ -2506,24 +2543,26 @@ export const tables = defineTables(vocabulary, columns)({
 })
 ```
 
-- `{ inbox: '<form>', read }` is a form's table: only that form appends to it, and only a site that holds `read` and
-  declares the reach reads it. No site writes it: `unscoped: { registrations: 'write' }` is refused.
+- `registrations` and `resend_requests` are what the public procedures insert, with `candidates.register`, which no
+  role grants. A public procedure inserts and reads back nothing; only the job, with `candidates.process`, reads them.
+- `queue` makes `registrations` a queue table: the job's `claim` leases due rows, counts `attempts`, and moves
+  `next_attempt_at` by the backoff; a row claimed `maxAttempts` times stays, no longer due, for an operator.
+- `files: { photo: 'photos' }` makes `photo` a file column of the kind `photos`. The claim reads it with the table's read
+  action, so the job may write the same reference into `candidates.photo`, whose own write action is `candidates.attach`.
 - `{ app: '<why>' }` is an application table: its rows belong to no candidate. An endpoint declared
   `access: { action, app: true }` reads and writes it through `ctx.db.app`, with the action the operation names. An
   endpoint `on`, `in` or `over` a candidate reads it, read-only and every row, where its action is the table's read
   action: `decide` reads `reasons` with `candidates.review`. A position or a reason is deactivated, never deleted, so
   neither table has a delete action. `candidate_exports` is appended with the export's own action, `candidates.export`,
   and read with `exports.read`. `test_mails` is appended with `mail.test` and read only by the job's `mail.send`.
-- The form writes each input field to the column of the same name: `full_name`, never `fullName`. tsc refuses another
-  name at the form's `appendTo`, and the checker refuses it too. A `ctx.sql` row still reads it as `fullName`.
-- The form writes nothing else, so an inbox records the time of a submission only in a `DEFAULT now()` column
-  (`received_at`). The job's own `now()` is later: seconds after a kick, up to a minute when the schedule recovers it.
-  An inbox's `id` is a `DEFAULT gen_random_uuid()` for the same reason: the job takes and counts each row by it.
+- A registration records the time of the submission in a `DEFAULT now()` column (`received_at`). The job's own
+  `now()` is later: seconds after a kick, up to a minute when the schedule recovers it.
 - The delivery columns are read only with `candidates.process`, so neither HR nor the link's holder sees them.
 
 ## The contract
 
 ```ts src/schemas.ts
+import { file } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 
 export const CandidateStatus = z.enum([
@@ -2535,9 +2574,10 @@ export const CandidateStatus = z.enum([
 ])
 export const Register = z.strictObject({
 	email: z.email().max(200),
-	full_name: z.string().min(1).max(200),
+	fullName: z.string().min(1).max(200),
 	website: z.optional(z.string().max(200)),
 	challengeToken: z.string().max(4096),
+	photo: z.optional(file('photos')),
 })
 export const Resend = z.strictObject({ email: z.email().max(200) })
 export const Me = z.strictObject({
@@ -2552,59 +2592,29 @@ export const Verified = z.strictObject({ verifiedAt: z.iso.datetime() })
 import { app } from './src/app-kit'
 import { candidates } from './src/candidates/endpoints'
 import { intake } from './src/intake/endpoints'
+import { visitors } from './src/intake/visitors'
 import { portal } from './src/portal/endpoints'
 import { positions } from './src/positions/endpoints'
 import { reasons } from './src/reasons/endpoints'
-import { Register, Resend } from './src/schemas'
 import { settings, testMails } from './src/settings/endpoints'
 
 export const contract = app.contract((c) => ({
 	site: c.spa('/', { dir: 'dist/site', access: { public: true } }),
-	register: c.form('/register', {
-		input: Register,
-		appendTo: 'registrations',
-		maxBytes: 4096,
-		honeypot: 'website',
-		challenge: {
-			provider: 'turnstile',
-			secret: 'TURNSTILE_SECRET',
-			siteKey: 'TURNSTILE_SITE_KEY',
-		},
-		files: { photo: { collection: 'photos' } },
-		then: 'intake',
-	}),
-	resend: c.form('/resend', {
-		input: Resend,
-		appendTo: 'resend_requests',
-		maxBytes: 1024,
-		then: 'intake',
-	}),
 	portal,
-	api: c.rpc('/api', { candidates, positions, reasons, settings }),
+	api: c.rpc('/api', { visitors, candidates, positions, reasons, settings }),
 	hr: c.spa('/hr', {
 		dir: 'dist/hr',
 		access: { action: 'candidates.read', over: 'candidate' },
 	}),
 	files: {
 		attachments: c.files({
-			owner: 'candidates',
-			read: 'candidates.read',
-			write: 'candidates.attach',
-			delete: 'candidates.review',
-			maxBytes: 10485760,
 			types: ['application/pdf'],
-			maxPerOwner: 5,
-			link: true,
+			maxBytes: 10485760,
 			scan: true,
 		}),
 		photos: c.files({
-			owner: 'candidates',
-			read: 'candidates.read',
-			write: 'candidates.attach',
-			delete: 'candidates.review',
-			maxBytes: 15728640,
 			types: ['image/jpeg', 'image/png', 'image/webp'],
-			maxPerOwner: 1,
+			maxBytes: 15728640,
 			scan: true,
 		}),
 	},
@@ -2613,59 +2623,110 @@ export const contract = app.contract((c) => ({
 }))
 ```
 
+```ts src/intake/visitors.ts
+import { honeypot } from '@fabrika/app'
+import { z } from 'zod/v4'
+import { app } from '../app-kit'
+import { Register, Resend } from '../schemas'
+
+const Empty = z.strictObject({})
+
+/** Each inserts one row and answers the same, whatever the database holds: no answer tells who registered. */
+export const visitors = app.group({}, (r) => ({
+	register: r.mutation({
+		input: Register,
+		output: Empty,
+		access: { public: true },
+		actions: ['candidates.register'],
+		admission: {
+			challenge: {
+				provider: 'turnstile',
+				secret: 'TURNSTILE_SECRET',
+				siteKey: 'TURNSTILE_SITE_KEY',
+			},
+			rate: { perClient: 100, perEndpoint: 100, bytesPerHour: 536870912 },
+		},
+		kicks: ['intake'],
+	})
+		.handle(async ({ input, ctx }) => {
+			if (honeypot(input.website)) return {}
+			await ctx.db.app('candidates.register').registrations.insert({
+				email: input.email,
+				full_name: input.fullName,
+				photo: input.photo ?? null,
+			})
+			ctx.kick('intake')
+			return {}
+		}),
+	resend: r.mutation({
+		input: Resend,
+		output: Empty,
+		access: { public: true },
+		actions: ['candidates.register'],
+		limits: { maxBytes: 1024 },
+		kicks: ['intake'],
+	})
+		.handle(async ({ input, ctx }) => {
+			await ctx.db.app('candidates.register').resend_requests.insert({
+				email: input.email,
+			})
+			ctx.kick('intake')
+			return {}
+		}),
+}))
+```
+
 - **The public page.** `access: { public: true }` serves the SPA to anyone, without a token, and takes no other key.
   At `/` it answers every `GET` that no more specific endpoint serves, so the HR SPA (`/hr`) and the link's SPA (`/p`)
   keep their own. The approver sees it as "for anyone, without signing in". Put nothing on it that only members may
-  read: the page calls no procedure.
-- **The form's abuse control.** `honeypot` names an optional string field the page hides: a filled one gets the same
-  answer and writes no row. `challenge` makes the framework verify the Turnstile token in `challengeToken` before it
-  writes the row (a failed token 400, an unreachable provider 503, no row either way) and adds Turnstile's origin to
-  the CSP. `TURNSTILE_SECRET` is an application variable the human sets; without it the application does not boot.
-  `siteKey` names the variable with the widget's public site key, which every SPA mount serves its pages; without it
-  the application does not boot either. Another public value a page needs per environment (a link target) goes in
-  the SPA mount's own list: `c.spa('/', { …, public: ['SIGNUP_URL'] })`. Both reach the page in
-  `<prefix>/__fabrika-config.json` as `public: { <VARIABLE>: <value> }`, and the approver sees each name. Never name
-  a secret there: the contract refuses a variable that is both.
-  `rate: { perClient, perForm }` (per minute, 10 and 100 by default) answers 429 past either limit.
-- **A form on someone else's page.** A form served from this application's own SPA needs nothing. A form a partner's
-  page or a separate marketing site submits needs `crossOrigin`: `true` for the origins an operator lists for the
-  environment in Control, `'*'` for any site (an embeddable widget). The proxy answers the browser's preflight and
-  the page can read the constant answer. Keep the honeypot, the challenge and the rate limit: `'*'` invites every site.
+  read: the page calls only the public procedures.
+- **A public procedure** sits in a group with no callers (`app.group({}, …)`), declares `access: { public: true }`
+  and the `actions` it holds, and is served at `POST /api/visitors.register`. Its `ctx.db.app('<action>')` inserts and
+  reads back nothing; it never locks or claims a row.
+- **Its abuse control.** `honeypot(input.website)` is true when the field the page hides is filled: answer the same
+  and write no row. `admission.challenge` makes the framework verify the Turnstile token in the input field
+  `challengeToken` before the handler runs (a failed token 400, an unreachable provider 503, no row either way) and adds
+  Turnstile's origin to the CSP. `TURNSTILE_SECRET` is an application variable the human sets; without it the
+  application does not boot. `siteKey` names the variable with the widget's public site key, which every SPA mount
+  serves its pages; without it the application does not boot either. Another public value a page needs per
+  environment (a link target) goes in the SPA mount's own list: `c.spa('/', { …, public: ['SIGNUP_URL'] })`. Both
+  reach the page in `<prefix>/__fabrika-config.json` as `public: { <VARIABLE>: <value> }`, and the approver sees each
+  name. Never name a secret there: the contract refuses a variable that is both.
+  `admission.rate: { perClient, perEndpoint }` (per minute, 10 and 100 by default for a public mutation) answers 429
+  past either limit.
+- **A form on someone else's page.** A page served from this application's own origin needs nothing. A partner's page
+  or a separate marketing site needs `admission.origins`: `'listed'` for the origins an operator lists for the
+  environment in Control, `'any'` for any site (an embeddable widget). Keep the honeypot, the challenge and the rate
+  limit: `'any'` invites every site.
 - **Zerops shares one client address.** Until the platform reads the visitor's address behind the Zerops balancer,
-  every visitor counts as one client there, so `perClient` acts as a second per-form limit: set it to the form's
-  expected peak, never lower it to stop a flood. The challenge is the defense that does not depend on the address.
-- **Counting clicks** on a public page has no primitive. The pattern is an anonymous form without a challenge whose
-  inbox gets one row per click, posted with `fetch(…, { keepalive: true })`. Know both limits before you offer it:
-  anyone can inflate the counts (the rate limits bound only how fast), and nothing drains the inbox but a job you
+  every visitor counts as one client there, so `perClient` acts as a second per-endpoint limit: set it to the expected
+  peak, never lower it to stop a flood. The challenge is the defense that does not depend on the address.
+- **Counting clicks** on a public page has no primitive. The pattern is a public procedure without a challenge that
+  inserts one row per click, posted with `fetch(…, { keepalive: true })`. Know both limits before you offer it:
+  anyone can inflate the counts (the rate limits bound only how fast), and nothing reads the rows but a job you
   write. Ask the human first; usually the application should not count clicks.
 - **Other origins** the pages load (an image host, an API the browser calls) go in the contract's `csp` section:
   `csp: { scriptSrc: [{ origin: 'https://…', purpose: '…' }] }`, beside `connectSrc`, `imgSrc`, `frameSrc`,
   `styleSrc`, `fontSrc` and `frameAncestors`: exact `https://` origins, at most 16 each. Each new origin is a widening the approver sees.
-- **Scanned files.** A visitor's upload waits `quarantined` until ClamAV answers clean (`references/files.md`): its
-  download answers 409 until then. On Zerops the deploy service needs `verticalAutoscaling: { minRam: 2 }`.
-- **A photo with the registration.** `files: { photo: { collection: 'photos' } }` lets the form carry one file beside
-  its input; `required: true` refuses a submission without it. The form becomes `multipart/form-data` (the page's code
-  is below) and must declare a challenge; each field lands in a collection that has `scan: true`, whose `types`,
-  `maxBytes` and `maxPerOwner` bound the file, while the form's `maxBytes` bounds only its input. The inbox has a
-  column named like the field (`photo UUID`), which receives the file's id, or `NULL` when the visitor sent none. Until
-  the job attaches it, the file is owned by nobody and nobody can read it; one the job never attaches (a known address,
-  a registration that stays dead) is deleted seven days after the submission. The approver sees "Form `register` takes
-  a file `photo` from anyone into files `photos`". A file the collection refuses (a type it does not admit, bytes
-  that are not that type, too large) is 415 or 413 after the challenge was spent, so the page checks the type and the
-  size before it submits, and solves the challenge again after a refusal.
-  While no file is `required`, the form still takes the JSON body it took before (every file column `NULL`): deploy the
-  application first, then switch each page to multipart. A form with files accepts 20 submissions a minute unless
-  `rate.perForm` says otherwise, and its files write at most 512 MiB an hour in all (`rate: { bytesPerHour }` to raise
-  it, never below the largest file): each file reserves its collection's `maxBytes` first, so with a 15 MiB photo about
-  34 maximal photos fit in an hour, more of the usual 2–5 MB ones; past it the form answers 429 until the hour ends.
-  Size the budget for the expected peak: a flood that spends it costs that hour's photos, not the storage.
-- **The kick.** `then: 'intake'` makes each accepted submission start a run of the job within seconds, once its row
-  committed, under the job's own key. The visitor's answer is the same constant and never waits for the run. Kicks
-  coalesce on the job's lease (at most one run and one pending, however many visitors submit), so a flood adds no
-  work: the run still drains the inbox in batches of 50, within each address's budget. A kick carries nothing; the
-  job reads its inbox.
+- **Scanned files.** A visitor's upload waits `quarantined` until ClamAV answers clean (`references/files.md`): a file
+  answer is 409 until then. On Zerops the deploy service needs `verticalAutoscaling: { minRam: 2 }`.
+- **A photo with the registration.** `photo: z.optional(file('photos'))` lets the visitor send one file beside the
+  input; the client then sends the body as multipart. A public file field needs a challenge, `bytesPerHour` and a kind
+  with `scan: true`, whose `types` and `maxBytes` bound the file. The handler writes the reference into
+  `registrations.photo`, and the job writes the same reference into `candidates.photo`: the file is never copied. A
+  file no column references any more (a known address, a registration an operator deleted) is deleted by the
+  framework's sweep. A file the kind refuses (a type it does not admit, bytes that are not that type, too large) is
+  415 or 413 after the challenge was spent, so the page checks the type and the size before it submits, and solves
+  the challenge again after a refusal. The files of the procedure write at most `bytesPerHour` in all (512 MiB here),
+  each file reserving its kind's `maxBytes` first, so with a 15 MiB photo about 34 maximal photos fit in an hour;
+  past it the procedure answers 429 until the hour ends. Size the budget for the expected peak: a flood that spends
+  it costs that hour's photos, not the storage.
+- **The kick.** `kicks: ['intake']` and `ctx.kick('intake')` start a run of the job within seconds, once the row
+  committed, under the job's own key. The visitor's answer never waits for the run. Kicks coalesce on the job's lease
+  (at most one run and one pending, however many visitors submit), so a flood adds no work: the run still claims in
+  batches of 50, within each address's budget. A kick carries nothing; the job reads its tables.
 
-## The job: inbox → record → link → e-mail
+## The job: registration → record → link → e-mail
 
 ```ts src/links.ts
 import { defineDeps } from '@fabrika/app/implement'
@@ -2739,15 +2800,8 @@ import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { links } from '../links'
 
-const Queued = z.strictObject({
-	id: z.string(),
-	email: z.string(),
-	fullName: z.string(),
-	photo: z.nullable(z.string()),
-})
 const Ask = z.strictObject({ email: z.string() })
 const Id = z.strictObject({ id: z.string() })
-const Attempts = z.strictObject({ attempts: z.number() })
 const State = z.strictObject({ linkState: z.string() })
 const Due = z.strictObject({
 	id: z.string(),
@@ -2779,7 +2833,6 @@ export const intake = app.cron('* * * * *', {
 		'candidates.verify',
 		'candidates.attach',
 	],
-	scope: 'app',
 	retries: 0,
 	sql: 'write',
 	issues: 'portal',
@@ -2802,47 +2855,42 @@ export const intake = app.cron('* * * * *', {
 				await failed(error)
 			}
 		}
-		// A registration becomes a candidate once; the form told the visitor nothing either way.
-		const queued = await ctx.transaction((tx) =>
-			tx.sql(Id)`
-				select id from registrations where attempts < ${MAX_ATTEMPTS}
-				order by received_at, id limit ${BATCH}`
-		)
-		for (const { id } of queued) {
+		// A registration becomes a candidate once; the procedure told the visitor nothing either way.
+		const claimed = await ctx.db.app('candidates.process').registrations.claim({
+			limit: BATCH,
+		})
+		for (const row of claimed) {
 			await eachRecord(() =>
 				ctx.transaction(async (tx) => {
-					// Claimed where it is consumed: a row other work holds is skipped, not waited for.
-					const [row] = await tx.sql(Queued)`
-						select id, email, full_name, photo from registrations
-						where id = ${id} and attempts < ${MAX_ATTEMPTS}
-						for update skip locked`
-					if (row === undefined) return
-					await tx.sql(Id)`
-						delete from registrations where id = ${row.id} returning id`
 					const [created] = await tx.sql(Id)`
 						insert into candidates (id, email, name, created_by, version)
-						values (${crypto.randomUUID()}, ${row.email}, ${row.fullName},
+						values (${crypto.randomUUID()}, ${row.email}, ${row.full_name},
 							${ctx.principal.id}, 1)
 						on conflict (email) do nothing
 						returning id`
-					// The photo becomes the new candidate's in this transaction; a known address gets none.
+					// The photo's reference moves to the new candidate in this transaction; a known address gets none.
 					if (created !== undefined && row.photo !== null) {
 						const candidate = await tx.ref(
 							'candidates.attach',
 							'candidate',
 							created.id,
 						)
-						await tx.files('photos').attach(candidate, row.photo)
+						await tx.db.on(candidate).update({ photo: row.photo }, {
+							expectVersion: 1,
+						})
 					}
+					await tx.db.on(row.ref).remove({ expectVersion: row.version })
 				}), async () => {
-				const [counted] = await ctx.transaction((tx) =>
-					tx.sql(Attempts)`
-						update registrations
-						set attempts = attempts + 1, last_failure = 'register'
-						where id = ${id} returning attempts`
+				// The claim counted the attempt and set the backoff; the row keeps the step that failed.
+				await ctx.transaction((tx) =>
+					tx.db.on(row.ref).update({ last_failure: 'register' }, {
+						expectVersion: row.version,
+					})
 				)
-				if (counted !== undefined && counted.attempts >= MAX_ATTEMPTS) {
-					console.error(`intake: registration ${id} is dead; an operator decides`)
+				if (row.attempts >= MAX_ATTEMPTS) {
+					console.error(
+						`intake: registration ${row.id} is dead; an operator decides`,
+					)
 				}
 			})
 		}
@@ -3001,7 +3049,7 @@ The job keeps eight invariants. Keep them when you change it:
   deliveries; the next run takes the rest. Each record's work runs in `eachRecord`: a failure (a row the insert refuses,
   a refused recipient, an e-mail past `SEND_TIMEOUT_MS`, IAM down) adds one to the record's `attempts`, keeps the step
   in `last_failure`, and the run goes on with the next record, so one bad record stops nothing else. A record that failed `MAX_ATTEMPTS` times is
-  dead: a registration stays in its inbox and the batch skips it, a delivery is `failed`; the job logs each once, by
+  dead: a registration stays in its table, no longer due, a delivery is `failed`; the job logs each once, by
   id, never by address. An operator decides: fix the row, or delete it. A resend revives a `failed` delivery, within
   the budget. A failure of an ended attempt (`ctx.signal` aborted) is the attempt's, not the record's: it is thrown,
   and the next run meets the record as it is. So each e-mail gets its own deadline inside the attempt's: `ctx.mail.send`
@@ -3016,8 +3064,9 @@ The job keeps eight invariants. Keep them when you change it:
   lost answer) sends it again only when `ctx.mail.capabilities.idempotent` holds, and otherwise leaves it dead for a
   person, because the e-mail may have arrived. A failure the transport says did not send it (`outcome: 'not_sent'`)
   returns the row to `issued`.
-- **A record is claimed where it is consumed.** Each registration is read again `for update skip locked` in the
-  transaction that deletes it and inserts the candidate, the resend batch is `for update skip locked` in the delete that
+- **A record is claimed where it is consumed.** `claim` leases each registration in a short transaction of its own and
+  skips a row other work holds; the job then removes it and inserts the candidate in one transaction, under the
+  version the claim answered. A failure leaves the row due again after the claim's backoff. The resend batch is `for update skip locked` in the delete that
   takes it, and the reservation skips a candidate row other work holds. A row someone else locks (an operator's
   session, an HR request) waits for a later run and blocks nothing behind it.
 - **The budget is charged first.** Each delivery reserves one e-mail of the address's daily budget, in its own
@@ -3047,10 +3096,11 @@ More on the job:
   links it issued. Its `actions` must hold the mount's `issuedBy` and every grant of the mount, or the contract is
   refused: IAM lets an issuer delegate only what it holds. The link is bound to one candidate (the `Ref`), and the
   approver sees the job's `issues` marked "needs closer review".
-- **`sql: 'write'`** is the declared reach into the inboxes: `delete … where id = …` takes each row exactly once, and
-  a refused insert rolls its delete back with it. **A job writes no scope fragment**: it is app-wide (`scope: 'app'`
-  is the only scope), so `tx.sql.scope` of its `Within` is every row, and an inbox has no scope at all.
-- **The latency.** The forms' kick starts a run within seconds of a submission, so the e-mail leaves seconds later,
+- **`sql: 'write'`** is the declared reach for the candidate's insert (`on conflict (email) do nothing`), the resend
+  requests and the delivery state. A file column is written only through `tx.db`, so the photo's reference goes into
+  `candidates.photo` through `tx.db.on(ref).update`. **A job writes no scope fragment**: it is application-wide, so
+  `tx.sql.scope` of its `Within` is every row, and an application table has no scope at all.
+- **The latency.** The procedures' kick starts a run within seconds of a submission, so the e-mail leaves seconds later,
   while the address has an e-mail of its daily budget left; a spent one waits until a day after the window's first
   e-mail. Keep the schedule (`* * * * *`): it is the recovery path. A kicked run that dies (a crash, a deploy, a
   timeout) leaves its rows, and the next scheduled run finishes them, within a minute. `retries: 0`: that run is the
@@ -3070,8 +3120,25 @@ More on the job:
 ## The visitor's link: verify once, attach files
 
 ```ts src/portal/endpoints.ts
+import { ConflictError, NotFoundError } from '@fabrika/app'
+import { file } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { Me, Verified } from '../schemas'
+
+const Attach = z.strictObject({ file: file('attachments') })
+const Attached = z.strictObject({ id: z.uuid() })
+const Document = z.strictObject({ id: z.uuid() })
+const Documents = z.strictObject({
+	items: z.array(z.strictObject({
+		id: z.uuid(),
+		name: z.nullable(z.string()),
+		status: z.string(),
+	})),
+})
+
+/** The files one candidate keeps. */
+const MAX_FILES = 5
 
 export const portal = app.link('/p', {
 	spa: 'dist/portal',
@@ -3104,6 +3171,43 @@ export const portal = app.link('/p', {
 				})
 				return { verifiedAt: now.toISOString() }
 			}),
+		attach: l.mutation({
+			input: Attach,
+			output: Attached,
+			access: { action: 'candidates.attach' },
+		})
+			.handle(async ({ input, ctx }) => {
+				// The lock serializes two uploads of one candidate, so the count holds.
+				await ctx.db.target.getForUpdate()
+				const held = await ctx.db.target.candidate_files.list({ limit: MAX_FILES })
+				if (held.items.length >= MAX_FILES) {
+					throw new ConflictError(`a candidate keeps at most ${MAX_FILES} files`)
+				}
+				await ctx.db.target.candidate_files.insert({ file: input.file })
+				return { id: input.file.id }
+			}),
+		documents: l.query({
+			output: Documents,
+			access: { action: 'candidates.read' },
+		})
+			.handle(async ({ ctx }) => ({
+				items: (await ctx.db.target.candidate_files.list()).items.map((row) => ({
+					id: row.file.id,
+					name: row.file.name,
+					status: row.file.status,
+				})),
+			})),
+		document: l.query({
+			input: Document,
+			output: file('attachments'),
+			access: { action: 'candidates.read' },
+		})
+			.handle(async ({ input, ctx }) => {
+				const rows = (await ctx.db.target.candidate_files.list()).items
+				const row = rows.find((item) => item.file.id === input.id)
+				if (row === undefined) throw new NotFoundError('no such document')
+				return row.file
+			}),
 	}),
 })
 ```
@@ -3112,11 +3216,12 @@ export const portal = app.link('/p', {
   answers the same time. IAM counts no uses: the proxy honors a token it holds without asking IAM.
 - A link procedure acts on the link's own object: no `from`, no id in the input. A key of another candidate reaches
   only that candidate's record, and a key whose candidate is gone answers 404.
-- `link: true` on the collection gives the holder's client `portal.files.attachments`: `upload(file)`, `list()` and
-  `download(id)`, for the link's candidate only: another candidate's file id answers 404. The mount must grant the
-  collection's `write` and `read`. HR reaches the same files through `api.files.attachments`, which names the owner,
-  with `candidates.read`. A second link mount on candidates that must not reach the files (a one-click answer) needs
-  `link: ['portal']` instead.
+- A file is a value in `candidate_files.file`: `attach` writes the uploaded reference with `candidates.attach`,
+  `documents` lists the rows with each file's `name` and `status`, and `document` answers one file
+  (`output: file('attachments')`), all for the link's candidate only: another candidate's file id answers 404. The
+  holder's client calls `portal.attach({ file })` and `download(portal.document, { id })`; a key never goes into a
+  URL. HR reaches the same rows through procedures of its own with `candidates.read`. A link mount reaches only the
+  files its own procedures answer.
 
 ```ts web/portal/main.ts
 import { createClient, RpcError, shareKey } from '@fabrika/app/client'
@@ -3144,7 +3249,7 @@ export const confirm = async (status: HTMLElement): Promise<void> => {
 export const attach = async (file: File): Promise<string> => {
 	if (portal === null) return 'This link holds no key.'
 	try {
-		await portal.files.attachments.upload(file)
+		await portal.attach({ file })
 		return 'Received: it is being checked.'
 	} catch (error) {
 		return error instanceof RpcError ? `Refused: ${error.type}` : 'Failed'
@@ -3169,13 +3274,16 @@ export const siteKey = async (): Promise<string | null> => {
 }
 ```
 
-The public page sends the form with a plain `fetch`: a form has no typed client, and its answer never depends on the
-data. A form that takes files is `multipart/form-data`: the first part is named `input` and holds the input as JSON,
-and each file follows in a part named after its field. Let the browser write the `Content-Type` with its boundary:
-never set it yourself.
+The public page calls the public procedure through the typed client, like any other. An input with a file is sent
+as a multipart body, and one without a file as JSON.
 
 ```ts web/site/register.ts
-/** What the `photos` collection admits; the page checks it before it spends the challenge. */
+import { createClient } from '@fabrika/app/client'
+import { contract } from '../../fabrika.contract'
+
+const api = createClient(contract, 'api')
+
+/** What the `photos` kind admits; the page checks it before it spends the challenge. */
 const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 const PHOTO_MAX_BYTES = 15728640
 
@@ -3188,32 +3296,33 @@ export const register = async (
 		const value = data.get(name)
 		return typeof value === 'string' ? value : ''
 	}
-	const body = new FormData()
-	body.append(
-		'input',
-		JSON.stringify({
+	// <input type="file" name="photo" accept="image/*" capture="environment">; an empty one sends nothing.
+	const sent = data.get('photo')
+	const photo = sent instanceof File && sent.size > 0 ? sent : undefined
+	if (
+		photo !== undefined
+		&& (!PHOTO_TYPES.includes(photo.type) || photo.size > PHOTO_MAX_BYTES)
+	) {
+		return false
+	}
+	try {
+		await api.visitors.register({
 			email: field('email'),
-			full_name: field('full_name'),
+			fullName: field('full_name'),
 			website: field('website'),
 			challengeToken,
-		}),
-	)
-	// <input type="file" name="photo" accept="image/*" capture="environment">; an empty one sends nothing.
-	const photo = data.get('photo')
-	if (photo instanceof File && photo.size > 0) {
-		if (!PHOTO_TYPES.includes(photo.type) || photo.size > PHOTO_MAX_BYTES) {
-			return false
-		}
-		body.append('photo', photo, photo.name)
+			photo,
+		})
+		return true
+	} catch {
+		return false
 	}
-	const response = await fetch('/register', { method: 'POST', body })
-	return response.ok
 }
 ```
 
-- The page renders the Turnstile widget with the site key `siteKey()` reads and `action` set to the form's mount name
-  (`register`), and passes the widget's token. Say "check your inbox" on success whatever the address was.
-- The resend form is the same call to `/resend` with `{ email }`. It answers the same for an unknown, a verified and a
+- The page renders the Turnstile widget with the site key `siteKey()` reads and `action` set to the procedure's
+  endpoint id with `_` for `.` (`api_visitors_register`), and passes the widget's token. Say "check your inbox" on success whatever the address was.
+- The resend form calls `api.visitors.resend({ email })`. It answers the same for an unknown, a verified and a
   rate-limited address; the job decides.
 - Build each SPA into its `dir` (`dist/site`, `dist/portal`, `dist/hr`): one `Bun.build` per `index.html` in
   `build-web.ts`.
@@ -3245,8 +3354,14 @@ export const stageOf = (
 ```
 
 ```ts src/candidates/endpoints.ts
-import { BadRequestError, ConflictError, fromPage, fromRow } from '@fabrika/app'
-import { attachment } from '@fabrika/app/contract'
+import {
+	BadRequestError,
+	ConflictError,
+	fromPage,
+	fromRow,
+	NotFoundError,
+} from '@fabrika/app'
+import { attachment, file } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { CandidateStatus } from '../schemas'
@@ -3280,6 +3395,14 @@ const ListCandidates = z.strictObject({
 	after: Cursor.optional(),
 })
 const ById = z.strictObject({ id: z.uuid() })
+const FileOf = z.strictObject({ id: z.uuid(), file: z.uuid() })
+const Files = z.strictObject({
+	items: z.array(z.strictObject({
+		id: z.uuid(),
+		name: z.nullable(z.string()),
+		status: z.string(),
+	})),
+})
 const HistoryOf = z.strictObject({ id: z.uuid(), after: Cursor.optional() })
 const Decide = z.strictObject({
 	id: z.uuid(),
@@ -3362,6 +3485,39 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
 				}),
 			)
 		),
+	files: r.query({
+		input: ById,
+		output: Files,
+		access: { action: 'candidates.read', on: 'candidate', from: 'id' },
+	})
+		.handle(async ({ ctx }) => ({
+			items: (await ctx.db.target.candidate_files.list()).items.map((row) => ({
+				id: row.file.id,
+				name: row.file.name,
+				status: row.file.status,
+			})),
+		})),
+	file: r.query({
+		input: FileOf,
+		output: file('attachments'),
+		access: { action: 'candidates.read', on: 'candidate', from: 'id' },
+	})
+		.handle(async ({ input, ctx }) => {
+			const rows = (await ctx.db.target.candidate_files.list()).items
+			const row = rows.find((item) => item.file.id === input.file)
+			if (row === undefined) throw new NotFoundError('no such file')
+			return row.file
+		}),
+	photo: r.query({
+		input: ById,
+		output: file('photos'),
+		access: { action: 'candidates.read', on: 'candidate', from: 'id' },
+	})
+		.handle(async ({ ctx }) => {
+			const { photo } = await ctx.db.target.get()
+			if (photo === null) throw new NotFoundError('the candidate sent no photo')
+			return photo
+		}),
 	decide: r.mutation({
 		input: Decide,
 		output: Saved,
@@ -3450,6 +3606,9 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
+- **HR's files.** `files`, `file` and `photo` serve the candidate's files to a holder of `candidates.read`. A file
+  query is a `GET`, so the HR page links it for its signed-in session: `api.candidates.photo.url({ id })` in an
+  `<img src>`, `api.candidates.file.url({ id, file })` in an `<a download>`.
 - **A code list an administrator edits is validated by reading it.** `decide` runs `on` one candidate with
   `candidates.review`, the read action of `reasons`, so `ctx.db.app.reasons` reads every reason there, read-only. A
   reason that is unknown or retired answers 400 that names it, before anything is written. Do not let a foreign key
@@ -3653,11 +3812,12 @@ export const settings = app.group({ callers: ['human'] }, (r) => ({
 	testMail: r.mutation({
 		output: Queued,
 		access: { action: 'mail.test', app: true },
-		then: 'testMails',
+		kicks: ['testMails'],
 	})
 		.handle(async ({ ctx }) => {
 			const to = ctx.principal.email
 			await ctx.db.app.test_mails.insert({ recipient: to })
+			ctx.kick('testMails')
 			return { queuedFor: to }
 		}),
 }))
@@ -3676,7 +3836,6 @@ const stateAfter = (
 
 export const testMails = app.cron('* * * * *', {
 	actions: ['mail.send'],
-	scope: 'app',
 	retries: 0,
 	sql: 'write',
 	mailer: 'installation',
@@ -3757,7 +3916,7 @@ export const testMails = app.cron('* * * * *', {
   who holds `mail.test` mail any address past every consent the application asks for. Never take a recipient from the
   input for "send it to me".
 - **The endpoint sends nothing.** It has no `ctx.mail`: it records the e-mail in `test_mails` in its own transaction,
-  and `then: 'testMails'` kicks the job once that transaction committed. The person's answer does not wait for the
+  and `kicks: ['testMails']` with `ctx.kick('testMails')` starts the job once that transaction committed. The person's answer does not wait for the
   run; the e-mail leaves seconds later. The schedule (`* * * * *`) sends what a kicked run left behind. The generated
   tests cover the endpoint like any `app` endpoint: a global holder of `mail.test` reaches it, a holder in one scope
   gets 403.
@@ -3786,21 +3945,20 @@ export const testMails = app.cron('* * * * *', {
   })` and calls `createClient(contract, 'portal', { fetch: kit.fetch, key: holder.key ?? '' })`.
 - The job asks IAM to issue and revoke links, and the kit's own IAM answers only the credentials of its callers, not a
   job's key, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an `IamMembershipRpc` of your own that
-  answers `issueLink` and `revokeLink`. A test of a form passes `env: {
+  answers `issueLink` and `revokeLink`. A test of a public procedure with a challenge passes `env: {
   TURNSTILE_SECRET: '…', TURNSTILE_SITE_KEY: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
-  `challengeToken` with each submission: a token is single use. A form that takes files is sent as the page sends it,
-  a `FormData` with the `input` part first, through `kit.fetch` with the page's `Origin` (`kit.origin`), and needs
-  `files: new MemoryFileObjects()` in `testKit`; `kit.runJob('intake')` then attaches the photo, and the scan job
-  (`FILE_SCAN_JOB`, with a `scanner`) makes it downloadable. Test the refusals beside the success: no or a failed
-  token, a filled honeypot, a file too large or of another type, a part the form does not declare, a page on another
-  origin; each keeps nothing. Test each stop of a delivery (a refused e-mail, IAM
+  `challengeToken` with each submission: a token is single use. A submission with a photo goes through the typed
+  client over `kit.fetch`, and needs `files: new MemoryFileObjects()` in `testKit`; `kit.runJob('intake')` then
+  writes the photo's reference into the candidate, and the scan job (`FILE_SCAN_JOB`, with a `scanner`) makes it
+  readable. Test the refusals beside the success: no or a failed token, a filled honeypot, a file too large or of
+  another type, a page on another origin; each keeps nothing. Test each stop of a delivery (a refused e-mail, IAM
   down, a crash after each step, an answer lost after the provider took the e-mail): the next run must leave exactly
   one live, e-mailed link and the transport one message per key. Test a bad record beside good ones too: a
   registration the insert refuses and a recipient whose e-mail hangs end dead after `MAX_ATTEMPTS` runs, a recipient
   the transport refuses ends dead at once, and every other record is delivered and every run succeeds; a
   registration another session locks waits. A failed delivery waits for its `next_attempt_at`: a test that runs the
   job again moves that column into the past first, as an operator's repair would.
-- A test that submits a form, or calls a mutation that declares `then`, kicks the job too, and the kicked run may start
+- A test that calls a mutation that kicks (`kicks`, `ctx.kick`) starts the job too, and the kicked run may start
   at once: arm a fault before the call, never between it and the run. `kit.drain()` waits for the kicked runs, and
   `kit.runJob('intake')` first waits for them, then runs once.
 - The mail transport is the kit's stand-in: `kit.mail`, a `MemoryEmailSender` that takes every message a job sends
@@ -4295,10 +4453,10 @@ export function EditTask(
 - `Form` shows its `error`: a summary on top, and each `fields[name]` under the `Field` of that `name`. `Field` gives
   its control the `name`, an `id`, its label and `aria-describedby`; the control needs nothing else. `Form` hands
   `onSubmit` the `FormData`: read the fields by name, and leave the checking to the procedure's schema.
-- A call that is no procedure — a file collection's `api.files.<name>.upload(owner, file)`, `list`, `download` —
-  runs through `useAction(async (input) => …)`, with the same state and error union; it refetches only what
+- A call that is no procedure of a client runs through `useAction(async (input) => …)`, with the same state and error union; it refetches only what
   `invalidates` names.
-- An attachment procedure (`output: attachment(…)`) downloads through `useDownload(api.reports.exportProject)`:
+- An attachment procedure (`output: attachment(…)`) or a file procedure (`output: file('<kind>')`) downloads through
+  `useDownload(api.reports.exportProject)`:
   `mutate(input)` saves the file and answers it, with the same state and error union. It runs on the provider's client,
   so a screen test downloads over the kit; never call `download(api.…)` of the module's client from a screen.
 
@@ -4676,9 +4834,9 @@ if (postgres !== null) {
 
 - `web/__tests__/dom.ts` comes first: imports run in order, and React reads `window` when it loads. `installDom` keeps
   Bun's `fetch`, `AbortController`, `URL`, `Blob`, `File`, `FormData` and its `ReadableStream`, `WritableStream` and
-  `TransformStream`, because the clients, the kit, a form's challenge, a form's file and a download run on them, and
+  `TransformStream`, because the clients, the kit, a challenge, a file field and a download run on them, and
   turns navigation off, so a download's link click leaves the page for the next test. A DOM registration of your own
-  keeps the same classes of Bun, or a form with a file fails in the kit. Run the tests with `bun test --isolate`, which
+  keeps the same classes of Bun, or an input with a file fails in the kit. Run the tests with `bun test --isolate`, which
   gives each file its own globals.
 - `await type('Title', 'report')` types into the control whose label (or `aria-label`) is `Title` as React reads a
   person typing; a select takes the option's value. `controlByLabel(label)` answers the control, and
@@ -5022,7 +5180,7 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
 - Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or a strict ISO 8601 string with `Z` or an offset;
   `int8` and `numeric` are strings; an enum is its literal union. JSON, `bytea`, arrays and domains are refused.
 - Plain SQL of the application's own schema only. Refused: another schema (`public.`, `app_…`), any `fabrika_*`
-  object (except a file collection's table, `references/files.md`), `GRANT`, roles, `CREATE EXTENSION`, `COPY`,
+  object (a file column references `fabrika_files (id)`, `references/files.md`), `GRANT`, roles, `CREATE EXTENSION`, `COPY`,
   `SET`, transaction control, `SECURITY DEFINER`, a domain, `serial` and sequences (use `GENERATED ALWAYS AS IDENTITY`),
   a function overload, and calls outside the reviewed built-ins.
 - Never edit, rename or delete a committed migration; add a new one. Change a schema by expand, switch, contract, and
@@ -5096,6 +5254,13 @@ export const tables = defineTables(vocabulary, columns)({
 		insert: ['row_count'],
 		createdBy: 'created_by',
 	},
+	task_attachments: {
+		scope: { child: 'tasks' },
+		actions: { read: 'tasks.read', insert: 'tasks.write', delete: 'tasks.write' },
+		insert: ['file'],
+		files: { file: 'attachments' },
+		createdBy: 'created_by',
+	},
 	priorities: {
 		scope: { reference: 'the priority codes; a migration changes them' },
 		actions: { read: 'tasks.read' },
@@ -5125,6 +5290,8 @@ export const tables = defineTables(vocabulary, columns)({
 - `columns: { <column>: { read: '<action>' } }` hides a column from every capability of another action, in the data
   and in the types. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
   action updates nothing else); the column is then not in `update`.
+- `files: { <column>: '<kind>' }` makes a column a file column of a kind the contract declares (`c.files`):
+  `task_attachments.file` holds the files of a task (`references/files.md`).
 - A column has one write action. A state that two actions change is two columns: in `references/public-intake.md` the
   link holder's `candidates.verify` sets `verified_at`, HR's `candidates.review` sets `status`, and `logic.ts` derives
   the stage HR sees from both (`stageOf`).
@@ -5174,8 +5341,8 @@ export const members = { 'api.tasks.assign': ['assignee'] }
 ```
 
 - `export const fixtures = { '<endpoint id>': { … } }` is an input for an endpoint whose schema the scaffold cannot
-  sample, such as a `regex` or a webhook's bind:
-  `{ 'webhooks.github.bind': { scope: 'acme', account: 'installation:1' } }`. The checker names each missing one,
+  sample, such as a `regex` (a webhook's account):
+  `{ 'api.integrations.connectGithub': { orgId: 'acme', account: 'installation:1' } }`. The checker names each missing one,
   and one of an endpoint that does not exist (`endpoint-fixture`). The access form's `from` field is
   replaced by the seeded scope.
 - `members['<endpoint id>']` lists the input fields that name a picked person the handler checks with
@@ -5424,7 +5591,7 @@ if (postgres !== null) {
 - `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`. A job's `ctx.links`
   reaches the kit's stand-in IAM under the job's own key, so a job that declares `issues` issues and revokes links in a
   plain `testKit` and under `fabrika app dev`, as IAM allows it: for its declared mount only.
-- A form or a mutation that declares `then` starts its job in the background of the call. `kit.drain()` waits for
+- A mutation that kicks (`kicks`, `ctx.kick`) starts its job in the background of the call. `kit.drain()` waits for
   those runs, and `kit.runJob` first waits for them; every generated access case drains before it answers. The kicked
   run may start at once, so arm a fault before the call, never between the call and the run.
 - `kit.mail` is the stand-in for every job's mail transport (`MemoryEmailSender` of `@fabrika/app/testing`), so a test
@@ -5437,7 +5604,7 @@ if (postgres !== null) {
   without it the application does not boot. With `scan: true`, an upload stays `quarantined` until
   `kit.runJob(FILE_SCAN_JOB)` (`@fabrika/app/implement`) runs with a `scanner` passed to `testKit`: a `FileScanner`
   stand-in, or the real ClamAV one, `clamscanScanner()` of `@fabrika/app/bun`.
-- A form's challenge token is single use: a second submission with the same token answers 400 `challenge_failed`,
+- A challenge token is single use: a second submission with the same token answers 400 `challenge_failed`,
   also when the test's `challengeFetch` answers success. Send a fresh token with each submission
   (`crypto.randomUUID()`). `passingChallenge` (`@fabrika/app/testing`) is a `challengeFetch` that passes every token;
   a stand-in of your own receives the check (`hostname`, `action`) a passing answer must confirm as its second argument.
@@ -5466,6 +5633,7 @@ what it lets that caller do.
 ## Webhooks (GitHub)
 
 ```ts src/github/endpoints.ts
+import { WebhookSecret } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 
@@ -5487,19 +5655,39 @@ export const github = app.webhook('/hooks/github', {
 			name: input.repository.full_name,
 		})
 	})
+
+const Connect = z.strictObject({
+	orgId: z.string(),
+	account: z.string().regex(/^(installation|repository):\d+$/),
+})
+
+/** Binds an org to a GitHub account: answers the secret and the URL once. */
+export const integrations = app.group({ callers: ['human'] }, (r) => ({
+	connectGithub: r.mutation({
+		input: Connect,
+		output: WebhookSecret,
+		access: { action: 'members.manage', on: 'org', from: 'orgId' },
+		binds: 'github',
+	})
+		.handle(({ input, ctx }) =>
+			ctx.webhooks('github').bind(ctx.target, input.account)
+		),
+}))
 ```
 
-- Mount it by name in the contract: `github,` beside `api`. It answers `POST /hooks/github/:bindingId`.
-- `boundTo` is a dimension with `members`. A holder of its `members.manage` binds an org to a GitHub account with the
-  generated `POST /api/webhooks.github.bind` (`{ scope, account: 'installation:<id>' | 'repository:<id>' }`), which
-  answers the secret and the URL once. The generated tests need a fixture for it (`references/tests.md`).
+- Mount it by name in the contract: `github,` beside `api`, and the group in `api`. It answers
+  `POST /hooks/github/:bindingId`.
+- A binding is made by a procedure that declares `binds: '<webhook>'` and calls `ctx.webhooks('<webhook>').bind(ref,
+  account)` with a capability on the bound value (`ctx.target`, an org here), in its transaction; `unbind(ref, id)`
+  removes one. A GitHub account is `installation:<id>` or `repository:<id>`. The answer carries the secret and the URL
+  once. The generated tests need a fixture for its input (`references/tests.md`).
 - The framework checks the signature, the account and the input (undeclared fields are dropped).
   `ctx.refs['<action>']` is a `Ref` of the bound org for each declared action.
-- It records the delivery key (a digest of the binding and the body) before the handler runs, and answers a body it
-  already ran in the last 30 days without running it again. A handler that throws commits nothing, and the key is
-  forgotten, so GitHub's redelivery runs it again from nothing. A process that dies after the record and before the
-  commit keeps the key and loses the delivery. So make every effect idempotent, and key an external effect after the
-  data work on `ctx.delivery.key`; never rely on exactly one run.
+- It claims the delivery key (a digest of the binding and the body) under a lease before the handler runs, marks it
+  complete in the handler's transaction, and answers a body it already ran in the last 30 days without running it
+  again. A handler that throws commits nothing, and a process that dies before the commit leaves the lease to expire,
+  so GitHub's redelivery runs it again from nothing. So make every effect idempotent, and key an external effect after
+  the data work on `ctx.delivery.key`; never rely on exactly one run.
 
 ## Share links
 
@@ -5557,8 +5745,8 @@ export const shared = app.link('/s', {
   that should work once records its use in the row: a `verify` sets `verified_at` once under `getForUpdate`, and a
   second call answers the same. IAM counts no uses.
 - A cron job may issue links too (`issues` on `app.cron`, `references/jobs.md`): a visitor without an account gets a
-  link by e-mail from a job that drains a form's inbox. `references/public-intake.md` is that recipe end to end, with
-  the files a link holder uploads (`link: true`, or `link: ['<mount>']` for some mounts only, `references/files.md`).
+  link by e-mail from a job that claims a public procedure's rows. `references/public-intake.md` is that recipe end to
+  end, with the files a link holder uploads through the link's own procedures (`references/files.md`).
 
 ## Connectors: another application's data
 
