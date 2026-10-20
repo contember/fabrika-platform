@@ -11,3 +11,5 @@ decided work or status.
 
 - [Operations plane](operations-plane.md) — broad target for runtime feedback,
   observability, alerting, and response beyond the initial Errors capability.
+- [A foreign runtime behind the platform](foreign-runtime.md) — another framework keeps its own data layer; the
+  platform reads only its surface and access, and delivers, fronts and authenticates it.
