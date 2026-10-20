@@ -272,7 +272,8 @@ holder there reads each member's email-derived label and every endpoint below it
 widens too. Each of these widening lines carries
 `review: 'closer'`: the approval page marks it "needs closer review",
 because the approver must read the code behind the line, not only the line. A diff that cannot classify a change
-also marks it for closer review. On an unprotected environment the run publishes at once, with the same lines.
+also marks it for closer review. A closer-review line names its reason (below), so the mark is the result of a rule
+the approver can read, never a label. On an unprotected environment the run publishes at once, with the same lines.
 
 **An endpoint's input and output are compared by the values they admit.** A change that can only admit
 fewer values narrows: an enum that loses a value, a lowered maximum, a raised minimum, an added pattern, a
@@ -288,6 +289,25 @@ cover them; the snapshot digest and the contract digest do.
 
 The diff is a pure function. It produces plain-language lines for the approver, for example "Role
 `editor` gains `notes.delete`" or "New endpoint `api.notes.export` for editors".
+
+**Each line is a structured fact, and its words are one rendering of it.** Beside its effect and its words, a line
+carries:
+
+- `rule`: a stable code of the comparison that produced it (`endpoint.public`, `admission.challenge`, `kick.public`,
+  `table.action`, `migration.code`, …). One comparison, one code; a code never holds an application's identifier.
+- `subject`: what the line is about: an endpoint (its id, method and path), a table and column, a role, a job, a mount,
+  a migration file, or the application itself.
+- `audience`, on an endpoint subject: who reaches it after the change, in the surface's terms (section 5): its reach,
+  the link mount of a `link` caller, the roles or actions its requirement names. For a removed endpoint it is who
+  reaches its paths now.
+- `consequence`, when the line says what a call sets off: the job it starts, the table it writes.
+- `reason`, on a closer-review line: `off-road` (a site's declared reach, database code, a contract that leaves the
+  staged kit), `anyone-calls` (a public procedure, a workload action or a job kick that anyone without signing in
+  sets off), `get-mutation`, `people` (who holds the application's roles, or labels that spell users' email addresses,
+  become visible), or `unclassified`.
+
+The diff builds each fact where it builds the line, so the words and the fact cannot drift apart, and nothing parses a
+line. MCP's `deviations` and the CLI keep reading the words. Not built yet: [backlog 195](../backlog/195-the-approval-page-leads-with-who-gains-access.md).
 
 **The environment's cross-origin list is not part of the change.** Which pages on other origins may call an endpoint
 the contract opens to them (`admission.origins`) is a fact of the environment, not of the contract
@@ -362,6 +382,43 @@ workload can hold completes an approval.
 A rollback deploys an older commit as a new run. Control classifies it like any other run, against the
 environment's active snapshot. Publishing an older run's snapshot again is not a rollback path.
 
+### 7. The approval page leads with who gains access
+
+A deploy of an agent-authored change can carry hundreds of lines, most of them harmless. The approver must see in one
+glance who gains access to what, and the few lines that decide it. The page is built from the facts of section 3,
+never from the words of a line:
+
+- **Impact first.** The head counts the changed endpoints per caller group and the new or changed migrations, for
+  example "5 endpoints anyone calls, 2 endpoints a share link of `student` reaches".
+- **Grouped by caller.** The facts of an endpoint fall under its audience, in the order and words of the environment
+  page's surface: anyone, a share link per link mount, another application, machines, and signed-in people per
+  requirement. Facts on any other subject form a second part, data and runtime, grouped by subject kind: tables,
+  roles, jobs, migrations, the application. A group is named by the contract's identifiers (a role name, a link mount
+  name); the contract declares no display label for them.
+- **Rank is derived, there is no severity field.** Groups and facts are ordered by effect and review (a widening with
+  closer review, a widening, a neutral line, a narrowing), then by reach, anyone first. Nothing else enters the rank,
+  so it cannot disagree with the classification.
+- **A warning says why.** A closer-review fact shows one fixed sentence for its reason; `anyone-calls` on a kick, for
+  example, reads "anyone on the internet decides when job `mailing` runs".
+- **Protection is shown, not asked for.** An endpoint anyone calls shows its effective admission from the candidate
+  snapshot beside it: buckets, challenge, body limit and time limit. The page never asks the approver to verify
+  something the snapshot states. Whether a bot check holds is read from the endpoint's challenge, never from a browser
+  config variable: a removed `siteKey` variable is a line about what a page reads, and a dropped challenge is its own
+  widening line on the endpoint. The environment's cross-origin list is named as section 3 says, and nothing presents
+  it as protection.
+- **Similar facts fold, widenings stay in view.** Facts of one rule and one effect on many subjects fold into one row
+  ("a body limit of 64 KiB on 40 endpoints"). A group or row the page collapses by default holds no widening fact, so
+  every widening is visible without expanding anything.
+- **Grouping decides nothing.** Whether the run waits is `classifyAccess`'s outcome alone. The grouping is a pure
+  function over the facts, beside the DTO in `@fabrika/control-contract`; a test holds that it keeps every fact, and
+  that the widenings it shows by default are exactly the widenings of the classification.
+- **The lines stay.** The three effect sections of section 3, with search and a filter, are one step away. They are
+  the same facts, unordered.
+- **A decided run says where it stands.** Approval and publication are two steps (section 2): an approved run is
+  queued again and classified once more before it publishes. The page shows which of these holds: approved and waiting
+  to run; published; or the approval lapsed, because the environment published another change first and the change
+  still widens against it, so the run waits for a new approval. A refused or cancelled run says so.
+
 ## Consequences
 
 - An agent can no longer widen production access silently. A widening on `prod` waits until a human
@@ -391,7 +448,13 @@ environment's active snapshot. Publishing an older run's snapshot again is not a
   still all widenings.
 - Rolling Control back below the version that wrote three effects breaks reading every run that version classified
   (the older schema is strict and knows only `widens`): the approval page, the approvals list and MCP's
-  `get_deployment` fail for those runs. Before 1.0 that is accepted; no dual format is written.
+  `get_deployment` fail for those runs. Before 1.0 that is accepted; no dual format is written. The same holds for
+  rolling back below the version that writes structured facts (section 3).
+- A run classified before lines carried facts keeps its stored lines without `rule`, `subject` or `audience`. The
+  approval page shows them in their effect sections as unsorted lines and builds no groups for that run; a parked run
+  that is classified again gets facts. No migration rewrites a stored classification.
+- Every comparison in `diff.ts` must emit its rule, subject and audience beside its words. A comparison added without
+  them is a type error, not an unsorted line.
 - The approval proves a signed-in user with `access.approve`, not a physical human. An agent that drives
   the approver's own signed-in browser can approve. The skill forbids it; WebAuthn on
   `approvals.complete` is the next step.
@@ -428,6 +491,16 @@ environment's active snapshot. Publishing an older run's snapshot again is not a
 - **Gate the environment's cross-origin list by approval.** Rejected: the list grants no authority (bearer only, see
   section 3), it is not part of the contract the approval binds, and a registry write has no run to park. The
   approval page names it beside each line that opens an endpoint to it.
+- **Give each line a severity score.** Rejected: a second judgement beside the effect, set by hand per rule, which can
+  disagree with the classification. The page derives its order from effect, review and reach (section 7).
+- **Group the lines in the console by parsing their words.** Rejected: the words are prose and change with wording
+  fixes; the diff knows the structure when it writes the line.
+- **Name caller groups by labels the contract declares ("Staff", "Student").** Deferred: it changes the framework API.
+  Until then a group carries the role or mount identifier.
+- **Collapse the data and runtime part by default.** Rejected: a new table action widens, and a collapsed group would
+  hide it. Only a group without a widening collapses.
+- **Warn when a challenge's site key leaves the browser config.** Rejected: the variable says what a page reads, not
+  what the server checks. A dropped challenge is its own line on the endpoint.
 - **Protect every environment by default.** Rejected: staging and MCP authoring targets must apply at
   once by default, or the authoring loop stalls. A human can still protect any environment.
 - **Let the deploy permission approve.** Rejected: every operator holds `deploy.*`, and the builder key
