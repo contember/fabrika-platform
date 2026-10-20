@@ -126,3 +126,18 @@ back and runs `bun run check:ci` on the integration branch.
   Cloudflare refuses a non-null `FABRIKA_TOKEN_KEYS` (Worker variables are plain text). A row with `cache` fails
   closed on an older proxy; the Cloudflare proxy Worker must be redeployed first. A dropped `compatibility` promise
   still binds the deploy that drops it.
+- **Merged WU-7.** The old forms left the framework (`c.form`, inbox scope, `then`, collections and their generated
+  rows, generated webhook bind/unbind, job `scope`); the platform side is unchanged and its approval tests read a real
+  0.5 application. `examples/crm` and `examples/zerops-app` keep attachments in a table with a file column, adopted by
+  migration. Fixed on the way: the public challenge site key in browser config, `0008` copying rows of deleted owners.
+- **Merged WU-7b.** An adoption migration calls `select fabrika_files_copy_legacy('<collection>')` before its INSERT,
+  so rows an old instance writes during the rollout do not break it. `crossOrigin` on procedures became
+  `admission.origins: 'listed'`; the SPA option `public` became `browserConfig` (the artifact and wire names stay).
+  `defineContract` is not a supported authoring form, so it gets no `binds`.
+- **Merged WU-8.** ADRs 0012 (sections 9–16), 0019, 0022, 0050, 0060, 0061, 0062 (accepted) rewritten; ADR-0063 new;
+  `docs/reference/framework-migrations.md`; reference and skill prose; the idea document deleted; backlog 157 and 171
+  deleted, 97, 160, 168 rescoped. Open for review: a 0.5.5 inbox migrated to a table sets a file column to `NULL` for
+  rows older than seven days, whose held file the 0.5 sweep may already have deleted.
+- **Merged WU-2b.** Zerops refuses a deploy whose rows neither the 0.4.8 nor the 0.5.5 proxy-core parser reads while
+  the namespace proxy is pinned to another source; the old parsers are Control dependencies (Zerops process only).
+  Open: Control does not record a pin's release, so a pin older than 0.5.3 still breaks on a 0.5 cross-origin field.
