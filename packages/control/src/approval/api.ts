@@ -2,7 +2,14 @@
 // principal from the console (`./human`), and the `protected` flag changed by the same rule.
 
 import type { AuthContext } from '@fabrika/auth'
-import type { AppEnvDto, ApprovalDto, CompleteApprovalRequest, ListResponse, SetEnvironmentProtectionRequest } from '@fabrika/control-contract'
+import type {
+	AccessChangeDto,
+	AppEnvDto,
+	ApprovalDto,
+	CompleteApprovalRequest,
+	ListResponse,
+	SetEnvironmentProtectionRequest,
+} from '@fabrika/control-contract'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import type { DeployLocks } from '@fabrika/platform'
 import { fail } from '../api/domain'
@@ -12,6 +19,8 @@ import { appEnvCrossOrigins, type AppEnvRow, type ControlRepositories, type RunR
 import { acquireLease, type LeaseClock, runLeaseKey } from '../lease'
 import { type ConsoleAdmission, requireHumanApprover } from './human'
 import { parseApproval, parseClassification, type StoredApproval } from './publish'
+import { parseSnapshot } from './snapshot'
+import { snapshotSurface } from './surface'
 
 export interface ApprovalUseCaseContext extends ConsoleAdmission {
 	readonly repositories: ControlRepositories
@@ -132,6 +141,13 @@ async function pendingCrossOrigins(c: ApprovalUseCaseContext, approval: Approval
 	return appEnv === null ? undefined : appEnvCrossOrigins(appEnv)
 }
 
+/** The candidate's surface of the endpoints the lines name, so the page shows what stands in front of each. */
+function namedEndpoints(run: RunRow, changes: readonly AccessChangeDto[]): ApprovalDto['endpoints'] {
+	if (run.snapshot_json === null) return []
+	const named = new Set(changes.flatMap((change) => (change.subject?.kind === 'endpoint' ? [change.subject.name] : [])))
+	return snapshotSurface(parseSnapshot(run.snapshot_json)).filter((endpoint) => named.has(endpoint.id))
+}
+
 function toApprovalDto(run: RunRow): ApprovalDto {
 	if (run.classification_json === null) throw new Error(`run ${run.id} has no classification`)
 	const classification = parseClassification(run.classification_json)
@@ -140,6 +156,7 @@ function toApprovalDto(run: RunRow): ApprovalDto {
 		run: toRunDto(run),
 		outcome: classification.outcome,
 		changes: [...classification.changes],
+		endpoints: namedEndpoints(run, classification.changes),
 		candidateDigest: classification.candidateDigest,
 		baselineDigest: classification.baselineDigest,
 		baselineRunId: classification.baselineRunId,

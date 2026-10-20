@@ -480,6 +480,8 @@ describe('approved access through the run lifecycle', () => {
 			'New endpoint `api.notes.summary` (POST /api/notes.summary) for human callers with `notes.read` (on `note`), callable from a page on an origin the environment lists',
 		])
 		expect((await read()).crossOrigins).toEqual([])
+		// The candidate's surface of the endpoints the lines name, the whole contract on a first deploy, most exposed first.
+		expect((await read()).endpoints.map((endpoint) => endpoint.id)).toEqual(['health', 'api.notes.retitle', 'api.notes.summary'])
 
 		await w.db.registry.upsertAppEnv({
 			appId: 'notes',

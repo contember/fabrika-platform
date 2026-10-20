@@ -1,7 +1,8 @@
 // The three effects of an access change line (ADR-0050 §3), in the order the console shows them, and how the list and
-// the approval page name each one.
+// the approval page name each one; the approval page's group titles, its review reasons and where a decided run stands.
 
-import type { AccessChangeDto } from '@fabrika/control-contract'
+import type { AccessChangeDto, ApprovalDto, ChangeSubjectKind, SurfaceReach } from '@fabrika/control-contract'
+import { type Lamp, runLamp } from '../components/Status'
 
 export type AccessEffect = AccessChangeDto['effect']
 
@@ -38,4 +39,85 @@ export function effectCounts(changes: readonly AccessChangeDto[]): string {
 		.filter(({ count }) => count > 0)
 		.map(({ count, word }) => `${count} ${word}`)
 		.join(', ')
+}
+
+/** Who a caller group's endpoints are reached by, as its heading says it. */
+export function callerGroupTitle(reach: SurfaceReach, mount?: string): string {
+	switch (reach) {
+		case 'anyone':
+			return 'Anyone, without signing in'
+		case 'link':
+			return mount === undefined ? 'Share links' : `Share links of \`${mount}\``
+		case 'app':
+			return 'Other applications'
+		case 'machine':
+			return 'Machines'
+		case 'human':
+			return 'Signed-in people'
+	}
+}
+
+export const SUBJECT_TITLES: Record<ChangeSubjectKind, string> = {
+	application: 'The application',
+	endpoint: 'Endpoints',
+	mount: 'Mounts',
+	dimension: 'Dimensions',
+	action: 'Actions',
+	role: 'Roles',
+	table: 'Tables',
+	'file-collection': 'File collections',
+	'file-kind': 'File kinds',
+	job: 'Jobs',
+	export: 'Exports',
+	import: 'Imports',
+	token: 'Token purposes',
+	csp: 'Content security policy',
+	migration: 'Migrations',
+}
+
+/**
+ * Why a line needs closer review, one fixed sentence per reason (ADR-0050 §7). A line that starts a job when anyone
+ * calls says which job anyone sets off.
+ */
+export function reviewReason(change: AccessChangeDto): string | null {
+	if (change.review !== 'closer') return null
+	switch (change.reason) {
+		case 'off-road':
+			return 'A step off the paved road: read the code behind it, not only this line.'
+		case 'anyone-calls':
+			return change.consequence === undefined
+				? 'Anyone on the internet sets this off, without signing in.'
+				: `Anyone on the internet decides when job \`${change.consequence.job}\` runs.`
+		case 'get-mutation':
+			return 'It changes state on a GET: a link scanner that opens the URL sets it off.'
+		case 'people':
+			return 'It shows who people are: who holds a role, or labels that spell their email addresses.'
+		case 'adoption':
+			return "It moves stored files under a table's policy, or deletes the ones no column took."
+		case 'unclassified':
+			return 'The diff cannot classify this change: read the code behind it.'
+		case undefined:
+			return null
+	}
+}
+
+/** Where a decided run stands: approval and publication are two steps (ADR-0050 §2). */
+export function approvalStage(approval: ApprovalDto): { readonly lamp: Lamp; readonly text: string } {
+	const { run } = approval
+	if (run.status === 'awaiting_approval') {
+		return approval.approval?.holds === false
+			? { lamp: 'stop', text: 'Approval lapsed: the environment published another change first, and this one still widens access against it' }
+			: { lamp: 'run', text: 'Waiting for a decision' }
+	}
+	if (approval.approval === null) return { lamp: runLamp(run.status), text: run.status === 'failed' ? 'Refused or failed' : 'Decided' }
+	switch (run.status) {
+		case 'pending':
+			return { lamp: 'idle', text: 'Approved, waiting to run' }
+		case 'running':
+			return { lamp: 'run', text: 'Approved, running' }
+		case 'succeeded':
+			return { lamp: 'ok', text: 'Approved and published' }
+		case 'failed':
+			return { lamp: 'stop', text: 'Approved, then failed' }
+	}
 }

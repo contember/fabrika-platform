@@ -1,4 +1,11 @@
-import { type ContractArtifact, type EndpointRow, type FormMountArtifact, isFileShape, type SchemaShape } from '@fabrika/auth-core'
+import {
+	type ContractArtifact,
+	type EndpointRow,
+	type FormMountArtifact,
+	isFileShape,
+	type ProcedureArtifact,
+	type SchemaShape,
+} from '@fabrika/auth-core'
 import { SURFACE_REACHES, type SurfaceEndpointDto, type SurfaceReach } from '@fabrika/control-contract'
 import { attachmentName, crossOriginReach, endpointReach, requirementPhrase, storedFileName } from './diff'
 import { type AccessSnapshot, compareText } from './snapshot'
@@ -36,6 +43,8 @@ function notesOf(contract: ContractArtifact, row: EndpointRow): string[] {
 	if (row.kind === 'upload' && row.admission !== null) notes.push(uploadLimit(row.admission.maxBytes))
 	const mount = row.source.kind === 'mount' ? contract.mounts[row.source.name] : undefined
 	if (mount?.kind === 'form') notes.push(...formProtection(mount))
+	const rules = contract.procedures?.[row.id]
+	if (rules !== undefined) notes.push(...procedureProtection(row, rules))
 	if (mount?.kind === 'webhook') notes.push(`verifies a ${mount.scheme} signature`)
 	return notes
 }
@@ -60,6 +69,22 @@ function formProtection(form: FormMountArtifact): string[] {
 	if (form.challenge !== undefined) notes.push(`${form.challenge.provider} challenge`)
 	if (form.honeypot !== undefined) notes.push(`honeypot field \`${form.honeypot}\``)
 	return notes.length === 0 ? ['no rate limit and no challenge'] : notes
+}
+
+/**
+ * A procedure's buckets and challenge, which stand in front of its handler. A public one without either says so, as a
+ * form does; a signed-in one names only the buckets it has.
+ */
+function procedureProtection(row: EndpointRow, rules: ProcedureArtifact): string[] {
+	const { perClient, perCaller, perEndpoint, bytesPerHour } = rules.rate
+	const notes = [
+		...(perClient === null ? [] : [`at most ${perClient} calls a minute per client`]),
+		...(perCaller === null ? [] : [`at most ${perCaller} calls a minute per caller`]),
+		...(perEndpoint === null ? [] : [`at most ${perEndpoint} calls a minute in all`]),
+		...(bytesPerHour === null ? [] : [`at most ${bytesPerHour} bytes an hour`]),
+		...(rules.challenge === null ? [] : [`${rules.challenge.provider} challenge`]),
+	]
+	return notes.length === 0 && row.requirement === null ? ['no rate limit and no challenge'] : notes
 }
 
 function reachRank(reach: SurfaceReach): number {

@@ -577,6 +577,12 @@ export interface ApprovalDto {
 	 */
 	crossOrigins?: string[]
 	/**
+	 * The candidate's endpoints the change names, as the environment page's surface words them: who reaches each, what it
+	 * requires, and what else opens it or stands in front of it (another origin, a body limit, rate buckets, a challenge).
+	 * A removed endpoint is not among them. Empty for a run that stored no snapshot.
+	 */
+	endpoints: SurfaceEndpointDto[]
+	/**
 	 * The human who approved it, once one did. `holds` is false once the approval lapsed: the environment published
 	 * another change first, the change still widens against it, and the run waits for a new approval (ADR-0050 §2).
 	 */
