@@ -1,14 +1,15 @@
 // Script, frame, style and font origins and a form's admission in the conservative access diff (ADR-0050 §3): a new
 // origin in any directive widens and a removed one narrows, like the three directives before them; a stored snapshot from
-// before they existed still compares; any change to a form's admission is shown and widens.
+// before they existed still compares; any change to a form's admission is shown and widens. Only a 0.5 application
+// declares a form, so every snapshot with one is read by that release's reader.
 
-import type { TablePolicyArtifact } from '@fabrika/auth-core'
+import type { TablePolicyArtifact } from '@fabrika/auth-core-0.5'
 import { readContractSource } from '@fabrika/check/contract'
 import { cspOrigins, headerPolicy } from '@fabrika/proxy-core/headers'
 import { describe, expect, test } from 'bun:test'
 import { classifyAccess } from '../approval/diff'
 import { type AccessSnapshot, parseSnapshot } from '../approval/snapshot'
-import { BASE, edited } from './helpers/contracts'
+import { BASE, edited, snapshot05 } from './helpers/contracts'
 
 const INBOX: TablePolicyArtifact = {
 	scope: { mode: 'inbox', form: 'apply' },
@@ -20,8 +21,8 @@ const INBOX: TablePolicyArtifact = {
 	columns: {},
 }
 
-function snapshot(contract = BASE, tables: Readonly<Record<string, TablePolicyArtifact>> = {}): AccessSnapshot {
-	return { version: 1, contract: readContractSource(new Map([['fabrika.contract.ts', contract]]), tables), migrations: [], checker: '0.0.0' }
+function snapshot(contract = BASE): AccessSnapshot {
+	return { version: 1, contract: readContractSource(new Map([['fabrika.contract.ts', contract]]), {}), migrations: [], checker: '0.0.0' }
 }
 
 const HEALTH = "health: c.health('/healthz'),"
@@ -132,9 +133,9 @@ describe('public variables in the approval diff', () => {
 		}])
 		const challenge = ", honeypot: 'website', challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' }"
 		const withSiteKey = ", honeypot: 'website', challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' }"
-		const changes = classifyAccess(snapshot(FORM(challenge), tables), snapshot(FORM(withSiteKey), tables)).changes
+		const changes = classifyAccess(snapshot05(FORM(challenge), tables), snapshot05(FORM(withSiteKey), tables)).changes
 		expect(changes).toEqual([{ effect: 'widens', line: 'Form `apply` serves every page its challenge site key from `TURNSTILE_SITE_KEY`' }])
-		expect(classifyAccess(snapshot(), snapshot(FORM(withSiteKey), tables)).changes).toContainEqual({
+		expect(classifyAccess(snapshot05(BASE), snapshot05(FORM(withSiteKey), tables)).changes).toContainEqual({
 			effect: 'widens',
 			line: 'New form mount `apply`, serving the public variable `TURNSTILE_SITE_KEY` to every page',
 		})
@@ -145,8 +146,8 @@ describe("a form's admission in the approval diff", () => {
 	const tables = { applications: INBOX }
 
 	test("a challenge shows its provider's origins as widenings and its form as changed", () => {
-		const challenged = snapshot(FORM(", honeypot: 'website', challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' }"), tables)
-		const classification = classifyAccess(snapshot(FORM(''), tables), challenged)
+		const challenged = snapshot05(FORM(", honeypot: 'website', challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' }"), tables)
+		const classification = classifyAccess(snapshot05(FORM(''), tables), challenged)
 		expect(classification.outcome).toBe('widening')
 		expect(classification.changes).toContainEqual({ effect: 'widens', line: 'CSP `scriptSrc` allows `https://challenges.cloudflare.com`' })
 		expect(classification.changes).toContainEqual({ effect: 'widens', line: 'CSP `frameSrc` allows `https://challenges.cloudflare.com`' })
@@ -154,7 +155,7 @@ describe("a form's admission in the approval diff", () => {
 	})
 
 	test('a new rate is shown', () => {
-		const classification = classifyAccess(snapshot(FORM(''), tables), snapshot(FORM(', rate: { perClient: 60 }'), tables))
+		const classification = classifyAccess(snapshot05(FORM(''), tables), snapshot05(FORM(', rate: { perClient: 60 }'), tables))
 		expect(classification.changes).toEqual([
 			{
 				effect: 'widens',
@@ -182,9 +183,9 @@ describe("a form's files in the approval diff", () => {
 	const withFiles = (files: string): string => edited(HEALTH, `${HEALTH}\n${PHOTOS}`, FORM(`${CHALLENGED}${files}`))
 
 	test('a new file field widens and names its collection; requiring it narrows; a removed one narrows', () => {
-		const plain = snapshot(withFiles(''), tables)
-		const taking = snapshot(withFiles(", files: { photo: { collection: 'photos' } }"), tables)
-		const requiring = snapshot(withFiles(", files: { photo: { collection: 'photos', required: true } }"), tables)
+		const plain = snapshot05(withFiles(''), tables)
+		const taking = snapshot05(withFiles(", files: { photo: { collection: 'photos' } }"), tables)
+		const requiring = snapshot05(withFiles(", files: { photo: { collection: 'photos', required: true } }"), tables)
 		const added = classifyAccess(plain, taking)
 		expect(added.outcome).toBe('widening')
 		expect(added.changes).toContainEqual({ effect: 'widens', line: 'Form `apply` takes a file `photo` from anyone into files `photos`' })
@@ -197,8 +198,8 @@ describe("a form's files in the approval diff", () => {
 	})
 
 	test('a new form names the collections it takes files into', () => {
-		const base = snapshot(edited(HEALTH, `${HEALTH}\n${PHOTOS}`), { notes: NOTES })
-		const changes = classifyAccess(base, snapshot(withFiles(", files: { photo: { collection: 'photos' } }"), tables)).changes
+		const base = snapshot05(edited(HEALTH, `${HEALTH}\n${PHOTOS}`), { notes: NOTES })
+		const changes = classifyAccess(base, snapshot05(withFiles(", files: { photo: { collection: 'photos' } }"), tables)).changes
 		expect(changes).toContainEqual({ effect: 'widens', line: 'New form mount `apply`, taking files from anyone: `photo` into files `photos`' })
 	})
 })

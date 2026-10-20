@@ -15,8 +15,8 @@ const app = defineApp(vocabulary, tables)
 function snapshot(mailer: JobMailer | undefined): AccessSnapshot {
 	const actions = ['crm.read'] as const
 	const digest = mailer === undefined
-		? app.cron('0 3 * * *', { actions, scope: 'app' }).handle(async () => {})
-		: app.cron('0 3 * * *', { actions, scope: 'app', mailer }).handle(async () => {})
+		? app.cron('0 3 * * *', { actions }).handle(async () => {})
+		: app.cron('0 3 * * *', { actions, mailer }).handle(async () => {})
 	const contract = app.contract(() => ({ shared, jobs: { digest } }))
 	return { version: 1, contract: compileContract(contract, tables), migrations: [], checker: '0.0.0' }
 }

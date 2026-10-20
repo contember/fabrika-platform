@@ -14,8 +14,8 @@ const app = defineApp(vocabulary, tables)
 function snapshot(issues: boolean): AccessSnapshot {
 	const actions = ['crm.read', 'deals.share'] as const
 	const invite = issues
-		? app.cron('* * * * *', { actions, scope: 'app', issues: 'shared' }).handle(async () => {})
-		: app.cron('* * * * *', { actions, scope: 'app' }).handle(async () => {})
+		? app.cron('* * * * *', { actions, issues: 'shared' }).handle(async () => {})
+		: app.cron('* * * * *', { actions }).handle(async () => {})
 	const contract = app.contract(() => ({ shared, jobs: { invite } }))
 	return { version: 1, contract: compileContract(contract, tables), migrations: [], checker: '0.0.0' }
 }

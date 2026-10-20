@@ -90,7 +90,7 @@ describe.skipIf(!hasPostgres)('fabrika db test-isolation against real Postgres',
 			}
 		})()
 		try {
-			expect(await testIsolation(database.url)).toBe('38 generated cases passed\n')
+			expect(await testIsolation(database.url)).toBe('49 generated cases passed\n')
 		} finally {
 			running = false
 			await sampling
@@ -122,7 +122,7 @@ describe.skipIf(!hasPostgres)('fabrika db test-isolation against real Postgres',
 		const run = testIsolation(database.url)
 		await Bun.sleep(3000)
 		await held.close()
-		expect(await run).toBe('38 generated cases passed\n')
+		expect(await run).toBe('49 generated cases passed\n')
 		expect(performance.now() - started).toBeGreaterThanOrEqual(3000)
 	})
 })

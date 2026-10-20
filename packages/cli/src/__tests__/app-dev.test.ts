@@ -504,7 +504,7 @@ describe.skipIf(url === '')('fabrika app dev on an application with a share link
 	})
 })
 
-describe.skipIf(url === '')("fabrika app dev's stand-ins for the outside: a form's challenge, the dev outbox, dev/dev.env", () => {
+describe.skipIf(url === '')("fabrika app dev's stand-ins for the outside: a public procedure's challenge, the dev outbox, dev/dev.env", () => {
 	let origin = ''
 	let stop: () => Promise<{ readonly code: number; readonly output: string }> = () => Promise.resolve({ code: 0, output: '' })
 
@@ -574,13 +574,17 @@ describe.skipIf(url === '')("fabrika app dev's stand-ins for the outside: a form
 		expect(await posted.text()).not.toContain('receipt-2')
 	})
 
-	test("the always-passing test widget's token submits the form again; any other token only once", async () => {
+	test("the always-passing test widget's token signs up again; any other token only once", async () => {
 		const join = (email: string, challengeToken: string) =>
-			fetch(`${origin}join`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, challengeToken }) })
+			fetch(`${origin}api/signups.join`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ email, challengeToken }),
+			})
 		expect((await join('ben@signup.example', 'XXXX.DUMMY.TOKEN.XXXX')).status).toBe(200)
 		expect((await join('cleo@signup.example', 'XXXX.DUMMY.TOKEN.XXXX')).status).toBe(200)
 		const once = crypto.randomUUID()
 		expect((await join('dan@signup.example', once)).status).toBe(200)
-		expect((await join('eve@signup.example', once)).status).toBe(400)
+		expect((await join('eve@signup.example', once)).status).toBe(403)
 	})
 })

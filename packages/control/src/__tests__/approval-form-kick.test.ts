@@ -1,13 +1,12 @@
 // A form's `then` in the conservative access diff (ADR-0050 §3): it reaches only a job of the same approved contract,
 // which runs under its own declared actions, so declaring, moving or dropping it shows a line and widens nothing; any
-// other change of the form still widens.
+// other change of the form still widens. Only a 0.5 application declares a form, read by its own release's reader.
 
-import type { TablePolicyArtifact } from '@fabrika/auth-core'
-import { readContractSource } from '@fabrika/check/contract'
+import type { TablePolicyArtifact } from '@fabrika/auth-core-0.5'
 import { describe, expect, test } from 'bun:test'
 import { classifyAccess } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
-import { edited } from './helpers/contracts'
+import { edited, snapshot05 } from './helpers/contracts'
 
 const INBOX: TablePolicyArtifact = {
 	scope: { mode: 'inbox', form: 'apply' },
@@ -39,7 +38,7 @@ const FORM = (options: string): string => {
 }
 
 function snapshot(contract: string): AccessSnapshot {
-	return { version: 1, contract: readContractSource(new Map([['fabrika.contract.ts', contract]]), TABLES), migrations: [], checker: '0.0.0' }
+	return snapshot05(contract, TABLES)
 }
 
 describe("a form's then in the approval diff", () => {

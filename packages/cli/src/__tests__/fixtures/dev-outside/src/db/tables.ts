@@ -3,5 +3,9 @@ import { vocabulary } from '../vocabulary'
 import { columns } from './schema.generated'
 
 export const tables = defineTables(vocabulary, columns)({
-	requests: { scope: { inbox: 'join', read: 'signups.process' } },
+	requests: {
+		scope: { app: 'a sign-up arrives before anyone has an account' },
+		actions: { read: 'signups.process', insert: 'signups.join' },
+		insert: ['email'],
+	},
 })

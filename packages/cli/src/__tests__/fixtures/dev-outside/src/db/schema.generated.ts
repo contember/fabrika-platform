@@ -3,6 +3,7 @@
 import type { TypedColumnList } from '@fabrika/db'
 
 export interface RequestsTable {
+	id: string
 	email: string
 }
 
@@ -13,6 +14,7 @@ export interface DB {
 export const columns: TypedColumnList<DB> = {
 	'requests': {
 		columns: [
+			'id',
 			'email',
 		],
 		foreignKeys: [],

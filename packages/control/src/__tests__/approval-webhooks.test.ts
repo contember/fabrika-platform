@@ -71,7 +71,7 @@ describe('webhooks in the approval diff', () => {
 				input: Push,
 				limits: { timeoutMs },
 			}).handle(async () => {})
-		const job = (timeoutMs: number) => app.cron('0 3 * * *', { actions: ['crm.read'], scope: 'app', limits: { timeoutMs } }).handle(async () => {})
+		const job = (timeoutMs: number) => app.cron('0 3 * * *', { actions: ['crm.read'], limits: { timeoutMs } }).handle(async () => {})
 		const timed = (hookMs: number, jobMs: number): AccessSnapshot => {
 			const contract = app.contract((c) => ({ api: c.rpc('/api', { ledgers: GROUPS.plain }), ledger: hook(hookMs), jobs: { nightly: job(jobMs) } }))
 			return { version: 1, contract: compileContract(contract, tables), migrations: [], checker: '0.0.0' }

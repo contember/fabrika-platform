@@ -1,4 +1,5 @@
--- The sign-up form's inbox: a column per input field but the challenge token.
+-- The sign-ups the public procedure records.
 CREATE TABLE requests (
+	id UUID PRIMARY KEY,
 	email TEXT NOT NULL
 );

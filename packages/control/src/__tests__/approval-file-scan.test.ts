@@ -1,12 +1,11 @@
 // A file collection's malware scan in the access diff (ADR-0050 §3): turning it off widens, turning it on removes, and a
-// collection's generated list query is a new endpoint like any other.
+// collection's generated list query is a new endpoint like any other. Only a 0.5 application declares a collection.
 
-import type { TablePolicyArtifact } from '@fabrika/auth-core'
-import { readContractSource } from '@fabrika/check/contract'
+import type { TablePolicyArtifact } from '@fabrika/auth-core-0.5'
 import { describe, expect, test } from 'bun:test'
 import { classifyAccess } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
-import { BASE, edited } from './helpers/contracts'
+import { BASE, edited, snapshot05 } from './helpers/contracts'
 
 const NOTES_TABLE: TablePolicyArtifact = {
 	scope: { mode: 'dimension', dimension: 'note', key: 'id', container: { dimension: 'workspace', column: 'workspace_id' } },
@@ -24,12 +23,7 @@ const withFiles = (options: string): string =>
 		`\tfiles: { attachments: c.files({ owner: 'notes', read: 'notes.read', write: 'notes.write', delete: 'notes.delete', maxBytes: 1024, types: ['application/pdf']${options} }) },\n\thealth: c.health`,
 	)
 
-const snapshot = (contract: string): AccessSnapshot => ({
-	version: 1,
-	contract: readContractSource(new Map([['fabrika.contract.ts', contract]]), { notes: NOTES_TABLE }),
-	migrations: [],
-	checker: '0.0.0',
-})
+const snapshot = (contract: string): AccessSnapshot => snapshot05(contract, { notes: NOTES_TABLE })
 
 describe('classifyAccess of a file collection that scans', () => {
 	test('turning the scan off widens, with its own line; turning it on only removes', () => {

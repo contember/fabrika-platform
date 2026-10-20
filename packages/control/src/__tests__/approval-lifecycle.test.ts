@@ -720,7 +720,7 @@ async function credentialed(w: World) {
 describe('workload keys from the approved contract', () => {
 	const WITH_JOB = edited(
 		"\tapp: c.spa('/', { dir: 'dist/app', access: { member: true } }),\n",
-		"\tapp: c.spa('/', { dir: 'dist/app', access: { member: true } }),\n\tjobs: { nightly: c.cron('0 3 * * *', { actions: ['notes.delete'], scope: 'app' }) },\n",
+		"\tapp: c.spa('/', { dir: 'dist/app', access: { member: true } }),\n\tjobs: { nightly: c.cron('0 3 * * *', { actions: ['notes.delete'] }) },\n",
 	)
 
 	test('a deploy hands each job of the approved contract its key, and no run log keeps it', async () => {
@@ -779,7 +779,7 @@ describe('workload keys from the approved contract', () => {
 describe('the installation mail transport for a job that declares it', () => {
 	const MAILING = `import { app } from './app-kit'
 
-export const digest = app.cron('0 3 * * *', { actions: ['notes.read'], scope: 'app', mailer: 'installation' }).handle(async () => {})
+export const digest = app.cron('0 3 * * *', { actions: ['notes.read'], mailer: 'installation' }).handle(async () => {})
 `
 	const CONTRACT = `import { app } from './src/app-kit'
 import { digest } from './src/jobs'

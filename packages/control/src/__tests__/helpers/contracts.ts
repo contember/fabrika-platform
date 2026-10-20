@@ -1,5 +1,10 @@
 // A contract application's source, as Control reads it at a commit, and edits of it for the approval tests.
 
+import type { TablePolicyArtifact as TablePolicyArtifact05 } from '@fabrika/auth-core-0.5'
+import { CHECKER_VERSION as CHECKER_05, readContractSource as readContractSource05 } from '@fabrika/check-0.5/contract'
+import { fromOlder } from '../../approval/formats'
+import type { AccessSnapshot } from '../../approval/snapshot'
+
 export const BASE = `import { defineContract } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 
@@ -47,3 +52,17 @@ export const healthOnly = (app: string): string =>
 
 export const contract = defineContract({ app: '${app}', dimensions: {}, actions: {}, roles: {} }, (c) => ({ health: c.health('/healthz') }))
 `
+
+/**
+ * The snapshot of a 0.5 application's commit, read by its own release's reader and upcast (ADR-0062). The forms, file
+ * collections and `then` that this release's framework no longer authors are approved and served this way.
+ * `files` are the commit's other files; without `tables` the reader reads them from `src/db/tables.ts`.
+ */
+export function snapshot05(
+	contract: string,
+	tables?: Readonly<Record<string, TablePolicyArtifact05>>,
+	files: Readonly<Record<string, string>> = {},
+): AccessSnapshot {
+	const sources = new Map(Object.entries({ ...files, 'fabrika.contract.ts': contract }))
+	return { version: 1, ...fromOlder(readContractSource05(sources, tables)), migrations: [], checker: CHECKER_05 }
+}

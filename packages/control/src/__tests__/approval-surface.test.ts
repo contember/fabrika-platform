@@ -1,13 +1,12 @@
 // The surface of a published snapshot (ADR-0050): every endpoint under its most exposed caller, most exposed first, in
 // the approval's words, with what else opens it to the outside.
 
-import type { TablePolicyArtifact } from '@fabrika/auth-core'
-import { readContractSource } from '@fabrika/check/contract'
+import type { TablePolicyArtifact } from '@fabrika/auth-core-0.5'
 import type { SurfaceEndpointDto } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import { type AccessSnapshot, EMPTY_SNAPSHOT } from '../approval/snapshot'
 import { snapshotSurface } from '../approval/surface'
-import { edited } from './helpers/contracts'
+import { edited, snapshot05 } from './helpers/contracts'
 
 const INBOX: TablePolicyArtifact = {
 	scope: { mode: 'inbox', form: 'apply' },
@@ -19,13 +18,9 @@ const INBOX: TablePolicyArtifact = {
 	columns: {},
 }
 
+/** A form is only a 0.5 application's, so the surface is read by that release's reader. */
 function snapshot(contract: string): AccessSnapshot {
-	return {
-		version: 1,
-		contract: readContractSource(new Map([['fabrika.contract.ts', contract]]), { applications: INBOX }),
-		migrations: [],
-		checker: '0.0.0',
-	}
+	return snapshot05(contract, { applications: INBOX })
 }
 
 const HEALTH = "health: c.health('/healthz'),"

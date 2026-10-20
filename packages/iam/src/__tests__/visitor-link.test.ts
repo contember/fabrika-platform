@@ -1,6 +1,6 @@
 // The public intake witness of WU15 against the real IAM through the proxy's decision: the fixture application of
-// `@fabrika/app`'s intake test, booted on a real Postgres, its intake job exchanging its own key at IAM's workload token
-// route and issuing through IAM's `issueLink`, and every visitor request decided by proxy-core's `Authorizer` over the
+// `@fabrika/app`'s intake test, booted on a real Postgres, its public procedures and its intake job each exchanging
+// its own key at IAM's workload token route, the job issuing through IAM's `issueLink`, and every visitor request decided by proxy-core's `Authorizer` over the
 // endpoint table the contract compiles to, with IAM minting from the presented key. IAM runs on its SQLite harness.
 
 import { compileContract, schemaFromContract } from '@fabrika/app/contract'
@@ -12,6 +12,7 @@ import {
 	ENDPOINT_HEADER,
 	FABRIKA_CONTRACT_DIGEST,
 	type MembershipFailure,
+	type OwnWorkloadKind,
 	PROXY_TOKEN_HEADER,
 	TOKEN_REFRESH_SKEW_SECONDS,
 	WORKLOAD_TOKEN_PATH,
@@ -126,8 +127,8 @@ interface VisitOptions {
 	readonly key?: string
 	/** A JSON body, sent with POST. */
 	readonly body?: unknown
-	/** A file's bytes and their media type, sent with POST. */
-	readonly file?: { readonly bytes: Uint8Array<ArrayBuffer>; readonly type: string }
+	/** A multipart body, sent with POST. */
+	readonly form?: FormData
 }
 
 interface Stack {
@@ -174,16 +175,24 @@ async function stack(): Promise<Stack> {
 		if (response.status !== 200) throw new Error(`IAM refused the schema: ${await response.text()}`)
 	}
 	await reconcile(true)
-	const issued = await iam('/admin/rpc', {
-		method: 'POST',
-		bearer: PROVISIONING_KEY,
-		body: {
-			method: 'workloads.issueKey',
-			input: { app: APP, kind: 'job', name: 'intake', expiresAt: Math.floor(Date.now() / 1000) + 30 * DAY, keep: null },
-		},
-	})
-	const jobKey = prop(prop(await issued.json(), 'result'), 'key')
-	if (typeof jobKey !== 'string') throw new Error('IAM issued no key for the intake job')
+	const issueKey = async (kind: OwnWorkloadKind, name: string): Promise<string> => {
+		const issued = await iam('/admin/rpc', {
+			method: 'POST',
+			bearer: PROVISIONING_KEY,
+			body: {
+				method: 'workloads.issueKey',
+				input: { app: APP, kind, name, expiresAt: Math.floor(Date.now() / 1000) + 30 * DAY, keep: null },
+			},
+		})
+		const key = prop(prop(await issued.json(), 'result'), 'key')
+		if (typeof key !== 'string') throw new Error(`IAM issued no key for the ${kind} workload ${name}`)
+		return key
+	}
+	const jobKey = await issueKey('job', 'intake')
+	const publicKeys: Record<string, string> = {}
+	for (const workload of schemaFromContract(artifact).workloads ?? []) {
+		if (workload.kind === 'public') publicKeys[workloadKeyVariable('public', workload.name)] = await issueKey('public', workload.name)
+	}
 
 	const rpc = createIamRpc(env, exec)
 	const connection = Database.postgres({ url, schema, max: 2 })
@@ -196,6 +205,7 @@ async function stack(): Promise<Stack> {
 			FABRIKA_IAM_ISSUER: ISSUER,
 			[FABRIKA_CONTRACT_DIGEST]: contractDigest(artifact),
 			[workloadKeyVariable('job', 'intake')]: jobKey,
+			...publicKeys,
 		}),
 		iam: { getJwks: () => rpc.getJwks() },
 		assets: echoAssets,
@@ -214,15 +224,17 @@ async function stack(): Promise<Stack> {
 		env,
 		clock: Math.floor(Date.now() / 1000),
 		async visit(path, options = {}) {
+			const multipart = options.form === undefined ? null : new Response(options.form)
 			const headers = new Headers({
-				'Content-Type': options.file?.type ?? 'application/json',
+				'Content-Type': multipart?.headers.get('Content-Type') ?? 'application/json',
 				'Sec-Fetch-Site': 'same-origin',
 				'Sec-Fetch-Mode': 'cors',
 			})
 			if (options.key !== undefined) headers.set('Authorization', `Bearer ${options.key}`)
-			const method = options.body === undefined && options.file === undefined ? 'GET' : 'POST'
+			const method = options.body === undefined && multipart === null ? 'GET' : 'POST'
 			const requestId = Bun.randomUUIDv7()
-			const decision = await authorizer.authorize(resolved, { method, url: new URL(path, `https://${HOST}`), rawPath: path, headers, requestId })
+			const target = new URL(path, `https://${HOST}`)
+			const decision = await authorizer.authorize(resolved, { method, url: target, rawPath: target.pathname, headers, requestId })
 			if (decision.outcome !== 'allow') {
 				return { status: decision.outcome === 'deny' || decision.outcome === 'login' ? decision.status : 302, body: decision.outcome }
 			}
@@ -232,7 +244,7 @@ async function stack(): Promise<Stack> {
 			forwarded.set('X-Request-Id', requestId)
 			if (decision.token !== null) forwarded.set(PROXY_TOKEN_HEADER, decision.token)
 			if (decision.delegation !== null) forwarded.set(DELEGATION_HEADER, decision.delegation)
-			const body = options.file?.bytes ?? (options.body === undefined ? null : JSON.stringify(options.body))
+			const body = multipart === null ? (options.body === undefined ? null : JSON.stringify(options.body)) : await multipart.arrayBuffer()
 			const response = await app.fetch(new Request(`https://${HOST}${path}`, { method, headers: forwarded, body }))
 			const text = await response.text()
 			let parsed: unknown = text
@@ -273,9 +285,9 @@ function resultOf(sent: { readonly status: number; readonly body: unknown }): un
 }
 
 describe.skipIf(!hasPostgres)('an anonymous visitor through the proxy and the real IAM', () => {
-	test("a form row becomes a candidate, the job's link is bound to it, and its holder verifies once", async () => {
+	test("a registration becomes a candidate, the job's link is bound to it, and its holder verifies once", async () => {
 		const s = await stack()
-		expect(resultOf(await s.visit('/register', { body: { email: 'ada@example.test', name: 'Ada' } }))).toEqual({ received: true })
+		expect(resultOf(await s.visit('/api/visitors.register', { body: { email: 'ada@example.test', name: 'Ada' } }))).toEqual({ received: true })
 		expect(await s.runJob()).toEqual({ status: 'succeeded', attempts: 1 })
 
 		const [row] = await admin((sql) => sql.unsafe(`select id, link_id from ${schema}.candidates where email = 'ada@example.test'`))
@@ -299,42 +311,44 @@ describe.skipIf(!hasPostgres)('an anonymous visitor through the proxy and the re
 
 	test("a holder uploads to and downloads from its own record only; another record's file is 404", async () => {
 		const s = await stack()
-		await s.visit('/register', { body: { email: 'eve@example.test', name: 'Eve' } })
-		await s.visit('/register', { body: { email: 'fay@example.test', name: 'Fay' } })
+		await s.visit('/api/visitors.register', { body: { email: 'eve@example.test', name: 'Eve' } })
+		await s.visit('/api/visitors.register', { body: { email: 'fay@example.test', name: 'Fay' } })
 		expect(await s.runJob()).toEqual({ status: 'succeeded', attempts: 1 })
 		const eve = s.world.lastKey('eve@example.test')
 		const fay = s.world.lastKey('fay@example.test')
-		const upload = (key: string) => s.visit('/p/api/files.attachments.upload', { key, file: { bytes: PDF, type: 'application/pdf' } })
+		const upload = (key: string) => {
+			const form = new FormData()
+			form.append('input', JSON.stringify({}))
+			form.append('file', new File([PDF], 'cv.pdf', { type: 'application/pdf' }))
+			return s.visit('/p/api/attach', { key, form })
+		}
 
 		const own = prop(resultOf(await upload(eve)), 'id')
 		const theirs = prop(resultOf(await upload(fay)), 'id')
 		if (typeof own !== 'string' || typeof theirs !== 'string') throw new Error('expected two uploads')
 		const owners = await admin((sql) =>
 			sql.unsafe(
-				`select c.email from ${schema}.fabrika_files_attachments f join ${schema}.candidates c on c.id = f.owner_id where f.id in ($1, $2) order by c.email`,
-				[
-					own,
-					theirs,
-				],
+				`select c.email from ${schema}.candidate_files f join ${schema}.candidates c on c.id = f.candidate_id where f.file in ($1, $2) order by c.email`,
+				[own, theirs],
 			)
 		)
 		expect(owners.map((row: { email: string }) => row.email)).toEqual(['eve@example.test', 'fay@example.test'])
-		const downloaded = await s.visit(`/p/api/files.attachments/${own}`, { key: eve })
+		const downloaded = await s.visit(`/p/api/document?id=${own}`, { key: eve })
 		expect(downloaded.status).toBe(200)
 		expect(downloaded.body).toBe(new TextDecoder().decode(PDF))
-		expect((await s.visit(`/p/api/files.attachments/${theirs}`, { key: eve })).status).toBe(404)
-		const listed = prop(resultOf(await s.visit('/p/api/files.attachments.list', { key: eve, body: {} })), 'items')
+		expect((await s.visit(`/p/api/document?id=${theirs}`, { key: eve })).status).toBe(404)
+		const listed = prop(resultOf(await s.visit('/p/api/documents', { key: eve, body: {} })), 'items')
 		expect(Array.isArray(listed) ? listed.map((item: unknown) => prop(item, 'id')) : listed).toEqual([own])
 	})
 
 	test('a link the job revoked keeps working only until the proxy must refresh its cached token', async () => {
 		const s = await stack()
-		await s.visit('/register', { body: { email: 'bo@example.test', name: 'Bo' } })
+		await s.visit('/api/visitors.register', { body: { email: 'bo@example.test', name: 'Bo' } })
 		await s.runJob()
 		const superseded = s.world.lastKey('bo@example.test')
 		expect(resultOf(await s.visit('/p/api/me', { key: superseded, body: {} }))).toMatchObject({ name: 'Bo' })
 
-		expect(resultOf(await s.visit('/resend', { body: { email: 'bo@example.test' } }))).toEqual({ received: true })
+		expect(resultOf(await s.visit('/api/visitors.resend', { body: { email: 'bo@example.test' } }))).toEqual({ received: true })
 		expect(await s.runJob()).toEqual({ status: 'succeeded', attempts: 1 })
 		const current = s.world.lastKey('bo@example.test')
 		expect(current).not.toBe(superseded)
@@ -366,7 +380,7 @@ describe.skipIf(!hasPostgres)('an anonymous visitor through the proxy and the re
 		expect(await rpc.listMembers({ ...caller, scope: { type: 'candidate', value: 'c1' } })).toEqual(refused)
 
 		await s.reconcile(false)
-		await s.visit('/register', { body: { email: 'cy@example.test', name: 'Cy' } })
+		await s.visit('/api/visitors.register', { body: { email: 'cy@example.test', name: 'Cy' } })
 		// IAM's refusal fails the candidate's delivery, which counts the attempt; the run goes on and succeeds.
 		expect(await s.runJob()).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(s.world.mails).toEqual([])
