@@ -9,6 +9,7 @@ fabrika-platform is and how the pieces fit — then skim
 [`decisions/README.md`](decisions/README.md) for the _why_.
 
 For editing an application from Claude or ChatGPT through MCP, see [MCP authoring](reference/mcp-authoring.md).
+For raising an application's framework pin to the next minor, see [framework migrations](reference/framework-migrations.md).
 
 ## Folders
 

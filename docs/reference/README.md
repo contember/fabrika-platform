@@ -47,4 +47,6 @@ behaviour.
 - [`local-development.md`](local-development.md) — operate and verify the real
   local Delivery, Access, and Operations data plane behind the narrow Zerops REST
   emulator.
+- [`framework-migrations.md`](framework-migrations.md) — how an application raises its `@fabrika/*` pin to the
+  next framework minor: every removed or changed form, old and new, with its migration steps.
 - [`release-process.md`](release-process.md) — required CI gates, the public package contract, trusted tag publication, and the per-account deployment boundary.
