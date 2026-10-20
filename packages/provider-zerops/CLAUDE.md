@@ -118,7 +118,7 @@ bun test
   removed by a null. Beside them Control hands each job's and webhook's key (`FABRIKA_<KIND>_<NAME>_KEY`), each public
   procedure's (`FABRIKA_PROCEDURE_<ID>_<8 hex>_KEY`) and each connector
   import's `FABRIKA_CONNECT_<IMPORT>_KEY` and `_URL`, and the platform transport's `FABRIKA_PLATFORM_<RECEIVER>_KEY`
-  (sensitive) and `_URL` (plain, http allowed: a private origin) (`parseManagedEnvironment`: a `px_` key, an origin,
+  (sensitive) and `_URL` (plain, Control's public origin, http allowed for the local stack's) (`parseManagedEnvironment`: a `px_` key, an origin,
   or the deploy is refused, and so is any other family name): `write-service-env` writes each and deletes every
   service variable of those families that this deploy did not hand, so a removed workload's or import's key does
   not stay readable.

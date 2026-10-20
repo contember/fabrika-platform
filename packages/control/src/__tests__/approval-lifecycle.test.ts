@@ -818,9 +818,12 @@ export const contract = app.contract((c) => ({
 	const mailVariables = (input: ProviderDeployInput | undefined): string[] =>
 		Object.keys(input?.managedEnvironment ?? {}).filter((name) => name.startsWith('FABRIKA_EMAIL_') || name.startsWith('FABRIKA_PLATFORM_')).sort()
 
-	async function relayed(w: World) {
+	const CONTROL_ORIGIN = 'https://control.example.test'
+
+	/** A Control that can relay: it issues the key and names the public origin an application reaches the relay on. */
+	async function relayed(w: World): Promise<Pick<RunDeps, 'platformTransport' | 'controlOrigin'>> {
 		const vault = await Vault.create(harnessDatabase(w.db), btoa(String.fromCharCode(...new Uint8Array(32).fill(7))))
-		return new VaultPlatformTransport(w.db.platformTransportKeys, () => Promise.resolve(vault))
+		return { platformTransport: new VaultPlatformTransport(w.db.platformTransportKeys, () => Promise.resolve(vault)), controlOrigin: CONTROL_ORIGIN }
 	}
 
 	test('a deploy hands the whole transport, and no run log keeps its credential', async () => {
@@ -832,7 +835,7 @@ export const contract = app.contract((c) => ({
 			...deps(w),
 			workloadCredentials,
 			mailTransport,
-			platformTransport: await relayed(w),
+			...(await relayed(w)),
 			provider: {
 				...loggingProvider,
 				deploy: (input) => {
@@ -860,7 +863,7 @@ export const contract = app.contract((c) => ({
 			...deps(w),
 			workloadCredentials,
 			mailTransport,
-			platformTransport: await relayed(w),
+			...(await relayed(w)),
 			provider: {
 				...loggingProvider,
 				deploy: (input) => {
@@ -873,7 +876,7 @@ export const contract = app.contract((c) => ({
 		const managed = w.deploys[0]?.managedEnvironment
 		expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_PLATFORM_MAIL_KEY', 'FABRIKA_PLATFORM_MAIL_URL'])
 		expect(managed?.['FABRIKA_EMAIL_PROVIDER']).toBe('platform')
-		expect(managed?.['FABRIKA_PLATFORM_MAIL_URL']).toBe('http://control:3000')
+		expect(managed?.['FABRIKA_PLATFORM_MAIL_URL']).toBe(CONTROL_ORIGIN)
 		const key = managed?.['FABRIKA_PLATFORM_MAIL_KEY'] ?? ''
 		expect(key).toMatch(/^px_[A-Za-z0-9_-]{27}$/)
 		expect(await w.db.platformTransportKeys.findValidByHash(await hashPlatformKey(key), Math.floor(Date.now() / 1000))).toMatchObject({
@@ -888,7 +891,7 @@ export const contract = app.contract((c) => ({
 
 		// The next deploy hands the same key while it is fresh.
 		expect(
-			(await executeDeploy({ ...deps(w), workloadCredentials, mailTransport, platformTransport: await relayed(w) }, {
+			(await executeDeploy({ ...deps(w), workloadCredentials, mailTransport, ...(await relayed(w)) }, {
 				runId: await createdRun(w, 'stage'),
 			})).status,
 		)
@@ -901,7 +904,7 @@ export const contract = app.contract((c) => ({
 			const w = mailingWorld('0.7.0')
 			await seed(w)
 			const { workloadCredentials } = await credentialed(w)
-			const result = await executeDeploy({ ...deps(w), workloadCredentials, ...transport, platformTransport: await relayed(w) }, {
+			const result = await executeDeploy({ ...deps(w), workloadCredentials, ...transport, ...(await relayed(w)) }, {
 				runId: await createdRun(w, 'stage'),
 			})
 			expect(result.status).toBe('succeeded')
@@ -916,7 +919,10 @@ export const contract = app.contract((c) => ({
 		const { workloadCredentials } = await credentialed(w)
 		const quiet = spyOn(console, 'error').mockImplementation(() => {})
 		try {
-			expect((await executeDeploy({ ...deps(w), workloadCredentials, mailTransport }, { runId: await createdRun(w, 'stage') })).status).toBe('failed')
+			expect(
+				(await executeDeploy({ ...deps(w), workloadCredentials, mailTransport, controlOrigin: CONTROL_ORIGIN }, { runId: await createdRun(w, 'stage') }))
+					.status,
+			).toBe('failed')
 			expect(quiet.mock.calls.flat().map(String).join('\n')).toContain('cannot issue the platform transport key')
 		} finally {
 			quiet.mockRestore()
@@ -924,12 +930,34 @@ export const contract = app.contract((c) => ({
 		expect(w.deploys).toEqual([])
 	})
 
+	test('a 0.7 application does not deploy behind a namespace proxy where Control names no public origin: its project cannot reach the private one', async () => {
+		const w = mailingWorld('0.7.0')
+		await seed(w)
+		const { workloadCredentials } = await credentialed(w)
+		const { platformTransport } = await relayed(w)
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			for (const dryRun of [false, true]) {
+				const result = await executeDeploy({ ...deps(w), workloadCredentials, mailTransport, platformTransport }, {
+					runId: await createdRun(w, 'stage'),
+					dryRun,
+				})
+				expect(result.status).toBe('failed')
+			}
+			expect(quiet.mock.calls.flat().map(String).join('\n')).toContain('Control names no public origin for the application to reach it on')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect(w.deploys).toEqual([])
+		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toEqual([])
+	})
+
 	test('a snapshot read before Control recorded the framework release is an older application: it gets the credential', async () => {
 		const w = mailingWorld('0.7.0')
 		await seed(w)
 		const { workloadCredentials } = await credentialed(w)
 		expect(
-			(await executeDeploy({ ...deps(w), workloadCredentials, mailTransport, platformTransport: await relayed(w) }, {
+			(await executeDeploy({ ...deps(w), workloadCredentials, mailTransport, ...(await relayed(w)) }, {
 				runId: await createdRun(w, 'stage'),
 			})).status,
 		)
@@ -940,7 +968,7 @@ export const contract = app.contract((c) => ({
 		expect(framework).toBe('0.7.0')
 		w.sqlite.query("UPDATE app_envs SET published_snapshot_json = ? WHERE app_id = 'notes' AND env = 'stage'").run(serializeSnapshot(unrecorded))
 		// A dry run deploys the approved snapshot as stored, without reading the commit again.
-		const dryRun = await executeDeploy({ ...deps(w), mailTransport, platformTransport: await relayed(w) }, {
+		const dryRun = await executeDeploy({ ...deps(w), mailTransport, ...(await relayed(w)) }, {
 			runId: await createdRun(w, 'stage'),
 			dryRun: true,
 		})
@@ -952,8 +980,7 @@ export const contract = app.contract((c) => ({
 		const w = mailingWorld('0.7.0')
 		await seed(w)
 		const { workloadCredentials } = await credentialed(w)
-		const platformTransport = await relayed(w)
-		const relayDeps = { ...deps(w), workloadCredentials, mailTransport, platformTransport }
+		const relayDeps = { ...deps(w), workloadCredentials, mailTransport, ...(await relayed(w)) }
 		expect((await executeDeploy(relayDeps, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
 		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toHaveLength(1)
 

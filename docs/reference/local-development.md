@@ -396,7 +396,8 @@ catalog/release projection, and managed app environment assembly use the real
 services.
 
 Notes can reach the public IAM address through the narrow `iam-public` network
-to fetch JWKS. It cannot resolve or reach the private control, platform
+to fetch JWKS, and Control's public address there, where an application's mail
+reaches the relay. It cannot resolve or reach the private control, platform
 PostgreSQL, SeaweedFS, IAM RPC, or Operations services.
 
 The stateful Zerops emulator implements only the REST calls used by

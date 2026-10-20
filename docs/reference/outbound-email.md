@@ -257,11 +257,14 @@ never sends. `mailer: 'own'` takes the application's own `EmailSender` from
 - A Zerops deploy whose approved snapshot records framework 0.7.0 or newer (a
   prerelease compares as its release) hands the relay (`relaysInstallationMail`,
   `platformMailEnvironment`): `FABRIKA_EMAIL_PROVIDER=platform`,
-  `FABRIKA_PLATFORM_MAIL_URL=http://control:3000` and the environment's
-  `FABRIKA_PLATFORM_MAIL_KEY`, and no provider variable. Control hands them whatever
+  `FABRIKA_PLATFORM_MAIL_URL` (Control's public origin, from `FABRIKA_CONTROL_DOMAIN`)
+  and the environment's `FABRIKA_PLATFORM_MAIL_KEY`, and no provider variable. The
+  application's project has no private network to Control's, so the platform proxy
+  carries the call to the relay's `protocol` row. Control hands them whatever
   its own transport is: the relay holds what it cannot send. A dry run hands the
   provider and the URL without a key. A Control without a vault
-  (`FABRIKA_CONTROL_VAULT_KEY`) cannot issue the key and refuses the deploy.
+  (`FABRIKA_CONTROL_VAULT_KEY`) cannot issue the key, and a Control without a public
+  origin has no address to hand: each refuses the deploy.
 - Any other deploy whose approved contract has such a job hands the application the
   whole set (`installationMailEnvironment`), its credentials among the values the
   run's logs redact. Zerops writes every name service-level and sensitive.
@@ -325,6 +328,9 @@ local stack) runs it; on the Worker its row answers 404.
 - `POST <url>/platform/mail/send`, `Authorization: Bearer <key>`,
   `Content-Type: application/json`. Control serves it on the `protocol` row
   `mail-relay` (`POST /platform/mail/*`); any other path under it answers 404.
+- An application calls it on Control's public host: the platform proxy serves the
+  row there, makes no decision and passes `Authorization` on to the relay. IAM calls
+  Control's private origin from the installation's project.
 - The body is the `EmailMessage` fields; each attachment is
   `{ filename, contentType, contentBase64 }` (standard padded base64).
   `encodePlatformMailRequest` writes it in a fixed field order, so the same message
@@ -435,6 +441,8 @@ Only `admin` holds them by default. The procedures (`controlRpc.mail`):
   rewrites `FABRIKA_SERVICE_TABLE_DIGEST`.
 - An installation starts with no rules: every application message passes.
 - An application environment moves to the relay at its first deploy on framework 0.7.
+  The deploy hands Control's public origin, which every installation already sets
+  (`FABRIKA_CONTROL_DOMAIN`).
   An older release keeps the set and sends directly; the gate does not cover it.
 - IAM moves to the relay with the release whose `zerops.yaml` gives it
   `FABRIKA_CONTROL_URL`. Its `FABRIKA_EMAIL_*` stay.

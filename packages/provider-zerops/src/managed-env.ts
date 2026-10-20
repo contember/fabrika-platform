@@ -137,7 +137,7 @@ const originSchema = (schemes: readonly string[]) =>
 		}
 	})
 const connectOriginSchema = originSchema(['https:'])
-// Control's private origin, `http://control:3000`, is a receiver's address on the project's private network.
+// Control's public origin is http in the local stack (`http://control.fabrika.localhost:18080`).
 const platformOriginSchema = originSchema(['http:', 'https:'])
 
 export function parseManagedEnvironment(value: Readonly<Record<string, string | null>>): ManagedEnvironment {

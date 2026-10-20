@@ -1,7 +1,7 @@
 // The composition's mail transport, without Docker: Control holds the `directory` set, Notes (which declares no
-// mailer) gets none, IAM holds the same set and Control's private origin, so it sends through the relay, the local
-// registry accepts the set, and it writes where the suites read. A suite finds a message by its mailbox, its time and,
-// for an application's, its transport key.
+// mailer) gets none, IAM holds the same set and Control's private origin, so it sends through the relay, an application
+// reaches the relay on Control's public host, the local registry accepts the set, and it writes where the suites read.
+// A suite finds a message by its mailbox, its time and, for an application's, its transport key.
 
 import { readEmailTransportConfig } from '@fabrika/email'
 import type { CapturedEmail } from '@fabrika/email/directory'
@@ -20,7 +20,8 @@ const Compose = z.object({
 	services: z.object({
 		iam: z.object({ environment: Environment }),
 		control: z.object({ environment: Environment }),
-		notes: z.object({ environment: Environment }),
+		notes: z.object({ environment: Environment, networks: z.array(z.string()) }),
+		'platform-proxy-auth': z.object({ networks: z.record(z.string(), z.object({ aliases: z.array(z.string()).optional() })) }),
 	}),
 })
 
@@ -42,6 +43,14 @@ describe("the composition's mail transport", () => {
 		const iam = compose.services.iam.environment
 		expect(mailOf(iam)).toEqual(mailOf(compose.services.control.environment))
 		expect(iam['FABRIKA_CONTROL_URL']).toBe(`http://control:${compose.services.control.environment['PORT']}`)
+	})
+
+	test("an application reaches the relay on Control's public host, which the platform proxy answers on the application's network", () => {
+		const domain = compose.services.control.environment['FABRIKA_CONTROL_DOMAIN']
+		if (typeof domain !== 'string') throw new Error('compose.yaml names no FABRIKA_CONTROL_DOMAIN')
+		const proxy = compose.services['platform-proxy-auth'].networks
+		const reached = compose.services.notes.networks.filter((network) => proxy[network]?.aliases?.includes(new URL(domain).hostname))
+		expect(reached).toEqual(['iam-public'])
 	})
 
 	test("IAM's composition boots with that environment and picks the relay's sender", async () => {

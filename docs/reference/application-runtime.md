@@ -1837,7 +1837,7 @@ commits them nor sets them, and an application VARIABLE of the same name is refu
 
 A deploy of an approved contract with a job that declares `mailer: 'installation'` also writes the mail transport
 ([outbound email](outbound-email.md#applications)). An application on framework 0.7 on Zerops gets the relay:
-`FABRIKA_EMAIL_PROVIDER=platform`, `FABRIKA_PLATFORM_MAIL_URL` (Control's private origin, plain) and
+`FABRIKA_EMAIL_PROVIDER=platform`, `FABRIKA_PLATFORM_MAIL_URL` (Control's public origin, plain) and
 `FABRIKA_PLATFORM_MAIL_KEY` (its environment's transport key, sensitive). An older release gets every `FABRIKA_EMAIL_*`
 name Control holds, sensitive on Zerops, or `FABRIKA_EMAIL_PROVIDER=none` when Control has no transport; with an
 invalid one, Control refuses that deploy before any effect. A deploy after the contract stops declaring it removes

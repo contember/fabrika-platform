@@ -74,8 +74,12 @@ caller's idempotency key. Mail is the first receiver.**
   already shares with Control. IAM's key is `px_` and the hex of `HMAC-SHA256(FABRIKA_IAM_RPC_KEY,
   'fabrika-platform-mail')` (`installationMailKey`). The receiver compares it in constant time and records the caller
   as `installation:iam`.
-- On Zerops the URL is Control's private origin, `http://control:3000`. The call stays on the project's private
-  network.
+- An application's URL is Control's public origin (`FABRIKA_CONTROL_DOMAIN`), as its membership transport's is IAM's
+  public origin. An application namespace is a Zerops project of its own, and projects share no private network
+  ([ADR-0014](0014-provider-owned-deployment-namespaces.md)). The platform proxy serves the receiver's `protocol` row
+  on that host and passes the bearer through. A Control without a public origin refuses a deploy that needs the
+  receiver.
+- IAM runs in the installation's project and calls Control's private origin, `http://control:3000`.
 
 ### 4. The receiver's idempotency contract
 

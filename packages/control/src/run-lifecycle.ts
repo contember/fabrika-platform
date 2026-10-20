@@ -52,6 +52,7 @@ import {
 	installationMailSecrets,
 	NO_INSTALLATION_MAIL,
 	platformMailEnvironment,
+	platformMailOrigin,
 	relaysInstallationMail,
 } from './mail-transport'
 import { type MembershipTransportPort, needsMembershipTransport } from './membership-transport'
@@ -116,6 +117,11 @@ export interface RunDeps {
 	 * vault, and then a contract whose job sends through the relay does not deploy there.
 	 */
 	platformTransport?: PlatformTransportPort
+	/**
+	 * Control's public origin, where an application behind a namespace proxy reaches the relay; absent when
+	 * `FABRIKA_CONTROL_DOMAIN` names none, and then a contract whose job sends through the relay does not deploy there.
+	 */
+	controlOrigin?: string
 }
 
 export interface DeployJobMessage {
@@ -645,8 +651,9 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			: await reconcileMembershipKey(deps, app.id, appEnv.env, namespaceProxy && needsMembershipTransport(approvedContract))
 		managedEnvironment[MEMBERSHIP_URL_VARIABLE] = membershipKey === null ? null : membershipTransportOrigin(deps.iamIssuer)
 		managedEnvironment[MEMBERSHIP_KEY_VARIABLE] = membershipKey
+		const relayOrigin = relayedMail ? platformMailOrigin(deps.controlOrigin) : null
 		const platformMailKey = dryRun ? null : await reconcilePlatformMailKey(deps, app.id, appEnv.env, relayedMail)
-		if (relayedMail) Object.assign(managedEnvironment, platformMailEnvironment(platformMailKey))
+		if (relayOrigin !== null) Object.assign(managedEnvironment, platformMailEnvironment(relayOrigin, platformMailKey))
 		// The canonical origin `ctx.url` builds links on; `null` removes a stale one from an environment that has none.
 		managedEnvironment[FABRIKA_APP_ORIGIN] = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
 		const tokenKeys = dryRun ? null : await reconcileTokenKeys(deps.tokenKeys, app.id, appEnv.env, approvedContract)

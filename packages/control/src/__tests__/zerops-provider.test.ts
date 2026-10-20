@@ -95,6 +95,17 @@ describe('the Zerops namespace process configuration', () => {
 		}
 	})
 
+	test("hands every deploy Control's public origin for the relay, from the bare host an installation writes", async () => {
+		for (const [domain, origin] of [['proxy-abc.prg1.zerops.app', 'https://proxy-abc.prg1.zerops.app'], [undefined, undefined]]) {
+			const runtime = createRuntime({ ...controlEnvironment(), FABRIKA_CONTROL_DOMAIN: domain })
+			try {
+				expect((await buildRunDeps(runtime.env, runtime.provider)).controlOrigin).toBe(origin)
+			} finally {
+				await runtime.shutdown()
+			}
+		}
+	})
+
 	test('an invalid FABRIKA_EMAIL_* keeps Control up, and the warning names the variable, never its value', async () => {
 		const warnings: string[] = []
 		const warn = spyOn(console, 'warn').mockImplementation((line: unknown) => {

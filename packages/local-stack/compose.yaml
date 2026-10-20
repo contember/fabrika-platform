@@ -207,8 +207,9 @@ services:
       platform: {}
       edge:
         aliases: [iam.fabrika.localhost]
+      # An application reaches the public hosts its deploy names: IAM's, and Control's for the mail relay.
       iam-public:
-        aliases: [iam.fabrika.localhost]
+        aliases: [iam.fabrika.localhost, control.fabrika.localhost]
     ports:
       - 127.0.0.1:18080:18080
     depends_on:

@@ -9,6 +9,7 @@ import type { Env } from './env'
 import { GitHubConnectionWebhookSecretProvider } from './github/connections/webhook-secret'
 import type { CommitSource } from './github/source/commit-files'
 import { ConnectionWebhookVerifier, type PushWebhookVerifier } from './github/triggers/push-event'
+import { controlPublicOrigin } from './iam'
 import type { MailDispatchMessage } from './mail-relay/queue'
 import { iamMembershipKeyIssuer, type MembershipTransportPort, VaultMembershipTransport } from './membership-transport'
 import {
@@ -98,6 +99,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		operations: operationsReleaseDeps(env),
 		// The installation's own IAM issuer, which every application it deploys verifies against (ADR-0035).
 		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { iamIssuer: env.FABRIKA_IAM_ISSUER }),
+		...controlOriginDeps(env),
 		...proxySecretDeps(env),
 		...workloadCredentialDeps(env),
 		...membershipTransportDeps(env),
@@ -124,6 +126,11 @@ export function membershipTransportDeps(env: Env): { membershipTransport?: Membe
 	}
 	const issuer = iamMembershipKeyIssuer({ origin, provisioningKey })
 	return { membershipTransport: new VaultMembershipTransport(repositories(env).membershipKeys, () => vault(env), issuer) }
+}
+
+function controlOriginDeps(env: Env): { controlOrigin?: string } {
+	const origin = controlPublicOrigin(env)
+	return origin === undefined ? {} : { controlOrigin: origin }
 }
 
 /** Control issues the platform transport keys itself and seals them in the vault; without a vault it issues none. */

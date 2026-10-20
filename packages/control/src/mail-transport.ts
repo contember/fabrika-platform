@@ -13,7 +13,6 @@ import {
 } from '@fabrika/email'
 import { PLATFORM_EMAIL_PROVIDER } from '@fabrika/email/platform'
 import { compareReleases, parseRelease, type Release } from './approval/readers'
-import { CONTROL_PRIVATE_ORIGIN } from './platform-transport'
 
 /** The installation's default transport: what Control hands an application whose job declares mailer 'installation'. */
 export interface InstallationMailTransport {
@@ -105,14 +104,27 @@ export function relaysInstallationMail(artifact: ContractArtifact | null, framew
 }
 
 /**
- * The variables of the relay: no provider, Control's private origin and the environment's key. The relay holds what it
- * cannot send, so Control hands them whether or not its own transport is valid. A dry run issues no key.
+ * Where an application reaches the relay: Control's public origin. An application namespace is a project of its own,
+ * with no private network to Control's (ADR-0014). Throws the refusal when Control names no public origin.
  */
-export function platformMailEnvironment(key: string | null): Readonly<Record<string, string>> {
+export function platformMailOrigin(controlOrigin: string | undefined): string {
+	if (controlOrigin === undefined) {
+		throw new Error(
+			"the contract's jobs send mail through the installation's relay, and Control names no public origin for the application to reach it on (it needs FABRIKA_CONTROL_DOMAIN)",
+		)
+	}
+	return controlOrigin
+}
+
+/**
+ * The variables of the relay: no provider, the relay's origin and the environment's key. The relay holds what it cannot
+ * send, so Control hands them whether or not its own transport is valid. A dry run issues no key.
+ */
+export function platformMailEnvironment(origin: string, key: string | null): Readonly<Record<string, string>> {
 	const variables = platformTransportVariables('mail')
 	return {
 		[EMAIL_PROVIDER_VARIABLE]: PLATFORM_EMAIL_PROVIDER,
-		[variables.url]: CONTROL_PRIVATE_ORIGIN,
+		[variables.url]: origin,
 		...(key === null ? {} : { [variables.key]: key }),
 	}
 }

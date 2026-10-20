@@ -8,6 +8,7 @@ import {
 	installationMailSecrets,
 	NO_INSTALLATION_MAIL,
 	platformMailEnvironment,
+	platformMailOrigin,
 	readInstallationMail,
 	relaysInstallationMail,
 } from '../mail-transport'
@@ -130,12 +131,22 @@ describe("the platform's relay for a job that sends through the installation", (
 		expect(relaysInstallationMail(null, '0.7.0')).toBe(false)
 	})
 
-	test("hands Control's private origin and the key, and nothing of a provider; a dry run's has no key", () => {
-		expect(platformMailEnvironment('px_relay')).toEqual({
+	test("hands the relay's origin and the key, and nothing of a provider; a dry run's has no key", () => {
+		expect(platformMailEnvironment('https://control.example.test', 'px_relay')).toEqual({
 			FABRIKA_EMAIL_PROVIDER: 'platform',
-			FABRIKA_PLATFORM_MAIL_URL: 'http://control:3000',
+			FABRIKA_PLATFORM_MAIL_URL: 'https://control.example.test',
 			FABRIKA_PLATFORM_MAIL_KEY: 'px_relay',
 		})
-		expect(platformMailEnvironment(null)).toEqual({ FABRIKA_EMAIL_PROVIDER: 'platform', FABRIKA_PLATFORM_MAIL_URL: 'http://control:3000' })
+		expect(platformMailEnvironment('https://control.example.test', null)).toEqual({
+			FABRIKA_EMAIL_PROVIDER: 'platform',
+			FABRIKA_PLATFORM_MAIL_URL: 'https://control.example.test',
+		})
+	})
+
+	test("the relay's origin is Control's public one, and without one the deploy is refused", () => {
+		expect(platformMailOrigin('https://control.example.test')).toBe('https://control.example.test')
+		expect(() => platformMailOrigin(undefined)).toThrow(
+			'Control names no public origin for the application to reach it on (it needs FABRIKA_CONTROL_DOMAIN)',
+		)
 	})
 })

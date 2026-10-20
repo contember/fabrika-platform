@@ -8,9 +8,6 @@ import { uuidv7 } from '@fabrika/platform'
 import type { PlatformTransportKeyRepository } from './db'
 import type { Vault, VaultSecretPurpose } from './vault'
 
-/** Control's private origin, which an application container reaches on Zerops and in the local stack. */
-export const CONTROL_PRIVATE_ORIGIN = 'http://control:3000'
-
 export const PLATFORM_KEY_LIFETIME_SECONDS = MAX_KEY_LIFETIME_SECONDS
 
 /** A key with less than this left is replaced, so a running version never holds one that is about to expire. */

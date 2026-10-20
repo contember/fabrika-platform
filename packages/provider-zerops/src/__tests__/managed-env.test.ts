@@ -22,21 +22,22 @@ const MANAGED: ManagedValues = {
 const KEY = `px_${'k'.repeat(27)}`
 
 describe('the platform transport family', () => {
-	test("hands the relay's private origin and the key beside the managed values", () => {
+	test("hands the relay's public origin and the key beside the managed values; the local stack's is http", () => {
 		const parsed = parseManagedEnvironment({
 			...MANAGED,
 			FABRIKA_EMAIL_PROVIDER: 'platform',
-			FABRIKA_PLATFORM_MAIL_URL: 'http://control:3000',
+			FABRIKA_PLATFORM_MAIL_URL: 'https://control.example.com',
 			FABRIKA_PLATFORM_MAIL_KEY: KEY,
 		})
 		expect(parsed.values).toEqual(MANAGED)
 		expect(parsed.familyVariables).toEqual({
 			FABRIKA_EMAIL_PROVIDER: 'platform',
-			FABRIKA_PLATFORM_MAIL_URL: 'http://control:3000',
+			FABRIKA_PLATFORM_MAIL_URL: 'https://control.example.com',
 			FABRIKA_PLATFORM_MAIL_KEY: KEY,
 		})
-		expect(parseManagedEnvironment({ ...MANAGED, FABRIKA_PLATFORM_MAIL_URL: 'https://control.example.com' }).familyVariables).toEqual({
-			FABRIKA_PLATFORM_MAIL_URL: 'https://control.example.com',
+		const local = 'http://control.fabrika.localhost:18080'
+		expect(parseManagedEnvironment({ ...MANAGED, FABRIKA_PLATFORM_MAIL_URL: local }).familyVariables).toEqual({
+			FABRIKA_PLATFORM_MAIL_URL: local,
 		})
 	})
 
