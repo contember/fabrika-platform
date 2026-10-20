@@ -29,4 +29,4 @@ export const webhookSchemeSchema: z.ZodType<WebhookScheme> = z.union([
 ])
 
 export const WEBHOOK_SCHEME_ALLOWED =
-	"scheme: 'github-sha256' | 'standard-webhooks' | 'stripe' | { hmac: { header, algorithm: 'sha1' | 'sha256' | 'sha512', encoding: 'hex' | 'base64', prefix?, timestamp?, signed: 'body' | 'timestamp.body', id? } } | { basic: true } | { bearer: true }"
+	"scheme: 'github-sha256' | 'slack' | 'standard-webhooks' | 'stripe' | 'twilio' | { hmac: { header, algorithm: 'sha1' | 'sha256' | 'sha512', encoding: 'hex' | 'base64', prefix?, timestamp?, signed: 'body' | 'timestamp.body', id? } } | { basic: true } | { bearer: true }"

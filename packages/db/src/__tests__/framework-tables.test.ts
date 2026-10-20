@@ -74,6 +74,17 @@ describe.skipIf(!hasPostgres)('the framework tables on Postgres', () => {
 		expect(await framework.webhooks.binding('github', 'b1')).toBeNull()
 	})
 
+	test("a binding's secret is replaced only in its own webhook and scope", async () => {
+		const binding = { id: 'b-secret', webhook: 'stripe', scope: W1, account: 'acct_1', secret: 'generated' }
+		await framework.webhooks.createBinding({ ...binding, createdBy: 'user-1', createdAt: 1 })
+		expect(await framework.webhooks.replaceSecret('stripe', 'b-secret', { type: 'workspace', value: 'w2' }, 'whsec_other')).toBe(false)
+		expect(await framework.webhooks.replaceSecret('github', 'b-secret', W1, 'whsec_other')).toBe(false)
+		expect(await framework.webhooks.replaceSecret('stripe', 'missing', W1, 'whsec_other')).toBe(false)
+		expect(await framework.webhooks.binding('stripe', 'b-secret')).toEqual(binding)
+		expect(await framework.webhooks.replaceSecret('stripe', 'b-secret', W1, 'whsec_issued')).toBe(true)
+		expect(await framework.webhooks.binding('stripe', 'b-secret')).toEqual({ ...binding, secret: 'whsec_issued' })
+	})
+
 	const bind = (id: string) =>
 		framework.webhooks.createBinding({ id, webhook: 'github', scope: W1, account: 'repository:7', secret: 's', createdBy: 'u', createdAt: 1 })
 

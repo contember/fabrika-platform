@@ -1,9 +1,10 @@
 // A webhook's bindings and deliveries (docs/reference/application-runtime.md). A procedure that declares `binds`
-// creates a binding through `ctx.webhooks('<name>')`. The framework generates the secret and keeps the binding in `fabrika_webhook_bindings`. A delivery is checked in a fixed order — the binding,
+// creates a binding through `ctx.webhooks('<name>')`. The framework generates the secret, or the procedure sets the one
+// the provider issued, and keeps the binding in `fabrika_webhook_bindings`. A delivery is checked in a fixed order — the binding,
 // the signature over the raw body, the account, the input, the delivery key — before its handler sees a `Ref` of the
 // bound value, or its application-wide capabilities when the webhook is bound to `'app'`.
 
-import type { ScopeBinding, WebhookScheme } from '@fabrika/auth-core'
+import { API_KEY_PREFIX, type ScopeBinding, type WebhookScheme } from '@fabrika/auth-core'
 import { type CapabilityAuthority, describeGrant } from '@fabrika/db/capability'
 import type { Session, WebhookTables } from '@fabrika/db/framework'
 import { uuidv7 } from '@fabrika/platform'
@@ -12,6 +13,7 @@ import { joinPath } from '../contract/defaults'
 import type { WebhookBindings, WebhookSecret } from '../contract/webhook-binding'
 import { BadRequestError } from '../errors'
 import { CapabilityRefusedError } from './capability'
+import { standardKey } from './verifiers'
 
 /** A GitHub account a binding accepts: an App installation or a repository, by numeric id. */
 const GITHUB_ACCOUNT = /^(?:installation|repository):[1-9][0-9]{0,19}$/
@@ -75,6 +77,9 @@ export const APP_BINDING_SCOPE = Object.freeze({ type: 'app', value: '' })
 /** The longest account a binding records for a provider other than GitHub. */
 const MAX_ACCOUNT_LENGTH = 200
 
+/** The longest secret a provider may issue for a binding. */
+const MAX_SECRET_LENGTH = 512
+
 /** What a procedure that binds needs of its webhook: where deliveries arrive, how they are signed, what they reach. */
 export interface BindableWebhook {
 	readonly name: string
@@ -125,6 +130,14 @@ export function webhookBindings(site: BindingSite): (name: string) => WebhookBin
 			)
 			return { id, url: joinPath(webhook.path, id), secret }
 		},
+		async setSecret(capability: unknown, id: unknown, secret: unknown): Promise<boolean> {
+			const scope = scopeOf(capability)
+			const issued = issuedSecret(webhook.scheme, secret)
+			if (typeof id !== 'string' || !z.uuid().safeParse(id).success) {
+				return false
+			}
+			return await site.tables().replaceSecret(webhook.name, id, scope, issued, await site.session())
+		},
 		async unbind(capability: unknown, id: unknown): Promise<boolean> {
 			const scope = scopeOf(capability)
 			if (typeof id !== 'string' || !z.uuid().safeParse(id).success) {
@@ -154,4 +167,23 @@ function accountOf(scheme: WebhookScheme, account: unknown): string {
 		throw new BadRequestError(`A binding's account is a text of 1 to ${MAX_ACCOUNT_LENGTH} printable characters`)
 	}
 	return account
+}
+
+/**
+ * A secret the provider issued, as the binding's verifier can use it: printable text of 1 to 512 characters; a Standard
+ * Webhooks one is `whsec_` and base64; a Basic password or bearer token never carries a platform key, which the proxy
+ * removes from every request (ADR-0022 rule 3).
+ */
+function issuedSecret(scheme: WebhookScheme, secret: unknown): string {
+	const printable = (text: string) => [...text].every((char) => char > ' ' && char !== '\u007f')
+	if (typeof secret !== 'string' || secret === '' || secret.length > MAX_SECRET_LENGTH || !printable(secret)) {
+		throw new BadRequestError(`A webhook secret is a text of 1 to ${MAX_SECRET_LENGTH} printable characters without spaces`)
+	}
+	if (scheme === 'standard-webhooks' && standardKey(secret) === null) {
+		throw new BadRequestError('A Standard Webhooks secret is whsec_ and the key in base64')
+	}
+	if (typeof scheme === 'object' && !('hmac' in scheme) && secret.includes(API_KEY_PREFIX)) {
+		throw new BadRequestError(`A Basic password or bearer token cannot contain ${API_KEY_PREFIX}: the proxy removes a platform key from every request`)
+	}
+	return secret
 }

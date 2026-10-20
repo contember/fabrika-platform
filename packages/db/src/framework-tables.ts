@@ -9,7 +9,7 @@ import { runFixedStatement, type Session, sessionOf } from './database'
 import { QueryRefusedError } from './errors'
 import type { GuardContext } from './guard'
 import { WEBHOOK_BINDINGS_TABLE, WEBHOOK_DELIVERIES_TABLE } from './migrations'
-import { acknowledgement, allOf, column, deleteNode, equals, insertNode, locateNode, scopedWhere } from './nodes'
+import { acknowledgement, allOf, column, deleteNode, equals, insertNode, locateNode, scopedWhere, updateNode } from './nodes'
 import type { DataLayerRuntime } from './store'
 
 /** One webhook binding: the scope value it reaches, the provider account it accepts, and its signing secret. */
@@ -33,6 +33,17 @@ export interface WebhookTables {
 	createBinding(binding: NewWebhookBinding, using?: Session): Promise<void>
 	/** The binding `id` of `webhook`, or `null`. */
 	binding(webhook: string, id: string): Promise<WebhookBinding | null>
+	/**
+	 * Replaces the secret of the binding when it belongs to `webhook` and `scope`, in `using` when given: a provider that
+	 * issues its own signing secret shows it only after the binding's URL is registered. `false` when there was none.
+	 */
+	replaceSecret(
+		webhook: string,
+		id: string,
+		scope: { readonly type: string; readonly value: string },
+		secret: string,
+		using?: Session,
+	): Promise<boolean>
 	/** Removes the binding when it belongs to `webhook` and `scope`, in `using` when given; `false` when there was none. */
 	removeBinding(webhook: string, id: string, scope: { readonly type: string; readonly value: string }, using?: Session): Promise<boolean>
 	/**
@@ -86,6 +97,16 @@ function text(row: Readonly<Record<string, unknown>>, column: string): string {
 	return value
 }
 
+/** The binding `id` of `webhook`, only when it reaches `scope`. */
+function bindingOf(webhook: string, id: string, scope: { readonly type: string; readonly value: string }): OperationNode {
+	return allOf([
+		equals(WEBHOOK_BINDINGS_TABLE, 'id', id),
+		equals(WEBHOOK_BINDINGS_TABLE, 'webhook', webhook),
+		equals(WEBHOOK_BINDINGS_TABLE, 'scope_type', scope.type),
+		equals(WEBHOOK_BINDINGS_TABLE, 'scope_value', scope.value),
+	])
+}
+
 export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
 	const session = () => sessionOf(runtime())
 	return Object.freeze({
@@ -122,13 +143,29 @@ export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
 			})
 		},
 
+		async replaceSecret(
+			webhook: string,
+			id: string,
+			scope: { readonly type: string; readonly value: string },
+			secret: string,
+			using?: Session,
+		): Promise<boolean> {
+			const predicate = bindingOf(webhook, id, scope)
+			const replaced = await (using ?? session()).run(
+				updateNode(
+					WEBHOOK_BINDINGS_TABLE,
+					new Map([['secret', secret]]),
+					undefined,
+					scopedWhere(undefined, predicate),
+					acknowledgement(WEBHOOK_BINDINGS_TABLE, 'id', undefined),
+				),
+				guard('UpdateQueryNode', WEBHOOK_BINDINGS_TABLE, predicate),
+			)
+			return replaced.length > 0
+		},
+
 		async removeBinding(webhook: string, id: string, scope: { readonly type: string; readonly value: string }, using?: Session): Promise<boolean> {
-			const predicate = allOf([
-				equals(WEBHOOK_BINDINGS_TABLE, 'id', id),
-				equals(WEBHOOK_BINDINGS_TABLE, 'webhook', webhook),
-				equals(WEBHOOK_BINDINGS_TABLE, 'scope_type', scope.type),
-				equals(WEBHOOK_BINDINGS_TABLE, 'scope_value', scope.value),
-			])
+			const predicate = bindingOf(webhook, id, scope)
 			const removed = await (using ?? session()).run(
 				deleteNode(WEBHOOK_BINDINGS_TABLE, scopedWhere(undefined, predicate), 'id'),
 				guard('DeleteQueryNode', WEBHOOK_BINDINGS_TABLE, predicate),

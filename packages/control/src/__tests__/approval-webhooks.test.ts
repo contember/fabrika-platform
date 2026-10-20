@@ -53,7 +53,8 @@ describe('webhooks in the approval diff', () => {
 		expect(binds).toContainEqual({
 			effect: 'widens',
 			review: 'closer',
-			line: "Endpoint `api.ledgers.connect` binds webhook `ledger`: it creates and removes its bindings, and sees each new binding's secret",
+			line:
+				"Endpoint `api.ledgers.connect` binds webhook `ledger`: it creates and removes its bindings, replaces a binding's secret with one the provider issued, and sees each new binding's secret",
 		})
 		expect(classifyAccess(snapshot('binding'), snapshot('plain')).changes).toContainEqual({
 			effect: 'narrows',

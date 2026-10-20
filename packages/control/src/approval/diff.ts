@@ -437,7 +437,8 @@ function signsChanges(site: string, from: readonly string[], to: readonly string
 
 /**
  * The webhook whose bindings a mutation creates and removes (`binds`): each binding it creates admits a provider's
- * deliveries, which run as the webhook's workload, and the mutation sees the binding's secret once.
+ * deliveries, which run as the webhook's workload, and the mutation sees the binding's secret once or sets the one the
+ * provider issued.
  */
 function bindsChange(site: string, before: string | undefined, after: string | undefined): AccessChange[] {
 	if (before === after) return []
@@ -445,7 +446,11 @@ function bindsChange(site: string, before: string | undefined, after: string | u
 	return [
 		...(after === undefined
 			? []
-			: [closerWidening(`${name} binds webhook \`${after}\`: it creates and removes its bindings, and sees each new binding's secret`)]),
+			: [
+				closerWidening(
+					`${name} binds webhook \`${after}\`: it creates and removes its bindings, replaces a binding's secret with one the provider issued, and sees each new binding's secret`,
+				),
+			]),
 		...(before === undefined ? [] : [narrowing(`${name} no longer binds webhook \`${before}\``)]),
 	]
 }

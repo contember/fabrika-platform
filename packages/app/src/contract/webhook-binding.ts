@@ -1,5 +1,5 @@
 // What a procedure that declares `binds: '<webhook>'` reaches through `ctx.webhooks('<webhook>')`, and what it answers
-// the member who binds: the binding's URL and its secret, shown once.
+// the member who binds: the binding's URL and its secret, shown once, or the provider's secret set afterwards.
 
 import { z } from 'zod/v4'
 import type { AppCapability, Ref } from '../implement/capability'
@@ -16,6 +16,11 @@ export type WebhookSecret = z.output<typeof WebhookSecret>
 export interface WebhookBindings {
 	/** A new binding that accepts deliveries for `account`; the framework generates its secret. */
 	bind(capability: Ref<string, string> | AppCapability<string>, account: string): Promise<WebhookSecret>
+	/**
+	 * Replaces the secret of the binding `id` of that value with one the provider issued (Stripe, Slack, Twilio): the
+	 * provider shows it only after the binding's URL is registered. `false` when the value has no binding of that id.
+	 */
+	setSecret(capability: Ref<string, string> | AppCapability<string>, id: string, secret: string): Promise<boolean>
 	/** Removes the binding `id` of that value; `false` when it has none of that id. */
 	unbind(capability: Ref<string, string> | AppCapability<string>, id: string): Promise<boolean>
 }

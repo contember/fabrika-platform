@@ -490,10 +490,22 @@ class ArtifactBuilder {
 				const boundTo = this.#scopeBinding(where, 'boundTo', mount.boundTo)
 				this.#actionList(where, mount.actions)
 				const path = joinPath(mount.path, `:${WEBHOOK_BINDING_PARAMETER}`)
-				const limits = this.#limits(where, mount.limits, WEBHOOK_LIMITS)
-				this.#anonymous(name, 'webhook', 'POST', path, { contentTypes: ['application/json'], maxBytes: limits.maxBytes }, mount.input)
-				this.#declare(where, name, mount.declared, { kind: 'webhook', readOnly: false })
+				const limits = this.#limits(where, mount.limits, WEBHOOK_LIMITS, null, WEBHOOK_LIMITS.maxMaxBytes)
 				const scheme = this.#webhookScheme(where, mount.scheme)
+				// A verifier that compares `Authorization` with the binding's secret needs the proxy to pass it on.
+				const forwards = scheme !== null && typeof scheme === 'object' && !('hmac' in scheme)
+				// Slack posts slash commands and Twilio its callbacks as forms; every other provider posts JSON.
+				const forms = scheme === 'slack' || scheme === 'twilio'
+				this.#anonymous(
+					name,
+					'webhook',
+					'POST',
+					path,
+					{ contentTypes: forms ? ['application/json', FORM_URLENCODED_TYPE] : ['application/json'], maxBytes: limits.maxBytes },
+					mount.input,
+					forwards ? { authorization: 'forward' } : {},
+				)
+				this.#declare(where, name, mount.declared, { kind: 'webhook', readOnly: false })
 				return boundTo === null || scheme === null
 					? null
 					: { kind: 'webhook', path: mount.path, scheme, boundTo, actions: [...mount.actions], timeoutMs: limits.timeoutMs }
@@ -598,16 +610,6 @@ class ArtifactBuilder {
 	/** The webhook's verifier: a preset, or a framework-owned shape the runtime computes. */
 	#webhookScheme(where: string, value: unknown): WebhookScheme | null {
 		const parsed = z.safeParse(webhookSchemeSchema, value)
-		if (parsed.success && typeof parsed.data === 'object' && !('hmac' in parsed.data)) {
-			// The verifier runs in the framework, behind the proxy, which forwards no `Authorization` it did not read.
-			this.#problem(
-				where,
-				`scheme ${
-					JSON.stringify(value)
-				} needs the request's Authorization header, which the proxy removes from an anonymous endpoint's request (ADR-0022 rule 3); this release serves the presets and the hmac shape`,
-			)
-			return null
-		}
 		if (parsed.success) {
 			return parsed.data
 		}
@@ -1008,18 +1010,18 @@ class ArtifactBuilder {
 	}
 
 	/**
-	 * A procedure's or a webhook's `limits`, each bound within a procedure's ceiling; `defaults` for what it leaves out. A
-	 * procedure with file fields admits by default its JSON input's bytes and each of its files at its kind's `maxBytes`,
-	 * at most `maxFileBodyBytes` in all.
+	 * A procedure's or a webhook's `limits`, each bound within `ceiling` (a procedure's by default); `defaults` for what it
+	 * leaves out. A procedure with file fields admits by default its JSON input's bytes and each of its files at its
+	 * kind's `maxBytes`, at most `maxFileBodyBytes` in all.
 	 */
 	#limits(
 		where: string,
 		value: unknown,
 		base: { readonly maxBytes: number; readonly timeoutMs: number },
 		files: InputFiles | null = null,
+		ceiling: number = files === null ? PROCEDURE_LIMITS.maxMaxBytes : PROCEDURE_LIMITS.maxFileBodyBytes,
 	): { readonly maxBytes: number; readonly timeoutMs: number } {
 		const defaults = { maxBytes: base.maxBytes + (files?.bytes ?? 0), timeoutMs: base.timeoutMs }
-		const ceiling = files === null ? PROCEDURE_LIMITS.maxMaxBytes : PROCEDURE_LIMITS.maxFileBodyBytes
 		if (defaults.maxBytes > ceiling && (!isRecord(value) || value['maxBytes'] === undefined)) {
 			this.#problem(
 				where,
@@ -1234,6 +1236,7 @@ class ArtifactBuilder {
 		path: string,
 		admission: BodyAdmission | null,
 		input: SchemaShape | null,
+		extra: Pick<EndpointRow, 'authorization'> = {},
 	): void {
 		this.#row({
 			id: name,
@@ -1246,6 +1249,7 @@ class ArtifactBuilder {
 			admission,
 			input,
 			output: null,
+			...extra,
 		})
 	}
 

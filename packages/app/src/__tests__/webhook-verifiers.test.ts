@@ -1,10 +1,10 @@
 // Every webhook verifier over the raw body: a preset reads its provider's headers, an `hmac` shape computes what it
 // declares, `basic` and `bearer` compare the binding's secret. A signature of another secret or body, a stale signed
-// timestamp and a missing header are refused alike.
+// timestamp and a missing header are refused alike. A replay is the delivery claim's (`webhook-providers.test.ts`).
 
 import type { WebhookScheme } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
-import { createHmac } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { verifyDelivery, WEBHOOK_TIMESTAMP_TOLERANCE_MS } from '../implement/verifiers'
 
 const NOW = Date.UTC(2026, 9, 19, 12)
@@ -17,7 +17,7 @@ const hmac = (algorithm: string, key: string | Buffer, content: string, encoding
 	createHmac(algorithm, key).update(content).digest(encoding)
 
 const verify = (scheme: WebhookScheme, headers: Record<string, string>, secret = SECRET, now = NOW) =>
-	verifyDelivery(scheme, new Headers(headers), secret, body, now)
+	verifyDelivery(scheme, { headers: new Headers(headers), body, url: null }, secret, now)
 
 describe('presets', () => {
 	test("github-sha256: GitHub's X-Hub-Signature-256 over the body", async () => {
@@ -38,6 +38,17 @@ describe('presets', () => {
 		const stale = String(Math.floor((NOW - WEBHOOK_TIMESTAMP_TOLERANCE_MS) / 1000) - 1)
 		expect(await verify('stripe', { 'Stripe-Signature': `t=${stale},v1=${signed(stale)}` }, secret)).toBe(false)
 		expect(await verify('stripe', { 'Stripe-Signature': `v1=${signed(SECONDS)}` }, secret)).toBe(false)
+	})
+
+	test('slack: v0= and the hex HMAC-SHA256 of v0:<timestamp>:<body>, within five minutes', async () => {
+		const signed = (t: string, secret = SECRET) => `v0=${hmac('sha256', secret, `v0:${t}:${raw}`, 'hex')}`
+		expect(await verify('slack', { 'X-Slack-Request-Timestamp': SECONDS, 'X-Slack-Signature': signed(SECONDS) })).toBe(true)
+		expect(await verify('slack', { 'X-Slack-Request-Timestamp': SECONDS, 'X-Slack-Signature': signed(SECONDS, 'b'.repeat(64)) })).toBe(false)
+		expect(await verify('slack', { 'X-Slack-Request-Timestamp': SECONDS, 'X-Slack-Signature': signed(SECONDS).slice(3) })).toBe(false)
+		const stale = String(Math.floor((NOW - WEBHOOK_TIMESTAMP_TOLERANCE_MS) / 1000) - 1)
+		expect(await verify('slack', { 'X-Slack-Request-Timestamp': stale, 'X-Slack-Signature': signed(stale) })).toBe(false)
+		expect(await verify('slack', { 'X-Slack-Request-Timestamp': String(Number(SECONDS) + 1), 'X-Slack-Signature': signed(SECONDS) })).toBe(false)
+		expect(await verify('slack', { 'X-Slack-Signature': signed(SECONDS) })).toBe(false)
 	})
 
 	test('standard-webhooks: v1 over <id>.<timestamp>.<body> with the base64 key of a whsec_ secret', async () => {
@@ -82,5 +93,34 @@ describe('framework-owned shapes', () => {
 		expect(await verify({ bearer: true }, { Authorization: `Bearer ${SECRET}` })).toBe(true)
 		expect(await verify({ bearer: true }, { Authorization: `Bearer ${SECRET}x` })).toBe(false)
 		expect(await verify({ bearer: true }, {})).toBe(false)
+	})
+})
+
+describe('twilio: the base64 HMAC-SHA1 of the public URL, signed with the auth token', () => {
+	const URL = 'https://intake.example.com/hooks/sms/0192d1f0-0000-7000-8000-000000000000'
+	const TOKEN = '12345678901234567890123456789012'
+	const twilio = (form: string, headers: Record<string, string>, url: string | null = URL) =>
+		verifyDelivery('twilio', { headers: new Headers(headers), body: new TextEncoder().encode(form), url }, TOKEN, NOW)
+
+	test("a form's parameters are signed sorted by name, each name then its value", async () => {
+		const form = 'To=%2B15005550006&From=%2B14158675310&Body=Hello+there&MessageSid=SM1'
+		const signature = hmac('sha1', TOKEN, `${URL}BodyHello thereFrom+14158675310MessageSidSM1To+15005550006`, 'base64')
+		const formType = { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8' }
+		expect(await twilio(form, { ...formType, 'X-Twilio-Signature': signature })).toBe(true)
+		expect(await twilio(`${form}&Extra=1`, { ...formType, 'X-Twilio-Signature': signature })).toBe(false)
+		expect(await twilio(form, { ...formType, 'X-Twilio-Signature': signature }, `${URL}x`)).toBe(false)
+		expect(await twilio(form, { ...formType, 'X-Twilio-Signature': signature }, null)).toBe(false)
+		expect(await twilio(form, { ...formType, 'X-Twilio-Signature': hmac('sha1', 'other', URL, 'base64') })).toBe(false)
+		expect(await twilio(form, formType)).toBe(false)
+	})
+
+	test('a JSON body is signed through the URL, whose bodySHA256 is the body hash', async () => {
+		const json = JSON.stringify({ event: 'delivered' })
+		const url = `${URL}?bodySHA256=${createHash('sha256').update(json).digest('hex')}`
+		const signature = hmac('sha1', TOKEN, url, 'base64')
+		const jsonType = { 'Content-Type': 'application/json' }
+		expect(await twilio(json, { ...jsonType, 'X-Twilio-Signature': signature }, url)).toBe(true)
+		expect(await twilio(`${json} `, { ...jsonType, 'X-Twilio-Signature': signature }, url)).toBe(false)
+		expect(await twilio(json, { ...jsonType, 'X-Twilio-Signature': hmac('sha1', TOKEN, URL, 'base64') }, URL)).toBe(false)
 	})
 })

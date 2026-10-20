@@ -239,11 +239,14 @@ describe('compileContract refuses what the types let through', () => {
 		const hook = (scheme: WebhookScheme) =>
 			defineContract(vocabulary, (c) => ({ hook: c.webhook('/hooks/in', { scheme, boundTo: 'app', actions: ['tasks.write'], input: Id }) }))
 		const shopify: WebhookScheme = { hmac: { header: 'X-Shopify-Hmac-Sha256', algorithm: 'sha256', encoding: 'base64', signed: 'body' } }
+		const row = (scheme: WebhookScheme) => compileContract(hook(scheme), {}).endpoints.find((endpoint) => endpoint.id === 'hook')
 		for (const scheme of ['stripe', 'standard-webhooks', shopify] satisfies WebhookScheme[]) {
 			expect(compileContract(hook(scheme), {}).mounts['hook']).toMatchObject({ kind: 'webhook', scheme })
+			expect(row(scheme)).not.toHaveProperty('authorization')
 		}
 		for (const scheme of [{ basic: true }, { bearer: true }] satisfies WebhookScheme[]) {
-			expect(compileProblems(hook(scheme))[0]).toContain('which the proxy removes from an anonymous endpoint')
+			expect(compileContract(hook(scheme), {}).mounts['hook']).toMatchObject({ kind: 'webhook', scheme })
+			expect(row(scheme)).toMatchObject({ kind: 'webhook', authorization: 'forward' })
 		}
 		const refused = (scheme: unknown) => {
 			const options = { scheme: 'stripe', boundTo: 'app', actions: ['tasks.write'], input: Id } as const
@@ -283,7 +286,7 @@ describe('compileContract refuses what the types let through', () => {
 		})
 	})
 
-	test('a webhook and a job bound their time, and a webhook its body, within their ceilings', () => {
+	test('a webhook and a job bound their time, and a webhook its body — up to the 48 MiB of inbound mail — within their ceilings', () => {
 		const bounded = (limits: object, jobLimits: object) => {
 			const hook = { scheme: 'github-sha256', boundTo: 'app', actions: ['tasks.write'], input: Id } as const
 			const job = { actions: ['tasks.write'] } as const
@@ -295,8 +298,10 @@ describe('compileContract refuses what the types let through', () => {
 		expect(artifact.mounts['hook']).toMatchObject({ timeoutMs: 30000 })
 		expect(artifact.endpoints.find((row) => row.id === 'hook')?.admission).toEqual({ contentTypes: ['application/json'], maxBytes: 4096 })
 		expect(artifact.jobs['nightly']?.timeoutMs).toBe(3600000)
-		expect(compileProblems(bounded({ maxBytes: 2097152, timeoutMs: 120000 }, { timeoutMs: 172800000, maxBytes: 1 }))).toEqual([
-			"mount 'hook': limits.maxBytes 2097152 is not a whole number of bytes from 1 to 1048576",
+		const mail = compileContract(bounded({ maxBytes: 50331648 }, {}), {})
+		expect(mail.endpoints.find((row) => row.id === 'hook')?.admission).toEqual({ contentTypes: ['application/json'], maxBytes: 50331648 })
+		expect(compileProblems(bounded({ maxBytes: 50331649, timeoutMs: 120000 }, { timeoutMs: 172800000, maxBytes: 1 }))).toEqual([
+			"mount 'hook': limits.maxBytes 50331649 is not a whole number of bytes from 1 to 50331648",
 			"mount 'hook': limits.timeoutMs 120000 is not a whole number of ms from 1 to 60000",
 			"job 'nightly': declares limits.maxBytes, and a job reads no body (allowed: limits: { timeoutMs? })",
 			"job 'nightly': limits.timeoutMs 172800000 is not a whole number of ms from 1 to 86400000",

@@ -360,6 +360,35 @@ if (postgres !== null) {
 			const [row] = await admin((sql) => sql.unsafe(`select image::text as image from ${schema}.products where name = 'scanned lamp'`))
 			expect((await files()).find((file) => file.id === row?.image)).toMatchObject({ status: 'live', kind: 'catalog' })
 		})
+
+		test("an inbound mail authenticated by a bearer token stores its attachments, past the 1 MiB default, within the webhook's limit", async () => {
+			const manager = kit.browser(kit.testCaller([{ action: 'catalog.write' }]))
+			const connected = await manager('/api/catalog.connectInbox', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ account: 'mail-service' }),
+			})
+			const binding =
+				z.strictObject({ result: z.strictObject({ id: z.string(), url: z.string(), secret: z.string() }) }).parse(await connected.json()).result
+			const image = new Uint8Array(200 * 1024)
+			image.set(PNG)
+			const content = Buffer.from(image).toString('base64')
+			const mail = (subject: string, count: number) =>
+				JSON.stringify({ subject, attachments: Array.from({ length: count }, (_, index) => ({ name: `scan-${index}.png`, type: 'image/png', content })) })
+			const deliver = (body: string, authorization: string) =>
+				kit.fetch(binding.url, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: authorization }, body })
+			const body = mail('order 7', 5)
+			expect(body.length).toBeGreaterThan(1024 * 1024)
+			expect((await deliver(body, 'Bearer wrong')).status).toBe(401)
+			expect((await deliver(body, `Bearer ${binding.secret}`)).status).toBe(200)
+			const rows = await admin((sql) => sql.unsafe(`select image::text as image from ${schema}.products where name like 'order 7: %'`))
+			expect(rows).toHaveLength(5)
+			const stored = await files()
+			for (const row of rows) {
+				expect(stored.find((file) => file.id === row.image)).toMatchObject({ status: 'live', kind: 'catalog' })
+			}
+			expect((await deliver(mail('order 8', 8) + ' '.repeat(4 * 1024 * 1024), `Bearer ${binding.secret}`)).status).toBe(413)
+		})
 	})
 
 	describe('the isolation fixture', () => {

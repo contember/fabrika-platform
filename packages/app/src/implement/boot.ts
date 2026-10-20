@@ -631,7 +631,8 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	checkContractDigest(options.environment.framework, artifact, problems)
 	const proxySecret = readProxySecret(options.environment.framework, options.requireProxySecret === true, problems)
 	const tokens = new SignedTokens(runtimePurposes(app.contract, artifact), readTokenKeys(options.environment.framework, artifact, problems))
-	const url = appUrl(artifact, readAppOrigin(options.environment.framework, problems))
+	const origin = readAppOrigin(options.environment.framework, problems)
+	const url = appUrl(artifact, origin)
 	const operations = operationsSettings(options.environment.framework, problems)
 	const scrubber = environmentScrubber(options.environment)
 	const reporterFor = (source: ReportSource): OperationsReporter | null =>
@@ -895,6 +896,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		clientVouched: options.clientAddress === 'vouched',
 		tokens,
 		url,
+		origin,
 	})
 	return Object.freeze({
 		fetch: (request: Request, exec?: RequestExecutionContext) => runtime.fetch(request, exec),

@@ -263,6 +263,8 @@ export interface RuntimeParts {
 	readonly tokens: SignedTokens
 	/** `ctx.url`: absolute links to the application's own procedures. */
 	readonly url: AppUrl
+	/** The environment's public origin (`FABRIKA_APP_ORIGIN`), which a Twilio signature covers; `null` where it has none. */
+	readonly origin: string | null
 }
 
 interface Caller {
@@ -1051,10 +1053,25 @@ export class ContractRuntime {
 		if (binding === null) {
 			throw new NotFoundError('Not found')
 		}
-		if (!(await verifyDelivery(served.scheme, request.headers, binding.secret, body, Date.now()))) {
+		if (served.scheme === 'twilio' && this.#parts.origin === null) {
+			throw new ServerFault(
+				'webhook_unverifiable',
+				`webhook '${served.webhook}' checks Twilio's signature over its public URL, and the environment has no FABRIKA_APP_ORIGIN`,
+			)
+		}
+		const target = rawRequestTarget(request.url)
+		const url = this.#parts.origin === null ? null : `${this.#parts.origin}${target.pathname}${target.search}`
+		if (!(await verifyDelivery(served.scheme, { headers: request.headers, body, url }, binding.secret, Date.now()))) {
 			throw new UnauthorizedError('The delivery signature does not verify with this binding')
 		}
-		const payload = parseJson(body)
+		const payload = mediaType(request.headers.get('Content-Type')) === FORM_URLENCODED_TYPE
+			? paramsObject(new URLSearchParams(utf8Body(body)), served.row.input)
+			: parseJson(body)
+		// Slack confirms a new events URL by asking it to echo a challenge, signed like every delivery; no handler runs.
+		const challenge = served.scheme === 'slack' ? slackChallenge(payload) : null
+		if (challenge !== null) {
+			return jsonResponse({ challenge }, 200)
+		}
 		// Only GitHub names the account in its payload; another provider's binding is its own secret.
 		if (served.scheme === 'github-sha256' && !githubAccounts(payload).includes(binding.account)) {
 			throw new ForbiddenError('The delivery names another account than its binding accepts')
@@ -1338,10 +1355,27 @@ function maxBytesOf(row: EndpointRow): number {
 
 function parseJson(body: Uint8Array): unknown {
 	try {
-		return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
+		return JSON.parse(utf8Body(body))
 	} catch {
 		throw new BadRequestError('The body is not JSON')
 	}
+}
+
+function utf8Body(body: Uint8Array): string {
+	try {
+		return new TextDecoder('utf-8', { fatal: true }).decode(body)
+	} catch {
+		throw new BadRequestError('The body is not UTF-8')
+	}
+}
+
+/** The challenge of Slack's `url_verification` request, which the URL answers as `{ challenge }`; `null` for any other. */
+function slackChallenge(payload: unknown): string | null {
+	if (!isRecord(payload) || payload['type'] !== 'url_verification') {
+		return null
+	}
+	const challenge = payload['challenge']
+	return typeof challenge === 'string' ? challenge : null
 }
 
 /** A webhook input keeps only the fields it declares: a provider sends many more, and none reaches the handler. */

@@ -2,7 +2,7 @@
 // code: a preset reads its provider's headers, an `hmac` shape computes the declared HMAC, `basic` and `bearer` compare
 // the secret itself. Every comparison is constant-time.
 
-import type { HmacAlgorithm, HmacScheme, WebhookScheme } from '@fabrika/auth-core'
+import { FORM_URLENCODED_TYPE, type HmacAlgorithm, type HmacScheme, type WebhookScheme } from '@fabrika/auth-core'
 
 /** How far a signed timestamp may be from now: the window in which a captured delivery could be replayed. */
 export const WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000
@@ -14,21 +14,31 @@ const ALGORITHMS: Readonly<Record<HmacAlgorithm, string>> = { sha1: 'SHA-1', sha
 
 const encoder = new TextEncoder()
 
+/** What a verifier reads of a delivery. */
+export interface SignedDelivery {
+	readonly headers: Headers
+	readonly body: Uint8Array<ArrayBuffer>
+	/**
+	 * The URL the provider posted to: `FABRIKA_APP_ORIGIN` and the request's path and query, which Twilio signs. `null`
+	 * where the environment has no public origin.
+	 */
+	readonly url: string | null
+}
+
 /** Whether the delivery proves it holds `secret` under `scheme`. `now` is the clock a signed timestamp is checked against. */
-export async function verifyDelivery(
-	scheme: WebhookScheme,
-	headers: Headers,
-	secret: string,
-	body: Uint8Array<ArrayBuffer>,
-	now: number,
-): Promise<boolean> {
+export async function verifyDelivery(scheme: WebhookScheme, delivery: SignedDelivery, secret: string, now: number): Promise<boolean> {
+	const { headers, body } = delivery
 	switch (scheme) {
 		case 'github-sha256':
 			return await verifyHmac(GITHUB, headers, encoder.encode(secret), body, now)
+		case 'slack':
+			return await verifySlack(headers, encoder.encode(secret), body, now)
 		case 'stripe':
 			return await verifyStripe(headers.get('Stripe-Signature'), encoder.encode(secret), body, now)
 		case 'standard-webhooks':
 			return await verifyStandard(headers, standardKey(secret), body, now)
+		case 'twilio':
+			return await verifyTwilio(delivery, encoder.encode(secret))
 	}
 	if ('hmac' in scheme) {
 		return await verifyHmac(scheme.hmac, headers, encoder.encode(secret), body, now)
@@ -103,6 +113,52 @@ async function verifyStripe(header: string | null, key: Uint8Array<ArrayBuffer>,
 	return await hmacVerifies('sha256', key, signatures, signedContent([timestamp], body))
 }
 
+/** Slack's `X-Slack-Signature: v0=<hex>`, an HMAC-SHA256 of `v0:<X-Slack-Request-Timestamp>:<body>`, within five minutes. */
+async function verifySlack(headers: Headers, key: Uint8Array<ArrayBuffer>, body: Uint8Array<ArrayBuffer>, now: number): Promise<boolean> {
+	const timestamp = headers.get('X-Slack-Request-Timestamp')
+	const header = headers.get('X-Slack-Signature')
+	if (timestamp === null || header === null || !header.startsWith('v0=') || !fresh(timestamp, now)) {
+		return false
+	}
+	const signature = decode(header.slice(3), 'hex')
+	return signature !== null && (await hmacVerifies('sha256', key, [signature], prefixed(`v0:${timestamp}:`, body)))
+}
+
+/**
+ * Twilio's `X-Twilio-Signature`: the base64 HMAC-SHA1 of the URL it posted to, followed by a form's parameters sorted by
+ * name, each name then its value. A JSON body is signed through the URL instead: its `bodySHA256` parameter must be
+ * the body's SHA-256. Twilio signs no timestamp.
+ */
+async function verifyTwilio(delivery: SignedDelivery, key: Uint8Array<ArrayBuffer>): Promise<boolean> {
+	const header = delivery.headers.get('X-Twilio-Signature')
+	const signature = header === null ? null : decode(header, 'base64')
+	const content = await twilioSigned(delivery)
+	return signature !== null && content !== null && (await hmacVerifies('sha1', key, [signature], encoder.encode(content)))
+}
+
+async function twilioSigned({ headers, body, url }: SignedDelivery): Promise<string | null> {
+	if (url === null) {
+		return null
+	}
+	if (headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() === FORM_URLENCODED_TYPE) {
+		const text = utf8(body)
+		if (text === null) {
+			return null
+		}
+		const parameters = [...new URLSearchParams(text)].sort(([leftName, leftValue], [rightName, rightValue]) =>
+			compareText(leftName, rightName) || compareText(leftValue, rightValue)
+		)
+		return url + parameters.map(([name, value]) => name + value).join('')
+	}
+	const claimed = new URL(url).searchParams.get('bodySHA256')
+	const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', body)), (byte) => byte.toString(16).padStart(2, '0')).join('')
+	return claimed?.toLowerCase() === digest ? url : null
+}
+
+function compareText(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0
+}
+
 /** Standard Webhooks: `webhook-signature: v1,<base64> …` over `<webhook-id>.<webhook-timestamp>.<body>`. */
 async function verifyStandard(headers: Headers, key: Uint8Array<ArrayBuffer> | null, body: Uint8Array<ArrayBuffer>, now: number): Promise<boolean> {
 	const id = headers.get('webhook-id')
@@ -119,7 +175,7 @@ async function verifyStandard(headers: Headers, key: Uint8Array<ArrayBuffer> | n
 }
 
 /** A Standard Webhooks secret is `whsec_` and the key in base64; `null` when it is not. */
-function standardKey(secret: string): Uint8Array<ArrayBuffer> | null {
+export function standardKey(secret: string): Uint8Array<ArrayBuffer> | null {
 	return secret.startsWith(STANDARD_SECRET_PREFIX) ? decode(secret.slice(STANDARD_SECRET_PREFIX.length), 'base64') : null
 }
 
@@ -133,13 +189,14 @@ function fresh(timestamp: string, now: number): boolean {
 
 /** `<part>.<part>.<body>`: what a timestamped or identified signature covers. */
 function signedContent(parts: readonly string[], body: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
-	if (parts.length === 0) {
-		return body
-	}
-	const head = encoder.encode(`${parts.join('.')}.`)
-	const content = new Uint8Array(head.byteLength + body.byteLength)
-	content.set(head, 0)
-	content.set(body, head.byteLength)
+	return parts.length === 0 ? body : prefixed(`${parts.join('.')}.`, body)
+}
+
+function prefixed(head: string, body: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
+	const bytes = encoder.encode(head)
+	const content = new Uint8Array(bytes.byteLength + body.byteLength)
+	content.set(bytes, 0)
+	content.set(body, bytes.byteLength)
 	return content
 }
 
@@ -165,17 +222,17 @@ async function hmacVerifies(
 function basicPassword(authorization: string | null): string | null {
 	const match = authorization === null ? null : /^Basic ([A-Za-z0-9+/]+={0,2})$/i.exec(authorization)
 	const credentials = match?.[1] === undefined ? null : decode(match[1], 'base64')
-	if (credentials === null) {
-		return null
-	}
-	let text: string
+	const text = credentials === null ? null : utf8(credentials)
+	const separator = text?.indexOf(':') ?? -1
+	return text === null || separator < 0 ? null : text.slice(separator + 1)
+}
+
+function utf8(bytes: Uint8Array): string | null {
 	try {
-		text = new TextDecoder('utf-8', { fatal: true }).decode(credentials)
+		return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
 	} catch {
 		return null
 	}
-	const separator = text.indexOf(':')
-	return separator < 0 ? null : text.slice(separator + 1)
 }
 
 function bearerToken(authorization: string | null): string | null {

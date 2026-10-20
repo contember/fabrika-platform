@@ -86,6 +86,12 @@ export const catalog = app.group({ callers: ['human'] }, (r) => ({
 		access: { action: 'catalog.write', app: true },
 		binds: 'scans',
 	}).handle(({ input, ctx }) => ctx.webhooks('scans').bind(ctx.app, input.account)),
+	connectInbox: r.mutation({
+		input: z.strictObject({ account: z.string() }),
+		output: WebhookSecret,
+		access: { action: 'catalog.write', app: true },
+		binds: 'inbox',
+	}).handle(({ input, ctx }) => ctx.webhooks('inbox').bind(ctx.app, input.account)),
 	putOnly: r.mutation({
 		input: z.strictObject({ name: z.string() }),
 		output: Empty,
@@ -136,6 +142,26 @@ export const scans = app.webhook('/hooks/scans', {
 }).handle(async ({ input, ctx }) => {
 	const image = await ctx.files.put('catalog', new Uint8Array(PNG_BYTES), { type: 'image/png', name: `${input.id}.png` })
 	await ctx.db.app('catalog.write').products.insert({ name: input.type, image })
+})
+
+/**
+ * An inbound mail service that posts each message with its attachments, authenticated by the binding's secret as a
+ * bearer token: one product per attached image, in a body larger than the 1 MiB default.
+ */
+export const inbox = app.webhook('/hooks/inbox', {
+	scheme: { bearer: true },
+	boundTo: 'app',
+	actions: ['catalog.write'],
+	input: z.strictObject({
+		subject: z.string(),
+		attachments: z.array(z.strictObject({ name: z.string(), type: z.literal('image/png'), content: z.string() })).max(8),
+	}),
+	limits: { maxBytes: 4194304 },
+}).handle(async ({ input, ctx }) => {
+	for (const attachment of input.attachments) {
+		const image = await ctx.files.put('catalog', Buffer.from(attachment.content, 'base64'), { type: attachment.type, name: attachment.name })
+		await ctx.db.app('catalog.write').products.insert({ name: `${input.subject}: ${attachment.name}`, image })
+	}
 })
 
 /** Mails the catalog's images as attachments: each a live file whose reference the job read from its column. */

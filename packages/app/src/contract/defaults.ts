@@ -36,10 +36,12 @@ export const FILE_INPUT_PART = 'input'
 
 /**
  * A webhook's bounds: a provider's body, by default the most a procedure without files takes, since providers send
- * whole objects; and its handler's time, a procedure's.
+ * whole objects; up to what a procedure with file fields takes, since an inbound e-mail carries its attachments in the
+ * body for the handler to `put`; and its handler's time, a procedure's.
  */
 export const WEBHOOK_LIMITS = {
 	maxBytes: PROCEDURE_LIMITS.maxMaxBytes,
+	maxMaxBytes: PROCEDURE_LIMITS.maxFileBodyBytes,
 	timeoutMs: PROCEDURE_LIMITS.timeoutMs,
 } as const
 

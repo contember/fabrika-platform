@@ -568,16 +568,19 @@ export interface WebhookMountArtifact {
 	readonly timeoutMs: number
 }
 
-/** The providers whose signature the framework checks by name; every one signs the raw body with the binding's secret. */
-export const WEBHOOK_PRESETS = ['github-sha256', 'standard-webhooks', 'stripe'] as const
+/**
+ * The providers whose signature the framework checks by name; every one signs the raw body with the binding's secret,
+ * and Twilio the public URL with it. Slack and Twilio post forms as well as JSON.
+ */
+export const WEBHOOK_PRESETS = ['github-sha256', 'slack', 'standard-webhooks', 'stripe', 'twilio'] as const
 
 export type WebhookPreset = (typeof WEBHOOK_PRESETS)[number]
 
 /**
  * How a delivery proves it holds its binding's secret: a preset, an HMAC the framework computes in a declared shape,
  * or the secret itself as a Basic password or a bearer token. A verifier is framework code, never the application's.
- * `basic` and `bearer` read `Authorization`, which the proxy removes from an anonymous endpoint's request (ADR-0022
- * rule 3), so `buildArtifact` refuses them while it does.
+ * `basic` and `bearer` read `Authorization`, which the proxy passes only to a row that declares `authorization:
+ * 'forward'` (ADR-0022 rule 3).
  */
 export type WebhookScheme =
 	| WebhookPreset
