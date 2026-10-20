@@ -726,7 +726,9 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   for byte. On Cloudflare the runner deploys the proxy Worker with the application. On Zerops Control refuses a
   deploy whose contract holds a public row or a `capabilities` requirement while the namespace's proxy source is
   another than the one it deploys new placements from, and names the re-pin
-  (`fabrika control namespaces update --namespace=<id> --proxy-source=current`).
+  (`fabrika control namespaces update --namespace=<id> --proxy-source=current`). It does not check a file-response
+  profile or `admission.origins`: an old pin refuses such a manifest at its republish, so the operator re-pins the
+  namespace before an application declares either.
 - **The platform keeps serving the rows of older framework releases**: a 0.4/0.5 form row with its content types,
   its cross-origin form and its multipart origin check, a collection's `upload` and `download` rows, and a webhook's
   generated binding rows, until no framework release in the window produces them

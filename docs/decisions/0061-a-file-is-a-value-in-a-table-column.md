@@ -193,7 +193,10 @@ does next.
   ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
 - **Rollout.** `fabrika db migrate` applies `0008_files.sql` before the application's own bundle at the next deploy
   of an application on framework 0.6. The Zerops provider adds the sweep and the scan to the crontab of an
-  application that declares file kinds. No generated installation file or variable changes.
+  application that declares file kinds. No generated installation file or variable changes. On Zerops a namespace
+  proxy pinned before the upgrade refuses a manifest with the file-response profile, and Control does not refuse such
+  a deploy: the operator re-pins the namespace first
+  ([`deployment-namespaces.md`](../reference/deployment-namespaces.md)).
 
 ## Alternatives considered
 

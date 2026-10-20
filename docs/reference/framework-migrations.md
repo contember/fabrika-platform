@@ -504,7 +504,7 @@ Only the option's name changes. The variables it names, and a challenge's site k
 ### Outbox drains on `claim`
 
 Optional, and recommended. A drain written as raw SQL (`sql: 'write'`, `… for update skip locked`) becomes a queue
-table and a claim, off no road:
+table and a claim, on the paved road:
 
 ```ts
 // src/db/tables.ts
