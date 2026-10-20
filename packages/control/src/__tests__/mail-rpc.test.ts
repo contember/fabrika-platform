@@ -1,4 +1,5 @@
 import type { AuthContext } from '@fabrika/auth'
+import { MemoryEmailSender } from '@fabrika/email/memory'
 import { encodePlatformMailRequest } from '@fabrika/email/platform'
 import { uuidv7 } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
@@ -12,7 +13,7 @@ import { fakeControlProvider } from './helpers/provider'
 import { rpcRequest, rpcResult } from './helpers/rpc'
 
 // The console's mail procedures over the real RPC parser and ACL, on the production schema: who reads which messages,
-// who sees their content, and that release and drop decide a held message only.
+// who sees their content, that release and drop decide a held message only, and who requeues a final one.
 
 const listSchema = z.object({
 	items: z.array(z.object({ id: z.string(), sender: z.string(), state: z.string() }).passthrough()),
@@ -33,7 +34,7 @@ const contentSchema = z.discriminatedUnion('kind', [
 		}).passthrough(),
 	}),
 ])
-const detailSchema = messageSchema.extend({ content: contentSchema })
+const detailSchema = messageSchema.extend({ content: contentSchema, requeueable: z.boolean() })
 const ruleSchema = z.object({ id: z.string(), scope: z.string(), domain: z.string(), action: z.string() }).passthrough()
 
 interface Fixture {
@@ -43,7 +44,7 @@ interface Fixture {
 	seed(sender: string, state: MailMessageState): Promise<string>
 }
 
-function fixture(options: { relay?: boolean } = {}): Fixture {
+function fixture(options: { relay?: boolean; idempotent?: boolean } = {}): Fixture {
 	const repositories = createHarness().db
 	const dispatched: MailDispatchMessage[] = []
 	return {
@@ -58,11 +59,14 @@ function fixture(options: { relay?: boolean } = {}): Fixture {
 				provider: fakeControlProvider,
 				cancelRun: () => Promise.resolve(),
 				...(options.relay === false ? {} : {
-					mailQueue: {
-						send(message) {
-							dispatched.push(message)
-							return Promise.resolve()
+					mailRelay: {
+						queue: {
+							send(message) {
+								dispatched.push(message)
+								return Promise.resolve()
+							},
 						},
+						sender: new MemoryEmailSender({ capabilities: { idempotent: options.idempotent ?? true } }),
 					},
 				}),
 			}
@@ -233,6 +237,68 @@ describe('release and drop', () => {
 		const id = await f.seed('notes@prod', 'held')
 		expect((await f.call(authWithActions(['mail.manage']), 'mail.messages.release', { id })).status).toBe(503)
 		expect((await f.repositories.mailMessages.get(id))?.state).toBe('held')
+	})
+})
+
+describe('requeue', () => {
+	const manager = authWithActions(['mail.manage', 'mail.read'], 'ops@test')
+
+	test('needs a global mail.manage', async () => {
+		const f = fixture()
+		const id = await f.seed('notes@prod', 'failed')
+		const scoped = authWithPermissions([{ action: 'mail.manage', scope: { type: 'app', value: 'notes' } }])
+		expect((await f.call(reader(null), 'mail.messages.requeue', { id })).status).toBe(403)
+		expect((await f.call(scoped, 'mail.messages.requeue', { id })).status).toBe(403)
+		expect((await f.repositories.mailMessages.get(id))?.state).toBe('failed')
+		expect(f.dispatched).toEqual([])
+	})
+
+	test('queues a failed message with its attempts spent anew, records who, and enqueues its dispatch', async () => {
+		const f = fixture({ idempotent: false })
+		const id = await f.seed('notes@prod', 'failed')
+		expect((await json(await f.call(manager, 'mail.messages.get', { id }), detailSchema)).requeueable).toBe(true)
+		const requeued = await json(await f.call(manager, 'mail.messages.requeue', { id }), messageSchema)
+		expect(requeued).toMatchObject({ state: 'queued', decidedBy: 'user:p-ops@test', attempts: 0, nextAttemptAt: null })
+		expect(f.dispatched).toEqual([{ messageId: id }])
+		expect((await f.call(manager, 'mail.messages.requeue', { id })).status).toBe(409)
+	})
+
+	test('an unknown message goes again only over an idempotent transport', async () => {
+		const once = fixture({ idempotent: false })
+		const refused = await once.seed('notes@prod', 'unknown')
+		expect((await json(await once.call(manager, 'mail.messages.get', { id: refused }), detailSchema)).requeueable).toBe(false)
+		expect((await once.call(manager, 'mail.messages.requeue', { id: refused })).status).toBe(409)
+		expect((await once.repositories.mailMessages.get(refused))?.state).toBe('unknown')
+		expect(once.dispatched).toEqual([])
+
+		const keyed = fixture({ idempotent: true })
+		const id = await keyed.seed('notes@prod', 'unknown')
+		expect((await json(await keyed.call(manager, 'mail.messages.get', { id }), detailSchema)).requeueable).toBe(true)
+		expect((await json(await keyed.call(manager, 'mail.messages.requeue', { id }), messageSchema)).state).toBe('queued')
+		expect(keyed.dispatched).toEqual([{ messageId: id }])
+	})
+
+	test('a message that is not final and undelivered, or whose content is gone, is a conflict; an unknown one is not found', async () => {
+		const f = fixture()
+		for (const state of ['held', 'queued', 'sending', 'sent', 'dropped'] as const) {
+			const id = await f.seed('notes@prod', state)
+			expect((await f.call(manager, 'mail.messages.requeue', { id })).status).toBe(409)
+			expect((await f.repositories.mailMessages.get(id))?.state).toBe(state)
+		}
+		const purged = await f.seed('installation:iam', 'failed')
+		await f.repositories.mailMessages.purgeContent(purged)
+		expect((await json(await f.call(manager, 'mail.messages.get', { id: purged }), detailSchema)).requeueable).toBe(false)
+		expect((await f.call(manager, 'mail.messages.requeue', { id: purged })).status).toBe(409)
+		expect((await f.call(manager, 'mail.messages.requeue', { id: uuidv7() })).status).toBe(404)
+		expect(f.dispatched).toEqual([])
+	})
+
+	test('answers 503 where no dispatcher runs, and leaves the message final', async () => {
+		const f = fixture({ relay: false })
+		const id = await f.seed('notes@prod', 'failed')
+		expect((await json(await f.call(manager, 'mail.messages.get', { id }), detailSchema)).requeueable).toBe(false)
+		expect((await f.call(manager, 'mail.messages.requeue', { id })).status).toBe(503)
+		expect((await f.repositories.mailMessages.get(id))?.state).toBe('failed')
 	})
 })
 

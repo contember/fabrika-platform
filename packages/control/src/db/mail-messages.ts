@@ -21,7 +21,7 @@ export interface MailMessageRow {
 	state: MailMessageState
 	/** The rule that decided the message at acceptance; `null` when none did. */
 	rule_id: string | null
-	/** Who released or dropped a held message. */
+	/** Who released or dropped a held message, or requeued a final one. */
 	decided_by: string | null
 	/** Attempts claimed so far; the claimed attempt's number while `sending`. */
 	attempts: number
@@ -125,6 +125,21 @@ export class MailMessageRepository {
 	/** A person drops a held message. `false`: it is not held (any more). */
 	async drop(id: string, decidedBy: string, now: number): Promise<boolean> {
 		return await this.decide(id, 'dropped', decidedBy, now)
+	}
+
+	/**
+	 * A person sends a final message again: one of `states` → `queued`, its attempts spent anew. Only while its content is
+	 * kept, because the dispatcher sends from it. `false`: it is in no such state, or its content is gone.
+	 */
+	async requeue(id: string, states: readonly ('failed' | 'unknown')[], decidedBy: string, now: number): Promise<boolean> {
+		const result = await this.d1
+			.prepare(
+				`UPDATE mail_messages SET state = 'queued', attempts = 0, next_attempt_at = NULL, decided_by = ?, updated_at = ?
+				WHERE id = ? AND content IS NOT NULL AND state IN (${states.map(() => '?').join(', ')})`,
+			)
+			.bind(decidedBy, now, id, ...states)
+			.run()
+		return result.meta.changes > 0
 	}
 
 	private async decide(id: string, state: 'queued' | 'dropped', decidedBy: string, now: number): Promise<boolean> {

@@ -7,7 +7,14 @@ import { encodePlatformMailRequest, platformMailFingerprint } from '@fabrika/ema
 import { type JobQueue, uuidv7 } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { MailMessageRepository, type MailMessageState } from '../db'
-import { dispatchMail, MAIL_DISPATCH_INTERRUPTED, MAIL_MAX_ATTEMPTS, MAIL_STALE_CLAIM_S, relayIdempotencyKey } from '../mail-relay/dispatch'
+import {
+	dispatchMail,
+	MAIL_DISPATCH_INTERRUPTED,
+	MAIL_MAX_ATTEMPTS,
+	MAIL_STALE_CLAIM_S,
+	mailRetryDelaySeconds,
+	relayIdempotencyKey,
+} from '../mail-relay/dispatch'
 import type { MailDispatchMessage } from '../mail-relay/queue'
 import { createHarness } from './helpers/harness'
 
@@ -105,7 +112,7 @@ describe('the mail dispatcher', () => {
 		expect(await lost.messages.get(unknown)).toMatchObject({ state: 'unknown', content: null })
 	})
 
-	test('a retryable failure is requeued with a doubling delay, and the fifth attempt is final by its outcome', async () => {
+	test('a retryable failure is requeued with a doubling delay, and the tenth attempt, some 8.5 hours on, is final by its outcome', async () => {
 		const d = dispatcher()
 		d.sender?.unavailable()
 		const id = await stored(d.messages)
@@ -124,10 +131,17 @@ describe('the mail dispatcher', () => {
 			expect(await d.dispatch(id)).toEqual({ status: 'skipped' })
 			d.advance(result.delaySeconds)
 		}
-		expect(delays).toEqual([60, 120, 240, 480])
+		expect(delays).toEqual([60, 120, 240, 480, 960, 1920, 3840, 7680, 15360])
+		expect(d.now() - T0).toBe(511 * 60)
 		expect(d.jobs).toEqual(delays.map((delaySeconds) => ({ message: { messageId: id }, delaySeconds })))
 		expect(await d.dispatch(id)).toEqual({ status: 'unknown', code: 'provider_unavailable' })
 		expect(await d.messages.get(id)).toMatchObject({ state: 'unknown', attempts: MAIL_MAX_ATTEMPTS, next_attempt_at: null })
+	})
+
+	test("the schedule is an application queue table's: one minute, doubled per attempt, ten attempts, at most 30 days apart", () => {
+		expect(MAIL_MAX_ATTEMPTS).toBe(10)
+		expect([1, 2, 3, 9].map(mailRetryDelaySeconds)).toEqual([60, 120, 240, 15360])
+		expect(mailRetryDelaySeconds(30)).toBe(30 * 24 * 60 * 60)
 	})
 
 	test('a retryable failure that left nothing behind ends failed once the attempts are spent', async () => {

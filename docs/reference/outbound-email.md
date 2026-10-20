@@ -385,7 +385,7 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
 | `queued`  | waits for the dispatcher                               |
 | `sending` | a dispatcher claimed one attempt and sends it          |
 | `sent`    | the provider took it; final                            |
-| `failed`  | it did not leave; final                                |
+| `failed`  | it did not leave; final, a person may requeue it       |
 | `unknown` | it may have left; final, for a person                  |
 | `dropped` | a rule or a person dropped it; nothing was sent; final |
 
@@ -408,10 +408,15 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
   30-second deadline, under the key `relay:<sender>:<key>`; a key longer than 256
   characters becomes `relay:` and the SHA-256 hex of `<sender>:<key>`.
 - Success marks the message `sent` with the provider's message id. A retryable error
-  that `mayRetryDelivery` allows is retried after 1, 2, 4 and 8 minutes, at most five
-  attempts. Any other error, and the fifth, makes the message `failed` (outcome
-  `not_sent`) or `unknown`. Without a transport a queued message fails as
-  `mail_not_configured`; content that no longer parses fails as `invalid_message`.
+  that `mayRetryDelivery` allows (a retryable `not_sent`, and an `unknown` outcome only
+  over an idempotent transport) is retried after one minute, doubled per attempt, at most
+  30 days apart, for ten attempts: the last one some 8.5 hours after the first. This is the
+  schedule of an application's queue table with its default one-minute tick
+  (`@fabrika/db`), which a 0.6 application's outbox retried its mail on; the relay took
+  that retry over when the application moved to 0.7. Any other error, and the tenth, makes
+  the message `failed` (outcome `not_sent`) or `unknown`. Without a transport a queued
+  message fails as `mail_not_configured`; content that no longer parses fails as
+  `invalid_message`.
 - An installation message's content is purged right after it is sent: it holds a
   one-time link.
 - Control's maintenance pass (cron) re-enqueues `queued` messages unchanged for 10
@@ -425,24 +430,29 @@ The Delivery section's **Mail** page lists messages by state, held first, with a
 filter by state and sender. A message's detail shows its metadata and, with
 `mail.content.read`, the recipient, subject, text, the HTML body in a sandboxed frame
 that runs no script, and each attachment's name, type and size. A held message has
-**Release** and **Drop**, each with a confirmation. The rules section sets and removes
-rules.
+**Release** and **Drop**, each with a confirmation. A message the relay would send again
+has **Requeue**, with a confirmation. The rules section sets and removes rules.
 
 | action              | grants                                              | scope                                                                |
 | ------------------- | --------------------------------------------------- | -------------------------------------------------------------------- |
 | `mail.read`         | the list and a message's metadata                   | an application's messages at its app or environment; others globally |
 | `mail.content.read` | the recipient, subject, bodies and attachment names | global                                                               |
-| `mail.manage`       | release, drop, and the rules                        | global                                                               |
+| `mail.manage`       | release, drop, requeue, and the rules               | global                                                               |
 
 Only `admin` holds them by default. The procedures (`controlRpc.mail`):
 
 - `messages.list({ state?, scope?, cursor? })`: without `scope` it needs a global
   `mail.read`, with one the grant that reads that sender (as `runs.list`); 50 a page.
 - `messages.get({ id })`: the content is `withheld` without `mail.content.read`,
-  `purged` once it is gone.
+  `purged` once it is gone. `requeueable` says whether a requeue would act now.
 - `messages.release({ id })` and `messages.drop({ id })`: act on a `held` message only,
   else 409; record who decided. A release enqueues the dispatch, so on the Worker it
   answers 503.
+- `messages.requeue({ id })`: acts on a `failed` message, and on an `unknown` one only
+  over an idempotent transport, whose content is kept, else 409. It moves the message to
+  `queued` with its attempts spent anew, records who decided, and enqueues the dispatch;
+  on the Worker it answers 503. An installation message's content is purged once it is
+  final, so it cannot be requeued.
 - `rules.list()`, `rules.set({ scope, domain, action })` (one rule per scope and
   domain; `scope` is `*` or an existing `<app>@<env>`, `domain` is `*` or a lowercase
   domain) and `rules.remove({ id })`.

@@ -12,9 +12,13 @@ import type { MailMessageRepository, MailMessageRow } from '../db'
 import { enqueueMailDispatch, isInstallationSender, type MailDispatchMessage } from './queue'
 
 export const MAIL_SEND_TIMEOUT_MS = 30_000
+// The retry schedule of an application's queue table with its default one-minute tick (`@fabrika/db`:
+// `DEFAULT_MAX_ATTEMPTS` and the claim backoff in `orm.ts`): before the relay, a 0.6 outbox retried mail on it.
+// Mirrored, because Control does not depend on the application data layer.
 /** Attempts of one message, the first included, before a retryable failure becomes final. */
-export const MAIL_MAX_ATTEMPTS = 5
+export const MAIL_MAX_ATTEMPTS = 10
 const FIRST_RETRY_DELAY_S = 60
+const MAX_RETRY_DELAY_S = 30 * 24 * 60 * 60
 /** A claim this old belongs to a consumer that stopped: far past the send deadline and the writes around it. */
 export const MAIL_STALE_CLAIM_S = 10 * 60
 /** The error code of an attempt whose consumer stopped after the claim, before it recorded an outcome. */
@@ -82,7 +86,7 @@ async function attempt(deps: MailDispatchDeps, row: MailMessageRow, attempts: nu
 	} catch (cause) {
 		if (!(cause instanceof EmailDeliveryError)) throw cause
 		if (mayRetryDelivery(cause, deps.sender.capabilities) && attempts < MAIL_MAX_ATTEMPTS) {
-			const delaySeconds = FIRST_RETRY_DELAY_S * 2 ** (attempts - 1)
+			const delaySeconds = mailRetryDelaySeconds(attempts)
 			if (!(await deps.messages.defer(row.id, attempts, deps.now() + delaySeconds, cause.code, deps.now()))) return { status: 'skipped' }
 			await enqueueMailDispatch(deps.queue, row.id, delaySeconds)
 			console.warn(`mail relay: message ${row.id} attempt ${attempts} failed (${cause.code}); retrying in ${delaySeconds}s`)
@@ -97,6 +101,11 @@ async function attempt(deps: MailDispatchDeps, row: MailMessageRow, attempts: nu
 	await forgetInstallationContent(deps, row)
 	console.info(`mail relay: message ${row.id} sent`)
 	return { status: 'sent' }
+}
+
+/** The wait after the failed attempt `attempts`: one minute, doubled per further attempt, at most 30 days. */
+export function mailRetryDelaySeconds(attempts: number): number {
+	return Math.min(FIRST_RETRY_DELAY_S * 2 ** (attempts - 1), MAX_RETRY_DELAY_S)
 }
 
 async function settleUndelivered(

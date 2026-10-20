@@ -159,6 +159,38 @@ for (const backend of backends) {
 				expect(await messages.get(other.id)).toMatchObject({ state: 'dropped', decided_by: 'user:bob' })
 			})
 
+			test('a person requeues a final message in an allowed state with its content kept, with its attempts spent anew', async () => {
+				const repositories = await open()
+				const messages = repositories.mailMessages
+				const failed = (await messages.insertOrFind(message({ idempotency_key: 'failed' }), T0)).row
+				await messages.claim(failed.id, 0, T0)
+				await messages.markUndelivered(failed.id, 'failed', 'provider_unavailable', 1, T0)
+				const unknown = (await messages.insertOrFind(message({ idempotency_key: 'unknown' }), T0)).row
+				await messages.claim(unknown.id, 0, T0)
+				await messages.markUndelivered(unknown.id, 'unknown', 'network_error', 1, T0)
+				const purged = (await messages.insertOrFind(message({ idempotency_key: 'purged' }), T0)).row
+				await messages.claim(purged.id, 0, T0)
+				await messages.markUndelivered(purged.id, 'failed', 'provider_unavailable', 1, T0)
+				await messages.purgeContent(purged.id)
+				const held = (await messages.insertOrFind(message({ idempotency_key: 'held', state: 'held' }), T0)).row
+
+				expect(await messages.requeue(unknown.id, ['failed'], 'user:ada', T0 + 5)).toBe(false)
+				expect(await messages.requeue(purged.id, ['failed', 'unknown'], 'user:ada', T0 + 5)).toBe(false)
+				expect(await messages.requeue(held.id, ['failed', 'unknown'], 'user:ada', T0 + 5)).toBe(false)
+				expect(await messages.requeue(failed.id, ['failed'], 'user:ada', T0 + 5)).toBe(true)
+				expect(await messages.requeue(failed.id, ['failed'], 'user:ada', T0 + 5)).toBe(false)
+				expect(await messages.get(failed.id)).toMatchObject({
+					state: 'queued',
+					attempts: 0,
+					next_attempt_at: null,
+					decided_by: 'user:ada',
+					error_code: 'provider_unavailable',
+					updated_at: T0 + 5,
+				})
+				expect(await messages.requeue(unknown.id, ['failed', 'unknown'], 'user:bob', T0 + 6)).toBe(true)
+				expect(await messages.get(unknown.id)).toMatchObject({ state: 'queued', decided_by: 'user:bob' })
+			})
+
 			test('one consumer claims a queued, due attempt; only the claim settles it', async () => {
 				const repositories = await open()
 				const messages = repositories.mailMessages

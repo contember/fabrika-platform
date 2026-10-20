@@ -223,9 +223,14 @@ none and answers its row with 404. Its senders reach it over the platform transp
   (`queued` → `sending`, guarded on the state and the attempts it read), so of two jobs or two consumers exactly one
   sends. A claim that never recorded an outcome (the consumer stopped) goes again under the same key only over an
   idempotent transport; over any other the message is `unknown`. A retryable failure that
-  `mayRetryDelivery` allows is retried with backoff, a bounded number of times; then the message is `failed` (it did
+  `mayRetryDelivery` allows is retried on the schedule an application's outbox had before the relay took its mail
+  over: ten attempts, one minute apart and doubled each time, about 8.5 hours in all. A shorter horizon would lose in a
+  provider outage mail that the application's outbox already counted as done. Then the message is `failed` (it did
   not leave) or `unknown` (it may have). Over a non-idempotent provider an `unknown` message stays for a person, as
   §1 says.
+- **A person sends a final message again.** An operator with `mail.manage` requeues a `failed` message, or an
+  `unknown` one over an idempotent transport, whose content is kept (`failed`/`unknown` → `queued`, its attempts
+  spent anew). The console records who did it, as for a release or a drop.
 - **Bodies are secrets.** Reading a message's metadata (`mail.read`) is scoped like runs: an application's messages
   at its application or environment, an installation sender's only globally. Reading the recipient, the subject and
   the bodies is a permission of its own (`mail.content.read`, global), and so is deciding (`mail.manage`, global).
@@ -251,7 +256,9 @@ none and answers its row with 404. Its senders reach it over the platform transp
   installation's address to anyone, and the gate does not cover it until the release leaves the window.
 - With the relay, Control is on the path of every installation mail. An outage delays mail; the sender retries the
   idempotent send, and the dispatcher's queue survives a restart.
-- An `unknown` or `failed` message is final. The console shows it; it has no action to send it again.
+- An `unknown` or `failed` message is final for the dispatcher. A person can requeue a `failed` one, and an `unknown`
+  one only over an idempotent transport; over SmartEmailing an `unknown` message is never sent again. An installation
+  message cannot be requeued: its content is purged once it is final.
 - An installation transport can use only a built-in provider. Another provider needs a relay outside the repository
   ([backlog 178](../backlog/178-an-installation-transport-through-an-outside-relay.md)) or a platform distribution that
   bundles it ([backlog 179](../backlog/179-build-a-platform-distribution-that-bundles-extra-email-adapters.md)).

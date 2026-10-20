@@ -240,6 +240,8 @@ export interface ControlRpcContract {
 			release: RpcProcedure<MailMessageIdInput, MailMessageDto>
 			/** A held message only. */
 			drop: RpcProcedure<MailMessageIdInput, MailMessageDto>
+			/** A `failed` message, or an `unknown` one over an idempotent transport, whose content is kept. */
+			requeue: RpcProcedure<MailMessageIdInput, MailMessageDto>
 		}
 		rules: {
 			list: RpcProcedure<void, ListResponse<MailRuleDto>>

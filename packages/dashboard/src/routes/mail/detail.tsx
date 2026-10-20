@@ -11,7 +11,8 @@ import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate } from '../../lib/format'
 import { MailState } from './index'
 
-// One relayed message: its metadata, its content for a caller who reads content, and the decision on a held message.
+// One relayed message: its metadata, its content for a caller who reads content, the decision on a held message, and
+// the requeue of a final one.
 // The HTML body never enters this page's document: it renders in a sandboxed frame that runs no script and loads
 // nothing from the network.
 
@@ -22,7 +23,7 @@ export default createPage()
 	.render(({ data, invalidate }) => {
 		const { message } = data
 		const access = useConsoleAccess()
-		const decides = message.state === 'held' && (access === null || holdsGlobally(access, CONTROL_ACTIONS.MAIL_MANAGE))
+		const manages = access === null || holdsGlobally(access, CONTROL_ACTIONS.MAIL_MANAGE)
 
 		return (
 			<>
@@ -64,13 +65,14 @@ export default createPage()
 							</Field>
 						)}
 						<Field label="Decided by rule">{message.ruleId === null ? <span className="muted">none</span> : <code>{message.ruleId}</code>}</Field>
-						{message.decidedBy !== null && <Field label="Released or dropped by">{message.decidedBy}</Field>}
+						{message.decidedBy !== null && <Field label="Decided by">{message.decidedBy}</Field>}
 					</div>
 				</section>
 
 				<MailContent content={message.content} />
 
-				{decides && <Decision message={message} onDone={invalidate} />}
+				{manages && message.state === 'held' && <Decision message={message} onDone={invalidate} />}
+				{manages && message.requeueable && <Requeue message={message} onDone={invalidate} />}
 			</>
 		)
 	})
@@ -208,6 +210,43 @@ function Decision({ message, onDone }: { message: MailMessageDetailDto; onDone: 
 					}
 					onConfirm={() => decide(confirming)}
 					onClose={() => setConfirming(null)}
+				/>
+			)}
+		</>
+	)
+}
+
+/** Sends a final message again: `failed`, or `unknown` over a transport that does not deliver one key twice. */
+function Requeue({ message, onDone }: { message: MailMessageDetailDto; onDone: () => void }) {
+	const [confirming, setConfirming] = useState(false)
+
+	async function requeue() {
+		await api.mail.messages.requeue({ id: message.id })
+		onDone()
+	}
+
+	return (
+		<>
+			<section>
+				<p className="hint">
+					Requeueing hands the message to the dispatcher again, with a new set of attempts.
+					{message.state === 'unknown' && ' It may already have arrived; the transport does not deliver one key twice.'}
+				</p>
+				<div className="row-actions">
+					<button type="button" className="primary" onClick={() => setConfirming(true)}>Requeue</button>
+				</div>
+			</section>
+			{confirming && (
+				<ConfirmDialog
+					title="Requeue the message"
+					confirmLabel="Requeue"
+					body={
+						<p>
+							Send the message from <strong>{message.sender}</strong> to {message.recipientDomain} again?
+						</p>
+					}
+					onConfirm={requeue}
+					onClose={() => setConfirming(false)}
 				/>
 			)}
 		</>

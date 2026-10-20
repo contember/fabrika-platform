@@ -43,7 +43,7 @@ export const CONTROL_ACTIONS = Object.freeze({
 	MAIL_READ: 'mail.read',
 	/** Read a relayed message's recipient, subject and bodies. Global. */
 	MAIL_CONTENT_READ: 'mail.content.read',
-	/** Release or drop a held message and change the gate's rules. Global. */
+	/** Release or drop a held message, requeue a final one, and change the gate's rules. Global. */
 	MAIL_MANAGE: 'mail.manage',
 })
 

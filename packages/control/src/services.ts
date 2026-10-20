@@ -1,5 +1,5 @@
 import type { AuthContext } from '@fabrika/auth'
-import { type DeployLocks, type JobQueue, SqlDeployLocks } from '@fabrika/platform'
+import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import type { BuilderPairingIam } from './api/builder-pairing'
 import { type NamespaceProxyChanged, republishNamespace } from './api/namespaces'
@@ -10,7 +10,7 @@ import { GitHubConnectionWebhookSecretProvider } from './github/connections/webh
 import type { CommitSource } from './github/source/commit-files'
 import { ConnectionWebhookVerifier, type PushWebhookVerifier } from './github/triggers/push-event'
 import { controlPublicOrigin } from './iam'
-import type { MailDispatchMessage } from './mail-relay/queue'
+import type { MailRelay } from './mail-relay/queue'
 import { iamMembershipKeyIssuer, type MembershipTransportPort, VaultMembershipTransport } from './membership-transport'
 import {
 	type OperationsCatalogSyncDeps,
@@ -179,8 +179,11 @@ export interface ControlRpcDeps {
 	namespaceProxyChanged?: NamespaceProxyChanged
 	/** GitHub as a deploy reads it; `register` probes an anonymous source with it. */
 	commits?: CommitSource
-	/** The mail dispatcher's queue a released message joins (`releaseMailMessage`); absent on the Worker. */
-	mailQueue?: JobQueue<MailDispatchMessage>
+	/**
+	 * The relay's dispatcher queue a released or requeued message joins, and its transport; absent on the Worker, which
+	 * has no dispatcher.
+	 */
+	mailRelay?: Pick<MailRelay, 'queue' | 'sender'>
 }
 
 /** Assemble RPC use-case dependencies around the installation's provider. Vault creation stays lazy. */
@@ -196,7 +199,7 @@ export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: A
 		vault: () => vault(env),
 		catalogChanged: () => scheduleOperationsCatalogChange(env),
 		...(env.COMMITS === undefined ? {} : { commits: env.COMMITS }),
-		...(env.MAIL_RELAY === undefined ? {} : { mailQueue: env.MAIL_RELAY.queue }),
+		...(env.MAIL_RELAY === undefined ? {} : { mailRelay: env.MAIL_RELAY }),
 		...(provider.namespaces?.republish === undefined
 			? {}
 			: {

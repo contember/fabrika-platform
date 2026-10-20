@@ -15,7 +15,7 @@ import {
 	type MailRuleDto,
 } from '@fabrika/control-contract'
 import { parsePlatformMailRequest } from '@fabrika/email/platform'
-import { type JobQueue, uuidv7 } from '@fabrika/platform'
+import { uuidv7 } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
@@ -83,7 +83,7 @@ import type { SourceConnectionPort } from './github/connections/port'
 import { sourceConnectionList } from './github/connections/status'
 import { appScope } from './iam'
 import { jsonValueSchema } from './json-value'
-import { type MailDispatchMessage, releaseMailMessage } from './mail-relay/queue'
+import { type MailRelay, mayRequeueMail, releaseMailMessage, requeueMailMessage } from './mail-relay/queue'
 import { buildControlRpcDeps } from './services'
 
 interface ControlRpcContext {
@@ -396,6 +396,9 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 				drop: rpc.procedure.input(mailId).require(CONTROL_ACTIONS.MAIL_MANAGE).mutation(({ ctx, input }) =>
 					controlCall(() => dropHeldMailMessage(mailContext(ctx), input.id))
 				),
+				requeue: rpc.procedure.input(mailId).require(CONTROL_ACTIONS.MAIL_MANAGE).mutation(({ ctx, input }) =>
+					controlCall(() => requeueFinalMailMessage(mailContext(ctx), input.id))
+				),
 			}),
 			rules: rpc.router({
 				list: rpc.procedure.require(CONTROL_ACTIONS.MAIL_MANAGE).query(({ ctx }) =>
@@ -466,7 +469,7 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 
 	function mailContext(ctx: ControlRpcContext): MailUseCaseContext {
 		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
-		return { repositories: deps.repositories, auth: ctx.auth, ...(deps.mailQueue === undefined ? {} : { mailQueue: deps.mailQueue }) }
+		return { repositories: deps.repositories, auth: ctx.auth, ...(deps.mailRelay === undefined ? {} : { mailRelay: deps.mailRelay }) }
 	}
 
 	function vaultContext(ctx: ControlRpcContext): VaultUseCaseContext {
@@ -509,8 +512,8 @@ async function controlCall<T>(run: () => Promise<T>): Promise<T> {
 interface MailUseCaseContext {
 	readonly repositories: ControlRepositories
 	readonly auth: AuthContext
-	/** Absent where no dispatcher runs (the Worker): a release answers 503 there. */
-	readonly mailQueue?: JobQueue<MailDispatchMessage>
+	/** Absent where no dispatcher runs (the Worker): a release or a requeue answers 503 there. */
+	readonly mailRelay?: Pick<MailRelay, 'queue' | 'sender'>
 }
 
 /**
@@ -540,7 +543,11 @@ async function listMailMessages(c: MailUseCaseContext, input: z.infer<typeof mai
 async function getMailMessage(c: MailUseCaseContext, id: string): Promise<MailMessageDetailDto> {
 	const row = await c.repositories.mailMessages.get(id)
 	if (row === null || !readsMailOf(c.auth, row.sender)) fail(404, 'mail message not found')
-	return { ...toMailMessageDto(row), content: mailContentOf(c.auth, row.content) }
+	return {
+		...toMailMessageDto(row),
+		content: mailContentOf(c.auth, row.content),
+		requeueable: c.mailRelay !== undefined && mayRequeueMail(row, c.mailRelay.sender),
+	}
 }
 
 function mailContentOf(auth: AuthContext, content: string | null): MailContentDto {
@@ -569,8 +576,8 @@ function mailContentOf(auth: AuthContext, content: string | null): MailContentDt
 }
 
 async function releaseHeldMailMessage(c: MailUseCaseContext, id: string): Promise<MailMessageDto> {
-	if (c.mailQueue === undefined) fail(503, 'the mail relay is unavailable')
-	const released = await releaseMailMessage({ messages: c.repositories.mailMessages, queue: c.mailQueue }, id, runActor(c.auth), nowSeconds())
+	if (c.mailRelay === undefined) fail(503, 'the mail relay is unavailable')
+	const released = await releaseMailMessage({ messages: c.repositories.mailMessages, queue: c.mailRelay.queue }, id, runActor(c.auth), nowSeconds())
 	return await decidedMailMessage(c, id, released)
 }
 
@@ -579,11 +586,23 @@ async function dropHeldMailMessage(c: MailUseCaseContext, id: string): Promise<M
 	return await decidedMailMessage(c, id, dropped)
 }
 
-/** The message after a release or drop; `decided` false means it was not held, or does not exist. */
-async function decidedMailMessage(c: MailUseCaseContext, id: string, decided: boolean): Promise<MailMessageDto> {
+async function requeueFinalMailMessage(c: MailUseCaseContext, id: string): Promise<MailMessageDto> {
+	if (c.mailRelay === undefined) fail(503, 'the mail relay is unavailable')
+	const deps = { messages: c.repositories.mailMessages, queue: c.mailRelay.queue, sender: c.mailRelay.sender }
+	const requeued = await requeueMailMessage(deps, id, runActor(c.auth), nowSeconds())
+	return await decidedMailMessage(c, id, requeued, 'the message is not failed, or unknown over an idempotent transport, with its content kept')
+}
+
+/** The message after a decision; `decided` false means it was not in a state the decision takes, or does not exist. */
+async function decidedMailMessage(
+	c: MailUseCaseContext,
+	id: string,
+	decided: boolean,
+	conflict = 'the message is not held',
+): Promise<MailMessageDto> {
 	const row = await c.repositories.mailMessages.get(id)
 	if (row === null) fail(404, 'mail message not found')
-	if (!decided) fail(409, 'the message is not held')
+	if (!decided) fail(409, conflict)
 	return toMailMessageDto(row)
 }
 

@@ -17,7 +17,7 @@ export interface MailMessageDto {
 	readonly state: MailMessageState
 	/** The rule that decided the message at acceptance; null when none did. */
 	readonly ruleId: string | null
-	/** Who released or dropped it. */
+	/** Who released or dropped it, or requeued it once it was final. */
 	readonly decidedBy: string | null
 	readonly attempts: number
 	readonly nextAttemptAt: number | null
@@ -58,6 +58,8 @@ export type MailContentDto =
 
 export interface MailMessageDetailDto extends MailMessageDto {
 	readonly content: MailContentDto
+	/** Whether a requeue would send it again now: `failed`, or `unknown` over an idempotent transport, with its content kept. */
+	readonly requeueable: boolean
 }
 
 export interface MailMessageListInput {
