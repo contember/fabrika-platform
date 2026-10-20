@@ -93,12 +93,13 @@ const Register = z.strictObject({
 	challengeToken: z.string().max(4096),
 	photo: z.optional(file('photos')),
 })
-const Empty = z.strictObject({})
+// The answer 0.5 gave: the envelope is `{ result: { received: true } }`, as before.
+const Received = z.strictObject({ received: z.literal(true) })
 
 export const visitors = app.group({}, (r) => ({
 	register: r.mutation({
 		input: Register,
-		output: Empty,
+		output: Received,
 		access: { public: true },
 		actions: ['candidates.register'],
 		admission: {
@@ -108,16 +109,14 @@ export const visitors = app.group({}, (r) => ({
 		kicks: ['intake'],
 	})
 		.handle(async ({ input, ctx }) => {
-			if (honeypot(input.website)) return {}
+			if (honeypot(input.website)) return { received: true }
 			await ctx.db.app('candidates.register').registrations.insert({
 				email: input.email,
 				full_name: input.fullName,
 				photo: input.photo ?? null,
-				client_ip: ctx.client.ip,
-				user_agent: ctx.client.userAgent,
 			})
 			ctx.kick('intake')
-			return {}
+			return { received: true }
 		}),
 }))
 
@@ -140,15 +139,15 @@ Steps:
    | Form option                    | Public procedure                                                             |
    | ------------------------------ | ---------------------------------------------------------------------------- |
    | `appendTo`                     | the handler's insert                                                         |
-   | `honeypot: 'website'`          | `if (honeypot(input.website)) return {}`; keep the field in the input        |
+   | `honeypot: 'website'`          | `if (honeypot(input.website)) return { received: true }`; keep the field     |
    | `challenge`                    | `admission.challenge`, the same shape                                        |
    | `rate: { perClient, perForm }` | `admission.rate: { perClient, perEndpoint }`                                 |
    | `rate.bytesPerHour`            | `admission.rate.bytesPerHour`, required with a file field                    |
-   | `maxBytes` (the input only)    | `limits.maxBytes` (the whole body)                                           |
+   | `maxBytes` (the input only)    | `limits.maxBytes` (the whole body, files included: step 5)                   |
    | `files: { f: { collection } }` | a top-level input field `f: file('<kind>')`, optional or `z.array(…).max(n)` |
    | `crossOrigin: true` / `'*'`    | `admission.origins: 'listed'` / `'any'`                                      |
    | `then: '<job>'`                | `kicks: ['<job>']` and `ctx.kick('<job>')`                                   |
-   | the constant answer            | the output schema; answer the same for a new and a known visitor             |
+   | the constant answer            | the output schema; keep the answer the clients read (step 6)                 |
 
 5. Check the bounds. A public mutation counts 10 calls per client and 100 for the endpoint per minute unless it
    declares its own buckets; `null` turns one off. A form with files counted 20 per minute by default: declare
@@ -156,14 +155,39 @@ Steps:
    not each file's `maxBytes`. The body limit defaults to 64 KiB plus each file field at its kind's `maxBytes`, at
    most 48 MiB with files and 1 MiB without. A public file field needs a challenge, `bytesPerHour` and a kind with
    `scan: true`.
+   - **The body limit.** A form's `maxBytes` bounded its input; its files were bounded apart. `limits.maxBytes`
+     bounds the whole body. Without files, it takes the form's `maxBytes`. With files, leave it out when the form's
+     `maxBytes` was 64 KiB or less: the default already adds the files to 64 KiB. Otherwise declare the form's
+     `maxBytes` plus each file field's files at its kind's `maxBytes`. The JSON input part may take the whole limit,
+     and the input with the files together never pass it.
 6. Move the pages. The path moves under the RPC prefix: `POST /register` becomes `POST /api/visitors.register`. Call
    it through the typed client (`api.visitors.register(input)`), which sends a JSON body, or a multipart body when the
    input holds a `Blob`: the JSON input in the first part, named `input`, then each file in a part named after its
    field. The challenge token stays the input field `challengeToken`. The widget's `action` is now the endpoint id
-   with `_` for `.` (`api_visitors_register`), not the form's name; the provider admits at most 32 characters. The
-   answer is the RPC envelope of the output, `{ result: {} }` here.
-7. Keep the visitor's evidence. `ctx.client.ip` and `ctx.client.userAgent` are information the handler may store,
-   never a check. `ip` is `null` on Bun and Zerops, where the platform cannot vouch for the visitor's address.
+   with `_` for `.` (`api_visitors_register`), not the form's name; the provider admits at most 32 characters. A
+   failed or replayed token answered 400 `challenge_failed` in 0.5 and answers 403 now.
+   - **The answer.** The answer is the RPC envelope of the output. A 0.5 form answered `{ result: { received: true } }`;
+     the example keeps it with `output: z.strictObject({ received: z.literal(true) })`. Keep the answer that your
+     clients read. An output of `{}` answers `{ result: {} }`, and a client that reads `received` breaks.
+7. Optional: record the visitor's evidence. This is not an upgrade step. `ctx.client.ip` and `ctx.client.userAgent` are
+   information the handler may store, never a check, in columns the application adds for its own reasons (for
+   example `client_ip TEXT` and `user_agent TEXT` as consent evidence). `ip` is `null` on Bun and Zerops, where the
+   platform cannot vouch for the visitor's address.
+
+### Clients on another origin
+
+A page that the application does not serve (a marketing site, a partner's page, a mobile application) posts to the
+form directly. It meets three changes at once, so it changes in the same release as the application:
+
+- **The path.** `POST /register` becomes `POST /api/visitors.register`.
+- **The challenge action.** The widget's `action` becomes the endpoint id with `_` for `.` (`api_visitors_register`).
+  A token solved for the old action fails the challenge.
+- **The statuses.** A failed challenge answers 403, not 400. A body past the limit answers 413 and a full bucket 429,
+  as before. A client that branches on a status reads the new one.
+
+Such a page also needs `admission.origins` (`'listed'` or `'any'`, see "Cross-origin procedures"). Keep the answer it
+reads (step 6 above). 0.6 serves a public procedure only under its mount's prefix, so nothing answers the old path
+once the 0.6 release runs: deploy the page's change with it.
 
 ### Inbox tables become application tables
 
@@ -184,7 +208,7 @@ registrations: {
 		update: 'candidates.process',
 		delete: 'candidates.process',
 	},
-	insert: ['email', 'full_name', 'photo', 'client_ip', 'user_agent'],
+	insert: ['email', 'full_name', 'photo'],
 	update: ['last_failure'],
 	files: { photo: 'photos' },
 	queue: { attempts: 'attempts', due: 'next_attempt_at', maxAttempts: 5 },
@@ -192,18 +216,27 @@ registrations: {
 },
 ```
 
-One migration turns the inbox into an application table and keeps its rows:
+One migration turns the inbox into an application table and keeps its rows. Start from what the inbox has. A 0.5
+inbox needed no key, so it may have no `id`, no `attempts` and no `last_failure`. Add each column that is missing:
 
 ```sql
+-- An inbox without a key: every existing row gets its own UUID.
+ALTER TABLE registrations ADD COLUMN id UUID NOT NULL DEFAULT gen_random_uuid();
 ALTER TABLE registrations ADD PRIMARY KEY (id);
+-- What the queue counts, when the job did not count it already.
+ALTER TABLE registrations ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE registrations ADD COLUMN last_failure TEXT;
 ALTER TABLE registrations ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE registrations ADD COLUMN next_attempt_at TIMESTAMPTZ DEFAULT now();
-ALTER TABLE registrations ADD COLUMN client_ip TEXT;
-ALTER TABLE registrations ADD COLUMN user_agent TEXT;
 ALTER TABLE registrations ADD CONSTRAINT registrations_photo_file FOREIGN KEY (photo) REFERENCES fabrika_files (id);
 CREATE INDEX registrations_photo ON registrations (photo);
 ```
 
+- An inbox that already has an `id` column without a key takes only `ADD PRIMARY KEY (id)`. Its rows must have
+  distinct, non-null ids; a 0.5 inbox filled `id` from a `DEFAULT gen_random_uuid()`.
+- Keep `DEFAULT gen_random_uuid()` on `id`, and a default on every other new `NOT NULL` column. The 0.5 instance
+  still runs during the rollout and inserts only its input's columns; without a default its insert fails. The 0.6
+  handler sends its own id, so the default serves only the old instance.
 - The handler writes the table under the procedure's action. A job reads it under the `read` action, from
   `ctx.db.app('<action>')`, not through `sql` or `unscoped`.
 - `version` is needed by a queue and by a file column. `queue` is optional (see "Outbox drains on `claim`").
@@ -389,6 +422,19 @@ Steps:
    | `POST /api/files.<c>.remove`                  | a mutation that removes the row; the sweep deletes the unreferenced file                 |
    | `link: true` (the link mount's files)         | link procedures (`l.mutation`, `l.query`) with the same inputs and outputs               |
 
+   `download` and `remove` take a row's id. Name that field in `rows` of `src/__tests__/endpoint-access.fixtures.ts`,
+   with the row's table, so the generated access tests seed a row and send its key
+   ([`references/tests.md`](../../packages/app/skill/references/tests.md) of the skill):
+
+   ```ts
+   export const rows = {
+   	'api.attachments.download': { id: 'deal_attachments' },
+   	'api.attachments.remove': { id: 'deal_attachments' },
+   }
+   ```
+
+   Without it they send a sample id, the handler answers 404, and the generated tests fail.
+
 6. **Move the client.** `api.files.<c>.upload(owner, file)` becomes `api.attachments.upload({ dealId, name, file })`.
    A `GET` file procedure has `api.attachments.download.url(input)` for a same-origin page (`<img src>`,
    `<a download>`). `download(api.attachments.download, input)` of `@fabrika/app/client` fetches any file answer with
@@ -396,16 +442,25 @@ Steps:
 7. **Bound the count yourself.** `maxPerOwner` is gone. Count under the owner's lock in the upload handler:
 
    ```ts
-   await ctx.db.on(ctx.capabilities.deal).getForUpdate()
-   const held = await ctx.db.on(ctx.capabilities.attached).deal_attachments
-   	.list({ limit: MAX_ATTACHMENTS_PER_DEAL })
+   await ctx.db.target.getForUpdate()
+   const held = await ctx.db.target.deal_attachments.list({
+   	limit: MAX_ATTACHMENTS_PER_DEAL,
+   })
    if (held.items.length >= MAX_ATTACHMENTS_PER_DEAL) {
    	throw new ConflictError('too many attachments')
    }
    ```
 
-   The upload then needs the table's `read` action beside `insert`: declare both with
-   `access: { capabilities: { … } }`.
+   - Both reads run under the upload's one action. A table reads under every action it names: an action of its policy
+     or a column's `write`. `deal_attachments` names `deals.write` as its `insert` action. `deals` must name it too
+     (for example as its `update` action); otherwise `getForUpdate` is a type error that names the action.
+   - When the owner's table does not name the upload's action, a credentialed procedure declares two capabilities,
+     `access: { capabilities: { deal: …, attached: … } }`, locks with one and counts with the other:
+     `ctx.db.on(ctx.capabilities.deal).getForUpdate()`, then `ctx.db.on(ctx.capabilities.attached).deal_attachments.list(…)`.
+   - A link procedure holds exactly one action, so it has no second capability. It counts under the lock only when the
+     owner's table names the link's action, as the portal's `attach` in the skill's `references/public-intake.md`
+     does: `candidates.photo` is written with `candidates.attach`. Otherwise a link procedure cannot take the owner's
+     lock, and the count is not bounded under concurrent uploads.
 
 ### `ctx.files` in handlers and jobs
 
@@ -531,6 +586,24 @@ for (const message of await ctx.db.app('mail.send').outbox.claim({ limit: 50 }))
   `remove({ expectVersion })`, or `requeue({ at? })`. A row past `maxAttempts` (10 by default) stays, not due.
 - `claim` is refused inside `ctx.transaction` and in a request.
 
+### The rollout window
+
+A deploy migrates the schema before the 0.6 instance starts, and the 0.5 instance serves until the 0.6 instance is
+ready. For that time the 0.5 instance runs against the migrated schema:
+
+- **A form with a file fails.** The 0.5 form holds its file in `fabrika_files_<collection>` and writes the id into the
+  inbox's file column. The new foreign key to `fabrika_files (id)` refuses that row, so the form answers 500.
+- **A file removal fails** once `fabrika_files_release('<collection>')` has dropped the collection's table.
+- **An insert without a default fails.** Keep a default on every new `NOT NULL` column of an inbox (see "Inbox
+  tables become application tables").
+
+Keep the window short, or keep the release out of it:
+
+1. Migrate and deploy in one step: the deploy that runs the migrations is the one that starts 0.6. Never run the 0.6
+   migrations against a database that a 0.5 instance keeps serving for longer.
+2. Ship `fabrika_files_release(…)` in the next deploy, once no 0.5 instance runs. Until the release the collection's
+   table stays, and the release copies what the old instance wrote since the adoption.
+
 ### An application that used forms as event logs
 
 An application that took anonymous submissions through forms, drained them with a job and kept files in collections
@@ -538,10 +611,10 @@ moves in one release:
 
 1. Each form becomes a public procedure with one action that no role holds. Its path moves under the RPC prefix, its
    pages switch to the typed client in the same release, and the challenge's widget `action` follows the endpoint id.
-2. One migration turns each inbox table into an application table (a primary key `id`, `version`, `client_ip`,
-   `user_agent`) and keeps its rows. The handler stores `ctx.client.ip` and `ctx.client.userAgent` as consent evidence.
-3. `then` becomes `kicks` and `ctx.kick`. The job copies `client_ip` and `user_agent` into its consent rows. Its outbox
-   drains move from `sql: 'write'` to `queue` and `claim`.
+2. One migration turns each inbox table into an application table (a primary key `id`, `version`, and the queue's
+   columns) and keeps its rows. Recording `ctx.client.ip` and `ctx.client.userAgent` as consent evidence is an
+   addition of that application, not an upgrade step.
+3. `then` becomes `kicks` and `ctx.kick`. Its outbox drains move from `sql: 'write'` to `queue` and `claim`.
 4. Each file collection becomes a table with a file column, adopted and released by its own migrations. The generated
    upload, list and download become link procedures for the visitor and queries for staff.
 5. A request that asks a visitor for a document takes it as a file field and writes it in the same call. Every read

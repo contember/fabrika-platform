@@ -480,7 +480,7 @@ export const visitors = app.group({}, (r) => ({
   `null` on Zerops. Never decide on either.
 - **Its abuse control.** `honeypot(input.website)` is true when the field the page hides is filled: answer the same
   and write no row. `admission.challenge` makes the framework verify the Turnstile token in the input field
-  `challengeToken` before the handler runs (a failed token 400, an unreachable provider 503, no row either way) and adds
+  `challengeToken` before the handler runs (a failed or replayed token 403 `challenge_failed`, an unreachable provider 503, no row either way) and adds
   Turnstile's origin to the CSP. `TURNSTILE_SECRET` is an application variable the human sets; without it the
   application does not boot. `siteKey` names the variable with the widget's public site key, which every SPA mount
   serves its pages; without it the application does not boot either. Another public value a page needs per
@@ -496,7 +496,7 @@ export const visitors = app.group({}, (r) => ({
   within it.
 - **The order of a public request**, each refusal with its answer: the origin rule (403), the in-flight share (503),
   every bucket (429), the bounded body and the strict input with its signed tokens (413, 400), the workload token (503
-  while the platform's identity service is down), the challenge (400, 503 when the provider is unreachable), the staged file parts, then the handler, the
+  while the platform's identity service is down), the challenge (403, 503 when the provider is unreachable), the staged file parts, then the handler, the
   commit and the kicks.
 - **A form on someone else's page.** A page served from this application's own origin needs nothing. A partner's page
   or a separate marketing site needs `admission.origins`: `'listed'` for the origins an operator lists for the
