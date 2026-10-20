@@ -11,7 +11,7 @@ the release; each is a P2 or P3.
 
 ## Problem
 
-From the run log of `sprints/sprint-2026-10-19-declare-the-surface.md`:
+From the run log of `archive/sprint-2026-10-19-declare-the-surface.md`:
 
 1. **The upgrade approval hides the adoption.** Upgrading a 0.5 application that had a file collection shows "File
    collection `attachments` is removed" and no line that says its files are adopted. The adoption migrations that call
@@ -54,4 +54,4 @@ upgrade of the local suite's Notes shows an adoption line, no body-limit noise, 
 `packages/control/src/approval/`, `packages/control/src/approval/formats.ts`, `packages/app/src/implement/`,
 `packages/iam/`, `packages/local-stack/src/compat.ts`, ADR-0012, ADR-0022, ADR-0061, ADR-0063.
 
-<!-- Origin: sprints/sprint-2026-10-19-declare-the-surface.md, run log. -->
+<!-- Origin: archive/sprint-2026-10-19-declare-the-surface.md, run log. -->
