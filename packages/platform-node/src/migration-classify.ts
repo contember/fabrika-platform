@@ -3,7 +3,14 @@
 // does not recognise: an allowlist at every level, so a form a later Postgres adds is refused, not executed.
 // Runtime-neutral: Control classifies a commit's migrations in a Worker, the runner before it applies them.
 
-import { FILE_TABLE_PREFIX, FILES_COPY_FUNCTION, FILES_RELEASE_FUNCTION, fileScanAlterTable, legacyStatusCheckName, STORED_FILES_TABLE } from './file-table-ddl'
+import {
+	FILE_TABLE_PREFIX,
+	FILES_COPY_FUNCTION,
+	FILES_RELEASE_FUNCTION,
+	fileScanAlterTable,
+	legacyStatusCheckName,
+	STORED_FILES_TABLE,
+} from './file-table-ddl'
 import { lexSql, type SqlToken, topLevelStatements, upperWord } from './migration-sql'
 import { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
 import {
