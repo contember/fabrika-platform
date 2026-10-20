@@ -512,7 +512,8 @@ function safeString(value: unknown): string {
 function markersOf(body: string): string[] {
 	const markers: string[] = []
 	const collect = (value: unknown): void => {
-		if (typeof value === 'string' && value.length >= MIN_BODY_MARKER_LENGTH) markers.push(value)
+		// A delivery error code is the contract's own vocabulary, which a relay answers with, not provider content.
+		if (typeof value === 'string' && value.length >= MIN_BODY_MARKER_LENGTH && !Object.hasOwn(EMAIL_DELIVERY_ERRORS, value)) markers.push(value)
 		else if (Array.isArray(value)) value.forEach(collect)
 		else if (typeof value === 'object' && value !== null) Object.values(value).forEach(collect)
 	}

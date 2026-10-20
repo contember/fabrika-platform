@@ -1,10 +1,10 @@
-// `ctx.mail` of a job that declares `mailer`, over the transport `boot` resolved: the installation's (`FABRIKA_EMAIL_*`),
-// the application's own (`serve(contract, { mail })`) or the test kit's stand-in. An installation without a transport
-// says so (`FABRIKA_EMAIL_PROVIDER=none`): its jobs get `ctx.mail` that is not available, and each send waits for one.
-// Each key carries the prefix of the installation and the application environment, so senders on one provider account
-// never share a key. Nothing here logs a message or a key.
+// `ctx.mail` of a job that declares `mailer`, over the transport `boot` resolved: the installation's (`FABRIKA_EMAIL_*`,
+// or the platform's relay under `FABRIKA_EMAIL_PROVIDER=platform`), the application's own (`serve(contract, { mail })`)
+// or the test kit's stand-in. An installation without a transport says so (`FABRIKA_EMAIL_PROVIDER=none`): its jobs get
+// `ctx.mail` that is not available, and each send waits for one. Each key carries the prefix of the installation and the
+// application environment, so senders on one provider account never share a key. Nothing here logs a message or a key.
 
-import { type ContractArtifact, JOB_SITE_PREFIX, type JobMailer, sha256Hex } from '@fabrika/auth-core'
+import { type ContractArtifact, JOB_SITE_PREFIX, type JobMailer, platformTransportVariables, sha256Hex } from '@fabrika/auth-core'
 import {
 	EMAIL_PROVIDER_VARIABLE,
 	type EmailAttachment,
@@ -19,6 +19,7 @@ import {
 	NO_EMAIL_PROVIDER,
 	pickEmailEnvironment,
 } from '@fabrika/email'
+import { PLATFORM_EMAIL_PROVIDER, PlatformEmailSender } from '@fabrika/email/platform'
 import { z } from 'zod/v4'
 import { HttpError } from '../errors'
 import type { OpenedFile } from '../files/handle'
@@ -224,7 +225,7 @@ function installationTransport(names: readonly string[], input: MailTransportInp
 	const env = pickEmailEnvironment(input.framework)
 	let sender: EmailSender | null
 	try {
-		sender = emailSenderFromEnv(env, input.registry)
+		sender = env[EMAIL_PROVIDER_VARIABLE] === PLATFORM_EMAIL_PROVIDER ? platformSender(input.framework) : emailSenderFromEnv(env, input.registry)
 	} catch (error) {
 		if (!(error instanceof EmailDeliveryError)) {
 			throw error
@@ -246,6 +247,29 @@ function installationTransport(names: readonly string[], input: MailTransportInp
 		)
 	}
 	return null
+}
+
+/** The platform's relay, from its receiver's variables; a refusal names them and never their values. */
+function platformSender(framework: Readonly<Record<string, string>>): EmailSender {
+	const variables = platformTransportVariables('mail')
+	const url = framework[variables.url] ?? ''
+	const key = framework[variables.key] ?? ''
+	const missing = [variables.url, variables.key].filter((name) => (framework[name] ?? '') === '')
+	if (missing.length > 0) {
+		throw new EmailDeliveryError(`Email configuration is invalid: ${missing.map((name) => `${name} is missing`).join('; ')}`, {
+			code: 'invalid_configuration',
+		})
+	}
+	try {
+		return new PlatformEmailSender({ url, key })
+	} catch (error) {
+		if (!(error instanceof EmailDeliveryError)) {
+			throw error
+		}
+		throw new EmailDeliveryError(`Email configuration is invalid: ${variables.url} or ${variables.key} is invalid (${error.message})`, {
+			code: 'invalid_configuration',
+		})
+	}
 }
 
 function ownTransport(names: readonly string[], input: MailTransportInput, problems: string[]): JobMailTransport | null {

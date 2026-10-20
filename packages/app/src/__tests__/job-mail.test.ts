@@ -1,7 +1,7 @@
 // A job that declares `mailer` sends through `ctx.mail`: the test kit's stand-in, the installation's transport
-// (`FABRIKA_EMAIL_*`) or the application's own (`serve(contract, { mail })`), each key behind the application
-// environment's prefix. An installation without a transport (`FABRIKA_EMAIL_PROVIDER=none`) boots, and its jobs see mail
-// that is not available; a misconfigured transport does not boot.
+// (`FABRIKA_EMAIL_*`, or the platform's relay) or the application's own (`serve(contract, { mail })`), each key behind
+// the application environment's prefix. An installation without a transport (`FABRIKA_EMAIL_PROVIDER=none`) boots, and
+// its jobs see mail that is not available; a misconfigured transport does not boot.
 // The job runs need FABRIKA_TEST_POSTGRES_URL, since a job's lease lives in @fabrika/db.
 
 import { compileContract, ContractError, defineApp, type FileRef } from '@fabrika/app/contract'
@@ -37,6 +37,12 @@ const app = defineApp(vocabulary, tables)
 const APP_ID = 'crm@prod'
 const LOCAL_ISSUER = 'http://iam.fabrika.localhost:18080'
 const SENDER = { FABRIKA_EMAIL_FROM: 'noreply@example.com' }
+/** What Control hands a deploy whose installation mailer goes through the platform's relay. */
+const PLATFORM = {
+	FABRIKA_EMAIL_PROVIDER: 'platform',
+	FABRIKA_PLATFORM_MAIL_URL: 'http://control:3000',
+	FABRIKA_PLATFORM_MAIL_KEY: 'px_job_mail_secret_5e2d',
+}
 /** The prefix scope of a deploy of `crm@prod` behind the harness's IAM. */
 const DEPLOYED = { issuer: ISSUER, appId: APP_ID }
 
@@ -639,6 +645,43 @@ describe.skipIf(!hasPostgres)('the transports of a deployed application', () => 
 		expect(refusals(() => deployed(served(installationOnly), variables, options))).toEqual([
 			"the installation's mail transport: FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing",
 		])
+	})
+
+	test("the platform's relay: posted under the bearer key with the prefixed key, queued, and no FABRIKA_EMAIL_FROM", async () => {
+		const requests: Request[] = []
+		// Stubbed before boot, so the job's egress guard wraps it and the relay call passes as the platform's.
+		const relay = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+			requests.push(new Request(input, init))
+			return Response.json({ status: 'accepted', messageId: 'relay-1' })
+		}, { preconnect: fetch.preconnect }))
+		try {
+			const deployment = deployed(served(installationOnly), PLATFORM)
+			expect(await deployment.jobs.run('notify')).toEqual({ status: 'succeeded', attempts: 1 })
+		} finally {
+			relay.mockRestore()
+		}
+		expect(seen.kept?.available).toBe(true)
+		expect(seen.kept?.capabilities.confirmation).toBe('queued')
+		expect(requests.map((request) => request.url)).toEqual(['http://control:3000/platform/mail/send'])
+		const [request] = requests
+		expect(request?.headers.get('authorization')).toBe(`Bearer ${PLATFORM.FABRIKA_PLATFORM_MAIL_KEY}`)
+		expect(await request?.json()).toMatchObject({ to: 'ada@example.com', idempotencyKey: transportMailKey(DEPLOYED, 'n-1') })
+	})
+
+	test("the platform's relay without its key or with a URL that is no origin does not boot, and no problem holds a value", () => {
+		const { FABRIKA_PLATFORM_MAIL_KEY: key, ...keyless } = PLATFORM
+		expect(refusals(() => deployed(served(installationOnly), keyless))).toEqual([
+			"the installation's mail transport: Email configuration is invalid: FABRIKA_PLATFORM_MAIL_KEY is missing",
+		])
+		expect(refusals(() => deployed(served(installationOnly), { FABRIKA_EMAIL_PROVIDER: 'platform' }))).toEqual([
+			"the installation's mail transport: Email configuration is invalid: FABRIKA_PLATFORM_MAIL_URL is missing; FABRIKA_PLATFORM_MAIL_KEY is missing",
+		])
+		const pathed = { ...PLATFORM, FABRIKA_PLATFORM_MAIL_URL: 'http://control:3000/relay-path' }
+		const problems = refusals(() => deployed(served(installationOnly), pathed))
+		expect(problems).toEqual([
+			"the installation's mail transport: Email configuration is invalid: FABRIKA_PLATFORM_MAIL_URL or FABRIKA_PLATFORM_MAIL_KEY is invalid (Platform mail URL is not an http(s) origin)",
+		])
+		for (const value of ['relay-path', key]) expect(problems.join('\n')).not.toContain(value)
 	})
 
 	test('a contract without a mailer job reads no FABRIKA_EMAIL_*', async () => {
