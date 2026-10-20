@@ -315,6 +315,55 @@ describe('the files a snapshot may read', () => {
 	})
 })
 
+const ADOPTION_MIGRATION = {
+	name: '20261020120000_note_attachments.sql',
+	sql: `CREATE TABLE note_attachments (id uuid PRIMARY KEY, file uuid NOT NULL REFERENCES fabrika_files (id));
+SELECT fabrika_files_copy_legacy('attachments');
+INSERT INTO note_attachments (id, file) SELECT id, id FROM fabrika_files_attachments;
+SELECT fabrika_files_release('attachments');
+`,
+}
+
+describe('a file collection adopted into a table (ADR-0061)', () => {
+	const pair = (baseline: AccessSnapshot, candidate: AccessSnapshot): readonly AccessChange[] => classifyAccess(baseline, candidate).changes
+
+	test('the snapshot records the adoption and the release, keeps them through storage, and leaves the digest as it was', async () => {
+		const snapshot = await snapshotOf(commitOf({}, [NOTES_MIGRATION, ADOPTION_MIGRATION]))
+		expect(snapshot.fileAdoptions).toEqual([
+			{ step: 'adopt', collection: 'attachments', table: 'note_attachments', file: ADOPTION_MIGRATION.name, line: 3 },
+			{ step: 'release', collection: 'attachments', file: ADOPTION_MIGRATION.name, line: 4 },
+		])
+		const stored = parseSnapshot(serializeSnapshot(snapshot))
+		expect(stored.fileAdoptions).toEqual(snapshot.fileAdoptions)
+		const { fileAdoptions: _, ...without } = snapshot
+		expect(snapshotDigest(snapshot)).toBe(snapshotDigest(without))
+		expect(JSON.parse(serializeSnapshot(await snapshotOf(commitOf())))).not.toHaveProperty('fileAdoptions')
+	})
+
+	test('a new adoption migration widens with closer review, its release narrows with closer review; an unchanged one adds nothing', async () => {
+		const before = await snapshotOf(commitOf())
+		const after = await snapshotOf(commitOf({}, [NOTES_MIGRATION, ADOPTION_MIGRATION]))
+		const adoption = pair(before, after).filter((change) => change.line.includes('collection `attachments`'))
+		expect(adoption).toEqual([
+			{
+				effect: 'widens',
+				line:
+					'Migration `20261020120000_note_attachments.sql` adopts the files of collection `attachments` into `note_attachments`: whoever the policy of `note_attachments` lets read a row reads its file',
+				review: 'closer',
+			},
+			{
+				effect: 'narrows',
+				line:
+					'Migration `20261020120000_note_attachments.sql` releases file collection `attachments`: its table is dropped, with every file no column adopted',
+				review: 'closer',
+			},
+		])
+		// A baseline that holds the file unchanged ran it already, also when it was read before adoptions were recorded.
+		const { fileAdoptions: _, ...readBefore } = after
+		expect(pair(readBefore, after)).toEqual([])
+	})
+})
+
 describe('the snapshot digest', () => {
 	test('a snapshot without database code keeps the digest formula approvals were stored under', async () => {
 		const snapshot = await snapshotOf(commitOf({ summary: "sql: 'read'" }))

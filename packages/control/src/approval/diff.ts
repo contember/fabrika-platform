@@ -2,6 +2,7 @@
 // environment's active one and answers plain-language lines for the approver. Anything it cannot show to narrow
 // access widens it.
 
+import { bodyDeadlineMs } from '@fabrika/app/contract'
 import {
 	type AdmissionRate,
 	type AttachmentShape,
@@ -95,6 +96,7 @@ export function classifyAccess(baseline: AccessSnapshot, candidate: AccessSnapsh
 		changed: (name, before, after) => (before.checksum === after.checksum ? [] : [widening(`Migration \`${name}\` changes`)]),
 	})
 	compareDatabaseCode(changes, baseline, candidate)
+	compareFileAdoptions(changes, baseline, candidate)
 	const list = changes.list
 	return { outcome: list.length === 0 ? 'none' : list.some((change) => change.effect === 'widens') ? 'widening' : 'no-widening', changes: list }
 }
@@ -258,7 +260,7 @@ function compareProcedures(changes: Changes, baseline: ContractArtifact, candida
 		if (from === undefined) {
 			changes.add(
 				neutral(
-					`\`${id}\` admits ${ratePhrase(rules.rate)}${challengePhrase(rules.challenge)}; it runs at most ${seconds(rules.timeoutMs)}${bodyPhrase(row)}`,
+					`\`${id}\` admits ${ratePhrase(rules.rate)}${challengePhrase(rules.challenge)}; it ${runPhrase(row, rules.timeoutMs)}`,
 				),
 				...(rules.changesStateOnGet === true ? [closerWidening(stateOnGet(`\`${id}\``))] : []),
 			)
@@ -295,9 +297,14 @@ function challengePhrase(challenge: ProcedureChallenge | null): string {
 		: `, after a ${challenge.provider} challenge`
 }
 
-function bodyPhrase(row: EndpointRow | undefined): string {
+/**
+ * How long a call may take: the body's deadline, which the runtime derives from its limit, then the handler's time
+ * limit, which starts after the last byte.
+ */
+function runPhrase(row: EndpointRow | undefined, timeoutMs: number): string {
 	const limit = row?.admission?.maxBytes ?? null
-	return limit === null ? '' : `, with a body of at most ${bytes(limit)}`
+	const runs = `runs at most ${seconds(timeoutMs)}`
+	return limit === null ? runs : `waits at most ${seconds(bodyDeadlineMs(limit))} for a body of at most ${bytes(limit)}, then ${runs}`
 }
 
 function seconds(ms: number): string {
@@ -578,6 +585,31 @@ function compareDatabaseCode(changes: Changes, baseline: AccessSnapshot, candida
 		else if (beforeFiles.get(to.file)?.checksum !== afterFiles.get(to.file)?.checksum) {
 			changes.add(closerWidening(`${migrationName(to.file)} changes, and declares ${databaseObject(to)}`))
 		}
+	}
+}
+
+/**
+ * The adoption steps of a migration file that is new or changed (ADR-0061). An adopted file is read under its table's
+ * policy from then on, and a release deletes every file of the collection no column adopted, so each needs closer
+ * review. A file the baseline holds unchanged has run already: the classifier may only have learned to report it.
+ */
+function compareFileAdoptions(changes: Changes, baseline: AccessSnapshot, candidate: AccessSnapshot): void {
+	const beforeFiles = byName(baseline.migrations)
+	const afterFiles = byName(candidate.migrations)
+	for (const adoption of candidate.fileAdoptions ?? []) {
+		if (beforeFiles.get(adoption.file)?.checksum === afterFiles.get(adoption.file)?.checksum) continue
+		const name = migrationName(adoption.file)
+		changes.add(
+			adoption.step === 'adopt'
+				? closerWidening(
+					`${name} adopts the files of collection \`${adoption.collection}\` into \`${adoption.table}\`: whoever the policy of \`${adoption.table}\` lets read a row reads its file`,
+				)
+				: {
+					effect: 'narrows',
+					line: `${name} releases file collection \`${adoption.collection}\`: its table is dropped, with every file no column adopted`,
+					review: 'closer',
+				},
+		)
 	}
 }
 
