@@ -217,7 +217,7 @@ none and answers its row with 404. Its senders reach it over the platform transp
 - **The application's send answers accepted for every decision.** `held` and `dropped` are the platform's business,
   not the application's: its outbox row is done once the relay took the message.
 - **A person decides a held message.** In the console an operator releases it (`held` → `queued`) or drops it. A
-  release on a Control without a transport fails the message as `mail_not_configured`.
+  queued message on a Control without a transport waits, spending no attempt, until Control has one.
 - **The dispatcher** sends each queued message through Control's own transport, under a key of its own
   (`relay:<sender>:<key>`), so two senders' keys never meet at the provider. It claims each attempt before the send
   (`queued` → `sending`, guarded on the state and the attempts it read), so of two jobs or two consumers exactly one

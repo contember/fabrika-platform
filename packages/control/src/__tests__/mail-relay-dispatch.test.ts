@@ -171,10 +171,11 @@ describe('the mail dispatcher', () => {
 		expect(lost.jobs).toEqual([])
 	})
 
-	test('without a transport a queued message fails as mail_not_configured', async () => {
+	test('without a transport a queued message waits for one and spends no attempt', async () => {
 		const d = dispatcher(null)
 		const id = await stored(d.messages)
-		expect(await d.dispatch(id)).toEqual({ status: 'failed', code: 'mail_not_configured' })
+		expect(await d.dispatch(id)).toEqual({ status: 'skipped' })
+		expect(await d.messages.get(id)).toMatchObject({ state: 'queued', attempts: 0 })
 	})
 
 	test('a stored body that no longer parses fails as invalid_message and sends nothing', async () => {

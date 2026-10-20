@@ -29,7 +29,7 @@ const MAX_IDEMPOTENCY_KEY_LENGTH = 256
 export interface MailDispatchDeps {
 	readonly messages: MailMessageRepository
 	readonly queue: JobQueue<MailDispatchMessage>
-	/** `null`: Control has no transport, and a queued message fails as `mail_not_configured`. */
+	/** `null`: Control has no transport, and a queued message waits for one; maintenance enqueues it again. */
 	readonly sender: EmailSender | null
 	/** Unix seconds. */
 	readonly now: () => number
@@ -53,8 +53,10 @@ export async function dispatchMail(deps: MailDispatchDeps, job: MailDispatchMess
 	if (row.state === 'queued') {
 		// A deferred attempt has its own delayed job; an early duplicate leaves the message to it.
 		if (row.next_attempt_at !== null && row.next_attempt_at > now) return { status: 'skipped' }
+		// As a 0.6 application's outbox did, the message waits for a transport without spending an attempt.
+		if (deps.sender === null) return { status: 'skipped' }
 		if (!(await deps.messages.claim(row.id, row.attempts, now))) return { status: 'skipped' }
-		return await attempt(deps, row, row.attempts + 1)
+		return await attempt(deps, deps.sender, row, row.attempts + 1)
 	}
 	if (row.state === 'sending' && row.updated_at <= now - MAIL_STALE_CLAIM_S) return await settleStaleClaim(deps, row)
 	return { status: 'skipped' }
@@ -66,26 +68,26 @@ export async function dispatchMail(deps: MailDispatchDeps, job: MailDispatchMess
  */
 async function settleStaleClaim(deps: MailDispatchDeps, row: MailMessageRow): Promise<MailDispatchResult> {
 	const now = deps.now()
-	if (deps.sender?.capabilities.idempotent === true && row.attempts < MAIL_MAX_ATTEMPTS) {
+	const sender = deps.sender
+	if (sender !== null && sender.capabilities.idempotent && row.attempts < MAIL_MAX_ATTEMPTS) {
 		if (!(await deps.messages.reclaim(row.id, row.attempts, now - MAIL_STALE_CLAIM_S, now))) return { status: 'skipped' }
 		console.warn(`mail relay: message ${row.id} attempt ${row.attempts} was interrupted; sending again under its key`)
-		return await attempt(deps, row, row.attempts + 1)
+		return await attempt(deps, sender, row, row.attempts + 1)
 	}
 	return await settleUndelivered(deps, row, 'unknown', MAIL_DISPATCH_INTERRUPTED, row.attempts)
 }
 
 /** Runs the claimed attempt `attempts` and records its outcome against that claim. */
-async function attempt(deps: MailDispatchDeps, row: MailMessageRow, attempts: number): Promise<MailDispatchResult> {
-	if (deps.sender === null) return await settleUndelivered(deps, row, 'failed', 'mail_not_configured', attempts)
+async function attempt(deps: MailDispatchDeps, sender: EmailSender, row: MailMessageRow, attempts: number): Promise<MailDispatchResult> {
 	const message = await storedMessage(row)
 	if (message === null) return await settleUndelivered(deps, row, 'failed', 'invalid_message', attempts)
 
 	let providerMessageId: string
 	try {
-		providerMessageId = (await deps.sender.send(message, AbortSignal.timeout(deps.timeoutMs ?? MAIL_SEND_TIMEOUT_MS))).messageId
+		providerMessageId = (await sender.send(message, AbortSignal.timeout(deps.timeoutMs ?? MAIL_SEND_TIMEOUT_MS))).messageId
 	} catch (cause) {
 		if (!(cause instanceof EmailDeliveryError)) throw cause
-		if (mayRetryDelivery(cause, deps.sender.capabilities) && attempts < MAIL_MAX_ATTEMPTS) {
+		if (mayRetryDelivery(cause, sender.capabilities) && attempts < MAIL_MAX_ATTEMPTS) {
 			const delaySeconds = mailRetryDelaySeconds(attempts)
 			if (!(await deps.messages.defer(row.id, attempts, deps.now() + delaySeconds, cause.code, deps.now()))) return { status: 'skipped' }
 			await enqueueMailDispatch(deps.queue, row.id, delaySeconds)

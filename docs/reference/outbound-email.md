@@ -415,7 +415,8 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
   (`@fabrika/db`), which a 0.6 application's outbox retried its mail on; the relay took
   that retry over when the application moved to 0.7. Any other error, and the tenth, makes
   the message `failed` (outcome `not_sent`) or `unknown`. Without a transport a queued
-  message fails as `mail_not_configured`; content that no longer parses fails as
+  message waits, spending no attempt, and maintenance enqueues it again until Control has
+  one; content that no longer parses fails as
   `invalid_message`.
 - An installation message's content is purged right after it is sent: it holds a
   one-time link.
