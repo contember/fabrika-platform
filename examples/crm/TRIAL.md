@@ -28,7 +28,7 @@ For the group under trial, from the root of a fabrika-platform checkout that sti
    tasks slices pick a person with its `picked`.
 3. In `fabrika.contract.ts`, delete the group's imports and its keys in `c.rpc('/api', { … })`. For group C also delete
    the `jobs: { overdue }` section. Leave the
-   `attachments` collection, the SPA mount and the health check.
+   `attachments` group and file kind, the SPA mount and the health check.
 4. Delete `src/__tests__/endpoint-access.test.ts` (the agent regenerates it with `fabrika db test-scaffold`) and the
    authored tests that call the group: `src/__tests__/crm.test.ts` always, `src/deals/__tests__/deals.test.ts` and
    `src/tasks/__tests__/overdue.test.ts` (it creates a company and a deal) for A and B. Keep them for the judge.
@@ -60,7 +60,7 @@ brief.
 - Roles, each a member role in one org, assigned by a manager: `manager` (every action), `sales` (`crm.read`,
   `deals.write`, `tasks.write`, `activities.write`), `viewer` (`crm.read`).
 
-### The tables (`src/db/tables.ts`, one migration)
+### The tables (`src/db/tables.ts`)
 
 | Table                | Scope               | Read       | Insert             | Update                                                                                     | Delete       |
 | -------------------- | ------------------- | ---------- | ------------------ | ------------------------------------------------------------------------------------------ | ------------ |
@@ -70,13 +70,15 @@ brief.
 | `tasks`              | dimension `task`    | `crm.read` | `tasks.write`      | `tasks.write`: `done`, `overdue`                                                           | —            |
 | `contact_activities` | child of `contacts` | `crm.read` | `activities.write` | —                                                                                          | —            |
 | `deal_activities`    | child of `deals`    | `crm.read` | `activities.write` | —                                                                                          | —            |
+| `deal_attachments`   | child of `deals`    | `crm.read` | `deals.write`      | —                                                                                          | `crm.delete` |
 
 Every table but the two activity tables has `version` and `created_by`; the activity tables have `created_by` and
 `created_at`. `deals.stage` is the enum `deal_stage` (`lead`, `qualified`, `proposal`, `won`, `lost`); `value` is an
 integer; `source` is nullable text; `owner` and `owner_label` are required text. `tasks.due_on` is a required `date`;
 `assignee` and `assignee_label` are required text; `done` and `overdue` default to false. An activity's `kind` is the
-enum `activity_kind` (`note`, `call`, `email`, `meeting`); `body` and `author_label` are required text. The
-`attachments` collection belongs to `deals` and has no handler.
+enum `activity_kind` (`note`, `call`, `email`, `meeting`); `body` and `author_label` are required text.
+`deal_attachments` has `created_by` and `created_at`, a required `name`, and `file`, a file of the `attachments` kind;
+the `attachments` group (`src/attachments/`) uploads, lists, downloads and removes them.
 
 `src/schemas.ts` holds what several slices, or a slice and the SPA, share: `DEAL_STAGES`, `MAX_ATTACHMENT_BYTES`,
 `MAX_ATTACHMENTS_PER_DEAL`, `Stage`, `Name`, `OptionalText` (a create's field the caller may leave out),

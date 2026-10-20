@@ -34,7 +34,7 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 }))
 
 /** Marks every open task past its due day, hourly; each is re-read under its lock, so a concurrent change is skipped. */
-export const overdue = app.cron('15 * * * *', { actions: ['crm.read', 'tasks.write'], scope: 'app', limits: { timeoutMs: 300000 }, retries: 2 })
+export const overdue = app.cron('15 * * * *', { actions: ['crm.read', 'tasks.write'], limits: { timeoutMs: 300000 }, retries: 2 })
 	.handle(async ({ ctx }) => {
 		const today = new Date().toISOString().slice(0, 10)
 		const open = ctx.db.over(ctx.within('crm.read', 'deal')).tasks

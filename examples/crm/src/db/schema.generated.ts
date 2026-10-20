@@ -47,6 +47,17 @@ export interface DealActivitiesTable {
 	created_at: ColumnType<Date, Date | string | undefined, Date | string>
 }
 
+export interface DealAttachmentsTable {
+	id: string
+	deal_id: string
+	company_id: string
+	org_id: string
+	file: string
+	name: string
+	created_by: string
+	created_at: ColumnType<Date, Date | string | undefined, Date | string>
+}
+
 export interface DealsTable {
 	id: string
 	company_id: string
@@ -81,6 +92,7 @@ export interface DB {
 	contact_activities: ContactActivitiesTable
 	contacts: ContactsTable
 	deal_activities: DealActivitiesTable
+	deal_attachments: DealAttachmentsTable
 	deals: DealsTable
 	tasks: TasksTable
 }
@@ -146,6 +158,26 @@ export const columns: TypedColumnList<DB> = {
 			'kind',
 			'body',
 			'author_label',
+			'created_by',
+			'created_at',
+		],
+		foreignKeys: [
+			{
+				columns: ['deal_id', 'company_id', 'org_id'],
+				table: 'deals',
+				references: ['id', 'company_id', 'org_id'],
+			},
+		],
+		timestamps: ['created_at'],
+	},
+	'deal_attachments': {
+		columns: [
+			'id',
+			'deal_id',
+			'company_id',
+			'org_id',
+			'file',
+			'name',
 			'created_by',
 			'created_at',
 		],

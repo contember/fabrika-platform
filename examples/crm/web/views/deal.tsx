@@ -1,6 +1,6 @@
 // One deal: its details and edit dialog, its stage, its owner, its tasks, its activity and its attachments.
 
-import { Can, skip, useAction, useInfiniteQuery, useMutation, useQuery } from '@fabrika/app/react'
+import { Can, skip, useInfiniteQuery, useMutation, useQuery } from '@fabrika/app/react'
 import {
 	Button,
 	Card,
@@ -266,33 +266,26 @@ function DealActivity({ deal }: { readonly deal: Deal }) {
 	)
 }
 
-/** Attachments uploaded in this page view; the screen does not list the deal's earlier files (`api.files.attachments.list`). */
-const uploadedThisSession = new Map<string, readonly { readonly id: string; readonly name: string }[]>()
-
 function Attachments({ deal }: { readonly deal: Deal }) {
-	const [uploads, setUploads] = useState(uploadedThisSession.get(deal.id) ?? [])
+	const attachments = useInfiniteQuery(api.attachments.list, { dealId: deal.id }, { pages: 'all' })
 	const [formKey, setFormKey] = useState(0)
-	// A file collection's calls are functions of the client, not procedures: `useAction` gives them the hooks' state.
-	const upload = useAction(({ dealId, file }: { readonly dealId: string; readonly file: File }) => api.files.attachments.upload(dealId, file))
+	const upload = useMutation(api.attachments.upload)
 	const report = useReport()
 	const submit = async (form: FormData) => {
 		const file = form.get('file')
 		if (!(file instanceof File) || file.name === '') return
-		const outcome = await upload.mutate({ dealId: deal.id, file })
+		const outcome = await upload.mutate({ dealId: deal.id, name: file.name, file })
 		if (!outcome.ok) return
-		const next = [...uploads, { id: outcome.data.id, name: file.name }]
-		uploadedThisSession.set(deal.id, next)
-		setUploads(next)
 		setFormKey(formKey + 1)
 		report(outcome, `${file.name} uploaded`)
 	}
 	return (
 		<Card title="Attachments">
-			{uploads.length === 0 ? null : (
+			{attachments.items.length === 0 ? null : (
 				<ul className="crm-files">
-					{uploads.map((file) => (
-						<li key={file.id}>
-							<a href={`/api/files.attachments/${file.id}`} target="_blank" rel="noreferrer">{file.name}</a>
+					{attachments.items.map((attachment) => (
+						<li key={attachment.id}>
+							<a href={api.attachments.download.url({ dealId: deal.id, id: attachment.id })} target="_blank" rel="noreferrer">{attachment.name}</a>
 						</li>
 					))}
 				</ul>

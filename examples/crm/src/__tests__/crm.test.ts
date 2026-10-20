@@ -8,13 +8,11 @@ import { statusOf, type TestCaller, testKit } from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { afterAll, describe, expect, test } from 'bun:test'
-import { z } from 'zod/v4'
 import { contract } from '../../fabrika.contract'
 import app from '../app'
+import { MAX_ATTACHMENTS_PER_DEAL } from '../schemas'
 
 const postgres = await testDatabase({ migrations: new URL('../../db/migrations/', import.meta.url), label: 'crm.test.ts' })
-
-const Uploaded = z.strictObject({ result: z.strictObject({ id: z.string() }) })
 
 if (postgres !== null) {
 	afterAll(() => postgres.close())
@@ -175,42 +173,45 @@ if (postgres !== null) {
 	})
 
 	describe('attachments', () => {
-		const uploadAs = (caller: TestCaller, dealId: string) =>
-			kit.browser(caller)(`/api/files.attachments.upload/${dealId}?name=quote.txt`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'text/plain' },
-				body: 'quote: 1000 EUR',
-			})
-		const removeAs = (caller: TestCaller, fileId: string) =>
-			kit.browser(caller)('/api/files.attachments.remove', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ id: fileId }),
-			})
+		const quote = () => new File(['quote: 1000 EUR'], 'quote.txt', { type: 'text/plain' })
+		const uploadAs = (api: typeof salesApi, dealId: string) => api.attachments.upload({ dealId, name: 'quote.txt', file: quote() })
 
 		test('sales attach a file to a deal and the org downloads it; a viewer cannot upload; another org reaches nothing', async () => {
 			const dealId = await newDeal(await newCompany('Files Ltd'), 'With a quote')
 			const stored = objects.objects.size
-			expect((await uploadAs(viewer, dealId)).status).toBe(403)
-			expect((await uploadAs(outsider, dealId)).status).toBe(404)
+			expect(await statusOf(uploadAs(viewerApi, dealId))).toBe(403)
+			expect(await statusOf(uploadAs(outsiderApi, dealId))).toBe(404)
 			expect(objects.objects.size).toBe(stored)
 
-			const upload = await uploadAs(sales, dealId)
-			expect(upload.status).toBe(200)
-			const fileId = Uploaded.parse(await upload.json()).result.id
-			const download = await kit.browser(viewer)(`/api/files.attachments/${fileId}`)
+			const { id } = await uploadAs(salesApi, dealId)
+			expect((await viewerApi.attachments.list({ dealId })).items).toEqual([{
+				id,
+				name: 'quote.txt',
+				file: { id: expect.any(String), name: 'quote.txt', type: 'text/plain', size: 15, status: 'live' },
+				createdAt: expect.any(String),
+			}])
+			const download = await kit.browser(viewer)(viewerApi.attachments.download.url({ dealId, id }))
 			expect(download.status).toBe(200)
 			expect(await download.text()).toBe('quote: 1000 EUR')
-			expect((await kit.browser(outsider)(`/api/files.attachments/${fileId}`)).status).toBe(404)
+			expect((await kit.browser(outsider)(outsiderApi.attachments.download.url({ dealId, id }))).status).toBe(404)
+			expect(await statusOf(outsiderApi.attachments.list({ dealId }))).toBe(404)
+		})
+
+		test(`a deal holds at most ${MAX_ATTACHMENTS_PER_DEAL} attachments`, async () => {
+			const dealId = await newDeal(await newCompany('Full Ltd'), 'Many quotes')
+			for (let held = 0; held < MAX_ATTACHMENTS_PER_DEAL; held++) await uploadAs(salesApi, dealId)
+			expect(await statusOf(uploadAs(salesApi, dealId))).toBe(409)
+			expect((await viewerApi.attachments.list({ dealId })).items).toHaveLength(MAX_ATTACHMENTS_PER_DEAL)
 		})
 
 		test('only a manager removes an attachment', async () => {
 			const dealId = await newDeal(await newCompany('Removals'), 'Old quote')
-			const fileId = Uploaded.parse(await (await uploadAs(sales, dealId)).json()).result.id
-			expect((await removeAs(sales, fileId)).status).toBe(403)
-			expect((await removeAs(outsider, fileId)).status).toBe(404)
-			expect((await removeAs(inOrg('manager'), fileId)).status).toBe(200)
-			expect((await kit.browser(sales)(`/api/files.attachments/${fileId}`)).status).toBe(404)
+			const { id } = await uploadAs(salesApi, dealId)
+			expect(await statusOf(salesApi.attachments.remove({ dealId, id }))).toBe(403)
+			expect(await statusOf(outsiderApi.attachments.remove({ dealId, id }))).toBe(404)
+			expect(await apiOf(inOrg('manager')).attachments.remove({ dealId, id })).toEqual({ id })
+			expect((await kit.browser(sales)(salesApi.attachments.download.url({ dealId, id }))).status).toBe(404)
+			expect((await viewerApi.attachments.list({ dealId })).items).toEqual([])
 		})
 	})
 

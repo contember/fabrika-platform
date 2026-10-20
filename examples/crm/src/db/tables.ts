@@ -48,4 +48,11 @@ export const tables = defineTables(vocabulary, columns)({
 		insert: ['kind', 'body', 'author_label'],
 		createdBy: 'created_by',
 	},
+	deal_attachments: {
+		scope: { child: 'deals' },
+		actions: { read: 'crm.read', insert: 'deals.write', delete: 'crm.delete' },
+		insert: ['file', 'name'],
+		files: { file: 'attachments' },
+		createdBy: 'created_by',
+	},
 })
