@@ -155,3 +155,17 @@ back and runs `bun run check:ci` on the integration branch.
   those of 0.5.5. Earlier run-log entries call the revision "0.6"; read them as 0.7. WU-12 moves the source to 0.7.0,
   bundles the 0.6.0 reader (read as the 0.5 format, with a v0.6.0 CRM fixture and Notes at v0.6.0 in `local:compat`),
   and renames "0.6" to "0.7" wherever it meant the revision. The window is 0.4, 0.5, 0.6 and 0.7.
+- **An application upgraded from 0.5.5.** A real application on 0.5.5 was read by this platform without a deploy: same
+  artifact, digests and rows as its own release, an empty approval diff, a byte-identical build descriptor. Then it
+  was upgraded to the new API from a local pack. Its findings became WU-10, WU-11 and WU-13.
+- **Merged WU-10.** `--packed` accepts every package its pack names (`agent-canvas`); a multipart input part takes up
+  to `maxBytes` and the whole body is counted; the test kit sends `Content-Length`; the typed client treats every
+  non-2xx answer as a failure (a JSON one with no error envelope as a transport failure). Ten guide and skill gaps
+  closed; every skill recipe passes `fabrika-check`. Backlog 193 gains the platform rollback and the link-procedure
+  owner lock.
+- **Merged WU-11.** `http.path` and `admission.challenge.action` let a public procedure keep a 0.5 form's URL and
+  widget action, so a page on another origin needs no change; a failed challenge answers 400 `challenge_failed` again,
+  as a 0.5 form did. The second upgrade confirmed every answer to the external page identical to 0.5.5.
+- **Merged WU-13.** A local pack takes the source version's name; the re-pack lockfile step; the guide covers the
+  400 instead of 413 past the old input bound, the honeypot after the challenge, and the catch-up adoption before
+  `fabrika_files_release`, which ships only after no older instance runs.
