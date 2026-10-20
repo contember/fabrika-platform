@@ -3582,6 +3582,58 @@ th.numeric {
 	}
 }
 
+/* ── Branding (ADR-0065) ─────────────────────────────────────────────────────── */
+/* The logo as fabrika's own pages draw it: on the blueprint grid of a light plate and of the welcome's dark panel, the
+   two grounds those pages have, whatever the console's own theme is. */
+
+.brand-preview {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+	gap: var(--s-4);
+	max-width: 44rem;
+}
+
+.brand-tile {
+	display: grid;
+	gap: var(--s-2);
+	margin: 0;
+}
+
+.brand-tile-art {
+	display: grid;
+	place-items: center;
+	min-height: 9rem;
+	padding: var(--s-4);
+	border: 1px solid rgba(14, 20, 32, 0.1);
+	border-radius: var(--r-2);
+	background-color: #ffffff;
+	background-image:
+		linear-gradient(rgba(14, 20, 32, 0.08) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(14, 20, 32, 0.08) 1px, transparent 1px);
+	background-size: 24px 24px;
+	background-position: center;
+	color: var(--brand);
+}
+
+.brand-tile[data-scheme='dark'] .brand-tile-art {
+	border-color: rgba(255, 255, 255, 0.08);
+	background-color: #080a0d;
+	background-image:
+		linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+}
+
+.brand-tile-art img {
+	display: block;
+	max-width: 80%;
+	max-height: 5rem;
+}
+
+.brand-tile figcaption {
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+}
+
 /* ── Command palette ─────────────────────────────────────────────────────── */
 /* Set high on the screen, where the eye already is, and as wide as a sentence; the list scrolls under the field. */
 

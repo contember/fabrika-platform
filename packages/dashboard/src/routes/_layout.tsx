@@ -54,6 +54,13 @@ const NAV: NavSection[] = [
 			{ to: 'approvals', label: 'Approvals', description: 'Access changes waiting for a person', icon: 'shield', match: '/approvals' },
 			{ to: 'mail', label: 'Mail', description: 'Relayed mail and its gate', icon: 'globe', match: '/mail' },
 			{ to: 'settings/source', label: 'Source connection', description: 'GitHub source authority', icon: 'link', match: '/settings/source' },
+			{
+				to: 'settings/branding',
+				label: 'Branding',
+				description: "The client's logo on sign-in and error pages",
+				icon: 'medal',
+				match: '/settings/branding',
+			},
 		],
 	},
 	{

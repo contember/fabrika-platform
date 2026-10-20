@@ -12,16 +12,17 @@
 		"preview": "vite preview"
 	},
 	"dependencies": {
-		"zod": "^3.25.76",
 		"@buzola/router": "^0.0.16",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/iam-contract": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
+		"@fabrika/proxy-core": "workspace:*",
 		"@fontsource-variable/ibm-plex-sans": "5.3.0",
 		"@fontsource/ibm-plex-mono": "5.3.0",
 		"react": "^19.0.0",
-		"react-dom": "^19.0.0"
+		"react-dom": "^19.0.0",
+		"zod": "^3.25.76"
 	},
 	"devDependencies": {
 		"@buzola/codegen": "^0.0.16",
