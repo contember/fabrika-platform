@@ -20,6 +20,9 @@ const EVERYTHING = [
 	'source.workspace.write',
 	'source.pull-request.create',
 	'access.approve',
+	'mail.read',
+	'mail.content.read',
+	'mail.manage',
 	...OPERATIONS,
 ]
 
@@ -51,7 +54,7 @@ describe('the console shows what its caller may use', () => {
 	test('an admin of the console and of IAM sees every section', () => {
 		expect(rail(caller({ global: EVERYTHING }, { iam: { kind: 'installation' } }))).toEqual([
 			'Overview',
-			'Delivery: Applications, Namespaces, Deploy runs, Approvals, Source connection',
+			'Delivery: Applications, Namespaces, Deploy runs, Approvals, Mail, Source connection',
 			'Access: Overview, Users, Credentials, Permissions, Audit',
 			'Operations: Overview, Errors, Sources, Releases, Health',
 		])
@@ -91,9 +94,15 @@ describe('the console shows what its caller may use', () => {
 		}
 	})
 
+	test('Mail opens for mail.read in any scope, and only for it', () => {
+		expect(rail(caller({ global: ['mail.read'] }))).toEqual(['Delivery: Mail'])
+		expect(mayOpen(caller({ scopes: [{ type: 'app', value: 'notes', actions: ['mail.read'] }] }), 'mail')).toBe(true)
+		expect(mayOpen(caller({ global: ['mail.manage', 'mail.content.read'] }), 'mail')).toBe(false)
+	})
+
 	test('a part nobody answered for is shown, so its own page reports the outage', () => {
 		const unknown: ConsoleCaller = { access: null, iam: null, administersPeople: null }
-		const pages: NavPage[] = ['index', 'apps', 'runs', 'access/users', 'operations', 'people']
+		const pages: NavPage[] = ['index', 'apps', 'runs', 'mail', 'access/users', 'operations', 'people']
 		expect(pages.every((page) => mayOpen(unknown, page))).toBe(true)
 	})
 })

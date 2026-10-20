@@ -51,6 +51,7 @@ const NAV: NavSection[] = [
 			{ to: 'namespaces', label: 'Namespaces', description: 'Runtime boundaries', icon: 'bay', match: '/namespaces' },
 			{ to: 'runs', label: 'Deploy runs', description: 'Build and release log', icon: 'runs', match: '/runs' },
 			{ to: 'approvals', label: 'Approvals', description: 'Access changes waiting for a person', icon: 'shield', match: '/approvals' },
+			{ to: 'mail', label: 'Mail', description: 'Relayed mail and its gate', icon: 'globe', match: '/mail' },
 			{ to: 'settings/source', label: 'Source connection', description: 'GitHub source authority', icon: 'link', match: '/settings/source' },
 		],
 	},

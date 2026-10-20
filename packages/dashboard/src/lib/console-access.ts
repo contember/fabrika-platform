@@ -9,6 +9,7 @@ export type NavPage =
 	| 'namespaces'
 	| 'runs'
 	| 'approvals'
+	| 'mail'
 	| 'settings/source'
 	| 'access'
 	| 'access/users'
@@ -72,7 +73,7 @@ function control(caller: ConsoleCaller, holds: (access: ConsoleAccessDto) => boo
 
 /** Each page's rule is what its loader asks for, so a page shown in the navigation loads. */
 export function mayOpen(caller: ConsoleCaller, page: NavPage): boolean {
-	const { APP_MANAGE, NAMESPACE_MANAGE, DEPLOY_READ, ACCESS_APPROVE, SOURCE_CONNECTION_MANAGE } = CONTROL_ACTIONS
+	const { APP_MANAGE, NAMESPACE_MANAGE, DEPLOY_READ, ACCESS_APPROVE, MAIL_READ, SOURCE_CONNECTION_MANAGE } = CONTROL_ACTIONS
 	switch (page) {
 		case 'index':
 			return control(caller, (access) => [APP_MANAGE, NAMESPACE_MANAGE, DEPLOY_READ].every((action) => holdsGlobally(access, action)))
@@ -84,6 +85,8 @@ export function mayOpen(caller: ConsoleCaller, page: NavPage): boolean {
 			return control(caller, (access) => holdsAnywhere(access, DEPLOY_READ))
 		case 'approvals':
 			return control(caller, (access) => holdsAnywhere(access, ACCESS_APPROVE))
+		case 'mail':
+			return control(caller, (access) => holdsAnywhere(access, MAIL_READ))
 		case 'settings/source':
 			return control(caller, (access) => holdsGlobally(access, SOURCE_CONNECTION_MANAGE))
 		case 'access/users':

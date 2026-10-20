@@ -1,14 +1,23 @@
 import { HttpError, initRpc, isStructuralError, type RpcRouterFor } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
+import { parseAppEnvironmentId } from '@fabrika/auth-core'
 import {
 	BUILDER_APPROVAL_VERIFIER,
 	BUILDER_CONNECTION_ATTEMPT_ID,
 	BUILDER_CONNECTION_IDENTIFIER,
 	CONTROL_ACTIONS,
 	type ControlRpcContract,
+	type CursorList,
 	githubSourceConnectionListInputSchema,
+	type MailContentDto,
+	type MailMessageDetailDto,
+	type MailMessageDto,
+	type MailRuleDto,
 } from '@fabrika/control-contract'
+import { parsePlatformMailRequest } from '@fabrika/email/platform'
+import { type JobQueue, uuidv7 } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
+import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { createBuilderConnectionReceipt, getBuilderConnectionReceipt } from './api/builder-connections'
 import {
@@ -39,11 +48,13 @@ import { deleteAppEnvUseCase, listAppEnvsUseCase, putAppEnvUseCase, rotateTokenK
 import { registerAppUseCase } from './api/registry/registration'
 import { APP_VAR_VALUE_MAX_LENGTH, assertAppVarValue } from './api/registry/validation'
 import {
+	canAtCoordinates,
 	cancelRunUseCase,
 	getRunLogUseCase,
 	getRunUseCase,
 	listLatestFailedRunsUseCase,
 	listRunsUseCase,
+	runActor,
 	type RunsUseCaseContext,
 	tailRunLogUseCase,
 	triggerDeployUseCase,
@@ -64,6 +75,7 @@ import {
 } from './approval/api'
 import { describeConnector } from './connectors'
 import { consoleAccess } from './console-access'
+import type { ControlRepositories, MailMessageRow, MailRuleRow } from './db'
 import type { Env } from './env'
 import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from './github/connections/installation'
 import { startSourceConnection } from './github/connections/manifest'
@@ -71,6 +83,7 @@ import type { SourceConnectionPort } from './github/connections/port'
 import { sourceConnectionList } from './github/connections/status'
 import { appScope } from './iam'
 import { jsonValueSchema } from './json-value'
+import { type MailDispatchMessage, releaseMailMessage } from './mail-relay/queue'
 import { buildControlRpcDeps } from './services'
 
 interface ControlRpcContext {
@@ -201,14 +214,18 @@ const startSourceConnectionInput = z.object({
 	repositories: z.array(z.object({ owner: githubOwner, name: githubRepositoryName }).strict()).max(100),
 }).strict()
 
+const MAIL_RULE_ANY = '*'
+const MAIL_PAGE_SIZE = 50
+const INSTALLATION_SENDER_PREFIX = 'installation:'
+
 const mailMessageState = z.enum(['held', 'queued', 'sent', 'failed', 'unknown', 'dropped'])
 const mailMessageListInput = z.object({ state: mailMessageState.optional(), scope: nonEmpty.optional(), cursor: nonEmpty.optional() }).strict()
 const mailId = z.object({ id: nonEmpty }).strict()
-const setMailRuleInput = z.object({ scope: nonEmpty, domain: nonEmpty, action: z.enum(['pass', 'hold', 'drop']) }).strict()
-
-function mailNotImplemented(): never {
-	throw new HttpError(501, 'not_implemented', 'not implemented (WU-4)')
-}
+const setMailRuleInput = z.object({
+	scope: z.string().refine((scope) => scope === MAIL_RULE_ANY || parseAppEnvironmentId(scope) !== null, 'scope must be * or <app>@<env>'),
+	domain: z.string().refine((domain) => domain === MAIL_RULE_ANY || isProxyHost(domain), 'domain must be * or a lowercase domain'),
+	action: z.enum(['pass', 'hold', 'drop']),
+}).strict()
 
 export const controlRpcRouter = createControlRpcRouter(buildControlRpcDeps)
 
@@ -369,18 +386,30 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 				})
 			),
 		}),
-		// Placeholders until the console's mail procedures land (WU-4): every call answers 501.
 		mail: rpc.router({
 			messages: rpc.router({
-				list: rpc.procedure.input(mailMessageListInput).query(mailNotImplemented),
-				get: rpc.procedure.input(mailId).query(mailNotImplemented),
-				release: rpc.procedure.input(mailId).mutation(mailNotImplemented),
-				drop: rpc.procedure.input(mailId).mutation(mailNotImplemented),
+				list: rpc.procedure.input(mailMessageListInput).query(({ ctx, input }) => controlCall(() => listMailMessages(mailContext(ctx), input))),
+				get: rpc.procedure.input(mailId).query(({ ctx, input }) => controlCall(() => getMailMessage(mailContext(ctx), input.id))),
+				release: rpc.procedure.input(mailId).require(CONTROL_ACTIONS.MAIL_MANAGE).mutation(({ ctx, input }) =>
+					controlCall(() => releaseHeldMailMessage(mailContext(ctx), input.id))
+				),
+				drop: rpc.procedure.input(mailId).require(CONTROL_ACTIONS.MAIL_MANAGE).mutation(({ ctx, input }) =>
+					controlCall(() => dropHeldMailMessage(mailContext(ctx), input.id))
+				),
 			}),
 			rules: rpc.router({
-				list: rpc.procedure.query(mailNotImplemented),
-				set: rpc.procedure.input(setMailRuleInput).mutation(mailNotImplemented),
-				remove: rpc.procedure.input(mailId).mutation(mailNotImplemented),
+				list: rpc.procedure.require(CONTROL_ACTIONS.MAIL_MANAGE).query(({ ctx }) =>
+					controlCall(async () => ({ items: (await mailContext(ctx).repositories.mailRules.list()).map(toMailRuleDto) }))
+				),
+				set: rpc.procedure.input(setMailRuleInput).require(CONTROL_ACTIONS.MAIL_MANAGE).mutation(({ ctx, input }) =>
+					controlCall(() => setMailRule(mailContext(ctx), input))
+				),
+				remove: rpc.procedure.input(mailId).require(CONTROL_ACTIONS.MAIL_MANAGE).mutation(({ ctx, input }) =>
+					controlCall(async () => {
+						if (!(await mailContext(ctx).repositories.mailRules.remove(input.id))) fail(404, 'mail rule not found')
+						return { ok: true }
+					})
+				),
 			}),
 		}),
 	})
@@ -435,6 +464,11 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 		}
 	}
 
+	function mailContext(ctx: ControlRpcContext): MailUseCaseContext {
+		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		return { repositories: deps.repositories, auth: ctx.auth, ...(deps.mailQueue === undefined ? {} : { mailQueue: deps.mailQueue }) }
+	}
+
 	function vaultContext(ctx: ControlRpcContext): VaultUseCaseContext {
 		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
 		return {
@@ -470,4 +504,119 @@ async function controlCall<T>(run: () => Promise<T>): Promise<T> {
 		console.error('control RPC request failed')
 		throw new HttpError(500, 'internal', 'internal error')
 	}
+}
+
+interface MailUseCaseContext {
+	readonly repositories: ControlRepositories
+	readonly auth: AuthContext
+	/** Absent where no dispatcher runs (the Worker): a release answers 503 there. */
+	readonly mailQueue?: JobQueue<MailDispatchMessage>
+}
+
+/**
+ * Whether the caller reads the messages of `sender`: an application's at its app or environment, an installation
+ * service's only globally. A sender that is neither is no one's to read.
+ */
+function readsMailOf(auth: AuthContext, sender: string): boolean {
+	if (sender.startsWith(INSTALLATION_SENDER_PREFIX)) return auth.can(CONTROL_ACTIONS.MAIL_READ)
+	const coordinates = parseAppEnvironmentId(sender)
+	return coordinates !== null && canAtCoordinates(auth, CONTROL_ACTIONS.MAIL_READ, coordinates.app, coordinates.env)
+}
+
+/** As `runs.list`: the whole list needs a global `mail.read`; one sender's, the grant that reads that sender. */
+async function listMailMessages(c: MailUseCaseContext, input: z.infer<typeof mailMessageListInput>): Promise<CursorList<MailMessageDto>> {
+	const allowed = input.scope === undefined ? c.auth.can(CONTROL_ACTIONS.MAIL_READ) : readsMailOf(c.auth, input.scope)
+	if (!allowed) fail(403, `not authorized: ${CONTROL_ACTIONS.MAIL_READ}`)
+	const rows = await c.repositories.mailMessages.list({
+		...(input.state === undefined ? {} : { state: input.state }),
+		...(input.scope === undefined ? {} : { sender: input.scope }),
+		...(input.cursor === undefined ? {} : { before: input.cursor }),
+		limit: MAIL_PAGE_SIZE,
+	})
+	const last = rows.at(-1)
+	return { items: rows.map(toMailMessageDto), nextCursor: rows.length === MAIL_PAGE_SIZE && last !== undefined ? last.id : null }
+}
+
+async function getMailMessage(c: MailUseCaseContext, id: string): Promise<MailMessageDetailDto> {
+	const row = await c.repositories.mailMessages.get(id)
+	if (row === null || !readsMailOf(c.auth, row.sender)) fail(404, 'mail message not found')
+	return { ...toMailMessageDto(row), content: mailContentOf(c.auth, row.content) }
+}
+
+function mailContentOf(auth: AuthContext, content: string | null): MailContentDto {
+	if (!auth.can(CONTROL_ACTIONS.MAIL_CONTENT_READ)) return { kind: 'withheld' }
+	if (content === null) return { kind: 'purged' }
+	const parsed = parsePlatformMailRequest(JSON.parse(content))
+	if (!parsed.ok) throw new Error('stored mail content does not parse')
+	const { to, subject, text, html, replyTo, fromName, unsubscribeUrl, attachments } = parsed.message
+	return {
+		kind: 'present',
+		message: {
+			to,
+			subject,
+			text,
+			...(html === undefined ? {} : { html }),
+			...(replyTo === undefined ? {} : { replyTo }),
+			...(fromName === undefined ? {} : { fromName }),
+			...(unsubscribeUrl === undefined ? {} : { unsubscribeUrl }),
+			attachments: (attachments ?? []).map((attachment) => ({
+				filename: attachment.filename,
+				contentType: attachment.contentType,
+				bytes: attachment.content.byteLength,
+			})),
+		},
+	}
+}
+
+async function releaseHeldMailMessage(c: MailUseCaseContext, id: string): Promise<MailMessageDto> {
+	if (c.mailQueue === undefined) fail(503, 'the mail relay is unavailable')
+	const released = await releaseMailMessage({ messages: c.repositories.mailMessages, queue: c.mailQueue }, id, runActor(c.auth), nowSeconds())
+	return await decidedMailMessage(c, id, released)
+}
+
+async function dropHeldMailMessage(c: MailUseCaseContext, id: string): Promise<MailMessageDto> {
+	const dropped = await c.repositories.mailMessages.drop(id, runActor(c.auth), nowSeconds())
+	return await decidedMailMessage(c, id, dropped)
+}
+
+/** The message after a release or drop; `decided` false means it was not held, or does not exist. */
+async function decidedMailMessage(c: MailUseCaseContext, id: string, decided: boolean): Promise<MailMessageDto> {
+	const row = await c.repositories.mailMessages.get(id)
+	if (row === null) fail(404, 'mail message not found')
+	if (!decided) fail(409, 'the message is not held')
+	return toMailMessageDto(row)
+}
+
+/** A rule's scope names an application environment that exists, so a typo cannot leave a rule that never matches. */
+async function setMailRule(c: MailUseCaseContext, input: z.infer<typeof setMailRuleInput>): Promise<MailRuleDto> {
+	const coordinates = parseAppEnvironmentId(input.scope)
+	if (coordinates !== null && (await c.repositories.registry.getAppEnv(coordinates.app, coordinates.env)) === null) {
+		fail(400, `no application environment ${input.scope}`)
+	}
+	return toMailRuleDto(await c.repositories.mailRules.upsert({ id: uuidv7(), ...input }, nowSeconds()))
+}
+
+function toMailMessageDto(row: MailMessageRow): MailMessageDto {
+	return {
+		id: row.id,
+		sender: row.sender,
+		recipientDomain: row.recipient_domain,
+		state: row.state,
+		ruleId: row.rule_id,
+		decidedBy: row.decided_by,
+		attempts: row.attempts,
+		nextAttemptAt: row.next_attempt_at,
+		providerMessageId: row.provider_message_id,
+		errorCode: row.error_code,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+	}
+}
+
+function toMailRuleDto(row: MailRuleRow): MailRuleDto {
+	return { id: row.id, scope: row.scope, domain: row.domain, action: row.action, createdAt: row.created_at, updatedAt: row.updated_at }
+}
+
+function nowSeconds(): number {
+	return Math.floor(Date.now() / 1000)
 }
