@@ -1,10 +1,12 @@
 import { schemaFromContract } from '@fabrika/app/contract'
 import {
 	contractDigest,
+	FABRIKA_APP_ORIGIN,
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
 	FABRIKA_PROXY_SECRET,
+	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
 	proxySecretVariable,
 } from '@fabrika/auth-core'
 import { LEASE_TTL_MS } from '@fabrika/control/lease'
@@ -324,6 +326,7 @@ const proveManagedOperationsEnvironment = async (
 		[FABRIKA_IAM_APP_ID, [LOCAL_NOTES_IAM_APP_ID, false]],
 		[FABRIKA_ENVIRONMENT, [NOTES_ENVIRONMENT, false]],
 		[FABRIKA_SERVICE_KEY, [DEFAULT_OPERATIONS_SERVICE_KEY, true]],
+		[FABRIKA_APP_ORIGIN, [NOTES_ORIGIN, false]],
 	])
 	for (const [key, [expectedValue, sensitive]] of expected) {
 		const matching = records.filter(record => record.key === key)
@@ -347,13 +350,14 @@ const proveManagedOperationsEnvironment = async (
 	}
 	// No retired protocol record survives: every Fabrika-prefixed service variable is a managed key, and every other
 	// Fabrika-prefixed record is the active version's generated run section. A contract application also gets its proxy
-	// secret, and a bucket the import created is marked as the platform's.
+	// secret, a bucket the import created is marked as the platform's, and its SPA build gets the source-map upload key.
 	const managedKeys = new Set<string>([
 		...expected.keys(),
 		FABRIKA_IAM_ISSUER,
 		FABRIKA_IAM_APP_ID,
 		FABRIKA_PROXY_SECRET,
 		STORAGE_PROVENANCE_VARIABLE,
+		FABRIKA_SOURCE_MAP_UPLOAD_KEY,
 		...notesWorkloadKeys().keys(),
 		MEMBERSHIP_URL_VARIABLE,
 		MEMBERSHIP_KEY_VARIABLE,
