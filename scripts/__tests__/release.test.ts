@@ -310,27 +310,27 @@ describe.skipIf(!runPackWitness)('an application outside the repository on a loc
 			const refused = await exec([checker, application], application)
 			expect(refused.code).toBe(1)
 			const rules = refused.stdout.split('\n').filter((line) => line !== '').map((line) => line.split(' ')[1])
-			// One refusal per package in each of dependencies and bun.lock, and one for overrides.
-			expect(rules).toEqual(Array.from({ length: manifest.packages.length * 2 + 1 }, () => 'package-replacement'))
+			// One refusal per @fabrika/* package in each of dependencies and bun.lock, and one for overrides; the unscoped
+			// agent-canvas is not a package the platform trusts by name, so only its override is refused.
+			const trusted = manifest.packages.filter((item) => item.name.startsWith('@fabrika/'))
+			expect(trusted.length).toBeLessThan(manifest.packages.length)
+			expect(rules).toEqual(Array.from({ length: trusted.length * 2 + 1 }, () => 'package-replacement'))
 
-			// A Zerops application declares only what it imports and its dev tooling; the overrides stay whole.
+			// As app-setup.md installs it: each package the application declares keeps its field, and the overrides stay whole.
 			const minimal = join(scratch, 'zerops-minimal')
 			await cp(join(application, LOCAL_TARBALL_DIRECTORY), join(minimal, LOCAL_TARBALL_DIRECTORY), { recursive: true })
-			const declared = [
-				'@fabrika/app',
-				'@fabrika/db',
-				'@fabrika/provider-zerops',
-				'@fabrika/proxy-core',
-				'@fabrika/cli',
-				'@fabrika/check',
-				'@fabrika/platform',
-			]
-			const dependencies = Object.fromEntries(Object.entries(block.dependencies).filter(([name]) => declared.includes(name)))
+			const tarballsOf = (names: readonly string[]) => Object.fromEntries(Object.entries(block.dependencies).filter(([name]) => names.includes(name)))
+			const dependencies = tarballsOf(['@fabrika/app', '@fabrika/db', '@fabrika/provider-zerops', '@fabrika/proxy-core'])
+			const devDependencies = tarballsOf(['@fabrika/cli', '@fabrika/check', '@fabrika/platform'])
 			await writeFile(
 				join(minimal, 'package.json'),
-				`${JSON.stringify({ name: 'zerops-minimal', private: true, type: 'module', dependencies, overrides: block.overrides }, null, '\t')}\n`,
+				`${
+					JSON.stringify({ name: 'zerops-minimal', private: true, type: 'module', dependencies, devDependencies, overrides: block.overrides }, null, '\t')
+				}\n`,
 			)
 			expect((await exec(['bun', 'install', '--ignore-scripts'], minimal)).code).toBe(0)
+			const minimalChecked = await exec([join(minimal, 'node_modules', '.bin', 'fabrika-check'), '--packed', manifestPath, minimal], minimal)
+			expect({ code: minimalChecked.code, stdout: minimalChecked.stdout }).toEqual({ code: 0, stdout: '' })
 			const installedNames = (await readdir(join(minimal, 'node_modules', '@fabrika'))).map((name) => `@fabrika/${name}`).sort()
 			for (
 				const absent of ['@fabrika/builder', '@fabrika/canvas-kernel', '@fabrika/annotations', '@fabrika/daemon-kit', '@fabrika/provider-cloudflare']

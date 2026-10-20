@@ -23,10 +23,13 @@ export interface PackedSet {
 	readonly tarballs: ReadonlyMap<string, string>
 }
 
+/** An npm package name, scoped or not: a pack holds `agent-canvas` beside the `@fabrika/*` set. */
+const PACKAGE_NAME = /^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/
+
 const releaseManifestSchema = z.object({
 	version: z.string().min(1),
 	packages: z.array(z.object({
-		name: z.string().startsWith('@fabrika/'),
+		name: z.string().regex(PACKAGE_NAME),
 		filename: z.string().regex(/^[A-Za-z0-9._-]+\.tgz$/),
 		integrity: z.string().startsWith('sha512-'),
 	})),
