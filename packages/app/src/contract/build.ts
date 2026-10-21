@@ -587,23 +587,23 @@ class ArtifactBuilder {
 		}
 		this.#challenges.push({ site: id, provider, secret, action })
 		if (provider === 'altcha') {
-			const cost = this.#within(
+			const cost = this.#bounded(
 				where,
 				'challenge.cost',
 				Reflect.get(challenge, 'cost'),
 				ALTCHA_LIMITS.cost,
-				ALTCHA_LIMITS.minCost,
 				ALTCHA_LIMITS.maxCost,
 				'iterations',
+				ALTCHA_LIMITS.minCost,
 			)
-			const maxAgeMs = this.#within(
+			const maxAgeMs = this.#bounded(
 				where,
 				'challenge.maxAgeMs',
 				Reflect.get(challenge, 'maxAgeMs'),
 				ALTCHA_LIMITS.maxAgeMs,
-				ALTCHA_LIMITS.minMaxAgeMs,
 				ALTCHA_LIMITS.maxMaxAgeMs,
 				'ms',
+				ALTCHA_LIMITS.minMaxAgeMs,
 			)
 			if (!altchaSolvable(cost, maxAgeMs)) {
 				this.#problem(
@@ -620,18 +620,6 @@ class ArtifactBuilder {
 		}
 		this.#publicVariables.push({ where, field: 'challenge siteKey', name: siteKey })
 		return { provider, secret, action, siteKey }
-	}
-
-	/** A declared whole number from `floor` to `ceiling`, or `fallback` when it is not declared. */
-	#within(where: string, field: string, value: unknown, fallback: number, floor: number, ceiling: number, unit: string): number {
-		if (value === undefined) {
-			return fallback
-		}
-		if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < floor || value > ceiling) {
-			this.#problem(where, `${field} ${JSON.stringify(value)} is not a whole number of ${unit} from ${floor} to ${ceiling}`)
-			return fallback
-		}
-		return value
 	}
 
 	/** The widget action a challenge's verification expects back: the declared `action`, else the endpoint id with `_` for `.`. */
@@ -1214,12 +1202,13 @@ class ArtifactBuilder {
 	}
 
 	/** A declared whole number from 1 to `ceiling`, or `fallback` when it is absent or refused. */
-	#bounded(where: string, field: string, value: unknown, fallback: number, ceiling: number, unit: string): number {
+	/** A declared whole number from `floor` (1 unless named) to `ceiling`, or `fallback` when it is not declared. */
+	#bounded(where: string, field: string, value: unknown, fallback: number, ceiling: number, unit: string, floor = 1): number {
 		if (value === undefined) {
 			return fallback
 		}
-		if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > ceiling) {
-			this.#problem(where, `${field} ${JSON.stringify(value)} is not a whole number of ${unit} from 1 to ${ceiling}`)
+		if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < floor || value > ceiling) {
+			this.#problem(where, `${field} ${JSON.stringify(value)} is not a whole number of ${unit} from ${floor} to ${ceiling}`)
 			return fallback
 		}
 		return value

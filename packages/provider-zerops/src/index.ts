@@ -101,8 +101,8 @@ export type {
 	ZeropsProxyRepublishInput,
 } from './namespace'
 export { postgresSchema as zeropsNamespacePostgresSchema } from './namespace/codec'
-export { rowsNeedingCurrentProxy } from './namespace/proxy-reads'
-export type { OlderProxyRowReader, OlderProxyRowReaders } from './namespace/proxy-reads'
+export { entriesNeedingCurrentProxy } from './namespace/proxy-reads'
+export type { OlderProxyReader, OlderProxyReaders } from './namespace/proxy-reads'
 export { buildZeropsPlan, resolveDeployHostname } from './plan'
 export type { ZeropsStep, ZeropsStepKind } from './plan'
 export { CANCELLED, createZeropsDeployer, interpolateManifest } from './provider'

@@ -462,9 +462,10 @@ other environment, before the provider prepares anything, and the write maps a r
   diff still serve; the upcast gives a job's `timeout` as `timeoutMs` (15 min without one) and a webhook the 10 s it ran
   with. A model change adds its upcast rule in `formats.ts`, and `framework-compat.test.ts` keeps every older minor of
   the window reading as its own platform read it.
-- **A Zerops namespace pinned to an older proxy source is judged by that release's own row parser
+- **A Zerops namespace pinned to an older proxy source is judged by that release's own manifest parser
   (`src/zerops/older-proxies.ts`).** It bundles `@fabrika/proxy-core` of each older minor's newest patch, as the
-  readers do, and the Zerops provider refuses a deploy of a row none of them parses (`older-proxies.test.ts`). Only the
+  readers do, and the Zerops provider refuses a deploy of a row none of them parses, or of a CSP none of them parses
+  (the CSP field of each release's entry parser) (`older-proxies.test.ts`). Only the
   Zerops composition imports it, so the Worker bundle carries none of them. Add a minor's parser with its reader.
 - **Steps off the paved road are in the reviewed snapshot, never refused by it (`diff.ts`).** Two kinds only: the
   reach a staged-kit site declares (`ContractArtifact.declared`: `sql`, `unscoped`, `connect`, `issues`), and the

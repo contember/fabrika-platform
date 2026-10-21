@@ -48,7 +48,7 @@ import {
 	type ZeropsNamespaceTarget,
 	zeropsNamespaceTargetCodec,
 } from './namespace'
-import { assertNamespaceProxyReads, type OlderProxyRowReaders } from './namespace/proxy-reads'
+import { assertNamespaceProxyReads, type OlderProxyReaders } from './namespace/proxy-reads'
 import { createZeropsDeployer, ZEROPS_VERSION_DEADLINE_MS } from './provider'
 import { allowedReferenceHosts, assertNoPlatformOnlyReference, foreignReferenceHost, serviceReferenceHosts } from './service-references'
 import { normalizeZeropsSourceRepository } from './source'
@@ -102,8 +102,8 @@ export interface ZeropsControlProviderOptions {
 		readonly proxySource: ZeropsNamespaceProxySource
 		readonly iamUrl: string
 		readonly iamKey: string
-		/** The row parsers of the older releases' proxies, which a namespace pinned to an older source may run. */
-		readonly olderProxies: OlderProxyRowReaders
+		/** The manifest parsers of the older releases' proxies, which a namespace pinned to an older source may run. */
+		readonly olderProxies: OlderProxyReaders
 	}
 }
 

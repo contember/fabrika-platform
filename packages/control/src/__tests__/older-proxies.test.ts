@@ -1,10 +1,11 @@
 // A Zerops namespace pinned to an older proxy source runs that release's strict manifest parser. A deploy is refused
-// only for a row no proxy of the window reads (`rowsNeedingCurrentProxy`), judged by those releases' own parsers: every
-// row form this release added is refused, and every row a 0.4, 0.5 or 0.6 application compiles to deploys.
+// only for a row or a CSP no proxy of the window reads (`entriesNeedingCurrentProxy`), judged by those releases' own
+// parsers: every row form and CSP directive this release added is refused, and every entry a 0.4, 0.5 or 0.6
+// application compiles to deploys.
 
 import { type BodyAdmission, type ContractArtifact, contractDigest, type EndpointRow } from '@fabrika/auth-core'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
-import { rowsNeedingCurrentProxy } from '@fabrika/provider-zerops'
+import { entriesNeedingCurrentProxy } from '@fabrika/provider-zerops'
 import { proxyEndpointRowSchema as proxyEndpointRowSchema05 } from '@fabrika/proxy-core-0.5/manifest'
 import { contractProxyTable, type ProxyEndpointRow, proxyEndpointRowSchema } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
@@ -17,7 +18,7 @@ import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { readAccessSnapshot } from '../approval/read'
 import { approvedAccess } from '../approval/snapshot'
-import { OLDER_PROXY_ROW_READERS } from '../zerops/older-proxies'
+import { OLDER_PROXY_READERS } from '../zerops/older-proxies'
 import { memoryCommits } from './helpers/commits'
 
 const access = (endpoints: readonly EndpointRow[]): ProviderApprovedAccess => {
@@ -101,7 +102,7 @@ describe('the rows of this release, for a namespace proxy pinned to an older sou
 			authorization: 'forward',
 		}],
 	])('refuses %s, which no older proxy parses', (_name, row) => {
-		expect(rowsNeedingCurrentProxy(access([row]), OLDER_PROXY_ROW_READERS)).toEqual([row.id])
+		expect(entriesNeedingCurrentProxy(access([row]), OLDER_PROXY_READERS)).toEqual([row.id])
 	})
 
 	test('deploys a GET mutation, whose row an older proxy parses and applies as this one does', () => {
@@ -117,11 +118,26 @@ describe('the rows of this release, for a namespace proxy pinned to an older sou
 			input: empty,
 			output: empty,
 		}
-		expect(rowsNeedingCurrentProxy(access([row]), OLDER_PROXY_ROW_READERS)).toEqual([])
+		expect(entriesNeedingCurrentProxy(access([row]), OLDER_PROXY_READERS)).toEqual([])
 	})
 
 	test('deploys an application of this release that uses none of them', () => {
-		expect(rowsNeedingCurrentProxy(access([]), OLDER_PROXY_ROW_READERS)).toEqual([])
+		expect(entriesNeedingCurrentProxy(access([]), OLDER_PROXY_READERS)).toEqual([])
+	})
+})
+
+describe("an entry's CSP, for a namespace proxy pinned to an older source", () => {
+	test("refuses worker-src blob:, which no older proxy's CSP parser knows, and deploys every directive they do", () => {
+		const workers = { origin: 'blob:', purpose: 'the workers of the altcha challenge' }
+		const withWorkers = (base: ProviderApprovedAccess): ProviderApprovedAccess => {
+			const contract: ContractArtifact = { ...base.contract, csp: { ...base.contract.csp, workerSrc: [workers] } }
+			return { ...base, contract, contractDigest: contractDigest(contract) }
+		}
+		expect(entriesNeedingCurrentProxy(withWorkers(access([])), OLDER_PROXY_READERS)).toEqual(['csp'])
+		const fonts = { origin: 'https://fonts.gstatic.com', purpose: 'the typeface files' }
+		const typeface: ContractArtifact = { ...notesArtifact, csp: { ...notesArtifact.csp, fontSrc: [fonts] } }
+		const withFonts = { ...access([]), contract: typeface, contractDigest: contractDigest(typeface) }
+		expect(entriesNeedingCurrentProxy(withFonts, OLDER_PROXY_READERS)).toEqual([])
 	})
 })
 
@@ -146,7 +162,7 @@ describe('a public procedure at a path of its own (http.path)', () => {
 			schema: schemaFromContract(artifact),
 			checker: '0.7.0',
 		}
-		expect(rowsNeedingCurrentProxy(approved, OLDER_PROXY_ROW_READERS)).toContain('api.intake.register')
+		expect(entriesNeedingCurrentProxy(approved, OLDER_PROXY_READERS)).toContain('api.intake.register')
 	})
 })
 
@@ -168,6 +184,6 @@ describe.each([
 		})
 		const approved = approvedAccess(await readAccessSnapshot(commit, '', app))
 		if (approved === undefined) throw new Error('the snapshot has no contract')
-		expect(rowsNeedingCurrentProxy(approved, OLDER_PROXY_ROW_READERS)).toEqual([])
+		expect(entriesNeedingCurrentProxy(approved, OLDER_PROXY_READERS)).toEqual([])
 	})
 })
