@@ -169,10 +169,8 @@ a secret under one of those names, and a deploy removes a family variable it no 
 included. The framework reads these variables and removes them from `process.env`.
 
 The generated `run` section depends on two platform facts ([platform facts](../reference/zerops-platform.md)).
-A failed `initCommands` entry stops activation, which is verified live. The readiness window opens with `run.start`,
-after the init commands: the CRM's runtime log shows it (init 14:12:04–14:12:21, the first readiness attempt at
-14:12:22), and the platform-facts row `slow-init-command-precedes-the-readiness-window` measures it, but no live run
-of that row has confirmed it yet. Its readiness check is an `httpGet` of the contract's health endpoint, which is
+A failed `initCommands` entry stops activation, and the readiness window opens with `run.start`, after the init
+commands (a 240 s init command behind a 60 s window activates). Both are verified live. Its readiness check is an `httpGet` of the contract's health endpoint, which is
 verified to gate a deploy.
 
 ### Exposure is refused, with no approval path

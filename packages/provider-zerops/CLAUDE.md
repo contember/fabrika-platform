@@ -141,8 +141,7 @@ bun test
   `schema.generated.ts` or a generated case that did not pass fails an init command, which stops the activation
   (verified live 2026-10-16); the build has no database. Never move them back into the start script: the readiness
   window (180 s, not the application's to raise) opens with `run.start`, and the CRM's isolation tests alone took
-  almost 3 minutes there (issue #27). UNVERIFIED: that the window opens only after the init commands, which one runtime
-  log shows and the platform-facts row `slow-init-command-precedes-the-readiness-window` measures. A `DEPLOY_FAILED` version's error names the init commands and the readiness check. The run section names the application's one PostgreSQL
+  almost 3 minutes there (issue #27); the window opens only after the init commands (verified live 2026-10-21). A `DEPLOY_FAILED` version's error names the init commands and the readiness check. The run section names the application's one PostgreSQL
   (`FABRIKA_APP_DATABASE_URL`) and its one object-storage service (`FABRIKA_APP_STORAGE_*`) only as `${<host>_…}`
   references, so no credential passes through this package. That database URL is the service's SUPERUSER on the direct
   port (`zeropsProvisioningDatabaseUrl`, `src/manifest.ts`) and only the provisioning credential of the application's
