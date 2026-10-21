@@ -103,7 +103,10 @@ PBKDF2 above that count. workerd, miniflare and Bun do not enforce that cap, so
 local runs cannot show the failure. A login rehashes a stored verifier whose
 count differs from the runtime's cost, so verifiers converge. A verifier above
 the runtime's cap, such as one that a Bun installation wrote, never verifies on
-a Worker; that user resets the password.
+a Worker; that user resets the password. Local lopata and miniflare runs do not
+enforce the cap either, so an account created locally before this cost applied
+holds a 600,000-iteration verifier and cannot sign in until its password is
+reset. Production Cloudflare never stored one, because hashing threw there.
 
 Login failures are throttled by separate hashed account and deployment-wide
 abuse keys. Recovery has separate account and deployment-wide buckets. Unknown,

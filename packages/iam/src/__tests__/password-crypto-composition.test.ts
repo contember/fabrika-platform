@@ -96,13 +96,17 @@ describe('the PBKDF2 cost each composition root chooses', () => {
 		expect(iterationsOf(stored.parameters)).toBe(600_000)
 	})
 
-	test('the Worker refuses a stored hash above its cap without deriving it', async () => {
+	test('the Worker refuses a stored hash above its cap without deriving at the stored count', async () => {
 		const stored = await withBunHasher((hasher) => hasher.hash(PASSWORD))
 		const hasher = workerHasher()
 		const deriveBits = spyOn(crypto.subtle, 'deriveBits')
 
 		expect(await hasher.verify(PASSWORD, stored)).toEqual({ valid: false, needsRehash: false })
-		expect(deriveBits).not.toHaveBeenCalled()
+		const derivedIterations = deriveBits.mock.calls.map((
+			[algorithm],
+		) => (typeof algorithm === 'object' && 'iterations' in algorithm ? algorithm.iterations : undefined))
+		expect(derivedIterations).toHaveLength(1)
+		expect(Number(derivedIterations[0])).toBeLessThanOrEqual(WORKERS_PBKDF2_ITERATION_CAP)
 	})
 
 	test('the Worker still verifies and upgrades a stored hash below its cap', async () => {
