@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { configurationError, responseError } from './errors'
-import type { GitHubCommit, GitHubPullRequestRef, GitHubRef, GitHubTreeEntry } from './repository-types'
+import type { GitHubCommit, GitHubComparison, GitHubPullRequestRef, GitHubRef, GitHubTreeEntry } from './repository-types'
 import { hasAsciiControl } from './validation'
 
 export const MAX_TREE_ENTRIES = 5000
@@ -20,6 +20,10 @@ export const MAX_PULL_REQUEST_RESPONSE_BYTES = 1024 * 1024
 // A commit echoes its message, which existing history does not bound.
 export const MAX_COMMIT_RESPONSE_BYTES = 1024 * 1024
 export const MAX_PATH_SEGMENTS = 64
+/** GitHub's own bound on the files of one comparison. */
+export const MAX_COMPARE_FILES = 300
+// Each file of a comparison carries its patch.
+export const MAX_COMPARE_RESPONSE_BYTES = 8 * 1024 * 1024
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/
 const LONE_SURROGATE_PATTERN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
@@ -134,6 +138,41 @@ export function decodeTextBlob(body: unknown, expectedSha: string, expectedSize:
 		return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
 	} catch {
 		return null
+	}
+}
+
+const comparisonSchema = z.object({
+	ahead_by: z.number().int().nonnegative(),
+	behind_by: z.number().int().nonnegative(),
+	merge_base_commit: z.object({ sha: shaSchema }),
+	files: z.array(z.object({
+		filename: z.string(),
+		previous_filename: z.string().optional(),
+		status: z.enum(['added', 'removed', 'modified', 'renamed', 'copied', 'changed', 'unchanged']),
+		additions: z.number().int().nonnegative(),
+		deletions: z.number().int().nonnegative(),
+		patch: z.string().optional(),
+	})).max(MAX_COMPARE_FILES).optional(),
+})
+
+export function decodeComparison(body: unknown, headSha: string): GitHubComparison {
+	const result = comparisonSchema.safeParse(body)
+	if (!result.success) throw responseError()
+	const files = (result.data.files ?? []).map((file) => ({
+		path: file.filename,
+		previousPath: file.previous_filename ?? null,
+		status: file.status,
+		additions: file.additions,
+		deletions: file.deletions,
+		patch: file.patch ?? null,
+	}))
+	return {
+		baseSha: result.data.merge_base_commit.sha,
+		headSha,
+		aheadBy: result.data.ahead_by,
+		behindBy: result.data.behind_by,
+		files,
+		filesCapped: files.length === MAX_COMPARE_FILES,
 	}
 }
 

@@ -113,7 +113,17 @@ describe('GitHubAppClient.openRepository', () => {
 		expect(requests[1]?.authorization).toBe(`Bearer ${SECRET_TOKEN}`)
 		expect(JSON.stringify(repository)).not.toContain(SECRET_TOKEN)
 		const reachable = Object.getOwnPropertyNames(Object.getPrototypeOf(repository)).sort()
-		expect(reachable).toEqual(['commitFiles', 'constructor', 'createBranch', 'openPullRequest', 'readBlobTexts', 'readFiles', 'readRef', 'readTree'])
+		expect(reachable).toEqual([
+			'commitFiles',
+			'compareCommits',
+			'constructor',
+			'createBranch',
+			'openPullRequest',
+			'readBlobTexts',
+			'readFiles',
+			'readRef',
+			'readTree',
+		])
 		expect(Object.keys(repository)).toEqual([])
 	})
 
@@ -287,6 +297,46 @@ describe('readBlobTexts', () => {
 			await expect(repository.readBlobTexts(blobs)).rejects.toThrow('GitHub App configuration is invalid')
 		}
 		expect(repositoryRequests(requests)).toHaveLength(0)
+	})
+})
+
+describe('compareCommits', () => {
+	test('reads the changed files from the merge base on one page of commits', async () => {
+		const { repository, requests } = await open([
+			on(
+				'GET',
+				`/compare/${OTHER}...${HEAD}?per_page=1`,
+				json({
+					ahead_by: 2,
+					behind_by: 0,
+					merge_base_commit: { sha: OTHER },
+					commits: [{ sha: HEAD }],
+					files: [
+						{ filename: 'src/a.ts', status: 'modified', additions: 1, deletions: 1, patch: '@@ -1 +1 @@\n-a\n+b' },
+						{ filename: 'src/c.ts', previous_filename: 'src/b.ts', status: 'renamed', additions: 0, deletions: 0 },
+					],
+				}),
+			),
+		])
+		expect(await repository.compareCommits(OTHER, HEAD)).toEqual({
+			baseSha: OTHER,
+			headSha: HEAD,
+			aheadBy: 2,
+			behindBy: 0,
+			files: [
+				{ path: 'src/a.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, patch: '@@ -1 +1 @@\n-a\n+b' },
+				{ path: 'src/c.ts', previousPath: 'src/b.ts', status: 'renamed', additions: 0, deletions: 0, patch: null },
+			],
+			filesCapped: false,
+		})
+		expect(repositoryRequests(requests)).toHaveLength(1)
+	})
+
+	test('an unknown commit is not found, and an invalid sha is refused before any request', async () => {
+		const { repository, requests } = await open([])
+		await expect(repository.compareCommits(OTHER, HEAD)).rejects.toBeInstanceOf(GitHubNotFoundError)
+		await expect(repository.compareCommits('main', HEAD)).rejects.toThrow('GitHub App configuration is invalid')
+		expect(repositoryRequests(requests)).toHaveLength(1)
 	})
 })
 

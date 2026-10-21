@@ -2,6 +2,7 @@ import {
 	type GitHubBlobRead,
 	type GitHubBlobRef,
 	GitHubBranchConflictError,
+	type GitHubComparison,
 	type GitHubFileRead,
 	GitHubNotFoundError,
 	type GitHubRepositoryClient,
@@ -58,6 +59,18 @@ class FakeRepository implements GitHubRepositoryClient {
 		return {
 			files: blobs.filter((blob) => blob.path !== 'src/big.ts').map((blob) => ({ path: blob.path, content: `text of ${blob.path}` })),
 			unreadable: blobs.filter((blob) => blob.path === 'src/big.ts').map((blob) => ({ path: blob.path, reason: 'too_large' })),
+		}
+	}
+
+	async compareCommits(baseSha: string, headSha: string): Promise<GitHubComparison> {
+		this.record('compareCommits', [baseSha, headSha])
+		return {
+			baseSha,
+			headSha,
+			aheadBy: 1,
+			behindBy: 3,
+			files: [{ path: 'a.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, patch: '+a' }],
+			filesCapped: false,
 		}
 	}
 
@@ -264,6 +277,18 @@ describe('GitHub workspace source', () => {
 		const none = await source.scanFiles({ target, commitSha: headSha, include: () => false, maxFiles: 10, signal: signal() })
 		expect(none).toEqual({ commitSha: headSha, files: [], candidates: 0, treeTruncated: false })
 		expect(repository.calls.map((call) => call.method)).toEqual(['readTree', 'readBlobTexts', 'readTree'])
+	})
+
+	test('compares through the repository and leaves out how far the base moved on', async () => {
+		const { source, repository } = await fixture()
+		expect(await source.compare({ target, baseSha: nextSha, headSha, signal: signal() })).toEqual({
+			baseSha: nextSha,
+			headSha,
+			aheadBy: 1,
+			files: [{ path: 'a.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, patch: '+a' }],
+			filesCapped: false,
+		})
+		expect(repository.calls).toEqual([{ method: 'compareCommits', args: [nextSha, headSha] }])
 	})
 
 	const classified: [Error, WorkspaceSourceErrorKind][] = [
