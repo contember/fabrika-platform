@@ -7,6 +7,9 @@ import {
 } from '@fabrika/proxy-core/manifest'
 import { ServiceReference, Worker } from 'oblaka-iac'
 
+/** A binding as oblaka configures it into a Worker's generated config. */
+type Binding = Pick<ServiceReference, 'configureBinding'>
+
 interface CloudflareProxyWorkerBase {
 	/** Name of the proxy Worker before the environment prefix is applied by oblaka. */
 	readonly name: string
@@ -71,6 +74,25 @@ export const IAM_APPLICATION_ENTRYPOINT = 'PropustkaApplication'
 export const iamServiceReference = (): ServiceReference => new ServiceReference(IAM_SERVICE, IAM_APPLICATION_ENTRYPOINT)
 
 /**
+ * The deployer's `IAM` binding: what the Worker declared, with the IAM service entry's `props` naming the deployment's
+ * IAM application id. IAM reads it as `ctx.props.app`, the transport identity of a call over the binding, as the
+ * membership transport key is over HTTP (ADR-0067 §3). An application cannot choose it: the deployer writes it, and the
+ * bounds refuse an IAM binding that names any other application.
+ */
+export class IamApplicationReference implements Binding {
+	constructor(
+		private readonly app: string,
+		private readonly declared: Binding = iamServiceReference(),
+	) {}
+
+	configureBinding(args: Parameters<Binding['configureBinding']>[0]): ReturnType<Binding['configureBinding']> {
+		const config = this.declared.configureBinding(args)
+		const services = (config.services ?? []).map((entry) => entry.binding === args.binding ? { ...entry, props: { app: this.app } } : entry)
+		return { ...config, services }
+	}
+}
+
+/**
  * Build the Cloudflare side of the accepted proxy topology: the public Worker owns the route and
  * binds the private application Worker. IAM remains a global service binding.
  */
@@ -97,6 +119,9 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 	const manifest: ProxyManifest = { apps: [proxyApp(placement, options)] }
 	const domain = options.domain?.trim()
 
+	const iam = new ServiceReference(options.iamService ?? IAM_SERVICE, IAM_APPLICATION_ENTRYPOINT)
+	// An application's proxy names its application to IAM, as the application Worker's binding does; a platform
+	// service's proxy is trusted composition and calls no operation that is pinned to an application.
 	return new Worker({
 		dir: CLOUDFLARE_PROXY_WORKER_DIR,
 		name: options.name,
@@ -108,7 +133,7 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 		define: { [PROXY_MANIFEST_DEFINE]: JSON.stringify(encodeProxyManifestJson(manifest)) },
 		vars: { FABRIKA_IAM_ISSUER: options.iamUrl ?? '' },
 		bindings: {
-			IAM: new ServiceReference(options.iamService ?? IAM_SERVICE, IAM_APPLICATION_ENTRYPOINT),
+			IAM: options.installation === undefined ? new IamApplicationReference(options.appId, iam) : iam,
 			APP: options.app,
 		},
 	})

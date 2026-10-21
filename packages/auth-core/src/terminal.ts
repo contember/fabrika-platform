@@ -1,7 +1,8 @@
 // What an application declares and calls to sign a person in on an enrolled terminal (ADR-0067): its identification
 // page, and the identification operations a handler asks IAM for. IAM takes the asserting application from the
 // verified transport, never from the input: over `/membership/*` the application's membership transport key pins it, and
-// over a Workers binding the credential's audience names it.
+// over a Workers binding the `props` the deployer wrote on the application's `IAM` binding pin it. The credential must
+// also verify for that application, but its audience alone proves nothing.
 
 import { isCanonicalPath } from './canonical-path'
 import type { MembershipCaller } from './membership'

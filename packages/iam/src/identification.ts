@@ -42,7 +42,10 @@ const INVALID_PRINCIPAL: TerminalFailure = { ok: false, reason: 'invalid_princip
 
 type CallerEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
-/** The application asking: the audience of the caller's verified token, which must be the `app` it names. */
+/**
+ * The application asking: the `app` the transport already pinned (the membership key, or the binding's props), which the
+ * caller's token must also verify for. The token's audience alone is no proof of the caller.
+ */
 async function askingApp(services: Services, env: CallerEnv, caller: TerminalCaller): Promise<{ ok: true; app: string } | TerminalFailure> {
 	if (caller.credential === null) {
 		return { ok: false, reason: 'missing_token' }

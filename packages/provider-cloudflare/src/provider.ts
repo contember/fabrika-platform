@@ -32,7 +32,7 @@ import { configSchema } from './config-schema'
 import { assertCloudflareContract, needsMinuteTick, runsInObject } from './contract-support'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
-import { createCloudflareProxyWorker, PROXY_MANIFEST_DEFINE } from './proxy'
+import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE } from './proxy'
 import type { RunnerApprovedAccess } from './runner-protocol'
 import { defaultReconcileSchema } from './schema'
 
@@ -176,6 +176,19 @@ const connectorBindings = (contract: ContractArtifact | null): Readonly<Record<s
 	Object.fromEntries(
 		Object.entries(contract?.imports ?? {}).map(([name, imported]) => [connectVariables(name).binding, proxyWorkerName(imported.app)]),
 	)
+
+/** The application Worker's `IAM` binding, written by the deployer so that it names this deployment (ADR-0067 §3). */
+const withIamIdentity = (authored: Worker, iamAppId: string): Worker => {
+	const application = applicationWorker(authored)
+	const declared = application.options.bindings?.['IAM']
+	// A resource under the name is no IAM binding; oblaka provisions it, and the bounds check whatever it emits.
+	if (declared === undefined || 'getId' in declared) return authored
+	const configured = new Worker({
+		...application.options,
+		bindings: { ...application.options.bindings, IAM: new IamApplicationReference(iamAppId, declared) },
+	})
+	return replaceApplicationWorker(authored, configured)
+}
 
 const withConnectorBindings = (authored: Worker, bindings: Readonly<Record<string, string>>): Worker => {
 	if (Object.keys(bindings).length === 0) return authored
@@ -595,7 +608,8 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	const objectRuntime = run.approved === undefined || (run.approved.framework !== undefined && runsInObject(run.approved.framework))
 	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract) : null
 	const managed = withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served))
-	const connected = withConnectorBindings(managed.worker, connectors)
+	const identified = platformResources === 'refuse' ? withIamIdentity(managed.worker, appEnvironmentId(run.appId, run.env)) : managed.worker
+	const connected = withConnectorBindings(identified, connectors)
 	const worker = runtime === null ? connected : withApplicationRuntime(connected, run, runtime)
 	const dir = workerDir(loaded.config, loaded.cwd)
 	const bounds: DeploymentBounds = {

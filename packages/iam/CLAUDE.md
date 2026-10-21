@@ -174,7 +174,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   current login, `/auth/login` turns a terminal cookie into an identification (2 minutes, id hashed) holding the whole
   handoff, and 302s to the app's identify path on the handoff's return origin. The application's
   `inspectIdentification`/`assertIdentity`/`cancelIdentification` (the membership transport, `PropustkaApplication`)
-  take the app from the credential's `aud`; every dead id is `not_found`. `assertIdentity` consumes it and writes a login
+  are pinned to the calling application by the transport: the membership key's app over HTTP, the binding's `ctx.props.app`
+  (written by the deployer, `binding-identity.ts`) over `PropustkaApplication`, and the credential must verify for that
+  app; a credential's `aud` alone proves nothing. Every dead id is `not_found`. `assertIdentity` consumes it and writes a login
   no browser holds (`terminal_assertion`, the terminal's TTL) with its `auth_log` row, in one batch guarded by the
   consumption (`consumedFor`), and answers IAM's completion URL, never a code. `/auth/terminals/complete` issues the code
   (`handoffLocation`) only to the browser holding the identification's own terminal cookie, once, within

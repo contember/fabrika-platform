@@ -110,7 +110,9 @@ The procedure then talks to IAM over the transport of
 - `inspectIdentification(id)` returns the terminal's id and label and the expiry. The application needs the
   terminal to throttle guesses per terminal.
 - `assertIdentity(id, principalId)` is the application's word. IAM takes the asserting application from the
-  verified transport identity, never from the input. It consumes the identification (single use) and checks
+  verified transport identity, never from the input: on HTTP the application's membership transport key, on a Workers
+  service binding the `props.app` that the deployer writes on the application's `IAM` binding. A credential's
+  audience is not proof of the caller. It consumes the identification (single use) and checks
   that:
   - the identification has not expired and belongs to this application;
   - the terminal is still enrolled and still lists this application;

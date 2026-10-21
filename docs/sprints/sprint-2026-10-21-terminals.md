@@ -304,3 +304,9 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
   identification open. The proxy spends a code that reaches its callback without a verifier cookie (`unmatchedVerifier`);
   that hardening applies to every handoff. It alone would not have been enough here: the asserter held the code and could
   redeem it before sending the browser anywhere.
+- Review fix 2: on Cloudflare nothing identified the caller of a binding, so the identification operations trusted any
+  token's `aud`. The deployer now wraps the application Worker's `IAM` binding (`IamApplicationReference`) so the
+  generated service entry carries `props: { app: '<app>@<env>' }`; the platform proxy's binding carries the same. The
+  bounds refuse an IAM binding whose `props` are not exactly this deployment's id, under any binding name.
+  `PropustkaApplication` answers `not_allowed` unless `ctx.props.app` is the input's `app`. A Worker deployed before this
+  carries no props, so its terminal calls are refused until it is redeployed.

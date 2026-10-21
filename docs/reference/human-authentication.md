@@ -300,7 +300,8 @@ PIN, a key fob) and IAM signs that person in
   `<return origin><identify>?identification=<id>`. In every other case IAM shows the normal sign-in.
 - **Assertion.** The application's public procedure calls `inspectIdentification`, `assertIdentity` and
   `cancelIdentification` over its membership transport, with a token whose `aud` is the application. IAM takes the
-  application from the transport, never from the input. `assertIdentity` accepts only an active internal user. It
+  application from the transport, never from the input: the membership transport key, or on Cloudflare the
+  `props.app` that the deployer writes on the application's `IAM` binding. `assertIdentity` accepts only an active internal user. It
   consumes the identification, writes a login with `authentication_method = 'terminal_assertion'`, the terminal and
   the terminal's TTL, and no cookie, and returns IAM's completion URL, `/auth/terminals/complete?identification=<id>`.
   It carries no code.

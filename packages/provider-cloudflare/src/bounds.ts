@@ -1,5 +1,5 @@
 import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING } from '@fabrika/app/build'
-import { type AppEnvironment, FRAMEWORK_VARIABLE_NAMES, isFrameworkVariableName, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type AppEnvironment, appEnvironmentId, FRAMEWORK_VARIABLE_NAMES, isFrameworkVariableName, parseAppEnvironmentId } from '@fabrika/auth-core'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { resolve } from 'node:path'
 import type { GeneratedConfig, Worker } from 'oblaka-iac'
@@ -248,9 +248,26 @@ const assertServices = (worker: string, config: WranglerConfig, names: Applicati
 					`cloudflare: Worker \`${worker}\` binds \`${service}\` to ${bound}; an application binds \`${IAM_APPLICATION_ENTRYPOINT}\` (use \`iamServiceReference()\`)`,
 				)
 			}
+			assertIamIdentity(worker, binding, field(entry, 'props'), names)
 			continue
 		}
 		assertOwnRemote(`Worker \`${worker}\` binds service`, service, names)
+	}
+}
+
+/**
+ * IAM reads a binding's `props.app` as the calling application (ADR-0067 §3), so an IAM binding names exactly this
+ * deployment's IAM application id and carries nothing else. The deployer writes the `IAM` binding that way.
+ */
+const assertIamIdentity = (worker: string, binding: unknown, props: unknown, names: ApplicationNames): void => {
+	const app = appEnvironmentId(names.self.app, names.self.env)
+	const keys = typeof props === 'object' && props !== null ? Object.keys(props) : []
+	if (keys.length !== 1 || field(props, 'app') !== app) {
+		throw new Error(
+			`cloudflare: Worker \`${worker}\` binds IAM as \`${
+				String(binding)
+			}\` without naming its own application \`${app}\`; only the deployer's \`IAM\` binding reaches IAM`,
+		)
 	}
 }
 

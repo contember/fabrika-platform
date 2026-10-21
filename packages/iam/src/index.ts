@@ -48,11 +48,13 @@ import type {
 	RevokeLinkResult,
 	RevokeMemberInput,
 	RevokeMemberResult,
+	TerminalFailure,
 } from '@fabrika/auth-core'
 import { pickEmailEnvironment } from '@fabrika/email'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { createIamApp } from './app'
+import { bindingApp } from './binding-identity'
 import { runIamMaintenance } from './cron'
 import { createIamRepositories } from './db'
 import type { Env } from './env'
@@ -112,6 +114,8 @@ export function iamEnv(bindings: WorkerBindings): Env {
 	}
 }
 
+const NOT_ALLOWED: TerminalFailure = { ok: false, reason: 'not_allowed' }
+
 /** Every call builds its surface from the Worker's own bindings; see `PropustkaApplication` for why it is no getter. */
 function iamRpc(bindings: WorkerBindings, ctx: ExecutionContext): IamRpc & IamHandoffRpc & IamMembershipRpc & IamTerminalRpc {
 	return createIamRpc(iamEnv(bindings), ctx)
@@ -120,7 +124,7 @@ function iamRpc(bindings: WorkerBindings, ctx: ExecutionContext): IamRpc & IamHa
 /**
  * What an application's Workers call over `IAM`: the proxy mints and redeems, the SDK verifies, lists and
  * audits, and the framework requests membership operations on its caller's behalf and identifies people at terminals.
- * An identification operation takes the asserting application from its credential's audience.
+ * An identification operation is pinned to the application named by the binding's `props` (`binding-identity.ts`).
  */
 export type IamApplicationRpc =
 	& Pick<IamRpc, 'getJwks' | 'mintToken' | 'mintFromKey' | 'listPrincipals' | 'audit'>
@@ -195,16 +199,18 @@ export class PropustkaApplication extends WorkerEntrypoint<WorkerBindings> imple
 		return iamRpc(this.env, this.ctx).revokeLink(input)
 	}
 
+	// The identification operations are pinned to the application whose deployment holds the binding, as the membership
+	// transport pins its key's (ADR-0067 §3): a credential's audience proves nothing about who calls.
 	inspectIdentification(input: InspectIdentificationInput): Promise<InspectIdentificationResult> {
-		return iamRpc(this.env, this.ctx).inspectIdentification(input)
+		return bindingApp(this.ctx) === input.app ? iamRpc(this.env, this.ctx).inspectIdentification(input) : Promise.resolve(NOT_ALLOWED)
 	}
 
 	assertIdentity(input: AssertIdentityInput): Promise<AssertIdentityResult> {
-		return iamRpc(this.env, this.ctx).assertIdentity(input)
+		return bindingApp(this.ctx) === input.app ? iamRpc(this.env, this.ctx).assertIdentity(input) : Promise.resolve(NOT_ALLOWED)
 	}
 
 	cancelIdentification(input: CancelIdentificationInput): Promise<CancelIdentificationResult> {
-		return iamRpc(this.env, this.ctx).cancelIdentification(input)
+		return bindingApp(this.ctx) === input.app ? iamRpc(this.env, this.ctx).cancelIdentification(input) : Promise.resolve(NOT_ALLOWED)
 	}
 }
 

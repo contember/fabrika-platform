@@ -71,7 +71,7 @@ const withRawOptions = (worker: Worker, raw: Record<string, unknown>): Worker =>
 	return worker
 }
 
-type GeneratedService = { binding: string; service: string; entrypoint?: string }
+type GeneratedService = { binding: string; service: string; entrypoint?: string; props?: Record<string, unknown> }
 
 /** Any object oblaka calls `configureBinding` on: a checkout can hand it one of its own. */
 type Bindable = Pick<ServiceReference, 'configureBinding'>
@@ -692,9 +692,39 @@ describe('Cloudflare provider', () => {
 		expect(rec.commands.some((command) => command.command === 'wrangler' && command.args[0] === 'deploy')).toBe(false)
 
 		const narrow = await deploy(rec, config({ resources: () => bindingIam(iamServiceReference()) }), {
-			generatedServices: [{ binding: 'IAM', service: 'stage-propustka-worker', entrypoint: 'PropustkaApplication' }],
+			generatedServices: [{ binding: 'IAM', service: 'stage-propustka-worker', entrypoint: 'PropustkaApplication', props: { app: 'demo@stage' } }],
 		})
 		expect(narrow.status).toBe('succeeded')
+	})
+
+	// IAM reads `props.app` as the calling application (ADR-0067 §3): an application must not name another, or none.
+	test('refuses an IAM binding that does not name this deployment as its application', async () => {
+		for (
+			const props of [undefined, { app: 'other@stage' }, { app: 'demo@prod' }, { app: 'demo@stage', admin: true }]
+		) {
+			const result = await deploy(rec, config({ resources: () => bindingIam(iamServiceReference()) }), {
+				generatedServices: [{
+					binding: 'IAM',
+					service: 'stage-propustka-worker',
+					entrypoint: 'PropustkaApplication',
+					...(props === undefined ? {} : { props }),
+				}],
+			})
+			expect(result.status).toBe('failed')
+			expect(stepError(result, 'deploy-worker')).toContain('binds IAM as `IAM` without naming its own application `demo@stage`')
+		}
+		const second: Bindable = {
+			configureBinding: ({ config }) => ({
+				...config,
+				services: [...(config.services ?? []), {
+					binding: 'IAM2',
+					service: 'stage-propustka-worker',
+					entrypoint: 'PropustkaApplication',
+					props: { app: 'other@stage' },
+				}],
+			}),
+		}
+		await expect(deploy(rec, config({ resources: () => bindingIam(second) }))).rejects.toThrow('binds IAM as `IAM2` without naming its own application')
 	})
 
 	// `packages/iam/src/__tests__/index.test.ts` pins the same name as the narrow class IAM exports.
@@ -706,8 +736,10 @@ describe('Cloudflare provider', () => {
 		const { root, app } = provisioned()
 		for (const worker of [app, root]) {
 			const iam = worker.options.bindings?.['IAM']
-			const services = iam instanceof ServiceReference ? iam.configureBinding({ config: {}, binding: 'IAM', env: 'stage' }).services : undefined
-			expect(services).toEqual([{ binding: 'IAM', service: 'stage-propustka-worker', entrypoint: 'PropustkaApplication' }])
+			const services = iam !== undefined && 'configureBinding' in iam && !('getId' in iam)
+				? iam.configureBinding({ config: {}, binding: 'IAM', env: 'stage' }).services
+				: undefined
+			expect(services).toEqual([{ binding: 'IAM', service: 'stage-propustka-worker', entrypoint: 'PropustkaApplication', props: { app: 'demo@stage' } }])
 		}
 	})
 
