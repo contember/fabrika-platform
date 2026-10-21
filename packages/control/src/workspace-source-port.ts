@@ -33,10 +33,20 @@ export interface WorkspaceTree {
 	readonly truncated: boolean
 }
 
+/**
+ * Why a file was not read: `missing`, `not_a_file` (a directory, symlink or submodule), `too_large` (over 512 KiB),
+ * `binary` (not UTF-8), or `budget` (past the 2 MiB a single read may return).
+ */
+export type WorkspaceUnreadableReason = 'missing' | 'not_a_file' | 'too_large' | 'binary' | 'budget'
+
+export type WorkspaceFile =
+	| { readonly path: string; readonly content: string }
+	| { readonly path: string; readonly content: null; readonly reason: WorkspaceUnreadableReason }
+
 export interface WorkspaceFiles {
 	readonly commitSha: string
-	/** `content` is null for a path that is missing, binary, or too large to read. */
-	readonly files: readonly { readonly path: string; readonly content: string | null }[]
+	/** One entry per requested path, in request order. */
+	readonly files: readonly WorkspaceFile[]
 }
 
 export interface WorkspaceCommit {

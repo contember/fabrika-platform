@@ -8,11 +8,13 @@ import type { ControlRepositories } from '../../db'
 import type { ControlJobMessage } from '../../run-lifecycle'
 import {
 	type WorkspaceCommit,
+	type WorkspaceFile,
 	type WorkspacePullRequestInput,
 	WorkspaceSourceError,
 	type WorkspaceSourcePort,
 	type WorkspaceSourceTarget,
 	type WorkspaceTree,
+	type WorkspaceUnreadableReason,
 } from '../../workspace-source-port'
 import { allowAllAuth, authWithPermissions } from './iam'
 
@@ -49,6 +51,8 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 	readonly branches = new Map<string, string>([['main', sha('a')]])
 	/** The content `readFiles` answers for a path; any other path reads as `content of <path>`. */
 	readonly contents = new Map<string, string>()
+	/** Paths `readFiles` answers as not read, with the reason. */
+	readonly unreadable = new Map<string, WorkspaceUnreadableReason>()
 	private commits = 0
 
 	readBranch(input: { target: WorkspaceSourceTarget; branch: string }): Promise<string | null> {
@@ -76,7 +80,11 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 		this.record(input.target, { kind: 'read-files', commitSha: input.commitSha, paths: input.paths })
 		return Promise.resolve({
 			commitSha: input.commitSha,
-			files: input.paths.map((path) => ({ path, content: this.contents.get(path) ?? `content of ${path}` })),
+			files: input.paths.map((path): WorkspaceFile => {
+				const reason = this.unreadable.get(path)
+				if (reason !== undefined) return { path, content: null, reason }
+				return { path, content: this.contents.get(path) ?? `content of ${path}` }
+			}),
 		})
 	}
 

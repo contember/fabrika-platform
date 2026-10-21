@@ -189,16 +189,43 @@ describe('readFiles', () => {
 		on('GET', `/git/blobs/${BLOB_BINARY}`, json(blob(BLOB_BINARY, new Uint8Array([0xff, 0xfe])))),
 	]
 
-	test('returns UTF-8 regular files and reports missing, binary, oversized, and non-regular paths as missing', async () => {
+	test('returns UTF-8 regular files and says why each other path was not read', async () => {
 		const { repository, requests } = await open(routes())
-		const read = await repository.readFiles(HEAD, ['src/index.ts', 'src/absent.ts', 'image.png', 'large.txt', 'link', 'src/index.ts/x'])
+		const read = await repository.readFiles(HEAD, ['src/index.ts', 'src/absent.ts', 'image.png', 'large.txt', 'link', 'src/index.ts/x', 'src'])
 		expect(read).toEqual({
 			commitSha: HEAD,
 			files: [{ path: 'src/index.ts', content: 'héllo' }],
-			missingPaths: ['src/absent.ts', 'image.png', 'large.txt', 'link', 'src/index.ts/x'],
+			unreadable: [
+				{ path: 'src/absent.ts', reason: 'missing' },
+				{ path: 'image.png', reason: 'binary' },
+				{ path: 'large.txt', reason: 'too_large' },
+				{ path: 'link', reason: 'not_a_file' },
+				{ path: 'src/index.ts/x', reason: 'missing' },
+				{ path: 'src', reason: 'not_a_file' },
+			],
 		})
 		expect(requests.some((request) => request.url.endsWith(`/git/blobs/${BLOB_LARGE}`))).toBe(false)
 		expect(requests.some((request) => request.url.endsWith(`/git/blobs/${BLOB_LINK}`))).toBe(false)
+	})
+
+	test('a file past the total read budget is reported as such and never fetched', async () => {
+		const size = 512 * 1024
+		const names = ['a', 'b', 'c', 'd', 'e']
+		const blobSha = (index: number) => sha(String(index + 5))
+		const content = new Uint8Array(size).fill(0x61)
+		const { repository, requests } = await open([
+			HEAD_COMMIT_ROUTE,
+			on(
+				'GET',
+				`/git/trees/${ROOT_TREE}`,
+				json({ sha: ROOT_TREE, truncated: false, tree: names.map((name, index) => blobEntry(name, blobSha(index), size)) }),
+			),
+			...names.map((_, index) => on('GET', `/git/blobs/${blobSha(index)}`, json(blob(blobSha(index), content)))),
+		])
+		const read = await repository.readFiles(HEAD, names)
+		expect(read.files.map((file) => file.path)).toEqual(['a', 'b', 'c', 'd'])
+		expect(read.unreadable).toEqual([{ path: 'e', reason: 'budget' }])
+		expect(requests.some((request) => request.url.endsWith(`/git/blobs/${blobSha(4)}`))).toBe(false)
 	})
 
 	test('refuses unbounded or invalid path lists before any repository request', async () => {

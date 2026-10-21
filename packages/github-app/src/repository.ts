@@ -11,6 +11,8 @@ import type {
 	GitHubTextFile,
 	GitHubTreeEntry,
 	GitHubTreeListing,
+	GitHubUnreadablePath,
+	GitHubUnreadableReason,
 } from './repository-types'
 import {
 	decodeCommit,
@@ -112,25 +114,24 @@ class RepositoryClient implements GitHubRepositoryClient {
 		for (const path of paths) validatePath(path)
 		const directories = this.#treeWalker((await this.#readCommit(commitSha, signal)).treeSha, signal)
 		const files: GitHubTextFile[] = []
-		const missingPaths: string[] = []
+		const unreadable: GitHubUnreadablePath[] = []
 		let remainingBytes = MAX_READ_BYTES
 		for (const path of paths) {
-			const entry = await directories.find(path)
-			// Oversized files, and files past the total read budget, are reported missing like other unreadable paths.
-			if (entry?.type !== 'blob' || entry.mode === '120000' || entry.size > MAX_FILE_BYTES || entry.size > remainingBytes) {
-				missingPaths.push(path)
+			const entry = readableBlob(await directories.find(path), remainingBytes)
+			if (typeof entry === 'string') {
+				unreadable.push({ path, reason: entry })
 				continue
 			}
 			const body = await this.#readGitObject(`/git/blobs/${entry.sha}`, signal, MAX_BLOB_RESPONSE_BYTES)
 			const content = decodeTextBlob(body, entry.sha, entry.size)
 			if (content === null) {
-				missingPaths.push(path)
+				unreadable.push({ path, reason: 'binary' })
 				continue
 			}
 			remainingBytes -= entry.size
 			files.push({ path, content })
 		}
-		return { commitSha, files, missingPaths }
+		return { commitSha, files, unreadable }
 	}
 
 	async createBranch(input: GitHubCreateBranchInput): Promise<GitHubRef> {
@@ -332,6 +333,17 @@ class TreeWalker {
 		if (tree.truncated) throw responseError()
 		return new Map(tree.entries.map((entry) => [entry.path, entry]))
 	}
+}
+
+type GitHubBlobEntry = Extract<GitHubTreeEntry, { readonly type: 'blob' }>
+
+/** The entry when it is a regular file within both bounds, otherwise why it is not read. */
+function readableBlob(entry: GitHubTreeEntry | null, remainingBytes: number): GitHubBlobEntry | GitHubUnreadableReason {
+	if (entry === null) return 'missing'
+	if (entry.type !== 'blob' || entry.mode === '120000') return 'not_a_file'
+	if (entry.size > MAX_FILE_BYTES) return 'too_large'
+	if (entry.size > remainingBytes) return 'budget'
+	return entry
 }
 
 function requireBranchAt(ref: GitHubRef, sha: string): GitHubRef {
