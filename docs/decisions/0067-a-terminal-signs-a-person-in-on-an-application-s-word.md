@@ -1,7 +1,7 @@
 ---
 id: 0067
 title: A terminal signs a person in on an application's word
-status: proposed
+status: accepted
 date: 2026-10-21
 ---
 
@@ -48,7 +48,7 @@ terminal's ceiling, and the permissions the terminal adds.**
 
 ### 1. A terminal is an enrolled browser
 
-An administrator with the IAM permission `terminals.manage` opens `/auth/terminals/enroll` on the computer,
+An administrator with the IAM permission `iam.terminals.manage` opens `/auth/terminals/enroll` on the computer,
 signed in with their personal account, and names it. IAM then, in one batch:
 
 - creates a `service` principal for the terminal and a `terminals` row beside it (label, who enrolled it,
@@ -60,16 +60,18 @@ signed in with their personal account, and names it. IAM then, in one batch:
   signed in as the person who set it up;
 - writes an audit event.
 
-The terminal's **profile** says what it is for:
+Administering an enrolled terminal (listing, setting its profile, revoking it) is an `/admin/rpc` operation and
+needs `iam.admin`. The terminal's **profile** says what it is for:
 
-| Field         | Meaning                                                                                                      |
-| ------------- | ------------------------------------------------------------------------------------------------------------ |
-| `asserters`   | the applications that may assert a person on this terminal                                                   |
-| `ceiling`     | per application, the patterns of the person's own permissions that survive on the terminal; empty by default |
-| grants        | ordinary `grants` rows on the terminal's principal: what the terminal adds                                   |
-| `session_ttl` | how long a person's session on it lasts; default 5 minutes, at most 1 hour                                   |
+| Field         | Meaning                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------- |
+| `asserters`   | the applications that may assert a person on this terminal, one `terminal_asserters` row each                 |
+| `ceiling`     | per asserter row, the patterns of the person's own permissions that survive on the terminal; empty by default |
+| grants        | ordinary `grants` rows on the terminal's principal: what the terminal adds                                    |
+| `session_ttl` | how long a person's session on it lasts; default 5 minutes, at most 1 hour                                    |
 
-Revoking a terminal sets `revoked_at` and revokes every session issued on it. The cookie then opens nothing.
+Revoking a terminal sets `revoked_at`, ends its pending identifications and revokes every session issued on it. The
+cookie then opens nothing.
 
 **Invariant: a terminal cookie is not a session.** No proxy reads it and no request is authorized by it. IAM
 reads it on its own host, only to start an identification.
@@ -104,8 +106,9 @@ that path against the handoff's return origin, which the application's registry 
 The identification page is the application's own: a PIN pad, a "hold your fob to the reader" screen, both.
 It is a public endpoint, because nobody is signed in yet. The application sends what the person entered to
 its own public procedure, which runs as its workload ([ADR-0063](0063-a-public-procedure-runs-as-its-own-workload.md)).
-The procedure then talks to IAM over the transport of
-[ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md):
+The procedure then talks to IAM over the transport of the membership operations
+([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)): the `IAM` service binding on Workers, the membership
+transport key over HTTP:
 
 - `inspectIdentification(id)` returns the terminal's id and label and the expiry. The application needs the
   terminal to throttle guesses per terminal.
@@ -228,7 +231,9 @@ redemption and every mint. The values come from the session row, never from what
   can do. They do not stop an asserter from naming a colleague within those bounds. Installations should keep
   the ceiling empty where the identification is weak: a fob UID can be cloned.
 - New persisted state, through new immutable migrations in both dialects:
-  - the `terminals` and `terminal_identifications` tables;
+  - the `terminals`, `terminal_asserters`, `terminal_identifications` and `app_terminals` tables;
+  - the terminal `generation`, carried by `terminals`, `terminal_identifications` and `sessions`, and the
+    identification's `session_id` and `completed_at` of the completion step;
   - `sessions.terminal_id` and `sessions.asserted_by`, and `terminal_assertion` in the
     `authentication_method` CHECK;
   - `terminal_id` and `asserted_by` columns in `auth_log`.
@@ -240,7 +245,7 @@ redemption and every mint. The values come from the session row, never from what
   exactly one path" holds; the new path only clears one. A proxy older than this release has no sign-out path,
   so a terminal application needs a proxy that serves it. The compatibility checks of
   [ADR-0062](0062-a-platform-release-serves-older-framework-releases.md) refuse to publish such an application
-  behind an older proxy.
+  behind a proxy release that does not serve the sign-out.
 - The token claims are optional and additive. An older framework ignores them, so an application that never
   uses terminals is unaffected.
 - `fabrika platform upgrade` applies the migrations. Nothing changes until an administrator enrols a terminal.

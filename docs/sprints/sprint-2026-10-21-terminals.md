@@ -192,9 +192,7 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
 
 ## Run log
 
-- WU1: the profile is `terminals.session_ttl` (CHECK 1–3600) plus one `terminal_asserters (terminal_id, app, ceiling)`
-  row per asserting application, not one JSON column. A ceiling exists only for an asserter, so no state can name one
-  for another app. The ceiling is a JSON array of action patterns, app-wide.
+- WU1: `terminals.session_ttl` has CHECK 1–3600. The ceiling is a JSON array of action patterns, app-wide.
 - WU1: the SQLite `sessions` rebuild also rebuilds `auth_codes`, `oauth_grants`, `oauth_codes` and
   `oauth_refresh_tokens`, kept aside and restored, as control's `0005_approved_access.sql` does for a referenced table.
 - WU1: `sessionUsable` got its `terminal_assertion` case (`true`; the validity join checks the terminal), because the
@@ -213,9 +211,7 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
 - WU2 → WU4/WU5: a `perms` entry with source `terminal` makes an older `parseAccessClaims` refuse the whole token
   (`parseSource` is closed). Only an application whose framework knows terminals may be an asserter; WU5's "declares an
   identification page" check is what enforces that.
-- WU3: the action is `iam.terminals.manage`, in IAM's `iam.*` namespace like `iam.admin` and `iam.users.manage`. It gates
-  enrolment only; `terminals.list`/`setProfile`/`revoke` of `/admin/rpc` require `iam.admin`, like the grants a terminal's
-  principal holds. "The `/admin` API" is these `/admin/rpc` procedures: `/admin/*` REST stays closed.
+- WU3: "The `/admin` API" is the `/admin/rpc` procedures: `/admin/*` REST stays closed.
 - WU3: `setProfile` also sets the label (on the terminal's principal too, which audit rows name). An asserter must be a
   registered app that is not a platform audience; ceiling patterns pass `isActionAllowed` against its catalog as a typo
   check and may be wildcards even for a contract application, because a ceiling narrows and grants nothing.
@@ -310,12 +306,21 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
   bounds refuse an IAM binding whose `props` are not exactly this deployment's id, under any binding name.
   `PropustkaApplication` answers `not_allowed` unless `ctx.props.app` is the input's `app`. A Worker deployed before this
   carries no props, so its terminal calls are refused until it is redeployed.
-- Review fix 3: a release (`terminals.release`, formerly `revokeSessions`) increments `terminals.generation`, ends the
-  pending identifications and revokes the sessions in one transaction; a revocation ends pending identifications too
-  (migration `0026_terminal_generation.sql`). An identification records its generation, the consumption requires it to
-  be the terminal's, the login and its child carry it (`sessions.terminal_generation`), and the validity join requires
-  it. No lock ordering is needed: a login written by an assertion that raced a release is invalid on arrival. Opus #2
-  (a failed write lost the identification) was already closed by fix 1's guarded batch.
+- Review fix 3: `terminals.release` replaces `revokeSessions` (migration `0026_terminal_generation.sql`). The generation
+  guard needs no lock ordering. Opus #2 (a failed write lost the identification) was already closed by fix 1's guarded
+  batch.
 - Review fix 4: `memberCallerOf` intersected a token's `perms` with the person's own live permissions, dropping every
   terminal grant. A token with a `terminal` claim is now intersected with `permissionsOnTerminal` (the mint's set, live),
   and is `invalid_token` once the terminal could no longer mint for the app. The token's own restriction still applies.
+- Review fix 5: a refused mint reads the stored session row for its `auth_log` principal and terminal
+  (`getSessionByHashForAudit`), so a refusal after a revocation or expiry stays attributed. `mintToken` refuses a
+  terminal session once the asserter no longer declares an identification page. The `identify` CHECK already refuses
+  `//…` only by its leading `/`; rather than a migration, `getTerminalIdentifyPath` re-validates the stored path with
+  `terminalIdentifyProblem` and answers null for an invalid one (the reconcile already validates on write).
+- Review fix 5: the Zerops refusal is keyed on the pinned reader's capability (`OlderProxyReader.signsOut`), so a
+  namespace pinned to a release that serves sign-out is admitted. Every listed older reader is `false` today.
+- Review fix 5: `/auth/login` writes an identification per bounce. Reusing an open one is impossible (only the id's
+  hash is stored), so IAM `CLAUDE.md` records the unthrottled write next to the release exception.
+- Review fix 5: the proxy "next request bounces" check already exists (`proxy-core` `signout.test.ts`, since WU6). The
+  terminal-sessions suite now also runs on Postgres; new tests cover a disabled terminal principal and a concurrent
+  double assertion.

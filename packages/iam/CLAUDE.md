@@ -174,7 +174,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   wire is `IamTerminalRpc` (`@fabrika/auth-core`'s `terminal.ts`).
 - **ONLY IAM ISSUES A TERMINAL'S CODE, AGAINST THE HANDOFF THE PROXY STARTED** (ADR-0067 §3, `identification.ts`). With no
   current login, `/auth/login` turns a terminal cookie into an identification (2 minutes, id hashed) holding the whole
-  handoff, and 302s to the app's identify path on the handoff's return origin. The application's
+  handoff, and 302s to the app's identify path on the handoff's return origin. Every bounce writes a new
+  identification and its `auth_log` row, unthrottled: only an enrolled terminal's browser reaches it, an open one
+  cannot be reused (IAM keeps only the id's hash) and the prune drops expired rows. The application's
   `inspectIdentification`/`assertIdentity`/`cancelIdentification` (the membership transport, `PropustkaApplication`)
   are pinned to the calling application by the transport: the membership key's app over HTTP, the binding's `ctx.props.app`
   (written by the deployer, `binding-identity.ts`) over `PropustkaApplication`, and the credential must verify for that
