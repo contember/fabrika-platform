@@ -42,6 +42,12 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `create_pull_request` | Open a pull request from the workspace to the default branch.      |
 | `get_app_rules`       | The application rules or one topic, read-only, with a pin warning. |
 
+Every tool carries MCP tool annotations. A tool that only reads has `readOnlyHint: true`, so a client such as ChatGPT
+does not ask the user to confirm it. A writing tool states `destructiveHint` (it can overwrite or delete files, or replace
+what the stage environment runs) and `idempotentHint` (a repeated call has no further effect). No tool has
+`openWorldHint`: every tool reaches only the target's repository and Control. The annotations are hints for the client;
+Control authorizes every call.
+
 `get_app_rules` answers the application rules every agent gets, headed by their version (`fabrika-app <version>`):
 the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `references/<topic>.md`
 ([application runtime](application-runtime.md#the-agent-skill)). With `workspaceId` it reads that workspace's
