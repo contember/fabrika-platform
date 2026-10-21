@@ -239,7 +239,8 @@ src/
 ## Contract framework
 
 - `@fabrika/app/contract` is browser-safe: it imports `@fabrika/auth-core`,
-  `@fabrika/db/tables` and `zod/v4` only. The SPA imports `fabrika.contract.ts` for
+  `@fabrika/db/tables`, `@fabrika/proxy-core/headers` (which imports nothing at runtime: `isPolicyOrigin`,
+  `MAX_CSP_ORIGINS`, `WORKER_BLOB_SOURCE`) and `zod/v4` only. The SPA imports `fabrika.contract.ts` for
   the typed client, so never import a server runtime, `@fabrika/db`'s root or a
   Node/Bun API there.
 - `defineContract(vocabulary, (c) => surface)` builds plain data and validates

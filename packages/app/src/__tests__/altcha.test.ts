@@ -18,7 +18,7 @@ import { contract } from './fixtures/altcha/fabrika.contract'
 import { tables } from './fixtures/altcha/src/db/tables'
 import { vocabulary } from './fixtures/altcha/src/vocabulary'
 
-// altcha-lib reads a challenge's expiry on the real clock too, so the tests' clock is the real one at load.
+// The issuer's clock: altcha-lib and the verifier read a challenge's expiry on the real clock, so it is the real one at load.
 const NOW = Date.now()
 const RULES = { action: 'register', cost: ALTCHA_LIMITS.cost, maxAgeMs: ALTCHA_LIMITS.maxAgeMs }
 const HOST = 'signup.example.com'
@@ -80,8 +80,10 @@ describe('an ALTCHA challenge, issued and verified by the application', () => {
 		const token = await solved(await issuer.issue(HOST))
 		expect((await verifier.verify({ token, hostname: 'other.example.com', action: 'register' })).outcome).toBe('failed')
 		expect((await verifier.verify({ token, hostname: HOST, action: 'enroll' })).outcome).toBe('failed')
-		const later = altchaChallenge('hmac-key-1', RULES, MINIMAL_CHALLENGE_WORK, () => NOW + RULES.maxAgeMs + 1000).verifier
-		expect((await later.verify({ token, hostname: HOST, action: 'register' })).outcome).toBe('failed')
+		// Issued a lifetime and a second ago: expired on the real clock, which the verifier and altcha-lib both read.
+		const earlier = altchaChallenge('hmac-key-1', RULES, MINIMAL_CHALLENGE_WORK, () => Date.now() - RULES.maxAgeMs - 1000).issuer
+		const expired = await solved(await earlier.issue(HOST))
+		expect((await verifier.verify({ token: expired, hostname: HOST, action: 'register' })).outcome).toBe('failed')
 	})
 
 	test('a challenge signed with another key, or whose parameters were changed, is refused', async () => {
@@ -240,10 +242,11 @@ describe('the bounds of an ALTCHA challenge', () => {
 		])
 	})
 
-	test('the issuer admits at least twice the procedure’s buckets, and keeps a bucket the procedure turned off off', () => {
+	test('the issuer admits at least twice the procedure’s buckets, and keeps its own where the procedure turned one off', () => {
 		const { artifact } = registration({ challenge: ALTCHA, rate: { perClient: null, perEndpoint: 3000 } })
+		// Every issue costs a PBKDF2 derivation, so the issuer is never unbounded, whatever the procedure's handler costs.
 		expect(artifact?.procedures?.[challengeRowId('api.signups.register')]?.rate).toEqual({
-			perClient: null,
+			perClient: 30,
 			perCaller: null,
 			perEndpoint: 6000,
 			bytesPerHour: null,

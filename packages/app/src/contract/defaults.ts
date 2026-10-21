@@ -143,14 +143,14 @@ export function challengeRowId(endpoint: string): string {
 /**
  * The buckets per minute of the endpoint that issues a challenge: a visitor fetches one per form shown and one more per
  * expiry, and every issue costs the server one attempt's work. Each is at least this, and at least twice the
- * procedure's own bucket, so the issuer never admits fewer submissions than the procedure declares; a bucket the
- * procedure turns off (`null`) the issuer has not either.
+ * procedure's own bucket, so the issuer never admits fewer submissions than the procedure declares. A bucket the
+ * procedure turns off (`null`) is this one on the issuer: the procedure's handler may be cheap, the issue never is.
  */
 export const CHALLENGE_ISSUE_RATE = { perClient: 30, perEndpoint: 600 } as const
 
 /** The issuer's bucket for the procedure's `own`, within the ceiling of every bucket. */
-export function challengeIssueBucket(own: number | null, floor: number): number | null {
-	return own === null ? null : Math.min(PROCEDURE_LIMITS.maxPerMinute, Math.max(floor, 2 * own))
+export function challengeIssueBucket(own: number | null, floor: number): number {
+	return Math.min(PROCEDURE_LIMITS.maxPerMinute, Math.max(floor, 2 * (own ?? 0)))
 }
 
 /**

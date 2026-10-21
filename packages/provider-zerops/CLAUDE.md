@@ -233,13 +233,15 @@ bun test
   environment's registry row, ADR-0022 "Cross-origin endpoints"), and omits the field otherwise.
   `compileNamespaceProxyManifest` refuses a list the manifest parser would: an origin that fails `isCrossOrigin`, a
   duplicate, the member's own host, more than `MAX_CROSS_ORIGINS`. Control republishes the namespace when the list changes.
-- **A deploy whose rows the namespace's pinned proxy cannot read is refused.** A namespace proxy's manifest parser is
-  strict, so an approved contract with a row that no older release's proxy parses (a `public` row, a `cache`, a
-  file-response profile, a `capabilities` requirement, and any later form) deploys only while the namespace's proxy
-  source is the one this control plane deploys new placements from; the refusal names
+- **A deploy whose rows or CSP the namespace's pinned proxy cannot read is refused.** A namespace proxy's manifest parser
+  is strict, so an approved contract with a row that no older release's proxy parses (a `public` row, a `cache`, a
+  file-response profile, a `capabilities` requirement, and any later form), or with a CSP directive none of them knows
+  (`workerSrc`, an ALTCHA challenge's `blob:` workers), deploys only while the namespace's proxy source is the one this
+  control plane deploys new placements from; the refusal names each row and `csp`, and
   `fabrika control namespaces update --namespace=<id> --proxy-source=current`. The judges are those releases' own
-  row parsers, which Control passes in as `namespaces.olderProxies` (`src/namespace/proxy-reads.ts`); never replace
-  them with a list of fields. A row one of them parses deploys, so every 0.4/0.5/0.6 contract does.
+  parsers, a row parser and the CSP field of the entry parser per release, which Control passes in as
+  `namespaces.olderProxies` (`src/namespace/proxy-reads.ts`); never replace them with a list of fields. What one of them
+  parses deploys, so every 0.4/0.5/0.6 contract does.
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).

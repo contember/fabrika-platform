@@ -19,7 +19,7 @@ import { createZeropsControlProvider, type ZeropsControlProviderOptions, zeropsS
 import type { ManagedValues } from '../managed-env'
 import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, zeropsArtifactCodec } from '../manifest'
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
-import type { OlderProxyRowReaders } from '../namespace/proxy-reads'
+import type { OlderProxyReaders } from '../namespace/proxy-reads'
 import { zeropsSharedServiceHostname } from '../service-names'
 import type { ZeropsSourcePort, ZeropsSourceUploadInput } from '../source/port'
 import type { ZeropsAppConfig } from '../types'
@@ -79,7 +79,7 @@ const PROXY_SOURCE = {
 	descriptor: await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: proxy\n'),
 }
 /** These deploys run on the namespace's own pin, so no older proxy is consulted. */
-const OLDER_PROXIES: OlderProxyRowReaders = [() => true]
+const OLDER_PROXIES: OlderProxyReaders = [{ row: () => true, csp: () => true }]
 
 const app: ProviderApp = {
 	id: 'notes',

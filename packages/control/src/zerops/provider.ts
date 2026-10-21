@@ -29,7 +29,7 @@ import type { Env } from '../env'
 import { gitHubAppClientFactory, vaultGitHubCredentials } from '../github/connections/credentials'
 import { createGitHubSource, type GitHubMetadataFetch, type SourceDownloadFetch, SourceRateLimited, type SourceUploadFetch } from '../github/source'
 import type { CommitSource } from '../github/source/commit-files'
-import { OLDER_PROXY_ROW_READERS } from './older-proxies'
+import { OLDER_PROXY_READERS } from './older-proxies'
 
 const required = (source: Record<string, string | undefined>, name: string): string => {
 	const value = source[name]
@@ -125,6 +125,6 @@ export function zeropsControlProvider(
 		...(env.FABRIKA_IAM_PROVISIONING_KEY === undefined
 			? {}
 			: { adminKey: env.FABRIKA_IAM_PROVISIONING_KEY }),
-		namespaces: { ...namespaces, olderProxies: OLDER_PROXY_ROW_READERS },
+		namespaces: { ...namespaces, olderProxies: OLDER_PROXY_READERS },
 	})
 }

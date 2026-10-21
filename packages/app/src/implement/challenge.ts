@@ -219,7 +219,8 @@ function parsePayload(token: string): AltchaPayload | null {
  * The issuer and the verifier of one public procedure's ALTCHA challenge, with the HMAC key its application variable
  * holds. A challenge carries the action and the host it was issued for and expires `maxAgeMs` after it was issued; the
  * server picks the attempt that solves it and signs that attempt's key, so verifying is two HMACs and no proof of work.
- * Nothing leaves the process. `now` is the clock a challenge's expiry is set and read with.
+ * Nothing leaves the process. `now` is the clock a challenge's expiry is set with; altcha-lib reads it on the real clock,
+ * and so does the verifier, so the two never disagree.
  */
 export function altchaChallenge(
 	secret: string,
@@ -254,7 +255,7 @@ export function altchaChallenge(
 			}
 			const { parameters } = payload.challenge
 			// The signature covers these; they are read before it only to answer without the HMAC.
-			if (parameters.data.action !== check.action || parameters.data.host !== check.hostname || parameters.expiresAt * 1000 < now()) {
+			if (parameters.data.action !== check.action || parameters.data.host !== check.hostname || parameters.expiresAt * 1000 < Date.now()) {
 				return { outcome: 'failed' }
 			}
 			try {

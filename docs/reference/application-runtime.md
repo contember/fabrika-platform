@@ -963,7 +963,8 @@ artifact records each procedure's effective rules (`procedures[<id>]`), and the 
   issues and verifies it itself, with the HMAC key the variable holds, and asks no one. The build adds a row of its own
   (source `challenge`, id `<endpoint>.challenge`): `GET /__fabrika/challenge/<action>`, anonymous, from the procedure's
   `crossOrigin`, no body, with buckets of its own (`CHALLENGE_ISSUE_RATE`: 30 per client and 600 a minute, each at
-  least twice the procedure's, and off where the procedure turned its own off), under the reserved prefix
+  least twice the procedure's; where the procedure turned one off, the issuer keeps its own, since every issue costs a
+  derivation), under the reserved prefix
   `/__fabrika/challenge`, so a path below it no row serves is 404; the artifact refuses a challenge without exactly
   that row. It answers a fresh PBKDF2/SHA-256 challenge signed over its parameters: `cost` iterations per attempt
   (5000 by default, 1000 to 18 000), a counter drawn from 1 to 10 000 that the browser counts up to (from 1, so no
