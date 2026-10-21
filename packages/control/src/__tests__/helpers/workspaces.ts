@@ -60,6 +60,8 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 	readonly contents = new Map<string, string>()
 	/** Paths `readFiles` answers as not read, with the reason. */
 	readonly unreadable = new Map<string, WorkspaceUnreadableReason>()
+	/** Thrown by the next call, then cleared. */
+	failure: Error | undefined
 	/** The files `compare` answers as changed. */
 	changedFiles: WorkspaceChangedFile[] = []
 	private commits = 0
@@ -153,6 +155,9 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 	private record(target: WorkspaceSourceTarget, call: SourceCall): void {
 		this.targets.push(target)
 		this.calls.push(call)
+		const failure = this.failure
+		this.failure = undefined
+		if (failure !== undefined) throw failure
 	}
 }
 

@@ -7,6 +7,7 @@ import {
 	GitHubNotFoundError,
 	type GitHubRepositoryClient,
 	type GitHubRepositoryOpenRequest,
+	GitHubRequestError,
 	GitHubStaleHeadError,
 	type GitHubTreeEntry,
 } from '@fabrika/github-app'
@@ -174,10 +175,10 @@ describe('GitHub workspace source', () => {
 		])
 	})
 
-	test('refuses a binding that does not own the repository before any GitHub client exists', async () => {
+	test('refuses a binding that does not own the repository before any GitHub client exists, as no retry helps', async () => {
 		const { source, credentials } = await fixture()
-		expect(await failureKind(source.readBranch({ target: { ...target, owner: 'other-org' }, branch: 'main', signal: signal() }))).toBe('unavailable')
-		expect(await failureKind(source.readBranch({ target: { ...target, installationId: 99 }, branch: 'main', signal: signal() }))).toBe('unavailable')
+		expect(await failureKind(source.readBranch({ target: { ...target, owner: 'other-org' }, branch: 'main', signal: signal() }))).toBe('refused')
+		expect(await failureKind(source.readBranch({ target: { ...target, installationId: 99 }, branch: 'main', signal: signal() }))).toBe('refused')
 		expect(credentials).toEqual([])
 	})
 
@@ -295,10 +296,27 @@ describe('GitHub workspace source', () => {
 		[new GitHubStaleHeadError(), 'stale_head'],
 		[new GitHubBranchConflictError(), 'conflict'],
 		[new GitHubNotFoundError(), 'not_found'],
+		[new GitHubRequestError(422), 'refused'],
+		[new GitHubRequestError(401), 'refused'],
+		[new GitHubRequestError(403), 'unavailable'],
+		[new GitHubRequestError(502), 'unavailable'],
 	]
 	test.each(classified)('classifies %p', async (error, kind) => {
 		const { source, repository } = await fixture()
 		repository.failure = error
+		expect(await failureKind(source.readBranch({ target, branch: 'main', signal: signal() }))).toBe(kind)
+	})
+
+	const openings: [Error, WorkspaceSourceErrorKind][] = [
+		[new GitHubRequestError(404), 'refused'],
+		[new GitHubRequestError(403), 'refused'],
+		[new GitHubRequestError(422), 'refused'],
+		[new GitHubRequestError(500), 'unavailable'],
+		[new Error('GitHub App request failed'), 'unavailable'],
+	]
+	test.each(openings)('classifies a repository that cannot be opened for %p', async (error, kind) => {
+		const { source, openFailure } = await fixture()
+		openFailure.error = error
 		expect(await failureKind(source.readBranch({ target, branch: 'main', signal: signal() }))).toBe(kind)
 	})
 

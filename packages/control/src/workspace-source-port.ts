@@ -114,9 +114,11 @@ export interface WorkspacePullRequest {
 
 /**
  * A classified, detail-free repository failure. `stale_head`: the branch moved past the expected head.
- * `not_found`: a branch, commit or path does not exist. `conflict`: the branch already exists.
+ * `not_found`: a branch, commit or path does not exist. `conflict`: the branch already exists. `refused`: the host
+ * refused the connection's credentials, permissions or the change itself, so a retry does not help. `unavailable`:
+ * the host failed or rate-limited the call, so a retry later may.
  */
-export type WorkspaceSourceErrorKind = 'stale_head' | 'not_found' | 'conflict' | 'unavailable'
+export type WorkspaceSourceErrorKind = 'stale_head' | 'not_found' | 'conflict' | 'refused' | 'unavailable'
 
 export class WorkspaceSourceError extends Error {
 	constructor(readonly kind: WorkspaceSourceErrorKind) {

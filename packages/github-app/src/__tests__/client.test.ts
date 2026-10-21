@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { generateKeyPairSync } from 'node:crypto'
-import { GitHubAppClient, type GitHubAppClientConfig, type GitHubAppFetch, pemToPkcs8 } from '..'
+import { GitHubAppClient, type GitHubAppClientConfig, type GitHubAppFetch, GitHubRequestError, pemToPkcs8 } from '..'
 
 const NOW = Date.UTC(2026, 7, 11, 10, 20, 30)
 const EXPIRES_AT = '2026-08-11T11:20:30.000Z'
@@ -506,6 +506,8 @@ describe('GitHubAppClient validation and redaction', () => {
 		const jwt = new Headers(request.init?.headers).get('authorization') ?? ''
 		for (const secret of [SECRET_BODY, SECRET_TOKEN, PKCS8_KEY, jwt, request.url]) expect(statusError.message).not.toContain(secret)
 		expect(statusError.message).toBe('GitHub App request failed with status 500')
+		expect(statusError).toBeInstanceOf(GitHubRequestError)
+		expect(statusError instanceof GitHubRequestError ? statusError.status : null).toBe(500)
 
 		const throwingFetch: GitHubAppFetch = () => Promise.reject(new Error(`https://private.example/${SECRET_TOKEN}`))
 		const networkError = await errorOf((await client(throwingFetch)).resolveInstallationId('owner', 'repo'))
