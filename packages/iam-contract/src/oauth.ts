@@ -143,10 +143,12 @@ export function parseOAuthClientMetadata(value: unknown, registration: OAuthMana
 
 function parseClientGrantTypes(value: unknown): OAuthClientMetadataDocument['grant_types'] | null {
 	if (value === undefined) return ['authorization_code']
-	if (!Array.isArray(value) || value.length === 0 || value.length > 2) return null
+	if (!Array.isArray(value) || value.length === 0 || value.length > 16) return null
 	const grants: OAuthClientMetadataDocument['grant_types'] = []
 	for (const grant of value) {
-		if ((grant !== 'authorization_code' && grant !== 'refresh_token') || grants.includes(grant)) return null
+		if (typeof grant !== 'string') return null
+		// A client may list grants this server does not offer (Claude lists jwt-bearer); they grant it nothing here.
+		if ((grant !== 'authorization_code' && grant !== 'refresh_token') || grants.includes(grant)) continue
 		grants.push(grant)
 	}
 	return grants.includes('authorization_code') ? grants : null

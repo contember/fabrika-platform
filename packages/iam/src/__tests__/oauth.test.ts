@@ -187,6 +187,32 @@ describe('authorization request validation', () => {
 		expect(body.refresh_token).toBeUndefined()
 	})
 
+	test('a document listing a grant this server does not offer is accepted with the grants it does', async () => {
+		const f = await fixture({
+			document: (clientId) => ({
+				client_id: clientId,
+				redirect_uris: [REDIRECT_URI],
+				grant_types: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:jwt-bearer'],
+				token_endpoint_auth_method: 'none',
+			}),
+		})
+		const body = await tokenBody(await f.exchange(await f.approve()))
+		expect(typeof body.refresh_token).toBe('string')
+	})
+
+	test('a document whose grants omit authorization_code is refused', async () => {
+		const f = await fixture({
+			document: (clientId) => ({
+				client_id: clientId,
+				redirect_uris: [REDIRECT_URI],
+				grant_types: ['refresh_token', 'urn:ietf:params:oauth:grant-type:jwt-bearer'],
+				token_endpoint_auth_method: 'none',
+			}),
+		})
+		const response = await f.authorize()
+		expect(response.status).toBe(400)
+	})
+
 	test('an unknown scope redirects with invalid_scope, an unknown resource with invalid_target', async () => {
 		const f = await fixture()
 		expect(locationOf(await f.authorize({ scope: 'everything' })).searchParams.get('error')).toBe('invalid_scope')
