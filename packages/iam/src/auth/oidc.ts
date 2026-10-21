@@ -72,7 +72,9 @@ export async function handleCallback(
 	const flight = await decodeFlight(env, readCookie(request.headers.get('Cookie'), OIDC_COOKIE))
 	// The flight we signed names the application the login started from; its refusals speak that language.
 	const presentation = await presentationFor(services, flight?.app ?? null)
-	if (!services.config.authentication.oidc.enabled || services.oidc === null) return authFailurePage(presentation, { kind: 'oidc_disabled' }, 404)
+	if (!services.config.authentication.oidc.enabled || services.oidc === null) {
+		return authFailureEndingFlight(presentation, { kind: 'oidc_disabled' }, 404)
+	}
 	// EVERY terminal outcome below consumes the flight. The cookie holds a live PKCE verifier and the
 	// state nonce; leaving it behind on a failure kept both replayable for the rest of their 600s.
 	// Every refusal is a refused login, logged before the answer.
