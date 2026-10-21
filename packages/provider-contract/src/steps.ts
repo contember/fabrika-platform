@@ -59,7 +59,9 @@ export const runSteps = async <TStep extends { readonly id: string; readonly des
 		log(`→ ${step.id}`)
 		try {
 			await untilCancelled(runOne(step), signal)
-			results.push({ id: step.id, status: 'succeeded', startedAt, finishedAt: Date.now() })
+			const finishedAt = Date.now()
+			log(`✓ ${step.id} (${((finishedAt - startedAt) / 1000).toFixed(1)}s)`)
+			results.push({ id: step.id, status: 'succeeded', startedAt, finishedAt })
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error)
 			stopped = true
