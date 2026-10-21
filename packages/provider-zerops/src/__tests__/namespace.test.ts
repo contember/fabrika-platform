@@ -1176,6 +1176,24 @@ describe('Zerops namespace lifecycle', () => {
 		expect(state.triggerCount).toBe(0)
 	})
 
+	test("refuses to adopt the installation's own project before it imports or builds anything", async () => {
+		const state = freshState()
+		state.projects.set(projectId, project(projectId, 'platform', 'fabrika platform'))
+		state.services.set(projectId, [proxy()])
+		const capabilities = createZeropsNamespaceCapabilities({ ...options(state), installationProjectId: projectId })
+		const adopted = namespace({
+			projectId,
+			projectName: 'platform',
+			corePackage: 'SERIOUS',
+			publicAccess: 'custom-domain',
+			managed: false,
+		})
+
+		await expect(run(capabilities, adopted, [])).rejects.toThrow("is the installation's own project")
+		expect(state.calls).not.toContain(`importServices:${projectId}`)
+		expect(state.triggerCount).toBe(0)
+	})
+
 	test('adopts by observable invariants and reapplies service isolation without creating another project', async () => {
 		const state = freshState()
 		state.projects.set(projectId, project(projectId, 'external-prod', 'operator project'))

@@ -73,4 +73,5 @@ it is what the live gate's wording describes. Rejected for now because a namespa
 by the hostname `proxy`, which is also the platform's own enforcement point: adopting the installation
 project would reconcile the live proxy and, with `ready: false`, overwrite its manifest with an empty
 one. Making an app shareable into the platform project is worth doing, and it is a bigger change than
-this one.
+this one. Until then the namespace provider refuses that project outright: `platform deploy` writes its id to
+Control as `FABRIKA_ZEROPS_PLATFORM_PROJECT_ID`, and every reconcile checks it before the first import.

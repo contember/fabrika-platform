@@ -81,6 +81,8 @@ export interface ZeropsNamespaceOptions {
 	readonly iamUrl: string
 	/** Same credential IAM receives as `FABRIKA_IAM_PROXY_KEY`. */
 	readonly iamKey: string
+	/** The installation's own project, which no namespace may create into or adopt. Absent until `platform deploy` writes it. */
+	readonly installationProjectId?: string
 	readonly api: ZeropsApi
 	readonly sleep?: Sleeper
 }

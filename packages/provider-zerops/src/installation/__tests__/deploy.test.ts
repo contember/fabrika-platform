@@ -398,6 +398,8 @@ describe('what it writes', () => {
 		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_ADMIN_ORIGINS')).toBeUndefined()
 		expect(fixture.zerops.env('control').get('FABRIKA_CONTROL_DOMAIN')).toBe(CONSOLE_HOST)
 		expect(fixture.zerops.env('control').get('OPERATIONS_ARTIFACT_ORIGIN')).toBe(`https://${OPERATIONS_HOST}`)
+		// The project no deployment namespace may adopt.
+		expect(fixture.zerops.env('control').get('FABRIKA_ZEROPS_PLATFORM_PROJECT_ID')).toBe(PROJECT.projectId)
 		expect(fixture.zerops.env('operations').get('FABRIKA_OPERATIONS_PUBLIC_HOST')).toBe(OPERATIONS_HOST)
 		// The proxy compares this byte-for-byte against a token's `iss`, so it is the PUBLIC issuer.
 		expect(fixture.zerops.env('proxy').get('FABRIKA_IAM_ISSUER')).toBe(`https://${IAM_HOST}`)

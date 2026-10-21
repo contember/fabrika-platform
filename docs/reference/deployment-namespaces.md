@@ -233,9 +233,11 @@ secret fields, and ownership of the proxy upstream.
 
 Every Zerops namespace reserves `service:proxy`. A cheap namespace also reserves
 `service:postgres`. Application claims are the service hostnames in the canonical
-manifest. Cheap defaults to `postgresql:ha@18` in `prod` and
-`postgresql:single@18` elsewhere; its plan options may select a supported type
-and profile explicitly.
+manifest. Cheap defaults to `postgresql:single@18` at `oltp-hobby` on every
+environment ([ADR-0038](../decisions/0038-size-namespaces-cheaply-by-default.md));
+its plan options (`--postgres-type`, `--postgres-profile`) may select a supported
+type and profile explicitly. `postgresql:ha@18` is the one that keeps its data
+through a node loss, and the type is fixed once the namespace exists.
 
 Apps in shared `cheap` and `mid` namespaces must use the deterministic app prefix
 from `zeropsSharedServicePrefix`. A direct lowercase alphanumeric app id up to 12
@@ -263,6 +265,10 @@ Provisioning creates or recovers a marked Fabrika project, imports the
 namespace-owned services with `startWithoutCode`, resolves their ids, writes the
 proxy's service-level IAM configuration, deploys the proxy, and checkpoints the
 ready target. Adoption validates the supplied project before the first import.
+Every reconcile refuses the installation's own project, which Control knows from
+`FABRIKA_ZEROPS_PLATFORM_PROJECT_ID` (written by `platform deploy`): its `proxy`
+is the platform's enforcement point, and a namespace reconcile would rebuild it
+with only application members.
 Reconcile repeats the same idempotent lifecycle from the stored checkpoint.
 
 The service import explicitly applies `envIsolation: service` on every

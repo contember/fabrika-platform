@@ -156,6 +156,14 @@ describe('the Zerops namespace process configuration', () => {
 		expect(zeropsNamespaceProcessConfig(namespaceEnvironment())).toEqual(EXPECTED)
 	})
 
+	test('reads the installation project id when platform deploy has written it, and starts without it', () => {
+		expect(zeropsNamespaceProcessConfig({ ...namespaceEnvironment(), FABRIKA_ZEROPS_PLATFORM_PROJECT_ID: 'proj-platform' })).toEqual({
+			...EXPECTED,
+			installationProjectId: 'proj-platform',
+		})
+		expect(zeropsNamespaceProcessConfig({ ...namespaceEnvironment(), FABRIKA_ZEROPS_PLATFORM_PROJECT_ID: '' })).toEqual(EXPECTED)
+	})
+
 	test('enables namespace lifecycle on the composed provider', () => {
 		const harness = createHarness()
 		const env: Env = {
