@@ -146,9 +146,9 @@ function Impact({ view }: { view: ApprovalView }) {
 					<div className="instrument-label">
 						<Words text={callerGroupTitle(entry.reach, entry.mount)} />
 					</div>
-					<div className="instrument-value">{entry.endpoints + entry.mounts}</div>
+					<div className="instrument-value">{entry.endpoints + entry.removedEndpoints + entry.removedMounts}</div>
 					<div className="instrument-note">
-						{reachedThings(entry.endpoints, entry.mounts)}
+						{reachedThings(entry)}
 						{closerIn(entry.key) > 0 && (
 							<>
 								{', '}
@@ -171,14 +171,16 @@ function Impact({ view }: { view: ApprovalView }) {
 	)
 }
 
-/** `endpoints`, or `2 endpoints, 1 removed mount` when a removed mount's paths now reach the group too. */
-function reachedThings(endpoints: number, mounts: number): string {
-	if (mounts === 0) return endpoints === 1 ? 'endpoint' : 'endpoints'
-	const counted = [
-		...(endpoints === 0 ? [] : [`${endpoints} ${endpoints === 1 ? 'endpoint' : 'endpoints'}`]),
-		`${mounts} removed ${mounts === 1 ? 'mount' : 'mounts'}`,
+/** `endpoints`, or `2 endpoints, 1 removed mount` when the group holds removals too. */
+function reachedThings(entry: ApprovalView['impact']['callers'][number]): string {
+	const { endpoints, removedEndpoints, removedMounts } = entry
+	if (removedEndpoints + removedMounts === 0) return endpoints === 1 ? 'endpoint' : 'endpoints'
+	const counted: [number, string, string][] = [
+		[endpoints, 'endpoint', 'endpoints'],
+		[removedEndpoints, 'removed endpoint', 'removed endpoints'],
+		[removedMounts, 'removed mount', 'removed mounts'],
 	]
-	return counted.join(', ')
+	return counted.flatMap(([count, one, many]) => (count === 0 ? [] : [`${count} ${count === 1 ? one : many}`])).join(', ')
 }
 
 /** One group: a caller group's endpoints with what each requires and what stands in front of it, or one kind of subject. */
@@ -251,7 +253,8 @@ function GroupRow(
 			</tr>
 		)
 	}
-	const surface = endpoints.get(row.subject.name)
+	// A removed mount may share an endpoint's name; only an endpoint has a surface row.
+	const surface = row.subject.kind === 'endpoint' ? endpoints.get(row.subject.name) : undefined
 	return (
 		<tr>
 			<td>

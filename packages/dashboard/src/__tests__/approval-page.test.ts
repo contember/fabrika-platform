@@ -1,5 +1,5 @@
 // The approval page (ADR-0050 §7): who gains access first, a group that only narrows starts closed, a closer review says
-// why, quiet endpoints that changed alike fold into one row, and a decided run says where it stands.
+// why, quiet endpoints that changed alike fold into one row, and a run says where it stands.
 
 import { approvalView } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
@@ -58,6 +58,7 @@ const RUN: RunDto = {
 	createdAt: 1,
 	startedAt: null,
 	finishedAt: null,
+	cancelRequestedAt: null,
 }
 
 const APPROVAL: ApprovalDto = {
@@ -104,6 +105,19 @@ describe('the approval page', () => {
 		expect(markup).toContain('<strong>4</strong> endpoints that only narrow access, alike: <code>endpoint.body-limit</code>')
 	})
 
+	test("does not show an endpoint's protection on a removed mount of the same name", () => {
+		const mount: AccessChangeDto = {
+			effect: 'widens',
+			line: 'Mount `register` is removed: GET /register/* now reaches `site` for anyone',
+			rule: 'mount.removed',
+			subject: { kind: 'mount', name: 'register' },
+			audience: anyone,
+		}
+		const removed = render({ ...APPROVAL, changes: [mount] })
+		expect(removed).not.toContain('at most 10 calls a minute per client')
+		expect(removed).toContain('<span class="muted">removed</span>')
+	})
+
 	test('shows the lines of a run classified before lines carried facts in their effect sections', () => {
 		const stored = render({ ...APPROVAL, changes: [{ effect: 'widens', line: 'Role `editor` gains `notes.delete`' }] })
 		expect(stored).toContain('Widens access')
@@ -111,7 +125,7 @@ describe('the approval page', () => {
 	})
 })
 
-describe('where a decided run stands', () => {
+describe('where a run stands', () => {
 	const approved = { principalId: 'p-ada', label: 'ada@example.test', approvedAt: 2, holds: true }
 
 	test('waiting, approved and queued, published, and an approval that lapsed', () => {
@@ -122,5 +136,16 @@ describe('where a decided run stands', () => {
 			text: 'Approved and published',
 		})
 		expect(approvalStage({ ...APPROVAL, approval: { ...approved, holds: false } }).lamp).toBe('stop')
+	})
+
+	test('refused, cancelled, and a run that never waited', () => {
+		const stage = (run: Partial<RunDto>, rest: Partial<ApprovalDto> = {}) => approvalStage({ ...APPROVAL, ...rest, run: { ...RUN, ...run } }).text
+		expect(stage({ status: 'failed' })).toBe('Refused')
+		expect(stage({ status: 'failed', cancelRequestedAt: 3 })).toBe('Cancelled')
+		expect(stage({ status: 'failed', cancelRequestedAt: 3 }, { approval: approved })).toBe('Approved, then cancelled')
+		expect(stage({ status: 'succeeded', cancelRequestedAt: 3 })).toBe('Published before the cancellation took effect')
+		expect(stage({ status: 'succeeded' }, { outcome: 'no-widening' })).toBe('Published without waiting for approval')
+		expect(stage({ status: 'succeeded' }, { protected: false })).toBe('Published without waiting for approval')
+		expect(stage({ status: 'failed' }, { protected: false })).toBe('Failed without waiting for approval')
 	})
 })

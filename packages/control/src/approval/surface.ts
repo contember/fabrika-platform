@@ -7,15 +7,20 @@ import {
 	type SchemaShape,
 } from '@fabrika/auth-core'
 import { SURFACE_REACHES, type SurfaceEndpointDto, type SurfaceReach } from '@fabrika/control-contract'
-import { attachmentName, crossOriginReach, endpointReach, opaqueRoots, requirementPhrase, storedFileName } from './diff'
+import { attachmentName, bucketBounds, crossOriginReach, endpointReach, opaqueRoots, requirementPhrase, runPhrase, storedFileName } from './diff'
 import { type AccessSnapshot, compareText } from './snapshot'
 
-/** Every endpoint a snapshot publishes, grouped by who reaches it, most exposed first, then by path and method. */
-export function snapshotSurface(snapshot: AccessSnapshot): SurfaceEndpointDto[] {
+/**
+ * Every endpoint a snapshot publishes, or only those `only` names, grouped by who reaches it, most exposed first, then by
+ * path and method.
+ */
+export function snapshotSurface(snapshot: AccessSnapshot, only?: ReadonlySet<string>): SurfaceEndpointDto[] {
 	const contract = snapshot.contract
 	if (contract === null) return []
+	const roots = new Set(opaqueRoots(contract))
 	return contract.endpoints
-		.map((row) => surfaceEndpoint(contract, new Set(opaqueRoots(contract)), row))
+		.filter((row) => only === undefined || only.has(row.id))
+		.map((row) => surfaceEndpoint(contract, roots, row))
 		.sort((a, b) => reachRank(a.reach) - reachRank(b.reach) || compareText(a.path, b.path) || compareText(a.method, b.method))
 }
 
@@ -84,20 +89,13 @@ function formProtection(form: FormMountArtifact): string[] {
 }
 
 /**
- * A procedure's buckets and challenge, which stand in front of its handler. A public one without either says so, as a
- * form does; a signed-in one names only the buckets it has.
+ * A procedure's buckets and challenge, which stand in front of its handler, then how long it waits for a body of what
+ * size and how long it runs, in the approval's words. A public one without a bucket or a challenge says so, as a form
+ * does; a signed-in one names only the buckets it has.
  */
 function procedureProtection(row: EndpointRow, rules: ProcedureArtifact): string[] {
-	const { perClient, perCaller, perEndpoint, bytesPerHour } = rules.rate
-	const notes = [
-		// On Zerops the proxy sees the balancer, not the visitor, until its range is trusted: every visitor is one client.
-		...(perClient === null ? [] : [`at most ${perClient} calls a minute per client (one client on Zerops)`]),
-		...(perCaller === null ? [] : [`at most ${perCaller} calls a minute per caller`]),
-		...(perEndpoint === null ? [] : [`at most ${perEndpoint} calls a minute in all`]),
-		...(bytesPerHour === null ? [] : [`at most ${bytesPerHour} bytes an hour`]),
-		...(rules.challenge === null ? [] : [`${rules.challenge.provider} challenge`]),
-	]
-	return notes.length === 0 && row.requirement === null ? ['no rate limit and no challenge'] : notes
+	const guards = [...bucketBounds(rules.rate), ...(rules.challenge === null ? [] : [`${rules.challenge.provider} challenge`])]
+	return [...(guards.length === 0 && row.requirement === null ? ['no rate limit and no challenge'] : guards), runPhrase(row, rules.timeoutMs)]
 }
 
 function reachRank(reach: SurfaceReach): number {

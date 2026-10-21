@@ -946,7 +946,8 @@ function fileAdoptionCall(tokens: readonly SqlToken[]): { readonly called: strin
 
 /** The adoption an `INSERT … SELECT` from collection tables makes: each collection's files into the target table. */
 function adoptionSteps(tokens: readonly SqlToken[], adopted: ReadonlySet<string>): AdoptionStep[] {
-	const table = nameText(tokens[skipWords(tokens, 1, 'INTO')])
+	// `checkQuery` refused a schema other than the application's, so a qualified target is its own table.
+	const table = objectNameAt(tokens, skipWords(tokens, 1, 'INTO'))?.name
 	const line = tokens[0]?.line ?? 1
 	if (table === undefined) return []
 	return [...adopted].sort().map((name) => ({ step: 'adopt', collection: name.slice(FILE_TABLE_PREFIX.length), table, line }))

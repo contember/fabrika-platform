@@ -74,7 +74,7 @@ describe('the surface of a published snapshot', () => {
 		expect(surface.find((endpoint) => endpoint.id === 'api.get')?.callers).toEqual(['human', 'machine'])
 	})
 
-	test('a public procedure names its buckets and its challenge, and one with neither says so', () => {
+	test('a public procedure names its buckets, its challenge, its body limit and time limit, and one with neither guard says so', () => {
 		const cta: EndpointRow = {
 			id: 'api.stats.cta',
 			source: { kind: 'mount', name: 'api' },
@@ -95,9 +95,11 @@ describe('the surface of a published snapshot', () => {
 			'at most 10 calls a minute per client (one client on Zerops)',
 			'at most 100 calls a minute in all',
 			'turnstile challenge',
+			'waits at most 30 s for a body of at most 1024 bytes, then runs at most 10 s',
 		])
 		expect(notesOf({ rate: { ...rate, perClient: null, perEndpoint: null }, challenge: null, timeoutMs: 10_000 })).toEqual([
 			'no rate limit and no challenge',
+			'waits at most 30 s for a body of at most 1024 bytes, then runs at most 10 s',
 		])
 	})
 

@@ -51,7 +51,7 @@ describe('a public procedure in the approval diff', () => {
 				{
 					effect: 'neutral',
 					line:
-						'`api.stats.cta` admits calls per minute: 10 per client (one client on Zerops) and 100 in all; it waits at most 30 s for a body of at most 1024 bytes, then runs at most 10 s',
+						'`api.stats.cta` admits at most 10 calls a minute per client (one client on Zerops) and at most 100 calls a minute in all; it waits at most 30 s for a body of at most 1024 bytes, then runs at most 10 s',
 				},
 			],
 		})
@@ -65,8 +65,10 @@ describe('a public procedure in the approval diff', () => {
 	})
 
 	test('the body deadline the line names is the one every bundled release that serves procedures applies', async () => {
-		// The diff names the platform's own deadline, which is right while every release in the window derives it alike. A
-		// bundled older release whose deadline differs needs the diff to read it from that release (ADR-0062): this fails then.
+		// Procedures, and so the line, start at 0.7: an older contract upcasts without any (`formats.ts`). The diff names the
+		// platform's own deadline, which is right while every release from 0.7 on derives it alike. A bundled release from 0.7
+		// on whose deadline differs, or that does not export it here, needs the diff to read it from that release (ADR-0062):
+		// this fails then. Until 0.7 is bundled as an older release, only the platform's own is compared.
 		const manifest = z.object({ dependencies: z.record(z.string()) }).parse(await Bun.file(new URL('../../package.json', import.meta.url)).json())
 		const older = Object.keys(manifest.dependencies).filter((name) => /^@fabrika\/app-\d+\.\d+$/.test(name))
 		expect(older.length).toBeGreaterThanOrEqual(3)
@@ -75,7 +77,11 @@ describe('a public procedure in the approval diff', () => {
 		for (const release of ['@fabrika/app', ...older]) {
 			const contract: unknown = await import(`${release}/contract`)
 			const deadline: unknown = typeof contract === 'object' && contract !== null ? Reflect.get(contract, 'bodyDeadlineMs') : undefined
-			if (typeof deadline !== 'function') continue
+			if (typeof deadline !== 'function') {
+				const minor = /^@fabrika\/app-0\.(\d+)$/.exec(release)?.[1]
+				expect([release, minor !== undefined && Number(minor) < 7]).toEqual([release, true])
+				continue
+			}
 			for (const maxBytes of [1, 64 * 1024, 1024 * 1024, 10 * 1024 * 1024]) {
 				const theirs: unknown = Reflect.apply(deadline, undefined, [maxBytes])
 				expect([release, theirs]).toEqual([release, bodyDeadlineMs(maxBytes)])

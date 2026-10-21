@@ -82,9 +82,9 @@ describe('the approval view', () => {
 		expect(view.callers.map((entry) => entry.key)).toEqual(['anyone', 'link:student', 'human'])
 		expect(view.impact).toEqual({
 			callers: [
-				{ key: 'anyone', reach: 'anyone', endpoints: 5, mounts: 0 },
-				{ key: 'link:student', reach: 'link', mount: 'student', endpoints: 1, mounts: 0 },
-				{ key: 'human', reach: 'human', endpoints: 41, mounts: 0 },
+				{ key: 'anyone', reach: 'anyone', endpoints: 5, removedEndpoints: 0, removedMounts: 0 },
+				{ key: 'link:student', reach: 'link', mount: 'student', endpoints: 1, removedEndpoints: 0, removedMounts: 0 },
+				{ key: 'human', reach: 'human', endpoints: 41, removedEndpoints: 0, removedMounts: 0 },
 			],
 			// The added file counts; the removed one runs nowhere.
 			migrations: 1,
@@ -118,8 +118,20 @@ describe('the approval view', () => {
 		}
 		const removed = approvalView([removal, ...intake])
 		expect(removed.callers[0]?.rows.map(label)).toContain('admin')
-		expect(removed.impact.callers[0]).toEqual({ key: 'anyone', reach: 'anyone', endpoints: 5, mounts: 1 })
+		expect(removed.impact.callers[0]).toEqual({ key: 'anyone', reach: 'anyone', endpoints: 5, removedEndpoints: 0, removedMounts: 1 })
 		expect(removed.data.some((entry) => entry.key === 'mount')).toBe(false)
+	})
+
+	test('counts a removed endpoint apart from the endpoints that change', () => {
+		const gone = endpoint('staff.old', anyone, { effect: 'widens', rule: 'endpoint.removed' })
+		const reach = endpoint('staff.old', anyone, { effect: 'narrows', rule: 'reach.sql' })
+		expect(approvalView([gone, reach, ...intake]).impact.callers[0]).toEqual({
+			key: 'anyone',
+			reach: 'anyone',
+			endpoints: 5,
+			removedEndpoints: 1,
+			removedMounts: 0,
+		})
 	})
 
 	test('puts lines stored before lines carried facts apart, in their order', () => {

@@ -502,6 +502,8 @@ export interface RunDto {
 	createdAt: number
 	startedAt: number | null
 	finishedAt: number | null
+	/** When someone asked to cancel the run; a run that finished with it set was cancelled, unless it succeeded first. */
+	cancelRequestedAt: number | null
 }
 
 /** What a change line is about (ADR-0050 §3). */

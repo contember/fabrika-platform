@@ -101,15 +101,22 @@ export function reviewReason(change: AccessChangeDto): string | null {
 	}
 }
 
-/** Where a decided run stands: approval and publication are two steps (ADR-0050 §2). */
+/** Where a run stands: approval and publication are two steps, and a refused or cancelled run says so (ADR-0050 §2). */
 export function approvalStage(approval: ApprovalDto): { readonly lamp: Lamp; readonly text: string } {
 	const { run } = approval
+	const approved = approval.approval !== null
+	if (run.cancelRequestedAt !== null) {
+		if (run.status === 'failed') return { lamp: 'stop', text: approved ? 'Approved, then cancelled' : 'Cancelled' }
+		// Cancellation never rolls back: a run whose publication won first succeeded (ADR-0044).
+		if (run.status === 'succeeded') return { lamp: 'ok', text: 'Published before the cancellation took effect' }
+		return { lamp: 'run', text: 'Cancelling' }
+	}
 	if (run.status === 'awaiting_approval') {
 		return approval.approval?.holds === false
 			? { lamp: 'stop', text: 'Approval lapsed: the environment published another change first, and this one still widens access against it' }
 			: { lamp: 'run', text: 'Waiting for a decision' }
 	}
-	if (approval.approval === null) return { lamp: runLamp(run.status), text: run.status === 'failed' ? 'Refused or failed' : 'Decided' }
+	if (!approved) return unapproved(approval)
 	switch (run.status) {
 		case 'pending':
 			return { lamp: 'idle', text: 'Approved, waiting to run' }
@@ -119,5 +126,24 @@ export function approvalStage(approval: ApprovalDto): { readonly lamp: Lamp; rea
 			return { lamp: 'ok', text: 'Approved and published' }
 		case 'failed':
 			return { lamp: 'stop', text: 'Approved, then failed' }
+	}
+}
+
+/**
+ * A run without an approval: one that waited and was refused (a refusal is the only way out of waiting without an
+ * approval or a cancellation), or one that never waited, because its change narrows or its environment is unprotected.
+ */
+function unapproved({ run, outcome, protected: guarded }: ApprovalDto): { readonly lamp: Lamp; readonly text: string } {
+	if (outcome === 'widening' && guarded && run.status === 'failed') return { lamp: 'stop', text: 'Refused' }
+	switch (run.status) {
+		case 'pending':
+		case 'running':
+			return { lamp: runLamp(run.status), text: 'Publishing without waiting for approval' }
+		case 'succeeded':
+			return { lamp: 'ok', text: 'Published without waiting for approval' }
+		case 'failed':
+			return { lamp: 'stop', text: 'Failed without waiting for approval' }
+		case 'awaiting_approval':
+			return { lamp: 'run', text: 'Waiting for a decision' }
 	}
 }

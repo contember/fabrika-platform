@@ -84,6 +84,9 @@ describe('a paved migration', () => {
 			framework: true,
 		})
 		expect(framework.adoptions).toEqual([])
+		expect(classify('INSERT INTO app_notes.deal_attachments (file) SELECT id FROM fabrika_files_attachments;').adoptions).toEqual([
+			{ step: 'adopt', collection: 'attachments', table: 'deal_attachments', file: FILE, line: 1 },
+		])
 		for (
 			const [refused, name] of [
 				['INSERT INTO fabrika_files_attachments (id) SELECT id FROM fabrika_files_other;', 'fabrika_files_attachments'],

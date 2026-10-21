@@ -13,7 +13,7 @@ import { completeApprovalUseCase } from '../approval/api'
 import { snapshotDeviations } from '../approval/diff'
 import { parseClassification, type StoredClassification } from '../approval/publish'
 import { readAccessSnapshot, snapshotReads, SnapshotRefused } from '../approval/read'
-import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
+import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializePublished, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
 import type { ControlRepositories } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
@@ -339,6 +339,9 @@ describe('a file collection adopted into a table (ADR-0061)', () => {
 		const { fileAdoptions: _, ...without } = snapshot
 		expect(snapshotDigest(snapshot)).toBe(snapshotDigest(without))
 		expect(JSON.parse(serializeSnapshot(await snapshotOf(commitOf())))).not.toHaveProperty('fileAdoptions')
+		// A publication leaves them out: the diff reads them only from a candidate, and an older Control reads it.
+		expect(JSON.parse(serializePublished(snapshot))).not.toHaveProperty('fileAdoptions')
+		expect(parseSnapshot(serializePublished(snapshot))).toEqual(parseSnapshot(serializeSnapshot(without)))
 	})
 
 	test('a new adoption migration widens with closer review, its release narrows with closer review; an unchanged one adds nothing', async () => {
@@ -362,6 +365,16 @@ describe('a file collection adopted into a table (ADR-0061)', () => {
 		// A baseline that holds the file unchanged ran it already, also when it was read before adoptions were recorded.
 		const { fileAdoptions: _, ...readBefore } = after
 		expect(pair(readBefore, after)).toEqual([])
+	})
+
+	test('the run keeps the adoptions it was classified with, the publication leaves them out', async () => {
+		const w = await world()
+		w.files = commitOf({}, [NOTES_MIGRATION, ADOPTION_MIGRATION])
+		await publish(w, 'stage')
+		const published = await environment(w, 'stage')
+		expect(JSON.parse(published.published_snapshot_json ?? '{}')).not.toHaveProperty('fileAdoptions')
+		const run = await w.db.runs.getRun(published.published_run_id ?? '')
+		expect(JSON.parse(run?.snapshot_json ?? '{}').fileAdoptions).toHaveLength(2)
 	})
 })
 

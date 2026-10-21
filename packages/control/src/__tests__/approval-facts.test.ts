@@ -122,6 +122,11 @@ describe('the facts of a change line', () => {
 			subject: { kind: 'endpoint', name: 'admin', path: '/pub/admin/*' },
 			audience: { reach: 'anyone', requirement: null },
 		})
+		// Every other line of the removed endpoint stands there too, so it is in one caller group, not two.
+		const declaring = snapshot({ ...before.contract ?? notesArtifact, declared: { admin: { ...reach, sql: 'read' } } })
+		const adminLines = classifyAccess(declaring, snapshot(pages)).changes.filter((change) => change.subject.name === 'admin')
+		expect(adminLines.length).toBeGreaterThan(1)
+		expect(adminLines.map((change) => change.audience?.reach)).toEqual(adminLines.map(() => 'anyone'))
 		const withMount = snapshot({
 			...pages,
 			endpoints: [...pages.endpoints, admin],
