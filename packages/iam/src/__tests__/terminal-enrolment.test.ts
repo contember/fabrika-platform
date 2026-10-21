@@ -266,6 +266,7 @@ describe('terminals.* administration', () => {
 		seedAppAction(h.sqlite, APP, 'attendance.record')
 		const terminalId = await enrolled(h)
 		await rpcResult(h, bearer, 'terminals.setProfile', { terminalId, label: 'Entrance', sessionTtl: 300, asserters: [{ app: APP, ceiling: [] }] })
+		h.sqlite.run('INSERT INTO app_terminals (app, identify) VALUES (?, ?)', [APP, '/identify'])
 		const person = seedUser(h.sqlite, { sub: 'sub-person', email: 'person@example.com' })
 		const session = 'terminal-session'
 		await h.repositories.sessions.createSession({

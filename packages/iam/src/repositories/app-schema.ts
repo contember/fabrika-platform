@@ -1,4 +1,4 @@
-import type { WorkloadKind } from '@fabrika/auth-core'
+import { terminalIdentifyProblem, type WorkloadKind } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement } from '@fabrika/platform'
 
 import { type AuditEventInput, auditEventStatement, AuditWriter } from './audit'
@@ -123,11 +123,12 @@ export class AppSchemaRepository {
 
 	/**
 	 * The path of the app's identification page at a terminal (ADR-0067), or null when the app declares none: an absolute
-	 * path on its own origin, which a sign-in resolves against its return origin.
+	 * path on its own origin, which a sign-in resolves against its return origin. The column's CHECK admits `//host`, a
+	 * reference to another origin, so a stored path is parsed again here and one that is no identification page is none.
 	 */
 	async getTerminalIdentifyPath(app: string): Promise<string | null> {
 		const row = await this.db.prepare('SELECT identify FROM app_terminals WHERE app = ?').bind(app).first<{ identify: string }>()
-		return row?.identify ?? null
+		return row === null || terminalIdentifyProblem(row.identify) !== null ? null : row.identify
 	}
 
 	/** The app's template of one message in one language, or null when it declares none. */

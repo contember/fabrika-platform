@@ -241,6 +241,14 @@ export class SessionRepository {
 	}
 
 	/**
+	 * A session row by the cookie's hash, VALID OR NOT: only for the audit row of a refused use, which names the session's
+	 * principal and terminal. Nothing may authorize from it; `getActiveSessionByHash` is the read that does.
+	 */
+	async getSessionByHashForAudit(tokenHash: string): Promise<SessionRow | null> {
+		return this.db.prepare('SELECT * FROM sessions WHERE token_hash = ?').bind(tokenHash).first<SessionRow>()
+	}
+
+	/**
 	 * A session row by id, VALID OR NOT — the admin read, unlike `getActiveSessionById`. An operator
 	 * revoking a session must be able to address one this instance would already refuse, and be told
 	 * "already revoked" rather than "no such session".

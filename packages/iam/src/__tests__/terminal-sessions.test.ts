@@ -2,11 +2,12 @@
 // that asserted it, and only while the terminal is enrolled and still lists that application.
 
 import { type AccessTokenClaims, buildAccessClaims, parseAccessClaims, type Scope } from '@fabrika/auth-core'
-import { uuidv7 } from '@fabrika/platform'
+import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import { unusedDatabase } from '@fabrika/platform/testing'
-import { describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, jwtVerify } from 'jose'
 import { resolveAdmin } from '../admin/router'
+import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
 import { exchangeAuthCode, issueAuthCode } from '../handoff'
 import { listAppMembers } from '../membership'
@@ -17,8 +18,19 @@ import type { Services } from '../services'
 import { getSigner } from '../signing'
 import { mintToken } from '../tokens'
 import { PEOPLE_SCHEMA } from './helpers/app-people'
-import { CONSOLE_APP, createHarness, type Harness, seedInlineGrant, seedUser, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
+import {
+	CONSOLE_APP,
+	createHarness,
+	type Harness,
+	makeServicesFor,
+	seedInlineGrant,
+	seedUser,
+	TEST_SIGNING_ENV,
+	TEST_SIGNING_KEYS,
+	TestSqlDatabase,
+} from './helpers/harness'
 import { APP as MEMBERS_APP, CALLER_ENV, membershipFixture } from './helpers/membership'
+import { createPostgres, hasPostgres, type PostgresFixture } from './helpers/postgres'
 
 const ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const ISSUER = 'https://iam.test'
@@ -75,6 +87,9 @@ async function scenario(ceiling: string[], grants: PersonalGrant[] = PERSONAL_GR
 		sessionTtl: 300,
 		asserters: [{ app: APP, ceiling }, { app: OTHER_APP, ceiling: [] }],
 	})
+	for (const app of [APP, OTHER_APP]) {
+		h.sqlite.run('INSERT INTO app_terminals (app, identify) VALUES (?, ?)', [app, '/identify'])
+	}
 	return { h, services, person, terminalId }
 }
 
@@ -213,6 +228,20 @@ describe('a terminal session is refused', () => {
 		expect((await mintToken(s.services, ENV, { app: APP, session, requestId: 'r' })).result).toEqual({ ok: false, reason: 'invalid_session' })
 	})
 
+	test('once the application no longer declares a terminal', async () => {
+		const s = await scenario([])
+		const session = await applicationSession(s)
+		s.h.sqlite.run('DELETE FROM app_terminals WHERE app = ?', [APP])
+		expect((await mintToken(s.services, ENV, { app: APP, session, requestId: 'r' })).result).toEqual({ ok: false, reason: 'invalid_session' })
+	})
+
+	test("once the terminal's principal is disabled", async () => {
+		const s = await scenario([])
+		const session = await applicationSession(s)
+		s.h.sqlite.run('UPDATE principals SET disabled_at = ? WHERE id = ?', [now(), s.terminalId])
+		expect((await mintToken(s.services, ENV, { app: APP, session, requestId: 'r' })).result).toEqual({ ok: false, reason: 'invalid_session' })
+	})
+
 	test('once the terminal no longer lists the application', async () => {
 		const s = await scenario([])
 		const session = await applicationSession(s)
@@ -279,15 +308,24 @@ describe('the auth_log of a terminal session', () => {
 		const rpc = createIamRpc(env, ctx)
 		expect((await rpc.mintToken({ app: APP, session, requestId: 'allowed' })).ok).toBe(true)
 		expect((await rpc.mintToken({ app: OTHER_APP, session, requestId: 'refused' })).ok).toBe(false)
+		// A session the validity rule no longer finds is refused, and its row still names who and where.
+		const expired = await applicationSession(s)
+		s.h.sqlite.run('UPDATE sessions SET expires_at = ? WHERE token_hash = ?', [now() - 1, await hashToken(expired)])
+		expect((await rpc.mintToken({ app: APP, session: expired, requestId: 'refused-expired' })).ok).toBe(false)
+		await s.h.repositories.terminals.revoke(s.terminalId)
+		expect((await rpc.mintToken({ app: APP, session, requestId: 'refused-revoked' })).ok).toBe(false)
 		await Promise.all(ctx.pending)
 		const rows = s.h.sqlite
-			.query<{ request_id: string; decision: string; terminal_id: string | null; asserted_by: string | null }, []>(
-				"SELECT request_id, decision, terminal_id, asserted_by FROM auth_log WHERE request_id IN ('allowed', 'refused') ORDER BY request_id",
+			.query<{ request_id: string; decision: string; principal_id: string | null; terminal_id: string | null; asserted_by: string | null }, []>(
+				"SELECT request_id, decision, principal_id, terminal_id, asserted_by FROM auth_log WHERE request_id LIKE 'allowed' OR request_id LIKE 'refused%' ORDER BY request_id",
 			)
 			.all()
+		const attributed = { principal_id: s.person, terminal_id: s.terminalId, asserted_by: APP }
 		expect(rows).toEqual([
-			{ request_id: 'allowed', decision: 'allow', terminal_id: s.terminalId, asserted_by: APP },
-			{ request_id: 'refused', decision: 'deny', terminal_id: s.terminalId, asserted_by: APP },
+			{ request_id: 'allowed', decision: 'allow', ...attributed },
+			{ request_id: 'refused', decision: 'deny', ...attributed },
+			{ request_id: 'refused-expired', decision: 'deny', ...attributed },
+			{ request_id: 'refused-revoked', decision: 'deny', ...attributed },
 		])
 	})
 })
@@ -343,6 +381,7 @@ describe('membership operations on a terminal session', () => {
 		])
 		await h.repositories.terminals.setProfile(terminalId, { label: 'Entrance', sessionTtl: 300, asserters: [{ app: MEMBERS_APP, ceiling: [] }] })
 		await h.repositories.grants.createGrant({ principalId: terminalId, permissions: ['people.list'], app: MEMBERS_APP })
+		h.sqlite.run('INSERT INTO app_terminals (app, identify) VALUES (?, ?)', [MEMBERS_APP, '/identify'])
 		const session = randomToken()
 		await h.repositories.sessions.createSession({
 			tokenHash: await hashToken(session),
@@ -365,5 +404,113 @@ describe('membership operations on a terminal session', () => {
 
 		await h.repositories.terminals.revoke(terminalId)
 		expect(await list()).toEqual({ ok: false, reason: 'invalid_token' })
+	})
+})
+
+/** The mint and handoff of a terminal session over the repositories alone, so it runs on SQLite and on Postgres. */
+function terminalSessionSuite(backend: () => { repositories: IamRepositories; db: SqlDatabase }): void {
+	async function world(ceiling: string[]) {
+		const { repositories, db } = backend()
+		const declareTerminal = async (declared: boolean): Promise<void> => {
+			await db.prepare('DELETE FROM app_terminals WHERE app = ?').bind(app).run()
+			if (declared) await db.prepare("INSERT INTO app_terminals (app, identify) VALUES (?, '/identify')").bind(app).run()
+		}
+		const services = makeServicesFor(repositories, { issuer: ISSUER })
+		const app = `attendance-${uuidv7()}@prod`
+		const person = (await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.test`)).id
+		await repositories.grants.createGrant({ principalId: person, permissions: ['attendance.view', 'report.export'], app })
+		const terminalId = uuidv7()
+		await repositories.audit.commit([
+			repositories.principals.createServiceStatement(terminalId, 'Entrance'),
+			repositories.terminals.enrolStatement({
+				principalId: terminalId,
+				label: 'Entrance',
+				enrolledBy: person,
+				tokenHash: await hashToken(randomToken()),
+				sessionTtl: 300,
+			}),
+		])
+		await repositories.grants.createGrant({ principalId: terminalId, permissions: ['attendance.record'], app })
+		await repositories.terminals.setProfile(terminalId, { label: 'Entrance', sessionTtl: 300, asserters: [{ app, ceiling }] })
+		await declareTerminal(true)
+		await repositories.handoff.setReturnOrigins(app, [APP_ORIGIN])
+		const generation = (await repositories.terminals.getById(terminalId))?.generation ?? -1
+		const session = async (): Promise<string> => {
+			const loginId = await repositories.sessions.createSession({
+				tokenHash: await hashToken(randomToken()),
+				principalId: person,
+				authenticationMethod: 'terminal_assertion',
+				terminal: { terminalId, assertedBy: app },
+				terminalGeneration: generation,
+				expiresAt: now() + 300,
+			})
+			const { code } = await issueAuthCode(services, {
+				app,
+				parentSessionId: loginId,
+				returnUrl: `${APP_ORIGIN}/`,
+				challenge: await pkceChallenge(VERIFIER),
+			})
+			const { result } = await exchangeAuthCode(services, { app, code, verifier: VERIFIER, requestId: uuidv7() })
+			if (!result.ok) throw new Error(`redemption refused: ${result.reason}`)
+			return result.session
+		}
+		const mint = (value: string, audience = app) => mintToken(services, ENV, { app: audience, session: value, requestId: uuidv7() })
+		return { repositories, app, person, terminalId, session, mint, declareTerminal }
+	}
+
+	test('mints (person ∩ ceiling) ∪ terminal through the handoff', async () => {
+		const w = await world(['attendance.*'])
+		const outcome = await w.mint(await w.session())
+		if (!outcome.result.ok) throw new Error(`mint refused: ${outcome.result.reason}`)
+		const claims = parseAccessClaims((await jwtVerify(outcome.result.token, createLocalJWKSet((await getSigner(ENV)).jwks()))).payload)
+		expect(claims?.terminal).toEqual({ id: w.terminalId, label: 'Entrance' })
+		expect(claims?.perms.map((entry) => `${entry.action}:${entry.source}`).sort()).toEqual(['attendance.record:terminal', 'attendance.view:grant'])
+		expect(outcome.terminal).toEqual({ terminalId: w.terminalId, assertedBy: w.app })
+	})
+
+	test('refuses another audience, a released or revoked terminal, and an application that no longer declares one', async () => {
+		const w = await world([])
+		const session = await w.session()
+		expect((await w.mint(session, OTHER_APP)).result).toEqual({ ok: false, reason: 'invalid_session' })
+		await w.declareTerminal(false)
+		expect((await w.mint(session)).result).toEqual({ ok: false, reason: 'invalid_session' })
+		await w.declareTerminal(true)
+		expect((await w.mint(session)).result.ok).toBe(true)
+
+		await w.repositories.terminals.release(w.terminalId)
+		const released = await w.mint(session)
+		expect(released.result).toEqual({ ok: false, reason: 'invalid_session' })
+		// The refusal's audit row still names the person and the terminal.
+		expect(released).toMatchObject({ principalId: w.person, terminal: { terminalId: w.terminalId, assertedBy: w.app } })
+
+		const again = await world([])
+		const live = await again.session()
+		await again.repositories.terminals.revoke(again.terminalId)
+		expect((await again.mint(live)).result).toEqual({ ok: false, reason: 'invalid_session' })
+	})
+}
+
+describe('terminal sessions — SQLite', () => {
+	terminalSessionSuite(() => {
+		const h = createHarness()
+		return { repositories: h.repositories, db: new TestSqlDatabase(h.sqlite) }
+	})
+})
+
+let postgresFixture: PostgresFixture | null = null
+
+beforeAll(async () => {
+	if (!hasPostgres) return
+	postgresFixture = await createPostgres('iam_terminal_sessions', { max: 4 })
+})
+
+afterAll(async () => {
+	await postgresFixture?.close()
+})
+
+describe.skipIf(!hasPostgres)('terminal sessions — Postgres', () => {
+	terminalSessionSuite(() => {
+		if (postgresFixture === null) throw new Error('postgres backend not ready')
+		return { repositories: createPostgresIamRepositories(postgresFixture.db), db: postgresFixture.db }
 	})
 })

@@ -175,6 +175,13 @@ describe('/auth/login on a terminal', () => {
 		expect(logged).toEqual([{ terminal_id: s.terminalId, asserted_by: APP }])
 	})
 
+	test('never sends the browser to a stored identification path that names another host', async () => {
+		const s = await scenario({ identify: '//elsewhere.test/identify' })
+		const response = await s.fetch(await loginRequest(s.terminalCookie))
+		expect(response.status).toBe(200)
+		expect(identificationCount(s)).toBe(0)
+	})
+
 	test.each([
 		{ name: 'the application is not an asserter', options: { asserters: [OTHER_APP] } },
 		{ name: 'the application declares no identification page', options: { identify: null } },
@@ -249,6 +256,20 @@ describe('the identification operations', () => {
 		expect(logged).toEqual([{ principal_id: s.person, terminal_id: s.terminalId, asserted_by: APP }])
 	})
 
+	test('of two concurrent assertions of one identification, one signs in and the other opens nothing', async () => {
+		const s = await scenario()
+		const rpc = createIamRpc(env(s.h), s.ctx)
+		const id = await identification(s)
+		const results = await Promise.all([
+			rpc.assertIdentity({ ...(await caller(s)), id, principalId: s.person }),
+			rpc.assertIdentity({ ...(await caller(s)), id, principalId: s.person }),
+		])
+		expect(results.filter((result) => result.ok)).toHaveLength(1)
+		expect(results.filter((result) => !result.ok)).toEqual([{ ok: false, reason: 'not_found' }])
+		expect(s.h.sqlite.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM sessions').get()?.n).toBe(1)
+		expect(s.h.sqlite.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM auth_log WHERE reason = 'terminal_assertion'").get()?.n).toBe(1)
+	})
+
 	test('an identification is single use', async () => {
 		const s = await scenario()
 		const rpc = createIamRpc(env(s.h), s.ctx)
@@ -281,6 +302,13 @@ describe('the identification operations', () => {
 			name: 'the terminal was revoked',
 			change: async (s: Scenario) => {
 				await s.h.repositories.terminals.revoke(s.terminalId)
+				return caller(s)
+			},
+		},
+		{
+			name: "the terminal's principal is disabled",
+			change: async (s: Scenario) => {
+				s.h.sqlite.run('UPDATE principals SET disabled_at = ? WHERE id = ?', [now(), s.terminalId])
 				return caller(s)
 			},
 		},

@@ -56,9 +56,16 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 		return { result: { ok: false, reason: 'no_session' }, principalId: null, terminal: null }
 	}
 
-	const session = await services.repositories.sessions.getActiveSessionByHash(await hashToken(input.session))
+	const tokenHash = await hashToken(input.session)
+	const session = await services.repositories.sessions.getActiveSessionByHash(tokenHash)
 	if (!session) {
-		return { result: { ok: false, reason: 'invalid_session' }, principalId: null, terminal: null }
+		// A revoked or expired session still names its principal and terminal in the refusal's `auth_log` row (ADR-0067 §6).
+		const stored = await services.repositories.sessions.getSessionByHashForAudit(tokenHash)
+		return {
+			result: { ok: false, reason: 'invalid_session' },
+			principalId: stored?.principal_id ?? null,
+			terminal: stored === null ? null : sessionTerminal(stored),
+		}
 	}
 	const terminal = sessionTerminal(session)
 	const refused = (reason: Exclude<MintTokenResult, { ok: true }>['reason'], principalId: string | null): MintOutcome => ({
@@ -133,8 +140,8 @@ interface TerminalAuthority {
 
 /**
  * The terminal's authority at `app`, or null when the session may no longer mint there: `app` is a platform audience,
- * whose tokens carry cross-app authority, the terminal is gone or revoked, no longer lists `app` as an asserter, or its
- * principal is disabled. The validity join already refused a revoked terminal; this read is the one the ceiling comes
+ * whose tokens carry cross-app authority, the terminal is gone or revoked, no longer lists `app` as an asserter, `app`
+ * no longer declares a terminal, or the terminal's principal is disabled. The validity join already refused a revoked terminal; this read is the one the ceiling comes
  * from, so it checks again.
  */
 async function terminalAuthority(services: Services, terminal: SessionTerminal, app: string): Promise<TerminalAuthority | null> {
@@ -146,7 +153,8 @@ async function terminalAuthority(services: Services, terminal: SessionTerminal, 
 		return null
 	}
 	const asserter = await services.repositories.terminals.getAsserter(row.principal_id, app)
-	if (asserter === null) {
+	// An application that no longer declares a terminal is no asserter: its framework may not read a terminal token.
+	if (asserter === null || await services.repositories.appSchema.getTerminalIdentifyPath(app) === null) {
 		return null
 	}
 	const principal = await services.repositories.principals.getPrincipalById(row.principal_id)
