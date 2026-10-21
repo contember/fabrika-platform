@@ -157,8 +157,8 @@ can grant itself any role there. The operator grants exactly that.
 The caller may invite a person, internal or external. An invitation admits that person past the OIDC allowlist's
 known-principal bypass. That is the job, and the invited person holds nothing until a grant follows.
 
-The caller acts on an existing principal (`principals.update`, `sessions.*`, `passwords.*`) only when every active
-grant of that principal is one the caller could create under section 4. That excludes:
+The caller acts on an existing principal (`principals.update`, `sessions.revoke`, `sessions.revokeAll`, `passwords.*`)
+only when every active grant of that principal is one the caller could create under section 4. That excludes:
 
 - anyone with a grant at an installation app, which covers deployers, console admins and Operations triagers;
 - anyone with a grant at `propustka`, which covers every IAM administrator and every other user administrator;
@@ -168,22 +168,20 @@ grant of that principal is one the caller could create under section 4. That exc
 - a service principal.
 
 A principal with no grant, such as a fresh invitation, qualifies. The check reads the target's grants just before the
-change. The one window is an installation admin granting the target an installation role in the same instant. For a
-manual password URL, IAM checks again after issuing it, and withholds the URL if the target no longer qualifies.
+change. The one window is an installation admin granting the target an installation role in the same instant.
 
 **Password actions.** A user administrator issues an enrollment, a reset or a password disable only for a principal it
 may act on. A reset of a deployer, a console admin or an IAM administrator is refused before any link exists. Delivery:
 
 - **With an email sender**, every link goes by email to the principal's own mailbox.
-- **Without one**, IAM returns the manual URL (`packages/iam/src/admin/passwords.ts:32-33`) to a user administrator only
-  for an enrollment of a principal that has never signed in (status `invited`). That is onboarding. The account has no
-  password and no history, and its grants are ones the caller could give an account of its own, by inviting its own
-  mailbox. So the URL hands over nothing the caller lacks.
-- **A reset of an existing account** is refused to a user administrator without email, and only `iam.admin` receives
-  a reset URL. A reset URL signs its holder in as an established person. That gives no new authority, but it gives
-  the person's identity: the records an application keeps for that person alone, and the person's name in the audit
-  trail. "Never signed in" is stricter than "never set a password" for the same reason: a person who signs in only
-  through OIDC has no password, but has a history.
+- **Without one**, IAM refuses every enrollment and reset to a user administrator with 403, before any link exists
+  (`passwordDelivery` in `packages/iam/src/admin/passwords.ts`). Only `iam.admin` receives a manual URL.
+
+A manual URL lets its holder choose the person's password. That holds even for a fresh invitation with no grant. The
+invited row is the one the person's first OIDC sign-in claims, and a password set before that claim stays enabled
+after it. Once an installation admin grants the person a role, the holder of the planted password signs in as that
+person, with the new role. So a user administrator never holds a link that sets a password: the link goes only to the
+person's own mailbox.
 
 The caller works from a signed-in session only, as in `appPeople`; a `px_` key administers only with `iam.admin`.
 
@@ -240,7 +238,9 @@ administrator's scope.
 - Reads stay installation-wide. A scoped user administrator lists every principal, including their grants elsewhere, so
   that it can find a person to grant to. Only writes are scoped. A listing narrowed to the scope is
   [backlog 175](../backlog/175-a-scoped-user-administrator-lists-every-principal.md).
-- An installation without an email sender cannot let a user administrator reset an existing person's password.
+- An installation without an email sender cannot let a user administrator enroll or reset anyone's password. Its
+  installation admin issues those links, or the operator configures a sender
+  ([outbound email](../reference/outbound-email.md#iam-composition)).
 - `propustka` appears in `apps.list`.
 - **The 409 risk.** The first registration cannot collide: a custom policy needs a registered app
   (`packages/iam/src/admin/policies.ts:69`), and `propustka` is not one today. After registration an admin can create a

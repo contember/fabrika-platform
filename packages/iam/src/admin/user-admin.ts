@@ -2,7 +2,7 @@
 // authority stops. Every rule here applies only to a caller without `iam.admin`.
 
 import { IAM_APP_ID, type IamAdministrationScope, iamAdministrationScope } from '@fabrika/iam-contract'
-import { type PrincipalRow, principalStatus } from '../db'
+import { type PrincipalRow } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 import type { Services } from '../services'
 import { type AdminContext, fail } from './context'
@@ -60,14 +60,4 @@ async function isActable(services: Services, administration: Administration, pri
 	if (principal.email !== null && services.config.bootstrapAdmins.has(normalizeEmailIdentity(principal.email))) return false
 	const grants = await services.repositories.grants.getActiveGrants(principal.id)
 	return grants.every((grant) => managesApp(services, administration, grant.app))
-}
-
-/**
- * A manual enrollment URL reaches a user administrator only for a person who never signed in, and only while that person
- * is still one it may act on — read again after the link was issued, so a grant written meanwhile withholds the URL.
- */
-export async function mayReceiveEnrollmentUrl(c: AdminContext, principalId: string): Promise<boolean> {
-	if (c.administration.kind === 'installation') return true
-	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
-	return principal !== null && principalStatus(principal) === 'invited' && await isActable(c.services, c.administration, principal)
 }

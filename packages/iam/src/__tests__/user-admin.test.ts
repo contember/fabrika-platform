@@ -278,16 +278,23 @@ function userAdministrationSuite(label: string, repositories: () => IamRepositor
 			expect(email.messages.at(-1)?.to).toBe(person.email ?? 'no mailbox')
 		})
 
-		test('without an email sender, a manual URL is only an enrollment of a person who never signed in', async () => {
+		test('without an email sender, an enrollment URL reaches only an installation admin, not even for a fresh invitation', async () => {
 			const i = await installation(repositories())
-			const admin = await i.userAdmin()
-			const c = await i.direct(admin)
-			const invited = await i.f.repositories.principals.inviteUser(`${unique('invited')}@example.test`)
-			expect(await adminUseCases.issuePasswordEnrollment(c, { principalId: invited.id })).toMatchObject({ delivery: 'manual' })
+			for (const admin of [await i.userAdmin(), await i.userAdmin([CRM])]) {
+				const c = await i.direct(admin)
+				// The invited row is the one the real person's OIDC sign-in claims later; a password set now would survive that claim.
+				const invited = await adminUseCases.invitePrincipal(c, { email: `${unique('newhire')}@example.test` })
+				expect(await refusal(() => adminUseCases.issuePasswordEnrollment(c, { principalId: invited.id }))).toMatchObject({ status: 403 })
+				expect(await i.f.repositories.passwords.getAccount(invited.id)).toBeNull()
+				const events = await i.f.repositories.audit.listAuditEvents({ principalId: admin.id, limit: 20 })
+				expect(events.map((event) => event.action)).not.toContain('iam.password.enrollment.issue')
 
-			const signedIn = await i.person('signed-in')
-			await i.grant(signedIn, CRM, 'viewer')
-			expect(await refusal(() => adminUseCases.issuePasswordEnrollment(c, { principalId: signedIn.id }))).toMatchObject({ status: 403 })
+				const installationAdmin = await i.person('installation-admin')
+				await i.grant(installationAdmin, null, 'admin')
+				expect(await adminUseCases.issuePasswordEnrollment(await i.direct(installationAdmin), { principalId: invited.id })).toMatchObject({
+					delivery: 'manual',
+				})
+			}
 		})
 
 		test('without an email sender, a reset URL reaches only an installation admin', async () => {
