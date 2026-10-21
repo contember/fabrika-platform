@@ -520,7 +520,9 @@ parent's id and every use joins to the parent. An already-minted access token st
 of its TTL.
 
 **Invariant: the proxy writes a long-lived cookie on exactly one path** — a successful redemption at
-the callback. The only other cookie it writes is the transient handoff verifier of ADR-0023.
+the callback. The only other cookie it writes is the transient handoff verifier of ADR-0023. It clears the
+session cookie on one other path, the same-origin sign-out `/__fabrika/auth/signout`
+([ADR-0067](0067-a-terminal-signs-a-person-in-on-an-application-s-word.md) §5).
 
 ### 5. An app verifies what the proxy sent; it never enforces
 
@@ -754,7 +756,8 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   session. Keep it thin. If the auth service dies, Caddy answers 502 and every request is denied.
 - **Zerops carries a second toolchain** (generated Caddy JSON, a pinned binary, an Alpine runtime) and
   one loopback `forward_auth` hop per request.
-- **`/__fabrika/auth/callback` is reserved on every app host.** An app route there never runs.
+- **`/__fabrika/auth/callback` and `/__fabrika/auth/signout` are reserved on every app host.** An app route there
+  never runs.
 - **An application is closed to other origins unless both its contract and its environment open it.** A contract
   change alone opens nothing until an operator lists an origin, and an operator listing an origin opens no endpoint
   the approved contract did not mark. A changed list is a proxy rebuild on Zerops and a proxy Worker deploy on

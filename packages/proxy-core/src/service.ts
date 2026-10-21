@@ -39,6 +39,7 @@ import type { InstallationBrand } from './brand'
 import type { TokenCache } from './cache'
 import {
 	APP_QUERY_PARAM,
+	AUTH_SIGNOUT_PATH,
 	DEFAULT_HEALTH_PATH,
 	DEFAULT_VERIFY_PATH,
 	FORWARD_AUTHORIZATION_HEADER,
@@ -168,9 +169,12 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			// The handoff callback is checked BEFORE the endpoint table: it is how a browser obtains a
 			// session, so it cannot itself be behind an endpoint. Because Caddy returns a non-2xx auth
 			// response verbatim, answering 302 + Set-Cookie here reaches the client and never the app.
+			// The sign-out is answered here for the same reason: a browser whose session is gone must still reach it.
 			const isCallback = forwarded.url.pathname === AUTH_CALLBACK_PATH
 			const decision = isCallback
 				? await authorizer.authorizeCallback(resolved, forwarded)
+				: forwarded.url.pathname === AUTH_SIGNOUT_PATH
+				? authorizer.signOut(resolved, forwarded)
 				: await authorizer.authorize(resolved, forwarded)
 			const fields: LogFields = {
 				requestId,
@@ -212,6 +216,8 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			const download = isDownload(resolved, forwarded)
 			const answer = decision.outcome === 'handoff'
 				? handoff(logger, fields, decision)
+				: decision.outcome === 'signout'
+				? signedOut(logger, fields, decision)
 				: denied(logger, fields, decision, { isCallback, asPage: asPage && !download, brand })
 			const treated = download ? withFileTreatment(answer, appFileTreatment(resolved.app)) : withPolicy(answer, policy)
 			if (decision.outcome === 'deny' && decision.crossOrigin !== undefined) {
@@ -248,6 +254,17 @@ function handoff(logger: ProxyLogger, fields: LogFields, decision: Extract<Decis
 	return handoffResponse(decision)
 }
 
+/**
+ * Clear the app session with the attributes it was set with, so the browser matches and drops it. The cookie is
+ * cleared whether or not the request carried one: the answer is the same for a browser already signed out.
+ */
+function signedOut(logger: ProxyLogger, fields: LogFields, decision: Extract<Decision, { outcome: 'signout' }>): Response {
+	logger.info('signout', fields)
+	const headers = new Headers({ location: decision.location, 'cache-control': 'no-store' })
+	headers.append('set-cookie', secureCookie(SESSION_COOKIE, '', 0))
+	return new Response(null, { status: 302, headers })
+}
+
 /** An answer the proxy writes reaches the client as-is, so it carries the policy the application's own answers do. */
 function withPolicy(response: Response, policy: HeaderPolicy): Response {
 	applyHeaderPolicy(response.headers, policy)
@@ -272,7 +289,7 @@ function isDownload(resolved: ResolvedApp, forwarded: ForwardedRequest): boolean
  * Render a redeemed handoff: set the app session on THIS host and send the browser where IAM said.
  *
  * This is the ONE place the proxy writes the long-lived app session. It separately writes a
- * short-lived handoff verifier when starting login, then clears that verifier here.
+ * short-lived handoff verifier when starting login, then clears that verifier here. The sign-out clears the session.
  *
  * Every attribute is fixed by `SESSION_COOKIE`'s `__Host-` prefix: `Secure`, `Path=/`, and no
  * `Domain`. The absent `Domain` is the substance — the session belongs to this app's host and no

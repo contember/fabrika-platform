@@ -49,6 +49,15 @@ export const APP_QUERY_PARAM = 'app'
  */
 export const LOGIN_REDIRECT_PARAM = 'redirect'
 
+/**
+ * Reserved on every app host beside the handoff callback, and answered before endpoint selection: it clears the app
+ * session and sends the browser to IAM's release (ADR-0067 §5). It takes the return path in `LOGIN_REDIRECT_PARAM`.
+ */
+export const AUTH_SIGNOUT_PATH = '/__fabrika/auth/signout'
+
+/** IAM's path that revokes the browser's terminal sessions and returns it to the application (ADR-0067 §5). */
+export const SIGNOUT_RELEASE_PATH = '/auth/terminals/release'
+
 /** The JWKS cache TTL and the unknown-`kid` refetch cooldown, owned by the verifier both planes share. */
 export { JWKS_REFETCH_COOLDOWN_SECONDS, JWKS_TTL_SECONDS } from '@fabrika/jwks'
 

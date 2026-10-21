@@ -224,3 +224,13 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
 - WU3 → WU5: the enrolment's audit and `logout` rows are unconditional in the batch, from the login read just before;
   WU5 may refresh the terminal cookie's `Max-Age` on each identification. `TERMINAL_COOKIE` lives in
   `packages/iam/src/auth/terminals.ts`.
+- WU6: absent `Sec-Fetch-Site` is refused (403 `cross_site`), as for a session non-`GET`; the proxy is lenient on
+  absence only for the answer shape (`Sec-Fetch-Mode`), which admits nothing. A non-`GET` is 403 `no_endpoint`.
+- WU6: `redirect` is required; absent, relative, `//`, `\`, whitespace or another origin is 400 `bad_redirect`.
+- WU6: `AUTH_SIGNOUT_PATH` and the release path live in `proxy-core/src/constants.ts`, not `auth-core`; IAM's
+  `/auth/terminals/release` route (WU5) must match `SIGNOUT_RELEASE_PATH`, which the WU7 end-to-end test witnesses.
+- WU6: no Caddy change; the generated chain forwards every path to `forward_auth`, as for the callback.
+- WU6 → WU4: no manifest capability flag. The Cloudflare proxy Worker deploys at the platform's release with each
+  application, and every older reader a Zerops namespace proxy may be pinned to predates sign-out. So the rule is:
+  an application that declares `terminal` is refused behind a namespace proxy pinned to another source than this
+  control plane's (`assertNamespaceProxyReads`), keyed on the contract, not on a proxy row.
