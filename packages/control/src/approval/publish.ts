@@ -2,6 +2,7 @@
 // on a protected environment until a human approves it, and publish with a compare-and-swap on the generation.
 
 import { incompatibleMountChanges } from '@fabrika/app/contract'
+import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { consumerEdgeProblems, ownerEdgeProblems } from '../connectors'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
@@ -11,7 +12,15 @@ import type { LeaseFence } from '../lease'
 import { type AccessChange, type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { ContractMissing, readAccessSnapshot, snapshotReads, SnapshotRefused } from './read'
 import { FrameworkReleaseRefused } from './readers'
-import { type AccessSnapshot, type ActiveSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot, snapshotDigest } from './snapshot'
+import {
+	type AccessSnapshot,
+	type ActiveSnapshot,
+	approvedAccess,
+	approvedSnapshot,
+	parseSnapshot,
+	serializeSnapshot,
+	snapshotDigest,
+} from './snapshot'
 
 /** What a run stores after classification: the diff, and the two digests an approval is bound to. */
 export interface StoredClassification {
@@ -90,6 +99,8 @@ export interface PublicationInput {
 	readonly root: string | null
 	readonly commitSha: string
 	readonly sourceBinding?: { readonly connectionId: string; readonly installationId: number }
+	/** Refuse a candidate the placement cannot serve before it becomes any publisher's source of truth. */
+	validateAccess?(access: ProviderApprovedAccess, environment: AppEnvRow): Promise<void>
 	log(line: string): void
 }
 
@@ -113,7 +124,8 @@ export async function publishRunSnapshot(
 	const runs = deps.repositories.runs
 	const candidate = input.run.snapshot_json === null ? await readCandidate(deps, invocation, input) : parseSnapshot(input.run.snapshot_json)
 	// A run whose snapshot was stored without a contract, before those were refused, is refused like a new one.
-	if (candidate.contract === null) {
+	const access = approvedAccess(candidate)
+	if (access === undefined) {
 		const missing = new ContractMissing()
 		input.log(`access: ${missing.message}`)
 		throw missing
@@ -124,6 +136,7 @@ export async function publishRunSnapshot(
 		const active = approvedSnapshot(appEnv)
 		await assertConnectorEdges(deps.repositories.registry, run, candidate, active, input.log)
 		assertMountCompatibility(candidate, active, input.log)
+		await input.validateAccess?.(access, appEnv)
 		const classification = classify(active, candidate, appEnv)
 		logClassification(input.log, classification, appEnv.env)
 		const serialized = JSON.stringify(classification)

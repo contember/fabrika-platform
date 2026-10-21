@@ -1,6 +1,6 @@
 // What a namespace proxy pinned to an older source cannot read. Its manifest parser is strict: one row of a form it does
-// not know, or a CSP directive it does not know, refuses the whole manifest, and every member of the namespace loses its
-// proxy at the next republish. So a deploy that would publish either is refused while the namespace's proxy source is not
+// not know, or a CSP directive it does not know, refuses the whole manifest and blocks the namespace's next republish.
+// So a deploy that would publish either is refused before publication while the namespace's proxy source is not
 // this control plane's own.
 
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'

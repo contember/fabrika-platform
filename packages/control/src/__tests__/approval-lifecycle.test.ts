@@ -223,6 +223,82 @@ const status = async (promise: Promise<unknown>): Promise<number> => {
 const DIGEST = contractDigest(readContractSource(new Map([['fabrika.contract.ts', BASE]])))
 
 describe('approved access through the run lifecycle', () => {
+	test('a provider refuses an incompatible candidate before publication or a namespace rebuild, then permits it after repair', async () => {
+		const w = world()
+		await seed(w)
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+		const before = await w.db.registry.getAppEnv('notes', 'stage')
+		const namespace = await w.db.registry.getDeploymentNamespace('apps-stage')
+		w.contract = WITH_EXPORT
+		const d = deps(w)
+		let compatible = false
+		let checks = 0
+		const checked: RunDeps = {
+			...d,
+			provider: {
+				...d.provider,
+				validateAccess: ({ environment, access }) => {
+					checks++
+					expect(environment.namespace?.id).toBe('apps-stage')
+					expect(environment.access?.contract.endpoints.some((row) => row.id === 'api.export')).toBe(false)
+					expect(access.contract.endpoints.some((row) => row.id === 'api.export')).toBe(true)
+					if (!compatible) throw new Error('the pinned proxy cannot read the candidate; re-pin it first')
+				},
+			},
+		}
+		const attempt = async () => {
+			const runId = uuidv7()
+			await w.db.runs.createRun({ id: runId, appId: 'notes', env: 'stage', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
+			return executeDeploy(checked, { runId })
+		}
+		const refused = await attempt()
+		expect(refused.status).toBe('failed')
+		expect(checks).toBe(1)
+		expect(await w.db.registry.getAppEnv('notes', 'stage')).toEqual(before)
+		expect(await w.db.registry.getDeploymentNamespace('apps-stage')).toEqual(namespace)
+		expect(w.republished).toHaveLength(1)
+		expect(w.deploys).toHaveLength(1)
+		expect(w.queued).toEqual([])
+		expect(w.logs.get(`runs/${refused.runId}/logs.ndjson`)).toContain('re-pin it first')
+		compatible = true
+		expect((await attempt()).status).toBe('succeeded')
+		expect(checks).toBe(2)
+		expect(w.republished).toHaveLength(2)
+		expect(w.deploys).toHaveLength(2)
+	})
+
+	test('a lost publication validates the candidate again against the updated environment', async () => {
+		const w = world()
+		await seed(w)
+		await deploy(w, 'stage')
+		const before = await published(w, 'stage')
+		const publish = w.db.runs.publishRunSnapshot.bind(w.db.runs)
+		w.db.runs.publishRunSnapshot = (id, expected, snapshot, fence) => {
+			w.sqlite.query('UPDATE app_envs SET domain = ?, generation = generation + 1 WHERE app_id = ? AND env = ?')
+				.run('changed.example.test', 'notes', 'stage')
+			return publish(id, expected, snapshot, fence)
+		}
+		const d = deps(w)
+		const seen: Array<string | undefined> = []
+		const runId = uuidv7()
+		await w.db.runs.createRun({ id: runId, appId: 'notes', env: 'stage', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
+		const result = await executeDeploy({
+			...d,
+			provider: {
+				...d.provider,
+				validateAccess: ({ environment }) => {
+					seen.push(environment.domain)
+					if (environment.domain === 'changed.example.test') throw new Error('placement changed')
+				},
+			},
+		}, { runId })
+		expect(result.status).toBe('failed')
+		expect(seen).toEqual(['stage.notes.example.test', 'changed.example.test'])
+		expect((await published(w, 'stage')).runId).toBe(before.runId)
+		expect(w.republished).toHaveLength(1)
+		expect(w.deploys).toHaveLength(1)
+	})
+
 	test('a widening applies at once on stage and waits on prod; the first deploy to a protected environment waits', async () => {
 		const w = world()
 		await seed(w)

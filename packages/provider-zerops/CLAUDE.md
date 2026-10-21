@@ -237,7 +237,9 @@ bun test
   is strict, so an approved contract with a row that no older release's proxy parses (a `public` row, a `cache`, a
   file-response profile, a `capabilities` requirement, and any later form), or with a CSP directive none of them knows
   (`workerSrc`, an ALTCHA challenge's `blob:` workers), deploys only while the namespace's proxy source is the one this
-  control plane deploys new placements from; the refusal names each row and `csp`, and
+  control plane deploys new placements from. Control calls `validateAccess` before publishing the candidate snapshot,
+  under the namespace lease, so a refusal cannot poison the namespace's next republish. `deploy` checks it too.
+  The refusal names each row and `csp`, and
   `fabrika control namespaces update --namespace=<id> --proxy-source=current`. The judges are those releases' own
   parsers, a row parser and the CSP field of the entry parser per release, which Control passes in as
   `namespaces.olderProxies` (`src/namespace/proxy-reads.ts`); never replace them with a list of fields. What one of them

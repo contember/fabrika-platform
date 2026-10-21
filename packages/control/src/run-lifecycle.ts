@@ -578,6 +578,11 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 				root: deps.provider.applicationRoot === undefined ? '' : deps.provider.applicationRoot(registration.app.source),
 				commitSha,
 				...(sourceBinding === undefined ? {} : { sourceBinding }),
+				validateAccess: async (access, row) => {
+					if (deps.provider.validateAccess === undefined) return
+					const environment = await providerEnvironment(deps.repositories, row, { requireReadyNamespace: true })
+					deps.provider.validateAccess({ environment, access })
+				},
 				log: (line) => runLogs.log(line),
 			})
 			if (publication.kind === 'parked') {
