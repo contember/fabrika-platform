@@ -138,6 +138,8 @@ export interface GitHubRepositoryClient {
 	compareCommits(baseSha: string, headSha: string, signal?: AbortSignal): Promise<GitHubComparison>
 	/** Idempotent: an existing branch already at `fromSha` is returned; one elsewhere is a conflict. */
 	createBranch(input: GitHubCreateBranchInput): Promise<GitHubRef>
+	/** Idempotent: `deleted` is false when the branch did not exist. GitHub closes an open pull request from it. */
+	deleteBranch(branch: string, signal?: AbortSignal): Promise<{ readonly deleted: boolean }>
 	/** Creates exactly one commit on top of `expectedHeadSha` and moves the branch to it without force. */
 	commitFiles(input: GitHubCommitFilesInput): Promise<GitHubCommit>
 	openPullRequest(input: GitHubOpenPullRequestInput): Promise<GitHubPullRequestRef>

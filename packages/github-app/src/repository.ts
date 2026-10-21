@@ -67,7 +67,7 @@ const BLOB_READ_CONCURRENCY = 6
 type RequestResult = { readonly ok: true; readonly body: unknown } | { readonly ok: false; readonly status: number }
 
 interface RequestOptions {
-	readonly method?: 'GET' | 'POST' | 'PATCH'
+	readonly method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
 	readonly body?: unknown
 	readonly signal?: AbortSignal | undefined
 	readonly maxResponseBytes?: number
@@ -211,6 +211,15 @@ class RepositoryClient implements GitHubRepositoryClient {
 		return requireBranchAt(raced, input.fromSha)
 	}
 
+	async deleteBranch(branch: string, signal?: AbortSignal): Promise<{ readonly deleted: boolean }> {
+		validateBranch(branch)
+		const result = await this.#request(`/git/refs/heads/${encodeBranch(branch)}`, { method: 'DELETE', signal, expectedFailures: [422] })
+		if (result.ok) return { deleted: true }
+		// 422 is "Reference does not exist" among other refusals; only an absent branch counts as already deleted.
+		if (await this.readRef(branch, signal) !== null) throw requestStatusError(result.status)
+		return { deleted: false }
+	}
+
 	async commitFiles(input: GitHubCommitFilesInput): Promise<GitHubCommit> {
 		validateBranch(input.branch)
 		validateSha(input.expectedHeadSha)
@@ -347,6 +356,7 @@ class RepositoryClient implements GitHubRepositoryClient {
 				if (options.expectedFailures?.includes(response.status) === true) return { ok: false, status: response.status }
 				throw requestStatusError(response.status)
 			}
+			if (response.status === 204) return { ok: true, body: null }
 			return { ok: true, body: await readBoundedJson(response, cancellation, options.maxResponseBytes) }
 		} finally {
 			cancellation.dispose()
