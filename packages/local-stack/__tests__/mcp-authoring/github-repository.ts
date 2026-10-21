@@ -4,6 +4,7 @@
 // which Control's workspace source classifies.
 
 import {
+	type GitHubBlobRef,
 	GitHubBranchConflictError,
 	type GitHubCommitFilesInput,
 	type GitHubCreateBranchInput,
@@ -90,6 +91,16 @@ export class FakeGitHubRepository implements GitHubRepositoryClient {
 		})
 		const unreadable = paths.filter((path) => !commit.files.has(path)).map((path): GitHubUnreadablePath => ({ path, reason: 'missing' }))
 		return Promise.resolve({ commitSha, files, unreadable })
+	}
+
+	readBlobTexts(blobs: readonly GitHubBlobRef[]) {
+		const contents = new Map([...this.commits.values()].flatMap((commit) => [...commit.files.values()]).map((content) => [gitHash(content), content]))
+		const files = blobs.flatMap((blob) => {
+			const content = contents.get(blob.sha)
+			return content === undefined ? [] : [{ path: blob.path, content }]
+		})
+		const unreadable = blobs.filter((blob) => !contents.has(blob.sha)).map((blob): GitHubUnreadablePath => ({ path: blob.path, reason: 'missing' }))
+		return Promise.resolve({ files, unreadable })
 	}
 
 	createBranch(input: GitHubCreateBranchInput) {

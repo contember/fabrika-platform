@@ -207,6 +207,93 @@ export async function readFilesUseCase(
 	return sourceCall(() => c.source.readFiles({ target: owned.source, commitSha, paths: input.paths, signal: c.signal }))
 }
 
+/** At most this many files are read for one text search: the GitHub client's bound on one blob read. */
+export const SEARCH_MAX_FILES = 100
+export const SEARCH_MAX_RESULTS = 200
+const SEARCH_LINE_MAX_CHARACTERS = 240
+
+export interface WorkspaceSearchInput {
+	workspaceId: string
+	commitSha?: string
+	directory?: string
+	/** Matched against the whole repository path with `Bun.Glob`; `**` crosses directories, `*` does not. */
+	glob?: string
+	/** A literal string, never a pattern: a regular expression could hold Control's event loop. */
+	text?: string
+	caseSensitive?: boolean
+	maxResults: number
+}
+
+export interface WorkspaceSearchDto {
+	commitSha: string
+	/** Without `text`: the file paths the glob matched. */
+	paths: string[]
+	/** With `text`: the matching lines, 1-based, each cut to 240 characters around the match. */
+	matches: { path: string; line: number; text: string }[]
+	/** Why the answer may be incomplete; empty when it is complete. */
+	incomplete: string[]
+}
+
+/**
+ * Search the workspace at a commit through the repository's own tree and blobs: by path glob alone, or for a literal
+ * text in the files the glob and directory admit. Every bound that cuts the answer short is named in `incomplete`.
+ */
+export async function searchFilesUseCase(c: WorkspaceUseCaseContext, input: WorkspaceSearchInput): Promise<WorkspaceSearchDto> {
+	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_READ)
+	if (input.glob === undefined && input.text === undefined) fail(400, 'name a glob, a text, or both')
+	const commitSha = input.commitSha ?? await requireHead(c, owned)
+	const glob = input.glob === undefined ? null : new Bun.Glob(input.glob)
+	const include = (path: string) => glob === null || glob.match(path)
+	const directory = input.directory === undefined ? {} : { directory: input.directory }
+	const incomplete: string[] = []
+	if (input.text === undefined) {
+		const tree = await sourceCall(() => c.source.listTree({ target: owned.source, commitSha, ...directory, signal: c.signal }))
+		const paths = tree.entries.filter((entry) => entry.kind === 'file' && include(entry.path)).map((entry) => entry.path)
+		if (tree.truncated) incomplete.push(TREE_TRUNCATED)
+		if (paths.length > input.maxResults) incomplete.push(`${paths.length} paths matched; only the first ${input.maxResults} are listed`)
+		return { commitSha: tree.commitSha, paths: paths.slice(0, input.maxResults), matches: [], incomplete }
+	}
+	const scan = await sourceCall(() =>
+		c.source.scanFiles({ target: owned.source, commitSha, ...directory, include, maxFiles: SEARCH_MAX_FILES, signal: c.signal })
+	)
+	if (scan.treeTruncated) incomplete.push(TREE_TRUNCATED)
+	if (scan.candidates > scan.files.length) {
+		incomplete.push(`only the first ${scan.files.length} of ${scan.candidates} files were searched; narrow the glob or the directory`)
+	}
+	for (const [reason, why] of UNSEARCHED) {
+		const skipped = scan.files.filter((file) => file.content === null && file.reason === reason).length
+		if (skipped > 0) incomplete.push(`${skipped} files were not searched: ${why}`)
+	}
+	const needle = input.caseSensitive === false ? input.text.toLowerCase() : input.text
+	const matches: WorkspaceSearchDto['matches'] = []
+	for (const file of scan.files) {
+		if (file.content === null) continue
+		for (const [index, line] of file.content.split('\n').entries()) {
+			const at = (input.caseSensitive === false ? line.toLowerCase() : line).indexOf(needle)
+			if (at === -1) continue
+			if (matches.length === input.maxResults) {
+				incomplete.push(`matches stop at maxResults (${input.maxResults})`)
+				return { commitSha: scan.commitSha, paths: [], matches, incomplete }
+			}
+			matches.push({ path: file.path, line: index + 1, text: lineAround(line, at) })
+		}
+	}
+	return { commitSha: scan.commitSha, paths: [], matches, incomplete }
+}
+
+const TREE_TRUNCATED = 'the repository tree has more entries than one listing returns; name a directory'
+
+const UNSEARCHED: readonly [WorkspaceUnreadableReason, string][] = [
+	['too_large', 'they are over 512 KiB'],
+	['budget', 'the files searched reached 2 MiB together; narrow the glob or the directory'],
+]
+
+function lineAround(line: string, at: number): string {
+	if (line.length <= SEARCH_LINE_MAX_CHARACTERS) return line
+	const start = Math.max(0, Math.min(at - SEARCH_LINE_MAX_CHARACTERS / 3, line.length - SEARCH_LINE_MAX_CHARACTERS))
+	return line.slice(start, start + SEARCH_LINE_MAX_CHARACTERS)
+}
+
 /** Commit one batch of changes on the workspace branch, only if its head is still `expectedHeadSha`. */
 export async function applyChangesUseCase(
 	c: WorkspaceUseCaseContext,
