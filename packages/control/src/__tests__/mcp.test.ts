@@ -222,6 +222,11 @@ describe('the MCP endpoint', () => {
 		expect(toolJson(edited)).toEqual({ commitSha: sha('1') })
 		expect(world.source.calls.at(-1)).toMatchObject({ kind: 'commit', commit: { changes: [{ path: 'src/app.ts', content: 'title = "New"' }] } })
 
+		const deployed = toolJson(await rpc(fetch, token, 'tools/call', { name: 'deploy_stage', arguments: { workspaceId: field(workspace, 'id') } }))
+		expect(field(deployed, 'runId')).toBe(field(deployed, 'id'))
+		const deployment = toolJson(await rpc(fetch, token, 'tools/call', { name: 'get_deployment', arguments: { runId: field(deployed, 'runId') } }))
+		expect(deployment).toMatchObject({ finished: false, summary: 'Queued and not started yet; poll again.', log: { lines: [], total: 0 } })
+
 		const searched = await rpc(fetch, token, 'tools/call', { name: 'search_files', arguments: { workspaceId: field(workspace, 'id'), text: 'Old' } })
 		expect(toolJson(searched)).toEqual({
 			commitSha: sha('1'),

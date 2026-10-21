@@ -276,12 +276,17 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 	}, (input) => run(() => applyChangesUseCase(c, input)))
 	server.registerTool('deploy_stage', {
 		description: 'Deploy the current head of the workspace branch to its stage environment. Creates a deploy run for that exact commit; '
-			+ 'follow it with get_deployment. Production is never deployed from a workspace.',
+			+ 'follow it with get_deployment and the runId this answers. Production is never deployed from a workspace.',
 		inputSchema: toolInput(toolInputs.deployStage),
 		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-	}, (input) => run(() => deployStageUseCase(c, input)))
+	}, (input) =>
+		run(async () => {
+			const deployed = await deployStageUseCase(c, input)
+			return { runId: deployed.id, ...deployed }
+		}))
 	server.registerTool('get_deployment', {
-		description: 'Read a deploy run of one of your workspaces: its status, the deployed commit and a window of its build log. '
+		description: 'Read a deploy run of one of your workspaces: its status, whether it finished, a one-line summary, the deployed '
+			+ 'commit and a window of its build log. exitCode stays null for a provider that runs no process. '
 			+ `The window is the last logLines lines (default ${DEPLOYMENT_LOG_DEFAULT_LINES}, at most ${DEPLOYMENT_LOG_MAX_LINES}); `
 			+ 'log.from and log.to index the log, so poll with after: log.to for new lines only, or page back with before: log.from. '
 			+ 'failuresOnly keeps stderr lines and lines that name an error or a failure. '
