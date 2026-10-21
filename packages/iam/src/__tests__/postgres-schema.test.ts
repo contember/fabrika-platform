@@ -120,6 +120,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0020_public_workloads.sql' },
 			{ bundle: 'iam', name: '0021_installation_brand.sql' },
 			{ bundle: 'iam', name: '0022_password_policy.sql' },
+			{ bundle: 'iam', name: '0023_terminals.sql' },
 		])
 	})
 
@@ -170,6 +171,9 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'app_schema_revisions',
 				'installation_brand',
 				'password_policy',
+				'terminals',
+				'terminal_asserters',
+				'terminal_identifications',
 			]
 		) {
 			expect(names).toContain(table)

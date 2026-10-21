@@ -191,3 +191,17 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
 | 4    | WU7                                                                                                                 |
 
 ## Run log
+
+- WU1: the profile is `terminals.session_ttl` (CHECK 1–3600) plus one `terminal_asserters (terminal_id, app, ceiling)`
+  row per asserting application, not one JSON column. A ceiling exists only for an asserter, so no state can name one
+  for another app. The ceiling is a JSON array of action patterns, app-wide.
+- WU1: the SQLite `sessions` rebuild also rebuilds `auth_codes`, `oauth_grants`, `oauth_codes` and
+  `oauth_refresh_tokens`, kept aside and restored, as control's `0005_approved_access.sql` does for a referenced table.
+- WU1: `sessionUsable` got its `terminal_assertion` case (`true`; the validity join checks the terminal), because the
+  exhaustive switch does not compile without it. `SessionDto.authenticationMethod` in `iam-contract` gained the value.
+- WU1: enrolment is `terminals.enrolStatement`, composed with `principals.createServiceStatement` (WU3 adds the login
+  revocation and the audit row to the same batch). Cancelling an identification sets `consumed_at`, scoped to its app.
+- WU1 → WU2: the row CHECK requires `terminal_id` and `asserted_by` on every `terminal_assertion` session, so
+  `exchangeAuthCode` fails for a terminal parent until it copies both to the child.
+- WU1 → WU3/WU5: a terminal principal is a `service` row, so check that `apiKeys.list` does not show it. Nothing calls
+  `terminals.pruneIdentifications` yet; the maintenance cron should.

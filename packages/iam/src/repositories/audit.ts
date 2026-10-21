@@ -41,6 +41,10 @@ export interface AuthLogRow {
 	created_at: number
 	/** 1 when the session's principal held the installation-admin action at login; 0 otherwise. */
 	privileged: number
+	/** The terminal of the session this row is about (ADR-0067), copied from the session row. */
+	terminal_id: string | null
+	/** The application that asserted that session's person on `terminal_id`. */
+	asserted_by: string | null
 }
 
 /** A login attempt (`authenticate`) or the end of a session (`logout`). */
@@ -70,6 +74,8 @@ export interface AuthLogInput {
 	reason?: string | null
 	/** The principal held the installation-admin action when this session was opened. */
 	privileged?: boolean
+	/** The session's `terminal_id` and `asserted_by`, read from its row, never from what an application sent. */
+	terminal?: { terminalId: string; assertedBy: string } | null
 }
 
 /**
@@ -212,8 +218,8 @@ export class AuditWriter {
 export function authLogStatement(db: SqlDatabase, input: AuthLogInput): SqlStatement {
 	return db
 		.prepare(`INSERT INTO auth_log
-			(request_id, app, kind, principal_id, credential_id, decision, reason, privileged, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			(request_id, app, kind, principal_id, credential_id, decision, reason, privileged, created_at, terminal_id, asserted_by)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 		.bind(
 			input.requestId,
 			input.app,
@@ -224,6 +230,8 @@ export function authLogStatement(db: SqlDatabase, input: AuthLogInput): SqlState
 			input.reason ?? null,
 			input.privileged === true ? 1 : 0,
 			unixNow(),
+			input.terminal?.terminalId ?? null,
+			input.terminal?.assertedBy ?? null,
 		)
 }
 

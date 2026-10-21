@@ -32,6 +32,9 @@ export function sessionUsable(
 			return config.authentication.password.enabled
 		case 'local_dev':
 			return config.localDevLogin
+		// No person can enable this method for themselves; the session lookup already refuses a revoked terminal.
+		case 'terminal_assertion':
+			return true
 	}
 }
 

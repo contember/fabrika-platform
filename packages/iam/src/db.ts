@@ -13,6 +13,7 @@ import { OAuthRepository } from './repositories/oauth'
 import { PasswordPolicyRepository } from './repositories/password-policy'
 import { PrincipalRepository } from './repositories/principals'
 import { SessionRepository } from './repositories/sessions'
+import { TerminalRepository } from './repositories/terminals'
 import { WorkloadRepository } from './repositories/workloads'
 
 export {
@@ -60,6 +61,15 @@ export { type OAuthCodeRow, type OAuthGrantRow, type OAuthRefreshTokenRow, OAuth
 export { PasswordPolicyRepository, type PasswordPolicyRow } from './repositories/password-policy'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
 export { type AuthenticationMethod, SessionRepository, type SessionRow } from './repositories/sessions'
+export {
+	DEFAULT_TERMINAL_SESSION_TTL_SECONDS,
+	MAX_TERMINAL_SESSION_TTL_SECONDS,
+	type TerminalAsserter,
+	type TerminalIdentificationRow,
+	type TerminalProfile,
+	TerminalRepository,
+	type TerminalRow,
+} from './repositories/terminals'
 export { type AppWorkloadRow, type WorkloadPrincipalRow, WorkloadRepository } from './repositories/workloads'
 
 /** IAM persistence capabilities selected together by a runtime composition root. */
@@ -76,6 +86,7 @@ export interface IamRepositories {
 	oauth: OAuthRepository
 	audit: AuditRepository
 	workloads: WorkloadRepository
+	terminals: TerminalRepository
 	membershipTransport: MembershipTransportKeyRepository
 	brand: InstallationBrandRepository
 	passwordPolicy: PasswordPolicyRepository
@@ -104,6 +115,7 @@ export function createIamRepositories(
 		oauth: replacements.oauth ?? new OAuthRepository(db, writer),
 		audit: replacements.audit ?? new AuditRepository(db, writer),
 		workloads: replacements.workloads ?? new WorkloadRepository(db),
+		terminals: replacements.terminals ?? new TerminalRepository(db, writer),
 		membershipTransport: replacements.membershipTransport ?? new MembershipTransportKeyRepository(db),
 		brand: replacements.brand ?? new InstallationBrandRepository(db, writer),
 		passwordPolicy: replacements.passwordPolicy ?? new PasswordPolicyRepository(db, writer),
