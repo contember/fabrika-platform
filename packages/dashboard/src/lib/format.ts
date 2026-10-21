@@ -57,3 +57,8 @@ export function shortSha(sha: string | null | undefined): string {
 export function shortRef(ref: string): string {
 	return ref.replace(/^refs\/(heads|tags)\//, '')
 }
+
+/** Shorten a trigger branch only when saving it still names the same ref; `refs/` is parsed as a full ref. */
+export function editableTriggerRef(ref: string): string {
+	return ref.replace(/^refs\/heads\/(?!refs\/)/, '')
+}

@@ -2685,10 +2685,6 @@ td.row-actions > * + * {
 	margin-top: var(--s-1);
 }
 
-.namespace-assignment select {
-	max-width: 13rem;
-}
-
 .namespace-provision-actions,
 .namespace-detail-actions {
 	margin-top: var(--s-3);
@@ -2697,6 +2693,218 @@ td.row-actions > * + * {
 .namespace-failure {
 	border-color: color-mix(in srgb, var(--lamp-stop) 34%, transparent);
 	background: var(--wash-stop);
+}
+
+/* Environment settings keep the app's own address separate from the pages allowed to call it. */
+.environment-table,
+.environment-editor {
+	container-type: inline-size;
+}
+
+.environment-table table:not(:has(td.empty)) {
+	min-width: 58rem;
+}
+
+.environment-row > td {
+	padding-block: var(--s-4);
+	font-size: var(--t-sm);
+}
+
+.environment-row strong {
+	font-weight: 600;
+}
+
+/* Technical values keep the same size in every column, including inside secondary text. */
+.environment-row code {
+	font-size: inherit;
+	font-weight: 400;
+}
+
+.environment-row .muted code {
+	color: inherit;
+}
+
+.environment-address {
+	min-width: 16rem;
+	max-width: 28rem;
+	overflow-wrap: anywhere;
+}
+
+.environment-row-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: var(--s-2);
+	min-width: 9rem;
+}
+
+.environment-editor-row > td,
+.environment-editor-row:hover > td {
+	padding: 0;
+	background: none;
+}
+
+.environment-editor {
+	/* The table can scroll on small screens; the expanded form still fits the visible workspace. */
+	max-width: 100cqw;
+	margin-block: var(--s-3);
+	border-left: 2px solid var(--rule);
+	font-size: var(--t-sm);
+}
+
+.environment-add {
+	margin-top: var(--s-4);
+}
+
+.environment-head {
+	padding: var(--s-4) var(--s-5) 0;
+}
+
+.environment-head h3,
+.environment-field-group h4 {
+	margin: 0;
+	font-family: var(--font-ui);
+	font-size: var(--t-base);
+	font-weight: 600;
+	line-height: 1.5;
+	letter-spacing: normal;
+	text-transform: none;
+	color: var(--ink);
+}
+
+.environment-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	flex-wrap: wrap;
+}
+
+.environment-deploy {
+	display: grid;
+	justify-items: end;
+	gap: var(--s-1);
+	max-width: 16rem;
+}
+
+.environment-url {
+	display: inline-flex;
+	align-items: baseline;
+	gap: var(--s-1);
+	max-width: 100%;
+	color: var(--ink);
+}
+
+.environment-url code {
+	min-width: 0;
+}
+
+.environment-url .icon {
+	flex-shrink: 0;
+	color: var(--ink-3);
+}
+
+.environment-origins {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+	display: grid;
+	gap: var(--s-1);
+	font-size: var(--t-sm);
+	min-width: 17rem;
+	max-width: 24rem;
+	overflow-wrap: anywhere;
+}
+
+.environment-form {
+	max-width: none;
+	gap: 0;
+}
+
+.environment-fields {
+	min-width: 0;
+	margin: 0;
+	padding: var(--s-5);
+	border: 0;
+	display: grid;
+	gap: var(--s-5);
+}
+
+.environment-form-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--s-5) var(--s-6);
+}
+
+.environment-field-group {
+	display: grid;
+	align-content: start;
+	gap: var(--s-4);
+	min-width: 0;
+}
+
+.environment-form label {
+	flex-direction: row;
+	align-items: baseline;
+	flex-wrap: wrap;
+	margin-bottom: var(--s-2);
+	font-weight: 500;
+}
+
+.environment-field-meta {
+	font-weight: 400;
+	font-size: inherit;
+	color: var(--ink-3);
+}
+
+.environment-form :is(input, select, textarea) {
+	width: 100%;
+	font-family: var(--font-mono);
+	font-size: var(--t-sm);
+	font-weight: 400;
+	line-height: 1.5;
+}
+
+.environment-name-field {
+	max-width: 30rem;
+}
+
+.environment-deployment-fields {
+	border-top: 1px solid var(--rule-soft);
+	padding-top: var(--s-5);
+}
+
+.environment-form .hint {
+	max-width: 68ch;
+}
+
+.environment-form-error {
+	margin: 0 var(--s-5) var(--s-4);
+}
+
+.environment-form-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: var(--s-3);
+	padding: var(--s-4) var(--s-5);
+	border-top: 1px solid var(--rule-soft);
+}
+
+.environment-form-actions > .environment-actions {
+	margin-left: auto;
+}
+
+@container (max-width: 36rem) {
+	.environment-form-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.environment-head,
+	.environment-fields,
+	.environment-form-actions {
+		padding-inline: var(--s-4);
+	}
 }
 
 /* ── Source connection ────────────────────────────────────────────────────── */

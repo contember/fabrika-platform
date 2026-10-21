@@ -1,16 +1,15 @@
 import { useNavigate } from '@buzola/router'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
-import { useState } from 'react'
-import { api, ApiError, type AppEnvDto, type DeploymentNamespaceDto, type PutAppEnvRequest, type TriggerDeployRequest } from '../../lib/api'
+import { useId, useRef, useState } from 'react'
+import { api, ApiError, type AppEnvDto, type DeploymentNamespaceDto, type TriggerDeployRequest } from '../../lib/api'
 import { mayDo } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
-import { shortRef } from '../../lib/format'
-import { cloudflareArtifactWithConfigPath, cloudflareConfigPath } from '../../lib/manifest-editor'
-import { compatibleNamespaces, namespaceAssignmentRequest } from '../../lib/namespaces'
-import { type FormProvider, formProvider, type ProviderRegistrationPayload, providerRegistrationPayload } from '../../lib/provider-registration'
+import { editableTriggerRef } from '../../lib/format'
+import { formProvider } from '../../lib/provider-registration'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { Icon } from '../Icon'
 import { EmptyState, Table } from '../Table'
+import { EnvironmentForm } from './EnvironmentForm'
 
 export function EnvironmentsSection(
 	{ appId, envs, namespaces, providerId, onDone }: {
@@ -23,43 +22,70 @@ export function EnvironmentsSection(
 	},
 ) {
 	const provider = formProvider(providerId)
+	const [adding, setAdding] = useState(false)
+	const addButton = useRef<HTMLButtonElement>(null)
+
+	function closeAdd() {
+		setAdding(false)
+		requestAnimationFrame(() => addButton.current?.focus())
+	}
+
 	return (
 		<section>
 			<div className="section-head">
-				<Icon name="bay" size={15} />
 				<h2>Environments</h2>
+				<span className="spacer" />
+				{provider !== null && (
+					<button ref={addButton} type="button" className="small" onClick={() => setAdding(true)} disabled={adding}>
+						<Icon name="plus" size={13} />
+						Add environment
+					</button>
+				)}
 			</div>
-			<Table
-				colSpan={6}
-				isEmpty={envs.length === 0}
-				empty={
-					<EmptyState
-						icon="bay"
-						title="No environments yet"
-						body="An environment binds this app to a namespace and a domain. It is what a deploy targets."
+			<p className="section-note">Where this app runs, how it deploys, and which other websites may call it.</p>
+			<div className="environment-table">
+				<Table
+					colSpan={6}
+					isEmpty={envs.length === 0}
+					empty={<EmptyState icon="bay" title="No environments yet" body="Add an environment to give this app an address and a deployment target." />}
+					head={
+						<tr>
+							<th>Environment</th>
+							<th className="grow">Address</th>
+							<th>Auto-deploy from</th>
+							<th>Placement</th>
+							<th>Cross-origin pages</th>
+							<th aria-label="Actions" />
+						</tr>
+					}
+				>
+					{envs.map((env) => <EnvironmentRow key={env.env} appId={appId} env={env} namespaces={namespaces} onDone={onDone} />)}
+				</Table>
+			</div>
+			{adding && provider !== null && (
+				<div className="environment-editor environment-add">
+					<div className="environment-head">
+						<h3>New environment</h3>
+					</div>
+					<EnvironmentForm
+						appId={appId}
+						initial={null}
+						existing={envs}
+						provider={provider}
+						namespaces={namespaces}
+						onDone={() => {
+							closeAdd()
+							onDone()
+						}}
+						onCancel={closeAdd}
 					/>
-				}
-				head={
-					<tr>
-						<th>Env</th>
-						{/* The domain and the origin it answers on are one address; one cell keeps the row in the window. */}
-						<th className="grow">Domain · public origin</th>
-						<th>Trigger ref</th>
-						<th>Placement</th>
-						<th>Provider config</th>
-						<th />
-					</tr>
-				}
-			>
-				{envs.map((env) => <EnvRow key={env.env} appId={appId} env={env} namespaces={namespaces} onDone={onDone} />)}
-			</Table>
-			{provider === null
-				? (
-					<p className="hint">
-						This console has no environment form for provider <code>{providerId}</code>.
-					</p>
-				)
-				: <AddEnvForm appId={appId} existing={envs} namespaces={namespaces} provider={provider} onDone={onDone} />}
+				</div>
+			)}
+			{provider === null && (
+				<p className="hint">
+					This console has no environment form for provider <code>{providerId}</code>.
+				</p>
+			)}
 		</section>
 	)
 }
@@ -86,17 +112,17 @@ function DeployButton({ appId, env }: { appId: string; env: AppEnvDto }) {
 	if (!mayDo(access, CONTROL_ACTIONS.DEPLOY_TRIGGER, { app: appId, env: env.env })) return null
 
 	return (
-		<>
+		<div className="environment-deploy">
 			<button type="button" className="accent small" onClick={deploy} disabled={busy}>
 				<Icon name="bolt" size={12} />
 				{busy ? 'Deploying…' : 'Deploy'}
 			</button>
-			{error && <div className="error-text small">{error}</div>}
-		</>
+			{error && <div className="error-text small" role="alert">{error}</div>}
+		</div>
 	)
 }
 
-function EnvRow(
+function EnvironmentRow(
 	{ appId, env, namespaces, onDone }: {
 		appId: string
 		env: AppEnvDto
@@ -106,332 +132,120 @@ function EnvRow(
 ) {
 	const [editing, setEditing] = useState(false)
 	const [confirming, setConfirming] = useState(false)
+	const editButton = useRef<HTMLButtonElement>(null)
+	const editorId = useId()
+
+	function closeEdit() {
+		setEditing(false)
+		requestAnimationFrame(() => editButton.current?.focus())
+	}
 
 	async function remove() {
 		await api.apps.environments.delete({ appId, env: env.env })
 		onDone()
 	}
 
-	if (editing) {
-		return (
-			<EnvForm
-				appId={appId}
-				env={env.env}
-				initial={env}
-				provider={null}
-				namespaces={namespaces}
-				onDone={() => {
-					setEditing(false)
-					onDone()
-				}}
-				onCancel={() => setEditing(false)}
-			/>
-		)
-	}
-
 	return (
-		<tr>
-			<td>
-				<strong>{env.env}</strong>
-			</td>
-			<td>
-				<div className="cell-stack">
-					{env.domain === null ? <span className="muted">no domain</span> : <span>{env.domain}</span>}
-					{env.publicOrigin === null ? <span className="muted small">no public origin</span> : <code className="small">{env.publicOrigin}</code>}
-					{env.crossOrigins.length > 0 && (
-						<span className="muted small" title="Pages on these origins may call the endpoints the contract opens to the environment's list.">
-							cross-origin pages: {env.crossOrigins.map((origin, index) => (
-								<span key={origin}>
-									{index > 0 && ', '}
-									<code>{origin}</code>
-								</span>
-							))}
+		<>
+			<tr className="environment-row">
+				<td>
+					<div className="cell-stack">
+						<strong>{env.env}</strong>
+						<span className="muted small">{env.provider}</span>
+					</div>
+				</td>
+				<td>
+					<div className="cell-stack environment-address">
+						{env.publicOrigin === null
+							? <span className="muted">No public URL</span>
+							: (
+								<a className="environment-url" href={env.publicOrigin} target="_blank" rel="noreferrer">
+									<code>{env.publicOrigin}</code>
+									<Icon name="external" size={12} />
+								</a>
+							)}
+						<span className="muted small">
+							{env.domain === null ? 'No routing domain' : (
+								<>
+									Domain: <code>{env.domain}</code>
+								</>
+							)}
 						</span>
-					)}
-				</div>
-			</td>
-			<td>{env.triggerRef === null ? <span className="muted">manual-only</span> : <code>{shortRef(env.triggerRef)}</code>}</td>
-			<td>
-				<NamespaceAssignment appId={appId} environment={env} namespaces={namespaces} onDone={onDone} />
-			</td>
-			<td>
-				<ProviderConfig environment={env} />
-			</td>
-			<td className="row-actions">
-				<DeployButton appId={appId} env={env} />
-				<button type="button" className="small" onClick={() => setEditing(true)}>Edit</button>
-				<button type="button" className="danger small" onClick={() => setConfirming(true)}>Delete</button>
-				{confirming && (
-					<ConfirmDialog
-						title="Delete environment"
-						confirmLabel="Delete"
-						body={
-							<p>
-								Delete environment <strong>{env.env}</strong> of <strong>{appId}</strong>?
-							</p>
-						}
-						onConfirm={remove}
-						onClose={() => setConfirming(false)}
-					/>
-				)}
-			</td>
-		</tr>
-	)
-}
-
-function ProviderConfig({ environment }: { environment: AppEnvDto }) {
-	const configPath = cloudflareConfigPath(environment.artifact)
-	return configPath === null
-		? <code>{environment.provider}@{environment.artifact.version}</code>
-		: <code>{configPath}</code>
-}
-
-function NamespaceAssignment(
-	{ appId, environment, namespaces, onDone }: {
-		appId: string
-		environment: AppEnvDto
-		namespaces: DeploymentNamespaceDto[]
-		onDone: () => void
-	},
-) {
-	const compatible = compatibleNamespaces(appId, environment, namespaces)
-	const currentIsCompatible = environment.namespaceId === null || compatible.some((namespace) => namespace.id === environment.namespaceId)
-	const [selected, setSelected] = useState(environment.namespaceId ?? '')
-	const [busy, setBusy] = useState(false)
-	const [error, setError] = useState<string | null>(null)
-
-	async function assign() {
-		setBusy(true)
-		setError(null)
-		try {
-			const body = namespaceAssignmentRequest(environment, selected === '' ? null : selected)
-			await api.apps.environments.put({ appId, env: environment.env, environment: body })
-			setBusy(false)
-			onDone()
-		} catch (cause) {
-			setError(cause instanceof ApiError ? cause.message : 'Placement assignment failed.')
-			setBusy(false)
-		}
-	}
-
-	return (
-		<div className="namespace-assignment">
-			<div className="row-actions">
-				<select
-					aria-label={`Placement for ${environment.env}`}
-					value={selected}
-					disabled={busy}
-					onChange={(event) => setSelected(event.target.value)}
-				>
-					{environment.namespaceId === null && <option value="">Unassigned</option>}
-					{!currentIsCompatible && environment.namespaceId !== null && (
-						<option value={environment.namespaceId} disabled>{environment.namespaceId} (not compatible)</option>
-					)}
-					{compatible.map((namespace) => (
-						<option key={namespace.id} value={namespace.id}>
-							{namespace.id}
-							{namespace.exclusiveAppId === null ? '' : ' (exclusive)'}
-						</option>
-					))}
-				</select>
-				<button
-					type="button"
-					className="small"
-					disabled={busy || selected === (environment.namespaceId ?? '')}
-					onClick={assign}
-				>
-					{busy ? 'Assigning…' : 'Assign'}
-				</button>
-			</div>
-			{compatible.length === 0 && environment.namespaceId === null && <div className="hint">No compatible ready placement.</div>}
-			{error && <div className="error-text small" role="alert">{error}</div>}
-		</div>
-	)
-}
-
-/** Shared env editor: an inline table row form for both edit and add. */
-function EnvForm(
-	{ appId, env, initial, provider, namespaces, onDone, onCancel, lockEnv = true }: {
-		appId: string
-		env: string
-		initial: AppEnvDto | null
-		/** Decides a NEW environment's fields and envelopes; an edit keeps the stored envelopes. */
-		provider: FormProvider | null
-		namespaces: DeploymentNamespaceDto[]
-		onDone: () => void
-		onCancel: () => void
-		lockEnv?: boolean
-	},
-) {
-	const [envName, setEnvName] = useState(env)
-	const [domain, setDomain] = useState(initial?.domain ?? '')
-	const [publicOrigin, setPublicOrigin] = useState(initial?.publicOrigin ?? '')
-	const [triggerRef, setTriggerRef] = useState(initial?.triggerRef ?? '')
-	const initialConfigPath = initial === null ? 'fabrika.config.ts' : cloudflareConfigPath(initial.artifact)
-	const [configPath, setConfigPath] = useState(initialConfigPath ?? '')
-	const [manifest, setManifest] = useState('')
-	const [namespaceId, setNamespaceId] = useState('')
-	const [busy, setBusy] = useState(false)
-	const [error, setError] = useState<string | null>(null)
-	const addingZerops = initial === null && provider === 'zerops'
-	const ready = provider === null ? [] : compatibleNamespaces(appId, { env: envName.trim(), provider }, namespaces)
-	const providerFieldsMissing = addingZerops
-		? manifest.trim() === '' || namespaceId === ''
-		: initialConfigPath !== null && configPath.trim() === ''
-
-	function placement(): ProviderRegistrationPayload | null {
-		if (initial !== null) {
-			return {
-				namespaceId: initial.namespaceId,
-				target: initial.target,
-				artifact: initialConfigPath === null ? initial.artifact : cloudflareArtifactWithConfigPath(initial.artifact, configPath.trim()),
-			}
-		}
-		return provider === null ? null : providerRegistrationPayload(provider, { configPath, manifest, namespaceId })
-	}
-
-	async function save() {
-		setError(null)
-		let resolved: ProviderRegistrationPayload | null
-		try {
-			resolved = placement()
-		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : 'Paste a valid fabrika.manifest.json.')
-			return
-		}
-		if (resolved === null) return
-		setBusy(true)
-		try {
-			const body: PutAppEnvRequest = {
-				domain: domain.trim() === '' ? null : domain.trim(),
-				publicOrigin: publicOrigin.trim() === '' ? null : publicOrigin.trim(),
-				triggerRef: triggerRef.trim() === '' ? null : triggerRef.trim(),
-				...resolved,
-			}
-			await api.apps.environments.put({ appId, env: envName.trim(), environment: body })
-			onDone()
-		} catch (cause) {
-			setError(cause instanceof ApiError ? cause.message : 'Save failed.')
-			setBusy(false)
-		}
-	}
-
-	return (
-		<tr>
-			<td>
-				{lockEnv
-					? <strong>{envName}</strong>
-					: <input aria-label="Env" value={envName} onChange={(e) => setEnvName(e.target.value)} placeholder="stage" />}
-			</td>
-			<td>
-				<div className="cell-stack">
-					<input aria-label="Domain" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="store.acme.com" />
-					<input
-						type="url"
-						aria-label="Public origin"
-						value={publicOrigin}
-						onChange={(e) => setPublicOrigin(e.target.value)}
-						placeholder="https://store.acme.com"
-					/>
-				</div>
-			</td>
-			<td>
-				<input aria-label="Trigger ref" value={triggerRef} onChange={(e) => setTriggerRef(e.target.value)} placeholder="refs/heads/main" />
-				{error && <div className="error-text small">{error}</div>}
-			</td>
-			<td>
-				{addingZerops
-					? (
-						<select aria-label="Placement" required value={namespaceId} onChange={(e) => setNamespaceId(e.target.value)}>
-							<option value="">Select a ready namespace</option>
-							{ready.map((namespace) => <option key={namespace.id} value={namespace.id}>{namespace.id}</option>)}
-						</select>
-					)
-					: initial?.namespaceId === null || initial === null
-					? <span className="muted">unassigned</span>
-					: <code>{initial.namespaceId}</code>}
-			</td>
-			<td>
-				{addingZerops
-					? (
-						<textarea
-							required
-							rows={4}
-							aria-label="Built fabrika manifest"
-							value={manifest}
-							onChange={(e) => setManifest(e.target.value)}
-							placeholder='{ "manifestVersion": 3, … }'
-							spellCheck={false}
-						/>
-					)
-					: initial !== null && initialConfigPath === null
-					? <code>{initial.provider}@{initial.artifact.version}</code>
-					: (
-						<input
-							required
-							aria-label="Config path"
-							value={configPath}
-							onChange={(e) => setConfigPath(e.target.value)}
-							placeholder="fabrika.config.ts"
+					</div>
+				</td>
+				<td>
+					{env.triggerRef === null
+						? <span className="muted">Manual deploys only</span>
+						: <code title={env.triggerRef}>{editableTriggerRef(env.triggerRef)}</code>}
+				</td>
+				<td>{env.namespaceId === null ? <span className="muted">Unassigned</span> : <code>{env.namespaceId}</code>}</td>
+				<td>
+					{env.crossOrigins.length === 0
+						? <span className="muted small">None listed</span>
+						: (
+							<ul className="environment-origins">
+								{env.crossOrigins.map((origin) => (
+									<li key={origin}>
+										<code>{origin}</code>
+									</li>
+								))}
+							</ul>
+						)}
+				</td>
+				<td>
+					<div className="environment-row-actions">
+						{!editing && <DeployButton appId={appId} env={env} />}
+						<button
+							ref={editButton}
+							type="button"
+							className="small"
+							onClick={() => setEditing(true)}
+							disabled={editing}
+							aria-expanded={editing}
+							aria-controls={editing ? editorId : undefined}
+						>
+							{editing ? 'Editing' : 'Edit'}
+						</button>
+					</div>
+					{confirming && (
+						<ConfirmDialog
+							title="Delete environment"
+							confirmLabel="Delete environment"
+							body={
+								<p>
+									Delete environment <strong>{env.env}</strong> of <strong>{appId}</strong>?
+								</p>
+							}
+							onConfirm={remove}
+							onClose={() => setConfirming(false)}
 						/>
 					)}
-			</td>
-			<td className="row-actions">
-				<button
-					type="button"
-					className="primary small"
-					onClick={save}
-					disabled={busy || envName.trim() === '' || providerFieldsMissing}
-				>
-					{busy ? 'Saving…' : 'Save'}
-				</button>
-				<button type="button" className="small" onClick={onCancel} disabled={busy}>Cancel</button>
-			</td>
-		</tr>
-	)
-}
-
-function AddEnvForm(
-	{ appId, existing, namespaces, provider, onDone }: {
-		appId: string
-		existing: AppEnvDto[]
-		namespaces: DeploymentNamespaceDto[]
-		provider: FormProvider
-		onDone: () => void
-	},
-) {
-	const [open, setOpen] = useState(false)
-
-	if (!open) {
-		return (
-			<div className="add-row">
-				<button type="button" className="small" onClick={() => setOpen(true)}>
-					<Icon name="plus" size={13} />
-					Add environment
-				</button>
-			</div>
-		)
-	}
-
-	return (
-		<div className="table-wrap inline-add">
-			<table>
-				<tbody>
-					<EnvForm
-						appId={appId}
-						env={existing.length === 0 ? 'prod' : ''}
-						initial={null}
-						provider={provider}
-						namespaces={namespaces}
-						lockEnv={false}
-						onDone={() => {
-							setOpen(false)
-							onDone()
-						}}
-						onCancel={() => setOpen(false)}
-					/>
-				</tbody>
-			</table>
-		</div>
+				</td>
+			</tr>
+			{editing && (
+				<tr className="environment-editor-row">
+					<td colSpan={6}>
+						<div className="environment-editor" id={editorId}>
+							<div className="environment-head">
+								<h3>Edit {env.env}</h3>
+							</div>
+							<EnvironmentForm
+								appId={appId}
+								initial={env}
+								existing={[]}
+								provider={null}
+								namespaces={namespaces}
+								onDone={() => {
+									closeEdit()
+									onDone()
+								}}
+								onCancel={closeEdit}
+								onDelete={() => setConfirming(true)}
+							/>
+						</div>
+					</td>
+				</tr>
+			)}
+		</>
 	)
 }
