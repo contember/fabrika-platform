@@ -148,8 +148,8 @@ const SECTION_AUTHORIZATION_FORWARDED =
 	'Verified live (2026-10-16) — the balancer forwards `Authorization` unchanged — docs/reference/zerops-platform.md'
 const SECTION_ACTIVATION_GATES =
 	'Verified live (2026-10-16) — an exec readiness check and a failed init command each stop an activation — docs/reference/zerops-platform.md'
-const SECTION_UNVERIFIED_READINESS_AFTER_INIT =
-	'UNVERIFIED: the readiness window opens with `run.start`, after the init commands (docs/reference/zerops-platform.md)'
+const SECTION_READINESS_AFTER_INIT =
+	'Verified live (2026-10-21): the readiness window opens with `run.start`, after the init commands (docs/reference/zerops-platform.md)'
 const SECTION_CORRECTIONS = 'Verified live (2026-08-21) — what the first automated run corrected — docs/reference/zerops-platform.md:785'
 const SECTION_VALUE_SIZE = 'Verified live (2026-10-15) — a service variable value over ~32 KB is a bare 500 — docs/reference/zerops-platform.md:767'
 const SECTION_USER_DATA_SENSITIVE_DEFAULT =
@@ -847,7 +847,7 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 	},
 	{
 		id: 'slow-init-command-precedes-the-readiness-window',
-		section: SECTION_UNVERIFIED_READINESS_AFTER_INIT,
+		section: SECTION_READINESS_AFTER_INIT,
 		request: { method: 'PUT', path: '/app-version/{appVersionId}/build-and-deploy' },
 		expect: { status: 200 },
 		script: 'slow-init-command',

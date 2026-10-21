@@ -284,9 +284,8 @@ const migrateScript = (appId: string): readonly string[] => [
 
 // The committed schema types must match the migrated schema and every generated isolation test must pass on a throwaway
 // schema. The build has no database, so they run at container start, after the migrations, as init commands: a failed
-// init command stops the activation (verified live), and a run as long as the CRM's ~3 minutes of generated cases does
-// not race the readiness window. UNVERIFIED: that the window opens with `run.start`, after the init commands; one
-// runtime log shows it, and the platform-facts row `slow-init-command-precedes-the-readiness-window` measures it.
+// init command stops the activation, and the readiness window opens only with `run.start`, after the init commands (both
+// verified live), so a run as long as the CRM's ~3 minutes of generated cases does not race it.
 const verifyScript = (appId: string): readonly string[] => [
 	'#!/bin/sh',
 	'set -eu',
