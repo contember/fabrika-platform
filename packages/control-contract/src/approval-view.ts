@@ -66,8 +66,8 @@ export type ChangeGroup = (CallerGroup | SubjectGroup) & {
 
 export interface ApprovalView {
 	/**
-	 * Per caller group the endpoints that change and the removed mounts whose paths now reach it, and the migration files
-	 * the change adds or edits.
+	 * Per caller group the endpoints that change, apart from the removed endpoints and mounts its paths reach (a removal
+	 * that widens stands with whoever its paths reach now), and the migration files the change adds or edits.
 	 */
 	readonly impact: {
 		readonly callers: readonly {
@@ -75,7 +75,8 @@ export interface ApprovalView {
 			readonly reach: SurfaceReach
 			readonly mount?: string
 			readonly endpoints: number
-			readonly mounts: number
+			readonly removedEndpoints: number
+			readonly removedMounts: number
 		}[]
 		readonly migrations: number
 	}
@@ -128,8 +129,10 @@ export function approvalView(changes: readonly AccessChangeDto[]): ApprovalView 
 			change.subject?.kind === 'migration' && (change.rule === 'migration.added' || change.rule === 'migration.changed') ? [change.subject.name] : []
 		),
 	)
-	const counted = (entry: ChangeGroup, kind: 'endpoint' | 'mount') =>
-		new Set(entry.rows.flatMap(rowChanges).flatMap((change) => (change.subject?.kind === kind ? [change.subject.name] : []))).size
+	const counted = (entry: ChangeGroup, kind: 'endpoint' | 'mount', removed: boolean) =>
+		entry.rows.flatMap(subjectRows).filter((row) =>
+			row.subject.kind === kind && row.changes.some((change) => change.rule === 'endpoint.removed' || change.rule === 'mount.removed') === removed
+		).length
 	return {
 		impact: {
 			callers: callerGroups.flatMap((entry) =>
@@ -138,8 +141,9 @@ export function approvalView(changes: readonly AccessChangeDto[]): ApprovalView 
 						key: entry.key,
 						reach: entry.reach,
 						...(entry.mount === undefined ? {} : { mount: entry.mount }),
-						endpoints: counted(entry, 'endpoint'),
-						mounts: counted(entry, 'mount'),
+						endpoints: counted(entry, 'endpoint', false),
+						removedEndpoints: counted(entry, 'endpoint', true),
+						removedMounts: counted(entry, 'mount', true),
 					}]
 					: []
 			),
@@ -154,6 +158,11 @@ export function approvalView(changes: readonly AccessChangeDto[]): ApprovalView 
 /** Every line a row holds. */
 export function rowChanges(row: ChangeRow): readonly AccessChangeDto[] {
 	return row.kind === 'subject' ? row.changes : row.subjects.flatMap((subject) => subject.changes)
+}
+
+/** Every subject a row holds. */
+function subjectRows(row: ChangeRow): readonly SubjectRow[] {
+	return row.kind === 'subject' ? [row] : row.subjects
 }
 
 /** Groups in rank order: the group whose most important line ranks first, then by `index` (reach or subject kind). */

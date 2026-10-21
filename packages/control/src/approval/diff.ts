@@ -120,21 +120,29 @@ export function classifyAccess(baseline: AccessSnapshot, candidate: AccessSnapsh
 	})
 	compareDatabaseCode(changes, baseline, candidate)
 	compareFileAdoptions(changes, baseline, candidate)
-	const list = changes.list.map((change) => withAudience(change, baseline.contract, candidate.contract))
+	// The candidate's row of an endpoint, or the baseline's for a removed one.
+	const rows = new Map([...baseline.contract?.endpoints ?? [], ...candidate.contract?.endpoints ?? []].map((row) => [row.id, row]))
+	const list = changes.list.map((change) => withAudience(change, changes.reaching.get(subjectKey(change.subject)), rows))
 	return { outcome: list.length === 0 ? 'none' : list.some((change) => change.effect === 'widens') ? 'widening' : 'no-widening', changes: list }
 }
 
 /** The lines of a classification, each placed on its subject. Only a ruled line is placed. */
 class Changes {
 	readonly list: AccessChange[] = []
+	/** The audience of each subject whose removal widens, by `subjectKey`: every line of that subject is placed there. */
+	readonly reaching = new Map<string, ChangeAudienceDto>()
 
 	add(subject: ChangeSubjectDto, ...changes: readonly RuledLine[]): void {
 		this.list.push(...changes.map((change) => ({ ...change, subject })))
 	}
 
-	/** Lines whose audience is not the subject's own row: a removal whose paths now reach a more exposed endpoint. */
+	/**
+	 * A removal whose paths now reach a more exposed endpoint: its lines, and every other line of its subject, stand with
+	 * whoever reaches it now, so one subject is never in two caller groups.
+	 */
 	addReaching(subject: ChangeSubjectDto, audience: ChangeAudienceDto, ...changes: readonly RuledLine[]): void {
-		this.list.push(...changes.map((change) => ({ ...change, subject, audience })))
+		this.reaching.set(subjectKey(subject), audience)
+		this.add(subject, ...changes)
 	}
 }
 
@@ -150,17 +158,17 @@ function ruled(rule: string, lines: readonly Line[]): RuledLine[] {
 }
 
 const subjectOf = (kind: ChangeSubjectKind, name: string): ChangeSubjectDto => ({ kind, name })
+const subjectKey = (subject: ChangeSubjectDto): string => `${subject.kind}:${subject.name}`
 
 /**
- * An endpoint's route and audience, read from the candidate's row, or the baseline's for a removed endpoint: the
- * approval page groups an endpoint's lines by who reaches it.
+ * An endpoint's route and audience, read from its row: the approval page groups an endpoint's lines by who reaches it.
+ * A subject whose removal widens has the audience its paths reach now (`reaching`) instead.
  */
-function withAudience(change: AccessChange, baseline: ContractArtifact | null, candidate: ContractArtifact | null): AccessChange {
-	if (change.subject.kind !== 'endpoint') return change
-	const id = change.subject.name
-	const row = candidate?.endpoints.find((endpoint) => endpoint.id === id) ?? baseline?.endpoints.find((endpoint) => endpoint.id === id)
-	if (row === undefined) return change
-	return { ...change, subject: { ...change.subject, method: row.method, path: row.path }, audience: change.audience ?? audienceOf(row) }
+function withAudience(change: AccessChange, reaching: ChangeAudienceDto | undefined, rows: ReadonlyMap<string, EndpointRow>): AccessChange {
+	const placed = reaching === undefined ? change : { ...change, audience: reaching }
+	const row = change.subject.kind === 'endpoint' ? rows.get(change.subject.name) : undefined
+	if (row === undefined) return placed
+	return { ...placed, subject: { ...change.subject, method: row.method, path: row.path }, audience: reaching ?? audienceOf(row) }
 }
 
 /** Who reaches a row, in the surface's terms. */
@@ -381,16 +389,24 @@ const BUCKETS = [
 	['bytesPerHour', 'bytes per hour'],
 ] as const
 
-/** `10 calls per minute per client and 100 in all`, or `any number of calls` without a bucket. */
-function ratePhrase(rate: AdmissionRate): string {
-	const counted = BUCKETS.flatMap(([bucket, words]) => {
+/**
+ * A procedure's buckets as bounds, `at most 10 calls a minute per client`: the approval's line and the environment's
+ * surface say them alike.
+ */
+export function bucketBounds(rate: AdmissionRate): string[] {
+	return BUCKETS.flatMap(([bucket, words]) => {
 		const value = rate[bucket]
 		if (value === null) return []
-		if (bucket === 'bytesPerHour') return [`${value} ${words}`]
-		// On Zerops the proxy sees the balancer, not the visitor, until its range is trusted.
-		return [bucket === 'perClient' ? `${value} ${words} (one client on Zerops)` : `${value} ${words}`]
+		if (bucket === 'bytesPerHour') return [`at most ${value} bytes an hour`]
+		// On Zerops the proxy sees the balancer, not the visitor, until its range is trusted: every visitor is one client.
+		return [`at most ${value} calls a minute ${words}${bucket === 'perClient' ? ' (one client on Zerops)' : ''}`]
 	})
-	return counted.length === 0 ? 'any number of calls' : `calls per minute: ${andList(counted)}`
+}
+
+/** `at most 10 calls a minute per client and at most 100 calls a minute in all`, or `any number of calls`. */
+function ratePhrase(rate: AdmissionRate): string {
+	const bounds = bucketBounds(rate)
+	return bounds.length === 0 ? 'any number of calls' : andList(bounds)
 }
 
 function challengePhrase(challenge: ProcedureChallenge | null): string {
@@ -403,10 +419,10 @@ function challengePhrase(challenge: ProcedureChallenge | null): string {
 
 /**
  * How long a call may take: the body's deadline, which the runtime derives from its limit, then the handler's time
- * limit, which starts after the last byte. The deadline is the platform's own release's; a test holds every bundled
- * older release that serves procedures to the same one, so a release that changes it is read with its own (ADR-0062).
+ * limit, which starts after the last byte. The deadline is the platform's own release's. Procedures start at 0.7, and a
+ * test fails once a bundled release from 0.7 on derives it otherwise; that release is then read with its own (ADR-0062).
  */
-function runPhrase(row: EndpointRow | undefined, timeoutMs: number): string {
+export function runPhrase(row: EndpointRow | undefined, timeoutMs: number): string {
 	const limit = row?.admission?.maxBytes ?? null
 	const runs = `runs at most ${seconds(timeoutMs)}`
 	return limit === null ? runs : `waits at most ${seconds(bodyDeadlineMs(limit))} for a body of at most ${bytes(limit)}, then ${runs}`

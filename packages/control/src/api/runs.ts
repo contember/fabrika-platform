@@ -59,6 +59,7 @@ export function toRunDto(row: RunRow): RunDto {
 		createdAt: row.created_at,
 		startedAt: row.started_at,
 		finishedAt: row.finished_at,
+		cancelRequestedAt: row.cancel_requested_at,
 	}
 }
 

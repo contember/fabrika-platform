@@ -42,6 +42,7 @@ const parkedRun = (id: string, appId: string, env: string): ApprovalDto => ({
 		createdAt: 0,
 		startedAt: null,
 		finishedAt: null,
+		cancelRequestedAt: null,
 	},
 	outcome: 'widening',
 	changes: [{ effect: 'widens', line: 'Role `editor` gains `notes.delete`' }],

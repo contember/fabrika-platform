@@ -102,6 +102,16 @@ export function serializeSnapshot(snapshot: AccessSnapshot): string {
 }
 
 /**
+ * The stored form of a publication: without the file adoptions, which the diff reads only from a candidate, so that a
+ * Control rolled back below the release that recorded them still reads every environment's publication. Only the run
+ * snapshot of a commit that adopts files stays unreadable to it.
+ */
+export function serializePublished(snapshot: AccessSnapshot): string {
+	const { fileAdoptions: _, ...published } = snapshot
+	return serializeSnapshot(published)
+}
+
+/**
  * The digest of the access a snapshot grants: the canonical contract, the migration list and the database code. The
  * checker version is not part of it, so reading the same commit with a newer checker approves nothing new. The
  * trailing `null` stood for artifact access; it stays, and the database code follows only when there is some, so that

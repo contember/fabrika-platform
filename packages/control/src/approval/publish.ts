@@ -19,6 +19,7 @@ import {
 	approvedAccess,
 	approvedSnapshot,
 	parseSnapshot,
+	serializePublished,
 	serializeSnapshot,
 	snapshotDigest,
 } from './snapshot'
@@ -170,7 +171,7 @@ export async function publishRunSnapshot(
 		}
 		await invocation.write((fence) => runs.recordRunClassification(run.id, serialized, fence))
 		const expected = { generation: active.generation, protectionRevision: appEnv.protection_revision }
-		if (await runs.publishRunSnapshot(run.id, expected, serializeSnapshot(candidate), invocation.fence())) {
+		if (await runs.publishRunSnapshot(run.id, expected, serializePublished(candidate), invocation.fence())) {
 			input.log(`access: published as generation ${active.generation + 1} of \`${appEnv.env}\``)
 			return { kind: 'published', classification }
 		}

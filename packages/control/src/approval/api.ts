@@ -145,7 +145,7 @@ async function pendingCrossOrigins(c: ApprovalUseCaseContext, approval: Approval
 function namedEndpoints(run: RunRow, changes: readonly AccessChangeDto[]): ApprovalDto['endpoints'] {
 	if (run.snapshot_json === null) return []
 	const named = new Set(changes.flatMap((change) => (change.subject?.kind === 'endpoint' ? [change.subject.name] : [])))
-	return snapshotSurface(parseSnapshot(run.snapshot_json)).filter((endpoint) => named.has(endpoint.id))
+	return named.size === 0 ? [] : snapshotSurface(parseSnapshot(run.snapshot_json), named)
 }
 
 /**
@@ -169,10 +169,10 @@ function toApprovalDto(run: RunRow, view: 'list' | 'detail' = 'detail'): Approva
 			principalId: approval.principalId,
 			label: approval.label,
 			approvedAt: approval.approvedAt,
-			// Only a run that waits again can hold a lapsed approval: a refusal or a cancellation drops it, and a run that
-			// published after it ran with what it was approved for, or with no widening left.
-			holds: run.status !== 'awaiting_approval'
-				|| (approval.candidateDigest === classification.candidateDigest && approval.baselineDigest === classification.baselineDigest),
+			// An approval moves the run out of waiting in the same write, and a run parks again only when the approval does not
+			// match its new classification, so a waiting run's approval has lapsed. A refusal or a cancellation drops it, and a
+			// run that published after it ran with what it was approved for, or with no widening left.
+			holds: run.status !== 'awaiting_approval',
 		},
 	}
 }

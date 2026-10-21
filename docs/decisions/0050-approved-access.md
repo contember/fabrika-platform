@@ -95,7 +95,8 @@ run stores the result as its **snapshot**:
   policy, `DO` block and expression that calls database code, by file, kind and object;
 - the **file adoptions** the migrations make (`fileAdoptions`, [ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)):
   each `INSERT … SELECT` that copies a file collection's files into a table, and each release of a collection. They
-  follow from the migration files, so the digest does not cover them beyond the files' checksums;
+  follow from the migration files, so the digest does not cover them beyond the files' checksums. The diff compares
+  only a candidate's, so the run's snapshot keeps them and the environment's publication leaves them out;
 - the checker version;
 - the baseline the candidate was compared with;
 - the approval, when one was needed.
@@ -406,8 +407,9 @@ never from the words of a line:
   example "5 endpoints anyone calls, 2 endpoints a share link of `student` reaches".
 - **Grouped by caller.** The facts of an endpoint fall under its audience, in the order and words of the environment
   page's surface: anyone, the share links of each link mount, another application, machines, and signed-in people,
-  each endpoint's requirement on its row. A removed mount whose paths now reach a more exposed endpoint stands there
-  too, and the head counts it apart from the endpoints. Facts on any other subject form a second part, data and runtime, grouped by
+  each endpoint's requirement on its row. A removed endpoint or mount whose paths now reach a more exposed endpoint
+  stands there with every line about it, and the head counts removed endpoints and mounts apart from the endpoints
+  that change. Facts on any other subject form a second part, data and runtime, grouped by
   subject kind: tables, roles, jobs, migrations, the application. A group is named by the contract's identifiers (a
   link mount name, a requirement's action); the contract declares no display label for them.
 - **Rank is derived, there is no severity field.** Groups and facts are ordered by effect and review (a widening with
@@ -415,8 +417,9 @@ never from the words of a line:
   first. Nothing else enters the rank, so it cannot disagree with the classification.
 - **A warning says why.** A closer-review fact shows one fixed sentence for its reason; `anyone-calls` on a kick, for
   example, reads "anyone on the internet decides when job `mailing` runs".
-- **Protection is shown, not asked for.** An endpoint anyone calls shows its effective admission from the candidate
-  snapshot beside it: buckets, challenge, body limit and time limit. The page never asks the approver to verify
+- **Protection is shown, not asked for.** A procedure shows its effective admission from the candidate snapshot
+  beside it, in the words of its diff line: buckets, challenge, body limit, how long it waits for the body and its
+  time limit. A public one without a bucket or a challenge says so. The page never asks the approver to verify
   something the snapshot states. Whether a bot check holds is read from the endpoint's challenge, never from a browser
   config variable: a removed `siteKey` variable is a line about what a page reads, and a dropped challenge is its own
   widening line on the endpoint. The environment's cross-origin list is named as section 3 says, and nothing presents
@@ -429,10 +432,12 @@ never from the words of a line:
   that the widenings it shows by default are exactly the widenings of the classification.
 - **The lines stay.** The three effect sections of section 3, with search and a filter, are one step away. They are
   the same facts, unordered.
-- **A decided run says where it stands.** Approval and publication are two steps (section 2): an approved run is
+- **A run says where it stands.** Approval and publication are two steps (section 2): an approved run is
   queued again and classified once more before it publishes. The page shows which of these holds: approved and waiting
   to run; published; or the approval lapsed, because the environment published another change first and the change
-  still widens against it, so the run waits for a new approval. A refused or cancelled run says so. Parking a run again
+  still widens against it, so the run waits for a new approval. A refused or cancelled run says so, and so does a run
+  that published before its cancellation took effect. A run that never waited, because its change does not widen or
+  its environment is not protected, says it published without waiting for approval. Parking a run again
   keeps the approval it held: it names the digests it approved, so it approves nothing the new classification shows,
   and `ApprovalDto.approval.holds` says it lapsed. Refusing or cancelling such a run drops the approval, so a decided
   run never reads as approved for what nobody approved.
@@ -467,7 +472,9 @@ never from the words of a line:
 - Rolling Control back below the version that wrote three effects breaks reading every run that version classified
   (the older schema is strict and knows only `widens`): the approval page, the approvals list and MCP's
   `get_deployment` fail for those runs. Before 1.0 that is accepted; no dual format is written. The same holds for
-  rolling back below the version that writes structured facts (section 3).
+  rolling back below the version that writes structured facts (section 3). Rolling back below the version that records
+  file adoptions breaks only the runs whose snapshot holds one (a deploy waiting for approval fails when it resumes);
+  the environment's publication never carries them, so every other deploy and republish still reads it.
 - A run classified before lines carried facts keeps its stored lines without `rule`, `subject` or `audience`. The
   approval page shows them in their effect sections as unsorted lines and builds no groups for that run; a parked run
   that is classified again gets facts. No migration rewrites a stored classification.

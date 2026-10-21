@@ -33,7 +33,8 @@ From upgrading an application from 0.5.5 to 0.7:
     `Unrecognized key(s) in object: 'framework'`. ADR-0062 covers an older application on a newer platform, not a
     platform rolled back to an older release. Decide whether a rollback is supported. If it is, say how a stored
     snapshot stays readable to the older Control (a reader that ignores unknown keys, or a snapshot written in the
-    older shape until the rollback window closes), and test it.
+    older shape until the rollback window closes), and test it. File adoptions add no break of this kind to a
+    publication: the environment's published snapshot leaves them out (ADR-0050).
 12. **A link procedure cannot always lock its owner.** It holds one action. `ctx.db.target.getForUpdate()` needs the
     owner's table to name that action, and a link procedure cannot declare a second capability. A link that only
     inserts child rows (an upload) therefore cannot count them under the owner's lock (`maxPerOwner` of a 0.5 file
