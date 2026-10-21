@@ -306,11 +306,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   `grants.delete`) only at a registered app that is not a platform audience and is in its scope, never cross-app
   (`requireManagedApp`), never on a service principal, whose grants are an API key's (`requireGrantablePrincipal`),
   and with no "holds what it grants" rule, because nothing granted there reaches the
-  installation; an action on a principal (`principals.update`, `sessions.*`, `passwords.*`) only when every active
+  installation; an action on a principal (`principals.update`, `sessions.revoke`/`sessions.revokeAll`, `passwords.*`) only when every active
   grant of that principal is one it could have written, and never on a service or a bootstrap mailbox
-  (`requireActableTarget`). Without an email sender it receives a manual password URL only for the enrollment of a
-  principal that never signed in, checked again after issuing (`mayReceiveEnrollmentUrl`); a reset URL stays
-  `iam.admin`'s. Reads (`principals.list/get`, `sessions.list`, apps, roles, policies) are installation-wide
+  (`requireActableTarget`). Without an email sender it receives no manual password URL: an enrollment or a reset
+  answers 403, and only `iam.admin` receives one (`passwordDelivery`). Reads (`principals.list/get`, `sessions.list`, apps, roles, policies) are installation-wide
   (backlog 175). `apps.list` marks each platform audience `installation: true`. `user-admin.test.ts` is the witness, on
   both engines.
 - **A MEMBERSHIP WRITE SPENDS A DELEGATION GRANT** (`delegation_grants`, ADR-0022 rule 6). IAM issues
