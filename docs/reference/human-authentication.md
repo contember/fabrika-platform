@@ -96,6 +96,15 @@ account-context values. It does not require character classes. Stored verifiers
 use versioned PBKDF2-HMAC-SHA256 parameters, a random per-password salt, and no
 reversible password value.
 
+Each composition root picks the PBKDF2 cost its runtime can derive. The Bun
+target (Zerops) uses 600,000 iterations, the OWASP recommendation. The
+Cloudflare Worker uses 100,000 iterations, because production Workers refuse
+PBKDF2 above that count. workerd, miniflare and Bun do not enforce that cap, so
+local runs cannot show the failure. A login rehashes a stored verifier whose
+count differs from the runtime's cost, so verifiers converge. A verifier above
+the runtime's cap, such as one that a Bun installation wrote, never verifies on
+a Worker; that user resets the password.
+
 Login failures are throttled by separate hashed account and deployment-wide
 abuse keys. Recovery has separate account and deployment-wide buckets. Unknown,
 ambiguous, disabled, and non-password users receive the same response and incur

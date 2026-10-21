@@ -18,6 +18,7 @@ import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import { createPostgresIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
 import { parseOAuthConfig } from '../oauth-config'
+import { BUN_PBKDF2_COST } from '../password-crypto'
 import { parseRetention } from '../retention'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
@@ -141,6 +142,7 @@ export async function createRuntime(source: Record<string, string | undefined> =
 		OIDC_REQUIRE_VERIFIED_EMAIL: source['OIDC_REQUIRE_VERIFIED_EMAIL'] ?? 'true',
 		EMAIL_CONFIG: emailConfig,
 		EMAIL_PROVIDERS: emailProviders,
+		PASSWORD_COST: BUN_PBKDF2_COST,
 		...(overrides.emailSender === undefined ? {} : { EMAIL_SENDER: overrides.emailSender }),
 		...(platformEmailSender === undefined ? {} : { PLATFORM_EMAIL_SENDER: platformEmailSender }),
 	}

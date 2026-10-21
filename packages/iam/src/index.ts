@@ -49,6 +49,7 @@ import { createIamApp } from './app'
 import { runIamMaintenance } from './cron'
 import { createIamRepositories } from './db'
 import type { Env } from './env'
+import { WORKERS_PBKDF2_COST } from './password-crypto'
 import { createIamRpc } from './rpc'
 
 /**
@@ -77,8 +78,11 @@ import { createIamRpc } from './rpc'
  * `src/client-address.ts` and `src/request-id.ts` for why IAM refuses to pick either itself.
  */
 const workerApp = createIamApp({ clientAddressHeader: 'CF-Connecting-IP', requestIdHeader: 'cf-ray' })
-export interface WorkerBindings
-	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'EMAIL_CONFIG' | 'EMAIL_PROVIDERS'>
+export interface WorkerBindings extends
+	Omit<
+		Env,
+		'DB' | 'REPOSITORIES' | 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'EMAIL_CONFIG' | 'EMAIL_PROVIDERS' | 'PASSWORD_COST'
+	>
 {
 	DB: D1Database
 	FABRIKA_IAM_SIGNING_KEYS?: string
@@ -97,6 +101,7 @@ export function iamEnv(bindings: WorkerBindings): Env {
 		FABRIKA_IAM_PROVISIONING_KEY: bindings.FABRIKA_IAM_PROVISIONING_KEY ?? '',
 		EMAIL_CONFIG: pickEmailEnvironment(bindings),
 		EMAIL_PROVIDERS: builtinEmailProviders,
+		PASSWORD_COST: WORKERS_PBKDF2_COST,
 	}
 }
 
