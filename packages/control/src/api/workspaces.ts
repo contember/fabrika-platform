@@ -17,6 +17,7 @@ import {
 	WorkspaceSourceError,
 	type WorkspaceSourcePort,
 	type WorkspaceSourceTarget,
+	type WorkspaceTreeEntry,
 	type WorkspaceUnreadableReason,
 } from '../workspace-source-port'
 import { ControlApiError, fail } from './domain'
@@ -209,13 +210,26 @@ export async function getWorkspaceUseCase(c: WorkspaceUseCaseContext, input: { w
 	return describeWorkspace(c, await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_READ))
 }
 
+export const LIST_FILES_DEFAULT_LIMIT = 500
+export const LIST_FILES_MAX_LIMIT = 5000
+
+export interface WorkspaceListingDto {
+	commitSha: string
+	entries: WorkspaceTreeEntry[]
+	/** The repository listing itself was cut short; name a directory to see past it. */
+	truncated: boolean
+	/** Pass as `offset` for the next page; null on the last one. */
+	nextOffset: number | null
+}
+
+/** One page of the entries under `directory`, at most `depth` levels below it. */
 export async function listFilesUseCase(
 	c: WorkspaceUseCaseContext,
-	input: { workspaceId: string; directory?: string; commitSha?: string },
-) {
+	input: { workspaceId: string; directory?: string; commitSha?: string; depth?: number; offset: number; limit: number },
+): Promise<WorkspaceListingDto> {
 	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_READ)
 	const commitSha = input.commitSha ?? await requireHead(c, owned)
-	return sourceCall(() =>
+	const tree = await sourceCall(() =>
 		c.source.listTree({
 			target: owned.source,
 			commitSha,
@@ -223,6 +237,16 @@ export async function listFilesUseCase(
 			signal: c.signal,
 		})
 	)
+	const base = input.directory === undefined ? 0 : input.directory.split('/').length
+	const { depth } = input
+	const entries = depth === undefined ? tree.entries : tree.entries.filter((entry) => entry.path.split('/').length - base <= depth)
+	const end = input.offset + input.limit
+	return {
+		commitSha: tree.commitSha,
+		entries: entries.slice(input.offset, end),
+		truncated: tree.truncated,
+		nextOffset: end < entries.length ? end : null,
+	}
 }
 
 export async function readFilesUseCase(

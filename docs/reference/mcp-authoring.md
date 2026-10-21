@@ -35,7 +35,7 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `list_workspaces`     | The user's workspaces on a target.                                 |
 | `get_workspace`       | One workspace, with its head.                                      |
 | `get_workspace_diff`  | Files changed since the workspace base, optionally with patches.   |
-| `list_files`          | Paths in the workspace.                                            |
+| `list_files`          | A page of paths in the workspace, optionally to a depth.           |
 | `read_files`          | File contents at the workspace head; an unread file says why.      |
 | `search_files`        | Paths by glob, or lines holding a literal text, within bounds.     |
 | `apply_changes`       | Commit writes, deletions and exact replacements against a head.    |
