@@ -23,7 +23,8 @@ import { ControlApiError, fail } from './domain'
 import { canAtCoordinates, createManualRun, type DeployQueue, getRunLogUseCase, getRunUseCase, type LogReader, toRunDto } from './runs'
 
 export const WORKSPACE_BRANCH_PREFIX = 'fabrika/'
-export const DEPLOYMENT_LOG_TAIL_LINES = 200
+export const DEPLOYMENT_LOG_DEFAULT_LINES = 30
+export const DEPLOYMENT_LOG_MAX_LINES = 500
 const AUTHOR_NAME_MAX_LENGTH = 200
 /** The bound on a commit message, trailers included. */
 export const COMMIT_MESSAGE_MAX_BYTES = 8 * 1024
@@ -85,8 +86,7 @@ export interface WorkspaceFileEdit {
 
 export interface DeploymentDto {
 	run: RunDto
-	/** The last lines of the build log, oldest first. */
-	logTail: RunLogLine[]
+	log: DeploymentLogDto
 	/** Present while the run waits for a person to approve its access change (ADR-0050); no MCP token can. */
 	approval: DeploymentApprovalDto | null
 	/**
@@ -94,6 +94,27 @@ export interface DeploymentDto {
 	 * person's closer review, parked or not; empty before the run is classified.
 	 */
 	deviations: string[]
+}
+
+/**
+ * One window of the build log, oldest first. `from` and `to` index the log as filtered, which only grows: pass `to` as
+ * `after` to poll for new lines, `from` as `before` to page back.
+ */
+export interface DeploymentLogDto {
+	lines: RunLogLine[]
+	from: number
+	to: number
+	total: number
+}
+
+export interface DeploymentLogQuery {
+	/** The window's size; 0 answers the counts alone. */
+	lines: number
+	/** Lines from this index on, for polling; without it, the window ends at `before` or at the newest line. */
+	after?: number
+	before?: number
+	/** Only stderr lines and lines that name an error or a failure. */
+	failuresOnly: boolean
 }
 
 export interface DeploymentApprovalDto {
@@ -481,7 +502,10 @@ export async function deployStageUseCase(c: WorkspaceUseCaseContext, input: { wo
 }
 
 /** Only a run of one of the caller's own workspaces, on a target that is still authorable. */
-export async function getDeploymentUseCase(c: WorkspaceUseCaseContext, input: { runId: string }): Promise<DeploymentDto> {
+export async function getDeploymentUseCase(
+	c: WorkspaceUseCaseContext,
+	input: { runId: string; log: DeploymentLogQuery },
+): Promise<DeploymentDto> {
 	const ownerId = requireOwner(c.auth)
 	const row = await c.repositories.runs.getRun(input.runId)
 	const branch = row?.ref.startsWith(`refs/heads/${WORKSPACE_BRANCH_PREFIX}`) ? row.ref.slice('refs/heads/'.length) : null
@@ -500,7 +524,18 @@ export async function getDeploymentUseCase(c: WorkspaceUseCaseContext, input: { 
 		}
 		: null
 	const deviations = changes.filter((change) => change.review === 'closer').map((change) => change.line)
-	return { run, logTail: log.lines.slice(-DEPLOYMENT_LOG_TAIL_LINES), approval, deviations }
+	return { run, log: logWindow(log.lines, input.log), approval, deviations }
+}
+
+const FAILURE_TEXT = /\b(error|errors|fail|failed|failure)\b/i
+
+function logWindow(all: readonly RunLogLine[], query: DeploymentLogQuery): DeploymentLogDto {
+	if (query.after !== undefined && query.before !== undefined) fail(400, 'name after or before, not both')
+	const lines = query.failuresOnly ? all.filter((line) => line.stream === 'stderr' || FAILURE_TEXT.test(line.text)) : all
+	const end = Math.min(query.before ?? lines.length, lines.length)
+	const from = query.after === undefined ? Math.max(0, end - query.lines) : Math.min(query.after, lines.length)
+	const to = query.after === undefined ? end : Math.min(from + query.lines, lines.length)
+	return { lines: lines.slice(from, to), from, to, total: lines.length }
 }
 
 export async function createPullRequestUseCase(
