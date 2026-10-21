@@ -433,7 +433,8 @@ const capabilityCases = (row: EndpointRow, fixtures: EndpointFixtures): readonly
  * one. Its name carries the workload's actions, so a change of them makes the committed test stale.
  */
 const publicCases = (row: EndpointRow, artifact: ContractArtifact, fixtures: EndpointFixtures): readonly Case[] => {
-	if (row.kind !== 'public') return []
+	// A `challenge` row is the framework's own issuer of a procedure's ALTCHA challenge: it runs no handler to test.
+	if (row.kind !== 'public' || row.source.kind !== 'mount') return []
 	const input = inputOf(row, fixtures)
 	if (input === undefined) return []
 	const call = `await kit.anyone(${quote(row.id)}, ${renderSample(input)})`

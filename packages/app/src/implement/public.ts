@@ -4,8 +4,16 @@
 
 import { type AdmissionRate, CLIENT_ADDRESS_HEADER, type ContractArtifact, type ProcedureArtifact } from '@fabrika/auth-core'
 import { createHash } from 'node:crypto'
+import { ALTCHA_LIMITS } from '../contract/defaults'
 import { REQUEST_BUDGET_MS } from './bounded'
-import { type ChallengeFetch, type ChallengeVerifier, turnstileVerifier } from './challenge'
+import {
+	altchaChallenge,
+	type ChallengeFetch,
+	type ChallengeIssuer,
+	type ChallengeVerifier,
+	type ChallengeWork,
+	turnstileVerifier,
+} from './challenge'
 import { clientBucket, clientKey } from './client-address'
 import type { RequestClient } from './types'
 
@@ -26,10 +34,12 @@ export interface ProcedureAdmission {
 	readonly timeoutMs: number
 }
 
-/** A challenge's verifier and the widget action the verification expects back. */
+/** A challenge's verifier and the widget action the verification expects back; an ALTCHA one's issuer too. */
 export interface AdmittedChallenge {
 	readonly verifier: ChallengeVerifier
 	readonly action: string
+	/** What the procedure's issuing endpoint answers with; `null` for a provider that issues its own (Turnstile). */
+	readonly issuer: ChallengeIssuer | null
 }
 
 /** A procedure the artifact holds no rules for (a `defineContract` one): no bucket, the request budget. */
@@ -44,11 +54,13 @@ export interface AdmissionOptions {
 	readonly application: Readonly<Record<string, unknown>>
 	readonly challengeFetch?: ChallengeFetch
 	readonly repeatableChallengeToken?: string
+	/** The work of every ALTCHA challenge in place of the contract's: a test kit's and `fabrika app dev`'s. */
+	readonly challengeWork?: ChallengeWork
 }
 
 /**
- * The admission of endpoint `id`, or `null` after a problem: a challenge whose secret's application variable is not set
- * keeps the application from booting, as a form's does.
+ * The admission of endpoint `id`, or `null` after a problem: a challenge whose secret's application variable is not set,
+ * or an ALTCHA key too short to resist a guess, keeps the application from booting, as a form's does.
  */
 export function procedureAdmission(id: string, artifact: ContractArtifact, options: AdmissionOptions, problems: string[]): ProcedureAdmission | null {
 	const rules: ProcedureArtifact | undefined = artifact.procedures !== undefined && Object.hasOwn(artifact.procedures, id)
@@ -66,9 +78,22 @@ export function procedureAdmission(id: string, artifact: ContractArtifact, optio
 			)
 			return null
 		}
-		challenge = {
-			verifier: turnstileVerifier(secret.trim(), options.challengeFetch ?? ((request) => fetch(request))),
-			action: rules.challenge.action,
+		if (rules.challenge.provider === 'altcha') {
+			// Every issued challenge carries a signature made with this key, so a short one can be guessed offline.
+			if (secret.trim().length < ALTCHA_LIMITS.minKeyLength) {
+				problems.push(
+					`procedure '${id}' signs its altcha challenge with the application variable ${rules.challenge.secret}, which holds fewer than ${ALTCHA_LIMITS.minKeyLength} characters; set it to a long random value (openssl rand -base64 32)`,
+				)
+				return null
+			}
+			const altcha = altchaChallenge(secret.trim(), rules.challenge, options.challengeWork ?? null)
+			challenge = { verifier: altcha.verifier, action: rules.challenge.action, issuer: altcha.issuer }
+		} else {
+			challenge = {
+				verifier: turnstileVerifier(secret.trim(), options.challengeFetch ?? ((request) => fetch(request))),
+				action: rules.challenge.action,
+				issuer: null,
+			}
 		}
 	}
 	return Object.freeze({

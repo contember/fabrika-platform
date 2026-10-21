@@ -12,7 +12,7 @@ import {
 	endpointDirectory,
 	endpointMembers,
 	type EndpointMethod,
-	type FormChallenge,
+	type ProcedureChallenge,
 	type SchemaShape,
 	type Scope,
 } from '@fabrika/auth-core'
@@ -230,13 +230,14 @@ const cleanScanner: FileScanner = {
  */
 function unusedVariables(app: ContractImplementation<AnyContract>): ApplicationEnvironment {
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
-	const challengeVariables = (challenge: FormChallenge): readonly string[] =>
-		challenge.siteKey === undefined ? [challenge.secret] : [challenge.secret, challenge.siteKey]
+	const challengeVariables = (challenge: ProcedureChallenge): readonly string[] =>
+		challenge.provider === 'altcha' || challenge.siteKey === undefined ? [challenge.secret] : [challenge.secret, challenge.siteKey]
 	const names = Object.values(artifact.mounts).flatMap((mount): readonly string[] => mount.kind === 'spa' ? (mount.public ?? []) : [])
 	const procedures = Object.values(artifact.procedures ?? {}).flatMap((procedure) =>
 		procedure.challenge === null ? [] : challengeVariables(procedure.challenge)
 	)
-	return Object.fromEntries([...names, ...procedures].map((name) => [name, 'unused']))
+	// Long enough for an ALTCHA key, which boot refuses under 32 characters.
+	return Object.fromEntries([...names, ...procedures].map((name) => [name, 'unused-by-every-generated-case-of-the-kit']))
 }
 
 /**

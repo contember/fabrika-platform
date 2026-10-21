@@ -421,11 +421,7 @@ export const visitors = app.group({}, (r) => ({
 		access: { public: true },
 		actions: ['candidates.register'],
 		admission: {
-			challenge: {
-				provider: 'turnstile',
-				secret: 'TURNSTILE_SECRET',
-				siteKey: 'TURNSTILE_SITE_KEY',
-			},
+			challenge: { provider: 'altcha', secret: 'ALTCHA_HMAC_KEY' },
 			rate: { perClient: 100, perEndpoint: 100, bytesPerHour: 536870912 },
 		},
 		kicks: ['intake'],
@@ -479,14 +475,26 @@ export const visitors = app.group({}, (r) => ({
 - **`ctx.client`** is `{ ip, userAgent }` as the proxy saw them, for consent evidence in a column of the row; `ip` is
   `null` on Zerops. Never decide on either.
 - **Its abuse control.** `honeypot(input.website)` is true when the field the page hides is filled: answer the same
-  and write no row. `admission.challenge` makes the framework verify the Turnstile token in the input field
-  `challengeToken` before the handler runs (a failed or replayed token 400 `challenge_failed`, an unreachable provider 503, no row either way) and adds
-  Turnstile's origin to the CSP. `TURNSTILE_SECRET` is an application variable the human sets; without it the
-  application does not boot. `siteKey` names the variable with the widget's public site key, which every SPA mount
-  serves its pages; without it the application does not boot either. Another public value a page needs per
-  environment (a link target) goes in the SPA mount's `browserConfig` list: `c.spa('/', { …, browserConfig: ['SIGNUP_URL'] })`. Both
-  reach the page in `<prefix>/__fabrika-config.json` as `public: { <VARIABLE>: <value> }`, and the approver sees each
-  name. Never name a secret there: the contract refuses a variable that is both.
+  and write no row. `admission.challenge: { provider: 'altcha', secret: 'ALTCHA_HMAC_KEY' }` is a proof of work the
+  application issues and verifies itself: the framework serves `GET /__fabrika/challenge/<action>` (the endpoint id
+  with `_` for `.`, `api_visitors_register`, or the challenge's own `action`), from the procedure's origins with a
+  buckets of its own (30 per client and 600 in all per minute, and at least twice the procedure's), and verifies the solved challenge in the input field
+  `challengeToken` before the handler runs: a failed, expired or replayed one, or one issued for another host or
+  procedure, is 400 `challenge_failed`, no row. No request leaves the installation, no third party sees the visitor,
+  and there is no site key. `ALTCHA_HMAC_KEY` is an application variable the human sets to a long random value
+  (`openssl rand -base64 32`); without it, or with one under 32 characters, the application does not boot: every
+  challenge publishes a signature a short key could be guessed from, and the key forges every challenge. `cost`
+  (PBKDF2 iterations per attempt, 5000 by default, 1000 to 18000) and `maxAgeMs` (how long a challenge may be solved
+  and sent, ten minutes by default, a minute to an hour) are the contract's, and the approver sees both. A browser
+  makes up to 10000 attempts, about 5000 on average, a few seconds on a phone at the default; the build refuses a
+  `cost` a slow phone would not solve within the widget's 90 s or half of `maxAgeMs`. The CSP gains `worker-src 'self' blob:`, where the widget solves.
+- **Turnstile instead.** `challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' }`
+  verifies Cloudflare's widget at Cloudflare (an unreachable provider is 503), adds Cloudflare's origin to the CSP, and
+  serves the site key to every SPA mount's pages. Use it only when the human asks for it: it needs a Cloudflare
+  account and a widget per hostname, and sends every visitor to a third party. Another public value a page needs per
+  environment (a link target) goes in the SPA mount's `browserConfig` list: `c.spa('/', { …, browserConfig: ['SIGNUP_URL'] })`.
+  It reaches the page in `<prefix>/__fabrika-config.json` as `public: { <VARIABLE>: <value> }`, and the approver sees
+  each name. Never name a secret there: the contract refuses a variable that is both.
   `admission.rate: { perClient, perEndpoint }` (per minute, 10 and 100 by default for a public mutation) answers 429
   past either limit; `null` turns one off. A public query counts nothing unless it declares a bucket, since each
   bucket is a database write per call: a page of twenty images costs no write. All public procedures of an instance
@@ -496,14 +504,16 @@ export const visitors = app.group({}, (r) => ({
   within it.
 - **The order of a public request**, each refusal with its answer: the origin rule (403), the in-flight share (503),
   every bucket (429), the bounded body and the strict input with its signed tokens (413, 400), the workload token (503
-  while the platform's identity service is down), the challenge (400, 503 when the provider is unreachable), the staged file parts, then the handler, the
+  while the platform's identity service is down), the challenge (400; Turnstile's 503 when Cloudflare is unreachable), the staged file parts, then the handler, the
   commit and the kicks.
 - **A form on someone else's page.** A page served from this application's own origin needs nothing. A partner's page
   or a separate marketing site needs `admission.origins`: `'listed'` for the origins an operator lists for the
   environment in Control, `'any'` for any site (an embeddable widget). Keep the honeypot, the challenge and the rate
   limit: `'any'` invites every site. Such a page is not yours to change in step with the application, so give it a URL
   and a widget action that do not follow your group names: `http: { path: '/register' }` and
-  `challenge: { …, action: 'register' }`. The path lies outside every mount's prefix (the root SPA's excepted).
+  `challenge: { …, action: 'register' }`, so its challenge is at `/__fabrika/challenge/register`. The path lies outside
+  every mount's prefix (the root SPA's excepted). That page bundles the `altcha` widget itself, points its `challenge`
+  attribute at the application's origin and that path, and needs `worker-src blob:` in its own CSP.
 - **Zerops shares one client address.** Until the platform reads the visitor's address behind the Zerops balancer,
   every visitor counts as one client there, so `perClient` acts as a second per-endpoint limit: set it to the expected
   peak, never lower it to stop a flood. The challenge is the defense that does not depend on the address.
@@ -1064,23 +1074,6 @@ export const attach = async (file: File): Promise<string> => {
 }
 ```
 
-The public page reads its site key from the config the framework serves it, so one build serves every environment.
-
-```ts web/site/config.ts
-import { z } from 'zod/v4'
-
-const SiteConfig = z.object({
-	public: z.object({ TURNSTILE_SITE_KEY: z.string() }),
-})
-
-/** The Turnstile widget's site key, or `null` when the config is unreadable. */
-export const siteKey = async (): Promise<string | null> => {
-	const response = await fetch('/__fabrika-config.json')
-	const config = SiteConfig.safeParse(response.ok ? await response.json() : null)
-	return config.success ? config.data.public.TURNSTILE_SITE_KEY : null
-}
-```
-
 The public page calls the public procedure through the typed client, like any other. An input with a file is sent
 as a multipart body, and one without a file as JSON.
 
@@ -1127,8 +1120,57 @@ export const register = async (
 }
 ```
 
-- The page renders the Turnstile widget with the site key `siteKey()` reads and `action` set to the procedure's
-  endpoint id with `_` for `.` (`api_visitors_register`), and passes the widget's token. Say "check your inbox" on success whatever the address was.
+The page renders the challenge with `@fabrika/ui/challenge`, which bundles the `altcha` widget with the page (add
+`altcha` to the dependencies: it is the kit's optional peer). `challengeUrl` gives the address the widget fetches the
+procedure's challenge from; nothing else is configured per environment.
+
+```tsx web/site/register-form.tsx
+import { challengeUrl, createClient } from '@fabrika/app/client'
+import { Challenge } from '@fabrika/ui/challenge'
+import { useState } from 'react'
+import { contract } from '../../fabrika.contract'
+import { register } from './register'
+
+const api = createClient(contract, 'api')
+
+export function RegisterForm() {
+	const [token, setToken] = useState<string | null>(null)
+	// A challenge passes once: a new key renders a fresh one after a refusal.
+	const [attempt, setAttempt] = useState(0)
+	const [sent, setSent] = useState(false)
+	if (sent) return <p>Check your inbox.</p>
+	return (
+		<form
+			onSubmit={async (event) => {
+				event.preventDefault()
+				if (token === null) return
+				if (await register(event.currentTarget, token)) setSent(true)
+				else setAttempt((n) => n + 1)
+			}}
+		>
+			<input name="email" type="email" required aria-label="E-mail" />
+			<input name="full_name" required aria-label="Full name" />
+			<input name="website" tabIndex={-1} autoComplete="off" hidden />
+			<input
+				name="photo"
+				type="file"
+				accept="image/*"
+				capture="environment"
+				aria-label="Photo"
+			/>
+			<Challenge
+				key={attempt}
+				url={challengeUrl(api.visitors.register)}
+				onToken={setToken}
+			/>
+			<button type="submit" disabled={token === null}>Register</button>
+		</form>
+	)
+}
+```
+
+- Say "check your inbox" on success whatever the address was. The widget reads its texts in English; translate them
+  with `strings` (`<Challenge strings={{ label: 'Nejsem robot', verified: 'Ověřeno' }} … />`).
 - The resend form calls `api.visitors.resend({ email })`. It answers the same for an unknown, a verified and a
   rate-limited address; the job decides.
 - Build each SPA into its `dir` (`dist/site`, `dist/portal`, `dist/hr`): one `Bun.build` per `index.html` in
@@ -1752,9 +1794,11 @@ export const testMails = app.cron('* * * * *', {
   })` and calls `createClient(contract, 'portal', { fetch: kit.fetch, key: holder.key ?? '' })`.
 - The job asks IAM to issue and revoke links, and the kit's own IAM answers only the credentials of its callers, not a
   job's key, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an `IamMembershipRpc` of your own that
-  answers `issueLink` and `revokeLink`. A test of a public procedure with a challenge passes `env: {
-  TURNSTILE_SECRET: '…', TURNSTILE_SITE_KEY: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
-  `challengeToken` with each submission: a token is single use. A submission with a photo goes through the typed
+  answers `issueLink` and `revokeLink`. A test of a public procedure with an ALTCHA challenge passes `env: {
+  ALTCHA_HMAC_KEY: '<32 characters or more>' }` to `testKit` and a fresh `challengeToken: await kit.solveChallenge(api.visitors.register)`
+  with each submission: a challenge passes once. The kit issues the cheapest challenge whatever the contract's
+  `cost`, and verifies it as production does, so a solve takes milliseconds. A Turnstile challenge instead takes
+  `challengeFetch`, a stand-in for Cloudflare's answer, and any fresh token. A submission with a photo goes through the typed
   client over `kit.fetch`, and needs `files: new MemoryFileObjects()` in `testKit`; `kit.runJob('intake')` then
   writes the photo's reference into the candidate, and the scan job (`FILE_SCAN_JOB`, with a `scanner`) makes it
   readable. Test the refusals beside the success: no or a failed token, a filled honeypot, a file too large or of
@@ -1825,7 +1869,7 @@ if (postgres !== null) {
 		database: postgres.database,
 		files: new MemoryFileObjects(),
 		membership,
-		env: { TURNSTILE_SECRET: 'test', TURNSTILE_SITE_KEY: 'test-site-key' },
+		env: { ALTCHA_HMAC_KEY: 'test-altcha-hmac-key-of-32-characters' },
 	})
 	afterEach(() => kit.mail.heal())
 	const sentTo = (address: string) =>
@@ -1856,7 +1900,7 @@ if (postgres !== null) {
 					database: postgres.database,
 					files: new MemoryFileObjects(),
 					membership,
-					env: { TURNSTILE_SECRET: 'test', TURNSTILE_SITE_KEY: 'test-site-key' },
+					env: { ALTCHA_HMAC_KEY: 'test-altcha-hmac-key-of-32-characters' },
 					mail: 'none',
 				},
 			)

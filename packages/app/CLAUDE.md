@@ -113,7 +113,8 @@ src/
                       DEV_OUTBOX_ORIGIN, the DevMail of devKit's mails(), and the DevOutside the seed reads the dev
                       outbox (outbox()) and the jobs' mail (mails()) through
     challenge.ts      passingChallenge: a siteverify stand-in that passes every token, devKit's default;
-                      TURNSTILE_TEST_TOKEN, the test widget's token devKit admits at every submission
+                      TURNSTILE_TEST_TOKEN, the test widget's token devKit admits at every submission;
+                      solveChallengeAt, which fetches an ALTCHA challenge and solves it (kit.solveChallenge)
     isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests
     policy-isolation.ts  policyIsolationKit and appPolicyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes
@@ -149,7 +150,8 @@ src/
     anonymous.ts      the bounded body read, the share bootstrap
     client-address.ts a public procedure's client bucket (`X-Fabrika-Client-Ip` only)
     multipart.ts      the `multipart/form-data` reader of a procedure with file fields: part by part as the body streams, strict
-    challenge.ts      a public procedure's challenge: Turnstile's siteverify under a deadline, strictly read
+    challenge.ts      a public procedure's challenge: Turnstile's siteverify under a deadline, strictly read; an
+                      ALTCHA challenge issued and verified in process (altcha-lib), and the replay key of each
     webhook.ts        a webhook's bindings (ctx.webhooks, a GitHub webhook's generated endpoints) and a delivery's principal
     verifiers.ts      a delivery's signature: the presets and the hmac shape, constant-time
     tokens.ts         signed tokens: FABRIKA_TOKEN_KEYS, ctx.tokens.sign, the verification of each token field
@@ -631,8 +633,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   cancelled request. The kicked run is the job's own (its key, its lease, its retries), never the request's. Never
   await the kick, and never give it a payload: the job reads its rows.
 - **A public procedure's challenge is verified after its buckets and its body, before its handler, and recorded once it
-  passed** (`challenge.ts`). The provider list is closed (`turnstile`) and its origins are fixed (`CHALLENGE_ORIGINS`,
-  which `buildArtifact` adds to `scriptSrc`/`frameSrc`). Turnstile's siteverify gets one deadline for the call and the
+  passed** (`challenge.ts`). The provider list is closed (`turnstile`, `altcha`) and each one's browser sources are
+  fixed (`CHALLENGE_ORIGINS`: Turnstile's origin, which `buildArtifact` adds to `scriptSrc`/`frameSrc`; ALTCHA's
+  `blob:` workers, which it writes as `csp.workerSrc`, a directive no contract declares). The record keys on
+  the passed verdict's `replayKey` for `verifier.recordMs`: the token for Turnstile, the challenge's signature for ALTCHA,
+  whose one solution can be spelled as many tokens. Never key the record on an ALTCHA token. Turnstile's siteverify gets one deadline for the call and the
   body (`CHALLENGE_LIMITS`), a byte budget and no redirect; it passes only `success` for the request's host, the
   widget action the artifact records (`challenge.action`, by default `challengeAction` of the endpoint id; `buildArtifact`
   refuses one two procedures share) and a fresh `challenge_ts`. A token the visitor got wrong is 400
@@ -642,6 +647,23 @@ vocabulary (`packages/db/CLAUDE.md`).
   Only `devKit` exempts one token (`repeatableChallengeToken`, Turnstile's test-widget token, which never changes);
   never set it outside `app dev`. The secret is the application variable the contract names (`challenge.secret`), read
   by `boot`, which refuses to start without it; never put the value in the contract or a log.
+- **An ALTCHA challenge is the application's own, issued at a row the build adds and verified in process**
+  (`altchaChallenge`). `buildArtifact` writes, beside each such procedure, the row `<endpoint>.challenge` (source
+  `challenge`, `GET /__fabrika/challenge/<action>`, the procedure's `crossOrigin`, no body or schemas) with its own
+  buckets (`CHALLENGE_ISSUE_RATE`), and `contractArtifactSchema` refuses a challenge without exactly that row, a row
+  without its challenge, and `workerSrc` without either; a `challenge` row is no workload (`declared` holds no
+  actions for it). `boot` serves it as the `challenge` kind beside the procedure: the anonymous share, its buckets,
+  then a challenge signed over its parameters (the contract's `cost` and `maxAgeMs`, the action and the request's
+  host). Verification reads the payload strictly (exactly the parameters `issue` signs; the widget's `test` payload
+  and a server-signed one are refused unread), checks the action, the host and the expiry, then the two HMACs
+  `verifySolution` computes with keys derived from the variable for each use, and its verdict carries the replay key,
+  so the payload is read once. It never makes a network call, so it has no `unavailable`. `boot` refuses a key under
+  `ALTCHA_LIMITS.minKeyLength` (every challenge publishes a signature a short key could be guessed from); the build
+  refuses a `cost` a slow phone would not solve in time (`altchaSolvable`); the counter is drawn from 1, so no solver
+  skips attempts the widget makes; the issuer's buckets are at least twice the procedure's (`challengeIssueBucket`) and
+  `CHALLENGE_PREFIX` is reserved; the widget's `footer`, which it renders as HTML, is no prop of `Challenge`. Only `BootOptions.challengeWork` (the kit's and `devKit`'s `MINIMAL_CHALLENGE_WORK`) lowers the
+  work; never set it in a runtime adapter. `challengeUrl(api.<procedure>)` (`@fabrika/app/client`) is the one place a
+  page learns the path, from `declaredChallengeAction`, the build's own rule; `@fabrika/ui/challenge` renders the widget.
 - **A webhook's verifier is framework code** (`verifiers.ts`): a preset (`github-sha256`, `slack`, `standard-webhooks`,
   `stripe`, `twilio`), an `{ hmac }` shape, or `{ basic }` / `{ bearer }`, over the raw body, a signed timestamp within
   `WEBHOOK_TIMESTAMP_TOLERANCE_MS`. Twilio signs the public URL: the delivery's `url` is `FABRIKA_APP_ORIGIN` and the

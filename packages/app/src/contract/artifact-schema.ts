@@ -26,9 +26,18 @@ import {
 	type TablePolicyArtifact,
 	type TupleShape,
 } from '@fabrika/auth-core'
-import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
+import { isPolicyOrigin, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
-import { CHALLENGE_ACTION, JOB_LIMITS, PROCEDURE_LIMITS } from './defaults'
+import {
+	ALTCHA_LIMITS,
+	altchaSolvable,
+	CHALLENGE_ACTION,
+	CHALLENGE_PREFIX,
+	challengePath,
+	challengeRowId,
+	JOB_LIMITS,
+	PROCEDURE_LIMITS,
+} from './defaults'
 import { TOKEN_MAX_DAYS } from './token'
 import { webhookSchemeSchema } from './webhook-scheme'
 
@@ -186,6 +195,19 @@ const endpointRow: z.ZodType<EndpointRow> = z.union([
 		crossOrigin: z.enum(['environment', 'any']).optional(),
 		cache: endpointCacheSchema.optional(),
 	}).refine((row) => row.cache === undefined || row.method === 'GET', 'only a GET answer is cached'),
+	// The framework's own GET that issues the ALTCHA challenge of the public procedure its source names: no body, no schemas.
+	z.strictObject({
+		...rowBase,
+		kind: z.literal('public'),
+		source: z.strictObject({ kind: z.literal('challenge'), name }),
+		method: z.literal('GET'),
+		admission: z.null(),
+		input: z.null(),
+		output: z.null(),
+		callers: z.tuple([]),
+		requirement: z.null(),
+		crossOrigin: z.enum(['environment', 'any']).optional(),
+	}),
 	// A public SPA is a fixed static row: GET only, no body, no schemas.
 	z.strictObject({
 		...rowBase,
@@ -219,7 +241,17 @@ const formRate = z.int().positive().max(10_000)
 const applicationVariable = z.string().regex(/^[A-Z][A-Z0-9_]*$/)
 const bucket = z.int().positive().max(PROCEDURE_LIMITS.maxPerMinute).nullable()
 const challenge = z.strictObject({ provider: z.literal('turnstile'), secret: applicationVariable, siteKey: applicationVariable.optional() })
-const procedureChallenge = challenge.extend({ action: z.string().regex(CHALLENGE_ACTION) })
+const challengeActionSchema = z.string().regex(CHALLENGE_ACTION)
+const procedureChallenge = z.discriminatedUnion('provider', [
+	challenge.extend({ action: challengeActionSchema }),
+	z.strictObject({
+		provider: z.literal('altcha'),
+		secret: applicationVariable,
+		action: challengeActionSchema,
+		cost: z.int().min(ALTCHA_LIMITS.minCost).max(ALTCHA_LIMITS.maxCost),
+		maxAgeMs: z.int().min(ALTCHA_LIMITS.minMaxAgeMs).max(ALTCHA_LIMITS.maxMaxAgeMs),
+	}).refine((challenge) => altchaSolvable(challenge.cost, challenge.maxAgeMs), 'a slow phone does not solve this challenge in time'),
+])
 
 const mount = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('rpc'), prefix: name, callers: z.array(rpcCaller), compatibility: z.literal('backward').optional() }),
@@ -350,6 +382,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		frameSrc: z.array(cspSource).nonempty().optional(),
 		styleSrc: z.array(cspSource).nonempty().optional(),
 		fontSrc: z.array(cspSource).nonempty().optional(),
+		workerSrc: z.tuple([z.strictObject({ origin: z.literal(WORKER_BLOB_SOURCE), purpose: z.string().min(1) })]).optional(),
 	}),
 	tables: record(tablePolicy),
 	endpoints: z.array(endpointRow).superRefine((rows, context) => {
@@ -407,9 +440,35 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 	tokens: record(z.strictObject({ claims: schemaShapeSchema, maxDays: z.int().positive().max(TOKEN_MAX_DAYS) })).optional(),
 }).superRefine((artifact, context) => {
 	for (const row of artifact.endpoints) {
-		if (row.kind === 'public' && artifact.declared?.[row.id]?.actions === undefined) {
+		if (row.kind === 'public' && row.source.kind !== 'challenge' && artifact.declared?.[row.id]?.actions === undefined) {
 			context.addIssue({ code: 'custom', path: ['declared', row.id], message: 'a public procedure declares its workload actions' })
 		}
+	}
+	// Every ALTCHA challenge has exactly its own issuer, under its action, from the procedure's origins, with its own buckets.
+	const rows = new Map(artifact.endpoints.map((row) => [row.id, row]))
+	const issuers = artifact.endpoints.filter((row) => row.source.kind === 'challenge')
+	for (const [id, rules] of Object.entries(artifact.procedures ?? {})) {
+		if (rules.challenge?.provider !== 'altcha') continue
+		const issuer = rows.get(challengeRowId(id))
+		const procedure = rows.get(id)
+		if (
+			issuer === undefined || procedure === undefined || issuer.source.kind !== 'challenge' || issuer.source.name !== id
+			|| issuer.path !== challengePath(rules.challenge.action) || issuer.crossOrigin !== procedure.crossOrigin
+			|| artifact.procedures?.[issuer.id]?.challenge !== null
+		) {
+			context.addIssue({ code: 'custom', path: ['procedures', id, 'challenge'], message: 'an ALTCHA challenge has its own issuer row' })
+		}
+	}
+	for (const issuer of issuers) {
+		if (issuer.id !== challengeRowId(issuer.source.name) || artifact.procedures?.[issuer.source.name]?.challenge?.provider !== 'altcha') {
+			context.addIssue({ code: 'custom', path: ['endpoints'], message: `'${issuer.id}' issues the challenge of no ALTCHA procedure` })
+		}
+	}
+	if (issuers.length > 0 && !artifact.reservedPrefixes.includes(CHALLENGE_PREFIX)) {
+		context.addIssue({ code: 'custom', path: ['reservedPrefixes'], message: `an issuer row reserves ${CHALLENGE_PREFIX}` })
+	}
+	if ((artifact.csp.workerSrc !== undefined) !== issuers.length > 0) {
+		context.addIssue({ code: 'custom', path: ['csp', 'workerSrc'], message: 'workerSrc admits the workers of an ALTCHA challenge, and only those' })
 	}
 })
 

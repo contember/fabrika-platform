@@ -12,6 +12,7 @@ dependencies, `tsconfig.json` (`"jsx": "react-jsx"`) and `build-web.ts`.
 | `@fabrika/app/react`         | `FabrikaProvider`, `useQuery`, `useInfiniteQuery`, `useMutation`, `useAction`, `useDownload`, `useInvalidate`, `skip`, `useCaller`, `Can`, `FabrikaError` |
 | `@fabrika/app/react/testing` | `installDom`, `type`, `controlByLabel`, `waitForText`: a screen test's DOM and typing                                                                     |
 | `@fabrika/ui`                | the components below, `createRouter`, and `@fabrika/ui/styles.css`                                                                                        |
+| `@fabrika/ui/challenge`      | `Challenge`: the ALTCHA widget of a public procedure's challenge, at `challengeUrl(api.<procedure>)`; needs the `altcha` package (`public-intake.md`)     |
 
 ## The provider and the routes
 

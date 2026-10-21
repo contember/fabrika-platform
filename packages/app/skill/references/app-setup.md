@@ -160,16 +160,20 @@ export default serve(contract, { database: scoped(tables) })
   stylesheet origin in `styleSrc` and its font origin in `fontSrc`; font files under the SPA's `dir` need neither. No path under `/__fabrika`.
 - A public procedure's abuse control is its `admission`: `rate: { perClient, perEndpoint }` (per minute, shared by
   every instance; 10 and 100 by default for a public mutation; 429 past either) and
-  `challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' }`. `honeypot(value)`
-  of `@fabrika/app` is true for a filled field the page hides: answer the same and write nothing. A challenge needs the
-  input field `challengeToken: z.string()`, which the page fills from the Turnstile widget rendered with `action` set
-  to the endpoint id with `_` for `.` (`api_visitors_register`), or to the challenge's own `action: 'register'` (at most
-  32 letters, digits, `_` and `-`, one per procedure); the framework verifies it on the server (a failed or replayed
-  token 400 `challenge_failed`, an unreachable provider 503, no row either way) and adds Turnstile's origin to the CSP. `secret` names an
-  application variable the human sets, never the value; without it the application does not boot. `siteKey` names
-  the variable with the widget's public site key, which every SPA mount serves its pages (below). On Zerops every
-  visitor still shares one client address (the balancer), so `perClient` acts as a second per-endpoint limit: raise
-  it, and use the challenge. `references/public-intake.md` builds a whole public intake on it.
+  `challenge: { provider: 'altcha', secret: 'ALTCHA_HMAC_KEY' }`. `honeypot(value)` of `@fabrika/app` is true for a
+  filled field the page hides: answer the same and write nothing. A challenge needs the input field
+  `challengeToken: z.string()`. An ALTCHA challenge is a proof of work the application issues at
+  `GET /__fabrika/challenge/<action>` (`challengeUrl(api.<procedure>)` of `@fabrika/app/client`; the action is the
+  endpoint id with `_` for `.`, `api_visitors_register`, or the challenge's own `action: 'register'`, at most 32
+  letters, digits, `_` and `-`, one per procedure) and verifies itself, asking no one: the page renders `Challenge` of
+  `@fabrika/ui/challenge`, which fills the field. A failed, expired or replayed one is 400 `challenge_failed`, no row.
+  `secret` names the application variable holding the HMAC key, which the human sets to a long random value
+  (32 characters at least), never the value itself; without it, or with a shorter one, the application does not boot. `cost` and `maxAgeMs` set the work and the lifetime
+  (`references/public-intake.md`). `provider: 'turnstile'` (with `siteKey`, verified at Cloudflare, an unreachable
+  provider 503) is the alternative when the human asks for it; it adds Cloudflare's origin to the CSP and serves the
+  site key to every SPA mount's pages (below). On Zerops every visitor still shares one client address (the balancer),
+  so `perClient` acts as a second per-endpoint limit: raise it, and use the challenge.
+  `references/public-intake.md` builds a whole public intake on it.
 - `defineApp(vocabulary, tables, { imports?, tokens? })`: `imports` names other applications' exports
   (`references/webhooks-links-connectors.md`), `tokens` the purposes of signed tokens (`references/endpoint.md`).
 - `c.rpc('/api/v1', groups, { compatibility: 'backward' })` promises a mount's callers a stable API

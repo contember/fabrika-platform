@@ -101,6 +101,7 @@
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
 		"@fabrika/proxy-core": "workspace:*",
+		"altcha-lib": "2.6.0",
 		"jose": "^5.9.0"
 	},
 	"peerDependencies": {

@@ -59,10 +59,13 @@ export default seed
 - `dev/dev.env` holds the application's variables for `app dev`, one `NAME=value` per line (`#` comments, quotes
   optional). They win over the shell's; a `FABRIKA_*` name is refused. Commit it: it holds stand-in values, never a
   real secret.
-- A public procedure's challenge passes in `app dev`: the stand-in answers Turnstile's siteverify for any token. Set the
-  challenge's `secret` variable to any value in `dev/dev.env`, and send a fresh `challengeToken` with each submission, as a test
-  does: a token is single use. For the widget on a page, set the `siteKey` variable to Turnstile's always-passing test
-  key `1x00000000000000000000AA`. Its token is the same every time, and `app dev` admits that one token again at each
+- A public procedure's ALTCHA challenge works in `app dev` as deployed, only cheaper: set the challenge's `secret`
+  variable in `dev/dev.env` to any value of at least 32 characters, as deployed, and the page's widget solves the challenge `app dev` issues in moments,
+  whatever the contract's `cost`. A solved challenge passes once, as deployed; the widget fetches a new one.
+- A Turnstile challenge passes in `app dev`: the stand-in answers Turnstile's siteverify for any token. Set its
+  `secret` variable to any value, and send a fresh `challengeToken` with each submission, as a test does: a token is
+  single use. For the widget on a page, set the `siteKey` variable to Turnstile's always-passing test key
+  `1x00000000000000000000AA`. Its token is the same every time, and `app dev` admits that one token again at each
   submission; a deployed application records it like any other, so there it passes once.
 - A job's e-mail goes to the kit's mail stand-in (`dev.mail`, as `kit.mail` in a test): nothing is delivered, and no
   mail variable is needed. The mail view lists each message, newest first, beside IAM's invitations: the recipient,
@@ -80,8 +83,7 @@ export default seed
 
 ```text dev/dev.env
 # Stand-in values for fabrika app dev.
-TURNSTILE_SECRET=dev
-TURNSTILE_SITE_KEY=1x00000000000000000000AA
+ALTCHA_HMAC_KEY=dev-altcha-hmac-key-of-32-characters
 ARCHIVE_URL=https://outbox.invalid/archive
 ARCHIVE_KEY=dev
 ```

@@ -558,13 +558,13 @@ should hold. The generated tests skip the other-scope leak case for such an endp
 
 Every procedure takes `admission` (who may send it, how often) and `limits` (how large, how long):
 
-| Option                              | Credentialed and link procedures                                                                       | Public procedures (`references/public-intake.md`)                 |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
-| `admission.rate` (calls per minute) | `perCaller`, `perEndpoint`; none by default                                                            | `perClient`, `perEndpoint`, `bytesPerHour`; a mutation 10 and 100 |
-| `admission.origins`                 | `'same-origin'` (default) or `'listed'`                                                                | `'same-origin'`, `'listed'` or `'any'`                            |
-| `admission.challenge`               | —                                                                                                      | `{ provider: 'turnstile', secret, siteKey, action? }`             |
-| `limits.maxBytes`                   | 64 KiB, at most 1 MiB; with file fields 64 KiB plus each file at its kind's `maxBytes`, at most 48 MiB | the same                                                          |
-| `limits.timeoutMs`                  | 10 s, at most 60 s                                                                                     | the same                                                          |
+| Option                              | Credentialed and link procedures                                                                       | Public procedures (`references/public-intake.md`)                                                                     |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `admission.rate` (calls per minute) | `perCaller`, `perEndpoint`; none by default                                                            | `perClient`, `perEndpoint`, `bytesPerHour`; a mutation 10 and 100                                                     |
+| `admission.origins`                 | `'same-origin'` (default) or `'listed'`                                                                | `'same-origin'`, `'listed'` or `'any'`                                                                                |
+| `admission.challenge`               | none                                                                                                   | `{ provider: 'altcha', secret, action?, cost?, maxAgeMs? }`, or `{ provider: 'turnstile', secret, siteKey, action? }` |
+| `limits.maxBytes`                   | 64 KiB, at most 1 MiB; with file fields 64 KiB plus each file at its kind's `maxBytes`, at most 48 MiB | the same                                                                                                              |
+| `limits.timeoutMs`                  | 10 s, at most 60 s                                                                                     | the same                                                                                                              |
 
 - A declared `rate` merges into the default; `null` turns one bucket off. Past a bucket the answer is 429.
 - Every bucket is charged before the body is read and stays charged whatever the handler does. A bucket is a database
@@ -572,6 +572,8 @@ Every procedure takes `admission` (who may send it, how often) and `limits` (how
 - The body must arrive within `max(30 s, maxBytes at 16 KiB/s)`: a stalled body is 408. The handler's time starts
   after the last byte, so a slow upload still commits.
 - The approver sees every effective value. A higher bucket, a dropped challenge or a longer time limit widens.
+- An `altcha` challenge adds the framework's own `GET /__fabrika/challenge/<action>`, which issues it from the
+  procedure's origins under buckets of its own (30 per client and 600 in all, at least twice the procedure's). The approver sees that endpoint too.
 
 ## Another origin: `admission.origins: 'listed'`
 

@@ -305,6 +305,14 @@ describe('contract apps — the endpoint table', () => {
 		expect(parseProxyManifest({ apps: [{ ...app, ...table }] })?.apps[0]).toEqual({ ...app, ...table, scheme: 'https' })
 	})
 
+	test("only a challenge widget's blob: workers add workerSrc, and the manifest of every other contract has none", () => {
+		expect('workerSrc' in contractProxyTable(artifact).csp).toBe(false)
+		const workers = { origin: 'blob:', purpose: 'the workers of the altcha challenge' }
+		const table = contractProxyTable({ ...artifact, csp: { ...artifact.csp, workerSrc: [workers] } })
+		expect(table.csp.workerSrc).toEqual(['blob:'])
+		expect(parseProxyManifest({ apps: [{ ...app, ...table }] })?.apps[0]).toEqual({ ...app, ...table, scheme: 'https' })
+	})
+
 	test('a directive may name 16 origins', () => {
 		const imgSrc = Array.from({ length: MAX_CSP_ORIGINS }, (_, index) => `https://tiles${index}.example`)
 		expect(MAX_CSP_ORIGINS).toBe(16)
@@ -361,6 +369,9 @@ describe('contract apps — the endpoint table', () => {
 		}],
 		['a style origin that is not https', { ...app, csp: { ...app.csp, styleSrc: ['http://fonts.example'] } }],
 		['a wildcard font origin', { ...app, csp: { ...app.csp, fontSrc: ['https://*.example.com'] } }],
+		['a worker origin', { ...app, csp: { ...app.csp, workerSrc: ['https://workers.example'] } }],
+		['a worker source beside blob:', { ...app, csp: { ...app.csp, workerSrc: ['blob:', 'data:'] } }],
+		['an empty worker directive', { ...app, csp: { ...app.csp, workerSrc: [] } }],
 		['a 17th origin in one directive', {
 			...app,
 			csp: { ...app.csp, imgSrc: Array.from({ length: MAX_CSP_ORIGINS + 1 }, (_, index) => `https://tiles${index}.example`) },

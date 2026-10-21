@@ -81,7 +81,7 @@ import {
 	runInRequest,
 	type Within,
 } from './capability'
-import { CHALLENGE_LIMITS, type ChallengeVerifier } from './challenge'
+import type { ChallengeIssuer, ChallengeVerifier } from './challenge'
 import { connectContext, type ImportWire } from './connect'
 import { runAsSite } from './egress'
 import type { FailureReports } from './failures'
@@ -197,6 +197,8 @@ export type ServedEndpoint =
 		readonly admission: ProcedureAdmission
 		readonly site: ServedSite
 	}
+	/** The framework's own `GET` that issues a public procedure's ALTCHA challenge, behind buckets of its own. */
+	| { readonly kind: 'challenge'; readonly row: EndpointRow; readonly issuer: ChallengeIssuer; readonly admission: ProcedureAdmission }
 	| {
 		readonly kind: 'webhook'
 		readonly row: EndpointRow
@@ -371,6 +373,8 @@ export class ContractRuntime {
 					return await this.#procedure(served, request, exec)
 				case 'public':
 					return await this.#public(served, request, exec)
+				case 'challenge':
+					return await this.#issueChallenge(served, request)
 				case 'webhook':
 					return await this.#webhook(served, request, plan.params, exec)
 				case 'description':
@@ -849,16 +853,16 @@ export class ContractRuntime {
 	 * failure is 400, as a 0.5 form answered, an unreachable provider 503.
 	 */
 	async #challenge(action: string, verifier: ChallengeVerifier, token: string | null, request: Request, repeatable: string | null): Promise<void> {
-		const outcome = token === null ? 'failed' : await verifier.verify({ token, hostname: new URL(request.url).hostname, action })
-		if (outcome === 'unavailable') {
+		const verdict = token === null ? null : await verifier.verify({ token, hostname: new URL(request.url).hostname, action })
+		if (verdict?.outcome === 'unavailable') {
 			throw new ServerFault('challenge_unavailable', `the ${verifier.provider} challenge of '${action}' could not be verified`, 503)
 		}
-		if (outcome === 'misconfigured') {
+		if (verdict?.outcome === 'misconfigured') {
 			throw new ServerFault('challenge_misconfigured', `the ${verifier.provider} challenge of '${action}' refused the application's secret`, 503)
 		}
-		const refused = token === null || outcome === 'failed'
+		const refused = verdict?.outcome !== 'passed'
 			|| (token !== repeatable
-				&& !(await this.#framework().admissions.recordChallenge(action, sha256Hex(token), CHALLENGE_LIMITS.maxAgeMs + CHALLENGE_LIMITS.maxSkewMs)))
+				&& !(await this.#framework().admissions.recordChallenge(action, sha256Hex(verdict.replayKey), verifier.recordMs)))
 		if (refused) {
 			throw new HttpError(400, 'challenge_failed', 'The challenge did not verify; solve it again')
 		}
@@ -907,6 +911,23 @@ export class ContractRuntime {
 			return await this.#publicInvocation(served, request, body, fields, query, carried, authority.perms, exec)
 		} finally {
 			await multipart?.close()
+			release()
+		}
+	}
+
+	/**
+	 * A fresh ALTCHA challenge for this host: within the anonymous share and after the endpoint's buckets, as a public
+	 * procedure is admitted. It reads no body and writes nothing but the buckets.
+	 */
+	async #issueChallenge(served: Extract<ServedEndpoint, { kind: 'challenge' }>, request: Request): Promise<Response> {
+		const release = this.#parts.publicShare.enter()
+		if (release === null) {
+			throw new HttpError(503, 'public_share_full', 'Too many anonymous requests at once; try again shortly')
+		}
+		try {
+			await this.#admit(served.row, served.admission, request, null)
+			return jsonResponse(await served.issuer.issue(new URL(request.url).hostname), 200)
+		} finally {
 			release()
 		}
 	}

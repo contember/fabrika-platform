@@ -1,7 +1,7 @@
-// Script, frame, style and font origins and a form's admission in the conservative access diff (ADR-0050 §3): a new
-// origin in any directive widens and a removed one narrows, like the three directives before them; a stored snapshot from
-// before they existed still compares; any change to a form's admission is shown and widens. Only a 0.5 application
-// declares a form, so every snapshot with one is read by that release's reader.
+// Script, frame, style and font origins, a challenge widget's blob: workers, and a form's admission in the conservative
+// access diff (ADR-0050 §3): a new origin in any directive widens and a removed one narrows, like the three directives
+// before them; a stored snapshot from before they existed still compares; any change to a form's admission is shown and
+// widens. Only a 0.5 application declares a form, so every snapshot with one is read by that release's reader.
 
 import type { TablePolicyArtifact } from '@fabrika/auth-core-0.5'
 import { readContractSource } from '@fabrika/check/contract'
@@ -39,6 +39,21 @@ const FORM = (options: string): string => {
 		roles,
 	)
 }
+
+describe("a challenge widget's blob: workers in the approval diff", () => {
+	test('worker-src blob: widens when it appears and narrows when it goes', () => {
+		const before = snapshot()
+		const contract = before.contract
+		if (contract === null) throw new Error('BASE reads as a contract')
+		const workers = { origin: 'blob:', purpose: 'the workers of the altcha challenge' }
+		const after: AccessSnapshot = { ...before, contract: { ...contract, csp: { ...contract.csp, workerSrc: [workers] } } }
+		expect(classifyAccess(before, after)).toEqual({
+			outcome: 'widening',
+			changes: [{ effect: 'widens', line: 'CSP `workerSrc` allows `blob:`' }],
+		})
+		expect(classifyAccess(after, before).changes).toEqual([{ effect: 'narrows', line: 'CSP `workerSrc` no longer allows `blob:`' }])
+	})
+})
 
 describe('script and frame origins in the approval diff', () => {
 	test('a new script origin and a new frame origin each widen', () => {

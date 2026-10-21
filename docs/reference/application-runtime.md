@@ -953,13 +953,37 @@ artifact records each procedure's effective rules (`procedures[<id>]`), and the 
   string, a form or a `Blob` body, so an honest request is charged what it sends; a body streamed without a length
   (chunked) is charged the whole limit. The test kit's `fetch` declares the length of such a body too, and leaves a
   `ReadableStream` body without one.
-- **The challenge**: `challenge: { provider: 'turnstile', secret: '<VARIABLE>', siteKey?: '<VARIABLE>', action? }`, on
-  a public procedure only. The input carries the widget's token as the string field `challengeToken`. `action` is the
-  widget's action, at most 32 letters, digits, `_` and `-` (what Turnstile admits); by default the endpoint id with `_`
-  for `.`, and the build refuses a default longer than that and an action two procedures share. The artifact records
-  the effective one. Turnstile's siteverify
+- **The challenge**, on a public procedure only, by provider. The input carries the widget's token as the string field
+  `challengeToken`. `action` is the widget's action, at most 32 letters, digits, `_` and `-` (what Turnstile admits,
+  and a path segment); by default the endpoint id with `_` for `.`, and the build refuses a default longer than that
+  and an action two procedures share. The artifact records the effective one. A passed token is recorded under the
+  action in `fabrika_form_challenges` as long as it could pass again, so a second use is a replay whatever the provider
+  answers.
+- **ALTCHA**: `challenge: { provider: 'altcha', secret: '<VARIABLE>', action?, cost?, maxAgeMs? }`. The application
+  issues and verifies it itself, with the HMAC key the variable holds, and asks no one. The build adds a row of its own
+  (source `challenge`, id `<endpoint>.challenge`): `GET /__fabrika/challenge/<action>`, anonymous, from the procedure's
+  `crossOrigin`, no body, with buckets of its own (`CHALLENGE_ISSUE_RATE`: 30 per client and 600 a minute, each at
+  least twice the procedure's, and off where the procedure turned its own off), under the reserved prefix
+  `/__fabrika/challenge`, so a path below it no row serves is 404; the artifact refuses a challenge without exactly
+  that row. It answers a fresh PBKDF2/SHA-256 challenge signed over its parameters: `cost` iterations per attempt
+  (5000 by default, 1000 to 18 000), a counter drawn from 1 to 10 000 that the browser counts up to (from 1, so no
+  solver can skip attempts the widget makes), the action and the request's host, and an expiry `maxAgeMs` away (ten
+  minutes by default, a minute to an hour). The build refuses a `cost` whose worst draw a slow phone (2 million
+  iterations a second over its workers) would not solve within the widget's 90 s or half of `maxAgeMs`
+  (`altchaSolvable`). `boot` refuses a key under 32 characters: every challenge publishes a signature made with it. The server knows the attempt that solves it and signs that attempt's key
+  with a second key derived from the variable, so verifying is two HMACs and no proof of work. A payload of another
+  shape (the widget's `test` mode, a server-signed one), another host or action, an expired or forged one is 400
+  `challenge_failed`; nothing is 503, since nothing remote can be down. The replay record keys on the challenge's
+  signature, not the token, so a solution re-encoded as other JSON is the same replay. The test kit and
+  `fabrika app dev` issue the cheapest challenge (`MINIMAL_CHALLENGE_WORK`, `BootOptions.challengeWork`) and verify it
+  as production does; `kit.solveChallenge(api.<procedure>)` fetches one through the kit's proxy and solves it. The page
+  fetches it from `challengeUrl(api.<procedure>)` of `@fabrika/app/client`, and `@fabrika/ui/challenge` renders the
+  widget, bundled with the page. Its workers start from `blob:` URLs, so the CSP gains `worker-src 'self' blob:`
+  (`csp.workerSrc`, which only the build writes) and no origin.
+- **Turnstile**: `challenge: { provider: 'turnstile', secret: '<VARIABLE>', siteKey?: '<VARIABLE>', action? }`.
+  Turnstile's siteverify
   checks it (5 s, a 16 KiB answer, the request's host, the procedure's `action`, a token at most
-  300 s old); its digest is recorded in `fabrika_form_challenges`, so a second use is a replay. A failed or replayed
+  300 s old), and the token's digest is the replay record. A failed or replayed
   token is 400 `challenge_failed`, an unreachable provider or a refused secret 503. Only `fabrika app dev` admits one
   token again (`BootOptions.repeatableChallengeToken`), the one Turnstile's always-passing test widget hands out. The
   secret is the application variable the contract names; without it the application does not boot. Every SPA mount
