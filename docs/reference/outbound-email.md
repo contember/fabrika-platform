@@ -444,22 +444,24 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
 
 The Delivery section's **Mail** page lists messages by state, held first, with a
 filter by state and sender. A message's detail shows its metadata and, with
-`mail.content.read`, the recipient, subject, text, the HTML body in a sandboxed frame
-that runs no script, and each attachment's name, type and size. A held message has
+`mail.content.read` and for an application's message only, the recipient, subject,
+text, the HTML body in a sandboxed frame that runs no script, and each attachment's
+name, type and size. A held message has
 **Release** and **Drop**, each with a confirmation. A message the relay would send again
 has **Requeue**, with a confirmation. The rules section sets and removes rules.
 
 | action              | grants                                              | scope                                                                |
 | ------------------- | --------------------------------------------------- | -------------------------------------------------------------------- |
 | `mail.read`         | the list and a message's metadata                   | an application's messages at its app or environment; others globally |
-| `mail.content.read` | the recipient, subject, bodies and attachment names | global                                                               |
+| `mail.content.read` | the recipient, subject, bodies and attachment names | global; never an installation sender's                               |
 | `mail.manage`       | release, drop, requeue, and the rules               | global                                                               |
 
 Only `admin` holds them by default. The procedures (`controlRpc.mail`):
 
 - `messages.list({ state?, scope?, cursor? })`: without `scope` it needs a global
   `mail.read`, with one the grant that reads that sender (as `runs.list`); 50 a page.
-- `messages.get({ id })`: the content is `withheld` without `mail.content.read`,
+- `messages.get({ id })`: the content is `withheld` without `mail.content.read`, and
+  always for an installation sender, whose mail carries one-time links;
   `purged` once it is gone. `requeueable` says whether a requeue would act now.
 - `messages.release({ id })` and `messages.drop({ id })`: act on a `held` message only,
   else 409; record who decided. A release enqueues the dispatch, so on the Worker it

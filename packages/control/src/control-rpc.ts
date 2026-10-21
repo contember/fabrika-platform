@@ -83,7 +83,7 @@ import type { SourceConnectionPort } from './github/connections/port'
 import { sourceConnectionList } from './github/connections/status'
 import { appScope } from './iam'
 import { jsonValueSchema } from './json-value'
-import { type MailRelay, mayRequeueMail, releaseMailMessage, requeueMailMessage } from './mail-relay/queue'
+import { isInstallationSender, type MailRelay, mayRequeueMail, releaseMailMessage, requeueMailMessage } from './mail-relay/queue'
 import { buildControlRpcDeps } from './services'
 
 interface ControlRpcContext {
@@ -216,7 +216,6 @@ const startSourceConnectionInput = z.object({
 
 const MAIL_RULE_ANY = '*'
 const MAIL_PAGE_SIZE = 50
-const INSTALLATION_SENDER_PREFIX = 'installation:'
 
 const mailMessageState = z.enum(['held', 'queued', 'sending', 'sent', 'failed', 'unknown', 'dropped'])
 const mailMessageListInput = z.object({ state: mailMessageState.optional(), scope: nonEmpty.optional(), cursor: nonEmpty.optional() }).strict()
@@ -521,7 +520,7 @@ interface MailUseCaseContext {
  * service's only globally. A sender that is neither is no one's to read.
  */
 function readsMailOf(auth: AuthContext, sender: string): boolean {
-	if (sender.startsWith(INSTALLATION_SENDER_PREFIX)) return auth.can(CONTROL_ACTIONS.MAIL_READ)
+	if (isInstallationSender(sender)) return auth.can(CONTROL_ACTIONS.MAIL_READ)
 	const coordinates = parseAppEnvironmentId(sender)
 	return coordinates !== null && canAtCoordinates(auth, CONTROL_ACTIONS.MAIL_READ, coordinates.app, coordinates.env)
 }
@@ -545,15 +544,16 @@ async function getMailMessage(c: MailUseCaseContext, id: string): Promise<MailMe
 	if (row === null || !readsMailOf(c.auth, row.sender)) fail(404, 'mail message not found')
 	return {
 		...toMailMessageDto(row),
-		content: mailContentOf(c.auth, row.content),
+		content: mailContentOf(c.auth, row),
 		requeueable: c.mailRelay !== undefined && mayRequeueMail(row, c.mailRelay.sender),
 	}
 }
 
-function mailContentOf(auth: AuthContext, content: string | null): MailContentDto {
-	if (!auth.can(CONTROL_ACTIONS.MAIL_CONTENT_READ)) return { kind: 'withheld' }
-	if (content === null) return { kind: 'purged' }
-	const parsed = parsePlatformMailRequest(JSON.parse(content))
+/** An installation service's mail carries one-time links (enrollment, password reset), so no caller reads it (ADR-0019 §8). */
+function mailContentOf(auth: AuthContext, row: MailMessageRow): MailContentDto {
+	if (isInstallationSender(row.sender) || !auth.can(CONTROL_ACTIONS.MAIL_CONTENT_READ)) return { kind: 'withheld' }
+	if (row.content === null) return { kind: 'purged' }
+	const parsed = parsePlatformMailRequest(JSON.parse(row.content))
 	if (!parsed.ok) throw new Error('stored mail content does not parse')
 	const { to, subject, text, html, replyTo, fromName, unsubscribeUrl, attachments } = parsed.message
 	return {
