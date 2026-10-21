@@ -14,6 +14,8 @@ import { type Config, type Services } from '../services'
 import type { AuthFailure } from './failure'
 import { handoffOf, handoffRedirectOr, loginDestinationFields, readHandoff } from './handoff'
 import { methodNotAllowed, readForm, sameOrigin, stringValue } from './http'
+import { knownDeviceCookie, readKnownDevice } from './known-device'
+import type { AuthEnv } from './oidc-flight'
 import { issueSession, type LoginRefusal, refuseLogin } from './sessions'
 
 const LOGIN_WINDOW_SECONDS = 15 * 60
@@ -23,6 +25,9 @@ const LOGIN_BLOCK_SECONDS = 15 * 60
 const ACCOUNT_MAX_ATTEMPTS = 5
 
 const GLOBAL_MAX_ATTEMPTS = 1_000
+
+/** Failures a known-device cookie may spend before it stops exempting its login from the account and global buckets. */
+const DEVICE_MAX_ATTEMPTS = 10
 
 const RECOVERY_ACCOUNT_MAX_ATTEMPTS = 3
 
@@ -79,6 +84,7 @@ async function clientBlocked(
 export async function handlePasswordLogin(
 	request: Request,
 	services: Services,
+	env: AuthEnv,
 	ctx: RequestContext,
 	clientAddress: string | null,
 	requestId: string,
@@ -125,14 +131,22 @@ export async function handlePasswordLogin(
 
 	const accountKey = await hashToken(`password-login:account:${email}`)
 	const globalKey = await hashToken('password-login:global')
-	const [accountThrottle, globalThrottle, lookup, clientOverLimit] = await Promise.all([
+	const [accountThrottle, globalThrottle, lookup, clientOverLimit, device] = await Promise.all([
 		services.repositories.passwords.getLoginThrottle(accountKey),
 		services.repositories.passwords.getLoginThrottle(globalKey),
 		services.repositories.passwords.lookupLogin(email),
 		clientBlocked(services, 'password-login', clientAddress, LOGIN_CLIENT_MAX_ATTEMPTS),
+		readKnownDevice(env, request),
 	])
 	const now = Math.floor(Date.now() / 1000)
-	const blocked = clientOverLimit || (accountThrottle?.blocked_until ?? 0) > now || (globalThrottle?.blocked_until ?? 0) > now
+	// A device cookie of another principal is ignored, so it neither exempts nor reveals which address it belongs to.
+	const deviceKey = device !== null && lookup.status === 'found' && device.principalId === lookup.principal.id
+		? await hashToken(`password-login:device:${device.deviceId}`)
+		: null
+	const deviceThrottle = deviceKey === null ? null : await services.repositories.passwords.getLoginThrottle(deviceKey)
+	const knownDevice = deviceKey !== null && (deviceThrottle?.blocked_until ?? 0) <= now
+	const blocked = clientOverLimit
+		|| (!knownDevice && ((accountThrottle?.blocked_until ?? 0) > now || (globalThrottle?.blocked_until ?? 0) > now))
 	let valid = false
 	let needsRehash = false
 	if (!blocked && passwordWithinLimit && lookup.status === 'found') {
@@ -159,7 +173,7 @@ export async function handlePasswordLogin(
 			)
 		}
 		await services.repositories.passwords.clearLoginFailures(accountKey)
-		return issueSession(request, services, ctx, {
+		const session = await issueSession(request, services, ctx, {
 			principalId: lookup.principal.id,
 			email: lookup.principal.email,
 			authenticationMethod: 'password',
@@ -168,9 +182,14 @@ export async function handlePasswordLogin(
 			requestId,
 			handoff,
 		})
+		// Only a recorded login (the 302) earns a device cookie; a 503 issued no session.
+		if (session.status === 302) session.headers.append('Set-Cookie', await knownDeviceCookie(env, lookup.principal.id))
+		return session
 	}
 
-	if (!blocked) {
+	if (!blocked && knownDevice) {
+		await recordLoginFailure(services, deviceKey, DEVICE_MAX_ATTEMPTS)
+	} else if (!blocked) {
 		await Promise.all([
 			recordLoginFailure(services, accountKey, ACCOUNT_MAX_ATTEMPTS),
 			recordLoginFailure(services, globalKey, GLOBAL_MAX_ATTEMPTS),

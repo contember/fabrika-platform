@@ -114,6 +114,16 @@ ambiguous, disabled, and non-password users receive the same response and incur
 password-derivation work until a bucket blocks; blocked requests skip the
 expensive derivation.
 
+A successful password login also sets a signed known-device cookie,
+`__Host-px_device` (`HttpOnly`, `SameSite=Lax`, 90 days), naming the principal
+and a random device id. A later login that presents a valid one for the SAME
+principal it targets skips the account and deployment-wide buckets and spends a
+bucket of its own instead: 10 failures in 15 minutes, after which the cookie
+stops exempting until the block passes. Its failures do not count against the
+account. A missing, forged, expired or other principal's cookie changes nothing.
+So a client that fills the account or deployment-wide bucket cannot lock out a
+user signing in again from a browser that signed in before.
+
 Login and recovery each have a third bucket, keyed on a hash of the client
 address, so one client cannot exhaust the deployment-wide bucket and deny the
 installation. IAM does not derive that address: the composition root names the
