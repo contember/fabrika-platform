@@ -46,7 +46,7 @@ describe('a Turnstile verification', () => {
 	test('posts the secret and the token to siteverify, and passes a fresh token of this host and action', async () => {
 		const seen: Request[] = []
 		const verifier = turnstileVerifier('secret-1', answering(() => passed(), seen), () => NOW)
-		expect(await verifier.verify(CHECK)).toBe('passed')
+		expect((await verifier.verify(CHECK)).outcome).toBe('passed')
 		const [request] = seen
 		expect(request?.url).toBe(TURNSTILE_VERIFY_URL)
 		expect(request?.method).toBe('POST')
@@ -57,7 +57,7 @@ describe('a Turnstile verification', () => {
 		const seen: Request[] = []
 		const verifier = turnstileVerifier('secret-1', answering(() => passed(), seen), () => NOW)
 		for (const token of ['', 'with space', 'x'.repeat(CHALLENGE_LIMITS.maxTokenLength + 1), 'line\nbreak']) {
-			expect(await verifier.verify({ ...CHECK, token })).toBe('failed')
+			expect((await verifier.verify({ ...CHECK, token })).outcome).toBe('failed')
 		}
 		expect(seen).toEqual([])
 	})
@@ -70,17 +70,17 @@ describe('a Turnstile verification', () => {
 		['a token from the future', { challenge_ts: new Date(NOW + CHALLENGE_LIMITS.maxSkewMs + 1000).toISOString() }],
 		['no issue time', { challenge_ts: undefined }],
 	])('fails %s', async (_name, overrides) => {
-		expect(await turnstileVerifier('secret-1', answering(() => passed(overrides)), () => NOW).verify(CHECK)).toBe('failed')
+		expect((await turnstileVerifier('secret-1', answering(() => passed(overrides)), () => NOW).verify(CHECK)).outcome).toBe('failed')
 	})
 
 	test("the visitor's refusal fails; a refused secret is misconfigured; the provider's own error is unavailable", async () => {
 		const refusing = (codes: string[]) =>
 			turnstileVerifier('secret-1', answering(() => Response.json({ success: false, 'error-codes': codes })), () => NOW)
-		expect(await refusing(['timeout-or-duplicate']).verify(CHECK)).toBe('failed')
-		expect(await refusing(['invalid-input-response']).verify(CHECK)).toBe('failed')
-		expect(await refusing(['invalid-input-secret']).verify(CHECK)).toBe('misconfigured')
-		expect(await refusing(['missing-input-secret']).verify(CHECK)).toBe('misconfigured')
-		expect(await refusing(['internal-error']).verify(CHECK)).toBe('unavailable')
+		expect((await refusing(['timeout-or-duplicate']).verify(CHECK)).outcome).toBe('failed')
+		expect((await refusing(['invalid-input-response']).verify(CHECK)).outcome).toBe('failed')
+		expect((await refusing(['invalid-input-secret']).verify(CHECK)).outcome).toBe('misconfigured')
+		expect((await refusing(['missing-input-secret']).verify(CHECK)).outcome).toBe('misconfigured')
+		expect((await refusing(['internal-error']).verify(CHECK)).outcome).toBe('unavailable')
 	})
 
 	test.each<[string, () => Response | Promise<Response>]>([
@@ -92,7 +92,7 @@ describe('a Turnstile verification', () => {
 		['an answer over its byte budget', () => Response.json({ success: true, padding: 'x'.repeat(CHALLENGE_LIMITS.maxAnswerBytes) })],
 		['a network failure', () => Promise.reject(new TypeError('connection refused'))],
 	])('is unavailable on %s', async (_name, answer) => {
-		expect(await turnstileVerifier('secret-1', answering(answer), () => NOW).verify(CHECK)).toBe('unavailable')
+		expect((await turnstileVerifier('secret-1', answering(answer), () => NOW).verify(CHECK)).outcome).toBe('unavailable')
 	})
 
 	test('a provider that does not answer within the deadline is unavailable, and the wait is bounded', async () => {
@@ -101,7 +101,7 @@ describe('a Turnstile verification', () => {
 				request.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
 			})
 		const started = Date.now()
-		expect(await turnstileVerifier('secret-1', hanging, () => NOW).verify(CHECK)).toBe('unavailable')
+		expect((await turnstileVerifier('secret-1', hanging, () => NOW).verify(CHECK)).outcome).toBe('unavailable')
 		expect(Date.now() - started).toBeLessThan(CHALLENGE_LIMITS.timeoutMs + 1000)
 	}, CHALLENGE_LIMITS.timeoutMs + 3000)
 })
@@ -109,8 +109,8 @@ describe('a Turnstile verification', () => {
 describe("the kits' passing challenge", () => {
 	test('passes every widget token for the host and the action the check names, and no other', async () => {
 		const verifier = turnstileVerifier('dev-secret', passingChallenge)
-		expect(await verifier.verify(CHECK)).toBe('passed')
-		expect(await verifier.verify({ ...CHECK, hostname: 'other.example', action: 'contact' })).toBe('passed')
-		expect(await verifier.verify({ ...CHECK, token: 'with space' })).toBe('failed')
+		expect((await verifier.verify(CHECK)).outcome).toBe('passed')
+		expect((await verifier.verify({ ...CHECK, hostname: 'other.example', action: 'contact' })).outcome).toBe('passed')
+		expect((await verifier.verify({ ...CHECK, token: 'with space' })).outcome).toBe('failed')
 	})
 })

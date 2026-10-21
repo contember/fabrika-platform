@@ -9,6 +9,8 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { z } from 'zod/v4'
+import { contract as altchaContract } from '../../../app/src/__tests__/fixtures/altcha/fabrika.contract'
+import { tables as altchaTables } from '../../../app/src/__tests__/fixtures/altcha/src/db/tables'
 import { contract as catalogContract } from '../../../app/src/__tests__/fixtures/connect-catalog/fabrika.contract'
 import { contract as shopContract } from '../../../app/src/__tests__/fixtures/connect-shop/fabrika.contract'
 import { contract as implementContract } from '../../../app/src/__tests__/fixtures/implement/fabrika.contract'
@@ -166,6 +168,11 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app intake (public procedures with a rate, a honeypot and a challenge; src/db/tables.ts read from source)',
 		root: join(APP_TESTS, 'fixtures', 'intake'),
 		evaluated: () => compileContract(intakeContract, intakeTables),
+	},
+	{
+		name: '@fabrika/app altcha (public procedures behind an ALTCHA challenge and its issuer rows; src/db/tables.ts read from source)',
+		root: join(APP_TESTS, 'fixtures', 'altcha'),
+		evaluated: () => compileContract(altchaContract, altchaTables),
 	},
 	{
 		name: '@fabrika/app connect/catalog, the owner of an export',

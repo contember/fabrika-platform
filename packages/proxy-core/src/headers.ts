@@ -54,7 +54,16 @@ export interface CspOrigins {
 	readonly frameSrc: readonly string[]
 	readonly styleSrc: readonly string[]
 	readonly fontSrc: readonly string[]
+	/**
+	 * `worker-src 'self' blob:` is emitted only when it holds `blob:`, its one source (a challenge widget that starts its
+	 * workers from `Blob` URLs); without it workers fall back to `script-src`. Absent from every manifest without it, so a
+	 * proxy that does not know the directive still parses those.
+	 */
+	readonly workerSrc?: readonly string[]
 }
+
+/** The one source a contract's `workerSrc` holds: a worker the page's own script built from a `Blob`. */
+export const WORKER_BLOB_SOURCE = 'blob:'
 
 const HOSTNAME = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
 
@@ -93,6 +102,7 @@ export function cspOrigins(csp: CspExtensions): CspOrigins {
 		frameSrc: (csp.frameSrc ?? []).map((source) => source.origin),
 		styleSrc: (csp.styleSrc ?? []).map((source) => source.origin),
 		fontSrc: (csp.fontSrc ?? []).map((source) => source.origin),
+		...(csp.workerSrc === undefined ? {} : { workerSrc: csp.workerSrc.map((source) => source.origin) }),
 	}
 }
 
@@ -116,6 +126,7 @@ export function headerPolicy(origins: CspOrigins, operationsOrigin: string | nul
 		`frame-ancestors ${frameAncestors.join(' ')}`,
 		// Without it frames fall back to `default-src 'self'`; a declared origin only extends that, so `'self'` stays.
 		...(origins.frameSrc.length === 0 ? [] : [`frame-src ${["'self'", ...origins.frameSrc].join(' ')}`]),
+		...(origins.workerSrc?.includes(WORKER_BLOB_SOURCE) === true ? [`worker-src 'self' ${WORKER_BLOB_SOURCE}`] : []),
 	]
 	return Object.freeze([
 		['Content-Security-Policy', directives.join('; ')],

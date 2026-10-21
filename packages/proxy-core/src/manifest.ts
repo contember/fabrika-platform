@@ -21,7 +21,7 @@ import {
 	requirementDigest,
 } from '@fabrika/auth-core'
 import { z } from 'zod'
-import { type CspOrigins, cspOrigins, isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS, MAX_CSP_ORIGINS } from './headers'
+import { type CspOrigins, cspOrigins, isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS, MAX_CSP_ORIGINS, WORKER_BLOB_SOURCE } from './headers'
 import { type OAuthProtectedResource, oauthProtectedResourceSchema, oauthScopesSchema } from './oauth-resource'
 
 export * from './oauth-resource'
@@ -267,6 +267,8 @@ const cspOriginsSchema = z.object({
 	frameSrc: cspDirectiveSchema.default([]),
 	styleSrc: cspDirectiveSchema.default([]),
 	fontSrc: cspDirectiveSchema.default([]),
+	// Only a challenge widget's workers need it, and its one source is `blob:`; absent everywhere else.
+	workerSrc: z.tuple([z.literal(WORKER_BLOB_SOURCE)]).optional(),
 }).strict() satisfies z.ZodType<CspOrigins, z.ZodTypeDef, unknown>
 
 // Strict: a key the proxy does not read (`gates`, or an installation entry's field) is refused, never ignored.

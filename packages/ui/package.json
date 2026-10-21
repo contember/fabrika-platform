@@ -22,6 +22,11 @@
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
 		},
+		"./challenge": {
+			"bun": "./src/Challenge.tsx",
+			"types": "./src/Challenge.tsx",
+			"default": "./src/Challenge.tsx"
+		},
 		"./styles.css": "./src/styles.css",
 		"./theme.css": "./src/theme.css"
 	},
@@ -30,14 +35,21 @@
 		"test": "bun test --isolate"
 	},
 	"peerDependencies": {
+		"altcha": "^3.4.0",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0"
+	},
+	"peerDependenciesMeta": {
+		"altcha": {
+			"optional": true
+		}
 	},
 	"devDependencies": {
 		"@happy-dom/global-registrator": "^20.11.2",
 		"@types/bun": "latest",
 		"@types/react": "^19.0.0",
 		"@types/react-dom": "^19.0.0",
+		"altcha": "3.4.0",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0",
 		"typescript": "^5.9.3"

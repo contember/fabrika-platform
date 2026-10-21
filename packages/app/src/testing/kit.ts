@@ -36,6 +36,7 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { z } from 'zod/v4'
+import { challengeUrl } from '../client/contract'
 import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
 import type { AnyContract, DimensionOf } from '../contract/define'
@@ -45,7 +46,7 @@ import type { RequestExecutionContext } from '../fetch'
 import type { FILE_SWEEP_JOB } from '../files/kinds'
 import type { FILE_SCAN_JOB, FileScanner } from '../files/scan'
 import { boot, type BootOptions, type ContractApp } from '../implement/boot'
-import type { ChallengeFetch } from '../implement/challenge'
+import { type ChallengeFetch, MINIMAL_CHALLENGE_WORK } from '../implement/challenge'
 import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
@@ -64,6 +65,7 @@ import {
 	type TestGrant,
 	type TestScope,
 } from './caller'
+import { solveChallengeAt } from './challenge'
 import {
 	credentialCallers,
 	type JobCredential,
@@ -192,6 +194,12 @@ export interface TestKit<C extends AnyContract> {
 	 * what a test sends where an input carries `signedToken('<purpose>')`.
 	 */
 	signToken<const P extends TokenPurposeName<C>>(purpose: P, claims: TokenClaimsInput<C, P>, options: { readonly days: number }): string
+	/**
+	 * A solved ALTCHA challenge of `procedure`, a procedure of a client over this kit whose challenge is
+	 * `provider: 'altcha'`: what the page sends as `challengeToken`. Each one passes once. The kit issues the cheapest
+	 * challenge whatever the contract's `cost`, so solving one takes milliseconds.
+	 */
+	solveChallenge(procedure: object): Promise<string>
 }
 
 /** The names of the contract's cron jobs. */
@@ -416,6 +424,7 @@ export function bootTestKit<C extends AnyContract>(
 		files: options.files,
 		...(options.scanner === undefined ? {} : { scanner: options.scanner }),
 		...(options.challengeFetch === undefined ? {} : { challengeFetch: options.challengeFetch }),
+		challengeWork: MINIMAL_CHALLENGE_WORK,
 		...dev,
 		...(options.revealHandlerErrors === undefined ? {} : { revealHandlerErrors: options.revealHandlerErrors }),
 		membership,
@@ -702,6 +711,7 @@ export function bootTestKit<C extends AnyContract>(
 			mail,
 			mailKeyScope,
 			signToken,
+			solveChallenge: (procedure: object) => solveChallengeAt(kitFetch, new URL(challengeUrl(procedure), origin).href),
 		}),
 		standIn,
 		callerOf: (value) => [...memberships.keys()].find((caller) => caller === value),

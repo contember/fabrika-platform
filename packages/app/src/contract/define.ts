@@ -303,17 +303,36 @@ export interface Surface extends SurfaceSections {
 	readonly [name: string]: AnyMount | SurfaceSections[keyof SurfaceSections]
 }
 
-/** A public procedure's challenge: the provider and the application variables that hold its secret and its public site key. */
-export interface ChallengeOption {
+/** A public procedure's challenge, by provider: Turnstile, verified at Cloudflare, or ALTCHA, which the application issues and verifies. */
+export type ChallengeOption = TurnstileChallengeOption | AltchaChallengeOption
+
+interface ChallengeOptionBase {
 	readonly provider: ChallengeProvider
+	/** The application variable that holds the provider's secret (Turnstile's) or the HMAC key (ALTCHA's): a name, never the value. */
 	readonly secret: string
-	/** Served by every SPA mount at `<prefix>/__fabrika-config.json`, so the page renders the widget with it. */
-	readonly siteKey?: string
 	/**
 	 * The widget's `action`, which the verification expects back: at most 32 letters, digits, `_` and `-`. The endpoint id
 	 * with `_` for `.` by default (`api_visitors_register`).
 	 */
 	readonly action?: string
+}
+
+export interface TurnstileChallengeOption extends ChallengeOptionBase {
+	readonly provider: 'turnstile'
+	/** Served by every SPA mount at `<prefix>/__fabrika-config.json`, so the page renders the widget with it. */
+	readonly siteKey?: string
+}
+
+/** The page fetches its challenge from `GET /__fabrika/challenge/<action>` (`challengeUrl` of `@fabrika/app/client`). */
+export interface AltchaChallengeOption extends ChallengeOptionBase {
+	readonly provider: 'altcha'
+	/**
+	 * The PBKDF2 iterations of one attempt, 1000 to 18000; 5000 by default. A browser makes up to 10000 attempts, about
+	 * 5000 on average, and the build refuses a cost a slow phone would not solve within 90 s or half of `maxAgeMs`.
+	 */
+	readonly cost?: number
+	/** How long a challenge may be solved and submitted, in ms, 60 s to an hour; ten minutes by default. */
+	readonly maxAgeMs?: number
 }
 
 export interface LinkKit<A extends string> {

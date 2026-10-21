@@ -58,7 +58,7 @@ import {
 	type TokenPurposeArtifact,
 	type WebhookScheme,
 } from '@fabrika/auth-core'
-import { isPolicyOrigin, MAX_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
+import { isPolicyOrigin, MAX_CSP_ORIGINS, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
 import { contractArtifactSchema } from './artifact-schema'
 import {
@@ -82,14 +82,23 @@ import {
 	type SpaAccessDeclaration,
 } from './declaration'
 import {
+	ALTCHA_LIMITS,
+	altchaSolvable,
+	altchaWorstSolveMs,
 	ATTACHMENT_LIMITS,
 	CHALLENGE_ACTION,
 	CHALLENGE_FIELD,
+	CHALLENGE_ISSUE_RATE,
 	CHALLENGE_ORIGINS,
+	CHALLENGE_PREFIX,
 	challengeAction,
+	challengeIssueBucket,
+	challengePath,
+	challengeRowId,
 	CONNECT_LIMITS,
 	CONNECT_PREFIX,
 	CONTRACT_DEFAULTS,
+	declaredChallengeAction,
 	exportBase,
 	FILE_LIMITS,
 	FORM_MULTIPART_TYPE,
@@ -127,6 +136,8 @@ const ATTACHMENT_FILENAMES: Readonly<Record<AttachmentFormat, RegExp>> = {
 const APP_SCOPE = 'app'
 const AUDIENCE = 'any consumer user'
 const IMPORT_FIELDS = ['app', 'export', 'version', 'digest', 'procedures', 'usedBy', 'timeoutMs']
+const TURNSTILE_CHALLENGE_FIELDS = ['provider', 'secret', 'siteKey', 'action']
+const ALTCHA_CHALLENGE_FIELDS = ['provider', 'secret', 'action', 'cost', 'maxAgeMs']
 /** Tables the framework keeps in the application's schema; no site reaches them unscoped. */
 const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
 /** The most origins one site calls: a site that reaches more is an integration hub, which a connector import serves. */
@@ -215,6 +226,8 @@ class ArtifactBuilder {
 		const csp = this.#csp(contract.csp)
 		const tables = this.#checkTables()
 		this.#reserve(this.#endpoints.some((row) => row.source.kind === 'export') ? CONNECT_PREFIX : null)
+		// An unknown challenge path is a 404, never the root SPA's page.
+		this.#reserve(this.#endpoints.some((row) => row.source.kind === 'challenge') ? CHALLENGE_PREFIX : null)
 		this.#checkKickCycles()
 		const directories = this.#directories(dimensions)
 		const locale = this.#locale()
@@ -541,21 +554,22 @@ class ArtifactBuilder {
 	 * declares its own `action`.
 	 */
 	#challenge(id: string, where: string, challenge: object, fields: Readonly<Record<string, SchemaShape>>): ProcedureChallenge | undefined {
-		this.#keys(`${where} challenge`, challenge, ['provider', 'secret', 'siteKey', 'action'])
 		const provider: unknown = Reflect.get(challenge, 'provider')
+		if (provider !== 'turnstile' && provider !== 'altcha') {
+			this.#problem(where, `challenge provider ${JSON.stringify(provider)} is not one the framework verifies (allowed: 'turnstile', 'altcha')`)
+			return undefined
+		}
+		this.#keys(`${where} challenge`, challenge, provider === 'altcha' ? ALTCHA_CHALLENGE_FIELDS : TURNSTILE_CHALLENGE_FIELDS)
 		const secret: unknown = Reflect.get(challenge, 'secret')
 		const siteKey: unknown = Reflect.get(challenge, 'siteKey')
 		const declaredAction: unknown = Reflect.get(challenge, 'action')
-		if (provider !== 'turnstile') {
-			this.#problem(where, `challenge provider ${JSON.stringify(provider)} is not one the framework verifies (allowed: 'turnstile')`)
-			return undefined
-		}
 		if (typeof secret !== 'string' || !APPLICATION_VARIABLE.test(secret) || secret.startsWith('FABRIKA_')) {
+			const example = provider === 'altcha' ? 'ALTCHA_HMAC_KEY' : 'TURNSTILE_SECRET'
 			this.#problem(
 				where,
 				`challenge secret ${
 					JSON.stringify(secret)
-				} is not the name of an application variable (allowed: 'TURNSTILE_SECRET'; never the secret itself, never FABRIKA_*)`,
+				} is not the name of an application variable (allowed: '${example}'; never the secret itself, never FABRIKA_*)`,
 			)
 			return undefined
 		}
@@ -572,11 +586,52 @@ class ArtifactBuilder {
 			)
 		}
 		this.#challenges.push({ site: id, provider, secret, action })
+		if (provider === 'altcha') {
+			const cost = this.#within(
+				where,
+				'challenge.cost',
+				Reflect.get(challenge, 'cost'),
+				ALTCHA_LIMITS.cost,
+				ALTCHA_LIMITS.minCost,
+				ALTCHA_LIMITS.maxCost,
+				'iterations',
+			)
+			const maxAgeMs = this.#within(
+				where,
+				'challenge.maxAgeMs',
+				Reflect.get(challenge, 'maxAgeMs'),
+				ALTCHA_LIMITS.maxAgeMs,
+				ALTCHA_LIMITS.minMaxAgeMs,
+				ALTCHA_LIMITS.maxMaxAgeMs,
+				'ms',
+			)
+			if (!altchaSolvable(cost, maxAgeMs)) {
+				this.#problem(
+					where,
+					`its challenge of cost ${cost} takes a slow phone up to ${
+						altchaWorstSolveMs(cost)
+					} ms, more than the widget's ${ALTCHA_LIMITS.solveTimeoutMs} ms or half of maxAgeMs ${maxAgeMs} (allowed: a lower cost, or a longer maxAgeMs)`,
+				)
+			}
+			return { provider, secret, action, cost, maxAgeMs }
+		}
 		if (siteKey === undefined || !this.#applicationVariable(where, 'challenge siteKey', siteKey, 'TURNSTILE_SITE_KEY')) {
 			return { provider, secret, action }
 		}
 		this.#publicVariables.push({ where, field: 'challenge siteKey', name: siteKey })
 		return { provider, secret, action, siteKey }
+	}
+
+	/** A declared whole number from `floor` to `ceiling`, or `fallback` when it is not declared. */
+	#within(where: string, field: string, value: unknown, fallback: number, floor: number, ceiling: number, unit: string): number {
+		if (value === undefined) {
+			return fallback
+		}
+		if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < floor || value > ceiling) {
+			this.#problem(where, `${field} ${JSON.stringify(value)} is not a whole number of ${unit} from ${floor} to ${ceiling}`)
+			return fallback
+		}
+		return value
 	}
 
 	/** The widget action a challenge's verification expects back: the declared `action`, else the endpoint id with `_` for `.`. */
@@ -588,7 +643,7 @@ class ArtifactBuilder {
 					`challenge.action ${JSON.stringify(declared)} is not a widget action (allowed: at most 32 letters, digits, '_' or '-', such as 'register')`,
 				)
 			}
-			return typeof declared === 'string' ? declared : challengeAction(id)
+			return declaredChallengeAction(id, declared)
 		}
 		const derived = challengeAction(id)
 		if (!CHALLENGE_ACTION.test(derived)) {
@@ -807,7 +862,42 @@ class ArtifactBuilder {
 			output: this.#output(where, procedure),
 			...origins,
 		})
+		const procedureRules = this.#procedureRules[id]
+		if (procedureRules?.challenge?.provider === 'altcha') {
+			this.#challengeIssuer(id, procedureRules.challenge.action, procedureRules.rate, origins)
+		}
 		return actions
+	}
+
+	/**
+	 * The framework's own `GET` that issues the ALTCHA challenge of public procedure `id`: anonymous like the procedure,
+	 * from the same origins, with buckets of its own that admit at least as many as the procedure's, and no body.
+	 */
+	#challengeIssuer(id: string, action: string, rate: AdmissionRate, origins: { readonly crossOrigin?: 'environment' | 'any' }): void {
+		const issuer = challengeRowId(id)
+		this.#row({
+			id: issuer,
+			source: { kind: 'challenge', name: id },
+			kind: 'public',
+			method: 'GET',
+			path: challengePath(action),
+			admission: null,
+			callers: [],
+			requirement: null,
+			input: null,
+			output: null,
+			...origins,
+		})
+		this.#procedureRules[issuer] = {
+			rate: {
+				perClient: challengeIssueBucket(rate.perClient, CHALLENGE_ISSUE_RATE.perClient),
+				perCaller: null,
+				perEndpoint: challengeIssueBucket(rate.perEndpoint, CHALLENGE_ISSUE_RATE.perEndpoint),
+				bytesPerHour: null,
+			},
+			challenge: null,
+			timeoutMs: PROCEDURE_LIMITS.timeoutMs,
+		}
 	}
 
 	/** A public procedure's `actions`: at least one action of the contract, each once. */
@@ -1892,7 +1982,20 @@ class ArtifactBuilder {
 			...(frameSrc.length === 0 ? {} : { frameSrc }),
 			...(styleSrc.length === 0 ? {} : { styleSrc }),
 			...(fontSrc.length === 0 ? {} : { fontSrc }),
+			...this.#challengeWorkers(),
 		}
+	}
+
+	/** `blob:` for workers, when a challenge provider's widget starts its own; the contract never declares it. */
+	#challengeWorkers(): Pick<CspExtensions, 'workerSrc'> {
+		const providers = [...new Set(this.#challenges.map((challenge) => challenge.provider))].sort()
+		const needing = providers.filter((provider) => CHALLENGE_ORIGINS[provider].workerSrc.length > 0)
+		if (needing.length === 0) {
+			return {}
+		}
+		const sites = this.#challenges.filter((challenge) => needing.includes(challenge.provider)).map((challenge) => `'${challenge.site}'`).sort()
+		const purpose = `the workers of the ${needing.join(' and ')} challenge of ${sites.join(', ')}`
+		return { workerSrc: [{ origin: WORKER_BLOB_SOURCE, purpose }] }
 	}
 
 	/** The declared sources, plus each fixed origin a challenge provider loads that the contract does not name itself. */

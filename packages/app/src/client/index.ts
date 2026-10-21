@@ -2,6 +2,7 @@
 export { type PageCaller, parsePageCaller } from './caller'
 export {
 	type AttachmentProcedure,
+	challengeUrl,
 	type ClientMount,
 	type ClientOptions,
 	type ClientTree,

@@ -152,9 +152,12 @@ export type AnonymousEndpointKind = 'health' | 'form' | 'webhook' | 'link-spa' |
 
 export type EndpointKind = CredentialedEndpointKind | AnonymousEndpointKind
 
-/** The contract entry that declared an endpoint. */
+/**
+ * The contract entry that declared an endpoint. A `challenge` row is the framework's own: the endpoint that issues the
+ * ALTCHA challenge of the public procedure `name`.
+ */
 export interface EndpointSource {
-	readonly kind: 'mount' | 'export' | 'files'
+	readonly kind: 'mount' | 'export' | 'files' | 'challenge'
 	readonly name: string
 }
 
@@ -547,21 +550,45 @@ export interface FormRate {
 	readonly bytesPerHour?: number
 }
 
-/** The closed list of challenge providers; each one's verification endpoint and browser origins are fixed. */
-export type ChallengeProvider = 'turnstile'
+/**
+ * The closed list of challenge providers. Turnstile is verified at Cloudflare's endpoint and loads its widget from
+ * Cloudflare; ALTCHA is issued and verified by the application itself, and its widget is bundled with the page.
+ */
+export type ChallengeProvider = 'turnstile' | 'altcha'
 
+/** A 0.4/0.5 form's challenge: Turnstile, the only provider those releases verified. */
 export interface FormChallenge {
-	readonly provider: ChallengeProvider
+	readonly provider: 'turnstile'
 	/** The application variable holding the provider's secret: a name, never the value. */
 	readonly secret: string
 	/** The application variable holding the widget's public site key, which every SPA mount's browser config serves. */
 	readonly siteKey?: string
 }
 
-/** A public procedure's challenge: a form's, and the widget `action` the verification expects back. */
-export interface ProcedureChallenge extends FormChallenge {
+/** A public procedure's challenge, by provider. */
+export type ProcedureChallenge = TurnstileChallenge | AltchaChallenge
+
+/** Turnstile: a form's challenge, and the widget `action` the verification expects back. */
+export interface TurnstileChallenge extends FormChallenge {
 	/** The declared `action`, or the endpoint id with `_` for `.`. */
 	readonly action: string
+}
+
+/**
+ * ALTCHA: a proof of work the application issues at its endpoint `GET /__fabrika/challenge/<action>` and verifies itself,
+ * signed with the HMAC key the application variable `secret` holds. A challenge carries the action and the host it was
+ * issued for, and passes for those only, before it expires.
+ */
+export interface AltchaChallenge {
+	readonly provider: 'altcha'
+	/** The application variable holding the HMAC key: a name, never the value. */
+	readonly secret: string
+	/** The declared `action`, or the endpoint id with `_` for `.`. */
+	readonly action: string
+	/** The PBKDF2 iterations of one attempt; a visitor's browser makes several thousand attempts. */
+	readonly cost: number
+	/** How long an issued challenge may be solved and submitted, in ms; a passed one is recorded as long. */
+	readonly maxAgeMs: number
 }
 
 export interface WebhookMountArtifact {
@@ -749,6 +776,11 @@ export interface CspExtensions {
 	readonly styleSrc?: readonly CspSource[]
 	/** Present only when the contract names a font origin. */
 	readonly fontSrc?: readonly CspSource[]
+	/**
+	 * Present only when a challenge provider's widget starts its Web Workers from `blob:` URLs (ALTCHA): its one source is
+	 * `blob:` (`WORKER_BLOB_SOURCE` of `@fabrika/proxy-core/headers`), never an origin, and the contract cannot declare it.
+	 */
+	readonly workerSrc?: readonly CspSource[]
 }
 
 export interface CspSource {

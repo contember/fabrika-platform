@@ -24,7 +24,6 @@ import {
 	type FileCollectionArtifact,
 	type FileKindArtifact,
 	type FileShape,
-	type FormChallenge,
 	type FormMountArtifact,
 	isAttachmentShape,
 	isFileShape,
@@ -40,6 +39,7 @@ import {
 	type OutputShape,
 	planEndpoint,
 	type ProcedureArtifact,
+	type ProcedureChallenge,
 	type RedirectShape,
 	type RoleArtifact,
 	type SchemaShape,
@@ -199,7 +199,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 			}),
 		],
 	})
-	for (const directive of ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc'] as const) {
+	for (const directive of ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc', 'workerSrc'] as const) {
 		compareSet(
 			changes,
 			(baseline.csp[directive] ?? []).map((source) => source.origin),
@@ -279,8 +279,12 @@ function ratePhrase(rate: AdmissionRate): string {
 	return counted.length === 0 ? 'any number of calls' : `calls per minute: ${andList(counted)}`
 }
 
-function challengePhrase(challenge: FormChallenge | null): string {
-	return challenge === null ? '' : `, after a ${challenge.provider} challenge`
+function challengePhrase(challenge: ProcedureChallenge | null): string {
+	if (challenge === null) return ''
+	// The work and the lifetime are what an ALTCHA challenge costs a visitor and how long a solution may be used.
+	return challenge.provider === 'altcha'
+		? `, after an altcha challenge of ${challenge.cost} iterations per attempt, solvable within ${seconds(challenge.maxAgeMs)}`
+		: `, after a ${challenge.provider} challenge`
 }
 
 function bodyPhrase(row: EndpointRow | undefined): string {

@@ -2,6 +2,7 @@
 // source reaches them only through `buildArtifact`, so both producers emit the same artifact.
 
 import type { BodyAdmission, ChallengeProvider } from '@fabrika/auth-core'
+import { WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
 
 export const CONTRACT_DEFAULTS = {
 	/** A failed job run is not retried unless the job asks for it: a retry repeats work. */
@@ -54,7 +55,7 @@ export const JOB_LIMITS = {
 /** A public mutation's buckets per minute unless it declares its own: per client and for the endpoint. */
 export const PUBLIC_MUTATION_RATE = { perClient: 10, perEndpoint: 100 } as const
 
-/** What Turnstile admits as a widget's `action`: at most 32 letters, digits, `_` and `-`. */
+/** What a widget's `action` may be: at most 32 letters, digits, `_` and `-`, what Turnstile admits, and a path segment. */
 export const CHALLENGE_ACTION = /^[A-Za-z0-9_-]{1,32}$/
 
 /**
@@ -71,11 +72,86 @@ export const CHALLENGE_FIELD = 'challengeToken'
 /** A procedure with file fields reads `multipart/form-data`; the proxy admits that type for its row. */
 export { FORM_MULTIPART_TYPE } from '@fabrika/auth-core'
 
-/** Each challenge provider's fixed browser origins: its widget's script and its frame. */
-export const CHALLENGE_ORIGINS: Readonly<Record<ChallengeProvider, { readonly scriptSrc: readonly string[]; readonly frameSrc: readonly string[] }>> =
-	{
-		turnstile: { scriptSrc: ['https://challenges.cloudflare.com'], frameSrc: ['https://challenges.cloudflare.com'] },
-	}
+/**
+ * Each challenge provider's fixed browser sources: the origins of its widget's script and frame, and `blob:` for workers
+ * when the widget starts its own. ALTCHA's widget is bundled with the page and solves in workers built from `Blob`s.
+ */
+export const CHALLENGE_ORIGINS: Readonly<
+	Record<ChallengeProvider, { readonly scriptSrc: readonly string[]; readonly frameSrc: readonly string[]; readonly workerSrc: readonly string[] }>
+> = {
+	turnstile: { scriptSrc: ['https://challenges.cloudflare.com'], frameSrc: ['https://challenges.cloudflare.com'], workerSrc: [] },
+	altcha: { scriptSrc: [], frameSrc: [], workerSrc: [WORKER_BLOB_SOURCE] },
+}
+
+/**
+ * An ALTCHA challenge: PBKDF2/SHA-256 attempts of `cost` iterations each, counted up to a number drawn per challenge
+ * between `minCounter` and `maxCounter`, so a browser makes that many attempts, about half of `maxCounter` on average.
+ * The draw starts at 1: a solver that knew a higher floor would skip the attempts below it, which the widget makes.
+ * `cost` and `maxAgeMs` are the contract's (`challenge.cost`, `challenge.maxAgeMs`), each with its default and its
+ * bounds, and together they must leave a slow phone time to solve (`altchaSolvable`). The HMAC key is at least
+ * `minKeyLength` characters: every issued challenge publishes a signature a short key could be guessed from. A solved
+ * payload is base64 JSON of the challenge and its solution, at most `maxTokenLength` characters.
+ */
+export const ALTCHA_LIMITS = {
+	algorithm: 'PBKDF2/SHA-256',
+	cost: 5000,
+	minCost: 1000,
+	maxCost: 18_000,
+	minCounter: 1,
+	maxCounter: 10_000,
+	maxAgeMs: 10 * 60_000,
+	minMaxAgeMs: 60_000,
+	maxMaxAgeMs: 60 * 60_000,
+	maxTokenLength: 4096,
+	minKeyLength: 32,
+	/** What a slow phone's widget runs over its workers, PBKDF2 iterations a second: the rate the worst case is sized by. */
+	slowIterationsPerSecond: 2_000_000,
+	/** How long the widget tries before it gives up. */
+	solveTimeoutMs: 90_000,
+} as const
+
+/** How long a slow phone takes for the worst draw of a challenge of `cost`, in ms. */
+export function altchaWorstSolveMs(cost: number): number {
+	return Math.ceil((cost * ALTCHA_LIMITS.maxCounter * 1000) / ALTCHA_LIMITS.slowIterationsPerSecond)
+}
+
+/** Whether a slow phone solves the worst draw before the widget gives up and within half the challenge's lifetime. */
+export function altchaSolvable(cost: number, maxAgeMs: number): boolean {
+	return altchaWorstSolveMs(cost) <= Math.min(ALTCHA_LIMITS.solveTimeoutMs, maxAgeMs / 2)
+}
+
+/**
+ * The `action` a procedure's challenge expects back: the declared one, else the endpoint id with `_` for `.`. The build
+ * and the typed client both read it here, so the client's challenge path is the artifact's.
+ */
+export function declaredChallengeAction(endpoint: string, declared: unknown): string {
+	return typeof declared === 'string' ? declared : challengeAction(endpoint)
+}
+
+/** Where an ALTCHA challenge is issued: one path per procedure, under its action. */
+export const CHALLENGE_PREFIX = '/__fabrika/challenge'
+
+export function challengePath(action: string): string {
+	return `${CHALLENGE_PREFIX}/${action}`
+}
+
+/** The endpoint id of the row that issues the challenge of public procedure `endpoint`. */
+export function challengeRowId(endpoint: string): string {
+	return `${endpoint}.challenge`
+}
+
+/**
+ * The buckets per minute of the endpoint that issues a challenge: a visitor fetches one per form shown and one more per
+ * expiry, and every issue costs the server one attempt's work. Each is at least this, and at least twice the
+ * procedure's own bucket, so the issuer never admits fewer submissions than the procedure declares; a bucket the
+ * procedure turns off (`null`) the issuer has not either.
+ */
+export const CHALLENGE_ISSUE_RATE = { perClient: 30, perEndpoint: 600 } as const
+
+/** The issuer's bucket for the procedure's `own`, within the ceiling of every bucket. */
+export function challengeIssueBucket(own: number | null, floor: number): number | null {
+	return own === null ? null : Math.min(PROCEDURE_LIMITS.maxPerMinute, Math.max(floor, 2 * own))
+}
 
 /**
  * The bounds of a file kind: the largest file a `scan: true` kind admits (the scanner reads at most this much of one

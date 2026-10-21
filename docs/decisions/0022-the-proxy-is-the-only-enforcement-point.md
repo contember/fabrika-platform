@@ -174,7 +174,11 @@ The policy:
   `frame-src 'self' <origins>`: without it frames fall back to `default-src 'self'`, so an extension never
   takes the same origin away and removing the last one narrows. A
   challenge provider of a public procedure (or of a 0.4/0.5/0.6 form) adds its own fixed origins to `script-src` and
-  `frame-src`, which the approval diff shows like any other.
+  `frame-src`, which the approval diff shows like any other. ALTCHA, which the application issues itself, adds no
+  origin: its widget is bundled with the page and solves in workers it starts from `blob:` URLs, so the build writes
+  `workerSrc: [blob:]` and the policy gains `worker-src 'self' blob:`. Only that source exists there, the contract
+  cannot declare it, and a manifest without it carries no `workerSrc` key, so an older proxy still parses every other
+  application's entry and refuses the one that needs the directive rather than serve it without.
 - `X-Content-Type-Options: nosniff`.
 - `Cache-Control: no-store`, static assets included. The one exception is a public `GET` query that declares
   `http.cache`: its row carries `cache`, and a `200` answer gets `Cache-Control: public, max-age=<n>` or

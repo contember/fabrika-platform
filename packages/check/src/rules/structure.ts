@@ -130,17 +130,18 @@ const isDataPackage = (specifier: string): boolean => specifier === '@fabrika/db
 /** The framework modules logic and queries may import; the rest of `@fabrika/*` is the framework's own composition. */
 const LAYER_PACKAGES: ReadonlySet<string> = new Set(['@fabrika/app', '@fabrika/db'])
 
-/** The framework modules an SPA loads: the typed client, its React hooks and the component kit. */
+/** The framework modules an SPA loads: the typed client, its React hooks, the component kit and its challenge widget. */
 const SPA_PACKAGES: ReadonlySet<string> = new Set([
 	'@fabrika/app/client',
 	'@fabrika/app/react',
 	'@fabrika/ui',
+	'@fabrika/ui/challenge',
 	'@fabrika/ui/styles.css',
 	'@fabrika/ui/theme.css',
 ])
 
 const SPA_ALLOWED =
-	'@fabrika/app/client, @fabrika/app/react, @fabrika/ui, fabrika.contract.ts, src/schemas.ts, modules under src/shared/ and modules under web/; a type-only import of anything else'
+	'@fabrika/app/client, @fabrika/app/react, @fabrika/ui, @fabrika/ui/challenge, fabrika.contract.ts, src/schemas.ts, modules under src/shared/ and modules under web/; a type-only import of anything else'
 
 const isSchemaModule = (path: string): boolean => path === SCHEMAS_FILE || path.startsWith(SCHEMAS_DIR)
 

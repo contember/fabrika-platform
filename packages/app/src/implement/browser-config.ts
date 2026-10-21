@@ -35,7 +35,8 @@ export function browserConfigs(
 	const siteKeys: Record<string, string> = {}
 	for (const [id, procedure] of Object.entries(artifact.procedures ?? {})) {
 		const challenge = procedure.challenge
-		if (challenge?.siteKey === undefined) continue
+		// Only Turnstile's widget needs a key in the page; ALTCHA's fetches its challenge from the application.
+		if (challenge?.provider !== 'turnstile' || challenge.siteKey === undefined) continue
 		const value = valueOf(challenge.siteKey)
 		if (value === null) problems.push(`procedure '${id}' names its ${challenge.provider} site key in ${challenge.siteKey}, which is not set`)
 		else siteKeys[challenge.siteKey] = value

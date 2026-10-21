@@ -9,7 +9,7 @@ import { z } from 'zod/v4'
 import { type AttachmentBrand, attachmentOf } from '../contract/attachment'
 import { isProcedure, type ProcedureTreeDeclaration, type ProcedureType, SURFACE_SECTIONS } from '../contract/declaration'
 import { FILE_INPUT_PART } from '../contract/defaults'
-import { joinPath, LINK_API_SEGMENT, procedurePath } from '../contract/defaults'
+import { challengePath, declaredChallengeAction, joinPath, LINK_API_SEGMENT, procedurePath } from '../contract/defaults'
 import type { AnyContract, InputSchema, Procedure, Schema, Surface } from '../contract/define'
 import { type ClientInput, type FileBrand, fileOf } from '../contract/file'
 import { type BounceConfig, type BounceOption, exchange, exchangeFile, resolveBounce, RpcError, type RpcFetch } from './transport'
@@ -201,6 +201,30 @@ interface TreeAt {
 	readonly path: string
 }
 
+/** Where each procedure of a client with an ALTCHA challenge fetches it, by the procedure's value. */
+const challengeUrls = new WeakMap<object, string>()
+
+/**
+ * The URL a page's ALTCHA widget fetches the challenge of `procedure` from (`GET /__fabrika/challenge/<action>`), on the
+ * client's `baseUrl`. Throws for a procedure whose `admission.challenge` is not `provider: 'altcha'`.
+ */
+export function challengeUrl(procedure: object): string {
+	const url = challengeUrls.get(procedure)
+	if (url === undefined) {
+		throw new Error("challengeUrl takes a procedure of a client createClient made whose admission.challenge is provider: 'altcha'")
+	}
+	return url
+}
+
+/** The action of a procedure's declared ALTCHA challenge, or `null`; `buildArtifact` refuses every other shape. */
+function altchaActionOf(admission: unknown, id: string): string | null {
+	const challenge: unknown = typeof admission === 'object' && admission !== null ? Reflect.get(admission, 'challenge') : undefined
+	if (typeof challenge !== 'object' || challenge === null || Reflect.get(challenge, 'provider') !== 'altcha') {
+		return null
+	}
+	return declaredChallengeAction(id, Reflect.get(challenge, 'action'))
+}
+
 function clientTree(
 	tree: ProcedureTreeDeclaration<Schema, unknown>,
 	at: TreeAt,
@@ -209,19 +233,27 @@ function clientTree(
 	const client: Record<string, unknown> = {}
 	for (const [name, node] of Object.entries(tree)) {
 		const path = at.path === '' ? name : `${at.path}.${name}`
-		client[name] = isProcedure(node)
-			? make({
-				id: `${at.mount}.${path}`,
-				url: `${at.origin}${procedurePath(at.base, path, node.http)}`,
-				method: httpMethodOf(node.http, node.type, node.output),
-				type: node.type,
-				input: node.input,
-				output: node.output,
-			}, {
-				...at,
-				path,
-			})
-			: clientTree(node, { ...at, path }, make)
+		if (!isProcedure(node)) {
+			client[name] = clientTree(node, { ...at, path }, make)
+			continue
+		}
+		const id = `${at.mount}.${path}`
+		const made = make({
+			id,
+			url: `${at.origin}${procedurePath(at.base, path, node.http)}`,
+			method: httpMethodOf(node.http, node.type, node.output),
+			type: node.type,
+			input: node.input,
+			output: node.output,
+		}, {
+			...at,
+			path,
+		})
+		const action = altchaActionOf(node.admission, id)
+		if (action !== null && (typeof made === 'function' || (typeof made === 'object' && made !== null))) {
+			challengeUrls.set(made, `${at.origin}${challengePath(action)}`)
+		}
+		client[name] = made
 	}
 	const group = Object.freeze(client)
 	clientNodes.set(group, { mount: at.mount, path: at.path, procedure: null })

@@ -32,7 +32,7 @@ import type { FileObjectStore } from '@fabrika/platform'
 import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
-import { exportBase, spaPrefixRowId } from '../contract/defaults'
+import { challengeRowId, exportBase, spaPrefixRowId } from '../contract/defaults'
 import type { AnyContract, Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
 import { schemaFromShape } from '../contract/schema-from-shape'
@@ -45,7 +45,7 @@ import { bindJobs, type ContractJobs, type HandlerErrorSink } from '../jobs/runn
 import { environmentScrubber } from '../jobs/scrub'
 import { browserConfigs } from './browser-config'
 import { createCapabilityIssuer, requestIsReadOnly } from './capability'
-import type { ChallengeFetch } from './challenge'
+import type { ChallengeFetch, ChallengeWork } from './challenge'
 import { type ConnectFetch, wireImports } from './connect'
 import {
 	ContractRuntime,
@@ -120,6 +120,11 @@ export interface BootOptions {
 	 * Turnstile's always-passing test widget hands out for every call. Every other token stays single use.
 	 */
 	readonly repeatableChallengeToken?: string
+	/**
+	 * The work of every ALTCHA challenge in place of the contract's `cost`: the test kit's and `fabrika app dev`'s
+	 * (`MINIMAL_CHALLENGE_WORK`), so a test solves one in milliseconds. A deployed application never sets it.
+	 */
+	readonly challengeWork?: ChallengeWork
 	/**
 	 * The developer's own machine only (`fabrika app dev`): what a job's handler threw, which every log of a deployed
 	 * application withholds because it may carry a credential.
@@ -545,7 +550,33 @@ function admissionOptions(options: BootOptions): AdmissionOptions {
 		application: options.environment.application,
 		...(options.challengeFetch === undefined ? {} : { challengeFetch: options.challengeFetch }),
 		...(options.repeatableChallengeToken === undefined ? {} : { repeatableChallengeToken: options.repeatableChallengeToken }),
+		...(options.challengeWork === undefined ? {} : { challengeWork: options.challengeWork }),
 	}
+}
+
+/**
+ * The framework's own endpoint that issues the ALTCHA challenge of a served public procedure, with its own buckets;
+ * `null` for a procedure without one.
+ */
+function challengeIssuerEndpoint(
+	procedure: Extract<ServedEndpoint, { kind: 'public' }>,
+	rows: ReadonlyMap<string, EndpointRow>,
+	artifact: ContractArtifact,
+	options: BootOptions,
+	problems: string[],
+): ServedEndpoint | null {
+	const issuer = procedure.admission.challenge?.issuer ?? null
+	if (issuer === null) {
+		return null
+	}
+	const id = challengeRowId(procedure.row.id)
+	const row = rows.get(id)
+	if (row === undefined || row.source.kind !== 'challenge') {
+		problems.push(`public procedure '${procedure.row.id}' has no endpoint that issues its challenge`)
+		return null
+	}
+	const admission = procedureAdmission(id, artifact, admissionOptions(options), problems)
+	return admission === null ? null : { kind: 'challenge', row, issuer, admission }
 }
 
 /**
@@ -560,7 +591,7 @@ function publicEndpoint(
 	workloads: ReadonlyMap<string, WorkloadCredential>,
 	options: BootOptions,
 	problems: string[],
-): ServedEndpoint | null {
+): Extract<ServedEndpoint, { kind: 'public' }> | null {
 	const where = `public procedure '${row.id}'`
 	const site = bound === null ? undefined : servedSite(procedure.type, bound)
 	if (bound === null || site === undefined) {
@@ -729,6 +760,10 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 					const served = publicEndpoint(row, procedure, bound, artifact, workloads, options, problems)
 					if (served !== null) {
 						endpoints.set(id, served)
+						const issuer = challengeIssuerEndpoint(served, rows, artifact, options, problems)
+						if (issuer !== null) {
+							endpoints.set(issuer.row.id, issuer)
+						}
 					}
 					continue
 				}

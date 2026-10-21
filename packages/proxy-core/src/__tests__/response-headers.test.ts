@@ -92,6 +92,15 @@ describe('the CSP of named script and frame origins', () => {
 	})
 })
 
+describe('the CSP of a challenge widget that starts its own workers', () => {
+	test("blob: workers add worker-src 'self' blob:, and only they do", () => {
+		const csp = (origins: Partial<CspOrigins>) => headerPolicy({ ...CSP, ...origins }, null).find(([name]) => name === 'Content-Security-Policy')?.[1]
+		expect(csp({}) ?? '').not.toContain('worker-src')
+		expect(csp({ workerSrc: ['blob:'] })).toEndWith("; worker-src 'self' blob:")
+		expect(csp({ workerSrc: ['blob:'] })).toContain("script-src 'self';")
+	})
+})
+
 describe('the CSP of named style and font origins', () => {
 	test('a declared style origin joins style-src and a declared font origin joins font-src', () => {
 		const csp = (origins: Partial<CspOrigins>) => headerPolicy({ ...CSP, ...origins }, null).find(([name]) => name === 'Content-Security-Policy')?.[1]
