@@ -319,7 +319,9 @@ Per request, in this order:
 6. the requirement: `member` is any permission, an action is that action in some
    scope, and under the `app` form that action held as a global grant (403);
 7. admission: a request without `Authorization` that is not a `GET` needs
-   `Sec-Fetch-Site: same-origin` (403), and the body needs a `Content-Type` its row admits (400):
+   `Sec-Fetch-Site: same-origin` (403). On a credentialed row the proxy sends a bearer request's
+   `Authorization` as `Bearer <the minted token>`, never the caller's `px_` key, and a session request without one;
+   only its presence is read here, and the body needs a `Content-Type` its row admits (400):
    `application/json` by default, `multipart/form-data` for an input with a file field (and JSON too while every file
    field is optional), `application/x-www-form-urlencoded` for `http.body: 'urlencoded'`. A `GET` has no body;
 8. the rate buckets ([Admission and limits](#admission-and-limits)): each is charged before the body is read and stays

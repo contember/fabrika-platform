@@ -404,20 +404,23 @@ describe.skipIf(CADDY === '')('an installation entry beside an application in a 
 	})
 	const PROTOCOL_ENDPOINT = `${PROTOCOL.id}@${PROTOCOL.digest}`
 	const SERVICE_CSP = "default-src 'self'; form-action https://return.example"
+	const MINTED = 'minted.application.token'
 	const seenByApp: { host: string | null; headers: Headers }[] = []
-	// Both decisions are anonymous allows: an endpoint, no token.
+	// Every decision is an anonymous allow (an endpoint, no token), except a credentialed `/api/` row, which mints.
 	const auth = Bun.serve({
 		hostname: '127.0.0.1',
 		port: 0,
 		fetch(request) {
 			const installation = request.headers.get('X-Forwarded-Host')?.startsWith('iam.') === true
 			const webhook = request.headers.get('X-Forwarded-Uri')?.startsWith('/webhooks/') === true
+			const credentialed = request.headers.get('X-Forwarded-Uri')?.startsWith('/api/') === true
 			return new Response(null, {
 				status: 200,
 				headers: {
 					'X-Request-Id': 'proxy-request',
 					'X-Fabrika-Endpoint': installation ? PROTOCOL_ENDPOINT : ENDPOINT,
 					...(webhook ? { [FORWARD_AUTHORIZATION_HEADER]: '1' } : {}),
+					...(credentialed ? { 'X-Fabrika-Token': MINTED } : {}),
 				},
 			})
 		},
@@ -507,6 +510,22 @@ describe.skipIf(CADDY === '')('an installation entry beside an application in a 
 		expect(seen?.headers.get(FORWARD_AUTHORIZATION_HEADER)).toBeNull()
 		expect(seen?.headers.get('X-Fabrika-Token')).toBeNull()
 		expect(answer.headers.get(FORWARD_AUTHORIZATION_HEADER)).toBeNull()
+	})
+
+	test("a credentialed row reaches the application with the minted token as its Authorization, never the caller's key", async () => {
+		const answer = await rawRequest(port, { Connection: 'close', Authorization: 'Bearer px_key' }, '/api/me', 'notes.example.com')
+		expect(answer.status).toBe(200)
+		const [seen] = seenByApp.splice(0)
+		expect(seen?.headers.get('Authorization')).toBe(`Bearer ${MINTED}`)
+		expect(seen?.headers.get('X-Fabrika-Token')).toBe(MINTED)
+	})
+
+	test('a credentialed row reached without Authorization, as a session is, gains none', async () => {
+		const answer = await rawRequest(port, { Connection: 'close', Cookie: '__Host-px_session=s1' }, '/api/me', 'notes.example.com')
+		expect(answer.status).toBe(200)
+		const [seen] = seenByApp.splice(0)
+		expect(seen?.headers.get('Authorization')).toBeNull()
+		expect(seen?.headers.get('X-Fabrika-Token')).toBe(MINTED)
 	})
 
 	test("an application's anonymous endpoint loses the Authorization the proxy did not read, and gets the secret", async () => {

@@ -115,10 +115,10 @@ the deploy artifact.
 
 The Caddy configuration is a **fixed chain per app**, identical whatever the endpoint table says:
 
-1. **Delete** the headers a client must not assert — every `X-Fabrika-*` header, the request id, the
-   client address and the forwarding headers — and set the client address from Caddy's own
-   `client_ip`. One list of every `X-Fabrika-*` name in `@fabrika/auth-core` feeds this step and the
-   Cloudflare proxy Worker.
+1. **Delete** the headers a client must not assert — every hop header in `FABRIKA_HOP_HEADERS`, the request
+   id, the client address and the forwarding headers — and set the client address from Caddy's own
+   `client_ip`. That one list in `@fabrika/auth-core` feeds this step and the Cloudflare proxy Worker. It
+   is not every `X-Fabrika-*` name: the Operations upload headers pass to Operations.
 2. `forward_auth` to `/verify?app=<id>`. The app id is pinned in the route, never derived from a
    client-influenced header.
 3. `reverse_proxy` to the private upstream, with every `__Host-px_*` cookie stripped and, for an
@@ -245,7 +245,11 @@ endpoint:
    endpoint is a 403 (`no_endpoint`). There is no fall-through to another endpoint.
 3. **A `px_` key is present.** The proxy mints from it with `mintFromKey`. The key's principal kind must
    be one of the endpoint's callers. This step is terminal: a rejected key never falls back to a
-   session.
+   session. The key never reaches the application: on the allow, the proxy replaces the request's
+   `Authorization` with `Bearer <the minted token>`, the value it also sends as `X-Fabrika-Token`. A key
+   bound to no application would otherwise let the application act as its principal at any other
+   application (rule 6). A request without `Authorization`, a session's, gains none, because the
+   application tells a bearer from a session by the header's presence.
 4. **No key.** When `human` is a caller, the proxy uses the session, or answers with the login
    redirect of rule 4. When `human` is not a caller, the answer is 401, never a login redirect.
 5. **Requirement.** The token must satisfy the endpoint's requirement: `member` (any permission of this
@@ -278,9 +282,10 @@ not by the proxy.
 `Authorization` for the application and never reads it: no key lookup, no session, no token. It still removes a value
 that carries a `px_` key, as the header or inside Basic credentials, because a platform key sent to a webhook URL by
 mistake must not reach application code; a binding's secret therefore never contains `px_`. The decision signals the
-outcome on its 2xx with `X-Fabrika-Forward-Authorization: 1`. Each deployment deletes `Authorization` from an allow
-that carries no token unless that marker is present (Caddy's chain, the Cloudflare proxy Worker, the test kit), and
-passes the marker on to no one. The field is new: an older proxy's strict parser refuses the row, so a Zerops namespace
+outcome on its 2xx with `X-Fabrika-Forward-Authorization: 1`. Each deployment (Caddy's chain, the Cloudflare proxy
+Worker, the test kit) forwards `Authorization` unchanged when that marker is present, deletes it from an allow that
+carries no token, replaces it with the minted token on an allow that carries one (step 3), and passes the marker on
+to no one. The field is new: an older proxy's strict parser refuses the row, so a Zerops namespace
 pinned to an older proxy source refuses that deploy
 ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
 

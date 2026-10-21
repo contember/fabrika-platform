@@ -479,6 +479,22 @@ describe('a contract app — the endpoint table', () => {
 		})
 	})
 
+	test("an allow with a token replaces the caller's Authorization with the minted token, after the token is copied", () => {
+		const replace = {
+			match: [{
+				not: [
+					{ vars: { [placeholder(PROXY_TOKEN_HEADER)]: [''] } },
+					{ vars: { [placeholder(FORWARD_AUTHORIZATION_HEADER)]: ['1'] } },
+					{ vars: { '{http.request.header.Authorization}': [''] } },
+				],
+			}],
+			handle: [{ handler: 'headers', request: { set: { Authorization: [`Bearer ${placeholder(PROXY_TOKEN_HEADER)}`] } } }],
+		}
+		const tokenCopy = copies.findIndex((route) => JSON.stringify(route.handle).includes(`"${PROXY_TOKEN_HEADER}"`))
+		expect(tokenCopy).toBeGreaterThan(-1)
+		expect(copies.indexOf(defined(copies.find((route) => Bun.deepEquals(route, replace))))).toBeGreaterThan(tokenCopy)
+	})
+
 	test('the forwarding marker is not copied onto the request the application receives', () => {
 		const copied = copies.flatMap((route) => route.handle).flatMap((
 			handler,
