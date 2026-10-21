@@ -421,6 +421,7 @@ describe('what reaches which service', () => {
 		const secrets = generateInstallationSecrets()
 		const matrix = installationServiceEnv({
 			environment: 'stage',
+			projectId: 'project-1',
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
 			clientId: CLIENT_ID,
@@ -442,6 +443,7 @@ describe('what reaches which service', () => {
 	test('the region API base reaches control only when the installation names one', () => {
 		const withRegion = installationServiceEnv({
 			environment: 'stage',
+			projectId: 'project-1',
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
 			clientId: CLIENT_ID,
@@ -458,6 +460,7 @@ describe('what reaches which service', () => {
 	test('fresh installs are anonymous and hold no source transport', () => {
 		const matrix = installationServiceEnv({
 			environment: 'stage',
+			projectId: 'project-1',
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
 			clientId: CLIENT_ID,
@@ -485,6 +488,7 @@ describe('what reaches which service', () => {
 	)('the %s tier points Operations at %s and %s, and IAM and control at db and storage', (tier, database, storage) => {
 		const matrix = installationServiceEnv({
 			environment: 'stage',
+			projectId: 'project-1',
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
 			clientId: CLIENT_ID,
@@ -519,11 +523,11 @@ describe('the hand-off', () => {
 
 		// The ONLY thing pass 2 has left to write is the console table digest of the manifest it composes, which
 		// the proxy's archive carries — every origin the deploy derives was written from the same hosts one step
-		// earlier, the last of them the access token.
+		// earlier, the last of them the platform project id.
 		const afterPassOne = fixture.zerops.calls.slice(fixture.zerops.calls.indexOf('deploy:proxy') + 1)
 		const passTwoWrites = afterPassOne.slice(afterPassOne.indexOf('deploy:iam') - 2)
 		expect(passTwoWrites.filter((call) => call.startsWith('env:'))).toEqual([
-			'env:control:FABRIKA_ZEROPS_ACCESS_TOKEN',
+			'env:control:FABRIKA_ZEROPS_PLATFORM_PROJECT_ID',
 			`env:control:${FABRIKA_SERVICE_TABLE_DIGEST}`,
 		])
 
@@ -751,7 +755,7 @@ describe('every outward step is confirmed', () => {
 	})
 
 	test('declining after pass one reports unsupported partial bootstrap and refuses to reroll on retry', async () => {
-		const fixture = harness({ confirms: { 'Write 41 variables across 4 services?': false } })
+		const fixture = harness({ confirms: { 'Write 42 variables across 4 services?': false } })
 		await expect(fixture.run()).rejects.toThrow('Neither `platform deploy` nor `platform init` completes a partial bootstrap')
 		const key = fixture.zerops.env('proxy').get('FABRIKA_IAM_KEY')
 		expect(key).toBeDefined()
