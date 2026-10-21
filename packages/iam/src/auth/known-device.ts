@@ -11,7 +11,8 @@ import { getSigner, verifyInternal } from '../signing'
 import { readCookie, serializeCookie } from './cookies'
 import type { AuthEnv } from './oidc-flight'
 
-export const KNOWN_DEVICE_COOKIE = '__Host-px_device'
+// Host-only on IAM's host, so no application upstream receives it; outside the proxy's stripped `__Host-px_` prefix on purpose.
+export const KNOWN_DEVICE_COOKIE = '__Host-fabrika_device'
 
 /** Three session lifetimes: a regular user keeps the exemption across renewals, a lost browser drops out within a quarter. */
 export const KNOWN_DEVICE_TTL_SECONDS = 90 * 24 * 60 * 60

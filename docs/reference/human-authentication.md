@@ -115,7 +115,7 @@ password-derivation work until a bucket blocks; blocked requests skip the
 expensive derivation.
 
 A successful password login also sets a signed known-device cookie,
-`__Host-px_device` (`HttpOnly`, `SameSite=Lax`, 90 days), naming the principal
+`__Host-fabrika_device` (`HttpOnly`, `SameSite=Lax`, 90 days), naming the principal
 and a random device id. A later login that presents a valid one for the SAME
 principal it targets skips the account and deployment-wide buckets and spends a
 bucket of its own instead: 10 failures in 15 minutes, after which the cookie
