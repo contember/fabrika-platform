@@ -829,6 +829,17 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   only links it issued. The job is app-wide for that mount: the link is bound to one object,
   the job is not. A webhook issues nothing. The `url` is a path: the job prepends the
   application's public origin from its own configuration before it e-mails the link.
+- **A terminal** ([ADR-0067](../decisions/0067-a-terminal-signs-a-person-in-on-an-application-s-word.md)). A
+  vocabulary that declares `terminal: { identify: '/path' }` names its identification page: an absolute path that a
+  public SPA mount serves, where IAM sends an enrolled terminal's browser with `?identification=<id>`. Its RPC and
+  public procedures get `ctx.terminals`: `inspect(id)` answers the terminal and the expiry, or `null`;
+  `assert(id, principalId)` answers `{ ok: true, callbackUrl }`, which the page navigates to, or `{ ok: false, reason }`
+  (`not_found`, `invalid_principal`); `cancel(id)` ends an abandoned one. They ask IAM over the membership transport with
+  the request's credential, a public procedure's workload token. IAM refusing the application's own credential is a 500
+  (`terminal_refused`), IAM out of reach a 503. The application throttles guesses per terminal and signs the person out
+  at `/__fabrika/auth/signout?redirect=<path>`. `boot` refuses such a contract without the transport; the test kit
+  answers every identification `not_found` unless `options.terminals` replaces it. Elsewhere `ctx.terminals` is
+  unavailable.
 - **The public intake recipe** (a public page, a public procedure, a cron job, a link mount). A public procedure
   inserts a registration into an application table and answers `{}`; the job claims the registrations, creates the
   records, then delivers each record's
@@ -1945,7 +1956,8 @@ A handler's `ctx.principal` comes from the verified token. A `human` caller is
 recorded for the person (lower-cased), and `label` the spelling IAM displays. The signature
 authenticates that IAM recorded it; it does not prove the person controls the mailbox beyond
 what the login method checked. A `machine` caller is `{ kind: 'service', id, label }` and has
-no address, and neither has a link holder or a connector. `boot` refuses (401) a `human` token
+no address, and neither has a link holder or a connector. A person an application asserted at a terminal also has
+`terminal: { id, label }`, from the token's `terminal` claim; every other principal has none. `boot` refuses (401) a `human` token
 without the claim: upgrade IAM first, and an application to this version only once 300 s (the
 token lifetime) have passed, and roll an application back before IAM
 ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) rule 6).

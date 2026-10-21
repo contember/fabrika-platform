@@ -284,3 +284,16 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
   `HttpIamTerminals` (a membership transport key of the app) `assertIdentity` with a token whose `aud` is the app →
   `callbackUrl`; the proxy redeems its code with the verifier it set; sign-out → `/auth/terminals/release` → the next
   `/auth/login` opens a new identification.
+- WU7: the witness is `packages/iam/src/__tests__/terminal-end-to-end.test.ts`, on IAM's SQLite harness and
+  `createVerifyService` over the endpoint table a contract with `terminal: { identify }` compiles to. Control's side
+  goes through IAM's own surfaces: the schema `PUT`, `workloads.issueKey` for the public procedure, `apps.setReturnOrigins`,
+  `grants.create`, `terminals.setProfile` and `terminals.revoke`; only the membership transport key is written through
+  the repository. The application is hand-written, not booted by the framework: a framework public procedure needs
+  Postgres. Its procedure exchanges the public workload key at IAM and calls `HttpIamTerminals`, the client
+  `ctx.terminals` uses on Bun, so the framework's dispatch to `ctx.terminals` stays covered by WU4's unit test only.
+- WU7: a revoked terminal's session survives at the proxy until its cached token comes due, as every revocation does
+  (ADR-0022 §4); the test moves the proxy's clock to show the bounce. After the release the old session is no longer
+  active, and the next bounce opens a new identification.
+- WU7: the decisions index row was already in place (`docs/decisions/README.md`). The reference entries are a
+  "Terminals" section in `human-authentication.md`, "Step 3 on a terminal" and the sign-out rule in `cross-host-sso.md`,
+  and the `ctx.terminals` and `ctx.principal.terminal` entries in `application-runtime.md`.

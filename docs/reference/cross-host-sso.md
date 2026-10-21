@@ -78,6 +78,14 @@ the login again:
 
 The page widens `form-action` by the handoff's registered origin, like the login page (below).
 
+### Step 3 on a terminal
+
+A browser that holds no IAM login but an enrolled terminal's cookie leaves IAM at step 3 for the application's
+identification page, with a single-use identification that holds the handoff's return URL, state and challenge. The
+application asserts the person over its transport. IAM then signs them in and answers the step 4 callback URL, which
+the application sends the browser to. The proxy redeems it with the verifier from step 1, so the handoff is unchanged
+([Human authentication](human-authentication.md#terminals)).
+
 ## The cookies
 
 | Cookie                      | Host                | Purpose                                                    |
@@ -137,6 +145,11 @@ on a public hostname cannot hold a session at all.
 - **The proxy writes the long-lived app session on exactly one path**: successful
   redemption at the reserved callback. Starting login writes only the transient
   verifier cookie.
+- **The proxy clears it on one path**: `/__fabrika/auth/signout?redirect=<path>`, answered,
+  like the callback, before endpoint selection. It accepts only a same-origin `GET` with a
+  path on the app's own origin, clears the app session cookie and drops its cached token, and
+  302s to IAM's `/auth/terminals/release`, which ends a terminal's sessions and returns to
+  that path. It does not revoke a personal login on IAM.
 - **Fabrika cookies never reach the upstream application.** Both proxy runtimes strip
   every `__Host-px_*` cookie on the upstream hop while preserving application-owned
   cookies. The application reads only the proxy-injected JWT header.
