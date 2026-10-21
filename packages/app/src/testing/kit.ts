@@ -16,6 +16,7 @@ import {
 	FABRIKA_IAM_ISSUER,
 	FABRIKA_TOKEN_KEYS,
 	type IamMembershipRpc,
+	type IamTerminalRpc,
 	isNormalizedMailbox,
 	type Jwks,
 	MAX_ACCESS_TOKEN_BYTES,
@@ -23,6 +24,7 @@ import {
 	type PermissionEntry,
 	PROXY_TOKEN_HEADER,
 	SESSION_COOKIE,
+	type TerminalFailure,
 	TOKEN_ALG,
 	UNTRUSTED_FORWARD_HEADERS,
 	workloadKeyVariable,
@@ -78,6 +80,14 @@ import {
 import { endpointProxy } from './proxy'
 
 export const TEST_ISSUER = 'https://iam.test'
+
+/** The kit's IAM without a terminal: no identification is open, so every one is `not_found`. */
+const noIdentification = (): Promise<TerminalFailure> => Promise.resolve({ ok: false, reason: 'not_found' })
+const NO_IDENTIFICATIONS: IamTerminalRpc = Object.freeze({
+	inspectIdentification: noIdentification,
+	assertIdentity: noIdentification,
+	cancelIdentification: noIdentification,
+})
 export const TEST_ENVIRONMENT = 'test'
 const KEY_ID = 'test-key'
 const TOKEN_TTL_SECONDS = 300
@@ -112,6 +122,11 @@ export interface TestKitOptions {
 	 * kit's proxy obtains each delegation grant from it. Without it the kit's IAM answers them under IAM's rules.
 	 */
 	readonly membership?: IamMembershipRpc
+	/**
+	 * IAM's identifications at a terminal (ADR-0067), for a contract that declares one. Without it the kit's IAM knows no
+	 * open identification: `inspect` answers null and `assert` `not_found`.
+	 */
+	readonly terminals?: IamTerminalRpc
 	/**
 	 * Each import's owner, by the import's name: its origin and edge key, which the platform writes as the import's
 	 * framework variables, and how a request reaches it — usually the owner kit's `fetch`.
@@ -428,6 +443,7 @@ export function bootTestKit<C extends AnyContract>(
 		...dev,
 		...(options.revealHandlerErrors === undefined ? {} : { revealHandlerErrors: options.revealHandlerErrors }),
 		membership,
+		terminals: options.terminals ?? (artifact.terminal === undefined ? undefined : NO_IDENTIFICATIONS),
 		connectBindings,
 		workloadTokens,
 		mailStandIn: options.mail === 'none' ? 'none' : mail,

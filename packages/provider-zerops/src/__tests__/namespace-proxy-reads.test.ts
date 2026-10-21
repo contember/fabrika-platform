@@ -73,6 +73,17 @@ describe('a namespace proxy pinned to an older source', () => {
 		expect(() => assertNamespaceProxyReads('apps-prod', withWorkers, CURRENT, { proxySource: CURRENT, olderProxies: WINDOW })).not.toThrow()
 	})
 
+	test('refuses a contract that declares a terminal: no older release serves its sign-out (ADR-0067)', () => {
+		const withTerminal = access({ ...notesArtifact, terminal: { identify: '/identify' } })
+		expect(entriesNeedingCurrentProxy(withTerminal, WINDOW)).toEqual(['terminal'])
+		// Even where every older release reads every row and the CSP.
+		expect(entriesNeedingCurrentProxy(withTerminal, [refusing()])).toEqual(['terminal'])
+		expect(() => assertNamespaceProxyReads('apps-prod', withTerminal, OLDER, { proxySource: CURRENT, olderProxies: WINDOW })).toThrow(
+			/`terminal`[\s\S]*--proxy-source=current/,
+		)
+		expect(() => assertNamespaceProxyReads('apps-prod', withTerminal, CURRENT, { proxySource: CURRENT, olderProxies: WINDOW })).not.toThrow()
+	})
+
 	test('deploys anything once the proxy is on this platform source, without namespaces, or with nothing approved', () => {
 		const platform = { proxySource: CURRENT, olderProxies: WINDOW }
 		expect(() => assertNamespaceProxyReads('apps-prod', withPublic, CURRENT, platform)).not.toThrow()

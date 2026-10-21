@@ -93,6 +93,7 @@ function appSchemaError(issues: readonly z.ZodIssue[]): string {
 	}
 	if (field === 'locale') return `locale must be one of ${LOCALES.map((locale) => `'${locale}'`).join(', ')}`
 	if (field === 'displayName') return issue?.code === 'custom' ? issue.message : 'displayName must be a string'
+	if (field === 'terminal') return issue?.code === 'custom' ? issue.message : "terminal must be { identify: '/path' }"
 	if (key === undefined) return 'scopes and actions must be arrays'
 	return field === 'scopes'
 		? 'each scope needs a non-empty `type` and, when present, a non-empty `label`, `in`, `creator` and `members`'
@@ -195,6 +196,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				Object.entries(byLocale ?? {}).flatMap(([locale, template]) => (template === undefined ? [] : [{ kind, locale, ...template }]))
 			),
 			members: schema.members === undefined ? null : { ...schema.members, directory: schema.directory ?? null },
+			terminal: schema.terminal ?? null,
 		},
 		adminEvent(c, {
 			action: 'iam.app.schema.reconcile',
@@ -212,6 +214,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				displayName: schema.displayName ?? null,
 				mail: Object.entries(schema.mail ?? {}).flatMap(([kind, byLocale]) => Object.keys(byLocale ?? {}).map((locale) => `${kind}.${locale}`)),
 				members: schema.members ?? null,
+				terminal: schema.terminal ?? null,
 			},
 		}),
 	)
@@ -237,6 +240,7 @@ async function readAppSchemaDto(c: AdminContext, app: string): Promise<AppSchema
 	}
 	const presentation = parsePresentation(await c.services.repositories.appSchema.getPresentation(app))
 	const members = await c.services.repositories.appSchema.getAppMembers(app)
+	const identify = await c.services.repositories.appSchema.getTerminalIdentifyPath(app)
 	return {
 		app,
 		scopes: scopeRows.map((r) => ({
@@ -256,6 +260,7 @@ async function readAppSchemaDto(c: AdminContext, app: string): Promise<AppSchema
 		...(presentation.displayName === null ? {} : { displayName: presentation.displayName }),
 		...(members === null ? {} : { members: { manage: members.manage, list: members.list } }),
 		...(members?.directory === 'labels' ? { directory: 'labels' } : {}),
+		...(identify === null ? {} : { terminal: { identify } }),
 	}
 }
 

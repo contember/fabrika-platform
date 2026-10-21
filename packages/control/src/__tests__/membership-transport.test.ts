@@ -63,6 +63,8 @@ describe('needsMembershipTransport', () => {
 		const plain: ContractArtifact = { ...withoutLinks, endpoints: withoutLinks.endpoints.filter((row) => row.requirement?.kind !== 'action') }
 		expect(needsMembershipTransport(plain)).toBe(false)
 		expect(needsMembershipTransport(null)).toBe(false)
+		// The identifications at a terminal travel on the same transport (ADR-0067).
+		expect(needsMembershipTransport({ ...plain, terminal: { identify: '/identify' } })).toBe(true)
 	})
 
 	test('an endpoint on or in a dimension with members, or below one, needs it for its member directory; a list over one does not', () => {

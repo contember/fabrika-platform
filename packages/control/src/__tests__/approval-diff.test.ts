@@ -223,6 +223,26 @@ describe('classifyAccess', () => {
 		expect(classifyAccess(people, snapshot()).outcome).toBe('no-widening')
 	})
 
+	test('a terminal identification page widens for closer review; removing it narrows (ADR-0067)', () => {
+		const withPage = edited(
+			"app: c.spa('/', { dir: 'dist/app', access: { member: true } }),",
+			"app: c.spa('/', { dir: 'dist/app', access: { member: true } }),\n\tidentify: c.spa('/identify', { dir: 'dist/identify', access: { public: true } }),",
+		)
+		const kiosk = snapshot(withPage)
+		const terminal = snapshot(edited("app: 'notes',", "app: 'notes',\n\tterminal: { identify: '/identify' },", withPage))
+		expect(terminal.contract?.terminal).toEqual({ identify: '/identify' })
+		expect(classifyAccess(kiosk, terminal)).toEqual({
+			outcome: 'widening',
+			changes: [{
+				effect: 'widens',
+				line: "The application identifies people at enrolled terminals on `/identify` and asserts who signs in there, within each terminal's ceiling",
+				review: 'closer',
+			}],
+		})
+		expect(lines(terminal, kiosk)).toEqual(['The application no longer identifies people at enrolled terminals'])
+		expect(classifyAccess(terminal, kiosk).outcome).toBe('no-widening')
+	})
+
 	test('the member directory an endpoint reads is recorded: an approval before it was recorded widens, labels for closer review', () => {
 		const members = "workspace: { creator: 'owner', members: { manage: 'notes.delete', list: 'notes.read' } }"
 		const listed = snapshot(edited("workspace: { creator: 'owner' }", members))

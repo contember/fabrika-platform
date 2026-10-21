@@ -121,6 +121,15 @@ export class AppSchemaRepository {
 		return this.db.prepare('SELECT * FROM app_presentation WHERE app = ?').bind(app).first<AppPresentationRow>()
 	}
 
+	/**
+	 * The path of the app's identification page at a terminal (ADR-0067), or null when the app declares none: an absolute
+	 * path on its own origin, which a sign-in resolves against its return origin.
+	 */
+	async getTerminalIdentifyPath(app: string): Promise<string | null> {
+		const row = await this.db.prepare('SELECT identify FROM app_terminals WHERE app = ?').bind(app).first<{ identify: string }>()
+		return row?.identify ?? null
+	}
+
 	/** The app's template of one message in one language, or null when it declares none. */
 	async getMailTemplate(app: string, kind: string, locale: string): Promise<AppMailTemplateRow | null> {
 		return this.db
@@ -337,6 +346,8 @@ export class AppSchemaRepository {
 		mail?: { kind: string; locale: string; subject: string; text: string; html?: string }[]
 		/** The actions that manage and list the app's own people; absent or null removes the row. */
 		members?: { manage: string; list: string; directory: 'labels' | null } | null
+		/** The app's identification page at a terminal; absent or null removes the row. */
+		terminal?: { identify: string } | null
 	}, audit?: AuditEventInput): Promise<void> {
 		const { app } = input
 		const statements: SqlStatement[] = [
@@ -351,7 +362,11 @@ export class AppSchemaRepository {
 			this.db.prepare('DELETE FROM app_presentation WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_mail_templates WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_members WHERE app = ?').bind(app),
+			this.db.prepare('DELETE FROM app_terminals WHERE app = ?').bind(app),
 		]
+		if (input.terminal != null) {
+			statements.push(this.db.prepare('INSERT INTO app_terminals (app, identify) VALUES (?, ?)').bind(app, input.terminal.identify))
+		}
 		if (input.members != null) {
 			statements.push(
 				this.db
@@ -506,16 +521,17 @@ export class AppSchemaRepository {
 						WHERE m.app = credentials.app AND m.mount = credentials.link_mount AND m.dimension = credentials.link_dimension)`)
 				.bind(unixNow(), app),
 		)
-		// An app left with no delegated endpoint, no link mount, no dimension that lists its members and no people of its own
-		// calls no membership operation, so it keeps no transport key.
+		// An app left with no delegated endpoint, no link mount, no dimension that lists its members, no people of its own and
+		// no terminal calls no membership or identification operation, so it keeps no transport key.
 		statements.push(
 			this.db
 				.prepare(`DELETE FROM membership_transport_keys
 					WHERE app = ? AND NOT EXISTS (SELECT 1 FROM app_delegated_endpoints d WHERE d.app = ?)
 						AND NOT EXISTS (SELECT 1 FROM app_link_mounts m WHERE m.app = ?)
 						AND NOT EXISTS (SELECT 1 FROM app_scopes s WHERE s.app = ? AND s.members_list IS NOT NULL)
-						AND NOT EXISTS (SELECT 1 FROM app_members p WHERE p.app = ?)`)
-				.bind(app, app, app, app, app),
+						AND NOT EXISTS (SELECT 1 FROM app_members p WHERE p.app = ?)
+						AND NOT EXISTS (SELECT 1 FROM app_terminals t WHERE t.app = ?)`)
+				.bind(app, app, app, app, app, app),
 		)
 		if (audit !== undefined) {
 			statements.push(auditEventStatement(this.db, audit))

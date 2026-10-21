@@ -13,6 +13,7 @@ import {
 	type CapabilityAccessForm,
 	type CapabilityRequirement,
 	type ChallengeProvider,
+	compileEndpointTable,
 	CONTRACT_FORMAT,
 	type ContractArtifact,
 	type CspExtensions,
@@ -48,6 +49,7 @@ import {
 	type MessageKind,
 	type MountArtifact,
 	type OutputShape,
+	planEndpoint,
 	type ProcedureArtifact,
 	type ProcedureChallenge,
 	type RoleArtifact,
@@ -55,6 +57,8 @@ import {
 	type ScopeBinding,
 	tableActions,
 	type TablePolicyArtifact,
+	type TerminalArtifact,
+	terminalIdentifyProblem,
 	type TokenPurposeArtifact,
 	type WebhookScheme,
 } from '@fabrika/auth-core'
@@ -234,6 +238,7 @@ class ArtifactBuilder {
 		const displayName = this.#displayName()
 		const mail = this.#mail()
 		const people = this.#people()
+		const terminal = this.#terminal()
 		const artifact: ContractArtifact = {
 			format: CONTRACT_FORMAT,
 			app: contract.app,
@@ -256,6 +261,7 @@ class ArtifactBuilder {
 			...(displayName === null ? {} : { displayName }),
 			...(mail === null ? {} : { mail }),
 			...people,
+			...(terminal === null ? {} : { terminal }),
 			...(Object.keys(this.#procedureRules).length === 0 ? {} : { procedures: this.#procedureRules }),
 			...(Object.keys(tokens).length === 0 ? {} : { tokens }),
 		}
@@ -263,8 +269,36 @@ class ArtifactBuilder {
 			assertNoAmbiguity(artifact)
 		} catch (error) {
 			this.#problem('endpoints', error instanceof Error ? error.message : String(error))
+			return artifact
+		}
+		if (terminal !== null) {
+			this.#checkIdentifyPage(artifact, terminal)
 		}
 		return artifact
+	}
+
+	/** The terminal's identification page, when its path is one. */
+	#terminal(): TerminalArtifact | null {
+		const terminal = this.#contract.terminal
+		if (terminal === undefined) return null
+		const problem = terminalIdentifyProblem(terminal.identify)
+		if (problem !== null) {
+			this.#problem('terminal.identify', `'${terminal.identify}' ${problem}`)
+			return null
+		}
+		return { identify: terminal.identify }
+	}
+
+	/**
+	 * Nobody is signed in on the identification page, so a public SPA mount must serve it: under a credentialed one, the
+	 * proxy would bounce the terminal's browser back to sign-in, which sends it to the page again.
+	 */
+	#checkIdentifyPage(artifact: ContractArtifact, terminal: TerminalArtifact): void {
+		const plan = planEndpoint(compileEndpointTable(artifact), 'GET', terminal.identify)
+		if (plan.outcome !== 'endpoint' || plan.endpoint.kind !== 'public-spa') {
+			const served = plan.outcome === 'endpoint' ? `'${plan.endpoint.id}' (${plan.endpoint.kind})` : 'no endpoint'
+			this.#problem('terminal.identify', `'${terminal.identify}' is served by ${served}; serve it from an spa mount with access: { public: true }`)
+		}
 	}
 
 	/** The member directory each endpoint reads, recorded so the approval and the digest cover the reach. */

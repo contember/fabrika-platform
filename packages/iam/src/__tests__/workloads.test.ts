@@ -223,7 +223,8 @@ describe("a public procedure's key", () => {
 
 describe('an installation upgraded to the public workload kind', () => {
 	test('keeps every job, webhook and connector workload, and each key still mints what it minted', async () => {
-		const h = createHarness(migrationsBefore('0020_public_workloads.sql'))
+		// The reconcile of this release also writes `app_terminals`, a later and independent table.
+		const h = createHarness(`${migrationsBefore('0020_public_workloads.sql')}\n${migrationFile('0024_app_terminals.sql')}`)
 		const workloads: AppSchema['workloads'] = [
 			{ kind: 'job', name: 'nightly', actions: ['notes.purge'] },
 			{ kind: 'webhook', name: 'github', actions: ['notes.read'] },

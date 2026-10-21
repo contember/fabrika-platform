@@ -17,6 +17,7 @@ import {
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_PROXY_SECRET,
 	type IamMembershipRpc,
+	type IamTerminalRpc,
 	isLoopbackHost,
 	type Jwks,
 	parseAppEnvironmentId,
@@ -101,6 +102,11 @@ export interface BootOptions {
 	 * creates scopes, manages members or issues share links does not boot.
 	 */
 	readonly membership?: IamMembershipRpc
+	/**
+	 * IAM's identification operations at a terminal (ADR-0067): the IAM binding on Cloudflare, `HttpIamTerminals`
+	 * elsewhere. Without it, a contract that declares a terminal does not boot.
+	 */
+	readonly terminals?: IamTerminalRpc
 	/**
 	 * Cloudflare service bindings to the owners' proxy Workers, by binding name (`FABRIKA_CONNECT_<IMPORT>`). An import
 	 * without one calls its owner with `fetch`.
@@ -673,6 +679,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	// What a handler reaches through these is the platform's own request, which no site's egress covers.
 	const objects = options.files === undefined ? undefined : platformFacility(options.files)
 	const membershipRpc = options.membership === undefined ? undefined : platformFacility(options.membership)
+	const terminalRpc = options.terminals === undefined ? undefined : platformFacility(options.terminals)
 	const workloadTokens = options.workloadTokens === undefined ? undefined : platformFacility(options.workloadTokens)
 	const variables = readFramework(options.environment.framework, app.contract.vocabulary.app, problems)
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
@@ -914,6 +921,11 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	if (site !== undefined && data === null) {
 		problems.push(`'${site.row.id}' reaches data through ctx.db, which runs on @fabrika/db: pass serve(contract, { database: scoped(tables) })`)
 	}
+	if (artifact.terminal !== undefined && options.terminals === undefined) {
+		problems.push(
+			'the contract declares a terminal, and the runtime adapter supplies no IAM transport for its identifications (the IAM binding on Cloudflare; FABRIKA_IAM_RPC_URL and FABRIKA_IAM_RPC_KEY on Bun)',
+		)
+	}
 	const asking = [...endpoints.values()].find(asksIam)
 	if (asking !== undefined && options.membership === undefined) {
 		problems.push(
@@ -937,6 +949,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		containers,
 		assets: options.assets ?? null,
 		membership,
+		terminals: artifact.terminal === undefined ? null : (terminalRpc ?? null),
 		framework,
 		mint: issuer.mint,
 		capabilities: issuer.authority,

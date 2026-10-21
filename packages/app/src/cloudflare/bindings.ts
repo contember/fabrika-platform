@@ -1,8 +1,8 @@
 // The Worker bindings a contract application's object boots with, each read structurally: IAM's application
 // entrypoint, the SPA's Workers Assets and the owners' proxy Workers.
 
-import { DecodedIamMembership } from '@fabrika/auth'
-import type { IamMembershipRpc, MintFromKeyResult } from '@fabrika/auth-core'
+import { DecodedIamMembership, DecodedIamTerminals } from '@fabrika/auth'
+import type { IamMembershipRpc, IamTerminalRpc, MintFromKeyResult } from '@fabrika/auth-core'
 import { parseJwks } from '@fabrika/jwks'
 import { z } from 'zod/v4'
 import type { IamKeySource } from '../implement/boot.js'
@@ -45,6 +45,21 @@ export function bindingMembership(binding: unknown): IamMembershipRpc | undefine
 		return undefined
 	}
 	return new DecodedIamMembership(async (name, input) => {
+		const call = method(binding, name)
+		if (call === null) {
+			throw new Error(`the IAM binding has no ${name}`)
+		}
+		return await call(input)
+	})
+}
+
+/** The identifications at a terminal over the IAM binding, when its entrypoint serves them (ADR-0067). */
+export function bindingTerminals(binding: unknown): IamTerminalRpc | undefined {
+	const methods = ['inspectIdentification', 'assertIdentity', 'cancelIdentification'] as const
+	if (!methods.every((name) => method(binding, name) !== null)) {
+		return undefined
+	}
+	return new DecodedIamTerminals(async (name, input) => {
 		const call = method(binding, name)
 		if (call === null) {
 			throw new Error(`the IAM binding has no ${name}`)

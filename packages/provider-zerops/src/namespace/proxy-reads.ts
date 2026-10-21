@@ -1,7 +1,7 @@
-// What a namespace proxy pinned to an older source cannot read. Its manifest parser is strict: one row of a form it does
-// not know, or a CSP directive it does not know, refuses the whole manifest and blocks the namespace's next republish.
-// So a deploy that would publish either is refused before publication while the namespace's proxy source is not
-// this control plane's own.
+// What a namespace proxy pinned to an older source cannot read or serve. Its manifest parser is strict: one row of a form
+// it does not know, or a CSP directive it does not know, refuses the whole manifest and blocks the namespace's next
+// republish; and it has no terminal sign-out. So a deploy that would publish either, or a terminal, is refused before
+// publication while the namespace's proxy source is not this control plane's own.
 
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
 import type { CspOrigins } from '@fabrika/proxy-core/headers'
@@ -26,11 +26,15 @@ export type OlderProxyReaders = readonly [OlderProxyReader, ...OlderProxyReader[
 /**
  * What of the approved contract's manifest entry no older release's proxy parses, as the namespace publishes it: each
  * such row by its id, and `csp` when no older proxy parses the entry's CSP (`workerSrc`, which only this release knows).
+ * A contract that declares a terminal adds `terminal`: its sessions end at the proxy's sign-out path (ADR-0067 §5),
+ * which every older release's proxy predates, so no capability of a pinned proxy is read for it.
  */
 export function entriesNeedingCurrentProxy(access: ProviderApprovedAccess, olderProxies: OlderProxyReaders): string[] {
 	const table = contractProxyTable(access.contract, access.contractDigest)
 	const rows = table.endpoints.filter((row) => !olderProxies.some((proxy) => proxy.row(row))).map((row) => row.id)
-	return olderProxies.some((proxy) => proxy.csp(table.csp)) ? rows : [...rows, 'csp']
+	const csp = olderProxies.some((proxy) => proxy.csp(table.csp)) ? [] : ['csp']
+	const terminal = access.contract.terminal === undefined ? [] : ['terminal']
+	return [...rows, ...csp, ...terminal]
 }
 
 /** This control plane's own proxy source, and the parsers of the older releases a pinned proxy may run. */
@@ -58,7 +62,7 @@ export function assertNamespaceProxyReads(
 		return
 	}
 	throw new Error(
-		`the proxy of deployment namespace \`${namespace}\` is pinned to an older source than this platform's, and no older release's proxy reads ${
+		`the proxy of deployment namespace \`${namespace}\` is pinned to an older source than this platform's, and no older release's proxy reads or serves ${
 			rows.map((row) => `\`${row}\``).join(', ')
 		}; re-pin it with \`fabrika control namespaces update --namespace=${namespace} --proxy-source=current\`, then deploy again`,
 	)

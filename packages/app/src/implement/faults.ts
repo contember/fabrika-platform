@@ -19,6 +19,7 @@ export const SERVER_FAULTS = {
 	webhook_unverifiable: 'a webhook verifies a signature over its public URL (Twilio), and the environment has no FABRIKA_APP_ORIGIN',
 	webhook_claim_lost: "a delivery's claim expired and another copy of the delivery took it over before this one committed; nothing it wrote is kept",
 	workload_unauthorized: "the workload's key or token does not carry the authority its declaration needs",
+	terminal_refused: "IAM refused the application's own credential for an identification at a terminal",
 	request_cancelled: 'the request was cancelled or outlived its budget before its transaction committed; nothing it wrote is kept',
 	file_object_missing: "a file's object is missing from storage",
 	file_object_mismatch: "a file's object has another size than its row records",

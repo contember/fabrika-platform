@@ -1,6 +1,15 @@
 // Who called: the caller kind a verified token presents, and the principal a handler sees for it.
 
-import { type AccessTokenClaims, APP_CALLER_PREFIX, type Caller, callerOf, matchAction, OAUTH_CALLER, type PermissionEntry } from '@fabrika/auth-core'
+import {
+	type AccessTokenClaims,
+	APP_CALLER_PREFIX,
+	type Caller,
+	callerOf,
+	matchAction,
+	OAUTH_CALLER,
+	type PermissionEntry,
+	type TerminalTokenClaims,
+} from '@fabrika/auth-core'
 import type { PageCaller } from '../client/caller'
 
 /** A person: the IAM session, or a `px_` key bound to a user principal. */
@@ -11,6 +20,11 @@ export interface UserPrincipal {
 	readonly label: string
 	/** The mailbox IAM recorded for the person, lower-cased: the one to mail, not proof of possession. Only a person has one. */
 	readonly email: string
+	/**
+	 * The enrolled terminal the person signed in on, when an application asserted them there (ADR-0067); absent for every
+	 * other sign-in. Information for the handler: what the session may do is in its permissions already.
+	 */
+	readonly terminal?: TerminalTokenClaims
 }
 
 /** A machine: a `px_` key bound to a service principal. */
@@ -65,7 +79,16 @@ export function presentedBy(claims: AccessTokenClaims): Presented | Unpresented 
 	switch (caller) {
 		case 'human':
 			if (claims.email === undefined) return 'no_mailbox'
-			return { caller, principal: { kind: 'user', id: claims.sub, label: claims.label ?? claims.sub, email: claims.email } }
+			return {
+				caller,
+				principal: {
+					kind: 'user',
+					id: claims.sub,
+					label: claims.label ?? claims.sub,
+					email: claims.email,
+					...(claims.terminal === undefined ? {} : { terminal: Object.freeze({ id: claims.terminal.id, label: claims.terminal.label }) }),
+				},
+			}
 		case 'machine':
 			return { caller, principal: { kind: 'service', id: claims.sub, label: claims.label ?? claims.sub } }
 		case 'link':

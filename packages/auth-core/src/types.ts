@@ -178,6 +178,8 @@ export interface AppSchema {
 	members?: { manage: string; list: string }
 	/** `labels`: a holder of the app's `members.list` also sees each member's label. Absent, labels stay with `members.manage`. */
 	directory?: 'labels'
+	/** The app's identification page for a person at an enrolled terminal (ADR-0067); absent, no terminal lists it. */
+	terminal?: { identify: string }
 }
 
 /**

@@ -7,6 +7,7 @@ import {
 	LOCALES,
 	mailTemplateProblems,
 	type MessageKind,
+	terminalIdentifyProblem,
 	WORKLOAD_NAME,
 } from '@fabrika/auth-core'
 import { z } from 'zod'
@@ -230,6 +231,12 @@ const appSchemaShape = z.object({
 		.optional(),
 	members: z.object({ manage: z.string().min(1), list: z.string().min(1) }).optional(),
 	directory: z.literal('labels').optional(),
+	terminal: z.object({
+		identify: z.string().superRefine((value, ctx) => {
+			const problem = terminalIdentifyProblem(value)
+			if (problem !== null) ctx.addIssue({ code: 'custom', message: `the terminal's identification path ${problem}` })
+		}),
+	}).strict().optional(),
 })
 
 /** One message's templates by language, each refused with the same rule the contract build applies. */

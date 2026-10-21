@@ -234,3 +234,37 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
   application, and every older reader a Zerops namespace proxy may be pinned to predates sign-out. So the rule is:
   an application that declares `terminal` is refused behind a namespace proxy pinned to another source than this
   control plane's (`assertNamespaceProxyReads`), keyed on the contract, not on a proxy row.
+- WU4: the declaration is the vocabulary's `terminal: { identify: '/path' }` (beside `members` and `directory`), not a
+  contract section; `buildArtifact` also refuses a path that no `public` SPA mount serves, since a credentialed one would
+  bounce the terminal back to sign-in. IAM stores it in `app_terminals` (migration `0024_app_terminals.sql`, both
+  dialects); `appSchema.getTerminalIdentifyPath(app)` answers it or null.
+- WU4: the SDK is `ctx.terminals.inspect / assert / cancel`, not `ctx.iam.terminals`: it sits beside `ctx.members` and
+  `ctx.links`. It exists on an RPC procedure and a public procedure of a vocabulary that declares a terminal, and is an
+  `Unavailable` elsewhere. `inspect` answers null and `assert` `{ ok: false, reason }` for `not_found` and
+  `invalid_principal`; a transport failure is a 503, and IAM refusing the application's own credential is the server
+  fault `terminal_refused`.
+- WU4: the transport is the membership transport (`FABRIKA_IAM_RPC_URL` + `FABRIKA_IAM_RPC_KEY`, `/membership/<method>`)
+  and the IAM binding on Cloudflare, not an ADR-0064 receiver: ADR-0064 names membership as the existing app → IAM
+  channel, and its key already pins `<app>@<env>`. Control issues the key for a contract that declares a terminal, and
+  IAM's reconcile keeps it while `app_terminals` has a row. `boot` refuses a terminal contract without the transport; the
+  test kit's default answers every identification `not_found` (`TestKitOptions.terminals` replaces it).
+- WU4: the WU6 compatibility rule is `entriesNeedingCurrentProxy` naming `terminal` for a contract that declares one;
+  the approval diff shows the declaration as a widening for closer review. An older framework cannot compile the field,
+  so the WU2 parser rule needs no check of its own.
+- WU4: `ctx.terminals` is tested through an RPC procedure (the caller's token as the credential); the public procedure
+  path (its workload token) shares the helper, but its runtime needs Postgres, so no test drives it yet (WU7).
+- WU4 → WU5: implement `IamTerminalRpc` (`packages/auth-core/src/terminal.ts`) in IAM:
+  - `inspectIdentification({ app, credential, requestId, id }) → { ok: true, terminal: { id, label }, expiresAt } | failure`;
+  - `assertIdentity({ app, credential, requestId, id, principalId }) → { ok: true, callbackUrl } | failure`;
+  - `cancelIdentification({ app, credential, requestId, id }) → { ok: true } | failure`;
+  - failure is `{ ok: false, reason }` with `missing_token | invalid_token | not_allowed | not_found | invalid_principal`
+    (`TerminalFailure`); an unknown, expired, consumed, cancelled or other-app id, a revoked terminal and a dropped
+    asserter are all `not_found`. `credential` is the caller's verified token (a public procedure's workload token);
+    require its `aud` to be `app`.
+  - Register them on the membership transport (`OPERATIONS` in `packages/iam/src/membership-http.ts`, pinned to the
+    key's app like the others; parse inputs strictly in `rpc-inputs.ts`), and on `PropustkaApplication` in
+    `packages/iam/src/index.ts`, where the app is the credential's `aud` (the binding carries no other identity). The
+    client sides are `HttpIamTerminals` and `DecodedIamTerminals` in `packages/auth/src/rpc-http.ts`, and
+    `bindingTerminals` in `packages/app/src/cloudflare.ts`, which detects the three methods on the binding.
+  - Redirect to `<return origin><identify>?identification=<id>` (`IDENTIFICATION_QUERY_PARAMETER`), and refuse the
+    terminal branch when `getTerminalIdentifyPath(app)` is null.

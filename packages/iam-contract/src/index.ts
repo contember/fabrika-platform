@@ -229,6 +229,8 @@ export interface AppSchemaDto {
 	members?: { manage: string; list: string }
 	/** `labels` when the app's directory shows labels to `members.list` holders. */
 	directory?: 'labels'
+	/** The app's identification page at a terminal (ADR-0067); absent when the app declares none. */
+	terminal?: { identify: string }
 }
 
 // ── Policies (origin='custom' roles, admin-composed) ──────────────────────────

@@ -124,6 +124,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 	else if (baseline.app !== candidate.app) changes.add(widening(`The contract's application changes from \`${baseline.app}\` to \`${candidate.app}\``))
 	changes.add(...presentationChanges(baseline, candidate))
 	changes.add(...peopleChanges(baseline, candidate))
+	changes.add(...terminalChanges(baseline, candidate))
 	const mountsShown = compareEndpoints(changes, baseline, candidate)
 	compareSet(changes, baseline.reservedPrefixes, candidate.reservedPrefixes, {
 		// A reserved prefix restricts which endpoints compete under it, so losing one widens.
@@ -1519,6 +1520,22 @@ function peopleChanges(baseline: ContractArtifact, candidate: ContractArtifact):
 		)
 	}
 	return changes
+}
+
+/**
+ * The terminal identification page (ADR-0067): with it, an administrator may list the application on an enrolled
+ * terminal, and the application then names which person signs in there, within the terminal's ceiling.
+ */
+function terminalChanges(baseline: ContractArtifact, candidate: ContractArtifact): AccessChange[] {
+	const before = baseline.terminal?.identify
+	const after = candidate.terminal?.identify
+	if (before === after) return []
+	if (after === undefined) return [narrowing('The application no longer identifies people at enrolled terminals')]
+	return [
+		closerWidening(
+			`The application identifies people at enrolled terminals on \`${after}\` and asserts who signs in there, within each terminal's ceiling`,
+		),
+	]
 }
 
 function dimensionChanges(name: string, from: DimensionArtifact, to: DimensionArtifact): AccessChange[] {

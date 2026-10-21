@@ -164,6 +164,11 @@ fails if that stops being true — it is the guard, not documentation of one.
   `iam.terminal.enrol`, then sets `__Host-px_terminal` (hash stored, 400 days, the browser's cap) and clears the login
   cookie. `terminals.*` of `/admin/rpc` (list, setProfile, revoke) require `iam.admin`; an asserter is a registered app
   that is not a platform audience. A terminal is not an API key: `apiKeys.*` neither list nor address one.
+- **ONLY AN APP THAT DECLARES AN IDENTIFICATION PAGE IDENTIFIES PEOPLE AT A TERMINAL** (ADR-0067 §2). The schema
+  reconcile stores the vocabulary's `terminal.identify` in `app_terminals` (`appSchema.getTerminalIdentifyPath(app)`,
+  null when undeclared). Only a framework that knows terminals compiles the field, and only such a framework parses a
+  token whose `perms` carry source `terminal`, so the row is what admits an asserter. The identification operations'
+  wire is `IamTerminalRpc` (`@fabrika/auth-core`'s `terminal.ts`).
 - **WHICH APP'S PROXY TOKEN MAY ADMINISTER IS A REGISTRY.** `ADMIN_AUDIENCES` (deploy
   var `FABRIKA_IAM_ADMIN_AUDIENCES`, comma-separated app ids) is the `aud` allowlist `resolveAdmin`'s
   JWT branch checks; unset means the console gateway's own app id (`vozka`), explicitly empty means
@@ -225,9 +230,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   `assignMember`, `revokeMember`, `listMembers`, `listAppMembers`, `findMember`, `issueLink` and `revokeLink`, never `requestDelegation`: only the
   proxy obtains a grant. The caller is still the token in the body. `membershipKeys.issue` (admin RPC) issues a key
   for an `<app>@<env>` id only, ≤30 days, and deletes every other key of it except `keep`; a reconcile that leaves the
-  app no delegated endpoint, no link mount, no dimension that lists its members and no people of its own
-  (`app_members`) deletes its keys in the same batch (the schema holds no per-endpoint list fact, so a
-  members-declaring dimension keeps the key).
+  app no delegated endpoint, no link mount, no dimension that lists its members, no people of its own
+  (`app_members`) and no terminal (`app_terminals`) deletes its keys in the same batch (the schema holds no
+  per-endpoint list fact, so a members-declaring dimension keeps the key).
 - **`workloads.issueKey` NEVER REVOKES THE KEY THE CALLER NAMES AS ACTIVE.** It creates the principal on first use,
   issues a key of at most 30 days, and revokes every other key of the workload except `keep` (the credential id
   Control has recorded). A key issued by an attempt whose record failed is therefore an orphan the next issuance
