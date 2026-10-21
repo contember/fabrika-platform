@@ -107,7 +107,7 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 		]))
 		expect(toolJson(await call(token, 'read_files', { workspaceId: workspace.id, paths: ['src/index.ts', 'missing.ts'] }), z.unknown())).toEqual({
 			commitSha: workspace.headSha,
-			files: [{ path: 'src/index.ts', content: "export const greeting = 'hello'\n" }, { path: 'missing.ts', content: null }],
+			files: [{ path: 'src/index.ts', content: "export const greeting = 'hello'\n" }, { path: 'missing.ts', content: null, reason: 'missing' }],
 		})
 
 		const edit = { path: 'src/index.ts', content: "export const greeting = 'ahoj'\n" }
