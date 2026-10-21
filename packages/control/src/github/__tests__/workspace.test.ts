@@ -1,5 +1,6 @@
 import {
 	GitHubBranchConflictError,
+	type GitHubFileRead,
 	GitHubNotFoundError,
 	type GitHubRepositoryClient,
 	type GitHubRepositoryOpenRequest,
@@ -41,9 +42,13 @@ class FakeRepository implements GitHubRepositoryClient {
 		return { commitSha, directory: directory ?? '', entries: this.treeEntries, truncated: false }
 	}
 
-	async readFiles(commitSha: string, paths: readonly string[]) {
+	async readFiles(commitSha: string, paths: readonly string[]): Promise<GitHubFileRead> {
 		this.record('readFiles', [commitSha, paths])
-		return { commitSha, files: [{ path: 'src/b.ts', content: 'b' }, { path: 'src/a.ts', content: '' }], missingPaths: ['src/gone.ts'] }
+		return {
+			commitSha,
+			files: [{ path: 'src/b.ts', content: 'b' }, { path: 'src/a.ts', content: '' }],
+			unreadable: [{ path: 'src/gone.ts', reason: 'missing' }, { path: 'src/big.ts', reason: 'too_large' }],
+		}
 	}
 
 	async createBranch(input: Parameters<GitHubRepositoryClient['createBranch']>[0]) {
@@ -203,11 +208,17 @@ describe('GitHub workspace source', () => {
 		expect(listing.truncated).toBe(true)
 	})
 
-	test('reads files in request order with missing paths as null', async () => {
+	test('reads files in request order, an unread path as null with its reason', async () => {
 		const { source } = await fixture()
-		expect(await source.readFiles({ target, commitSha: headSha, paths: ['src/a.ts', 'src/gone.ts', 'src/b.ts'], signal: signal() })).toEqual({
+		const paths = ['src/a.ts', 'src/gone.ts', 'src/b.ts', 'src/big.ts']
+		expect(await source.readFiles({ target, commitSha: headSha, paths, signal: signal() })).toEqual({
 			commitSha: headSha,
-			files: [{ path: 'src/a.ts', content: '' }, { path: 'src/gone.ts', content: null }, { path: 'src/b.ts', content: 'b' }],
+			files: [
+				{ path: 'src/a.ts', content: '' },
+				{ path: 'src/gone.ts', content: null, reason: 'missing' },
+				{ path: 'src/b.ts', content: 'b' },
+				{ path: 'src/big.ts', content: null, reason: 'too_large' },
+			],
 		})
 	})
 

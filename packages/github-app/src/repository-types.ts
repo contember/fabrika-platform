@@ -32,11 +32,22 @@ export interface GitHubTextFile {
 	readonly content: string
 }
 
+/**
+ * Why a requested path was not read: `missing` (no such path), `not_a_file` (a directory, symlink or submodule),
+ * `too_large` (over the per-file bound), `binary` (not UTF-8), `budget` (past the read's total byte bound).
+ */
+export type GitHubUnreadableReason = 'missing' | 'not_a_file' | 'too_large' | 'binary' | 'budget'
+
+export interface GitHubUnreadablePath {
+	readonly path: string
+	readonly reason: GitHubUnreadableReason
+}
+
 export interface GitHubFileRead {
 	readonly commitSha: string
 	readonly files: readonly GitHubTextFile[]
-	/** Requested paths that do not exist (or are not regular UTF-8 files) at `commitSha`. */
-	readonly missingPaths: readonly string[]
+	/** Requested paths that were not read at `commitSha`, in request order. */
+	readonly unreadable: readonly GitHubUnreadablePath[]
 }
 
 export interface GitHubFileChange {

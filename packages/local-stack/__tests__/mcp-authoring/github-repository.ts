@@ -13,6 +13,7 @@ import {
 	type GitHubRepositoryOpenRequest,
 	GitHubStaleHeadError,
 	type GitHubTreeEntry,
+	type GitHubUnreadablePath,
 } from '../../../github-app/src/index'
 
 export interface FakeCommit {
@@ -87,7 +88,8 @@ export class FakeGitHubRepository implements GitHubRepositoryClient {
 			const content = commit.files.get(path)
 			return content === undefined ? [] : [{ path, content }]
 		})
-		return Promise.resolve({ commitSha, files, missingPaths: paths.filter((path) => !commit.files.has(path)) })
+		const unreadable = paths.filter((path) => !commit.files.has(path)).map((path): GitHubUnreadablePath => ({ path, reason: 'missing' }))
+		return Promise.resolve({ commitSha, files, unreadable })
 	}
 
 	createBranch(input: GitHubCreateBranchInput) {
