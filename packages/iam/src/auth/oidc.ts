@@ -54,12 +54,8 @@ export async function startOidc(
 			: { app: handoff.app, handoffState: handoff.state, handoffChallenge: handoff.challenge }),
 	})
 	const headers = redirectHeaders(location)
-	// The in-flight cookie is scoped to /auth (only the callback reads it), single-use, and SIGNED —
-	// see `encodeFlight`.
-	headers.append(
-		'Set-Cookie',
-		serializeCookie(OIDC_COOKIE, flight, { httpOnly: true, secure: true, sameSite: 'Lax', maxAge: OIDC_TTL_SECONDS, path: '/auth' }),
-	)
+	// The in-flight cookie is single-use, `__Host-` and SIGNED — see `encodeFlight`.
+	headers.append('Set-Cookie', serializeCookie(OIDC_COOKIE, flight, { httpOnly: true, secure: true, sameSite: 'Lax', maxAge: OIDC_TTL_SECONDS }))
 	return new Response(null, { status: 302, headers })
 }
 

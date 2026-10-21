@@ -16,7 +16,7 @@ import { type Handoff, handoffLocation } from './handoff'
 import { authFailurePage } from '../password-pages'
 import { redirectHeaders, safeRedirect, sameOrigin } from './http'
 
-import { OIDC_COOKIE } from './oidc-flight'
+import { endingFlightCookies } from './oidc-flight'
 
 /** SSO session lifetime — the long-lived credential a browser carries (30 days). */
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -111,7 +111,9 @@ export async function issueSession(
 	const headers = redirectHeaders(location)
 	headers.append('Set-Cookie', sessionCookie(sessionToken))
 	if (input.clearOidc === true) {
-		headers.append('Set-Cookie', clearCookie(OIDC_COOKIE, { path: '/auth' }))
+		for (const cookie of endingFlightCookies()) {
+			headers.append('Set-Cookie', cookie)
+		}
 	}
 	return new Response(null, { status: 302, headers })
 }

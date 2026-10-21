@@ -113,7 +113,7 @@ describe('GET /auth/login', () => {
 		const location = new URL(res.headers.get('location') ?? '')
 		expect(location.hostname).toBe('idp.test')
 		expect(location.searchParams.get('code_challenge_method')).toBe('S256')
-		expect(setCookieValue(res, 'px_oidc')).toBeTruthy()
+		expect(setCookieValue(res, '__Host-px_oidc')).toBeTruthy()
 	})
 
 	test('rejects an open-redirect target, falling back to the issuer', async () => {
@@ -143,13 +143,13 @@ describe('login → callback (end to end with a fake IdP)', () => {
 			ctx(),
 		)
 		const state = new URL(login.headers.get('location') ?? '').searchParams.get('state')
-		const flightCookie = setCookieValue(login, 'px_oidc')
+		const flightCookie = setCookieValue(login, '__Host-px_oidc')
 		expect(state && flightCookie).toBeTruthy()
 
 		// 2. Callback: the IdP bounces back with code + matching state; the in-flight cookie is replayed.
 		const callback = await handleAuth(
 			new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, {
-				headers: { Cookie: `px_oidc=${flightCookie}` },
+				headers: { Cookie: `__Host-px_oidc=${flightCookie}` },
 			}),
 			services,
 			AUTH_ENV,
@@ -182,7 +182,9 @@ describe('login → callback (end to end with a fake IdP)', () => {
 			const state = new URL(login.headers.get('location') ?? '').searchParams.get('state')
 
 			const callback = await handleAuth(
-				new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, { headers: { Cookie: `px_oidc=${setCookieValue(login, 'px_oidc')}` } }),
+				new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, {
+					headers: { Cookie: `__Host-px_oidc=${setCookieValue(login, '__Host-px_oidc')}` },
+				}),
 				services,
 				AUTH_ENV,
 				ctx(),
@@ -199,10 +201,10 @@ describe('login → callback (end to end with a fake IdP)', () => {
 			const services = h.makeServices({ issuer: ISSUER, oidc: new FakeOidc({ sub: `g-${email}`, email }) })
 			const login = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, ctx())
 			const state = new URL(login.headers.get('location') ?? '').searchParams.get('state')
-			const flightCookie = setCookieValue(login, 'px_oidc')
+			const flightCookie = setCookieValue(login, '__Host-px_oidc')
 
 			const callback = await handleAuth(
-				new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, { headers: { Cookie: `px_oidc=${flightCookie}` } }),
+				new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, { headers: { Cookie: `__Host-px_oidc=${flightCookie}` } }),
 				services,
 				AUTH_ENV,
 				ctx(),
@@ -218,16 +220,16 @@ describe('login → callback (end to end with a fake IdP)', () => {
 
 	/** Whether a response spends the in-flight cookie (Max-Age=0), which every terminal outcome must. */
 	function clearsFlight(res: Response): boolean {
-		return res.headers.getSetCookie().some((c) => c.startsWith('px_oidc=') && c.includes('Max-Age=0'))
+		return res.headers.getSetCookie().some((c) => c.startsWith('__Host-px_oidc=') && c.includes('Max-Age=0'))
 	}
 
 	test('a mismatched state is rejected (CSRF guard) and the flight is spent', async () => {
 		const h = createHarness()
 		const services = h.makeServices({ issuer: ISSUER, oidc: new FakeOidc({ sub: 'g', email: 'a@b.cz' }) })
 		const login = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, ctx())
-		const flightCookie = setCookieValue(login, 'px_oidc')
+		const flightCookie = setCookieValue(login, '__Host-px_oidc')
 		const res = await handleAuth(
-			new Request(`${ISSUER}/auth/callback?code=abc&state=WRONG`, { headers: { Cookie: `px_oidc=${flightCookie}` } }),
+			new Request(`${ISSUER}/auth/callback?code=abc&state=WRONG`, { headers: { Cookie: `__Host-px_oidc=${flightCookie}` } }),
 			services,
 			AUTH_ENV,
 			ctx(),
@@ -241,10 +243,10 @@ describe('login → callback (end to end with a fake IdP)', () => {
 		const h = createHarness()
 		const services = h.makeServices({ issuer: ISSUER, oidc: new FakeOidc(null) })
 		const login = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, ctx())
-		const flightCookie = setCookieValue(login, 'px_oidc')
+		const flightCookie = setCookieValue(login, '__Host-px_oidc')
 		const state = new URL(login.headers.get('location') ?? '').searchParams.get('state')
 		const res = await handleAuth(
-			new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, { headers: { Cookie: `px_oidc=${flightCookie}` } }),
+			new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, { headers: { Cookie: `__Host-px_oidc=${flightCookie}` } }),
 			services,
 			AUTH_ENV,
 			ctx(),
@@ -255,16 +257,13 @@ describe('login → callback (end to end with a fake IdP)', () => {
 
 	test('a flight nobody signed is refused, however well its state matches', async () => {
 		// The cookie used to be plain base64 JSON, and the only CSRF check was `flight.state === state`
-		// — an attacker-written cookie against an attacker-written query parameter. `Path=/auth` is no
-		// isolation either: a sibling host under a shared registrable domain can toss in a SECOND
-		// px_oidc that the browser sends first, so a planted flight bought the victim a session for
-		// the ATTACKER'S identity.
+		// — an attacker-written cookie against an attacker-written query parameter.
 		const h = createHarness()
 		const services = h.makeServices({ issuer: ISSUER, oidc: new FakeOidc({ sub: 'attacker', email: 'attacker@contember.com' }) })
 		const forged = btoa(JSON.stringify({ state: 'S', verifier: 'V', redirect: ISSUER })).replaceAll('=', '')
 
 		const res = await handleAuth(
-			new Request(`${ISSUER}/auth/callback?code=attacker-code&state=S`, { headers: { Cookie: `px_oidc=${forged}` } }),
+			new Request(`${ISSUER}/auth/callback?code=attacker-code&state=S`, { headers: { Cookie: `__Host-px_oidc=${forged}` } }),
 			services,
 			AUTH_ENV,
 			ctx(),
@@ -285,13 +284,77 @@ describe('login → callback (end to end with a fake IdP)', () => {
 
 		const res = await handleAuth(
 			new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, {
-				headers: { Cookie: `px_oidc=${setCookieValue(login, 'px_oidc')}` },
+				headers: { Cookie: `__Host-px_oidc=${setCookieValue(login, '__Host-px_oidc')}` },
 			}),
 			services,
 			AUTH_ENV,
 			ctx(),
 		)
 		expect(res.status).toBe(400)
+	})
+
+	test('the flight cookie is a __Host- cookie: Secure, Path=/ and no Domain', async () => {
+		const h = createHarness()
+		const login = await handleAuth(new Request(`${ISSUER}/auth/login`), h.makeServices({ issuer: ISSUER }), AUTH_ENV, ctx())
+		const flight = login.headers.getSetCookie().find((c) => c.startsWith('__Host-px_oidc='))
+		const attributes = (flight ?? '').split(';').map((part) => part.trim().toLowerCase())
+		expect(attributes).toContain('path=/')
+		expect(attributes).toContain('secure')
+		expect(attributes.some((part) => part.startsWith('domain='))).toBe(false)
+	})
+
+	test('a validly signed attacker flight cannot sign the victim in as the attacker', async () => {
+		// A sibling host under a shared registrable domain can toss `px_oidc` with `Domain=<parent>`
+		// into the victim's browser, but never a `__Host-` cookie. So the callback reads only the
+		// `__Host-` name: a flight under the legacy name, or one the browser sends ahead of it, is
+		// none of IAM's business.
+		const h = createHarness()
+		const services = h.makeServices({ issuer: ISSUER, oidc: new FakeOidc({ sub: 'attacker', email: 'attacker@contember.com' }) })
+		const attackerLogin = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, ctx())
+		const attackerState = new URL(attackerLogin.headers.get('location') ?? '').searchParams.get('state')
+		const attackerFlight = setCookieValue(attackerLogin, '__Host-px_oidc')
+		const victimLogin = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, ctx())
+		const victimFlight = setCookieValue(victimLogin, '__Host-px_oidc')
+
+		for (
+			const cookie of [
+				`px_oidc=${attackerFlight}`,
+				`px_oidc=${attackerFlight}; __Host-px_oidc=${victimFlight}`,
+			]
+		) {
+			const res = await handleAuth(
+				new Request(`${ISSUER}/auth/callback?code=attacker-code&state=${attackerState}`, { headers: { Cookie: cookie } }),
+				services,
+				AUTH_ENV,
+				ctx(),
+			)
+			expect(res.status).toBe(400)
+			expect(setCookieValue(res, SESSION_COOKIE)).toBeNull()
+		}
+		expect(await h.repositories.principals.getUserByExternalId('attacker')).toBeNull()
+	})
+
+	test('every callback outcome also clears the legacy px_oidc cookie at Path=/auth', async () => {
+		const clearsLegacy = (res: Response) =>
+			res.headers.getSetCookie().some((c) => c.startsWith('px_oidc=;') && c.includes('Path=/auth;') && c.includes('Max-Age=0'))
+		const h = createHarness()
+		const services = h.makeServices({ issuer: ISSUER, oidc: new FakeOidc({ sub: 'g-legacy', email: 'user@contember.com' }) })
+		const login = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, ctx())
+		const state = new URL(login.headers.get('location') ?? '').searchParams.get('state')
+		const flight = setCookieValue(login, '__Host-px_oidc')
+
+		const refused = await handleAuth(new Request(`${ISSUER}/auth/callback?code=abc&state=WRONG`), services, AUTH_ENV, ctx())
+		expect(refused.status).toBe(400)
+		expect(clearsLegacy(refused)).toBe(true)
+
+		const signedIn = await handleAuth(
+			new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, { headers: { Cookie: `__Host-px_oidc=${flight}` } }),
+			services,
+			AUTH_ENV,
+			ctx(),
+		)
+		expect(signedIn.status).toBe(302)
+		expect(clearsLegacy(signedIn)).toBe(true)
 	})
 })
 
@@ -301,9 +364,9 @@ describe('login admission (/auth/callback allowlist)', () => {
 		const withOidc = { ...services, oidc: new FakeOidc(identity) }
 		const loginRes = await handleAuth(new Request(`${ISSUER}/auth/login`), withOidc, AUTH_ENV, ctx())
 		const state = new URL(loginRes.headers.get('location') ?? '').searchParams.get('state')
-		const flightCookie = setCookieValue(loginRes, 'px_oidc')
+		const flightCookie = setCookieValue(loginRes, '__Host-px_oidc')
 		return handleAuth(
-			new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, { headers: { Cookie: `px_oidc=${flightCookie}` } }),
+			new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, { headers: { Cookie: `__Host-px_oidc=${flightCookie}` } }),
 			withOidc,
 			AUTH_ENV,
 			ctx(),
@@ -381,7 +444,7 @@ describe('email identity is the mailbox, not its spelling', () => {
 		const state = new URL(loginRes.headers.get('location') ?? '').searchParams.get('state')
 		return handleAuth(
 			new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, {
-				headers: { Cookie: `px_oidc=${setCookieValue(loginRes, 'px_oidc')}` },
+				headers: { Cookie: `__Host-px_oidc=${setCookieValue(loginRes, '__Host-px_oidc')}` },
 			}),
 			withOidc,
 			AUTH_ENV,
