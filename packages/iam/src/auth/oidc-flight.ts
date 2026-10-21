@@ -7,8 +7,11 @@ import { getSigner, verifyInternal } from '../signing'
 import { clearCookie } from './cookies'
 import type { AuthFailure } from './failure'
 
-/** In-flight OIDC cookie: a SIGNED token carrying state + PKCE verifier + redirect; /auth, 10 min. */
-export const OIDC_COOKIE = 'px_oidc'
+/** In-flight OIDC cookie: a SIGNED token carrying state + PKCE verifier + redirect; `__Host-`, 10 min. */
+export const OIDC_COOKIE = '__Host-px_oidc'
+
+/** The flight's name before it took the `__Host-` prefix. Never read; only cleared, so old copies expire. */
+const LEGACY_OIDC_COOKIE = 'px_oidc'
 
 export const OIDC_TTL_SECONDS = 600
 
@@ -31,14 +34,14 @@ interface Flight {
 const OIDC_FLIGHT_AUDIENCE = 'fabrika:iam:oidc-flight'
 
 /**
- * SIGN the flight, with IAM's own key.
+ * SIGN the flight, with IAM's own key, and keep it in a `__Host-` cookie. Both are needed.
  *
  * The `state` match alone is not a CSRF check when whoever writes the cookie also writes `state`.
- * `Path=/auth` does not isolate it either: cookie-tossing from any host under a shared registrable
- * domain sets a SECOND `px_oidc` the browser also sends, and per RFC 6265 §5.4 the longer-path one
- * comes first — so an attacker could plant their own flight, hand the victim their authorization
- * code, and have IAM issue the victim a session for the ATTACKER'S identity. A signature is what
- * makes "this flight is ours" true rather than assumed.
+ * The signature proves IAM issued the flight, but an attacker can start a login of their own and
+ * get a validly signed flight too. Cookie-tossing from any host under a shared registrable domain
+ * would plant it in the victim's browser ahead of the victim's own, and IAM would issue the victim
+ * a session for the ATTACKER'S identity. The browser refuses a `__Host-` cookie that names a
+ * `Domain`, so the prefix proves this browser's flight was set by IAM's host.
  */
 export async function encodeFlight(env: AuthEnv, flight: Flight): Promise<string> {
 	const signer = await getSigner(env)
@@ -70,9 +73,16 @@ export async function decodeFlight(env: AuthEnv, raw: string | null): Promise<Fl
 	return parsed.success ? parsed.data : null
 }
 
+/** The `Set-Cookie` values that spend the flight, the legacy `/auth` one included. */
+export function endingFlightCookies(): string[] {
+	return [clearCookie(OIDC_COOKIE), clearCookie(LEGACY_OIDC_COOKIE, { path: '/auth' })]
+}
+
 /** A refusal page that also spends the OIDC flight — every terminal callback outcome goes through here. */
 export function authFailureEndingFlight(presentation: AppPresentation, failure: AuthFailure, status: number): Response {
 	const response = authFailurePage(presentation, failure, status)
-	response.headers.append('set-cookie', clearCookie(OIDC_COOKIE, { path: '/auth' }))
+	for (const cookie of endingFlightCookies()) {
+		response.headers.append('set-cookie', cookie)
+	}
 	return response
 }
