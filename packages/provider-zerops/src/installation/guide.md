@@ -77,7 +77,7 @@ A staging namespace (`cheap`, single-node) adds about $9 to any of them.
 
 **2. Namespace preset** (`control namespaces create --preset`, step 5). A namespace is the Zerops project
 applications run in. Each one adds its own proxy, about $1.08. A `cheap` namespace's shared PostgreSQL is
-single-node unless `--postgres-type=postgresql:ha@18` asks for HA (about $11 at `--postgres-profile=oltp-staging`);
+single-node unless `--postgres-type=postgresql:ha@18` asks for HA (about $11 at `--postgres-profile=oltp-staging`; the two flags go together);
 the type is fixed once the namespace exists, the profile is not.
 
 | Preset          | Where an application's database lives                                   | Use with                             |

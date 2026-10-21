@@ -235,8 +235,8 @@ Every Zerops namespace reserves `service:proxy`. A cheap namespace also reserves
 `service:postgres`. Application claims are the service hostnames in the canonical
 manifest. Cheap defaults to `postgresql:single@18` at `oltp-hobby` on every
 environment ([ADR-0038](../decisions/0038-size-namespaces-cheaply-by-default.md));
-its plan options (`--postgres-type`, `--postgres-profile`) may select a supported
-type and profile explicitly. `postgresql:ha@18` is the one that keeps its data
+its plan options (`--postgres-type` with `--postgres-profile`, always together) may
+select a supported type and profile explicitly. `postgresql:ha@18` is the one that keeps its data
 through a node loss, and the type is fixed once the namespace exists.
 
 Apps in shared `cheap` and `mid` namespaces must use the deterministic app prefix

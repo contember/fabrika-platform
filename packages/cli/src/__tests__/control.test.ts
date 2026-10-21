@@ -678,7 +678,15 @@ describe('control namespaces', () => {
 				undefined,
 				CONTROL_ENV,
 			),
-		).rejects.toThrow('--postgres-profile needs --postgres-type')
+		).rejects.toThrow('--postgres-type and --postgres-profile go together')
+		await expect(
+			runControlCli(
+				'namespaces',
+				['plan', '--namespace=notes-prod', '--env=prod', '--preset=cheap', '--postgres-type=postgresql:ha@18'],
+				undefined,
+				CONTROL_ENV,
+			),
+		).rejects.toThrow('--postgres-type and --postgres-profile go together')
 	})
 
 	test('create commits the plan it just read rather than deriving a second one', async () => {

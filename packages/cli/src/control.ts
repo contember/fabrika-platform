@@ -128,7 +128,8 @@ Namespace placement options, each defaulting to what the preset would choose:
   --postgres-type=<type>            the \`cheap\` preset's shared PostgreSQL; on Zerops postgresql:single@18
                                     (default) or postgresql:ha@18, which keeps its data through a node loss.
                                     Fixed once created
-  --postgres-profile=<profile>      its profile, e.g. oltp-staging for HA; needs --postgres-type
+  --postgres-profile=<profile>      its profile, given together with --postgres-type: oltp-hobby for single,
+                                    oltp-staging (about $11) or oltp-production (about $72) for HA
 
 \`namespaces plan\` is a preview and changes nothing. It prints one \`<path>\\t<value>\` row per field of
 the plan, keyed by its path in \`--json\`; a multi-line value such as the proxy's descriptor file is shown
@@ -832,10 +833,9 @@ const namespacePlan = (flags: Flags): PlanDeploymentNamespaceRequest => {
 	if (publicAccess !== undefined) options['publicAccess'] = publicAccess
 	const postgresType = optional(flags, 'postgres-type')
 	const postgresProfile = optional(flags, 'postgres-profile')
-	if (postgresProfile !== undefined && postgresType === undefined) throw new Error('--postgres-profile needs --postgres-type')
-	if (postgresType !== undefined) {
-		options['postgres'] = postgresProfile === undefined ? { type: postgresType } : { type: postgresType, profile: postgresProfile }
-	}
+	// Together or not at all: a type without a profile gets the platform's default, which for HA is the dedicated ~$72 one.
+	if ((postgresType === undefined) !== (postgresProfile === undefined)) throw new Error('--postgres-type and --postgres-profile go together')
+	if (postgresType !== undefined && postgresProfile !== undefined) options['postgres'] = { type: postgresType, profile: postgresProfile }
 	return {
 		id: required(flags, 'namespace'),
 		env: required(flags, 'env'),
