@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { parseZeropsDescriptor } from '../descriptor'
-import { PROBE_FILES, probeArchive, probeDescriptor } from './platform-facts-archive'
+import { PROBE_FILES, probeArchive, probeDescriptor, SLOW_INIT_SECONDS } from './platform-facts-archive'
 
 const BLOCK_BYTES = 512
 const CHECKSUM_OFFSET = 148
@@ -104,5 +104,8 @@ describe('the unpacker probe archives', () => {
 		const init = parseZeropsDescriptor(probeDescriptor('wu1a', { initCommand: true })).document
 		expect(JSON.stringify(init)).toContain('"initCommands":["exit 1"]')
 		expect(JSON.stringify(init)).not.toContain('readinessCheck')
+		const slow = parseZeropsDescriptor(probeDescriptor('wu1a', { slowInitCommand: true })).document
+		expect(JSON.stringify(slow)).toContain(`"initCommands":["sleep ${SLOW_INIT_SECONDS}"]`)
+		expect(JSON.stringify(slow)).toContain('"readinessCheck":{"httpGet":{"port":3000,"path":"/"},"retryPeriod":"10s","failureTimeout":"60s"}')
 	})
 })

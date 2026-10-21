@@ -1,5 +1,5 @@
 // Both application commits are ones a production build accepts: the archive Control uploads, unpacked, passes the
-// checker, and on Postgres the start script's `fabrika db migrate`, `fabrika db codegen --verify` and
+// checker, and on Postgres the init commands' `fabrika db migrate`, `fabrika db codegen --verify` and
 // `fabrika db test-isolation`. The composed Notes container runs the workspace copy of the same files, so this is
 // what ties the container's behaviour to the deployed source. The agent change passing them is what "regenerated tests
 // included" means. The URL is a credential: no assertion prints it.
@@ -15,7 +15,7 @@ import { applicationFixtureRoot, generateFixture } from './generate'
 const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 const CLI = join(REPO_ROOT, 'packages', 'cli', 'src', 'index.ts')
 const url = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? ''
-if (url === '') console.warn('deployable.test.ts: the Postgres half skipped; set FABRIKA_TEST_POSTGRES_URL to run the start script on the archive')
+if (url === '') console.warn('deployable.test.ts: the Postgres half skipped; set FABRIKA_TEST_POSTGRES_URL to run the init commands on the archive')
 
 const staging = await mkdtemp(join(import.meta.dir, '.deployable-'))
 const appIds: string[] = []
@@ -64,7 +64,7 @@ for (const kind of ['application', 'agentChange'] satisfies LocalSourceFixtureKi
 	})
 
 	describe.skipIf(url === '')(`the ${kind} fixture archive on Postgres`, () => {
-		test("passes the start script's steps: migrate, codegen --verify and every generated case", async () => {
+		test("passes the init commands' steps: migrate, codegen --verify and every generated case", async () => {
 			// The build installed the example's packages; its workspace install stands in for them.
 			await symlink(join(applicationFixtureRoot, 'node_modules'), join(root, 'node_modules'))
 			expect(await fabrika('migrate')).toMatchObject({ code: 0 })

@@ -15,7 +15,7 @@ export const ZEROPS_POSTGRES_MIN_RAM_GB = 0.25
 export const ZEROPS_POSTGRES_UNAVAILABLE_CONNECTIONS = 7
 
 /**
- * The most connections one container's start script holds at once: `fabrika db test-isolation` peaks at 4 since the
+ * The most connections one container's init commands hold at once: `fabrika db test-isolation` peaks at 4 since the
  * test kit opens a file's connections together, and at 5 with a `@fabrika/db` before that (measured locally,
  * 2026-10-16, with the Notes and CRM examples). Migrating and reading the schema take fewer, one after the other.
  */
@@ -53,7 +53,7 @@ export function zeropsPostgresMaxConnections(ramGB: number, profile: string | un
 const poolHolders = (demand: ZeropsDatabaseDemand): number => 2 * demand.maxContainers + demand.jobs
 
 /**
- * The connections each process may open so that all of them, with one container's start script, stay within what the
+ * The connections each process may open so that all of them, with one container's init commands, stay within what the
  * application's roles can take; `null` when that is below `MIN_PROCESS_CONNECTIONS`.
  */
 export function zeropsProcessConnections(maxConnections: number, demand: ZeropsDatabaseDemand): number | null {

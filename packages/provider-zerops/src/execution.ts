@@ -55,7 +55,7 @@ const FILE_SWEEP_SCHEDULE = '41 * * * *'
 export const ZEROPS_SCAN_MIN_RAM_GB = 2
 
 /**
- * The RAM in GB a container of an application with a database starts with. Its start script runs `fabrika db
+ * The RAM in GB a container of an application with a database starts with. Its init commands run `fabrika db
  * test-isolation`, whose CLI and `bun test` child together peak at 161 MiB of anonymous memory for the Notes example
  * and 225 MiB for the CRM example (measured locally, 2026-10-15), beside Bun's own mapped binary. Zerops' 0.125 GB
  * floor kills that within a second, faster than vertical autoscaling reacts.
@@ -243,6 +243,7 @@ const SOURCE_ROOT = '/build/source'
 const RUNTIME_ROOT = '/var/www'
 const FABRIKA_BIN = './node_modules/.bin/fabrika'
 const MIGRATE_SCRIPT = 'fabrika/migrate.generated.sh'
+const VERIFY_SCRIPT = 'fabrika/verify.generated.sh'
 const START_SCRIPT = 'fabrika/start.generated.sh'
 const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
 
@@ -281,23 +282,20 @@ const migrateScript = (appId: string): readonly string[] => [
 	`FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db migrate`,
 ]
 
-// The server starts only after the migrations it expects are applied, the committed schema types match the migrated
-// schema and every generated isolation test passed on a throwaway schema, so any failure fails the readiness check,
-// whether or not a failed `initCommands` stops the activation (it does, verified live). The build has no
-// database, so this is where the types and the generated tests run.
-const startScript = (appId: string, database: boolean): readonly string[] => [
+// The committed schema types must match the migrated schema and every generated isolation test must pass on a throwaway
+// schema. The build has no database, so they run at container start, after the migrations, as init commands: a failed
+// init command stops the activation (verified live), and a run as long as the CRM's ~3 minutes of generated cases does
+// not race the readiness window. UNVERIFIED: that the window opens with `run.start`, after the init commands; one
+// runtime log shows it, and the platform-facts row `slow-init-command-precedes-the-readiness-window` measures it.
+const verifyScript = (appId: string): readonly string[] => [
 	'#!/bin/sh',
 	'set -eu',
 	`cd ${RUNTIME_ROOT}`,
-	...(database
-		? [
-			`sh ${RUNTIME_ROOT}/${MIGRATE_SCRIPT}`,
-			`FABRIKA_APP_ID=${appId} ${FABRIKA_BIN} db codegen --verify`,
-			`FABRIKA_APP_ID=${appId} ${FABRIKA_BIN} db test-isolation`,
-		]
-		: []),
-	'exec bun fabrika/entry.generated.ts',
+	`FABRIKA_APP_ID=${appId} ${FABRIKA_BIN} db codegen --verify`,
+	`FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db test-isolation`,
 ]
+
+const startScript: readonly string[] = ['#!/bin/sh', 'set -eu', `cd ${RUNTIME_ROOT}`, 'exec bun fabrika/entry.generated.ts']
 
 const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
 
@@ -333,8 +331,10 @@ export function generatedBuildCommands(execution: ZeropsLockedExecution): readon
 		`cd /tmp && bun x --bun -p @fabrika/check@${execution.checkRelease} fabrika-check ${SOURCE_ROOT}`,
 		writeFileCommand(PLATFORM_TSCONFIG, [PLATFORM_TSCONFIG_CONTENTS]),
 		`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${SOURCE_ROOT}/${PLATFORM_TSCONFIG}`,
-		...(database ? [writeFileCommand(MIGRATE_SCRIPT, migrateScript(execution.appId))] : []),
-		writeFileCommand(START_SCRIPT, startScript(execution.appId, database)),
+		...(database
+			? [writeFileCommand(MIGRATE_SCRIPT, migrateScript(execution.appId)), writeFileCommand(VERIFY_SCRIPT, verifyScript(execution.appId))]
+			: []),
+		writeFileCommand(START_SCRIPT, startScript),
 		...(execution.sourceMaps === null ? [] : [sourceMapUpload(execution.checkRelease)]),
 	]
 }
@@ -363,6 +363,16 @@ const jobCrontab = (contract: ZeropsContractRun): { readonly timing: string; rea
 /** How many job processes the crontab may run at once, each opening the application's database. */
 export const zeropsJobProcesses = (contract: ZeropsContractRun): number => jobCrontab(contract).length
 
+/** The commands every container runs before `run.start`, in order; any failure stops the activation. */
+export function generatedInitCommands(execution: ZeropsLockedExecution): string[] {
+	return [
+		// A container starts from the prepared image, whose signatures are as old as its build; a failed refresh leaves
+		// them to the daily one, and the scanner refuses signatures older than three days, so the scan fails closed.
+		...(execution.contract.scan === true ? [`${FRESHCLAM} || echo 'fabrika: freshclam did not refresh the malware signatures'`] : []),
+		...(execution.databaseUrl === null ? [] : [`sh ${RUNTIME_ROOT}/${MIGRATE_SCRIPT}`, `sh ${RUNTIME_ROOT}/${VERIFY_SCRIPT}`]),
+	]
+}
+
 /** The generated selected setup: the authored build kept, everything else the platform's. */
 export function renderLockedSetup(
 	setup: string,
@@ -385,12 +395,7 @@ export function renderLockedSetup(
 	const packages = sortedUnique([...execution.runtimePackages, ...(scan ? [SCANNER_PACKAGE] : [])])
 	// Every container keeps its own signatures; one scan pass at a time holds the job's lease.
 	const crontab = [...jobCrontab(contract), ...(scan ? [{ timing: FRESHCLAM_SCHEDULE, command: FRESHCLAM, allContainers: true }] : [])]
-	// A container starts from the prepared image, whose signatures are as old as its build; a failed refresh leaves
-	// them to the daily one, and the scanner refuses signatures older than three days, so the scan fails closed.
-	const initCommands = [
-		...(scan ? [`${FRESHCLAM} || echo 'fabrika: freshclam did not refresh the malware signatures'`] : []),
-		...(execution.databaseUrl === null ? [] : [`sh ${RUNTIME_ROOT}/${MIGRATE_SCRIPT}`]),
-	]
+	const initCommands = generatedInitCommands(execution)
 	const prepareCommands = packages.length === 0 ? [] : [`sudo apk add --no-cache ${packages.join(' ')}`, ...(scan ? [FRESHCLAM] : [])]
 	return {
 		setup,

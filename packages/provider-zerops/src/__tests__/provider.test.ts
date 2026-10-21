@@ -1060,6 +1060,22 @@ describe('Zerops provider', () => {
 		expect(recorded.sleeps).toEqual([])
 	})
 
+	test('a version that built but did not activate names the init commands and the readiness check', async () => {
+		const provider = createZeropsDeployer(() =>
+			makeCollaborators(recorded, { statuses: ['DEPLOY_FAILED'], processStatuses: ['FINISHED'], triggerVersionId: 'version-inactive' })
+		)
+		const failed = stepError(await provider(deployRun(recorded)), 'await-version')
+		expect(failed).toStartWith('Zerops pipeline failed: app-version version-inactive is DEPLOY_FAILED: an init command failed or the readiness check')
+		expect(failed).toContain('its generated isolation tests')
+
+		const process = createZeropsDeployer(() =>
+			makeCollaborators(recorded, { statuses: ['DEPLOY_FAILED'], processStatuses: ['FAILED'], triggerVersionId: 'version-inactive' })
+		)
+		expect(stepError(await process(deployRun(recorded)), 'await-version')).toStartWith(
+			'zerops: pipeline process process-1 is FAILED while app-version version-inactive is DEPLOY_FAILED: an init command failed',
+		)
+	})
+
 	test('does not accept an active app version when its trigger process failed', async () => {
 		const provider = createZeropsDeployer(() =>
 			makeCollaborators(recorded, { statuses: ['ACTIVE'], processStatuses: ['FAILED'], triggerVersionId: 'version-active' })
@@ -1171,7 +1187,7 @@ describe('Zerops provider', () => {
 	})
 })
 
-// The start script runs `fabrika db test-isolation`, which the platform's 0.125 GB floor kills (ADR-0043).
+// The init commands run `fabrika db test-isolation`, which the platform's 0.125 GB floor kills (ADR-0043).
 describe("the deploy service's minimum RAM", () => {
 	const deploy = (overrides: Overrides, run: ZeropsDeployRun = deployRun(recorded)) =>
 		createZeropsDeployer(() => makeCollaborators(recorded, overrides))(run)
@@ -1242,7 +1258,7 @@ describe("the application's database connections", () => {
 	const sentConnections = (): string | undefined => /FABRIKA_APP_DATABASE_CONNECTIONS: "(\d+)"/.exec(recorded.builds[0]?.zeropsYaml ?? '')?.[1]
 
 	test('each process gets its share of what the database admits, and the database is left alone when that is enough', async () => {
-		// 50 connections at 1 GB, 12 of them unavailable or the start script's, shared by 2 × 4 containers and 2 jobs.
+		// 50 connections at 1 GB, 12 of them unavailable or the init commands', shared by 2 × 4 containers and 2 jobs.
 		expect((await deploy({ databaseMinRam: 1, maxContainers: 4 })).status).toBe('succeeded')
 		expect(sentConnections()).toBe('3')
 		expect(recorded.databaseAutoscaling).toEqual([])

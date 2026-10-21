@@ -341,7 +341,7 @@ The deploy then runs `apply-import → verify-exposure → write-service-env →
 raise-start-memory → size-database → reserve-version → upload-source → trigger-build → await-version → reconcile-schema`
 (`packages/provider-zerops/src/plan.ts`). `reconcile-schema` runs only when the
 app declares a schema. `raise-start-memory` raises the deploy service's minimum
-RAM to what the generated start script needs. `size-database` sizes each
+RAM to what the generated init commands need. `size-database` sizes each
 process's database connections to the database's limit and raises the
 database's minimum RAM where that leaves too few. `verify-exposure` refuses the run, and raises an
 Operations alert, when a declared service has subdomain access or a bucket

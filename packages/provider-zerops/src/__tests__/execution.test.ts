@@ -100,7 +100,8 @@ describe('the generated execution descriptor of a contract application', () => {
 					expect.stringMatching(/^printf '%s\\n' '\{"compilerOptions":.*' > fabrika\/tsconfig\.platform\.json$/),
 					`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p /build/source/fabrika/tsconfig.platform.json`,
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db migrate' > fabrika/migrate.generated.sh",
-					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'sh /var/www/fabrika/migrate.generated.sh' 'FABRIKA_APP_ID=notes ./node_modules/.bin/fabrika db codegen --verify' 'FABRIKA_APP_ID=notes ./node_modules/.bin/fabrika db test-isolation' 'exec bun fabrika/entry.generated.ts' > fabrika/start.generated.sh",
+					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes ./node_modules/.bin/fabrika db codegen --verify' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db test-isolation' > fabrika/verify.generated.sh",
+					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'exec bun fabrika/entry.generated.ts' > fabrika/start.generated.sh",
 				],
 				deployFiles: ['./'],
 				cache: ['node_modules'],
@@ -109,7 +110,7 @@ describe('the generated execution descriptor of a contract application', () => {
 			run: {
 				base: 'alpine/bun@1.3',
 				prepareCommands: ['sudo apk add --no-cache ffmpeg vips'],
-				initCommands: ['sh /var/www/fabrika/migrate.generated.sh'],
+				initCommands: ['sh /var/www/fabrika/migrate.generated.sh', 'sh /var/www/fabrika/verify.generated.sh'],
 				start: 'sh /var/www/fabrika/start.generated.sh',
 				ports: [{ port: 3000, httpSupport: true }],
 				healthCheck: {
@@ -133,12 +134,16 @@ describe('the generated execution descriptor of a contract application', () => {
 		})
 	})
 
-	test('the server starts only after the migration it expects ran, so a failed migration fails the readiness check', async () => {
-		const commands = mapping(render(await compile(contractApp()))['build'])['buildCommands']
-		const start = Array.isArray(commands) ? commands.find((command) => String(command).includes('start.generated.sh')) : undefined
-		expect(String(start)).toMatch(
-			/'set -eu' 'cd \/var\/www' 'sh \/var\/www\/fabrika\/migrate\.generated\.sh' 'FABRIKA_APP_ID=notes \S+ db codegen --verify' 'FABRIKA_APP_ID=notes \S+ db test-isolation' 'exec bun /,
+	test('the schema check and the isolation tests run after the migrations, before `run.start` opens the readiness window', async () => {
+		const setup = render(await compile(contractApp()))
+		expect(mapping(setup['run'])['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh', 'sh /var/www/fabrika/verify.generated.sh'])
+		const commands = mapping(setup['build'])['buildCommands']
+		const verify = Array.isArray(commands) ? commands.find((command) => String(command).includes('verify.generated.sh')) : undefined
+		expect(String(verify)).toMatch(
+			/'set -eu' 'cd \/var\/www' 'FABRIKA_APP_ID=notes \S+ db codegen --verify' 'FABRIKA_APP_ID=notes exec \S+ db test-isolation'/,
 		)
+		const start = Array.isArray(commands) ? commands.find((command) => String(command).includes('start.generated.sh')) : undefined
+		expect(String(start)).not.toContain('fabrika db')
 	})
 
 	test('the authored tests run before the reinstall, the regenerated entrypoint and every check', async () => {
@@ -158,6 +163,7 @@ describe('the generated execution descriptor of a contract application', () => {
 			envVariables: { PORT: '3000', FABRIKA_CONTRACT_DIGEST: DIGEST },
 		})
 		expect(JSON.stringify(setup)).not.toContain('migrate')
+		expect(JSON.stringify(setup)).not.toContain('verify.generated.sh')
 		expect(JSON.stringify(setup)).not.toContain('FABRIKA_RELEASE')
 	})
 
