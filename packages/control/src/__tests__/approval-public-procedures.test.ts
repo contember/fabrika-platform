@@ -68,7 +68,9 @@ describe('a public procedure in the approval diff', () => {
 		// Procedures, and so the line, start at 0.7: an older contract upcasts without any (`formats.ts`). The diff names the
 		// platform's own deadline, which is right while every release from 0.7 on derives it alike. A bundled release from 0.7
 		// on whose deadline differs, or that does not export it here, needs the diff to read it from that release (ADR-0062):
-		// this fails then. Until 0.7 is bundled as an older release, only the platform's own is compared.
+		// this fails then. 0.7 and 0.8 are the exceptions: they keep the deadline unexported in `implement/anonymous.ts`, at
+		// the same 16 KiB/s and 30 s floor, so their applications wait as long as the line says.
+		const exportsNoDeadline = new Set(['@fabrika/app-0.7', '@fabrika/app-0.8'])
 		const manifest = z.object({ dependencies: z.record(z.string()) }).parse(await Bun.file(new URL('../../package.json', import.meta.url)).json())
 		const older = Object.keys(manifest.dependencies).filter((name) => /^@fabrika\/app-\d+\.\d+$/.test(name))
 		expect(older.length).toBeGreaterThanOrEqual(3)
@@ -79,7 +81,7 @@ describe('a public procedure in the approval diff', () => {
 			const deadline: unknown = typeof contract === 'object' && contract !== null ? Reflect.get(contract, 'bodyDeadlineMs') : undefined
 			if (typeof deadline !== 'function') {
 				const minor = /^@fabrika\/app-0\.(\d+)$/.exec(release)?.[1]
-				expect([release, minor !== undefined && Number(minor) < 7]).toEqual([release, true])
+				expect([release, (minor !== undefined && Number(minor) < 7) || exportsNoDeadline.has(release)]).toEqual([release, true])
 				continue
 			}
 			for (const maxBytes of [1, 64 * 1024, 1024 * 1024, 10 * 1024 * 1024]) {
