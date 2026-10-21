@@ -57,8 +57,9 @@ database service, daily between 00:00 and 01:00 UTC unless the service sets anot
 manual (download, then `pg_restore`). A single-node PostgreSQL whose node fails loses everything written since
 its last backup and stays down until someone restores it. An HA PostgreSQL (three nodes) keeps both its data and
 its service. A deploy never takes a one-container runtime down, because Zerops starts the new container before
-it stops the old one; how fast Zerops replaces one lost with its node is not measured. Operations has its own
-database because its error history does not need the backup schedule identity and deploy state do.
+it stops the old one; how fast Zerops replaces one lost with its node is not measured. `platform install` and
+every `platform deploy` set the platform database `db` (users, grants, deploy records) to back up hourly.
+Operations' own `operationsdb` keeps the daily default: its error history does not need that schedule.
 
 **Presets.** The choices below combine into three shapes. Prices are the idle floor for three applications in
 one production namespace; an application with a database runs at a 0.5 GB floor, about $2.10 per container.

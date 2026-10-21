@@ -163,6 +163,8 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		createIntegrationToken: () => Promise.reject(new Error('an application deploy must not mint a Zerops token')),
 		enableSubdomainAccess: () => Promise.resolve(record('enableSubdomainAccess', undefined)),
 		configureAutoscaling: () => Promise.reject(new Error('an application deploy must not change a profile')),
+		getBackupConfig: () => Promise.reject(new Error('an application deploy must not read a backup schedule')),
+		configureBackup: () => Promise.reject(new Error('an application deploy must not change a backup schedule')),
 		configureCustomAutoscaling: ({ serviceId, autoscaling: sent }) => {
 			rec.minRams.push([serviceId, sent.vertical.minResource.memoryGBytes])
 			minRams.set(serviceId, sent.vertical.minResource.memoryGBytes)

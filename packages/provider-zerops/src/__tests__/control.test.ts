@@ -218,6 +218,8 @@ const makeApi = (
 		},
 		configureAutoscaling: () => Promise.reject(new Error('the control provider must not change autoscaling')),
 		configureCustomAutoscaling: () => Promise.reject(new Error('the control provider must not change autoscaling')),
+		getBackupConfig: () => Promise.reject(new Error('the control provider must not read a backup schedule')),
+		configureBackup: () => Promise.reject(new Error('the control provider must not change a backup schedule')),
 		getService: async ({ serviceId }) => ({ id: serviceId, name: 'notes', projectId: 'project-1', activeAppVersionId: 'bootstrap-1' }),
 		findService: async ({ hostname }) => ({ id: 'service-1', name: hostname, subdomainAccess: false }),
 		getProject: async ({ projectId }) => ({ id: projectId, name: 'project' }),

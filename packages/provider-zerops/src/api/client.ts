@@ -5,6 +5,7 @@ import { waitForProcess } from './polling'
 import {
 	appVersionListSchema,
 	appVersionSchema,
+	backupConfigSchema,
 	importResultSchema,
 	integrationTokenSchema,
 	logAccessSchema,
@@ -362,6 +363,17 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 				signal,
 			})
 			return readResponse('configure custom autoscaling', processNilSchema, payload).process ?? null
+		},
+
+		getBackupConfig: async ({ serviceId, signal }) =>
+			readResponse('list backups', backupConfigSchema, await request('list backups', 'GET', `/service-stack/${serviceId}/backup`, { signal })),
+
+		configureBackup: async ({ serviceId, backupPeriod, retentionPolicy, signal }) => {
+			const payload = await request('configure backup', 'PUT', `/service-stack/${serviceId}/backup-config`, {
+				body: { backupPeriod, retentionPolicy },
+				signal,
+			})
+			return readResponse('configure backup', processNilSchema, payload).process ?? null
 		},
 
 		getService: async ({ serviceId, signal }) =>

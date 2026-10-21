@@ -3,6 +3,8 @@ import { withoutSensitiveContent } from './service-env-response'
 import type {
 	ZeropsAppVersion,
 	ZeropsAppVersionStatus,
+	ZeropsBackupConfig,
+	ZeropsBackupRetentionPolicy,
 	ZeropsImportResult,
 	ZeropsIntegrationToken,
 	ZeropsLogAccess,
@@ -169,6 +171,32 @@ export const serviceSchema = z.object({
 	customAutoscaling: optional(serviceAutoscalingSchema),
 	currentAutoscaling: optional(serviceAutoscalingSchema),
 }).transform(({ activeAppVersion, ...service }): ZeropsService => ({ ...service, activeAppVersionId: activeAppVersion?.id }))
+
+const backupCountSchema = z.number().int().nonnegative()
+
+/** Strict like the custom autoscaling, for the same reason: it is sent back whole, so no field may read as absent. */
+const backupRetentionPolicySchema = z.object({
+	maxTotalFiles: backupCountSchema,
+	maxTotalGiB: backupCountSchema,
+	protectedTags: z.array(z.string()),
+	minDaily: backupCountSchema,
+	maxDaily: backupCountSchema,
+	minWeekly: backupCountSchema,
+	maxWeekly: backupCountSchema,
+	minMonthly: backupCountSchema,
+	maxMonthly: backupCountSchema,
+}) satisfies z.ZodType<ZeropsBackupRetentionPolicy, z.ZodTypeDef, unknown>
+
+/** A service's own retention that does not parse fails the whole read: reading it as absent would send the default over it. */
+export const backupConfigSchema = z.object({
+	backupPeriod: z.string(),
+	defaultRetentionPolicy: backupRetentionPolicySchema,
+	retentionPolicy: backupRetentionPolicySchema.nullish(),
+}).transform(({ backupPeriod, defaultRetentionPolicy, retentionPolicy }): ZeropsBackupConfig => ({
+	backupPeriod,
+	defaultRetentionPolicy,
+	...(retentionPolicy === null || retentionPolicy === undefined ? {} : { retentionPolicy }),
+}))
 
 export const projectSchema = z.object({
 	id: idSchema,

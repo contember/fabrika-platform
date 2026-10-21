@@ -196,6 +196,34 @@ export interface ZeropsServiceAutoscaling {
 	}
 }
 
+/**
+ * How many backups of a managed service the platform keeps. VERIFIED AS A SHAPE: `OutDtoBackupRetentionPolicy` and
+ * `InDtoBodyBackupRetentionPolicy` carry these nine fields, all required. The `min*`/`max*` counts are per backup TAG
+ * (`daily`, `weekly`, `monthly`); UNVERIFIED: which tags an hourly automatic backup gets.
+ */
+export interface ZeropsBackupRetentionPolicy {
+	maxTotalFiles: number
+	maxTotalGiB: number
+	/** Backups with one of these tags are never deleted automatically. */
+	protectedTags: string[]
+	minDaily: number
+	maxDaily: number
+	minWeekly: number
+	maxWeekly: number
+	minMonthly: number
+	maxMonthly: number
+}
+
+/** A managed service's backup schedule and retention. VERIFIED AS A SHAPE: `ResponseServiceStackBackupFileList`, without its `files`. */
+export interface ZeropsBackupConfig {
+	/** UNVERIFIED: the format. Zerops' GUI documentation describes a 5-field cron (`min hour dom mon dow`). */
+	backupPeriod: string
+	/** What the platform applies to a service with no retention of its own. UNVERIFIED: that it is what applies then. */
+	defaultRetentionPolicy: ZeropsBackupRetentionPolicy
+	/** The service's own retention; absent when none was set. */
+	retentionPolicy?: ZeropsBackupRetentionPolicy
+}
+
 /** One service. VERIFIED: `ResponseServiceStack` (narrowed to the fields fabrika reads). */
 export interface ZeropsService {
 	id: string
@@ -493,6 +521,30 @@ export interface ZeropsApi {
 	 * 200, so the caller sends what `getService().customAutoscaling` read, changed where it means to.
 	 */
 	configureCustomAutoscaling(input: { serviceId: string; autoscaling: ZeropsServiceAutoscaling; signal: AbortSignal }): Promise<ZeropsProcess | null>
+
+	// ── service-stack: backups ────────────────────────────────────────────────────
+
+	/**
+	 * A managed service's backup schedule and retention. VERIFIED AS A SHAPE: `GET /service-stack/{id}/backup`
+	 * (`ListBackups`), response `ResponseServiceStackBackupFileList`; the backup files it also lists are not read.
+	 */
+	getBackupConfig(input: { serviceId: string; signal: AbortSignal }): Promise<ZeropsBackupConfig>
+
+	/**
+	 * Set a managed service's backup schedule and retention. VERIFIED AS A SHAPE: `PUT /service-stack/{id}/backup-config`
+	 * (`ConfigureBackup`), body `RequestServiceStackBackupConfig`, response `ResponseProcessNil`. The platform stores the
+	 * period as the service's `BACKUP_PERIOD` variable and may start a user-data sync, whose process this answers.
+	 *
+	 * `retentionPolicy` is required here although the body makes it optional. UNVERIFIED: whether a request without one
+	 * resets the service's retention; a PUT elsewhere on this API resets every field it leaves out, so the caller sends
+	 * the retention it read, whole.
+	 */
+	configureBackup(input: {
+		serviceId: string
+		backupPeriod: string
+		retentionPolicy: ZeropsBackupRetentionPolicy
+		signal: AbortSignal
+	}): Promise<ZeropsProcess | null>
 
 	// ── service-stack / project: reading state ────────────────────────────────────
 

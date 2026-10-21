@@ -142,6 +142,7 @@ const SECTION_UNVERIFIED_HA_NEW_ROLE =
 	'UNVERIFIED: a role fabrika creates connects on the direct port of `postgresql:ha@18` — docs/reference/zerops-platform.md:1293'
 const SECTION_POSTGRES_MIN_RAM =
 	"Verified live (2026-10-16) — the autoscaling API raises a PostgreSQL service's minimum RAM and its `max_connections` — docs/reference/zerops-platform.md"
+const SECTION_BACKUP_SCHEDULE = "UNVERIFIED: a managed service's backup schedule, set through the API — docs/reference/zerops-platform.md"
 const SECTION_REST_API = 'REST API — docs/reference/zerops-platform.md:149'
 const SECTION_HIERARCHY = 'Hierarchy and isolation — docs/reference/zerops-platform.md:28'
 const SECTION_AUTHORIZATION_FORWARDED =
@@ -1276,6 +1277,18 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		live: 'build',
 		emulator: false,
 		emulatorNote: 'the double serves no database',
+	},
+	{
+		id: 'postgres-backup-period-round-trips',
+		section: SECTION_BACKUP_SCHEDULE,
+		// The import of its own `postgresql:single@18`, the read, the change through the deploy step's own
+		// `ensureBackupPeriod` and the read-back all happen in the script. No build, but a managed import takes minutes.
+		request: { method: 'PUT', path: '/service-stack/{backupServiceId}/backup-config' },
+		expect: { status: 200 },
+		script: 'postgres-backup-period',
+		live: 'build',
+		emulator: false,
+		emulatorNote: 'the double keeps no backups',
 	},
 ]
 

@@ -337,6 +337,11 @@ Invariants:
   is a SECURITY property.** The application enforces nothing (ADR-0022), so control at a new version
   behind the previous manifest is an open `/api/*`. Operations owns `operationsdb` and
   `operationsstorage`; only the proxy may expose its ingest and source-map paths.
+- **`platform deploy` ends by setting `db`'s backup period to hourly (`ensureBackupPeriod`)**, after the
+  registration, so a failure there leaves the deployed order whole and still fails the command. Read-compare-write:
+  a different period is sent with the retention it read (its own, else the default) WHOLE, and decided by the
+  read-back. The API shapes are the OpenAPI's; the period's format and the retention reset are UNVERIFIED
+  (`docs/reference/zerops-platform.md`). `operationsdb` keeps the Zerops default.
 - **MCP authoring is opt-in, and ONE input turns on both halves** (ADR-0049,
   [`mcp-authoring.md`](../../docs/reference/mcp-authoring.md)). `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` /
   `--mcp-clients` makes `resolvePlatformProxyManifest` publish the console's MCP table with its `oauth` row

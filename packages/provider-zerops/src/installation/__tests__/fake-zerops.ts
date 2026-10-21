@@ -12,6 +12,7 @@ import {
 	type ZeropsApi,
 	ZeropsApiError,
 	type ZeropsAppVersion,
+	type ZeropsBackupRetentionPolicy,
 	type ZeropsProjectMode,
 	type ZeropsProjectStatus,
 	type ZeropsService,
@@ -35,6 +36,37 @@ export interface FakeServiceSpec {
 	readonly status?: ZeropsServiceStatus
 	/** How many processes an import of this service hands back. Live: 1 for managed, 2 for a runtime. */
 	readonly importProcesses?: number
+	/** What `getBackupConfig` reads; `FAKE_DAILY_BACKUP_PERIOD` and no retention of its own when absent. */
+	readonly backup?: FakeBackup
+}
+
+/** A service's backup schedule and its own retention, as the fake stores them. */
+export interface FakeBackup {
+	readonly backupPeriod: string
+	readonly retentionPolicy?: ZeropsBackupRetentionPolicy
+}
+
+/** The fake's stand-in for the platform's default schedule. UNVERIFIED: how the platform spells its own default. */
+export const FAKE_DAILY_BACKUP_PERIOD = '0 0 * * *'
+
+/** What `defaultRetentionPolicy` reads on every service of the fake. */
+export const FAKE_DEFAULT_RETENTION: ZeropsBackupRetentionPolicy = {
+	maxTotalFiles: 50,
+	maxTotalGiB: 25,
+	protectedTags: [],
+	minDaily: 7,
+	maxDaily: 14,
+	minWeekly: 4,
+	maxWeekly: 8,
+	minMonthly: 3,
+	maxMonthly: 6,
+}
+
+/** One `configureBackup` request, as it was sent. */
+export interface FakeBackupWrite {
+	readonly service: string
+	readonly backupPeriod: string
+	readonly retentionPolicy: ZeropsBackupRetentionPolicy
 }
 
 /** What an `importServices` call is allowed to create, and which client a token may be minted on. */
@@ -93,6 +125,12 @@ export interface FakeZerops {
 	failDeploy(service: string): void
 	/** Make the next N triggers of one service answer `userDataSyncRunning`, as a live one can. */
 	blockTrigger(service: string, times: number): void
+	/** Every `configureBackup` request, in order. */
+	readonly backupWrites: FakeBackupWrite[]
+	/** What `getBackupConfig` would read for one service now. */
+	backup(service: string): FakeBackup
+	/** Make one service accept `configureBackup` and keep its period, so the read-back disagrees. */
+	ignoreBackupPeriod(service: string): void
 }
 
 const NEVER = (name: string) => (): never => {
@@ -130,6 +168,10 @@ export const fakeZerops = (options: {
 	const served = new Map<string, string>()
 	const blockedTriggers = new Map<string, number>()
 	const processes = new Map<string, string>()
+	const backups = new Map(live.map((service) => [service.name, service.backup ?? { backupPeriod: FAKE_DAILY_BACKUP_PERIOD }]))
+	const backupWrites: FakeBackupWrite[] = []
+	const ignoredBackupPeriods = new Set<string>()
+	const backupOf = (name: string): FakeBackup => backups.get(name) ?? { backupPeriod: FAKE_DAILY_BACKUP_PERIOD }
 
 	const nameOf = (serviceId: string): string => {
 		const name = idToName.get(serviceId)
@@ -419,6 +461,22 @@ export const fakeZerops = (options: {
 			effect(`subdomain:${name}`)
 			published.set(name, true)
 		},
+
+		getBackupConfig: async ({ serviceId }) => {
+			const name = nameOf(serviceId)
+			observe(`readbackup:${name}`)
+			const { backupPeriod, retentionPolicy } = backupOf(name)
+			return { backupPeriod, defaultRetentionPolicy: FAKE_DEFAULT_RETENTION, ...(retentionPolicy === undefined ? {} : { retentionPolicy }) }
+		},
+
+		/** No process: `getProcess` belongs to the bootstrap surface, which a deploy must not reach. */
+		configureBackup: async ({ serviceId, backupPeriod, retentionPolicy }) => {
+			const name = nameOf(serviceId)
+			effect(`backup:${name}`)
+			backupWrites.push({ service: name, backupPeriod, retentionPolicy })
+			backups.set(name, { backupPeriod: ignoredBackupPeriods.has(name) ? backupOf(name).backupPeriod : backupPeriod, retentionPolicy })
+			return null
+		},
 	}
 
 	const uploadFetch: PlatformUploadFetch = async (url, init) => {
@@ -450,6 +508,9 @@ export const fakeZerops = (options: {
 		failWrite: (service, key) => void failedWrites.add(`${service}:${key}`),
 		failDeploy: (service) => void failedDeploys.add(service),
 		blockTrigger: (service, times) => void blockedTriggers.set(service, times),
+		backupWrites,
+		backup: (service) => backupOf(service),
+		ignoreBackupPeriod: (service) => void ignoredBackupPeriods.add(service),
 	}
 }
 

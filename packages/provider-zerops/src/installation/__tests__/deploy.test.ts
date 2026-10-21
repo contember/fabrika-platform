@@ -18,12 +18,20 @@ import {
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { ZeropsApi } from '../../index'
-import { deployPlatform, PLATFORM_CONCURRENT_DEPLOY, PLATFORM_SEQUENTIAL_DEPLOY } from '../deploy'
+import { deployPlatform, PLATFORM_CONCURRENT_DEPLOY, PLATFORM_DATABASE_BACKUP_PERIOD, PLATFORM_SEQUENTIAL_DEPLOY } from '../deploy'
 import { parsePlatformDeployArgs, type PlatformDeployInput } from '../deploy-options'
 import { recordingDeployLog } from '../log'
 import type { McpClient } from '../mcp'
 import { fakeSourceCollaborators } from './fake-platform-source'
-import { type FakeZerops, fakeZerops, platformServices, SUBDOMAINS } from './fake-zerops'
+import {
+	FAKE_DAILY_BACKUP_PERIOD,
+	FAKE_DEFAULT_RETENTION,
+	type FakeBackup,
+	type FakeZerops,
+	fakeZerops,
+	platformServices,
+	SUBDOMAINS,
+} from './fake-zerops'
 
 /** The platform app `id` of a parsed manifest; every platform service is an installation entry with its table. */
 const tableAppOf = (manifest: ProxyManifest | null, id: string): InstallationProxyApp | undefined => {
@@ -75,10 +83,11 @@ interface Harness {
 	run(overrides?: Partial<PlatformDeployInput>): Promise<void>
 }
 
-const harness = (proxyEnv: Readonly<Record<string, string>> = {}): Harness => {
+const harness = (proxyEnv: Readonly<Record<string, string>> = {}, databaseBackup?: FakeBackup): Harness => {
 	const zerops = fakeZerops({
 		...PROJECT,
-		services: platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS, ...proxyEnv } }),
+		services: platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS, ...proxyEnv } })
+			.map((service) => (service.name === 'db' && databaseBackup !== undefined ? { ...service, backup: databaseBackup } : service)),
 	})
 	const reconciled: SchemaReconcileInput[] = []
 	const log = recordingDeployLog()
@@ -336,6 +345,7 @@ describe('idempotence', () => {
 		await fixture.run()
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('env'))).toEqual([])
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('subdomain:'))).toEqual([])
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('backup:'))).toEqual([])
 		expect(await manifestOf(fixture.zerops)).toBe(afterFirst)
 		// Deploying IS what a re-run does; it is the configuration that must not move.
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toHaveLength(4)
@@ -524,6 +534,73 @@ describe('--dry-run', () => {
 		expect(fixture.zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON)).toBe(legacyManifest)
 		expect(fixture.log.lines.some((line) => line.includes('would write'))).toBe(true)
 		expect(fixture.log.lines.some((line) => line.includes(`would remove ${FABRIKA_PROXY_MANIFEST_JSON}`))).toBe(true)
+		expect(fixture.zerops.timeline).toContain('readbackup:db')
+		expect(fixture.zerops.backup('db').backupPeriod).toBe(FAKE_DAILY_BACKUP_PERIOD)
+		expect(fixture.log.lines).toContain(`info: db: backups would run on \`${PLATFORM_DATABASE_BACKUP_PERIOD}\`, were \`${FAKE_DAILY_BACKUP_PERIOD}\``)
+	})
+})
+
+describe('the platform database backup schedule', () => {
+	const OWN_RETENTION = { ...FAKE_DEFAULT_RETENTION, maxTotalFiles: 40, protectedTags: ['before-migration'], minMonthly: 12 }
+
+	test('a daily schedule becomes hourly, sent with the default retention whole when the service has none of its own', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		await fixture.run()
+		expect(fixture.zerops.backupWrites).toEqual([
+			{ service: 'db', backupPeriod: PLATFORM_DATABASE_BACKUP_PERIOD, retentionPolicy: FAKE_DEFAULT_RETENTION },
+		])
+		expect(fixture.zerops.backup('db').backupPeriod).toBe(PLATFORM_DATABASE_BACKUP_PERIOD)
+		expect(fixture.log.lines).toContain(`info: db: backups now run on \`${PLATFORM_DATABASE_BACKUP_PERIOD}\`, were \`${FAKE_DAILY_BACKUP_PERIOD}\``)
+	})
+
+	test("the service's own retention is sent back whole", async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest }, {
+			backupPeriod: FAKE_DAILY_BACKUP_PERIOD,
+			retentionPolicy: OWN_RETENTION,
+		})
+		await fixture.run()
+		expect(fixture.zerops.backupWrites).toEqual([{ service: 'db', backupPeriod: PLATFORM_DATABASE_BACKUP_PERIOD, retentionPolicy: OWN_RETENTION }])
+	})
+
+	test('an hourly schedule is read and left alone', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest }, {
+			backupPeriod: PLATFORM_DATABASE_BACKUP_PERIOD,
+			retentionPolicy: OWN_RETENTION,
+		})
+		await fixture.run()
+		expect(fixture.zerops.timeline).toContain('readbackup:db')
+		expect(fixture.zerops.backupWrites).toEqual([])
+		expect(fixture.log.lines).toContain(`info: db: backups already run on \`${PLATFORM_DATABASE_BACKUP_PERIOD}\``)
+	})
+
+	test('a period the read-back does not show fails the command, after every service is deployed and registered', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		fixture.zerops.ignoreBackupPeriod('db')
+		await expect(fixture.run()).rejects.toThrow(
+			`db reads back the backup schedule \`${FAKE_DAILY_BACKUP_PERIOD}\` after it was set to \`${PLATFORM_DATABASE_BACKUP_PERIOD}\``,
+		)
+		expect(fixture.zerops.backupWrites).toHaveLength(1)
+		expect(fixture.zerops.calls).toContain('deploy:control')
+		expect(fixture.reconciled).toHaveLength(2)
+		expect(fixture.zerops.calls.at(-1)).toBe('backup:db')
+	})
+
+	test('an installation without its database is refused before anything is written', async () => {
+		const zerops = fakeZerops({
+			...PROJECT,
+			services: platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS } }).filter((service) => service.name !== 'db'),
+		})
+		await expect(
+			deployPlatform(input(), {
+				...fakeSourceCollaborators,
+				api: zerops.api,
+				reconcileSchema: async () => {},
+				sleep: async () => {},
+				log: recordingDeployLog(),
+				signal: new AbortController().signal,
+			}),
+		).rejects.toThrow('has no db service')
+		expect(zerops.calls).toEqual([])
 	})
 })
 
