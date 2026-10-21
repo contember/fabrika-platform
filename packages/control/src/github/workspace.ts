@@ -5,6 +5,7 @@ import {
 	GitHubNotFoundError,
 	type GitHubRepositoryClient,
 	type GitHubRepositoryOpenRequest,
+	GitHubRequestError,
 	GitHubStaleHeadError,
 	type GitHubTreeEntry,
 } from '@fabrika/github-app'
@@ -17,6 +18,7 @@ import {
 	type WorkspaceTreeEntry,
 } from '../workspace-source-port'
 import { type GitHubAppCredential, readBoundAppCredential } from './connections/credentials'
+import { SourceFailure } from './source/failure'
 
 export const WORKSPACE_MAX_TREE_ENTRIES = 5000
 /** The GitHub client's bound on one blob read. */
@@ -53,7 +55,8 @@ export function githubWorkspaceSource(env: Env, createClient: WorkspaceGitHubCli
 		} catch (error) {
 			if (isAbort(error, signal)) throw error
 			console.error('workspace could not open the repository')
-			throw new WorkspaceSourceError('unavailable')
+			const refused = error instanceof SourceFailure || (error instanceof GitHubRequestError && OPEN_REFUSALS.includes(error.status))
+			throw new WorkspaceSourceError(refused ? 'refused' : 'unavailable')
 		}
 		try {
 			return await use(repository)
@@ -140,6 +143,11 @@ function treeEntry(entry: GitHubTreeEntry): WorkspaceTreeEntry {
 	return { path: entry.path, kind: 'other' }
 }
 
+/** A token GitHub will not mint: an unknown, suspended or under-permitted installation, or a bad App key. */
+const OPEN_REFUSALS: readonly number[] = [401, 403, 404, 422]
+// 403 is left out on purpose: GitHub answers its secondary rate limit with it, and a retry then helps.
+const OPERATION_REFUSALS: readonly number[] = [401, 422]
+
 /** GitHub error bodies and messages never reach the caller or the log; they may carry repository detail. */
 function workspaceFailure(error: unknown, signal: AbortSignal): unknown {
 	if (isAbort(error, signal)) return error
@@ -147,7 +155,7 @@ function workspaceFailure(error: unknown, signal: AbortSignal): unknown {
 	if (error instanceof GitHubBranchConflictError) return new WorkspaceSourceError('conflict')
 	if (error instanceof GitHubNotFoundError) return new WorkspaceSourceError('not_found')
 	console.error('workspace GitHub operation failed')
-	return new WorkspaceSourceError('unavailable')
+	return new WorkspaceSourceError(error instanceof GitHubRequestError && OPERATION_REFUSALS.includes(error.status) ? 'refused' : 'unavailable')
 }
 
 function isAbort(error: unknown, signal: AbortSignal): boolean {

@@ -23,7 +23,7 @@ import {
 	searchFilesUseCase,
 } from '../api/workspaces'
 import { type ControlRepositories, createControlRepositories } from '../db'
-import type { WorkspaceChangedFile } from '../workspace-source-port'
+import { type WorkspaceChangedFile, WorkspaceSourceError } from '../workspace-source-port'
 import { createHarness } from './helpers/harness'
 import { fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, skipReason } from './helpers/postgres'
@@ -195,6 +195,21 @@ for (const backend of backends) {
 				await expect(getWorkspaceUseCase(w.context(writerOnly), id)).rejects.toMatchObject({ httpStatus: 404 })
 				expect(w.source.kinds()).toEqual(['read-branch', 'create-branch'])
 				expect(w.queued).toEqual([])
+			})
+
+			test('a GitHub refusal says a retry will not help, and an outage says it may', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				w.source.failure = new WorkspaceSourceError('refused')
+				await expect(getWorkspaceUseCase(w.context(author), { workspaceId: created.id })).rejects.toMatchObject({
+					httpStatus: 502,
+					message: expect.stringContaining('Retrying will not help; tell the operator.'),
+				})
+				w.source.failure = new WorkspaceSourceError('unavailable')
+				await expect(getWorkspaceUseCase(w.context(author), { workspaceId: created.id })).rejects.toMatchObject({
+					httpStatus: 503,
+					message: expect.stringContaining('Retry in a minute'),
+				})
 			})
 
 			test('a target that stops being an authoring environment is refused', async () => {

@@ -3,8 +3,9 @@
 
 import { readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
+import type { DeployQueue } from '../api/runs'
 import type { Env } from '../env'
 import { controlMcpRoute } from '../zerops/mcp'
 import { createFetchHandler } from '../zerops/server'
@@ -24,7 +25,7 @@ afterEach(() => {
 	harness = null
 })
 
-async function fixture(): Promise<{ world: WorkspaceWorld; fetch: (request: Request) => Promise<Response> }> {
+async function fixture(queue?: DeployQueue): Promise<{ world: WorkspaceWorld; fetch: (request: Request) => Promise<Response> }> {
 	harness = createHarness()
 	const world = await seedWorkspaceWorld(harness.repositories, harness.d1)
 	// The world's queue and log reader stand in for the process ports.
@@ -39,7 +40,7 @@ async function fixture(): Promise<{ world: WorkspaceWorld; fetch: (request: Requ
 			put: () => Promise.reject(new Error('unused')),
 			delete: () => Promise.reject(new Error('unused')),
 		},
-		DEPLOY_QUEUE: context.queue,
+		DEPLOY_QUEUE: queue ?? context.queue,
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'stage',
 		FABRIKA_CONTROL_DOMAIN: ORIGIN,
@@ -263,6 +264,33 @@ describe('the MCP endpoint', () => {
 		expect(JSON.stringify(oversized)).toContain('"isError":true')
 		expect(world.source.kinds()).toEqual(['read-branch', 'create-branch'])
 		expect(world.queued).toEqual([])
+	})
+
+	test('an unclassified failure names no upstream detail but a reference, and a queue failure names the queue', async () => {
+		const { fetch, world } = await fixture({ send: () => Promise.reject(new Error('queue down')) })
+		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const errorLog = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const workspace = toolJson(
+				await rpc(fetch, token, 'tools/call', { name: 'create_workspace', arguments: { appId: 'shop', env: 'stage', title: 'Failing' } }),
+			)
+			world.source.failure = new Error('https://x-access-token:ghs_secret@github.com/acme/shop')
+			const failed = JSON.stringify(
+				await rpc(fetch, token, 'tools/call', { name: 'get_workspace', arguments: { workspaceId: field(workspace, 'id') } }),
+			)
+			expect(failed).toContain('"isError":true')
+			expect(failed).toMatch(
+				/your input did not cause it\. Retry in a minute\. If it keeps failing, tell the operator and quote reference [0-9a-f-]{36}\./,
+			)
+			expect(failed).not.toContain('ghs_')
+			const deploy = JSON.stringify(
+				await rpc(fetch, token, 'tools/call', { name: 'deploy_stage', arguments: { workspaceId: field(workspace, 'id') } }),
+			)
+			expect(deploy).toContain('Control created the run but could not queue it: the deploy queue is unavailable.')
+			expect(JSON.stringify(errorLog.mock.calls)).not.toContain('ghs_')
+		} finally {
+			errorLog.mockRestore()
+		}
 	})
 
 	test('an OAuth resource token is refused on the console RPC surface', async () => {

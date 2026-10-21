@@ -79,6 +79,20 @@ the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `refer
 `get_app_rules`, and three rules (each endpoint and every step off the paved road declared; never loosen anything to
 make something pass; ask when a file is protected).
 
+## Failures
+
+A refused call is a tool error with one short line. A failure the client did not cause says what failed and whether a
+retry helps, and never carries upstream text, which may hold a token or a clone URL:
+
+- **GitHub refused** the app's GitHub App (its installation, permissions or key, or a protected branch): retrying does
+  not help, and the operator must act.
+- **GitHub is unavailable or rate-limited** (a 5xx, a timeout, or a 403, which GitHub also answers for its secondary
+  rate limit): retry in a minute.
+- **The deploy queue or the run log store failed**: the message names the store. A queue failure after the run was
+  created says so, so the client knows a retry creates another run.
+- **Anything else** (Control's database, the audit log in IAM, a fault in Control): retry in a minute. The message carries
+  a reference that Control's log names beside the error's class.
+
 ## Enable it on an installation
 
 1. **Register the MCP clients.** Set `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` in the sidecar's GitHub
