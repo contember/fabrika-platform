@@ -104,6 +104,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [217](217-postmark-managed-unsubscribes-never-reach-the-application.md): An unsubscribe through Postmark's own link or footer reaches only Postmark; the application's consent records drift.
 - [218](218-the-skill-names-no-working-one-click-unsubscribe-target.md): The skill's unsubscribe procedure is POST JSON, which refuses a mailbox's RFC 8058 one-click POST.
 - [219](219-a-zerops-platform-deploy-rebuilds-every-service.md): A Zerops platform deploy rebuilds all four services every time, and a bring-up compiles Caddy for 5 min.
+- [220](220-operator-traps-of-an-mcp-authoring-bring-up.md): MCP authoring bring-up traps: `put` loses bucket provenance, no `authoring` flag, a bare `forbidden`, `admin` offered for a contract app.
 - [223](223-terminal-authority-outlives-the-terminal-in-a-share-link.md): A share link issued on a terminal keeps the terminal's grants after sign-out, release or revoke.
 - [224](224-terminal-follow-ups.md): Smaller gaps of terminals: sign-out without `Sec-Fetch-Site`, re-enrolment, sign-out of a personal login.
 - [225](225-password-minimum-follow-ups.md): Smaller gaps of the installation's minimum password length: audit, an upper cap, the console page.
