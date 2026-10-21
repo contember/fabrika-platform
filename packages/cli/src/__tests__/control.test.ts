@@ -657,6 +657,30 @@ describe('control namespaces', () => {
 		})
 	})
 
+	test('plan forwards the shared PostgreSQL type and profile, and refuses a profile without a type', async () => {
+		const captured = captureFetch({ result: zeropsPlan({ corePackage: 'LIGHT' }) })
+		await captureStdout(() =>
+			runControlCli(
+				'namespaces',
+				['plan', '--namespace=notes-prod', '--env=prod', '--preset=cheap', '--postgres-type=postgresql:ha@18', '--postgres-profile=oltp-staging'],
+				undefined,
+				CONTROL_ENV,
+			)
+		)
+		expect(captured.calls[0]?.body).toEqual({
+			method: 'namespaces.plan',
+			input: { id: 'notes-prod', env: 'prod', preset: 'cheap', options: { postgres: { type: 'postgresql:ha@18', profile: 'oltp-staging' } } },
+		})
+		await expect(
+			runControlCli(
+				'namespaces',
+				['plan', '--namespace=notes-prod', '--env=prod', '--preset=cheap', '--postgres-profile=oltp-staging'],
+				undefined,
+				CONTROL_ENV,
+			),
+		).rejects.toThrow('--postgres-profile needs --postgres-type')
+	})
+
 	test('create commits the plan it just read rather than deriving a second one', async () => {
 		const calls: Captured[] = []
 		globalThis.fetch = asFetch(async (input, init) => {

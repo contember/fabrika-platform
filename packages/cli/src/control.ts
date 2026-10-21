@@ -125,6 +125,10 @@ Namespace placement options, each defaulting to what the preset would choose:
                                     SERIOUS is a deliberate choice: a project cannot be downgraded again
   --public-access=<custom-domain|zerops-subdomain>
   --exclusive-app=<id>              required by, and only by, the \`full\` preset
+  --postgres-type=<type>            the \`cheap\` preset's shared PostgreSQL; on Zerops postgresql:single@18
+                                    (default) or postgresql:ha@18, which keeps its data through a node loss.
+                                    Fixed once created
+  --postgres-profile=<profile>      its profile, e.g. oltp-staging for HA; needs --postgres-type
 
 \`namespaces plan\` is a preview and changes nothing. It prints one \`<path>\\t<value>\` row per field of
 the plan, keyed by its path in \`--json\`; a multi-line value such as the proxy's descriptor file is shown
@@ -826,6 +830,12 @@ const namespacePlan = (flags: Flags): PlanDeploymentNamespaceRequest => {
 	if (project !== undefined) options['projectName'] = project
 	if (corePackage !== undefined) options['corePackage'] = corePackage
 	if (publicAccess !== undefined) options['publicAccess'] = publicAccess
+	const postgresType = optional(flags, 'postgres-type')
+	const postgresProfile = optional(flags, 'postgres-profile')
+	if (postgresProfile !== undefined && postgresType === undefined) throw new Error('--postgres-profile needs --postgres-type')
+	if (postgresType !== undefined) {
+		options['postgres'] = postgresProfile === undefined ? { type: postgresType } : { type: postgresType, profile: postgresProfile }
+	}
 	return {
 		id: required(flags, 'namespace'),
 		env: required(flags, 'env'),
