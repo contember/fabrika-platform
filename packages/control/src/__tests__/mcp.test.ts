@@ -203,6 +203,19 @@ describe('the MCP endpoint', () => {
 		const workspace = toolJson(created)
 		expect(workspace).toMatchObject({ appId: 'shop', env: 'stage', headSha: sha('a') })
 		expect(world.source.kinds()).toEqual(['read-branch', 'create-branch'])
+
+		world.source.contents.set('src/app.ts', 'title = "Old"')
+		const edited = await rpc(fetch, token, 'tools/call', {
+			name: 'apply_changes',
+			arguments: {
+				workspaceId: field(workspace, 'id'),
+				expectedHeadSha: sha('a'),
+				message: 'Retitle',
+				changes: [{ path: 'src/app.ts', oldString: '"Old"', newString: '"New"' }],
+			},
+		})
+		expect(toolJson(edited)).toEqual({ commitSha: sha('1') })
+		expect(world.source.calls.at(-1)).toMatchObject({ kind: 'commit', commit: { changes: [{ path: 'src/app.ts', content: 'title = "New"' }] } })
 	})
 
 	test('a refused tool call is a tool error with a short message, and invalid input never reaches Source', async () => {
@@ -224,6 +237,13 @@ describe('the MCP endpoint', () => {
 		})
 		const pinned = await rpc(fetch, token, 'tools/call', { name: 'deploy_stage', arguments: { workspaceId, commitSha: sha('b') } })
 		expect(JSON.stringify(pinned)).toContain('"isError":true')
+		for (const change of [{ path: 'a.ts', oldString: '', newString: 'x' }, { path: 'a.ts', oldString: 'x', content: 'y' }]) {
+			const malformed = await rpc(fetch, token, 'tools/call', {
+				name: 'apply_changes',
+				arguments: { workspaceId, expectedHeadSha: sha('a'), message: 'm', changes: [change] },
+			})
+			expect(JSON.stringify(malformed)).toContain('"isError":true')
+		}
 		const oversized = await rpc(fetch, token, 'tools/call', {
 			name: 'apply_changes',
 			arguments: { workspaceId, expectedHeadSha: sha('a'), message: 'm', changes: [{ path: 'big.txt', content: 'é'.repeat(256 * 1024 + 1) }] },
