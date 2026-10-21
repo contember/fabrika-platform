@@ -289,7 +289,8 @@ other environment, before the provider prepares anything, and the write maps a r
   (`ownerEdgeProblems`, the rule in `incompatibleChanges`). The two sides publish independently, so two
   concurrent publications can each pass against the other's previous snapshot; the next deploy of either sees
   the break. `assertMountCompatibility` refuses, the same way, a candidate that breaks a procedure of a mount the
-  approved contract promises `compatibility: 'backward'` (`incompatibleMountChanges`). `connectors.describe` answers the approved export to its consumer for `fabrika connect`, behind
+  approved contract promises `compatibility: 'backward'` (`incompatibleMountChanges`), including the generated challenge
+  URLs its clients fetch. `connectors.describe` answers the approved export to its consumer for `fabrika connect`, behind
   `deploy.read` on the consumer, and the same 404 for anything else.
 - **Signed-token keys and the application origin are Control's (migration `0012_token_keys`).** Each environment's
   token keys live in the vault (`app_env_token_keys`) and are handed as `FABRIKA_TOKEN_KEYS`, the signing key first,

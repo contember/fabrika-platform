@@ -2,7 +2,7 @@
 // application issues and verifies it, nothing leaving the process. The Postgres half, the replay record and the
 // buckets through boot, runs in altcha-admission.test.ts.
 
-import { ContractError, defineApp } from '@fabrika/app/contract'
+import { ContractError, defineApp, incompatibleMountChanges } from '@fabrika/app/contract'
 import type { ContractArtifact } from '@fabrika/auth-core'
 import { cspOrigins, headerPolicy } from '@fabrika/proxy-core/headers'
 import { contractProxyTable, parseProxyManifest } from '@fabrika/proxy-core/manifest'
@@ -219,7 +219,10 @@ describe('the CSP of a contract without an ALTCHA challenge', () => {
 })
 
 /** The contract of one public registration with `admission`, compiled, or the build's problems when it refuses. */
-function registration(admission: Record<string, unknown>): { readonly artifact: ContractArtifact | null; readonly problems: readonly string[] } {
+function registration(
+	admission: Record<string, unknown>,
+	compatibility: 'backward' | 'unchecked' = 'unchecked',
+): { readonly artifact: ContractArtifact | null; readonly problems: readonly string[] } {
 	const app = defineApp(vocabulary, tables)
 	const signups = app.group({}, (r) => ({
 		register: r.mutation({
@@ -231,7 +234,7 @@ function registration(admission: Record<string, unknown>): { readonly artifact: 
 		}).handle(() => ({ received: true })),
 	}))
 	try {
-		return { artifact: compileContract(app.contract((c) => ({ api: c.rpc('/api', { signups }) })), tables), problems: [] }
+		return { artifact: compileContract(app.contract((c) => ({ api: c.rpc('/api', { signups }, { compatibility }) })), tables), problems: [] }
 	} catch (error) {
 		if (error instanceof ContractError) return { artifact: null, problems: error.problems }
 		throw error
@@ -239,6 +242,39 @@ function registration(admission: Record<string, unknown>): { readonly artifact: 
 }
 
 const ALTCHA = { provider: 'altcha', secret: 'ALTCHA_HMAC_KEY' }
+
+describe('the challenge endpoint of a backward-compatible mount', () => {
+	const artifact = (challenge: Record<string, unknown> | null, compatibility: 'backward' | 'unchecked' = 'backward'): ContractArtifact => {
+		const result = registration(challenge === null ? {} : { challenge }, compatibility)
+		if (result.artifact === null) throw new Error(result.problems.join('\n'))
+		return result.artifact
+	}
+	const before = artifact({ ...ALTCHA, action: 'register' })
+
+	test('refuses a renamed action because existing clients still fetch the old challenge URL', () => {
+		expect(incompatibleMountChanges(before, artifact({ ...ALTCHA, action: 'enroll' }))).toEqual([
+			"'api.signups.register.challenge' changes its HTTP shape",
+		])
+	})
+
+	test('refuses a removed issuer, including a switch to another provider', () => {
+		for (const challenge of [null, { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY', action: 'register' }]) {
+			expect(incompatibleMountChanges(before, artifact(challenge))).toEqual(["removes 'api.signups.register.challenge'"])
+		}
+	})
+
+	test('keeps the promise on the publication that drops it, but leaves an unchecked mount free to change', () => {
+		expect(incompatibleMountChanges(before, artifact({ ...ALTCHA, action: 'enroll' }, 'unchecked'))).toEqual([
+			"'api.signups.register.challenge' changes its HTTP shape",
+		])
+		expect(incompatibleMountChanges(artifact({ ...ALTCHA, action: 'register' }, 'unchecked'), artifact({ ...ALTCHA, action: 'enroll' }))).toEqual([])
+	})
+
+	test('permits unchanged challenge URLs with different server-selected work and lifetime', () => {
+		expect(incompatibleMountChanges(before, artifact({ ...ALTCHA, action: 'register', cost: 2000, maxAgeMs: 120_000 }))).toEqual([])
+		expect(incompatibleMountChanges(before, before)).toEqual([])
+	})
+})
 
 describe('the bounds of an ALTCHA challenge', () => {
 	test('a cost a slow phone cannot solve within the widget’s time or half the lifetime is refused', () => {

@@ -150,8 +150,9 @@ export function incompatibleChanges(before: ExportDescription, after: ExportDesc
 
 /**
  * What `after` breaks for the callers of each mount `before` promises `compatibility: 'backward'`: a procedure it
- * removes, an input or a query that accepts less, another output, another HTTP shape (method, path, body codec), file
- * answer or access (its kind, callers, requirement and cross-origin form), or a mount moved. The promise binds the
+ * removes (including its generated challenge endpoint), an input or a query that accepts less, another output, another
+ * HTTP shape (method, path, body codec), file answer or access (its kind, callers, requirement and cross-origin form), or a
+ * mount moved. The promise binds the
  * publication that drops it too, so a breaking change is a new mount beside the old one. Empty when compatible.
  */
 export function incompatibleMountChanges(before: ContractArtifact, after: ContractArtifact): string[] {
@@ -165,9 +166,10 @@ export function incompatibleMountChanges(before: ContractArtifact, after: Contra
 			problems.push(`mount '${name}' promises backward compatibility, and this deploy removes or moves it`)
 			continue
 		}
-		for (const row of before.endpoints.filter((endpoint) => isMountProcedure(endpoint, name))) {
-			const next = after.endpoints.find((candidate) => candidate.id === row.id)
-			if (next === undefined || !isMountProcedure(next, name)) {
+		const current = mountEndpoints(after, name)
+		for (const row of mountEndpoints(before, name)) {
+			const next = current.find((candidate) => candidate.id === row.id)
+			if (next === undefined) {
 				problems.push(`removes '${row.id}'`)
 				continue
 			}
@@ -175,6 +177,12 @@ export function incompatibleMountChanges(before: ContractArtifact, after: Contra
 		}
 	}
 	return problems
+}
+
+/** A challenge URL is embedded in the mount's clients too, even though its row is outside the mount's prefix. */
+function mountEndpoints(artifact: ContractArtifact, mount: string): EndpointRow[] {
+	const procedures = new Set(artifact.endpoints.filter((row) => isMountProcedure(row, mount)).map((row) => row.id))
+	return artifact.endpoints.filter((row) => procedures.has(row.id) || (row.source.kind === 'challenge' && procedures.has(row.source.name)))
 }
 
 function isMountProcedure(row: EndpointRow, mount: string): boolean {
