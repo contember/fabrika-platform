@@ -79,6 +79,12 @@ fails if that stops being true — it is the guard, not documentation of one.
   whose job is to bound a burst. It counts every attempt (a decision taken before the work cannot know
   the outcome) and a successful login does not clear it — `clearLoginFailures` is the account key
   only, or one valid credential would zero the bucket between bursts.
+- **A known-device cookie exempts a password login from the account and deployment-wide buckets, and from nothing
+  else** (`auth/known-device.ts`, `Signer.signInternal`, audience `fabrika:iam:known-device`). It is
+  `__Host-px_device`, set only on a recorded password login, and exempts only a login for the principal it names. That
+  login spends the device's own bucket instead (`password-login:device:<id>`, 10 / 15 min); once it blocks, the attempt
+  is throttled as if no cookie were sent. The per-client bucket still applies. Those two buckets are keyed on a value
+  anyone can pick, so without the exemption one client locks out a known account, or every password user on Zerops.
 - **ONE MAILBOX RULE. `principals.email` is the NORMALIZED mailbox and nothing else; the spelling a
   human or an IdP used lives in `label`.** `PrincipalRepository` is the only place that applies
   `normalizeEmailIdentity`, so every caller may hand it any spelling, and every comparison is plain

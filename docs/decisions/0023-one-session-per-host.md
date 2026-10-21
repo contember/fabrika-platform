@@ -47,12 +47,12 @@ They are different `sessions` rows with the same cookie name.
 
 ### 2. Every fabrika cookie carries the `__Host-` prefix and `Secure`
 
-The session cookie is `__Host-px_session`; handoff cookies are `__Host-px_handoff_<state>`; IAM's OIDC
-flight cookie is `__Host-fabrika_oidc`, outside the `__Host-px_` prefix the proxy strips upstream, because
-IAM itself reads it. The browser refuses a cookie with the `__Host-` prefix unless it has `Secure`,
-`Path=/` and no `Domain`, so a sibling host cannot shadow it. `Secure` is unconditional. The socket
-behind a TLS-terminating balancer is plain HTTP, so a derived `Secure` was the wrong signal, and
-without `Secure` the browser stores nothing anyway.
+The session cookie is `__Host-px_session`; handoff cookies are `__Host-px_handoff_<state>`. IAM's OIDC
+flight cookie `__Host-fabrika_oidc` and its known-device cookie `__Host-fabrika_device` sit outside the
+`__Host-px_` prefix the proxy strips upstream, because IAM itself reads them. The browser refuses a cookie
+with the `__Host-` prefix unless it has `Secure`, `Path=/` and no `Domain`, so a sibling host cannot shadow
+it. `Secure` is unconditional. The socket behind a TLS-terminating balancer is plain HTTP, so a derived
+`Secure` was the wrong signal, and without `Secure` the browser stores nothing anyway.
 
 The browser holds no access-token cookie. The proxy mints or reuses a short-lived per-app JWT
 server-side and injects it as `X-Fabrika-Token`.

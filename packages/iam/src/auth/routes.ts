@@ -41,7 +41,7 @@ export async function handleAuth(
 		return handleJwks(env)
 	}
 	if (url.pathname === '/auth/login') {
-		if (request.method === 'POST') return handlePasswordLogin(request, services, ctx, clientAddress, requestId)
+		if (request.method === 'POST') return handlePasswordLogin(request, services, env, ctx, clientAddress, requestId)
 		if (request.method === 'GET') return handleLogin(request, services, env, ctx, requestId)
 		return methodNotAllowed()
 	}
