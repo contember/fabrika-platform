@@ -133,6 +133,12 @@ export class RunRepository {
 			ORDER BY id DESC LIMIT 1`).bind(input.appId, input.env, input.ref).first<RunRow>()
 	}
 
+	/** The run that last finished successfully in one environment: what it runs now. */
+	async getLatestSucceededRun(input: { appId: string; env: string }): Promise<RunRow | null> {
+		return this.d1.prepare(`SELECT * FROM runs WHERE app_id = ? AND env = ? AND status = 'succeeded'
+			ORDER BY finished_at DESC, id DESC LIMIT 1`).bind(input.appId, input.env).first<RunRow>()
+	}
+
 	async getRun(id: string): Promise<RunRow | null> {
 		return this.d1.prepare('SELECT * FROM runs WHERE id = ?').bind(id).first<RunRow>()
 	}

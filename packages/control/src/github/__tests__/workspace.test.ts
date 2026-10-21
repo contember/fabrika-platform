@@ -1,8 +1,13 @@
 import {
+	type GitHubBlobRead,
+	type GitHubBlobRef,
 	GitHubBranchConflictError,
+	type GitHubComparison,
+	type GitHubFileRead,
 	GitHubNotFoundError,
 	type GitHubRepositoryClient,
 	type GitHubRepositoryOpenRequest,
+	GitHubRequestError,
 	GitHubStaleHeadError,
 	type GitHubTreeEntry,
 } from '@fabrika/github-app'
@@ -13,7 +18,7 @@ import { Vault } from '../../vault'
 import { WorkspaceSourceError, type WorkspaceSourceErrorKind, type WorkspaceSourceTarget } from '../../workspace-source-port'
 import { encodeGitHubAppCredential, type GitHubAppCredential } from '../connections/credentials'
 import { githubAppCredentialSecretLabel } from '../connections/secrets'
-import { githubWorkspaceSource, WORKSPACE_MAX_TREE_ENTRIES } from '../workspace'
+import { githubWorkspaceSource, WORKSPACE_MAX_SCAN_FILES, WORKSPACE_MAX_TREE_ENTRIES } from '../workspace'
 
 const headSha = 'a'.repeat(40)
 const nextSha = 'b'.repeat(40)
@@ -41,14 +46,43 @@ class FakeRepository implements GitHubRepositoryClient {
 		return { commitSha, directory: directory ?? '', entries: this.treeEntries, truncated: false }
 	}
 
-	async readFiles(commitSha: string, paths: readonly string[]) {
+	async readFiles(commitSha: string, paths: readonly string[]): Promise<GitHubFileRead> {
 		this.record('readFiles', [commitSha, paths])
-		return { commitSha, files: [{ path: 'src/b.ts', content: 'b' }, { path: 'src/a.ts', content: '' }], missingPaths: ['src/gone.ts'] }
+		return {
+			commitSha,
+			files: [{ path: 'src/b.ts', content: 'b' }, { path: 'src/a.ts', content: '' }],
+			unreadable: [{ path: 'src/gone.ts', reason: 'missing' }, { path: 'src/big.ts', reason: 'too_large' }],
+		}
+	}
+
+	async readBlobTexts(blobs: readonly GitHubBlobRef[]): Promise<GitHubBlobRead> {
+		this.record('readBlobTexts', [blobs])
+		return {
+			files: blobs.filter((blob) => blob.path !== 'src/big.ts').map((blob) => ({ path: blob.path, content: `text of ${blob.path}` })),
+			unreadable: blobs.filter((blob) => blob.path === 'src/big.ts').map((blob) => ({ path: blob.path, reason: 'too_large' })),
+		}
+	}
+
+	async compareCommits(baseSha: string, headSha: string): Promise<GitHubComparison> {
+		this.record('compareCommits', [baseSha, headSha])
+		return {
+			baseSha,
+			headSha,
+			aheadBy: 1,
+			behindBy: 3,
+			files: [{ path: 'a.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, patch: '+a' }],
+			filesCapped: false,
+		}
 	}
 
 	async createBranch(input: Parameters<GitHubRepositoryClient['createBranch']>[0]) {
 		this.record('createBranch', [{ branch: input.branch, fromSha: input.fromSha }])
 		return { branch: input.branch, sha: input.fromSha }
+	}
+
+	async deleteBranch(branch: string) {
+		this.record('deleteBranch', [branch])
+		return { deleted: branch !== 'fabrika/missing' }
 	}
 
 	async commitFiles(input: Parameters<GitHubRepositoryClient['commitFiles']>[0]) {
@@ -146,10 +180,10 @@ describe('GitHub workspace source', () => {
 		])
 	})
 
-	test('refuses a binding that does not own the repository before any GitHub client exists', async () => {
+	test('refuses a binding that does not own the repository before any GitHub client exists, as no retry helps', async () => {
 		const { source, credentials } = await fixture()
-		expect(await failureKind(source.readBranch({ target: { ...target, owner: 'other-org' }, branch: 'main', signal: signal() }))).toBe('unavailable')
-		expect(await failureKind(source.readBranch({ target: { ...target, installationId: 99 }, branch: 'main', signal: signal() }))).toBe('unavailable')
+		expect(await failureKind(source.readBranch({ target: { ...target, owner: 'other-org' }, branch: 'main', signal: signal() }))).toBe('refused')
+		expect(await failureKind(source.readBranch({ target: { ...target, installationId: 99 }, branch: 'main', signal: signal() }))).toBe('refused')
 		expect(credentials).toEqual([])
 	})
 
@@ -203,22 +237,107 @@ describe('GitHub workspace source', () => {
 		expect(listing.truncated).toBe(true)
 	})
 
-	test('reads files in request order with missing paths as null', async () => {
+	test('reads files in request order, an unread path as null with its reason', async () => {
 		const { source } = await fixture()
-		expect(await source.readFiles({ target, commitSha: headSha, paths: ['src/a.ts', 'src/gone.ts', 'src/b.ts'], signal: signal() })).toEqual({
+		const paths = ['src/a.ts', 'src/gone.ts', 'src/b.ts', 'src/big.ts']
+		expect(await source.readFiles({ target, commitSha: headSha, paths, signal: signal() })).toEqual({
 			commitSha: headSha,
-			files: [{ path: 'src/a.ts', content: '' }, { path: 'src/gone.ts', content: null }, { path: 'src/b.ts', content: 'b' }],
+			files: [
+				{ path: 'src/a.ts', content: '' },
+				{ path: 'src/gone.ts', content: null, reason: 'missing' },
+				{ path: 'src/b.ts', content: 'b' },
+				{ path: 'src/big.ts', content: null, reason: 'too_large' },
+			],
 		})
+	})
+
+	test('scans the admitted regular files of a tree listing, at most the bound, and counts the rest', async () => {
+		const { source, repository } = await fixture()
+		const blob = (path: string, mode: '100644' | '120000' = '100644'): GitHubTreeEntry => ({ path, sha: 'd'.repeat(40), type: 'blob', mode, size: 3 })
+		repository.treeEntries = [
+			{ path: 'src', sha: 'e'.repeat(40), type: 'tree', mode: '040000' },
+			blob('src/a.ts'),
+			blob('src/big.ts'),
+			blob('src/link.ts', '120000'),
+			blob('src/c.md'),
+			...Array.from({ length: WORKSPACE_MAX_SCAN_FILES }, (_, index) => blob(`src/gen/f${index}.ts`)),
+		]
+		const scan = await source.scanFiles({
+			target,
+			commitSha: headSha,
+			directory: 'src',
+			include: (path) => path.endsWith('.ts'),
+			maxFiles: 500,
+			signal: signal(),
+		})
+		expect(scan.candidates).toBe(WORKSPACE_MAX_SCAN_FILES + 2)
+		expect(scan.files).toHaveLength(WORKSPACE_MAX_SCAN_FILES)
+		expect(scan.files.slice(0, 2)).toEqual([{ path: 'src/a.ts', content: 'text of src/a.ts' }, {
+			path: 'src/big.ts',
+			content: null,
+			reason: 'too_large',
+		}])
+		expect(scan.treeTruncated).toBe(false)
+		expect(repository.calls.map((call) => call.method)).toEqual(['readTree', 'readBlobTexts'])
+
+		const none = await source.scanFiles({ target, commitSha: headSha, include: () => false, maxFiles: 10, signal: signal() })
+		expect(none).toEqual({ commitSha: headSha, files: [], candidates: 0, treeTruncated: false })
+		expect(repository.calls.map((call) => call.method)).toEqual(['readTree', 'readBlobTexts', 'readTree'])
+	})
+
+	test('reads several branch heads through one repository token, in request order', async () => {
+		const { source, repository, opened } = await fixture()
+		const branches = ['fabrika/a', 'fabrika/missing', ...Array.from({ length: 7 }, (_, index) => `fabrika/b${index}`)]
+		const heads = await source.readBranches({ target, branches, signal: signal() })
+		expect(heads).toEqual([headSha, null, ...Array(7).fill(headSha)])
+		expect(opened).toHaveLength(1)
+		expect(repository.calls.map((call) => call.args[0])).toEqual(branches)
+	})
+
+	test('deletes a branch, and says when it was already gone', async () => {
+		const { source, repository } = await fixture()
+		expect(await source.deleteBranch({ target, branch: 'fabrika/w1', signal: signal() })).toBe(true)
+		expect(await source.deleteBranch({ target, branch: 'fabrika/missing', signal: signal() })).toBe(false)
+		expect(repository.calls).toEqual([{ method: 'deleteBranch', args: ['fabrika/w1'] }, { method: 'deleteBranch', args: ['fabrika/missing'] }])
+	})
+
+	test('compares through the repository and leaves out how far the base moved on', async () => {
+		const { source, repository } = await fixture()
+		expect(await source.compare({ target, baseSha: nextSha, headSha, signal: signal() })).toEqual({
+			baseSha: nextSha,
+			headSha,
+			aheadBy: 1,
+			files: [{ path: 'a.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, patch: '+a' }],
+			filesCapped: false,
+		})
+		expect(repository.calls).toEqual([{ method: 'compareCommits', args: [nextSha, headSha] }])
 	})
 
 	const classified: [Error, WorkspaceSourceErrorKind][] = [
 		[new GitHubStaleHeadError(), 'stale_head'],
 		[new GitHubBranchConflictError(), 'conflict'],
 		[new GitHubNotFoundError(), 'not_found'],
+		[new GitHubRequestError(422), 'refused'],
+		[new GitHubRequestError(401), 'refused'],
+		[new GitHubRequestError(403), 'unavailable'],
+		[new GitHubRequestError(502), 'unavailable'],
 	]
 	test.each(classified)('classifies %p', async (error, kind) => {
 		const { source, repository } = await fixture()
 		repository.failure = error
+		expect(await failureKind(source.readBranch({ target, branch: 'main', signal: signal() }))).toBe(kind)
+	})
+
+	const openings: [Error, WorkspaceSourceErrorKind][] = [
+		[new GitHubRequestError(404), 'refused'],
+		[new GitHubRequestError(403), 'refused'],
+		[new GitHubRequestError(422), 'refused'],
+		[new GitHubRequestError(500), 'unavailable'],
+		[new Error('GitHub App request failed'), 'unavailable'],
+	]
+	test.each(openings)('classifies a repository that cannot be opened for %p', async (error, kind) => {
+		const { source, openFailure } = await fixture()
+		openFailure.error = error
 		expect(await failureKind(source.readBranch({ target, branch: 'main', signal: signal() }))).toBe(kind)
 	})
 

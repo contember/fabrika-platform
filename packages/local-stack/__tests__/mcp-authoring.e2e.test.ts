@@ -75,18 +75,28 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 			'apply_changes',
 			'create_pull_request',
 			'create_workspace',
+			'delete_workspace',
 			'deploy_stage',
 			'get_app_rules',
 			'get_deployment',
 			'get_workspace',
+			'get_workspace_diff',
 			'list_files',
 			'list_targets',
 			'list_workspaces',
 			'read_files',
+			'search_files',
 		])
 
 		expect(toolJson(await call(token, 'list_targets', {}), z.unknown())).toEqual({
-			items: [{ appId: 'shop', env: 'stage', repository: 'acme/shop', defaultBranch: 'main', publicOrigin: 'https://shop-stage.example.com' }],
+			items: [{
+				appId: 'shop',
+				env: 'stage',
+				repository: 'acme/shop',
+				defaultBranch: 'main',
+				publicOrigin: 'https://shop-stage.example.com',
+				deployed: null,
+			}],
 		})
 
 		const mainSha = repository.branches.get('main')
@@ -105,7 +115,7 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 		]))
 		expect(toolJson(await call(token, 'read_files', { workspaceId: workspace.id, paths: ['src/index.ts', 'missing.ts'] }), z.unknown())).toEqual({
 			commitSha: workspace.headSha,
-			files: [{ path: 'src/index.ts', content: "export const greeting = 'hello'\n" }, { path: 'missing.ts', content: null }],
+			files: [{ path: 'src/index.ts', content: "export const greeting = 'hello'\n" }, { path: 'missing.ts', content: null, reason: 'missing' }],
 		})
 
 		const edit = { path: 'src/index.ts', content: "export const greeting = 'ahoj'\n" }
@@ -158,7 +168,7 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 
 		expect(toolJson(await call(token, 'get_deployment', { runId: run.id }), z.unknown())).toMatchObject({
 			run: { id: run.id, commitSha: committed.commitSha, status: 'pending' },
-			logTail: [],
+			log: { lines: [], from: 0, to: 0, total: 0 },
 		})
 
 		const opened = toolJson(

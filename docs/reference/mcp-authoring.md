@@ -28,19 +28,67 @@ commit that names the expected head; a stale head fails and the client re-reads.
 
 ## Tools
 
-| Tool                  | What it does                                                       |
-| --------------------- | ------------------------------------------------------------------ |
-| `list_targets`        | App environments the user may author.                              |
-| `create_workspace`    | Create a workspace branch from the default branch.                 |
-| `list_workspaces`     | The user's workspaces on a target.                                 |
-| `get_workspace`       | One workspace, with its head.                                      |
-| `list_files`          | Paths in the workspace.                                            |
-| `read_files`          | File contents at the workspace head.                               |
-| `apply_changes`       | Commit file writes and deletions against an expected head.         |
-| `deploy_stage`        | Start an ordinary run for the workspace head in the stage env.     |
-| `get_deployment`      | The run's state, a parked run's approval link, `deviations`.       |
-| `create_pull_request` | Open a pull request from the workspace to the default branch.      |
-| `get_app_rules`       | The application rules or one topic, read-only, with a pin warning. |
+| Tool                  | What it does                                                        |
+| --------------------- | ------------------------------------------------------------------- |
+| `list_targets`        | App environments the user may author.                               |
+| `create_workspace`    | Create a workspace branch from the default branch.                  |
+| `list_workspaces`     | The user's workspaces, each with head, latest run and pull request. |
+| `get_workspace`       | One workspace, with its head, latest run and pull request.          |
+| `get_workspace_diff`  | Files changed since the workspace base, optionally with patches.    |
+| `list_files`          | A page of paths in the workspace, optionally to a depth.            |
+| `read_files`          | File contents at the workspace head; an unread file says why.       |
+| `search_files`        | Paths by glob, or lines holding a literal text, within bounds.      |
+| `apply_changes`       | Commit writes, deletions and exact replacements against a head.     |
+| `deploy_stage`        | Start an ordinary run for the workspace head in the stage env.      |
+| `get_deployment`      | The run's state, a log window, approval link, `deviations`.         |
+| `delete_workspace`    | Abandon a workspace: delete its branch and stop listing it.         |
+| `create_pull_request` | Open a pull request from the workspace to the default branch.       |
+| `get_app_rules`       | The application rules or one topic, read-only, with a pin warning.  |
+
+Every tool carries MCP tool annotations. A tool that only reads has `readOnlyHint: true`, so a client such as ChatGPT
+does not ask the user to confirm it. A writing tool states `destructiveHint` (it can overwrite or delete files, or replace
+what the stage environment runs) and `idempotentHint` (a repeated call has no further effect). No tool has
+`openWorldHint`: every tool reaches only the target's repository and Control. The annotations are hints for the client;
+Control authorizes every call.
+
+`apply_changes` takes two kinds of change. `{ path, content }` writes the whole file, and `content: null` deletes it.
+`{ path, oldString, newString }` replaces `oldString` in the file as it is at `expectedHeadSha`. Control refuses the
+whole batch when `oldString` does not occur exactly once, or when the file is missing, binary, or over 512 KiB.
+Several replacements on one path apply in order; a path written whole may appear only once. The protected paths and the
+expected head apply to both kinds.
+
+`search_files` reads the branch through the repository's tree and blobs; there is no search index. With `glob` alone it
+lists matching paths from one tree listing. With `text` it reads at most 100 files the glob and `directory` admit, 2 MiB
+together, and answers the lines that contain the literal text (no regular expressions: a pattern could hold Control's
+event loop). It answers at most `maxResults` (default 50, at most 200), each line cut to 240 characters. `incomplete`
+names every bound that cut the answer short. A text search costs one GitHub request per file read.
+
+`get_workspace_diff` compares the live head with the workspace's base through GitHub's compare API. GitHub lists at most
+300 changed files. With `includePatches`, a patch is at most 32 KiB and all patches together at most 256 KiB; `paths`
+narrows which files carry one, and `incomplete` names the files left without a patch.
+
+The authoring environment shows one workspace at a time. `list_targets` answers what it runs now as `deployed`: the last
+successful run, the workspace whose branch it deployed (null for another branch), and whether that workspace is the
+caller's. A workspace says the same as `onStage`.
+
+`get_workspace` and `list_workspaces` name the pull request that `create_pull_request` opened or found, as Control
+recorded it; a pull request opened on GitHub by hand is not shown, and the record does not follow a merge or a close.
+`list_workspaces` reads every listed workspace's head through one GitHub token per repository.
+
+`delete_workspace` needs `source.workspace.write` and works on the caller's own workspace only. It deletes the branch
+first, which closes an open pull request from it on GitHub, and then marks the workspace abandoned: no list shows it and
+every other tool answers `410`. A failed delete leaves the workspace as it was, and a repeated call is harmless. The
+stage environment keeps running what it last deployed; the runs of the branch stay readable.
+
+`deploy_stage` answers the run with its id as `runId` too, the name `get_deployment` takes. `get_deployment` says whether
+the run `finished` and gives a one-line `summary` of what its status means and what to do next; `run.exitCode` stays
+null for a provider that runs no process, such as Zerops. Each provider step logs `→ <step>` when it starts and
+`✓ <step> (<seconds>s)` or `✗ <step>: <error>` when it ends.
+
+`get_deployment` answers a window of the build log, 30 lines by default and at most 500. `log.from` and `log.to` index
+the log, which only grows: a client polls with `after: log.to` and gets only the new lines, or pages back with
+`before: log.from`. `failuresOnly` keeps the stderr lines and the lines that name an error or a failure; the indexes then
+count those lines only. `logLines: 0` answers the counts alone.
 
 `get_app_rules` answers the application rules every agent gets, headed by their version (`fabrika-app <version>`):
 the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `references/<topic>.md`
@@ -49,6 +97,20 @@ the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `refer
 `instructions` at about 2 KB, so the instructions stay under 2,000 characters: the workspace flow, a pointer to
 `get_app_rules`, and three rules (each endpoint and every step off the paved road declared; never loosen anything to
 make something pass; ask when a file is protected).
+
+## Failures
+
+A refused call is a tool error with one short line. A failure the client did not cause says what failed and whether a
+retry helps, and never carries upstream text, which may hold a token or a clone URL:
+
+- **GitHub refused** the app's GitHub App (its installation, permissions or key, or a protected branch): retrying does
+  not help, and the operator must act.
+- **GitHub is unavailable or rate-limited** (a 5xx, a timeout, or a 403, which GitHub also answers for its secondary
+  rate limit): retry in a minute.
+- **The deploy queue or the run log store failed**: the message names the store. A queue failure after the run was
+  created says so, so the client knows a retry creates another run.
+- **Anything else** (Control's database, the audit log in IAM, a fault in Control): retry in a minute. The message carries
+  a reference that Control's log names beside the error's class.
 
 ## Enable it on an installation
 

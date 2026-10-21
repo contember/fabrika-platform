@@ -1,7 +1,10 @@
 import { configurationError, GitHubBranchConflictError, GitHubNotFoundError, GitHubStaleHeadError, requestStatusError, responseError } from './errors'
 import type {
+	GitHubBlobRead,
+	GitHubBlobRef,
 	GitHubCommit,
 	GitHubCommitFilesInput,
+	GitHubComparison,
 	GitHubCreateBranchInput,
 	GitHubFileRead,
 	GitHubOpenPullRequestInput,
@@ -11,9 +14,12 @@ import type {
 	GitHubTextFile,
 	GitHubTreeEntry,
 	GitHubTreeListing,
+	GitHubUnreadablePath,
+	GitHubUnreadableReason,
 } from './repository-types'
 import {
 	decodeCommit,
+	decodeComparison,
 	decodeCreatedTreeSha,
 	decodePullRequest,
 	decodePullRequestList,
@@ -26,6 +32,7 @@ import {
 	MAX_CHANGED_FILES,
 	MAX_COMMIT_MESSAGE_BYTES,
 	MAX_COMMIT_RESPONSE_BYTES,
+	MAX_COMPARE_RESPONSE_BYTES,
 	MAX_FILE_BYTES,
 	MAX_PULL_REQUEST_BODY_BYTES,
 	MAX_PULL_REQUEST_RESPONSE_BYTES,
@@ -54,10 +61,13 @@ export interface RepositoryClientConfig {
 	readonly timeoutMs: number
 }
 
+/** Blob reads in flight at once; enough to hide latency, few enough to stay clear of GitHub's secondary rate limits. */
+const BLOB_READ_CONCURRENCY = 6
+
 type RequestResult = { readonly ok: true; readonly body: unknown } | { readonly ok: false; readonly status: number }
 
 interface RequestOptions {
-	readonly method?: 'GET' | 'POST' | 'PATCH'
+	readonly method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
 	readonly body?: unknown
 	readonly signal?: AbortSignal | undefined
 	readonly maxResponseBytes?: number
@@ -112,25 +122,74 @@ class RepositoryClient implements GitHubRepositoryClient {
 		for (const path of paths) validatePath(path)
 		const directories = this.#treeWalker((await this.#readCommit(commitSha, signal)).treeSha, signal)
 		const files: GitHubTextFile[] = []
-		const missingPaths: string[] = []
+		const unreadable: GitHubUnreadablePath[] = []
 		let remainingBytes = MAX_READ_BYTES
 		for (const path of paths) {
-			const entry = await directories.find(path)
-			// Oversized files, and files past the total read budget, are reported missing like other unreadable paths.
-			if (entry?.type !== 'blob' || entry.mode === '120000' || entry.size > MAX_FILE_BYTES || entry.size > remainingBytes) {
-				missingPaths.push(path)
+			const entry = readableBlob(await directories.find(path), remainingBytes)
+			if (typeof entry === 'string') {
+				unreadable.push({ path, reason: entry })
 				continue
 			}
 			const body = await this.#readGitObject(`/git/blobs/${entry.sha}`, signal, MAX_BLOB_RESPONSE_BYTES)
 			const content = decodeTextBlob(body, entry.sha, entry.size)
 			if (content === null) {
-				missingPaths.push(path)
+				unreadable.push({ path, reason: 'binary' })
 				continue
 			}
 			remainingBytes -= entry.size
 			files.push({ path, content })
 		}
-		return { commitSha, files, missingPaths }
+		return { commitSha, files, unreadable }
+	}
+
+	async readBlobTexts(blobs: readonly GitHubBlobRef[], signal?: AbortSignal): Promise<GitHubBlobRead> {
+		if (blobs.length === 0 || blobs.length > MAX_READ_PATHS || new Set(blobs.map((blob) => blob.path)).size !== blobs.length) {
+			throw configurationError()
+		}
+		for (const blob of blobs) {
+			validatePath(blob.path)
+			validateSha(blob.sha)
+			if (!Number.isSafeInteger(blob.size) || blob.size < 0) throw configurationError()
+		}
+		const unreadable = new Map<string, GitHubUnreadableReason>()
+		const selected: GitHubBlobRef[] = []
+		let remainingBytes = MAX_READ_BYTES
+		for (const blob of blobs) {
+			if (blob.size > MAX_FILE_BYTES) unreadable.set(blob.path, 'too_large')
+			else if (blob.size > remainingBytes) unreadable.set(blob.path, 'budget')
+			else {
+				remainingBytes -= blob.size
+				selected.push(blob)
+			}
+		}
+		const contents = new Map<string, string>()
+		for (let start = 0; start < selected.length; start += BLOB_READ_CONCURRENCY) {
+			await Promise.all(
+				selected.slice(start, start + BLOB_READ_CONCURRENCY).map(async (blob) => {
+					const body = await this.#readGitObject(`/git/blobs/${blob.sha}`, signal, MAX_BLOB_RESPONSE_BYTES)
+					const content = decodeTextBlob(body, blob.sha, blob.size)
+					if (content === null) unreadable.set(blob.path, 'binary')
+					else contents.set(blob.path, content)
+				}),
+			)
+		}
+		const files: GitHubTextFile[] = []
+		const unread: GitHubUnreadablePath[] = []
+		for (const blob of blobs) {
+			const content = contents.get(blob.path)
+			const reason = unreadable.get(blob.path)
+			if (content !== undefined) files.push({ path: blob.path, content })
+			else if (reason !== undefined) unread.push({ path: blob.path, reason })
+		}
+		return { files, unreadable: unread }
+	}
+
+	async compareCommits(baseSha: string, headSha: string, signal?: AbortSignal): Promise<GitHubComparison> {
+		validateSha(baseSha)
+		validateSha(headSha)
+		// The changed files ride only on the first page of commits, so one commit per page keeps the rest of the body small.
+		const body = await this.#readGitObject(`/compare/${baseSha}...${headSha}?per_page=1`, signal, MAX_COMPARE_RESPONSE_BYTES)
+		return decodeComparison(body, headSha)
 	}
 
 	async createBranch(input: GitHubCreateBranchInput): Promise<GitHubRef> {
@@ -150,6 +209,15 @@ class RepositoryClient implements GitHubRepositoryClient {
 		const raced = await this.readRef(input.branch, input.signal)
 		if (raced === null) throw new GitHubNotFoundError()
 		return requireBranchAt(raced, input.fromSha)
+	}
+
+	async deleteBranch(branch: string, signal?: AbortSignal): Promise<{ readonly deleted: boolean }> {
+		validateBranch(branch)
+		const result = await this.#request(`/git/refs/heads/${encodeBranch(branch)}`, { method: 'DELETE', signal, expectedFailures: [422] })
+		if (result.ok) return { deleted: true }
+		// 422 is "Reference does not exist" among other refusals; only an absent branch counts as already deleted.
+		if (await this.readRef(branch, signal) !== null) throw requestStatusError(result.status)
+		return { deleted: false }
 	}
 
 	async commitFiles(input: GitHubCommitFilesInput): Promise<GitHubCommit> {
@@ -288,6 +356,7 @@ class RepositoryClient implements GitHubRepositoryClient {
 				if (options.expectedFailures?.includes(response.status) === true) return { ok: false, status: response.status }
 				throw requestStatusError(response.status)
 			}
+			if (response.status === 204) return { ok: true, body: null }
 			return { ok: true, body: await readBoundedJson(response, cancellation, options.maxResponseBytes) }
 		} finally {
 			cancellation.dispose()
@@ -332,6 +401,17 @@ class TreeWalker {
 		if (tree.truncated) throw responseError()
 		return new Map(tree.entries.map((entry) => [entry.path, entry]))
 	}
+}
+
+type GitHubBlobEntry = Extract<GitHubTreeEntry, { readonly type: 'blob' }>
+
+/** The entry when it is a regular file within both bounds, otherwise why it is not read. */
+function readableBlob(entry: GitHubTreeEntry | null, remainingBytes: number): GitHubBlobEntry | GitHubUnreadableReason {
+	if (entry === null) return 'missing'
+	if (entry.type !== 'blob' || entry.mode === '120000') return 'not_a_file'
+	if (entry.size > MAX_FILE_BYTES) return 'too_large'
+	if (entry.size > remainingBytes) return 'budget'
+	return entry
 }
 
 function requireBranchAt(ref: GitHubRef, sha: string): GitHubRef {

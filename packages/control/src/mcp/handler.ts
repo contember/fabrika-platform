@@ -11,28 +11,37 @@ import {
 	type McpHttpHandler,
 	McpServer,
 	type StandardSchemaWithJSON,
+	type ToolAnnotations,
 } from '@modelcontextprotocol/server'
 import { z } from 'zod/v4'
 import { ControlApiError } from '../api/domain'
 import {
+	abandonWorkspaceUseCase,
 	applyChangesUseCase,
 	COMMIT_MESSAGE_MAX_BYTES,
 	createPullRequestUseCase,
 	createWorkspaceUseCase,
+	DEPLOYMENT_LOG_DEFAULT_LINES,
+	DEPLOYMENT_LOG_MAX_LINES,
 	deployStageUseCase,
 	getDeploymentUseCase,
+	getWorkspaceDiffUseCase,
 	getWorkspaceUseCase,
 	isRepositoryPath,
+	LIST_FILES_DEFAULT_LIMIT,
+	LIST_FILES_MAX_LIMIT,
 	listFilesUseCase,
 	listTargetsUseCase,
 	listWorkspacesUseCase,
 	readFilesUseCase,
+	SEARCH_MAX_FILES,
+	SEARCH_MAX_RESULTS,
+	searchFilesUseCase,
+	WORKSPACE_FILE_MAX_BYTES,
 	type WorkspaceUseCaseContext,
 } from '../api/workspaces'
 
 const MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024
-/** The GitHub repository client's per-file bound. */
-const MAX_FILE_CONTENT_BYTES = 512 * 1024
 /** Room left in the commit-message bound for the Fabrika trailers. */
 const MAX_COMMIT_MESSAGE_BYTES = COMMIT_MESSAGE_MAX_BYTES - 1024
 
@@ -48,6 +57,9 @@ Before editing an application, call get_app_rules and follow it. Its topics hold
 - Declare every endpoint with its access and its .handle() in a slice's endpoints.ts; declare every step off the paved road.
 - Never loosen a contract, a table policy, a role or a test to make something pass. Tell the human which role the caller lacks.
 - When a file is refused as protected, stop and ask the human.`
+
+/** Hints only (MCP 2025-11-25): a client may skip its confirmation for a read; Control still authorizes every call. */
+const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: false }
 
 const APP_SKILL = readAppAgentSkill()
 const APP_TOPICS = APP_SKILL.references.map((reference) => reference.topic)
@@ -113,6 +125,7 @@ const identifier = z.string().min(1).max(128)
 const commitSha = z.string().regex(/^[0-9a-f]{40}$/)
 const repositoryPath = z.string().min(1).max(512).refine(isRepositoryPath, 'invalid repository path')
 const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength
+const fileText = z.string().refine((text) => utf8Bytes(text) <= WORKSPACE_FILE_MAX_BYTES, 'text exceeds 512 KiB')
 const workspaceInput = z.object({ workspaceId: identifier }).strict()
 
 const toolInputs = {
@@ -124,20 +137,45 @@ const toolInputs = {
 	createWorkspace: z.object({ appId: identifier, env: identifier, title: z.string().min(1).max(200) }).strict(),
 	listWorkspaces: z.object({ appId: identifier.optional(), env: identifier.optional() }).strict(),
 	getWorkspace: workspaceInput,
-	listFiles: workspaceInput.extend({ directory: repositoryPath.optional(), commitSha: commitSha.optional() }).strict(),
+	listFiles: workspaceInput.extend({
+		directory: repositoryPath.optional(),
+		commitSha: commitSha.optional(),
+		depth: z.number().int().min(1).max(64).optional(),
+		offset: z.number().int().min(0).default(0),
+		limit: z.number().int().min(1).max(LIST_FILES_MAX_LIMIT).default(LIST_FILES_DEFAULT_LIMIT),
+	}).strict(),
 	readFiles: workspaceInput.extend({ paths: z.array(repositoryPath).min(1).max(50), commitSha: commitSha.optional() }).strict(),
+	getWorkspaceDiff: workspaceInput.extend({
+		includePatches: z.boolean().default(false),
+		paths: z.array(repositoryPath).min(1).max(50).optional(),
+	}).strict(),
+	searchFiles: workspaceInput.extend({
+		glob: z.string().min(1).max(200).optional(),
+		text: z.string().min(1).max(200).optional(),
+		caseSensitive: z.boolean().optional(),
+		directory: repositoryPath.optional(),
+		commitSha: commitSha.optional(),
+		maxResults: z.number().int().min(1).max(SEARCH_MAX_RESULTS).default(50),
+	}).strict(),
 	applyChanges: workspaceInput.extend({
 		expectedHeadSha: commitSha,
 		message: z.string().min(1).refine((message) => utf8Bytes(message) <= MAX_COMMIT_MESSAGE_BYTES, 'message is too long'),
 		changes: z.array(
-			z.object({
-				path: repositoryPath,
-				content: z.string().refine((content) => utf8Bytes(content) <= MAX_FILE_CONTENT_BYTES, 'file content exceeds 512 KiB').nullable(),
-			}).strict(),
+			z.union([
+				z.object({ path: repositoryPath, content: fileText.nullable() }).strict(),
+				z.object({ path: repositoryPath, oldString: fileText.min(1), newString: fileText }).strict(),
+			]),
 		).min(1).max(100),
 	}).strict(),
 	deployStage: workspaceInput,
-	getDeployment: z.object({ runId: identifier }).strict(),
+	getDeployment: z.object({
+		runId: identifier,
+		logLines: z.number().int().min(0).max(DEPLOYMENT_LOG_MAX_LINES).default(DEPLOYMENT_LOG_DEFAULT_LINES),
+		after: z.number().int().min(0).optional(),
+		before: z.number().int().min(0).optional(),
+		failuresOnly: z.boolean().default(false),
+	}).strict(),
+	deleteWorkspace: workspaceInput,
 	createPullRequest: workspaceInput.extend({ title: z.string().min(1).max(256), body: z.string().max(65_536) }).strict(),
 }
 
@@ -162,7 +200,7 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 			+ `a topic answers one reference file they name (references/<topic>.md): ${APP_TOPICS.join(', ')}. `
 			+ 'With workspaceId it also warns when that workspace pins another @fabrika/app than these rules describe.',
 		inputSchema: toolInput(toolInputs.getAppRules),
-		annotations: { readOnlyHint: true },
+		annotations: READ_ONLY,
 	}, async (input): Promise<CallToolResult> => {
 		try {
 			const warning = input.workspaceId === undefined ? null : await pinWarning(c, input.workspaceId)
@@ -174,59 +212,115 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 		}
 	})
 	server.registerTool('list_targets', {
-		description: 'List the app environments you may author. Each target is one stage environment of one app, with its GitHub repository.',
+		description: 'List the app environments you may author. Each target is one stage environment of one app, with its GitHub repository '
+			+ 'and what it runs now (deployed: the last successful deploy, its workspace, and whether that workspace is yours). '
+			+ 'The environment shows one workspace at a time, so a deploy_stage replaces what another workspace deployed.',
 		inputSchema: toolInput(toolInputs.listTargets),
+		annotations: READ_ONLY,
 	}, () => run(() => listTargetsUseCase(c)))
 	server.registerTool('create_workspace', {
 		description: 'Create a workspace on an authoring target. A workspace is a new Git branch `fabrika/<id>` created from the default '
 			+ 'branch. Returns the workspace id and its head commit.',
 		inputSchema: toolInput(toolInputs.createWorkspace),
+		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 	}, (input) => run(() => createWorkspaceUseCase(c, input)))
 	server.registerTool('list_workspaces', {
-		description: 'List your own workspaces, optionally for one app and environment. Use get_workspace for the current head and latest deploy.',
+		description: 'List your own workspaces, optionally for one app and environment, each with its current head (headSha), its latest '
+			+ 'stage deploy and the pull request create_pull_request opened.',
 		inputSchema: toolInput(toolInputs.listWorkspaces),
+		annotations: READ_ONLY,
 	}, (input) => run(() => listWorkspacesUseCase(c, input)))
 	server.registerTool('get_workspace', {
-		description: 'Read one of your workspaces: its branch, the current head commit (headSha) and the latest stage deploy. '
+		description: 'Read one of your workspaces: its branch, the current head commit (headSha), the latest stage deploy, whether the '
+			+ 'stage environment runs it now (onStage) and the pull request create_pull_request opened. '
 			+ 'Use headSha as expectedHeadSha for apply_changes.',
 		inputSchema: toolInput(toolInputs.getWorkspace),
+		annotations: READ_ONLY,
 	}, (input) => run(() => getWorkspaceUseCase(c, input)))
+	server.registerTool('get_workspace_diff', {
+		description: 'List the files the workspace changed since its base (the default-branch commit it was created from), at the '
+			+ 'current head, with their status and line counts. With includePatches each file carries its unified diff, at most 32 KiB '
+			+ 'each and 256 KiB together; paths narrows which files carry one. incomplete says what was left out.',
+		inputSchema: toolInput(toolInputs.getWorkspaceDiff),
+		annotations: READ_ONLY,
+	}, (input) => run(() => getWorkspaceDiffUseCase(c, input)))
 	server.registerTool('list_files', {
 		description: 'List the entries of a directory of the workspace branch (the repository root when no directory is given), '
-			+ 'at commitSha or at the current head.',
+			+ 'at commitSha or at the current head. Without depth it lists every level below the directory; depth 1 lists its direct '
+			+ `entries. A page holds limit entries (default ${LIST_FILES_DEFAULT_LIMIT}); pass nextOffset as offset for the next one. `
+			+ 'truncated means the repository is too large for one listing; name a directory.',
 		inputSchema: toolInput(toolInputs.listFiles),
+		annotations: READ_ONLY,
 	}, (input) => run(() => listFilesUseCase(c, input)))
 	server.registerTool('read_files', {
 		description: 'Read up to 50 files of the workspace branch at commitSha or at the current head. The result names the commit read; '
-			+ 'use it as expectedHeadSha for apply_changes. A missing, binary or oversized file has content null.',
+			+ 'use it as expectedHeadSha for apply_changes. A file that was not read has content null and a reason: missing, '
+			+ 'not_a_file, too_large (over 512 KiB), binary, or budget (past the 2 MiB one call returns; read it in another call).',
 		inputSchema: toolInput(toolInputs.readFiles),
+		annotations: READ_ONLY,
 	}, (input) => run(() => readFilesUseCase(c, input)))
+	server.registerTool('search_files', {
+		description: 'Search the workspace branch at commitSha or at the current head. With glob alone it lists the matching file paths; '
+			+ 'the glob matches the whole repository path, ** crosses directories and * does not (src/**/*.ts). With text it lists the '
+			+ 'lines that contain that literal text (no regular expressions), in at most '
+			+ `${SEARCH_MAX_FILES} files the glob and directory admit, 2 MiB together. incomplete names every bound that cut the `
+			+ 'answer short; narrow glob or directory then.',
+		inputSchema: toolInput(toolInputs.searchFiles),
+		annotations: READ_ONLY,
+	}, (input) => run(() => searchFilesUseCase(c, input)))
 	server.registerTool('apply_changes', {
 		description: 'Commit a batch of file changes to the workspace branch as one ordinary Git commit. expectedHeadSha must be the '
 			+ 'current head from get_workspace or read_files; if the branch moved, the call fails with the new head and you must re-read '
-			+ 'and retry. content null deletes a file. zerops.yaml, zerops.yml, every fabrika.* file but fabrika.contract.ts and '
+			+ 'and retry. A change { path, content } writes the whole file; content null deletes it. A change { path, oldString, newString } '
+			+ 'replaces oldString, which must occur exactly once in the file at expectedHeadSha, so include enough surrounding text; '
+			+ 'several such changes to one path apply in order. zerops.yaml, zerops.yml, every fabrika.* file but fabrika.contract.ts and '
 			+ 'everything under .github/ are protected and cannot be changed. A change of the contract, its schema modules, '
 			+ 'src/db/tables.ts or db/migrations/ is classified at deploy time; on a protected environment a widening waits for '
 			+ 'a person to approve it. A file may hold at most 512 KiB.',
 		inputSchema: toolInput(toolInputs.applyChanges),
+		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 	}, (input) => run(() => applyChangesUseCase(c, input)))
 	server.registerTool('deploy_stage', {
 		description: 'Deploy the current head of the workspace branch to its stage environment. Creates a deploy run for that exact commit; '
-			+ 'follow it with get_deployment. Production is never deployed from a workspace.',
+			+ 'follow it with get_deployment and the runId this answers. Production is never deployed from a workspace.',
 		inputSchema: toolInput(toolInputs.deployStage),
-	}, (input) => run(() => deployStageUseCase(c, input)))
+		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+	}, (input) =>
+		run(async () => {
+			const deployed = await deployStageUseCase(c, input)
+			return { runId: deployed.id, ...deployed }
+		}))
 	server.registerTool('get_deployment', {
-		description: 'Read a deploy run of one of your workspaces: its status, the deployed commit and the last lines of its build log. '
+		description: 'Read a deploy run of one of your workspaces: its status, whether it finished, a one-line summary, the deployed '
+			+ 'commit and a window of its build log. exitCode stays null for a provider that runs no process. '
+			+ `The window is the last logLines lines (default ${DEPLOYMENT_LOG_DEFAULT_LINES}, at most ${DEPLOYMENT_LOG_MAX_LINES}); `
+			+ 'log.from and log.to index the log, so poll with after: log.to for new lines only, or page back with before: log.from. '
+			+ 'failuresOnly keeps stderr lines and lines that name an error or a failure. '
 			+ 'A run whose access change waits for a person reports status awaiting_approval with the approval link and the change '
 			+ 'in plain language; you cannot approve it, and loosening access further only adds to what the person must approve. '
 			+ 'deviations names the changes off the paved road (declared sql, unscoped, connect, link issuing, database code) that need closer review.',
 		inputSchema: toolInput(toolInputs.getDeployment),
-	}, (input) => run(() => getDeploymentUseCase(c, input)))
+		annotations: READ_ONLY,
+	}, ({ runId, logLines, after, before, failuresOnly }) =>
+		run(() =>
+			getDeploymentUseCase(c, {
+				runId,
+				log: { lines: logLines, failuresOnly, ...(after === undefined ? {} : { after }), ...(before === undefined ? {} : { before }) },
+			})
+		))
 	server.registerTool('create_pull_request', {
 		description: 'Open a pull request from the workspace branch to the default branch, or return the one already open. '
 			+ 'Production changes only after a human reviews and merges it in GitHub.',
 		inputSchema: toolInput(toolInputs.createPullRequest),
+		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 	}, (input) => run(() => createPullRequestUseCase(c, input)))
+	server.registerTool('delete_workspace', {
+		description: 'Abandon one of your workspaces: delete its branch on GitHub, which closes an open pull request from it, and stop '
+			+ 'listing it. Its commits are no longer reachable from a branch. The stage environment keeps running what it last deployed. '
+			+ 'Ask the human before you call it.',
+		inputSchema: toolInput(toolInputs.deleteWorkspace),
+		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+	}, (input) => run(() => abandonWorkspaceUseCase(c, input)))
 	return server
 }
 
@@ -257,7 +351,15 @@ async function run(effect: () => Promise<object>): Promise<CallToolResult> {
 
 function toolFailure(cause: unknown): CallToolResult {
 	if (cause instanceof ControlApiError) return { isError: true, content: [{ type: 'text', text: cause.message }] }
-	// Never log the error object: a GitHub or provider failure may carry repository detail.
-	console.error('mcp tool failed:', cause instanceof Error ? cause.name : 'unknown error')
-	return { isError: true, content: [{ type: 'text', text: 'The request failed. Try again later.' }] }
+	// Never log or answer the error object: a GitHub or provider failure may carry repository detail or a credential.
+	const reference = crypto.randomUUID()
+	console.error(`mcp tool failed (reference ${reference}):`, cause instanceof Error ? cause.name : 'unknown error')
+	return {
+		isError: true,
+		content: [{
+			type: 'text',
+			text: 'Control or a service it depends on (its database, the audit log in IAM) failed; your input did not cause it. '
+				+ `Retry in a minute. If it keeps failing, tell the operator and quote reference ${reference}.`,
+		}],
+	}
 }
