@@ -147,7 +147,7 @@ function parseClientGrantTypes(value: unknown): OAuthClientMetadataDocument['gra
 	const grants: OAuthClientMetadataDocument['grant_types'] = []
 	for (const grant of value) {
 		if (typeof grant !== 'string') return null
-		// A client may list grants this server does not offer (Claude lists jwt-bearer); they grant it nothing here.
+		// A client may list grants IAM does not serve (Claude lists jwt-bearer); IAM serves the intersection.
 		if ((grant !== 'authorization_code' && grant !== 'refresh_token') || grants.includes(grant)) continue
 		grants.push(grant)
 	}

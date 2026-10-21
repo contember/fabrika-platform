@@ -179,6 +179,23 @@ describe('authorization request validation', () => {
 		expect(f.fetched).toHaveLength(1)
 	})
 
+	test("Claude's document, which lists a grant IAM does not serve, is accepted for the grants IAM serves", async () => {
+		// Claude's live document (fetched 2026-10-21) under the fixture's client id and redirect URI.
+		const f = await fixture({
+			document: (clientId) => ({
+				client_id: clientId,
+				client_name: 'Claude',
+				client_uri: 'https://claude.ai',
+				redirect_uris: [REDIRECT_URI],
+				grant_types: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:jwt-bearer'],
+				response_types: ['code'],
+				token_endpoint_auth_method: 'none',
+			}),
+		})
+		const first = await tokenBody(await f.exchange(await f.approve()))
+		expect((await f.refresh(first.refresh_token ?? '')).status).toBe(200)
+	})
+
 	test('a document without grant_types gets no refresh token', async () => {
 		const f = await fixture({
 			document: (clientId) => ({ client_id: clientId, redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none' }),
