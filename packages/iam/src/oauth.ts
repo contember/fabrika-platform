@@ -1,12 +1,4 @@
-import {
-	buildResourceAccessClaims,
-	DEFAULT_TOKEN_TTL_SECONDS,
-	type KeyGrant,
-	matchAction,
-	parseOAuthScopes,
-	type PermissionEntry,
-	type Scope,
-} from '@fabrika/auth-core'
+import { buildResourceAccessClaims, DEFAULT_TOKEN_TTL_SECONDS, type KeyGrant, parseOAuthScopes, type PermissionEntry } from '@fabrika/auth-core'
 import type {
 	OAuthAuthorizationRequest,
 	OAuthClientMetadataDocument,
@@ -20,6 +12,7 @@ import { sessionUsable } from './auth'
 import { type AuditEventInput, type OAuthGrantRow, type PrincipalRow, principalStatus, type SessionRow } from './db'
 import type { Env } from './env'
 import { parseJsonOrNull } from './json'
+import { narrowPermissions } from './narrow-permissions'
 import { clientMetadata } from './oauth-client'
 import type { ManagedOAuthClient, OAuthConfig } from './oauth-config'
 import { pkceChallenge } from './oidc'
@@ -259,34 +252,6 @@ export function scopeCeiling(resource: OAuthResourceDto, scopes: readonly string
 		ceiling.push(...grant.permissions)
 	}
 	return ceiling
-}
-
-/**
- * Intersect live permissions with a scope ceiling. The ceiling never adds anything: each result is
- * the narrower action and the narrower scope of one held entry and one ceiling entry.
- */
-export function narrowPermissions(live: readonly PermissionEntry[], ceiling: readonly KeyGrant[]): PermissionEntry[] {
-	const result: PermissionEntry[] = []
-	const seen = new Set<string>()
-	for (const held of live) {
-		for (const limit of ceiling) {
-			const action = matchAction(limit.action, held.action) ? held.action : matchAction(held.action, limit.action) ? limit.action : null
-			const scope = narrowerScope(held.scope, limit.scope ?? null)
-			if (action === null || scope === undefined) continue
-			const key = `${action} ${scope === null ? '' : `${scope.type}:${scope.value}`} ${held.source}`
-			if (seen.has(key)) continue
-			seen.add(key)
-			result.push({ action, scope, source: held.source })
-		}
-	}
-	return result
-}
-
-/** `null` is global; `undefined` means the two scopes do not overlap. */
-function narrowerScope(held: Scope | null, limit: Scope | null): Scope | null | undefined {
-	if (held === null) return limit
-	if (limit === null) return held
-	return held.type === limit.type && held.value === limit.value ? held : undefined
 }
 
 /** The record of a grant's revocation: by its client, or by IAM on a replayed code or refresh token. */

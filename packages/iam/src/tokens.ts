@@ -16,6 +16,7 @@ import {
 	type AccessTokenClaims,
 	buildAccessClaims,
 	DEFAULT_TOKEN_TTL_SECONDS,
+	type KeyGrant,
 	type LinkTokenClaims,
 	MAX_ACCESS_TOKEN_BYTES,
 	type MintFromKeyResult,
@@ -30,6 +31,7 @@ import { sessionUsable } from './auth'
 import type { CredentialGrantRow, CredentialRow, PrincipalRow, SessionTerminal } from './db'
 import { principalStatus, sessionTerminal } from './db'
 import type { Env } from './env'
+import { narrowPermissions } from './narrow-permissions'
 import { reachesCrossAppAuthority, resolvePermissionsAt } from './resolve'
 import { hashToken } from './secret'
 import type { Services } from './services'
@@ -125,7 +127,7 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 interface TerminalAuthority {
 	id: string
 	label: string
-	ceiling: PermissionEntry[]
+	ceiling: KeyGrant[]
 	additions: PermissionEntry[]
 }
 
@@ -155,19 +157,18 @@ async function terminalAuthority(services: Services, terminal: SessionTerminal, 
 	return {
 		id: row.principal_id,
 		label: row.label,
-		ceiling: asserter.ceiling.map((action): PermissionEntry => ({ action, scope: null, source: 'terminal' })),
+		ceiling: asserter.ceiling.map((action): KeyGrant => ({ action })),
 		additions: granted.map((entry): PermissionEntry => ({ ...entry, source: 'terminal' })),
 	}
 }
 
 /**
- * A person's permissions on a terminal (ADR-0067 §4): their own entries that the ceiling permits — the downscope
- * filter a principal-bound key applies — and then the terminal's own, with the source `terminal`. An empty ceiling
- * keeps none of the person's.
+ * A person's permissions on a terminal (ADR-0067 §4): each of their own entries narrowed by the ceiling patterns it
+ * overlaps, keeping its scope, and then the terminal's own, with the source `terminal`. A person's `*` under a ceiling
+ * `a.read` keeps `a.read`; an empty ceiling keeps none of the person's.
  */
 function withinTerminal(personal: PermissionEntry[], terminal: TerminalAuthority): PermissionEntry[] {
-	const kept = personal.filter((entry) => permits(terminal.ceiling, entry.action, entry.scope ?? undefined))
-	return [...kept, ...terminal.additions]
+	return [...narrowPermissions(personal, terminal.ceiling), ...terminal.additions]
 }
 
 /** `principalId`/`credentialId` are surfaced for the auth_log row. */

@@ -190,6 +190,28 @@ function terminalSuite(backend: () => Backend): void {
 			expect(await b.repositories.sessions.getActiveSessionByHash(elsewhere.childHash)).not.toBeNull()
 		})
 
+		test('a release logs one logout per login it ends, with the terminal and the asserter', async () => {
+			const b = backend()
+			const someone = await person(b)
+			const { terminalId } = await enrol(b, await person(b))
+			await terminalSessions(b, terminalId, someone)
+			const log = { requestId: `release-${uuidv7()}`, app: 'propustka', reason: 'terminal_release' }
+
+			expect(await b.repositories.terminals.revokeSessions(terminalId, log)).toBe(2)
+			expect(await b.repositories.terminals.revokeSessions(terminalId, { ...log, requestId: `${log.requestId}-again` })).toBe(0)
+			const { results } = await b.db
+				.prepare("SELECT request_id, principal_id, terminal_id, asserted_by, reason FROM auth_log WHERE kind = 'logout' AND request_id LIKE ?")
+				.bind(`${log.requestId}%`)
+				.all()
+			expect(results).toEqual([{
+				request_id: log.requestId,
+				principal_id: someone,
+				terminal_id: terminalId,
+				asserted_by: APP,
+				reason: 'terminal_release',
+			}])
+		})
+
 		test('a terminal is named by exactly the terminal_assertion sessions', async () => {
 			const b = backend()
 			const someone = await person(b)

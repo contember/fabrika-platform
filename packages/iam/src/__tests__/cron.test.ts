@@ -38,6 +38,7 @@ const SWEPT_TABLES = [
 	'oauth_refresh_tokens',
 	'delegation_grants',
 	'membership_invitations',
+	'terminal_identifications',
 ] as const
 
 function counts(sqlite: Database): Record<string, number> {
@@ -207,6 +208,30 @@ async function seedBothSides(h: Harness): Promise<string> {
 		await h.repositories.oauth.insertRefreshToken({ token_hash: hash, grant_id: 'grant-live', expires_at: expiresAt })
 	}
 
+	// terminal_identifications — an expired or ended identification goes at once; an open one stays.
+	const terminalId = 'terminal-cron'
+	await h.repositories.audit.commit([
+		h.repositories.principals.createServiceStatement(terminalId, 'Entrance'),
+		h.repositories.terminals.enrolStatement({
+			principalId: terminalId,
+			label: 'Entrance',
+			enrolledBy: principal,
+			tokenHash: 'h-terminal',
+			sessionTtl: 300,
+		}),
+	])
+	for (const [id, expiresAt] of [['ident-old', NOW - 1], ['ident-live', NOW + 60]] as const) {
+		await h.repositories.terminals.createIdentification({
+			idHash: await hashToken(id),
+			terminalId,
+			app: 'attendance',
+			returnUrl: 'https://attendance.test/',
+			handoffState: 's'.repeat(16),
+			handoffChallenge: 'c'.repeat(43),
+			expiresAt,
+		})
+	}
+
 	return principal
 }
 
@@ -236,6 +261,7 @@ describe('runIamMaintenance', () => {
 			oauth_refresh_tokens: 2,
 			delegation_grants: 2,
 			membership_invitations: 2,
+			terminal_identifications: 2,
 		})
 
 		const settled: Promise<unknown>[] = []
@@ -257,6 +283,7 @@ describe('runIamMaintenance', () => {
 			oauth_refresh_tokens: 1,
 			delegation_grants: 1,
 			membership_invitations: 1,
+			terminal_identifications: 1,
 		})
 	})
 
@@ -282,6 +309,7 @@ describe('runIamMaintenance', () => {
 			oauth_refresh_tokens: 1,
 			delegation_grants: 1,
 			membership_invitations: 1,
+			terminal_identifications: 1,
 		})
 	})
 })

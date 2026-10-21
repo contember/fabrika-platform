@@ -33,6 +33,7 @@ export {
 	PREFLIGHT_HEADER,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
+	SIGNOUT_RELEASE_PATH,
 	UNTRUSTED_FORWARD_HEADERS,
 } from './constants'
 export { carriesPlatformKey, readBearer, readCookie } from './credentials'

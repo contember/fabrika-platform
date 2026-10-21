@@ -1,19 +1,23 @@
-import { FABRIKA_COOKIE_PREFIX, permits, SESSION_COOKIE } from '@fabrika/auth-core'
+import { FABRIKA_COOKIE_PREFIX, IDENTIFICATION_QUERY_PARAMETER, permits, SESSION_COOKIE } from '@fabrika/auth-core'
 import { IAM_ACTIONS } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
 import { IAM_APP } from '../admin/router'
-import { INSTALLATION_PRESENTATION } from '../app-presentation'
-import { auditLabelOf, DEFAULT_TERMINAL_SESSION_TTL_SECONDS } from '../db'
+import { type AppPresentation, INSTALLATION_PRESENTATION, presentationFor } from '../app-presentation'
+import { auditLabelOf, DEFAULT_TERMINAL_SESSION_TTL_SECONDS, type TerminalRow } from '../db'
+import { normalizeOrigin, resolveReturnUrl } from '../handoff'
+import { IDENTIFICATION_TTL_SECONDS } from '../identification'
 import { installationBrand } from '../installation-brand'
 import { logError } from '../log'
 import { randomToken } from '../oidc'
 import { authFailurePage, TERMINAL_ENROL_PATH, terminalEnrolledPage, terminalEnrolPage } from '../password-pages'
+import { unixNow } from '../repositories/sql'
 import { resolvePermissionsAt } from '../resolve'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
 import { terminalLabel } from '../terminals'
-import { clearCookie, serializeCookie } from './cookies'
-import { readForm, redirectHeaders, sameOrigin, stringValue } from './http'
+import { clearCookie, readCookie, serializeCookie } from './cookies'
+import type { Handoff } from './handoff'
+import { printable, readForm, redirectHeaders, sameOrigin, stringValue } from './http'
 import { type CurrentLogin, currentLogin } from './sessions'
 
 /**
@@ -27,6 +31,9 @@ export const TERMINAL_COOKIE = `${FABRIKA_COOKIE_PREFIX}terminal`
  * ends when an administrator revokes it, not when a cookie expires, so it asks for the most a browser grants.
  */
 export const TERMINAL_COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60
+
+/** Where an application's proxy sends a signed-out terminal's browser; the proxy's `SIGNOUT_RELEASE_PATH` names it. */
+export const TERMINAL_RELEASE_PATH = '/auth/terminals/release'
 
 /**
  * `GET` renders the enrolment form to a login that may enrol; `POST` enrols. A browser without a login is sent to sign
@@ -127,4 +134,103 @@ function terminalCookie(value: string): string {
 		maxAge: TERMINAL_COOKIE_MAX_AGE_SECONDS,
 		path: '/',
 	})
+}
+
+/** The enrolled terminal this browser is, by its cookie, with the cookie's value; null for any other browser. */
+async function browserTerminal(request: Request, services: Services): Promise<{ terminal: TerminalRow; token: string } | null> {
+	const token = readCookie(request.headers.get('Cookie'), TERMINAL_COOKIE)
+	if (token === null) {
+		return null
+	}
+	const terminal = await services.repositories.terminals.getActiveByTokenHash(await hashToken(token))
+	return terminal === null ? null : { terminal, token }
+}
+
+/**
+ * Send a terminal's browser to the application to identify the person at it (ADR-0067 §2): when the browser is an
+ * enrolled terminal, the handoff's application is one of its asserters and declares an identification page. The
+ * identification holds the handoff, so IAM alone issues the code once the application names the person. Null for any
+ * other sign-in, which goes on as usual. The terminal cookie is refreshed, so a terminal in use never reaches its cap.
+ */
+export async function identificationRedirect(
+	request: Request,
+	services: Services,
+	handoff: Handoff,
+	presentation: AppPresentation,
+	requestId: string,
+): Promise<Response | null> {
+	const browser = await browserTerminal(request, services)
+	if (browser === null) {
+		return null
+	}
+	const { terminals, appSchema } = services.repositories
+	const terminalId = browser.terminal.principal_id
+	if (await terminals.getAsserter(terminalId, handoff.app) === null) {
+		return null
+	}
+	const identify = await appSchema.getTerminalIdentifyPath(handoff.app)
+	const origin = normalizeOrigin(handoff.returnUrl)
+	if (identify === null || origin === null) {
+		return null
+	}
+	const id = randomToken(32)
+	try {
+		await terminals.createIdentification({
+			idHash: await hashToken(id),
+			terminalId,
+			app: handoff.app,
+			returnUrl: handoff.returnUrl,
+			handoffState: handoff.state,
+			handoffChallenge: handoff.challenge,
+			expiresAt: unixNow() + IDENTIFICATION_TTL_SECONDS,
+		}, {
+			requestId,
+			app: IAM_APP,
+			kind: 'authenticate',
+			principalId: null,
+			decision: 'allow',
+			reason: 'terminal_identification',
+			terminal: { terminalId, assertedBy: handoff.app },
+		})
+	} catch (err) {
+		logError(`a terminal identification could not be opened for request '${requestId}'`, err)
+		return authFailurePage(presentation, { kind: 'login_unavailable' }, 503)
+	}
+	const location = new URL(identify, origin)
+	location.searchParams.set(IDENTIFICATION_QUERY_PARAMETER, id)
+	const headers = redirectHeaders(location.toString())
+	headers.append('Set-Cookie', terminalCookie(browser.token))
+	return new Response(null, { status: 302, headers })
+}
+
+/**
+ * `GET /auth/terminals/release?app=&redirect=` (ADR-0067 §5): end the sessions of this browser's terminal, then return
+ * to `redirect`, which must lie in the app's registered return origins. A browser that is no terminal is only sent back.
+ *
+ * A GET without a same-origin check, unlike every other auth route that changes state: the application's proxy sends
+ * the browser here from its own sign-out, a navigation from another host. The most a cross-site request can do is end
+ * the short session of whoever stands at the terminal.
+ */
+export async function handleTerminalRelease(request: Request, services: Services, requestId: string): Promise<Response> {
+	const url = new URL(request.url)
+	const app = url.searchParams.get('app')
+	const redirect = url.searchParams.get('redirect')
+	const presentation = await presentationFor(services, app)
+	if (app === null || app === '' || redirect === null || redirect === '') {
+		return authFailurePage(presentation, { kind: 'no_return_address' }, 400)
+	}
+	const returnUrl = await resolveReturnUrl(services, app, redirect)
+	if (returnUrl === null) {
+		return authFailurePage(presentation, { kind: 'unregistered_origin', origin: printable(normalizeOrigin(redirect) ?? 'that address') }, 400)
+	}
+	const browser = await browserTerminal(request, services)
+	if (browser !== null) {
+		try {
+			await services.repositories.terminals.revokeSessions(browser.terminal.principal_id, { requestId, app: IAM_APP, reason: 'terminal_release' })
+		} catch (err) {
+			logError(`a terminal release could not be recorded for request '${requestId}'`, err)
+			return authFailurePage(presentation, { kind: 'logout_unavailable' }, 503)
+		}
+	}
+	return new Response(null, { status: 302, headers: redirectHeaders(returnUrl) })
 }

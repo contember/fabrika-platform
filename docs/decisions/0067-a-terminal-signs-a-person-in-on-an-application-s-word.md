@@ -144,8 +144,9 @@ permissions = (person's resolved permissions filtered by the terminal's ceiling 
               ∪ (the terminal principal's resolved permissions for this app)
 ```
 
-The ceiling is applied with the downscope filter that already serves keys bound to a principal: an entry
-survives only if the ceiling `permits` it. The added entries carry the source `terminal`.
+The ceiling narrows the way an OAuth scope narrows a person's permissions: each of the person's entries yields the
+narrower of itself and every ceiling pattern it overlaps, with its own scope. A person's `*` under a ceiling `a.read`
+keeps `a.read`; a person's `a.read` under a ceiling `a.*` keeps `a.read`. The added entries carry the source `terminal`.
 
 **Invariant: the ceiling is never absent.** An application's assertion is weaker than the person's own
 credential. A buggy or compromised asserter can name anybody, so what it can obtain must be bounded by

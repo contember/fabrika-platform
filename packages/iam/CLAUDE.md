@@ -152,8 +152,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   seeds a session must therefore name a method that composition enables — `src/node/browser-identity.ts`
   seeds `password` for exactly that reason.
 - **A SESSION ASSERTED AT A TERMINAL MINTS `(person ∩ ceiling) ∪ terminal`, ONLY FOR ITS ASSERTER** (ADR-0067 §4,
-  `mintToken`). The person's entries pass the asserter's ceiling with the key downscope filter (`permits`, never a set
-  intersection), then the terminal principal's own grants at the app follow with source `terminal`. Any other audience,
+  `mintToken`). Each person entry is narrowed by the asserter's ceiling patterns it overlaps (`narrowPermissions`, as an
+  OAuth scope narrows: a `*` under `a.read` keeps `a.read` with the entry's scope), then the terminal principal's own
+  grants at the app follow with source `terminal`. Any other audience,
   a platform audience even as the asserter, a revoked terminal, an asserter the profile no longer lists and a disabled
   terminal principal are `invalid_session`. `exchangeAuthCode` copies `terminal_id`/`asserted_by` to the child and
   refuses a code for another app; `resolveAdmin` refuses a token carrying `terminal`, because it re-resolves the
@@ -169,6 +170,15 @@ fails if that stops being true — it is the guard, not documentation of one.
   null when undeclared). Only a framework that knows terminals compiles the field, and only such a framework parses a
   token whose `perms` carry source `terminal`, so the row is what admits an asserter. The identification operations'
   wire is `IamTerminalRpc` (`@fabrika/auth-core`'s `terminal.ts`).
+- **ONLY IAM ISSUES A TERMINAL'S CODE, AGAINST THE HANDOFF THE PROXY STARTED** (ADR-0067 §3, `identification.ts`). With no
+  current login, `/auth/login` turns a terminal cookie into an identification (2 minutes, id hashed) holding the whole
+  handoff, and 302s to the app's identify path on the handoff's return origin. The application's
+  `inspectIdentification`/`assertIdentity`/`cancelIdentification` (the membership transport, `PropustkaApplication`)
+  take the app from the credential's `aud`; every dead id is `not_found`. `assertIdentity` consumes it, writes a login
+  no browser holds (`terminal_assertion`, the terminal's TTL) with its `auth_log` row, and answers `handoffLocation`.
+- **`/auth/terminals/release` IS A CROSS-SITE `GET` THAT CHANGES STATE**, the one exception to `sameOrigin` below: the
+  application's proxy sends the browser there from its sign-out. It revokes only the terminal's own sessions, and only
+  after the redirect passed the app's return-origin registry.
 - **WHICH APP'S PROXY TOKEN MAY ADMINISTER IS A REGISTRY.** `ADMIN_AUDIENCES` (deploy
   var `FABRIKA_IAM_ADMIN_AUDIENCES`, comma-separated app ids) is the `aud` allowlist `resolveAdmin`'s
   JWT branch checks; unset means the console gateway's own app id (`vozka`), explicitly empty means

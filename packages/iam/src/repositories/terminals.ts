@@ -1,6 +1,7 @@
 import { parseJsonStringArray } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement } from '@fabrika/platform'
-import { type AuditEventInput, AuditWriter, type SqlChange } from './audit'
+import { type AuditEventInput, AuditWriter, type AuthLogInput, authLogStatement, type SqlChange } from './audit'
+import type { LogoutLogInput } from './sessions'
 import { unixNow } from './sql'
 
 /** How long a person's session on a terminal lasts unless its profile says otherwise (ADR-0067). */
@@ -152,11 +153,6 @@ export class TerminalRepository {
 		return change.rows(results).length > 0
 	}
 
-	/** Record that the terminal started an identification now. */
-	async markSeen(terminalId: string): Promise<void> {
-		await this.db.prepare('UPDATE terminals SET last_seen_at = ? WHERE principal_id = ?').bind(unixNow(), terminalId).run()
-	}
-
 	/**
 	 * Revoke a terminal and every session issued on it, in one transaction. Idempotent: answers false, and writes no
 	 * `audit`, when the terminal was already revoked or is unknown. The validity join ends its sessions either way; the
@@ -171,14 +167,46 @@ export class TerminalRepository {
 		return (await this.writer.run(changes, audit)).length > 0
 	}
 
-	/** Revoke every live session issued on the terminal, as its sign-out does (ADR-0067 §5). Answers how many. */
-	async revokeSessions(terminalId: string): Promise<number> {
-		return (await this.writer.run([revokeSessionsChange(terminalId, unixNow())], undefined)).length
+	/**
+	 * Revoke every live session issued on the terminal, as its sign-out does (ADR-0067 §5). Answers how many. A sign-out
+	 * passes `log`: each login this call ends gets its `logout` row in the same transaction, with the login's principal,
+	 * terminal and asserter, like `SessionRepository.revokeSessionByHash`. Its children end with it through the join.
+	 */
+	async revokeSessions(terminalId: string, log?: LogoutLogInput): Promise<number> {
+		const now = unixNow()
+		const revoke = revokeSessionsChange(terminalId, now)
+		if (log === undefined) {
+			return (await this.writer.run([revoke], undefined)).length
+		}
+		const values = [log.requestId, log.app, log.reason ?? null, now]
+		const columns = '(request_id, app, kind, principal_id, credential_id, decision, reason, privileged, created_at, terminal_id, asserted_by)'
+		const logged = "SELECT ?, ?, 'logout', principal_id, NULL, 'allow', ?, 0, ?, terminal_id, asserted_by"
+		if (this.writer.dialect === 'postgres') {
+			const { results } = await this.db
+				.prepare(`WITH changed AS (${revoke.sql}), logged AS (
+					INSERT INTO auth_log ${columns} ${logged} FROM changed WHERE parent_session_id IS NULL
+				) SELECT id FROM changed`)
+				.bind(...revoke.binds, ...values)
+				.all()
+			return results.length
+		}
+		// SQLite serializes writers, so the logins read here are exactly the ones the UPDATE after it ends.
+		const [, revoked] = await this.db.batch([
+			this.db
+				.prepare(`INSERT INTO auth_log ${columns} ${logged} FROM sessions
+					WHERE terminal_id = ? AND revoked_at IS NULL AND parent_session_id IS NULL`)
+				.bind(...values, terminalId),
+			this.db.prepare(revoke.sql).bind(...revoke.binds),
+		])
+		return revoked?.results.length ?? 0
 	}
 
 	// ── Identifications ───────────────────────────────────────────────────────
 
-	/** Open an identification. Only the hash of its id is stored; the plaintext lives in one redirect. */
+	/**
+	 * Open an identification and record that its terminal was seen now, in one batch with `log`, the identification's
+	 * `auth_log` row. Only the hash of its id is stored; the plaintext lives in one redirect.
+	 */
 	async createIdentification(input: {
 		idHash: string
 		terminalId: string
@@ -187,13 +215,17 @@ export class TerminalRepository {
 		handoffState: string
 		handoffChallenge: string
 		expiresAt: number
-	}): Promise<void> {
-		await this.db
-			.prepare(`INSERT INTO terminal_identifications
-				(id_hash, terminal_id, app, return_url, handoff_state, handoff_challenge, created_at, expires_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-			.bind(input.idHash, input.terminalId, input.app, input.returnUrl, input.handoffState, input.handoffChallenge, unixNow(), input.expiresAt)
-			.run()
+	}, log?: AuthLogInput): Promise<void> {
+		const now = unixNow()
+		await this.db.batch([
+			this.db
+				.prepare(`INSERT INTO terminal_identifications
+					(id_hash, terminal_id, app, return_url, handoff_state, handoff_challenge, created_at, expires_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+				.bind(input.idHash, input.terminalId, input.app, input.returnUrl, input.handoffState, input.handoffChallenge, now, input.expiresAt),
+			this.db.prepare('UPDATE terminals SET last_seen_at = ? WHERE principal_id = ?').bind(now, input.terminalId),
+			...(log === undefined ? [] : [authLogStatement(this.db, log)]),
+		])
 	}
 
 	/** An identification by its id's hash, in any state — the caller judges expiry and consumption. */
@@ -233,7 +265,11 @@ export class TerminalRepository {
 }
 
 function revokeSessionsChange(terminalId: string, now: number): SqlChange {
-	return { sql: 'UPDATE sessions SET revoked_at = ? WHERE terminal_id = ? AND revoked_at IS NULL RETURNING id', binds: [now, terminalId] }
+	return {
+		sql: `UPDATE sessions SET revoked_at = ? WHERE terminal_id = ? AND revoked_at IS NULL
+			RETURNING id, principal_id, terminal_id, asserted_by, parent_session_id`,
+		binds: [now, terminalId],
+	}
 }
 
 function toAsserter(row: TerminalAsserterRow): TerminalAsserter {

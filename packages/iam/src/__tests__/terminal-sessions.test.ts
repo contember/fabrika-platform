@@ -1,7 +1,7 @@
 // A person's session on a terminal (ADR-0067 §4): it mints `(person ∩ ceiling) ∪ terminal`, only for the application
 // that asserted it, and only while the terminal is enrolled and still lists that application.
 
-import { type AccessTokenClaims, buildAccessClaims, parseAccessClaims } from '@fabrika/auth-core'
+import { type AccessTokenClaims, buildAccessClaims, parseAccessClaims, type Scope } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
@@ -35,14 +35,26 @@ interface Scenario {
 	terminalId: string
 }
 
+interface PersonalGrant {
+	actions: string[]
+	scope: Scope | null
+	app: string
+}
+
+const PERSONAL_GRANTS: PersonalGrant[] = [
+	{ actions: ['attendance.view', 'report.export'], scope: null, app: APP },
+	{ actions: ['attendance.view'], scope: { type: 'site', value: 'north' }, app: APP },
+	{ actions: ['meal.order'], scope: null, app: OTHER_APP },
+]
+
 /** A person with personal grants at the app, and a terminal whose principal holds its own grant there. */
-async function scenario(ceiling: string[]): Promise<Scenario> {
+async function scenario(ceiling: string[], grants: PersonalGrant[] = PERSONAL_GRANTS): Promise<Scenario> {
 	const h = createHarness()
 	const services = h.makeServices({ issuer: ISSUER, authentication: { oidc: true, password: true } })
 	const person = seedUser(h.sqlite, { sub: 'g-person', email: 'ann@example.com' })
-	seedInlineGrant(h.sqlite, person, ['attendance.view', 'report.export'], null, APP)
-	seedInlineGrant(h.sqlite, person, ['attendance.view'], { type: 'site', value: 'north' }, APP)
-	seedInlineGrant(h.sqlite, person, ['meal.order'], null, OTHER_APP)
+	for (const grant of grants) {
+		seedInlineGrant(h.sqlite, person, grant.actions, grant.scope, grant.app)
+	}
 	const terminalId = uuidv7()
 	await h.repositories.audit.commit([
 		h.repositories.principals.createServiceStatement(terminalId, 'Entrance'),
@@ -118,6 +130,29 @@ describe('a terminal session mints (person ∩ ceiling) ∪ terminal', () => {
 		expect(claims.perms).toEqual([
 			{ action: 'attendance.view', scope: null, source: 'grant' },
 			{ action: 'attendance.view', scope: { type: 'site', value: 'north' }, source: 'grant' },
+			{ action: 'attendance.record', scope: null, source: 'terminal' },
+		])
+	})
+
+	test("a person's wildcard yields the ceiling's narrower actions, under the person's scope", async () => {
+		const everything = await scenario(['attendance.view'], [{ actions: ['*'], scope: null, app: APP }])
+		expect((await mintedClaims(everything, await applicationSession(everything))).perms).toEqual([
+			{ action: 'attendance.view', scope: null, source: 'grant' },
+			{ action: 'attendance.record', scope: null, source: 'terminal' },
+		])
+
+		const north = { type: 'site', value: 'north' }
+		const namespace = await scenario(['attendance.view', 'report.export'], [{ actions: ['attendance.*'], scope: north, app: APP }])
+		expect((await mintedClaims(namespace, await applicationSession(namespace))).perms).toEqual([
+			{ action: 'attendance.view', scope: north, source: 'grant' },
+			{ action: 'attendance.record', scope: null, source: 'terminal' },
+		])
+	})
+
+	test("a ceiling wildcard keeps the person's exact action", async () => {
+		const s = await scenario(['attendance.*'], [{ actions: ['attendance.view', 'report.export'], scope: null, app: APP }])
+		expect((await mintedClaims(s, await applicationSession(s))).perms).toEqual([
+			{ action: 'attendance.view', scope: null, source: 'grant' },
 			{ action: 'attendance.record', scope: null, source: 'terminal' },
 		])
 	})

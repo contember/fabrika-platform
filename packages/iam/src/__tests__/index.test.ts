@@ -643,12 +643,15 @@ function prototypeMembers(entrypoint: object): { methods: string[]; accessors: s
 
 describe('the entrypoint an application binds', () => {
 	const APPLICATION_METHODS = [
+		'assertIdentity',
 		'assignMember',
 		'audit',
+		'cancelIdentification',
 		'createScope',
 		'exchangeAuthCode',
 		'findMember',
 		'getJwks',
+		'inspectIdentification',
 		'issueLink',
 		'listAppMembers',
 		'listMembers',

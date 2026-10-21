@@ -205,8 +205,8 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
   `exchangeAuthCode` fails for a terminal parent until it copies both to the child.
 - WU1 → WU3/WU5: a terminal principal is a `service` row, so check that `apiKeys.list` does not show it. Nothing calls
   `terminals.pruneIdentifications` yet; the maintenance cron should.
-- WU2: the ceiling is a set of global `permits` patterns, so a person's wildcard entry (`*`, `x.*`) survives only under a
-  ceiling pattern that matches the wildcard string itself; contract applications hold exact actions, so this rarely bites.
+- WU2: the ceiling is a set of global patterns. WU5 replaced the `permits` filter with `narrowPermissions` (moved out of
+  `oauth.ts`): a person's `*` or `x.*` now yields the narrower ceiling actions, keeping its scope (→ ADR-0067 §4).
 - WU2: `mintToken` also refuses a terminal session for a platform audience, even as its asserter, and when the terminal
   principal is disabled or the profile no longer lists the asserter. `exchangeAuthCode` refuses (`wrong_app`) a code
   issued for an app other than the login's `asserted_by`.
@@ -268,3 +268,19 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
     `bindingTerminals` in `packages/app/src/cloudflare.ts`, which detects the three methods on the binding.
   - Redirect to `<return origin><identify>?identification=<id>` (`IDENTIFICATION_QUERY_PARAMETER`), and refuse the
     terminal branch when `getTerminalIdentifyPath(app)` is null.
+- WU5: `assertIdentity` checks the principal before it consumes the identification, so `invalid_principal` leaves it open
+  for another try; a dead id is consumed by nothing. The terminal principal being disabled is `not_found` too.
+- WU5: the identification operations accept only a verified access token whose `aud` is the named app (any `ptype`), not a
+  `px_` key. They are on the membership transport and `PropustkaApplication`, not on the platform `/rpc/*`.
+- WU5: `auth_log` rows: `terminal_identification` (allow, no principal) in the identification's batch,
+  `terminal_assertion` (allow) in the login's batch, `terminal_assertion_<reason>` (deny) in `waitUntil`, and one
+  `terminal_release` `logout` per login a release ends. Every one carries `terminal_id`/`asserted_by`; `app` is IAM's.
+- WU5: opening an identification refreshes `__Host-px_terminal`'s `Max-Age` and sets `last_seen_at` in the same batch
+  (`markSeen` is gone). The release is a `GET` with no same-origin check (IAM `CLAUDE.md` records the exception).
+- WU5: `TERMINAL_RELEASE_PATH` lives in `iam/src/auth/terminals.ts`; IAM's test pins it to `SIGNOUT_RELEASE_PATH`, which
+  `proxy-core` now exports.
+- WU5 → WU7: drive the flow through `createIamApp` (`membershipTransport: true`) as `terminal-identification.test.ts`
+  does: `/auth/login` with the proxy's handoff and the terminal cookie → 302 to `<origin><identify>?identification=`;
+  `HttpIamTerminals` (a membership transport key of the app) `assertIdentity` with a token whose `aud` is the app →
+  `callbackUrl`; the proxy redeems its code with the verifier it set; sign-out → `/auth/terminals/release` → the next
+  `/auth/login` opens a new identification.

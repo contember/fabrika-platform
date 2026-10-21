@@ -1,9 +1,13 @@
 import type {
 	ApproveDeviceAuthorizationInput,
 	ApproveDeviceAuthorizationResult,
+	AssertIdentityInput,
+	AssertIdentityResult,
 	AssignMemberInput,
 	AssignMemberResult,
 	AuditInput,
+	CancelIdentificationInput,
+	CancelIdentificationResult,
 	CreateScopeInput,
 	CreateScopeResult,
 	DenyDeviceAuthorizationResult,
@@ -14,8 +18,11 @@ import type {
 	IamHandoffRpc,
 	IamMembershipRpc,
 	IamRpc,
+	IamTerminalRpc,
 	InspectDeviceAuthorizationInput,
 	InspectDeviceAuthorizationResult,
+	InspectIdentificationInput,
+	InspectIdentificationResult,
 	IssueKeyInput,
 	IssueKeyResult,
 	IssueLinkInput,
@@ -106,15 +113,20 @@ export function iamEnv(bindings: WorkerBindings): Env {
 }
 
 /** Every call builds its surface from the Worker's own bindings; see `PropustkaApplication` for why it is no getter. */
-function iamRpc(bindings: WorkerBindings, ctx: ExecutionContext): IamRpc & IamHandoffRpc & IamMembershipRpc {
+function iamRpc(bindings: WorkerBindings, ctx: ExecutionContext): IamRpc & IamHandoffRpc & IamMembershipRpc & IamTerminalRpc {
 	return createIamRpc(iamEnv(bindings), ctx)
 }
 
 /**
  * What an application's Workers call over `IAM`: the proxy mints and redeems, the SDK verifies, lists and
- * audits, and the framework requests membership operations on its caller's behalf.
+ * audits, and the framework requests membership operations on its caller's behalf and identifies people at terminals.
+ * An identification operation takes the asserting application from its credential's audience.
  */
-export type IamApplicationRpc = Pick<IamRpc, 'getJwks' | 'mintToken' | 'mintFromKey' | 'listPrincipals' | 'audit'> & IamHandoffRpc & IamMembershipRpc
+export type IamApplicationRpc =
+	& Pick<IamRpc, 'getJwks' | 'mintToken' | 'mintFromKey' | 'listPrincipals' | 'audit'>
+	& IamHandoffRpc
+	& IamMembershipRpc
+	& IamTerminalRpc
 
 /**
  * The entrypoint every application Worker and its proxy bind (`@fabrika/provider-cloudflare` refuses any
@@ -181,6 +193,18 @@ export class PropustkaApplication extends WorkerEntrypoint<WorkerBindings> imple
 
 	revokeLink(input: RevokeLinkInput): Promise<RevokeLinkResult> {
 		return iamRpc(this.env, this.ctx).revokeLink(input)
+	}
+
+	inspectIdentification(input: InspectIdentificationInput): Promise<InspectIdentificationResult> {
+		return iamRpc(this.env, this.ctx).inspectIdentification(input)
+	}
+
+	assertIdentity(input: AssertIdentityInput): Promise<AssertIdentityResult> {
+		return iamRpc(this.env, this.ctx).assertIdentity(input)
+	}
+
+	cancelIdentification(input: CancelIdentificationInput): Promise<CancelIdentificationResult> {
+		return iamRpc(this.env, this.ctx).cancelIdentification(input)
 	}
 }
 
