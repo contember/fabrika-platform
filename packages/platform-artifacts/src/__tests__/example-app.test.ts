@@ -354,7 +354,13 @@ const assertSubmittedDescriptor = (recorded: Recorded): void => {
 		zerops: [{
 			setup: NOTES_SERVICE,
 			build: { base: 'alpine/bun@1.3' },
-			deploy: { readinessCheck: { httpGet: { port: 3000, path: '/healthz' }, retryPeriod: '10s', failureTimeout: '180s' } },
+			deploy: {
+				readinessCheck: {
+					exec: { command: expect.stringContaining("fetch('http://127.0.0.1:3000/healthz'") },
+					retryPeriod: '10s',
+					failureTimeout: '180s',
+				},
+			},
 			run: {
 				start: 'sh /var/www/fabrika/start.generated.sh',
 				healthCheck: { httpGet: { port: 3000, path: '/healthz' } },
