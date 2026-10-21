@@ -170,6 +170,7 @@ const installPreparedPlatform = async (
 	log.step('Write every remaining variable')
 	const desired = installationServiceEnv({
 		environment,
+		projectId: project.id,
 		tier: input.tier,
 		scheme: input.scheme,
 		hosts,

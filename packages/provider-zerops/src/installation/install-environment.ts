@@ -56,6 +56,8 @@ export const PASS_ONE_PROXY_MANIFEST = encodeProxyManifestJson({ apps: [] })
 /** What `installationServiceEnv` needs. Everything in it is settled before the first write. */
 export interface InstallationEnvInput {
 	readonly environment: string
+	/** The installation's own Zerops project, which no deployment namespace may adopt. */
+	readonly projectId: string
 	readonly tier: PlatformTier
 	readonly scheme: 'http' | 'https'
 	readonly hosts: PlatformHosts
@@ -117,6 +119,7 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 		['FABRIKA_ZEROPS_PROXY_IAM_URL', iamOrigin],
 		['FABRIKA_ZEROPS_PROXY_IAM_KEY', secrets.proxyKey],
 		['FABRIKA_ZEROPS_ACCESS_TOKEN', input.zeropsAccessToken],
+		['FABRIKA_ZEROPS_PLATFORM_PROJECT_ID', input.projectId],
 	])
 	if (input.apiBaseUrl !== undefined) {
 		// Only when the installation is not on the default region. Control spells it `_API_BASE_URL` while
