@@ -145,6 +145,9 @@ browser.** An application never holds a code or a verifier. An asserter can send
 `/auth/login` with a handoff that it made itself, so it may know the state and the verifier. The completion step
 keeps the code on the terminal, and the terminal's proxy holds no verifier for that state and spends the code. A
 leaked identification id or completion URL buys nothing elsewhere: the completion refuses every other browser.
+This holds only while every return origin registered for an asserting application is served by its proxy: a
+registered origin that something else answers would receive the code. Register no such origin for an application
+that declares a terminal.
 
 **Invariant: a failed identification costs the application, not IAM.** IAM sees only assertions. Throttling
 guesses (PIN tries, unknown fobs) is the application's duty, and the identification hands it the terminal to

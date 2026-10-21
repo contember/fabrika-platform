@@ -76,7 +76,9 @@ installation's console, a registered origin, or on IAM's sign-in page without on
    existing-session login paths. The verifier never appears in a URL.
 4. IAM integrity-binds the challenge into the plaintext code and stores the hash of the complete code.
 5. IAM returns the state with the code. The proxy requires the matching verifier cookie and redeems
-   `(app, code, verifier)` over its private IAM surface.
+   `(app, code, verifier)` over its private IAM surface. A callback without that cookie still spends the
+   code at IAM, so a code that reached the wrong browser is dead
+   ([ADR-0067](0067-a-terminal-signs-a-person-in-on-an-application-s-word.md) §3).
 6. IAM consumes the code atomically, then checks the verifier. Success creates the child app session.
    Every terminal callback clears the handoff cookie.
 
