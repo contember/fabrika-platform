@@ -153,7 +153,7 @@ describe('the sequence', () => {
 
 		await fixture.run()
 
-		expect(fixture.zerops.importedProcesses).toHaveLength(10)
+		expect(fixture.zerops.importedProcesses).toHaveLength(11)
 		for (const processId of fixture.zerops.importedProcesses) {
 			expect(fixture.zerops.timeline).toContain(`process:${processId}`)
 		}
@@ -363,7 +363,9 @@ describe('what reaches which service', () => {
 
 		const dsn = '${db_connectionTlsString}/${db_dbName}?sslmode=require'
 		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_DATABASE_URL')).toBe(dsn)
-		expect(fixture.zerops.env('operations').get('FABRIKA_OPERATIONS_DATABASE_URL')).toBe(dsn)
+		expect(fixture.zerops.env('operations').get('FABRIKA_OPERATIONS_DATABASE_URL')).toBe(
+			'${operationsdb_connectionTlsString}/${operationsdb_dbName}?sslmode=require',
+		)
 		expect(fixture.zerops.env('control').get('FABRIKA_CONTROL_DATABASE_URL')).toBe(dsn)
 		expect(fixture.zerops.env('operations').get('FABRIKA_OPERATIONS_BLOB_BUCKET')).toBe('${storage_bucketName}')
 		expect(fixture.zerops.env('operations').get('FABRIKA_OPERATIONS_BLOB_ENDPOINT')).toBe('${storage_apiUrl}')
@@ -468,7 +470,7 @@ describe('what reaches which service', () => {
 
 	test.each(
 		[
-			['light', 'db', 'storage'],
+			['light', 'operationsdb', 'storage'],
 			['standard', 'operationsdb', 'operationsstorage'],
 		] as const,
 	)('the %s tier points Operations at %s and %s, and IAM and control at db and storage', (tier, database, storage) => {
@@ -830,7 +832,7 @@ describe('every outward step is confirmed', () => {
 
 		expect(fixture.asked).toHaveLength(6)
 		expect(fixture.asked[0]).toContain('Read Zerops project proj-1')
-		expect(fixture.asked[1]).toContain('Import 6 services')
+		expect(fixture.asked[1]).toContain('Import 7 services')
 		expect(fixture.asked[2]).toContain('Mint an integration token')
 		expect(fixture.asked[3]).toContain(`build commit ${'a'.repeat(40)}`)
 		expect(fixture.asked[4]).toContain('variables across 4 services')
@@ -848,7 +850,7 @@ describe('every outward step is confirmed', () => {
 
 	test('declining the import creates nothing', async () => {
 		const fixture = harness({
-			confirms: { 'Import 6 services (db, storage, iam, operations, control, proxy) into project proj-1?': false },
+			confirms: { 'Import 7 services (db, operationsdb, storage, iam, operations, control, proxy) into project proj-1?': false },
 		})
 
 		await expect(fixture.run()).rejects.toThrow('nothing has been created')

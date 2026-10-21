@@ -379,8 +379,10 @@ HA PostgreSQL services, i.e. **six database containers**. Left to the default th
 cores and 24 GB at idle. Fabrika now states both profiles: `db` keeps `oltp-production` (identity and
 control-plane latency is felt by every request), `operationsdb` takes `oltp-staging` (same redundancy,
 same ceiling, a 1-core/1-GB shared floor — error history is bursty and tolerant of jitter), which
-halves the idle floor of the data plane. The `light` tier is one `postgresql:single@18` at
-`oltp-hobby` — a 1-core / 0.25 GB shared floor, the same ceiling
+halves the idle floor of the data plane. The `light` tier is two `postgresql:single@18` services at
+`oltp-hobby` — `db` for IAM and control, `operationsdb` for Operations, each a 1-core / 0.25 GB shared
+floor with the same ceiling. A light installation created before Operations had its own database keeps
+all three in `db`: an upgrade does not create a service
 ([ADR-0038](../decisions/0038-size-namespaces-cheaply-by-default.md)).
 
 #### Probe durations: the published schema is wrong, and the platform bounds them
@@ -1142,7 +1144,8 @@ dedupes. Consumed by `ZeropsApi.readBuildLog`.
 
 ## Fabrika placement mapping
 
-The Fabrika platform project contains:
+The Fabrika platform project of the `standard` tier contains (the `light` tier has the same roles on
+single-node databases and one shared `storage` bucket):
 
 - `iam`, `operations`, `control`, and the only public `proxy` runtime;
 - one shared `db` PostgreSQL service for IAM and control;

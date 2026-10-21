@@ -125,25 +125,28 @@ describe('the topology is the one ADR-0006 describes', () => {
 		expect(operationsStorage?.enableCdn).toBe(false)
 	})
 
-	test('the light tier is the same six roles on ONE database and ONE bucket', () => {
+	test('the light tier is the same six roles on two databases and ONE bucket', () => {
 		expect(light?.steady.document.services.map((service) => service.hostname)).toEqual([
 			'db',
+			'operationsdb',
 			'storage',
 			'iam',
 			'operations',
 			'control',
 			'proxy',
 		])
-		// The point of the tier: no `operationsdb`, no `operationsstorage`. Which schema and which key
-		// prefix each service uses is per-installation configuration, not a second data service.
-		expect(light?.steady.document.services.some((service) => service.hostname.startsWith('operations') && service.hostname !== 'operations'))
-			.toBe(false)
+		// Operations has its own database because Zerops schedules backups per service; the bucket stays
+		// shared, its key prefixes are disjoint.
+		expect(light?.steady.document.services.some((service) => service.hostname === 'operationsstorage')).toBe(false)
 	})
 
 	test('the light tier trades availability, not isolation: single Postgres, one container, still private', () => {
 		const services = new Map(light?.steady.document.services.map((service) => [service.hostname, service]))
-		expect(services.get('db')?.type).toBe('postgresql:single@18')
-		expect(services.get('db')?.mode).toBeUndefined()
+		for (const hostname of ['db', 'operationsdb']) {
+			expect(services.get(hostname)?.type).toBe('postgresql:single@18')
+			expect(services.get(hostname)?.profile).toBe('oltp-hobby')
+			expect(services.get(hostname)?.mode).toBeUndefined()
+		}
 		expect(services.get('storage')?.objectStoragePolicy).toBe('private')
 		expect(services.get('storage')?.enableCdn).toBe(false)
 		for (const hostname of ['iam', 'operations', 'control', 'proxy']) {

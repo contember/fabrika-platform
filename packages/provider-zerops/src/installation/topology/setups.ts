@@ -47,7 +47,9 @@
 // into the platform's variable store rather than carrying a credential. That reasoning is still sound
 // and it is no longer sufficient, because a reference names a SERVICE — and which data services exist
 // is exactly what differs between the `standard` and `light` tiers (`./topology.ts`). One committed
-// file cannot say `${operationsdb_connectionString}` on behalf of a tier that has no `operationsdb`.
+// file cannot say `${operationsstorage_bucketName}` on behalf of a tier that has no `operationsstorage`,
+// nor `${operationsdb_connectionString}` on behalf of a light installation created before Operations
+// had a database of its own.
 // So the file's own rule decides it: a data-service reference is not true for every installation, and
 // it moves to the env API alongside the origins and the secrets.
 //
@@ -291,8 +293,9 @@ const control: ZeropsYamlSetupSpec = {
  * `FABRIKA_OPERATIONS_BLOB_*` coordinates, `ENVIRONMENT`, `FABRIKA_OPERATIONS_PUBLIC_HOST` and
  * `FABRIKA_IAM_ISSUER` (the public IAM issuer). `FABRIKA_OPERATIONS_DATABASE_URL` takes the canonical
  * form above. On the `standard` tier the data references are `${operationsdb_*}` and
- * `${operationsstorage_*}`; on `light` they are `${db_*}` and `${storage_*}`, which is precisely why
- * they cannot be written here.
+ * `${operationsstorage_*}`; on `light` they are `${operationsdb_*}` and `${storage_*}` (`${db_*}` on a
+ * light installation created before Operations had its own database), which is precisely why they cannot
+ * be written here.
  *
  * Secrets (`envSecrets`): `OPERATIONS_SYNC_KEY`, shared only with control for catalog projection, and
  * `FABRIKA_IAM_RPC_KEY`, used only for Operations → IAM management RPC.

@@ -32,8 +32,8 @@ We will size every namespace at the cheapest shape that runs, on **every** envir
   that the platform project repairs the apps project, which no app namespace does.
 - The namespace proxy floors at one container instead of two. `maxContainers` is unchanged, so load
   still scales out.
-- The light platform tier's shared `db` moves from `oltp-staging` to `oltp-hobby`, dropping a 1 GB
-  memory floor to 0.25 GB. An installation that wants a specific floor sets one on the service, which
+- The light platform tier's databases (`db` for IAM and control, `operationsdb` for Operations) run
+  `oltp-hobby` instead of `oltp-staging`, dropping a 1 GB memory floor to 0.25 GB. An installation that wants a specific floor sets one on the service, which
   is where a per-installation value belongs ([ADR-0004](0004-secrets-live-in-the-platform.md)).
 - The worked example stops branching on `env` for its database type, profile and container floor — an
   example is where people copy their defaults from.

@@ -82,22 +82,27 @@ export type PublicAccess = 'custom-domain' | 'zerops-subdomain'
  * `standard` is the production shape: HA Postgres, a separate database and bucket for Operations, and
  * enough containers that no single one is a point of failure.
  *
- * `light` is one project, one `postgresql:single@18` and one bucket shared by IAM, Operations, control
- * AND the apps deployed alongside them, at one container per service. This tier exists because the standard
+ * `light` is one project with two `postgresql:single@18` services — `db` for IAM and control, `operationsdb`
+ * for Operations — and one bucket, at one container per service. This tier exists because the standard
  * shape costs ~13 containers before a single application is deployed, which is more platform than a
- * small fleet — or an evaluation — can justify.
+ * small fleet — or an evaluation — can justify. Applications run in their own namespace projects
+ * (ADR-0034); a production namespace that must keep its data through a node loss asks for HA there.
  *
- * Sharing is safe rather than merely cheap, and that is a property of the code, not of this comment:
+ * Operations gets its own database, not a schema beside IAM's, because Zerops backs up a whole service on
+ * one schedule: identity and deploy state is worth an hourly dump, error history is not, and only two
+ * services can carry two schedules. It also keeps Operations' high-volume writes off the identity path.
  *
- *   • The three services' table names do not intersect (IAM 10, Operations 24, control 16), and
- *     ADR-0017 already gives each its own migration ledger and advisory lock, so one database holds
- *     all three without coordination.
+ * Sharing the rest is safe rather than merely cheap, and that is a property of the code, not of this comment:
+ *
+ *   • IAM's and control's table names do not intersect, and ADR-0017 gives each its own migration ledger
+ *     and advisory lock, so one database holds both without coordination. A light installation created
+ *     before Operations moved out still holds all three in `db`, which the same property covers.
  *   • Their blob keys are prefix-disjoint — control writes `runs/`, Operations writes `events/`,
  *     `dead/` and `source-maps/` — so one bucket cannot collide.
  *
- * What `light` genuinely gives up is FAILURE-DOMAIN isolation: Operations' high-volume error history
- * now shares capacity with the identity path, and losing the one database loses all three services.
- * That is the trade, and it is why `standard` remains the default rather than the special case.
+ * What `light` genuinely gives up is AVAILABILITY and DURABILITY: one container per service, and a
+ * single-node database loses everything since its last backup when its node fails (Zerops has no
+ * point-in-time recovery). That is the trade, and it is why `standard` remains the default rather than the special case.
  */
 export type PlatformTier = 'standard' | 'light'
 
@@ -188,9 +193,9 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 			hostname: 'db',
 			// HA is encoded in the TYPE. The deprecated `mode` field is not merely avoided here — it
 			// is absent from `ZeropsServiceSpec`, so it cannot be written. One database serves both
-			// IAM and the control plane; they are separate schemas in it, not separate services,
-			// because a second HA Postgres triples the cost of the isolation the private network
-			// already gives us.
+			// IAM and the control plane; both use its default schema with disjoint tables and their own
+			// migration ledgers (ADR-0017), not separate services, because a second HA Postgres triples
+			// the cost of the isolation the private network already gives us.
 			type: 'postgresql:ha@18',
 			// The identity and control-plane database: every login, every token mint, every run's
 			// state. `oltp-production` is also what an HA service gets by DEFAULT — stated here so
@@ -315,10 +320,9 @@ const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAcc
 	// that creates the project. Same shape as `compileZeropsNamespaceTopology` in `src/namespace/topology.ts`.
 	const services = (): ZeropsServiceSpec[] => [
 		{
-			// ONE database for IAM, control, Operations and every app in this project. Which schema each
-			// one gets is not expressed here — it is `FABRIKA_*_DATABASE_URL`, written per installation
-			// through the env API, because this same repository-root `zerops.yaml` serves both tiers and
-			// a `${operationsdb_connectionString}` baked into it would name a service `light` does not have.
+			// IAM and control. Which schema each one gets is not expressed here — it is `FABRIKA_*_DATABASE_URL`,
+			// written per installation through the env API, because this same repository-root `zerops.yaml`
+			// serves both tiers.
 			hostname: 'db',
 			type: 'postgresql:single@18',
 			// `oltp-hobby`, written out because a default is not a choice — this type's default is
@@ -326,12 +330,18 @@ const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAcc
 			//
 			// A floor is not headroom. Every PostgreSQL profile shares the same 8-core / 48 GB / 250 GB
 			// ceiling and the same vertical autoscaler, so `oltp-staging` does not let this service grow
-			// any further than `oltp-hobby` does — it only pre-pays for memory the tier is idle on. That
-			// this single service holds IAM, control, Operations and the apps beside them is an argument
-			// about the ceiling, which is unchanged.
+			// any further than `oltp-hobby` does — it only pre-pays for memory the tier is idle on.
 			//
 			// An installation that wants a specific floor sets one on the service — `minRam` accepts a
 			// float — which is where a per-installation value belongs (ADR-0004), not in this document.
+			profile: 'oltp-hobby',
+			priority: 100,
+		},
+		{
+			// Operations' own database: its own backup schedule (the Zerops default, daily) and its own
+			// capacity, off the identity path. Same type and profile as `db`, for the same reasons.
+			hostname: 'operationsdb',
+			type: 'postgresql:single@18',
 			profile: 'oltp-hobby',
 			priority: 100,
 		},
@@ -367,7 +377,7 @@ const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAcc
 			platform: 'zerops',
 			project: {
 				name: 'platform',
-				description: 'fabrika light tier: control plane, Operations, IAM, the auth proxy and the apps they serve, on shared data services.',
+				description: 'fabrika light tier: control plane, Operations, IAM and the auth proxy, on single-node data services.',
 				corePackage: 'LIGHT',
 				tags: ['fabrika', 'platform', 'light', options.env],
 			},
