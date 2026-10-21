@@ -1164,7 +1164,7 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		const widened: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
 		type Vars = NonNullable<Parameters<Bindable['configureBinding']>[0]['config']['vars']>
 		const rewriting = (vars: (current: Vars) => Vars): Bindable => ({
-			configureBinding: ({ config }) => ({ ...config, vars: vars({ ...(config.vars ?? {}) }) }),
+			configureBinding: ({ config }) => ({ ...config, vars: vars({ ...config.vars }) }),
 		})
 		const cases = [
 			rewriting((vars) => ({ ...vars, FABRIKA_CONTRACT_DIGEST: contractDigest(widened) })),

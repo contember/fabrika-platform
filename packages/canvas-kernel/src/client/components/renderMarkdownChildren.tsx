@@ -1,4 +1,4 @@
-// biome-ignore-all lint/security/noDangerouslySetInnerHtml: Canvas modules already execute as code in this document.
+/* oxlint-disable react/no-danger -- Canvas modules already execute as code in this document. */
 import { marked } from 'marked'
 import React from 'react'
 

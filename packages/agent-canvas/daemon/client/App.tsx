@@ -1064,7 +1064,7 @@ function ResponseBanner({ markdown }: { markdown: string }) {
 					</svg>
 					<span className="text-[11px] font-medium uppercase tracking-widest text-accent-blue font-body">Agent Response</span>
 				</div>
-				{/* biome-ignore lint/security/noDangerouslySetInnerHtml: The response is the local agent's markdown, the same author whose canvas modules already execute as code here. */}
+				{/* oxlint-disable-next-line react/no-danger -- The response is the local agent's markdown, the same author whose canvas modules already execute as code here. */}
 				<div ref={contentRef} className="prose-canvas text-sm" dangerouslySetInnerHTML={{ __html: html }} />
 			</div>
 
