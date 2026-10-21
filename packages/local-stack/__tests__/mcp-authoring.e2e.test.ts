@@ -89,7 +89,14 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 		])
 
 		expect(toolJson(await call(token, 'list_targets', {}), z.unknown())).toEqual({
-			items: [{ appId: 'shop', env: 'stage', repository: 'acme/shop', defaultBranch: 'main', publicOrigin: 'https://shop-stage.example.com' }],
+			items: [{
+				appId: 'shop',
+				env: 'stage',
+				repository: 'acme/shop',
+				defaultBranch: 'main',
+				publicOrigin: 'https://shop-stage.example.com',
+				deployed: null,
+			}],
 		})
 
 		const mainSha = repository.branches.get('main')
