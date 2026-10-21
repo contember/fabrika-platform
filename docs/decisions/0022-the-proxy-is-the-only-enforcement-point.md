@@ -543,8 +543,19 @@ For a contract application, the hop carries more facts, and the application chec
 An installation service checks the endpoint as well, with one stated exception: it requires the header
 on its credentialed rows only. A `protocol` or `health` row may arrive without it, because the service
 authenticates such a request itself, and such requests also arrive unfronted — at IAM's own Worker on
-Cloudflare, and over the private hops between the services. An installation service gets no proxy
-secret.
+Cloudflare, and over the private hops between the services.
+
+An installation service gets no proxy secret, with one exception for attribution. On Zerops IAM keys its per-client
+login throttle on `X-Fabrika-Client-Ip` and writes `X-Request-Id` to `auth_log` and `audit_events`, and anything on
+the platform project's private network can reach IAM's port and write both. So Caddy sets `X-Fabrika-Proxy-Secret`
+on the route of IAM's session owner, from `FABRIKA_INSTALLATION_PROXY_SECRET_IAM`, and IAM holds the same variable.
+IAM reads the two headers only from a request whose secret matches (digests compared in constant time). Any other
+request shares one client bucket and gets a generated request id. IAM refuses nothing for a missing secret: this is
+attribution, not a second enforcement decision. `platform deploy` derives the secret as HMAC-SHA256 of the label
+`fabrika-installation-proxy-secret:iam` keyed by `FABRIKA_IAM_PROVISIONING_KEY`, which every deploy already holds,
+and writes it sensitive to `proxy` and `iam` on every deploy without reading it back. It is not derived from the
+proxy key, because every namespace proxy holds that one. An unset variable turns IAM's check off: Cloudflare, where
+IAM's Worker sits behind Cloudflare's edge and reads `CF-Connecting-IP` and `cf-ray`, sets none.
 
 Work unit B3 built the hop. `FABRIKA_HOP_HEADERS` in `@fabrika/auth-core` is the one list of every
 `X-Fabrika-*` name a hop carries; Caddy and the Cloudflare proxy Worker delete exactly it. The secret
@@ -769,6 +780,14 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   balancer no header can supply it.
 - **The proxy refuses to boot without `FABRIKA_IAM_ISSUER` and `FABRIKA_IAM_KEY`**, rather than boot
   and answer 503 to everything.
+- **IAM attributes a request on Zerops only when the proxy proves it sent it.** A caller on the private network
+  cannot rotate its client bucket or forge a correlation id. The console's admin hop through Control carries no
+  secret, so an admin action's audit row gets a generated id instead of the proxy's. **Rollout:** no generated
+  file changes and no provider state is added. The first `platform upgrade` writes the derived variable to `proxy`
+  and `iam` before any build; nothing is removed or renamed. IAM deploys before the proxy, so for those minutes the
+  old proxy sends no secret and every request falls into the shared bucket with a generated id, which refuses
+  nothing; that is also what an installation behind a balancer that hides the client already sees. Once the proxy
+  is deployed the headers count again. A rollback of IAM ignores the variable.
 - **The least-privilege split around redemption is real only on Zerops**, where `/rpc/*` takes
   `FABRIKA_IAM_RPC_KEY`, `/auth/mint/*` takes `FABRIKA_IAM_PROXY_KEY`, an unset key makes its surface
   404, and an application's own membership transport key reaches only `/membership/*`. On Cloudflare an application's proxy and application Workers bind one IAM `WorkerEntrypoint`,

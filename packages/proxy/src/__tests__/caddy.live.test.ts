@@ -3,7 +3,7 @@
 // names. Skips without a binary; `FABRIKA_TEST_CADDY_BIN` names one, for example the one in the pinned image:
 //   id=$(docker create caddy:2.10.2-alpine) && docker cp "$id":/usr/bin/caddy ./caddy && docker rm "$id"
 
-import { proxySecretVariable } from '@fabrika/auth-core'
+import { IAM_PROXY_SECRET_VARIABLE, proxySecretVariable } from '@fabrika/auth-core'
 import { FORWARD_AUTHORIZATION_HEADER } from '@fabrika/proxy-core'
 import {
 	appFileTreatment,
@@ -27,6 +27,7 @@ if (CADDY === '') {
 }
 
 const SECRET = 'live-proxy-secret-0123456789abcdef0123456789'
+const IAM_SECRET = 'live-iam-proxy-secret-0123456789abcdef01234'
 const ENDPOINT = `api.me@sha256:${'a'.repeat(64)}`
 const DOWNLOAD = endpointRow({
 	id: 'files.avatar.download',
@@ -443,6 +444,8 @@ describe.skipIf(CADDY === '')('an installation entry beside an application in a 
 		endpoints: [PROTOCOL],
 		reservedPrefixes: [],
 	}
+	// The entry the composition names as IAM's session owner: the one installation route that carries a secret.
+	const owner: InstallationProxyApp = { ...entry, id: 'iam', hosts: ['login.example.com'] }
 	const application: ContractProxyApp = {
 		id: 'notes@prod',
 		hosts: ['notes.example.com'],
@@ -457,14 +460,22 @@ describe.skipIf(CADDY === '')('an installation entry beside an application in a 
 	let caddy: ReturnType<typeof Bun.spawn> | undefined
 
 	beforeAll(async () => {
-		const config = buildCaddyConfig({ apps: [entry, application] }, {
+		const config = buildCaddyConfig({ apps: [entry, owner, application] }, {
 			authUpstream: `127.0.0.1:${auth.port}`,
 			listen: [`127.0.0.1:${port}`],
 			healthListen: [`127.0.0.1:${freePort()}`],
+			iamSessionOwner: { issuer: 'https://login.example.com', upstream: owner.upstream },
 		})
 		writeFileSync(join(dir, 'caddy.json'), JSON.stringify(config))
 		caddy = Bun.spawn([CADDY, 'run', '--config', join(dir, 'caddy.json')], {
-			env: { ...process.env, HOME: dir, XDG_DATA_HOME: dir, XDG_CONFIG_HOME: dir, [proxySecretVariable('notes@prod')]: SECRET },
+			env: {
+				...process.env,
+				HOME: dir,
+				XDG_DATA_HOME: dir,
+				XDG_CONFIG_HOME: dir,
+				[proxySecretVariable('notes@prod')]: SECRET,
+				[IAM_PROXY_SECRET_VARIABLE]: IAM_SECRET,
+			},
 			stdout: 'ignore',
 			stderr: 'pipe',
 		})
@@ -494,6 +505,16 @@ describe.skipIf(CADDY === '')('an installation entry beside an application in a 
 		expect(seen?.headers.get('X-Fabrika-Endpoint')).toBe(PROTOCOL_ENDPOINT)
 		expect(seen?.headers.get('X-Fabrika-Token')).toBeNull()
 		expect(seen?.headers.get('X-Fabrika-Proxy-Secret')).toBeNull()
+	})
+
+	test("IAM's session owner gets the installation secret in place of a client's, with the proxy's client address", async () => {
+		const forged = { Connection: 'close', 'X-Fabrika-Proxy-Secret': 'forged', 'X-Fabrika-Client-Ip': '203.0.113.9', 'X-Request-Id': 'forged' }
+		const answer = await rawRequest(port, forged, '/admin/apps', 'login.example.com')
+		expect(answer.status).toBe(200)
+		const [seen] = seenByApp.splice(0)
+		expect(seen?.headers.get('X-Fabrika-Proxy-Secret')).toBe(IAM_SECRET)
+		expect(seen?.headers.get('X-Fabrika-Client-Ip')).toBe('127.0.0.1')
+		expect(seen?.headers.get('X-Request-Id')).toBe('proxy-request')
 	})
 
 	test("the service's own policy passes through untouched", async () => {

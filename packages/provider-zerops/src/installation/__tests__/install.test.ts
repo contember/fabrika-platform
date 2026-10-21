@@ -9,7 +9,7 @@ import { join } from 'node:path'
 // then refuses every request), which service each SHARED secret reaches (a mismatch is a 401 at 3am),
 // and what never reaches a log line.
 
-import { FABRIKA_SERVICE_TABLE_DIGEST } from '@fabrika/auth-core'
+import { FABRIKA_SERVICE_TABLE_DIGEST, IAM_PROXY_SECRET_VARIABLE } from '@fabrika/auth-core'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import { UNATTENDED_FLAG } from '@fabrika/installation-init'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
@@ -109,6 +109,11 @@ const storedCredentials = (text: string): Map<string, string> =>
 	)
 
 /** Every generated secret value that reached any service, so a test can hunt for it in the transcript. */
+/** What `deployPlatform` writes sensitive beside the generated secrets: the secret derived from the IAM admin key. */
+const derivedSecretKeys = (
+	hostname: PlatformDeployService,
+): string[] => (hostname === 'iam' || hostname === 'proxy' ? [IAM_PROXY_SECRET_VARIABLE] : [])
+
 const writtenSecrets = (zerops: FakeZerops): Map<string, string> => {
 	const values = new Map<string, string>()
 	for (const [hostname, keys] of GENERATED_SECRET_KEYS) {
@@ -521,13 +526,15 @@ describe('the hand-off', () => {
 
 		await fixture.run()
 
-		// The ONLY thing pass 2 has left to write is the console table digest of the manifest it composes, which
-		// the proxy's archive carries — every origin the deploy derives was written from the same hosts one step
-		// earlier, the last of them the platform project id.
+		// All pass 2 has left to write is the console table digest of the manifest it composes, which the proxy's
+		// archive carries, and the IAM proxy secret, which no deploy reads back — every origin the deploy derives was
+		// written from the same hosts one step earlier, the last of them the platform project id.
 		const afterPassOne = fixture.zerops.calls.slice(fixture.zerops.calls.indexOf('deploy:proxy') + 1)
-		const passTwoWrites = afterPassOne.slice(afterPassOne.indexOf('deploy:iam') - 2)
+		const passTwoWrites = afterPassOne.slice(afterPassOne.indexOf('env:control:FABRIKA_ZEROPS_PLATFORM_PROJECT_ID'), afterPassOne.indexOf('deploy:iam'))
 		expect(passTwoWrites.filter((call) => call.startsWith('env:'))).toEqual([
 			'env:control:FABRIKA_ZEROPS_PLATFORM_PROJECT_ID',
+			`env:iam:${IAM_PROXY_SECRET_VARIABLE}`,
+			`env:proxy:${IAM_PROXY_SECRET_VARIABLE}`,
 			`env:control:${FABRIKA_SERVICE_TABLE_DIGEST}`,
 		])
 
@@ -558,13 +565,13 @@ describe('the hand-off', () => {
 		expect(storedAt).toBeLessThan(firstPlaced)
 	})
 
-	test('writes exactly the generated secrets sensitive, and everything platform deploy compares readable', async () => {
+	test('writes exactly the generated and derived secrets sensitive, and everything platform deploy compares readable', async () => {
 		const fixture = harness()
 
 		await fixture.run()
 
 		for (const [hostname, keys] of GENERATED_SECRET_KEYS) {
-			expect([...fixture.zerops.sensitive(hostname)].sort()).toEqual([...keys].sort())
+			expect([...fixture.zerops.sensitive(hostname)].sort()).toEqual([...keys, ...derivedSecretKeys(hostname)].sort())
 		}
 		expect(fixture.zerops.env('proxy').has(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
 	})
@@ -593,7 +600,7 @@ describe('the hand-off', () => {
 				apiKey,
 			])
 			expect([...fixture.zerops.sensitive(hostname)].sort()).toEqual(
-				[...(GENERATED_SECRET_KEYS.get(hostname) ?? []), 'FABRIKA_EMAIL_RESEND_API_KEY'].sort(),
+				[...(GENERATED_SECRET_KEYS.get(hostname) ?? []), ...derivedSecretKeys(hostname), 'FABRIKA_EMAIL_RESEND_API_KEY'].sort(),
 			)
 		}
 		for (const hostname of ['operations', 'proxy'] as const) {
@@ -827,7 +834,11 @@ describe('every outward step is confirmed', () => {
 			log: fixture.log,
 			signal: new AbortController().signal,
 		})
-		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:') || call.startsWith('import:') || call.startsWith('token:'))).toEqual([])
+		// Only the derived secret, which no deploy can read back to compare.
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:') || call.startsWith('import:') || call.startsWith('token:'))).toEqual([
+			`env:iam:${IAM_PROXY_SECRET_VARIABLE}`,
+			`env:proxy:${IAM_PROXY_SECRET_VARIABLE}`,
+		])
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toEqual([
 			'deploy:iam',
 			'deploy:operations',

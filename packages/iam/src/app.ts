@@ -10,7 +10,8 @@ import { handleDeviceAuthorization } from './device-http'
 import type { Env } from './env'
 import { handleMembershipTransport } from './membership-http'
 import { handleOAuth } from './oauth-http'
-import { readRequestId } from './request-id'
+import { proxyProof, UNPROVEN_CLIENT_ADDRESS } from './proxy-proof'
+import { generateRequestId, readRequestId } from './request-id'
 import { createIamRpc } from './rpc'
 import { handleMintHttp, handleRpcHttp } from './rpc-http'
 import { type IamEndpointId, iamServiceContract, type IamServiceOptions } from './service'
@@ -52,6 +53,12 @@ export interface IamAppOptions {
 	 * every request gets a generated id. See `src/request-id.ts`.
 	 */
 	readonly requestIdHeader?: string
+	/**
+	 * The secret the proxy sends in `PROXY_SECRET_HEADER` to prove it wrote the two headers above. Set, a request without
+	 * it keys on `UNPROVEN_CLIENT_ADDRESS` and gets a generated id; omitted or empty, the headers are read as they arrive.
+	 * See `src/proxy-proof.ts`.
+	 */
+	readonly proxySecret?: string
 }
 
 /** The service contract this composition serves: a switched-off transport has no row (`IamServiceOptions`). */
@@ -72,18 +79,22 @@ export function iamServiceOptions(options: IamAppOptions): IamServiceOptions {
  * transports are mounted by the Bun composition because their shared-secret boundary is process-only.
  */
 export function createIamApp(options: IamAppOptions = {}): FetchService<Env> {
-	const context = (request: Request, env: Env, exec: RequestExecutionContext): IamAppContext => ({
-		env,
-		request,
-		exec,
-		services: buildServices(env),
-		requestId: readRequestId(request, options.requestIdHeader),
-		clientAddress: readClientAddress(request, options.clientAddressHeader),
-		auth: anonymousAuth(),
-		admin: null,
-	})
-	const serve = (handle: (ctx: IamAppContext) => Response | Promise<Response>): ServiceHandler<Env> => ({ request, env, exec }) =>
-		handle(context(request, env, exec))
+	const proven = proxyProof(options.proxySecret ?? '')
+	const context = async (request: Request, env: Env, exec: RequestExecutionContext): Promise<IamAppContext> => {
+		const attributed = await proven(request)
+		return {
+			env,
+			request,
+			exec,
+			services: buildServices(env),
+			requestId: attributed ? readRequestId(request, options.requestIdHeader) : generateRequestId(),
+			clientAddress: attributed ? readClientAddress(request, options.clientAddressHeader) : UNPROVEN_CLIENT_ADDRESS,
+			auth: anonymousAuth(),
+			admin: null,
+		}
+	}
+	const serve = (handle: (ctx: IamAppContext) => Response | Promise<Response>): ServiceHandler<Env> => async ({ request, env, exec }) =>
+		handle(await context(request, env, exec))
 	const auth = serve((ctx) => handleAuth(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.clientAddress, ctx.requestId))
 	const oauth = serve((ctx) => handleOAuth(ctx.request, ctx.services, ctx.env, ctx.requestId))
 	const admin = serve((ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.requestId))

@@ -64,6 +64,12 @@ export function proxySecretVariable(id: string): string {
 }
 
 /**
+ * The variable holding the secret the platform proxy sends IAM's installation entry in `PROXY_SECRET_HEADER`. The proxy
+ * and IAM hold it under this one name. It proves only who wrote IAM's client-address and request-id headers.
+ */
+export const IAM_PROXY_SECRET_VARIABLE = 'FABRIKA_INSTALLATION_PROXY_SECRET_IAM'
+
+/**
  * Every `X-Fabrika-*` name a proxy hop carries to an application. Caddy's first step and the Cloudflare proxy Worker
  * delete each of them from the client's request before anything else, then set only what the decision asserts. A new
  * header the proxy sets joins this list in the same change. The Operations upload headers are not hop headers: a

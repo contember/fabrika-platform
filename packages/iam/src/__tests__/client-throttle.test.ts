@@ -9,10 +9,11 @@
  *  3. **Provenance.** The coordinate comes from the ONE header the composition root names, and from
  *     nothing else. A caller that sets the other names — the spoofing test, once per composition —
  *     changes no key, and an installation that names no header gets no per-client bucket at all rather
- *     than a forgeable one.
+ *     than a forgeable one. Where the composition holds the proxy's secret, a request without it shares one
+ *     bucket, whatever address it claims.
  */
 
-import { CLIENT_ADDRESS_HEADER } from '@fabrika/auth-core'
+import { CLIENT_ADDRESS_HEADER, PROXY_SECRET_HEADER } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { createIamApp } from '../app'
@@ -20,6 +21,7 @@ import { handleAuth } from '../auth/routes'
 import { readClientAddress } from '../client-address'
 import type { Env, RequestContext } from '../env'
 import type { PasswordHasher, StoredPasswordHash } from '../password-crypto'
+import { UNPROVEN_CLIENT_ADDRESS } from '../proxy-proof'
 import { hashToken } from '../secret'
 import { createHarness, type Harness, seedUser } from './helpers/harness'
 
@@ -276,8 +278,8 @@ describe('a caller cannot choose its own bucket on either composition', () => {
 
 	test('Caddy/Bun: the proxy header keys the bucket and a forged edge header does not', async () => {
 		const h = createHarness()
-		// The Bun root's own wiring (`src/node/server.ts`): Caddy writes `X-Fabrika-Client-Ip` after
-		// deleting the caller's, and IAM is not publicly routed.
+		// The Bun root's own wiring (`src/node/server.ts`) before a proxy secret is configured: Caddy writes
+		// `X-Fabrika-Client-Ip` after deleting the caller's.
 		const app = createIamApp({ clientAddressHeader: CLIENT_ADDRESS_HEADER })
 		await app.fetch(login({ email: 'person@example.test', password: PASSWORD }, forged), appEnv(h), { waitUntil() {} })
 
@@ -291,5 +293,51 @@ describe('a caller cannot choose its own bucket on either composition', () => {
 
 		const rows = h.sqlite.query<{ login_key_hash: string }, []>('SELECT login_key_hash FROM password_login_throttles').all()
 		expect(rows).toHaveLength(2)
+	})
+})
+
+describe('a caller on the private network cannot choose its bucket once the proxy secret is configured', () => {
+	const SECRET = 'installation-proxy-secret-0123456789abcdef'
+	const claimed = { [CLIENT_ADDRESS_HEADER]: '203.0.113.66' }
+	const bunApp = () => createIamApp({ clientAddressHeader: CLIENT_ADDRESS_HEADER, proxySecret: SECRET })
+
+	test('a request carrying the secret keys on the address the proxy wrote', async () => {
+		const h = createHarness()
+		await bunApp().fetch(login({ email: 'person@example.test', password: PASSWORD }, { ...claimed, [PROXY_SECRET_HEADER]: SECRET }), appEnv(h), {
+			waitUntil() {},
+		})
+
+		expect(await h.repositories.passwords.getLoginThrottle(await clientKey('203.0.113.66'))).not.toBeNull()
+		expect(await h.repositories.passwords.getLoginThrottle(await clientKey(UNPROVEN_CLIENT_ADDRESS))).toBeNull()
+	})
+
+	test('requests without it, or with a wrong one, share one bucket and are still answered', async () => {
+		const h = createHarness()
+		const app = bunApp()
+		const rotated: Record<string, string>[] = [
+			{ [CLIENT_ADDRESS_HEADER]: '203.0.113.1' },
+			{ [CLIENT_ADDRESS_HEADER]: '203.0.113.2', [PROXY_SECRET_HEADER]: 'forged' },
+			{ [CLIENT_ADDRESS_HEADER]: '203.0.113.3', [PROXY_SECRET_HEADER]: '' },
+		]
+		for (const headers of rotated) {
+			const response = await app.fetch(login({ email: 'person@example.test', password: PASSWORD }, headers), appEnv(h), { waitUntil() {} })
+			expect(response.status).toBe(401)
+		}
+
+		expect(await attemptCount(h, UNPROVEN_CLIENT_ADDRESS)).toBe(rotated.length)
+		for (const address of ['203.0.113.1', '203.0.113.2', '203.0.113.3']) {
+			expect(await attemptCount(h, address)).toBeNull()
+		}
+	})
+
+	test('without a configured secret the address is read as it arrives, as before', async () => {
+		const h = createHarness()
+		await createIamApp({ clientAddressHeader: CLIENT_ADDRESS_HEADER, proxySecret: '' }).fetch(
+			login({ email: 'person@example.test', password: PASSWORD }, claimed),
+			appEnv(h),
+			{ waitUntil() {} },
+		)
+
+		expect(await h.repositories.passwords.getLoginThrottle(await clientKey('203.0.113.66'))).not.toBeNull()
 	})
 })

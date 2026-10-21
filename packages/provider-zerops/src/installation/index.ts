@@ -263,7 +263,8 @@ process listing:
                                                (a --dry-run does not need it)
   FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
 
-This command writes NO credential. Every secret an installation holds is placed at bring-up.
+This command writes one credential, derived from FABRIKA_IAM_PROVISIONING_KEY: the secret the proxy
+proves its requests to IAM with. Every other secret an installation holds is placed at bring-up.
 
 Install and deploy require --source-dir explicitly. Run the CLI from that same clean full checkout;
 a packaged CLI cannot supply another revision's manifest or schema. --from-git and

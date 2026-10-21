@@ -8,7 +8,8 @@
  *   - `src/index.ts` (Cloudflare) — `cf-ray`. The Worker holds its own Custom Domain, so no proxy hop
  *     strips a caller's `X-Request-Id`; only the edge-written ray id is outside the caller's reach.
  *   - `src/node/server.ts` (Bun/Zerops) — `X-Request-Id`, which the Caddy proxy deletes at ingress and
- *     re-injects. IAM is not publicly routed there (ADR-0022 rule 1).
+ *     re-injects. Once the installation's proxy secret is configured, a request without it gets a
+ *     generated id (`src/proxy-proof.ts`).
  *
  * Even a trusted header is bounded: an audit column never takes an unbounded or free-form string. The
  * `IamRpc` surface (`src/rpc.ts`) holds the `requestId` its callers pass to the same rule.

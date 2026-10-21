@@ -17,8 +17,9 @@
  *     it is reached through Cloudflare's edge, which writes that header and replaces a caller's.
  *   - `src/node/server.ts` (Bun/Zerops) — `CLIENT_ADDRESS_HEADER`, written by the Caddy proxy in front
  *     of it after deleting the caller's. IAM is not publicly routed on that composition (ADR-0022
- *     rule 1), so the proxy is the only thing that can reach this port — the same trust the request-id
- *     header already runs on.
+ *     rule 1), but the private network reaches the port too, so once the installation's proxy secret is
+ *     configured the header counts only beside it (`src/proxy-proof.ts`) — the same trust the request-id
+ *     header runs on.
  *
  * A composition must never name a header its ingress does not overwrite. That is the whole invariant.
  */

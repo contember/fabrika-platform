@@ -4,7 +4,7 @@
 // ORDER is a security property (ADR-0027), the fail-closed behaviour only shows up on a failure path,
 // and idempotence is a claim about the SECOND run.
 
-import { FABRIKA_SERVICE_TABLE_DIGEST, installationTableDigest } from '@fabrika/auth-core'
+import { FABRIKA_SERVICE_TABLE_DIGEST, IAM_PROXY_SECRET_VARIABLE, installationTableDigest } from '@fabrika/auth-core'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import {
@@ -16,6 +16,7 @@ import {
 	type ProxyManifest,
 } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
+import { createHmac } from 'node:crypto'
 import { notesArtifact } from '../../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { ZeropsApi } from '../../index'
 import { deployPlatform, PLATFORM_CONCURRENT_DEPLOY, PLATFORM_DATABASE_BACKUP_PERIOD, PLATFORM_SEQUENTIAL_DEPLOY } from '../deploy'
@@ -335,7 +336,7 @@ describe('fail closed', () => {
 })
 
 describe('idempotence', () => {
-	test('a second run writes nothing, publishes nothing, and leaves the manifest byte-identical', async () => {
+	test('a second run writes only the secret it cannot read back, publishes nothing, and leaves the manifest byte-identical', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
 		const afterFirst = await manifestOf(fixture.zerops)
@@ -343,7 +344,10 @@ describe('idempotence', () => {
 
 		fixture.zerops.calls.length = 0
 		await fixture.run()
-		expect(fixture.zerops.calls.filter((call) => call.startsWith('env'))).toEqual([])
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('env'))).toEqual([
+			`env:iam:${IAM_PROXY_SECRET_VARIABLE}`,
+			`env:proxy:${IAM_PROXY_SECRET_VARIABLE}`,
+		])
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('subdomain:'))).toEqual([])
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('backup:'))).toEqual([])
 		expect(await manifestOf(fixture.zerops)).toBe(afterFirst)
@@ -401,7 +405,7 @@ describe('what it writes', () => {
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('env-delete:'))).toEqual([])
 	})
 
-	test('the per-installation origins every service needs, and no credential', async () => {
+	test('the per-installation origins every service needs, and no credential but the derived IAM proxy secret', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
 		expect(fixture.zerops.env('iam').get('ISSUER')).toBe(`https://${IAM_HOST}`)
@@ -421,8 +425,9 @@ describe('what it writes', () => {
 			expect(fixture.zerops.env(service).get('ENVIRONMENT')).toBe('stage')
 		}
 		const written = new Set(fixture.zerops.calls.filter((call) => call.startsWith('env:')).map((call) => call.split(':')[2]))
+		written.delete(IAM_PROXY_SECRET_VARIABLE)
 		for (const key of written) {
-			expect(key).not.toMatch(/KEY$|TOKEN$|SECRET$|PASSWORD$/)
+			expect(key).not.toMatch(/KEY|TOKEN|SECRET|PASSWORD/)
 		}
 	})
 
@@ -445,6 +450,40 @@ describe('what it writes', () => {
 		)
 		expect(zerops.calls).not.toContain('subdomain:proxy')
 		expect(zerops.env('iam').get('ISSUER')).toBe('https://iam.example.com')
+	})
+})
+
+describe('the IAM proxy secret', () => {
+	const expected = createHmac('sha256', 'px_admin').update('fabrika-installation-proxy-secret:iam').digest('hex')
+
+	test('is HMAC-SHA256 of the label keyed by the IAM admin key, written SENSITIVE to proxy and iam before any deploy', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		await fixture.run()
+		for (const service of ['iam', 'proxy']) {
+			expect(fixture.zerops.env(service).get(IAM_PROXY_SECRET_VARIABLE)).toBe(expected)
+			expect(fixture.zerops.sensitive(service).has(IAM_PROXY_SECRET_VARIABLE)).toBe(true)
+			expect(fixture.zerops.calls.indexOf(`env:${service}:${IAM_PROXY_SECRET_VARIABLE}`)).toBeLessThan(fixture.zerops.calls.indexOf('deploy:iam'))
+		}
+		for (const service of ['operations', 'control']) {
+			expect(fixture.zerops.env(service).has(IAM_PROXY_SECRET_VARIABLE)).toBe(false)
+		}
+	})
+
+	test('is rewritten on every deploy, and another admin key derives another secret', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		await fixture.run()
+		await fixture.run({ iamAdminKey: 'px_other_admin' })
+		const rotated = createHmac('sha256', 'px_other_admin').update('fabrika-installation-proxy-secret:iam').digest('hex')
+		expect(rotated).not.toBe(expected)
+		expect(fixture.zerops.env('iam').get(IAM_PROXY_SECRET_VARIABLE)).toBe(rotated)
+		expect(fixture.zerops.env('proxy').get(IAM_PROXY_SECRET_VARIABLE)).toBe(rotated)
+	})
+
+	test('is never logged', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		await fixture.run()
+		expect(fixture.log.lines.some((line) => line.includes(IAM_PROXY_SECRET_VARIABLE))).toBe(true)
+		expect(fixture.log.lines.some((line) => line.includes(expected))).toBe(false)
 	})
 })
 

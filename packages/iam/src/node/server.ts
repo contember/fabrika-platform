@@ -28,13 +28,14 @@ export function createFetchHandler(runtime: Runtime): (request: Request) => Prom
 		// An application on Zerops has no IAM binding; its membership operations arrive here, each with its own key.
 		membershipTransport: true,
 		health: true,
-		// This process is not publicly routed (ADR-0022 rule 1): the Caddy proxy is the only thing that
-		// can reach the port, and it deletes a caller's copy before writing its own. It fails safe — an
-		// installation whose balancer hides the client makes every client share one bucket, not a forgeable one.
+		// The Caddy proxy deletes a caller's copy before writing its own. It fails safe — an installation
+		// whose balancer hides the client makes every client share one bucket, not a forgeable one.
 		clientAddressHeader: CLIENT_ADDRESS_HEADER,
 		// `REQUEST_ID_HEADER` in `@fabrika/proxy-core`: the proxy deletes a caller's copy at ingress and
 		// injects its own, on the same trust as the client address above.
 		requestIdHeader: 'X-Request-Id',
+		// The private network reaches this port too, so the two headers above count only beside the proxy's secret.
+		proxySecret: runtime.config.proxySecret,
 	})
 	return createBunHandler(app, runtime.env, { executionContext: runtime.ctx }).fetch
 }
@@ -63,7 +64,9 @@ export function startIamServer(runtime: Runtime): void {
 	// secret turned something off, which is otherwise only visible as a 404 at 3am.
 	const state = (key: string): string => (key === '' ? 'disabled' : 'enabled')
 	console.info(
-		`iam listening on :${server.port} (env=${runtime.env.ENVIRONMENT}, rpc=${state(runtime.config.rpcKey)}, mint=${state(runtime.config.proxyKey)})`,
+		`iam listening on :${server.port} (env=${runtime.env.ENVIRONMENT}, rpc=${state(runtime.config.rpcKey)}, mint=${
+			state(runtime.config.proxyKey)
+		}, proxy-proof=${state(runtime.config.proxySecret)})`,
 	)
 
 	// SIGTERM is what the platform sends on redeploy/scale-down. Stop accepting, let in-flight requests

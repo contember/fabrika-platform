@@ -22,23 +22,26 @@
 // It composes the proxy manifest and ships it in the proxy's build archive. It writes the exact namespace
 // planning source default and the per-installation configuration derived from the resolved public hosts
 // (each service's own origin, the origins it must know about, and the installation's environment name),
-// and the platform database's backup schedule. **It writes no credential at all** — every
-// secret an installation holds is `platform init`'s to place, and a deploy that cannot write one cannot
-// leak one. The two credentials this command HOLDS are the Zerops access token and the IAM admin key,
-// both from the environment, neither ever logged.
+// and the platform database's backup schedule. **It writes one credential, and only a derived one**: the
+// secret the proxy proves its requests to IAM with, HMAC-SHA256 of a fixed label keyed by the IAM admin key,
+// written sensitive to `proxy` and `iam` and never read back. Every other secret an installation holds is
+// `platform install`'s to place. The two credentials this command HOLDS are the Zerops access token and the
+// IAM admin key, both from the environment, neither ever logged.
 //
 // ── Idempotence ───────────────────────────────────────────────────────────────────────────────────
 //
-// Every variable is READ before it is written and skipped when it already matches, so a second run
-// writes nothing; the subdomain is decided by reading `subdomainAccess` back, so a second run enables
-// nothing; the database's backup period is read and set only when it differs; and the schema reconcile
-// is an upsert. What a re-run does do is redeploy — that is what "deploy" means, and the platform keeps
-// the previous version serving whenever the new one fails its readiness gate.
+// Every readable variable is READ before it is written and skipped when it already matches, so a second
+// run writes only the derived secret, which it cannot read back; the subdomain is decided by reading
+// `subdomainAccess` back, so a second run enables nothing; the database's backup period is read and set
+// only when it differs; and the schema reconcile is an upsert. What a re-run does do is redeploy — that is
+// what "deploy" means, and the platform keeps the previous version serving whenever the new one fails its
+// readiness gate.
 
-import { FABRIKA_SERVICE_TABLE_DIGEST, readEnvironmentName } from '@fabrika/auth-core'
+import { FABRIKA_SERVICE_TABLE_DIGEST, IAM_PROXY_SECRET_VARIABLE, readEnvironmentName } from '@fabrika/auth-core'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
+import { createHmac } from 'node:crypto'
 import { assertServiceEnvValueFits } from '../api'
 import {
 	enableSubdomainAccessWhenHttp,
@@ -319,6 +322,17 @@ const resolvePlacement = (input: PlatformDeployInput, proxyEnv: LiveServiceEnv):
 const IAM_OAUTH_CONFIG = 'FABRIKA_IAM_OAUTH_CONFIG'
 
 /**
+ * The secret the platform proxy sends IAM's route, so IAM honours the client address and request id only from the proxy.
+ * Derived from the IAM admin key, which every deploy holds, so each deploy writes the same value and nothing stores or
+ * reads one back. Never from the proxy key: namespace proxies hold that one.
+ */
+const deriveIamProxySecret = (iamAdminKey: string): string =>
+	createHmac('sha256', iamAdminKey).update('fabrika-installation-proxy-secret:iam').digest('hex')
+
+/** The credentials this command writes. Sensitive, so they cannot be compared and are rewritten on every deploy. */
+const SENSITIVE_DEPLOY_KEYS: ReadonlySet<string> = new Set([IAM_PROXY_SECRET_VARIABLE])
+
+/**
  * The per-installation configuration each service needs, derived from the resolved hosts.
  *
  * The namespace source default comes from the verified snapshot. Values are compared but never logged.
@@ -332,6 +346,7 @@ const desiredServiceEnv = (
 	proxySource: ZeropsNamespaceProxySource,
 	oauthConfig: IamOAuthConfig | undefined,
 	controlTableDigest: string,
+	iamProxySecret: string,
 ): ReadonlyMap<PlatformDeployService, ReadonlyMap<string, string>> => {
 	const iamOrigin = platformOrigin(placement.scheme, placement.hosts.iam)
 	const operationsOrigin = platformOrigin(placement.scheme, placement.hosts.operations)
@@ -340,6 +355,7 @@ const desiredServiceEnv = (
 		// The `iss` of every minted token AND the OIDC redirect base, so it must be the address
 		// routed to the proxy in front of this service.
 		['ISSUER', iamOrigin],
+		[IAM_PROXY_SECRET_VARIABLE, iamProxySecret],
 	])
 	if (oauthConfig !== undefined) {
 		iam.set(IAM_OAUTH_CONFIG, JSON.stringify(oauthConfig))
@@ -362,6 +378,8 @@ const desiredServiceEnv = (
 				// private `iam:3000` the manifest dials — `readProxyEnv` canonicalizes it to an origin.
 				['FABRIKA_IAM_ISSUER', iamOrigin],
 				['FABRIKA_PROXY_SESSION_OWNER_JSON', JSON.stringify({ issuer: iamOrigin, upstream: PRIVATE_IAM_UPSTREAM })],
+				// Caddy sends it on the session owner's route; IAM refuses nothing without it, so the order is free.
+				[IAM_PROXY_SECRET_VARIABLE, iamProxySecret],
 			]),
 		],
 		[
@@ -390,8 +408,8 @@ const desiredServiceEnv = (
 /**
  * Write only what differs. Returns the KEYS written — never a value, not even in a debug line.
  *
- * Nothing here is a credential, so everything is written readable. A record an older release wrote
- * sensitive reads as different and is rewritten readable, which is what lets the next deploy compare it.
+ * Everything but `SENSITIVE_DEPLOY_KEYS` is written readable. A record an older release wrote sensitive
+ * reads as different and is rewritten readable, which is what lets the next deploy compare it.
  */
 const applyServiceEnv = async (
 	service: ResolvedService,
@@ -402,7 +420,8 @@ const applyServiceEnv = async (
 ): Promise<string[]> => {
 	const written: string[] = []
 	for (const [key, value] of desired) {
-		if (readableContent(live.get(key)) === value) {
+		const sensitive = SENSITIVE_DEPLOY_KEYS.has(key)
+		if (!sensitive && readableContent(live.get(key)) === value) {
 			continue
 		}
 		written.push(key)
@@ -412,7 +431,7 @@ const applyServiceEnv = async (
 			continue
 		}
 		assertRunning(collaborators.signal)
-		await collaborators.api.putServiceEnv({ serviceId: service.id, key, value, sensitive: false, signal: collaborators.signal })
+		await collaborators.api.putServiceEnv({ serviceId: service.id, key, value, sensitive, signal: collaborators.signal })
 	}
 	return written
 }
@@ -754,7 +773,15 @@ export const deployPreparedPlatform = async (
 
 	log.step('Write the service environment')
 	const controlTableDigest = platformServiceTableDigest(platformManifest, platformProxyAppFor(PLATFORM_PROXY_MANIFEST_TEMPLATE, 'control').id)
-	const desired = desiredServiceEnv(environment, project.id, placement, proxySource, oauthConfig, controlTableDigest)
+	const desired = desiredServiceEnv(
+		environment,
+		project.id,
+		placement,
+		proxySource,
+		oauthConfig,
+		controlTableDigest,
+		deriveIamProxySecret(input.iamAdminKey),
+	)
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
 		const service = serviceOf(services, hostname)
 		const live = hostname === PLATFORM_PROXY_SERVICE ? proxyEnv : await readServiceEnv(service.id, collaborators)

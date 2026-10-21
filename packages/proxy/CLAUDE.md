@@ -87,8 +87,10 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
 - **A contract app's upstream hop carries its proxy secret on Zerops** (ADR-0022 rule 5): step 3 sets
   `X-Fabrika-Proxy-Secret` from `{env.<proxySecretVariable(app.id)>}`, so the secret is in no generated
   file. An unset variable sends an empty secret, which the application refuses; the auth service only
-  warns at boot (`appsWithoutProxySecret`), because one proxy fronts a whole namespace. An installation
-  service gets no secret, and the Cloudflare Worker sets none: its service binding is the authenticated hop.
+  warns at boot (`appsWithoutProxySecret`), because one proxy fronts a whole namespace. The one installation
+  route with a secret is IAM's session owner (`iamSessionOwner`), from `{env.FABRIKA_INSTALLATION_PROXY_SECRET_IAM}`:
+  it proves only who wrote the client address and request id, and IAM refuses nothing without it. Every other
+  installation service gets none, and the Cloudflare Worker sets none: its service binding is the authenticated hop.
 - **The token cache is best-effort and per-process.** Every entry is re-verified against the JWKS
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
   times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay
@@ -164,7 +166,7 @@ application's database.
 | Cloudflare proxy Worker    | **deleted, then set** from `CF-Connecting-IP` | deleted                        | deleted                    |
 | Zerops balancer            | passed through untouched                      | unconfirmed — see below        | passed through untouched   |
 | Caddy (`appRoute`, step 1) | **deleted, then set** from `{client_ip}`      | deleted                        | deleted                    |
-| app / IAM upstream         | trust it — nothing else could have written it | the previous hop's socket peer | absent                     |
+| app / IAM upstream         | trust it beside the proxy secret              | the previous hop's socket peer | absent                     |
 
 - **`{http.vars.client_ip}` is the socket peer unless `trusted_proxies` names the balancer.** Caddy
   resolves it once in `PrepareRequest`, before any handler, so the strip above cannot affect it. With
