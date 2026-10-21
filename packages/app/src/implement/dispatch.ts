@@ -862,7 +862,7 @@ export class ContractRuntime {
 		}
 		const refused = verdict?.outcome !== 'passed'
 			|| (token !== repeatable
-				&& !(await this.#framework().admissions.recordChallenge(action, sha256Hex(verdict.replayKey), verifier.recordMs)))
+				&& !(await this.#framework().admissions.recordChallenge(action, sha256Hex(verdict.replayKey), verdict.recordMs)))
 		if (refused) {
 			throw new HttpError(400, 'challenge_failed', 'The challenge did not verify; solve it again')
 		}

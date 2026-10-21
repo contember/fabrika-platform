@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serve } from '../implement'
 import { BootError } from '../implement/boot'
-import { MINIMAL_CHALLENGE_WORK } from '../implement/challenge'
+import { altchaChallenge, MINIMAL_CHALLENGE_WORK } from '../implement/challenge'
 import { solveChallengeAt } from '../testing/challenge'
 import { altchaApp } from './fixtures/altcha/app'
 import { contract } from './fixtures/altcha/fabrika.contract'
@@ -111,6 +111,26 @@ if (postgres !== null) {
 			expect((await register(app, respelled)).status).toBe(400)
 			// A second instance reads the same record.
 			expect((await register(start(), token)).status).toBe(400)
+			expect(await registrations()).toBe(1)
+		})
+
+		test('a shorter-lived deployment retains a previous challenge through its signed expiry', async () => {
+			const previous = altchaChallenge(KEY, { action: 'enroll', cost: 2000, maxAgeMs: 600_000 }, MINIMAL_CHALLENGE_WORK)
+			const issued = await previous.issuer.issue('notes.test')
+			const token = await solveChallengeAt(async () => Response.json(issued), 'https://notes.test/__fabrika/challenge/enroll')
+			// This deployment issues enroll challenges for 120 seconds, with the same key and action.
+			const app = start()
+			const submit = () =>
+				send(app, '/enroll', {
+					body: { name: 'Visitor', email: 'visitor@example.com', challengeToken: token },
+					headers: fromClient('203.0.113.7'),
+				})
+			expect((await submit()).status).toBe(200)
+			const [record] = await admin((sql, schema) =>
+				sql.unsafe(`select extract(epoch from expires_at)::float8 * 1000 as expires_ms from ${schema}.fabrika_form_challenges`)
+			)
+			expect(Number(record?.expires_ms)).toBeGreaterThan(Number(issued.parameters['expiresAt']) * 1000)
+			expect((await submit()).status).toBe(400)
 			expect(await registrations()).toBe(1)
 		})
 

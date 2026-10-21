@@ -637,7 +637,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   passed** (`challenge.ts`). The provider list is closed (`turnstile`, `altcha`) and each one's browser sources are
   fixed (`CHALLENGE_ORIGINS`: Turnstile's origin, which `buildArtifact` adds to `scriptSrc`/`frameSrc`; ALTCHA's
   `blob:` workers, which it writes as `csp.workerSrc`, a directive no contract declares). The record keys on
-  the passed verdict's `replayKey` for `verifier.recordMs`: the token for Turnstile, the challenge's signature for ALTCHA,
+  the passed verdict's `replayKey` for its `recordMs`: the token for Turnstile, the challenge's signature for ALTCHA,
   whose one solution can be spelled as many tokens. Never key the record on an ALTCHA token. Turnstile's siteverify gets one deadline for the call and the
   body (`CHALLENGE_LIMITS`), a byte budget and no redirect; it passes only `success` for the request's host, the
   widget action the artifact records (`challenge.action`, by default `challengeAction` of the endpoint id; `buildArtifact`
@@ -657,8 +657,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   then a challenge signed over its parameters (the contract's `cost` and `maxAgeMs`, the action and the request's
   host). Verification reads the payload strictly (exactly the parameters `issue` signs; the widget's `test` payload
   and a server-signed one are refused unread), checks the action, the host and the expiry, then the two HMACs
-  `verifySolution` computes with keys derived from the variable for each use, and its verdict carries the replay key,
-  so the payload is read once. It never makes a network call, so it has no `unavailable`. `boot` refuses a key under
+  `verifySolution` computes with keys derived from the variable for each use. Its verdict carries the replay key
+  and retention through the signed expiry plus clock skew, even after a deploy reduces `maxAgeMs`, so the payload is
+  read once. It never makes a network call, so it has no `unavailable`. `boot` refuses a key under
   `ALTCHA_LIMITS.minKeyLength` (every challenge publishes a signature a short key could be guessed from); the build
   refuses a `cost` a slow phone would not solve in time (`altchaSolvable`); the counter is drawn from 1, so no solver
   skips attempts the widget makes; the issuer's buckets are at least twice the procedure's (`challengeIssueBucket`) and

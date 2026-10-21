@@ -127,9 +127,19 @@ describe('an ALTCHA challenge, issued and verified by the application', () => {
 		const once = await verifier.verify({ token, hostname: HOST, action: 'register' })
 		const again = await verifier.verify({ token: respelled, hostname: HOST, action: 'register' })
 		expect(again.outcome).toBe('passed')
-		expect(again).toEqual(once)
-		expect(once).toEqual({ outcome: 'passed', replayKey: expect.stringMatching(/^[0-9a-f]{64}$/) })
-		expect(verifier.recordMs).toBeGreaterThan(RULES.maxAgeMs)
+		expect(once.outcome).toBe('passed')
+		if (once.outcome !== 'passed' || again.outcome !== 'passed') throw new Error('challenge did not pass')
+		expect(once.replayKey).toMatch(/^[0-9a-f]{64}$/)
+		expect(again.replayKey).toBe(once.replayKey)
+	})
+
+	test('reducing the issuer lifetime keeps a previously issued challenge recorded through its signed expiry', async () => {
+		const issued = await issuer.issue(HOST)
+		const token = await solved(issued)
+		const shorter = altchaChallenge('hmac-key-1', { ...RULES, maxAgeMs: 60_000 }, MINIMAL_CHALLENGE_WORK).verifier
+		const verdict = await shorter.verify({ token, hostname: HOST, action: 'register' })
+		if (verdict.outcome !== 'passed') throw new Error('previously issued challenge did not pass')
+		expect(Date.now() + verdict.recordMs).toBeGreaterThan(Number(issued.parameters['expiresAt']) * 1000)
 	})
 })
 
