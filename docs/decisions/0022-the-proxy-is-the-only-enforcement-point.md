@@ -644,7 +644,9 @@ still refuses any `Authorization` header, as authorization.
   enabled, the user's grant revision and the application's schema revision unchanged, so a reconcile or the removal of
   any grant of the user between the check and the write makes it write nothing. Only a signed-in session administers
   this way, never a `px_` key, presented directly or exchanged by the proxy for a console token (that token has no
-  `session` mark), because a key's own grants narrow what it carries. A user holding `list` globally reads the directory (`listAppMembers`, `ctx.members.list()`
+  `session` mark), because a key's own grants narrow what it carries. The same holds for every administration of IAM
+  through the console's gateway, an installation administrator's included: IAM refuses a console token without the
+  `session` mark before it resolves any permission. A key administers IAM only presented directly, bound to IAM. A user holding `list` globally reads the directory (`listAppMembers`, `ctx.members.list()`
   of an `app: true` endpoint of that action), paged by principal id, at most 100 a page: labels where the vocabulary
   declares `directory: 'labels'` or to `manage`, addresses and last sign-ins only to `manage`. This is authorization of
   IAM's own operations, never a second enforcement decision; the alternative, one organisation value per

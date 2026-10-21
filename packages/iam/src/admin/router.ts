@@ -80,7 +80,7 @@ export type AdminResolution =
 
 /**
  * Resolve the admin caller from its bearer:
- *   - an access JWT whose `aud` is a REGISTERED admin gateway → verify identity, then resolve IAM
+ *   - a signed-in session's access JWT whose `aud` is a REGISTERED admin gateway → verify identity, then resolve IAM
  *     permissions;
  *   - a `px_<key>` machine credential (CI / provisioning) → `resolveCaller`.
  * No bearer is 401. Returns the caller + permissions; `handleAdmin` then enforces `iam.admin`. An ANONYMOUS credential
@@ -110,6 +110,10 @@ export async function resolveAdmin(
 		if (claims.ptype === undefined || isWorkloadKind(claims.ptype)) {
 			return { ok: false, status: 403, reason: 'not_allowed' }
 		}
+		// A token the proxy minted from a `px_` key carries that key's narrowed grants, not the person's live IAM permissions.
+		if (claims.session !== true) {
+			return { ok: false, status: 403, reason: 'not_allowed' }
+		}
 		const principal = await services.repositories.principals.getPrincipalById(claims.sub)
 		if (principal === null) {
 			return { ok: false, status: 401, reason: 'invalid_token' }
@@ -120,7 +124,7 @@ export async function resolveAdmin(
 		const permissions = await resolvePermissionsAt(services, principal, IAM_APP)
 		return {
 			ok: true,
-			admin: { id: principal.id, type: principal.type, label: principal.label, permissions, audience: claims.aud, session: claims.session === true },
+			admin: { id: principal.id, type: principal.type, label: principal.label, permissions, audience: claims.aud, session: true },
 		}
 	}
 

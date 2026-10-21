@@ -112,7 +112,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   maintain again. `extractCredentials`/`resolveAdmin` live in `admin/router.ts` and are shared by
   both, so the caller is resolved once.
 - **`/admin/*` IS BEARER-ONLY.** `resolveAdmin` accepts a registered-audience proxy JWT (what
-  Control's console gateway forwards as a bearer) or a `px_` key, and reads no session cookie. With
+  Control's console gateway forwards as a bearer) or a `px_` key, and reads no session cookie. The JWT must be a
+  signed-in session's (`AccessTokenClaims.session`): one the proxy minted from a `px_` key is 403 before any permission
+  is resolved, because the key's grants narrow it and the live IAM permissions would not. With
   no ambient credential there is nothing for a CSRF check to defend, so IAM keeps no admin-origin
   registry. A bearer request without an `Origin` passes; admission of a console session is the
   proxy's (`Sec-Fetch-Site`, ADR-0022 rule 3), before Control's gateway forwards it. A request with no bearer is
