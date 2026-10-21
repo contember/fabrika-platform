@@ -48,6 +48,7 @@ export type SourceCall =
 	| { kind: 'read-branch'; branch: string }
 	| { kind: 'read-branches'; branches: readonly string[] }
 	| { kind: 'create-branch'; branch: string; fromSha: string }
+	| { kind: 'delete-branch'; branch: string }
 	| { kind: 'list-tree'; commitSha: string; directory?: string }
 	| { kind: 'read-files'; commitSha: string; paths: readonly string[] }
 	| { kind: 'scan-files'; commitSha: string; directory?: string; maxFiles: number }
@@ -85,6 +86,11 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 		if (this.branches.has(input.branch)) return Promise.reject(new WorkspaceSourceError('conflict'))
 		this.branches.set(input.branch, input.fromSha)
 		return Promise.resolve(input.fromSha)
+	}
+
+	deleteBranch(input: { target: WorkspaceSourceTarget; branch: string }): Promise<boolean> {
+		this.record(input.target, { kind: 'delete-branch', branch: input.branch })
+		return Promise.resolve(this.branches.delete(input.branch))
 	}
 
 	listTree(input: { target: WorkspaceSourceTarget; commitSha: string; directory?: string }): Promise<WorkspaceTree> {

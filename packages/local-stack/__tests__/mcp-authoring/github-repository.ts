@@ -129,6 +129,10 @@ export class FakeGitHubRepository implements GitHubRepositoryClient {
 		return Promise.resolve({ branch: input.branch, sha: input.fromSha })
 	}
 
+	deleteBranch(branch: string) {
+		return Promise.resolve({ deleted: this.branches.delete(branch) })
+	}
+
 	commitFiles(input: GitHubCommitFilesInput) {
 		if (this.branches.get(input.branch) !== input.expectedHeadSha) return Promise.reject(new GitHubStaleHeadError())
 		const files = new Map(this.commit(input.expectedHeadSha).files)

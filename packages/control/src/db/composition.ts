@@ -43,7 +43,7 @@ export function createControlRepositories(db: SqlDatabase, options: { now?: () =
 		operationsCatalog: new OperationsCatalogRepository(db, now),
 		operationsReleases: new OperationsReleaseRepository(db, now),
 		githubConnections: new GitHubConnectionStore(db, now),
-		workspaces: new WorkspaceRepository(db),
+		workspaces: new WorkspaceRepository(db, now),
 		workloadCredentials: new WorkloadCredentialRepository(db),
 		membershipKeys: new MembershipKeyRepository(db),
 		tokenKeys: new TokenKeyRepository(db),

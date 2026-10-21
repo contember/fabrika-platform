@@ -4,6 +4,8 @@ export interface WorkspaceSourcePort {
 	/** The heads of several branches of one repository, in request order; null for a branch that does not exist. */
 	readBranches(input: WorkspaceSourceCall & { branches: readonly string[] }): Promise<(string | null)[]>
 	createBranch(input: WorkspaceSourceCall & { branch: string; fromSha: string }): Promise<string>
+	/** Idempotent: false when the branch did not exist. */
+	deleteBranch(input: WorkspaceSourceCall & { branch: string }): Promise<boolean>
 	listTree(input: WorkspaceSourceCall & { commitSha: string; directory?: string }): Promise<WorkspaceTree>
 	readFiles(input: WorkspaceSourceCall & { commitSha: string; paths: readonly string[] }): Promise<WorkspaceFiles>
 	/** Read the regular files under `directory` that `include` admits, the first `maxFiles` of them in tree order. */

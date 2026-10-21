@@ -154,6 +154,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0012_token_keys.sql' },
 			{ bundle: 'control', name: '0013_mail_relay.sql' },
 			{ bundle: 'control', name: '0014_workspace_pull_requests.sql' },
+			{ bundle: 'control', name: '0015_workspace_abandon.sql' },
 		])
 	})
 
