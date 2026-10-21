@@ -16,6 +16,8 @@ import {
 	listTargetsUseCase,
 	listWorkspacesUseCase,
 	readFilesUseCase,
+	SEARCH_MAX_FILES,
+	searchFilesUseCase,
 } from '../api/workspaces'
 import { type ControlRepositories, createControlRepositories } from '../db'
 import { createHarness } from './helpers/harness'
@@ -213,6 +215,69 @@ for (const backend of backends) {
 				expect((await readFilesUseCase(w.context(author), { workspaceId: created.id, paths: ['logo.png'] })).files).toEqual([
 					{ path: 'logo.png', content: null, reason: 'binary' },
 				])
+			})
+		})
+
+		describe('search', () => {
+			test('a glob alone lists the matching file paths of the tree', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				for (const path of ['README.md', 'src/a.ts', 'src/lib/b.ts']) w.source.contents.set(path, '')
+				const found = await searchFilesUseCase(w.context(author), { workspaceId: created.id, glob: 'src/**/*.ts', maxResults: 10 })
+				expect(found).toEqual({ commitSha: sha('a'), paths: ['src/a.ts', 'src/lib/b.ts'], matches: [], incomplete: [] })
+				const capped = await searchFilesUseCase(w.context(author), { workspaceId: created.id, glob: '**', maxResults: 1 })
+				expect(capped).toEqual({ commitSha: sha('a'), paths: ['README.md'], matches: [], incomplete: ['3 paths matched; only the first 1 are listed'] })
+				expect(w.source.calls.at(-1)).toEqual({ kind: 'list-tree', commitSha: sha('a') })
+			})
+
+			test('a text search returns the matching lines of the admitted files, literally', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				w.source.contents.set('src/a.ts', 'const Title = 1\nconst title = (x)\n')
+				w.source.contents.set('src/b.md', 'Title (x)')
+				w.source.contents.set('docs/c.ts', 'title')
+				const search = (input: Partial<Parameters<typeof searchFilesUseCase>[1]>) =>
+					searchFilesUseCase(w.context(author), { workspaceId: created.id, maxResults: 50, ...input })
+				expect((await search({ text: 'title', glob: 'src/**/*.ts' })).matches).toEqual([{ path: 'src/a.ts', line: 2, text: 'const title = (x)' }])
+				expect((await search({ text: 'TITLE', caseSensitive: false, directory: 'src' })).matches.map((match) => match.path)).toEqual([
+					'src/a.ts',
+					'src/a.ts',
+					'src/b.md',
+				])
+				expect((await search({ text: '(x)', glob: '*.ts' })).matches).toEqual([])
+				expect((await search({ text: '(x)' })).matches.map((match) => match.path)).toEqual(['src/a.ts', 'src/b.md'])
+				expect(w.source.calls.at(-1)).toEqual({ kind: 'scan-files', commitSha: sha('a'), maxFiles: SEARCH_MAX_FILES })
+			})
+
+			test('each bound that cuts the answer short is named, and a long line is cut around the match', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				for (let index = 0; index < SEARCH_MAX_FILES + 1; index++) w.source.contents.set(`f${String(index).padStart(3, '0')}.txt`, 'hit\nhit')
+				w.source.unreadable.set('f000.txt', 'too_large')
+				w.source.unreadable.set('f001.txt', 'budget')
+				w.source.contents.set('a-long.txt', `${'x'.repeat(500)}needle${'y'.repeat(500)}`)
+				const long = await searchFilesUseCase(w.context(author), { workspaceId: created.id, text: 'needle', maxResults: 5 })
+				expect(long.matches[0]?.text).toHaveLength(240)
+				expect(long.matches[0]?.text).toContain('needle')
+				const capped = await searchFilesUseCase(w.context(author), { workspaceId: created.id, text: 'hit', maxResults: 5 })
+				expect(capped.matches).toHaveLength(5)
+				expect(capped.incomplete).toEqual([
+					`only the first ${SEARCH_MAX_FILES} of ${SEARCH_MAX_FILES + 2} files were searched; narrow the glob or the directory`,
+					'1 files were not searched: they are over 512 KiB',
+					'1 files were not searched: the files searched reached 2 MiB together; narrow the glob or the directory',
+					'matches stop at maxResults (5)',
+				])
+			})
+
+			test('a search needs a glob or a text and read access to the workspace', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				await expect(searchFilesUseCase(w.context(author), { workspaceId: created.id, maxResults: 5 })).rejects.toMatchObject({ httpStatus: 400 })
+				const writerOnly = oauthUser(['source.workspace.write'], 'author@acme.test')
+				await expect(searchFilesUseCase(w.context(writerOnly), { workspaceId: created.id, text: 'x', maxResults: 5 })).rejects.toMatchObject({
+					httpStatus: 404,
+				})
+				expect(w.source.kinds()).toEqual(['read-branch', 'create-branch'])
 			})
 		})
 

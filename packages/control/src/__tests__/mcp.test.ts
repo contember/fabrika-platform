@@ -168,6 +168,7 @@ describe('the MCP endpoint', () => {
 			get_workspace: read,
 			list_files: read,
 			read_files: read,
+			search_files: read,
 			apply_changes: write(true, true),
 			deploy_stage: write(true, false),
 			get_deployment: read,
@@ -192,6 +193,7 @@ describe('the MCP endpoint', () => {
 			'list_targets',
 			'list_workspaces',
 			'read_files',
+			'search_files',
 		])
 
 		const targets = await rpc(fetch, token, 'tools/call', { name: 'list_targets', arguments: {} })
@@ -216,6 +218,14 @@ describe('the MCP endpoint', () => {
 		})
 		expect(toolJson(edited)).toEqual({ commitSha: sha('1') })
 		expect(world.source.calls.at(-1)).toMatchObject({ kind: 'commit', commit: { changes: [{ path: 'src/app.ts', content: 'title = "New"' }] } })
+
+		const searched = await rpc(fetch, token, 'tools/call', { name: 'search_files', arguments: { workspaceId: field(workspace, 'id'), text: 'Old' } })
+		expect(toolJson(searched)).toEqual({
+			commitSha: sha('1'),
+			paths: [],
+			matches: [{ path: 'src/app.ts', line: 1, text: 'title = "Old"' }],
+			incomplete: [],
+		})
 	})
 
 	test('a refused tool call is a tool error with a short message, and invalid input never reaches Source', async () => {

@@ -4,6 +4,8 @@ export interface WorkspaceSourcePort {
 	createBranch(input: WorkspaceSourceCall & { branch: string; fromSha: string }): Promise<string>
 	listTree(input: WorkspaceSourceCall & { commitSha: string; directory?: string }): Promise<WorkspaceTree>
 	readFiles(input: WorkspaceSourceCall & { commitSha: string; paths: readonly string[] }): Promise<WorkspaceFiles>
+	/** Read the regular files under `directory` that `include` admits, the first `maxFiles` of them in tree order. */
+	scanFiles(input: WorkspaceSourceCall & WorkspaceScanInput): Promise<WorkspaceScan>
 	commit(input: WorkspaceSourceCall & WorkspaceCommit): Promise<string>
 	openPullRequest(input: WorkspaceSourceCall & WorkspacePullRequestInput): Promise<WorkspacePullRequest>
 }
@@ -47,6 +49,23 @@ export interface WorkspaceFiles {
 	readonly commitSha: string
 	/** One entry per requested path, in request order. */
 	readonly files: readonly WorkspaceFile[]
+}
+
+export interface WorkspaceScanInput {
+	readonly commitSha: string
+	readonly directory?: string
+	readonly include: (path: string) => boolean
+	readonly maxFiles: number
+}
+
+export interface WorkspaceScan {
+	readonly commitSha: string
+	/** The admitted files that were scanned, read or not, in tree order. */
+	readonly files: readonly WorkspaceFile[]
+	/** Every regular file `include` admitted, those past `maxFiles` included. */
+	readonly candidates: number
+	/** The tree listing was cut short, so files beyond it were never considered. */
+	readonly treeTruncated: boolean
 }
 
 export interface WorkspaceCommit {

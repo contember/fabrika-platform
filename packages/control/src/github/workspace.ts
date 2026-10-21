@@ -19,6 +19,8 @@ import {
 import { type GitHubAppCredential, readBoundAppCredential } from './connections/credentials'
 
 export const WORKSPACE_MAX_TREE_ENTRIES = 5000
+/** The GitHub client's bound on one blob read. */
+export const WORKSPACE_MAX_SCAN_FILES = 100
 
 /** The part of the GitHub App client that workspace operations use. */
 export interface WorkspaceGitHubClient {
@@ -85,6 +87,26 @@ export function githubWorkspaceSource(env: Env, createClient: WorkspaceGitHubCli
 						const content = contents.get(path)
 						return content === undefined ? { path, content: null, reason: reasons.get(path) ?? 'missing' } : { path, content }
 					}),
+				}
+			}),
+		scanFiles: ({ target, commitSha, directory, include, maxFiles, signal }) =>
+			withRepository(target, signal, async (repository) => {
+				const listing = await repository.readTree(commitSha, directory, signal)
+				const admitted = listing.entries.flatMap((entry) =>
+					entry.type === 'blob' && entry.mode !== '120000' && include(entry.path) ? [{ path: entry.path, sha: entry.sha, size: entry.size }] : []
+				)
+				const scanned = admitted.slice(0, Math.min(maxFiles, WORKSPACE_MAX_SCAN_FILES))
+				const read = scanned.length === 0 ? { files: [], unreadable: [] } : await repository.readBlobTexts(scanned, signal)
+				const contents = new Map(read.files.map((file) => [file.path, file.content]))
+				const reasons = new Map(read.unreadable.map((entry) => [entry.path, entry.reason]))
+				return {
+					commitSha: listing.commitSha,
+					files: scanned.map(({ path }): WorkspaceFile => {
+						const content = contents.get(path)
+						return content === undefined ? { path, content: null, reason: reasons.get(path) ?? 'missing' } : { path, content }
+					}),
+					candidates: admitted.length,
+					treeTruncated: listing.truncated,
 				}
 			}),
 		commit: ({ target, branch, expectedHeadSha, message, author, changes, signal }) =>

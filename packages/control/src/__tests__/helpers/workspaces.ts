@@ -10,10 +10,13 @@ import {
 	type WorkspaceCommit,
 	type WorkspaceFile,
 	type WorkspacePullRequestInput,
+	type WorkspaceScan,
+	type WorkspaceScanInput,
 	WorkspaceSourceError,
 	type WorkspaceSourcePort,
 	type WorkspaceSourceTarget,
 	type WorkspaceTree,
+	type WorkspaceTreeEntry,
 	type WorkspaceUnreadableReason,
 } from '../../workspace-source-port'
 import { allowAllAuth, authWithPermissions } from './iam'
@@ -41,6 +44,7 @@ export type SourceCall =
 	| { kind: 'create-branch'; branch: string; fromSha: string }
 	| { kind: 'list-tree'; commitSha: string; directory?: string }
 	| { kind: 'read-files'; commitSha: string; paths: readonly string[] }
+	| { kind: 'scan-files'; commitSha: string; directory?: string; maxFiles: number }
 	| { kind: 'commit'; commit: WorkspaceCommit }
 	| { kind: 'pull-request'; pullRequest: WorkspacePullRequestInput }
 
@@ -73,7 +77,8 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 			commitSha: input.commitSha,
 			...(input.directory === undefined ? {} : { directory: input.directory }),
 		})
-		return Promise.resolve({ commitSha: input.commitSha, entries: [{ path: 'src', kind: 'directory' }], truncated: false })
+		const files = [...this.contents.keys()].sort().map((path): WorkspaceTreeEntry => ({ path, kind: 'file', size: 1 }))
+		return Promise.resolve({ commitSha: input.commitSha, entries: [{ path: 'src', kind: 'directory' }, ...files], truncated: false })
 	}
 
 	readFiles(input: { target: WorkspaceSourceTarget; commitSha: string; paths: readonly string[] }) {
@@ -86,6 +91,24 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 				return { path, content: this.contents.get(path) ?? `content of ${path}` }
 			}),
 		})
+	}
+
+	/** Scans the paths of `contents` and `unreadable` as the tree, in path order. */
+	scanFiles(input: WorkspaceScanInput & { target: WorkspaceSourceTarget }): Promise<WorkspaceScan> {
+		this.record(input.target, {
+			kind: 'scan-files',
+			commitSha: input.commitSha,
+			...(input.directory === undefined ? {} : { directory: input.directory }),
+			maxFiles: input.maxFiles,
+		})
+		const prefix = input.directory === undefined ? '' : `${input.directory}/`
+		const admitted = [...new Set([...this.contents.keys(), ...this.unreadable.keys()])].sort()
+			.filter((path) => path.startsWith(prefix) && input.include(path))
+		const files = admitted.slice(0, input.maxFiles).map((path): WorkspaceFile => {
+			const reason = this.unreadable.get(path)
+			return reason === undefined ? { path, content: this.contents.get(path) ?? '' } : { path, content: null, reason }
+		})
+		return Promise.resolve({ commitSha: input.commitSha, files, candidates: admitted.length, treeTruncated: false })
 	}
 
 	commit(input: WorkspaceCommit & { target: WorkspaceSourceTarget; signal: AbortSignal }): Promise<string> {

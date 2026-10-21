@@ -28,6 +28,9 @@ import {
 	listTargetsUseCase,
 	listWorkspacesUseCase,
 	readFilesUseCase,
+	SEARCH_MAX_FILES,
+	SEARCH_MAX_RESULTS,
+	searchFilesUseCase,
 	WORKSPACE_FILE_MAX_BYTES,
 	type WorkspaceUseCaseContext,
 } from '../api/workspaces'
@@ -130,6 +133,14 @@ const toolInputs = {
 	getWorkspace: workspaceInput,
 	listFiles: workspaceInput.extend({ directory: repositoryPath.optional(), commitSha: commitSha.optional() }).strict(),
 	readFiles: workspaceInput.extend({ paths: z.array(repositoryPath).min(1).max(50), commitSha: commitSha.optional() }).strict(),
+	searchFiles: workspaceInput.extend({
+		glob: z.string().min(1).max(200).optional(),
+		text: z.string().min(1).max(200).optional(),
+		caseSensitive: z.boolean().optional(),
+		directory: repositoryPath.optional(),
+		commitSha: commitSha.optional(),
+		maxResults: z.number().int().min(1).max(SEARCH_MAX_RESULTS).default(50),
+	}).strict(),
 	applyChanges: workspaceInput.extend({
 		expectedHeadSha: commitSha,
 		message: z.string().min(1).refine((message) => utf8Bytes(message) <= MAX_COMMIT_MESSAGE_BYTES, 'message is too long'),
@@ -212,6 +223,15 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 		inputSchema: toolInput(toolInputs.readFiles),
 		annotations: READ_ONLY,
 	}, (input) => run(() => readFilesUseCase(c, input)))
+	server.registerTool('search_files', {
+		description: 'Search the workspace branch at commitSha or at the current head. With glob alone it lists the matching file paths; '
+			+ 'the glob matches the whole repository path, ** crosses directories and * does not (src/**/*.ts). With text it lists the '
+			+ 'lines that contain that literal text (no regular expressions), in at most '
+			+ `${SEARCH_MAX_FILES} files the glob and directory admit, 2 MiB together. incomplete names every bound that cut the `
+			+ 'answer short; narrow glob or directory then.',
+		inputSchema: toolInput(toolInputs.searchFiles),
+		annotations: READ_ONLY,
+	}, (input) => run(() => searchFilesUseCase(c, input)))
 	server.registerTool('apply_changes', {
 		description: 'Commit a batch of file changes to the workspace branch as one ordinary Git commit. expectedHeadSha must be the '
 			+ 'current head from get_workspace or read_files; if the branch moved, the call fails with the new head and you must re-read '
