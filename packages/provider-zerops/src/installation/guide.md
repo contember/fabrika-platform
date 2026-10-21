@@ -44,16 +44,37 @@ cores and 48 GB per container, and costs more while it does.
 **1. Platform tier** (`platform install --tier`, step 1). Cannot be changed later: a project's core package
 is upgrade-only, and the data services differ.
 
-| Tier              | What runs                                                                                                                                                                           | Idle floor | Fails when                                               |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | -------------------------------------------------------- |
-| `light` (default) | Lightweight core. One single-node PostgreSQL (`oltp-hobby`) and one bucket shared by IAM, control and Operations; one container each.                                               | about $6   | any one container or the database is down: sign-in stops |
-| `standard`        | Serious core. HA PostgreSQL (3 nodes, `oltp-production`, dedicated CPU) for IAM and control; a second HA PostgreSQL and bucket for Operations; two containers of IAM and the proxy. | about $100 | survives the loss of one node of each                    |
+| Tier              | What runs                                                                                                                                                                           | Idle floor  | Fails when                                       |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------------------------------------------------ |
+| `light` (default) | Lightweight core. Two single-node PostgreSQL (`oltp-hobby`): `db` for IAM and control, `operationsdb` for Operations; one shared bucket; one container each.                        | about $7.50 | any one container or `db` is down: sign-in stops |
+| `standard`        | Serious core. HA PostgreSQL (3 nodes, `oltp-production`, dedicated CPU) for IAM and control; a second HA PostgreSQL and bucket for Operations; two containers of IAM and the proxy. | about $100  | survives the loss of one node of each            |
 
 Most of `standard`'s price is the identity database's dedicated floor (about $72). `light` is right for an
 evaluation and a small fleet that tolerates an outage; `standard` for sign-in that must stay up.
 
+**What a lost node costs.** Zerops has no point-in-time recovery. Its backups are logical dumps of a whole
+database service, daily between 00:00 and 01:00 UTC unless the service sets another schedule, and a restore is
+manual (download, then `pg_restore`). A single-node PostgreSQL whose node fails loses everything written since
+its last backup and stays down until someone restores it. An HA PostgreSQL (three nodes) keeps both its data and
+its service. A deploy never takes a one-container runtime down, because Zerops starts the new container before
+it stops the old one; how fast Zerops replaces one lost with its node is not measured. Operations has its own
+database because its error history does not need the backup schedule identity and deploy state do.
+
+**Presets.** The choices below combine into three shapes. Prices are the idle floor for three applications in
+one production namespace; an application with a database runs at a 0.5 GB floor, about $2.10 per container.
+
+| Preset     | Platform tier | Production namespace                                                                                | Idle floor | A lost node costs                                                 |
+| ---------- | ------------- | --------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------- |
+| evaluation | `light`       | `cheap`, single-node PostgreSQL, one container each                                                 | about $16  | the data written since that database's last backup, and an outage |
+| data       | `light`       | `cheap` with `--postgres-type=postgresql:ha@18 --postgres-profile=oltp-staging`, one container each | about $26  | applications' data survives; platform data since its last backup  |
+| stable     | `standard`    | `cheap` HA as above, `--core-package=SERIOUS`, two containers of each application                   | $130+      | a short failover; the namespace proxy has one container           |
+
+A staging namespace (`cheap`, single-node) adds about $8 to any of them.
+
 **2. Namespace preset** (`control namespaces create --preset`, step 5). A namespace is the Zerops project
-applications run in. Each one adds its own proxy, about $1.08.
+applications run in. Each one adds its own proxy, about $1.08. A `cheap` namespace's shared PostgreSQL is
+single-node unless `--postgres-type=postgresql:ha@18` asks for HA (about $11 at `--postgres-profile=oltp-staging`);
+the type is fixed once the namespace exists, the profile is not.
 
 | Preset          | Where an application's database lives                                   | Use with                             |
 | --------------- | ----------------------------------------------------------------------- | ------------------------------------ |
@@ -62,8 +83,8 @@ applications run in. Each one adds its own proxy, about $1.08.
 | `full`          | The namespace belongs to ONE application (`--exclusive-app=<id>`)       | an application that must be isolated |
 
 **3. The application's database** (the application's `fabrika.config.ts`, before step 5). The example
-declares `postgresql:single@18` at `oltp-hobby`, about $1.45, plus its runtime from about $1.08 per
-container. `postgresql:ha@18` survives a node failure: about $11 at `oltp-staging` (shared CPU), about $72 at
+declares `postgresql:single@18` at `oltp-hobby`, about $1.45, plus its runtime at about $2.10 per
+container (a deploy raises the floor of an application with a database to 0.5 GB). `postgresql:ha@18` survives a node failure: about $11 at `oltp-staging` (shared CPU), about $72 at
 `oltp-production` (dedicated). Single to HA later means a new service and a data migration.
 
 **4. Namespace core package** (`--core-package=LIGHT|SERIOUS`, step 5). `LIGHT` is free and the default on
