@@ -80,6 +80,11 @@ class FakeRepository implements GitHubRepositoryClient {
 		return { branch: input.branch, sha: input.fromSha }
 	}
 
+	async deleteBranch(branch: string) {
+		this.record('deleteBranch', [branch])
+		return { deleted: branch !== 'fabrika/missing' }
+	}
+
 	async commitFiles(input: Parameters<GitHubRepositoryClient['commitFiles']>[0]) {
 		const { signal: _signal, ...rest } = input
 		this.record('commitFiles', [rest])
@@ -287,6 +292,13 @@ describe('GitHub workspace source', () => {
 		expect(heads).toEqual([headSha, null, ...Array(7).fill(headSha)])
 		expect(opened).toHaveLength(1)
 		expect(repository.calls.map((call) => call.args[0])).toEqual(branches)
+	})
+
+	test('deletes a branch, and says when it was already gone', async () => {
+		const { source, repository } = await fixture()
+		expect(await source.deleteBranch({ target, branch: 'fabrika/w1', signal: signal() })).toBe(true)
+		expect(await source.deleteBranch({ target, branch: 'fabrika/missing', signal: signal() })).toBe(false)
+		expect(repository.calls).toEqual([{ method: 'deleteBranch', args: ['fabrika/w1'] }, { method: 'deleteBranch', args: ['fabrika/missing'] }])
 	})
 
 	test('compares through the repository and leaves out how far the base moved on', async () => {

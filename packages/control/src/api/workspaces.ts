@@ -626,6 +626,30 @@ export async function createPullRequestUseCase(
 	return { number: pullRequest.number, url: pullRequest.url, created: pullRequest.created }
 }
 
+/**
+ * Abandon a workspace: delete its branch, which closes an open pull request from it on GitHub, then mark it so it is no
+ * longer listed or usable. The stage environment keeps running whatever it last deployed. Repeating it is harmless.
+ */
+export async function abandonWorkspaceUseCase(
+	c: WorkspaceUseCaseContext,
+	input: { workspaceId: string },
+): Promise<{ workspaceId: string; branchDeleted: boolean }> {
+	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_WRITE, 'allow')
+	const { branch } = owned.workspace
+	// Only ever a workspace branch: never the default branch or anything the operator owns.
+	if (!branch.startsWith(WORKSPACE_BRANCH_PREFIX)) fail(409, 'the workspace does not own a fabrika/ branch')
+	// The branch goes first, so a failure leaves the workspace usable and the call can be repeated.
+	const branchDeleted = await sourceCall(() => c.source.deleteBranch({ target: owned.source, branch, signal: c.signal }))
+	await c.repositories.workspaces.markAbandoned(owned.workspace.id)
+	await c.auth.audit({
+		action: 'source.workspace.abandon',
+		resourceType: 'workspace',
+		resourceId: owned.workspace.id,
+		metadata: { appId: owned.workspace.app_id, env: owned.workspace.env, branch, branchDeleted },
+	})
+	return { workspaceId: owned.workspace.id, branchDeleted }
+}
+
 /** Repository-relative with forward slashes: no leading slash, no empty, `.` or `..` segment, no control character. */
 export function isRepositoryPath(path: string): boolean {
 	return !path.startsWith('/') && !path.includes('\\')
@@ -674,10 +698,16 @@ async function findAuthoringTarget(c: WorkspaceUseCaseContext, appId: string, en
 	}
 }
 
-async function requireWorkspace(c: WorkspaceUseCaseContext, workspaceId: string, action: string): Promise<OwnedWorkspace> {
+async function requireWorkspace(
+	c: WorkspaceUseCaseContext,
+	workspaceId: string,
+	action: string,
+	abandoned: 'refuse' | 'allow' = 'refuse',
+): Promise<OwnedWorkspace> {
 	const ownerId = requireOwner(c.auth)
 	const workspace = await c.repositories.workspaces.getWorkspace(workspaceId)
 	if (workspace === null || workspace.owner_id !== ownerId) fail(404, 'workspace not found')
+	if (workspace.abandoned_at !== null && abandoned === 'refuse') fail(410, 'the workspace was abandoned; create a new one')
 	const target = await findAuthoringTarget(c, workspace.app_id, workspace.env, action)
 	if (target === null) fail(404, 'workspace not found')
 	return { ...target, workspace }

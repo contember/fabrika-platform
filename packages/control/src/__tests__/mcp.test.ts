@@ -175,6 +175,7 @@ describe('the MCP endpoint', () => {
 			deploy_stage: write(true, false),
 			get_deployment: read,
 			create_pull_request: write(false, true),
+			delete_workspace: write(true, true),
 		})
 	})
 
@@ -187,6 +188,7 @@ describe('the MCP endpoint', () => {
 			'apply_changes',
 			'create_pull_request',
 			'create_workspace',
+			'delete_workspace',
 			'deploy_stage',
 			'get_app_rules',
 			'get_deployment',

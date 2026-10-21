@@ -16,6 +16,7 @@ import {
 import { z } from 'zod/v4'
 import { ControlApiError } from '../api/domain'
 import {
+	abandonWorkspaceUseCase,
 	applyChangesUseCase,
 	COMMIT_MESSAGE_MAX_BYTES,
 	createPullRequestUseCase,
@@ -174,6 +175,7 @@ const toolInputs = {
 		before: z.number().int().min(0).optional(),
 		failuresOnly: z.boolean().default(false),
 	}).strict(),
+	deleteWorkspace: workspaceInput,
 	createPullRequest: workspaceInput.extend({ title: z.string().min(1).max(256), body: z.string().max(65_536) }).strict(),
 }
 
@@ -310,6 +312,13 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 		inputSchema: toolInput(toolInputs.createPullRequest),
 		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 	}, (input) => run(() => createPullRequestUseCase(c, input)))
+	server.registerTool('delete_workspace', {
+		description: 'Abandon one of your workspaces: delete its branch on GitHub, which closes an open pull request from it, and stop '
+			+ 'listing it. Its commits are no longer reachable from a branch. The stage environment keeps running what it last deployed. '
+			+ 'Ask the human before you call it.',
+		inputSchema: toolInput(toolInputs.deleteWorkspace),
+		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+	}, (input) => run(() => abandonWorkspaceUseCase(c, input)))
 	return server
 }
 

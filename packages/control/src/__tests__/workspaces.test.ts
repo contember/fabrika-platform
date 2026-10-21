@@ -6,6 +6,7 @@ import { type SqlDatabase, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { putAppEnvUseCase } from '../api/registry/environments'
 import {
+	abandonWorkspaceUseCase,
 	applyChangesUseCase,
 	createPullRequestUseCase,
 	createWorkspaceUseCase,
@@ -184,6 +185,41 @@ for (const backend of backends) {
 					number: 7,
 					url: 'https://github.com/acme/shop/pull/7',
 				})
+			})
+
+			test('an abandoned workspace loses its branch, leaves the list, refuses further use, and abandoning again is harmless', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				const run = await deployStageUseCase(w.context(author), { workspaceId: created.id })
+				expect(await abandonWorkspaceUseCase(w.context(author), { workspaceId: created.id })).toEqual({
+					workspaceId: created.id,
+					branchDeleted: true,
+				})
+				expect(w.source.calls.at(-1)).toEqual({ kind: 'delete-branch', branch: created.branch })
+				expect(w.source.branches.has(created.branch)).toBe(false)
+				expect((await w.repositories.workspaces.getWorkspace(created.id))?.abandoned_at).toEqual(expect.any(Number))
+				expect(await listWorkspacesUseCase(w.context(author), {})).toEqual({ items: [] })
+				await expect(getWorkspaceUseCase(w.context(author), { workspaceId: created.id })).rejects.toMatchObject({ httpStatus: 410 })
+				await expect(deployStageUseCase(w.context(author), { workspaceId: created.id })).rejects.toMatchObject({ httpStatus: 410 })
+				expect((await getDeploymentUseCase(w.context(author), { runId: run.id, log: TAIL })).run.id).toBe(run.id)
+				expect(await abandonWorkspaceUseCase(w.context(author), { workspaceId: created.id })).toEqual({
+					workspaceId: created.id,
+					branchDeleted: false,
+				})
+			})
+
+			test('only the owner with write access abandons a workspace, and a failed branch delete leaves it usable', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				const stranger = oauthUser(AUTHOR_ACTIONS, 'stranger@acme.test')
+				const reader = oauthUser(['source.workspace.read'], 'author@acme.test')
+				for (const auth of [stranger, reader]) {
+					await expect(abandonWorkspaceUseCase(w.context(auth), { workspaceId: created.id })).rejects.toMatchObject({ httpStatus: 404 })
+				}
+				expect(w.source.kinds()).toEqual(['read-branch', 'create-branch'])
+				w.source.failure = new WorkspaceSourceError('unavailable')
+				await expect(abandonWorkspaceUseCase(w.context(author), { workspaceId: created.id })).rejects.toMatchObject({ httpStatus: 503 })
+				expect((await getWorkspaceUseCase(w.context(author), { workspaceId: created.id })).id).toBe(created.id)
 			})
 
 			test('are visible to their owner only', async () => {

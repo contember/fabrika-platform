@@ -81,6 +81,8 @@ export function githubWorkspaceSource(env: Env, createClient: WorkspaceGitHubCli
 			}),
 		createBranch: ({ target, branch, fromSha, signal }) =>
 			withRepository(target, signal, async (repository) => (await repository.createBranch({ branch, fromSha, signal })).sha),
+		deleteBranch: ({ target, branch, signal }) =>
+			withRepository(target, signal, async (repository) => (await repository.deleteBranch(branch, signal)).deleted),
 		listTree: ({ target, commitSha, directory, signal }) =>
 			withRepository(target, signal, async (repository) => {
 				const listing = await repository.readTree(commitSha, directory, signal)

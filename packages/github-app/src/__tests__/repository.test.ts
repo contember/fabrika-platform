@@ -118,6 +118,7 @@ describe('GitHubAppClient.openRepository', () => {
 			'compareCommits',
 			'constructor',
 			'createBranch',
+			'deleteBranch',
 			'openPullRequest',
 			'readBlobTexts',
 			'readFiles',
@@ -337,6 +338,26 @@ describe('compareCommits', () => {
 		await expect(repository.compareCommits(OTHER, HEAD)).rejects.toBeInstanceOf(GitHubNotFoundError)
 		await expect(repository.compareCommits('main', HEAD)).rejects.toThrow('GitHub App configuration is invalid')
 		expect(repositoryRequests(requests)).toHaveLength(1)
+	})
+})
+
+describe('deleteBranch', () => {
+	test('deletes a branch, and reads an absent one as already deleted', async () => {
+		const deleted = await open([on('DELETE', '/git/refs/heads/fabrika/w1', () => new Response(null, { status: 204 }))])
+		expect(await deleted.repository.deleteBranch('fabrika/w1')).toEqual({ deleted: true })
+		const absent = await open([on('DELETE', '/git/refs/heads/fabrika/w1', json({ message: 'Reference does not exist' }, 422))])
+		expect(await absent.repository.deleteBranch('fabrika/w1')).toEqual({ deleted: false })
+		expect(absent.requests.map((request) => request.method).slice(-2)).toEqual(['DELETE', 'GET'])
+	})
+
+	test('a refusal of a branch that still exists fails, and an invalid branch is refused before any request', async () => {
+		const { repository, requests } = await open([
+			on('DELETE', '/git/refs/heads/main', json({ message: 'protected' }, 422)),
+			on('GET', '/git/ref/heads/main', json(ref('main', HEAD))),
+		])
+		await expect(repository.deleteBranch('main')).rejects.toThrow('GitHub App request failed with status 422')
+		await expect(repository.deleteBranch('a..b')).rejects.toThrow('GitHub App configuration is invalid')
+		expect(repositoryRequests(requests)).toHaveLength(2)
 	})
 })
 
