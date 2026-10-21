@@ -86,6 +86,9 @@ is a latest-observed summary: `observedAt` updates `run_id`, state, finish time,
 and artifact state as one tuple, and delayed older projections cannot roll it
 back.
 
+Event detail resolves source maps for the whole event at once (`resolveEventFrames`): one map cache per event, at most
+250 frames (in-app first, then the top of each stack), 16 distinct maps and 4 concurrent map loads; the rest stay unresolved.
+
 The Bun migration wrapper uses `definePostgresServiceMigrations` and composes the
 `platform-node` job-queue bundle before the Operations service bundle. Bundle names and filenames are
 migration identity under ADR-0017; do not rename them. Before 1.0 the history may be squashed when

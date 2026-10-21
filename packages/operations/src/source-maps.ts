@@ -9,6 +9,12 @@ export interface ObjectReader {
 }
 
 const CONTEXT_RADIUS = 5
+// A stack within the 120 KiB ingest cap can carry thousands of frames; bound the work one detail view does.
+export const MAX_RESOLVED_FRAMES_PER_EVENT = 250
+// Each distinct map is a fetch, a JSON parse and a consumer build of up to megabytes.
+export const MAX_SOURCE_MAPS_PER_EVENT = 16
+// Bounds how many map bodies are fetched and held in memory at the same time.
+export const SOURCE_MAP_LOAD_CONCURRENCY = 4
 
 const rawSourceMapSchema = z.object({
 	version: z.union([z.string(), z.number()]).transform(String),
@@ -134,39 +140,102 @@ async function resolveOne(
 	}
 }
 
+function limitConcurrency(limit: number): <T>(work: () => Promise<T>) => Promise<T> {
+	let active = 0
+	const waiting: Array<() => void> = []
+	return async (work) => {
+		if (active >= limit) await new Promise<void>((resolve) => waiting.push(resolve))
+		active++
+		try {
+			return await work()
+		} finally {
+			active--
+			waiting.shift()?.()
+		}
+	}
+}
+
+function isResolvable(frame: StackFrame): boolean {
+	return frameFile(frame) !== '' && frame.line !== undefined
+}
+
+interface FramePosition {
+	stack: number
+	index: number
+}
+
+// In-app frames first, then the top of each stack (Sentry orders frames oldest first), interleaving stacks.
+function framesToResolve(stacks: StackFrame[][]): FramePosition[] {
+	const inApp: FramePosition[] = []
+	const other: FramePosition[] = []
+	const deepest = Math.max(0, ...stacks.map((frames) => frames.length))
+	for (let depth = 0; depth < deepest; depth++) {
+		stacks.forEach((frames, stack) => {
+			const index = frames.length - 1 - depth
+			const frame = frames[index]
+			if (frame === undefined || !isResolvable(frame)) return
+			if (frame.inApp === true) inApp.push({ stack, index })
+			else other.push({ stack, index })
+		})
+	}
+	return [...inApp, ...other].slice(0, MAX_RESOLVED_FRAMES_PER_EVENT)
+}
+
+export async function resolveEventFrames(
+	stacks: StackFrame[][],
+	sourceId: string,
+	release: string | undefined,
+	reader: ObjectReader,
+): Promise<DisplayFrame[][]> {
+	const displays = stacks.map((frames) => frames.map(minifiedDisplay))
+	if (!release) return displays
+	const sourceMapRelease = release
+	const consumers = new Map<string, Promise<SourceMapConsumer | null>>()
+	const limitLoad = limitConcurrency(SOURCE_MAP_LOAD_CONCURRENCY)
+	async function loadConsumer(key: string, logicalPath: string): Promise<SourceMapConsumer | null> {
+		try {
+			const object = reader.getSourceMap === undefined
+				? await reader.get(key)
+				: await reader.getSourceMap(sourceId, sourceMapRelease, logicalPath)
+			if (!object) return null
+			const map = parseRawSourceMap(JSON.parse(await object.text()))
+			return map ? new SourceMapConsumer(map) : null
+		} catch {
+			return null
+		}
+	}
+	function consumerFor(fileReference: string): Promise<SourceMapConsumer | null> {
+		let logicalPath: string
+		try {
+			logicalPath = logicalAssetPath(fileReference)
+		} catch {
+			return Promise.resolve(null)
+		}
+		const key = sourceMapKey(sourceId, sourceMapRelease, logicalPath)
+		const cached = consumers.get(key)
+		if (cached !== undefined) return cached
+		if (consumers.size >= MAX_SOURCE_MAPS_PER_EVENT) return Promise.resolve(null)
+		const loading = limitLoad(() => loadConsumer(key, logicalPath))
+		consumers.set(key, loading)
+		return loading
+	}
+	await Promise.all(
+		framesToResolve(stacks).map(async ({ stack, index }) => {
+			const frame = stacks[stack]?.[index]
+			const row = displays[stack]
+			if (frame === undefined || row === undefined) return
+			row[index] = await resolveOne(frame, consumerFor)
+		}),
+	)
+	return displays
+}
+
 export async function resolveFrames(
 	frames: StackFrame[],
 	sourceId: string,
 	release: string | undefined,
 	reader: ObjectReader,
 ): Promise<DisplayFrame[]> {
-	if (!release) return frames.map(minifiedDisplay)
-	const sourceMapRelease = release
-	const consumers = new Map<string, SourceMapConsumer | null>()
-	async function consumerFor(fileReference: string): Promise<SourceMapConsumer | null> {
-		let logicalPath: string
-		try {
-			logicalPath = logicalAssetPath(fileReference)
-		} catch {
-			return null
-		}
-		const key = sourceMapKey(sourceId, sourceMapRelease, logicalPath)
-		if (consumers.has(key)) return consumers.get(key) ?? null
-		let consumer: SourceMapConsumer | null = null
-		try {
-			const object = reader.getSourceMap === undefined
-				? await reader.get(key)
-				: await reader.getSourceMap(sourceId, sourceMapRelease, logicalPath)
-			if (object) {
-				const parsed: unknown = JSON.parse(await object.text())
-				const map = parseRawSourceMap(parsed)
-				if (map) consumer = new SourceMapConsumer(map)
-			}
-		} catch {
-			consumer = null
-		}
-		consumers.set(key, consumer)
-		return consumer
-	}
-	return Promise.all(frames.map((frame) => resolveOne(frame, consumerFor)))
+	const [displays] = await resolveEventFrames([frames], sourceId, release, reader)
+	return displays ?? []
 }

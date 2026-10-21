@@ -1,7 +1,7 @@
 import type { EventDetail, EventException, StackFrame } from '@fabrika/operations-contract'
 import { type SentryEvent, sentryEventSchema, type SentryException, type SentryRuntime } from './event-schemas.js'
 import type { ObjectReader } from './source-maps.js'
-import { resolveFrames } from './source-maps.js'
+import { resolveEventFrames } from './source-maps.js'
 
 interface RawException {
 	type: string | null
@@ -73,14 +73,19 @@ export async function parseEventDetail(rawText: string, sourceId: string, reader
 	const read = sentryEventSchema.safeParse(parsed)
 	if (!read.success) return emptyDetail(rawText)
 	const event = read.data
-	const exceptions: EventException[] = await Promise.all(
-		exceptionsOf(event).map(async (exception) => ({
-			type: exception.type,
-			value: exception.value,
-			handled: exception.handled,
-			frames: await resolveFrames(exception.frames, sourceId, event.release, reader),
-		})),
+	const rawExceptions = exceptionsOf(event)
+	const frames = await resolveEventFrames(
+		rawExceptions.map((exception) => exception.frames),
+		sourceId,
+		event.release,
+		reader,
 	)
+	const exceptions: EventException[] = rawExceptions.map((exception, index) => ({
+		type: exception.type,
+		value: exception.value,
+		handled: exception.handled,
+		frames: frames[index] ?? [],
+	}))
 	const contexts = event.contexts
 	return {
 		eventId: event.event_id ?? null,

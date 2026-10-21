@@ -116,6 +116,31 @@ describe('event detail and source context', () => {
 		expect(fromPairs.runtime).toBeNull()
 	})
 
+	test('loads a map once for every exception of one event', async () => {
+		const loads: string[] = []
+		const countingReader: ObjectReader = {
+			async get() {
+				return null
+			},
+			async getSourceMap(_sourceId, _releaseName, logicalPath) {
+				loads.push(logicalPath)
+				return {
+					async text() {
+						return map
+					},
+				}
+			},
+		}
+		const stack = { frames: [{ abs_path: 'https://app.test/app.min.js', function: 't', lineno: 1, colno: 1 }] }
+		const raw = JSON.stringify({
+			release: 'v1',
+			exception: { values: [{ type: 'Cause', stacktrace: stack }, { type: 'Wrapper', stacktrace: stack }] },
+		})
+		const detail = await parseEventDetail(raw, 'source-a', countingReader)
+		expect(detail.exceptions.map((exception) => exception.frames[0]?.file)).toEqual(['src/app.ts', 'src/app.ts'])
+		expect(loads).toEqual(['app.min.js'])
+	})
+
 	test('retains malformed event bytes for forensics', async () => {
 		const detail = await parseEventDetail('{broken', 'source-a', reader({}))
 		expect(detail.rawEvent).toBe('{broken')
