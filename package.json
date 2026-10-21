@@ -16,7 +16,7 @@
 		"test:examples": "bun run --cwd examples/zerops-app test && bun run --cwd examples/crm test && bun run --cwd examples/app test",
 		"test:live": "bun test packages/provider-zerops/src/__tests__/platform-facts.live.test.ts",
 		"check:ci": "bun scripts/check-ci.ts",
-		"lint": "biome lint .",
+		"lint": "oxlint",
 		"format": "dprint fmt",
 		"format:check": "dprint check",
 		"release:validate": "bun scripts/release.ts validate",
@@ -39,8 +39,6 @@
 		"test:browser": "bun run --filter @fabrika/local-stack browser:test"
 	},
 	"devDependencies": {
-		"zod": "^3.25.76",
-		"@biomejs/biome": "^2.5.6",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/cli": "workspace:*",
 		"@fabrika/local-stack": "workspace:*",
@@ -49,8 +47,10 @@
 		"@opice/harness": "0.11.0",
 		"@types/bun": "^1.4.3",
 		"dprint": "^0.51.1",
+		"oxlint": "1.89.0",
 		"playwright": "^1.60.0",
-		"typescript": "^5.9.3"
+		"typescript": "^5.9.3",
+		"zod": "^3.25.76"
 	},
 	"license": "MIT"
 }

@@ -22,10 +22,10 @@ export class RecordingDialect implements Dialect {
 	}
 
 	createDriver(): Driver {
-		const dialect = this
+		const { log, transactions } = this
 		const connection: DatabaseConnection = {
 			async executeQuery<R>(compiled: CompiledQuery): Promise<QueryResult<R>> {
-				dialect.log.push(compiled)
+				log.push(compiled)
 				return { rows: [] }
 			},
 			async *streamQuery<R>(): AsyncIterableIterator<QueryResult<R>> {
@@ -38,7 +38,7 @@ export class RecordingDialect implements Dialect {
 				return connection
 			},
 			async beginTransaction(_connection, settings) {
-				dialect.transactions.push(settings)
+				transactions.push(settings)
 			},
 			async commitTransaction() {},
 			async rollbackTransaction() {},

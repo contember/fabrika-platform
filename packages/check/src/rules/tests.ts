@@ -33,7 +33,7 @@ const isAssertionCall = (node: AstNode): boolean => {
 	const path = memberPath(callee)
 	const [root] = path ?? []
 	const last = path?.[path.length - 1]
-	return root !== undefined && root !== 'expect' && (/^assert/.test(root) || (last !== undefined && ASSERTION_NAME.test(last)))
+	return root !== undefined && root !== 'expect' && (root.startsWith('assert') || (last !== undefined && ASSERTION_NAME.test(last)))
 }
 
 /** Whether a test body runs an assertion; a nested function counts only where it is called or passed to a call. */

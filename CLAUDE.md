@@ -29,7 +29,7 @@ bun install
 bun run typecheck          # every package + scripts/
 bun run test               # all tests; isolates DOM-heavy agent-interface suites and the Lopata ones (they replace globals)
 bun test packages/provider-contract/src/__tests__/steps.test.ts   # a single file
-bun run lint               # biome
+bun run lint               # oxlint
 bun run format             # dprint fmt  (format:check to verify only)
 bun run check:ci           # every step of CI's verify workflow, with throwaway Postgres + SeaweedFS; run before pushing to main
 
@@ -123,7 +123,10 @@ needed only when there is no app config. Platform commands load the provider's
 ## Code Conventions
 
 - **Format = dprint** (`dprint.json`): tabs, **no semicolons** (ASI), single quotes, line width 150. Run `bun run format` before committing.
-- **Lint = biome** (`biome.json`, recommended ruleset with many rules relaxed). `noConsole` allows `info/warn/error/debug/log`.
+- **Lint = oxlint** (`.oxlintrc.json`): the correctness category with the typescript, unicorn, oxc and import plugins, react
+  on the React packages, `.ts` and `.tsx` only; every rule switched off is switched off there, by name. `no-console`
+  allows `info/warn/error/debug/log`. A suppression names its rule and its reason:
+  `// oxlint-disable-next-line <rule> -- <reason>`.
 - Generate caller-side IDs (UUIDv7), never in SQL. snake_case row shapes mirror the migration files.
 - No `as` casts, `@ts-ignore`, `@ts-expect-error`, or `any`. Solve it properly or ask.
 

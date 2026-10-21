@@ -76,6 +76,6 @@ export function url(value: string): string {
 
 /** Strip ANSI escape codes so box-drawing can measure the VISIBLE width of a line. */
 function stripAnsi(value: string): string {
-	// biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escape sequences by design.
+	// oxlint-disable-next-line no-control-regex -- matching ANSI escape sequences by design.
 	return value.replace(/\x1b\[[0-9;]*m/g, '')
 }

@@ -96,7 +96,7 @@ Requires **[Bun](https://bun.sh)** (≥ 1.3).
 bun install
 bun run typecheck
 bun run test
-bun run lint          # biome
+bun run lint          # oxlint
 bun run format        # dprint
 ```
 

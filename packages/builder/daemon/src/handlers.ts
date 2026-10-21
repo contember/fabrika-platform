@@ -298,7 +298,7 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 
 		const skeletons: unknown[] = []
 		for (const entry of readdirSync(dir).sort()) {
-			if (!/\.test\.ts$/.test(entry)) continue
+			if (!entry.endsWith('.test.ts')) continue
 			try {
 				platform.storage.artifact(session.projectRoot, join('tests', 'browser', entry))
 				platform.storage.assertPublicFile(join(dir, entry))

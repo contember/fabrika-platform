@@ -69,7 +69,7 @@ export const buildExampleProxy = (ctx: ResourceContext): Worker => {
 			// moves, the files bucket, and the minute tick the object runs the jobs on.
 			bindings: {
 				[CLOUDFLARE_APPLICATION_BINDING]: new DurableObject({ name: `${exampleAppId}-application`, className: CLOUDFLARE_APPLICATION_CLASS }),
-				...(app.options.bindings ?? {}),
+				...app.options.bindings,
 				[CLOUDFLARE_FILES_BINDING]: new R2Bucket({ name: `${exampleAppId}-files` }),
 			},
 			triggers: { crons: ['* * * * *'] },
