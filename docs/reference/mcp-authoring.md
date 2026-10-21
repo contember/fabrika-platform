@@ -36,7 +36,7 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `get_workspace`       | One workspace, with its head.                                      |
 | `list_files`          | Paths in the workspace.                                            |
 | `read_files`          | File contents at the workspace head; an unread file says why.      |
-| `apply_changes`       | Commit file writes and deletions against an expected head.         |
+| `apply_changes`       | Commit writes, deletions and exact replacements against a head.    |
 | `deploy_stage`        | Start an ordinary run for the workspace head in the stage env.     |
 | `get_deployment`      | The run's state, a parked run's approval link, `deviations`.       |
 | `create_pull_request` | Open a pull request from the workspace to the default branch.      |
@@ -47,6 +47,12 @@ does not ask the user to confirm it. A writing tool states `destructiveHint` (it
 what the stage environment runs) and `idempotentHint` (a repeated call has no further effect). No tool has
 `openWorldHint`: every tool reaches only the target's repository and Control. The annotations are hints for the client;
 Control authorizes every call.
+
+`apply_changes` takes two kinds of change. `{ path, content }` writes the whole file, and `content: null` deletes it.
+`{ path, oldString, newString }` replaces `oldString` in the file as it is at `expectedHeadSha`. Control refuses the
+whole batch when `oldString` does not occur exactly once, or when the file is missing, binary, or over 512 KiB.
+Several replacements on one path apply in order; a path written whole may appear only once. The protected paths and the
+expected head apply to both kinds.
 
 `get_app_rules` answers the application rules every agent gets, headed by their version (`fabrika-app <version>`):
 the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `references/<topic>.md`

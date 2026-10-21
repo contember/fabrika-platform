@@ -28,12 +28,11 @@ import {
 	listTargetsUseCase,
 	listWorkspacesUseCase,
 	readFilesUseCase,
+	WORKSPACE_FILE_MAX_BYTES,
 	type WorkspaceUseCaseContext,
 } from '../api/workspaces'
 
 const MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024
-/** The GitHub repository client's per-file bound. */
-const MAX_FILE_CONTENT_BYTES = 512 * 1024
 /** Room left in the commit-message bound for the Fabrika trailers. */
 const MAX_COMMIT_MESSAGE_BYTES = COMMIT_MESSAGE_MAX_BYTES - 1024
 
@@ -117,6 +116,7 @@ const identifier = z.string().min(1).max(128)
 const commitSha = z.string().regex(/^[0-9a-f]{40}$/)
 const repositoryPath = z.string().min(1).max(512).refine(isRepositoryPath, 'invalid repository path')
 const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength
+const fileText = z.string().refine((text) => utf8Bytes(text) <= WORKSPACE_FILE_MAX_BYTES, 'text exceeds 512 KiB')
 const workspaceInput = z.object({ workspaceId: identifier }).strict()
 
 const toolInputs = {
@@ -134,10 +134,10 @@ const toolInputs = {
 		expectedHeadSha: commitSha,
 		message: z.string().min(1).refine((message) => utf8Bytes(message) <= MAX_COMMIT_MESSAGE_BYTES, 'message is too long'),
 		changes: z.array(
-			z.object({
-				path: repositoryPath,
-				content: z.string().refine((content) => utf8Bytes(content) <= MAX_FILE_CONTENT_BYTES, 'file content exceeds 512 KiB').nullable(),
-			}).strict(),
+			z.union([
+				z.object({ path: repositoryPath, content: fileText.nullable() }).strict(),
+				z.object({ path: repositoryPath, oldString: fileText.min(1), newString: fileText }).strict(),
+			]),
 		).min(1).max(100),
 	}).strict(),
 	deployStage: workspaceInput,
@@ -215,7 +215,9 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 	server.registerTool('apply_changes', {
 		description: 'Commit a batch of file changes to the workspace branch as one ordinary Git commit. expectedHeadSha must be the '
 			+ 'current head from get_workspace or read_files; if the branch moved, the call fails with the new head and you must re-read '
-			+ `and retry. content null deletes a file. ${
+			+ 'and retry. A change { path, content } writes the whole file; content null deletes it. A change { path, oldString, newString } '
+			+ 'replaces oldString, which must occur exactly once in the file at expectedHeadSha, so include enough surrounding text; '
+			+ `several such changes to one path apply in order. ${
 				c.protectedFiles.map((file) => `${file}, `).join('')
 			}every fabrika.* file but fabrika.contract.ts and `
 			+ 'everything under .github/ are protected and cannot be changed. A change of the contract, its schema modules, '
