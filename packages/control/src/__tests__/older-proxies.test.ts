@@ -1,11 +1,11 @@
 // A Zerops namespace pinned to an older proxy source runs that release's strict manifest parser. A deploy is refused
 // only for a row or a CSP no proxy of the window reads (`entriesNeedingCurrentProxy`), judged by those releases' own
-// parsers: every row form and CSP directive this release added is refused, and every entry a 0.4, 0.5 or 0.6
-// application compiles to deploys.
+// parsers: every row form and CSP directive no proxy of the window knows is refused, and every entry a 0.4, 0.5, 0.6 or
+// 0.7 application compiles to deploys.
 
 import { type BodyAdmission, type ContractArtifact, contractDigest, type EndpointRow } from '@fabrika/auth-core'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
-import { entriesNeedingCurrentProxy } from '@fabrika/provider-zerops'
+import { entriesNeedingCurrentProxy, type OlderProxyReaders } from '@fabrika/provider-zerops'
 import { proxyEndpointRowSchema as proxyEndpointRowSchema05 } from '@fabrika/proxy-core-0.5/manifest'
 import { contractProxyTable, type ProxyEndpointRow, proxyEndpointRowSchema } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
@@ -30,7 +30,11 @@ const mount: EndpointRow['source'] = { kind: 'mount', name: 'api' }
 const empty: EndpointRow['input'] = { type: 'object', fields: {} }
 const json: BodyAdmission = { contentTypes: ['application/json'], maxBytes: 1024 }
 
-describe('the rows of this release, for a namespace proxy pinned to an older source', () => {
+/** The proxies of the window older than 0.7: 0.4.8, 0.5.5 and 0.6.0, which know none of the rows 0.7 added. */
+const [proxy04, ...after04] = OLDER_PROXY_READERS
+const BEFORE_07: OlderProxyReaders = [proxy04, ...after04.slice(0, 2)]
+
+describe('the rows 0.7 added, for a namespace proxy pinned to an older source', () => {
 	test.each<[string, EndpointRow]>([
 		['a public procedure', {
 			id: 'api.stats.cta',
@@ -101,8 +105,9 @@ describe('the rows of this release, for a namespace proxy pinned to an older sou
 			output: null,
 			authorization: 'forward',
 		}],
-	])('refuses %s, which no older proxy parses', (_name, row) => {
-		expect(entriesNeedingCurrentProxy(access([row]), OLDER_PROXY_READERS)).toEqual([row.id])
+	])('deploys %s, which a proxy at 0.7 parses, and refuses it below 0.7', (_name, row) => {
+		expect(entriesNeedingCurrentProxy(access([row]), OLDER_PROXY_READERS)).toEqual([])
+		expect(entriesNeedingCurrentProxy(access([row]), BEFORE_07)).toEqual([row.id])
 	})
 
 	test('deploys a GET mutation, whose row an older proxy parses and applies as this one does', () => {
@@ -162,7 +167,8 @@ describe('a public procedure at a path of its own (http.path)', () => {
 			schema: schemaFromContract(artifact),
 			checker: '0.7.0',
 		}
-		expect(entriesNeedingCurrentProxy(approved, OLDER_PROXY_READERS)).toContain('api.intake.register')
+		expect(entriesNeedingCurrentProxy(approved, BEFORE_07)).toContain('api.intake.register')
+		expect(entriesNeedingCurrentProxy(approved, OLDER_PROXY_READERS)).not.toContain('api.intake.register')
 	})
 })
 
@@ -174,6 +180,7 @@ describe.each([
 	['an application with form files at v0.5.5', 'form-files-0.5.5.json', 'signup'],
 	['a GitHub webhook and a job at v0.5.5', 'webhooks-0.5.5.json', 'hooks'],
 	['the CRM at v0.6.0', 'crm-0.6.0.json', 'crm'],
+	['the CRM at v0.7.0', 'crm-0.7.0.json', 'crm'],
 ])('%s, for a namespace proxy pinned to an older source', (_name, file, app) => {
 	test('deploys: a proxy of the window parses every row', async () => {
 		const fixture = fixtureSchema.parse(JSON.parse(readFileSync(new URL(`./fixtures/${file}`, import.meta.url), 'utf8')))
