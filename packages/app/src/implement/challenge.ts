@@ -44,20 +44,20 @@ export interface ChallengeCheck {
 
 /**
  * A verification's answer. A passed one names what the dispatcher records it by: the token itself, or, for ALTCHA, the
- * signature of the challenge it solved, since one solution can be encoded as many tokens.
+ * signature of the challenge it solved, since one solution can be encoded as many tokens. Its record lasts at least
+ * as long as this token could pass again, even if the issuer's configured lifetime has since changed.
  */
 export type ChallengeVerdict =
-	| { readonly outcome: 'passed'; readonly replayKey: string }
+	| { readonly outcome: 'passed'; readonly replayKey: string; readonly recordMs: number }
 	| { readonly outcome: Exclude<ChallengeOutcome, 'passed'> }
 
 export interface ChallengeVerifier {
 	readonly provider: ChallengeProvider
-	/** How long a passed token is recorded: as long as it could pass again. */
-	readonly recordMs: number
 	verify(check: ChallengeCheck): Promise<ChallengeVerdict>
 }
 
-const verdictOf = (outcome: ChallengeOutcome, replayKey: string): ChallengeVerdict => outcome === 'passed' ? { outcome, replayKey } : { outcome }
+const verdictOf = (outcome: ChallengeOutcome, replayKey: string, recordMs: number): ChallengeVerdict =>
+	outcome === 'passed' ? { outcome, replayKey, recordMs } : { outcome }
 
 /** A token as the widget issues it: printable ASCII without spaces, within the provider's length. */
 const TOKEN = new RegExp(`^[\\x21-\\x7e]{1,${CHALLENGE_LIMITS.maxTokenLength}}$`)
@@ -78,9 +78,8 @@ const SECRET_ERRORS = ['missing-input-secret', 'invalid-input-secret']
 export function turnstileVerifier(secret: string, fetch: ChallengeFetch, now: () => number = Date.now): ChallengeVerifier {
 	const verifier: ChallengeVerifier = {
 		provider: 'turnstile',
-		recordMs: CHALLENGE_LIMITS.maxAgeMs + CHALLENGE_LIMITS.maxSkewMs,
 		async verify(check: ChallengeCheck): Promise<ChallengeVerdict> {
-			return verdictOf(await siteverify(secret, fetch, now, check), check.token)
+			return verdictOf(await siteverify(secret, fetch, now, check), check.token, CHALLENGE_LIMITS.maxAgeMs + CHALLENGE_LIMITS.maxSkewMs)
 		},
 	}
 	return Object.freeze(verifier)
@@ -247,7 +246,6 @@ export function altchaChallenge(
 	}
 	const verifier: ChallengeVerifier = {
 		provider: 'altcha',
-		recordMs: rules.maxAgeMs + CHALLENGE_LIMITS.maxSkewMs,
 		async verify(check: ChallengeCheck): Promise<ChallengeVerdict> {
 			const payload = parsePayload(check.token)
 			if (payload === null) {
@@ -266,7 +264,9 @@ export function altchaChallenge(
 					hmacSignatureSecret: keys.signature,
 					hmacKeySignatureSecret: keys.key,
 				})
-				return verdictOf(result.verified ? 'passed' : 'failed', payload.challenge.signature)
+				// A previous deployment may have issued longer-lived challenges with this same key.
+				const recordMs = Math.max(0, parameters.expiresAt * 1000 - Date.now()) + CHALLENGE_LIMITS.maxSkewMs
+				return verdictOf(result.verified ? 'passed' : 'failed', payload.challenge.signature, recordMs)
 			} catch {
 				return { outcome: 'failed' }
 			}
