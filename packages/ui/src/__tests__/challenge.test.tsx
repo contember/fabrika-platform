@@ -41,6 +41,18 @@ describe('Challenge', () => {
 		expect(customElements.get('altcha-widget')).toBeDefined()
 	})
 
+	test('the widget shows neither the library’s logo nor its attribution footer', async () => {
+		mounted = await mount(<Challenge url="/__fabrika/challenge/register" />)
+		const element = widget(mounted.container)
+		expect(JSON.parse(String(setting(element, 'configuration')))).toEqual({ hideLogo: true, hideFooter: true })
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 0))
+		})
+		expect(element.querySelector('.altcha-main')).not.toBeNull()
+		expect(element.querySelector('.altcha-logo')).toBeNull()
+		expect(element.querySelector('.altcha-footer')).toBeNull()
+	})
+
 	test('reports the solved payload, and null once it expires or fails', async () => {
 		const tokens: (string | null)[] = []
 		mounted = await mount(<Challenge url="/__fabrika/challenge/register" onToken={(token) => tokens.push(token)} />)

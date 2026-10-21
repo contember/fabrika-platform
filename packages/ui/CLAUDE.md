@@ -23,7 +23,9 @@ bun test --isolate packages/ui        # happy-dom; import src/__tests__/dom.ts F
   (`src/Challenge.tsx`), the ALTCHA widget of a public procedure's challenge: it imports the optional peer `altcha`,
   which registers `<altcha-widget>` (with its own styles and `blob:` workers, which the framework's CSP admits for such
   an application) when the module loads. Never import it from `src/index.ts`, so an application without a challenge
-  bundles none of it; its test imports `./dom` first, in a group of its own.
+  bundles none of it; its test imports `./dom` first, in a group of its own. The widget wears the kit, not its library:
+  `.fui-challenge` sets its `--altcha-*` theme variables from `--fui-*` tokens, and the component hides its logo and
+  attribution footer, so nothing the visitor sees names ALTCHA.
 - **Every interactive component is keyboard operable**, with a visible `:focus-visible` ring and ARIA that tests assert.
 - Every string a component renders itself is a prop with an English default, so an application can translate it.
 - `FormErrorLike` stays structural: never import the framework's error union from `@fabrika/app`.

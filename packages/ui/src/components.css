@@ -520,6 +520,35 @@
 	gap: var(--fui-space-4);
 }
 
+/* Challenge: the widget's own theme variables, set from the kit's tokens on its element, which its parts inherit. */
+
+.fui-challenge {
+	display: block;
+	font-family: var(--fui-font-family);
+	font-size: var(--fui-text-md);
+	--altcha-color-base: var(--fui-surface);
+	--altcha-color-base-content: var(--fui-text);
+	--altcha-color-neutral: var(--fui-border-strong);
+	--altcha-color-neutral-content: var(--fui-text-muted);
+	--altcha-color-primary: var(--fui-accent);
+	--altcha-color-primary-content: var(--fui-accent-contrast);
+	--altcha-color-success: var(--fui-success);
+	--altcha-color-success-content: var(--fui-accent-contrast);
+	--altcha-color-error: var(--fui-danger);
+	--altcha-color-error-content: var(--fui-accent-contrast);
+	--altcha-border-color: var(--fui-border);
+	--altcha-border-width: var(--fui-border-width);
+	--altcha-border-radius: var(--fui-radius-md);
+	--altcha-padding: var(--fui-space-3);
+	--altcha-checkbox-size: var(--fui-check-size);
+	--altcha-checkbox-border-color: var(--fui-border-strong);
+	--altcha-checkbox-border-radius: var(--fui-radius-sm);
+	--altcha-checkbox-outline: var(--fui-focus-width) solid var(--fui-focus);
+	--altcha-input-background-color: var(--fui-surface);
+	--altcha-input-border-radius: var(--fui-radius-sm);
+	--altcha-spinner-color: var(--fui-text-muted);
+}
+
 /* Button */
 
 .fui-button {
