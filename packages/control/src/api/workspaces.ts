@@ -12,7 +12,13 @@ import type { ProviderSourceBinding } from '@fabrika/provider-contract'
 import { parseClassification } from '../approval/publish'
 import { type AppEnvRow, type AppRow, type ControlRepositories, SourceBindingError, type WorkspaceRow } from '../db'
 import { parseGitHubRepo } from '../github/triggers/push-event'
-import { WorkspaceSourceError, type WorkspaceSourcePort, type WorkspaceSourceTarget, type WorkspaceUnreadableReason } from '../workspace-source-port'
+import {
+	type WorkspaceChangedFile,
+	WorkspaceSourceError,
+	type WorkspaceSourcePort,
+	type WorkspaceSourceTarget,
+	type WorkspaceUnreadableReason,
+} from '../workspace-source-port'
 import { ControlApiError, fail } from './domain'
 import { canAtCoordinates, createManualRun, type DeployQueue, getRunLogUseCase, getRunUseCase, type LogReader, toRunDto } from './runs'
 
@@ -205,6 +211,71 @@ export async function readFilesUseCase(
 	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_READ)
 	const commitSha = input.commitSha ?? await requireHead(c, owned)
 	return sourceCall(() => c.source.readFiles({ target: owned.source, commitSha, paths: input.paths, signal: c.signal }))
+}
+
+const DIFF_PATCH_MAX_BYTES = 32 * 1024
+const DIFF_PATCHES_MAX_BYTES = 256 * 1024
+
+export interface WorkspaceDiffFileDto {
+	path: string
+	previousPath: string | null
+	status: WorkspaceChangedFile['status']
+	additions: number
+	deletions: number
+	/** Present when patches were asked for; null when it was omitted, and `incomplete` says why. */
+	patch?: string | null
+}
+
+export interface WorkspaceDiffDto {
+	/** The workspace's base: the default branch head it was created from. */
+	baseSha: string
+	headSha: string
+	commitsAhead: number
+	files: WorkspaceDiffFileDto[]
+	/** Why the answer may be incomplete; empty when it is complete. */
+	incomplete: string[]
+}
+
+/**
+ * What the workspace changed since its base, from the live head. Patches are bounded per file and in total; `paths`
+ * narrows which files carry one.
+ */
+export async function getWorkspaceDiffUseCase(
+	c: WorkspaceUseCaseContext,
+	input: { workspaceId: string; includePatches: boolean; paths?: readonly string[] },
+): Promise<WorkspaceDiffDto> {
+	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_READ)
+	const headSha = await requireHead(c, owned)
+	const comparison = await sourceCall(() => c.source.compare({ target: owned.source, baseSha: owned.workspace.base_sha, headSha, signal: c.signal }))
+	const incomplete: string[] = []
+	if (comparison.filesCapped) incomplete.push(`GitHub lists at most ${comparison.files.length} changed files; more may have changed`)
+	const wanted = input.paths === undefined ? null : new Set(input.paths)
+	let remainingBytes = DIFF_PATCHES_MAX_BYTES
+	const omitted: string[] = []
+	const files = comparison.files.map((file): WorkspaceDiffFileDto => {
+		const summary = {
+			path: file.path,
+			previousPath: file.previousPath,
+			status: file.status,
+			additions: file.additions,
+			deletions: file.deletions,
+		}
+		if (!input.includePatches || (wanted !== null && !wanted.has(file.path))) return summary
+		const bytes = file.patch === null ? 0 : new TextEncoder().encode(file.patch).byteLength
+		if (file.patch !== null && bytes <= DIFF_PATCH_MAX_BYTES && bytes <= remainingBytes) {
+			remainingBytes -= bytes
+			return { ...summary, patch: file.patch }
+		}
+		omitted.push(file.path)
+		return { ...summary, patch: null }
+	})
+	if (omitted.length > 0) {
+		incomplete.push(
+			`no patch for ${omitted.join(', ')}: GitHub gave none (binary or very large), it is over 32 KiB, or the patches `
+				+ 'reached 256 KiB together; read the file, or ask for fewer paths',
+		)
+	}
+	return { baseSha: owned.workspace.base_sha, headSha, commitsAhead: comparison.aheadBy, files, incomplete }
 }
 
 /** At most this many files are read for one text search: the GitHub client's bound on one blob read. */

@@ -4,6 +4,7 @@ import type {
 	GitHubBlobRef,
 	GitHubCommit,
 	GitHubCommitFilesInput,
+	GitHubComparison,
 	GitHubCreateBranchInput,
 	GitHubFileRead,
 	GitHubOpenPullRequestInput,
@@ -18,6 +19,7 @@ import type {
 } from './repository-types'
 import {
 	decodeCommit,
+	decodeComparison,
 	decodeCreatedTreeSha,
 	decodePullRequest,
 	decodePullRequestList,
@@ -30,6 +32,7 @@ import {
 	MAX_CHANGED_FILES,
 	MAX_COMMIT_MESSAGE_BYTES,
 	MAX_COMMIT_RESPONSE_BYTES,
+	MAX_COMPARE_RESPONSE_BYTES,
 	MAX_FILE_BYTES,
 	MAX_PULL_REQUEST_BODY_BYTES,
 	MAX_PULL_REQUEST_RESPONSE_BYTES,
@@ -179,6 +182,14 @@ class RepositoryClient implements GitHubRepositoryClient {
 			else if (reason !== undefined) unread.push({ path: blob.path, reason })
 		}
 		return { files, unreadable: unread }
+	}
+
+	async compareCommits(baseSha: string, headSha: string, signal?: AbortSignal): Promise<GitHubComparison> {
+		validateSha(baseSha)
+		validateSha(headSha)
+		// The changed files ride only on the first page of commits, so one commit per page keeps the rest of the body small.
+		const body = await this.#readGitObject(`/compare/${baseSha}...${headSha}?per_page=1`, signal, MAX_COMPARE_RESPONSE_BYTES)
+		return decodeComparison(body, headSha)
 	}
 
 	async createBranch(input: GitHubCreateBranchInput): Promise<GitHubRef> {

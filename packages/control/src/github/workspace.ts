@@ -109,6 +109,17 @@ export function githubWorkspaceSource(env: Env, createClient: WorkspaceGitHubCli
 					treeTruncated: listing.truncated,
 				}
 			}),
+		compare: ({ target, baseSha, headSha, signal }) =>
+			withRepository(target, signal, async (repository) => {
+				const comparison = await repository.compareCommits(baseSha, headSha, signal)
+				return {
+					baseSha: comparison.baseSha,
+					headSha: comparison.headSha,
+					aheadBy: comparison.aheadBy,
+					files: comparison.files,
+					filesCapped: comparison.filesCapped,
+				}
+			}),
 		commit: ({ target, branch, expectedHeadSha, message, author, changes, signal }) =>
 			withRepository(
 				target,
