@@ -50,6 +50,19 @@ export interface GitHubFileRead {
 	readonly unreadable: readonly GitHubUnreadablePath[]
 }
 
+/** A blob named by a tree listing of the same repository. */
+export interface GitHubBlobRef {
+	readonly path: string
+	readonly sha: string
+	readonly size: number
+}
+
+export interface GitHubBlobRead {
+	readonly files: readonly GitHubTextFile[]
+	/** Blobs that were not read (`too_large`, `budget` or `binary`), in request order. */
+	readonly unreadable: readonly GitHubUnreadablePath[]
+}
+
 export interface GitHubFileChange {
 	readonly path: string
 	/** UTF-8 regular-file contents, or null to delete the path. */
@@ -95,6 +108,8 @@ export interface GitHubRepositoryClient {
 	readRef(branch: string, signal?: AbortSignal): Promise<GitHubRef | null>
 	readTree(commitSha: string, directory?: string, signal?: AbortSignal): Promise<GitHubTreeListing>
 	readFiles(commitSha: string, paths: readonly string[], signal?: AbortSignal): Promise<GitHubFileRead>
+	/** Reads listed blobs as text without walking the tree again, within the same per-file and total bounds as `readFiles`. */
+	readBlobTexts(blobs: readonly GitHubBlobRef[], signal?: AbortSignal): Promise<GitHubBlobRead>
 	/** Idempotent: an existing branch already at `fromSha` is returned; one elsewhere is a conflict. */
 	createBranch(input: GitHubCreateBranchInput): Promise<GitHubRef>
 	/** Creates exactly one commit on top of `expectedHeadSha` and moves the branch to it without force. */

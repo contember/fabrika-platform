@@ -1,4 +1,6 @@
 import {
+	type GitHubBlobRead,
+	type GitHubBlobRef,
 	GitHubBranchConflictError,
 	type GitHubFileRead,
 	GitHubNotFoundError,
@@ -14,7 +16,7 @@ import { Vault } from '../../vault'
 import { WorkspaceSourceError, type WorkspaceSourceErrorKind, type WorkspaceSourceTarget } from '../../workspace-source-port'
 import { encodeGitHubAppCredential, type GitHubAppCredential } from '../connections/credentials'
 import { githubAppCredentialSecretLabel } from '../connections/secrets'
-import { githubWorkspaceSource, WORKSPACE_MAX_TREE_ENTRIES } from '../workspace'
+import { githubWorkspaceSource, WORKSPACE_MAX_SCAN_FILES, WORKSPACE_MAX_TREE_ENTRIES } from '../workspace'
 
 const headSha = 'a'.repeat(40)
 const nextSha = 'b'.repeat(40)
@@ -48,6 +50,14 @@ class FakeRepository implements GitHubRepositoryClient {
 			commitSha,
 			files: [{ path: 'src/b.ts', content: 'b' }, { path: 'src/a.ts', content: '' }],
 			unreadable: [{ path: 'src/gone.ts', reason: 'missing' }, { path: 'src/big.ts', reason: 'too_large' }],
+		}
+	}
+
+	async readBlobTexts(blobs: readonly GitHubBlobRef[]): Promise<GitHubBlobRead> {
+		this.record('readBlobTexts', [blobs])
+		return {
+			files: blobs.filter((blob) => blob.path !== 'src/big.ts').map((blob) => ({ path: blob.path, content: `text of ${blob.path}` })),
+			unreadable: blobs.filter((blob) => blob.path === 'src/big.ts').map((blob) => ({ path: blob.path, reason: 'too_large' })),
 		}
 	}
 
@@ -220,6 +230,40 @@ describe('GitHub workspace source', () => {
 				{ path: 'src/big.ts', content: null, reason: 'too_large' },
 			],
 		})
+	})
+
+	test('scans the admitted regular files of a tree listing, at most the bound, and counts the rest', async () => {
+		const { source, repository } = await fixture()
+		const blob = (path: string, mode: '100644' | '120000' = '100644'): GitHubTreeEntry => ({ path, sha: 'd'.repeat(40), type: 'blob', mode, size: 3 })
+		repository.treeEntries = [
+			{ path: 'src', sha: 'e'.repeat(40), type: 'tree', mode: '040000' },
+			blob('src/a.ts'),
+			blob('src/big.ts'),
+			blob('src/link.ts', '120000'),
+			blob('src/c.md'),
+			...Array.from({ length: WORKSPACE_MAX_SCAN_FILES }, (_, index) => blob(`src/gen/f${index}.ts`)),
+		]
+		const scan = await source.scanFiles({
+			target,
+			commitSha: headSha,
+			directory: 'src',
+			include: (path) => path.endsWith('.ts'),
+			maxFiles: 500,
+			signal: signal(),
+		})
+		expect(scan.candidates).toBe(WORKSPACE_MAX_SCAN_FILES + 2)
+		expect(scan.files).toHaveLength(WORKSPACE_MAX_SCAN_FILES)
+		expect(scan.files.slice(0, 2)).toEqual([{ path: 'src/a.ts', content: 'text of src/a.ts' }, {
+			path: 'src/big.ts',
+			content: null,
+			reason: 'too_large',
+		}])
+		expect(scan.treeTruncated).toBe(false)
+		expect(repository.calls.map((call) => call.method)).toEqual(['readTree', 'readBlobTexts'])
+
+		const none = await source.scanFiles({ target, commitSha: headSha, include: () => false, maxFiles: 10, signal: signal() })
+		expect(none).toEqual({ commitSha: headSha, files: [], candidates: 0, treeTruncated: false })
+		expect(repository.calls.map((call) => call.method)).toEqual(['readTree', 'readBlobTexts', 'readTree'])
 	})
 
 	const classified: [Error, WorkspaceSourceErrorKind][] = [

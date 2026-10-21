@@ -113,7 +113,7 @@ describe('GitHubAppClient.openRepository', () => {
 		expect(requests[1]?.authorization).toBe(`Bearer ${SECRET_TOKEN}`)
 		expect(JSON.stringify(repository)).not.toContain(SECRET_TOKEN)
 		const reachable = Object.getOwnPropertyNames(Object.getPrototypeOf(repository)).sort()
-		expect(reachable).toEqual(['commitFiles', 'constructor', 'createBranch', 'openPullRequest', 'readFiles', 'readRef', 'readTree'])
+		expect(reachable).toEqual(['commitFiles', 'constructor', 'createBranch', 'openPullRequest', 'readBlobTexts', 'readFiles', 'readRef', 'readTree'])
 		expect(Object.keys(repository)).toEqual([])
 	})
 
@@ -234,6 +234,57 @@ describe('readFiles', () => {
 		const deep = Array.from({ length: 65 }, () => 'd').join('/')
 		for (const paths of [[], tooMany, ['a', 'a'], ['../etc/passwd'], ['/abs'], ['.git/config'], ['a//b'], [deep]]) {
 			await expect(repository.readFiles(HEAD, paths)).rejects.toThrow('GitHub App configuration is invalid')
+		}
+		expect(repositoryRequests(requests)).toHaveLength(0)
+	})
+})
+
+describe('readBlobTexts', () => {
+	const routes = (): Route[] => [
+		on('GET', `/git/blobs/${BLOB_TEXT}`, json(blob(BLOB_TEXT, new TextEncoder().encode('héllo')))),
+		on('GET', `/git/blobs/${BLOB_BINARY}`, json(blob(BLOB_BINARY, new Uint8Array([0xff, 0xfe])))),
+	]
+
+	test('reads listed blobs without a tree walk and says why each other blob was not read', async () => {
+		const size = 512 * 1024
+		const { repository, requests } = await open([
+			...routes(),
+			on('GET', `/git/blobs/${BLOB_LARGE}`, json(blob(BLOB_LARGE, new Uint8Array(size).fill(0x61)))),
+		])
+		const full = ['a', 'b', 'c'].map((path) => ({ path, sha: BLOB_LARGE, size }))
+		const read = await repository.readBlobTexts([
+			{ path: 'src/index.ts', sha: BLOB_TEXT, size: 6 },
+			{ path: 'large.txt', sha: BLOB_LINK, size: size + 1 },
+			{ path: 'image.png', sha: BLOB_BINARY, size: 2 },
+			...full,
+			{ path: 'last.txt', sha: BLOB_LINK, size },
+		])
+		expect(read.files.map((file) => file.path)).toEqual(['src/index.ts', 'a', 'b', 'c'])
+		expect(read.files[0]).toEqual({ path: 'src/index.ts', content: 'héllo' })
+		expect(read.unreadable).toEqual([
+			{ path: 'large.txt', reason: 'too_large' },
+			{ path: 'image.png', reason: 'binary' },
+			{ path: 'last.txt', reason: 'budget' },
+		])
+		const fetched = repositoryRequests(requests).map((request) => request.url.slice(REPO.length))
+		expect(fetched).toHaveLength(5)
+		expect(fetched.some((url) => url.endsWith(BLOB_LINK))).toBe(false)
+	})
+
+	test('refuses an unbounded or invalid blob list before any repository request', async () => {
+		const { repository, requests } = await open(routes())
+		const many = Array.from({ length: 101 }, (_, index) => ({ path: `f${index}`, sha: BLOB_TEXT, size: 1 }))
+		for (
+			const blobs of [
+				[],
+				many,
+				[{ path: 'a', sha: BLOB_TEXT, size: 1 }, { path: 'a', sha: BLOB_BINARY, size: 1 }],
+				[{ path: '../a', sha: BLOB_TEXT, size: 1 }],
+				[{ path: 'a', sha: 'not-a-sha', size: 1 }],
+				[{ path: 'a', sha: BLOB_TEXT, size: -1 }],
+			]
+		) {
+			await expect(repository.readBlobTexts(blobs)).rejects.toThrow('GitHub App configuration is invalid')
 		}
 		expect(repositoryRequests(requests)).toHaveLength(0)
 	})

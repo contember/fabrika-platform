@@ -36,6 +36,7 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `get_workspace`       | One workspace, with its head.                                      |
 | `list_files`          | Paths in the workspace.                                            |
 | `read_files`          | File contents at the workspace head; an unread file says why.      |
+| `search_files`        | Paths by glob, or lines holding a literal text, within bounds.     |
 | `apply_changes`       | Commit writes, deletions and exact replacements against a head.    |
 | `deploy_stage`        | Start an ordinary run for the workspace head in the stage env.     |
 | `get_deployment`      | The run's state, a parked run's approval link, `deviations`.       |
@@ -53,6 +54,12 @@ Control authorizes every call.
 whole batch when `oldString` does not occur exactly once, or when the file is missing, binary, or over 512 KiB.
 Several replacements on one path apply in order; a path written whole may appear only once. The protected paths and the
 expected head apply to both kinds.
+
+`search_files` reads the branch through the repository's tree and blobs; there is no search index. With `glob` alone it
+lists matching paths from one tree listing. With `text` it reads at most 100 files the glob and `directory` admit, 2 MiB
+together, and answers the lines that contain the literal text (no regular expressions: a pattern could hold Control's
+event loop). It answers at most `maxResults` (default 50, at most 200), each line cut to 240 characters. `incomplete`
+names every bound that cut the answer short. A text search costs one GitHub request per file read.
 
 `get_app_rules` answers the application rules every agent gets, headed by their version (`fabrika-app <version>`):
 the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `references/<topic>.md`

@@ -1,5 +1,7 @@
 import { configurationError, GitHubBranchConflictError, GitHubNotFoundError, GitHubStaleHeadError, requestStatusError, responseError } from './errors'
 import type {
+	GitHubBlobRead,
+	GitHubBlobRef,
 	GitHubCommit,
 	GitHubCommitFilesInput,
 	GitHubCreateBranchInput,
@@ -55,6 +57,9 @@ export interface RepositoryClientConfig {
 	readonly fetch: GitHubAppFetch
 	readonly timeoutMs: number
 }
+
+/** Blob reads in flight at once; enough to hide latency, few enough to stay clear of GitHub's secondary rate limits. */
+const BLOB_READ_CONCURRENCY = 6
 
 type RequestResult = { readonly ok: true; readonly body: unknown } | { readonly ok: false; readonly status: number }
 
@@ -132,6 +137,48 @@ class RepositoryClient implements GitHubRepositoryClient {
 			files.push({ path, content })
 		}
 		return { commitSha, files, unreadable }
+	}
+
+	async readBlobTexts(blobs: readonly GitHubBlobRef[], signal?: AbortSignal): Promise<GitHubBlobRead> {
+		if (blobs.length === 0 || blobs.length > MAX_READ_PATHS || new Set(blobs.map((blob) => blob.path)).size !== blobs.length) {
+			throw configurationError()
+		}
+		for (const blob of blobs) {
+			validatePath(blob.path)
+			validateSha(blob.sha)
+			if (!Number.isSafeInteger(blob.size) || blob.size < 0) throw configurationError()
+		}
+		const unreadable = new Map<string, GitHubUnreadableReason>()
+		const selected: GitHubBlobRef[] = []
+		let remainingBytes = MAX_READ_BYTES
+		for (const blob of blobs) {
+			if (blob.size > MAX_FILE_BYTES) unreadable.set(blob.path, 'too_large')
+			else if (blob.size > remainingBytes) unreadable.set(blob.path, 'budget')
+			else {
+				remainingBytes -= blob.size
+				selected.push(blob)
+			}
+		}
+		const contents = new Map<string, string>()
+		for (let start = 0; start < selected.length; start += BLOB_READ_CONCURRENCY) {
+			await Promise.all(
+				selected.slice(start, start + BLOB_READ_CONCURRENCY).map(async (blob) => {
+					const body = await this.#readGitObject(`/git/blobs/${blob.sha}`, signal, MAX_BLOB_RESPONSE_BYTES)
+					const content = decodeTextBlob(body, blob.sha, blob.size)
+					if (content === null) unreadable.set(blob.path, 'binary')
+					else contents.set(blob.path, content)
+				}),
+			)
+		}
+		const files: GitHubTextFile[] = []
+		const unread: GitHubUnreadablePath[] = []
+		for (const blob of blobs) {
+			const content = contents.get(blob.path)
+			const reason = unreadable.get(blob.path)
+			if (content !== undefined) files.push({ path: blob.path, content })
+			else if (reason !== undefined) unread.push({ path: blob.path, reason })
+		}
+		return { files, unreadable: unread }
 	}
 
 	async createBranch(input: GitHubCreateBranchInput): Promise<GitHubRef> {
