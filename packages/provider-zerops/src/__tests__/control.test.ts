@@ -279,6 +279,42 @@ beforeEach(() => {
 })
 
 describe('Zerops ControlProvider registration', () => {
+	test('validates the candidate against the pinned proxy before publication, without provider effects', () => {
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			namespaces: {
+				clientId: 'client-1',
+				proxySource: { ...PROXY_SOURCE, commitSha: 'b'.repeat(40) },
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+				olderProxies: [{ row: () => true, csp: (csp) => csp.workerSrc === undefined }],
+			},
+		})
+		const validate = control.validateAccess
+		if (validate === undefined) throw new Error('the Zerops provider validates candidate access')
+		const access = approvedContract({
+			...notesArtifact,
+			csp: { ...notesArtifact.csp, workerSrc: [{ origin: 'blob:', purpose: 'the ALTCHA workers' }] },
+		})
+		expect(() => validate({ environment: environment(), access })).toThrow(/`csp`[\s\S]*--proxy-source=current/)
+		expect(() => validate({ environment: environment(), access: approvedContract() })).not.toThrow()
+		const current = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			namespaces: {
+				clientId: 'client-1',
+				proxySource: PROXY_SOURCE,
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+				olderProxies: [{ row: () => true, csp: () => false }],
+			},
+		})
+		expect(() => current.validateAccess?.({ environment: environment(), access })).not.toThrow()
+		expect(recorded.calls).toEqual([])
+		expect(recorded.envWrites).toEqual([])
+	})
+
 	for (const coordinates of [{ id: 'other', env: 'prod' }, { id: 'notes', env: 'stage' }]) {
 		test(`rejects decoded artifact coordinate drift ${coordinates.id}/${coordinates.env} before effects`, async () => {
 			const control = createTestControlProvider({

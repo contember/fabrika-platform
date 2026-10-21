@@ -440,7 +440,9 @@ other environment, before the provider prepares anything, and the write maps a r
   on the run, classifies it against the active snapshot (`classifyAccess`, pure, conservative) and either parks
   the run in `awaiting_approval` (a widening on a `protected` environment without a matching approval) or
   publishes it with `publishRunSnapshot`, a compare-and-swap on `app_envs.generation` and `protection_revision`
-  fenced on the run lease and taken under the namespace lease; a lost swap classifies again. The snapshot is read
+  fenced on the run lease and taken under the namespace lease; a lost swap classifies again. Before each attempt,
+  the provider's optional, mutation-free `validateAccess` checks the candidate against the current placement, so an
+  incompatible proxy never receives a published snapshot. The snapshot is read
   at `provider.applicationRoot(source)`, the provider's own normalization of `workerDir`. `providerEnvironment` and
   `namespaceMembers` attach `approvedProviderAccess`, so every deploy, cancel, reconcile, registry hook and
   namespace job hands the provider the approved access and nothing else: `access`, the approved contract. A commit

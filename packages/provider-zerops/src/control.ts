@@ -340,6 +340,10 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			}
 		},
 		resolveSource,
+		validateAccess: ({ environment, access }) => {
+			const placement = resolvedEnvironment(environment, { requireReady: true })
+			assertNamespaceProxyReads(placement.namespace.id, access, placement.namespaceTarget.proxySource, options.namespaces)
+		},
 		deploy: async (input: ProviderDeployInput): Promise<ProviderDeployOutcome> => {
 			input.signal.throwIfAborted()
 			assertAuthoredManagedInputs({ variableNames: Object.keys(input.vars), secretNames: Object.keys(input.secrets) })

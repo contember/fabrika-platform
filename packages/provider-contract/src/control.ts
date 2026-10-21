@@ -494,6 +494,11 @@ export interface ControlProvider {
 	/** Absent means core stores the registration as submitted. */
 	normalizeRegistration?(input: ProviderRegistrationInput): ProviderRegistration
 	resolveSource?(input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution>
+	/**
+	 * Mutation-free check of a candidate's compatibility with its placement. Control calls it before publishing the
+	 * snapshot, under the namespace lease, on every publication attempt. The candidate is not yet approved access.
+	 */
+	validateAccess?(input: { readonly environment: ProviderEnvironment; readonly access: ProviderApprovedAccess }): void
 	deploy(input: ProviderDeployInput): Promise<ProviderDeployOutcome>
 	cancel?(input: ProviderCancelInput): Promise<ProviderCancelOutcome>
 	reconcile?(input: ProviderReconcileInput): Promise<ProviderReconcileOutcome>
