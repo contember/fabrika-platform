@@ -51,7 +51,7 @@ const services = (_ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [
 		type: 'postgresql:single@18',
 		// Without a profile a single service gets `oltp-staging`; `oltp-hobby` is the cheapest floor.
 		profile: 'oltp-hobby',
-		// Created before the runtime, whose start script migrates into it.
+		// Created before the runtime, whose init commands migrate into it.
 		priority: 100,
 	},
 	notesFiles,

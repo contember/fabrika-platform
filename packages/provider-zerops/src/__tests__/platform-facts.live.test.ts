@@ -380,7 +380,7 @@ const postgresProbe = (): { scripts: Record<string, FactScript>; stop: () => Pro
 			service: { id: clientId, hostname: client },
 			name: `${client}-sql`,
 			archive: probeArchive({ directoryEntries: true, files: SQL_PROBE_FILES }),
-			descriptor: probeDescriptor(client, {}, { PROBE_DATABASE_URL: databaseUrl }),
+			descriptor: probeDescriptor(client, undefined, { PROBE_DATABASE_URL: databaseUrl }),
 		})
 		if (settled !== 'ACTIVE') {
 			throw new PlatformFactError(fact.id, fact.section, `the SQL client settled on ${settled}, expected ACTIVE`)
@@ -519,9 +519,9 @@ const postgres = postgresProbe()
 const scripts: Record<string, FactScript> = {
 	'unpacker-flat-archive': unpackerProbe({ directoryEntries: false, expected: 'BUILD_FAILED' }),
 	'unpacker-directory-entries': unpackerProbe({ directoryEntries: true, expected: 'ACTIVE' }),
-	'failing-exec-readiness': unpackerProbe({ directoryEntries: true, expected: 'DEPLOY_FAILED', failure: { execReadiness: true } }),
-	'failing-init-command': unpackerProbe({ directoryEntries: true, expected: 'DEPLOY_FAILED', failure: { initCommand: true } }),
-	'slow-init-command': unpackerProbe({ directoryEntries: true, expected: 'ACTIVE', failure: { slowInitCommand: true } }),
+	'failing-exec-readiness': unpackerProbe({ directoryEntries: true, expected: 'DEPLOY_FAILED', failure: 'exec-readiness' }),
+	'failing-init-command': unpackerProbe({ directoryEntries: true, expected: 'DEPLOY_FAILED', failure: 'init-command' }),
+	'slow-init-command': unpackerProbe({ directoryEntries: true, expected: 'ACTIVE', failure: 'slow-init-command' }),
 	'authorization-forwarded': authorizationForwarded,
 	...postgres.scripts,
 }

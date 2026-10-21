@@ -1359,7 +1359,7 @@ as the superuser `postgres` once a second and read `max_connections` and `pg_pos
 | Fresh connections during the restart (76 and 79 tries) | **None refused**; the slowest answer of the second run took 56 ms                                    |
 
 So the limit follows the minimum RAM step and the documented table (0.25 GB: 20, 1 GB: 50), and `size-database` need
-not wait for it: the build that follows the step takes minutes, so the start script and the new containers meet the
+not wait for it: the build that follows the step takes minutes, so the init commands and the new containers meet the
 new limit. The version still serving sees its open connections closed once, by the restart; a fresh connection is not
 refused. A service whose minimum the platform does not report is sized as 0.25 GB, which never overstates its limit.
 The rows need a build and run with `FABRIKA_LIVE_ZEROPS_SLOW=1`.

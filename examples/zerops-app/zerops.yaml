@@ -1,7 +1,7 @@
 # The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,
 # `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,
-# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs
-# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the
+# tests, the checker, the type check), the deploy gate and the whole run section: the init commands run
+# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server starts, and the
 # crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.
 #
 # `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects. The SPA commands run first and

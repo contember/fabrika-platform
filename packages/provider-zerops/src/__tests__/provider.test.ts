@@ -1066,7 +1066,13 @@ describe('Zerops provider', () => {
 		)
 		const failed = stepError(await provider(deployRun(recorded)), 'await-version')
 		expect(failed).toStartWith('Zerops pipeline failed: app-version version-inactive is DEPLOY_FAILED: an init command failed or the readiness check')
-		expect(failed).toContain('its generated isolation tests')
+		expect(failed).toContain('the generated isolation tests')
+
+		const withoutDatabase = createZeropsDeployer(() =>
+			makeCollaborators(recorded, { statuses: ['DEPLOY_FAILED'], processStatuses: ['FINISHED'], triggerVersionId: 'version-inactive' })
+		)
+		const run = { ...deployRun(recorded), artifact: compileFabrikaManifest(app([API]), 'prod', SOURCE_DESCRIPTOR) }
+		expect(stepError(await withoutDatabase(run), 'await-version')).toEndWith(': an init command failed or the readiness check never answered')
 
 		const process = createZeropsDeployer(() =>
 			makeCollaborators(recorded, { statuses: ['DEPLOY_FAILED'], processStatuses: ['FAILED'], triggerVersionId: 'version-inactive' })

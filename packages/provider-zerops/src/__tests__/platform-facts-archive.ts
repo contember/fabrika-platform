@@ -62,24 +62,21 @@ export const SQL_PROBE_FILES: readonly ArchiveFile[] = [
 	},
 ]
 
-/** What a probe's descriptor changes on purpose, for the rows that ask what stops, or does not stop, an activation. */
-export interface ProbeFailure {
-	/** A `deploy.readinessCheck` whose `exec` command always fails. */
-	readonly execReadiness?: boolean
-	/** A `run.initCommands` entry that always fails. */
-	readonly initCommand?: boolean
-	/**
-	 * A `run.initCommands` entry that outlasts a 60 s `httpGet` readiness window, and the server ready at once: the
-	 * version activates only when the window opens with `run.start`, after the init commands.
-	 */
-	readonly slowInitCommand?: boolean
-}
+/**
+ * The one thing a probe's descriptor changes on purpose, for the rows that ask what stops, or does not stop, an
+ * activation. One at a time: each adds its own `deploy` or `initCommands` key.
+ * - `exec-readiness`: a `deploy.readinessCheck` whose `exec` command always fails.
+ * - `init-command`: a `run.initCommands` entry that always fails.
+ * - `slow-init-command`: a `run.initCommands` entry that outlasts a 60 s `httpGet` readiness window, and the server
+ *   ready at once: the version activates only when the window opens with `run.start`, after the init commands.
+ */
+export type ProbeFailure = 'exec-readiness' | 'init-command' | 'slow-init-command'
 
 /** Longer than the generated setup's 180 s readiness window, and than the ~3 minutes the CRM's isolation tests take. */
 export const SLOW_INIT_SECONDS = 240
 
 /** The build descriptor the probe deploys with. `setup` must equal the service's hostname. */
-export const probeDescriptor = (hostname: string, failure: ProbeFailure = {}, envVariables: Readonly<Record<string, string>> = {}): string =>
+export const probeDescriptor = (hostname: string, failure?: ProbeFailure, envVariables: Readonly<Record<string, string>> = {}): string =>
 	[
 		'zerops:',
 		`  - setup: ${hostname}`,
@@ -89,7 +86,7 @@ export const probeDescriptor = (hostname: string, failure: ProbeFailure = {}, en
 		'      deployFiles:',
 		'        - package.json',
 		'        - src',
-		...(failure.execReadiness === true
+		...(failure === 'exec-readiness'
 			? [
 				'    deploy:',
 				'      readinessCheck:',
@@ -99,7 +96,7 @@ export const probeDescriptor = (hostname: string, failure: ProbeFailure = {}, en
 				'        failureTimeout: 60s',
 			]
 			: []),
-		...(failure.slowInitCommand === true
+		...(failure === 'slow-init-command'
 			? [
 				'    deploy:',
 				'      readinessCheck:',
@@ -114,8 +111,8 @@ export const probeDescriptor = (hostname: string, failure: ProbeFailure = {}, en
 		'      base: alpine/bun@1.3',
 		...(Object.keys(envVariables).length === 0 ? [] : ['      envVariables:']),
 		...Object.entries(envVariables).map(([key, value]) => `        ${key}: ${JSON.stringify(value)}`),
-		...(failure.initCommand === true ? ['      initCommands:', '        - "exit 1"'] : []),
-		...(failure.slowInitCommand === true ? ['      initCommands:', `        - "sleep ${SLOW_INIT_SECONDS}"`] : []),
+		...(failure === 'init-command' ? ['      initCommands:', '        - "exit 1"'] : []),
+		...(failure === 'slow-init-command' ? ['      initCommands:', `        - "sleep ${SLOW_INIT_SECONDS}"`] : []),
 		'      start: bun src/index.ts',
 		'      ports:',
 		'        - port: 3000',

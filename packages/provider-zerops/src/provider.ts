@@ -280,25 +280,28 @@ export function interpolateManifest(
 }
 
 /** Human-readable failure for a version that finished in a non-`ACTIVE` state. */
-const terminalFailure = (version: ZeropsAppVersion): string => {
+const terminalFailure = (version: ZeropsAppVersion, checks: boolean): string => {
 	if (version.status === 'BACKUP') {
 		return `app-version ${version.id} was superseded by a newer version before it went live`
 	}
 	if (version.status === 'CANCELLED') {
 		return `app-version ${version.id} was cancelled`
 	}
-	return `Zerops pipeline failed: app-version ${version.id} is ${version.status ?? 'in an unknown state'}${activationHint(version)}`
+	return `Zerops pipeline failed: app-version ${version.id} is ${version.status ?? 'in an unknown state'}${activationHint(version, checks)}`
 }
 
 /**
  * What a version that built but did not activate tells the operator. Zerops' own log of it is the refused readiness
- * attempts, which read as a server that never started whatever stopped it.
+ * attempts, which read as a server that never started whatever stopped it. `checks`: the generated init commands run
+ * the migrations, the schema check and the isolation tests, as for a contract application with a database.
  */
-const activationHint = (version: ZeropsAppVersion): string =>
-	version.status === 'DEPLOY_FAILED'
-		? ": an init command failed or the readiness check never answered. A contract application's init commands are its"
-			+ ' migrations, its schema check and its generated isolation tests; the runtime lines above show how far they got'
-		: ''
+const activationHint = (version: ZeropsAppVersion, checks: boolean): string => {
+	if (version.status !== 'DEPLOY_FAILED') return ''
+	const failed = ': an init command failed or the readiness check never answered'
+	return checks
+		? `${failed}. The init commands run the migrations, the schema check and the generated isolation tests; the runtime lines above show how far they got`
+		: failed
+}
 
 /**
  * The attempt this invocation is making. `appVersionId` is set once a version is reserved and `triggered`
@@ -425,7 +428,7 @@ const openLog = async (env: StepEnv): Promise<ZeropsLogAccess | null> => {
  * poll loop without telling it leaves a build container burning through the pipeline's hour. A lost lease
  * gives no such permission (ADR-0044), so it stops without touching the build.
  */
-const awaitVersion = async (env: StepEnv, appVersionId: string, processId: string | undefined): Promise<void> => {
+const awaitVersion = async (env: StepEnv, appVersionId: string, processId: string | undefined, checks: boolean): Promise<void> => {
 	const { zerops, signal, log } = env
 	const access = await openLog(env)
 	const seen = new Set<string>()
@@ -472,7 +475,7 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 		if (process?.status !== undefined && ZEROPS_PROCESS_TERMINAL.has(process.status) && process.status !== ZEROPS_PROCESS_FINISHED) {
 			throw new Error(
 				`zerops: pipeline process ${process.id} is ${process.status} while app-version ${appVersionId} is ${version.status ?? 'in an unknown state'}${
-					activationHint(version)
+					activationHint(version, checks)
 				}`,
 			)
 		}
@@ -480,7 +483,7 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 			if (version.status === ZEROPS_ACTIVE) {
 				return
 			}
-			throw new Error(terminalFailure(version))
+			throw new Error(terminalFailure(version, checks))
 		}
 		if (Date.now() > env.deadlineMs) await timedOut()
 		await zerops.sleep(POLL_INTERVAL_MS, signal)
@@ -982,7 +985,8 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 			}
 			const appVersionId = requireVersion(env, 'await-version')
 			assertRunning(signal)
-			await awaitVersion(env, appVersionId, attempt.processId)
+			const locked = lockedExecutionFor(artifact, run, dryRun)
+			await awaitVersion(env, appVersionId, attempt.processId, locked !== null && locked.databaseUrl !== null)
 			return
 		}
 

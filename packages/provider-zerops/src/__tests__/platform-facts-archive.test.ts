@@ -98,13 +98,13 @@ describe('the unpacker probe archives', () => {
 	})
 
 	test('fails only what an activation row asks about, in a descriptor the platform parser accepts', () => {
-		const readiness = parseZeropsDescriptor(probeDescriptor('wu1a', { execReadiness: true })).document
+		const readiness = parseZeropsDescriptor(probeDescriptor('wu1a', 'exec-readiness')).document
 		expect(JSON.stringify(readiness)).toContain('"readinessCheck":{"exec":{"command":"exit 1"}')
 		expect(JSON.stringify(readiness)).not.toContain('initCommands')
-		const init = parseZeropsDescriptor(probeDescriptor('wu1a', { initCommand: true })).document
+		const init = parseZeropsDescriptor(probeDescriptor('wu1a', 'init-command')).document
 		expect(JSON.stringify(init)).toContain('"initCommands":["exit 1"]')
 		expect(JSON.stringify(init)).not.toContain('readinessCheck')
-		const slow = parseZeropsDescriptor(probeDescriptor('wu1a', { slowInitCommand: true })).document
+		const slow = parseZeropsDescriptor(probeDescriptor('wu1a', 'slow-init-command')).document
 		expect(JSON.stringify(slow)).toContain(`"initCommands":["sleep ${SLOW_INIT_SECONDS}"]`)
 		expect(JSON.stringify(slow)).toContain('"readinessCheck":{"httpGet":{"port":3000,"path":"/"},"retryPeriod":"10s","failureTimeout":"60s"}')
 	})
