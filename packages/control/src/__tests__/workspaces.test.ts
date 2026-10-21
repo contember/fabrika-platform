@@ -561,12 +561,34 @@ for (const backend of backends) {
 				w.logs.set(`runs/${run.id}/logs.ndjson`, [{ ts: 1, stream: 'meta', text: 'building' }])
 				expect(await getDeploymentUseCase(w.context(author), { runId: run.id, log: TAIL })).toEqual({
 					run,
+					finished: false,
+					summary: 'Queued and not started yet; poll again.',
 					log: { lines: [{ ts: 1, stream: 'meta', text: 'building' }], from: 0, to: 1, total: 1 },
 					approval: null,
 					deviations: [],
 				})
 				await expect(getDeploymentUseCase(w.context(oauthUser(['source.workspace.read'])), { runId: run.id, log: TAIL })).rejects.toMatchObject({
 					httpStatus: 404,
+				})
+			})
+
+			test('a finished run says so and what its status means', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				const runs = fixtureRuns(w.repositories.runs, new SqlDeployLocks(requireOpened().db))
+				const succeeded = await deployStageUseCase(w.context(author), { workspaceId: created.id })
+				await runs.start(succeeded.id)
+				await runs.finish(succeeded.id, 'succeeded')
+				expect(await getDeploymentUseCase(w.context(author), { runId: succeeded.id, log: TAIL })).toMatchObject({
+					finished: true,
+					summary: `Succeeded: the stage environment runs ${sha('a')}.`,
+				})
+				const failed = await deployStageUseCase(w.context(author), { workspaceId: created.id })
+				await runs.start(failed.id)
+				await runs.finish(failed.id, 'failed')
+				expect(await getDeploymentUseCase(w.context(author), { runId: failed.id, log: TAIL })).toMatchObject({
+					finished: true,
+					summary: 'Failed; read the log with failuresOnly for the lines that name the failure.',
 				})
 			})
 
@@ -611,6 +633,8 @@ for (const backend of backends) {
 
 				const deployment = await getDeploymentUseCase(w.context(author), { runId: run.id, log: TAIL })
 				expect(deployment.run.status).toBe('awaiting_approval')
+				expect(deployment.finished).toBe(false)
+				expect(deployment.summary).toStartWith('Waiting for a person to approve')
 				expect(deployment.approval).toEqual({
 					url: `https://console.example.test/approvals/${run.id}`,
 					changes: ['Role `editor` gains `notes.delete`', 'Endpoint `api.notes.export` declares raw SQL (`read`)'],
