@@ -305,7 +305,9 @@ execution document carries the generated `run` and `build`.
   collection in the CLI nothing, and the test child alone holds more than 0.125 GB.
 - **Run the isolation tests once per version (`zsc execOnce ${ZEROPS_appVersionId}`).** Rejected: the run they
   start on still needs the same memory, which is what failed, and the command is not established to work in an
-  init command. Running at every start costs about two seconds and keeps the check on every container.
+  init command. Running at every start keeps the check on every container. It costs about two seconds for the
+  Notes example and almost 3 minutes for the CRM on a small database, which every restart and added container now
+  waits before it starts.
 - **Make the application declare `verticalAutoscaling.minRam`, as a scanning one does.** Rejected as the only
   mechanism: an import does not change an existing service, so an installation would not converge, and every
   application would carry a platform number. The build still refuses a scanning application without its 2 GB.

@@ -297,6 +297,12 @@ const verifyScript = (appId: string): readonly string[] => [
 
 const startScript: readonly string[] = ['#!/bin/sh', 'set -eu', `cd ${RUNTIME_ROOT}`, 'exec bun fabrika/entry.generated.ts']
 
+/** The scripts the build writes and every container's init commands run, in this order. */
+const initScripts = (execution: ZeropsLockedExecution): readonly { readonly path: string; readonly lines: readonly string[] }[] =>
+	execution.databaseUrl === null
+		? []
+		: [{ path: MIGRATE_SCRIPT, lines: migrateScript(execution.appId) }, { path: VERIFY_SCRIPT, lines: verifyScript(execution.appId) }]
+
 const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
 
 // After every check: a map is uploaded only for a build that can deploy. A failed upload never fails the build; the
@@ -322,7 +328,6 @@ const sourceMapBuildVariables = (upload: OperationsSourceMapBuildUpload): Record
 export function generatedBuildCommands(execution: ZeropsLockedExecution): readonly string[] {
 	if (!LOCKED_APP_ID_PATTERN.test(execution.appId)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
 	if (!FRAMEWORK_RELEASE_PATTERN.test(execution.checkRelease)) throw new Error('zerops: the checker release must be a release version')
-	const database = execution.databaseUrl !== null
 	return [
 		INSTALL,
 		'bun test --isolate --pass-with-no-tests',
@@ -331,9 +336,7 @@ export function generatedBuildCommands(execution: ZeropsLockedExecution): readon
 		`cd /tmp && bun x --bun -p @fabrika/check@${execution.checkRelease} fabrika-check ${SOURCE_ROOT}`,
 		writeFileCommand(PLATFORM_TSCONFIG, [PLATFORM_TSCONFIG_CONTENTS]),
 		`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${SOURCE_ROOT}/${PLATFORM_TSCONFIG}`,
-		...(database
-			? [writeFileCommand(MIGRATE_SCRIPT, migrateScript(execution.appId)), writeFileCommand(VERIFY_SCRIPT, verifyScript(execution.appId))]
-			: []),
+		...initScripts(execution).map((script) => writeFileCommand(script.path, script.lines)),
 		writeFileCommand(START_SCRIPT, startScript),
 		...(execution.sourceMaps === null ? [] : [sourceMapUpload(execution.checkRelease)]),
 	]
@@ -369,7 +372,7 @@ export function generatedInitCommands(execution: ZeropsLockedExecution): string[
 		// A container starts from the prepared image, whose signatures are as old as its build; a failed refresh leaves
 		// them to the daily one, and the scanner refuses signatures older than three days, so the scan fails closed.
 		...(execution.contract.scan === true ? [`${FRESHCLAM} || echo 'fabrika: freshclam did not refresh the malware signatures'`] : []),
-		...(execution.databaseUrl === null ? [] : [`sh ${RUNTIME_ROOT}/${MIGRATE_SCRIPT}`, `sh ${RUNTIME_ROOT}/${VERIFY_SCRIPT}`]),
+		...initScripts(execution).map((script) => `sh ${RUNTIME_ROOT}/${script.path}`),
 	]
 }
 
