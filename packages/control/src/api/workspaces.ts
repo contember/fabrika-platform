@@ -12,7 +12,7 @@ import type { ProviderSourceBinding } from '@fabrika/provider-contract'
 import { parseClassification } from '../approval/publish'
 import { type AppEnvRow, type AppRow, type ControlRepositories, SourceBindingError, type WorkspaceRow } from '../db'
 import { parseGitHubRepo } from '../github/triggers/push-event'
-import { WorkspaceSourceError, type WorkspaceSourcePort, type WorkspaceSourceTarget } from '../workspace-source-port'
+import { WorkspaceSourceError, type WorkspaceSourcePort, type WorkspaceSourceTarget, type WorkspaceUnreadableReason } from '../workspace-source-port'
 import { ControlApiError, fail } from './domain'
 import { canAtCoordinates, createManualRun, type DeployQueue, getRunLogUseCase, getRunUseCase, type LogReader, toRunDto } from './runs'
 
@@ -59,10 +59,22 @@ export interface WorkspaceDto extends WorkspaceSummaryDto {
 	latestRun: RunDto | null
 }
 
-export interface WorkspaceFileChange {
+/** The bound on one file's content, the GitHub repository client's own. */
+export const WORKSPACE_FILE_MAX_BYTES = 512 * 1024
+
+/** A whole-file write (`content` null deletes the file), or one exact replacement in the file at the expected head. */
+export type WorkspaceFileChange = WorkspaceFileWrite | WorkspaceFileEdit
+
+export interface WorkspaceFileWrite {
 	path: string
-	/** null deletes the file. */
 	content: string | null
+}
+
+export interface WorkspaceFileEdit {
+	path: string
+	/** Must occur exactly once in the file as the edits before it on the same path left it. */
+	oldString: string
+	newString: string
 }
 
 export interface DeploymentDto {
@@ -199,13 +211,14 @@ export async function applyChangesUseCase(
 	input: { workspaceId: string; expectedHeadSha: string; message: string; changes: readonly WorkspaceFileChange[] },
 ): Promise<{ commitSha: string }> {
 	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_WRITE)
-	const protectedPaths = input.changes.map((change) => change.path).filter(isProtectedPath)
+	const protectedPaths = [...new Set(input.changes.map((change) => change.path))].filter(isProtectedPath)
 	if (protectedPaths.length > 0) {
 		fail(403, `protected paths cannot be changed through a workspace: ${protectedPaths.join(', ')}`)
 	}
 	const principal = requirePrincipal(c.auth)
 	const message = commitMessage(input.message, principal.id, c.auth.oauth?.clientId)
 	if (new TextEncoder().encode(message).byteLength > COMMIT_MESSAGE_MAX_BYTES) fail(400, 'the commit message is too long')
+	const changes = await resolveChanges(c, owned, input.expectedHeadSha, input.changes)
 	let commitSha: string
 	try {
 		commitSha = await c.source.commit({
@@ -217,7 +230,7 @@ export async function applyChangesUseCase(
 				name: (principal.label === '' ? principal.id : principal.label).slice(0, AUTHOR_NAME_MAX_LENGTH),
 				email: `${principal.id}@users.noreply.fabrika`,
 			},
-			changes: input.changes,
+			changes,
 			signal: c.signal,
 		})
 	} catch (cause) {
@@ -231,9 +244,70 @@ export async function applyChangesUseCase(
 		action: 'source.workspace.commit',
 		resourceType: 'workspace',
 		resourceId: owned.workspace.id,
-		metadata: { appId: owned.workspace.app_id, env: owned.workspace.env, commitSha, paths: input.changes.length },
+		metadata: { appId: owned.workspace.app_id, env: owned.workspace.env, commitSha, paths: changes.length },
 	})
 	return { commitSha }
+}
+
+/**
+ * Turn the changes into one whole-file write per path. Edits read their file at the expected head and apply in order,
+ * each refused unless its `oldString` occurs exactly once; a path written whole appears in no other change.
+ */
+async function resolveChanges(
+	c: WorkspaceUseCaseContext,
+	owned: OwnedWorkspace,
+	expectedHeadSha: string,
+	changes: readonly WorkspaceFileChange[],
+): Promise<WorkspaceFileWrite[]> {
+	const writes = new Map<string, WorkspaceFileWrite>()
+	const edits = new Map<string, { change: WorkspaceFileEdit; index: number }[]>()
+	for (const [index, change] of changes.entries()) {
+		if (writes.has(change.path) || ('content' in change && edits.has(change.path))) {
+			fail(400, `${change.path} is written whole and changed again in the same batch; send one change for it`)
+		}
+		if ('content' in change) writes.set(change.path, { path: change.path, content: change.content })
+		else edits.set(change.path, [...(edits.get(change.path) ?? []), { change, index }])
+	}
+	if (edits.size === 0) return [...writes.values()]
+	const read = await sourceCall(() =>
+		c.source.readFiles({ target: owned.source, commitSha: expectedHeadSha, paths: [...edits.keys()], signal: c.signal })
+	)
+	for (const file of read.files) {
+		if (file.content === null) {
+			fail(409, `cannot edit ${file.path} at ${expectedHeadSha}: ${UNEDITABLE[file.reason]}`)
+		}
+		let content = file.content
+		for (const { change, index } of edits.get(file.path) ?? []) {
+			content = replaceOnce(content, change, index, expectedHeadSha)
+		}
+		if (new TextEncoder().encode(content).byteLength > WORKSPACE_FILE_MAX_BYTES) {
+			fail(400, `${file.path} would exceed 512 KiB after the edit`)
+		}
+		writes.set(file.path, { path: file.path, content })
+	}
+	return [...new Set(changes.map((change) => change.path))].flatMap((path) => {
+		const write = writes.get(path)
+		return write === undefined ? [] : [write]
+	})
+}
+
+const UNEDITABLE: Record<WorkspaceUnreadableReason, string> = {
+	missing: 'the file does not exist; write it whole with content',
+	not_a_file: 'the path is not a regular file',
+	too_large: 'the file is over 512 KiB',
+	binary: 'the file is not UTF-8 text',
+	budget: 'the files to edit exceed 2 MiB together; split the edits into several calls',
+}
+
+function replaceOnce(content: string, edit: WorkspaceFileEdit, index: number, expectedHeadSha: string): string {
+	const first = content.indexOf(edit.oldString)
+	if (first === -1) {
+		fail(409, `oldString of changes[${index}] does not occur in ${edit.path} at ${expectedHeadSha}; re-read the file and retry`)
+	}
+	if (content.indexOf(edit.oldString, first + 1) !== -1) {
+		fail(409, `oldString of changes[${index}] occurs more than once in ${edit.path}; include more of the surrounding text so it occurs once`)
+	}
+	return content.slice(0, first) + edit.newString + content.slice(first + edit.oldString.length)
 }
 
 /** Deploy the live head of the workspace branch, pinned, to the authoring environment as an ordinary manual run. */

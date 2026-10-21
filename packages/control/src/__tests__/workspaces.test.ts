@@ -282,6 +282,86 @@ for (const backend of backends) {
 				expect(w.source.kinds()).toEqual(['read-branch', 'create-branch'])
 			})
 
+			test('an edit replaces the one occurrence of oldString in the file at the expected head, in order per path', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				w.source.contents.set('src/a.ts', 'const a = 1\nconst b = 2\n')
+				await applyChangesUseCase(w.context(author), {
+					workspaceId: created.id,
+					expectedHeadSha: sha('a'),
+					message: 'Edit',
+					changes: [
+						{ path: 'src/a.ts', oldString: 'a = 1', newString: 'a = $& 10' },
+						{ path: 'notes.md', content: 'new' },
+						{ path: 'src/a.ts', oldString: 'a = $& 10\nconst b', newString: 'a = 10\nlet b' },
+					],
+				})
+				expect(w.source.calls.slice(-2)).toEqual([
+					{ kind: 'read-files', commitSha: sha('a'), paths: ['src/a.ts'] },
+					expect.objectContaining({
+						kind: 'commit',
+						commit: expect.objectContaining({
+							expectedHeadSha: sha('a'),
+							changes: [{ path: 'src/a.ts', content: 'const a = 10\nlet b = 2\n' }, { path: 'notes.md', content: 'new' }],
+						}),
+					}),
+				])
+			})
+
+			test('an edit is refused unless oldString occurs exactly once in a readable file, before anything is committed', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				w.source.contents.set('src/a.ts', 'let x = 1\nlet x = 1\naaa\n')
+				w.source.unreadable.set('gone.ts', 'missing')
+				w.source.unreadable.set('big.ts', 'budget')
+				const edit = (path: string, oldString: string) =>
+					applyChangesUseCase(w.context(author), {
+						workspaceId: created.id,
+						expectedHeadSha: sha('a'),
+						message: 'm',
+						changes: [{ path, oldString, newString: 'y' }],
+					})
+				await expect(edit('src/a.ts', 'absent')).rejects.toMatchObject({ httpStatus: 409, message: expect.stringContaining('does not occur') })
+				await expect(edit('src/a.ts', 'let x = 1')).rejects.toMatchObject({ httpStatus: 409, message: expect.stringContaining('more than once') })
+				await expect(edit('src/a.ts', 'aa')).rejects.toMatchObject({ httpStatus: 409, message: expect.stringContaining('more than once') })
+				await expect(edit('gone.ts', 'x')).rejects.toMatchObject({ httpStatus: 409, message: expect.stringContaining('does not exist') })
+				await expect(edit('big.ts', 'x')).rejects.toMatchObject({ httpStatus: 409, message: expect.stringContaining('split the edits') })
+				w.source.contents.set('src/a.ts', 'x')
+				expect(w.source.kinds()).not.toContain('commit')
+				expect((await edit('src/a.ts', 'x')).commitSha).toBe(sha('1'))
+			})
+
+			test('an edit of a protected path, a path also written whole, or an oversized result is refused', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				const apply = (changes: Parameters<typeof applyChangesUseCase>[1]['changes']) =>
+					applyChangesUseCase(w.context(author), { workspaceId: created.id, expectedHeadSha: sha('a'), message: 'm', changes })
+				await expect(apply([{ path: 'fabrika.config.ts', oldString: 'a', newString: 'b' }])).rejects.toMatchObject({ httpStatus: 403 })
+				await expect(apply([{ path: 'src/a.ts', content: 'x' }, { path: 'src/a.ts', oldString: 'x', newString: 'y' }])).rejects
+					.toMatchObject({ httpStatus: 400 })
+				await expect(apply([{ path: 'src/a.ts', oldString: 'x', newString: 'y' }, { path: 'src/a.ts', content: 'x' }])).rejects
+					.toMatchObject({ httpStatus: 400 })
+				expect(w.source.kinds()).toEqual(['read-branch', 'create-branch'])
+				w.source.contents.set('src/a.ts', 'x')
+				await expect(apply([{ path: 'src/a.ts', oldString: 'x', newString: 'y'.repeat(512 * 1024 + 1) }])).rejects.toMatchObject({
+					httpStatus: 400,
+				})
+				expect(w.source.kinds()).not.toContain('commit')
+			})
+
+			test('an edit against a stale head fails with the new head', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				w.source.contents.set('src/a.ts', 'x')
+				w.source.branches.set(created.branch, sha('e'))
+				await expect(applyChangesUseCase(w.context(author), {
+					workspaceId: created.id,
+					expectedHeadSha: sha('a'),
+					message: 'm',
+					changes: [{ path: 'src/a.ts', oldString: 'x', newString: 'y' }],
+				})).rejects.toMatchObject({ httpStatus: 409, message: expect.stringContaining(sha('e')) })
+			})
+
 			test('a stale expected head fails with the new head', async () => {
 				const w = await world()
 				const created = await workspace(w)
