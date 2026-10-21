@@ -234,7 +234,9 @@ none and answers its row with 404. Its senders reach it over the platform transp
 - **Bodies are secrets.** Reading a message's metadata (`mail.read`) is scoped like runs: an application's messages
   at its application or environment, an installation sender's only globally. Reading the recipient, the subject and
   the bodies is a permission of its own (`mail.content.read`, global), and so is deciding (`mail.manage`, global).
-  Only `admin` holds them by default.
+  Only `admin` holds them by default. An installation sender's content is withheld from every caller, whatever the
+  message's state: it carries one-time links (enrollment, password reset, invitation), and a console reader without
+  IAM rights must not take over an account through one, not even while the message waits for a retry.
 - **Content has a retention.** An installation message's content is purged as soon as it is sent, because it carries
   a one-time link. Every other final message keeps its content for 30 days. A held message keeps it until a person
   decides.
