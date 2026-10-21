@@ -612,16 +612,51 @@ describe('the platform database backup schedule', () => {
 		expect(fixture.log.lines).toContain(`info: db: backups already run on \`${PLATFORM_DATABASE_BACKUP_PERIOD}\``)
 	})
 
-	test('a period the read-back does not show fails the command, after every service is deployed and registered', async () => {
+	test('a period the read-back does not show is a warning, after every service is deployed and registered', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		fixture.zerops.ignoreBackupPeriod('db')
-		await expect(fixture.run()).rejects.toThrow(
-			`db reads back the backup schedule \`${FAKE_DAILY_BACKUP_PERIOD}\` after it was set to \`${PLATFORM_DATABASE_BACKUP_PERIOD}\``,
-		)
+		await fixture.run()
 		expect(fixture.zerops.backupWrites).toHaveLength(1)
 		expect(fixture.zerops.calls).toContain('deploy:control')
 		expect(fixture.reconciled).toHaveLength(2)
-		expect(fixture.zerops.calls.at(-1)).toBe('backup:db')
+		expect(fixture.log.lines).toContain(
+			`warn: db: backups were set to \`${PLATFORM_DATABASE_BACKUP_PERIOD}\` but read back \`${FAKE_DAILY_BACKUP_PERIOD}\`; check the schedule by hand`,
+		)
+	})
+
+	test('a refused write is a warning, not a failed deploy', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		fixture.zerops.refuseBackupConfig('db')
+		await fixture.run()
+		expect(fixture.zerops.calls).toContain('deploy:control')
+		expect(fixture.log.lines.some((line) => line.startsWith('warn: db: the backup schedule was not set'))).toBe(true)
+	})
+
+	test('a schedule someone chose is kept', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest }, { backupPeriod: '*/15 * * * *' })
+		await fixture.run()
+		expect(fixture.zerops.backupWrites).toEqual([])
+		expect(fixture.log.lines).toContain('info: db: backups keep the schedule `*/15 * * * *` someone chose instead of the daily default')
+	})
+
+	test('an installation whose Operations shares `db` keeps its schedule', async () => {
+		const zerops = fakeZerops({
+			...PROJECT,
+			services: platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS } }).filter((service) => service.name !== 'operationsdb'),
+		})
+		const log = recordingDeployLog()
+		await deployPlatform(input(), {
+			...fakeSourceCollaborators,
+			uploadFetch: zerops.uploadFetch,
+			api: zerops.api,
+			reconcileSchema: async () => {},
+			sleep: async () => {},
+			log,
+			signal: new AbortController().signal,
+		})
+		expect(zerops.timeline).not.toContain('readbackup:db')
+		expect(zerops.backupWrites).toEqual([])
+		expect(log.lines.some((line) => line.startsWith('warn: db: backups keep their schedule — Operations shares this database'))).toBe(true)
 	})
 
 	test('an installation without its database is refused before anything is written', async () => {
