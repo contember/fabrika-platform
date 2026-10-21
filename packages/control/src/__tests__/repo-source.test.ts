@@ -59,10 +59,10 @@ describe('ConnectionWebhookVerifier', () => {
 			new Request('https://control.test/webhooks/github', {
 				method: 'POST',
 				body,
-				headers: { 'X-Hub-Signature-256': signature },
+				headers: { 'X-Hub-Signature-256': signature, 'X-GitHub-Event': 'push' },
 			}),
 		)
-		expect(event?.repoUrl).toBe('https://github.com/acme/app.git')
+		expect(event).toMatchObject({ kind: 'push', push: { repoUrl: 'https://github.com/acme/app.git' } })
 	})
 
 	test.each([null, ''])('fails closed when the webhook secret is %p', async (secret) => {
@@ -104,7 +104,7 @@ describe('ConnectionWebhookVerifier', () => {
 				new Request('https://control.test/webhooks/github', {
 					method: 'POST',
 					body,
-					headers: { 'X-Hub-Signature-256': first },
+					headers: { 'X-Hub-Signature-256': first, 'X-GitHub-Event': 'push' },
 				}),
 			),
 		).not.toBeNull()
@@ -115,7 +115,7 @@ describe('ConnectionWebhookVerifier', () => {
 				new Request('https://control.test/webhooks/github', {
 					method: 'POST',
 					body,
-					headers: { 'X-Hub-Signature-256': second },
+					headers: { 'X-Hub-Signature-256': second, 'X-GitHub-Event': 'push' },
 				}),
 			),
 		).not.toBeNull()
@@ -128,10 +128,14 @@ describe('ConnectionWebhookVerifier', () => {
 			new Request('https://control.test/webhooks/github', {
 				method: 'POST',
 				body,
-				headers: { 'X-Hub-Signature-256': await signWebhook(body, 'hook-secret'), 'X-GitHub-Hook-Installation-Target-ID': '99' },
+				headers: {
+					'X-Hub-Signature-256': await signWebhook(body, 'hook-secret'),
+					'X-GitHub-Event': 'push',
+					'X-GitHub-Hook-Installation-Target-ID': '99',
+				},
 			}),
 		)
-		expect(event?.installationId).toBeNull()
+		expect(event).toMatchObject({ kind: 'push', push: { installationId: null } })
 	})
 })
 
@@ -163,7 +167,13 @@ describe('decodePushEvent', () => {
 		const event = decodePushEvent(
 			{ ref: 'refs/heads/deploy/prod', after: 'sha1', repository: { clone_url: 'https://github.com/a/b.git' }, installation: { id: 7 } },
 		)
-		expect(event).toEqual({ ref: 'refs/heads/deploy/prod', repoUrl: 'https://github.com/a/b.git', commitSha: 'sha1', installationId: 7 })
+		expect(event).toEqual({
+			ref: 'refs/heads/deploy/prod',
+			repoUrl: 'https://github.com/a/b.git',
+			commitSha: 'sha1',
+			deleted: false,
+			installationId: 7,
+		})
 	})
 
 	test('falls back to html_url but never invents an installation id outside the payload', () => {

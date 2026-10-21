@@ -1162,6 +1162,49 @@ describe('provider-neutral run lifecycle', () => {
 		expect(inputs).toEqual([])
 	})
 
+	test('an older pending run fails as superseded once a newer run of its environment succeeded, and calls no provider', async () => {
+		const { db } = createHarness()
+		const olderId = await seedRun(db)
+		const newerId = uuidv7()
+		await db.runs.createRun({ id: newerId, appId: 'app', env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'webhook', actor: 'webhook:c' })
+		const inputs: ProviderDeployInput[] = []
+		const resolved: string[] = []
+		const provider = makeProvider(inputs, { state: 'succeeded' })
+		provider.resolveSource = (input) => {
+			resolved.push(input.runId)
+			return Promise.resolve({ commitSha: 'a'.repeat(40) })
+		}
+		const { logs, objects } = memoryLogs()
+		const deps = { ...makeDeps(db, provider), logs, runLogs: logs }
+
+		expect((await executeDeploy(deps, { runId: newerId })).status).toBe('succeeded')
+		expect((await executeDeploy(deps, { runId: olderId })).status).toBe('failed')
+
+		expect(resolved).toEqual([newerId])
+		expect(inputs.map((input) => input.runId)).toEqual([newerId])
+		const older = await requireRun(db, olderId)
+		expect(older.status).toBe('failed')
+		expect(older.started_at).toBeNull()
+		expect(typeof older.finished_at).toBe('number')
+		const lines = (objects.get(`runs/${olderId}/logs.ndjson`) ?? '').trim().split('\n').map((line) => JSON.parse(line).text)
+		expect(lines).toEqual([`superseded by run ${newerId}`])
+		expect(await heldLeases(db)).toEqual([])
+	})
+
+	test('a newer run that failed, or is still pending, supersedes nothing', async () => {
+		const { db } = createHarness()
+		const olderId = await seedRun(db)
+		const failedId = uuidv7()
+		await db.runs.createRun({ id: failedId, appId: 'app', env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'webhook', actor: 'webhook:c' })
+		await fixtureRuns(db.runs, makeFakeLock(db)).finish(failedId, 'failed')
+		const pendingId = uuidv7()
+		await db.runs.createRun({ id: pendingId, appId: 'app', env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'webhook', actor: 'webhook:c' })
+		const inputs: ProviderDeployInput[] = []
+
+		expect((await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId: olderId })).status).toBe('succeeded')
+		expect(inputs.map((input) => input.runId)).toEqual([olderId])
+	})
+
 	test('records resolution and provider failures without leaking the exception', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)

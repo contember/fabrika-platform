@@ -192,20 +192,27 @@ export async function pushWebhookRequest(options: {
 	ref: string
 	cloneUrl: string
 	after?: string
+	/** The commit `head_commit` names; GitHub sends it on every push that leaves the ref on a commit. */
+	headCommitId?: string
+	deleted?: boolean
 	installationId?: number
 	secret: string
 	signatureOverride?: string
+	/** The `X-GitHub-Event` header; `push` unless a test sends another event. */
+	event?: string
 }): Promise<Request> {
 	const body = JSON.stringify({
 		ref: options.ref,
 		after: options.after ?? 'deadbeef',
+		...(options.headCommitId === undefined ? {} : { head_commit: { id: options.headCommitId } }),
+		...(options.deleted === undefined ? {} : { deleted: options.deleted }),
 		repository: { clone_url: options.cloneUrl },
 		...(options.installationId !== undefined ? { installation: { id: options.installationId } } : {}),
 	})
 	const signature = options.signatureOverride ?? (await signWebhook(body, options.secret))
 	return new Request('https://vozka.example/webhooks/github', {
 		method: 'POST',
-		headers: { 'content-type': 'application/json', 'X-Hub-Signature-256': signature },
+		headers: { 'content-type': 'application/json', 'X-Hub-Signature-256': signature, 'X-GitHub-Event': options.event ?? 'push' },
 		body,
 	})
 }

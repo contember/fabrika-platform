@@ -1,14 +1,15 @@
 // The GitHub webhook handler — the ONE unauthenticated route. It authenticates by HMAC instead: the route's
 // connection secret verifies the `X-Hub-Signature-256` over the raw body before anything touches the
 // database. On a verified push it maps repo+ref → (app, env) through the connection's bound apps, creates
-// a `pending` run, and enqueues the deploy. A push that no env subscribes to is a 204 no-op.
+// a `pending` run, and enqueues the deploy. A push that no env subscribes to, a ref deletion, and any event other than
+// `push` (GitHub's `ping` among them) are a 204 no-op.
 
 import { type JobQueue, uuidv7 } from '@fabrika/platform'
 import type { ControlRepositories } from '../../db'
 import { error, json } from '../../http'
 import { refMatches } from '../../ref-match'
 import type { DeployJobMessage } from '../../run-lifecycle'
-import { normalizeRepoUrl, parseGitHubRepo, type PushEvent, type PushWebhookVerifier } from './push-event'
+import { normalizeRepoUrl, parseGitHubRepo, type PushWebhookVerifier, type VerifiedDelivery } from './push-event'
 
 export interface WebhookDeps {
 	repositories: ControlRepositories
@@ -22,22 +23,24 @@ export interface WebhookDeps {
  * Handle `POST /webhooks/github/:connectionId`. Verify the HMAC, decode the push, and for every (app, env) whose
  * `trigger_ref` matches the pushed ref, create + enqueue a run. Returns:
  *   - 401 when the signature is missing/invalid (the HMAC check — the only auth on this route),
- *   - 204 when verified but no env subscribes to the ref (acknowledged no-op),
+ *   - 204 when verified but not a push, a deletion, or no env subscribes to the ref (acknowledged no-op),
  *   - 200 with the created run ids when one or more deploys were triggered.
  */
 export async function handleWebhook(request: Request, deps: WebhookDeps): Promise<Response> {
-	let push: PushEvent | null
+	let delivery: VerifiedDelivery | null
 	try {
-		push = await deps.verifier.verifyWebhook(request)
+		delivery = await deps.verifier.verifyWebhook(request)
 	} catch {
 		return error(401, 'invalid webhook signature')
 	}
-	if (push === null) {
+	if (delivery === null) {
 		// Either a bad signature or an undecodable body — both are 401 on this HMAC-authenticated route (we do
 		// not distinguish, to avoid leaking which check failed).
 		return error(401, 'invalid webhook signature')
 	}
-	if (push.installationId === null) return new Response(null, { status: 204 })
+	if (delivery.kind === 'ignored') return new Response(null, { status: 204 })
+	const push = delivery.push
+	if (push.deleted || push.installationId === null) return new Response(null, { status: 204 })
 
 	const apps = await getConnectionApps(normalizeRepoUrl(push.repoUrl), push.installationId, deps.connectionId, deps.repositories)
 	if (apps.length === 0) {

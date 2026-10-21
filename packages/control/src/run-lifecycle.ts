@@ -506,6 +506,13 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		const run = await invocation.read()
 		if (run === null || run.status !== 'pending') return { runId, status: 'skipped' }
 		if (invocation.cancelled) return await settleCancelledInvocation(deps, invocation)
+		// Queue order means nothing (a deferred run is re-enqueued), so the order that holds is the runs' own.
+		const superseding = await runs.getSupersedingRun(runId)
+		if (superseding !== null) {
+			await logSettlement(deps, { id: runId, log_key: run.log_key ?? logsKey(runId) }, `superseded by run ${superseding.id}`)
+			await invocation.write((fence) => runs.markRunSuperseded(runId, fence))
+			return { runId, status: 'failed' }
+		}
 		const namespaceId = dryRun || deps.provider.namespaces?.republish === undefined
 			? null
 			: (await deps.repositories.registry.getAppEnv(run.app_id, run.env))?.namespace_id ?? null

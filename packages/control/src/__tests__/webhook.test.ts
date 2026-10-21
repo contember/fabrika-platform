@@ -331,6 +331,79 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 		expect(queue.sent).toHaveLength(1)
 	})
 
+	test.each(['ping', 'installation', 'pull_request'])('a verified %s delivery is a 204 no-op, never a run', async (event) => {
+		const harness = createHarness()
+		const cloneUrl = 'https://github.com/acme/app.git'
+		await seedRegistry(harness, cloneUrl)
+		const queue = makeQueue()
+		const request = await pushWebhookRequest({ ref: 'refs/heads/deploy/prod', cloneUrl, installationId: 42, secret: SECRET, event })
+
+		const response = await handleWebhook(request, { repositories: harness.db, verifier, queue, connectionId: CONNECTION_ID })
+
+		expect(response.status).toBe(204)
+		expect(queue.sent).toEqual([])
+		expect(await harness.db.runs.listRuns({ limit: 10 })).toEqual([])
+	})
+
+	test('an unsigned ping is still refused before its event is read', async () => {
+		const harness = createHarness()
+		const cloneUrl = 'https://github.com/acme/app.git'
+		await seedRegistry(harness, cloneUrl)
+		const request = await pushWebhookRequest({
+			ref: 'refs/heads/deploy/prod',
+			cloneUrl,
+			installationId: 42,
+			secret: SECRET,
+			event: 'ping',
+			signatureOverride: await signWebhook('{}', SECRET),
+		})
+
+		const response = await handleWebhook(request, { repositories: harness.db, verifier, queue: makeQueue(), connectionId: CONNECTION_ID })
+
+		expect(response.status).toBe(401)
+	})
+
+	test.each([
+		['deleted: true', { deleted: true, after: '0'.repeat(40) }],
+		['an all-zero after', { after: '0'.repeat(40) }],
+	])('a ref deletion (%s) on a subscribed ref is a 204 no-op', async (_name, deletion) => {
+		const harness = createHarness()
+		const cloneUrl = 'https://github.com/acme/app.git'
+		await seedRegistry(harness, cloneUrl)
+		const queue = makeQueue()
+		const request = await pushWebhookRequest({ ref: 'refs/heads/deploy/prod', cloneUrl, installationId: 42, secret: SECRET, ...deletion })
+
+		const response = await handleWebhook(request, { repositories: harness.db, verifier, queue, connectionId: CONNECTION_ID })
+
+		expect(response.status).toBe(204)
+		expect(queue.sent).toEqual([])
+		expect(await harness.db.runs.listRuns({ limit: 10 })).toEqual([])
+	})
+
+	test('an annotated tag push records the tagged commit, not the tag object `after` names', async () => {
+		const { db, sqlite } = createHarness()
+		const cloneUrl = 'https://github.com/acme/app.git'
+		insertConnection(sqlite, CONNECTION_ID, 'acme', 42)
+		await db.registry.createApp({ id: 'app', repoUrl: normalizeRepoUrl(cloneUrl), githubConnectionId: CONNECTION_ID, githubInstallationId: 42 })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
+		const tagObject = 'a'.repeat(40)
+		const commit = 'b'.repeat(40)
+		const request = await pushWebhookRequest({
+			ref: 'refs/tags/v1.2.3',
+			cloneUrl,
+			after: tagObject,
+			headCommitId: commit,
+			installationId: 42,
+			secret: SECRET,
+		})
+
+		const response = await handleWebhook(request, { repositories: db, verifier, queue: makeQueue(), connectionId: CONNECTION_ID })
+
+		expect(response.status).toBe(200)
+		const [run] = await db.runs.listRuns({ limit: 10 })
+		expect(run?.commit_sha).toBe(commit)
+	})
+
 	test('does not misreport a post-verification queue failure as an authentication failure', async () => {
 		const harness = createHarness()
 		const { db } = harness

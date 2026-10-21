@@ -49,6 +49,7 @@ export function fixtureRuns(runs: RunRepository, locks: DeployLocks, now: () => 
 		approve: (id: string, classificationJson: string, approvalJson: string) =>
 			owned(id, (fence) => runs.approveParkedRun(id, classificationJson, approvalJson, fence)),
 		reject: (id: string, classificationJson: string) => owned(id, (fence) => runs.rejectParkedRun(id, classificationJson, fence)),
+		supersede: (id: string) => owned(id, (fence) => runs.markRunSuperseded(id, fence)),
 	}
 }
 

@@ -362,6 +362,11 @@ workload can hold completes an approval.
 A rollback deploys an older commit as a new run. Control classifies it like any other run, against the
 environment's active snapshot. Publishing an older run's snapshot again is not a rollback path.
 
+An older run therefore never deploys after a newer run of the same environment succeeded. Before it starts, under the
+environment's lease, Control fails it with the run-log line `superseded by run <id>`. That covers a run the queue
+redelivered late and a parked run approved after a newer deploy went live: re-running the older commit is a new
+deploy.
+
 ## Consequences
 
 - An agent can no longer widen production access silently. A widening on `prod` waits until a human

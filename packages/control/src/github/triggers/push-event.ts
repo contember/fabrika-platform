@@ -12,14 +12,20 @@ export interface PushEvent {
 	ref: string
 	/** The repo's clone URL (https), used to identify which app this push belongs to. */
 	repoUrl: string
-	/** The head commit sha after the push, when present. */
+	/** The commit the push left on the ref, when present. */
 	commitSha: string | null
+	/** The push deleted the ref: there is nothing to deploy. */
+	deleted: boolean
 	/** The GitHub App installation id that delivered this event, when present. */
 	installationId: number | null
 }
 
+/** A verified delivery: a push, or another event (a `ping`, say) that Control acknowledges and ignores. */
+export type VerifiedDelivery = { readonly kind: 'push'; readonly push: PushEvent } | { readonly kind: 'ignored' }
+
 export interface PushWebhookVerifier {
-	verifyWebhook(request: Request): Promise<PushEvent | null>
+	/** `null` when the signature or the body does not verify. */
+	verifyWebhook(request: Request): Promise<VerifiedDelivery | null>
 }
 
 /** Supplies the current webhook HMAC secret without exposing it through connection state. */
@@ -57,7 +63,7 @@ export async function verifyWebhookSignature(rawBody: string, signatureHeader: s
 export class ConnectionWebhookVerifier implements PushWebhookVerifier {
 	constructor(private readonly webhookSecrets: WebhookSecretProvider) {}
 
-	async verifyWebhook(request: Request): Promise<PushEvent | null> {
+	async verifyWebhook(request: Request): Promise<VerifiedDelivery | null> {
 		const secret = await this.webhookSecrets.getSecret(request.signal)
 		if (secret === null || secret === '') return null
 		return verifyPushWebhook(request, secret)
@@ -134,33 +140,45 @@ export function parseGitHubRepo(repoUrl: string): { owner: string; repo: string 
 export function decodePushEvent(body: unknown): PushEvent | null {
 	const parsed = pushPayloadSchema.safeParse(body)
 	if (!parsed.success) return null
-	const { ref, repository, after, installation } = parsed.data
+	const { ref, repository, after, head_commit, deleted, installation } = parsed.data
 	const repoUrl = repository.clone_url ?? repository.html_url
 	if (repoUrl === undefined) {
 		return null
 	}
-	return { ref, repoUrl, commitSha: after ?? null, installationId: installation?.id ?? null }
+	// An annotated tag's `after` is the tag object, which no commit lookup resolves; `head_commit` is the commit it tags.
+	const commitSha = ref.startsWith('refs/tags/') ? head_commit?.id ?? null : after ?? null
+	return {
+		ref,
+		repoUrl,
+		commitSha,
+		deleted: deleted === true || (after !== undefined && /^0+$/.test(after)),
+		installationId: installation?.id ?? null,
+	}
 }
 
 const pushPayloadSchema = z.object({
 	ref: z.string(),
 	repository: z.object({ clone_url: z.string().optional().catch(undefined), html_url: z.string().optional().catch(undefined) }),
 	after: z.string().optional().catch(undefined),
+	head_commit: z.object({ id: z.string() }).nullable().optional().catch(undefined),
+	deleted: z.boolean().optional().catch(undefined),
 	installation: z.object({ id: z.number().int().safe().positive().optional().catch(undefined) }).optional().catch(undefined),
 })
 
-const verifyPushWebhook = async (request: Request, secret: string): Promise<PushEvent | null> => {
+const verifyPushWebhook = async (request: Request, secret: string): Promise<VerifiedDelivery | null> => {
 	const rawBody = await readWebhookBody(request)
 	if (rawBody === null || !(await verifyWebhookSignature(rawBody, request.headers.get('X-Hub-Signature-256'), secret))) {
 		return null
 	}
+	if (request.headers.get('X-GitHub-Event') !== 'push') return { kind: 'ignored' }
 	let body: unknown
 	try {
 		body = JSON.parse(rawBody)
 	} catch {
 		return null
 	}
-	return decodePushEvent(body)
+	const push = decodePushEvent(body)
+	return push === null ? null : { kind: 'push', push }
 }
 
 const readWebhookBody = async (request: Request): Promise<string | null> => {

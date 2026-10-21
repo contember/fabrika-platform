@@ -26,6 +26,7 @@ import { type ControlRepositories, createControlRepositories } from './db'
 import type { Env } from './env'
 import { gitHubAppClientFactory, vaultGitHubCredentials } from './github/connections/credentials'
 import { gitHubCommitSource } from './github/source/commit-files'
+import { SourceFailure } from './github/source/failure'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './github/source/metadata'
 import type { SourceRepository } from './github/source/types'
 import { controlPublicOrigin } from './iam'
@@ -215,7 +216,15 @@ export function cloudflareGitHubSource(
 			input.signal.throwIfAborted()
 			const repository = canonicalRepository(input.app.source.repoUrl)
 			try {
+				const pushedBranch = input.expectedCommitSha !== undefined && input.app.source.ref.startsWith('refs/heads/')
+					&& (await branchTriggered(env.REPOSITORIES, input.runId))
 				const token = await repositoryToken(repository, input.sourceBinding, input.signal)
+				if (pushedBranch) {
+					// The branch must still point at the pushed commit, as Zerops checks: else a newer push has a run of its own.
+					const head = await metadata.commit(repository, input.app.source.ref, token, input.signal, 'resolve')
+					if (head !== input.expectedCommitSha) throw new SourceFailure('commit_mismatch', 'resolve')
+					return { commitSha: head }
+				}
 				const commitSha = await metadata.commit(repository, input.expectedCommitSha ?? input.app.source.ref, token, input.signal, 'resolve')
 				return { commitSha }
 			} catch (error) {
@@ -242,6 +251,12 @@ export function cloudflareGitHubSource(
 			return { repoUrl: cloneUrl.toString() }
 		},
 	}
+}
+
+/** A webhook or poll run recorded the commit a push left on its branch; a manual run pins the commit it names. */
+async function branchTriggered(repositories: Pick<ControlRepositories, 'runs'>, runId: string): Promise<boolean> {
+	const run = await repositories.runs.getRun(runId)
+	return run?.trigger === 'webhook' || run?.trigger === 'poll'
 }
 
 /** The registry stores `github.com/<owner>/<repo>`; anything else never becomes a clone destination. */
