@@ -1,7 +1,10 @@
 import { z } from 'zod'
 
 export const PBKDF2_SHA256_ALGORITHM = 'pbkdf2-sha256'
+/** OWASP's PBKDF2-HMAC-SHA256 cost, which the Bun process uses. */
 export const PBKDF2_SHA256_ITERATIONS = 600_000
+/** Production Cloudflare Workers refuse PBKDF2 above this with `NotSupportedError`; workerd, miniflare and Bun do not. */
+export const PBKDF2_SHA256_WORKERS_MAX_ITERATIONS = 100_000
 export const PBKDF2_SHA256_SALT_BYTES = 16
 export const PBKDF2_SHA256_OUTPUT_BYTES = 32
 
@@ -27,9 +30,20 @@ interface Pbkdf2Parameters {
 	outputBytes: number
 }
 
-const CURRENT_PARAMETERS: Pbkdf2Parameters = {
-	iterations: PBKDF2_SHA256_ITERATIONS,
-	outputBytes: PBKDF2_SHA256_OUTPUT_BYTES,
+/** The PBKDF2 cost a composition root picks for its runtime. */
+export interface Pbkdf2Cost {
+	/** What `hash` derives with; a stored verifier with any other count is rehashed on login. */
+	readonly iterations: number
+	/** The most this runtime's WebCrypto derives. A stored verifier above it cannot be checked here. */
+	readonly maxIterations: number
+}
+
+const MAX_STORED_ITERATIONS = 10_000_000
+
+export const BUN_PBKDF2_COST: Pbkdf2Cost = { iterations: PBKDF2_SHA256_ITERATIONS, maxIterations: MAX_STORED_ITERATIONS }
+export const WORKERS_PBKDF2_COST: Pbkdf2Cost = {
+	iterations: PBKDF2_SHA256_WORKERS_MAX_ITERATIONS,
+	maxIterations: PBKDF2_SHA256_WORKERS_MAX_ITERATIONS,
 }
 
 function encodeHex(bytes: Uint8Array): string {
@@ -56,7 +70,7 @@ function decodeHex(value: string): Uint8Array<ArrayBuffer> | null {
 }
 
 const parametersSchema = z.object({
-	iterations: z.number().int().positive().max(10_000_000),
+	iterations: z.number().int().positive().max(MAX_STORED_ITERATIONS),
 	outputBytes: z.number().int().positive().max(128),
 })
 
@@ -91,12 +105,18 @@ function constantTimeEqual(left: Uint8Array, right: Uint8Array): boolean {
 }
 
 export class WebCryptoPasswordHasher implements PasswordHasher {
+	private readonly current: Pbkdf2Parameters
+
+	constructor(private readonly cost: Pbkdf2Cost = BUN_PBKDF2_COST) {
+		this.current = { iterations: cost.iterations, outputBytes: PBKDF2_SHA256_OUTPUT_BYTES }
+	}
+
 	async hash(password: string): Promise<StoredPasswordHash> {
 		const salt = crypto.getRandomValues(new Uint8Array(PBKDF2_SHA256_SALT_BYTES))
-		const passwordHash = await derive(password, salt, CURRENT_PARAMETERS)
+		const passwordHash = await derive(password, salt, this.current)
 		return {
 			algorithm: PBKDF2_SHA256_ALGORITHM,
-			parameters: JSON.stringify(CURRENT_PARAMETERS),
+			parameters: JSON.stringify(this.current),
 			salt: encodeHex(salt),
 			passwordHash: encodeHex(passwordHash),
 		}
@@ -109,14 +129,14 @@ export class WebCryptoPasswordHasher implements PasswordHasher {
 		const parameters = parseParameters(stored.parameters)
 		const salt = decodeHex(stored.salt)
 		const expected = decodeHex(stored.passwordHash)
-		if (parameters === null || salt === null || expected === null) {
+		if (parameters === null || salt === null || expected === null || parameters.iterations > this.cost.maxIterations) {
 			return { valid: false, needsRehash: false }
 		}
 		const actual = await derive(password, salt, parameters)
 		const valid = constantTimeEqual(actual, expected)
 		const needsRehash = valid
-			&& (parameters.iterations !== CURRENT_PARAMETERS.iterations
-				|| parameters.outputBytes !== CURRENT_PARAMETERS.outputBytes
+			&& (parameters.iterations !== this.current.iterations
+				|| parameters.outputBytes !== this.current.outputBytes
 				|| salt.length !== PBKDF2_SHA256_SALT_BYTES)
 		return { valid, needsRehash }
 	}

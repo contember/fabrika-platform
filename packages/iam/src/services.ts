@@ -119,7 +119,7 @@ export function buildServices(env: Env): Services {
 	return {
 		repositories: env.REPOSITORIES,
 		oidc,
-		passwordHasher: new WebCryptoPasswordHasher(),
+		passwordHasher: new WebCryptoPasswordHasher(env.PASSWORD_COST),
 		email: buildEmailSender(env, environment),
 		config: {
 			human: {
