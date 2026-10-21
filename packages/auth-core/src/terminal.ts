@@ -74,15 +74,16 @@ export type InspectIdentificationResult = { ok: true; terminal: IdentificationTe
 
 /**
  * The application's word that `principalId` stands at the identification's terminal. IAM consumes the identification
- * (single use), signs the person in under the terminal's ceiling, and answers the URL the browser goes to next: the
- * proxy's callback with a code only the browser that started the sign-in redeems.
+ * (single use), signs the person in under the terminal's ceiling, and answers the URL the browser goes to next: IAM's
+ * completion of the identification, which issues the handoff code only to the terminal's own browser. The application
+ * never holds a code.
  */
 export interface AssertIdentityInput extends TerminalCaller {
 	id: string
 	principalId: string
 }
 
-export type AssertIdentityResult = { ok: true; callbackUrl: string } | TerminalFailure
+export type AssertIdentityResult = { ok: true; completionUrl: string } | TerminalFailure
 
 /** End an identification the person abandoned. Repeating it, or cancelling a consumed one, answers `not_found`. */
 export interface CancelIdentificationInput extends TerminalCaller {

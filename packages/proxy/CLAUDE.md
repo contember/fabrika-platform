@@ -208,7 +208,8 @@ application's database.
   reserved callback. Starting login additionally writes one short-lived browser verifier cookie,
   named `__Host-px_handoff_<state>` so parallel tabs do not overwrite each other; the callback clears
   it on every terminal outcome. IAM receives only its S256 challenge. A callback without the matching
-  state and verifier cannot redeem or replace a browser's session.
+  state and verifier cannot redeem or replace a browser's session; its code is redeemed with a verifier made for no
+  challenge (`unmatchedVerifier`), which only spends it, so whoever started that sign-in cannot redeem it elsewhere.
 - **The sign-out clears it** (ADR-0067 §5): `GET /__fabrika/auth/signout?redirect=<path>`, answered before endpoint
   selection, only with `Sec-Fetch-Site: same-origin` (absent is refused), clears the session cookie, drops its cached
   token and redirects to IAM's `/auth/terminals/release`. A return that is not a path on the app's origin is a 400.

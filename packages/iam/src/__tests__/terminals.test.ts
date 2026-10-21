@@ -286,16 +286,17 @@ function terminalSuite(backend: () => Backend): void {
 			return idHash
 		}
 
+		function consume(b: Backend, idHash: string) {
+			return b.repositories.terminals.consumeIdentification({ idHash, sessionId: uuidv7(), now: now(), completeBy: now() + 60 })
+		}
+
 		test('is consumed at most once, and the consumption answers the handoff it carries', async () => {
 			const b = backend()
 			const { terminalId } = await enrol(b, await person(b))
 			const idHash = await open(b, terminalId)
 			expect(await b.repositories.terminals.getIdentification(idHash)).toMatchObject({ terminal_id: terminalId, app: APP, consumed_at: null })
 
-			const consumed = await Promise.all([
-				b.repositories.terminals.consumeIdentification(idHash, now()),
-				b.repositories.terminals.consumeIdentification(idHash, now()),
-			])
+			const consumed = await Promise.all([consume(b, idHash), consume(b, idHash)])
 			const winners = consumed.filter((row) => row !== null)
 			expect(winners).toHaveLength(1)
 			expect(winners[0]).toMatchObject({
@@ -305,15 +306,15 @@ function terminalSuite(backend: () => Backend): void {
 				handoff_state: 'state',
 				handoff_challenge: 'challenge',
 			})
-			expect(await b.repositories.terminals.consumeIdentification(idHash, now())).toBeNull()
+			expect(await consume(b, idHash)).toBeNull()
 		})
 
 		test('an expired identification cannot be consumed', async () => {
 			const b = backend()
 			const { terminalId } = await enrol(b, await person(b))
 			const idHash = await open(b, terminalId, now() - 1)
-			expect(await b.repositories.terminals.consumeIdentification(idHash, now())).toBeNull()
-			expect(await b.repositories.terminals.consumeIdentification(await hashToken(randomToken()), now())).toBeNull()
+			expect(await consume(b, idHash)).toBeNull()
+			expect(await consume(b, await hashToken(randomToken()))).toBeNull()
 		})
 
 		test('is cancelled only by its own application, and a cancelled one cannot be consumed', async () => {
@@ -323,21 +324,44 @@ function terminalSuite(backend: () => Backend): void {
 			expect(await b.repositories.terminals.cancelIdentification(idHash, 'canteen')).toBe(false)
 			expect(await b.repositories.terminals.cancelIdentification(idHash, APP)).toBe(true)
 			expect(await b.repositories.terminals.cancelIdentification(idHash, APP)).toBe(false)
-			expect(await b.repositories.terminals.consumeIdentification(idHash, now())).toBeNull()
+			expect(await consume(b, idHash)).toBeNull()
 		})
 
-		test('pruning removes ended and expired identifications and keeps open ones', async () => {
+		test('pruning removes cancelled, completed and expired identifications and keeps open and asserted ones', async () => {
 			const b = backend()
 			const { terminalId } = await enrol(b, await person(b))
 			const live = await open(b, terminalId)
 			const expired = await open(b, terminalId, now() - 10)
-			const consumed = await open(b, terminalId)
-			await b.repositories.terminals.consumeIdentification(consumed, now())
+			const cancelled = await open(b, terminalId)
+			await b.repositories.terminals.cancelIdentification(cancelled, APP)
+			const asserted = await open(b, terminalId)
+			await consume(b, asserted)
+			const completed = await open(b, terminalId)
+			await consume(b, completed)
+			expect(await b.repositories.terminals.completeIdentification(completed, terminalId, now())).not.toBeNull()
 
 			await b.repositories.terminals.pruneIdentifications(now())
 			expect(await b.repositories.terminals.getIdentification(live)).not.toBeNull()
+			expect(await b.repositories.terminals.getIdentification(asserted)).not.toBeNull()
 			expect(await b.repositories.terminals.getIdentification(expired)).toBeNull()
-			expect(await b.repositories.terminals.getIdentification(consumed)).toBeNull()
+			expect(await b.repositories.terminals.getIdentification(cancelled)).toBeNull()
+			expect(await b.repositories.terminals.getIdentification(completed)).toBeNull()
+		})
+
+		test('is completed once, by its own terminal, and only after an assertion', async () => {
+			const b = backend()
+			const { terminalId } = await enrol(b, await person(b))
+			const other = await enrol(b, await person(b))
+			const idHash = await open(b, terminalId)
+			expect(await b.repositories.terminals.completeIdentification(idHash, terminalId, now())).toBeNull()
+			await consume(b, idHash)
+			expect(await b.repositories.terminals.completeIdentification(idHash, other.terminalId, now())).toBeNull()
+			const completions = await Promise.all([
+				b.repositories.terminals.completeIdentification(idHash, terminalId, now()),
+				b.repositories.terminals.completeIdentification(idHash, terminalId, now()),
+			])
+			expect(completions.filter((row) => row !== null)).toHaveLength(1)
+			expect(await b.repositories.terminals.completeIdentification(idHash, terminalId, now())).toBeNull()
 		})
 	})
 }

@@ -833,7 +833,8 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   vocabulary that declares `terminal: { identify: '/path' }` names its identification page: an absolute path that a
   public SPA mount serves, where IAM sends an enrolled terminal's browser with `?identification=<id>`. Its RPC and
   public procedures get `ctx.terminals`: `inspect(id)` answers the terminal and the expiry, or `null`;
-  `assert(id, principalId)` answers `{ ok: true, callbackUrl }`, which the page navigates to, or `{ ok: false, reason }`
+  `assert(id, principalId)` answers `{ ok: true, completionUrl }` (IAM's, with no code), which the page navigates to, or
+  `{ ok: false, reason }`
   (`not_found`, `invalid_principal`); `cancel(id)` ends an abandoned one. They ask IAM over the membership transport with
   the request's credential, a public procedure's workload token. IAM refusing the application's own credential is a 500
   (`terminal_refused`), IAM out of reach a 503. The application throttles guesses per terminal and signs the person out

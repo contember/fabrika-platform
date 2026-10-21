@@ -39,9 +39,9 @@ describe('the identification wire', () => {
 	})
 
 	test('assertIdentity answers the callback URL, and cancelIdentification an empty success', async () => {
-		const callbackUrl = 'https://kiosk.test/__fabrika/auth/callback?code=c1&state=s1'
-		const asserted = stub(200, { ok: true, callbackUrl })
-		expect(await asserted.rpc.assertIdentity({ ...caller, id: 'ident-1', principalId: 'person-7' })).toEqual({ ok: true, callbackUrl })
+		const completionUrl = 'https://iam.test/auth/terminals/complete?identification=i1'
+		const asserted = stub(200, { ok: true, completionUrl })
+		expect(await asserted.rpc.assertIdentity({ ...caller, id: 'ident-1', principalId: 'person-7' })).toEqual({ ok: true, completionUrl })
 		expect(asserted.calls[0]?.url).toBe('https://iam.test/membership/assertIdentity')
 		expect(await stub(200, { ok: true }).rpc.cancelIdentification({ ...caller, id: 'ident-1' })).toEqual({ ok: true })
 	})
@@ -65,7 +65,7 @@ describe('the identification wire', () => {
 		await expect(stub(401, { error: 'unauthorized' }).rpc.inspectIdentification({ ...caller, id: 'i' })).rejects.toBeInstanceOf(IamTransportError)
 		await expect(stub(200, { ok: true, terminal: { id: 'terminal-1' }, expiresAt: 42 }).rpc.inspectIdentification({ ...caller, id: 'i' })).rejects
 			.toBeInstanceOf(IamTransportError)
-		await expect(stub(200, { ok: true, callbackUrl: 'not a url' }).rpc.assertIdentity({ ...caller, id: 'i', principalId: 'p' })).rejects
+		await expect(stub(200, { ok: true, completionUrl: 'not a url' }).rpc.assertIdentity({ ...caller, id: 'i', principalId: 'p' })).rejects
 			.toBeInstanceOf(IamTransportError)
 	})
 })

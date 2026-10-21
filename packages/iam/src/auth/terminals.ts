@@ -16,7 +16,7 @@ import { hashToken } from '../secret'
 import type { Services } from '../services'
 import { terminalLabel } from '../terminals'
 import { clearCookie, readCookie, serializeCookie } from './cookies'
-import type { Handoff } from './handoff'
+import { type Handoff, handoffLocation } from './handoff'
 import { printable, readForm, redirectHeaders, sameOrigin, stringValue } from './http'
 import { type CurrentLogin, currentLogin } from './sessions'
 
@@ -31,6 +31,9 @@ export const TERMINAL_COOKIE = `${FABRIKA_COOKIE_PREFIX}terminal`
  * ends when an administrator revokes it, not when a cookie expires, so it asks for the most a browser grants.
  */
 export const TERMINAL_COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60
+
+/** The longest identification id the completion looks up; IAM's own are far shorter. */
+const MAX_IDENTIFICATION_ID_LENGTH = 128
 
 /** Where an application's proxy sends a signed-out terminal's browser; the proxy's `SIGNOUT_RELEASE_PATH` names it. */
 export const TERMINAL_RELEASE_PATH = '/auth/terminals/release'
@@ -201,6 +204,42 @@ export async function identificationRedirect(
 	const headers = redirectHeaders(location.toString())
 	headers.append('Set-Cookie', terminalCookie(browser.token))
 	return new Response(null, { status: 302, headers })
+}
+
+/**
+ * `GET /auth/terminals/complete?identification=` (ADR-0067 §3): the terminal's browser arrives here from the application
+ * after its assertion, and IAM issues the handoff's code to it. Only the browser of the identification's own terminal
+ * completes it, once, within the completion window, while the asserted login is still valid; anything else is refused
+ * and issues nothing. The code goes to the proxy's callback on the handoff's return origin, so the application never
+ * sees it, and the proxy redeems it only with the verifier it set on the browser that started the sign-in.
+ *
+ * A GET without a same-origin check, like the release: the application sends the browser here from its own host.
+ * Completing an identification the application already asserted is all a cross-site request can do.
+ */
+export async function handleTerminalCompletion(request: Request, services: Services, requestId: string): Promise<Response> {
+	const id = new URL(request.url).searchParams.get(IDENTIFICATION_QUERY_PARAMETER) ?? ''
+	const browser = await browserTerminal(request, services)
+	if (browser === null || id === '' || id.length > MAX_IDENTIFICATION_ID_LENGTH) {
+		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_completion_refused' }, 403)
+	}
+	const { terminals, sessions } = services.repositories
+	try {
+		const completed = await terminals.completeIdentification(await hashToken(id), browser.terminal.principal_id, unixNow())
+		const login = completed?.session_id == null ? null : await sessions.getActiveSessionById(completed.session_id)
+		if (completed === null || login === null) {
+			return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_completion_refused' }, 403)
+		}
+		const location = await handoffLocation(services, {
+			app: completed.app,
+			returnUrl: completed.return_url,
+			state: completed.handoff_state,
+			challenge: completed.handoff_challenge,
+		}, login.id)
+		return new Response(null, { status: 302, headers: redirectHeaders(location) })
+	} catch (err) {
+		logError(`a terminal identification could not be completed for request '${requestId}'`, err)
+		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'login_unavailable' }, 503)
+	}
 }
 
 /**

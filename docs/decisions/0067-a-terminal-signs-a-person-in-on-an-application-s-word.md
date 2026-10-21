@@ -118,18 +118,28 @@ The procedure then talks to IAM over the transport of
     never sign in on a terminal.
 
   IAM then writes a login session for the person with `authentication_method = 'terminal_assertion'`,
-  `terminal_id`, `asserted_by` and the terminal's `session_ttl`. No browser ever holds that login's token. It
-  exists as the parent of the application session. IAM issues the handoff code against it and returns the
-  callback URL.
+  `terminal_id`, `asserted_by` and the terminal's `session_ttl`, in the same batch as the consumption. No browser
+  ever holds that login's token. It exists as the parent of the application session. IAM returns its own
+  completion URL, `/auth/terminals/complete?identification=<id>`, which carries no code.
 - `cancelIdentification(id)` ends an identification that the person abandoned.
 
-The application redirects the browser to that callback URL. The proxy redeems the code with the verifier it set
-when the bounce started, sets the child session and lands on the original return URL. To the proxy this is an
-ordinary sign-in.
+The application redirects the browser to the completion URL. IAM issues the handoff code there only when:
 
-**Invariant: only IAM issues a code, and only against a handoff that the proxy started.** An application never
-holds a handoff state, challenge or verifier. A leaked identification id cannot buy a session elsewhere: the
-code it leads to is redeemable only with the verifier cookie on the terminal's browser.
+- the browser holds the `__Host-px_terminal` cookie of the terminal that the identification belongs to;
+- the identification was asserted, is not yet completed, and completes within a minute of the assertion;
+- the asserted login is still valid.
+
+IAM then 302s to the proxy's callback. The proxy redeems the code with the verifier it set when the bounce
+started, sets the child session and lands on the original return URL. To the proxy this is an ordinary sign-in.
+
+A proxy that receives a code at its callback without a verifier cookie for the code's state redeems it anyway,
+with a verifier made for no challenge. IAM consumes a code before it compares the verifier, so the code is spent.
+
+**Invariant: only IAM issues a code, only against a handoff that the proxy started, and only to the terminal's own
+browser.** An application never holds a code or a verifier. An asserter can send the terminal's browser to
+`/auth/login` with a handoff that it made itself, so it may know the state and the verifier. The completion step
+keeps the code on the terminal, and the terminal's proxy holds no verifier for that state and spends the code. A
+leaked identification id or completion URL buys nothing elsewhere: the completion refuses every other browser.
 
 **Invariant: a failed identification costs the application, not IAM.** IAM sees only assertions. Throttling
 guesses (PIN tries, unknown fobs) is the application's duty, and the identification hands it the terminal to

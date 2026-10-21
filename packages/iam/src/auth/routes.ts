@@ -4,6 +4,7 @@
  */
 import { installationConsole } from '../app-presentation'
 import type { RequestContext } from '../env'
+import { TERMINAL_COMPLETE_PATH } from '../identification'
 import { installationBrand } from '../installation-brand'
 import { INVITATION_ACCEPT_PATH } from '../membership'
 import { ACCOUNT_CHOICE_PATH, logoutPage, TERMINAL_ENROL_PATH } from '../password-pages'
@@ -17,7 +18,7 @@ import { handleCallback, handleOidcStart } from './oidc'
 import type { AuthEnv } from './oidc-flight'
 import { handleForgotPassword, handlePasswordAction, handlePasswordLogin } from './password'
 import { handleLogout } from './sessions'
-import { handleTerminalEnrolment, handleTerminalRelease, TERMINAL_RELEASE_PATH } from './terminals'
+import { handleTerminalCompletion, handleTerminalEnrolment, handleTerminalRelease, TERMINAL_RELEASE_PATH } from './terminals'
 
 /**
  * `clientAddress` is what the composition's ingress observed, or `null` when it cannot see a client
@@ -70,6 +71,9 @@ export async function handleAuth(
 	}
 	if (url.pathname === TERMINAL_ENROL_PATH) {
 		return request.method === 'GET' || request.method === 'POST' ? handleTerminalEnrolment(request, services, requestId) : methodNotAllowed()
+	}
+	if (url.pathname === TERMINAL_COMPLETE_PATH) {
+		return request.method === 'GET' ? handleTerminalCompletion(request, services, requestId) : methodNotAllowed()
 	}
 	if (url.pathname === TERMINAL_RELEASE_PATH) {
 		return request.method === 'GET' ? handleTerminalRelease(request, services, requestId) : methodNotAllowed()

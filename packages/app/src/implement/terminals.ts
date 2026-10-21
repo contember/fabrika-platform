@@ -21,7 +21,7 @@ export interface OpenIdentification {
  * that cannot sign in on a terminal (unknown, disabled, not a person, or external).
  */
 export type AssertedIdentity =
-	| { readonly ok: true; readonly callbackUrl: string }
+	| { readonly ok: true; readonly completionUrl: string }
 	| { readonly ok: false; readonly reason: 'not_found' | 'invalid_principal' }
 
 /** `ctx.terminals` of an application that declares `terminal: { identify }`. */
@@ -30,7 +30,8 @@ export interface TerminalIdentification {
 	inspect(id: string): Promise<OpenIdentification | null>
 	/**
 	 * The application's word that `principalId` stands at the identification's terminal. IAM uses the identification up
-	 * and, on `ok`, the handler sends the browser to `callbackUrl`, which signs the person in there.
+	 * and, on `ok`, the handler sends the browser to `completionUrl`: IAM signs the person in there, and only on the
+	 * terminal's own browser.
 	 */
 	assert(id: string, principalId: string): Promise<AssertedIdentity>
 	/** Ends an identification the person abandoned; one that is no longer open is already ended. */
@@ -49,7 +50,7 @@ export function terminalIdentification(rpc: IamTerminalRpc, caller: MembershipCa
 		async assert(id: string, principalId: string): Promise<AssertedIdentity> {
 			if (!isIdentificationId(id)) return { ok: false, reason: 'not_found' }
 			const result = await ask(() => rpc.assertIdentity({ ...caller, id, principalId }), 'assert an identity')
-			return result.ok ? { ok: true, callbackUrl: result.callbackUrl } : { ok: false, reason: result.reason }
+			return result.ok ? { ok: true, completionUrl: result.completionUrl } : { ok: false, reason: result.reason }
 		},
 		async cancel(id: string): Promise<void> {
 			if (isIdentificationId(id)) {

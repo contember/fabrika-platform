@@ -8,6 +8,9 @@ import { compileContract, defineApp, defineVocabulary, schemaFromContract } from
 import { HttpIamTerminals } from '@fabrika/auth'
 import {
 	AUTH_CALLBACK_PATH,
+	AUTH_CODE_PARAM,
+	AUTH_HANDOFF_CHALLENGE_PARAM,
+	AUTH_HANDOFF_STATE_PARAM,
 	IDENTIFICATION_QUERY_PARAMETER,
 	parseAccessClaims,
 	PROXY_TOKEN_HEADER,
@@ -36,7 +39,7 @@ import { createIamApp } from '../app'
 import { TERMINAL_COOKIE } from '../auth/terminals'
 import type { Env, RequestContext } from '../env'
 import { prop } from '../json'
-import { randomToken } from '../oidc'
+import { pkceChallenge, randomToken } from '../oidc'
 import { createIamRpc } from '../rpc'
 import { hashToken } from '../secret'
 import { createHarness, type Harness, seedGrant, seedInlineGrant, seedUser, TEST_SIGNING_KEYS } from './helpers/harness'
@@ -175,7 +178,7 @@ class AttendanceApplication {
 		if (person === undefined) return Response.json({ refused: 'unknown_pin' }, { status: 400 })
 		const asserted = await this.terminals.assertIdentity({ ...caller, id: input.identification, principalId: person })
 		if (!asserted.ok) return Response.json({ refused: asserted.reason }, { status: 400 })
-		return Response.json({ callbackUrl: asserted.callbackUrl })
+		return Response.json({ completionUrl: asserted.completionUrl })
 	}
 }
 
@@ -190,6 +193,10 @@ interface World {
 	go(url: string, options?: { fetched?: Fetched; body?: unknown }): Promise<Response>
 	admin(method: string, input: unknown): Promise<unknown>
 	enrol(label: string): Promise<string>
+	/** IAM's host answering a request from a browser with no cookies of this one. */
+	iam(request: Request): Promise<Response>
+	/** IAM's RPC surface, as the application's proxy and Workers call it. */
+	readonly rpc: ReturnType<typeof createIamRpc>
 }
 
 async function world(): Promise<World> {
@@ -251,6 +258,7 @@ async function world(): Promise<World> {
 	application.pins.set(PIN, person)
 
 	const jar = new CookieJar()
+	const rpc = createIamRpc(env, ctx)
 	const proxied: ContractProxyApp = { id: APP, hosts: [HOST], upstream: 'app', scheme: 'https', ...contractProxyTable(artifact) }
 	const state: World = {
 		h,
@@ -284,6 +292,8 @@ async function world(): Promise<World> {
 			return application.fetch(new Request(target, { method, headers: forwarded, body }))
 		},
 		admin,
+		iam,
+		rpc,
 		async enrol(label) {
 			const enrolling = seedUser(h.sqlite, { sub: `sub-${label}`, email: `${label}-enrols@example.test` })
 			seedInlineGrant(h.sqlite, enrolling, ['iam.terminals.manage'], null, 'propustka')
@@ -310,7 +320,7 @@ async function world(): Promise<World> {
 	}
 	const proxy: VerifyService = createVerifyService({
 		manifest: { apps: [proxied] },
-		iam: createIamRpc(env, ctx),
+		iam: rpc,
 		issuer: ISSUER,
 		cache: new MemoryTokenCache(),
 		now: () => state.clock,
@@ -345,14 +355,22 @@ async function bounceToIdentification(w: World): Promise<string> {
 	return identify.searchParams.get(IDENTIFICATION_QUERY_PARAMETER) ?? ''
 }
 
-/** The person enters their PIN; the application asserts them and the browser follows IAM's callback through the proxy. */
-async function identifyWithPin(w: World, identification: string): Promise<void> {
+/** The person enters their PIN; the application asserts them, and the browser completes at IAM and follows its callback. */
+async function identifyWithPin(w: World, identification: string): Promise<URL> {
+	const completionUrl = await assertWithPin(w, identification)
+	const callbackUrl = location(await w.go(completionUrl.href))
+	expect(`${callbackUrl.origin}${callbackUrl.pathname}`).toBe(`${APP_ORIGIN}${AUTH_CALLBACK_PATH}`)
+	return location(await w.go(callbackUrl.href))
+}
+
+/** The application's answer to a PIN: IAM's completion URL, which carries no code. */
+async function assertWithPin(w: World, identification: string): Promise<URL> {
 	const identified = await w.go(`${APP_ORIGIN}/api/kiosk.identify`, { fetched: 'fetch', body: { identification, pin: PIN } })
 	expect(identified.status).toBe(200)
-	const callbackUrl = new URL(z.string().parse(prop(await identified.json(), 'callbackUrl')))
-	expect(`${callbackUrl.origin}${callbackUrl.pathname}`).toBe(`${APP_ORIGIN}${AUTH_CALLBACK_PATH}`)
-	const landed = location(await w.go(callbackUrl.href))
-	expect(landed.href).toBe(`${APP_ORIGIN}/`)
+	const completionUrl = new URL(z.string().parse(prop(await identified.json(), 'completionUrl')))
+	expect(`${completionUrl.origin}${completionUrl.pathname}`).toBe(`${ISSUER}/auth/terminals/complete`)
+	expect(completionUrl.searchParams.get(AUTH_CODE_PARAM)).toBeNull()
+	return completionUrl
 }
 
 async function claimsAt(w: World, path: string): Promise<{ status: number; claims: unknown }> {
@@ -370,7 +388,7 @@ describe('a person on a terminal, through the proxy and the real IAM', () => {
 		expect(w.jar.get(new URL(ISSUER).host, SESSION_COOKIE)).toBeNull()
 
 		const first = await bounceToIdentification(w)
-		await identifyWithPin(w, first)
+		expect((await identifyWithPin(w, first)).href).toBe(`${APP_ORIGIN}/`)
 		expect(w.application.inspected).toEqual([terminalId])
 		const session = w.jar.get(HOST, SESSION_COOKIE)
 		if (session === null) throw new Error('the proxy set no session')
@@ -426,5 +444,33 @@ describe('a person on a terminal, through the proxy and the real IAM', () => {
 		expect(`${bounce.origin}${bounce.pathname}`).toBe(`${ISSUER}/auth/login`)
 		// The revoked terminal opens no identification: the browser gets the ordinary sign-in.
 		expect((await w.go(bounce.href)).status).toBe(200)
+	})
+
+	test("an attacker-chosen challenge: the code never leaves the terminal, and the terminal's proxy spends it", async () => {
+		const w = await world()
+		const terminalId = await w.enrol('Entrance')
+		await w.admin('terminals.setProfile', { terminalId, label: 'Entrance', sessionTtl: 300, asserters: [{ app: APP, ceiling: [] }] })
+		// A malicious asserter sends the terminal's browser to sign-in with a handoff it made, so it holds the verifier.
+		const attackerVerifier = randomToken(32)
+		const planted = new URL('/auth/login', ISSUER)
+		planted.searchParams.set('app', APP)
+		planted.searchParams.set('redirect', `${APP_ORIGIN}/`)
+		planted.searchParams.set(AUTH_HANDOFF_STATE_PARAM, 'attacker-state-0123456789')
+		planted.searchParams.set(AUTH_HANDOFF_CHALLENGE_PARAM, await pkceChallenge(attackerVerifier))
+		const identify = location(await w.go(planted.href))
+		const completionUrl = await assertWithPin(w, identify.searchParams.get(IDENTIFICATION_QUERY_PARAMETER) ?? '')
+
+		// Another browser, the attacker's, gets nothing from the completion.
+		const elsewhere = await w.iam(new Request(completionUrl))
+		expect(elsewhere.status).toBe(403)
+
+		// The terminal's browser completes; its proxy holds no verifier for the planted state and spends the code.
+		const callback = location(await w.go(completionUrl.href))
+		const code = callback.searchParams.get(AUTH_CODE_PARAM) ?? ''
+		expect((await w.go(callback.href)).status).toBe(403)
+		expect(w.jar.get(HOST, SESSION_COOKIE)).toBeNull()
+		const stolen = await w.rpc.exchangeAuthCode({ app: APP, code, verifier: attackerVerifier, requestId: 'attacker' })
+		// Spent: IAM tells a used code from an unknown one only in its log.
+		expect(stolen).toEqual({ ok: false, reason: 'expired_code' })
 	})
 })

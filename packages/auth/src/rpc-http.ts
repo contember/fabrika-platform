@@ -485,7 +485,7 @@ const inspectIdentificationSuccessSchema = z.object({
 	terminal: z.object({ id: z.string().min(1), label: z.string().min(1) }),
 	expiresAt: z.number().finite(),
 })
-const assertIdentitySuccessSchema = z.object({ ...okEnvelope, callbackUrl: z.string().url() })
+const assertIdentitySuccessSchema = z.object({ ...okEnvelope, completionUrl: z.string().url() })
 
 /**
  * `IamTerminalRpc` over any transport that answers each call with a JSON-shaped body: `HttpIamTerminals`, or a Workers

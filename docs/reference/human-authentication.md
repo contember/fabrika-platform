@@ -302,8 +302,12 @@ PIN, a key fob) and IAM signs that person in
   `cancelIdentification` over its membership transport, with a token whose `aud` is the application. IAM takes the
   application from the transport, never from the input. `assertIdentity` accepts only an active internal user. It
   consumes the identification, writes a login with `authentication_method = 'terminal_assertion'`, the terminal and
-  the terminal's TTL, and no cookie, and returns the handoff callback URL. The browser follows it, and the proxy
-  redeems the code with the verifier it set at the bounce.
+  the terminal's TTL, and no cookie, and returns IAM's completion URL, `/auth/terminals/complete?identification=<id>`.
+  It carries no code.
+- **Completion.** The application sends the browser to the completion URL. IAM issues the handoff code there, once and
+  within a minute, only to the browser that holds the cookie of the identification's own terminal, and only while the
+  asserted login is still valid. It 302s to the proxy's callback, and the proxy redeems the code with the verifier it
+  set at the bounce. An application never holds a code. A proxy that receives a code without its verifier spends it.
 - **What the session may do.** The token carries the person's `sub`, `amr: 'terminal_assertion'` and
   `terminal: { id, label }`. Its permissions are the person's own, narrowed by the ceiling (a person's `*` under a
   ceiling `a.read` keeps `a.read`), plus the terminal principal's, with source `terminal`. An empty ceiling, the

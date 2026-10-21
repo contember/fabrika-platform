@@ -297,3 +297,10 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
 - WU7: the decisions index row was already in place (`docs/decisions/README.md`). The reference entries are a
   "Terminals" section in `human-authentication.md`, "Step 3 on a terminal" and the sign-out rule in `cross-host-sso.md`,
   and the `ctx.terminals` and `ctx.principal.terminal` entries in `application-runtime.md`.
+- Review fix 1: `assertIdentity` answers IAM's `/auth/terminals/complete?identification=<id>`, never a code; the
+  completion issues the code only to the identification's own terminal cookie, once, within 60 s of the assertion,
+  while the login is valid (migration `0025_terminal_completion.sql`: `session_id`, `completed_at`). The consumption and
+  the login are one batch (`consumedFor` guards the login and its `auth_log` row), so a failed write leaves the
+  identification open. The proxy spends a code that reaches its callback without a verifier cookie (`unmatchedVerifier`);
+  that hardening applies to every handoff. It alone would not have been enough here: the asserter held the code and could
+  redeem it before sending the browser anywhere.

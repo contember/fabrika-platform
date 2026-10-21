@@ -38,7 +38,7 @@ import {
 import { cacheKey, type TokenCache } from './cache'
 import { LOGIN_REDIRECT_PARAM, SIGNOUT_RELEASE_PATH } from './constants'
 import { carriesPlatformKey, readBearer, readCookie } from './credentials'
-import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams } from './handoff'
+import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams, unmatchedVerifier } from './handoff'
 import { type DelegationIssuer, type IamGateway, IamUnavailableError } from './iam'
 import {
 	isApplicationEntry,
@@ -584,15 +584,20 @@ export class Authorizer {
 		}
 		const cookieName = handoffCookieName(state)
 		const verifier = cookieName === null ? null : readCookie(request.headers.get('Cookie'), cookieName)
-		if (verifier === null) {
-			return { outcome: 'deny', status: 403, reason: 'invalid_session', clearHandoffState: state }
-		}
 		// Through `callIam` like every other IAM call, so an unreachable service is a 503 whatever kind
 		// of error the injected gateway happened to throw. `authorize`'s outer catch maps the rest.
-		const result = await this.callIam(
-			'exchangeAuthCode',
-			() => this.options.iam.exchangeAuthCode({ app: resolved.app.id, code, verifier, requestId: request.requestId }),
-		)
+		const redeem = (presented: string) =>
+			this.callIam(
+				'exchangeAuthCode',
+				() => this.options.iam.exchangeAuthCode({ app: resolved.app.id, code, verifier: presented, requestId: request.requestId }),
+			)
+		if (verifier === null) {
+			// This browser did not start the sign-in the code belongs to. The code is spent, so whoever started it cannot
+			// redeem it from the address this browser shows (ADR-0067 §3).
+			await redeem(unmatchedVerifier())
+			return { outcome: 'deny', status: 403, reason: 'invalid_session', clearHandoffState: state }
+		}
+		const result = await redeem(verifier)
 		if (!result.ok) {
 			return { outcome: 'deny', status: 403, reason: 'invalid_session', clearHandoffState: state }
 		}

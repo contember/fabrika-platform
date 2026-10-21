@@ -1,6 +1,6 @@
 import { parseJsonStringArray } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement } from '@fabrika/platform'
-import { type AuditEventInput, AuditWriter, type AuthLogInput, authLogStatement, type SqlChange } from './audit'
+import { type AuditEventInput, AuditWriter, type AuthLogInput, authLogStatement, type SqlChange, type SqlGuard } from './audit'
 import type { LogoutLogInput } from './sessions'
 import { unixNow } from './sql'
 
@@ -48,6 +48,10 @@ export interface TerminalIdentificationRow {
 	created_at: number
 	expires_at: number
 	consumed_at: number | null
+	/** The login an assertion opened for the person; the terminal's browser completes the identification with it. */
+	session_id: string | null
+	/** When the terminal's browser completed the identification and IAM issued the handoff code. */
+	completed_at: number | null
 }
 
 interface TerminalAsserterRow {
@@ -234,14 +238,40 @@ export class TerminalRepository {
 	}
 
 	/**
-	 * Consume an identification, atomically and at most once. The conditional UPDATE is the guard: a second consumption
-	 * changes no row and answers null, as an unknown, expired or cancelled one does. The row is the one this call consumed.
+	 * Consume an identification for the login `sessionId`, atomically and at most once, and give its completion until
+	 * `completeBy`. `login` is the batch that opens that login, written only when this call consumed the identification
+	 * (see `consumedFor`), so a failed write leaves the identification open and a refused consumption opens nothing.
+	 * Answers the row this call consumed, or null for an unknown, expired, cancelled or already consumed one.
 	 */
-	async consumeIdentification(idHash: string, now: number): Promise<TerminalIdentificationRow | null> {
+	async consumeIdentification(
+		consumption: { idHash: string; sessionId: string; now: number; completeBy: number },
+		login: readonly SqlStatement[] = [],
+	): Promise<TerminalIdentificationRow | null> {
+		const { idHash, sessionId, now, completeBy } = consumption
+		const [consumed] = await this.db.batch<TerminalIdentificationRow>([
+			this.db
+				.prepare(`UPDATE terminal_identifications SET consumed_at = ?, session_id = ?, expires_at = ?
+					WHERE id_hash = ? AND consumed_at IS NULL AND expires_at > ? RETURNING *`)
+				.bind(now, sessionId, completeBy, idHash, now),
+			...login,
+		])
+		return consumed?.results[0] ?? null
+	}
+
+	/** The guard of the statements after `consumeIdentification` in its batch: the identification is consumed for `sessionId`. */
+	consumedFor(idHash: string, sessionId: string): SqlGuard {
+		return { sql: 'SELECT 1 FROM terminal_identifications WHERE id_hash = ? AND session_id = ?', binds: [idHash, sessionId] }
+	}
+
+	/**
+	 * Complete an asserted identification of `terminalId`, atomically and at most once: the terminal's own browser asks,
+	 * before the completion window closes. Null for any other identification, a second completion included.
+	 */
+	async completeIdentification(idHash: string, terminalId: string, now: number): Promise<TerminalIdentificationRow | null> {
 		return this.db
-			.prepare(`UPDATE terminal_identifications SET consumed_at = ?
-				WHERE id_hash = ? AND consumed_at IS NULL AND expires_at > ? RETURNING *`)
-			.bind(now, idHash, now)
+			.prepare(`UPDATE terminal_identifications SET completed_at = ?
+				WHERE id_hash = ? AND terminal_id = ? AND session_id IS NOT NULL AND completed_at IS NULL AND expires_at > ? RETURNING *`)
+			.bind(now, idHash, terminalId, now)
 			.first<TerminalIdentificationRow>()
 	}
 
@@ -254,10 +284,14 @@ export class TerminalRepository {
 		return (result.meta.changes ?? 0) > 0
 	}
 
-	/** Prune expired and ended identifications (cron). Returns the number removed. */
+	/**
+	 * Prune expired, cancelled and completed identifications (cron). An asserted one waits for its completion until it
+	 * expires. Returns the number removed.
+	 */
 	async pruneIdentifications(now: number): Promise<number> {
 		const result = await this.db
-			.prepare('DELETE FROM terminal_identifications WHERE expires_at < ? OR consumed_at IS NOT NULL')
+			.prepare(`DELETE FROM terminal_identifications
+				WHERE expires_at < ? OR completed_at IS NOT NULL OR (consumed_at IS NOT NULL AND session_id IS NULL)`)
 			.bind(now)
 			.run()
 		return result.meta.changes ?? 0

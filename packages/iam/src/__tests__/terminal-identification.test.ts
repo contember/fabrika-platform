@@ -20,6 +20,7 @@ import { createIamApp } from '../app'
 import { TERMINAL_COOKIE, TERMINAL_COOKIE_MAX_AGE_SECONDS, TERMINAL_RELEASE_PATH } from '../auth/terminals'
 import type { Env, RequestContext } from '../env'
 import { exchangeAuthCode } from '../handoff'
+import { TERMINAL_COMPLETE_PATH } from '../identification'
 import { pkceChallenge, randomToken } from '../oidc'
 import { createIamRpc } from '../rpc'
 import { hashToken } from '../secret'
@@ -136,6 +137,18 @@ async function caller(s: Scenario, app = APP, tokenApp = app): Promise<TerminalC
 	return { app, credential: await adminTokenFor(s.h.repositories, workload, { issuer: ORIGIN, app: tokenApp, session: false }), requestId: uuidv7() }
 }
 
+/** The terminal's browser completes an asserted identification at IAM; answers the proxy callback it is sent to. */
+async function completed(s: Scenario, completionUrl: string, cookie: string | null = s.terminalCookie): Promise<URL> {
+	const response = await s.fetch(new Request(completionUrl, cookie === null ? {} : { headers: { Cookie: cookie } }))
+	const location = response.headers.get('location')
+	if (response.status !== 302 || location === null) throw new Error(`the completion was refused: ${response.status}`)
+	return new URL(location)
+}
+
+function codeCount(s: Scenario): number {
+	return s.h.sqlite.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM auth_codes').get()?.n ?? -1
+}
+
 function identificationCount(s: Scenario): number {
 	return s.h.sqlite.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM terminal_identifications').get()?.n ?? -1
 }
@@ -201,7 +214,12 @@ describe('the identification operations', () => {
 
 		const asserted = await rpc.assertIdentity({ ...(await caller(s)), id, principalId: s.person })
 		if (!asserted.ok) throw new Error(`assertion refused: ${asserted.reason}`)
-		const callback = new URL(asserted.callbackUrl)
+		const completion = new URL(asserted.completionUrl)
+		expect(`${completion.origin}${completion.pathname}`).toBe(`${ORIGIN}${TERMINAL_COMPLETE_PATH}`)
+		expect(completion.searchParams.get(AUTH_CODE_PARAM)).toBeNull()
+		expect(codeCount(s)).toBe(0)
+
+		const callback = await completed(s, asserted.completionUrl)
 		expect(`${callback.origin}${callback.pathname}`).toBe(`${APP_ORIGIN}${AUTH_CALLBACK_PATH}`)
 		expect(callback.searchParams.get(AUTH_HANDOFF_STATE_PARAM)).toBe(STATE)
 
@@ -342,6 +360,99 @@ describe('the identification operations', () => {
 	})
 })
 
+describe('/auth/terminals/complete', () => {
+	async function asserted(s: Scenario, id: string): Promise<string> {
+		const result = await createIamRpc(env(s.h), s.ctx).assertIdentity({ ...(await caller(s)), id, principalId: s.person })
+		if (!result.ok) throw new Error(`assertion refused: ${result.reason}`)
+		return result.completionUrl
+	}
+
+	async function enrolOther(s: Scenario): Promise<string> {
+		const terminalId = uuidv7()
+		const token = randomToken()
+		await s.h.repositories.audit.commit([
+			s.h.repositories.principals.createServiceStatement(terminalId, 'Canteen'),
+			s.h.repositories.terminals.enrolStatement({
+				principalId: terminalId,
+				label: 'Canteen',
+				enrolledBy: s.person,
+				tokenHash: await hashToken(token),
+				sessionTtl: 300,
+			}),
+		])
+		return `${TERMINAL_COOKIE}=${token}`
+	}
+
+	test.each([
+		{ name: 'a browser that is no terminal', cookie: (_s: Scenario): Promise<string | null> => Promise.resolve(null) },
+		{ name: "another terminal's browser", cookie: (s: Scenario): Promise<string | null> => enrolOther(s) },
+	])('refuses $name and issues no code', async ({ cookie }) => {
+		const s = await scenario()
+		const completionUrl = await asserted(s, await identification(s))
+		const response = await s.fetch(new Request(completionUrl, cookieInit(await cookie(s))))
+		expect(response.status).toBe(403)
+		expect(response.headers.get('location')).toBeNull()
+		expect(codeCount(s)).toBe(0)
+		// The terminal's own browser still completes it.
+		expect((await completed(s, completionUrl)).pathname).toBe(AUTH_CALLBACK_PATH)
+	})
+
+	test('completes once, and not before an assertion', async () => {
+		const s = await scenario()
+		const id = await identification(s)
+		const early = new URL(TERMINAL_COMPLETE_PATH, ORIGIN)
+		early.searchParams.set(IDENTIFICATION_QUERY_PARAMETER, id)
+		expect((await s.fetch(new Request(early, { headers: { Cookie: s.terminalCookie } }))).status).toBe(403)
+		const completionUrl = await asserted(s, id)
+		await completed(s, completionUrl)
+		expect((await s.fetch(new Request(completionUrl, { headers: { Cookie: s.terminalCookie } }))).status).toBe(403)
+		expect(codeCount(s)).toBe(1)
+	})
+
+	test('refuses a completion after the window or after the asserted login ended', async () => {
+		const late = await scenario()
+		const lateUrl = await asserted(late, await identification(late))
+		late.h.sqlite.run('UPDATE terminal_identifications SET expires_at = ?', [now() - 1])
+		expect((await late.fetch(new Request(lateUrl, { headers: { Cookie: late.terminalCookie } }))).status).toBe(403)
+
+		const ended = await scenario()
+		const endedUrl = await asserted(ended, await identification(ended))
+		ended.h.sqlite.run('UPDATE sessions SET revoked_at = ?', [now()])
+		expect((await ended.fetch(new Request(endedUrl, { headers: { Cookie: ended.terminalCookie } }))).status).toBe(403)
+		expect(codeCount(late) + codeCount(ended)).toBe(0)
+	})
+
+	test("an attacker-chosen challenge buys nothing: the asserter never sees the code, and the terminal's proxy spends it", async () => {
+		const s = await scenario()
+		// A malicious asserter sends the terminal's browser to sign-in with a handoff whose verifier it holds.
+		const attackerVerifier = randomToken(32)
+		const planted = new URL('/auth/login', ORIGIN)
+		planted.searchParams.set('app', APP)
+		planted.searchParams.set('redirect', `${APP_ORIGIN}/desk`)
+		planted.searchParams.set(AUTH_HANDOFF_STATE_PARAM, 'attacker-state-0123456789')
+		planted.searchParams.set(AUTH_HANDOFF_CHALLENGE_PARAM, await pkceChallenge(attackerVerifier))
+		const opened = await s.fetch(new Request(planted, { headers: { Cookie: s.terminalCookie } }))
+		const id = new URL(opened.headers.get('location') ?? '').searchParams.get(IDENTIFICATION_QUERY_PARAMETER) ?? ''
+
+		const completionUrl = await asserted(s, id)
+		expect(new URL(completionUrl).searchParams.get(AUTH_CODE_PARAM)).toBeNull()
+		// From the attacker's own browser, the completion issues nothing.
+		expect((await s.fetch(new Request(completionUrl))).status).toBe(403)
+		expect(codeCount(s)).toBe(0)
+
+		// On the terminal, the code reaches the proxy, which holds no verifier for that state and spends the code.
+		const code = (await completed(s, completionUrl)).searchParams.get(AUTH_CODE_PARAM) ?? ''
+		const spent = await exchangeAuthCode(s.services, { app: APP, code, verifier: randomToken(32), requestId: 'proxy' })
+		expect(spent.result).toEqual({ ok: false, reason: 'invalid_verifier' })
+		const stolen = await exchangeAuthCode(s.services, { app: APP, code, verifier: attackerVerifier, requestId: 'attacker' })
+		expect(stolen.result.ok).toBe(false)
+	})
+})
+
+function cookieInit(cookie: string | null): RequestInit {
+	return cookie === null ? {} : { headers: { Cookie: cookie } }
+}
+
 describe('/auth/terminals/release', () => {
 	function release(redirect: string, cookie: string | null, method = 'GET'): Request {
 		const url = new URL(TERMINAL_RELEASE_PATH, ORIGIN)
@@ -357,7 +468,7 @@ describe('/auth/terminals/release', () => {
 		if (!asserted.ok) throw new Error(`assertion refused: ${asserted.reason}`)
 		const { result } = await exchangeAuthCode(s.services, {
 			app: APP,
-			code: new URL(asserted.callbackUrl).searchParams.get(AUTH_CODE_PARAM) ?? '',
+			code: (await completed(s, asserted.completionUrl)).searchParams.get(AUTH_CODE_PARAM) ?? '',
 			verifier: VERIFIER,
 			requestId: 'redeem',
 		})

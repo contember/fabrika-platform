@@ -31,7 +31,7 @@ const base = {
 
 const Whoami = z.strictObject({ id: z.string(), terminal: z.nullable(z.strictObject({ id: z.string(), label: z.string() })) })
 const Identify = z.strictObject({ id: z.string(), principalId: z.string() })
-const Identified = z.strictObject({ terminal: z.nullable(z.string()), callbackUrl: z.nullable(z.string()), refused: z.nullable(z.string()) })
+const Identified = z.strictObject({ terminal: z.nullable(z.string()), completionUrl: z.nullable(z.string()), refused: z.nullable(z.string()) })
 
 function kioskContract(identify: `/${string}`, page: 'public' | 'member' = 'public') {
 	const app = defineApp(defineVocabulary({ ...base, terminal: { identify } }))
@@ -45,7 +45,7 @@ function kioskContract(identify: `/${string}`, page: 'public' | 'member' = 'publ
 				await ctx.terminals.cancel(input.id)
 				return {
 					terminal: open?.terminal.label ?? null,
-					callbackUrl: asserted.ok ? asserted.callbackUrl : null,
+					completionUrl: asserted.ok ? asserted.completionUrl : null,
 					refused: asserted.ok ? null : asserted.reason,
 				}
 			}),
@@ -78,7 +78,8 @@ function fakeTerminals(answers: Partial<IamTerminalRpc> = {}) {
 		},
 		assertIdentity: (input) => {
 			calls.push(input)
-			return answers.assertIdentity?.(input) ?? Promise.resolve({ ok: true, callbackUrl: 'https://notes.test/__fabrika/auth/callback?code=c1' })
+			return answers.assertIdentity?.(input)
+				?? Promise.resolve({ ok: true, completionUrl: 'https://iam.notes.test/auth/terminals/complete?identification=i1' })
 		},
 		cancelIdentification: (input) => {
 			calls.push(input)
@@ -196,7 +197,11 @@ describe('ctx.terminals', () => {
 			token: credential,
 			body: { id: 'ident-1', principalId: 'person-7' },
 		})
-		expect(resultOf(sent)).toEqual({ terminal: 'Entrance', callbackUrl: 'https://notes.test/__fabrika/auth/callback?code=c1', refused: null })
+		expect(resultOf(sent)).toEqual({
+			terminal: 'Entrance',
+			completionUrl: 'https://iam.notes.test/auth/terminals/complete?identification=i1',
+			refused: null,
+		})
 		expect(iam.calls.map(({ requestId: _requestId, ...call }) => call)).toEqual([
 			{ app: APP_ID, credential, id: 'ident-1' },
 			{ app: APP_ID, credential, id: 'ident-1', principalId: 'person-7' },
@@ -214,10 +219,10 @@ describe('ctx.terminals', () => {
 		const credential = await token('user', [grant('attendance.record')])
 		const booted = bootApp(app, { terminals: iam.rpc })
 		const refused = await send(booted, '/api/kiosk.identify', { token: credential, body: { id: 'ident-1', principalId: 'external-1' } })
-		expect(resultOf(refused)).toEqual({ terminal: null, callbackUrl: null, refused: 'invalid_principal' })
+		expect(resultOf(refused)).toEqual({ terminal: null, completionUrl: null, refused: 'invalid_principal' })
 		const before = iam.calls.length
 		const unknown = await send(booted, '/api/kiosk.identify', { token: credential, body: { id: 'x'.repeat(201), principalId: 'person-7' } })
-		expect(resultOf(unknown)).toEqual({ terminal: null, callbackUrl: null, refused: 'not_found' })
+		expect(resultOf(unknown)).toEqual({ terminal: null, completionUrl: null, refused: 'not_found' })
 		expect(iam.calls.length).toBe(before)
 	})
 

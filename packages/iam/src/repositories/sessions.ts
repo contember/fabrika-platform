@@ -1,6 +1,6 @@
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 
-import { type AuditEventInput, AuditWriter, type AuthLogInput, authLogStatement, type SqlChange } from './audit'
+import { type AuditEventInput, AuditWriter, type AuthLogInput, authLogStatement, guardedInsert, type SqlChange, type SqlGuard } from './audit'
 import { unixNow } from './sql'
 
 /** The logout row of a session: its principal comes from the session itself. */
@@ -50,6 +50,22 @@ export function sessionTerminal(row: Pick<SessionRow, 'terminal_id' | 'asserted_
 	return row.terminal_id === null || row.asserted_by === null ? null : { terminalId: row.terminal_id, assertedBy: row.asserted_by }
 }
 
+/** A session to create. */
+export interface NewSession {
+	tokenHash: string
+	principalId: string
+	idpSub?: string | null
+	email?: string | null
+	authenticationMethod?: AuthenticationMethod
+	expiresAt: number
+	/** Bind this session to ONE app (ADR-0022). Omitted = an IAM session, usable for any app. */
+	app?: string | null
+	/** The IAM session this is derived from. Revoking that one revokes this. */
+	parentSessionId?: string | null
+	/** A `terminal_assertion` session's terminal and asserting application; both or neither. */
+	terminal?: SessionTerminal | null
+}
+
 /** Methods with no upstream subject: the row CHECK pairs every other method with an `idp_sub`. */
 const SUBJECTLESS_METHODS: readonly AuthenticationMethod[] = ['password', 'terminal_assertion']
 
@@ -70,21 +86,18 @@ export class SessionRepository {
 	 * `auth_log` row, written in the same batch: a session nobody logged is never opened. A child session is a sign-in to
 	 * its app, which the batch records as the principal's last one there (`app_sign_ins`).
 	 */
-	async createSession(input: {
-		tokenHash: string
-		principalId: string
-		idpSub?: string | null
-		email?: string | null
-		authenticationMethod?: AuthenticationMethod
-		expiresAt: number
-		/** Bind this session to ONE app (ADR-0022). Omitted = an IAM session, usable for any app. */
-		app?: string | null
-		/** The IAM session this is derived from. Revoking that one revokes this. */
-		parentSessionId?: string | null
-		/** A `terminal_assertion` session's terminal and asserting application; both or neither. */
-		terminal?: SessionTerminal | null
-	}, log?: AuthLogInput): Promise<string> {
+	async createSession(input: NewSession, log?: AuthLogInput): Promise<string> {
 		const id = uuidv7()
+		await this.db.batch(this.createSessionStatements(id, input, log))
+		return id
+	}
+
+	/**
+	 * The statements that create session `id` with its `auth_log` row, for a use case that composes them into its own
+	 * batch. With `guard`, they write only when the guard finds its row: after a change earlier in that batch that must
+	 * have happened first.
+	 */
+	createSessionStatements(id: string, input: NewSession, log?: AuthLogInput, guard?: SqlGuard): SqlStatement[] {
 		const authenticationMethod = input.authenticationMethod ?? 'oidc'
 		if (!SUBJECTLESS_METHODS.includes(authenticationMethod) && input.idpSub == null) {
 			throw new Error(`A ${authenticationMethod} session requires an IdP subject`)
@@ -93,13 +106,12 @@ export class SessionRepository {
 		if ((authenticationMethod === 'terminal_assertion') !== (terminal !== null)) {
 			throw new Error('A terminal is named by exactly the terminal_assertion sessions')
 		}
-		const insert = this.db
-			.prepare(
-				`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, email, authentication_method, expires_at, created_at, app, parent_session_id,
-					terminal_id, asserted_by)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.bind(
+		const now = unixNow()
+		const session = guardedInsert(
+			`sessions (id, token_hash, principal_id, idp_sub, email, authentication_method, expires_at, created_at, app, parent_session_id,
+				terminal_id, asserted_by)`,
+			'?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?',
+			[
 				id,
 				input.tokenHash,
 				input.principalId,
@@ -107,21 +119,28 @@ export class SessionRepository {
 				input.email ?? null,
 				authenticationMethod,
 				input.expiresAt,
-				unixNow(),
+				now,
 				input.app ?? null,
 				input.parentSessionId ?? null,
 				terminal?.terminalId ?? null,
 				terminal?.assertedBy ?? null,
-			)
-		const now = unixNow()
+			],
+			guard,
+		)
 		const signIn = input.app == null ? [] : [
 			this.db
 				.prepare(`INSERT INTO app_sign_ins (app, principal_id, signed_in_at) VALUES (?, ?, ?)
 					ON CONFLICT (app, principal_id) DO UPDATE SET signed_in_at = excluded.signed_in_at`)
 				.bind(input.app, input.principalId, now),
 		]
-		await this.db.batch([insert, ...signIn, ...(log === undefined ? [] : [authLogStatement(this.db, log)])])
-		return id
+		if (guard !== undefined && signIn.length > 0) {
+			throw new Error('A guarded session is a login, not a sign-in to an app')
+		}
+		return [
+			this.db.prepare(session.sql).bind(...session.binds),
+			...signIn,
+			...(log === undefined ? [] : [authLogStatement(this.db, log, guard)]),
+		]
 	}
 
 	/**

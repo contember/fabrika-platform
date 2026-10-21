@@ -174,11 +174,16 @@ fails if that stops being true — it is the guard, not documentation of one.
   current login, `/auth/login` turns a terminal cookie into an identification (2 minutes, id hashed) holding the whole
   handoff, and 302s to the app's identify path on the handoff's return origin. The application's
   `inspectIdentification`/`assertIdentity`/`cancelIdentification` (the membership transport, `PropustkaApplication`)
-  take the app from the credential's `aud`; every dead id is `not_found`. `assertIdentity` consumes it, writes a login
-  no browser holds (`terminal_assertion`, the terminal's TTL) with its `auth_log` row, and answers `handoffLocation`.
-- **`/auth/terminals/release` IS A CROSS-SITE `GET` THAT CHANGES STATE**, the one exception to `sameOrigin` below: the
-  application's proxy sends the browser there from its sign-out. It revokes only the terminal's own sessions, and only
-  after the redirect passed the app's return-origin registry.
+  take the app from the credential's `aud`; every dead id is `not_found`. `assertIdentity` consumes it and writes a login
+  no browser holds (`terminal_assertion`, the terminal's TTL) with its `auth_log` row, in one batch guarded by the
+  consumption (`consumedFor`), and answers IAM's completion URL, never a code. `/auth/terminals/complete` issues the code
+  (`handoffLocation`) only to the browser holding the identification's own terminal cookie, once, within
+  `COMPLETION_TTL_SECONDS`, while the login is valid.
+- **`/auth/terminals/release` AND `/auth/terminals/complete` ARE CROSS-SITE `GET`S THAT CHANGE STATE**, the exceptions to
+  `sameOrigin` below: the application's proxy sends the browser to the release from its sign-out, and the application
+  sends it to the completion after its assertion. The release revokes only the terminal's own sessions, and only after
+  the redirect passed the app's return-origin registry. The completion completes only an identification its application
+  already asserted, for the terminal whose cookie the browser holds.
 - **WHICH APP'S PROXY TOKEN MAY ADMINISTER IS A REGISTRY.** `ADMIN_AUDIENCES` (deploy
   var `FABRIKA_IAM_ADMIN_AUDIENCES`, comma-separated app ids) is the `aud` allowlist `resolveAdmin`'s
   JWT branch checks; unset means the console gateway's own app id (`vozka`), explicitly empty means

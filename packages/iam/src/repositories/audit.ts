@@ -212,15 +212,32 @@ export class AuditWriter {
 }
 
 /**
+ * A one-row SELECT that statements after a guarded change in one batch require: they write only when it finds a row,
+ * so they follow the change exactly when it changed something.
+ */
+export interface SqlGuard {
+	readonly sql: string
+	readonly binds: readonly unknown[]
+}
+
+/** `INSERT INTO <target> SELECT <placeholders>`, guarded by `guard` when there is one. */
+export function guardedInsert(target: string, placeholders: string, values: readonly unknown[], guard?: SqlGuard): { sql: string; binds: unknown[] } {
+	if (guard === undefined) {
+		return { sql: `INSERT INTO ${target} VALUES (${placeholders})`, binds: [...values] }
+	}
+	return { sql: `INSERT INTO ${target} SELECT ${placeholders} WHERE EXISTS (${guard.sql})`, binds: [...values, ...guard.binds] }
+}
+
+/**
  * The INSERT of one `auth_log` row. `id` is deliberately omitted — the column is auto-assigned (SQLite rowid alias /
  * Postgres identity; see the note on `auth_log` in migration 0001). Everything else, `created_at` included, is bound.
+ * With `guard`, the row is written only when the guard finds its row.
  */
-export function authLogStatement(db: SqlDatabase, input: AuthLogInput): SqlStatement {
-	return db
-		.prepare(`INSERT INTO auth_log
-			(request_id, app, kind, principal_id, credential_id, decision, reason, privileged, created_at, terminal_id, asserted_by)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-		.bind(
+export function authLogStatement(db: SqlDatabase, input: AuthLogInput, guard?: SqlGuard): SqlStatement {
+	const insert = guardedInsert(
+		'auth_log (request_id, app, kind, principal_id, credential_id, decision, reason, privileged, created_at, terminal_id, asserted_by)',
+		'?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?',
+		[
 			input.requestId,
 			input.app,
 			input.kind,
@@ -232,7 +249,10 @@ export function authLogStatement(db: SqlDatabase, input: AuthLogInput): SqlState
 			unixNow(),
 			input.terminal?.terminalId ?? null,
 			input.terminal?.assertedBy ?? null,
-		)
+		],
+		guard,
+	)
+	return db.prepare(insert.sql).bind(...insert.binds)
 }
 
 export class AuditRepository {

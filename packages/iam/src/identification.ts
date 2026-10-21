@@ -1,20 +1,21 @@
 // The identification of a person at an enrolled terminal (ADR-0067 §2, §3): what an application asks IAM about an
 // identification that `/auth/login` opened for a terminal's browser, and its word about who stands there. IAM takes the
-// asserting application from the caller's verified token, never from the input, and issues the code itself, against the
-// handoff the application's proxy started.
+// asserting application from the caller's verified token, never from the input. The code of the handoff the
+// application's proxy started is issued only at the completion, to the terminal's own browser (`auth/terminals.ts`).
 
-import type {
-	AssertIdentityInput,
-	AssertIdentityResult,
-	CancelIdentificationInput,
-	CancelIdentificationResult,
-	InspectIdentificationInput,
-	InspectIdentificationResult,
-	TerminalCaller,
-	TerminalFailure,
+import {
+	type AssertIdentityInput,
+	type AssertIdentityResult,
+	type CancelIdentificationInput,
+	type CancelIdentificationResult,
+	IDENTIFICATION_QUERY_PARAMETER,
+	type InspectIdentificationInput,
+	type InspectIdentificationResult,
+	type TerminalCaller,
+	type TerminalFailure,
 } from '@fabrika/auth-core'
+import { uuidv7 } from '@fabrika/platform'
 import { IAM_APP } from './admin/router'
-import { handoffLocation } from './auth/handoff'
 import { administersIam } from './auth/sessions'
 import { type PrincipalRow, principalStatus, type SessionTerminal, type TerminalIdentificationRow, type TerminalRow } from './db'
 import type { Env } from './env'
@@ -26,6 +27,12 @@ import { getSigner, verifyAccessToken } from './signing'
 
 /** How long the person at a terminal has to identify before the sign-in starts over. */
 export const IDENTIFICATION_TTL_SECONDS = 120
+
+/** How long the terminal's browser has, after an assertion, to complete the identification at IAM. */
+export const COMPLETION_TTL_SECONDS = 60
+
+/** Where an application sends the terminal's browser after its assertion; IAM issues the code there. */
+export const TERMINAL_COMPLETE_PATH = '/auth/terminals/complete'
 
 /** The longest identification id or principal id IAM looks up; its own are far shorter. */
 const MAX_ID_LENGTH = 128
@@ -98,10 +105,11 @@ export interface AssertOutcome {
 }
 
 /**
- * The application's word that `principalId` stands at the identification's terminal. IAM consumes the identification,
- * opens a login for the person that no browser holds (the parent of the application session), logs it in the same
- * batch, and issues the code of the handoff the identification carries. A refused principal leaves the identification
- * open, so the person can try again within its two minutes.
+ * The application's word that `principalId` stands at the identification's terminal. In one batch, IAM consumes the
+ * identification and opens a login for the person that no browser holds (the parent of the application session), with
+ * its `auth_log` row. It answers IAM's completion URL, never a code: only the terminal's own browser completes the
+ * identification there, and only then does IAM issue the code of the handoff the identification carries. A refused
+ * principal leaves the identification open, so the person can try again within its two minutes.
  */
 export async function assertIdentity(services: Services, env: CallerEnv, input: AssertIdentityInput): Promise<AssertOutcome> {
 	const asking = await askingApp(services, env, input)
@@ -118,12 +126,10 @@ export async function assertIdentity(services: Services, env: CallerEnv, input: 
 	if (person === null || !signsInAtTerminal(person)) {
 		return { result: INVALID_PRINCIPAL, principalId: person?.id ?? null, terminal }
 	}
-	// Single use: a concurrent assertion of the same id consumes nothing and is refused here.
-	const consumed = await services.repositories.terminals.consumeIdentification(open.identification.id_hash, now)
-	if (consumed === null) {
-		return { result: NOT_FOUND, principalId: person.id, terminal }
-	}
-	const loginId = await services.repositories.sessions.createSession({
+	const { terminals, sessions } = services.repositories
+	const idHash = open.identification.id_hash
+	const loginId = uuidv7()
+	const login = sessions.createSessionStatements(loginId, {
 		tokenHash: await hashToken(randomToken(32)),
 		principalId: person.id,
 		authenticationMethod: 'terminal_assertion',
@@ -138,14 +144,15 @@ export async function assertIdentity(services: Services, env: CallerEnv, input: 
 		reason: 'terminal_assertion',
 		privileged: await administersIam(services, person.id),
 		terminal,
-	})
-	const callbackUrl = await handoffLocation(services, {
-		app: consumed.app,
-		returnUrl: consumed.return_url,
-		state: consumed.handoff_state,
-		challenge: consumed.handoff_challenge,
-	}, loginId)
-	return { result: { ok: true, callbackUrl }, principalId: person.id, terminal }
+	}, terminals.consumedFor(idHash, loginId))
+	// Single use: a concurrent assertion of the same id consumes nothing, opens no login and is refused here.
+	const consumed = await terminals.consumeIdentification({ idHash, sessionId: loginId, now, completeBy: now + COMPLETION_TTL_SECONDS }, login)
+	if (consumed === null) {
+		return { result: NOT_FOUND, principalId: person.id, terminal }
+	}
+	const completion = new URL(TERMINAL_COMPLETE_PATH, services.config.issuer)
+	completion.searchParams.set(IDENTIFICATION_QUERY_PARAMETER, input.id)
+	return { result: { ok: true, completionUrl: completion.toString() }, principalId: person.id, terminal }
 }
 
 /** An active internal person. A service never signs in, and an external principal never on a terminal (ADR-0051). */

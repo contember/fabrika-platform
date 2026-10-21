@@ -82,9 +82,10 @@ The page widens `form-action` by the handoff's registered origin, like the login
 
 A browser that holds no IAM login but an enrolled terminal's cookie leaves IAM at step 3 for the application's
 identification page, with a single-use identification that holds the handoff's return URL, state and challenge. The
-application asserts the person over its transport. IAM then signs them in and answers the step 4 callback URL, which
-the application sends the browser to. The proxy redeems it with the verifier from step 1, so the handoff is unchanged
-([Human authentication](human-authentication.md#terminals)).
+application asserts the person over its transport. IAM then signs them in and answers its own completion URL, which the
+application sends the browser to. Only the terminal's own browser completes there: IAM issues the step 4 code to it and
+302s to the callback. The proxy redeems it with the verifier from step 1, so the handoff is unchanged, and the
+application never holds a code ([Human authentication](human-authentication.md#terminals)).
 
 ## The cookies
 
@@ -145,6 +146,10 @@ on a public hostname cannot hold a session at all.
 - **The proxy writes the long-lived app session on exactly one path**: successful
   redemption at the reserved callback. Starting login writes only the transient
   verifier cookie.
+- **A code without its verifier is spent.** A callback whose browser holds no verifier
+  cookie for its state did not start that sign-in. The proxy still redeems the code, with a
+  verifier made for no challenge, so IAM consumes it, and refuses the request. Whoever
+  started the sign-in elsewhere cannot redeem a code read off this browser.
 - **The proxy clears it on one path**: `/__fabrika/auth/signout?redirect=<path>`, answered,
   like the callback, before endpoint selection. It accepts only a same-origin `GET` with a
   path on the app's own origin, clears the app session cookie and drops its cached token, and

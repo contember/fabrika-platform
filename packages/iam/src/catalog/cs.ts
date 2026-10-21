@@ -89,6 +89,8 @@ export const cs: Catalog = {
 						return 'Přihlaste se účtem, který smí registrovat terminály.'
 					case 'terminal_enrolment_unavailable':
 						return 'Registrace teď není k dispozici. Zkuste to později.'
+					case 'terminal_completion_refused':
+						return 'Toto přihlášení vypršelo nebo už bylo použito. Identifikujte se znovu.'
 				}
 			},
 		},

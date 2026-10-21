@@ -89,6 +89,8 @@ export const en: Catalog = {
 						return 'Sign in with an account that may enrol terminals.'
 					case 'terminal_enrolment_unavailable':
 						return 'Enrolment is unavailable. Try again later.'
+					case 'terminal_completion_refused':
+						return 'This sign-in has expired or was already used. Identify again.'
 				}
 			},
 		},
