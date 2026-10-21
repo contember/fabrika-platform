@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { builderDaemonUrl } from '../../shared/urls'
 import { type RunningDaemon, startDaemon } from '../src/index'
+import { scratchDir } from './scratch'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -20,7 +20,7 @@ let dataDir: string
 let sessionsDir: string
 
 beforeAll(() => {
-	dataDir = mkdtempSync(join(tmpdir(), 'fabrika-gate-loop-'))
+	dataDir = scratchDir('fabrika-gate-loop-')
 	sessionsDir = join(dataDir, 'sessions')
 	daemon = startDaemon({ port: 0, sessionsDir })
 	base = builderDaemonUrl(daemon.port)
@@ -33,7 +33,7 @@ afterAll(() => {
 })
 
 async function openGate(sessionId: string, gate: string): Promise<void> {
-	const canvasDir = mkdtempSync(join(tmpdir(), 'fabrika-gate-canvas-'))
+	const canvasDir = scratchDir('fabrika-gate-canvas-')
 	writeFileSync(join(canvasDir, 'view.jsx'), "<Section title='Review me'>body</Section>")
 	const res = await fetch(`${base}/api/session/${sessionId}/plan`, {
 		method: 'POST',
@@ -126,7 +126,7 @@ describe('gate interactive loop', () => {
 	test('BUG B happy-path: gate wait PEEKs (no consume), then advance consumes and the phase derives forward', async () => {
 		const sessionId = 'gate-loop-e2e'
 
-		const repo = mkdtempSync(join(tmpdir(), 'fabrika-e2e-repo-'))
+		const repo = scratchDir('fabrika-e2e-repo-')
 		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
 		writeFileSync(
 			join(repo, '.fabrika', 'config.json'),
@@ -178,7 +178,7 @@ describe('gate interactive loop', () => {
 	test('re-opening a gate un-satisfies its phase: only the LATEST gate revision counts', async () => {
 		const sessionId = 'gate-loop-reopen'
 
-		const repo = mkdtempSync(join(tmpdir(), 'fabrika-reopen-repo-'))
+		const repo = scratchDir('fabrika-reopen-repo-')
 		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
 		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
 		const fabrikaDir = join(repo, '.fabrika')

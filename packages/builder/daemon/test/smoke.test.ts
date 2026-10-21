@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { PHASES } from '../../shared/phases'
 import { builderDaemonUrl } from '../../shared/urls'
 import { type RunningDaemon, startDaemon } from '../src/index'
 import { derivePhaseState } from '../src/phases'
+import { scratchDir } from './scratch'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -16,7 +16,7 @@ let base: string
 let sessionsDir: string
 
 beforeAll(() => {
-	sessionsDir = mkdtempSync(join(tmpdir(), 'fabrika-daemon-sessions-'))
+	sessionsDir = scratchDir('fabrika-daemon-sessions-')
 	daemon = startDaemon({ port: 0, sessionsDir })
 	base = builderDaemonUrl(daemon.port)
 })
@@ -40,7 +40,7 @@ describe('daemon http endpoints', () => {
 	})
 
 	test('GET /api/phase derives phase state from a .fabrika/ dir', async () => {
-		const repo = mkdtempSync(join(tmpdir(), 'fabrika-repo-'))
+		const repo = scratchDir('fabrika-repo-')
 		const fabrikaDir = join(repo, '.fabrika')
 		mkdirSync(fabrikaDir, { recursive: true })
 
@@ -62,7 +62,7 @@ describe('daemon http endpoints', () => {
 	})
 
 	test('POST /api/session/:id/plan (gate open) compiles + creates a revision', async () => {
-		const canvasDir = mkdtempSync(join(tmpdir(), 'fabrika-canvas-'))
+		const canvasDir = scratchDir('fabrika-canvas-')
 		writeFileSync(join(canvasDir, 'view.jsx'), "<Section title='Hi'>x</Section>")
 
 		const sessionId = 'smoke-session'
@@ -92,7 +92,7 @@ describe('daemon http endpoints', () => {
 	})
 
 	test('POST /plan with view records and compiles exactly that file', async () => {
-		const canvasDir = mkdtempSync(join(tmpdir(), 'fabrika-single-canvas-'))
+		const canvasDir = scratchDir('fabrika-single-canvas-')
 		const brief = join(canvasDir, 'brief.jsx')
 		const vision = join(canvasDir, 'vision.jsx')
 		writeFileSync(brief, "<Section title='Old'>old questions</Section>")
@@ -120,7 +120,7 @@ describe('daemon http endpoints', () => {
 	})
 
 	test('POST /plan rejects ambiguous view + directory input', async () => {
-		const canvasDir = mkdtempSync(join(tmpdir(), 'fabrika-ambiguous-canvas-'))
+		const canvasDir = scratchDir('fabrika-ambiguous-canvas-')
 		const view = join(canvasDir, 'view.jsx')
 		writeFileSync(view, "<Section title='X'>x</Section>")
 
@@ -136,12 +136,12 @@ describe('daemon http endpoints', () => {
 	})
 
 	test('a pushed-but-unanswered gate does NOT complete its phase', async () => {
-		const repo = mkdtempSync(join(tmpdir(), 'fabrika-gate-repo-'))
+		const repo = scratchDir('fabrika-gate-repo-')
 		const fabrikaDir = join(repo, '.fabrika')
 		mkdirSync(join(fabrikaDir, 'intent'), { recursive: true })
 		writeFileSync(join(fabrikaDir, 'intent', 'brief.md'), '# Brief\ncontent')
 
-		const canvasDir = mkdtempSync(join(tmpdir(), 'fabrika-gate-canvas-'))
+		const canvasDir = scratchDir('fabrika-gate-canvas-')
 		writeFileSync(join(canvasDir, 'brief.jsx'), "<Section title='Brief'>x</Section>")
 
 		const sessionId = 'gate-unanswered-session'
@@ -195,7 +195,7 @@ describe('daemon http endpoints', () => {
 	})
 
 	test('GET /api/session/:id/artifact reads a project file (sandboxed)', async () => {
-		const projectRoot = mkdtempSync(join(tmpdir(), 'fabrika-proj-'))
+		const projectRoot = scratchDir('fabrika-proj-')
 		mkdirSync(join(projectRoot, '.fabrika', 'architecture'), { recursive: true })
 		writeFileSync(join(projectRoot, '.fabrika', 'architecture', 'design.md'), '# tokens\n:root{--x:1}')
 		const canvasDir = join(projectRoot, '.gates', 'design')
@@ -229,7 +229,7 @@ describe('daemon http endpoints', () => {
 	})
 
 	test('re-pushing a session preserves its original projectRoot', async () => {
-		const canvasDir = mkdtempSync(join(tmpdir(), 'fabrika-pr-'))
+		const canvasDir = scratchDir('fabrika-pr-')
 		writeFileSync(join(canvasDir, 'view.jsx'), "<Section title='A'>x</Section>")
 		const sessionId = 'projectroot-session'
 
@@ -240,17 +240,18 @@ describe('daemon http endpoints', () => {
 				body: JSON.stringify({ directory: canvasDir, projectRoot, gate: 'intake' }),
 			})
 
-		await push('/tmp/original-root')
-		await push('/tmp/some-other-cwd')
+		const originalRoot = join(canvasDir, 'original-root')
+		await push(originalRoot)
+		await push(join(canvasDir, 'some-other-cwd'))
 
 		const meta = await (await fetch(`${base}/api/session/${sessionId}/meta`)).json()
-		expect(meta.projectRoot).toBe('/tmp/original-root')
+		expect(meta.projectRoot).toBe(originalRoot)
 
 		rmSync(canvasDir, { recursive: true, force: true })
 	})
 
 	test('GET /api/session/:id/skeletons parses opice metadata (brace-matched url)', async () => {
-		const projectRoot = mkdtempSync(join(tmpdir(), 'fabrika-sk-'))
+		const projectRoot = scratchDir('fabrika-sk-')
 		const tb = join(projectRoot, 'tests', 'browser')
 		mkdirSync(tb, { recursive: true })
 		writeFileSync(
@@ -284,7 +285,7 @@ describe('daemon http endpoints', () => {
 	})
 
 	test('gate answers persist server-side (PUT then GET responses)', async () => {
-		const canvasDir = mkdtempSync(join(tmpdir(), 'fabrika-resp-'))
+		const canvasDir = scratchDir('fabrika-resp-')
 		writeFileSync(join(canvasDir, 'view.jsx'), "<Section title='R'>x</Section>")
 		const sessionId = 'responses-session'
 		await fetch(`${base}/api/session/${sessionId}/plan`, {
@@ -326,7 +327,7 @@ describe('daemon http endpoints', () => {
 	})
 
 	test('POST /api/session/:id/reset drops the session (memory + meta)', async () => {
-		const canvasDir = mkdtempSync(join(tmpdir(), 'fabrika-reset-'))
+		const canvasDir = scratchDir('fabrika-reset-')
 		writeFileSync(join(canvasDir, 'view.jsx'), "<Section title='X'>x</Section>")
 		const sessionId = 'reset-session'
 		await fetch(`${base}/api/session/${sessionId}/plan`, {
@@ -352,7 +353,7 @@ describe('daemon http endpoints', () => {
 
 describe('derivePhaseState (filesystem fixture)', () => {
 	function freshFabrika(): string {
-		return join(mkdtempSync(join(tmpdir(), 'fabrika-derive-')), '.fabrika')
+		return join(scratchDir('fabrika-derive-'), '.fabrika')
 	}
 
 	test('empty → intake', () => {

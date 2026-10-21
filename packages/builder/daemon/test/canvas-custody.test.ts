@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import { scratchDir } from './scratch'
 
 if (process.env['FABRIKA_CANVAS_CUSTODY_CHILD'] !== '1') {
 	test('canvas custody with the real kernel in a process without the fake preload', async () => {
@@ -21,7 +21,7 @@ if (process.env['FABRIKA_CANVAS_CUSTODY_CHILD'] !== '1') {
 	const { BuildStream } = await import('../src/build-stream')
 
 	function fixture() {
-		const directory = mkdtempSync(join(tmpdir(), 'canvas-custody-'))
+		const directory = scratchDir('canvas-custody-')
 		const root = join(directory, 'project')
 		const keys = join(directory, 'keys')
 		const state = join(directory, 'state')

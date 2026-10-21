@@ -1,5 +1,5 @@
 import { compileEndpointTable, SESSION_COOKIE } from '@fabrika/auth-core'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HttpIamRpc } from '../../../../auth/src/rpc-http'
@@ -22,7 +22,8 @@ import { createHarness as createControlHarness } from './harness'
 import { unusedSourceConnection } from './source-connection'
 
 export async function integrationFixture() {
-	const directory = mkdtempSync(join(tmpdir(), 'builder-cross-plane-'))
+	// Resolved: the builder daemon refuses a project root behind a symlink, and macOS keeps the temp directory behind one.
+	const directory = realpathSync(mkdtempSync(join(tmpdir(), 'builder-cross-plane-')))
 	const root = join(directory, 'project')
 	const id = 'cross-plane'
 	const iam = createIamHarness()
