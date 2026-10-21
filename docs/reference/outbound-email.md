@@ -217,6 +217,21 @@ flow; it does not silently drop an email. Operations still owns its notification
 targets, outbox, retry schedule, and operator interface when email alert delivery
 is added.
 
+Only an installation administrator (`iam.admin`) receives a manual enrollment or
+reset URL. A user administrator's request answers 403 without a sender
+([ADR-0058](../decisions/0058-user-administration-is-grantable-on-its-own.md) section 5).
+An older release gave a user administrator the enrollment URL of an invited
+person. On an existing installation that ran without a sender, the operator
+checks for passwords set that way:
+
+1. Through `audit.list` with `action: 'iam.password.enrollment.issue'`, list the
+   events whose metadata is `delivery: manual`.
+2. Keep each event whose actor does not hold `iam.admin` (neither the built-in
+   `admin` role nor a bootstrap mailbox).
+3. For each such target, disable the password (`passwords.disable`), which also
+   ends its password sessions. Then an installation administrator issues a new
+   enrollment, or the person signs in through OIDC.
+
 ## The installation's transport
 
 An installation configures at most one transport, for IAM and for the applications
