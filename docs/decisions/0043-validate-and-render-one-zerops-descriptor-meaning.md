@@ -170,8 +170,9 @@ included. The framework reads these variables and removes them from `process.env
 
 The generated `run` section depends on two platform facts ([platform facts](../reference/zerops-platform.md)).
 A failed `initCommands` entry stops activation, and the readiness window opens with `run.start`, after the init
-commands (a 240 s init command behind a 60 s window activates). Both are verified live. Its readiness check is an `httpGet` of the contract's health endpoint, which is
-verified to gate a deploy.
+commands (a 240 s init command behind a 60 s window activates). Both are verified live. Its readiness check is an `exec` that requests the contract's health endpoint
+until a 2xx answers, for at most 9 s of each attempt; an `exec` check is verified to gate a deploy. An `httpGet` check
+would pass only at the second attempt, 10 s later, because the server rarely listens one second after `run.start`.
 
 ### Exposure is refused, with no approval path
 

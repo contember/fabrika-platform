@@ -429,8 +429,15 @@ Measured by the platform-facts table's live suite (`live: 'build'`, `FABRIKA_LIV
 
 The generated run section of a contract application
 ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)) depends on the second row: its
-migrations, its schema check and its generated isolation tests are init commands. Its readiness check is the `httpGet`
-above, against the contract's health endpoint.
+migrations, its schema check and its generated isolation tests are init commands. Its readiness check is an `exec`
+against the contract's health endpoint (below).
+
+#### Verified live (2026-10-21, a throwaway `alpine/bun@1.3` service): one `exec` readiness attempt may wait for the server
+
+The first readiness attempt runs about one second after `run.start`, and the next one `retryPeriod` (at least 10 s)
+later. A server that listened 4 s after start, behind an `exec` check whose command polled its health path every 200 ms
+for up to 9 s, logged `ready after 1 attempts (took 5s)`. With an `httpGet` check the Notes example logged a refused first
+attempt and `ready after 2 attempts (took 10s)`. Activation followed readiness by about 21 s in both cases.
 
 #### Verified live (2026-10-21, account Contember, project `fabrika-live`): the readiness window opens with `run.start`, after the init commands
 
