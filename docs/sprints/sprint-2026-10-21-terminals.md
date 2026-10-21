@@ -316,3 +316,6 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
   be the terminal's, the login and its child carry it (`sessions.terminal_generation`), and the validity join requires
   it. No lock ordering is needed: a login written by an assertion that raced a release is invalid on arrival. Opus #2
   (a failed write lost the identification) was already closed by fix 1's guarded batch.
+- Review fix 4: `memberCallerOf` intersected a token's `perms` with the person's own live permissions, dropping every
+  terminal grant. A token with a `terminal` claim is now intersected with `permissionsOnTerminal` (the mint's set, live),
+  and is `invalid_token` once the terminal could no longer mint for the app. The token's own restriction still applies.

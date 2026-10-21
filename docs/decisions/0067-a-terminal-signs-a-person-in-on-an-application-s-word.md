@@ -170,6 +170,9 @@ that application, and the parent carries `asserted_by`. IAM refuses to use it fo
 includes IAM's own administration audience, which re-resolves permissions from the subject and would otherwise
 bypass the ceiling.
 
+IAM's own operations that re-resolve a caller's live permissions, such as the membership operations, resolve a
+terminal session's token against this same set, never against the person's own permissions alone.
+
 Validity: every use joins the session to its terminal, so a revoked terminal ends its sessions at once.
 Already-minted access tokens stay valid for the rest of their TTL, as with every revocation (ADR-0022 §4).
 

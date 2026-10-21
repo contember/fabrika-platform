@@ -158,7 +158,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   a platform audience even as the asserter, a revoked terminal, an asserter the profile no longer lists and a disabled
   terminal principal are `invalid_session`. `exchangeAuthCode` copies `terminal_id`/`asserted_by` to the child and
   refuses a code for another app; `resolveAdmin` refuses a token carrying `terminal`, because it re-resolves the
-  subject's own permissions. Mint and redemption `auth_log` rows take both values from the session row.
+  subject's own permissions. Mint and redemption `auth_log` rows take both values from the session row. A membership
+  operation holds a token carrying `terminal` to `permissionsOnTerminal` (the same set, live), not to the person's own
+  permissions, and refuses it (`invalid_token`) once the terminal could no longer mint there.
 - **A TERMINAL IS ENROLLED BY A BROWSER, NEVER OVER `/admin`** (ADR-0067 §1, `auth/terminals.ts`). `/auth/terminals/enroll`
   needs a current login holding `iam.terminals.manage` at IAM; its same-origin POST writes, in one batch, the `service`
   principal, the `terminals` row (5-minute TTL, no asserter), the revocation of that login with its `logout` row and

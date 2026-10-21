@@ -163,6 +163,21 @@ async function terminalAuthority(services: Services, terminal: SessionTerminal, 
 }
 
 /**
+ * A person's live permissions at `app` on the terminal `terminalId` that asserted them there (ADR-0067 §4), the set a
+ * mint would sign now; null when the terminal could no longer mint for `app`. What a terminal session's token is
+ * re-resolved against.
+ */
+export async function permissionsOnTerminal(
+	services: Services,
+	principal: PrincipalRow,
+	terminalId: string,
+	app: string,
+): Promise<PermissionEntry[] | null> {
+	const terminal = await terminalAuthority(services, { terminalId, assertedBy: app }, app)
+	return terminal === null ? null : withinTerminal(await resolvePermissionsAt(services, principal, app), terminal)
+}
+
+/**
  * A person's permissions on a terminal (ADR-0067 §4): each of their own entries narrowed by the ceiling patterns it
  * overlaps, keeping its scope, and then the terminal's own, with the source `terminal`. A person's `*` under a ceiling
  * `a.read` keeps `a.read`; an empty ceiling keeps none of the person's.

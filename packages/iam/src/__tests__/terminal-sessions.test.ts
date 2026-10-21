@@ -9,13 +9,16 @@ import { createLocalJWKSet, jwtVerify } from 'jose'
 import { resolveAdmin } from '../admin/router'
 import type { Env, RequestContext } from '../env'
 import { exchangeAuthCode, issueAuthCode } from '../handoff'
+import { listAppMembers } from '../membership'
 import { pkceChallenge, randomToken } from '../oidc'
 import { createIamRpc } from '../rpc'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
 import { mintToken } from '../tokens'
+import { PEOPLE_SCHEMA } from './helpers/app-people'
 import { CONSOLE_APP, createHarness, type Harness, seedInlineGrant, seedUser, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
+import { APP as MEMBERS_APP, CALLER_ENV, membershipFixture } from './helpers/membership'
 
 const ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const ISSUER = 'https://iam.test'
@@ -317,5 +320,50 @@ describe("IAM's administration refuses a terminal session's token", () => {
 			requestId: 'r',
 		})
 		expect(onTerminal).toEqual({ ok: false, status: 403, reason: 'not_allowed' })
+	})
+})
+
+describe('membership operations on a terminal session', () => {
+	// A terminal grants `people.list`, which the person lacks: the token carries it, and the directory honours it.
+	test('honour what the terminal grants, live, and refuse once the terminal no longer mints there', async () => {
+		const h = createHarness()
+		const f = await membershipFixture(h.repositories)
+		expect((await f.putSchema(PEOPLE_SCHEMA)).status).toBe(200)
+		const person = await f.person('ann')
+		const terminalId = uuidv7()
+		await h.repositories.audit.commit([
+			h.repositories.principals.createServiceStatement(terminalId, 'Entrance'),
+			h.repositories.terminals.enrolStatement({
+				principalId: terminalId,
+				label: 'Entrance',
+				enrolledBy: person.id,
+				tokenHash: await hashToken(randomToken()),
+				sessionTtl: 300,
+			}),
+		])
+		await h.repositories.terminals.setProfile(terminalId, { label: 'Entrance', sessionTtl: 300, asserters: [{ app: MEMBERS_APP, ceiling: [] }] })
+		await h.repositories.grants.createGrant({ principalId: terminalId, permissions: ['people.list'], app: MEMBERS_APP })
+		const session = randomToken()
+		await h.repositories.sessions.createSession({
+			tokenHash: await hashToken(session),
+			principalId: person.id,
+			authenticationMethod: 'terminal_assertion',
+			terminal: { terminalId, assertedBy: MEMBERS_APP },
+			terminalGeneration: 0,
+			app: MEMBERS_APP,
+			expiresAt: now() + 300,
+		})
+		const minted = await mintToken(f.services, TEST_SIGNING_ENV, { app: MEMBERS_APP, session, requestId: uuidv7() })
+		if (!minted.result.ok) throw new Error(`mint refused: ${minted.result.reason}`)
+		const list = () =>
+			listAppMembers(f.services, CALLER_ENV, f.ctx, { app: MEMBERS_APP, credential: minted.result.ok ? minted.result.token : '', requestId: uuidv7() })
+
+		// The person alone may not list the application's people.
+		const own = await listAppMembers(f.services, CALLER_ENV, f.ctx, { app: MEMBERS_APP, credential: await person.token(), requestId: uuidv7() })
+		expect(own).toEqual({ ok: false, reason: 'not_allowed' })
+		expect((await list()).ok).toBe(true)
+
+		await h.repositories.terminals.revoke(terminalId)
+		expect(await list()).toEqual({ ok: false, reason: 'invalid_token' })
 	})
 })
