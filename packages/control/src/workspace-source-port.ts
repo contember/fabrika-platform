@@ -1,6 +1,8 @@
 /** Provider-neutral Git workspace operations on an app's repository (ADR-0049). */
 export interface WorkspaceSourcePort {
 	readBranch(input: WorkspaceSourceCall & { branch: string }): Promise<string | null>
+	/** The heads of several branches of one repository, in request order; null for a branch that does not exist. */
+	readBranches(input: WorkspaceSourceCall & { branches: readonly string[] }): Promise<(string | null)[]>
 	createBranch(input: WorkspaceSourceCall & { branch: string; fromSha: string }): Promise<string>
 	listTree(input: WorkspaceSourceCall & { commitSha: string; directory?: string }): Promise<WorkspaceTree>
 	readFiles(input: WorkspaceSourceCall & { commitSha: string; paths: readonly string[] }): Promise<WorkspaceFiles>

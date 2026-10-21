@@ -43,6 +43,7 @@ export const zeropsEnvelopes = () => ({
 /** Every repository call, in order, by operation. */
 export type SourceCall =
 	| { kind: 'read-branch'; branch: string }
+	| { kind: 'read-branches'; branches: readonly string[] }
 	| { kind: 'create-branch'; branch: string; fromSha: string }
 	| { kind: 'list-tree'; commitSha: string; directory?: string }
 	| { kind: 'read-files'; commitSha: string; paths: readonly string[] }
@@ -69,6 +70,11 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 	readBranch(input: { target: WorkspaceSourceTarget; branch: string }): Promise<string | null> {
 		this.record(input.target, { kind: 'read-branch', branch: input.branch })
 		return Promise.resolve(this.branches.get(input.branch) ?? null)
+	}
+
+	readBranches(input: { target: WorkspaceSourceTarget; branches: readonly string[] }): Promise<(string | null)[]> {
+		this.record(input.target, { kind: 'read-branches', branches: input.branches })
+		return Promise.resolve(input.branches.map((branch) => this.branches.get(branch) ?? null))
 	}
 
 	createBranch(input: { target: WorkspaceSourceTarget; branch: string; fromSha: string }): Promise<string> {

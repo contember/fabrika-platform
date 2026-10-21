@@ -280,6 +280,15 @@ describe('GitHub workspace source', () => {
 		expect(repository.calls.map((call) => call.method)).toEqual(['readTree', 'readBlobTexts', 'readTree'])
 	})
 
+	test('reads several branch heads through one repository token, in request order', async () => {
+		const { source, repository, opened } = await fixture()
+		const branches = ['fabrika/a', 'fabrika/missing', ...Array.from({ length: 7 }, (_, index) => `fabrika/b${index}`)]
+		const heads = await source.readBranches({ target, branches, signal: signal() })
+		expect(heads).toEqual([headSha, null, ...Array(7).fill(headSha)])
+		expect(opened).toHaveLength(1)
+		expect(repository.calls.map((call) => call.args[0])).toEqual(branches)
+	})
+
 	test('compares through the repository and leaves out how far the base moved on', async () => {
 		const { source, repository } = await fixture()
 		expect(await source.compare({ target, baseSha: nextSha, headSha, signal: signal() })).toEqual({

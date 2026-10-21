@@ -28,21 +28,21 @@ commit that names the expected head; a stale head fails and the client re-reads.
 
 ## Tools
 
-| Tool                  | What it does                                                       |
-| --------------------- | ------------------------------------------------------------------ |
-| `list_targets`        | App environments the user may author.                              |
-| `create_workspace`    | Create a workspace branch from the default branch.                 |
-| `list_workspaces`     | The user's workspaces on a target.                                 |
-| `get_workspace`       | One workspace, with its head.                                      |
-| `get_workspace_diff`  | Files changed since the workspace base, optionally with patches.   |
-| `list_files`          | A page of paths in the workspace, optionally to a depth.           |
-| `read_files`          | File contents at the workspace head; an unread file says why.      |
-| `search_files`        | Paths by glob, or lines holding a literal text, within bounds.     |
-| `apply_changes`       | Commit writes, deletions and exact replacements against a head.    |
-| `deploy_stage`        | Start an ordinary run for the workspace head in the stage env.     |
-| `get_deployment`      | The run's state, a log window, approval link, `deviations`.        |
-| `create_pull_request` | Open a pull request from the workspace to the default branch.      |
-| `get_app_rules`       | The application rules or one topic, read-only, with a pin warning. |
+| Tool                  | What it does                                                        |
+| --------------------- | ------------------------------------------------------------------- |
+| `list_targets`        | App environments the user may author.                               |
+| `create_workspace`    | Create a workspace branch from the default branch.                  |
+| `list_workspaces`     | The user's workspaces, each with head, latest run and pull request. |
+| `get_workspace`       | One workspace, with its head, latest run and pull request.          |
+| `get_workspace_diff`  | Files changed since the workspace base, optionally with patches.    |
+| `list_files`          | A page of paths in the workspace, optionally to a depth.            |
+| `read_files`          | File contents at the workspace head; an unread file says why.       |
+| `search_files`        | Paths by glob, or lines holding a literal text, within bounds.      |
+| `apply_changes`       | Commit writes, deletions and exact replacements against a head.     |
+| `deploy_stage`        | Start an ordinary run for the workspace head in the stage env.      |
+| `get_deployment`      | The run's state, a log window, approval link, `deviations`.         |
+| `create_pull_request` | Open a pull request from the workspace to the default branch.       |
+| `get_app_rules`       | The application rules or one topic, read-only, with a pin warning.  |
 
 Every tool carries MCP tool annotations. A tool that only reads has `readOnlyHint: true`, so a client such as ChatGPT
 does not ask the user to confirm it. A writing tool states `destructiveHint` (it can overwrite or delete files, or replace
@@ -65,6 +65,10 @@ names every bound that cut the answer short. A text search costs one GitHub requ
 `get_workspace_diff` compares the live head with the workspace's base through GitHub's compare API. GitHub lists at most
 300 changed files. With `includePatches`, a patch is at most 32 KiB and all patches together at most 256 KiB; `paths`
 narrows which files carry one, and `incomplete` names the files left without a patch.
+
+`get_workspace` and `list_workspaces` name the pull request that `create_pull_request` opened or found, as Control
+recorded it; a pull request opened on GitHub by hand is not shown, and the record does not follow a merge or a close.
+`list_workspaces` reads every listed workspace's head through one GitHub token per repository.
 
 `deploy_stage` answers the run with its id as `runId` too, the name `get_deployment` takes. `get_deployment` says whether
 the run `finished` and gives a one-line `summary` of what its status means and what to do next; `run.exitCode` stays
