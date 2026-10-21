@@ -207,7 +207,8 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 	}, (input) => run(() => listFilesUseCase(c, input)))
 	server.registerTool('read_files', {
 		description: 'Read up to 50 files of the workspace branch at commitSha or at the current head. The result names the commit read; '
-			+ 'use it as expectedHeadSha for apply_changes. A missing, binary or oversized file has content null.',
+			+ 'use it as expectedHeadSha for apply_changes. A file that was not read has content null and a reason: missing, '
+			+ 'not_a_file, too_large (over 512 KiB), binary, or budget (past the 2 MiB one call returns; read it in another call).',
 		inputSchema: toolInput(toolInputs.readFiles),
 		annotations: READ_ONLY,
 	}, (input) => run(() => readFilesUseCase(c, input)))

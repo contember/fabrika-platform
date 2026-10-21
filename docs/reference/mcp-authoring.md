@@ -35,7 +35,7 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `list_workspaces`     | The user's workspaces on a target.                                 |
 | `get_workspace`       | One workspace, with its head.                                      |
 | `list_files`          | Paths in the workspace.                                            |
-| `read_files`          | File contents at the workspace head.                               |
+| `read_files`          | File contents at the workspace head; an unread file says why.      |
 | `apply_changes`       | Commit file writes and deletions against an expected head.         |
 | `deploy_stage`        | Start an ordinary run for the workspace head in the stage env.     |
 | `get_deployment`      | The run's state, a parked run's approval link, `deviations`.       |

@@ -9,7 +9,13 @@ import {
 	type GitHubTreeEntry,
 } from '@fabrika/github-app'
 import type { Env } from '../env'
-import { WorkspaceSourceError, type WorkspaceSourcePort, type WorkspaceSourceTarget, type WorkspaceTreeEntry } from '../workspace-source-port'
+import {
+	type WorkspaceFile,
+	WorkspaceSourceError,
+	type WorkspaceSourcePort,
+	type WorkspaceSourceTarget,
+	type WorkspaceTreeEntry,
+} from '../workspace-source-port'
 import { type GitHubAppCredential, readBoundAppCredential } from './connections/credentials'
 
 export const WORKSPACE_MAX_TREE_ENTRIES = 5000
@@ -72,7 +78,14 @@ export function githubWorkspaceSource(env: Env, createClient: WorkspaceGitHubCli
 			withRepository(target, signal, async (repository) => {
 				const read = await repository.readFiles(commitSha, paths, signal)
 				const contents = new Map(read.files.map((file) => [file.path, file.content]))
-				return { commitSha: read.commitSha, files: paths.map((path) => ({ path, content: contents.get(path) ?? null })) }
+				const reasons = new Map(read.unreadable.map((entry) => [entry.path, entry.reason]))
+				return {
+					commitSha: read.commitSha,
+					files: paths.map((path): WorkspaceFile => {
+						const content = contents.get(path)
+						return content === undefined ? { path, content: null, reason: reasons.get(path) ?? 'missing' } : { path, content }
+					}),
+				}
 			}),
 		commit: ({ target, branch, expectedHeadSha, message, author, changes, signal }) =>
 			withRepository(

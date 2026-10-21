@@ -15,6 +15,8 @@ export type {
 	GitHubTextFile,
 	GitHubTreeEntry,
 	GitHubTreeListing,
+	GitHubUnreadablePath,
+	GitHubUnreadableReason,
 } from './repository-types'
 export { pemToPkcs8 } from './signing'
 export type {

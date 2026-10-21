@@ -209,6 +209,10 @@ for (const backend of backends) {
 				expect((await listFilesUseCase(w.context(author), { workspaceId: created.id })).commitSha).toBe(sha('a'))
 				const read = await readFilesUseCase(w.context(author), { workspaceId: created.id, paths: ['README.md'], commitSha: sha('b') })
 				expect(read).toEqual({ commitSha: sha('b'), files: [{ path: 'README.md', content: 'content of README.md' }] })
+				w.source.unreadable.set('logo.png', 'binary')
+				expect((await readFilesUseCase(w.context(author), { workspaceId: created.id, paths: ['logo.png'] })).files).toEqual([
+					{ path: 'logo.png', content: null, reason: 'binary' },
+				])
 			})
 		})
 
