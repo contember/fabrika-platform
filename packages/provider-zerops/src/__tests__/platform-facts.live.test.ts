@@ -10,7 +10,8 @@
 // WHAT IT DOES TO THE PROJECT. It imports four throwaway services named `wu1<run id>*`, writes and removes
 // a handful of `FABRIKA_FACT_*` variables on one of them, and deletes every service it created again — including
 // when a row failed. The build-length PostgreSQL rows add a `postgresql:single@18` and a small SQL client
-// published on its subdomain, which answers the database's `max_connections` and nothing else. It never creates or deletes a project, never touches a service it did not create, and never
+// published on its subdomain, which answers the database's `max_connections` and nothing else, and a second
+// `postgresql:single@18` whose backup schedule they set to hourly. It never creates or deletes a project, never touches a service it did not create, and never
 // adopts one left behind by an earlier run: a leaked name is REPORTED at startup and left alone, because
 // adopting it would let an interrupted run silently change a later one's result.
 //
@@ -21,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { createZeropsApi } from '../api'
 import { zeropsPostgresMaxConnections } from '../database-budget'
+import { ensureBackupPeriod, PLATFORM_DATABASE_BACKUP_PERIOD } from '../installation/deploy'
 import { raiseMinRam } from '../provider'
 import {
 	assertLiveRowIsSafe,
@@ -90,7 +92,7 @@ const hasLiveAccount = account !== null
 
 export const skipReason = `skipped: set ${TOKEN_VAR} and ${PROJECT_VAR} (plus ${SLOW_VAR}=1 for the build-length rows) to run `
 	+ `the platform-facts table against a real Zerops account — it imports four throwaway ${RUN_PREFIX}* services into that `
-	+ `project (six with ${SLOW_VAR}=1, a PostgreSQL among them), writes and deletes their variables, and deletes every service it created again`
+	+ `project (seven with ${SLOW_VAR}=1, two PostgreSQL among them), writes and deletes their variables, and deletes every service it created again`
 
 if (!hasLiveAccount) {
 	console.warn(`platform-facts.live.test.ts ${skipReason}`)
@@ -516,6 +518,71 @@ const postgresProbe = (): { scripts: Record<string, FactScript>; stop: () => Pro
 
 const postgres = postgresProbe()
 
+const backupProbeImport = (database: string): string =>
+	['services:', `  - hostname: ${database}`, '    type: postgresql:single@18', `    profile: ${POSTGRES_PROBE_PROFILE}`, ''].join('\n')
+
+/**
+ * Imports its own `postgresql:single@18`, prints the backup configuration a fresh one reads, and sets the platform
+ * database's period through the deploy step's own `ensureBackupPeriod`. The fact holds when the period reads back,
+ * the retention reads back as it was sent, and a second run changes nothing. The printed lines record the formats.
+ */
+const backupPeriodRow: FactScript = async ({ transport, context, fact }) => {
+	const projectId = required(context, 'projectId')
+	const database = required(context, 'backupHostname')
+	const imported = await callApi(transport, 'POST', `/project/${projectId}/service-stack/import`, { yaml: backupProbeImport(database) })
+	if (imported.status !== 200) {
+		throw new PlatformFactError(fact.id, fact.section, `importing the database answered ${imported.status}`)
+	}
+	for (const processId of resolvePath(imported.body, 'serviceStacks[*].processes[*].id')) {
+		if (typeof processId === 'string') await awaitProcessTerminal(transport, processId)
+	}
+	const databaseId = await findServiceId(transport, projectId, database)
+	if (databaseId === null) {
+		throw new PlatformFactError(fact.id, fact.section, 'the import did not leave the database')
+	}
+	context.set('backupServiceId', databaseId)
+	const printBackupConfig = async (moment: string): Promise<void> => {
+		const read = await callApi(transport, 'GET', `/service-stack/${databaseId}/backup`)
+		const body = read.status === 200 ? read.body : null
+		console.info(
+			`platform-facts.live: ${moment} ${database} answers ${read.status}: backupPeriod ${JSON.stringify(first(body, 'backupPeriod'))}, `
+				+ `retentionPolicy ${JSON.stringify(first(body, 'retentionPolicy') ?? null)}, defaultRetentionPolicy ${
+					JSON.stringify(first(body, 'defaultRetentionPolicy') ?? null)
+				}, ${resolvePath(body, 'files[*]').length} file(s)`,
+		)
+	}
+	await printBackupConfig('a fresh')
+
+	const api = createZeropsApi({ token: transport.token })
+	const before = await api.getBackupConfig({ serviceId: databaseId, signal: transport.signal })
+	const sent = before.retentionPolicy ?? before.defaultRetentionPolicy
+	const ensure = () =>
+		ensureBackupPeriod({
+			api,
+			sleep: (ms) => transport.sleep(ms),
+			signal: transport.signal,
+			serviceId: databaseId,
+			hostname: database,
+			period: PLATFORM_DATABASE_BACKUP_PERIOD,
+			dryRun: false,
+		})
+	const startedAtMs = Date.now()
+	const outcome = await ensure()
+	console.info(`platform-facts.live: ensureBackupPeriod answered ${outcome.kind} after ${Date.now() - startedAtMs} ms`)
+	await printBackupConfig('the updated')
+	if (outcome.kind !== 'changed') {
+		throw new PlatformFactError(fact.id, fact.section, `a fresh database already reads ${PLATFORM_DATABASE_BACKUP_PERIOD}, so nothing was set`)
+	}
+	const after = await api.getBackupConfig({ serviceId: databaseId, signal: transport.signal })
+	if (!Bun.deepEquals(after.retentionPolicy, sent)) {
+		throw new PlatformFactError(fact.id, fact.section, 'the retention read back differs from the one sent whole')
+	}
+	const again = await ensure()
+	if (again.kind !== 'unchanged') {
+		throw new PlatformFactError(fact.id, fact.section, `a second run answered ${again.kind}`)
+	}
+}
+
 const scripts: Record<string, FactScript> = {
 	'unpacker-flat-archive': unpackerProbe({ directoryEntries: false, expected: 'BUILD_FAILED' }),
 	'unpacker-directory-entries': unpackerProbe({ directoryEntries: true, expected: 'ACTIVE' }),
@@ -524,6 +591,7 @@ const scripts: Record<string, FactScript> = {
 	'slow-init-command': unpackerProbe({ directoryEntries: true, expected: 'ACTIVE', failure: 'slow-init-command' }),
 	'authorization-forwarded': authorizationForwarded,
 	...postgres.scripts,
+	'postgres-backup-period': backupPeriodRow,
 }
 
 describe.skipIf(!hasLiveAccount)('the platform-facts table, against a real Zerops account', () => {
@@ -557,9 +625,10 @@ describe.skipIf(!hasLiveAccount)('the platform-facts table, against a real Zerop
 		context.set('absentAppVersionId', 'AAAAAAAAAAAAAAAAAAAAAA')
 		context.set('postgresHostname', `${hostname}p`)
 		context.set('sqlClientHostname', `${hostname}q`)
+		context.set('backupHostname', `${hostname}b`)
 		created.push(hostname, `${hostname}d`, `${hostname}c`, `${hostname}n`)
-		// Only the build-length PostgreSQL rows create these two, so a run without them deletes nothing more.
-		cleanup.push(`${hostname}p`, `${hostname}q`)
+		// Only the build-length PostgreSQL rows create these three, so a run without them deletes nothing more.
+		cleanup.push(`${hostname}p`, `${hostname}q`, `${hostname}b`)
 		// The `zeropsSetup` row expects a refusal; if the platform ever accepts it, the service is still ours.
 		cleanup.push(...created, `${hostname}s`)
 		console.info(`platform-facts.live: run ${runId} will create ${created.join(', ')} in the configured project`)

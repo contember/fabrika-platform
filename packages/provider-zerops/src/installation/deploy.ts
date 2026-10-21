@@ -21,7 +21,8 @@
 //
 // It composes the proxy manifest and ships it in the proxy's build archive. It writes the exact namespace
 // planning source default and the per-installation configuration derived from the resolved public hosts
-// (each service's own origin, the origins it must know about, and the installation's environment name). **It writes no credential at all** — every
+// (each service's own origin, the origins it must know about, and the installation's environment name),
+// and the platform database's backup schedule. **It writes no credential at all** — every
 // secret an installation holds is `platform init`'s to place, and a deploy that cannot write one cannot
 // leak one. The two credentials this command HOLDS are the Zerops access token and the IAM admin key,
 // both from the environment, neither ever logged.
@@ -30,9 +31,9 @@
 //
 // Every variable is READ before it is written and skipped when it already matches, so a second run
 // writes nothing; the subdomain is decided by reading `subdomainAccess` back, so a second run enables
-// nothing; and the schema reconcile is an upsert. What a re-run does do is redeploy — that is what
-// "deploy" means, and the platform keeps the previous version serving whenever the new one fails its
-// readiness gate.
+// nothing; the database's backup period is read and set only when it differs; and the schema reconcile
+// is an upsert. What a re-run does do is redeploy — that is what "deploy" means, and the platform keeps
+// the previous version serving whenever the new one fails its readiness gate.
 
 import { FABRIKA_SERVICE_TABLE_DIGEST, readEnvironmentName } from '@fabrika/auth-core'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
@@ -44,12 +45,14 @@ import {
 	prepareZeropsDescriptor,
 	readableContent,
 	type Sleeper,
+	waitForProcess,
 	ZEROPS_ACTIVE,
 	ZEROPS_SERVICE_NOT_HTTP,
 	ZEROPS_TERMINAL,
 	type ZeropsApi,
 	ZeropsApiError,
 	type ZeropsNamespaceProxySource,
+	type ZeropsProcess,
 	type ZeropsService,
 	type ZeropsServiceEnv,
 } from '../index'
@@ -111,6 +114,15 @@ export const PLATFORM_SEQUENTIAL_DEPLOY = ['proxy', 'control'] as const
 
 /** The proxy's hostname. The only publicly routed service, and the one that carries the manifest. */
 export const PLATFORM_PROXY_SERVICE = 'proxy'
+
+/** IAM's and control's database, on both tiers. This command deploys nothing to it; it sets its backup schedule. */
+export const PLATFORM_DATABASE_SERVICE = 'db'
+
+/**
+ * Hourly. Zerops has no point-in-time recovery: a single-node database loses everything since its last `pg_dump`, which
+ * by default is daily. UNVERIFIED: that `backupPeriod` takes this 5-field cron, as the GUI documentation describes.
+ */
+export const PLATFORM_DATABASE_BACKUP_PERIOD = '0 * * * *'
 
 /** How often a triggered pipeline is polled. */
 const POLL_INTERVAL_MS = 5_000
@@ -208,43 +220,57 @@ const resolveProject = async (
 /** The private source service of an earlier layout; Control now streams sources itself (ADR-0029). */
 const LEFTOVER_SOURCE_SERVICE = 'source'
 
+/** The services this command touches: the four it deploys, and the database whose backups it schedules. */
+interface ResolvedInstallation {
+	readonly services: ReadonlyMap<PlatformDeployService, ResolvedService>
+	readonly databaseId: string
+}
+
 /**
  * Find every platform service by hostname in one listing.
  *
- * One call rather than four `findService` lookups, so a missing service is reported as the whole set
+ * One call rather than five `findService` lookups, so a missing service is reported as the whole set
  * that is missing — an installation that was never imported fails once, naming all of it, rather than
- * four runs later. Build runtimes (`build<hostname>v<n>`) share the project and are ignored by the
+ * five runs later. Build runtimes (`build<hostname>v<n>`) share the project and are ignored by the
  * exact-name match.
  */
 const resolveServices = async (
 	projectId: string,
 	{ api, log, signal }: PlatformDeployCollaborators,
-): Promise<Map<PlatformDeployService, ResolvedService>> => {
+): Promise<ResolvedInstallation> => {
 	const services = await api.listProjectServices({ projectId, signal })
 	if (services.some((service: ZeropsService) => service.name === LEFTOVER_SOURCE_SERVICE)) {
 		log.warn('a `source` service from an earlier layout is present and unused; it may still hold GitHub App keys; delete it or reinstall')
 	}
-	const resolved = new Map<PlatformDeployService, ResolvedService>()
-	const missing: string[] = []
-	for (const hostname of PLATFORM_DEPLOY_ORDER) {
+	const idOf = (hostname: string): string | undefined => {
 		const matches = services.filter((service: ZeropsService) => service.name === hostname)
 		if (matches.length > 1) {
 			throw new Error(`Zerops project ${projectId} has ${matches.length} services named \`${hostname}\``)
 		}
 		const match = matches[0]
-		if (match === undefined || match.id === '') {
+		return match === undefined || match.id === '' ? undefined : match.id
+	}
+	const resolved = new Map<PlatformDeployService, ResolvedService>()
+	const missing: string[] = []
+	for (const hostname of PLATFORM_DEPLOY_ORDER) {
+		const id = idOf(hostname)
+		if (id === undefined) {
 			missing.push(hostname)
 			continue
 		}
-		resolved.set(hostname, { hostname, id: match.id })
+		resolved.set(hostname, { hostname, id })
 	}
-	if (missing.length > 0) {
+	const databaseId = idOf(PLATFORM_DATABASE_SERVICE)
+	if (databaseId === undefined) {
+		missing.push(PLATFORM_DATABASE_SERVICE)
+	}
+	if (missing.length > 0 || databaseId === undefined) {
 		throw new Error(
 			`Zerops project ${projectId} has no ${missing.join(', ')} service — \`platform deploy\` updates an installation, `
 				+ 'it does not create one',
 		)
 	}
-	return resolved
+	return { services: resolved, databaseId }
 }
 
 export const serviceOf = (services: ReadonlyMap<PlatformDeployService, ResolvedService>, hostname: PlatformDeployService): ResolvedService => {
@@ -595,6 +621,60 @@ const ensureSubdomainAccess = async (
 	}
 }
 
+/** What `ensureBackupPeriod` found and did. */
+export type BackupPeriodOutcome =
+	| { readonly kind: 'unchanged' }
+	| { readonly kind: 'would-change'; readonly from: string }
+	| { readonly kind: 'changed'; readonly from: string }
+
+/**
+ * Set a managed service's backup period, read-compare-write.
+ *
+ * A different period is sent with the retention the service reads — its own, else the default — WHOLE, because a
+ * PUT on this API resets what it leaves out. The decision is the read-back, never the PUT returning.
+ */
+export const ensureBackupPeriod = async (input: {
+	readonly api: Pick<ZeropsApi, 'getBackupConfig' | 'configureBackup' | 'getProcess'>
+	readonly sleep: Sleeper
+	readonly signal: AbortSignal
+	readonly serviceId: string
+	readonly hostname: string
+	readonly period: string
+	readonly dryRun: boolean
+}): Promise<BackupPeriodOutcome> => {
+	const { api, sleep, signal, serviceId, hostname, period } = input
+	const current = await api.getBackupConfig({ serviceId, signal })
+	if (current.backupPeriod === period) {
+		return { kind: 'unchanged' }
+	}
+	if (input.dryRun) {
+		return { kind: 'would-change', from: current.backupPeriod }
+	}
+	assertRunning(signal)
+	let process: ZeropsProcess | null
+	try {
+		process = await api.configureBackup({
+			serviceId,
+			backupPeriod: period,
+			retentionPolicy: current.retentionPolicy ?? current.defaultRetentionPolicy,
+			signal,
+		})
+	} catch (error) {
+		if (error instanceof ZeropsApiError && error.status >= 400 && error.status < 500) {
+			throw new Error(`zerops: setting the backup schedule of ${hostname} was refused (${error.code === '' ? error.status : error.code})`)
+		}
+		throw error
+	}
+	if (process !== null) {
+		await waitForProcess({ api, processId: process.id, sleep, signal, label: `the backup schedule change of ${hostname}` })
+	}
+	const after = await api.getBackupConfig({ serviceId, signal })
+	if (after.backupPeriod !== period) {
+		throw new Error(`zerops: ${hostname} reads back the backup schedule \`${after.backupPeriod}\` after it was set to \`${period}\``)
+	}
+	return { kind: 'changed', from: current.backupPeriod }
+}
+
 /**
  * The installation's environment name, refused when a public origin contradicts it.
  *
@@ -641,7 +721,7 @@ export const deployPreparedPlatform = async (
 
 	log.step('Resolve the installation')
 	const project = await resolveProject(input, collaborators)
-	const services = await resolveServices(project.id, collaborators)
+	const { services, databaseId } = await resolveServices(project.id, collaborators)
 	log.info(`project ${project.name} (${project.id}) — ${PLATFORM_DEPLOY_ORDER.join(', ')}`)
 
 	const proxy = serviceOf(services, PLATFORM_PROXY_SERVICE)
@@ -749,6 +829,24 @@ export const deployPreparedPlatform = async (
 		})
 		log.info(`\`${IAM_APP_ID}\` reconciled`)
 	}
+
+	// Last, so a refusal here leaves every service deployed, published and registered; the command still fails on it.
+	log.step('Schedule the platform database backups')
+	const backup = await ensureBackupPeriod({
+		api: collaborators.api,
+		sleep: collaborators.sleep,
+		signal,
+		serviceId: databaseId,
+		hostname: PLATFORM_DATABASE_SERVICE,
+		period: PLATFORM_DATABASE_BACKUP_PERIOD,
+		dryRun: input.dryRun,
+	})
+	const schedule = `\`${PLATFORM_DATABASE_BACKUP_PERIOD}\``
+	log.info(
+		backup.kind === 'unchanged'
+			? `${PLATFORM_DATABASE_SERVICE}: backups already run on ${schedule}`
+			: `${PLATFORM_DATABASE_SERVICE}: backups ${backup.kind === 'changed' ? 'now run' : 'would run'} on ${schedule}, were \`${backup.from}\``,
+	)
 
 	log.step(input.dryRun ? 'Dry run complete — nothing was written' : 'Installation deployed')
 }

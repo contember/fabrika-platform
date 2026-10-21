@@ -15,7 +15,7 @@ import { UNATTENDED_FLAG } from '@fabrika/installation-init'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { FABRIKA_PROXY_MANIFEST_JSON, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
-import { deployPlatform, PLATFORM_DEPLOY_ORDER, type PlatformDeployService } from '../deploy'
+import { deployPlatform, PLATFORM_DATABASE_BACKUP_PERIOD, PLATFORM_DEPLOY_ORDER, type PlatformDeployService } from '../deploy'
 import { GENERATED_SECRET_KEYS, installationServiceEnv, type InstallCollaborators, installPrompts, runInstall } from '../install'
 import { parsePlatformInstallArgs as parseArgs, type PlatformInstallInput } from '../install-options'
 import { provisioningDocument } from '../install-provisioning'
@@ -143,6 +143,15 @@ describe('the sequence', () => {
 			'deploy:control',
 			'subdomain:proxy',
 		])
+	})
+
+	test("pass 2 leaves the new database's backups hourly", async () => {
+		const fixture = harness()
+
+		await fixture.run()
+
+		expect(fixture.zerops.calls.at(-1)).toBe('backup:db')
+		expect(fixture.zerops.backup('db').backupPeriod).toBe(PLATFORM_DATABASE_BACKUP_PERIOD)
 	})
 
 	test('waits on EVERY process the import returned before it reads or writes any environment', async () => {

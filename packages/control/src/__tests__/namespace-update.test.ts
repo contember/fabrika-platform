@@ -157,6 +157,8 @@ function fakeZerops(): FakeZerops {
 			return { id: `autoscaling-${serviceId}`, status: 'PENDING', actionName: 'stack.autoscaling' }
 		},
 		configureCustomAutoscaling: () => Promise.reject(new Error('a namespace update never sets custom autoscaling')),
+		getBackupConfig: () => Promise.reject(new Error('a namespace update never reads a backup schedule')),
+		configureBackup: () => Promise.reject(new Error('a namespace update never changes a backup schedule')),
 		getProcess: async ({ processId }) => {
 			if (faults.processLost && processId.startsWith('autoscaling-')) {
 				faults.processLost = false

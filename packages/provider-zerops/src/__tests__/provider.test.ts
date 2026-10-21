@@ -245,6 +245,8 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 			recorded.calls.push('enableSubdomainAccess')
 		},
 		configureAutoscaling: () => Promise.reject(new Error('the deploy driver must not change a profile')),
+		getBackupConfig: () => Promise.reject(new Error('the deploy driver must not read a backup schedule')),
+		configureBackup: () => Promise.reject(new Error('the deploy driver must not change a backup schedule')),
 		configureCustomAutoscaling: async ({ serviceId, autoscaling }) => {
 			if (serviceId === DATABASE_SERVICE_ID) {
 				recorded.calls.push('configureCustomAutoscaling:db')

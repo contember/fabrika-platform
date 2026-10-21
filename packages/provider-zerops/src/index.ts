@@ -18,6 +18,8 @@ export type {
 	ZeropsAppVersion,
 	ZeropsAppVersionStatus,
 	ZeropsAppVersionUpload,
+	ZeropsBackupConfig,
+	ZeropsBackupRetentionPolicy,
 	ZeropsImportedService,
 	ZeropsImportResult,
 	ZeropsIntegrationToken,

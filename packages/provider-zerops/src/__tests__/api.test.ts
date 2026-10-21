@@ -1093,6 +1093,67 @@ describe('Zerops upload-backed app versions', () => {
 		})
 	})
 
+	test('reads a backup schedule without its files, and sends the period and the retention back to `backup-config`', async () => {
+		const retention = {
+			maxTotalFiles: 50,
+			maxTotalGiB: 25,
+			protectedTags: ['keep'],
+			minDaily: 7,
+			maxDaily: 14,
+			minWeekly: 4,
+			maxWeekly: 8,
+			minMonthly: 3,
+			maxMonthly: 6,
+		}
+		const requests: { method: string; url: string; body: unknown }[] = []
+		const fetchImpl: FetchLike = async (url, init) => {
+			requests.push({ method: init?.method ?? 'GET', url, body: init?.body === undefined ? undefined : JSON.parse(init.body) })
+			if (init?.method === 'PUT') return jsonResponse({ process: null })
+			return jsonResponse({
+				files: [{ path: 'stack/2026-10-21 00:00:06', name: '2026-10-21 00:00:06', size: 399, metadata: { tags: ['daily'] } }],
+				backupPeriod: '0 0 * * *',
+				defaultRetentionPolicy: retention,
+				retentionPolicy: null,
+			})
+		}
+		const api = createZeropsApi({ token: 'zerops-secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await expect(api.getBackupConfig({ serviceId: 'db-1', signal: signal() })).resolves.toEqual({
+			backupPeriod: '0 0 * * *',
+			defaultRetentionPolicy: retention,
+		})
+		await expect(api.configureBackup({ serviceId: 'db-1', backupPeriod: '0 * * * *', retentionPolicy: retention, signal: signal() })).resolves
+			.toBeNull()
+		expect(requests).toEqual([
+			{ method: 'GET', url: 'https://zerops.test/service-stack/db-1/backup', body: undefined },
+			{
+				method: 'PUT',
+				url: 'https://zerops.test/service-stack/db-1/backup-config',
+				body: { backupPeriod: '0 * * * *', retentionPolicy: retention },
+			},
+		])
+	})
+
+	test("a service's own retention that does not parse fails the read, rather than reading as absent", async () => {
+		const retention = {
+			maxTotalFiles: 50,
+			maxTotalGiB: 25,
+			protectedTags: [],
+			minDaily: 7,
+			maxDaily: 14,
+			minWeekly: 4,
+			maxWeekly: 8,
+			minMonthly: 3,
+			maxMonthly: 6,
+		}
+		const { maxMonthly: _dropped, ...partial } = retention
+		const fetchImpl: FetchLike = async () =>
+			jsonResponse({ files: [], backupPeriod: '0 0 * * *', defaultRetentionPolicy: retention, retentionPolicy: partial })
+		const api = createZeropsApi({ token: 'zerops-secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await expect(api.getBackupConfig({ serviceId: 'db-1', signal: signal() })).rejects.toThrow('zerops: list backups returned an invalid response')
+	})
+
 	test('accepts a documented process without appVersion, omits zeropsYamlSetup, and deletes with a bodiless request', async () => {
 		const requests: { method: string; url: string; body: unknown }[] = []
 		const fetchImpl: FetchLike = async (url, init) => {
