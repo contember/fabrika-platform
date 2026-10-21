@@ -11,6 +11,7 @@ import {
 	type McpHttpHandler,
 	McpServer,
 	type StandardSchemaWithJSON,
+	type ToolAnnotations,
 } from '@modelcontextprotocol/server'
 import { z } from 'zod/v4'
 import { ControlApiError } from '../api/domain'
@@ -48,6 +49,9 @@ Before editing an application, call get_app_rules and follow it. Its topics hold
 - Declare every endpoint with its access and its .handle() in a slice's endpoints.ts; declare every step off the paved road.
 - Never loosen a contract, a table policy, a role or a test to make something pass. Tell the human which role the caller lacks.
 - When a file is refused as protected, stop and ask the human.`
+
+/** Hints only (MCP 2025-11-25): a client may skip its confirmation for a read; Control still authorizes every call. */
+const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: false }
 
 const APP_SKILL = readAppAgentSkill()
 const APP_TOPICS = APP_SKILL.references.map((reference) => reference.topic)
@@ -162,7 +166,7 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 			+ `a topic answers one reference file they name (references/<topic>.md): ${APP_TOPICS.join(', ')}. `
 			+ 'With workspaceId it also warns when that workspace pins another @fabrika/app than these rules describe.',
 		inputSchema: toolInput(toolInputs.getAppRules),
-		annotations: { readOnlyHint: true },
+		annotations: READ_ONLY,
 	}, async (input): Promise<CallToolResult> => {
 		try {
 			const warning = input.workspaceId === undefined ? null : await pinWarning(c, input.workspaceId)
@@ -176,30 +180,36 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 	server.registerTool('list_targets', {
 		description: 'List the app environments you may author. Each target is one stage environment of one app, with its GitHub repository.',
 		inputSchema: toolInput(toolInputs.listTargets),
+		annotations: READ_ONLY,
 	}, () => run(() => listTargetsUseCase(c)))
 	server.registerTool('create_workspace', {
 		description: 'Create a workspace on an authoring target. A workspace is a new Git branch `fabrika/<id>` created from the default '
 			+ 'branch. Returns the workspace id and its head commit.',
 		inputSchema: toolInput(toolInputs.createWorkspace),
+		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 	}, (input) => run(() => createWorkspaceUseCase(c, input)))
 	server.registerTool('list_workspaces', {
 		description: 'List your own workspaces, optionally for one app and environment. Use get_workspace for the current head and latest deploy.',
 		inputSchema: toolInput(toolInputs.listWorkspaces),
+		annotations: READ_ONLY,
 	}, (input) => run(() => listWorkspacesUseCase(c, input)))
 	server.registerTool('get_workspace', {
 		description: 'Read one of your workspaces: its branch, the current head commit (headSha) and the latest stage deploy. '
 			+ 'Use headSha as expectedHeadSha for apply_changes.',
 		inputSchema: toolInput(toolInputs.getWorkspace),
+		annotations: READ_ONLY,
 	}, (input) => run(() => getWorkspaceUseCase(c, input)))
 	server.registerTool('list_files', {
 		description: 'List the entries of a directory of the workspace branch (the repository root when no directory is given), '
 			+ 'at commitSha or at the current head.',
 		inputSchema: toolInput(toolInputs.listFiles),
+		annotations: READ_ONLY,
 	}, (input) => run(() => listFilesUseCase(c, input)))
 	server.registerTool('read_files', {
 		description: 'Read up to 50 files of the workspace branch at commitSha or at the current head. The result names the commit read; '
 			+ 'use it as expectedHeadSha for apply_changes. A missing, binary or oversized file has content null.',
 		inputSchema: toolInput(toolInputs.readFiles),
+		annotations: READ_ONLY,
 	}, (input) => run(() => readFilesUseCase(c, input)))
 	server.registerTool('apply_changes', {
 		description: 'Commit a batch of file changes to the workspace branch as one ordinary Git commit. expectedHeadSha must be the '
@@ -209,11 +219,13 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 			+ 'src/db/tables.ts or db/migrations/ is classified at deploy time; on a protected environment a widening waits for '
 			+ 'a person to approve it. A file may hold at most 512 KiB.',
 		inputSchema: toolInput(toolInputs.applyChanges),
+		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 	}, (input) => run(() => applyChangesUseCase(c, input)))
 	server.registerTool('deploy_stage', {
 		description: 'Deploy the current head of the workspace branch to its stage environment. Creates a deploy run for that exact commit; '
 			+ 'follow it with get_deployment. Production is never deployed from a workspace.',
 		inputSchema: toolInput(toolInputs.deployStage),
+		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 	}, (input) => run(() => deployStageUseCase(c, input)))
 	server.registerTool('get_deployment', {
 		description: 'Read a deploy run of one of your workspaces: its status, the deployed commit and the last lines of its build log. '
@@ -221,11 +233,13 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 			+ 'in plain language; you cannot approve it, and loosening access further only adds to what the person must approve. '
 			+ 'deviations names the changes off the paved road (declared sql, unscoped, connect, link issuing, database code) that need closer review.',
 		inputSchema: toolInput(toolInputs.getDeployment),
+		annotations: READ_ONLY,
 	}, (input) => run(() => getDeploymentUseCase(c, input)))
 	server.registerTool('create_pull_request', {
 		description: 'Open a pull request from the workspace branch to the default branch, or return the one already open. '
 			+ 'Production changes only after a human reviews and merges it in GitHub.',
 		inputSchema: toolInput(toolInputs.createPullRequest),
+		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 	}, (input) => run(() => createPullRequestUseCase(c, input)))
 	return server
 }
