@@ -87,7 +87,8 @@ and artifact state as one tuple, and delayed older projections cannot roll it
 back.
 
 Event detail resolves source maps for the whole event at once (`resolveEventFrames`): one map cache per event, at most
-250 frames (in-app first, then the top of each stack), 16 distinct maps and 4 concurrent map loads; the rest stay unresolved.
+250 frames (in-app first, then the top of each stack), 16 distinct maps, 16 MiB of map text and 4 concurrent map loads; the rest stay unresolved.
+`resolveFrames` is the one-stack case and applies the same caps.
 
 The Bun migration wrapper uses `definePostgresServiceMigrations` and composes the
 `platform-node` job-queue bundle before the Operations service bundle. Bundle names and filenames are

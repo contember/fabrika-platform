@@ -13,6 +13,8 @@ const CONTEXT_RADIUS = 5
 export const MAX_RESOLVED_FRAMES_PER_EVENT = 250
 // Each distinct map is a fetch, a JSON parse and a consumer build of up to megabytes.
 export const MAX_SOURCE_MAPS_PER_EVENT = 16
+// Measured worst case without it: 16 dense 8 MiB maps took ~17 s of synchronous parsing and 3.8 GB on Bun.
+export const MAX_SOURCE_MAP_TEXT_PER_EVENT = 16 * 1024 * 1024
 // Bounds how many map bodies are fetched and held in memory at the same time.
 export const SOURCE_MAP_LOAD_CONCURRENCY = 4
 
@@ -95,15 +97,23 @@ function minifiedDisplay(frame: StackFrame): DisplayFrame {
 	return result
 }
 
-function mapSourceContext(consumer: SourceMapConsumer, source: string, line: number): SourceContext | undefined {
+interface EventSourceMaps {
+	consumerFor(fileReference: string): Promise<SourceMapConsumer | null>
+	sourceLinesFor(consumer: SourceMapConsumer, source: string): string[] | null
+}
+
+function sourceLines(consumer: SourceMapConsumer, source: string): string[] | null {
 	let content: string | null
 	try {
 		content = consumer.sourceContentFor(source, true)
 	} catch {
 		content = null
 	}
-	if (!content) return undefined
-	const allLines = content.split('\n')
+	return content ? content.split('\n') : null
+}
+
+function mapSourceContext(allLines: string[] | null, line: number): SourceContext | undefined {
+	if (!allLines) return undefined
 	const start = Math.max(1, line - CONTEXT_RADIUS)
 	const end = Math.min(allLines.length, line + CONTEXT_RADIUS)
 	const lines = allLines.slice(start - 1, end)
@@ -112,11 +122,11 @@ function mapSourceContext(consumer: SourceMapConsumer, source: string, line: num
 
 async function resolveOne(
 	frame: StackFrame,
-	consumerFor: (fileReference: string) => Promise<SourceMapConsumer | null>,
+	maps: EventSourceMaps,
 ): Promise<DisplayFrame> {
 	const fileReference = frameFile(frame)
 	if (!fileReference || frame.line === undefined) return minifiedDisplay(frame)
-	const consumer = await consumerFor(fileReference)
+	const consumer = await maps.consumerFor(fileReference)
 	if (!consumer) return minifiedDisplay(frame)
 	try {
 		const position = consumer.originalPositionFor({
@@ -132,7 +142,7 @@ async function resolveOne(
 			inApp: frame.inApp === true,
 			resolved: true,
 		}
-		const source = mapSourceContext(consumer, position.source, position.line)
+		const source = mapSourceContext(maps.sourceLinesFor(consumer, position.source), position.line)
 		if (source) result.source = source
 		return result
 	} catch {
@@ -191,14 +201,19 @@ export async function resolveEventFrames(
 	if (!release) return displays
 	const sourceMapRelease = release
 	const consumers = new Map<string, Promise<SourceMapConsumer | null>>()
+	const linesByConsumer = new Map<SourceMapConsumer, Map<string, string[] | null>>()
 	const limitLoad = limitConcurrency(SOURCE_MAP_LOAD_CONCURRENCY)
+	let remainingText = MAX_SOURCE_MAP_TEXT_PER_EVENT
 	async function loadConsumer(key: string, logicalPath: string): Promise<SourceMapConsumer | null> {
 		try {
 			const object = reader.getSourceMap === undefined
 				? await reader.get(key)
 				: await reader.getSourceMap(sourceId, sourceMapRelease, logicalPath)
 			if (!object) return null
-			const map = parseRawSourceMap(JSON.parse(await object.text()))
+			const text = await object.text()
+			if (text.length > remainingText) return null
+			remainingText -= text.length
+			const map = parseRawSourceMap(JSON.parse(text))
 			return map ? new SourceMapConsumer(map) : null
 		} catch {
 			return null
@@ -219,17 +234,31 @@ export async function resolveEventFrames(
 		consumers.set(key, loading)
 		return loading
 	}
+	function sourceLinesFor(consumer: SourceMapConsumer, source: string): string[] | null {
+		let bySource = linesByConsumer.get(consumer)
+		if (bySource === undefined) {
+			bySource = new Map()
+			linesByConsumer.set(consumer, bySource)
+		}
+		const cached = bySource.get(source)
+		if (cached !== undefined) return cached
+		const lines = sourceLines(consumer, source)
+		bySource.set(source, lines)
+		return lines
+	}
+	const maps: EventSourceMaps = { consumerFor, sourceLinesFor }
 	await Promise.all(
 		framesToResolve(stacks).map(async ({ stack, index }) => {
 			const frame = stacks[stack]?.[index]
 			const row = displays[stack]
 			if (frame === undefined || row === undefined) return
-			row[index] = await resolveOne(frame, consumerFor)
+			row[index] = await resolveOne(frame, maps)
 		}),
 	)
 	return displays
 }
 
+// Resolves one stack as a whole event, so every caller gets the per-event caps.
 export async function resolveFrames(
 	frames: StackFrame[],
 	sourceId: string,

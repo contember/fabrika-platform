@@ -1,7 +1,13 @@
 import type { StackFrame } from '@fabrika/operations-contract'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import type { ObjectReader } from '../source-maps.js'
-import { MAX_RESOLVED_FRAMES_PER_EVENT, MAX_SOURCE_MAPS_PER_EVENT, resolveFrames, SOURCE_MAP_LOAD_CONCURRENCY } from '../source-maps.js'
+import {
+	MAX_RESOLVED_FRAMES_PER_EVENT,
+	MAX_SOURCE_MAP_TEXT_PER_EVENT,
+	MAX_SOURCE_MAPS_PER_EVENT,
+	resolveFrames,
+	SOURCE_MAP_LOAD_CONCURRENCY,
+} from '../source-maps.js'
 
 const MAP = JSON.stringify({
 	version: 3,
@@ -17,7 +23,7 @@ interface CountingReader extends ObjectReader {
 	readonly maxInFlight: () => number
 }
 
-function countingReader(): CountingReader {
+function countingReader(mapFor: (logicalPath: string) => string = () => MAP): CountingReader {
 	const loads: string[] = []
 	let parses = 0
 	let inFlight = 0
@@ -35,10 +41,11 @@ function countingReader(): CountingReader {
 			maxInFlight = Math.max(maxInFlight, inFlight)
 			await Bun.sleep(1)
 			inFlight--
+			const text = mapFor(logicalPath)
 			return {
 				async text() {
 					parses++
-					return MAP
+					return text
 				},
 			}
 		},
@@ -88,5 +95,41 @@ describe('source-map resolution limits', () => {
 		expect(resolved.slice(0, 4).some((display) => display.resolved)).toBeFalse()
 		expect(resolved.slice(4).every((display) => display.resolved)).toBeTrue()
 		expect(reader.maxInFlight()).toBeLessThanOrEqual(SOURCE_MAP_LOAD_CONCURRENCY)
+	})
+
+	test('does not parse maps past the per-event text budget', async () => {
+		const padding = ' '.repeat(Math.floor(MAX_SOURCE_MAP_TEXT_PER_EVENT * 0.4))
+		const largeMap = `${MAP.slice(0, -1)}${padding}}`
+		const reader = countingReader(() => largeMap)
+		const parse = spyOn(JSON, 'parse')
+		try {
+			const frames = ['a.js', 'b.js', 'c.js'].map((file) => frame(file))
+			const resolved = await resolveFrames(frames, 'source-a', 'v1', reader)
+			expect(reader.loads).toHaveLength(3)
+			expect(parse.mock.calls.filter(([text]) => text === largeMap)).toHaveLength(2)
+			expect(resolved.filter((display) => display.resolved)).toHaveLength(2)
+		} finally {
+			parse.mockRestore()
+		}
+	})
+
+	test("leaves only a failing map's frames unresolved", async () => {
+		const reader: ObjectReader = {
+			async get() {
+				return null
+			},
+			async getSourceMap(_sourceId, _releaseName, logicalPath) {
+				if (logicalPath === 'assets/broken.js') throw new Error('storage unavailable')
+				return {
+					async text() {
+						return MAP
+					},
+				}
+			},
+		}
+		const frames = [frame('broken.js'), frame('index.js'), frame('broken.js')]
+		const resolved = await resolveFrames(frames, 'source-a', 'v1', reader)
+		expect(resolved.map((display) => display.resolved)).toEqual([false, true, false])
+		expect(resolved[1]?.source?.lines).toEqual(['throw new Error()'])
 	})
 })
