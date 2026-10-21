@@ -13,6 +13,7 @@ import {
 	contractDigest as contractDigest05,
 } from '@fabrika/auth-core-0.5'
 import type { ContractArtifact as ContractArtifact06 } from '@fabrika/auth-core-0.6'
+import type { ContractArtifact as ContractArtifact07 } from '@fabrika/auth-core-0.7'
 
 /** An artifact of a format older than this release's, as its own release's reader produced it. */
 export type OlderArtifact = ContractArtifact05
@@ -50,6 +51,15 @@ export function from04(artifact: ContractArtifact04): SnapshotContract {
  */
 export function from06(artifact: ContractArtifact06): SnapshotContract {
 	return fromOlder(artifact)
+}
+
+/**
+ * A 0.7 artifact is this release's format: 0.8 only added optional forms (the `altcha` challenge, its `challenge`
+ * issuer rows, `csp.workerSrc`) that no 0.7 artifact holds, so its canonical form and contract digest are 0.7's. It is
+ * kept as it is, read by this release's schema, which refuses one that is not.
+ */
+export function from07(artifact: ContractArtifact07): SnapshotContract {
+	return { contract: parseContractArtifact(artifact) }
 }
 
 /**

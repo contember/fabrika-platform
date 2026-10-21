@@ -7,16 +7,20 @@
 import { schemaFromContract as schemaFromContract04 } from '@fabrika/app-0.4/contract'
 import { schemaFromContract as schemaFromContract05 } from '@fabrika/app-0.5/contract'
 import { schemaFromContract as schemaFromContract06 } from '@fabrika/app-0.6/contract'
+import { schemaFromContract as schemaFromContract07 } from '@fabrika/app-0.7/contract'
 import { CONTRACT_FORMAT } from '@fabrika/auth-core'
 import { contractDigest as contractDigest04 } from '@fabrika/auth-core-0.4'
 import { contractDigest as contractDigest05 } from '@fabrika/auth-core-0.5'
 import { contractDigest as contractDigest06 } from '@fabrika/auth-core-0.6'
+import { contractDigest as contractDigest07 } from '@fabrika/auth-core-0.7'
 import { readContractSource as readContractSource04 } from '@fabrika/check-0.4/contract'
 import { readContractSource as readContractSource05 } from '@fabrika/check-0.5/contract'
 import { readContractSource as readContractSource06 } from '@fabrika/check-0.6/contract'
+import { readContractSource as readContractSource07 } from '@fabrika/check-0.7/contract'
 import { contractProxyTable as contractProxyTable04 } from '@fabrika/proxy-core-0.4/manifest'
 import { contractProxyTable as contractProxyTable05 } from '@fabrika/proxy-core-0.5/manifest'
 import { contractProxyTable as contractProxyTable06 } from '@fabrika/proxy-core-0.6/manifest'
+import { contractProxyTable as contractProxyTable07 } from '@fabrika/proxy-core-0.7/manifest'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
@@ -60,6 +64,11 @@ const view06 = (files: ReadonlyMap<string, string>): ReleaseView => {
 	return { artifact, contractDigest: contractDigest06(artifact), proxyTable: contractProxyTable06(artifact), schema: schemaFromContract06(artifact) }
 }
 
+const view07 = (files: ReadonlyMap<string, string>): ReleaseView => {
+	const artifact = readContractSource07(files)
+	return { artifact, contractDigest: contractDigest07(artifact), proxyTable: contractProxyTable07(artifact), schema: schemaFromContract07(artifact) }
+}
+
 interface Case {
 	readonly name: string
 	readonly fixture: string
@@ -71,6 +80,11 @@ interface Case {
 	/** What the application computes at startup: `contractDigest(compileContract(contract, tables))` over its own modules. */
 	readonly startupDigest: string
 	readonly view: (files: ReadonlyMap<string, string>) => ReleaseView
+	/**
+	 * `current`: its artifact is this release's format (0.7's, which 0.8 only extended), kept and read as it is, and its
+	 * platform recorded the framework release beside the checker. `older`: it carries no format and is upcast.
+	 */
+	readonly format: 'older' | 'current'
 }
 
 const CASES: readonly Case[] = [
@@ -82,6 +96,7 @@ const CASES: readonly Case[] = [
 		checker: '0.4.8',
 		startupDigest: 'sha256:88312782b8fe094862492595b599ab4b8e24d439de0b31afe9d6c63d9e536fb2',
 		view: view04,
+		format: 'older',
 	},
 	{
 		name: 'the CRM at v0.5.4, an older patch of the bundled 0.5.5 reader',
@@ -91,6 +106,7 @@ const CASES: readonly Case[] = [
 		checker: '0.5.5',
 		startupDigest: 'sha256:88312782b8fe094862492595b599ab4b8e24d439de0b31afe9d6c63d9e536fb2',
 		view: view05,
+		format: 'older',
 	},
 	{
 		name: 'an application with form files at v0.5.5',
@@ -100,6 +116,7 @@ const CASES: readonly Case[] = [
 		checker: '0.5.5',
 		startupDigest: 'sha256:b52454f9becd0e2beae741bcea7644f0ff232dd5f4d8178a096228a3809e94d6',
 		view: view05,
+		format: 'older',
 	},
 	{
 		name: 'a GitHub webhook with its generated binding endpoints, and a job with a timeout, at v0.5.5',
@@ -109,6 +126,7 @@ const CASES: readonly Case[] = [
 		checker: '0.5.5',
 		startupDigest: 'sha256:e2afd0f3d3f482ad8100f5cc92b550085932349564d2319bcf55b8a3cdaef267',
 		view: view05,
+		format: 'older',
 	},
 	{
 		name: 'the CRM at v0.6.0, read by the 0.6 reader although its framework sources are those of 0.5.5',
@@ -118,6 +136,17 @@ const CASES: readonly Case[] = [
 		checker: '0.6.0',
 		startupDigest: 'sha256:88312782b8fe094862492595b599ab4b8e24d439de0b31afe9d6c63d9e536fb2',
 		view: view06,
+		format: 'older',
+	},
+	{
+		name: "the CRM at v0.7.0, whose artifact is this release's format",
+		fixture: 'crm-0.7.0.json',
+		app: 'crm',
+		framework: '0.7.0',
+		checker: '0.7.0',
+		startupDigest: 'sha256:60cc6dd14474d3bb2c38af5861660add9316939b0a8eb5e54d05a3a93a856639',
+		view: view07,
+		format: 'current',
 	},
 ]
 
@@ -132,7 +161,7 @@ for (const release of CASES) {
 		)
 
 	describe(`${release.name} on this platform`, () => {
-		test("upcasts its jobs' and webhooks' time limits to what its release ran with", async () => {
+		test.skipIf(release.format === 'current')("upcasts its jobs' and webhooks' time limits to what its release ran with", async () => {
 			const contract = (await read()).contract
 			if (contract === null) throw new Error('the snapshot has no contract')
 			const older = z.object({ jobs: z.record(z.object({ timeout: z.string().nullable() }).passthrough()) }).passthrough().parse(live.artifact)
@@ -150,7 +179,8 @@ for (const release of CASES) {
 			const snapshot = await read()
 			expect(snapshot.checker).toBe(release.checker)
 			expect(snapshot.framework).toBe(release.framework)
-			expect(live.artifact).toEqual(snapshot.older)
+			expect(live.artifact).toEqual(release.format === 'current' ? snapshot.contract : snapshot.older)
+			if (release.format === 'current') expect(snapshot.older).toBeUndefined()
 			expect(snapshot.contract?.format).toBe(CONTRACT_FORMAT)
 		})
 
@@ -182,7 +212,8 @@ for (const release of CASES) {
 		test('a snapshot its platform stored publishes the same contract, and its next unchanged deploy changes nothing', async () => {
 			const snapshot = await read()
 			const stored = parseSnapshot(fixture.platform.stored)
-			expect(stored.framework).toBeUndefined()
+			// A 0.7 Control records the framework release beside the checker; an older one recorded neither.
+			expect(stored.framework).toBe(release.format === 'current' ? release.framework : undefined)
 			expect(approvedAccess(stored)?.contract).toEqual(approvedAccess(snapshot)?.contract)
 			expect(approvedAccess(stored)?.contractDigest).toBe(release.startupDigest)
 			expect(classifyAccess(stored, snapshot)).toEqual({ outcome: 'none', changes: [] })
@@ -192,7 +223,7 @@ for (const release of CASES) {
 			const snapshot = await read()
 			const stored = z.object({ contract: z.record(z.unknown()) }).passthrough().parse(JSON.parse(serializeSnapshot(snapshot)))
 			expect(stored.contract).toEqual(JSON.parse(JSON.stringify(live.artifact)))
-			expect('format' in stored.contract).toBe(false)
+			expect('format' in stored.contract).toBe(release.format === 'current')
 			expect(parseSnapshot(serializeSnapshot(snapshot))).toEqual(snapshot)
 		})
 	})

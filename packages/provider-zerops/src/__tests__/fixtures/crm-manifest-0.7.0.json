@@ -1,0 +1,1069 @@
+{
+	"manifestVersion": 3,
+	"app": {
+		"id": "crm",
+		"env": "prod",
+		"schema": {
+			"scopes": [
+				{
+					"type": "company",
+					"in": "org"
+				},
+				{
+					"type": "contact",
+					"in": "company"
+				},
+				{
+					"type": "deal",
+					"in": "company"
+				},
+				{
+					"type": "org",
+					"members": {
+						"manage": "members.manage",
+						"list": "crm.read"
+					},
+					"directory": "labels",
+					"lookups": [
+						"activities.write",
+						"crm.delete",
+						"crm.read",
+						"crm.write",
+						"deals.assign",
+						"deals.write",
+						"tasks.write"
+					]
+				},
+				{
+					"type": "task",
+					"in": "deal"
+				}
+			],
+			"actions": [
+				{
+					"action": "activities.write",
+					"description": "Log activities on contacts and deals"
+				},
+				{
+					"action": "crm.delete",
+					"description": "Delete companies, contacts, deals and attachments"
+				},
+				{
+					"action": "crm.read",
+					"description": "Read companies, contacts, deals, tasks, activities, attachments and the members of an org"
+				},
+				{
+					"action": "crm.write",
+					"description": "Create and edit companies and contacts"
+				},
+				{
+					"action": "deals.assign",
+					"description": "Choose the owner of a deal"
+				},
+				{
+					"action": "deals.write",
+					"description": "Create deals, edit them, move them through the pipeline and attach files"
+				},
+				{
+					"action": "members.manage",
+					"description": "Invite and remove the members of an org"
+				},
+				{
+					"action": "tasks.write",
+					"description": "Create tasks and mark them done"
+				}
+			],
+			"roles": {
+				"manager": {
+					"name": "manager",
+					"permissions": [
+						"activities.write",
+						"crm.delete",
+						"crm.read",
+						"crm.write",
+						"deals.assign",
+						"deals.write",
+						"members.manage",
+						"tasks.write"
+					],
+					"member": {
+						"scope": "org",
+						"assignableBy": [
+							"manager"
+						]
+					}
+				},
+				"sales": {
+					"name": "sales",
+					"permissions": [
+						"activities.write",
+						"crm.read",
+						"deals.write",
+						"tasks.write"
+					],
+					"member": {
+						"scope": "org",
+						"assignableBy": [
+							"manager"
+						]
+					}
+				},
+				"viewer": {
+					"name": "viewer",
+					"permissions": [
+						"crm.read"
+					],
+					"member": {
+						"scope": "org",
+						"assignableBy": [
+							"manager"
+						]
+					}
+				}
+			},
+			"contract": true,
+			"links": {},
+			"delegations": {},
+			"workloads": [
+				{
+					"kind": "job",
+					"name": "overdue",
+					"actions": [
+						"crm.read",
+						"tasks.write"
+					]
+				}
+			]
+		},
+		"pipeline": {
+			"secrets": [],
+			"vars": []
+		}
+	},
+	"target": {
+		"platform": "zerops",
+		"sourceDescriptor": {
+			"path": "zerops.yaml",
+			"contents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and the SPA's `build.buildCommands`; the platform generates the rest (ADR-0043).\n\nzerops:\n  - setup: crmapi\n    build:\n      base: alpine/bun@1.3\n      buildCommands:\n        - bun install --frozen-lockfile\n        - bun run build:web\n",
+			"sha256": "a4cbad489023a8acb7915e4da6247730b7966fd24cd041a0b58286d8c2bfe9ff"
+		},
+		"importDocument": {
+			"services": [
+				{
+					"hostname": "crmdb",
+					"type": "postgresql:single@18",
+					"envIsolation": "service",
+					"override": true,
+					"priority": 100,
+					"profile": "oltp-hobby"
+				},
+				{
+					"hostname": "crmfiles",
+					"type": "object-storage",
+					"envIsolation": "service",
+					"override": true,
+					"objectStorageSize": 1,
+					"priority": 50,
+					"objectStoragePolicy": "private"
+				},
+				{
+					"hostname": "crmapi",
+					"type": "alpine/bun@1.3",
+					"envIsolation": "service",
+					"override": true,
+					"enableSubdomainAccess": false,
+					"priority": 10,
+					"minContainers": 1,
+					"maxContainers": 2
+				}
+			]
+		},
+		"deployService": "crmapi",
+		"zeropsSetup": "crmapi",
+		"proxy": {
+			"upstream": "crmapi:3000",
+			"endpoints": [
+				{
+					"id": "api.activities.logContact",
+					"method": "POST",
+					"path": "/api/activities.logContact",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:19249f8b614b1d67b23bb165bb32180a38c6528ce288ef8bccb83ffe11e6b36b",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "activities.write",
+						"access": {
+							"form": "on",
+							"dimension": "contact",
+							"from": "contactId"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.activities.logDeal",
+					"method": "POST",
+					"path": "/api/activities.logDeal",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:2e5b4a8c021a05a00580c9d70cdba9902f0a9455ecc6748f519f88a00738f646",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "activities.write",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "dealId"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.activities.ofContact",
+					"method": "POST",
+					"path": "/api/activities.ofContact",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:899161abe136c92feb51d16c03f93a4d3bab4acbf74489abf5af329b552f104f",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "contact",
+							"from": "contactId"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.activities.ofDeal",
+					"method": "POST",
+					"path": "/api/activities.ofDeal",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:3fd476a0c8c6f4a71a7ca944b3e00f2192505c79c5d12385581f800f74249bff",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "dealId"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.attachments.download",
+					"method": "GET",
+					"path": "/api/attachments.download",
+					"admission": null,
+					"digest": "sha256:b6d18555a52cdbbf24138c21eb1e8f9cc7174289ddc1c689a2ee8abb70e1d576",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "dealId"
+						}
+					},
+					"delegation": null,
+					"response": "file"
+				},
+				{
+					"id": "api.attachments.list",
+					"method": "POST",
+					"path": "/api/attachments.list",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:870b02080a4adb0dd55e712b8b24cbb71921a1d231332a1bc4d20f246a0f7ccd",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "dealId"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.attachments.remove",
+					"method": "POST",
+					"path": "/api/attachments.remove",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:8f720b3d6344a36ce1dbaea12e6e5ac916bdf17f693e5f535a0142eb6c2de6c3",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.delete",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "dealId"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.attachments.upload",
+					"method": "POST",
+					"path": "/api/attachments.upload",
+					"admission": {
+						"contentTypes": [
+							"multipart/form-data"
+						],
+						"maxBytes": 5308416
+					},
+					"digest": "sha256:d22e2c9f020e5b6192e6deadad1736c0b5577ad7b022f90368c330c71f050dde",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "capabilities",
+						"capabilities": {
+							"deal": {
+								"action": "deals.write",
+								"access": {
+									"form": "on",
+									"dimension": "deal",
+									"from": "dealId"
+								}
+							},
+							"attached": {
+								"action": "crm.read",
+								"access": {
+									"form": "on",
+									"dimension": "deal",
+									"from": "dealId"
+								}
+							}
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.companies.create",
+					"method": "POST",
+					"path": "/api/companies.create",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:150b5861abb0fe9eef69afca1250dc22e6c32d852943a769854812e7b4bfffc0",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.write",
+						"access": {
+							"form": "in",
+							"dimension": "org",
+							"from": "orgId"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.companies.edit",
+					"method": "POST",
+					"path": "/api/companies.edit",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:06bb6c6782dae41efb216e2b83bb8708d83a3bcd6813ecccec824d879d529f92",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.write",
+						"access": {
+							"form": "on",
+							"dimension": "company",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.companies.get",
+					"method": "POST",
+					"path": "/api/companies.get",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:9c06b33efdc07e0cb39094de57dd06ff2e82b6204e62bb67bdb55a08d283f113",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "company",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.companies.list",
+					"method": "POST",
+					"path": "/api/companies.list",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:263d4083af1da69651d44323257c818d923c36f46e6dcf5d85f829dac1649fe1",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "org"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.companies.remove",
+					"method": "POST",
+					"path": "/api/companies.remove",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:8d208a37ac33dc6a821a51a8b7a35db7f83bf986bdaf4f4b4e98c9edae59bbd4",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.delete",
+						"access": {
+							"form": "on",
+							"dimension": "company",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.contacts.create",
+					"method": "POST",
+					"path": "/api/contacts.create",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:3ae678822f3daedbf9123798dc5e72e8e2395fddb45cd71e3497b3717e671eaa",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.write",
+						"access": {
+							"form": "in",
+							"dimension": "company",
+							"from": "companyId"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.contacts.edit",
+					"method": "POST",
+					"path": "/api/contacts.edit",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:dfe02a5afb17b199d68d045ed251cbdbc4c1c89eae0e601f8435231cef6091f1",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.write",
+						"access": {
+							"form": "on",
+							"dimension": "contact",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.contacts.get",
+					"method": "POST",
+					"path": "/api/contacts.get",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:1d834f1db36b00eb087fb5ff13f45f24b04977767ceb9966604dbc3cf7753945",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "contact",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.contacts.list",
+					"method": "POST",
+					"path": "/api/contacts.list",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:e2519ab41c5d22542021bbf8e900a9e7c241cf7d9c44f28cef1a38e1455204d2",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "company"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.contacts.remove",
+					"method": "POST",
+					"path": "/api/contacts.remove",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:002aeb2c679831e7f52c1058a70fa617db9d1a444b82ea7bfe9819aeea963542",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.delete",
+						"access": {
+							"form": "on",
+							"dimension": "contact",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.deals.assign",
+					"method": "POST",
+					"path": "/api/deals.assign",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:db9f9547b5cef33468f152aa00e432559410d8c088f5d4a319c5b71fca2a9f4e",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "deals.assign",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.deals.create",
+					"method": "POST",
+					"path": "/api/deals.create",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:ca8d16d63b2bb9aefc057fe53e97ad70274a31bee7b95f58e4301a1f32650251",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "deals.write",
+						"access": {
+							"form": "in",
+							"dimension": "company",
+							"from": "companyId"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.deals.edit",
+					"method": "POST",
+					"path": "/api/deals.edit",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:0fca4ddf2ad48a6062202d1088d391f99bb101a513f427e953d56403e351bef1",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "deals.write",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.deals.get",
+					"method": "POST",
+					"path": "/api/deals.get",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:7a2b63966e0c349e72470c5164c3b12a2f5ab2a026b8f3fe9ce09d5ff9d1cbde",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.deals.list",
+					"method": "POST",
+					"path": "/api/deals.list",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:3b17da918fa3787f8107f3c6933e467adf4e8674499666167ea4d78e7aa36f38",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "company"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.deals.move",
+					"method": "POST",
+					"path": "/api/deals.move",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:868d69d57213395c4cbb4b0b635c076e6d986184f777e4de8f3bdfb55c34558b",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "deals.write",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.deals.pipeline",
+					"method": "POST",
+					"path": "/api/deals.pipeline",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:ab380bee2bf8c3ad54399064c9a91e32f98cd6c4223a24d816ea5f3fcd878cd6",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "company"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.deals.remove",
+					"method": "POST",
+					"path": "/api/deals.remove",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:5df6ff5a12f5688eebe5d94b5c69b98af0a5f757b68cb60429045cda562a30f3",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.delete",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.deals.reopen",
+					"method": "POST",
+					"path": "/api/deals.reopen",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:abe3ac0caf5444c1882755061043c05fed64da228d34831ccd430482e1995813",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "deals.write",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.orgs.members",
+					"method": "POST",
+					"path": "/api/orgs.members",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:6fc3c2ee4f9e424257b40cefe591f49e6ad938586121bca10da83338bcecdf58",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "in",
+							"dimension": "org",
+							"from": "orgId"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.orgs.mine",
+					"method": "POST",
+					"path": "/api/orgs.mine",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:f58c1db698c30909357a181a9eadb5739b0c849a972a824d99e77d21332babac",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "org"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.tasks.complete",
+					"method": "POST",
+					"path": "/api/tasks.complete",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:f1e94b146a4f757da6f09c851f6318a5a96daeb3faaf86db177ad22884933357",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "tasks.write",
+						"access": {
+							"form": "on",
+							"dimension": "task",
+							"from": "id"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.tasks.create",
+					"method": "POST",
+					"path": "/api/tasks.create",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:7aa12961ed15b7ae1fb4f5e7dc0769890be13f9afde9226843a79e3ed27c555d",
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "tasks.write",
+						"access": {
+							"form": "in",
+							"dimension": "deal",
+							"from": "dealId"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "api.tasks.list",
+					"method": "POST",
+					"path": "/api/tasks.list",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"digest": "sha256:52d61ff0990290e1947acecb81692e7530721769a8cf3fe373023b6c5a4f90bf",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "deal"
+						}
+					},
+					"delegation": null
+				},
+				{
+					"id": "health",
+					"method": "GET",
+					"path": "/healthz",
+					"admission": null,
+					"digest": "sha256:f180f636975e69016cea9bf60a44f559f8c5b00572f70903979674bf936c086f",
+					"kind": "health",
+					"callers": [],
+					"requirement": null,
+					"delegation": null
+				},
+				{
+					"id": "site",
+					"method": "GET",
+					"path": "/*",
+					"admission": null,
+					"digest": "sha256:82cc1bbd8a8b7049747b7af29ad838b8729e7e02ee5a90cb47d503164af2d190",
+					"kind": "spa",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "org"
+						}
+					},
+					"delegation": null
+				}
+			],
+			"reservedPrefixes": [
+				"/api"
+			],
+			"snapshot": "sha256:60cc6dd14474d3bb2c38af5861660add9316939b0a8eb5e54d05a3a93a856639"
+		},
+		"contract": {
+			"digest": "sha256:60cc6dd14474d3bb2c38af5861660add9316939b0a8eb5e54d05a3a93a856639",
+			"readinessPath": "/healthz",
+			"jobs": [
+				{
+					"name": "overdue",
+					"schedule": "15 * * * *"
+				}
+			],
+			"files": true
+		}
+	}
+}

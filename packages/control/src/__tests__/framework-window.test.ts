@@ -13,8 +13,8 @@ import { healthOnly } from './helpers/contracts'
 
 const reader = (checker: string): ContractReader => ({ checker, inputs: () => [], read: () => ({ ok: false, problems: 1 }) })
 
-/** A platform on 0.8.0 that bundles the 0.6 reader and, past the window's rule, not the 0.7 one. */
-const WINDOW: ReaderWindow = { platform: '0.8.0', readers: [reader('0.8.0'), reader('0.6.4')] }
+/** A platform on 0.9.0 that bundles the 0.7 reader and, past the window's rule, not the 0.8 one. */
+const WINDOW: ReaderWindow = { platform: '0.9.0', readers: [reader('0.9.0'), reader('0.7.4')] }
 
 const refusal = (release: string, window?: ReaderWindow): string => {
 	try {
@@ -28,33 +28,34 @@ const refusal = (release: string, window?: ReaderWindow): string => {
 
 describe('the reader of a framework release', () => {
 	test("is the one of the release's minor, any patch of it", () => {
-		expect(readerFor('0.8.0', WINDOW).checker).toBe('0.8.0')
-		expect(readerFor('0.8.0-next.2', WINDOW).checker).toBe('0.8.0')
-		expect(readerFor('0.6.0', WINDOW).checker).toBe('0.6.4')
-		expect(readerFor('0.6.9', WINDOW).checker).toBe('0.6.4')
+		expect(readerFor('0.9.0', WINDOW).checker).toBe('0.9.0')
+		expect(readerFor('0.9.0-next.2', WINDOW).checker).toBe('0.9.0')
+		expect(readerFor('0.7.0', WINDOW).checker).toBe('0.7.4')
+		expect(readerFor('0.7.9', WINDOW).checker).toBe('0.7.4')
 	})
 
-	test("is this platform's own for its own release, and the bundled newest patch for 0.6, 0.5 and 0.4", () => {
+	test("is this platform's own for its own release, and the bundled newest patch for 0.7, 0.6, 0.5 and 0.4", () => {
 		expect(readerFor(CHECKER_VERSION).checker).toBe(CHECKER_VERSION)
+		expect(readerFor('0.7.0').checker).toBe('0.7.0')
 		expect(readerFor('0.6.0').checker).toBe('0.6.0')
 		expect(readerFor('0.5.1').checker).toBe('0.5.5')
 		expect(readerFor('0.4.1').checker).toBe('0.4.8')
 	})
 
-	test('this platform refuses 0.3, below its window of 0.4, 0.5, 0.6 and its own minor', () => {
+	test('this platform refuses 0.3, below its window of 0.4, 0.5, 0.6, 0.7 and its own minor', () => {
 		expect(refusal('0.3.9')).toContain('the oldest release it deploys is 0.4.0')
 	})
 
 	test('a release outside the window is refused with the oldest release the platform deploys and the migration guide', () => {
 		const line =
-			`the application pins @fabrika/app 0.5.2, outside this platform's window; the oldest release it deploys is 0.6.0. Raise the pin as ${MIGRATION_GUIDE} describes`
-		expect(refusal('0.5.2', WINDOW)).toBe(line)
-		expect(refusal('0.7.3', WINDOW)).toContain("the application pins @fabrika/app 0.7.3, outside this platform's window")
+			`the application pins @fabrika/app 0.6.2, outside this platform's window; the oldest release it deploys is 0.7.0. Raise the pin as ${MIGRATION_GUIDE} describes`
+		expect(refusal('0.6.2', WINDOW)).toBe(line)
+		expect(refusal('0.8.3', WINDOW)).toContain("the application pins @fabrika/app 0.8.3, outside this platform's window")
 	})
 
 	test('a release newer than the platform is refused, a newer patch too: the platform is upgraded first', () => {
-		expect(refusal('0.8.1', WINDOW)).toBe("the application pins @fabrika/app 0.8.1, newer than this platform's 0.8.0; upgrade the platform first")
-		expect(refusal('1.0.0', WINDOW)).toBe("the application pins @fabrika/app 1.0.0, newer than this platform's 0.8.0; upgrade the platform first")
+		expect(refusal('0.9.1', WINDOW)).toBe("the application pins @fabrika/app 0.9.1, newer than this platform's 0.9.0; upgrade the platform first")
+		expect(refusal('1.0.0', WINDOW)).toBe("the application pins @fabrika/app 1.0.0, newer than this platform's 0.9.0; upgrade the platform first")
 	})
 })
 

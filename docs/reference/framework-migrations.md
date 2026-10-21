@@ -12,7 +12,7 @@ this page.
 ## Raising the pin
 
 1. Upgrade the installation first. Control refuses an application whose framework release is newer than the platform.
-2. Set every `@fabrika/*` dependency of the application to one exact release, for example `"@fabrika/app": "0.7.0"`.
+2. Set every `@fabrika/*` dependency of the application to one exact release, for example `"@fabrika/app": "0.8.0"`.
    Never a range: a range mixes releases of the co-versioned set
    ([`release-process.md`](release-process.md#the-framework-window)).
 3. Run `bun install` and commit `bun.lock`. Control reads the release from the `@fabrika/app` entry of the `bun.lock`
@@ -21,6 +21,24 @@ this page.
 5. Regenerate and check: `fabrika db codegen` after the migrations, `fabrika db test-scaffold` for the generated
    tests, then `fabrika-check` and the application's tests. The skill in `node_modules/@fabrika/app/skill/` describes
    the new release.
+
+## 0.7 → 0.8
+
+0.8 changed no 0.7 form: it added the ALTCHA challenge provider. Raise the pin; nothing else changes. To move a public
+procedure from Turnstile to ALTCHA, which is a change the approval shows:
+
+1. Replace `challenge: { provider: 'turnstile', secret, siteKey }` with `challenge: { provider: 'altcha', secret:
+   'ALTCHA_HMAC_KEY' }`, keeping its `action` if it declares one, and set `ALTCHA_HMAC_KEY` for the environment to a
+   long random value (at least 32 characters, `openssl rand -base64 32`).
+2. On the page, render `Challenge` of `@fabrika/ui/challenge` at `challengeUrl(api.<procedure>)` in place of the
+   Turnstile widget (add `altcha` to the dependencies), or, on a page outside the application, the `altcha` widget
+   pointed at `/__fabrika/challenge/<action>`, with `worker-src blob:` in that page's CSP. The input field stays
+   `challengeToken`.
+3. A test sends `await kit.solveChallenge(api.<procedure>)` as `challengeToken` and drops its `challengeFetch`.
+4. Remove the Turnstile variables once no procedure names them.
+
+On Zerops, a namespace whose proxy is pinned to an older source refuses the first deploy with an ALTCHA challenge until
+the proxy is re-pinned (`fabrika control namespaces update --namespace=<id> --proxy-source=current`).
 
 ## 0.6 → 0.7
 
@@ -682,9 +700,9 @@ moves in one release:
 ## 0.5 → 0.6
 
 0.6.0 changed nothing in the framework API: its framework sources are those of 0.5.5. Raise the pin; nothing else
-changes. An application on 0.5 goes 0.5 → 0.6 → 0.7, or raises its pin straight to 0.7 and follows "0.6 → 0.7".
+changes. An application on 0.5 goes 0.5 → 0.6 → 0.7, or raises its pin straight to 0.8 and follows "0.6 → 0.7".
 
 ## 0.4 → 0.5
 
-0.5 changed no 0.4 form: it added `then` and the job's `mailer`. An application on 0.4 raises its pin straight to 0.7
+0.5 changed no 0.4 form: it added `then` and the job's `mailer`. An application on 0.4 raises its pin straight to 0.8
 and follows "0.6 → 0.7"; it has no `then` to replace.
