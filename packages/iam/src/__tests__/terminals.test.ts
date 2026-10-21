@@ -86,6 +86,7 @@ function terminalSuite(backend: () => Backend): void {
 
 			expect(
 				await b.repositories.terminals.setProfile(terminalId, {
+					label: 'Entrance',
 					sessionTtl: 600,
 					asserters: [{ app: APP, ceiling: ['attendance.*'] }, { app: 'canteen', ceiling: [] }],
 				}),
@@ -93,7 +94,11 @@ function terminalSuite(backend: () => Backend): void {
 			expect((await b.repositories.terminals.getById(terminalId))?.session_ttl).toBe(600)
 			expect(await b.repositories.terminals.getAsserter(terminalId, APP)).toEqual({ app: APP, ceiling: ['attendance.*'] })
 
-			await b.repositories.terminals.setProfile(terminalId, { sessionTtl: 300, asserters: [{ app: 'canteen', ceiling: ['meal.order'] }] })
+			await b.repositories.terminals.setProfile(terminalId, {
+				label: 'Entrance',
+				sessionTtl: 300,
+				asserters: [{ app: 'canteen', ceiling: ['meal.order'] }],
+			})
 			expect(await b.repositories.terminals.listAsserters(terminalId)).toEqual([{ app: 'canteen', ceiling: ['meal.order'] }])
 			expect(await b.repositories.terminals.getAsserter(terminalId, APP)).toBeNull()
 		})
@@ -101,7 +106,7 @@ function terminalSuite(backend: () => Backend): void {
 		test('a session TTL over one hour is refused by the schema', async () => {
 			const b = backend()
 			const { terminalId } = await enrol(b, await person(b))
-			await expect(b.repositories.terminals.setProfile(terminalId, { sessionTtl: 3601, asserters: [] })).rejects.toThrow()
+			await expect(b.repositories.terminals.setProfile(terminalId, { label: 'Entrance', sessionTtl: 3601, asserters: [] })).rejects.toThrow()
 			expect((await b.repositories.terminals.getById(terminalId))?.session_ttl).toBe(300)
 		})
 
@@ -148,7 +153,9 @@ function terminalSuite(backend: () => Backend): void {
 			expect((await b.repositories.sessions.getSessionById(sessions.parentId))?.revoked_at).not.toBeNull()
 			expect(await b.repositories.sessions.getActiveSessionByHash(personalHash)).not.toBeNull()
 			expect(await b.repositories.terminals.getActiveByTokenHash(tokenHash)).toBeNull()
-			expect(await b.repositories.terminals.setProfile(terminalId, { sessionTtl: 600, asserters: [{ app: APP, ceiling: [] }] })).toBe(false)
+			expect(await b.repositories.terminals.setProfile(terminalId, { label: 'Entrance', sessionTtl: 600, asserters: [{ app: APP, ceiling: [] }] })).toBe(
+				false,
+			)
 			expect(await b.repositories.terminals.listAsserters(terminalId)).toEqual([])
 
 			const { results } = await b.db

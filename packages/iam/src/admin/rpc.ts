@@ -206,6 +206,25 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.require(ADMIN_ACTION)
 			.query(({ ctx, input }) => adminUseCases.listAuthLog(context(ctx), input)),
 	}),
+	terminals: t.router({
+		list: t.procedure
+			.input(z.object(pageInput).default({}))
+			.require(ADMIN_ACTION)
+			.query(({ ctx, input }) => adminUseCases.listTerminals(context(ctx), input)),
+		setProfile: t.procedure
+			.input(z.object({
+				terminalId: nonEmpty,
+				label: z.string(),
+				sessionTtl: z.number().int(),
+				asserters: z.array(z.object({ app: nonEmpty, ceiling: z.array(nonEmpty) })),
+			}))
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.setTerminalProfile(context(ctx), input)),
+		revoke: t.procedure
+			.input(z.object({ terminalId: nonEmpty }))
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.revokeTerminal(context(ctx), input)),
+	}),
 	// No `iam.admin` here: each use case authorizes the application's own `members.manage`, held globally there.
 	appPeople: t.router({
 		apps: t.procedure.query(({ ctx }) => listAdministeredApps(ctx)),

@@ -258,6 +258,11 @@ export class AuditRepository {
 		return this.db.batch<T>(statements)
 	}
 
+	/** The statement form of `writeAuthLog`, for a use case that composes a `commit`. */
+	authLogStatement(input: AuthLogInput): SqlStatement {
+		return authLogStatement(this.db, input)
+	}
+
 	/** The statement form of `auditEventStatement`, for a use case that composes a `commit`. */
 	eventStatement(event: AuditEventInput): SqlStatement {
 		return auditEventStatement(this.db, event)

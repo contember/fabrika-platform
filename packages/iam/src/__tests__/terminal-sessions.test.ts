@@ -55,7 +55,11 @@ async function scenario(ceiling: string[]): Promise<Scenario> {
 		}),
 	])
 	seedInlineGrant(h.sqlite, terminalId, ['attendance.record'], null, APP)
-	await h.repositories.terminals.setProfile(terminalId, { sessionTtl: 300, asserters: [{ app: APP, ceiling }, { app: OTHER_APP, ceiling: [] }] })
+	await h.repositories.terminals.setProfile(terminalId, {
+		label: 'Entrance',
+		sessionTtl: 300,
+		asserters: [{ app: APP, ceiling }, { app: OTHER_APP, ceiling: [] }],
+	})
 	return { h, services, person, terminalId }
 }
 
@@ -121,7 +125,11 @@ describe('a terminal session mints (person ∩ ceiling) ∪ terminal', () => {
 	test('the ceiling and the grants are read at every mint', async () => {
 		const s = await scenario([])
 		const session = await applicationSession(s)
-		await s.h.repositories.terminals.setProfile(s.terminalId, { sessionTtl: 300, asserters: [{ app: APP, ceiling: ['report.export'] }] })
+		await s.h.repositories.terminals.setProfile(s.terminalId, {
+			label: 'Entrance',
+			sessionTtl: 300,
+			asserters: [{ app: APP, ceiling: ['report.export'] }],
+		})
 		expect((await mintedClaims(s, session)).perms.map((entry) => entry.action)).toEqual(['report.export', 'attendance.record'])
 	})
 
@@ -153,7 +161,7 @@ describe('a terminal session is refused', () => {
 
 	test('for a platform audience even when that audience asserted it', async () => {
 		const s = await scenario(['*'])
-		await s.h.repositories.terminals.setProfile(s.terminalId, { sessionTtl: 300, asserters: [{ app: CONSOLE_APP, ceiling: ['*'] }] })
+		await s.h.repositories.terminals.setProfile(s.terminalId, { label: 'Entrance', sessionTtl: 300, asserters: [{ app: CONSOLE_APP, ceiling: ['*'] }] })
 		const login = await terminalLogin(s, CONSOLE_APP)
 		const outcome = await mintToken(s.services, ENV, { app: CONSOLE_APP, session: login.token, requestId: 'r' })
 		expect(outcome.result).toEqual({ ok: false, reason: 'invalid_session' })
@@ -169,7 +177,7 @@ describe('a terminal session is refused', () => {
 	test('once the terminal no longer lists the application', async () => {
 		const s = await scenario([])
 		const session = await applicationSession(s)
-		await s.h.repositories.terminals.setProfile(s.terminalId, { sessionTtl: 300, asserters: [] })
+		await s.h.repositories.terminals.setProfile(s.terminalId, { label: 'Entrance', sessionTtl: 300, asserters: [] })
 		const outcome = await mintToken(s.services, ENV, { app: APP, session, requestId: 'r' })
 		expect(outcome.result).toEqual({ ok: false, reason: 'invalid_session' })
 		expect(outcome.terminal).toEqual({ terminalId: s.terminalId, assertedBy: APP })

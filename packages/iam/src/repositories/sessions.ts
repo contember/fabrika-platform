@@ -1,4 +1,4 @@
-import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
+import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 
 import { type AuditEventInput, AuditWriter, type AuthLogInput, authLogStatement, type SqlChange } from './audit'
 import { unixNow } from './sql'
@@ -266,6 +266,11 @@ export class SessionRepository {
 	async revokeSessionById(id: string, audit?: AuditEventInput): Promise<boolean> {
 		const revoke: SqlChange = { sql: 'UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL RETURNING id', binds: [unixNow(), id] }
 		return (await this.writer.run([revoke], audit)).length > 0
+	}
+
+	/** The revocation of one session by id, for a use case that composes it into its own batch with the session's log row. */
+	revokeStatement(id: string): SqlStatement {
+		return this.db.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').bind(unixNow(), id)
 	}
 
 	/** How many unrevoked sessions a principal holds — the count an operator's "revoke all" records. */

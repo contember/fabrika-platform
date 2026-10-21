@@ -213,3 +213,14 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
 - WU2 → WU4/WU5: a `perms` entry with source `terminal` makes an older `parseAccessClaims` refuse the whole token
   (`parseSource` is closed). Only an application whose framework knows terminals may be an asserter; WU5's "declares an
   identification page" check is what enforces that.
+- WU3: the action is `iam.terminals.manage`, in IAM's `iam.*` namespace like `iam.admin` and `iam.users.manage`. It gates
+  enrolment only; `terminals.list`/`setProfile`/`revoke` of `/admin/rpc` require `iam.admin`, like the grants a terminal's
+  principal holds. "The `/admin` API" is these `/admin/rpc` procedures: `/admin/*` REST stays closed.
+- WU3: `setProfile` also sets the label (on the terminal's principal too, which audit rows name). An asserter must be a
+  registered app that is not a platform audience; ceiling patterns pass `isActionAllowed` against its catalog as a typo
+  check and may be wildcards even for a contract application, because a ceiling narrows and grants nothing.
+- WU3: `__Host-px_terminal` has `Max-Age` 400 days, the browser's cap; revocation, not expiry, ends a terminal. Enrolling
+  a browser that already holds a terminal cookie leaves the old terminal enrolled; an administrator revokes it.
+- WU3 → WU5: the enrolment's audit and `logout` rows are unconditional in the batch, from the login read just before;
+  WU5 may refresh the terminal cookie's `Max-Age` on each identification. `TERMINAL_COOKIE` lives in
+  `packages/iam/src/auth/terminals.ts`.

@@ -29,8 +29,9 @@ export interface TerminalAsserter {
 	ceiling: string[]
 }
 
-/** What a terminal is for: who may assert on it and how long a session on it lasts. */
+/** What a terminal is for: its name, who may assert on it and how long a session on it lasts. */
 export interface TerminalProfile {
+	label: string
 	asserters: TerminalAsserter[]
 	sessionTtl: number
 }
@@ -49,6 +50,7 @@ export interface TerminalIdentificationRow {
 }
 
 interface TerminalAsserterRow {
+	terminal_id: string
 	app: string
 	ceiling: string
 }
@@ -94,34 +96,51 @@ export class TerminalRepository {
 
 	/** The applications that may assert on the terminal, each with its ceiling. A malformed ceiling reads as empty. */
 	async listAsserters(terminalId: string): Promise<TerminalAsserter[]> {
+		return (await this.listAssertersFor([terminalId])).get(terminalId) ?? []
+	}
+
+	/** The asserters of every terminal in `terminalIds`, in one query — the fan-out of one admin page. */
+	async listAssertersFor(terminalIds: readonly string[]): Promise<Map<string, TerminalAsserter[]>> {
+		const byTerminal = new Map<string, TerminalAsserter[]>()
+		if (terminalIds.length === 0) {
+			return byTerminal
+		}
 		const { results } = await this.db
-			.prepare('SELECT app, ceiling FROM terminal_asserters WHERE terminal_id = ? ORDER BY app')
-			.bind(terminalId)
+			.prepare(`SELECT terminal_id, app, ceiling FROM terminal_asserters WHERE terminal_id IN (${terminalIds.map(() => '?').join(', ')})
+				ORDER BY terminal_id, app`)
+			.bind(...terminalIds)
 			.all<TerminalAsserterRow>()
-		return results.map(toAsserter)
+		for (const row of results) {
+			const asserters = byTerminal.get(row.terminal_id) ?? []
+			asserters.push(toAsserter(row))
+			byTerminal.set(row.terminal_id, asserters)
+		}
+		return byTerminal
 	}
 
 	/** `app`'s entry on the terminal, or null when `app` may not assert there. */
 	async getAsserter(terminalId: string, app: string): Promise<TerminalAsserter | null> {
 		const row = await this.db
-			.prepare('SELECT app, ceiling FROM terminal_asserters WHERE terminal_id = ? AND app = ?')
+			.prepare('SELECT terminal_id, app, ceiling FROM terminal_asserters WHERE terminal_id = ? AND app = ?')
 			.bind(terminalId, app)
 			.first<TerminalAsserterRow>()
 		return row === null ? null : toAsserter(row)
 	}
 
 	/**
-	 * Replace an enrolled terminal's profile in one batch: its session TTL and its whole set of asserters. Answers false,
-	 * and changes nothing, when the terminal is unknown or revoked; `audit` is written only when it changed.
+	 * Replace an enrolled terminal's profile in one batch: its label (on its principal too, which audit rows name), its
+	 * session TTL and its whole set of asserters. Answers false, and changes nothing, when the terminal is unknown or
+	 * revoked; `audit` is written only when it changed.
 	 */
 	async setProfile(terminalId: string, profile: TerminalProfile, audit?: AuditEventInput): Promise<boolean> {
 		const enrolled = 'SELECT 1 FROM terminals WHERE principal_id = ? AND revoked_at IS NULL'
 		const update: SqlChange = {
-			sql: 'UPDATE terminals SET session_ttl = ? WHERE principal_id = ? AND revoked_at IS NULL RETURNING principal_id',
-			binds: [profile.sessionTtl, terminalId],
+			sql: 'UPDATE terminals SET label = ?, session_ttl = ? WHERE principal_id = ? AND revoked_at IS NULL RETURNING principal_id',
+			binds: [profile.label, profile.sessionTtl, terminalId],
 		}
 		const change = this.writer.changed([update], audit)
 		const asserters: SqlStatement[] = [
+			this.db.prepare(`UPDATE principals SET label = ? WHERE id = ? AND EXISTS (${enrolled})`).bind(profile.label, terminalId, terminalId),
 			this.db.prepare(`DELETE FROM terminal_asserters WHERE terminal_id = ? AND EXISTS (${enrolled})`).bind(terminalId, terminalId),
 			...profile.asserters.map((asserter) =>
 				this.db

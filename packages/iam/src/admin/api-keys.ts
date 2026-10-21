@@ -31,6 +31,7 @@ export async function listApiKeysUseCase(c: AdminContext, input: ListApiKeysInpu
 	const principals = await c.services.repositories.principals.listPrincipals({
 		type: 'service',
 		withoutWorkloads: true,
+		withoutTerminals: true,
 		...(input.before ? { before: input.before } : {}),
 		limit,
 	})
@@ -53,12 +54,25 @@ export async function listApiKeysUseCase(c: AdminContext, input: ListApiKeysInpu
 	return { items, nextCursor: cursorOf(items, limit, (item) => item.principalId) }
 }
 
-/** One key with its grants and its live credential, for the console's key page. A workload's key is not an API key. */
+/**
+ * The service principal behind an API key, or null. A workload's key and a terminal are service principals too, and
+ * neither is an API key: a terminal holds no key at all, and rotating one would hand it a `px_` credential.
+ */
+async function apiKeyPrincipal(c: AdminContext, principalId: string): Promise<PrincipalRow | null> {
+	const { principals, grants, terminals } = c.services.repositories
+	const principal = await principals.getPrincipalById(principalId)
+	if (principal?.type !== 'service' || (await grants.isWorkloadPrincipal(principalId)) || (await terminals.getById(principalId)) !== null) {
+		return null
+	}
+	return principal
+}
+
+/** One key with its grants and its live credential, for the console's key page. */
 export async function getApiKeyUseCase(c: AdminContext, input: ApiKeyIdInput): Promise<ApiKeyDetail> {
 	const { principalId } = input
-	const { principals, grants, credentials } = c.services.repositories
-	const principal = await principals.getPrincipalById(principalId)
-	if (principal?.type !== 'service' || (await grants.isWorkloadPrincipal(principalId))) {
+	const { grants, credentials } = c.services.repositories
+	const principal = await apiKeyPrincipal(c, principalId)
+	if (principal === null) {
 		return fail(404, 'service principal not found')
 	}
 	// `listCredentialsForPrincipal` is newest-first and rotation revokes every older key, so this is the live one.
@@ -164,8 +178,8 @@ export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionAp
 
 export async function revokeApiKeyUseCase(c: AdminContext, input: { principalId: string }): Promise<OkResponse> {
 	const { principalId } = input
-	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
-	if (principal?.type !== 'service' || (await c.services.repositories.grants.isWorkloadPrincipal(principalId))) {
+	const principal = await apiKeyPrincipal(c, principalId)
+	if (principal === null) {
 		return fail(404, 'service principal not found')
 	}
 
@@ -194,8 +208,8 @@ export async function revokeApiKeyUseCase(c: AdminContext, input: { principalId:
  */
 export async function rotateApiKeyUseCase(c: AdminContext, input: RotateApiKeyInput): Promise<RotateApiKeyResponse> {
 	const { principalId } = input
-	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
-	if (principal?.type !== 'service' || (await c.services.repositories.grants.isWorkloadPrincipal(principalId))) {
+	const principal = await apiKeyPrincipal(c, principalId)
+	if (principal === null) {
 		return fail(404, 'service principal not found')
 	}
 	if (principal.disabled_at !== null) {

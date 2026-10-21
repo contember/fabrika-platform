@@ -85,6 +85,10 @@ export const en: Catalog = {
 						return 'This account may not sign in here.'
 					case 'login_refused':
 						return `Sign-in was refused (${failure.reason}).`
+					case 'terminal_enrolment_not_allowed':
+						return 'Sign in with an account that may enrol terminals.'
+					case 'terminal_enrolment_unavailable':
+						return 'Enrolment is unavailable. Try again later.'
 				}
 			},
 		},
@@ -97,6 +101,16 @@ export const en: Catalog = {
 			title: 'Sign out',
 			text: 'This ends your session on every application you are signed in to.',
 			submit: 'Sign out',
+		},
+		terminal: {
+			enrolTitle: 'Enrol this computer as a terminal',
+			enrolText:
+				'People will sign in on this computer through the applications it is set up for. Enrolling signs you out of this browser, so the terminal is never left signed in as you.',
+			label: 'Name of the terminal',
+			labelProblem: (max) => `Use 1–${max} characters.`,
+			submit: 'Enrol and sign out',
+			enrolledTitle: 'Terminal enrolled',
+			enrolledText: (label) => `This browser is now the terminal ${label}. You are signed out. An administrator sets which applications it serves.`,
 		},
 		invitation: {
 			title: 'Accept invitation',

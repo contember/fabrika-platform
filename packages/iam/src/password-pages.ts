@@ -7,6 +7,7 @@ import type { Handoff } from './auth/handoff'
 import { catalogFor, type PageText } from './catalog'
 import { escapeHtml } from './html'
 import { PASSWORD_MAX_CODE_POINTS, type PasswordProblem } from './password-policy'
+import { MAX_TERMINAL_LABEL_LENGTH } from './terminals'
 
 export function loginPage(input: {
 	readonly presentation: AppPresentation
@@ -186,6 +187,38 @@ export function logoutPage(input: {
 			<button type="submit">${escapeHtml(text.logout.submit)}</button>
 		</form>`,
 		formActionOrigin: input.landingOrigin ?? undefined,
+	})
+}
+
+/** Where an administrator enrols the browser it uses as a terminal (ADR-0067). */
+export const TERMINAL_ENROL_PATH = '/auth/terminals/enroll'
+
+/** The enrolment form. It names no application, so it speaks the installation's language. */
+export function terminalEnrolPage(input: { readonly brand: InstallationBrand | null; readonly labelProblem?: boolean }): Response {
+	const text = catalogFor(DEFAULT_LOCALE).pages.terminal
+	return htmlPage({
+		locale: DEFAULT_LOCALE,
+		brand: input.brand,
+		title: text.enrolTitle,
+		content: `<h1>${escapeHtml(text.enrolTitle)}</h1>${
+			message(input.labelProblem === true ? text.labelProblem(MAX_TERMINAL_LABEL_LENGTH) : undefined)
+		}<p>${escapeHtml(text.enrolText)}</p>
+		<form method="post" action="${TERMINAL_ENROL_PATH}">
+			<label>${escapeHtml(text.label)}<input name="label" type="text" maxlength="${MAX_TERMINAL_LABEL_LENGTH}" autocomplete="off" required></label>
+			<button type="submit">${escapeHtml(text.submit)}</button>
+		</form>`,
+		status: input.labelProblem === true ? 400 : 200,
+	})
+}
+
+/** What an enrolled browser shows: the administrator is signed out and the terminal is named. */
+export function terminalEnrolledPage(label: string, brand: InstallationBrand | null): Response {
+	const text = catalogFor(DEFAULT_LOCALE).pages.terminal
+	return htmlPage({
+		locale: DEFAULT_LOCALE,
+		brand,
+		title: text.enrolledTitle,
+		content: `<h1>${escapeHtml(text.enrolledTitle)}</h1><p>${escapeHtml(text.enrolledText(label))}</p>`,
 	})
 }
 

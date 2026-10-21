@@ -158,6 +158,12 @@ fails if that stops being true — it is the guard, not documentation of one.
   terminal principal are `invalid_session`. `exchangeAuthCode` copies `terminal_id`/`asserted_by` to the child and
   refuses a code for another app; `resolveAdmin` refuses a token carrying `terminal`, because it re-resolves the
   subject's own permissions. Mint and redemption `auth_log` rows take both values from the session row.
+- **A TERMINAL IS ENROLLED BY A BROWSER, NEVER OVER `/admin`** (ADR-0067 §1, `auth/terminals.ts`). `/auth/terminals/enroll`
+  needs a current login holding `iam.terminals.manage` at IAM; its same-origin POST writes, in one batch, the `service`
+  principal, the `terminals` row (5-minute TTL, no asserter), the revocation of that login with its `logout` row and
+  `iam.terminal.enrol`, then sets `__Host-px_terminal` (hash stored, 400 days, the browser's cap) and clears the login
+  cookie. `terminals.*` of `/admin/rpc` (list, setProfile, revoke) require `iam.admin`; an asserter is a registered app
+  that is not a platform audience. A terminal is not an API key: `apiKeys.*` neither list nor address one.
 - **WHICH APP'S PROXY TOKEN MAY ADMINISTER IS A REGISTRY.** `ADMIN_AUDIENCES` (deploy
   var `FABRIKA_IAM_ADMIN_AUDIENCES`, comma-separated app ids) is the `aud` allowlist `resolveAdmin`'s
   JWT branch checks; unset means the console gateway's own app id (`vozka`), explicitly empty means
