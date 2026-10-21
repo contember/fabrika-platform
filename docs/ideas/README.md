@@ -13,3 +13,5 @@ decided work or status.
   observability, alerting, and response beyond the initial Errors capability.
 - [A foreign runtime behind the platform](foreign-runtime.md) — another framework keeps its own data layer; the
   platform reads only its surface and access, and delivers, fronts and authenticates it.
+- [A dev environment for MCP authoring](mcp-dev-containers.md) — a `dev` environment that takes each workspace
+  commit in about two seconds through an in-container launcher that pulls from Control; measured on Zerops.
