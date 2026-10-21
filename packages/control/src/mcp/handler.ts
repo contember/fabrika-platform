@@ -22,6 +22,7 @@ import {
 	createWorkspaceUseCase,
 	deployStageUseCase,
 	getDeploymentUseCase,
+	getWorkspaceDiffUseCase,
 	getWorkspaceUseCase,
 	isRepositoryPath,
 	listFilesUseCase,
@@ -133,6 +134,10 @@ const toolInputs = {
 	getWorkspace: workspaceInput,
 	listFiles: workspaceInput.extend({ directory: repositoryPath.optional(), commitSha: commitSha.optional() }).strict(),
 	readFiles: workspaceInput.extend({ paths: z.array(repositoryPath).min(1).max(50), commitSha: commitSha.optional() }).strict(),
+	getWorkspaceDiff: workspaceInput.extend({
+		includePatches: z.boolean().default(false),
+		paths: z.array(repositoryPath).min(1).max(50).optional(),
+	}).strict(),
 	searchFiles: workspaceInput.extend({
 		glob: z.string().min(1).max(200).optional(),
 		text: z.string().min(1).max(200).optional(),
@@ -210,6 +215,13 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 		inputSchema: toolInput(toolInputs.getWorkspace),
 		annotations: READ_ONLY,
 	}, (input) => run(() => getWorkspaceUseCase(c, input)))
+	server.registerTool('get_workspace_diff', {
+		description: 'List the files the workspace changed since its base (the default-branch commit it was created from), at the '
+			+ 'current head, with their status and line counts. With includePatches each file carries its unified diff, at most 32 KiB '
+			+ 'each and 256 KiB together; paths narrows which files carry one. incomplete says what was left out.',
+		inputSchema: toolInput(toolInputs.getWorkspaceDiff),
+		annotations: READ_ONLY,
+	}, (input) => run(() => getWorkspaceDiffUseCase(c, input)))
 	server.registerTool('list_files', {
 		description: 'List the entries of a directory of the workspace branch (the repository root when no directory is given), '
 			+ 'at commitSha or at the current head.',

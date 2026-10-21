@@ -7,7 +7,9 @@ import type { WorkspaceUseCaseContext } from '../../api/workspaces'
 import type { ControlRepositories } from '../../db'
 import type { ControlJobMessage } from '../../run-lifecycle'
 import {
+	type WorkspaceChangedFile,
 	type WorkspaceCommit,
+	type WorkspaceComparison,
 	type WorkspaceFile,
 	type WorkspacePullRequestInput,
 	type WorkspaceScan,
@@ -45,6 +47,7 @@ export type SourceCall =
 	| { kind: 'list-tree'; commitSha: string; directory?: string }
 	| { kind: 'read-files'; commitSha: string; paths: readonly string[] }
 	| { kind: 'scan-files'; commitSha: string; directory?: string; maxFiles: number }
+	| { kind: 'compare'; baseSha: string; headSha: string }
 	| { kind: 'commit'; commit: WorkspaceCommit }
 	| { kind: 'pull-request'; pullRequest: WorkspacePullRequestInput }
 
@@ -57,6 +60,8 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 	readonly contents = new Map<string, string>()
 	/** Paths `readFiles` answers as not read, with the reason. */
 	readonly unreadable = new Map<string, WorkspaceUnreadableReason>()
+	/** The files `compare` answers as changed. */
+	changedFiles: WorkspaceChangedFile[] = []
 	private commits = 0
 
 	readBranch(input: { target: WorkspaceSourceTarget; branch: string }): Promise<string | null> {
@@ -109,6 +114,17 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 			return reason === undefined ? { path, content: this.contents.get(path) ?? '' } : { path, content: null, reason }
 		})
 		return Promise.resolve({ commitSha: input.commitSha, files, candidates: admitted.length, treeTruncated: false })
+	}
+
+	compare(input: { target: WorkspaceSourceTarget; baseSha: string; headSha: string }): Promise<WorkspaceComparison> {
+		this.record(input.target, { kind: 'compare', baseSha: input.baseSha, headSha: input.headSha })
+		return Promise.resolve({
+			baseSha: input.baseSha,
+			headSha: input.headSha,
+			aheadBy: this.changedFiles.length === 0 ? 0 : 1,
+			files: this.changedFiles,
+			filesCapped: false,
+		})
 	}
 
 	commit(input: WorkspaceCommit & { target: WorkspaceSourceTarget; signal: AbortSignal }): Promise<string> {

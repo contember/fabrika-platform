@@ -6,6 +6,7 @@
 import {
 	type GitHubBlobRef,
 	GitHubBranchConflictError,
+	type GitHubChangedFile,
 	type GitHubCommitFilesInput,
 	type GitHubCreateBranchInput,
 	GitHubNotFoundError,
@@ -101,6 +102,23 @@ export class FakeGitHubRepository implements GitHubRepositoryClient {
 		})
 		const unreadable = blobs.filter((blob) => !contents.has(blob.sha)).map((blob): GitHubUnreadablePath => ({ path: blob.path, reason: 'missing' }))
 		return Promise.resolve({ files, unreadable })
+	}
+
+	/** Compares base with head directly: in this model a workspace's base is always an ancestor of its head. */
+	compareCommits(baseSha: string, headSha: string) {
+		const base = this.commit(baseSha).files
+		const head = this.commit(headSha).files
+		const paths = [...new Set([...base.keys(), ...head.keys()])].sort()
+		const files = paths.flatMap((path): GitHubChangedFile[] => {
+			const before = base.get(path)
+			const after = head.get(path)
+			if (before === after) return []
+			const status = before === undefined ? 'added' : after === undefined ? 'removed' : 'modified'
+			return [{ path, previousPath: null, status, additions: after === undefined ? 0 : 1, deletions: before === undefined ? 0 : 1, patch: null }]
+		})
+		let aheadBy = 0
+		for (let sha: string | null = headSha; sha !== null && sha !== baseSha; sha = this.commit(sha).parent) aheadBy += 1
+		return Promise.resolve({ baseSha, headSha, aheadBy, behindBy: 0, files, filesCapped: false })
 	}
 
 	createBranch(input: GitHubCreateBranchInput) {

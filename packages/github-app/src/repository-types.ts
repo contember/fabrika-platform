@@ -63,6 +63,30 @@ export interface GitHubBlobRead {
 	readonly unreadable: readonly GitHubUnreadablePath[]
 }
 
+export type GitHubChangedFileStatus = 'added' | 'removed' | 'modified' | 'renamed' | 'copied' | 'changed' | 'unchanged'
+
+export interface GitHubChangedFile {
+	readonly path: string
+	/** The path before a rename or copy. */
+	readonly previousPath: string | null
+	readonly status: GitHubChangedFileStatus
+	readonly additions: number
+	readonly deletions: number
+	/** The unified diff hunk; null when GitHub omits it (a binary file or a very large change). */
+	readonly patch: string | null
+}
+
+export interface GitHubComparison {
+	readonly baseSha: string
+	readonly headSha: string
+	/** Commits on head that are not on base. */
+	readonly aheadBy: number
+	readonly behindBy: number
+	readonly files: readonly GitHubChangedFile[]
+	/** GitHub lists at most 300 files of a comparison; true when it listed that many, so more may have changed. */
+	readonly filesCapped: boolean
+}
+
 export interface GitHubFileChange {
 	readonly path: string
 	/** UTF-8 regular-file contents, or null to delete the path. */
@@ -110,6 +134,8 @@ export interface GitHubRepositoryClient {
 	readFiles(commitSha: string, paths: readonly string[], signal?: AbortSignal): Promise<GitHubFileRead>
 	/** Reads listed blobs as text without walking the tree again, within the same per-file and total bounds as `readFiles`. */
 	readBlobTexts(blobs: readonly GitHubBlobRef[], signal?: AbortSignal): Promise<GitHubBlobRead>
+	/** The changes from the merge base of `baseSha` and `headSha` to `headSha`. */
+	compareCommits(baseSha: string, headSha: string, signal?: AbortSignal): Promise<GitHubComparison>
 	/** Idempotent: an existing branch already at `fromSha` is returned; one elsewhere is a conflict. */
 	createBranch(input: GitHubCreateBranchInput): Promise<GitHubRef>
 	/** Creates exactly one commit on top of `expectedHeadSha` and moves the branch to it without force. */

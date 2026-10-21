@@ -4,8 +4,11 @@ export { buildGitHubAppManifest, exchangeGitHubAppManifestCode } from './manifes
 export type {
 	GitHubBlobRead,
 	GitHubBlobRef,
+	GitHubChangedFile,
+	GitHubChangedFileStatus,
 	GitHubCommit,
 	GitHubCommitFilesInput,
+	GitHubComparison,
 	GitHubCreateBranchInput,
 	GitHubFileChange,
 	GitHubFileRead,

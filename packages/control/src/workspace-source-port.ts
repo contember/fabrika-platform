@@ -6,6 +6,8 @@ export interface WorkspaceSourcePort {
 	readFiles(input: WorkspaceSourceCall & { commitSha: string; paths: readonly string[] }): Promise<WorkspaceFiles>
 	/** Read the regular files under `directory` that `include` admits, the first `maxFiles` of them in tree order. */
 	scanFiles(input: WorkspaceSourceCall & WorkspaceScanInput): Promise<WorkspaceScan>
+	/** The changes from the merge base of `baseSha` and `headSha` to `headSha`. */
+	compare(input: WorkspaceSourceCall & { baseSha: string; headSha: string }): Promise<WorkspaceComparison>
 	commit(input: WorkspaceSourceCall & WorkspaceCommit): Promise<string>
 	openPullRequest(input: WorkspaceSourceCall & WorkspacePullRequestInput): Promise<WorkspacePullRequest>
 }
@@ -66,6 +68,26 @@ export interface WorkspaceScan {
 	readonly candidates: number
 	/** The tree listing was cut short, so files beyond it were never considered. */
 	readonly treeTruncated: boolean
+}
+
+export interface WorkspaceChangedFile {
+	readonly path: string
+	/** The path before a rename or copy. */
+	readonly previousPath: string | null
+	readonly status: 'added' | 'removed' | 'modified' | 'renamed' | 'copied' | 'changed' | 'unchanged'
+	readonly additions: number
+	readonly deletions: number
+	/** null when the host omits it, for a binary file or a very large change. */
+	readonly patch: string | null
+}
+
+export interface WorkspaceComparison {
+	readonly baseSha: string
+	readonly headSha: string
+	readonly aheadBy: number
+	readonly files: readonly WorkspaceChangedFile[]
+	/** The host lists a bounded number of files; true when it listed that many, so more may have changed. */
+	readonly filesCapped: boolean
 }
 
 export interface WorkspaceCommit {

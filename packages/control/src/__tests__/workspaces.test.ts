@@ -10,6 +10,7 @@ import {
 	createWorkspaceUseCase,
 	deployStageUseCase,
 	getDeploymentUseCase,
+	getWorkspaceDiffUseCase,
 	getWorkspaceUseCase,
 	isProtectedPath,
 	listFilesUseCase,
@@ -20,6 +21,7 @@ import {
 	searchFilesUseCase,
 } from '../api/workspaces'
 import { type ControlRepositories, createControlRepositories } from '../db'
+import type { WorkspaceChangedFile } from '../workspace-source-port'
 import { createHarness } from './helpers/harness'
 import { fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, skipReason } from './helpers/postgres'
@@ -215,6 +217,67 @@ for (const backend of backends) {
 				expect((await readFilesUseCase(w.context(author), { workspaceId: created.id, paths: ['logo.png'] })).files).toEqual([
 					{ path: 'logo.png', content: null, reason: 'binary' },
 				])
+			})
+		})
+
+		describe('diff', () => {
+			const changed = (path: string, patch: string | null): WorkspaceChangedFile => ({
+				path,
+				previousPath: null,
+				status: 'modified',
+				additions: 1,
+				deletions: 1,
+				patch,
+			})
+
+			test('compares the live head with the workspace base and leaves patches out unless asked', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				w.source.branches.set(created.branch, sha('f'))
+				w.source.changedFiles = [changed('src/a.ts', '@@ -1 +1 @@')]
+				const diff = await getWorkspaceDiffUseCase(w.context(author), { workspaceId: created.id, includePatches: false })
+				expect(diff).toEqual({
+					baseSha: sha('a'),
+					headSha: sha('f'),
+					commitsAhead: 1,
+					files: [{ path: 'src/a.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1 }],
+					incomplete: [],
+				})
+				expect(w.source.calls.at(-1)).toEqual({ kind: 'compare', baseSha: sha('a'), headSha: sha('f') })
+			})
+
+			test('patches are bounded per file and in total, and paths narrows which files carry one', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				const patch = (size: number) => `+${'x'.repeat(size - 1)}`
+				w.source.changedFiles = [
+					changed('a.ts', patch(10)),
+					changed('big.ts', patch(32 * 1024 + 1)),
+					changed('image.png', null),
+					...Array.from({ length: 8 }, (_, index) => changed(`f${index}.ts`, patch(32 * 1024))),
+				]
+				const diff = await getWorkspaceDiffUseCase(w.context(author), { workspaceId: created.id, includePatches: true })
+				expect(diff.files.map((file) => file.patch?.length ?? null)).toEqual([10, null, null, ...Array(7).fill(32 * 1024), null])
+				expect(diff.incomplete).toEqual([
+					'no patch for big.ts, image.png, f7.ts: GitHub gave none (binary or very large), it is over 32 KiB, or the patches '
+					+ 'reached 256 KiB together; read the file, or ask for fewer paths',
+				])
+				const narrowed = await getWorkspaceDiffUseCase(w.context(author), { workspaceId: created.id, includePatches: true, paths: ['f7.ts'] })
+				expect(narrowed.files.filter((file) => file.patch !== undefined)).toEqual([changed('f7.ts', patch(32 * 1024))])
+				expect(narrowed.incomplete).toEqual([])
+			})
+
+			test('a diff needs read access to the caller own workspace', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				const stranger = oauthUser(AUTHOR_ACTIONS, 'stranger@acme.test')
+				const writerOnly = oauthUser(['source.workspace.write'], 'author@acme.test')
+				for (const auth of [stranger, writerOnly]) {
+					await expect(getWorkspaceDiffUseCase(w.context(auth), { workspaceId: created.id, includePatches: true })).rejects.toMatchObject({
+						httpStatus: 404,
+					})
+				}
+				expect(w.source.kinds()).toEqual(['read-branch', 'create-branch'])
 			})
 		})
 

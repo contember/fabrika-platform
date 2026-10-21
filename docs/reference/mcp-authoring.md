@@ -34,6 +34,7 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `create_workspace`    | Create a workspace branch from the default branch.                 |
 | `list_workspaces`     | The user's workspaces on a target.                                 |
 | `get_workspace`       | One workspace, with its head.                                      |
+| `get_workspace_diff`  | Files changed since the workspace base, optionally with patches.   |
 | `list_files`          | Paths in the workspace.                                            |
 | `read_files`          | File contents at the workspace head; an unread file says why.      |
 | `search_files`        | Paths by glob, or lines holding a literal text, within bounds.     |
@@ -60,6 +61,10 @@ lists matching paths from one tree listing. With `text` it reads at most 100 fil
 together, and answers the lines that contain the literal text (no regular expressions: a pattern could hold Control's
 event loop). It answers at most `maxResults` (default 50, at most 200), each line cut to 240 characters. `incomplete`
 names every bound that cut the answer short. A text search costs one GitHub request per file read.
+
+`get_workspace_diff` compares the live head with the workspace's base through GitHub's compare API. GitHub lists at most
+300 changed files. With `includePatches`, a patch is at most 32 KiB and all patches together at most 256 KiB; `paths`
+narrows which files carry one, and `incomplete` names the files left without a patch.
 
 `get_app_rules` answers the application rules every agent gets, headed by their version (`fabrika-app <version>`):
 the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `references/<topic>.md`
