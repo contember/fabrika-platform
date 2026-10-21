@@ -40,7 +40,7 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `search_files`        | Paths by glob, or lines holding a literal text, within bounds.     |
 | `apply_changes`       | Commit writes, deletions and exact replacements against a head.    |
 | `deploy_stage`        | Start an ordinary run for the workspace head in the stage env.     |
-| `get_deployment`      | The run's state, a parked run's approval link, `deviations`.       |
+| `get_deployment`      | The run's state, a log window, approval link, `deviations`.        |
 | `create_pull_request` | Open a pull request from the workspace to the default branch.      |
 | `get_app_rules`       | The application rules or one topic, read-only, with a pin warning. |
 
@@ -65,6 +65,11 @@ names every bound that cut the answer short. A text search costs one GitHub requ
 `get_workspace_diff` compares the live head with the workspace's base through GitHub's compare API. GitHub lists at most
 300 changed files. With `includePatches`, a patch is at most 32 KiB and all patches together at most 256 KiB; `paths`
 narrows which files carry one, and `incomplete` names the files left without a patch.
+
+`get_deployment` answers a window of the build log, 30 lines by default and at most 500. `log.from` and `log.to` index the
+log, which only grows: a client polls with `after: log.to` and gets only the new lines, or pages back with
+`before: log.from`. `failuresOnly` keeps the stderr lines and the lines that name an error or a failure; the indexes then
+count those lines only. `logLines: 0` answers the counts alone.
 
 `get_app_rules` answers the application rules every agent gets, headed by their version (`fabrika-app <version>`):
 the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `references/<topic>.md`

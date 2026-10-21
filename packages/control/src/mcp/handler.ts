@@ -20,6 +20,8 @@ import {
 	COMMIT_MESSAGE_MAX_BYTES,
 	createPullRequestUseCase,
 	createWorkspaceUseCase,
+	DEPLOYMENT_LOG_DEFAULT_LINES,
+	DEPLOYMENT_LOG_MAX_LINES,
 	deployStageUseCase,
 	getDeploymentUseCase,
 	getWorkspaceDiffUseCase,
@@ -157,7 +159,13 @@ const toolInputs = {
 		).min(1).max(100),
 	}).strict(),
 	deployStage: workspaceInput,
-	getDeployment: z.object({ runId: identifier }).strict(),
+	getDeployment: z.object({
+		runId: identifier,
+		logLines: z.number().int().min(0).max(DEPLOYMENT_LOG_MAX_LINES).default(DEPLOYMENT_LOG_DEFAULT_LINES),
+		after: z.number().int().min(0).optional(),
+		before: z.number().int().min(0).optional(),
+		failuresOnly: z.boolean().default(false),
+	}).strict(),
 	createPullRequest: workspaceInput.extend({ title: z.string().min(1).max(256), body: z.string().max(65_536) }).strict(),
 }
 
@@ -263,13 +271,22 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 	}, (input) => run(() => deployStageUseCase(c, input)))
 	server.registerTool('get_deployment', {
-		description: 'Read a deploy run of one of your workspaces: its status, the deployed commit and the last lines of its build log. '
+		description: 'Read a deploy run of one of your workspaces: its status, the deployed commit and a window of its build log. '
+			+ `The window is the last logLines lines (default ${DEPLOYMENT_LOG_DEFAULT_LINES}, at most ${DEPLOYMENT_LOG_MAX_LINES}); `
+			+ 'log.from and log.to index the log, so poll with after: log.to for new lines only, or page back with before: log.from. '
+			+ 'failuresOnly keeps stderr lines and lines that name an error or a failure. '
 			+ 'A run whose access change waits for a person reports status awaiting_approval with the approval link and the change '
 			+ 'in plain language; you cannot approve it, and loosening access further only adds to what the person must approve. '
 			+ 'deviations names the changes off the paved road (declared sql, unscoped, connect, link issuing, database code) that need closer review.',
 		inputSchema: toolInput(toolInputs.getDeployment),
 		annotations: READ_ONLY,
-	}, (input) => run(() => getDeploymentUseCase(c, input)))
+	}, ({ runId, logLines, after, before, failuresOnly }) =>
+		run(() =>
+			getDeploymentUseCase(c, {
+				runId,
+				log: { lines: logLines, failuresOnly, ...(after === undefined ? {} : { after }), ...(before === undefined ? {} : { before }) },
+			})
+		))
 	server.registerTool('create_pull_request', {
 		description: 'Open a pull request from the workspace branch to the default branch, or return the one already open. '
 			+ 'Production changes only after a human reviews and merges it in GitHub.',

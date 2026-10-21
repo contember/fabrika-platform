@@ -1,6 +1,7 @@
 // Authoring targets and Git workspaces (ADR-0049), against SQLite always and Postgres when
 // FABRIKA_TEST_POSTGRES_URL is set. The repository port is a recording fake; the SQL runs against the real schema.
 
+import type { RunLogLine } from '@fabrika/control-contract'
 import { type SqlDatabase, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { putAppEnvUseCase } from '../api/registry/environments'
@@ -8,6 +9,7 @@ import {
 	applyChangesUseCase,
 	createPullRequestUseCase,
 	createWorkspaceUseCase,
+	type DeploymentLogQuery,
 	deployStageUseCase,
 	getDeploymentUseCase,
 	getWorkspaceDiffUseCase,
@@ -73,6 +75,7 @@ const backends: { name: string; skip: boolean; open(): Promise<Backend> }[] = [
 ]
 
 const author = oauthUser(AUTHOR_ACTIONS)
+const TAIL = { lines: 30, failuresOnly: false }
 
 for (const backend of backends) {
 	describe.skipIf(backend.skip)(`authoring workspaces (${backend.name})`, () => {
@@ -521,15 +524,35 @@ for (const backend of backends) {
 				expect((await getWorkspaceUseCase(w.context(author), { workspaceId: created.id })).latestRun?.id).toBe(run.id)
 
 				w.logs.set(`runs/${run.id}/logs.ndjson`, [{ ts: 1, stream: 'meta', text: 'building' }])
-				expect(await getDeploymentUseCase(w.context(author), { runId: run.id })).toEqual({
+				expect(await getDeploymentUseCase(w.context(author), { runId: run.id, log: TAIL })).toEqual({
 					run,
-					logTail: [{ ts: 1, stream: 'meta', text: 'building' }],
+					log: { lines: [{ ts: 1, stream: 'meta', text: 'building' }], from: 0, to: 1, total: 1 },
 					approval: null,
 					deviations: [],
 				})
-				await expect(getDeploymentUseCase(w.context(oauthUser(['source.workspace.read'])), { runId: run.id })).rejects.toMatchObject({
+				await expect(getDeploymentUseCase(w.context(oauthUser(['source.workspace.read'])), { runId: run.id, log: TAIL })).rejects.toMatchObject({
 					httpStatus: 404,
 				})
+			})
+
+			test('the log is a bounded window: a tail by default, after for polling, before for paging back, failures only on request', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				const run = await deployStageUseCase(w.context(author), { workspaceId: created.id })
+				const lines = Array.from({ length: 10 }, (_, index): RunLogLine => ({ ts: index, stream: 'stdout', text: `step ${index}` }))
+				lines[3] = { ts: 3, stream: 'stderr', text: 'npm warn deprecated' }
+				lines[6] = { ts: 6, stream: 'stdout', text: 'Error: build failed' }
+				lines[7] = { ts: 7, stream: 'stdout', text: 'terrorist is not a failure word, failure is' }
+				w.logs.set(`runs/${run.id}/logs.ndjson`, lines)
+				const log = async (query: Partial<DeploymentLogQuery>) =>
+					(await getDeploymentUseCase(w.context(author), { runId: run.id, log: { lines: 3, failuresOnly: false, ...query } })).log
+				expect(await log({})).toEqual({ lines: lines.slice(7), from: 7, to: 10, total: 10 })
+				expect(await log({ before: 7 })).toEqual({ lines: lines.slice(4, 7), from: 4, to: 7, total: 10 })
+				expect(await log({ after: 8 })).toEqual({ lines: lines.slice(8), from: 8, to: 10, total: 10 })
+				expect(await log({ after: 10 })).toEqual({ lines: [], from: 10, to: 10, total: 10 })
+				expect(await log({ lines: 0 })).toEqual({ lines: [], from: 10, to: 10, total: 10 })
+				expect(await log({ failuresOnly: true, lines: 10 })).toEqual({ lines: [lines[3], lines[6], lines[7]], from: 0, to: 3, total: 3 })
+				await expect(log({ after: 1, before: 2 })).rejects.toMatchObject({ httpStatus: 400 })
 			})
 
 			test('a run parked for approval is reported with the approval link, the change and its deviations, which no MCP token can approve', async () => {
@@ -551,7 +574,7 @@ for (const backend of backends) {
 				await owned.start(run.id, `runs/${run.id}/logs.ndjson`)
 				await owned.park(run.id, JSON.stringify(classification))
 
-				const deployment = await getDeploymentUseCase(w.context(author), { runId: run.id })
+				const deployment = await getDeploymentUseCase(w.context(author), { runId: run.id, log: TAIL })
 				expect(deployment.run.status).toBe('awaiting_approval')
 				expect(deployment.approval).toEqual({
 					url: `https://console.example.test/approvals/${run.id}`,
@@ -586,11 +609,11 @@ for (const backend of backends) {
 					actor: 'user:test',
 				})
 				for (const runId of [foreign.id, prod.id, 'missing']) {
-					await expect(getDeploymentUseCase(w.context(author), { runId })).rejects.toMatchObject({ httpStatus: 404 })
+					await expect(getDeploymentUseCase(w.context(author), { runId, log: TAIL })).rejects.toMatchObject({ httpStatus: 404 })
 				}
-				expect((await getDeploymentUseCase(w.context(author), { runId: own.id })).run.id).toBe(own.id)
+				expect((await getDeploymentUseCase(w.context(author), { runId: own.id, log: TAIL })).run.id).toBe(own.id)
 				await putAppEnvUseCase(registryContext(w.repositories), 'shop', 'stage', { ...zeropsEnvelopes(), authoring: false })
-				await expect(getDeploymentUseCase(w.context(author), { runId: own.id })).rejects.toMatchObject({ httpStatus: 404 })
+				await expect(getDeploymentUseCase(w.context(author), { runId: own.id, log: TAIL })).rejects.toMatchObject({ httpStatus: 404 })
 			})
 
 			test('a pull request goes from the workspace branch to the default branch', async () => {

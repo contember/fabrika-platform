@@ -160,7 +160,7 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 
 		expect(toolJson(await call(token, 'get_deployment', { runId: run.id }), z.unknown())).toMatchObject({
 			run: { id: run.id, commitSha: committed.commitSha, status: 'pending' },
-			logTail: [],
+			log: { lines: [], from: 0, to: 0, total: 0 },
 		})
 
 		const opened = toolJson(
