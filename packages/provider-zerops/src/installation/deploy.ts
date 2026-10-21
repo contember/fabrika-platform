@@ -301,6 +301,7 @@ const IAM_OAUTH_CONFIG = 'FABRIKA_IAM_OAUTH_CONFIG'
  */
 const desiredServiceEnv = (
 	environment: string,
+	projectId: string,
 	placement: PlatformPlacement,
 	proxySource: ZeropsNamespaceProxySource,
 	oauthConfig: IamOAuthConfig | undefined,
@@ -352,6 +353,9 @@ const desiredServiceEnv = (
 				// The public IAM origin an APPLICATION project's proxy reaches — there is no private
 				// network between projects (ADR-0006).
 				['FABRIKA_ZEROPS_PROXY_IAM_URL', iamOrigin],
+				// The installation's own project, which no deployment namespace may adopt: its proxy is the
+				// platform's enforcement point, and a namespace reconcile would rebuild it with only app members.
+				['FABRIKA_ZEROPS_PLATFORM_PROJECT_ID', projectId],
 			]),
 		],
 	])
@@ -670,7 +674,7 @@ export const deployPreparedPlatform = async (
 
 	log.step('Write the service environment')
 	const controlTableDigest = platformServiceTableDigest(platformManifest, platformProxyAppFor(PLATFORM_PROXY_MANIFEST_TEMPLATE, 'control').id)
-	const desired = desiredServiceEnv(environment, placement, proxySource, oauthConfig, controlTableDigest)
+	const desired = desiredServiceEnv(environment, project.id, placement, proxySource, oauthConfig, controlTableDigest)
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
 		const service = serviceOf(services, hostname)
 		const live = hostname === PLATFORM_PROXY_SERVICE ? proxyEnv : await readServiceEnv(service.id, collaborators)

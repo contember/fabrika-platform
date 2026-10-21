@@ -67,9 +67,17 @@ const validateProject = (
 	target: NormalizedZeropsNamespaceTarget,
 	project: ZeropsProject,
 	adopting: boolean,
+	installationProjectId: string | undefined,
 ): void => {
 	if (project.id === '') {
 		throw new Error('Zerops namespace project returned an empty id')
+	}
+	// Checked on every reconcile, before the import and the proxy build, so a namespace that already adopted it stops
+	// here instead of rebuilding the platform's enforcement point with an empty manifest (ADR-0034).
+	if (project.id === installationProjectId) {
+		throw new Error(
+			`Zerops project ${project.id} is the installation's own project; a deployment namespace needs a project of its own`,
+		)
 	}
 	if (target.projectName !== project.name) {
 		throw new Error(`Zerops namespace project name mismatch: expected \`${target.projectName}\`, got \`${project.name}\``)
@@ -398,7 +406,7 @@ const runNamespaceMutation = async (
 		target = { ...target, projectName: project.name }
 		namespace = await checkpoint(input, namespace, target)
 	}
-	validateProject(namespace, target, project, initiallyAdopted)
+	validateProject(namespace, target, project, initiallyAdopted, options.installationProjectId)
 
 	if (initiallyAdopted) {
 		// Validate before the first mutation; the import below then enforces service-level envIsolation.

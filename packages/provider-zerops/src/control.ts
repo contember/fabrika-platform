@@ -102,6 +102,8 @@ export interface ZeropsControlProviderOptions {
 		readonly proxySource: ZeropsNamespaceProxySource
 		readonly iamUrl: string
 		readonly iamKey: string
+		/** The installation's own project, which no namespace may adopt. */
+		readonly installationProjectId?: string
 		/** The manifest parsers of the older releases' proxies, which a namespace pinned to an older source may run. */
 		readonly olderProxies: OlderProxyReaders
 	}

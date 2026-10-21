@@ -44,6 +44,7 @@ export interface ZeropsNamespaceProcessConfig {
 	readonly proxySource: ZeropsNamespaceProxySource
 	readonly iamUrl: string
 	readonly iamKey: string
+	readonly installationProjectId?: string
 }
 
 /** Read the installation-specific namespace inputs without hiding any behind provider defaults. */
@@ -54,6 +55,11 @@ export const zeropsNamespaceProcessConfig = (
 	proxySource: readProxySource(required(source, 'FABRIKA_ZEROPS_PROXY_SOURCE_JSON')),
 	iamUrl: required(source, 'FABRIKA_ZEROPS_PROXY_IAM_URL'),
 	iamKey: required(source, 'FABRIKA_ZEROPS_PROXY_IAM_KEY'),
+	// Optional: an installation gets it on its next `platform deploy`, and Control must still start before that.
+	...((): { installationProjectId?: string } => {
+		const installationProjectId = source['FABRIKA_ZEROPS_PLATFORM_PROJECT_ID']
+		return installationProjectId === undefined || installationProjectId === '' ? {} : { installationProjectId }
+	})(),
 })
 
 function readProxySource(raw: string): ZeropsNamespaceProxySource {
