@@ -84,4 +84,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [193](193-loose-ends-of-the-declared-surface.md): The approval of an upgrade to 0.7, admission buckets, tokens on Cloudflare and other P2s of the surface revision.
 - [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: a claim before the dispatcher sends (two double-send paths), maintenance and console edges, the sender's error mapping, expired keys' vault values.
 - [197](197-local-compat-has-no-0.7-release.md): `local:compat` deploys no Notes at v0.7.0: its proof needs a release without a file collection.
+- [198](198-a-zerops-platform-deploy-rebuilds-every-service.md): A Zerops platform deploy rebuilds all four services every time, and a bring-up compiles Caddy for 5 min.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
