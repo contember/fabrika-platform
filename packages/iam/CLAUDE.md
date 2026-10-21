@@ -151,6 +151,13 @@ fails if that stops being true — it is the guard, not documentation of one.
   "refuse an `oidc` session when OIDC is off" would have disabled the bypass itself. Anything that
   seeds a session must therefore name a method that composition enables — `src/node/browser-identity.ts`
   seeds `password` for exactly that reason.
+- **A SESSION ASSERTED AT A TERMINAL MINTS `(person ∩ ceiling) ∪ terminal`, ONLY FOR ITS ASSERTER** (ADR-0067 §4,
+  `mintToken`). The person's entries pass the asserter's ceiling with the key downscope filter (`permits`, never a set
+  intersection), then the terminal principal's own grants at the app follow with source `terminal`. Any other audience,
+  a platform audience even as the asserter, a revoked terminal, an asserter the profile no longer lists and a disabled
+  terminal principal are `invalid_session`. `exchangeAuthCode` copies `terminal_id`/`asserted_by` to the child and
+  refuses a code for another app; `resolveAdmin` refuses a token carrying `terminal`, because it re-resolves the
+  subject's own permissions. Mint and redemption `auth_log` rows take both values from the session row.
 - **WHICH APP'S PROXY TOKEN MAY ADMINISTER IS A REGISTRY.** `ADMIN_AUDIENCES` (deploy
   var `FABRIKA_IAM_ADMIN_AUDIENCES`, comma-separated app ids) is the `aud` allowlist `resolveAdmin`'s
   JWT branch checks; unset means the console gateway's own app id (`vozka`), explicitly empty means

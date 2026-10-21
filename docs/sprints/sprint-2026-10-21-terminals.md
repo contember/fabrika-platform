@@ -205,3 +205,11 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
   `exchangeAuthCode` fails for a terminal parent until it copies both to the child.
 - WU1 → WU3/WU5: a terminal principal is a `service` row, so check that `apiKeys.list` does not show it. Nothing calls
   `terminals.pruneIdentifications` yet; the maintenance cron should.
+- WU2: the ceiling is a set of global `permits` patterns, so a person's wildcard entry (`*`, `x.*`) survives only under a
+  ceiling pattern that matches the wildcard string itself; contract applications hold exact actions, so this rarely bites.
+- WU2: `mintToken` also refuses a terminal session for a platform audience, even as its asserter, and when the terminal
+  principal is disabled or the profile no longer lists the asserter. `exchangeAuthCode` refuses (`wrong_app`) a code
+  issued for an app other than the login's `asserted_by`.
+- WU2 → WU4/WU5: a `perms` entry with source `terminal` makes an older `parseAccessClaims` refuse the whole token
+  (`parseSource` is closed). Only an application whose framework knows terminals may be an asserter; WU5's "declares an
+  identification page" check is what enforces that.

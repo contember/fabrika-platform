@@ -39,6 +39,17 @@ export interface ListedSessionRow extends SessionRow {
 	parent_revoked_at: number | null
 }
 
+/** The terminal a `terminal_assertion` session was asserted on, and the application that asserted it. */
+export interface SessionTerminal {
+	terminalId: string
+	assertedBy: string
+}
+
+/** A session row's terminal, or null for a session on none. The row CHECK sets both columns or neither. */
+export function sessionTerminal(row: Pick<SessionRow, 'terminal_id' | 'asserted_by'>): SessionTerminal | null {
+	return row.terminal_id === null || row.asserted_by === null ? null : { terminalId: row.terminal_id, assertedBy: row.asserted_by }
+}
+
 /** Methods with no upstream subject: the row CHECK pairs every other method with an `idp_sub`. */
 const SUBJECTLESS_METHODS: readonly AuthenticationMethod[] = ['password', 'terminal_assertion']
 
@@ -71,7 +82,7 @@ export class SessionRepository {
 		/** The IAM session this is derived from. Revoking that one revokes this. */
 		parentSessionId?: string | null
 		/** A `terminal_assertion` session's terminal and asserting application; both or neither. */
-		terminal?: { terminalId: string; assertedBy: string } | null
+		terminal?: SessionTerminal | null
 	}, log?: AuthLogInput): Promise<string> {
 		const id = uuidv7()
 		const authenticationMethod = input.authenticationMethod ?? 'oidc'

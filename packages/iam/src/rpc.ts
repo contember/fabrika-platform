@@ -104,7 +104,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		async exchangeAuthCode(raw: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
 			const input = withAcceptedRequestId(raw)
 			try {
-				const { result, principalId } = await exchangeAuthCode(services, input)
+				const { result, principalId, terminal } = await exchangeAuthCode(services, input)
 				// A redemption logged its `allow` row in the child session's own batch; a refusal opened nothing.
 				if (!result.ok) {
 					ctx.waitUntil(
@@ -115,6 +115,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 							principalId,
 							decision: 'deny',
 							reason: result.reason,
+							terminal,
 						}),
 					)
 				}
@@ -143,7 +144,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		async mintToken(raw: MintTokenInput): Promise<MintTokenResult> {
 			const input = withAcceptedRequestId(raw)
 			try {
-				const { result, principalId } = await mintToken(services, env, input)
+				const { result, principalId, terminal } = await mintToken(services, env, input)
 				ctx.waitUntil(
 					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
@@ -152,6 +153,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 						principalId,
 						decision: result.ok ? 'allow' : 'deny',
 						reason: result.ok ? 'mint' : result.reason,
+						terminal,
 					}),
 				)
 				return result

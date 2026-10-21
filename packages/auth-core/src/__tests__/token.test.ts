@@ -325,3 +325,54 @@ describe('the session mark of a principal token', () => {
 		}
 	})
 })
+
+describe('the terminal of a person signed in on one (ADR-0067)', () => {
+	const terminalParams = {
+		iss: ISS,
+		app: 'attendance@prod',
+		subject: 'user-1',
+		type: 'user' as const,
+		label: 'ann@example.com',
+		session: true as const,
+		permissions: [{ action: 'attendance.record', scope: null, source: 'terminal' as const }],
+		issuedAt: 1,
+		expiresAt: 2,
+	}
+	const terminal = { id: 'terminal-1', label: 'Entrance' }
+
+	test('a terminal session token carries amr and the terminal, and round-trips them with the terminal source', () => {
+		const built = buildAccessClaims({ ...terminalParams, terminal })
+		expect(built.amr).toBe('terminal_assertion')
+		expect(built.terminal).toEqual(terminal)
+		const parsed = parseAccessClaims(JSON.parse(JSON.stringify(built)))
+		expect(parsed?.amr).toBe('terminal_assertion')
+		expect(parsed?.terminal).toEqual(terminal)
+		expect(parsed?.perms).toEqual(terminalParams.permissions)
+	})
+
+	test('a token without them parses without them', () => {
+		const parsed = parseAccessClaims(JSON.parse(JSON.stringify(buildAccessClaims(terminalParams))))
+		expect(parsed).not.toBeNull()
+		expect(parsed?.amr).toBeUndefined()
+		expect(parsed?.terminal).toBeUndefined()
+	})
+
+	test("only a person's session token names a terminal", () => {
+		expect(() => buildAccessClaims({ ...terminalParams, type: 'service', terminal })).toThrow()
+		expect(() => buildAccessClaims({ ...terminalParams, session: undefined, terminal })).toThrow()
+		expect(() => buildAccessClaims({ ...terminalParams, terminal: { id: '', label: 'Entrance' } })).toThrow()
+		const claims = { amr: 'terminal_assertion', terminal }
+		expect(parseAccessClaims({ ...buildAccessClaims({ ...terminalParams, type: 'service' }), ...claims })).toBeNull()
+		expect(parseAccessClaims({ ...buildAccessClaims({ ...terminalParams, session: undefined }), ...claims })).toBeNull()
+	})
+
+	test('amr and the terminal come together and well-formed, or the whole token is refused', () => {
+		const plain = buildAccessClaims(terminalParams)
+		expect(parseAccessClaims({ ...plain, amr: 'terminal_assertion' })).toBeNull()
+		expect(parseAccessClaims({ ...plain, terminal })).toBeNull()
+		expect(parseAccessClaims({ ...plain, amr: 'pwd', terminal })).toBeNull()
+		for (const value of [{ id: 'terminal-1' }, { id: 7, label: 'Entrance' }, { id: 'terminal-1', label: '' }, 'terminal-1', null]) {
+			expect(parseAccessClaims({ ...plain, amr: 'terminal_assertion', terminal: value })).toBeNull()
+		}
+	})
+})

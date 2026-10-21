@@ -60,7 +60,7 @@ export { MembershipTransportKeyRepository, type MembershipTransportKeyRow } from
 export { type OAuthCodeRow, type OAuthGrantRow, type OAuthRefreshTokenRow, OAuthRepository } from './repositories/oauth'
 export { PasswordPolicyRepository, type PasswordPolicyRow } from './repositories/password-policy'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
-export { type AuthenticationMethod, SessionRepository, type SessionRow } from './repositories/sessions'
+export { type AuthenticationMethod, SessionRepository, type SessionRow, type SessionTerminal, sessionTerminal } from './repositories/sessions'
 export {
 	DEFAULT_TERMINAL_SESSION_TTL_SECONDS,
 	MAX_TERMINAL_SESSION_TTL_SECONDS,

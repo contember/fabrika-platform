@@ -31,8 +31,9 @@ export function isWorkloadKind(value: unknown): value is WorkloadKind {
  *  - 'grant'             — explicit `grants` row
  *  - 'bootstrap'         — IAM_BOOTSTRAP_ADMINS env match (resolution-time only)
  *  - `group:${groupRef}` — IdP group → role mapping (the `<org>/<team>` ref)
+ *  - 'terminal'          — a grant of the terminal a person is signed in on (ADR-0067)
  */
-export type PermissionSource = 'grant' | 'bootstrap' | `group:${string}`
+export type PermissionSource = 'grant' | 'bootstrap' | 'terminal' | `group:${string}`
 
 /**
  * A flat, app-owned scope coordinate — one dimension (`type`) and an opaque value.

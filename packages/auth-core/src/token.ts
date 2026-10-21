@@ -117,10 +117,27 @@ export interface AccessTokenClaims {
 	 * key carries what the key's own grants narrow, so a check that resolves the person's permissions requires this.
 	 */
 	session?: true
+	/**
+	 * Present only on a session token of a person an application asserted at an enrolled terminal (ADR-0067), and
+	 * always together with `terminal`.
+	 */
+	amr?: TerminalAuthenticationMethod
+	/** The terminal the person is signed in on; present exactly when `amr` is. */
+	terminal?: TerminalTokenClaims
 	/** Present only on an OAuth resource token (`aud` is then a resource URI, not an app id). */
 	oauth?: OAuthTokenClaims
 	/** Present only on a share-link token, which has no `ptype`: `sub` is then the link key's id. */
 	link?: LinkTokenClaims
+}
+
+/** The `amr` value of a session an application asserted at a terminal. */
+export const TERMINAL_AUTHENTICATION_METHOD = 'terminal_assertion'
+export type TerminalAuthenticationMethod = typeof TERMINAL_AUTHENTICATION_METHOD
+
+/** The terminal a person's session was asserted on: its principal id and the label an administrator gave it. */
+export interface TerminalTokenClaims {
+	id: string
+	label: string
 }
 
 /** What a share-link token adds: the link mount that issued the key and the chain the key is bound to. */
@@ -200,6 +217,8 @@ export interface AccessTokenParams {
 	email?: string
 	/** Minted from a signed-in session; refused on a token without `type` or of a workload. */
 	session?: true
+	/** The terminal of a person's session asserted on one; sets `amr` too, and requires a user `type` and `session`. */
+	terminal?: TerminalTokenClaims
 	permissions: PermissionEntry[]
 	issuedAt: number
 	expiresAt: number
@@ -284,6 +303,13 @@ export function buildAccessClaims(params: AccessTokenParams): AccessTokenClaims 
 		if (params.type === undefined || isWorkloadKind(params.type)) throw new Error("Only a person's or a service's token is minted from a session")
 		claims.session = params.session
 	}
+	if (params.terminal !== undefined) {
+		if (params.type !== 'user' || params.session !== true || !isTerminalClaims(params.terminal)) {
+			throw new Error("Only a person's session token names a terminal, and only by a non-empty id and label")
+		}
+		claims.amr = TERMINAL_AUTHENTICATION_METHOD
+		claims.terminal = { id: params.terminal.id, label: params.terminal.label }
+	}
 	if (params.link !== undefined) {
 		if (params.type !== undefined) throw new Error('A share-link token has no principal type')
 		claims.link = { mount: params.link.mount, chain: params.link.chain.map((scope) => ({ type: scope.type, value: scope.value })) }
@@ -333,6 +359,10 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 	if (session !== undefined && (session !== true || ptype === null || isWorkloadKind(ptype) || oauth !== null)) {
 		return null
 	}
+	const terminal = parseTerminalClaims(prop(payload, 'amr'), prop(payload, 'terminal'))
+	if (terminal === undefined || (terminal !== null && (ptype !== 'user' || session !== true || oauth !== null))) {
+		return null
+	}
 	const claims: AccessTokenClaims = { iss, aud, sub, iat, exp, perms, label }
 	if (ptype !== null) {
 		claims.ptype = ptype
@@ -345,6 +375,10 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 	}
 	if (session === true) {
 		claims.session = true
+	}
+	if (terminal !== null) {
+		claims.amr = TERMINAL_AUTHENTICATION_METHOD
+		claims.terminal = terminal
 	}
 	if (oauth !== null) {
 		claims.oauth = oauth
@@ -377,6 +411,22 @@ function parseEmail(value: unknown, ptype: TokenPrincipalType | null): string | 
 		return null
 	}
 	return ptype === 'user' && typeof value === 'string' && isNormalizedMailbox(value) ? value : undefined
+}
+
+/** Both absent → null; `amr` naming the terminal method beside a well-formed `terminal` → it; anything else → undefined. */
+function parseTerminalClaims(amr: unknown, value: unknown): TerminalTokenClaims | null | undefined {
+	if (amr === undefined && value === undefined) {
+		return null
+	}
+	if (amr !== TERMINAL_AUTHENTICATION_METHOD) {
+		return undefined
+	}
+	const terminal = { id: stringField(value, 'id'), label: stringField(value, 'label') }
+	return isTerminalClaims(terminal) ? { id: terminal.id, label: terminal.label } : undefined
+}
+
+function isTerminalClaims(value: { id: string | undefined; label: string | undefined }): value is TerminalTokenClaims {
+	return value.id !== undefined && value.id !== '' && value.label !== undefined && value.label !== ''
 }
 
 /** Absent → null; a mount and a non-empty chain → the claims; anything else → undefined. */
@@ -470,7 +520,7 @@ function parseScope(value: unknown): Scope | null | undefined {
 
 /** Validate `source` against the union — our own token, but read without `as`. */
 function parseSource(value: unknown): PermissionSource | null {
-	if (value === 'grant' || value === 'bootstrap') {
+	if (value === 'grant' || value === 'bootstrap' || value === 'terminal') {
 		return value
 	}
 	if (typeof value === 'string' && value.startsWith('group:')) {

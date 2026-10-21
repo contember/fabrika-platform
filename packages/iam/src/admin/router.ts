@@ -114,6 +114,11 @@ export async function resolveAdmin(
 		if (claims.session !== true) {
 			return { ok: false, status: 403, reason: 'not_allowed' }
 		}
+		// Nor does a person signed in at a terminal: this branch resolves the subject's own permissions, which would
+		// step past the terminal's ceiling (ADR-0067 §4).
+		if (claims.terminal !== undefined) {
+			return { ok: false, status: 403, reason: 'not_allowed' }
+		}
 		const principal = await services.repositories.principals.getPrincipalById(claims.sub)
 		if (principal === null) {
 			return { ok: false, status: 401, reason: 'invalid_token' }
