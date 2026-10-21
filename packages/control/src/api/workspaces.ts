@@ -701,5 +701,12 @@ function sourceFailure(cause: unknown, conflictMessage: string): unknown {
 	if (cause.kind === 'stale_head') return new ControlApiError(409, 'the workspace head moved; re-read the workspace and retry')
 	if (cause.kind === 'not_found') return new ControlApiError(404, 'branch, commit or path not found')
 	if (cause.kind === 'conflict') return new ControlApiError(409, conflictMessage)
-	return new ControlApiError(502, 'GitHub is unavailable')
+	if (cause.kind === 'refused') {
+		return new ControlApiError(
+			502,
+			"GitHub refused this app's GitHub App: its installation, permissions or key, or a protected branch. Retrying will not help; "
+				+ 'tell the operator.',
+		)
+	}
+	return new ControlApiError(503, 'GitHub is unavailable or rate-limited. Retry in a minute; if it keeps failing, tell the operator.')
 }

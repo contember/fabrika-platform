@@ -335,7 +335,15 @@ async function run(effect: () => Promise<object>): Promise<CallToolResult> {
 
 function toolFailure(cause: unknown): CallToolResult {
 	if (cause instanceof ControlApiError) return { isError: true, content: [{ type: 'text', text: cause.message }] }
-	// Never log the error object: a GitHub or provider failure may carry repository detail.
-	console.error('mcp tool failed:', cause instanceof Error ? cause.name : 'unknown error')
-	return { isError: true, content: [{ type: 'text', text: 'The request failed. Try again later.' }] }
+	// Never log or answer the error object: a GitHub or provider failure may carry repository detail or a credential.
+	const reference = crypto.randomUUID()
+	console.error(`mcp tool failed (reference ${reference}):`, cause instanceof Error ? cause.name : 'unknown error')
+	return {
+		isError: true,
+		content: [{
+			type: 'text',
+			text: 'Control or a service it depends on (its database, the audit log in IAM) failed; your input did not cause it. '
+				+ `Retry in a minute. If it keeps failing, tell the operator and quote reference ${reference}.`,
+		}],
+	}
 }

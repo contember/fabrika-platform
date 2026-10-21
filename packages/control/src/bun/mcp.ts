@@ -2,6 +2,7 @@ import { createIam, type Iam } from '@fabrika/auth'
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
+import { ControlApiError } from '../api/domain'
 import type { McpRoute } from '../app'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
@@ -28,12 +29,28 @@ export function controlMcpRoute(env: Env, source: WorkspaceSourcePort, provider:
 		useCases: (auth, signal) => ({
 			repositories: env.REPOSITORIES,
 			source,
-			queue: env.DEPLOY_QUEUE,
-			logs: env.RUN_LOGS,
+			queue: {
+				send: (message) =>
+					namedFailure(
+						() => env.DEPLOY_QUEUE.send(message),
+						'Control created the run but could not queue it: the deploy queue is unavailable. Retry deploy_stage in a minute',
+					),
+			},
+			logs: { get: (key) => namedFailure(() => env.RUN_LOGS.get(key), 'The run log store is unavailable. Retry in a minute') },
 			auth,
 			signal,
 			consoleOrigin: publicOrigin,
 			protectedFiles,
 		}),
 	})
+}
+
+/** A failed queue or log-store call becomes a short tool error that names the store and says a retry may help. */
+async function namedFailure<T>(operation: () => Promise<T>, message: string): Promise<T> {
+	try {
+		return await operation()
+	} catch {
+		console.error('mcp: a deploy queue or run log store call failed')
+		throw new ControlApiError(503, `${message}; if it keeps failing, tell the operator.`)
+	}
 }
