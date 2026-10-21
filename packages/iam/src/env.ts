@@ -73,7 +73,10 @@ export interface Env {
 	 * `FABRIKA_CONTROL_URL` is set beside a configured provider. Control then delivers through its own transport.
 	 */
 	PLATFORM_EMAIL_SENDER?: EmailSender
-	/** The PBKDF2 cost this runtime can derive: a port the composition root sets, not a variable. Absent is the Bun cost. */
+	/**
+	 * The PBKDF2 cost this runtime can derive: a port the composition root sets, not a variable. Absent is the Bun cost,
+	 * which production Workers refuse, so every Worker composition must pass `WORKERS_PBKDF2_COST`.
+	 */
 	PASSWORD_COST?: Pbkdf2Cost
 
 	// ── propustka-native auth (propustka issues its own tokens; see token.ts / signing.ts) ──

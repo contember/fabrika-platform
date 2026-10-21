@@ -129,7 +129,12 @@ export class WebCryptoPasswordHasher implements PasswordHasher {
 		const parameters = parseParameters(stored.parameters)
 		const salt = decodeHex(stored.salt)
 		const expected = decodeHex(stored.passwordHash)
-		if (parameters === null || salt === null || expected === null || parameters.iterations > this.cost.maxIterations) {
+		if (parameters === null || salt === null || expected === null) {
+			return { valid: false, needsRehash: false }
+		}
+		if (parameters.iterations > this.cost.maxIterations) {
+			// Spend the current cost anyway, so a refused verifier answers no faster than a wrong password.
+			await derive(password, salt, this.current)
 			return { valid: false, needsRehash: false }
 		}
 		const actual = await derive(password, salt, parameters)
