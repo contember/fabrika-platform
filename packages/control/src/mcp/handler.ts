@@ -212,7 +212,9 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 		}
 	})
 	server.registerTool('list_targets', {
-		description: 'List the app environments you may author. Each target is one stage environment of one app, with its GitHub repository.',
+		description: 'List the app environments you may author. Each target is one stage environment of one app, with its GitHub repository '
+			+ 'and what it runs now (deployed: the last successful deploy, its workspace, and whether that workspace is yours). '
+			+ 'The environment shows one workspace at a time, so a deploy_stage replaces what another workspace deployed.',
 		inputSchema: toolInput(toolInputs.listTargets),
 		annotations: READ_ONLY,
 	}, () => run(() => listTargetsUseCase(c)))
@@ -229,8 +231,8 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 		annotations: READ_ONLY,
 	}, (input) => run(() => listWorkspacesUseCase(c, input)))
 	server.registerTool('get_workspace', {
-		description: 'Read one of your workspaces: its branch, the current head commit (headSha), the latest stage deploy and the pull '
-			+ 'request create_pull_request opened. '
+		description: 'Read one of your workspaces: its branch, the current head commit (headSha), the latest stage deploy, whether the '
+			+ 'stage environment runs it now (onStage) and the pull request create_pull_request opened. '
 			+ 'Use headSha as expectedHeadSha for apply_changes.',
 		inputSchema: toolInput(toolInputs.getWorkspace),
 		annotations: READ_ONLY,

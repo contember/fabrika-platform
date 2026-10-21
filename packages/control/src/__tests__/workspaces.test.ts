@@ -144,7 +144,14 @@ for (const backend of backends) {
 			test('lists only authoring environments the caller may read', async () => {
 				const w = await world()
 				expect(await listTargetsUseCase(w.context(author))).toEqual({
-					items: [{ appId: 'shop', env: 'stage', repository: 'acme/shop', defaultBranch: 'main', publicOrigin: 'https://shop-stage.example.com' }],
+					items: [{
+						appId: 'shop',
+						env: 'stage',
+						repository: 'acme/shop',
+						defaultBranch: 'main',
+						publicOrigin: 'https://shop-stage.example.com',
+						deployed: null,
+					}],
 				})
 				expect(await listTargetsUseCase(w.context(oauthUser(['deploy.read'])))).toEqual({ items: [] })
 			})
@@ -220,6 +227,34 @@ for (const backend of backends) {
 				w.source.failure = new WorkspaceSourceError('unavailable')
 				await expect(abandonWorkspaceUseCase(w.context(author), { workspaceId: created.id })).rejects.toMatchObject({ httpStatus: 503 })
 				expect((await getWorkspaceUseCase(w.context(author), { workspaceId: created.id })).id).toBe(created.id)
+			})
+
+			test('the target and each workspace say which workspace the stage environment runs now', async () => {
+				const w = await world()
+				const runs = fixtureRuns(w.repositories.runs, new SqlDeployLocks(requireOpened().db))
+				const mine = await workspace(w)
+				const stranger = oauthUser(AUTHOR_ACTIONS, 'stranger@acme.test')
+				const theirs = await createWorkspaceUseCase(w.context(stranger), { appId: 'shop', env: 'stage', title: 'Theirs' })
+				const deploy = async (auth: typeof author, workspaceId: string) => {
+					const run = await deployStageUseCase(w.context(auth), { workspaceId })
+					await runs.start(run.id)
+					await runs.finish(run.id, 'succeeded')
+					return run
+				}
+				const mineRun = await deploy(author, mine.id)
+				const target = async () => (await listTargetsUseCase(w.context(author))).items[0]?.deployed
+				expect(await target()).toMatchObject({ runId: mineRun.id, commitSha: sha('a'), workspaceId: mine.id, yours: true })
+				expect((await getWorkspaceUseCase(w.context(author), { workspaceId: mine.id })).onStage).toBe(true)
+				expect((await listWorkspacesUseCase(w.context(author), {})).items.map((item) => item.onStage)).toEqual([true])
+
+				const theirRun = await deploy(stranger, theirs.id)
+				expect(await target()).toMatchObject({ runId: theirRun.id, workspaceId: theirs.id, yours: false })
+				expect((await getWorkspaceUseCase(w.context(author), { workspaceId: mine.id })).onStage).toBe(false)
+
+				const failing = await deployStageUseCase(w.context(author), { workspaceId: mine.id })
+				await runs.start(failing.id)
+				await runs.finish(failing.id, 'failed')
+				expect((await target())?.runId).toBe(theirRun.id)
 			})
 
 			test('are visible to their owner only', async () => {
