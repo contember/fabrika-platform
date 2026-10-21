@@ -550,8 +550,9 @@ login throttle on `X-Fabrika-Client-Ip` and writes `X-Request-Id` to `auth_log` 
 the platform project's private network can reach IAM's port and write both. So Caddy sets `X-Fabrika-Proxy-Secret`
 on the route of IAM's session owner, from `FABRIKA_INSTALLATION_PROXY_SECRET_IAM`, and IAM holds the same variable.
 IAM reads the two headers only from a request whose secret matches (digests compared in constant time). Any other
-request shares one client bucket and gets a generated request id. IAM refuses nothing for a missing secret: this is
-attribution, not a second enforcement decision. `platform deploy` derives the secret as HMAC-SHA256 of the label
+request shares one client bucket and gets a generated request id. A missing secret is never a refusal by itself;
+the shared bucket refuses once it is exhausted, like the balancer's one bucket every Zerops client shares today. This
+is attribution, not a second enforcement decision. `platform deploy` derives the secret as HMAC-SHA256 of the label
 `fabrika-installation-proxy-secret:iam` keyed by `FABRIKA_IAM_PROVISIONING_KEY`, which every deploy already holds,
 and writes it sensitive to `proxy` and `iam` on every deploy without reading it back. It is not derived from the
 proxy key, because every namespace proxy holds that one. An unset variable turns IAM's check off: Cloudflare, where
@@ -785,8 +786,9 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   secret, so an admin action's audit row gets a generated id instead of the proxy's. **Rollout:** no generated
   file changes and no provider state is added. The first `platform upgrade` writes the derived variable to `proxy`
   and `iam` before any build; nothing is removed or renamed. IAM deploys before the proxy, so for those minutes the
-  old proxy sends no secret and every request falls into the shared bucket with a generated id, which refuses
-  nothing; that is also what an installation behind a balancer that hides the client already sees. Once the proxy
+  old proxy sends no secret and every request falls into the shared bucket with a generated id. That bucket
+  refuses once exhausted, exactly as the balancer's address does today, because Zerops installations configure no
+  trusted balancer range; if the proxy build fails, the state lasts until the next successful deploy. Once the proxy
   is deployed the headers count again. A rollback of IAM ignores the variable.
 - **The least-privilege split around redemption is real only on Zerops**, where `/rpc/*` takes
   `FABRIKA_IAM_RPC_KEY`, `/auth/mint/*` takes `FABRIKA_IAM_PROXY_KEY`, an unset key makes its surface
