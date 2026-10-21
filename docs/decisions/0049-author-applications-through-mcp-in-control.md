@@ -32,7 +32,10 @@ contract and classify what it changed instead.
    administrative transport is unchanged. Only the Bun/Zerops composition mounts it.
 2. **IAM is the OAuth 2.1 authorization server.** Authorization code with S256 PKCE, explicit RFC 8707
    resource, refresh rotation and revocation. Clients are operator-registered Client ID Metadata
-   Documents (Claude, ChatGPT); there is no open dynamic registration. An access token is minted for
+   Documents (Claude, ChatGPT); there is no open dynamic registration. A client authenticates at the token
+   endpoint as its document declares: none (a public client with PKCE) or `private_key_jwt` against the
+   document's own-origin key set; a request never chooses a weaker method. Every authorization response
+   carries `iss` (RFC 9207). An access token is minted for
    one resource of one app. Its permissions are the user's live grants narrowed by the consented
    scope. No token delegation exists.
 3. **The proxy enforces it.** `/mcp` is a `service` row of the console's installation entry that

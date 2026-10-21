@@ -93,14 +93,24 @@ export class OAuthRepository {
 		return this.db.prepare('SELECT * FROM oauth_refresh_tokens WHERE token_hash = ?').bind(tokenHash).first<OAuthRefreshTokenRow>()
 	}
 
+	/** Record an accepted client assertion's `jti`. False when the client already presented it: a replay. */
+	async recordClientAssertion(clientId: string, jti: string, expiresAt: number): Promise<boolean> {
+		const row = await this.db.prepare(
+			'INSERT INTO oauth_client_assertions (client_id, jti, expires_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING RETURNING jti',
+		)
+			.bind(clientId, jti, expiresAt).first<{ jti: string }>()
+		return row !== null
+	}
+
 	/**
-	 * Delete codes and refresh tokens past expiry. Spent rows stay until then because they are what
+	 * Delete codes, refresh tokens and client assertion ids past expiry. Spent rows stay until then because they are what
 	 * detects a replay. Grants go with their session row (`ON DELETE CASCADE`), which shares their expiry.
 	 */
 	async prune(now: number): Promise<void> {
 		await this.db.batch([
 			this.db.prepare('DELETE FROM oauth_codes WHERE expires_at <= ?').bind(now),
 			this.db.prepare('DELETE FROM oauth_refresh_tokens WHERE expires_at <= ?').bind(now),
+			this.db.prepare('DELETE FROM oauth_client_assertions WHERE expires_at <= ?').bind(now),
 		])
 	}
 }

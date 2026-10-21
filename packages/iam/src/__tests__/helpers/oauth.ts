@@ -15,13 +15,17 @@ export const REDIRECT_URI = 'https://claude.example.test/api/mcp/auth_callback'
 export const SIGNING_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 
 /**
- * One user with live grants at `control`, one IAM session, and one registered client whose CIMD is
- * served by a stubbed `fetch`. Each fixture gets a fresh client id, so the module-level metadata cache
- * never answers one test from another's document.
+ * One user with live grants at `control`, one IAM session, and one registered client whose CIMD (and,
+ * with `jwks`, its key set at `jwksUri`) is served by a stubbed `fetch`. Each fixture gets a fresh client
+ * id and key set URL, so the module-level caches never answer one test from another's documents.
  */
 export async function oauthFixture(
 	repositories: IamRepositories,
-	options: { document?: (clientId: string) => Record<string, unknown>; failFetch?: boolean } = {},
+	options: {
+		document?: (clientId: string, jwksUri: string) => Record<string, unknown>
+		jwks?: () => Record<string, unknown>
+		failFetch?: boolean
+	} = {},
 ) {
 	const principal = await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.test`)
 	await repositories.grants.createGrant({
@@ -39,6 +43,7 @@ export async function oauthFixture(
 		expiresAt: Math.floor(Date.now() / 1000) + 3600,
 	})
 	const clientId = `https://claude.example.test/cimd/${uuidv7()}`
+	const jwksUri = `https://claude.example.test/jwks/${uuidv7()}.json`
 	const config: OAuthConfig = {
 		clients: [{ provider: 'claude', clientId, redirectUris: [REDIRECT_URI], metadataUrl: clientId }],
 		resources: [{
@@ -51,7 +56,7 @@ export async function oauthFixture(
 			],
 		}],
 	}
-	const document = options.document?.(clientId) ?? {
+	const document = options.document?.(clientId, jwksUri) ?? {
 		client_id: clientId,
 		client_name: 'Claude <test>',
 		redirect_uris: [REDIRECT_URI],
@@ -63,8 +68,10 @@ export async function oauthFixture(
 	const nativeFetch = globalThis.fetch
 	const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(
 		(input: Parameters<typeof fetch>[0]) => {
-			fetched.push(input instanceof Request ? input.url : String(input))
-			return Promise.resolve(options.failFetch === true ? new Response('unavailable', { status: 503 }) : Response.json(document))
+			const url = input instanceof Request ? input.url : String(input)
+			fetched.push(url)
+			if (options.failFetch === true) return Promise.resolve(new Response('unavailable', { status: 503 }))
+			return Promise.resolve(url === jwksUri && options.jwks !== undefined ? Response.json(options.jwks()) : Response.json(document))
 		},
 		{ preconnect: nativeFetch.preconnect },
 	))
@@ -151,6 +158,7 @@ export async function oauthFixture(
 		principal,
 		sessionId,
 		clientId,
+		jwksUri,
 		config,
 		services,
 		fetched,

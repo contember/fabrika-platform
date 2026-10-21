@@ -36,6 +36,7 @@ const SWEPT_TABLES = [
 	'oauth_grants',
 	'oauth_codes',
 	'oauth_refresh_tokens',
+	'oauth_client_assertions',
 	'delegation_grants',
 	'membership_invitations',
 ] as const
@@ -206,6 +207,9 @@ async function seedBothSides(h: Harness): Promise<string> {
 	for (const [hash, expiresAt] of [['refresh-old', NOW - 1], ['refresh-live', NOW + DAY]] as const) {
 		await h.repositories.oauth.insertRefreshToken({ token_hash: hash, grant_id: 'grant-live', expires_at: expiresAt })
 	}
+	for (const [jti, expiresAt] of [['jti-old', NOW - 1], ['jti-live', NOW + 60]] as const) {
+		await h.repositories.oauth.recordClientAssertion('https://chatgpt.example.test/cimd', jti, expiresAt)
+	}
 
 	return principal
 }
@@ -234,6 +238,7 @@ describe('runIamMaintenance', () => {
 			oauth_grants: 2,
 			oauth_codes: 3,
 			oauth_refresh_tokens: 2,
+			oauth_client_assertions: 2,
 			delegation_grants: 2,
 			membership_invitations: 2,
 		})
@@ -255,6 +260,7 @@ describe('runIamMaintenance', () => {
 			oauth_grants: 1,
 			oauth_codes: 1,
 			oauth_refresh_tokens: 1,
+			oauth_client_assertions: 1,
 			delegation_grants: 1,
 			membership_invitations: 1,
 		})
@@ -280,6 +286,7 @@ describe('runIamMaintenance', () => {
 			oauth_grants: 1,
 			oauth_codes: 1,
 			oauth_refresh_tokens: 1,
+			oauth_client_assertions: 1,
 			delegation_grants: 1,
 			membership_invitations: 1,
 		})

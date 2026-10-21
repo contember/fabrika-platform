@@ -8,14 +8,33 @@ export interface OAuthManagedClient {
 	redirectUris: string[]
 }
 
-export interface OAuthClientMetadataDocument {
+/** RFC 7523 §2.2: the `client_assertion_type` of a JWT client assertion (`private_key_jwt`). */
+export const OAUTH_CLIENT_ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
+
+/** The signing algorithms IAM verifies a client assertion with. */
+export const OAUTH_CLIENT_ASSERTION_ALGORITHMS = ['RS256'] as const
+export type OAuthClientAssertionAlgorithm = (typeof OAUTH_CLIENT_ASSERTION_ALGORITHMS)[number]
+
+interface OAuthClientMetadataFields {
 	client_id: string
 	client_name?: string
 	redirect_uris: string[]
-	token_endpoint_auth_method: 'none'
 	grant_types: ('authorization_code' | 'refresh_token')[]
 	response_types: ['code']
 }
+
+/** A public client, or one that authenticates with a JWT signed by a key its document publishes. */
+export type OAuthClientMetadataDocument =
+	| (OAuthClientMetadataFields & { token_endpoint_auth_method: 'none' })
+	| (OAuthClientMetadataFields & {
+		token_endpoint_auth_method: 'private_key_jwt'
+		/** HTTPS, on the client id's own origin. */
+		jwks_uri: string
+		token_endpoint_auth_signing_alg: OAuthClientAssertionAlgorithm
+	})
+
+/** How a token or revocation request authenticates its client: no credential, or a JWT assertion. */
+export type OAuthClientCredential = { method: 'none' } | { method: 'private_key_jwt'; assertion: string }
 
 export interface OAuthResourceDto {
 	app: string
@@ -84,7 +103,12 @@ export interface OAuthAuthorizationServerMetadata {
 	response_types_supported: ['code']
 	grant_types_supported: ['authorization_code', 'refresh_token']
 	code_challenge_methods_supported: ['S256']
-	token_endpoint_auth_methods_supported: ['none']
+	token_endpoint_auth_methods_supported: ['none', 'private_key_jwt']
+	token_endpoint_auth_signing_alg_values_supported: OAuthClientAssertionAlgorithm[]
+	revocation_endpoint_auth_methods_supported: ['none', 'private_key_jwt']
+	revocation_endpoint_auth_signing_alg_values_supported: OAuthClientAssertionAlgorithm[]
+	/** RFC 9207: every authorization response carries `iss`. */
+	authorization_response_iss_parameter_supported: true
 	client_id_metadata_document_supported: true
 }
 
@@ -126,19 +150,40 @@ export function parseOAuthClientMetadata(value: unknown, registration: OAuthMana
 	const responses = rawResponses === undefined ? ['code'] : rawResponses
 	if (
 		managed === null || clientId !== managed.clientId || uris === null || !uris.every((uri) => managed.redirectUris.includes(uri))
-		|| field(value, 'token_endpoint_auth_method') !== 'none' || (clientName !== undefined && !isNonemptyText(clientName))
+		|| (clientName !== undefined && !isNonemptyText(clientName))
 		|| field(value, 'client_secret') !== undefined || field(value, 'client_secret_expires_at') !== undefined || grants === null
 		|| !Array.isArray(responses) || responses.length !== 1 || responses[0] !== 'code'
 	) return null
-	const metadata: OAuthClientMetadataDocument = {
+	const fields: OAuthClientMetadataFields = {
 		client_id: managed.clientId,
 		redirect_uris: uris,
-		token_endpoint_auth_method: 'none',
 		grant_types: grants,
 		response_types: ['code'],
 	}
-	if (isNonemptyText(clientName)) metadata.client_name = clientName
-	return metadata
+	if (isNonemptyText(clientName)) fields.client_name = clientName
+	const method = field(value, 'token_endpoint_auth_method')
+	if (method === 'none') return { ...fields, token_endpoint_auth_method: 'none' }
+	if (method !== 'private_key_jwt') return null
+	const jwksUri = field(value, 'jwks_uri')
+	const algorithm = field(value, 'token_endpoint_auth_signing_alg')
+	// An inline `jwks` would bypass the origin rule below; RFC 7591 §2 forbids it beside `jwks_uri` anyway.
+	if (field(value, 'jwks') !== undefined || !isClientOriginUrl(jwksUri, managed.clientId) || !isClientAssertionAlgorithm(algorithm)) return null
+	return { ...fields, token_endpoint_auth_method: 'private_key_jwt', jwks_uri: jwksUri, token_endpoint_auth_signing_alg: algorithm }
+}
+
+function isClientAssertionAlgorithm(value: unknown): value is OAuthClientAssertionAlgorithm {
+	return OAUTH_CLIENT_ASSERTION_ALGORITHMS.some((algorithm) => algorithm === value)
+}
+
+/** An HTTPS URL on the client id's own origin, so the client's own host vouches for its keys. */
+function isClientOriginUrl(value: unknown, clientId: string): value is string {
+	if (typeof value !== 'string' || value.includes('#')) return false
+	try {
+		const url = new URL(value)
+		return url.protocol === 'https:' && url.username === '' && url.password === '' && url.origin === new URL(clientId).origin
+	} catch {
+		return false
+	}
 }
 
 function parseClientGrantTypes(value: unknown): OAuthClientMetadataDocument['grant_types'] | null {
@@ -147,7 +192,7 @@ function parseClientGrantTypes(value: unknown): OAuthClientMetadataDocument['gra
 	const grants: OAuthClientMetadataDocument['grant_types'] = []
 	for (const grant of value) {
 		if (typeof grant !== 'string') return null
-		// A client may list grants this server does not offer (Claude lists jwt-bearer); they grant it nothing here.
+		// A client may list grants IAM does not serve (Claude lists jwt-bearer); IAM serves the intersection.
 		if ((grant !== 'authorization_code' && grant !== 'refresh_token') || grants.includes(grant)) continue
 		grants.push(grant)
 	}
@@ -261,6 +306,20 @@ export function parseOAuthTokenRequest(value: unknown): OAuthTokenRequest | null
 		return isNonemptyText(refreshToken) ? { grant_type: grantType, client_id: clientId, refresh_token: refreshToken, resource } : null
 	}
 	return null
+}
+
+const MAX_CLIENT_ASSERTION_LENGTH = 16_384
+
+/**
+ * The client credential of a token or revocation request (RFC 7521 §4.2). Neither assertion field is no
+ * credential; a half-present pair, another assertion type or an oversized assertion is null.
+ */
+export function parseOAuthClientCredential(value: unknown): OAuthClientCredential | null {
+	const type = field(value, 'client_assertion_type')
+	const assertion = field(value, 'client_assertion')
+	if (type === undefined && assertion === undefined) return { method: 'none' }
+	if (type !== OAUTH_CLIENT_ASSERTION_TYPE || !isNonemptyText(assertion) || assertion.length > MAX_CLIENT_ASSERTION_LENGTH) return null
+	return { method: 'private_key_jwt', assertion }
 }
 
 export function parseOAuthRevocationRequest(value: unknown): OAuthRevocationRequest | null {

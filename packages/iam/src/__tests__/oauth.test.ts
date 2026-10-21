@@ -30,7 +30,7 @@ function locationOf(response: Response): URL {
 }
 
 describe('authorization server metadata', () => {
-	test('advertises the endpoints, PKCE S256, public clients and CIMD', async () => {
+	test('advertises the endpoints, PKCE S256, public and private_key_jwt clients, RFC 9207 and CIMD', async () => {
 		const f = await fixture()
 		const response = await f.call(new Request(`${ISSUER}/.well-known/oauth-authorization-server`))
 		expect(response.status).toBe(200)
@@ -44,7 +44,11 @@ describe('authorization server metadata', () => {
 			response_types_supported: ['code'],
 			grant_types_supported: ['authorization_code', 'refresh_token'],
 			code_challenge_methods_supported: ['S256'],
-			token_endpoint_auth_methods_supported: ['none'],
+			token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+			token_endpoint_auth_signing_alg_values_supported: ['RS256'],
+			revocation_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+			revocation_endpoint_auth_signing_alg_values_supported: ['RS256'],
+			authorization_response_iss_parameter_supported: true,
 			client_id_metadata_document_supported: true,
 		})
 	})
@@ -83,6 +87,7 @@ describe('authorization code flow', () => {
 		const callback = locationOf(approved)
 		expect(callback.origin + callback.pathname).toBe(REDIRECT_URI)
 		expect(callback.searchParams.get('state')).toBe('opaque-state')
+		expect(callback.searchParams.get('iss')).toBe(ISSUER)
 		const code = callback.searchParams.get('code') ?? ''
 
 		const exchanged = await f.exchange(code)
@@ -125,6 +130,7 @@ describe('authorization code flow', () => {
 		const callback = locationOf(await f.decide('deny'))
 		expect(callback.searchParams.get('error')).toBe('access_denied')
 		expect(callback.searchParams.get('state')).toBe('opaque-state')
+		expect(callback.searchParams.get('iss')).toBe(ISSUER)
 		expect(callback.searchParams.get('code')).toBeNull()
 	})
 
@@ -178,6 +184,23 @@ describe('authorization request validation', () => {
 		expect(f.fetched).toHaveLength(1)
 	})
 
+	test("Claude's document, which lists a grant IAM does not serve, is accepted for the grants IAM serves", async () => {
+		// Claude's live document (fetched 2026-10-21) under the fixture's client id and redirect URI.
+		const f = await fixture({
+			document: (clientId) => ({
+				client_id: clientId,
+				client_name: 'Claude',
+				client_uri: 'https://claude.ai',
+				redirect_uris: [REDIRECT_URI],
+				grant_types: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:jwt-bearer'],
+				response_types: ['code'],
+				token_endpoint_auth_method: 'none',
+			}),
+		})
+		const first = await tokenBody(await f.exchange(await f.approve()))
+		expect((await f.refresh(first.refresh_token ?? '')).status).toBe(200)
+	})
+
 	test('a document without grant_types gets no refresh token', async () => {
 		const f = await fixture({
 			document: (clientId) => ({ client_id: clientId, redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none' }),
@@ -214,8 +237,12 @@ describe('authorization request validation', () => {
 
 	test('an unknown scope redirects with invalid_scope, an unknown resource with invalid_target', async () => {
 		const f = await fixture()
-		expect(locationOf(await f.authorize({ scope: 'everything' })).searchParams.get('error')).toBe('invalid_scope')
-		expect(locationOf(await f.authorize({ resource: 'https://other.example.test/mcp' })).searchParams.get('error')).toBe('invalid_target')
+		const scope = locationOf(await f.authorize({ scope: 'everything' }))
+		expect(scope.searchParams.get('error')).toBe('invalid_scope')
+		expect(scope.searchParams.get('iss')).toBe(ISSUER)
+		const target = locationOf(await f.authorize({ resource: 'https://other.example.test/mcp' }))
+		expect(target.searchParams.get('error')).toBe('invalid_target')
+		expect(target.searchParams.get('iss')).toBe(ISSUER)
 	})
 
 	test('a repeated parameter is a malformed request', async () => {
