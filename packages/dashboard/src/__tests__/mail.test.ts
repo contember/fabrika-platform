@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { MailContentDto } from '../lib/api'
 import { MailContent } from '../routes/mail/detail'
 
-const render = (content: MailContentDto) => renderToStaticMarkup(createElement(MailContent, { content }))
+const render = (content: MailContentDto, sender = 'notes@prod') => renderToStaticMarkup(createElement(MailContent, { content, sender }))
 
 describe("a relayed message's content", () => {
 	test('the HTML body renders only in a frame that runs no script and fetches nothing, never in the page', () => {
@@ -38,5 +38,11 @@ describe("a relayed message's content", () => {
 	test('withheld and purged content say why nothing is shown', () => {
 		expect(render({ kind: 'withheld' })).toContain('mail.content.read')
 		expect(render({ kind: 'purged' })).toContain('no longer keeps')
+	})
+
+	test("an installation service's withheld content says it is never shown, not which permission would show it", () => {
+		const markup = render({ kind: 'withheld' }, 'installation:iam')
+		expect(markup).toContain('never shown')
+		expect(markup).not.toContain('mail.content.read')
 	})
 })

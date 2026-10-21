@@ -433,8 +433,9 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
   message waits, spending no attempt, and maintenance enqueues it again until Control has
   one; content that no longer parses fails as
   `invalid_message`.
-- An installation message's content is purged right after it is sent: it holds a
-  one-time link.
+- An installation message's content is purged as soon as the dispatcher makes it final
+  (`sent`, `failed` or `unknown`): it holds a one-time link. Until then the relay keeps
+  it for its retries, and the console withholds it from every caller.
 - Control's maintenance pass (cron) re-enqueues `queued` messages unchanged for 10
   minutes whose retry is due, and `sending` messages whose claim is stale, at most 100 a
   pass. It purges the content of final messages 30 days after their last change. A held
