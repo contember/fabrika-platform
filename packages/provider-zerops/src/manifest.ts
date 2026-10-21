@@ -13,6 +13,7 @@ import {
 	FABRIKA_CHECK_VERSION,
 	LOCKED_APP_ID_PATTERN,
 	lockedAuthoredBuild,
+	READINESS_PATH_PATTERN,
 	ZEROPS_RUNTIME_PACKAGES,
 	zeropsAssetRoots,
 	type ZeropsContractRun,
@@ -311,12 +312,9 @@ const importDocumentSchema = z.object({ project: importProjectSchema.optional(),
 /** The import document a manifest carries: every service already holds the ADR-0004 invariants. */
 export type FabrikaManifestImportDocument = z.infer<typeof importDocumentSchema>
 
-/** A literal path of unreserved characters: it is written into the generated probes unquoted by any shell. */
-const READINESS_PATH = /^(?:\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$/
-
 const contractRunSchema = z.object({
 	digest: z.string().regex(CONTRACT_DIGEST_PATTERN),
-	readinessPath: z.string().regex(READINESS_PATH),
+	readinessPath: z.string().regex(READINESS_PATH_PATTERN),
 	jobs: z.array(z.object({ name: z.string().regex(CONTRACT_JOB_NAME_PATTERN), schedule: z.string().regex(CRON_SCHEDULE_PATTERN) }).strict()),
 	files: z.literal(true).optional(),
 	scan: z.literal(true).optional(),

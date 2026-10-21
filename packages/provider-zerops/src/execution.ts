@@ -108,6 +108,9 @@ export { CONTRACT_APP_ID_PATTERN as LOCKED_APP_ID_PATTERN } from '@fabrika/app/b
 
 export const CONTRACT_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/
 
+/** A literal path of unreserved characters: it is written into the generated probes unquoted by any shell. */
+export const READINESS_PATH_PATTERN = /^(?:\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$/
+
 const byName = <T extends { readonly name: string }>(left: T, right: T): number => left.name < right.name ? -1 : left.name > right.name ? 1 : 0
 
 /**
@@ -255,6 +258,15 @@ const sourceMapBuildVariables = (upload: OperationsSourceMapBuildUpload): Record
 	return { [FABRIKA_SOURCE_MAP_UPLOAD]: value, [FABRIKA_SOURCE_MAP_UPLOAD_KEY]: `\${RUNTIME_${FABRIKA_SOURCE_MAP_UPLOAD_KEY}}` }
 }
 
+// The readiness check is retried no sooner than every 10 s (the platform's floor), and a server is rarely listening at
+// the first attempt, one second after `run.start`. So one attempt waits for the health endpoint itself, for less than
+// the retry period; it passes only on a 2xx, like the `httpGet` it replaces.
+const readinessCommand = (path: string): string => {
+	if (!READINESS_PATH_PATTERN.test(path)) throw new Error('zerops: a readiness path must be a literal path of unreserved characters')
+	const url = `http://127.0.0.1:${ZEROPS_APPLICATION_PORT}${path}`
+	return `bun -e "const end = Date.now() + 9000; while (Date.now() < end) { try { if ((await fetch('${url}', { signal: AbortSignal.timeout(2000) })).ok) process.exit(0) } catch {} await Bun.sleep(200) } process.exit(1)"`
+}
+
 /** `@fabrika/app/build`'s recipe at this installation's paths. */
 const recipeOf = (execution: ZeropsLockedExecution): ContractRecipe =>
 	contractRecipe({
@@ -340,7 +352,7 @@ export function renderLockedSetup(
 			cache: ['node_modules'],
 		},
 		deploy: {
-			readinessCheck: { httpGet: probe, retryPeriod: '10s', failureTimeout: '180s' },
+			readinessCheck: { exec: { command: readinessCommand(contract.readinessPath) }, retryPeriod: '10s', failureTimeout: '180s' },
 		},
 		run: {
 			base: ZEROPS_APPLICATION_RUNTIME,
