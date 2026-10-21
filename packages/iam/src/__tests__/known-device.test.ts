@@ -1,3 +1,4 @@
+import { FABRIKA_COOKIE_PREFIX } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { KNOWN_DEVICE_COOKIE, KNOWN_DEVICE_TTL_SECONDS } from '../auth/known-device'
 import { handleAuth } from '../auth/routes'
@@ -87,6 +88,8 @@ describe('known-device cookie', () => {
 		const attributes = (header ?? '').split('; ').slice(1)
 		expect(attributes).toEqual(['Path=/', `Max-Age=${KNOWN_DEVICE_TTL_SECONDS}`, 'HttpOnly', 'Secure', 'SameSite=Lax'])
 		expect(KNOWN_DEVICE_COOKIE.startsWith('__Host-')).toBe(true)
+		// The Caddy proxy strips every `FABRIKA_COOKIE_PREFIX` cookie but the session on its way to IAM.
+		expect(KNOWN_DEVICE_COOKIE.startsWith(FABRIKA_COOKIE_PREFIX)).toBe(false)
 	})
 
 	test('a refused login issues no device cookie', async () => {

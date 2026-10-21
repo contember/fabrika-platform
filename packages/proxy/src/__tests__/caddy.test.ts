@@ -369,6 +369,23 @@ describe('IAM login cookie ownership', () => {
 	})
 })
 
+describe("IAM's known-device cookie", () => {
+	const owner = { issuer: 'https://iam.example.com', upstream: 'iam:3000' }
+	const iam: ProxyApp = installationAppWith([protocolRow('/*')], [], { id: 'identity-service', hosts: ['iam.example.com'], upstream: 'iam:3000' })
+
+	test('reaches IAM on its session-owning route beside the login cookie', () => {
+		const config = buildCaddyConfig({ apps: [iam] }, { ...OPTIONS, iamSessionOwner: owner })
+		const route = config.apps.http.servers['proxy']?.routes[0]
+		if (route === undefined) throw new Error('expected an app route')
+		const upstream = proxyHandler(subrouteOf(route).routes[2])
+		let cookie = '__Host-px_session=login; __Host-fabrika_device=device; __Host-px_handoff_state=verifier'
+		for (const replacement of upstream.headers?.request?.replace?.['Cookie'] ?? []) {
+			cookie = cookie.replace(new RegExp(replacement.search_regexp, 'g'), replacement.replace)
+		}
+		expect(cookie).toBe('__Host-px_session=login; __Host-fabrika_device=device')
+	})
+})
+
 describe('the forward_auth expansion matches Caddy v2.10.2', () => {
 	const config = buildCaddyConfig(MANIFEST, OPTIONS)
 	const auth = proxyHandler(subrouteOf((config.apps.http.servers['proxy']?.routes ?? [])[0] as CaddyRoute).routes[1])
