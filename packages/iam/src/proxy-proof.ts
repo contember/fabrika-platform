@@ -4,8 +4,8 @@
  *
  * On Zerops IAM is not publicly routed, but anything on the platform project's private network can reach its port and
  * write both headers. So the proxy sends a per-installation secret in `PROXY_SECRET_HEADER` on IAM's route, and a
- * request without it is attributed to nobody. This is attribution, not an enforcement decision (ADR-0022): nothing is
- * refused for missing the proof.
+ * request without it is attributed to nobody. This is attribution, not an enforcement decision (ADR-0022): a missing
+ * proof is never a refusal by itself, though the one bucket all such requests share refuses once exhausted.
  */
 
 import { PROXY_SECRET_HEADER } from '@fabrika/auth-core'

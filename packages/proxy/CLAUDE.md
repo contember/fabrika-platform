@@ -89,7 +89,7 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   file. An unset variable sends an empty secret, which the application refuses; the auth service only
   warns at boot (`appsWithoutProxySecret`), because one proxy fronts a whole namespace. The one installation
   route with a secret is IAM's session owner (`iamSessionOwner`), from `{env.FABRIKA_INSTALLATION_PROXY_SECRET_IAM}`:
-  it proves only who wrote the client address and request id, and IAM refuses nothing without it. Every other
+  it proves only who wrote the client address and request id; without it IAM keys every request on one shared bucket. Every other
   installation service gets none, and the Cloudflare Worker sets none: its service binding is the authenticated hop.
 - **The token cache is best-effort and per-process.** Every entry is re-verified against the JWKS
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many

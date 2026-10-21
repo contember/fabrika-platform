@@ -16,7 +16,7 @@ One Zerops project, LIGHT core, every runtime at one container:
 | `appproxy`                                                     | `alpine@3.21`, setup `proxy`       | Control, as a namespace reconcile |
 | application services                                           | shared database binding only       | Control                           |
 
-Idle floor for three applications ≈ $23, against ≈ $24 for the "data" preset and ≈ $34 for two HA databases in two
+Idle floor for three applications ≈ $23 (≈ $25 if Operations keeps its own `operationsdb`), against ≈ $26 for the "data" preset and ≈ $34 for two HA databases in two
 projects. Staging applications stay in an ordinary `cheap` namespace (ADR-0006).
 
 ## What co-location breaks, and the replacement for each
@@ -33,8 +33,8 @@ projects. Staging applications stay in an ordinary `cheap` namespace (ADR-0006).
   shadow IAM's unqualified tables through a schema named `db` on the default `search_path`. `REVOKE CONNECT ON DATABASE db
   FROM PUBLIC` keeps application roles out of the platform database altogether.
 - **The private network (ADR-0022).** Applications could call `iam`, `control` and `operations` directly. Tokens are
-  audience-checked, so no authority is gained, but IAM's trust of `X-Fabrika-Client-Ip` / `X-Request-Id` and Control's
-  `service` rows (whose endpoint header is computable) need a proxy secret derived per installation.
+  audience-checked, so no authority is gained. IAM already reads `X-Fabrika-Client-Ip` / `X-Request-Id` only beside a
+  derived proxy secret; Control's `service` rows (whose endpoint header is computable) would need the same.
 - **Hostnames.** The import's `override: true` silently keeps an existing service of the same name, so an application
   whose composed hostname is `db`, `operationsdb` or `appproxy` would shadow a platform service. Reserve the platform
   hostnames in the placement's claims (not at manifest decode: a `full` namespace may legitimately hold `db` today).
@@ -60,5 +60,5 @@ anyone with a role on the project sees every service's variables, so application
 ## Size
 
 Large: a namespace placement inside the installation project, a Control-side provisioning port (`provider-zerops` stays
-HTTP-only), a `compact` tier as a parameter of the light topology, the proxy secret, the claims, and rewrites of ADR-0006,
+HTTP-only), a `compact` tier as a parameter of the light topology, Control's proxy secret, the claims, and rewrites of ADR-0006,
 0017, 0022, 0034 and 0064. A live bring-up closes it.

@@ -77,8 +77,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   proxy sends `X-Fabrika-Proxy-Secret` on IAM's route (the session owner's, from
   `FABRIKA_INSTALLATION_PROXY_SECRET_IAM`), and IAM holds the same variable. A request without a matching secret
   (digests compared in constant time) keys its client bucket on the one shared `UNPROVEN_CLIENT_ADDRESS` and gets
-  a generated request id. **It is attribution, not an enforcement decision: nothing is refused for missing the
-  secret.** An unset variable turns the check off, so the Worker root, the local stack before a reset and an
+  a generated request id. **It is attribution, not an enforcement decision: a missing secret is never a refusal by
+  itself**, though the shared bucket refuses once exhausted, as the balancer's one bucket does today. An unset variable turns the check off, so the Worker root, the local stack before a reset and an
   installation before the deploy that writes the secret behave as before. The console's admin hop through
   Control carries no secret, so its audit rows get a generated id. A short value fails the boot like the
   transport keys. The Zerops deploy derives the value from `FABRIKA_IAM_PROVISIONING_KEY` (ADR-0022 rule 5).

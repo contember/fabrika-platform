@@ -382,7 +382,8 @@ const desiredServiceEnv = (
 				// private `iam:3000` the manifest dials — `readProxyEnv` canonicalizes it to an origin.
 				['FABRIKA_IAM_ISSUER', iamOrigin],
 				['FABRIKA_PROXY_SESSION_OWNER_JSON', JSON.stringify({ issuer: iamOrigin, upstream: PRIVATE_IAM_UPSTREAM })],
-				// Caddy sends it on the session owner's route; IAM refuses nothing without it, so the order is free.
+				// Caddy sends it on the session owner's route. Until the proxy deploys, IAM keys every request on one shared
+				// bucket, which is what the balancer's address already does on Zerops.
 				[IAM_PROXY_SECRET_VARIABLE, iamProxySecret],
 			]),
 		],
