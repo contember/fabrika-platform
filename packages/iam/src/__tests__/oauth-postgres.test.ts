@@ -58,4 +58,13 @@ describe.skipIf(!hasPostgres)('OAuth on real Postgres', () => {
 		expect((await active.refresh(first.refresh_token ?? '')).status).toBe(400)
 		expect((await active.refresh(second.refresh_token ?? '')).status).toBe(400)
 	})
+
+	test('concurrent presentations of one client assertion jti record it once', async () => {
+		const expiresAt = Math.floor(Date.now() / 1000) + 60
+		const recorded = await Promise.all(
+			Array.from({ length: 8 }, () => repositories.oauth.recordClientAssertion('https://chatgpt.example.test/cimd', 'jti-concurrent', expiresAt)),
+		)
+		expect(recorded.filter(Boolean)).toHaveLength(1)
+		expect(await repositories.oauth.recordClientAssertion('https://other.example.test/cimd', 'jti-concurrent', expiresAt)).toBe(true)
+	})
 })

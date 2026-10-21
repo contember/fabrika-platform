@@ -116,6 +116,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0018_app_members.sql' },
 			{ bundle: 'iam', name: '0019_app_mail_html.sql' },
 			{ bundle: 'iam', name: '0020_public_workloads.sql' },
+			{ bundle: 'iam', name: '0021_oauth_client_assertions.sql' },
 		])
 	})
 
@@ -154,6 +155,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'oauth_grants',
 				'oauth_codes',
 				'oauth_refresh_tokens',
+				'oauth_client_assertions',
 				'contract_apps',
 				'app_link_mounts',
 				'app_delegated_endpoints',
