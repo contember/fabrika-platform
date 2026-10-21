@@ -73,6 +73,7 @@ describe('a scanning contract on Zerops', () => {
 		expect(generated['initCommands']).toEqual([
 			"sudo freshclam --stdout --quiet || echo 'fabrika: freshclam did not refresh the malware signatures'",
 			'sh /var/www/fabrika/migrate.generated.sh',
+			'sh /var/www/fabrika/verify.generated.sh',
 		])
 		expect(generated['crontab']).toEqual([
 			{ timing: '0 3 * * *', command: './node_modules/.bin/fabrika job run purgeDeleted', allContainers: false },
@@ -87,7 +88,7 @@ describe('a scanning contract on Zerops', () => {
 		expect(Object.keys(manifest.target.contract ?? {})).not.toContain('scan')
 		const generated = run(manifest)
 		expect(generated['prepareCommands']).toBeUndefined()
-		expect(generated['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh'])
+		expect(generated['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh', 'sh /var/www/fabrika/verify.generated.sh'])
 		expect(JSON.stringify(generated['crontab'])).not.toContain(ZEROPS_FILE_SCAN_JOB)
 		expect(JSON.stringify(generated['crontab'])).toContain(ZEROPS_FILE_SWEEP_JOB)
 	})
@@ -127,7 +128,7 @@ describe('the minimum RAM a deploy raises the deploy service to', () => {
 		return zeropsStartMinRam(execution)
 	}
 
-	test("what the start script's isolation tests need with a database, what a scan needs with a scanner, nothing without either", async () => {
+	test("what the init commands' isolation tests need with a database, what a scan needs with a scanner, nothing without either", async () => {
 		expect(minRamOf(await compile(app(notesArtifact, null)))).toBe(ZEROPS_START_MIN_RAM_GB)
 		expect(minRamOf(await compile(app(SCANNING, ZEROPS_SCAN_MIN_RAM_GB)))).toBe(ZEROPS_SCAN_MIN_RAM_GB)
 		const withoutDatabase: ZeropsAppConfig = {

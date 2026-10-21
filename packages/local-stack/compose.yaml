@@ -254,7 +254,7 @@ services:
       timeout: 3s
       retries: 30
 
-  # The Notes example as the platform starts a contract application on Zerops: the generated start script's steps,
+  # The Notes example as the platform starts a contract application on Zerops: the generated init commands' steps,
   # then the generated entrypoint, with the variables the deploy writes (`prepare.ts` generates the local ones).
   # `followNotesDeploy` points it at another fixture commit the emulator activated (`src/notes-follow.ts`).
   notes:
@@ -263,7 +263,7 @@ services:
     image: fabrika-local-app:clamav
     build: app-image
     working_dir: ${FABRIKA_LOCAL_NOTES_ROOT:-/workspace/examples/zerops-app}
-    # The generated start script's steps, with the source's own `fabrika` as the platform runs it: a release fixture
+    # The generated init commands' steps, with the source's own `fabrika` as the platform runs it: a release fixture
     # (`local:compat`) migrates and checks with the framework it pins.
     command:
       - sh

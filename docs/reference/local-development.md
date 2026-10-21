@@ -221,7 +221,7 @@ it:
 2. pushes the release's commit through the keyed connection's webhook. Control reads it with the bundled reader of its
    minor, the suite approves the diff in the console, and the deploy runs to the emulator. The composition follows it:
    the release's source with its packages installed from npm, the entrypoint its own framework writes, its own
-   `fabrika` for the start script, and the digest and endpoint table the deploy wrote. A healthy container means the
+   `fabrika` for the init commands, and the digest and endpoint table the deploy wrote. A healthy container means the
    release's startup digest check passed;
 3. calls Notes through the proxy: a service key creates and lists notes, a path no row serves and a key without
    `notes.write` are refused with 403, an anonymous call is sent to sign in, and the local admin, signed in on the

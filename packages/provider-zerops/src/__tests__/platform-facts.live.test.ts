@@ -521,6 +521,7 @@ const scripts: Record<string, FactScript> = {
 	'unpacker-directory-entries': unpackerProbe({ directoryEntries: true, expected: 'ACTIVE' }),
 	'failing-exec-readiness': unpackerProbe({ directoryEntries: true, expected: 'DEPLOY_FAILED', failure: { execReadiness: true } }),
 	'failing-init-command': unpackerProbe({ directoryEntries: true, expected: 'DEPLOY_FAILED', failure: { initCommand: true } }),
+	'slow-init-command': unpackerProbe({ directoryEntries: true, expected: 'ACTIVE', failure: { slowInitCommand: true } }),
 	'authorization-forwarded': authorizationForwarded,
 	...postgres.scripts,
 }

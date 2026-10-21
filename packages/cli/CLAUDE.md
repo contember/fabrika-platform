@@ -83,7 +83,7 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
   generated tests are committed and run with this package's suite, always on a copy in a private temporary directory
   (concurrent runs of the suite share the committed directory); `db.test.ts` fails when they differ from what the
   scaffold writes, and when its `schema.generated.ts` differs from codegen's.
-- `db test-isolation` is the platform's run of them (the Zerops start script): the files must equal the scaffold's
+- `db test-isolation` is the platform's run of them (a Zerops init command): the files must equal the scaffold's
   output and no endpoint may lack its input fixture, then `bun --config=<empty> test
   --preload=<@fabrika/app/testing/preload> <files> --reporter=junit` runs them, as a throwaway provisioner
   `createTestProvisioner` makes from `FABRIKA_APP_DATABASE_URL` and drops afterwards (the tests load application code,
@@ -95,7 +95,7 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
   a failed run whose output names a refused connection (`reportsExhaustedConnections`) fails saying so, never as a
   count of passed cases (ADR-0043). **It prints none of the child's output**, only the counts and the failed case names, which come from the
   scaffold: a dependency may write a credential into the output in any form. `--verbose` prints it, locally only;
-  the start script never passes it.
+  the init command never passes it.
 - `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` come from the ENVIRONMENT ONLY.
   An error reaches the output only as the runner's own message (a `PostgresMigrationError`, which every refusal of
   the bundle is: it names files, never a URL) or a server-reported Postgres error; any other driver error is replaced,

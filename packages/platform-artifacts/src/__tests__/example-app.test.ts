@@ -514,7 +514,7 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 			// 4. write the managed service variables, read once: the proxy secret; the marker already holds the bucket.
 			'listServiceEnv',
 			'putServiceEnv',
-			// 5. raise the service's minimum RAM to what its start script's isolation tests need, and read it back.
+			// 5. raise the service's minimum RAM to what its init commands' isolation tests need, and read it back.
 			'getService',
 			'configureCustomAutoscaling',
 			'getProcess',

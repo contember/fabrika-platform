@@ -135,11 +135,14 @@ bun test
   the checker fetched at the release of the reader that read the application (`ZeropsLockedExecution.checkRelease`,
   from `ProviderApprovedAccess.checker`: the newest patch of the minor its `bun.lock` pins; ADR-0062), `tsc` with
   the platform tsconfig and
-  the scripts. Keep the tests before every step that produces or checks what deploys. The start script runs
-  `fabrika db migrate`, then `fabrika db codegen --verify`, then `fabrika db test-isolation` (the generated tests on
-  a throwaway schema), then `exec`s the server, so a failed migration, a stale `schema.generated.ts` or a generated
-  case that did not pass fails the httpGet readiness check whether or not a failed `initCommands` stops
-  activation (it does, verified live 2026-10-16); the build has no database. The run section names the application's one PostgreSQL
+  the scripts. Keep the tests before every step that produces or checks what deploys. The init commands run
+  `fabrika db migrate`, then `fabrika db codegen --verify` and `fabrika db test-isolation` (the generated tests on
+  a throwaway schema), and the start script only `exec`s the server, so a failed migration, a stale
+  `schema.generated.ts` or a generated case that did not pass fails an init command, which stops the activation
+  (verified live 2026-10-16); the build has no database. Never move them back into the start script: the readiness
+  window (180 s, not the application's to raise) opens with `run.start`, and the CRM's isolation tests alone took
+  almost 3 minutes there (issue #27). UNVERIFIED: that the window opens only after the init commands, which one runtime
+  log shows and the platform-facts row `slow-init-command-precedes-the-readiness-window` measures. A `DEPLOY_FAILED` version's error names the init commands and the readiness check. The run section names the application's one PostgreSQL
   (`FABRIKA_APP_DATABASE_URL`) and its one object-storage service (`FABRIKA_APP_STORAGE_*`) only as `${<host>_…}`
   references, so no credential passes through this package. That database URL is the service's SUPERUSER on the direct
   port (`zeropsProvisioningDatabaseUrl`, `src/manifest.ts`) and only the provisioning credential of the application's
@@ -161,8 +164,8 @@ bun test
   log (`readSourceMapUploadReport`): a succeeded run reports `artifactState: 'complete'` only when that line said so, else
   `incomplete`. Every build command, the authored ones included, can read the bearer, and so can the runtime until the
   next deploy replaces it: it reaches only this run's release and expires two hours after the run started.
-- **`raise-start-memory` raises the deploy service's minimum RAM before a version is reserved (ADR-0043).** The start
-  script's `fabrika db test-isolation` peaks above the runtime's 0.125 GB faster than vertical autoscaling reacts, so
+- **`raise-start-memory` raises the deploy service's minimum RAM before a version is reserved (ADR-0043).** The init
+  commands' `fabrika db test-isolation` peaks above the runtime's 0.125 GB faster than vertical autoscaling reacts, so
   `zeropsStartMinRam` (`src/execution.ts`) names the floor: 0.5 GB with a database, 2 GB with a scanner. An import
   cannot change an existing service, so the step reads `customAutoscaling` back, sends it WHOLE with only
   `minResource.memoryGBytes` changed, under the keys `verticalAutoscaling` / `horizontalAutoscaling`, and decides by
@@ -171,7 +174,7 @@ bun test
   and the step then refuses rather than reset a field. It only raises.
 - **`size-database` sizes each process's database connections before a version is reserved (ADR-0043).** Pure in
   `src/database-budget.ts`: `max_connections` follows the database's minimum RAM step and profile; 7 are never an
-  application role's and 5 are one container's start script; the rest is shared by twice the deploy service's maximum
+  application role's and 5 are one container's init commands; the rest is shared by twice the deploy service's maximum
   container count (10 when it reads none) and one process per crontab job (`zeropsJobProcesses`, the same list the
   crontab is rendered from), at most 10 each. Below 2 the step raises the application's OWN database through the same
   read-modify-write as `raise-start-memory` (`raiseMinRam`); measured live, `max_connections` follows in ~15 s through

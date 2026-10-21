@@ -66,7 +66,7 @@ const run = async (command: string[], cwd: string): Promise<void> => {
 
 /**
  * Stage a release fixture's commit as its platform build does: its packages from npm by its own `bun.lock`, the
- * entrypoint written by its own framework, and its SPA. The container then runs its own `fabrika` for the start script.
+ * entrypoint written by its own framework, and its SPA. The container then runs its own `fabrika` for the init commands.
  */
 async function stageReleaseSource(kind: LocalSourceReleaseKind, files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>): Promise<string> {
 	const target = resolve(STATE_DIR, NOTES_SOURCE_DIRECTORY)

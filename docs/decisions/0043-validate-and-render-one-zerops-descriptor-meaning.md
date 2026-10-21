@@ -109,12 +109,18 @@ command is generated and never passes it, so a deployed application still instal
 registry with its hash.
 
 The build has no database. The migrations, the verification of the committed schema types and the
-generated isolation tests therefore run at container start: the start script runs `fabrika db migrate`, then
-`fabrika db codegen --verify` against the application's real schema, then `fabrika db test-isolation` on a
-throwaway schema, then the server, under `set -eu`. A stale `schema.generated.ts` or a generated case that
-did not pass leaves nothing that answers the readiness check, and the previous version keeps serving.
+generated isolation tests therefore run at container start, as init commands: `run.initCommands` runs
+`fabrika db migrate`, then `fabrika db codegen --verify` against the application's real schema and
+`fabrika db test-isolation` on a throwaway schema, each script under `set -eu`, and the start script only starts the
+server. A failed init command stops the activation, so a stale `schema.generated.ts` or a generated case that did not
+pass leaves the version `DEPLOY_FAILED`, and the previous version keeps serving.
 
-**A container starts with the memory its start script needs.** The isolation tests run as `fabrika db
+They run before `run.start` because the readiness window opens with `run.start`, and it is fixed at 180 s: the
+application cannot raise it. While the checks ran in the start script they shared that window with the server. The
+CRM's 605 generated cases took almost 3 minutes on a small database, and two deploys in a row failed although every
+check passed.
+
+**A container starts with the memory its init commands need.** The isolation tests run as `fabrika db
 test-isolation` and its `bun test` child, which together peak at 161 MiB of anonymous memory for the Notes example
 and 225 MiB for the CRM example, within about 1.5 s. A Zerops runtime starts at 0.125 GB, and vertical autoscaling
 reacts in 10–20 s, so the platform killed the run on 2 of 3 first deploys and marked the version `DEPLOY_FAILED`
@@ -122,13 +128,13 @@ reacts in 10–20 s, so the platform killed the run on 2 of 3 first deploys and 
 service's minimum RAM to 0.5 GB for an application with a database, and to 2 GB for one that scans uploads, in the
 `raise-start-memory` step before it reserves a version. An import cannot do it: Zerops ignores a changed
 `verticalAutoscaling` of an existing service. The step changes only that field through the autoscaling API, reads it
-back, and never lowers it. The tests still run at every container start, so the readiness check still proves that
-they passed for the version that serves.
+back, and never lowers it. The tests still run at every container start, so an active version still proves that they
+passed for the version that serves.
 
 **Every process of an application fits its database's connection limit.** The deploy's `size-database`
 step, after `raise-start-memory`, reads the minimum RAM and the profile of the application's PostgreSQL
 service and the deploy service's maximum container count (10, Zerops' maximum, when it reads none). Of
-`max_connections`, it keeps 7 for superusers and Zerops and 5 for one container's start script (the
+`max_connections`, it keeps 7 for superusers and Zerops and 5 for one container's init commands (the
 isolation tests' measured peak with a test kit of v0.4.7, which an application that has not updated still
 runs; 4 since), and shares the rest between twice the maximum container count (old and new
 containers overlap while a deploy replaces them) and one process per crontab job. Each process gets its
@@ -162,11 +168,12 @@ an application. Control's
 a secret under one of those names, and a deploy removes a family variable it no longer hands, one set by hand
 included. The framework reads these variables and removes them from `process.env`.
 
-The generated `run` section does not depend on two platform facts: that an exec readiness check gates
-a Zerops deploy, and that a failed `initCommands` stops activation. Both are verified live
-([platform facts](../reference/zerops-platform.md)). Its readiness check is an `httpGet` of the contract's
-health endpoint, which is verified to gate a deploy. Its start script runs `fabrika db migrate` again
-before it starts the server, so a failed migration leaves nothing to answer the readiness check.
+The generated `run` section depends on two platform facts ([platform facts](../reference/zerops-platform.md)).
+A failed `initCommands` entry stops activation, which is verified live. The readiness window opens with `run.start`,
+after the init commands: the CRM's runtime log shows it (init 14:12:04–14:12:21, the first readiness attempt at
+14:12:22), and the platform-facts row `slow-init-command-precedes-the-readiness-window` measures it, but no live run
+of that row has confirmed it yet. Its readiness check is an `httpGet` of the contract's health endpoint, which is
+verified to gate a deploy.
 
 ### Exposure is refused, with no approval path
 
@@ -253,8 +260,14 @@ execution document carries the generated `run` and `build`.
   database's minimum RAM is provider state the step only raises. `fabrika platform upgrade` and the application's
   next deploy therefore raise its database where needed and hand it the variable. The application reads the
   variable, and the test kit waits and holds 4 connections, only once it updates its `@fabrika/app`, `@fabrika/db`
-  and `@fabrika/cli`: the start script runs the application's own installed packages. Before that, its processes
+  and `@fabrika/cli`: the init commands run the application's own installed packages. Before that, its processes
   keep 10 connections each and only the raised database helps it.
+- The checks run before `run.start`, so a long isolation run delays a container's start but never fails its readiness
+  check. Rollout path of an existing installation: no generated installation file and no variable changes. The init
+  commands and the scripts belong to the execution descriptor every application deploy generates, so `fabrika platform
+  upgrade` and the application's next deploy move the checks; the application needs no package update. Until that
+  deploy, the version that serves keeps its earlier start script, and a restart of it runs the checks inside the
+  readiness window as before.
 - An application is reachable only through the namespace proxy. A bucket policy changed outside
   Fabrika is not detected, because Zerops has no API to read a policy back.
 - Evidence can still be lost when the import step itself dies between the import's answer and the
@@ -291,13 +304,18 @@ execution document carries the generated `run` and `build`.
 - **Run the isolation tests with less memory.** Rejected: `--smol` on the test child saved 7 % and a forced
   collection in the CLI nothing, and the test child alone holds more than 0.125 GB.
 - **Run the isolation tests once per version (`zsc execOnce ${ZEROPS_appVersionId}`).** Rejected: the run they
-  start on still needs the same memory, which is what failed, and the command is not established to work in a
-  start script. Running at every start costs about two seconds and keeps the check on every container.
+  start on still needs the same memory, which is what failed, and the command is not established to work in an
+  init command. Running at every start costs about two seconds and keeps the check on every container.
 - **Make the application declare `verticalAutoscaling.minRam`, as a scanning one does.** Rejected as the only
   mechanism: an import does not change an existing service, so an installation would not converge, and every
   application would carry a platform number. The build still refuses a scanning application without its 2 GB.
-- **Raise the RAM for a moment from the start script (`zsc scale ram`).** Rejected: it takes effect in about
+- **Raise the RAM for a moment from the init commands (`zsc scale ram`).** Rejected: it takes effect in about
   10 s, so the script would have to wait for it, and a restart outside a deploy would repeat it.
+- **Keep the checks in the start script and raise the readiness `failureTimeout`.** Rejected: it only buys time.
+  Every start, restart and added container still waits for the checks inside the window, and an application that
+  grows past the new limit fails the same way.
+- **Run the checks once in the deploy run, against a throwaway database.** Rejected for now: the build has no
+  database, and a check outside the container would no longer prove the version that serves against its own schema.
 - **Let each process read `SHOW max_connections` at boot and take a share.** Rejected: a process cannot know how
   many containers, jobs and replaced containers share the limit; the deploy reads both services.
 - **A lower fixed pool with an override.** Rejected: no one number fits 20 connections for 10 containers and 200 for

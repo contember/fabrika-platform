@@ -287,8 +287,18 @@ const terminalFailure = (version: ZeropsAppVersion): string => {
 	if (version.status === 'CANCELLED') {
 		return `app-version ${version.id} was cancelled`
 	}
-	return `Zerops pipeline failed: app-version ${version.id} is ${version.status ?? 'in an unknown state'}`
+	return `Zerops pipeline failed: app-version ${version.id} is ${version.status ?? 'in an unknown state'}${activationHint(version)}`
 }
+
+/**
+ * What a version that built but did not activate tells the operator. Zerops' own log of it is the refused readiness
+ * attempts, which read as a server that never started whatever stopped it.
+ */
+const activationHint = (version: ZeropsAppVersion): string =>
+	version.status === 'DEPLOY_FAILED'
+		? ": an init command failed or the readiness check never answered. A contract application's init commands are its"
+			+ ' migrations, its schema check and its generated isolation tests; the runtime lines above show how far they got'
+		: ''
 
 /**
  * The attempt this invocation is making. `appVersionId` is set once a version is reserved and `triggered`
@@ -461,7 +471,9 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 
 		if (process?.status !== undefined && ZEROPS_PROCESS_TERMINAL.has(process.status) && process.status !== ZEROPS_PROCESS_FINISHED) {
 			throw new Error(
-				`zerops: pipeline process ${process.id} is ${process.status} while app-version ${appVersionId} is ${version.status ?? 'in an unknown state'}`,
+				`zerops: pipeline process ${process.id} is ${process.status} while app-version ${appVersionId} is ${version.status ?? 'in an unknown state'}${
+					activationHint(version)
+				}`,
 			)
 		}
 		if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) {
@@ -669,7 +681,7 @@ const withMinRam = (custom: ZeropsServiceAutoscaling, minRam: number): ZeropsSer
 })
 
 /**
- * Raises the deploy service's minimum RAM to what the generated start script needs (`zeropsStartMinRam`), before the
+ * Raises the deploy service's minimum RAM to what the generated init commands need (`zeropsStartMinRam`), before the
  * version's containers start. An import cannot: Zerops ignores a changed `verticalAutoscaling` of an existing service,
  * so an existing service converges here, on every deploy. It only raises, and decides by reading the service back.
  */

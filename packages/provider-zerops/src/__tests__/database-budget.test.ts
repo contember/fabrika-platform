@@ -27,8 +27,8 @@ describe('max_connections of a Zerops PostgreSQL service', () => {
 })
 
 describe('the connections of each process', () => {
-	test('share what the roles can take after the reserved slots and one start script, between twice the containers and the jobs', () => {
-		// 20 − 7 reserved − 5 for a start script = 8, over 2 × 1 containers and 2 jobs.
+	test('share what the roles can take after the reserved slots and one container start, between twice the containers and the jobs', () => {
+		// 20 − 7 reserved − 5 for the init commands = 8, over 2 × 1 containers and 2 jobs.
 		expect(zeropsProcessConnections(20, { maxContainers: 1, jobs: 2 })).toBe(2)
 		// 50 − 12 = 38, over 2 × 4 containers.
 		expect(zeropsProcessConnections(50, { maxContainers: 4, jobs: 0 })).toBe(4)

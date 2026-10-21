@@ -13,7 +13,7 @@ sources:
   - where: "examples/zerops-app/fabrika.config.ts + zerops.yaml in fabrika-platform"
     read: "Current defineApp shape with `target.contract`, the private runtime and the locked repository-root descriptor."
   - where: "packages/provider-zerops/src/execution.ts + CLAUDE.md in fabrika-platform"
-    read: "The generated build, start script, readiness check and crontab of a contract application."
+    read: "The generated build, init commands, start script, readiness check and crontab of a contract application."
   - where: "packages/provider-zerops/src/types.ts + src/index.ts in fabrika-platform"
     read: "Provider-owned authoring contract and exports; verify installed versions before use."
   - where: "docs/reference/zerops-platform.md in fabrika-platform"
@@ -44,9 +44,9 @@ truth: stable `id`, `schema`, `pipeline` and `target` with `platform: 'zerops'`.
   `build.buildCommands`; every other key is refused. The platform generates the
   rest: a frozen install, the application's `bun test`, a reinstall, the
   generated entrypoint, `fabrika-check`, `tsc`, the deploy gate on the contract's
-  health path, and the `run` section. Its start script runs `fabrika db migrate`,
-  `fabrika db codegen --verify` and `fabrika db test-isolation`, then
-  `fabrika/entry.generated.ts`; each `c.cron` job becomes a crontab entry
+  health path, and the `run` section. Its init commands run `fabrika db migrate`,
+  `fabrika db codegen --verify` and `fabrika db test-isolation`, then its
+  start script runs `fabrika/entry.generated.ts`; each `c.cron` job becomes a crontab entry
   `fabrika job run <name>`. The build has no database, so the database tests skip
   there and run at container start.
 - Commit the Bun lockfile at the app repository root, and commit what

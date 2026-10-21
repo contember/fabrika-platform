@@ -428,10 +428,19 @@ Measured by the platform-facts table's live suite (`live: 'build'`, `FABRIKA_LIV
 | A `run.initCommands` entry `exit 1`                                                                   | **`DEPLOY_FAILED`** | `failed-init-command-stops-activation` |
 
 The generated run section of a contract application
-([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)) does not depend on
-either. Its readiness check is the `httpGet` above, against the contract's health endpoint, and its start
-script runs `fabrika db migrate` before it starts the server, so a failed migration leaves nothing that
-answers the readiness check.
+([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)) depends on the second row: its
+migrations, its schema check and its generated isolation tests are init commands. Its readiness check is the `httpGet`
+above, against the contract's health endpoint.
+
+#### UNVERIFIED: the readiness window opens with `run.start`, after the init commands
+
+Observed in one runtime log (the Schrack CRM, `intake/prod`, 2026-10-21, run `01a15ec9`): the init commands ran
+14:12:04–14:12:21, Zerops logged `Readiness check: failureTimeout 3m0s`, and the first of 18 readiness attempts came at
+14:12:22, so the init commands did not count against the window. The platform-facts row
+`slow-init-command-precedes-the-readiness-window` measures it: a probe whose init command sleeps 240 s, behind an
+`httpGet` readiness check with `failureTimeout: 60s`, must settle `ACTIVE`. A `DEPLOY_FAILED` there means either that
+the window covers the init commands or that Zerops limits an init command to less than 240 s; the runtime log tells the
+two apart. No live run of the row has confirmed it yet, and no limit on an init command's duration is known.
 
 #### The PostgreSQL connection target
 
@@ -1213,9 +1222,11 @@ remedies, neither of which needs sudo: when the bucket's `stack.create` process 
 set the variable on the deploy service to the bucket's service id, not sensitive; otherwise delete the bucket
 and deploy again.
 
-The build container has no database, so a contract application's start script runs `fabrika db migrate`, then
-`fabrika db codegen --verify`, then `fabrika db test-isolation`, then the server: a stale committed
-`schema.generated.ts` or a generated isolation case that did not pass fails the readiness check.
+The build container has no database, so a contract application's init commands run `fabrika db migrate`, then
+`fabrika db codegen --verify` and `fabrika db test-isolation`, and its start script only starts the server: a stale
+committed `schema.generated.ts` or a generated isolation case that did not pass fails an init command, which stops the
+activation. The checks run before `run.start`, outside the readiness window (above), however long the isolation tests
+take.
 
 `FABRIKA_APP_DATABASE_URL` carries the PostgreSQL service's superuser on the direct port:
 
