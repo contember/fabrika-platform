@@ -184,10 +184,14 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 			const value = verification.headers.get(header)
 			if (value !== null && value !== '') upstreamHeaders.set(header, value)
 		}
-		// An anonymous endpoint mints no token, and the proxy forwards no key it read nothing from (ADR-0022 rule 3), except
-		// the credential of a webhook row the decision marked to pass on.
+		// A contract app never receives the caller's `px_` key (ADR-0022 rule 3): an anonymous endpoint mints no token and
+		// loses the header, a credentialed one gets the minted token in its place, and a webhook the decision marked keeps its own.
 		const forwards = verification.headers.get(FORWARD_AUTHORIZATION_HEADER) === '1'
-		if (isApplicationEntry(app) && !upstreamHeaders.has(PROXY_TOKEN_HEADER) && !forwards) upstreamHeaders.delete('Authorization')
+		const minted = upstreamHeaders.get(PROXY_TOKEN_HEADER)
+		if (isApplicationEntry(app) && !forwards) {
+			if (minted === null) upstreamHeaders.delete('Authorization')
+			else if (upstreamHeaders.has('Authorization')) upstreamHeaders.set('Authorization', `Bearer ${minted}`)
+		}
 
 		let answer: Response
 		try {

@@ -25,12 +25,12 @@ import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 export type ProxyOutcome =
 	| {
 		readonly outcome: 'forward'
-		/** Every header only the proxy may assert, with the value the decision gave it. */
-		readonly asserted: ReadonlyMap<string, string>
 		/**
-		 * Whether the request's own `Authorization` reaches the application: not on an anonymous endpoint, except a webhook
-		 * row the decision marked to pass it on.
+		 * Every header only the proxy may assert, with the value the decision gave it. A credentialed request that carried
+		 * `Authorization` has it replaced by the minted token, so the caller's `px_` key never reaches the application.
 		 */
+		readonly asserted: ReadonlyMap<string, string>
+		/** Whether the request's own `Authorization` reaches the application: only on a webhook row the decision marked to pass it on. */
 		readonly keepsAuthorization: boolean
 		/** What the application's answer is given for an admitted cross-origin request, over its own headers. */
 		readonly decorate: (headers: Headers) => void
@@ -105,10 +105,15 @@ export function endpointProxy(options: EndpointProxyOptions): TestProxy {
 				asserted.set(header, value)
 			}
 		}
+		const keepsAuthorization = verification.headers.get(FORWARD_AUTHORIZATION_HEADER) === '1'
+		const minted = asserted.get(PROXY_TOKEN_HEADER)
+		if (!keepsAuthorization && minted !== undefined && request.headers.has('Authorization')) {
+			asserted.set('Authorization', `Bearer ${minted}`)
+		}
 		return {
 			outcome: 'forward',
 			asserted,
-			keepsAuthorization: asserted.has(PROXY_TOKEN_HEADER) || verification.headers.get(FORWARD_AUTHORIZATION_HEADER) === '1',
+			keepsAuthorization,
 			decorate: (answer) => {
 				if (allowOrigin !== null) applyCrossOriginHeaders(answer, crossOriginHeaders(allowOrigin))
 			},

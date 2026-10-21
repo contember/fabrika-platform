@@ -558,6 +558,7 @@ function forwardAuth(app: ProxyApp, authUpstream: string): CaddyReverseProxyHand
 					: []),
 				...(isApplicationEntry(app) ? [withoutCredentialUnlessMinted()] : []),
 				...PROXY_ASSERTED_HEADERS.map(copyResponseHeader),
+				...(isApplicationEntry(app) ? [mintedInPlaceOfCredential()] : []),
 			],
 		}],
 	}
@@ -641,6 +642,26 @@ function withoutCredentialUnlessMinted(): CaddyRoute {
 			not: [{ vars: { [`{http.reverse_proxy.header.${FORWARD_AUTHORIZATION_HEADER}}`]: ['1'] } }],
 		}],
 		handle: [{ handler: 'headers', request: { delete: ['Authorization'] } }],
+	}
+}
+
+/**
+ * A contract app's credentialed endpoint gets the minted token in place of the caller's `Authorization`, so the `px_`
+ * key never reaches the app, where it would act for the principal at any other app (ADR-0022 rule 6). A request
+ * without the header gains none: the app tells a bearer from a session by its presence. `not` negates the OR of its
+ * sets, so the route runs only when the token is set, the marker is not, and the header is present.
+ */
+function mintedInPlaceOfCredential(): CaddyRoute {
+	const token = `{http.reverse_proxy.header.${PROXY_TOKEN_HEADER}}`
+	return {
+		match: [{
+			not: [
+				{ vars: { [token]: [''] } },
+				{ vars: { [`{http.reverse_proxy.header.${FORWARD_AUTHORIZATION_HEADER}}`]: ['1'] } },
+				{ vars: { '{http.request.header.Authorization}': [''] } },
+			],
+		}],
+		handle: [{ handler: 'headers', request: { set: { Authorization: [`Bearer ${token}`] } } }],
 	}
 }
 

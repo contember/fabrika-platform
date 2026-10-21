@@ -850,9 +850,10 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		expect(iam.mintFromKeyCalls).toBe(0)
 	})
 
-	test('a key request reaches the app with the token, the endpoint, and its own Authorization header', async () => {
+	test('a key request reaches the app with the token, the endpoint, and the minted token as its Authorization, never the key', async () => {
 		const seen: Request[] = []
-		const iam = new FakeIam({ mintFromKey: { ok: true, token: await signToken({ type: 'service' }), expiresAt: Math.floor(Date.now() / 1000) + 300 } })
+		const token = await signToken({ type: 'service' })
+		const iam = new FakeIam({ mintFromKey: { ok: true, token, expiresAt: Math.floor(Date.now() / 1000) + 300 } })
 		const response = await createCloudflareProxyHandler(contractEnvironment(iam, seen))(
 			new Request(`https://${HOST}/api/me`, {
 				method: 'POST',
@@ -862,8 +863,24 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		)
 		expect(response.status).toBe(200)
 		expect(seen[0]?.headers.get(ENDPOINT_HEADER)).toBe(formatEndpointHeader(me.id, requirementDigest(me)))
-		expect(seen[0]?.headers.get('X-Fabrika-Token')).not.toBeNull()
-		expect(seen[0]?.headers.get('Authorization')).toBe('Bearer px_key')
+		expect(seen[0]?.headers.get('X-Fabrika-Token')).toBe(token)
+		expect(seen[0]?.headers.get('Authorization')).toBe(`Bearer ${token}`)
+	})
+
+	test('a session request on a credentialed row reaches the app with the token and no Authorization', async () => {
+		const seen: Request[] = []
+		const token = await signUserToken()
+		const iam = new FakeIam({ mintToken: { ok: true, token, expiresAt: Math.floor(Date.now() / 1000) + 300 } })
+		const response = await createCloudflareProxyHandler(contractEnvironment(iam, seen))(
+			new Request(`https://${HOST}/api/me`, {
+				method: 'POST',
+				body: '{}',
+				headers: { Cookie: '__Host-px_session=s1', 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
+			}),
+		)
+		expect(response.status).toBe(200)
+		expect(seen[0]?.headers.get('X-Fabrika-Token')).toBe(token)
+		expect(seen[0]?.headers.get('Authorization')).toBeNull()
 	})
 
 	test("a membership endpoint gets its grant from the IAM binding's requestDelegation and forwards it", async () => {

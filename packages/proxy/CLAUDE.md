@@ -70,10 +70,13 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   rule 3; the steps are in `../proxy-core/CLAUDE.md`).
 - **The endpoint and the delegation grant are proxy-asserted like the token.** Step 1 deletes a
   client's `X-Fabrika-Endpoint` and `X-Fabrika-Delegation`; the 2xx branch copies them back from the
-  auth response. For a contract app, an allow without a token (an anonymous endpoint) also deletes
-  `Authorization`, so a key the proxy did not read never reaches the app, unless the auth response carries
-  `X-Fabrika-Forward-Authorization: 1` (a `basic` or `bearer` webhook). One `vars` matcher ORs its keys, so the
-  marker is a `not` beside it in the same matcher set. An installation entry
+  auth response. For a contract app, the caller's `px_` key never reaches the app, unless the auth response carries
+  `X-Fabrika-Forward-Authorization: 1` (a `basic` or `bearer` webhook), which keeps `Authorization` unchanged. An allow
+  without a token (an anonymous endpoint) deletes `Authorization`; one `vars` matcher ORs its keys, so the marker is a
+  `not` beside it in the same matcher set. An allow with a token, after the token copy, sets `Authorization` to
+  `Bearer <minted>` only when the request carried one (a session gains none: the app tells bearer from session by its
+  presence); a `not` negates the OR of its sets, so the token, the marker and the header are three sets under it.
+  A key bound to no app would otherwise let one app act as its principal at another (ADR-0022 rule 6). An installation entry
   (`isApplicationEntry` false) keeps it: IAM's `/admin/*` reads its
   own bearer, and a `protocol` row is one the service authenticates itself.
 - **Caddy's header order is code, not JSON, so the chain is proven in a running Caddy** (`caddy.live.test.ts`).
