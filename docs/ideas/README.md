@@ -15,3 +15,5 @@ decided work or status.
   platform reads only its surface and access, and delivers, fronts and authenticates it.
 - [A compact installation](compact-installation.md) — applications beside the platform on one HA database; reviewed,
   gated by two live-account facts, and only worth it if platform data must also be HA.
+- [A dev environment for MCP authoring](mcp-dev-containers.md) — a `dev` environment that takes each workspace
+  commit in about two seconds through an in-container launcher that pulls from Control; measured on Zerops.
