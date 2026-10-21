@@ -79,7 +79,7 @@ const PROXY_SOURCE = {
 	descriptor: await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: proxy\n'),
 }
 /** These deploys run on the namespace's own pin, so no older proxy is consulted. */
-const OLDER_PROXIES: OlderProxyReaders = [{ row: () => true, csp: () => true }]
+const OLDER_PROXIES: OlderProxyReaders = [{ row: () => true, csp: () => true, signsOut: false }]
 
 const app: ProviderApp = {
 	id: 'notes',
@@ -290,7 +290,7 @@ describe('Zerops ControlProvider registration', () => {
 				proxySource: { ...PROXY_SOURCE, commitSha: 'b'.repeat(40) },
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
-				olderProxies: [{ row: () => true, csp: (csp) => csp.workerSrc === undefined }],
+				olderProxies: [{ row: () => true, csp: (csp) => csp.workerSrc === undefined, signsOut: false }],
 			},
 		})
 		const validate = control.validateAccess
@@ -309,7 +309,7 @@ describe('Zerops ControlProvider registration', () => {
 				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
-				olderProxies: [{ row: () => true, csp: () => false }],
+				olderProxies: [{ row: () => true, csp: () => false, signsOut: false }],
 			},
 		})
 		expect(() => current.validateAccess?.({ environment: environment(), access })).not.toThrow()

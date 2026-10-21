@@ -48,6 +48,7 @@ const notes = access(notesArtifact)
 const refusing = (...kinds: readonly string[]): OlderProxyReader => ({
 	row: (row) => !kinds.includes(row.kind),
 	csp: (csp) => csp.workerSrc === undefined,
+	signsOut: false,
 })
 const WINDOW: OlderProxyReaders = [refusing('public', 'webhook'), refusing('public')]
 const WORKERS = { origin: 'blob:', purpose: 'the workers of the altcha challenge' }
@@ -82,6 +83,13 @@ describe('a namespace proxy pinned to an older source', () => {
 			/`terminal`[\s\S]*--proxy-source=current/,
 		)
 		expect(() => assertNamespaceProxyReads('apps-prod', withTerminal, CURRENT, { proxySource: CURRENT, olderProxies: WINDOW })).not.toThrow()
+	})
+
+	test('admits a terminal behind a pin once an older release serves the sign-out', () => {
+		const withTerminal = access({ ...notesArtifact, terminal: { identify: '/identify' } })
+		const signingOut: OlderProxyReaders = [refusing(), { ...refusing(), signsOut: true }]
+		expect(entriesNeedingCurrentProxy(withTerminal, signingOut)).toEqual([])
+		expect(() => assertNamespaceProxyReads('apps-prod', withTerminal, OLDER, { proxySource: CURRENT, olderProxies: signingOut })).not.toThrow()
 	})
 
 	test('deploys anything once the proxy is on this platform source, without namespaces, or with nothing approved', () => {

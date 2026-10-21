@@ -10,11 +10,12 @@ import type { ZeropsNamespaceProxySource } from './types'
 
 /**
  * What the namespace proxy of one older platform release parses of an application's manifest entry: a row, and the
- * entry's CSP directives, each by that release's own parser.
+ * entry's CSP directives, each by that release's own parser; and whether it serves the sign-out (ADR-0067 §5).
  */
 export interface OlderProxyReader {
 	readonly row: (row: ProxyEndpointRow) => boolean
 	readonly csp: (csp: CspOrigins) => boolean
+	readonly signsOut: boolean
 }
 
 /**
@@ -26,14 +27,14 @@ export type OlderProxyReaders = readonly [OlderProxyReader, ...OlderProxyReader[
 /**
  * What of the approved contract's manifest entry no older release's proxy parses, as the namespace publishes it: each
  * such row by its id, and `csp` when no older proxy parses the entry's CSP (`workerSrc`, which only this release knows).
- * A contract that declares a terminal adds `terminal`: its sessions end at the proxy's sign-out path (ADR-0067 §5),
- * which every older release's proxy predates, so no capability of a pinned proxy is read for it.
+ * A contract that declares a terminal adds `terminal` when no older proxy serves the sign-out its sessions end at
+ * (ADR-0067 §5).
  */
 export function entriesNeedingCurrentProxy(access: ProviderApprovedAccess, olderProxies: OlderProxyReaders): string[] {
 	const table = contractProxyTable(access.contract, access.contractDigest)
 	const rows = table.endpoints.filter((row) => !olderProxies.some((proxy) => proxy.row(row))).map((row) => row.id)
 	const csp = olderProxies.some((proxy) => proxy.csp(table.csp)) ? [] : ['csp']
-	const terminal = access.contract.terminal === undefined ? [] : ['terminal']
+	const terminal = access.contract.terminal === undefined || olderProxies.some((proxy) => proxy.signsOut) ? [] : ['terminal']
 	return [...rows, ...csp, ...terminal]
 }
 
