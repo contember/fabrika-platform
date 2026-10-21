@@ -10,7 +10,7 @@
 //   SqlDatabase → PostgresDatabase      (D1's place)
 //   WaitUntil   → createBackgroundTasks (ctx.waitUntil's place — supervised, never process-fatal)
 
-import { LOCAL_ENVIRONMENT, readEnvironmentName } from '@fabrika/auth-core'
+import { IAM_PROXY_SECRET_VARIABLE, LOCAL_ENVIRONMENT, readEnvironmentName } from '@fabrika/auth-core'
 import { type EmailProviderRegistry, type EmailSender, emailSenderFromEnv, pickEmailEnvironment, readEmailTransportConfig } from '@fabrika/email'
 import { installationMailKey, PlatformEmailSender } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
@@ -41,6 +41,11 @@ export interface ProcessConfig {
 	 * Never logged.
 	 */
 	proxyKey: string
+	/**
+	 * The secret the platform proxy sends on IAM's route (`IAM_PROXY_SECRET_VARIABLE`), proving it wrote the client-address
+	 * and request-id headers. EMPTY READS THOSE HEADERS UNPROVEN, as before the deploy that writes it. Never logged.
+	 */
+	proxySecret: string
 }
 
 /** What a composition root hands the process besides `process.env` — never an environment variable. */
@@ -108,6 +113,7 @@ export async function createRuntime(source: Record<string, string | undefined> =
 		port: parsePort(source['PORT']),
 		rpcKey: sharedSecret(source, 'FABRIKA_IAM_RPC_KEY'),
 		proxyKey: sharedSecret(source, 'FABRIKA_IAM_PROXY_KEY'),
+		proxySecret: sharedSecret(source, IAM_PROXY_SECRET_VARIABLE),
 	}
 	// IAM keeps its provider's configuration as the switch for delivery; Control holds the transport that delivers.
 	const platformEmailSender = controlUrl !== undefined && emailConfigured ? await relaySender(controlUrl, config.rpcKey) : undefined

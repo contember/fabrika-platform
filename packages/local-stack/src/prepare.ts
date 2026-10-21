@@ -5,6 +5,7 @@ import {
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_PROXY_SECRET,
 	FABRIKA_SERVICE_TABLE_DIGEST,
+	IAM_PROXY_SECRET_VARIABLE,
 	proxySecretVariable,
 } from '@fabrika/auth-core'
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
@@ -107,6 +108,7 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 	const appsDatabasePassword = randomSecret()
 	const appsStorageSecret = randomSecret()
 	const notesProxySecret = randomSecret()
+	const iamProxySecret = randomSecret()
 	const storagePassword = randomSecret()
 	const rpcKey = `px_${randomSecret()}`
 	const proxyKey = `px_${randomSecret()}`
@@ -126,6 +128,7 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 			FABRIKA_IAM_RPC_KEY: rpcKey,
 			FABRIKA_IAM_PROXY_KEY: proxyKey,
 			FABRIKA_IAM_PROVISIONING_KEY: provisioningKey,
+			[IAM_PROXY_SECRET_VARIABLE]: iamProxySecret,
 		}),
 		writeEnv(directory, 'operations.env', {
 			FABRIKA_OPERATIONS_DATABASE_URL: `postgres://postgres:${platformDatabasePassword}@platform-db:5432/operations`,
@@ -146,7 +149,8 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 			FABRIKA_ZEROPS_ACCESS_TOKEN: emulatorToken,
 			FABRIKA_ZEROPS_PROXY_IAM_KEY: proxyKey,
 		}),
-		writeEnv(directory, 'platform-proxy.env', { FABRIKA_IAM_KEY: proxyKey }),
+		// The platform proxy's Caddy sends the IAM secret on IAM's route, as a deploy writes it on Zerops.
+		writeEnv(directory, 'platform-proxy.env', { FABRIKA_IAM_KEY: proxyKey, [IAM_PROXY_SECRET_VARIABLE]: iamProxySecret }),
 		writeEnv(directory, 'apps-proxy.env', { FABRIKA_IAM_KEY: proxyKey }),
 		// What the platform writes into a contract application on Zerops (ADR-0022 rule 5, F1), for the composed container.
 		writeEnv(directory, 'notes.env', {

@@ -358,8 +358,13 @@ Invariants:
   snapshot archive (`platform-archive.ts`); only the proxy's archive carries one. `deploy` DELETES, unread, a
   `FABRIKA_PROXY_MANIFEST_JSON` left on the proxy: releases up to 0.4.2 wrote the manifest there SENSITIVE, and only
   sudo mode reads one back. Never read it, merge it or ask the operator for its value.
-- **`platform deploy` writes no credential and reads every credential from the environment.** No `--token`,
-  no `--admin-key`; an unknown flag is an error.
+- **`platform deploy` reads every credential from the environment, and writes only one it derives.** No `--token`,
+  no `--admin-key`; an unknown flag is an error. On every run it writes `FABRIKA_INSTALLATION_PROXY_SECRET_IAM`
+  SENSITIVE to `proxy` and `iam`, before any build and without reading it back: HMAC-SHA256 of the label
+  `fabrika-installation-proxy-secret:iam` keyed by `FABRIKA_IAM_PROVISIONING_KEY` (`deriveIamProxySecret`, ADR-0022
+  rule 5). Caddy sends it on IAM's route and IAM reads its client-address and request-id headers only beside it. Never
+  derive it from the proxy key (`FABRIKA_IAM_KEY`): every namespace proxy holds that. `install` pass 2 is
+  `deployPlatform`, so a fresh installation gets it there; it is not one of `GENERATED_SECRET_KEYS`.
 - **`platform init` keeps deployment credentials off disk and writes nothing to Zerops.** It reads
   `control` and `proxy` only to print origins. GitHub App setup is the Control UI's; init never touches a
   GitHub App key, webhook secret or XDG recovery file. It confirms before every step that leaves the disk;
@@ -381,8 +386,8 @@ Invariants:
 - **`machine-key.ts` is built from an ORIGIN and variable NAMES only**, so no key can leak through it.
   `init` prints no origin when `control`'s `FABRIKA_IAM_ISSUER` is absent or disagrees with the named
   hosts. The block must survive being PASTED: the origin is an `export`, every other line a `#` comment.
-- **Every write is read-compare-write**, so a re-run changes nothing; `putServiceEnv` stays write-first
-  because it must work on a never-deployed service.
+- **Every write of a readable value is read-compare-write**, so a re-run changes nothing but the derived IAM proxy
+  secret, which cannot be read back; `putServiceEnv` stays write-first because it must work on a never-deployed service.
 - Every managed service names its `profile` explicitly (omitting it buys `oltp-production` on HA).
 - Every setup declares `run.healthCheck` and `deploy.readinessCheck`, every duration a quoted Go duration
   in `[10s, 1h]` (`topology/installation-schemas.ts` declares the six probe fields as strings).

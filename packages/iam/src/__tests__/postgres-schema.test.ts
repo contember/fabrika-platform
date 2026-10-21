@@ -971,7 +971,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		const assembled: Runtime = {
 			env,
 			ctx: { waitUntil: tasks.waitUntil },
-			config: { port: 0, rpcKey: RPC_KEY, proxyKey: PROXY_KEY },
+			config: { port: 0, rpcKey: RPC_KEY, proxyKey: PROXY_KEY, proxySecret: '' },
 			shutdown: () => tasks.drain(),
 		}
 		return { handler: createFetchHandler(assembled), drain: () => tasks.drain() }
@@ -1084,7 +1084,7 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		const assembled: Runtime = {
 			env,
 			ctx: { waitUntil: tasks.waitUntil },
-			config: { port: 0, rpcKey: RPC_KEY, proxyKey: options.proxyKey ?? PROXY_KEY },
+			config: { port: 0, rpcKey: RPC_KEY, proxyKey: options.proxyKey ?? PROXY_KEY, proxySecret: '' },
 			shutdown: () => tasks.drain(),
 		}
 		return createFetchHandler(assembled)
@@ -1257,7 +1257,7 @@ describe.skipIf(!hasPostgres)('the Bun handler never leaks internals on an unhan
 		const assembled: Runtime = {
 			env,
 			ctx: { waitUntil: tasks.waitUntil },
-			config: { port: 0, rpcKey: '', proxyKey: '' },
+			config: { port: 0, rpcKey: '', proxyKey: '', proxySecret: '' },
 			shutdown: () => tasks.drain(),
 		}
 		const res = await createFetchHandler(assembled)(new Request('http://localhost:18191/.well-known/jwks.json'))

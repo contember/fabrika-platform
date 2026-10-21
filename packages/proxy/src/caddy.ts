@@ -21,6 +21,7 @@ import {
 	AUTH_CODE_PARAM,
 	FABRIKA_COOKIE_PREFIX,
 	FABRIKA_HOP_HEADERS,
+	IAM_PROXY_SECRET_VARIABLE,
 	PROXY_SECRET_HEADER,
 	proxySecretVariable,
 	SESSION_COOKIE,
@@ -330,6 +331,12 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 	}
 }
 
+/** The variable whose value the upstream hop sends as `PROXY_SECRET_HEADER`, or `null` for an entry that gets none. */
+function proxySecretVariableOf(app: ProxyApp, ownsIamSession: boolean): string | null {
+	if (isApplicationEntry(app)) return proxySecretVariable(app.id)
+	return ownsIamSession ? IAM_PROXY_SECRET_VARIABLE : null
+}
+
 /**
  * One app = one host-matched, terminal route whose subroute is a fixed three-step chain:
  *
@@ -362,7 +369,9 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
  *      `__Host-px_*` cookie on that upstream hop, except IAM's login cookie on its owning route. For a
  *      contract app it sets the proxy secret from the variable `proxySecretVariable(app.id)`, read at
  *      request time through `{env.…}`, so the secret is in no generated file (ADR-0022 rule 5). An unset
- *      variable sends an empty secret, which the application refuses. A contract app's answer then gets
+ *      variable sends an empty secret, which the application refuses. IAM's own route sets the secret from
+ *      `IAM_PROXY_SECRET_VARIABLE`, which proves only who wrote the client address and request id; IAM refuses
+ *      nothing without it (`packages/iam/src/proxy-proof.ts`). A contract app's answer then gets
  *      the header policy, replacing whatever the app set; a download endpoint's gets the file treatment
  *      instead (`contractUpstream`).
  *
@@ -370,6 +379,7 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
  * `@fabrika/proxy-core` set, because Caddy returns a non-2xx auth answer to the client as-is.
  */
 function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean): CaddyRoute {
+	const secretVariable = proxySecretVariableOf(app, ownsIamSession)
 	const fabrikaCookiePattern = `(?:^|;[ \\t]*)${escapeRe2(FABRIKA_COOKIE_PREFIX)}[^=;]*=[^;]*`
 	// RE2 has no lookahead: the first alternative retains the exact login cookie, including its separator.
 	const cookiePattern = ownsIamSession
@@ -380,7 +390,7 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 		upstreams: [{ dial: app.upstream }],
 		headers: {
 			request: {
-				...(isApplicationEntry(app) ? { set: { [PROXY_SECRET_HEADER]: [`{env.${proxySecretVariable(app.id)}}`] } } : {}),
+				...(secretVariable === null ? {} : { set: { [PROXY_SECRET_HEADER]: [`{env.${secretVariable}}`] } }),
 				replace: {
 					Cookie: [
 						{

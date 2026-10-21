@@ -9,6 +9,7 @@
  * credential matched.
  */
 
+import { IAM_PROXY_SECRET_VARIABLE } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { createRuntime } from '../node/runtime'
 import { hashToken, timingSafeEqualHex } from '../secret'
@@ -43,7 +44,7 @@ describe('process transport secrets', () => {
 	}
 
 	test('a SHORT key fails the boot rather than standing in front of an HTTP surface', async () => {
-		for (const name of ['FABRIKA_IAM_RPC_KEY', 'FABRIKA_IAM_PROXY_KEY']) {
+		for (const name of ['FABRIKA_IAM_RPC_KEY', 'FABRIKA_IAM_PROXY_KEY', IAM_PROXY_SECRET_VARIABLE]) {
 			await expect(createRuntime({ ...base, [name]: 'too-short' })).rejects.toThrow(new RegExp(`${name} must be at least 32 characters`))
 		}
 	})
@@ -53,13 +54,15 @@ describe('process transport secrets', () => {
 		const runtime = await createRuntime(base)
 		expect(runtime.config.rpcKey).toBe('')
 		expect(runtime.config.proxyKey).toBe('')
+		expect(runtime.config.proxySecret).toBe('')
 	})
 
 	test('a long enough key is accepted', async () => {
 		const key = `px_${'k'.repeat(40)}`
-		const runtime = await createRuntime({ ...base, FABRIKA_IAM_RPC_KEY: key, FABRIKA_IAM_PROXY_KEY: key })
+		const runtime = await createRuntime({ ...base, FABRIKA_IAM_RPC_KEY: key, FABRIKA_IAM_PROXY_KEY: key, [IAM_PROXY_SECRET_VARIABLE]: key })
 		expect(runtime.config.rpcKey).toBe(key)
 		expect(runtime.config.proxyKey).toBe(key)
+		expect(runtime.config.proxySecret).toBe(key)
 	})
 })
 

@@ -416,8 +416,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   row 404, a `service` row without `X-Fabrika-Endpoint` naming that row and its digest 503, a path
   parameter that does not decode 400, then the row's handler. A `protocol` or `health` row ignores the
   header: the service authenticates it itself, and it also arrives unfronted or over a private hop that
-  carries the calling service's own header (ADR-0022 rule 5). It checks no proxy secret; an installation
-  service gets none. It needs a handler for every row it serves.
+  carries the calling service's own header (ADR-0022 rule 5). It checks no proxy secret; the only installation
+  service that gets one is IAM, which reads it for attribution only. It needs a handler for every row it serves.
 - `dispatchRpcRequest`, `initRpc` and `createRpcClient` stay for the installation's typed RPC mounts;
   a row handler of a `{ method, input }` mount calls `dispatchRpcRequest`.
 

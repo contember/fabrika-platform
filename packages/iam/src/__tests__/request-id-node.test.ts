@@ -1,9 +1,11 @@
 /**
  * Backlog 57 on the Bun root (`src/node/server.ts`): the Caddy proxy deletes a caller's `X-Request-Id`
  * and injects its own, so IAM keeps a well-formed one. A malformed one still never reaches `auth_log`.
+ * With the installation's proxy secret configured, only a request carrying it keeps its id.
  * The Worker root's half is in index.test.ts, next to its `cloudflare:workers` mock.
  */
 
+import { PROXY_SECRET_HEADER } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import type { Env, RequestContext } from '../env'
@@ -13,6 +15,8 @@ import { createHarness, type Harness } from './helpers/harness'
 const ISSUER = 'https://iam.example.test'
 const GENERATED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const CALLER_RAY = '8f1c2a3b4c5d6e7f-PRG'
+const PROXY_SECRET = 'installation-proxy-secret-0123456789abcdef'
+const PROXY_ID = '0192f3a4-5b6c-7d8e-9f01-23456789abcd'
 
 class TestContext implements RequestContext {
 	readonly pending: Promise<unknown>[] = []
@@ -38,13 +42,16 @@ function env(h: Harness): Env {
 }
 
 /** A refused password login: it writes one `auth_log` row carrying the request's correlation id. */
-async function failedLoginRequestId(requestIdHeader: string): Promise<string | undefined> {
+async function failedLoginRequestId(
+	requestIdHeader: string,
+	proof: { readonly configured: string; readonly presented?: string } = { configured: '' },
+): Promise<string | undefined> {
 	const h = createHarness()
 	const ctx = new TestContext()
 	const handler = createFetchHandler({
 		env: env(h),
 		ctx,
-		config: { port: 0, rpcKey: '', proxyKey: '' },
+		config: { port: 0, rpcKey: '', proxyKey: '', proxySecret: proof.configured },
 		shutdown: () => Promise.resolve(),
 	})
 	const response = await handler(
@@ -56,6 +63,7 @@ async function failedLoginRequestId(requestIdHeader: string): Promise<string | u
 				'Content-Type': 'application/x-www-form-urlencoded',
 				'X-Request-Id': requestIdHeader,
 				'cf-ray': CALLER_RAY,
+				...(proof.presented === undefined ? {} : { [PROXY_SECRET_HEADER]: proof.presented }),
 			},
 			body: new URLSearchParams({ email: 'nobody@example.test', password: 'a wrong but long password' }),
 		}),
@@ -70,9 +78,7 @@ async function failedLoginRequestId(requestIdHeader: string): Promise<string | u
 
 describe('the Bun root chooses the audit correlation id', () => {
 	test('keeps a well-formed proxy id', async () => {
-		const proxyId = '0192f3a4-5b6c-7d8e-9f01-23456789abcd'
-
-		expect(await failedLoginRequestId(proxyId)).toBe(proxyId)
+		expect(await failedLoginRequestId(PROXY_ID)).toBe(PROXY_ID)
 	})
 
 	test('replaces an overlong id with a generated one, not a truncated one', async () => {
@@ -87,5 +93,25 @@ describe('the Bun root chooses the audit correlation id', () => {
 
 		expect(stored).toMatch(GENERATED)
 		expect(stored).not.toBe(CALLER_RAY)
+	})
+})
+
+describe('with the proxy secret configured, the id counts only beside the proof', () => {
+	test('keeps the id of a request that carries the secret', async () => {
+		expect(await failedLoginRequestId(PROXY_ID, { configured: PROXY_SECRET, presented: PROXY_SECRET })).toBe(PROXY_ID)
+	})
+
+	test('generates an id for a request without the secret, and still answers it', async () => {
+		const stored = await failedLoginRequestId(PROXY_ID, { configured: PROXY_SECRET })
+
+		expect(stored).toMatch(GENERATED)
+		expect(stored).not.toBe(PROXY_ID)
+	})
+
+	test('generates an id for a request with a wrong secret', async () => {
+		const stored = await failedLoginRequestId(PROXY_ID, { configured: PROXY_SECRET, presented: `${PROXY_SECRET}x` })
+
+		expect(stored).toMatch(GENERATED)
+		expect(stored).not.toBe(PROXY_ID)
 	})
 })

@@ -183,6 +183,8 @@ const WORKSPACE_DEPLOY_FILES = ['package.json', 'bun.lock', 'node_modules', 'pac
  * since the proxy is the only publicly routed component and must not also be able to write audit rows),
  * `FABRIKA_IAM_PROVISIONING_KEY`. Both shared secrets must be at least 32 characters; a shorter one fails
  * the boot rather than standing in front of an internet-reachable surface while looking configured.
+ * `FABRIKA_INSTALLATION_PROXY_SECRET_IAM`, which `platform deploy` derives and writes, lets IAM tell the proxy's
+ * client-address and request-id headers from a private caller's.
  */
 const iam: ZeropsYamlSetupSpec = {
 	setup: 'iam',
@@ -334,7 +336,8 @@ const operations: ZeropsYamlSetupSpec = {
  * IAM service's PUBLIC origin in an apps project, because there is no private network between projects
  * (ADR-0006). The manifest is not a variable; see below.
  *
- * Secret (`envSecrets`): `FABRIKA_IAM_KEY` — the value IAM knows as `FABRIKA_IAM_PROXY_KEY`.
+ * Secret (`envSecrets`): `FABRIKA_IAM_KEY` — the value IAM knows as `FABRIKA_IAM_PROXY_KEY`. In the platform project
+ * also `FABRIKA_INSTALLATION_PROXY_SECRET_IAM`, which Caddy sends on IAM's route and IAM holds too.
  *
  * ── How the manifest reaches the build ───────────────────────────────────────────────────────────
  *

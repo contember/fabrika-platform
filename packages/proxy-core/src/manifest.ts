@@ -61,7 +61,8 @@ export interface ContractProxyApp extends ProxyAppBase {
 /**
  * An installation service protected by an endpoint table (ADR-0022 "Installation entries"). Only trusted platform
  * composition writes `installation: true`; its rows may use the forms no application may declare, and its hop keeps
- * `Authorization`, sets no proxy secret and leaves the service's answers untouched.
+ * `Authorization`, sets no proxy secret (IAM's session-owner route excepted, for attribution only) and leaves the
+ * service's answers untouched.
  */
 export interface InstallationProxyApp extends ProxyAppBase {
 	installation: true

@@ -1,3 +1,4 @@
+import { IAM_PROXY_SECRET_VARIABLE } from '@fabrika/auth-core'
 import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
@@ -114,6 +115,16 @@ describe('local storage preparation', () => {
 		expect(existsSync(resolve(directory, 'minio.env'))).toBe(false)
 		await prepareLocalSecrets(directory)
 		expect(await snapshotEnvironment()).toEqual(before)
+	})
+
+	test("gives IAM and the platform proxy's Caddy one IAM proxy secret, as a Zerops deploy does", async () => {
+		await prepareLocalSecrets(directory)
+		const environment = await snapshotEnvironment()
+		const valueIn = (file: string) => (environment[file] ?? '').match(new RegExp(`^${IAM_PROXY_SECRET_VARIABLE}=(.+)$`, 'm'))?.[1]
+		expect(valueIn('iam.env')).toMatch(/^[A-Za-z0-9][A-Za-z0-9_-]{42}$/)
+		expect(valueIn('platform-proxy.env')).toBe(valueIn('iam.env'))
+		const compose = Bun.YAML.parse(await Bun.file(COMPOSE_FILE).text())
+		expect(compose).toMatchObject({ services: { 'platform-proxy': { env_file: '.state/platform-proxy.env' } } })
 	})
 
 	test.each([

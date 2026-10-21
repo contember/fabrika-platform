@@ -228,6 +228,8 @@ services:
   platform-proxy:
     image: caddy:2.10.2-alpine
     command: caddy run --config /local-state/platform-caddy.json
+    # Caddy reads the IAM proxy secret from its environment (`{env.FABRIKA_INSTALLATION_PROXY_SECRET_IAM}`) and sends it to IAM.
+    env_file: .state/platform-proxy.env
     network_mode: service:platform-proxy-auth
     volumes:
       - ./.state:/local-state:ro

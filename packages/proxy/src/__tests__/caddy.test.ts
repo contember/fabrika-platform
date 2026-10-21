@@ -9,7 +9,7 @@
  *     make the Caddy layer itself fail-closed.
  */
 
-import { FABRIKA_HOP_HEADERS, PROXY_SECRET_HEADER, proxySecretVariable } from '@fabrika/auth-core'
+import { FABRIKA_HOP_HEADERS, IAM_PROXY_SECRET_VARIABLE, PROXY_SECRET_HEADER, proxySecretVariable } from '@fabrika/auth-core'
 import {
 	CLIENT_ADDRESS_HEADER,
 	DELEGATION_HEADER,
@@ -331,6 +331,24 @@ describe('IAM login cookie ownership', () => {
 			expect(upstreamCookie(app, '__Host-px_session=login; app-cookie=kept; __Host-px_handoff_state=verifier', owner)).toBe('app-cookie=kept')
 		})
 	}
+
+	function upstreamSet(app: ProxyApp, iamSessionOwner?: CaddyBuildOptions['iamSessionOwner']) {
+		const config = buildCaddyConfig({ apps: [app] }, { ...OPTIONS, ...(iamSessionOwner === undefined ? {} : { iamSessionOwner }) })
+		const route = config.apps.http.servers['proxy']?.routes[0]
+		if (route === undefined) throw new Error('expected an app route')
+		return proxyHandler(subrouteOf(route).routes[2]).headers?.request?.set
+	}
+
+	test('the owner route proves the proxy sent it, with the secret read from IAM_PROXY_SECRET_VARIABLE', () => {
+		expect(upstreamSet(iam, owner)).toEqual({ [PROXY_SECRET_HEADER]: [`{env.${IAM_PROXY_SECRET_VARIABLE}}`] })
+	})
+
+	test('no secret reaches IAM without a configured owner, or any installation service that is not the owner', () => {
+		expect(upstreamSet(iam)).toBeUndefined()
+		for (const { app } of nonOwners) {
+			expect(upstreamSet(app, owner)).toBeUndefined()
+		}
+	})
 
 	test('accepts the local HTTP issuer with a non-default port', () => {
 		const localOwner = { issuer: 'http://iam.fabrika.localhost:18080/', upstream: 'iam:18080' }
