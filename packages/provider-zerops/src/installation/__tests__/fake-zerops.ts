@@ -464,6 +464,7 @@ export const fakeZerops = (options: {
  */
 export const importedLightServices = (): FakeServiceSpec[] => [
 	{ name: 'db', id: 'svc-db', importProcesses: 1 },
+	{ name: 'operationsdb', id: 'svc-operationsdb', importProcesses: 1 },
 	{ name: 'storage', id: 'svc-storage', importProcesses: 1 },
 	{ name: 'iam', id: 'svc-iam', importProcesses: 2 },
 	{ name: 'operations', id: 'svc-operations', importProcesses: 2 },

@@ -22,6 +22,12 @@ services:
     override: true
     priority: 100
     profile: oltp-hobby
+  - hostname: operationsdb
+    type: "postgresql:single@18"
+    envIsolation: service
+    override: true
+    priority: 100
+    profile: oltp-hobby
   - hostname: storage
     type: object-storage
     envIsolation: service

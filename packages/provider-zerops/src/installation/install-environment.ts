@@ -30,9 +30,9 @@ const storageOf = (service: string): StorageReferences => ({
 	endpoint: `\${${service}_apiUrl}`,
 })
 
-/** IAM and control share `db` and `storage` on both tiers; `standard` gives Operations its own pair. */
+/** IAM and control share `db` and `storage` on both tiers; Operations has its own database on both, and its own bucket on `standard`. */
 const OPERATIONS_DATA: Readonly<Record<PlatformTier, { readonly database: string; readonly storage: string }>> = {
-	light: { database: 'db', storage: 'storage' },
+	light: { database: 'operationsdb', storage: 'storage' },
 	standard: { database: 'operationsdb', storage: 'operationsstorage' },
 }
 

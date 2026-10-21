@@ -1,7 +1,7 @@
-// The light tier's load-bearing assumption, pinned.
+// The shared platform database's load-bearing assumption, pinned.
 //
-// `platformTopology({ tier: 'light' })` puts IAM, control, Operations AND the apps deployed alongside
-// them in ONE `postgresql:single@18`. On Zerops that means one database and one `public` schema —
+// IAM and control share `db` on every tier, and a light installation created before Operations had its own
+// `operationsdb` holds all three services in it. On Zerops that means one database and one `public` schema —
 // `${db_connectionString}` carries no `search_path`, and nothing sets one. So the three services'
 // schemas are not merely adjacent, they are INTERLEAVED, and the tier is only correct while:
 //
@@ -43,7 +43,7 @@ const SERVICES = {
 	operations: 'packages/operations/migrations-postgres',
 } as const
 
-describe('the light tier shares one database, so the three schemas must interleave safely', () => {
+describe('a shared platform database holds up to three services, so their schemas must interleave safely', () => {
 	test('every service actually declares tables — a silent empty read would make this file vacuous', () => {
 		for (const [service, directory] of Object.entries(SERVICES)) {
 			expect(tablesIn(directory).length, `${service} declares no tables`).toBeGreaterThan(0)

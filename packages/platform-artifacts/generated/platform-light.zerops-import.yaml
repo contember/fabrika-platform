@@ -16,7 +16,7 @@
 project:
   name: platform
   envIsolation: service
-  description: "fabrika light tier: control plane, Operations, IAM, the auth proxy and the apps they serve, on shared data services."
+  description: "fabrika light tier: control plane, Operations, IAM and the auth proxy, on single-node data services."
   corePackage: LIGHT
   tags:
     - fabrika
@@ -25,6 +25,12 @@ project:
     - prod
 services:
   - hostname: db
+    type: "postgresql:single@18"
+    envIsolation: service
+    override: true
+    priority: 100
+    profile: oltp-hobby
+  - hostname: operationsdb
     type: "postgresql:single@18"
     envIsolation: service
     override: true

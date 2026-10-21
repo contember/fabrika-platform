@@ -63,8 +63,9 @@ each SQL file and its qualified ledger row in one transaction.
 
 Operations composes the `platform-node` job-queue bundle before its
 `operations` service bundle. Control states the same `jobs` table in its own
-initial migration with `IF NOT EXISTS`, column for column, because on the light
-Zerops tier both services create it in one shared schema.
+initial migration with `IF NOT EXISTS`, column for column, because on a light
+Zerops installation created before Operations had its own database both services
+create it in one shared schema.
 
 The advisory lock identifiers are stable:
 
@@ -541,8 +542,9 @@ Repeating the job-queue DDL in every consumer would leave several
 independently maintained copies of the same runtime schema and make drift
 likely. Bundle composition keeps the generic DDL with the implementation that
 consumes it. Control's single restatement exists only because both services
-create the table in one shared schema on the light tier, and a test pins the
-two declarations to each other.
+create the table in one shared schema on a light Zerops installation created
+before Operations had its own database, and a test pins the two declarations to
+each other.
 
 ### Run application migrations from Control
 
