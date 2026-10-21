@@ -66,8 +66,13 @@ names every bound that cut the answer short. A text search costs one GitHub requ
 300 changed files. With `includePatches`, a patch is at most 32 KiB and all patches together at most 256 KiB; `paths`
 narrows which files carry one, and `incomplete` names the files left without a patch.
 
-`get_deployment` answers a window of the build log, 30 lines by default and at most 500. `log.from` and `log.to` index the
-log, which only grows: a client polls with `after: log.to` and gets only the new lines, or pages back with
+`deploy_stage` answers the run with its id as `runId` too, the name `get_deployment` takes. `get_deployment` says whether
+the run `finished` and gives a one-line `summary` of what its status means and what to do next; `run.exitCode` stays
+null for a provider that runs no process, such as Zerops. Each provider step logs `→ <step>` when it starts and
+`✓ <step> (<seconds>s)` or `✗ <step>: <error>` when it ends.
+
+`get_deployment` answers a window of the build log, 30 lines by default and at most 500. `log.from` and `log.to` index
+the log, which only grows: a client polls with `after: log.to` and gets only the new lines, or pages back with
 `before: log.from`. `failuresOnly` keeps the stderr lines and the lines that name an error or a failure; the indexes then
 count those lines only. `logLines: 0` answers the counts alone.
 

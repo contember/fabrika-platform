@@ -89,6 +89,10 @@ export interface WorkspaceFileEdit {
 
 export interface DeploymentDto {
 	run: RunDto
+	/** True once the run succeeded or failed; a parked run is not finished. */
+	finished: boolean
+	/** What the status means for the caller and what to do next, in one line. */
+	summary: string
 	log: DeploymentLogDto
 	/** Present while the run waits for a person to approve its access change (ADR-0050); no MCP token can. */
 	approval: DeploymentApprovalDto | null
@@ -550,7 +554,23 @@ export async function getDeploymentUseCase(
 		}
 		: null
 	const deviations = changes.filter((change) => change.review === 'closer').map((change) => change.line)
-	return { run, log: logWindow(log.lines, input.log), approval, deviations }
+	const finished = run.status === 'succeeded' || run.status === 'failed'
+	return { run, finished, summary: deploymentSummary(run), log: logWindow(log.lines, input.log), approval, deviations }
+}
+
+function deploymentSummary(run: RunDto): string {
+	switch (run.status) {
+		case 'pending':
+			return 'Queued and not started yet; poll again.'
+		case 'running':
+			return 'Running; poll with after set to log.to for the new lines only.'
+		case 'awaiting_approval':
+			return 'Waiting for a person to approve its access change (see approval); it continues only after that.'
+		case 'succeeded':
+			return `Succeeded: the stage environment runs ${run.commitSha ?? 'the deployed commit'}.`
+		case 'failed':
+			return 'Failed; read the log with failuresOnly for the lines that name the failure.'
+	}
 }
 
 const FAILURE_TEXT = /\b(error|errors|fail|failed|failure)\b/i
