@@ -122,16 +122,23 @@ proxy version would keep serving, and every deploy that republishes the namespac
 Control refuses such a deploy itself, before any effect, while the namespace's proxy source is another than the one
 this control plane deploys new placements from (`assertNamespaceProxyReads`,
 `packages/provider-zerops/src/namespace/proxy-reads.ts`). It refuses a row that no older release's proxy parses,
-judged by the strict row parser of the newest patch of each older minor in the window (`@fabrika/proxy-core` 0.4.8
-and 0.5.5, which Control bundles as npm aliases, `packages/control/src/zerops/older-proxies.ts`). The refusal names the
-rows and the re-pin: `fabrika control namespaces update --namespace=<id> --proxy-source=current`. Today that covers:
+judged by the strict row parser of the newest patch of each minor before 0.7 in the window (`@fabrika/proxy-core`
+0.4.8, 0.5.5 and 0.6.0, which Control bundles as npm aliases, `packages/control/src/zerops/older-proxies.ts`). It
+refuses the entry's CSP the same way, by the CSP field of each of those releases' entry parsers. The refusal names the
+rows, `csp`, and the re-pin: `fabrika control namespaces update --namespace=<id> --proxy-source=current`. Today that
+covers:
 
 - a public procedure, also with `http.cache` (the row kind `public` and its `cache`);
 - a procedure with a file output (the row's `response: 'file'`);
-- an endpoint of several capabilities (the requirement kind `capabilities`).
+- an endpoint of several capabilities (the requirement kind `capabilities`);
+- a webhook that forwards its own `Authorization` (the row's `authorization: 'forward'`);
+- an ALTCHA challenge's `blob:` workers (the CSP's `workerSrc`).
 
-A later row form is covered without a change here. A row one of those parsers reads deploys as before: every row of a
-0.4, 0.5 or 0.6 application, and every row of a newer one that uses none of these forms. A GET mutation is such a row:
+A later row form is covered without a change here. 0.7.0's parser is not one of the judges, although the window serves
+0.7: Control does not record a pin's release, so a form only 0.7 reads would reach a namespace pinned to 0.4–0.6, and
+that proxy would refuse the whole manifest. A namespace pinned to 0.7.0 is therefore re-pinned before an application
+deploys one of these forms to it. A row one of those parsers reads deploys as before: every row of a 0.4, 0.5 or 0.6
+application, and every row of a newer one that uses none of these forms. A GET mutation is such a row:
 an older proxy parses it and applies the same rules to it.
 
 One case still needs the operator, because Control does not record the release a pin was built from. A pin older than

@@ -18,8 +18,8 @@ export interface OlderProxyReader {
 }
 
 /**
- * The namespace proxies of the older releases this platform serves (ADR-0062). Control holds their parsers, as it holds
- * their contract readers; a pin's release is not recorded, so what any of them reads is what the pin may read.
+ * The namespace proxies of the older releases a pin may run whose parsers Control holds (ADR-0062). A pin's release is not
+ * recorded, so what any of them reads is what the pin may read.
  */
 export type OlderProxyReaders = readonly [OlderProxyReader, ...OlderProxyReader[]]
 

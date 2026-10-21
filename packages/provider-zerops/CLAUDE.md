@@ -237,7 +237,8 @@ bun test
   duplicate, the member's own host, more than `MAX_CROSS_ORIGINS`. Control republishes the namespace when the list changes.
 - **A deploy whose rows or CSP the namespace's pinned proxy cannot read is refused.** A namespace proxy's manifest parser
   is strict, so an approved contract with a row that no older release's proxy parses (a `public` row, a `cache`, a
-  file-response profile, a `capabilities` requirement, and any later form), or with a CSP directive none of them knows
+  file-response profile, a `capabilities` requirement, a webhook's `authorization: 'forward'`, and any later form), or
+  with a CSP directive none of them knows
   (`workerSrc`, an ALTCHA challenge's `blob:` workers), deploys only while the namespace's proxy source is the one this
   control plane deploys new placements from. Control calls `validateAccess` before publishing the candidate snapshot,
   under the namespace lease, so a refusal cannot poison the namespace's next republish. `deploy` checks it too.
@@ -245,7 +246,8 @@ bun test
   `fabrika control namespaces update --namespace=<id> --proxy-source=current`. The judges are those releases' own
   parsers, a row parser and the CSP field of the entry parser per release, which Control passes in as
   `namespaces.olderProxies` (`src/namespace/proxy-reads.ts`); never replace them with a list of fields. What one of them
-  parses deploys, so every 0.4/0.5/0.6/0.7 contract does.
+  parses deploys, so every 0.4/0.5/0.6 contract does. They are 0.4.8, 0.5.5 and 0.6.0, not 0.7.0: a pin's release is not
+  recorded, so a form only 0.7 reads deploys only while the namespace's proxy source is current.
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).
