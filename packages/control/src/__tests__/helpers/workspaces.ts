@@ -82,8 +82,11 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 			commitSha: input.commitSha,
 			...(input.directory === undefined ? {} : { directory: input.directory }),
 		})
-		const files = [...this.contents.keys()].sort().map((path): WorkspaceTreeEntry => ({ path, kind: 'file', size: 1 }))
-		return Promise.resolve({ commitSha: input.commitSha, entries: [{ path: 'src', kind: 'directory' }, ...files], truncated: false })
+		const prefix = input.directory === undefined ? '' : `${input.directory}/`
+		const files = [...this.contents.keys()].sort().filter((path) => path.startsWith(prefix))
+			.map((path): WorkspaceTreeEntry => ({ path, kind: 'file', size: 1 }))
+		const directories: WorkspaceTreeEntry[] = input.directory === undefined ? [{ path: 'src', kind: 'directory' }] : []
+		return Promise.resolve({ commitSha: input.commitSha, entries: [...directories, ...files], truncated: false })
 	}
 
 	readFiles(input: { target: WorkspaceSourceTarget; commitSha: string; paths: readonly string[] }) {

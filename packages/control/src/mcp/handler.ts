@@ -27,6 +27,8 @@ import {
 	getWorkspaceDiffUseCase,
 	getWorkspaceUseCase,
 	isRepositoryPath,
+	LIST_FILES_DEFAULT_LIMIT,
+	LIST_FILES_MAX_LIMIT,
 	listFilesUseCase,
 	listTargetsUseCase,
 	listWorkspacesUseCase,
@@ -134,7 +136,13 @@ const toolInputs = {
 	createWorkspace: z.object({ appId: identifier, env: identifier, title: z.string().min(1).max(200) }).strict(),
 	listWorkspaces: z.object({ appId: identifier.optional(), env: identifier.optional() }).strict(),
 	getWorkspace: workspaceInput,
-	listFiles: workspaceInput.extend({ directory: repositoryPath.optional(), commitSha: commitSha.optional() }).strict(),
+	listFiles: workspaceInput.extend({
+		directory: repositoryPath.optional(),
+		commitSha: commitSha.optional(),
+		depth: z.number().int().min(1).max(64).optional(),
+		offset: z.number().int().min(0).default(0),
+		limit: z.number().int().min(1).max(LIST_FILES_MAX_LIMIT).default(LIST_FILES_DEFAULT_LIMIT),
+	}).strict(),
 	readFiles: workspaceInput.extend({ paths: z.array(repositoryPath).min(1).max(50), commitSha: commitSha.optional() }).strict(),
 	getWorkspaceDiff: workspaceInput.extend({
 		includePatches: z.boolean().default(false),
@@ -232,7 +240,9 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 	}, (input) => run(() => getWorkspaceDiffUseCase(c, input)))
 	server.registerTool('list_files', {
 		description: 'List the entries of a directory of the workspace branch (the repository root when no directory is given), '
-			+ 'at commitSha or at the current head.',
+			+ 'at commitSha or at the current head. Without depth it lists every level below the directory; depth 1 lists its direct '
+			+ `entries. A page holds limit entries (default ${LIST_FILES_DEFAULT_LIMIT}); pass nextOffset as offset for the next one. `
+			+ 'truncated means the repository is too large for one listing; name a directory.',
 		inputSchema: toolInput(toolInputs.listFiles),
 		annotations: READ_ONLY,
 	}, (input) => run(() => listFilesUseCase(c, input)))
