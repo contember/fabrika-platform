@@ -221,12 +221,14 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 	}, (input) => run(() => createWorkspaceUseCase(c, input)))
 	server.registerTool('list_workspaces', {
-		description: 'List your own workspaces, optionally for one app and environment. Use get_workspace for the current head and latest deploy.',
+		description: 'List your own workspaces, optionally for one app and environment, each with its current head (headSha), its latest '
+			+ 'stage deploy and the pull request create_pull_request opened.',
 		inputSchema: toolInput(toolInputs.listWorkspaces),
 		annotations: READ_ONLY,
 	}, (input) => run(() => listWorkspacesUseCase(c, input)))
 	server.registerTool('get_workspace', {
-		description: 'Read one of your workspaces: its branch, the current head commit (headSha) and the latest stage deploy. '
+		description: 'Read one of your workspaces: its branch, the current head commit (headSha), the latest stage deploy and the pull '
+			+ 'request create_pull_request opened. '
 			+ 'Use headSha as expectedHeadSha for apply_changes.',
 		inputSchema: toolInput(toolInputs.getWorkspace),
 		annotations: READ_ONLY,

@@ -21,6 +21,8 @@ import { type GitHubAppCredential, readBoundAppCredential } from './connections/
 import { SourceFailure } from './source/failure'
 
 export const WORKSPACE_MAX_TREE_ENTRIES = 5000
+/** Branch reads in flight at once for one listing, through one repository token. */
+const BRANCH_READ_CONCURRENCY = 6
 /** The GitHub client's bound on one blob read. */
 export const WORKSPACE_MAX_SCAN_FILES = 100
 
@@ -68,6 +70,15 @@ export function githubWorkspaceSource(env: Env, createClient: WorkspaceGitHubCli
 	return {
 		readBranch: ({ target, branch, signal }) =>
 			withRepository(target, signal, async (repository) => (await repository.readRef(branch, signal))?.sha ?? null),
+		readBranches: ({ target, branches, signal }) =>
+			withRepository(target, signal, async (repository) => {
+				const heads: (string | null)[] = []
+				for (let start = 0; start < branches.length; start += BRANCH_READ_CONCURRENCY) {
+					const batch = branches.slice(start, start + BRANCH_READ_CONCURRENCY)
+					heads.push(...await Promise.all(batch.map(async (branch) => (await repository.readRef(branch, signal))?.sha ?? null)))
+				}
+				return heads
+			}),
 		createBranch: ({ target, branch, fromSha, signal }) =>
 			withRepository(target, signal, async (repository) => (await repository.createBranch({ branch, fromSha, signal })).sha),
 		listTree: ({ target, commitSha, directory, signal }) =>

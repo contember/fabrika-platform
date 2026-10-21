@@ -60,6 +60,8 @@ export interface WorkspaceSummaryDto {
 	baseSha: string
 	title: string
 	createdAt: number
+	/** The pull request create_pull_request opened or found; it may since have been merged or closed on GitHub. */
+	pullRequest: { number: number; url: string } | null
 }
 
 export interface WorkspaceDto extends WorkspaceSummaryDto {
@@ -191,21 +193,38 @@ export async function createWorkspaceUseCase(
 	return toWorkspaceDto(workspace, headSha, null)
 }
 
-/** Workspace metadata without the live head; `get_workspace` reads the head from GitHub. */
+/** The caller's workspaces with their live heads, read once per repository, and their latest stage deploys. */
 export async function listWorkspacesUseCase(
 	c: WorkspaceUseCaseContext,
 	input: { appId?: string; env?: string },
-): Promise<{ items: WorkspaceSummaryDto[] }> {
+): Promise<{ items: WorkspaceDto[] }> {
 	const ownerId = requireOwner(c.auth)
 	const rows = await c.repositories.workspaces.listWorkspaces({
 		ownerId,
 		...(input.appId === undefined ? {} : { appId: input.appId }),
 		...(input.env === undefined ? {} : { env: input.env }),
 	})
-	const items: WorkspaceSummaryDto[] = []
+	const byTarget = new Map<string, { target: AuthoringTarget; workspaces: WorkspaceRow[] }>()
 	for (const workspace of rows) {
+		const key = `${workspace.app_id}\u0000${workspace.env}`
+		const group = byTarget.get(key)
+		if (group !== undefined) {
+			group.workspaces.push(workspace)
+			continue
+		}
 		const target = await findAuthoringTarget(c, workspace.app_id, workspace.env, CONTROL_ACTIONS.SOURCE_WORKSPACE_READ)
-		if (target !== null) items.push(toWorkspaceSummaryDto(workspace))
+		if (target !== null) byTarget.set(key, { target, workspaces: [workspace] })
+	}
+	const heads = new Map<string, string | null>()
+	for (const { target, workspaces } of byTarget.values()) {
+		const branches = workspaces.map((workspace) => workspace.branch)
+		const read = await sourceCall(() => c.source.readBranches({ target: target.source, branches, signal: c.signal }))
+		for (const [index, branch] of branches.entries()) heads.set(branch, read[index] ?? null)
+	}
+	const items: WorkspaceDto[] = []
+	for (const workspace of rows) {
+		if (!heads.has(workspace.branch)) continue
+		items.push(toWorkspaceDto(workspace, heads.get(workspace.branch) ?? null, await latestRunOf(c, workspace)))
 	}
 	return { items }
 }
@@ -599,6 +618,7 @@ export async function createPullRequestUseCase(
 			signal: c.signal,
 		})
 	)
+	await c.repositories.workspaces.recordPullRequest(owned.workspace.id, { number: pullRequest.number, url: pullRequest.url })
 	await c.auth.audit({
 		action: 'source.pull-request.create',
 		resourceType: 'workspace',
@@ -673,12 +693,16 @@ async function requireHead(c: WorkspaceUseCaseContext, owned: OwnedWorkspace): P
 
 async function describeWorkspace(c: WorkspaceUseCaseContext, owned: OwnedWorkspace): Promise<WorkspaceDto> {
 	const headSha = await sourceCall(() => c.source.readBranch({ target: owned.source, branch: owned.workspace.branch, signal: c.signal }))
+	return toWorkspaceDto(owned.workspace, headSha, await latestRunOf(c, owned.workspace))
+}
+
+async function latestRunOf(c: WorkspaceUseCaseContext, workspace: WorkspaceRow): Promise<RunDto | null> {
 	const latestRun = await c.repositories.runs.getLatestRunForRef({
-		appId: owned.workspace.app_id,
-		env: owned.workspace.env,
-		ref: `refs/heads/${owned.workspace.branch}`,
+		appId: workspace.app_id,
+		env: workspace.env,
+		ref: `refs/heads/${workspace.branch}`,
 	})
-	return toWorkspaceDto(owned.workspace, headSha, latestRun === null ? null : toRunDto(latestRun))
+	return latestRun === null ? null : toRunDto(latestRun)
 }
 
 function toWorkspaceSummaryDto(row: WorkspaceRow): WorkspaceSummaryDto {
@@ -690,6 +714,9 @@ function toWorkspaceSummaryDto(row: WorkspaceRow): WorkspaceSummaryDto {
 		baseSha: row.base_sha,
 		title: row.title,
 		createdAt: row.created_at,
+		pullRequest: row.pull_request_number === null || row.pull_request_url === null
+			? null
+			: { number: row.pull_request_number, url: row.pull_request_url },
 	}
 }
 

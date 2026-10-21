@@ -11,6 +11,8 @@ export interface WorkspaceRow {
 	base_sha: string
 	title: string
 	created_at: number
+	pull_request_number: number | null
+	pull_request_url: string | null
 }
 
 export interface WorkspaceInput {
@@ -43,6 +45,13 @@ export class WorkspaceRepository {
 
 	async getWorkspaceByBranch(branch: string): Promise<WorkspaceRow | null> {
 		return this.d1.prepare('SELECT * FROM workspaces WHERE branch = ?').bind(branch).first<WorkspaceRow>()
+	}
+
+	/** Remember the pull request opened or found for the workspace; the newest one wins. */
+	async recordPullRequest(id: string, pullRequest: { number: number; url: string }): Promise<void> {
+		await this.d1.prepare('UPDATE workspaces SET pull_request_number = ?, pull_request_url = ? WHERE id = ?')
+			.bind(pullRequest.number, pullRequest.url, id)
+			.run()
 	}
 
 	/** The newest workspaces of one owner, optionally narrowed to an app and an environment. */
