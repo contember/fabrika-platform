@@ -32,9 +32,10 @@ dependency installation or any repository-controlled command. Nothing falls back
   SHA once, before Control freezes the release context. A recorded commit ID wins over a mutable ref
   and must exist as a commit; a recorded non-commit object fails.
 - A webhook or poll run of a branch (`refs/heads/…`) resolves the branch, not the recorded commit, and fails with
-  `commit_mismatch` when the branch no longer points at it, as the Zerops source check does. A newer push has a run
-  of its own, so the older one must not deploy after it. A manual run pinned to a commit, and a tag, deploy the
-  recorded commit wherever the ref points now.
+  `commit_mismatch` when the branch no longer points at it. The Zerops source check is wider: it checks the branch of
+  every run that records a commit, a manual one included. A newer push has a run of its own, so the older one must
+  not deploy after it. On Cloudflare a manual run pinned to a commit, and a tag, deploy the recorded commit wherever
+  the ref points now.
 - The push webhook records the commit an annotated tag points to (`head_commit.id`), because the payload's
   `after` is the tag object, which no commit lookup resolves.
 - Ref resolution: qualified heads and tags keep their namespace; a bare name tries the exact branch,

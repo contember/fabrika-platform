@@ -506,13 +506,6 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		const run = await invocation.read()
 		if (run === null || run.status !== 'pending') return { runId, status: 'skipped' }
 		if (invocation.cancelled) return await settleCancelledInvocation(deps, invocation)
-		// Queue order means nothing (a deferred run is re-enqueued), so the order that holds is the runs' own.
-		const superseding = await runs.getSupersedingRun(runId)
-		if (superseding !== null) {
-			await logSettlement(deps, { id: runId, log_key: run.log_key ?? logsKey(runId) }, `superseded by run ${superseding.id}`)
-			await invocation.write((fence) => runs.markRunSuperseded(runId, fence))
-			return { runId, status: 'failed' }
-		}
 		const namespaceId = dryRun || deps.provider.namespaces?.republish === undefined
 			? null
 			: (await deps.repositories.registry.getAppEnv(run.app_id, run.env))?.namespace_id ?? null
@@ -521,6 +514,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			if (namespaceLease === null) return { runId, status: 'deferred' }
 		}
 		if (!(await startRun(deps, invocation, run))) {
+			if (await supersedeRun(deps, invocation, run)) return { runId, status: 'failed' }
 			const latest = await runs.getRun(runId)
 			return { runId, status: latest?.status === 'pending' ? 'deferred' : 'skipped' }
 		}
@@ -908,6 +902,20 @@ async function startRun(deps: RunDeps, invocation: RunInvocation, run: RunRow): 
 	const settled = await settleUnfinishedRun(deps, invocation.forRun(blocking.id)).catch(() => null)
 	if (settled !== 'succeeded' && settled !== 'failed') return false
 	return runs.markRunStarted(run.id, logsKey(run.id), invocation.lease.fence())
+}
+
+/**
+ * Fail a pending run whose start was refused because a newer run of its environment succeeded, possibly one that
+ * `startRun` itself just settled. Queue order is not run order (a deferred run is enqueued again), and a rollback is a
+ * new run (ADR-0050 §6). False when no newer run succeeded.
+ */
+async function supersedeRun(deps: RunDeps, invocation: RunInvocation, run: RunRow): Promise<boolean> {
+	const runs = deps.repositories.runs
+	const superseding = await runs.getSupersedingRun(run.id)
+	if (superseding === null) return false
+	await invocation.write((fence) => runs.markRunSuperseded(run.id, fence))
+	await logSettlement(deps, { id: run.id, log_key: run.log_key ?? logsKey(run.id) }, `superseded by run ${superseding.id}`)
+	return true
 }
 
 export type RunSettleDeps = Pick<RunDeps, 'repositories' | 'provider' | 'operations' | 'runLogs' | 'platformTransport'> & {

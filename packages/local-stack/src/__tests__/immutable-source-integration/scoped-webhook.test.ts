@@ -36,6 +36,7 @@ test("the smoke's push is signed for the notes connection's scoped route and yie
 	expect(new URL(request.url).pathname).toBe(`/webhooks/github/${LOCAL_SOURCE_CONNECTIONS[0]?.connectionId}`)
 	const body = await request.text()
 	expect(request.headers.get('x-hub-signature-256')).toBe(`sha256=${createHmac('sha256', 'webhook-secret').update(body).digest('hex')}`)
+	expect(request.headers.get('x-github-event')).toBe('push')
 	expect(JSON.parse(body)).toMatchObject({
 		ref: 'refs/heads/main',
 		after: COMMIT_SHA,

@@ -190,9 +190,11 @@ for (const backend of ['sqlite', 'postgres']) {
 		}
 
 		test('repairs clean and dirty started and accepted rows before sending terminal data', async () => {
+			let order = 0
 			for (const clean of [true, false]) {
 				for (const phase of ['started', 'provider_accepted']) {
-					const runId = `${phase}-${clean}`
+					// Ids sort in creation order, as UUIDv7 ids do: an older run never starts after a newer one succeeded.
+					const runId = `${order++}-${phase}-${clean}`
 					await seed(runId, { ...frozen(runId), phase }, clean)
 					await owned.start(runId, 'logs')
 					await owned.externalId(runId, `external-${runId}`)

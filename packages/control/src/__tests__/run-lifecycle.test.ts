@@ -1191,6 +1191,57 @@ describe('provider-neutral run lifecycle', () => {
 		expect(await heldLeases(db)).toEqual([])
 	})
 
+	test('an older pending run is superseded by a newer running run that its start settles to succeeded', async () => {
+		const { db } = createHarness()
+		const olderId = await seedRun(db)
+		const newerId = uuidv7()
+		await db.runs.createRun({ id: newerId, appId: 'app', env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'webhook', actor: 'webhook:c' })
+		const deployed: string[] = []
+		const provider = makeProvider([], { state: 'succeeded' })
+		provider.deploy = async (input) => {
+			deployed.push(input.runId)
+			await input.events.externalId(`version-${input.runId}`)
+			return input.runId === newerId ? { state: 'running' } : { state: 'succeeded' }
+		}
+		provider.reconcile = () => Promise.resolve({ state: 'succeeded' })
+		const { logs, objects } = memoryLogs()
+		const deps = { ...makeDeps(db, provider), logs, runLogs: logs }
+
+		expect((await executeDeploy(deps, { runId: newerId })).status).toBe('running')
+		expect((await executeDeploy(deps, { runId: olderId })).status).toBe('failed')
+
+		expect(deployed).toEqual([newerId])
+		expect((await requireRun(db, newerId)).status).toBe('succeeded')
+		const older = await requireRun(db, olderId)
+		expect(older.status).toBe('failed')
+		expect(older.started_at).toBeNull()
+		const lines = (objects.get(`runs/${olderId}/logs.ndjson`) ?? '').trim().split('\n').map((line) => JSON.parse(line).text)
+		expect(lines).toEqual([`superseded by run ${newerId}`])
+		expect(await heldLeases(db)).toEqual([])
+	})
+
+	test('a cancellation that wins over the supersede write leaves no superseded line', async () => {
+		const { db } = createHarness()
+		const olderId = await seedRun(db)
+		const newerId = uuidv7()
+		await db.runs.createRun({ id: newerId, appId: 'app', env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'webhook', actor: 'webhook:c' })
+		await fixtureRuns(db.runs, makeFakeLock(db)).finish(newerId, 'succeeded', 0)
+		const runs = db.runs
+		const original = runs.markRunSuperseded.bind(runs)
+		runs.markRunSuperseded = async (id, fence) => {
+			await runs.requestRunCancellation(id)
+			return original(id, fence)
+		}
+		const inputs: ProviderDeployInput[] = []
+		const { logs, objects } = memoryLogs()
+
+		await executeDeploy({ ...makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), logs, runLogs: logs }, { runId: olderId })
+
+		expect(inputs).toEqual([])
+		expect((await requireRun(db, olderId)).status).toBe('failed')
+		expect(objects.get(`runs/${olderId}/logs.ndjson`) ?? '').not.toContain('superseded')
+	})
+
 	test('a newer run that failed, or is still pending, supersedes nothing', async () => {
 		const { db } = createHarness()
 		const olderId = await seedRun(db)

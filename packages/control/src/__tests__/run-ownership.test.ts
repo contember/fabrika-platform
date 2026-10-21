@@ -99,9 +99,9 @@ test('accepted unresolved work excludes another run after the invocation release
 		throw new Error('response lost')
 	}
 	expect(await executeDeploy(deps, { runId: 'run' })).toEqual({ runId: 'run', status: 'running' })
-	await db.runs.createRun({ id: 'next', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
-	expect(await executeDeploy(deps, { runId: 'next' })).toEqual({ runId: 'next', status: 'deferred' })
-	expect((await db.runs.getRun('next'))?.status).toBe('pending')
+	await db.runs.createRun({ id: 'run-next', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
+	expect(await executeDeploy(deps, { runId: 'run-next' })).toEqual({ runId: 'run-next', status: 'deferred' })
+	expect((await db.runs.getRun('run-next'))?.status).toBe('pending')
 })
 
 test('an ambiguous persistence error invalidates the invocation without terminalizing accepted work', async () => {
@@ -279,11 +279,11 @@ test('the next deploy settles a run a dead holder left running, within one TTL a
 	expect(await db.runs.markRunStarted(row.id, 'logs', crashed.fence())).toBe(true)
 	// The process dies: its lease is never renewed and never released.
 	locks.renewal = 'hanging'
-	await db.runs.createRun({ id: 'next', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
-	expect(await executeDeploy(deps, { runId: 'next' })).toEqual({ runId: 'next', status: 'deferred' })
+	await db.runs.createRun({ id: 'run-next', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
+	expect(await executeDeploy(deps, { runId: 'run-next' })).toEqual({ runId: 'run-next', status: 'deferred' })
 	await advance(LEASE_TTL_MS)
 	locks.renewal = 'live'
-	expect(await executeDeploy(deps, { runId: 'next' })).toEqual({ runId: 'next', status: 'succeeded' })
+	expect(await executeDeploy(deps, { runId: 'run-next' })).toEqual({ runId: 'run-next', status: 'succeeded' })
 	expect((await db.runs.getRun(row.id))?.status).toBe('failed')
 	expect(lastLogLine('logs')).toBe(RUN_INTERRUPTED_REASON)
 	await crashed.release()
@@ -301,11 +301,11 @@ test('the next deploy defers while the run it would settle still has external wo
 		return { state: 'running' }
 	}
 	expect(await executeDeploy(deps, { runId: row.id })).toEqual({ runId: row.id, status: 'running' })
-	await db.runs.createRun({ id: 'next', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
-	expect(await executeDeploy(deps, { runId: 'next' })).toEqual({ runId: 'next', status: 'deferred' })
+	await db.runs.createRun({ id: 'run-next', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
+	expect(await executeDeploy(deps, { runId: 'run-next' })).toEqual({ runId: 'run-next', status: 'deferred' })
 	expect(reconciled).toEqual(['version'])
 	deps.provider.reconcile = async () => ({ state: 'succeeded' })
 	deps.provider.deploy = async () => ({ state: 'succeeded' })
-	expect(await executeDeploy(deps, { runId: 'next' })).toEqual({ runId: 'next', status: 'succeeded' })
+	expect(await executeDeploy(deps, { runId: 'run-next' })).toEqual({ runId: 'run-next', status: 'succeeded' })
 	expect((await db.runs.getRun(row.id))?.status).toBe('succeeded')
 })

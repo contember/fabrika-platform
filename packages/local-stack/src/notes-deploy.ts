@@ -244,6 +244,8 @@ export const triggerByScopedWebhook = async (webhookSecret: string, commitSha: s
 		headers: {
 			'content-type': 'application/json',
 			'x-hub-signature-256': `sha256=${signature}`,
+			// Control acts on a delivery only when GitHub names it a push.
+			'x-github-event': 'push',
 		},
 		body,
 	})
