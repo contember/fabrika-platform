@@ -75,7 +75,9 @@ what excludes the candidate from activation.
 Provisioning, reconciliation, application `beforeDeploy` and registry republish rebuild a namespace's
 proxy through one path. The attempt is recorded on the namespace row with the same two facts and is
 settled by the same poll-or-delete rule. It stays separate from any application run's checkpoint. A
-registry change stays durable even if publishing its proxy manifest fails.
+registry change stays durable even if publishing its proxy manifest fails. A `beforeDeploy` or registry republish whose pin and
+manifest identity (manifest, IAM issuer and key, proxy secrets) equal the recorded deployment, and whose version
+still reads `ACTIVE`, reuses that version instead of building; provisioning and reconciliation always build.
 
 ### One lease primitive
 

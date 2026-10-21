@@ -25,6 +25,10 @@ import {
 import type { ZeropsAppConfig, ZeropsServiceSpec } from '../types'
 import { LOCKED_REPOSITORIES } from './fixtures/locked-repositories'
 
+/** The generated readiness attempt: it waits for a 2xx of the health endpoint for less than the 10 s retry period. */
+const READINESS_HEALTHZ =
+	`bun -e "const end = Date.now() + 9000; while (Date.now() < end) { try { if ((await fetch('http://127.0.0.1:3000/healthz', { signal: AbortSignal.timeout(2000) })).ok) process.exit(0) } catch {} await Bun.sleep(200) } process.exit(1)"`
+
 const SPA_DESCRIPTOR = 'zerops:\n  - setup: notesapi\n    build:\n      buildCommands: ["bun run build:spa"]\n'
 
 const API: ZeropsServiceSpec = { hostname: 'notesapi', type: 'alpine/bun@1.3' }
@@ -106,7 +110,7 @@ describe('the generated execution descriptor of a contract application', () => {
 				deployFiles: ['./'],
 				cache: ['node_modules'],
 			},
-			deploy: { readinessCheck: { httpGet: { port: 3000, path: '/healthz' }, retryPeriod: '10s', failureTimeout: '180s' } },
+			deploy: { readinessCheck: { exec: { command: READINESS_HEALTHZ }, retryPeriod: '10s', failureTimeout: '180s' } },
 			run: {
 				base: 'alpine/bun@1.3',
 				prepareCommands: ['sudo apk add --no-cache ffmpeg vips'],
