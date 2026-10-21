@@ -27,7 +27,7 @@ From the run log of `sprints/sprint-2026-10-19-declare-the-surface.md`:
 6. **Custom IAM policies** may grant a public procedure's action (ADR-0063 consequence). Decide whether IAM refuses it.
 7. **Signed tokens on Cloudflare** are refused: Worker variables are plain text, and no secret path exists.
 8. **A namespace proxy pin older than 0.5.3** still breaks on a 0.5 cross-origin field: Control does not record a
-   pin's release (backlog 189).
+   pin's release. The fix is [backlog 189](189-cross-origin-endpoints-review-follow-ups.md) item 3.
 9. **Queues.** A row past `maxAttempts` has no staff path back into the queue; confirm the 30-day backoff cap.
 10. **The local compatibility suite** does not run the platform's build step over the old release's source.
 

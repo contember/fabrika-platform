@@ -102,6 +102,12 @@ const intake = app.group({}, (r) => ({
 - An update or a delete needs its action and takes only a row id that a verified signed token of this request carries,
   with `expectVersion`, on a versioned table. An update answers only the new version. That is how a public link
   manages one booking: the token names the booking (ADR-0012 §14).
+- "Carries" means any text: every text anywhere in the verified claims of every signed token field of the request
+  (its input and its query), whatever that field's purpose, authorizes a row of that id in every versioned table the
+  procedure updates or deletes under a declared action. The id is not bound to a table, to a field or to a purpose. An
+  application that signs several purposes, or puts more than the row id in a token's claims, widens what one token
+  unlocks. Binding an id to its purpose is
+  [backlog 209](../backlog/209-a-public-procedure-binds-a-token-id-to-its-purpose.md).
 - No lock (`getForUpdate`) and no `claim`.
 
 ### 4. The row and the order of a request

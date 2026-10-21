@@ -67,7 +67,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [170](170-a-column-write-scoped-update-cannot-bump-the-version.md) — A raw UPDATE under a column's write action is refused when it also bumps `version`.
 - [172](172-a-list-of-values-cannot-show-each-values-last-sign-in.md) — A last sign-in per value needs one call per row and `members.manage`; needs a privacy decision.
 - [173](173-the-skills-test-recipes-leak-a-files-globals-and-render-outside-act.md) — The `fetch` stand-in recipe leaks under `--isolate`, and the screen example renders outside `act`.
-- [175](175-a-scoped-user-administrator-lists-every-principal.md) — A user administrator scoped to one application still reads the whole directory.
+- [175](175-a-scoped-user-administrator-lists-every-principal.md) — A user administrator scoped to one application still reads the whole directory and anyone's sessions.
 - [176](176-the-runtime-does-not-know-the-declared-secret-names.md) — An error report scrubs an application secret only when its variable name says it is one; the platform does not hand the runtime the declared names.
 - [177](177-the-cloudflare-proxy-manifest-is-a-worker-variable.md) — A Cloudflare proxy Worker carries its manifest as a variable, which Cloudflare caps at 5 KB; bake it into the bundle.
 - [178](178-an-installation-transport-through-an-outside-relay.md) — Control's own transport can use only a built-in provider; a `relay` provider over the platform mail wire and a reference relay reach any adapter.
@@ -77,11 +77,20 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [186](186-send-email-in-batches.md) — Every adapter sends one message per call (`maxBatch: 1`); `sendBatch` would cut requests and rate-limit use for bulk sends.
 - [187](187-set-or-rotate-the-installation-mail-transport.md) — `fabrika platform mail` sets or rotates the installation's mail transport on IAM and Control and redeploys the environments that use it; today an application gets a change only at its next deploy.
 - [188](188-application-mail-review-follow-ups.md) — Application mail review follow-ups: two upgrade release notes, an IAM `delivery_failed` retry, and three `ctx.mail`/`then` runtime edges.
-- [189](189-cross-origin-endpoints-review-follow-ups.md) — Cross-origin endpoints review follow-ups: the `http://` host rule, `Vary: Origin` on every answer, an early refusal for an old namespace proxy pin, and the preflight's request headers.
+- [189](189-cross-origin-endpoints-review-follow-ups.md) — Cross-origin endpoints review follow-ups: the `http://` host rule, `Vary: Origin` on every answer, a recorded release for a namespace proxy pin, and the preflight's request headers.
 - [190](190-the-overview-reads-each-applications-environments-separately.md): The console overview calls Control once per application for its environments; one read for many applications.
 - [191](191-the-audit-log-cannot-leave-out-admin-reads.md): `audit.list` cannot leave out admin reads, so the console pages past them in the browser.
 - [192](192-a-signed-in-person-cannot-manage-their-own-account.md): No self-service password change or sign-in list; an IAM account page, after rewriting ADR-0020.
 - [193](193-loose-ends-of-the-declared-surface.md): The approval of an upgrade to 0.7, admission buckets, tokens on Cloudflare and other P2s of the surface revision.
 - [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: a claim before the dispatcher sends (two double-send paths), maintenance and console edges, the sender's error mapping, expired keys' vault values.
 - [197](197-local-compat-has-no-0.7-release.md): `local:compat` deploys no Notes at v0.7.0: its proof needs a release without a file collection.
+- [201](201-cloudflare-passwords-are-hashed-below-the-owasp-work-factor.md): A Worker caps PBKDF2 at 100 000 iterations; Argon2id through WASM on both runtimes.
+- [202](202-relayed-mail-content-is-plaintext-at-rest.md): Control stores relayed mail content, IAM's links included, as plain text until the row is final; seal it under the vault key.
+- [203](203-deleting-an-app-or-env-leaves-its-secrets-and-iam-keys.md): An app or env delete leaves its vault rows, its IAM keys and its IAM schema.
+- [204](204-a-redelivered-push-webhook-creates-a-second-run.md): A redelivered push creates another run; deduplicate over the signed push.
+- [205](205-operations-ingest-robustness.md): An item type echoed into a response header, an unbounded redaction recursion, untruncated frames.
+- [206](206-iam-token-and-oidc-hardening.md): The token verifier pins no algorithm; a thrown OIDC fetch skips the refusal path.
+- [207](207-three-service-log-lines-skip-redaction.md): Three `console.error` calls print an error's text or object without redaction.
+- [208](208-application-framework-and-data-layer-review-follow-ups.md): Six small `@fabrika/app` and `@fabrika/db` findings: two clocks, `bound` insert, `.input()`, prototype methods, insert under `in`, `releaseBytes`.
+- [209](209-a-public-procedure-binds-a-token-id-to-its-purpose.md): Any text of any verified token unlocks a row; bind the id to its purpose and table.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
