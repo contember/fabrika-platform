@@ -7,8 +7,11 @@ import { getSigner, verifyInternal } from '../signing'
 import { clearCookie } from './cookies'
 import type { AuthFailure } from './failure'
 
-/** In-flight OIDC cookie: a SIGNED token carrying state + PKCE verifier + redirect; `__Host-`, 10 min. */
-export const OIDC_COOKIE = '__Host-px_oidc'
+/**
+ * In-flight OIDC cookie: a SIGNED token carrying state + PKCE verifier + redirect; `__Host-`, 10 min.
+ * Outside the `__Host-px_` prefix the proxy strips upstream; host-only on IAM's host, so no application receives it.
+ */
+export const OIDC_COOKIE = '__Host-fabrika_oidc'
 
 /** The flight's name before it took the `__Host-` prefix. Never read; only cleared, so old copies expire. */
 const LEGACY_OIDC_COOKIE = 'px_oidc'

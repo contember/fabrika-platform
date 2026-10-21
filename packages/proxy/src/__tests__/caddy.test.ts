@@ -306,6 +306,11 @@ describe('IAM login cookie ownership', () => {
 		expect(upstreamCookie(iam, cookie, owner)).toBe('__Host-px_session=login; app-cookie=kept')
 	})
 
+	test("IAM's OIDC flight cookie reaches the owner: its name is outside the stripped prefix", () => {
+		expect(upstreamCookie(iam, '__Host-fabrika_oidc=flight; __Host-px_session=login; __Host-px_handoff_state=verifier; theme=dark', owner))
+			.toBe('__Host-fabrika_oidc=flight; __Host-px_session=login; theme=dark')
+	})
+
 	test('retains separators when the login cookie follows an application cookie', () => {
 		expect(upstreamCookie(iam, 'app-cookie=kept;\t__Host-px_session=login; __Host-px_handoff_state=verifier; theme=dark', owner))
 			.toBe('app-cookie=kept;\t__Host-px_session=login; theme=dark')

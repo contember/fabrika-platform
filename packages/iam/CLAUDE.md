@@ -88,7 +88,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   with a principal whose address changes. A user's token carries `principals.email` as its `email` claim
   (`mailboxClaim` in `src/tokens.ts`, on a session's and a user key's token alike), which an application reads as
   `ctx.principal.email` and mails; never put `label` there.
-- **The OIDC flight cookie is signed AND `__Host-`** (`__Host-px_oidc`; `Signer.signInternal`, audience
+- **The OIDC flight cookie is signed AND `__Host-`** (`__Host-fabrika_oidc`; `Signer.signInternal`, audience
   `fabrika:iam:oidc-flight`). Its `state` cannot authenticate itself — whoever writes the cookie writes
   `state` too. The signature proves IAM issued the flight; the prefix proves this browser holds it, because
   a sibling host under a shared domain can toss in an attacker's validly signed flight under any other name.
