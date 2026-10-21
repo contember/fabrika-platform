@@ -203,7 +203,14 @@ describe('the MCP endpoint', () => {
 
 		const targets = await rpc(fetch, token, 'tools/call', { name: 'list_targets', arguments: {} })
 		expect(toolJson(targets)).toEqual({
-			items: [{ appId: 'shop', env: 'stage', repository: 'acme/shop', defaultBranch: 'main', publicOrigin: 'https://shop-stage.example.com' }],
+			items: [{
+				appId: 'shop',
+				env: 'stage',
+				repository: 'acme/shop',
+				defaultBranch: 'main',
+				publicOrigin: 'https://shop-stage.example.com',
+				deployed: null,
+			}],
 		})
 
 		const created = await rpc(fetch, token, 'tools/call', { name: 'create_workspace', arguments: { appId: 'shop', env: 'stage', title: 'Banner' } })

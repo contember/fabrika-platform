@@ -67,6 +67,10 @@ names every bound that cut the answer short. A text search costs one GitHub requ
 300 changed files. With `includePatches`, a patch is at most 32 KiB and all patches together at most 256 KiB; `paths`
 narrows which files carry one, and `incomplete` names the files left without a patch.
 
+The authoring environment shows one workspace at a time. `list_targets` answers what it runs now as `deployed`: the last
+successful run, the workspace whose branch it deployed (null for another branch), and whether that workspace is the
+caller's. A workspace says the same as `onStage`.
+
 `get_workspace` and `list_workspaces` name the pull request that `create_pull_request` opened or found, as Control
 recorded it; a pull request opened on GitHub by hand is not shown, and the record does not follow a merge or a close.
 `list_workspaces` reads every listed workspace's head through one GitHub token per repository.

@@ -50,6 +50,18 @@ export interface AuthoringTargetDto {
 	repository: string
 	defaultBranch: string
 	publicOrigin: string | null
+	/** What the environment runs now: its last successful deploy; null before the first one. */
+	deployed: StageDeploymentDto | null
+}
+
+export interface StageDeploymentDto {
+	runId: string
+	commitSha: string | null
+	finishedAt: number | null
+	/** The workspace whose branch was deployed; null for a branch that is not a workspace's, such as the default branch. */
+	workspaceId: string | null
+	/** True when that workspace is the caller's own. */
+	yours: boolean
 }
 
 export interface WorkspaceSummaryDto {
@@ -69,6 +81,8 @@ export interface WorkspaceDto extends WorkspaceSummaryDto {
 	headSha: string | null
 	/** The newest deploy of this workspace's branch, if any. */
 	latestRun: RunDto | null
+	/** True when the stage environment runs this workspace now: its last successful deploy was of this branch. */
+	onStage: boolean
 }
 
 /** The bound on one file's content, the GitHub repository client's own. */
@@ -154,6 +168,7 @@ export async function listTargetsUseCase(c: WorkspaceUseCaseContext): Promise<{ 
 			repository: `${target.source.owner}/${target.source.repository}`,
 			defaultBranch: target.app.default_branch,
 			publicOrigin: target.appEnv.public_origin,
+			deployed: await stageDeployment(c, target.app.id, target.appEnv.env),
 		})
 	}
 	return { items }
@@ -190,7 +205,7 @@ export async function createWorkspaceUseCase(
 		resourceId: id,
 		metadata: { appId: input.appId, env: input.env, branch, baseSha: headSha },
 	})
-	return toWorkspaceDto(workspace, headSha, null)
+	return toWorkspaceDto(workspace, headSha, null, false)
 }
 
 /** The caller's workspaces with their live heads, read once per repository, and their latest stage deploys. */
@@ -216,15 +231,19 @@ export async function listWorkspacesUseCase(
 		if (target !== null) byTarget.set(key, { target, workspaces: [workspace] })
 	}
 	const heads = new Map<string, string | null>()
+	const onStage = new Set<string>()
 	for (const { target, workspaces } of byTarget.values()) {
 		const branches = workspaces.map((workspace) => workspace.branch)
 		const read = await sourceCall(() => c.source.readBranches({ target: target.source, branches, signal: c.signal }))
 		for (const [index, branch] of branches.entries()) heads.set(branch, read[index] ?? null)
+		const deployed = await stageDeployment(c, target.app.id, target.appEnv.env)
+		if (deployed !== null && deployed.workspaceId !== null) onStage.add(deployed.workspaceId)
 	}
 	const items: WorkspaceDto[] = []
 	for (const workspace of rows) {
 		if (!heads.has(workspace.branch)) continue
-		items.push(toWorkspaceDto(workspace, heads.get(workspace.branch) ?? null, await latestRunOf(c, workspace)))
+		const headSha = heads.get(workspace.branch) ?? null
+		items.push(toWorkspaceDto(workspace, headSha, await latestRunOf(c, workspace), onStage.has(workspace.id)))
 	}
 	return { items }
 }
@@ -723,7 +742,23 @@ async function requireHead(c: WorkspaceUseCaseContext, owned: OwnedWorkspace): P
 
 async function describeWorkspace(c: WorkspaceUseCaseContext, owned: OwnedWorkspace): Promise<WorkspaceDto> {
 	const headSha = await sourceCall(() => c.source.readBranch({ target: owned.source, branch: owned.workspace.branch, signal: c.signal }))
-	return toWorkspaceDto(owned.workspace, headSha, await latestRunOf(c, owned.workspace))
+	const deployed = await stageDeployment(c, owned.workspace.app_id, owned.workspace.env)
+	return toWorkspaceDto(owned.workspace, headSha, await latestRunOf(c, owned.workspace), deployed?.workspaceId === owned.workspace.id)
+}
+
+async function stageDeployment(c: WorkspaceUseCaseContext, appId: string, env: string): Promise<StageDeploymentDto | null> {
+	const run = await c.repositories.runs.getLatestSucceededRun({ appId, env })
+	if (run === null) return null
+	const branch = run.ref.startsWith(`refs/heads/${WORKSPACE_BRANCH_PREFIX}`) ? run.ref.slice('refs/heads/'.length) : null
+	const workspace = branch === null ? null : await c.repositories.workspaces.getWorkspaceByBranch(branch)
+	const sameTarget = workspace !== null && workspace.app_id === appId && workspace.env === env
+	return {
+		runId: run.id,
+		commitSha: run.commit_sha,
+		finishedAt: run.finished_at,
+		workspaceId: sameTarget ? workspace.id : null,
+		yours: sameTarget && workspace.owner_id === requireOwner(c.auth),
+	}
 }
 
 async function latestRunOf(c: WorkspaceUseCaseContext, workspace: WorkspaceRow): Promise<RunDto | null> {
@@ -750,8 +785,8 @@ function toWorkspaceSummaryDto(row: WorkspaceRow): WorkspaceSummaryDto {
 	}
 }
 
-function toWorkspaceDto(row: WorkspaceRow, headSha: string | null, latestRun: RunDto | null): WorkspaceDto {
-	return { ...toWorkspaceSummaryDto(row), headSha, latestRun }
+function toWorkspaceDto(row: WorkspaceRow, headSha: string | null, latestRun: RunDto | null, onStage: boolean): WorkspaceDto {
+	return { ...toWorkspaceSummaryDto(row), headSha, latestRun, onStage }
 }
 
 function requirePrincipal(auth: AuthContext) {
