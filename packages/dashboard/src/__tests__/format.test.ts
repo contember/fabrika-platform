@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { fmtAgo, fmtDuration, shortRef, shortSha } from '../lib/format'
+import { editableTriggerRef, fmtAgo, fmtDuration, shortRef, shortSha } from '../lib/format'
 
 // Pure formatting helpers used across the dashboard. No DOM, just the deterministic transforms.
 
@@ -25,6 +25,23 @@ describe('shortRef', () => {
 	test('leaves a bare ref untouched', () => {
 		expect(shortRef('main')).toBe('main')
 		expect(shortRef('deadbeef')).toBe('deadbeef')
+	})
+})
+
+describe('editableTriggerRef', () => {
+	test('shortens ordinary branches but keeps full tag references', () => {
+		expect(editableTriggerRef('refs/heads/main')).toBe('main')
+		expect(editableTriggerRef('refs/heads/deploy/prod')).toBe('deploy/prod')
+		expect(editableTriggerRef('refs/tags/v*')).toBe('refs/tags/v*')
+	})
+	test('keeps branches whose names would otherwise be interpreted as full refs', () => {
+		expect(editableTriggerRef('refs/heads/refs/tags/release')).toBe('refs/heads/refs/tags/release')
+		expect(editableTriggerRef('refs/heads/refs/heads/main')).toBe('refs/heads/refs/heads/main')
+		expect(editableTriggerRef('refs/heads/refs/custom/release')).toBe('refs/heads/refs/custom/release')
+	})
+	test('preserves an empty or already shortened input', () => {
+		expect(editableTriggerRef('')).toBe('')
+		expect(editableTriggerRef('deploy/prod')).toBe('deploy/prod')
 	})
 })
 
