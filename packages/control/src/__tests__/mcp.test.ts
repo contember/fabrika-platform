@@ -111,7 +111,7 @@ describe('the MCP endpoint', () => {
 		const skill = readAppAgentSkill()
 		const listed = field(field(await rpc(fetch, token, 'tools/list', {}), 'result'), 'tools')
 		const tool = Array.isArray(listed) ? listed.find((entry) => field(entry, 'name') === 'get_app_rules') : undefined
-		expect(field(tool, 'annotations')).toEqual({ readOnlyHint: true })
+		expect(field(tool, 'annotations')).toEqual({ readOnlyHint: true, openWorldHint: false })
 		const properties = field(field(tool, 'inputSchema'), 'properties')
 		expect(typeof properties === 'object' && properties !== null ? Object.keys(properties).sort() : []).toEqual(['topic', 'workspaceId'])
 
@@ -145,6 +145,34 @@ describe('the MCP endpoint', () => {
 		}
 		expect(await rulesFor(`^${version}`)).not.toContain('Warning:')
 		expect(await rulesFor('^99.0.0')).toContain(`Warning: this workspace pins @fabrika/app ^99.0.0, and these rules describe ${version}.`)
+	})
+
+	test('every tool tells the client whether it only reads, and how a write behaves', async () => {
+		const { fetch } = await fixture()
+		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const tools = field(field(await rpc(fetch, token, 'tools/list', {}), 'result'), 'tools')
+		if (!Array.isArray(tools)) throw new Error('expected a tool list')
+		const annotations = Object.fromEntries(tools.map((tool) => [String(field(tool, 'name')), field(tool, 'annotations')]))
+		const read = { readOnlyHint: true, openWorldHint: false }
+		const write = (destructiveHint: boolean, idempotentHint: boolean) => ({
+			readOnlyHint: false,
+			destructiveHint,
+			idempotentHint,
+			openWorldHint: false,
+		})
+		expect(annotations).toEqual({
+			get_app_rules: read,
+			list_targets: read,
+			create_workspace: write(false, false),
+			list_workspaces: read,
+			get_workspace: read,
+			list_files: read,
+			read_files: read,
+			apply_changes: write(true, true),
+			deploy_stage: write(true, false),
+			get_deployment: read,
+			create_pull_request: write(false, true),
+		})
 	})
 
 	test('a resource token lists the tools and calls a read and a write tool', async () => {
