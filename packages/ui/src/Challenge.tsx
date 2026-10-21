@@ -2,6 +2,10 @@
 // challenge the application issued, solves its proof of work in workers, and the page sends the payload as the
 // procedure's `challengeToken`. Nothing is loaded from a third party: the widget is bundled with the page.
 //
+// To the visitor it is a part of the page, not a third party's badge: the widget's logo and attribution footer are
+// hidden (the library's MIT license asks for neither), and `.fui-challenge` sets its theme variables from the kit's
+// tokens.
+//
 // The one module of the kit with a runtime dependency, the optional peer `altcha`, which registers `<altcha-widget>`
 // when this module loads; the kit's root never imports it.
 
@@ -13,7 +17,7 @@ import { classNames } from './class-names'
 
 /**
  * The texts the widget renders as text, each with the widget's English default. Its footer is not among them: the
- * widget renders that one as HTML, so the kit keeps the widget's own.
+ * widget renders that one as HTML, and the kit hides it.
  */
 export interface ChallengeStrings {
 	readonly label: string
@@ -24,6 +28,7 @@ export interface ChallengeStrings {
 	readonly error: string
 	readonly reload: string
 	readonly waitAlert: string
+	/** @deprecated The label of the widget's logo link, which the kit hides; it reaches nothing. */
 	readonly ariaLinkLabel: string
 }
 
@@ -45,6 +50,9 @@ export interface ChallengeProps {
 
 /** The input a procedure with a challenge reads its token from; `@fabrika/app`'s `CHALLENGE_FIELD`. */
 const CHALLENGE_FIELD = 'challengeToken'
+
+/** The widget's configuration: no logo and no footer, both of which name and link the library. */
+const CONFIGURATION = JSON.stringify({ hideLogo: true, hideFooter: true })
 
 /** Each set of strings is registered once with the widget, under a language code of its own. */
 const registered = new Map<string, string>()
@@ -97,7 +105,7 @@ function tokenOf(event: Event): string | null | undefined {
 }
 
 /**
- * The ALTCHA widget for one procedure's challenge. A challenge passes once: after a refused submission, give the
+ * The proof-of-work widget for one procedure's challenge. A challenge passes once: after a refused submission, give the
  * component a new `key` so the visitor solves a fresh one.
  */
 export function Challenge({ url, onToken, name = CHALLENGE_FIELD, auto = 'off', strings, className }: ChallengeProps) {
@@ -121,6 +129,7 @@ export function Challenge({ url, onToken, name = CHALLENGE_FIELD, auto = 'off', 
 			ref={host}
 			className={classNames('fui-challenge', className)}
 			challenge={url}
+			configuration={CONFIGURATION}
 			name={name}
 			auto={auto}
 			language={languageOf(strings)}
