@@ -182,9 +182,21 @@ gets a sign-out path on the application's host, `/__fabrika/auth/signout`, with 
 - it clears the application's session cookie, drops that session's cached token, and redirects to IAM
   `/auth/terminals/release?app=…&redirect=…`.
 
-IAM checks the redirect against the application's return origins. It then revokes the active terminal
-sessions of the browser's terminal and sends the browser back. The next request bounces to sign-in, and §2
-opens the next identification.
+IAM checks the redirect against the application's return origins. It then releases the browser's terminal, in
+one transaction, and sends the browser back:
+
+- it moves the terminal to its next **generation**;
+- it ends the identifications still pending on the terminal;
+- it revokes the terminal's active sessions.
+
+The next request bounces to sign-in, and §2 opens the next identification. Revoking a terminal also ends its
+pending identifications.
+
+**Invariant: nothing asserted before a release outlives it.** An identification records the generation it was
+opened in, an assertion consumes it only while that is still the terminal's, and the login carries it. A session
+is valid only while its generation is the terminal's. An assertion that races a release therefore opens a login
+that is already invalid, whichever transaction commits first, and a tab left open on an identification signs
+nobody in after the sign-out.
 
 The session TTL is the backstop when nobody signs out. An application should still sign out after its kiosk
 action and after a short idle time.

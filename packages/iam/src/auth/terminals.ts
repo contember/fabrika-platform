@@ -265,7 +265,7 @@ export async function handleTerminalRelease(request: Request, services: Services
 	const browser = await browserTerminal(request, services)
 	if (browser !== null) {
 		try {
-			await services.repositories.terminals.revokeSessions(browser.terminal.principal_id, { requestId, app: IAM_APP, reason: 'terminal_release' })
+			await services.repositories.terminals.release(browser.terminal.principal_id, { requestId, app: IAM_APP, reason: 'terminal_release' })
 		} catch (err) {
 			logError(`a terminal release could not be recorded for request '${requestId}'`, err)
 			return authFailurePage(presentation, { kind: 'logout_unavailable' }, 503)

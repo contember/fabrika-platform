@@ -273,6 +273,7 @@ describe('terminals.* administration', () => {
 			principalId: person,
 			authenticationMethod: 'terminal_assertion',
 			terminal: { terminalId, assertedBy: APP },
+			terminalGeneration: 0,
 			expiresAt: Math.floor(Date.now() / 1000) + 300,
 		})
 		const services = h.makeServices({ issuer: ORIGIN })

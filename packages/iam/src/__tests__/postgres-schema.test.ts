@@ -123,6 +123,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0023_terminals.sql' },
 			{ bundle: 'iam', name: '0024_app_terminals.sql' },
 			{ bundle: 'iam', name: '0025_terminal_completion.sql' },
+			{ bundle: 'iam', name: '0026_terminal_generation.sql' },
 		])
 	})
 

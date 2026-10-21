@@ -22,6 +22,8 @@ export interface TerminalRow {
 	created_at: number
 	last_seen_at: number | null
 	revoked_at: number | null
+	/** Incremented by every release; the sessions and identifications of an earlier generation are over. */
+	generation: number
 }
 
 /** An application that may assert a person on a terminal, with its ceiling of action patterns. */
@@ -52,6 +54,8 @@ export interface TerminalIdentificationRow {
 	session_id: string | null
 	/** When the terminal's browser completed the identification and IAM issued the handoff code. */
 	completed_at: number | null
+	/** The terminal's generation the identification was opened in; it is over once the terminal's moves on. */
+	generation: number
 }
 
 interface TerminalAsserterRow {
@@ -158,13 +162,14 @@ export class TerminalRepository {
 	}
 
 	/**
-	 * Revoke a terminal and every session issued on it, in one transaction. Idempotent: answers false, and writes no
+	 * Revoke a terminal, every session issued on it and every identification still pending on it, in one transaction. Idempotent: answers false, and writes no
 	 * `audit`, when the terminal was already revoked or is unknown. The validity join ends its sessions either way; the
 	 * sessions are revoked too so an operator sees them ended.
 	 */
 	async revoke(terminalId: string, audit?: AuditEventInput): Promise<boolean> {
 		const now = unixNow()
 		const changes: SqlChange[] = [
+			endIdentificationsChange(terminalId, now),
 			revokeSessionsChange(terminalId, now),
 			{ sql: 'UPDATE terminals SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL RETURNING principal_id', binds: [now, terminalId] },
 		]
@@ -172,37 +177,48 @@ export class TerminalRepository {
 	}
 
 	/**
-	 * Revoke every live session issued on the terminal, as its sign-out does (ADR-0067 §5). Answers how many. A sign-out
-	 * passes `log`: each login this call ends gets its `logout` row in the same transaction, with the login's principal,
+	 * Release the terminal, as its sign-out does (ADR-0067 §5), in one transaction: move it to its next generation, which
+	 * ends every session and identification of the current one at once, however an assertion in flight interleaves; then
+	 * end its pending identifications and revoke its live sessions, so an operator sees them ended. Answers how many
+	 * sessions. A sign-out passes `log`: each login this call ends gets its `logout` row, with the login's principal,
 	 * terminal and asserter, like `SessionRepository.revokeSessionByHash`. Its children end with it through the join.
 	 */
-	async revokeSessions(terminalId: string, log?: LogoutLogInput): Promise<number> {
+	async release(terminalId: string, log?: LogoutLogInput): Promise<number> {
 		const now = unixNow()
+		const ended = endIdentificationsChange(terminalId, now)
+		const before = [
+			this.db.prepare('UPDATE terminals SET generation = generation + 1 WHERE principal_id = ?').bind(terminalId),
+			this.db.prepare(ended.sql).bind(...ended.binds),
+		]
 		const revoke = revokeSessionsChange(terminalId, now)
 		if (log === undefined) {
-			return (await this.writer.run([revoke], undefined)).length
+			const results = await this.db.batch([...before, this.db.prepare(revoke.sql).bind(...revoke.binds)])
+			return results[before.length]?.results.length ?? 0
 		}
 		const values = [log.requestId, log.app, log.reason ?? null, now]
 		const columns = '(request_id, app, kind, principal_id, credential_id, decision, reason, privileged, created_at, terminal_id, asserted_by)'
 		const logged = "SELECT ?, ?, 'logout', principal_id, NULL, 'allow', ?, 0, ?, terminal_id, asserted_by"
 		if (this.writer.dialect === 'postgres') {
-			const { results } = await this.db
-				.prepare(`WITH changed AS (${revoke.sql}), logged AS (
-					INSERT INTO auth_log ${columns} ${logged} FROM changed WHERE parent_session_id IS NULL
-				) SELECT id FROM changed`)
-				.bind(...revoke.binds, ...values)
-				.all()
-			return results.length
+			const results = await this.db.batch([
+				...before,
+				this.db
+					.prepare(`WITH changed AS (${revoke.sql}), logged AS (
+						INSERT INTO auth_log ${columns} ${logged} FROM changed WHERE parent_session_id IS NULL
+					) SELECT id FROM changed`)
+					.bind(...revoke.binds, ...values),
+			])
+			return results[before.length]?.results.length ?? 0
 		}
 		// SQLite serializes writers, so the logins read here are exactly the ones the UPDATE after it ends.
-		const [, revoked] = await this.db.batch([
+		const results = await this.db.batch([
+			...before,
 			this.db
 				.prepare(`INSERT INTO auth_log ${columns} ${logged} FROM sessions
 					WHERE terminal_id = ? AND revoked_at IS NULL AND parent_session_id IS NULL`)
 				.bind(...values, terminalId),
 			this.db.prepare(revoke.sql).bind(...revoke.binds),
 		])
-		return revoked?.results.length ?? 0
+		return results[before.length + 1]?.results.length ?? 0
 	}
 
 	// ── Identifications ───────────────────────────────────────────────────────
@@ -224,9 +240,19 @@ export class TerminalRepository {
 		await this.db.batch([
 			this.db
 				.prepare(`INSERT INTO terminal_identifications
-					(id_hash, terminal_id, app, return_url, handoff_state, handoff_challenge, created_at, expires_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-				.bind(input.idHash, input.terminalId, input.app, input.returnUrl, input.handoffState, input.handoffChallenge, now, input.expiresAt),
+					(id_hash, terminal_id, app, return_url, handoff_state, handoff_challenge, created_at, expires_at, generation)
+					SELECT ?, ?, ?, ?, ?, ?, ?, ?, generation FROM terminals WHERE principal_id = ?`)
+				.bind(
+					input.idHash,
+					input.terminalId,
+					input.app,
+					input.returnUrl,
+					input.handoffState,
+					input.handoffChallenge,
+					now,
+					input.expiresAt,
+					input.terminalId,
+				),
 			this.db.prepare('UPDATE terminals SET last_seen_at = ? WHERE principal_id = ?').bind(now, input.terminalId),
 			...(log === undefined ? [] : [authLogStatement(this.db, log)]),
 		])
@@ -251,7 +277,9 @@ export class TerminalRepository {
 		const [consumed] = await this.db.batch<TerminalIdentificationRow>([
 			this.db
 				.prepare(`UPDATE terminal_identifications SET consumed_at = ?, session_id = ?, expires_at = ?
-					WHERE id_hash = ? AND consumed_at IS NULL AND expires_at > ? RETURNING *`)
+					WHERE id_hash = ? AND consumed_at IS NULL AND expires_at > ?
+						AND generation = (SELECT t.generation FROM terminals t WHERE t.principal_id = terminal_identifications.terminal_id AND t.revoked_at IS NULL)
+					RETURNING *`)
 				.bind(now, sessionId, completeBy, idHash, now),
 			...login,
 		])
@@ -295,6 +323,13 @@ export class TerminalRepository {
 			.bind(now)
 			.run()
 		return result.meta.changes ?? 0
+	}
+}
+
+function endIdentificationsChange(terminalId: string, now: number): SqlChange {
+	return {
+		sql: 'UPDATE terminal_identifications SET consumed_at = ? WHERE terminal_id = ? AND consumed_at IS NULL RETURNING id_hash',
+		binds: [now, terminalId],
 	}
 }
 

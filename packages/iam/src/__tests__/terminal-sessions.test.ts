@@ -83,6 +83,7 @@ async function terminalLogin(s: Scenario, assertedBy = APP): Promise<{ id: strin
 		principalId: s.person,
 		authenticationMethod: 'terminal_assertion',
 		terminal: { terminalId: s.terminalId, assertedBy },
+		terminalGeneration: 0,
 		expiresAt: now() + 300,
 	})
 	return { id, token }

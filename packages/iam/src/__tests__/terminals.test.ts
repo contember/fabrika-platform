@@ -46,6 +46,7 @@ async function terminalSessions(b: Backend, terminalId: string, principalId: str
 		principalId,
 		authenticationMethod: 'terminal_assertion',
 		terminal,
+		terminalGeneration: 0,
 		expiresAt: now() + 300,
 	})
 	const childHash = await hashToken(randomToken())
@@ -54,6 +55,7 @@ async function terminalSessions(b: Backend, terminalId: string, principalId: str
 		principalId,
 		authenticationMethod: 'terminal_assertion',
 		terminal,
+		terminalGeneration: 0,
 		app: APP,
 		parentSessionId: parentId,
 		expiresAt: now() + 300,
@@ -184,10 +186,24 @@ function terminalSuite(backend: () => Backend): void {
 			const sessions = await terminalSessions(b, terminalId, someone)
 			const elsewhere = await terminalSessions(b, other.terminalId, someone)
 
-			expect(await b.repositories.terminals.revokeSessions(terminalId)).toBe(2)
-			expect(await b.repositories.terminals.revokeSessions(terminalId)).toBe(0)
+			expect(await b.repositories.terminals.release(terminalId)).toBe(2)
+			expect(await b.repositories.terminals.release(terminalId)).toBe(0)
 			expect(await b.repositories.sessions.getActiveSessionByHash(sessions.childHash)).toBeNull()
 			expect(await b.repositories.sessions.getActiveSessionByHash(elsewhere.childHash)).not.toBeNull()
+		})
+
+		test('a release ends its generation: a login of the earlier generation is invalid even when written after it', async () => {
+			const b = backend()
+			const someone = await person(b)
+			const { terminalId } = await enrol(b, await person(b))
+			const before = await terminalSessions(b, terminalId, someone)
+			await b.repositories.terminals.release(terminalId)
+			expect(await b.repositories.sessions.getActiveSessionByHash(before.childHash)).toBeNull()
+			// An assertion that read the generation before the release and commits after it.
+			const late = await terminalSessions(b, terminalId, someone)
+			expect(await b.repositories.sessions.getActiveSessionByHash(late.parentHash)).toBeNull()
+			expect(await b.repositories.sessions.getActiveSessionByHash(late.childHash)).toBeNull()
+			expect((await b.repositories.terminals.getById(terminalId))?.generation).toBe(1)
 		})
 
 		test('a release logs one logout per login it ends, with the terminal and the asserter', async () => {
@@ -197,8 +213,8 @@ function terminalSuite(backend: () => Backend): void {
 			await terminalSessions(b, terminalId, someone)
 			const log = { requestId: `release-${uuidv7()}`, app: 'propustka', reason: 'terminal_release' }
 
-			expect(await b.repositories.terminals.revokeSessions(terminalId, log)).toBe(2)
-			expect(await b.repositories.terminals.revokeSessions(terminalId, { ...log, requestId: `${log.requestId}-again` })).toBe(0)
+			expect(await b.repositories.terminals.release(terminalId, log)).toBe(2)
+			expect(await b.repositories.terminals.release(terminalId, { ...log, requestId: `${log.requestId}-again` })).toBe(0)
 			const { results } = await b.db
 				.prepare("SELECT request_id, principal_id, terminal_id, asserted_by, reason FROM auth_log WHERE kind = 'logout' AND request_id LIKE ?")
 				.bind(`${log.requestId}%`)
@@ -324,6 +340,31 @@ function terminalSuite(backend: () => Backend): void {
 			expect(await b.repositories.terminals.cancelIdentification(idHash, 'canteen')).toBe(false)
 			expect(await b.repositories.terminals.cancelIdentification(idHash, APP)).toBe(true)
 			expect(await b.repositories.terminals.cancelIdentification(idHash, APP)).toBe(false)
+			expect(await consume(b, idHash)).toBeNull()
+		})
+
+		test('a release or a revocation ends the pending identifications of the terminal', async () => {
+			const b = backend()
+			const { terminalId } = await enrol(b, await person(b))
+			const pending = await open(b, terminalId)
+			await b.repositories.terminals.release(terminalId)
+			expect(await b.repositories.terminals.getIdentification(pending)).toMatchObject({ generation: 0 })
+			expect((await b.repositories.terminals.getIdentification(pending))?.consumed_at).not.toBeNull()
+			expect(await consume(b, pending)).toBeNull()
+			// One opened after the release belongs to the new generation and is consumable.
+			const fresh = await open(b, terminalId)
+			expect(await b.repositories.terminals.getIdentification(fresh)).toMatchObject({ generation: 1, consumed_at: null })
+			await b.repositories.terminals.revoke(terminalId)
+			expect(await consume(b, fresh)).toBeNull()
+			expect((await b.repositories.terminals.getIdentification(fresh))?.consumed_at).not.toBeNull()
+		})
+
+		test('an identification of an earlier generation cannot be consumed', async () => {
+			const b = backend()
+			const { terminalId } = await enrol(b, await person(b))
+			const idHash = await open(b, terminalId)
+			// The generation moves without ending the row, as a release committing between its steps would leave it.
+			await b.db.prepare('UPDATE terminals SET generation = generation + 1 WHERE principal_id = ?').bind(terminalId).run()
 			expect(await consume(b, idHash)).toBeNull()
 		})
 

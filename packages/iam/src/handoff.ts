@@ -139,6 +139,7 @@ export async function exchangeAuthCode(services: Services, input: ExchangeAuthCo
 		app: consumed.app,
 		parentSessionId: parent.id,
 		terminal,
+		terminalGeneration: parent.terminal_generation,
 	}, {
 		requestId: input.requestId,
 		app: input.app,

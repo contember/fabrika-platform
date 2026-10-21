@@ -183,8 +183,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   `COMPLETION_TTL_SECONDS`, while the login is valid.
 - **`/auth/terminals/release` AND `/auth/terminals/complete` ARE CROSS-SITE `GET`S THAT CHANGE STATE**, the exceptions to
   `sameOrigin` below: the application's proxy sends the browser to the release from its sign-out, and the application
-  sends it to the completion after its assertion. The release revokes only the terminal's own sessions, and only after
-  the redirect passed the app's return-origin registry. The completion completes only an identification its application
+  sends it to the completion after its assertion. The release (`terminals.release`) increments the terminal's
+  `generation`, ends its pending identifications and revokes its sessions in one transaction, and only after the
+  redirect passed the app's return-origin registry. A login carries the generation of its identification and the
+  validity join requires it to be the terminal's, so an assertion racing a release yields an invalid login. The completion completes only an identification its application
   already asserted, for the terminal whose cookie the browser holds.
 - **WHICH APP'S PROXY TOKEN MAY ADMINISTER IS A REGISTRY.** `ADMIN_AUDIENCES` (deploy
   var `FABRIKA_IAM_ADMIN_AUDIENCES`, comma-separated app ids) is the `aud` allowlist `resolveAdmin`'s

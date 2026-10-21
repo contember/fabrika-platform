@@ -60,8 +60,8 @@ interface OpenIdentification {
 }
 
 /**
- * The identification `id` of `app` while it is open: unexpired, unconsumed, on an enrolled terminal with an enabled
- * principal that still lists `app` as an asserter. Null for anything else, so an id reveals nothing.
+ * The identification `id` of `app` while it is open: unexpired, unconsumed, on an enrolled terminal not released since
+ * it was opened, with an enabled principal that still lists `app` as an asserter. Null for anything else, so an id reveals nothing.
  */
 async function openIdentification(services: Services, app: string, id: string, now: number): Promise<OpenIdentification | null> {
 	if (id.length === 0 || id.length > MAX_ID_LENGTH) {
@@ -73,7 +73,10 @@ async function openIdentification(services: Services, app: string, id: string, n
 		return null
 	}
 	const terminal = await terminals.getById(identification.terminal_id)
-	if (terminal === null || terminal.revoked_at !== null || await terminals.getAsserter(terminal.principal_id, app) === null) {
+	if (
+		terminal === null || terminal.revoked_at !== null || terminal.generation !== identification.generation
+		|| await terminals.getAsserter(terminal.principal_id, app) === null
+	) {
 		return null
 	}
 	const principal = await principals.getPrincipalById(terminal.principal_id)
@@ -137,6 +140,7 @@ export async function assertIdentity(services: Services, env: CallerEnv, input: 
 		principalId: person.id,
 		authenticationMethod: 'terminal_assertion',
 		terminal,
+		terminalGeneration: open.identification.generation,
 		expiresAt: now + open.terminal.session_ttl,
 	}, {
 		requestId: input.requestId,

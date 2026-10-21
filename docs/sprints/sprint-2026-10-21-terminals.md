@@ -310,3 +310,9 @@ path through IAM and the proxy, and the existing handoff tests still pass unchan
   bounds refuse an IAM binding whose `props` are not exactly this deployment's id, under any binding name.
   `PropustkaApplication` answers `not_allowed` unless `ctx.props.app` is the input's `app`. A Worker deployed before this
   carries no props, so its terminal calls are refused until it is redeployed.
+- Review fix 3: a release (`terminals.release`, formerly `revokeSessions`) increments `terminals.generation`, ends the
+  pending identifications and revokes the sessions in one transaction; a revocation ends pending identifications too
+  (migration `0026_terminal_generation.sql`). An identification records its generation, the consumption requires it to
+  be the terminal's, the login and its child carry it (`sessions.terminal_generation`), and the validity join requires
+  it. No lock ordering is needed: a login written by an assertion that raced a release is invalid on arrival. Opus #2
+  (a failed write lost the identification) was already closed by fix 1's guarded batch.

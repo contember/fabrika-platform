@@ -32,6 +32,8 @@ export interface SessionRow {
 	terminal_id: string | null
 	/** The application that asserted the person on `terminal_id`; set exactly when `terminal_id` is. */
 	asserted_by: string | null
+	/** The terminal's generation the login was asserted in; the session is valid only while it is still the terminal's. */
+	terminal_generation: number | null
 }
 
 export interface ListedSessionRow extends SessionRow {
@@ -64,6 +66,8 @@ export interface NewSession {
 	parentSessionId?: string | null
 	/** A `terminal_assertion` session's terminal and asserting application; both or neither. */
 	terminal?: SessionTerminal | null
+	/** The terminal's generation the login was asserted in, which a child copies; required with `terminal`. */
+	terminalGeneration?: number | null
 }
 
 /** Methods with no upstream subject: the row CHECK pairs every other method with an `idp_sub`. */
@@ -71,9 +75,10 @@ const SUBJECTLESS_METHODS: readonly AuthenticationMethod[] = ['password', 'termi
 
 /**
  * The validity clause over `t`, the terminal of the session or of its parent: a session on no terminal passes, and one
- * on a terminal passes while that terminal is enrolled.
+ * on a terminal passes while that terminal is enrolled and still in the generation the login was asserted in.
  */
-const TERMINAL_ENROLLED = 'AND (COALESCE(s.terminal_id, p.terminal_id) IS NULL OR (t.principal_id IS NOT NULL AND t.revoked_at IS NULL))'
+const TERMINAL_ENROLLED = `AND (COALESCE(s.terminal_id, p.terminal_id) IS NULL
+	OR (t.principal_id IS NOT NULL AND t.revoked_at IS NULL AND t.generation = COALESCE(s.terminal_generation, p.terminal_generation)))`
 
 export class SessionRepository {
 	constructor(
@@ -103,14 +108,15 @@ export class SessionRepository {
 			throw new Error(`A ${authenticationMethod} session requires an IdP subject`)
 		}
 		const terminal = input.terminal ?? null
-		if ((authenticationMethod === 'terminal_assertion') !== (terminal !== null)) {
-			throw new Error('A terminal is named by exactly the terminal_assertion sessions')
+		const terminalGeneration = input.terminalGeneration ?? null
+		if ((authenticationMethod === 'terminal_assertion') !== (terminal !== null) || (terminal !== null) !== (terminalGeneration !== null)) {
+			throw new Error('A terminal and its generation are named by exactly the terminal_assertion sessions')
 		}
 		const now = unixNow()
 		const session = guardedInsert(
 			`sessions (id, token_hash, principal_id, idp_sub, email, authentication_method, expires_at, created_at, app, parent_session_id,
-				terminal_id, asserted_by)`,
-			'?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?',
+				terminal_id, asserted_by, terminal_generation)`,
+			'?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?',
 			[
 				id,
 				input.tokenHash,
@@ -124,6 +130,7 @@ export class SessionRepository {
 				input.parentSessionId ?? null,
 				terminal?.terminalId ?? null,
 				terminal?.assertedBy ?? null,
+				terminalGeneration,
 			],
 			guard,
 		)

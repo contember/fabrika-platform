@@ -493,6 +493,27 @@ describe('/auth/terminals/release', () => {
 		expect(logout).toEqual([{ principal_id: s.person, terminal_id: s.terminalId }])
 	})
 
+	test('ends the identifications still pending: a tab left open before the sign-out signs nobody in', async () => {
+		const s = await scenario()
+		const rpc = createIamRpc(env(s.h), s.ctx)
+		const pending = await identification(s)
+		expect((await s.fetch(release(`${APP_ORIGIN}/kiosk`, s.terminalCookie))).status).toBe(302)
+		expect(await rpc.inspectIdentification({ ...(await caller(s)), id: pending })).toEqual({ ok: false, reason: 'not_found' })
+		expect(await rpc.assertIdentity({ ...(await caller(s)), id: pending, principalId: s.person })).toEqual({ ok: false, reason: 'not_found' })
+		expect(s.h.sqlite.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM sessions').get()?.n).toBe(0)
+	})
+
+	test('an assertion before the sign-out cannot complete after it', async () => {
+		const s = await scenario()
+		const rpc = createIamRpc(env(s.h), s.ctx)
+		const asserted = await rpc.assertIdentity({ ...(await caller(s)), id: await identification(s), principalId: s.person })
+		if (!asserted.ok) throw new Error(`assertion refused: ${asserted.reason}`)
+		expect((await s.fetch(release(`${APP_ORIGIN}/kiosk`, s.terminalCookie))).status).toBe(302)
+		const completion = await s.fetch(new Request(asserted.completionUrl, { headers: { Cookie: s.terminalCookie } }))
+		expect(completion.status).toBe(403)
+		expect(codeCount(s)).toBe(0)
+	})
+
 	test('a browser that is no terminal is only sent back', async () => {
 		const s = await scenario()
 		const session = await signedInAtTerminal(s)
