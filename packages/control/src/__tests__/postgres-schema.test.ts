@@ -746,6 +746,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 
 		expect((await db.runs.getSupersedingRun(older.id))?.id).toBe(newer.id)
 		expect(await db.runs.getSupersedingRun(newer.id)).toBeNull()
+		expect(await owned.start(older.id)).toBe(false)
 		expect(await owned.supersede(older.id)).toBe(true)
 		const superseded = await db.runs.getRun(older.id)
 		expect(superseded?.status).toBe('failed')

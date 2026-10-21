@@ -224,7 +224,8 @@ export class RunRepository {
 
 	/**
 	 * Move a run `pending → running`: stamp `started_at` and the R2 log key. Guarded on the current
-	 * status so a redelivered queue message can't re-start a run already past pending. Returns true
+	 * status so a redelivered queue message can't re-start a run already past pending, and refused while
+	 * another run of the environment runs or once a newer one succeeded (`markRunSuperseded`). Returns true
 	 * iff the row transitioned.
 	 */
 	async markRunStarted(id: string, logKey: string, fence: LeaseFence): Promise<boolean> {
@@ -233,7 +234,9 @@ export class RunRepository {
 			`UPDATE runs SET status = 'running', started_at = ?, log_key = ?
 			WHERE id = ? AND status = 'pending' AND cancel_requested_at IS NULL
 				AND NOT EXISTS (SELECT 1 FROM runs active
-					WHERE active.app_id = runs.app_id AND active.env = runs.env AND active.status = 'running' AND active.id <> runs.id)`,
+					WHERE active.app_id = runs.app_id AND active.env = runs.env AND active.status = 'running' AND active.id <> runs.id)
+				AND NOT EXISTS (SELECT 1 FROM runs newer
+					WHERE newer.app_id = runs.app_id AND newer.env = runs.env AND newer.id > runs.id AND newer.status = 'succeeded')`,
 			[this.now(), logKey, id],
 			fence,
 		)

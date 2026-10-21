@@ -88,8 +88,9 @@ a TTL of about 90 seconds, and is renewed every 30 seconds.
   it under the lease.
 - Cancellation is read at step boundaries, not by a background poll of the row.
 - A new run for an app/environment first settles any unfinished run for it under the same lease.
-- A pending run that a newer run of the same app/environment already superseded by succeeding never starts. Under
-  the lease, one fenced write fails it, and its log names the newer run (`superseded by run <id>`). Queue order is
+- A pending run that a newer run of the same app/environment already superseded by succeeding never starts: the
+  start write refuses it, also when the start just settled that newer run. Under the lease, one fenced write then
+  fails it, and its log names the newer run (`superseded by run <id>`). Queue order is
   not run order, because a deferred run is enqueued again; the UUIDv7 run id is. A rollback is a new run
   ([ADR-0050](0050-approved-access.md) §6).
 
