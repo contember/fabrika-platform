@@ -269,9 +269,8 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 		expect(result).toEqual({ runId, status: selectedObjectUnavailable ? 'failed' : 'succeeded' })
 		expect(commitB).toMatch(/^[0-9a-f]{40}$/)
 		expect(commitB).not.toBe(commitA)
-		expect(sourceRequests).toEqual([
-			`/repos/acme/source-identity/commits/${trigger === 'manual' ? encodeURIComponent(REQUESTED_REF) : commitA}`,
-		])
+		// A webhook or poll run checks that its branch still names the recorded commit; the branch moves only after that.
+		expect(sourceRequests).toEqual([`/repos/acme/source-identity/commits/${encodeURIComponent(REQUESTED_REF)}`])
 		expect(phasesAtRunnerStart).toEqual(['started', 'provider_accepted'])
 		expect(persistedCommitAtRunnerStart).toBe(commitA)
 		expect(jobs).toHaveLength(1)

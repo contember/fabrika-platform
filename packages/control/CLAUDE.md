@@ -81,7 +81,9 @@ adapters) · `src/services.ts` (how every dependency bag is built). Persistence 
 `migrations/*.sql` (SQLite/D1) and `migrations-postgres/*.sql` (the same schema for Postgres).
 
 Three deploy TRIGGERS, all converging on the same `createRun` + enqueue: (1) the GitHub-App push
-webhook (`src/github/triggers/webhook.ts`, private repos, scoped to one connection); (2) the manual Deploy button (`triggerDeploy`); (3) the cron
+webhook (`src/github/triggers/webhook.ts`, private repos, scoped to one connection; after the HMAC check, any
+`X-GitHub-Event` other than `push`, a `ping` among them, and a ref deletion are a 204 no-op, and an annotated tag
+records `head_commit.id`, the commit it tags, not the tag object in `after`); (2) the manual Deploy button (`triggerDeploy`); (3) the cron
 poller (`src/github/triggers/poll.ts`, wired in `scheduled`) for PUBLIC repos with no App install — it conditional-
 GETs the repo's commits/tags Atom feed (ETag) and enqueues on a new head sha (`runs.trigger='poll'`).
 
@@ -311,6 +313,11 @@ other environment, before the provider prepares anything, and the write maps a r
   (`settleUnfinishedRun`: startup reconcile, cron, or the environment's next deploy), which first appends
   `RUN_INTERRUPTED_REASON` through `runLogs`; the stale-run sweep appends its own reason. Neither requeues the run
   (ADR-0044): every composition hands `runLogs`, or the reason reaches the console only.
+  A pending run older than a run of the same environment that already `succeeded` never starts: under the lease,
+  before `startRun`, `markRunSuperseded` fails it and its log says `superseded by run <id>` (ADR-0044). Queue order is
+  not run order (a deferred run is enqueued again), and an approved parked run is covered the same way. Cloudflare's
+  `resolveSource` resolves a webhook or poll run's BRANCH and refuses it (`commit_mismatch`) when the branch moved
+  past the recorded commit, as Zerops does (ADR-0048).
 - **Control is the only writer of a run's row (ADR-0044).** A Cloudflare run settles in exactly two ways,
   both under the run's lease: the awaited `startRun` result (`executeDeploy`), or — after a Control
   restart such as a self-deploy — `reconcileProviderRuns`, where the provider's `reconcile` reads the

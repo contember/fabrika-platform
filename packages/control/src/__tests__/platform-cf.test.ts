@@ -1,5 +1,6 @@
 import { schemaFromContract } from '@fabrika/app/contract'
 import { contractDigest } from '@fabrika/auth-core'
+import { uuidv7 } from '@fabrika/platform'
 import {
 	cloudflareArtifact,
 	cloudflareArtifactCodec,
@@ -11,6 +12,7 @@ import { type ProviderDeployInput, type ProviderEnvelope, ProviderInvocationAbor
 import type { RelayResult, RunnerStatus } from '@fabrika/runner-cloudflare'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { SourceFailure } from '../github/source/failure'
 import {
 	cancelRunOnRunner,
 	cloudflareControlProvider,
@@ -265,6 +267,46 @@ describe('the Cloudflare source composition', () => {
 		expect(await pending.catch((error: unknown) => error)).toBe(secondReason)
 		expect(requests).toBe(1)
 		harness.sqlite.close()
+	})
+
+	test('a webhook or poll run of a branch fails before the provider when the branch moved past the pushed commit', async () => {
+		const harness = createHarness()
+		const pushed = 'a'.repeat(40)
+		const moved = 'b'.repeat(40)
+		const requests: string[] = []
+		const source = cloudflareGitHubSource(controlEnv(workerBindings(harness), () => {}), {
+			metadataFetch: (url) => {
+				requests.push(String(url))
+				return Promise.resolve(Response.json({ sha: String(url).endsWith(pushed) ? pushed : moved }))
+			},
+		})
+		await harness.db.registry.createApp({ id: 'api', repoUrl: 'github.com/acme/public' })
+		const resolve = async (trigger: 'webhook' | 'poll' | 'manual', ref: string) => {
+			const runId = uuidv7()
+			await harness.db.runs.createRun({ id: runId, appId: 'api', env: 'production', ref, commitSha: pushed, trigger, actor: trigger })
+			const input = deployInput()
+			const app = { ...input.app, source: { ...input.app.source, repoUrl: 'github.com/acme/public', ref } }
+			return source.resolveSource({ ...input, runId, app, expectedCommitSha: pushed })
+		}
+		try {
+			const moving: Array<'webhook' | 'poll'> = ['webhook', 'poll']
+			for (const trigger of moving) {
+				const refused = await resolve(trigger, 'refs/heads/main').catch((error: unknown) => error)
+				expect(refused).toBeInstanceOf(SourceFailure)
+				expect(refused).toMatchObject({ code: 'commit_mismatch', stage: 'resolve' })
+			}
+			// A manual run pinned to a commit, and a tag, deploy the recorded commit wherever the ref points now.
+			expect(await resolve('manual', 'refs/heads/main')).toEqual({ commitSha: pushed })
+			expect(await resolve('webhook', 'refs/tags/v1')).toEqual({ commitSha: pushed })
+			expect(requests).toEqual([
+				'https://api.github.com/repos/acme/public/commits/refs%2Fheads%2Fmain',
+				'https://api.github.com/repos/acme/public/commits/refs%2Fheads%2Fmain',
+				`https://api.github.com/repos/acme/public/commits/${pushed}`,
+				`https://api.github.com/repos/acme/public/commits/${pushed}`,
+			])
+		} finally {
+			harness.sqlite.close()
+		}
 	})
 })
 

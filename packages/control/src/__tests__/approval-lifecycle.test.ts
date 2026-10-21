@@ -542,12 +542,14 @@ describe('approved access through the run lifecycle', () => {
 	test('an approval holds only for its baseline: another publication in between makes the run wait again', async () => {
 		const w = world()
 		await seed(w)
+		// The publication in between is an OLDER run, so it does not supersede the approved one.
+		const firstId = uuidv7()
 		w.contract = WITH_EXPORT
 		const wider = await deploy(w, 'prod')
 		await approve(w, wider.runId)
 
 		w.contract = BASE
-		const first = await deploy(w, 'prod')
+		const first = await deploy(w, 'prod', firstId)
 		await approve(w, first.runId)
 		expect((await executeDeploy(deps(w), { runId: first.runId })).status).toBe('succeeded')
 
@@ -682,6 +684,22 @@ describe('approved access through the run lifecycle', () => {
 		expect(next.status).toBe('succeeded')
 		expect((await published(w, 'prod')).runId).toBe(next.runId)
 		expect((await run(w, parked.runId)).status).toBe('awaiting_approval')
+
+		// The newer run succeeded, so the approved older one is superseded instead of overwriting it (ADR-0050 §6).
+		await approve(w, parked.runId)
+		expect((await executeDeploy(deps(w), { runId: parked.runId })).status).toBe('failed')
+		expect((await run(w, parked.runId)).status).toBe('failed')
+		expect(w.deploys.map((input) => input.runId)).toEqual([next.runId])
+		expect((await published(w, 'prod')).runId).toBe(next.runId)
+	})
+
+	test('an approved parked run deploys when no newer run of its environment succeeded', async () => {
+		const w = world()
+		await seed(w)
+		const parked = await deploy(w, 'prod')
+		await setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'prod', protected: false })
+		const stage = await deploy(w, 'stage')
+		expect(stage.status).toBe('succeeded')
 
 		await approve(w, parked.runId)
 		expect((await executeDeploy(deps(w), { runId: parked.runId })).status).toBe('succeeded')

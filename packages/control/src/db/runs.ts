@@ -239,6 +239,30 @@ export class RunRepository {
 		)
 	}
 
+	/** The newest run of the same environment, created after this one, that succeeded: the run that supersedes it. */
+	async getSupersedingRun(id: string): Promise<RunRow | null> {
+		return this.d1.prepare(`SELECT newer.* FROM runs newer
+			JOIN runs older ON older.app_id = newer.app_id AND older.env = newer.env
+			WHERE older.id = ? AND newer.id > older.id AND newer.status = 'succeeded'
+			ORDER BY newer.id DESC LIMIT 1`).bind(id).first<RunRow>()
+	}
+
+	/**
+	 * Fail a pending run that a newer succeeded run of its environment supersedes, before it starts: an older run never
+	 * deploys over a newer success, and a rollback is a new run (ADR-0050 §6).
+	 */
+	async markRunSuperseded(id: string, fence: LeaseFence): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET status = 'failed', finished_at = ?
+			WHERE id = ? AND status = 'pending' AND cancel_requested_at IS NULL
+				AND EXISTS (SELECT 1 FROM runs newer
+					WHERE newer.app_id = runs.app_id AND newer.env = runs.env AND newer.id > runs.id AND newer.status = 'succeeded')`,
+			[this.now(), id],
+			fence,
+		)
+	}
+
 	/** Record one resolved commit while the active run still accepts provider lifecycle writes. */
 	async setRunCommit(id: string, commitSha: string, fence: LeaseFence): Promise<boolean> {
 		return this.mutateRun(

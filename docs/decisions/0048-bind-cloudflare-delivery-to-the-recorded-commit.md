@@ -31,6 +31,12 @@ dependency installation or any repository-controlled command. Nothing falls back
 - The Cloudflare provider implements `resolveSource`. It resolves the run's source to a complete commit
   SHA once, before Control freezes the release context. A recorded commit ID wins over a mutable ref
   and must exist as a commit; a recorded non-commit object fails.
+- A webhook or poll run of a branch (`refs/heads/…`) resolves the branch, not the recorded commit, and fails with
+  `commit_mismatch` when the branch no longer points at it, as the Zerops source check does. A newer push has a run
+  of its own, so the older one must not deploy after it. A manual run pinned to a commit, and a tag, deploy the
+  recorded commit wherever the ref points now.
+- The push webhook records the commit an annotated tag points to (`head_commit.id`), because the payload's
+  `after` is the tag object, which no commit lookup resolves.
 - Ref resolution: qualified heads and tags keep their namespace; a bare name tries the exact branch,
   then the exact tag; an annotated tag is peeled to its commit; the GitHub composition accepts
   complete 40-hex SHA-1 commit IDs.
@@ -97,6 +103,8 @@ repository-controlled code. They are a strong default.
 ## Consequences
 
 - A moved branch cannot change an already selected deployment or mislabel its release and source maps.
+- A run triggered by a push fails when its branch moved before the run resolved its source; the newer push's run
+  deploys instead.
 - A force-pushed or removed commit is a pre-install failure; the source host need not keep old commits.
 - An outdated runner may ignore the expected SHA. Rolling the runner forward first is the only guard;
   a deploy order mistake is an operator error, not something Control detects.

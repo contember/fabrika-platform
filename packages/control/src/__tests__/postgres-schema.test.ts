@@ -726,6 +726,33 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect((await db.runs.getRun(second.id))?.status).toBe('pending')
 	})
 
+	test('runs: only a newer succeeded run of the same environment supersedes a pending one', async () => {
+		await reset()
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
+		const owned = fixtureRuns(db.runs, new SqlDeployLocks(raw))
+		const create = (env: string) => db.runs.createRun({ id: uuidv7(), appId: 'acme', env, ref: 'refs/heads/main', trigger: 'webhook', actor: 'poll' })
+		const older = await create('prod')
+		const otherEnv = await create('stage')
+		await owned.finish(otherEnv.id, 'succeeded', 0)
+		const failed = await create('prod')
+		await owned.finish(failed.id, 'failed', 1)
+
+		expect(await db.runs.getSupersedingRun(older.id)).toBeNull()
+		expect(await owned.supersede(older.id)).toBe(false)
+		const newer = await create('prod')
+		await owned.start(newer.id)
+		await owned.finish(newer.id, 'succeeded', 0)
+
+		expect((await db.runs.getSupersedingRun(older.id))?.id).toBe(newer.id)
+		expect(await db.runs.getSupersedingRun(newer.id)).toBeNull()
+		expect(await owned.supersede(older.id)).toBe(true)
+		const superseded = await db.runs.getRun(older.id)
+		expect(superseded?.status).toBe('failed')
+		expect(typeof superseded?.finished_at).toBe('number')
+		expect(await owned.supersede(older.id)).toBe(false)
+	})
+
 	test('repo poll state: the join that selects pollable envs, and the upsert', async () => {
 		await reset()
 		// PUBLIC (no installation id) + a trigger ref → pollable. The other three combinations are not.
