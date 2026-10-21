@@ -70,7 +70,9 @@ upgraded first.
    bundles, as exact npm aliases, `@fabrika/check`, `@fabrika/app` and `@fabrika/auth-core` at the newest patch of
    every older framework minor in its window, so Control fetches no code at run time, on Bun and in a Worker alike.
    It bundles `@fabrika/proxy-core` of the same releases too: a Zerops namespace whose proxy is pinned to an older
-   source runs that release's strict manifest parser, so Control refuses a deploy of a row none of them parses.
+   source runs that release's strict manifest parser, so Control refuses a deploy of a row or a CSP that none of 0.4.8,
+   0.5.5 and 0.6.0 parses. No newer minor is a judge while Control does not record a pin's release, because a form
+   only it reads would reach a namespace pinned below it (ADR-0022).
    The reader's artifact carries `format: <n>` (a 0.4, 0.5 or 0.6 artifact has none and is format 1). The snapshot
    stores the artifact as its release read it and digests it by that release's canonical form, and the providers write
    that digest into `FABRIKA_CONTRACT_DIGEST` and the proxy table instead of recomputing it, so the application's

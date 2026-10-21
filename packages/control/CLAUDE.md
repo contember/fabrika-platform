@@ -470,9 +470,9 @@ other environment, before the provider prepares anything, and the write maps a r
   (`src/zerops/older-proxies.ts`).** It holds the parsers of `@fabrika/proxy-core` 0.4.8, 0.5.5 and 0.6.0, and the
   Zerops provider refuses a deploy of a row none of them parses, or of a CSP none of them parses (the CSP field of each
   release's entry parser) (`older-proxies.test.ts`). Only the Zerops composition imports it, so the Worker bundle carries
-  none of them. Never add 0.7.0's parser while a pin's release is not recorded: the provider deploys what any parser
-  reads, so a 0.7-only form would reach a namespace pinned to 0.4–0.6, whose strict parser refuses the whole manifest
-  and every later republish. A 0.7-only form deploys only to a namespace at `--proxy-source=current`.
+  none of them. Never add a parser of a minor newer than 0.6 while a pin's release is not recorded: the provider deploys
+  what any parser reads, so that minor's forms would reach a namespace pinned below it, whose strict parser refuses the
+  whole manifest and every later republish. A form newer than 0.6 deploys only to a namespace at `--proxy-source=current`.
 - **Steps off the paved road are in the reviewed snapshot, never refused by it (`diff.ts`).** Two kinds only: the
   reach a staged-kit site declares (`ContractArtifact.declared`: `sql`, `unscoped`, `connect`, `issues`), and the
   database code the migrations declare (`AccessSnapshot.databaseCode`, from `classifyMigrations` of
