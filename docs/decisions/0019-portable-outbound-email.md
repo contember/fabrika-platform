@@ -237,9 +237,10 @@ none and answers its row with 404. Its senders reach it over the platform transp
   Only `admin` holds them by default. An installation sender's content is withheld from every caller, whatever the
   message's state: it carries one-time links (enrollment, password reset, invitation), and a console reader without
   IAM rights must not take over an account through one, not even while the message waits for a retry.
-- **Content has a retention.** An installation message's content is purged as soon as it is sent, because it carries
-  a one-time link. Every other final message keeps its content for 30 days. A held message keeps it until a person
-  decides.
+- **Content has a retention.** An installation message's content is purged as soon as the dispatcher makes it final
+  (`sent`, `failed` or `unknown`), because it carries a one-time link. Until then the relay keeps it for its retries,
+  and the console withholds it from every caller. Every other final message keeps its content for 30 days. A held
+  message keeps it until a person decides.
 
 ## Consequences
 

@@ -69,7 +69,7 @@ export default createPage()
 					</div>
 				</section>
 
-				<MailContent content={message.content} />
+				<MailContent content={message.content} sender={message.sender} />
 
 				{manages && message.state === 'held' && <Decision message={message} onDone={invalidate} />}
 				{manages && message.requeueable && <Requeue message={message} onDone={invalidate} />}
@@ -78,7 +78,10 @@ export default createPage()
 	})
 
 /** What the recipient sees, or why the page does not show it. */
-export function MailContent({ content }: { content: MailContentDto }) {
+export function MailContent({ content, sender }: { content: MailContentDto; sender: string }) {
+	if (content.kind === 'withheld' && sender.startsWith('installation:')) {
+		return <p className="hint">An installation service's mail carries one-time links and is never shown.</p>
+	}
 	if (content.kind === 'withheld') {
 		return (
 			<p className="hint">

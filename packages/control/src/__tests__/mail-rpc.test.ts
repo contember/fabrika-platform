@@ -182,10 +182,11 @@ describe('mail.messages.get', () => {
 	test("an installation service's content is withheld from every caller, whatever its state", async () => {
 		const f = fixture()
 		const queued = await f.seed('installation:iam', 'queued')
+		const sending = await f.seed('installation:iam', 'sending')
 		const sent = await f.seed('installation:iam', 'sent')
 		expect(await f.repositories.mailMessages.purgeContent(sent)).toBe(true)
 		for (const auth of [authWithActions(['mail.read', 'mail.content.read']), allowAllAuth()]) {
-			for (const id of [queued, sent]) {
+			for (const id of [queued, sending, sent]) {
 				const detail = await json(await f.call(auth, 'mail.messages.get', { id }), detailSchema)
 				expect(detail.content).toEqual({ kind: 'withheld' })
 			}
