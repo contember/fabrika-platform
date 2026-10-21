@@ -121,6 +121,9 @@ export const PLATFORM_PROXY_SERVICE = 'proxy'
 /** IAM's and control's database, on both tiers. This command deploys nothing to it; it sets its backup schedule. */
 export const PLATFORM_DATABASE_SERVICE = 'db'
 
+/** Operations' own database. A light installation created before it existed keeps Operations in `db`. */
+export const OPERATIONS_DATABASE_SERVICE = 'operationsdb'
+
 /**
  * Hourly. Zerops has no point-in-time recovery: a single-node database loses everything since its last `pg_dump`, which
  * by default is daily. UNVERIFIED: that `backupPeriod` takes this 5-field cron, as the GUI documentation describes.
@@ -227,6 +230,7 @@ const LEFTOVER_SOURCE_SERVICE = 'source'
 interface ResolvedInstallation {
 	readonly services: ReadonlyMap<PlatformDeployService, ResolvedService>
 	readonly databaseId: string
+	readonly hasOperationsDatabase: boolean
 }
 
 /**
@@ -273,7 +277,7 @@ const resolveServices = async (
 				+ 'it does not create one',
 		)
 	}
-	return { services: resolved, databaseId }
+	return { services: resolved, databaseId, hasOperationsDatabase: idOf(OPERATIONS_DATABASE_SERVICE) !== undefined }
 }
 
 export const serviceOf = (services: ReadonlyMap<PlatformDeployService, ResolvedService>, hostname: PlatformDeployService): ResolvedService => {
@@ -643,11 +647,19 @@ const ensureSubdomainAccess = async (
 /** What `ensureBackupPeriod` found and did. */
 export type BackupPeriodOutcome =
 	| { readonly kind: 'unchanged' }
+	| { readonly kind: 'kept'; readonly current: string }
 	| { readonly kind: 'would-change'; readonly from: string }
 	| { readonly kind: 'changed'; readonly from: string }
+	| { readonly kind: 'unconfirmed'; readonly readBack: string }
 
 /**
- * Set a managed service's backup period, read-compare-write.
+ * Whether a period is one the operator did not choose: empty, or once a day (`<minute> <hour> * * *`), which is the
+ * shape of the platform's daily default. Anything else is kept. UNVERIFIED: how the platform spells its default.
+ */
+const isDailyBackupPeriod = (period: string): boolean => period.trim() === '' || /^\d+ \d+ \* \* \*$/.test(period.trim())
+
+/**
+ * Set a managed service's backup period, read-compare-write, replacing only a daily one.
  *
  * A different period is sent with the retention the service reads — its own, else the default — WHOLE, because a
  * PUT on this API resets what it leaves out. The decision is the read-back, never the PUT returning.
@@ -665,6 +677,9 @@ export const ensureBackupPeriod = async (input: {
 	const current = await api.getBackupConfig({ serviceId, signal })
 	if (current.backupPeriod === period) {
 		return { kind: 'unchanged' }
+	}
+	if (!isDailyBackupPeriod(current.backupPeriod)) {
+		return { kind: 'kept', current: current.backupPeriod }
 	}
 	if (input.dryRun) {
 		return { kind: 'would-change', from: current.backupPeriod }
@@ -689,9 +704,49 @@ export const ensureBackupPeriod = async (input: {
 	}
 	const after = await api.getBackupConfig({ serviceId, signal })
 	if (after.backupPeriod !== period) {
-		throw new Error(`zerops: ${hostname} reads back the backup schedule \`${after.backupPeriod}\` after it was set to \`${period}\``)
+		return { kind: 'unconfirmed', readBack: after.backupPeriod }
 	}
 	return { kind: 'changed', from: current.backupPeriod }
+}
+
+/** `ensureBackupPeriod` on the platform database, reported as one log line; nothing it meets fails the deploy. */
+const scheduleDatabaseBackups = async (databaseId: string, dryRun: boolean, collaborators: PlatformDeployCollaborators): Promise<void> => {
+	const { log, signal } = collaborators
+	const db = PLATFORM_DATABASE_SERVICE
+	const schedule = `\`${PLATFORM_DATABASE_BACKUP_PERIOD}\``
+	let backup: BackupPeriodOutcome
+	try {
+		backup = await ensureBackupPeriod({
+			api: collaborators.api,
+			sleep: collaborators.sleep,
+			signal,
+			serviceId: databaseId,
+			hostname: db,
+			period: PLATFORM_DATABASE_BACKUP_PERIOD,
+			dryRun,
+		})
+	} catch (error) {
+		if (signal.aborted) throw error
+		log.warn(`${db}: the backup schedule was not set (${error instanceof Error ? error.message : 'unknown error'}); set it to ${schedule} by hand`)
+		return
+	}
+	switch (backup.kind) {
+		case 'unchanged':
+			log.info(`${db}: backups already run on ${schedule}`)
+			return
+		case 'kept':
+			log.info(`${db}: backups keep the schedule \`${backup.current}\` someone chose instead of the daily default`)
+			return
+		case 'would-change':
+			log.info(`${db}: backups would run on ${schedule}, were \`${backup.from}\``)
+			return
+		case 'changed':
+			log.info(`${db}: backups now run on ${schedule}, were \`${backup.from}\``)
+			return
+		case 'unconfirmed':
+			log.warn(`${db}: backups were set to ${schedule} but read back \`${backup.readBack}\`; check the schedule by hand`)
+			return
+	}
 }
 
 /**
@@ -740,7 +795,7 @@ export const deployPreparedPlatform = async (
 
 	log.step('Resolve the installation')
 	const project = await resolveProject(input, collaborators)
-	const { services, databaseId } = await resolveServices(project.id, collaborators)
+	const { services, databaseId, hasOperationsDatabase } = await resolveServices(project.id, collaborators)
 	log.info(`project ${project.name} (${project.id}) — ${PLATFORM_DEPLOY_ORDER.join(', ')}`)
 
 	const proxy = serviceOf(services, PLATFORM_PROXY_SERVICE)
@@ -857,23 +912,17 @@ export const deployPreparedPlatform = async (
 		log.info(`\`${IAM_APP_ID}\` reconciled`)
 	}
 
-	// Last, so a refusal here leaves every service deployed, published and registered; the command still fails on it.
+	// Last, and a warning rather than a failure: the backup API's behaviour is not yet measured on a live account
+	// (docs/reference/zerops-platform.md), and every service is already deployed, published and registered.
 	log.step('Schedule the platform database backups')
-	const backup = await ensureBackupPeriod({
-		api: collaborators.api,
-		sleep: collaborators.sleep,
-		signal,
-		serviceId: databaseId,
-		hostname: PLATFORM_DATABASE_SERVICE,
-		period: PLATFORM_DATABASE_BACKUP_PERIOD,
-		dryRun: input.dryRun,
-	})
-	const schedule = `\`${PLATFORM_DATABASE_BACKUP_PERIOD}\``
-	log.info(
-		backup.kind === 'unchanged'
-			? `${PLATFORM_DATABASE_SERVICE}: backups already run on ${schedule}`
-			: `${PLATFORM_DATABASE_SERVICE}: backups ${backup.kind === 'changed' ? 'now run' : 'would run'} on ${schedule}, were \`${backup.from}\``,
-	)
+	if (hasOperationsDatabase) {
+		await scheduleDatabaseBackups(databaseId, input.dryRun, collaborators)
+	} else {
+		log.warn(
+			`${PLATFORM_DATABASE_SERVICE}: backups keep their schedule — Operations shares this database on an installation `
+				+ `created before \`${OPERATIONS_DATABASE_SERVICE}\`, and hourly dumps would copy its whole error history`,
+		)
+	}
 
 	log.step(input.dryRun ? 'Dry run complete — nothing was written' : 'Installation deployed')
 }

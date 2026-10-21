@@ -56,10 +56,13 @@ evaluation and a small fleet that tolerates an outage; `standard` for sign-in th
 database service, daily between 00:00 and 01:00 UTC unless the service sets another schedule, and a restore is
 manual (download, then `pg_restore`). A single-node PostgreSQL whose node fails loses everything written since
 its last backup and stays down until someone restores it. An HA PostgreSQL (three nodes) keeps both its data and
-its service. A deploy never takes a one-container runtime down, because Zerops starts the new container before
-it stops the old one; how fast Zerops replaces one lost with its node is not measured. `platform install` and
-every `platform deploy` set the platform database `db` (users, grants, deploy records) to back up hourly.
-Operations' own `operationsdb` keeps the daily default: its error history does not need that schedule.
+its service. Zerops documents that a deploy starts the new container before it stops the old one, so a deploy
+should not take a one-container runtime down; neither that nor how fast Zerops replaces a container lost with its
+node is measured here. `platform install` and every `platform deploy` set the platform database `db` (users,
+grants, deploy records) to back up hourly, unless someone chose another schedule; a light installation created
+before `operationsdb` existed keeps its schedule. Hourly backups may shorten how far back the restore points
+reach: if Zerops tags each one `daily`, the retention's daily count counts hours. Check `db`'s retention in the GUI. Operations' own `operationsdb`
+keeps the daily default: its error history does not need that schedule.
 
 **Presets.** The choices below combine into three shapes. Prices are the idle floor for three applications in
 one production namespace; an application with a database runs at a 0.5 GB floor, about $2.10 per container.
@@ -70,7 +73,7 @@ one production namespace; an application with a database runs at a 0.5 GB floor,
 | data       | `light`       | `cheap` with `--postgres-type=postgresql:ha@18 --postgres-profile=oltp-staging`, one container each | about $26  | applications' data survives; platform data since its last backup  |
 | stable     | `standard`    | `cheap` HA as above, `--core-package=SERIOUS`, two containers of each application                   | $130+      | a short failover; the namespace proxy has one container           |
 
-A staging namespace (`cheap`, single-node) adds about $8 to any of them.
+A staging namespace (`cheap`, single-node) adds about $9 to any of them.
 
 **2. Namespace preset** (`control namespaces create --preset`, step 5). A namespace is the Zerops project
 applications run in. Each one adds its own proxy, about $1.08. A `cheap` namespace's shared PostgreSQL is

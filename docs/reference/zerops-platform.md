@@ -1436,7 +1436,9 @@ release artifacts incomplete. The variable stays readable to the runtime until t
 Zerops has no point-in-time recovery. A PostgreSQL backup is a logical `pg_dump` on a per-service schedule, daily
 (00:00–01:00 UTC) by default, so a single-node database loses everything since its last backup when its node fails.
 `platform deploy` therefore sets the platform database `db` (IAM and control, on both tiers) to hourly as its last
-step (`ensureBackupPeriod`, `installation/deploy.ts`). `operationsdb` keeps the default.
+step (`ensureBackupPeriod`, `installation/deploy.ts`). `operationsdb` keeps the default. A light installation
+created before `operationsdb` existed keeps Operations in `db`, so the step leaves `db`'s schedule alone there and
+warns: hourly dumps would copy Operations' whole, unpruned error history.
 
 Read off the published OpenAPI document, not measured:
 
@@ -1446,16 +1448,23 @@ Read off the published OpenAPI document, not measured:
 | `PUT /service-stack/{id}/backup-config` | `ConfigureBackup`, `{ backupPeriod?, retentionPolicy? }` → `{ process? }`. "Sets BACKUP_PERIOD env, retention policies, and triggers user data sync" |
 | A retention policy                      | Nine required fields: `maxTotalFiles`, `maxTotalGiB`, `protectedTags`, and `min`/`max` of `Daily`, `Weekly`, `Monthly` (counts per backup tag)       |
 
-The step reads the configuration, and only when `backupPeriod` is not `0 * * * *` sends that period with the
-retention it read (the service's own, else `defaultRetentionPolicy`) whole, waits for a returned process, and reads
-the period back. A second run changes nothing. Unverified:
+The step reads the configuration. It replaces only a period that is empty or once a day (`<minute> <hour> * * *`,
+the shape of the default); any other period is someone's choice and is kept. It sends `0 * * * *` with the retention
+it read (the service's own, else `defaultRetentionPolicy`) whole, waits for a returned process, and reads the period
+back. A second run changes nothing. Until the row below has run, nothing the step meets fails the deploy: a refused
+write, a response that does not parse, or a read-back that differs is a warning naming the manual step. A null
+`protectedTags` reads as the empty list. Unverified:
 
-- the format of `backupPeriod`: the GUI documentation describes a 5-field cron (`min hour dom mon dow`), and the
-  read-back is compared byte for byte, so a platform that spells it differently fails every deploy at this step;
+- the format of `backupPeriod` and of the default: the GUI documentation describes a 5-field cron
+  (`min hour dom mon dow`); the read-back is compared byte for byte;
 - whether a PUT without `retentionPolicy` resets the retention, and whether `defaultRetentionPolicy` is what applies
   while `retentionPolicy` is absent (sending the default turns it into the service's own);
-- how an hourly backup is tagged. The documentation says every automatic backup gets `daily`; if so, `maxTotalFiles`
-  (at most 50 per service) keeps about two days of hourly backups, and `minWeekly`/`minMonthly` keep the older points.
+- how an hourly backup is tagged. The documentation says every automatic backup gets `daily`; if so, `maxDaily`
+  counts hours instead of days, and `maxTotalFiles` (at most 50 per service) caps it further. The restore points
+  then reach back hours to about two days, and only `minWeekly`/`minMonthly` keep older ones. Read the row's
+  printed default retention before relying on the history: the step may need to raise `maxDaily` or use a coarser
+  period;
+- whether a `backup-config` write restarts the database ("triggers user data sync").
 
 | Behaviour                                                                                            | Row                                  |
 | ---------------------------------------------------------------------------------------------------- | ------------------------------------ |

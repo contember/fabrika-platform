@@ -131,6 +131,8 @@ export interface FakeZerops {
 	backup(service: string): FakeBackup
 	/** Make one service accept `configureBackup` and keep its period, so the read-back disagrees. */
 	ignoreBackupPeriod(service: string): void
+	/** Make one service refuse `configureBackup` with a 403. */
+	refuseBackupConfig(service: string): void
 }
 
 const NEVER = (name: string) => (): never => {
@@ -171,6 +173,7 @@ export const fakeZerops = (options: {
 	const backups = new Map(live.map((service) => [service.name, service.backup ?? { backupPeriod: FAKE_DAILY_BACKUP_PERIOD }]))
 	const backupWrites: FakeBackupWrite[] = []
 	const ignoredBackupPeriods = new Set<string>()
+	const refusedBackupConfigs = new Set<string>()
 	const backupOf = (name: string): FakeBackup => backups.get(name) ?? { backupPeriod: FAKE_DAILY_BACKUP_PERIOD }
 
 	const nameOf = (serviceId: string): string => {
@@ -472,6 +475,7 @@ export const fakeZerops = (options: {
 		/** No process: `getProcess` belongs to the bootstrap surface, which a deploy must not reach. */
 		configureBackup: async ({ serviceId, backupPeriod, retentionPolicy }) => {
 			const name = nameOf(serviceId)
+			if (refusedBackupConfigs.has(name)) throw new ZeropsApiError('zerops: configure backup failed (403)', 403, 'forbidden')
 			effect(`backup:${name}`)
 			backupWrites.push({ service: name, backupPeriod, retentionPolicy })
 			backups.set(name, { backupPeriod: ignoredBackupPeriods.has(name) ? backupOf(name).backupPeriod : backupPeriod, retentionPolicy })
@@ -511,6 +515,7 @@ export const fakeZerops = (options: {
 		backupWrites,
 		backup: (service) => backupOf(service),
 		ignoreBackupPeriod: (service) => void ignoredBackupPeriods.add(service),
+		refuseBackupConfig: (service) => void refusedBackupConfigs.add(service),
 	}
 }
 
@@ -536,6 +541,7 @@ export const importedLightServices = (): FakeServiceSpec[] => [
 /** The four platform services, shaped like the live `fabrika-test` installation. */
 export const platformServices = (env: Readonly<Record<string, Readonly<Record<string, string>>>> = {}): FakeServiceSpec[] => [
 	{ name: 'db', id: 'svc-db' },
+	{ name: 'operationsdb', id: 'svc-operationsdb' },
 	{ name: 'iam', id: 'svc-iam', sequence: 4, ...(env['iam'] === undefined ? {} : { env: env['iam'] }) },
 	{ name: 'operations', id: 'svc-operations', sequence: 4, ...(env['operations'] === undefined ? {} : { env: env['operations'] }) },
 	{ name: 'control', id: 'svc-control', sequence: 4, ...(env['control'] === undefined ? {} : { env: env['control'] }) },

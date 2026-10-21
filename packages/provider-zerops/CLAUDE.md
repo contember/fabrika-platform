@@ -338,10 +338,11 @@ Invariants:
   behind the previous manifest is an open `/api/*`. Operations owns `operationsdb` and
   `operationsstorage`; only the proxy may expose its ingest and source-map paths.
 - **`platform deploy` ends by setting `db`'s backup period to hourly (`ensureBackupPeriod`)**, after the
-  registration, so a failure there leaves the deployed order whole and still fails the command. Read-compare-write:
-  a different period is sent with the retention it read (its own, else the default) WHOLE, and decided by the
-  read-back. The API shapes are the OpenAPI's; the period's format and the retention reset are UNVERIFIED
-  (`docs/reference/zerops-platform.md`). `operationsdb` keeps the Zerops default.
+  registration. Until a live run measures the API, nothing in that step fails the deploy: a refusal, an unparsable
+  read or a differing read-back is a warning. Read-compare-write: only an empty or once-a-day period is replaced, and
+  it is sent with the retention it read (its own, else the default) WHOLE. It is skipped when the project has no
+  `operationsdb` (an older light installation, whose Operations still lives in `db`). The API shapes are the
+  OpenAPI's; the period's format, tagging and the retention reset are UNVERIFIED (`docs/reference/zerops-platform.md`).
 - **MCP authoring is opt-in, and ONE input turns on both halves** (ADR-0049,
   [`mcp-authoring.md`](../../docs/reference/mcp-authoring.md)). `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` /
   `--mcp-clients` makes `resolvePlatformProxyManifest` publish the console's MCP table with its `oauth` row

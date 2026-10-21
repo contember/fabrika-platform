@@ -1154,6 +1154,27 @@ describe('Zerops upload-backed app versions', () => {
 		await expect(api.getBackupConfig({ serviceId: 'db-1', signal: signal() })).rejects.toThrow('zerops: list backups returned an invalid response')
 	})
 
+	test('a null list of protected tags reads as the empty list', async () => {
+		const retention = {
+			maxTotalFiles: 50,
+			maxTotalGiB: 25,
+			minDaily: 7,
+			maxDaily: 14,
+			minWeekly: 4,
+			maxWeekly: 8,
+			minMonthly: 3,
+			maxMonthly: 6,
+		}
+		const fetchImpl: FetchLike = async () =>
+			jsonResponse({ files: [], backupPeriod: '0 0 * * *', defaultRetentionPolicy: { ...retention, protectedTags: null } })
+		const api = createZeropsApi({ token: 'zerops-secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await expect(api.getBackupConfig({ serviceId: 'db-1', signal: signal() })).resolves.toEqual({
+			backupPeriod: '0 0 * * *',
+			defaultRetentionPolicy: { ...retention, protectedTags: [] },
+		})
+	})
+
 	test('accepts a documented process without appVersion, omits zeropsYamlSetup, and deletes with a bodiless request', async () => {
 		const requests: { method: string; url: string; body: unknown }[] = []
 		const fetchImpl: FetchLike = async (url, init) => {

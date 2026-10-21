@@ -178,7 +178,8 @@ const backupCountSchema = z.number().int().nonnegative()
 const backupRetentionPolicySchema = z.object({
 	maxTotalFiles: backupCountSchema,
 	maxTotalGiB: backupCountSchema,
-	protectedTags: z.array(z.string()),
+	// A Go API may serialise an empty list as null; read as the empty list it is.
+	protectedTags: z.array(z.string()).nullable().transform((tags) => tags ?? []),
 	minDaily: backupCountSchema,
 	maxDaily: backupCountSchema,
 	minWeekly: backupCountSchema,
