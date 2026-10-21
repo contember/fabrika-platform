@@ -79,10 +79,12 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 			'get_app_rules',
 			'get_deployment',
 			'get_workspace',
+			'get_workspace_diff',
 			'list_files',
 			'list_targets',
 			'list_workspaces',
 			'read_files',
+			'search_files',
 		])
 
 		expect(toolJson(await call(token, 'list_targets', {}), z.unknown())).toEqual({
