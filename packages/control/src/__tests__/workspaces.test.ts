@@ -165,6 +165,27 @@ for (const backend of backends) {
 				expect(stored?.owner_id).toBe(author.principal?.id)
 			})
 
+			test('are listed with their live heads, read once per repository, their latest deploy and their pull request', async () => {
+				const w = await world()
+				const first = await workspace(w)
+				const second = await workspace(w)
+				w.source.branches.set(second.branch, sha('d'))
+				w.source.branches.delete(first.branch)
+				const run = await deployStageUseCase(w.context(author), { workspaceId: second.id })
+				await createPullRequestUseCase(w.context(author), { workspaceId: second.id, title: 'T', body: '' })
+				const before = w.source.calls.length
+				const listed = await listWorkspacesUseCase(w.context(author), { appId: 'shop' })
+				expect(listed.items.map((item) => [item.id, item.headSha, item.latestRun?.id ?? null, item.pullRequest])).toEqual([
+					[second.id, sha('d'), run.id, { number: 7, url: 'https://github.com/acme/shop/pull/7' }],
+					[first.id, null, null, null],
+				])
+				expect(w.source.calls.slice(before)).toEqual([{ kind: 'read-branches', branches: [second.branch, first.branch] }])
+				expect((await getWorkspaceUseCase(w.context(author), { workspaceId: second.id })).pullRequest).toEqual({
+					number: 7,
+					url: 'https://github.com/acme/shop/pull/7',
+				})
+			})
+
 			test('are visible to their owner only', async () => {
 				const w = await world()
 				const created = await workspace(w)
