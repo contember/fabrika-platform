@@ -213,13 +213,33 @@ for (const backend of backends) {
 			test('files are read at the live head unless a commit is named', async () => {
 				const w = await world()
 				const created = await workspace(w)
-				expect((await listFilesUseCase(w.context(author), { workspaceId: created.id })).commitSha).toBe(sha('a'))
+				expect((await listFilesUseCase(w.context(author), { workspaceId: created.id, offset: 0, limit: 10 })).commitSha).toBe(sha('a'))
 				const read = await readFilesUseCase(w.context(author), { workspaceId: created.id, paths: ['README.md'], commitSha: sha('b') })
 				expect(read).toEqual({ commitSha: sha('b'), files: [{ path: 'README.md', content: 'content of README.md' }] })
 				w.source.unreadable.set('logo.png', 'binary')
 				expect((await readFilesUseCase(w.context(author), { workspaceId: created.id, paths: ['logo.png'] })).files).toEqual([
 					{ path: 'logo.png', content: null, reason: 'binary' },
 				])
+			})
+		})
+
+		describe('listing', () => {
+			test('depth keeps the levels below the directory, and a page ends with the offset of the next one', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				for (const path of ['src/a.ts', 'src/lib/b.ts', 'src/lib/deep/c.ts', 'src/z.ts']) w.source.contents.set(path, '')
+				const list = (input: { directory?: string; depth?: number; offset?: number; limit?: number }) =>
+					listFilesUseCase(w.context(author), { workspaceId: created.id, offset: 0, limit: 100, ...input })
+				expect((await list({ directory: 'src', depth: 1 })).entries.map((entry) => entry.path)).toEqual(['src/a.ts', 'src/z.ts'])
+				expect((await list({ depth: 2 })).entries.map((entry) => entry.path)).toEqual(['src', 'src/a.ts', 'src/z.ts'])
+				expect((await list({ depth: 1 })).entries.map((entry) => entry.path)).toEqual(['src'])
+				expect(await list({ limit: 2 })).toEqual({
+					commitSha: sha('a'),
+					entries: [{ path: 'src', kind: 'directory' }, { path: 'src/a.ts', kind: 'file', size: 1 }],
+					truncated: false,
+					nextOffset: 2,
+				})
+				expect((await list({ offset: 4, limit: 2 })).nextOffset).toBeNull()
 			})
 		})
 
