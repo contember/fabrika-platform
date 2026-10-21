@@ -3756,6 +3756,90 @@ th.numeric {
 	gap: 0.35rem;
 }
 
+/* An access change by who gains access (approvals, ADR-0050 §7): the impact in readings, one card per group, one table
+   row per endpoint or subject with all its lines. A widening keeps its lamp colour; a group with none starts closed. */
+.change-impact {
+	margin-bottom: var(--s-4);
+}
+
+.change-group {
+	margin-top: var(--s-3);
+}
+
+.change-group > summary {
+	cursor: pointer;
+	list-style: none;
+	padding-bottom: var(--s-3);
+}
+
+.change-group > summary::-webkit-details-marker {
+	display: none;
+}
+
+/* A card's icon only repeats its title, but a group's says who it is about, so it stays. */
+.change-group > summary > .icon {
+	display: inline-block;
+}
+
+.change-lines {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: grid;
+	gap: var(--s-1);
+}
+
+.change-lines > li {
+	display: flex;
+	gap: var(--s-2);
+	align-items: baseline;
+}
+
+.change-lines > li > .icon {
+	flex: none;
+	color: var(--ink-3);
+}
+
+.change-lines > .change-widens > .icon {
+	color: var(--lamp-run);
+}
+
+.change-lines > .change-narrows > .icon {
+	color: var(--lamp-ok);
+}
+
+.change-reason {
+	display: block;
+	margin-top: 0.125rem;
+}
+
+.folded-row > summary {
+	cursor: pointer;
+	color: var(--ink-2);
+}
+
+.folded-row > summary > code + code {
+	margin-left: var(--s-1);
+}
+
+.folded-row > .change-list {
+	margin-top: var(--s-2);
+	gap: var(--s-2);
+}
+
+.every-line {
+	margin-top: var(--s-5);
+}
+
+.every-line > summary {
+	cursor: pointer;
+	font-weight: 500;
+}
+
+.every-line > .filters {
+	margin-top: var(--s-3);
+}
+
 /* An environment's published surface and steps off the paved road (app detail): a summary line that opens on the list. */
 .deviations,
 .surface {

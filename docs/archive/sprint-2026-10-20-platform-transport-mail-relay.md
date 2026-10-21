@@ -1,3 +1,22 @@
+> **OUTCOME: shipped 2026-10-20 in v0.7.0.** A 0.7 application sends installation mail to Control over a platform
+> transport key ([ADR-0064](../decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md));
+> Control records, gates and dispatches it ([ADR-0019](../decisions/0019-portable-outbound-email.md) §8); IAM on Zerops
+> sends through it.
+>
+> **Shipped.** WU-0 to WU-6, then the review's fixes: the dispatcher claims an attempt before it sends, a dropped relay
+> key is revoked only once the new version runs, the relay starts at 0.7 (0.6 keeps the direct credential), an
+> application reaches the relay on Control's public origin, a person can requeue, and a relayed message waits for a
+> transport instead of failing.
+>
+> **Commits** on main: `af2944a4`…`931397e1`.
+>
+> **Verification.** The Release workflow of tag `v0.7.0`, which runs CI's verify workflow, passed on `931397e1`. The
+> run log records no run of the success condition end to end on the local stack:
+> [backlog 194](../backlog/194-mail-relay-follow-ups.md) item 27.
+>
+> **Backlog.** Open: [194](../backlog/194-mail-relay-follow-ups.md) (the review's follow-ups),
+> [178](../backlog/178-an-installation-transport-through-an-outside-relay.md) (rewritten), 187 and 46 (out of scope).
+
 # Sprint — the platform transport and the gated mail relay (2026-10-20)
 
 **Goal.** An application on framework 0.7 sends installation mail to Control over a platform transport, and Control

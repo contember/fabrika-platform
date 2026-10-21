@@ -62,6 +62,19 @@ export interface MigrationDeviation {
 	readonly line: number
 }
 
+/**
+ * A step of a file collection's adoption into a file column (ADR-0061): the `INSERT … SELECT` that copies the
+ * collection's files into a table, and the call that releases the collection. Paved, and shown to the approver: an
+ * adopted file is read under its table's policy from then on, and a release deletes every file no column adopted.
+ */
+export type FileAdoption =
+	| { readonly step: 'adopt'; readonly collection: string; readonly table: string; readonly file: string; readonly line: number }
+	| { readonly step: 'release'; readonly collection: string; readonly file: string; readonly line: number }
+
+/** A file adoption step before the file it lies in is known. */
+type AdoptionStep = WithoutFile<FileAdoption>
+type WithoutFile<T> = T extends unknown ? Omit<T, 'file'> : never
+
 export interface MigrationRefusal {
 	/** What is refused, phrased to precede "is not allowed". */
 	readonly reason: string
@@ -84,6 +97,8 @@ export interface MigrationClassification {
 	/** One per refused statement, in order. A file with a refusal does not run. */
 	readonly refused: readonly MigrationRefusal[]
 	readonly deviations: readonly MigrationDeviation[]
+	/** The file's adoption steps, in order. */
+	readonly adoptions: readonly FileAdoption[]
 	/** The objects the file creates. */
 	readonly objects: readonly DatabaseObject[]
 	readonly changes: readonly ManifestChange[]
@@ -206,6 +221,7 @@ class Refused extends Error {
 /** What one statement adds when it is not refused. */
 interface Collected {
 	readonly deviations: { readonly kind: DeviationKind; readonly object: string; readonly line: number }[]
+	readonly adoptions: AdoptionStep[]
 	readonly changes: ManifestChange[]
 }
 
@@ -916,26 +932,46 @@ function adoptedTableNames(tokens: readonly SqlToken[]): ReadonlySet<string> {
 
 /**
  * `SELECT fabrika_files_copy_legacy('<collection>');` and `SELECT fabrika_files_release('<collection>');`: the only
- * calls of a framework function an application migration makes, each a statement of its own.
+ * calls of a framework function an application migration makes, each a statement of its own. Answers the function and
+ * the collection, or `undefined` for any other statement.
  */
-function isFileAdoptionCall(tokens: readonly SqlToken[]): boolean {
+function fileAdoptionCall(tokens: readonly SqlToken[]): { readonly called: string; readonly collection: string } | undefined {
 	const [select, name, open, collection, close] = tokens
 	const called = nameText(name)
-	return tokens.length === 5 && upperWord(select) === 'SELECT' && (called === FILES_COPY_FUNCTION || called === FILES_RELEASE_FUNCTION)
-		&& isPunct(open, '(')
-		&& collection?.kind === 'string' && /^[a-z_][a-z0-9_]*$/.test(collection.text ?? '') && isPunct(close, ')')
+	const value = collection?.kind === 'string' ? collection.text : undefined
+	const matches = tokens.length === 5 && upperWord(select) === 'SELECT' && (called === FILES_COPY_FUNCTION || called === FILES_RELEASE_FUNCTION)
+		&& isPunct(open, '(') && value !== undefined && /^[a-z_][a-z0-9_]*$/.test(value) && isPunct(close, ')')
+	return matches ? { called, collection: value } : undefined
+}
+
+/** The adoption an `INSERT … SELECT` from collection tables makes: each collection's files into the target table. */
+function adoptionSteps(tokens: readonly SqlToken[], adopted: ReadonlySet<string>): AdoptionStep[] {
+	// `checkQuery` refused a schema other than the application's, so a qualified target is its own table.
+	const table = objectNameAt(tokens, skipWords(tokens, 1, 'INTO'))?.name
+	const line = tokens[0]?.line ?? 1
+	if (table === undefined) return []
+	return [...adopted].sort().map((name) => ({ step: 'adopt', collection: name.slice(FILE_TABLE_PREFIX.length), table, line }))
 }
 
 function classifyStatement(tokens: readonly SqlToken[], context: Context, out: Collected): void {
 	const line = tokens[0]?.line ?? 1
 	const unicode = unicodeIdentifier(tokens)
 	if (unicode !== undefined) throw new Refused('a Unicode-escaped identifier (U&"…")', unicode.line)
-	if (!context.framework && isFileAdoptionCall(tokens)) return
-	const allowed = new Set([...fileTableNames(tokens), ...adoptedTableNames(tokens)])
+	const call = context.framework ? undefined : fileAdoptionCall(tokens)
+	if (call !== undefined) {
+		if (call.called === FILES_RELEASE_FUNCTION) out.adoptions.push({ step: 'release', collection: call.collection, line: tokens[0]?.line ?? 1 })
+		return
+	}
+	const adopted = adoptedTableNames(tokens)
+	const allowed = new Set([...fileTableNames(tokens), ...adopted])
 	const framework = context.framework ? undefined : frameworkReference(withoutFileReferences(tokens), allowed)
 	if (framework !== undefined) throw new Refused(`a reference to the framework's ${framework.name}`, framework.line)
 	const first = upperWord(tokens[0])
-	if (first === 'INSERT' || first === 'UPDATE' || first === 'DELETE') return checkQuery(tokens, context, first)
+	if (first === 'INSERT' || first === 'UPDATE' || first === 'DELETE') {
+		checkQuery(tokens, context, first)
+		if (!context.framework) out.adoptions.push(...adoptionSteps(tokens, adopted))
+		return
+	}
 	if (first === 'COMMENT' && upperWord(tokens[1]) === 'ON') return classifyComment(tokens, context)
 	if (first === 'DO') return classifyDo(tokens, context, out)
 	if (first === 'CREATE') return classifyCreate(tokens, context, out)
@@ -967,6 +1003,7 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 	const context: Context = { schema, functions: options.functions ?? new Set(), framework: options.framework === true, doBlocks: 0 }
 	const refused: MigrationRefusal[] = []
 	const deviations: MigrationDeviation[] = []
+	const adoptions: FileAdoption[] = []
 	const changes: ManifestChange[] = []
 	const keys = new Set<string>()
 	const { unterminated } = lexSql(sql)
@@ -974,7 +1011,7 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 		refused.push({ reason: 'a literal, a quoted name or a comment that never closes', file: options.file, line: unterminated })
 	}
 	for (const { tokens, line } of topLevelStatements(sql)) {
-		const out: Collected = { deviations: [], changes: [] }
+		const out: Collected = { deviations: [], adoptions: [], changes: [] }
 		try {
 			classifyStatement(tokens, context, out)
 		} catch (error) {
@@ -988,10 +1025,11 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 			keys.add(key)
 			deviations.push({ ...deviation, file: options.file })
 		}
+		adoptions.push(...out.adoptions.map((step) => ({ ...step, file: options.file })))
 		changes.push(...out.changes)
 	}
 	const objects = changes.flatMap((change) => (change.change === 'create' || change.change === 'create routine' ? [change.object] : []))
-	return { file: options.file, refused, deviations, objects, changes }
+	return { file: options.file, refused, deviations, adoptions, objects, changes }
 }
 
 /** The names of the functions and procedures a migration creates or renames to in `schema`, read without classifying them. */

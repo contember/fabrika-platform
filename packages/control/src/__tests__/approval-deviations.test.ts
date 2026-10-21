@@ -10,13 +10,14 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { toAppEnvDto } from '../api/registry/registration'
 import { completeApprovalUseCase } from '../approval/api'
-import { type AccessChange, classifyAccess, snapshotDeviations } from '../approval/diff'
+import { snapshotDeviations } from '../approval/diff'
 import { parseClassification, type StoredClassification } from '../approval/publish'
 import { readAccessSnapshot, snapshotReads, SnapshotRefused } from '../approval/read'
-import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
+import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializePublished, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
 import type { ControlRepositories } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
+import { classifyAccess, type WordedChange, wordsOf } from './helpers/access'
 import { memoryCommits } from './helpers/commits'
 import { BASE } from './helpers/contracts'
 import { createHarness } from './helpers/harness'
@@ -134,7 +135,7 @@ const digests = (classification: StoredClassification) => ({
 	baselineDigest: classification.baselineDigest,
 })
 
-const closer = (classification: { readonly changes: readonly AccessChange[] }): string[] =>
+const closer = (classification: { readonly changes: readonly WordedChange[] }): string[] =>
 	classification.changes.filter((change) => change.review === 'closer').map((change) => change.line)
 
 async function snapshotOf(files: Record<string, string>, settled: AccessSnapshot['migrations'] = []): Promise<AccessSnapshot> {
@@ -159,7 +160,7 @@ describe('declared reach in the reviewed snapshot', () => {
 		const stage = await deploy(w, 'stage')
 		expect(stage.status).toBe('succeeded')
 		expect(classified(stage).outcome).toBe('widening')
-		expect(classified(stage).changes).toEqual([{ effect: 'widens', line, review: 'closer' }])
+		expect(wordsOf(classified(stage).changes)).toEqual([{ effect: 'widens', line, review: 'closer' }])
 
 		const prod = await deploy(w, 'prod')
 		expect(prod.status).toBe('awaiting_approval')
@@ -223,7 +224,7 @@ describe('declared reach in the reviewed snapshot', () => {
 		w.files = commitOf()
 		const removal = await deploy(w, 'prod')
 		expect(removal.status).toBe('succeeded')
-		expect(classified(removal).changes).toEqual([{ effect: 'narrows', line: 'Endpoint `api.notes.summary` no longer declares raw SQL' }])
+		expect(wordsOf(classified(removal).changes)).toEqual([{ effect: 'narrows', line: 'Endpoint `api.notes.summary` no longer declares raw SQL' }])
 		expect(toAppEnvDto(await environment(w, 'prod')).deviationSubjects).toEqual([])
 	})
 
@@ -249,7 +250,7 @@ describe('database code in the reviewed snapshot', () => {
 		w.files = commitOf({}, [NOTES_MIGRATION, AUDIT_TRIGGER_MIGRATION])
 		const parked = await deploy(w, 'prod')
 		expect(parked.status).toBe('awaiting_approval')
-		expect(classified(parked).changes).toEqual([
+		expect(wordsOf(classified(parked).changes)).toEqual([
 			{ effect: 'widens', line: `New migration \`${AUDIT_TRIGGER_MIGRATION.name}\`` },
 			{ effect: 'widens', line: `Migration \`${AUDIT_TRIGGER_MIGRATION.name}\` declares function \`record_retitle\``, review: 'closer' },
 			{ effect: 'widens', line: `Migration \`${AUDIT_TRIGGER_MIGRATION.name}\` declares trigger \`notes.audit_retitle\``, review: 'closer' },
@@ -312,6 +313,68 @@ describe('the files a snapshot may read', () => {
 		).toBe(true)
 		expect(['apps/notes/README.md', 'apps/other/fabrika.contract.ts', 'fabrika.contract.ts'].some(reads)).toBe(false)
 		expect(snapshotReads('')('src/db/tables.ts')).toBe(true)
+	})
+})
+
+const ADOPTION_MIGRATION = {
+	name: '20261020120000_note_attachments.sql',
+	sql: `CREATE TABLE note_attachments (id uuid PRIMARY KEY, file uuid NOT NULL REFERENCES fabrika_files (id));
+SELECT fabrika_files_copy_legacy('attachments');
+INSERT INTO note_attachments (id, file) SELECT id, id FROM fabrika_files_attachments;
+SELECT fabrika_files_release('attachments');
+`,
+}
+
+describe('a file collection adopted into a table (ADR-0061)', () => {
+	const pair = (baseline: AccessSnapshot, candidate: AccessSnapshot): readonly WordedChange[] => classifyAccess(baseline, candidate).changes
+
+	test('the snapshot records the adoption and the release, keeps them through storage, and leaves the digest as it was', async () => {
+		const snapshot = await snapshotOf(commitOf({}, [NOTES_MIGRATION, ADOPTION_MIGRATION]))
+		expect(snapshot.fileAdoptions).toEqual([
+			{ step: 'adopt', collection: 'attachments', table: 'note_attachments', file: ADOPTION_MIGRATION.name, line: 3 },
+			{ step: 'release', collection: 'attachments', file: ADOPTION_MIGRATION.name, line: 4 },
+		])
+		const stored = parseSnapshot(serializeSnapshot(snapshot))
+		expect(stored.fileAdoptions).toEqual(snapshot.fileAdoptions)
+		const { fileAdoptions: _, ...without } = snapshot
+		expect(snapshotDigest(snapshot)).toBe(snapshotDigest(without))
+		expect(JSON.parse(serializeSnapshot(await snapshotOf(commitOf())))).not.toHaveProperty('fileAdoptions')
+		// A publication leaves them out: the diff reads them only from a candidate, and an older Control reads it.
+		expect(JSON.parse(serializePublished(snapshot))).not.toHaveProperty('fileAdoptions')
+		expect(parseSnapshot(serializePublished(snapshot))).toEqual(parseSnapshot(serializeSnapshot(without)))
+	})
+
+	test('a new adoption migration widens with closer review, its release narrows with closer review; an unchanged one adds nothing', async () => {
+		const before = await snapshotOf(commitOf())
+		const after = await snapshotOf(commitOf({}, [NOTES_MIGRATION, ADOPTION_MIGRATION]))
+		const adoption = pair(before, after).filter((change) => change.line.includes('collection `attachments`'))
+		expect(adoption).toEqual([
+			{
+				effect: 'widens',
+				line:
+					'Migration `20261020120000_note_attachments.sql` adopts the files of collection `attachments` into `note_attachments`: whoever the policy of `note_attachments` lets read a row reads its file',
+				review: 'closer',
+			},
+			{
+				effect: 'narrows',
+				line:
+					'Migration `20261020120000_note_attachments.sql` releases file collection `attachments`: its table is dropped, with every file no column adopted',
+				review: 'closer',
+			},
+		])
+		// A baseline that holds the file unchanged ran it already, also when it was read before adoptions were recorded.
+		const { fileAdoptions: _, ...readBefore } = after
+		expect(pair(readBefore, after)).toEqual([])
+	})
+
+	test('the run keeps the adoptions it was classified with, the publication leaves them out', async () => {
+		const w = await world()
+		w.files = commitOf({}, [NOTES_MIGRATION, ADOPTION_MIGRATION])
+		await publish(w, 'stage')
+		const published = await environment(w, 'stage')
+		expect(JSON.parse(published.published_snapshot_json ?? '{}')).not.toHaveProperty('fileAdoptions')
+		const run = await w.db.runs.getRun(published.published_run_id ?? '')
+		expect(JSON.parse(run?.snapshot_json ?? '{}').fileAdoptions).toHaveLength(2)
 	})
 })
 

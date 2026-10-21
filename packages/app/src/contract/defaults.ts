@@ -30,6 +30,17 @@ export const PROCEDURE_LIMITS = {
 } as const
 
 /**
+ * The slowest body a procedure or a webhook waits for: its deadline is `maxBytes` at `bytesPerSecond`, `minMs` at least.
+ * The handler's own `timeoutMs` starts after the last byte, so the approval diff names both.
+ */
+export const BODY_DEADLINE = { bytesPerSecond: 16 * 1024, minMs: 30_000 } as const
+
+/** How long a body of at most `maxBytes` may take to arrive. */
+export function bodyDeadlineMs(maxBytes: number): number {
+	return Math.max(BODY_DEADLINE.minMs, Math.ceil((maxBytes / BODY_DEADLINE.bytesPerSecond) * 1000))
+}
+
+/**
  * A procedure with file fields is `multipart/form-data`: its JSON input travels in the first part, named `input`, and
  * each file in a part named after its field. A field of several files sends one part per file, under its name.
  */

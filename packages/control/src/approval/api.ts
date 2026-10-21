@@ -2,7 +2,14 @@
 // principal from the console (`./human`), and the `protected` flag changed by the same rule.
 
 import type { AuthContext } from '@fabrika/auth'
-import type { AppEnvDto, ApprovalDto, CompleteApprovalRequest, ListResponse, SetEnvironmentProtectionRequest } from '@fabrika/control-contract'
+import type {
+	AccessChangeDto,
+	AppEnvDto,
+	ApprovalDto,
+	CompleteApprovalRequest,
+	ListResponse,
+	SetEnvironmentProtectionRequest,
+} from '@fabrika/control-contract'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import type { DeployLocks } from '@fabrika/platform'
 import { fail } from '../api/domain'
@@ -12,6 +19,8 @@ import { appEnvCrossOrigins, type AppEnvRow, type ControlRepositories, type RunR
 import { acquireLease, type LeaseClock, runLeaseKey } from '../lease'
 import { type ConsoleAdmission, requireHumanApprover } from './human'
 import { parseApproval, parseClassification, type StoredApproval } from './publish'
+import { parseSnapshot } from './snapshot'
+import { snapshotSurface } from './surface'
 
 export interface ApprovalUseCaseContext extends ConsoleAdmission {
 	readonly repositories: ControlRepositories
@@ -26,7 +35,7 @@ const LIST_LIMIT = 100
 
 export async function listApprovalsUseCase(c: ApprovalUseCaseContext): Promise<ListResponse<ApprovalDto>> {
 	const rows = await c.repositories.runs.listRunsAwaitingApproval(LIST_LIMIT)
-	return { items: rows.filter((row) => mayApprove(c.auth, row)).map(toApprovalDto) }
+	return { items: rows.filter((row) => mayApprove(c.auth, row)).map((row) => toApprovalDto(row, 'list')) }
 }
 
 export async function getApprovalUseCase(c: ApprovalUseCaseContext, runId: string): Promise<ApprovalDto> {
@@ -132,23 +141,38 @@ async function pendingCrossOrigins(c: ApprovalUseCaseContext, approval: Approval
 	return appEnv === null ? undefined : appEnvCrossOrigins(appEnv)
 }
 
-function toApprovalDto(run: RunRow): ApprovalDto {
+/** The candidate's surface of the endpoints the lines name, so the page shows what stands in front of each. */
+function namedEndpoints(run: RunRow, changes: readonly AccessChangeDto[]): ApprovalDto['endpoints'] {
+	if (run.snapshot_json === null) return []
+	const named = new Set(changes.flatMap((change) => (change.subject?.kind === 'endpoint' ? [change.subject.name] : [])))
+	return named.size === 0 ? [] : snapshotSurface(parseSnapshot(run.snapshot_json), named)
+}
+
+/**
+ * The approval as the console reads it. The list reads no snapshot: it shows no endpoint, and one stored snapshot that
+ * no longer parses must not take the whole list down with it.
+ */
+function toApprovalDto(run: RunRow, view: 'list' | 'detail' = 'detail'): ApprovalDto {
 	if (run.classification_json === null) throw new Error(`run ${run.id} has no classification`)
 	const classification = parseClassification(run.classification_json)
 	const approval = run.approval_json === null ? null : parseApproval(run.approval_json)
 	return {
 		run: toRunDto(run),
 		outcome: classification.outcome,
-		changes: classification.changes.map((change) => ({
-			effect: change.effect,
-			line: change.line,
-			...(change.review === undefined ? {} : { review: change.review }),
-			...(change.environmentOrigins === undefined ? {} : { environmentOrigins: change.environmentOrigins }),
-		})),
+		changes: [...classification.changes],
+		endpoints: view === 'list' ? [] : namedEndpoints(run, classification.changes),
 		candidateDigest: classification.candidateDigest,
 		baselineDigest: classification.baselineDigest,
 		baselineRunId: classification.baselineRunId,
 		protected: classification.protected,
-		approval: approval === null ? null : { principalId: approval.principalId, label: approval.label, approvedAt: approval.approvedAt },
+		approval: approval === null ? null : {
+			principalId: approval.principalId,
+			label: approval.label,
+			approvedAt: approval.approvedAt,
+			// An approval moves the run out of waiting in the same write, and a run parks again only when the approval does not
+			// match its new classification, so a waiting run's approval has lapsed. A refusal or a cancellation drops it, and a
+			// run that published after it ran with what it was approved for, or with no widening left.
+			holds: run.status !== 'awaiting_approval',
+		},
 	}
 }

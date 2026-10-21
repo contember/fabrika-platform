@@ -3,8 +3,9 @@
 // Only a 0.5 application declares `then`, so each snapshot is its commit read by that release's reader.
 
 import { describe, expect, test } from 'bun:test'
-import { classifyAccess, snapshotDeviations } from '../approval/diff'
+import { snapshotDeviations } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
+import { classifyAccess } from './helpers/access'
 import { snapshot05 } from './helpers/contracts'
 import { kitFiles } from './helpers/kit-contract'
 

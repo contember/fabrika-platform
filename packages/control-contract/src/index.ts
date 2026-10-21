@@ -481,19 +481,82 @@ export interface RunDto {
 	createdAt: number
 	startedAt: number | null
 	finishedAt: number | null
+	/** When someone asked to cancel the run; a run that finished with it set was cancelled, unless it succeeded first. */
+	cancelRequestedAt: number | null
+}
+
+/** What a change line is about (ADR-0050 §3). */
+export const CHANGE_SUBJECT_KINDS = [
+	'application',
+	'endpoint',
+	'mount',
+	'dimension',
+	'action',
+	'role',
+	'table',
+	'file-collection',
+	'file-kind',
+	'job',
+	'export',
+	'import',
+	'token',
+	'csp',
+	'migration',
+] as const
+
+export type ChangeSubjectKind = (typeof CHANGE_SUBJECT_KINDS)[number]
+
+export interface ChangeSubjectDto {
+	kind: ChangeSubjectKind
+	/** The endpoint id, the table, the role, the migration file, the CSP directive; the application's id for `application`. */
+	name: string
+	/** An endpoint's route: the candidate's row, or the baseline's for a removed endpoint. */
+	method?: EndpointMethod
+	path?: string
+}
+
+/** Who reaches an endpoint: the candidate's row, or the baseline's for a removed endpoint, in the surface's terms. */
+export interface ChangeAudienceDto {
+	reach: SurfaceReach
+	/** The link mount whose share links reach it, for a `link` reach. */
+	mount?: string
+	/** What a caller must hold, as `SurfaceEndpointDto.requirement` words it; null for an anonymous kind. */
+	requirement: string | null
+}
+
+/**
+ * Why a line needs closer review: a step off the paved road, something anyone without signing in sets off, a mutation
+ * served on `GET`, people becoming visible, or a file collection adopted or released.
+ */
+export const REVIEW_REASONS = ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption'] as const
+
+export type ReviewReason = (typeof REVIEW_REASONS)[number]
+
+/** What a call sets off, when the line says so. */
+export interface ChangeConsequenceDto {
+	kind: 'starts-job'
+	job: string
 }
 
 /**
  * One plain-language line of an access change. `effect` is `widens` when it can grant access the baseline did not,
  * `narrows` when it can only take access away, and `neutral` when it admits no one new and takes nothing away.
- * `review: 'closer'` marks a step off the paved road (declared reach, database code) or a change the diff cannot classify.
+ * `review: 'closer'` marks a line the approver reads the code behind (a step off the paved road, a call anyone sets off,
+ * …), and `reason` says which. A line classified before lines carried facts has no `rule`, `subject` or `reason`.
  */
 export interface AccessChangeDto {
 	effect: 'widens' | 'narrows' | 'neutral'
 	line: string
 	review?: 'closer'
+	reason?: ReviewReason
 	/** The line opens an endpoint to the pages on the origins the environment lists; `ApprovalDto.crossOrigins` names them. */
 	environmentOrigins?: true
+	/** The comparison that produced the line, a stable code (`endpoint.body-limit`); it never holds an application's name. */
+	rule?: string
+	subject?: ChangeSubjectDto
+	/** Who reaches the endpoint, on an endpoint subject. */
+	audience?: ChangeAudienceDto
+	consequence?: ChangeConsequenceDto
 }
 
 /** A run's access change against its environment's active snapshot (ADR-0050 §3). */
@@ -515,8 +578,18 @@ export interface ApprovalDto {
 	 * empty when the environment lists none.
 	 */
 	crossOrigins?: string[]
-	/** The human who approved it, once one did. */
-	approval: { principalId: string; label: string; approvedAt: number } | null
+	/**
+	 * The candidate's endpoints the change names, as the environment page's surface words them: who reaches each, what it
+	 * requires, and what else opens it or stands in front of it (another origin, a body limit, rate buckets, a challenge).
+	 * A removed endpoint is not among them. Empty for a run that stored no snapshot, and on the approvals list.
+	 */
+	endpoints: SurfaceEndpointDto[]
+	/**
+	 * The human who approved it, once one did. `holds` is false once the approval lapsed: the environment published
+	 * another change first, the change still widens against it, and the run waits for a new approval (ADR-0050 §2). A
+	 * refusal or a cancellation of such a run drops the approval, so a decided run's approval always held.
+	 */
+	approval: { principalId: string; label: string; approvedAt: number; holds: boolean } | null
 }
 
 /** Approve or refuse one parked run. The digests are the ones the approver read; a reclassified run refuses them. */
@@ -552,6 +625,7 @@ export interface RunLogResponse {
 	status?: RunStatus
 }
 
+export * from './approval-view.js'
 export type {
 	AdoptNamespaceInput,
 	AppEnvironmentInput,

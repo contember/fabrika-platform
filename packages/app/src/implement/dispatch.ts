@@ -44,6 +44,7 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
 import { fileFieldsOf } from '../contract/build'
 import {
+	bodyDeadlineMs,
 	BROWSER_CONFIG_FILE,
 	CHALLENGE_FIELD,
 	FILE_INPUT_PART,
@@ -67,7 +68,7 @@ import {
 import type { RequestExecutionContext } from '../fetch'
 import { FileWork, type StoredFileKinds, storedFilesHandle } from '../files/kinds'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
-import { abortedBody, bodyDeadlineMs, bootstrapPath, bootstrapResponse, readBoundedBody, withBootstrap } from './anonymous'
+import { abortedBody, bootstrapPath, bootstrapResponse, readBoundedBody, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
 import { boundedStream, handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'

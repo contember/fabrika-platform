@@ -81,7 +81,8 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [190](190-the-overview-reads-each-applications-environments-separately.md): The console overview calls Control once per application for its environments; one read for many applications.
 - [191](191-the-audit-log-cannot-leave-out-admin-reads.md): `audit.list` cannot leave out admin reads, so the console pages past them in the browser.
 - [192](192-a-signed-in-person-cannot-manage-their-own-account.md): No self-service password change or sign-in list; an IAM account page, after rewriting ADR-0020.
-- [193](193-loose-ends-of-the-declared-surface.md): The approval of an upgrade to 0.7, admission buckets, tokens on Cloudflare and other P2s of the surface revision.
-- [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: a claim before the dispatcher sends (two double-send paths), maintenance and console edges, the sender's error mapping, expired keys' vault values.
+- [193](193-loose-ends-of-the-declared-surface.md): The legacy file marker, admission buckets, tokens on Cloudflare, the platform rollback and other P2s of the surface revision.
+- [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: maintenance and console edges, the sender's error mapping, expired keys' vault values, and the sprint's end-to-end run.
+- [196](196-mcp-authoring-has-no-live-acceptance.md): MCP authoring was never run with a real client, GitHub App and Zerops build; the sprint's known limits.
 - [197](197-local-compat-has-no-0.7-release.md): `local:compat` deploys no Notes at v0.7.0: its proof needs a release without a file collection.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

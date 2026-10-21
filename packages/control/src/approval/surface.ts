@@ -1,13 +1,24 @@
-import { APP_CALLER_PREFIX, type ContractArtifact, type EndpointRow, type FormMountArtifact, isFileShape, type SchemaShape } from '@fabrika/auth-core'
+import {
+	type ContractArtifact,
+	type EndpointRow,
+	type FormMountArtifact,
+	isFileShape,
+	type ProcedureArtifact,
+	type SchemaShape,
+} from '@fabrika/auth-core'
 import { SURFACE_REACHES, type SurfaceEndpointDto, type SurfaceReach } from '@fabrika/control-contract'
-import { attachmentName, crossOriginReach, requirementPhrase, storedFileName } from './diff'
+import { attachmentName, bucketBounds, crossOriginReach, endpointReach, requirementPhrase, runPhrase, storedFileName } from './diff'
 import { type AccessSnapshot, compareText } from './snapshot'
 
-/** Every endpoint a snapshot publishes, grouped by who reaches it, most exposed first, then by path and method. */
-export function snapshotSurface(snapshot: AccessSnapshot): SurfaceEndpointDto[] {
+/**
+ * Every endpoint a snapshot publishes, or only those `only` names, grouped by who reaches it, most exposed first, then by
+ * path and method.
+ */
+export function snapshotSurface(snapshot: AccessSnapshot, only?: ReadonlySet<string>): SurfaceEndpointDto[] {
 	const contract = snapshot.contract
 	if (contract === null) return []
 	return contract.endpoints
+		.filter((row) => only === undefined || only.has(row.id))
 		.map((row) => surfaceEndpoint(contract, row))
 		.sort((a, b) => reachRank(a.reach) - reachRank(b.reach) || compareText(a.path, b.path) || compareText(a.method, b.method))
 }
@@ -18,18 +29,11 @@ function surfaceEndpoint(contract: ContractArtifact, row: EndpointRow): SurfaceE
 		method: row.method,
 		path: row.path,
 		kind: row.kind,
-		reach: reachOf(row),
+		reach: endpointReach(row),
 		callers: [...row.callers],
 		requirement: row.requirement === null ? null : requirementPhrase(row.requirement),
 		notes: notesOf(contract, row),
 	}
-}
-
-function reachOf(row: EndpointRow): SurfaceReach {
-	if (row.requirement === null) return 'anyone'
-	if (row.callers.includes('link')) return 'link'
-	if (row.callers.some((caller) => caller.startsWith(APP_CALLER_PREFIX))) return 'app'
-	return row.callers.includes('machine') ? 'machine' : 'human'
 }
 
 function notesOf(contract: ContractArtifact, row: EndpointRow): string[] {
@@ -43,6 +47,8 @@ function notesOf(contract: ContractArtifact, row: EndpointRow): string[] {
 	if (row.kind === 'upload' && row.admission !== null) notes.push(uploadLimit(row.admission.maxBytes))
 	const mount = row.source.kind === 'mount' ? contract.mounts[row.source.name] : undefined
 	if (mount?.kind === 'form') notes.push(...formProtection(mount))
+	const rules = contract.procedures?.[row.id]
+	if (rules !== undefined) notes.push(...procedureProtection(row, rules))
 	if (mount?.kind === 'webhook') notes.push(`verifies a ${mount.scheme} signature`)
 	return notes
 }
@@ -67,6 +73,16 @@ function formProtection(form: FormMountArtifact): string[] {
 	if (form.challenge !== undefined) notes.push(`${form.challenge.provider} challenge`)
 	if (form.honeypot !== undefined) notes.push(`honeypot field \`${form.honeypot}\``)
 	return notes.length === 0 ? ['no rate limit and no challenge'] : notes
+}
+
+/**
+ * A procedure's buckets and challenge, which stand in front of its handler, then how long it waits for a body of what
+ * size and how long it runs, in the approval's words. A public one without a bucket or a challenge says so, as a form
+ * does; a signed-in one names only the buckets it has.
+ */
+function procedureProtection(row: EndpointRow, rules: ProcedureArtifact): string[] {
+	const guards = [...bucketBounds(rules.rate), ...(rules.challenge === null ? [] : [`${rules.challenge.provider} challenge`])]
+	return [...(guards.length === 0 && row.requirement === null ? ['no rate limit and no challenge'] : guards), runPhrase(row, rules.timeoutMs)]
 }
 
 function reachRank(reach: SurfaceReach): number {
