@@ -108,6 +108,7 @@ async function fixture() {
 			manifest: { apps: [] },
 			iamUrl: 'https://iam.example.test',
 			iamKey: 'test-key',
+			reuseActive: false,
 			signal,
 			checkpoint,
 			boundary: async () => {},

@@ -214,7 +214,10 @@ bun test
   `wait: 'started'` a running build of the same manifest is answer enough. A fresh attempt writes the IAM
   variables, records the version untriggered, uploads the archive, records `triggered`, then sends the build on
   a signal that only a lost lease aborts. A cancelled deploy never cancels the proxy build; it stays recorded for
-  `reconcile`.
+  `reconcile`. A deploy's or a registry change's republish (`reuseActive`) builds nothing when the recorded
+  `proxyDeployment` names the same pin and `manifestSha256` (which covers the IAM issuer, the IAM key and every proxy
+  secret) and its version still reads `ACTIVE` on the proxy service; any doubt rebuilds. Provisioning and `reconcile`
+  always rebuild.
 - **The proxy manifest is the build archive's one data file, never a variable (ADR-0045).** The manifest (compiled
   from the members core passes, `src/namespace/manifest.ts`) rides as `proxy.manifest.json` beside the exact commit,
   and the upload must report its sha256 or the attempt fails. `zeropsProxyManifestCarrier` reads the PINNED

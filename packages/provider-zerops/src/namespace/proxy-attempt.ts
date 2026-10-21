@@ -44,6 +44,11 @@ export interface ZeropsProxyRepublishInput {
 	/** Aborts with `lease_lost` when the namespace lease goes, and with `cancel_requested` when a deploy is cancelled. */
 	readonly signal: AbortSignal
 	readonly wait: 'started' | 'active'
+	/**
+	 * Reuse the proxy's ACTIVE version when it was built from this pin with this manifest identity. A deploy and a
+	 * registry change pass true; provisioning and reconcile rebuild, so an operator's repair always reaches the platform.
+	 */
+	readonly reuseActive: boolean
 	/** Persist the target; the caller fences the write on the namespace lease. */
 	readonly checkpoint: (target: ZeropsNamespaceTarget) => Promise<void>
 	readonly boundary: () => Promise<void>
@@ -87,6 +92,28 @@ const writeProxyIam = async (input: ZeropsProxyRepublishInput, serviceId: string
 /** One line per secret, sorted, so the attempt's identity changes when any secret does and never carries one. */
 const proxySecretsDigest = async (secrets: ReadonlyMap<string, string>): Promise<string> =>
 	digest([...secrets].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([key, value]) => `${key}=${value}`).join('\n'))
+
+/**
+ * Whether the proxy already runs `manifestSha256` on this pin: the recorded deployment names both, and its version is
+ * still the service's ACTIVE one. Any doubt, a failed read included, answers false, and the proxy is rebuilt.
+ */
+const servesManifest = async (input: ZeropsProxyRepublishInput, target: ZeropsNamespaceTarget, manifestSha256: string): Promise<boolean> => {
+	const deployed = target.proxyDeployment
+	const pin = target.proxySource
+	if (
+		target.ready !== true || deployed === undefined || deployed.manifestSha256 !== manifestSha256
+		|| deployed.commitSha !== pin.commitSha || deployed.descriptorSha256 !== pin.descriptor.sha256
+		|| deployed.repository.owner !== pin.repository.owner || deployed.repository.name !== pin.repository.name
+	) return false
+	await input.boundary()
+	try {
+		const version = await input.api.getAppVersion({ appVersionId: deployed.appVersionId, signal: input.signal })
+		return version.id === deployed.appVersionId && version.status === ZEROPS_ACTIVE && version.serviceStackId === target.proxyServiceId
+	} catch {
+		input.signal.throwIfAborted()
+		return false
+	}
+}
 
 /**
  * Rebuild the namespace proxy with `manifest` (ADR-0044). The attempt is recorded as `proxyBuild` and never
@@ -172,6 +199,8 @@ export async function republishProxy(input: ZeropsProxyRepublishInput): Promise<
 		if (await settle(inherited) === 'running') return target
 		if (inherited.manifestSha256 === manifestSha256) return target
 	}
+
+	if (input.reuseActive && target.proxyBuild === undefined && await servesManifest(input, target, manifestSha256)) return target
 
 	if (input.source === undefined) throw new Error('Zerops namespace source client is required')
 	const runId = crypto.randomUUID()

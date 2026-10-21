@@ -8,6 +8,7 @@ import { createZeropsNamespaceCapabilities } from '../namespace'
 import { zeropsNamespaceTargetCodec } from '../namespace/codec'
 import { ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, ZEROPS_NAMESPACE_IAM_KEY_VARIABLE } from '../namespace/constants'
 import { asNamespaceError } from '../namespace/errors'
+import { compileNamespaceProxyManifest } from '../namespace/manifest'
 import { republishProxy, type ZeropsProxyApi, type ZeropsProxyRepublishInput } from '../namespace/proxy-attempt'
 import type { ZeropsNamespaceTarget } from '../namespace/types'
 import type { ZeropsSourceArchive, ZeropsSourcePort } from '../source/port'
@@ -66,7 +67,7 @@ function fixture(proxySource = pin) {
 		getAppVersion: async input => {
 			calls.push(`observe:${input.appVersionId}`)
 			if (deleted.has(input.appVersionId)) throw new ZeropsApiError('absent', 400, 'appVersionNotFound')
-			return { id: input.appVersionId, status }
+			return { id: input.appVersionId, status, serviceStackId: 'proxy' }
 		},
 	}
 	const source: ZeropsSourcePort = {
@@ -103,6 +104,7 @@ function fixture(proxySource = pin) {
 		iamKey: 'not-logged',
 		signal: controller.signal,
 		wait: 'started',
+		reuseActive: false,
 		sleep: async () => {},
 		boundary: async () => {
 			calls.push('boundary')
@@ -202,6 +204,66 @@ test('an inherited triggered attempt of the same manifest settles without anothe
 	const result = await republishProxy({ ...f.input(), wait: 'active' })
 	expect(result.proxyDeployment?.appVersionId).toBe('v1')
 	expect(effects(f.calls)).toEqual([])
+})
+
+test('a republish of the manifest the ACTIVE proxy already serves reuses it, with no write and no build', async () => {
+	const f = fixture()
+	const secrets = new Map([['FABRIKA_PROXY_SECRET_A', 'secret-one']])
+	await republishProxy({ ...f.input(), wait: 'active', proxySecrets: secrets })
+	f.calls.length = 0
+	const result = await republishProxy({ ...f.input(), wait: 'active', reuseActive: true, proxySecrets: secrets })
+	expect(result.proxyDeployment?.appVersionId).toBe('v1')
+	expect(f.calls).toEqual(['boundary', 'observe:v1'])
+})
+
+test('a republish rebuilds when the manifest, a secret, the pin or the ACTIVE version differs from the deployment', async () => {
+	const changes: { readonly name: string; readonly change: (f: ReturnType<typeof fixture>) => Promise<Partial<ZeropsProxyRepublishInput>> }[] = [
+		{ name: 'manifest', change: async () => ({ manifest: CHANGED }) },
+		{ name: 'secret', change: async () => ({ proxySecrets: new Map([['FABRIKA_PROXY_SECRET_A', 'secret-two']]) }) },
+		{ name: 'IAM key', change: async () => ({ iamKey: 'rotated-key' }) },
+		{
+			name: 'pin',
+			change: async (f) => {
+				const deployed = f.target().proxyDeployment
+				if (deployed === undefined) throw new Error('expected a deployment')
+				await f.input().checkpoint({ ...f.target(), proxyDeployment: { ...deployed, commitSha: 'c'.repeat(40) } })
+				return {}
+			},
+		},
+		{
+			name: 'version',
+			change: async (f) => {
+				f.status('BACKUP')
+				return {}
+			},
+		},
+		{
+			name: 'unreadable version',
+			change: async (f) => {
+				f.api.getAppVersion = async () => {
+					throw new Error('unreachable')
+				}
+				return {}
+			},
+		},
+	]
+	for (const { name, change } of changes) {
+		const f = fixture()
+		const secrets = new Map([['FABRIKA_PROXY_SECRET_A', 'secret-one']])
+		await republishProxy({ ...f.input(), wait: 'active', proxySecrets: secrets })
+		const changed = await change(f)
+		f.calls.length = 0
+		await republishProxy({ ...f.input(), wait: 'started', reuseActive: true, proxySecrets: secrets, ...changed })
+		expect({ name, built: f.calls.includes('build:v2') }).toEqual({ name, built: true })
+	}
+})
+
+test('without reuseActive a republish of the same manifest rebuilds, so a reconcile always reaches the platform', async () => {
+	const f = fixture()
+	await republishProxy({ ...f.input(), wait: 'active' })
+	f.calls.length = 0
+	await republishProxy({ ...f.input(), wait: 'started' })
+	expect(f.calls).toContain('build:v2')
 })
 
 for (const rotation of ['issuer', 'key'] as const) {
@@ -502,4 +564,42 @@ test('the republish capability refuses a namespace with no proxy or one that is 
 		})).rejects.toThrow('not ready')
 	}
 	expect(calls).toEqual([])
+})
+
+test("a deploy's republish reuses the ACTIVE proxy of an unchanged manifest; only its version is read", async () => {
+	const f = fixture()
+	await republishProxy({ ...f.input(), manifest: compileNamespaceProxyManifest('apps-prod', []), wait: 'active' })
+	const deployed = f.target().proxyDeployment
+	if (deployed === undefined) throw new Error('expected a deployment')
+	const calls: string[] = []
+	const capabilities = createZeropsNamespaceCapabilities({
+		clientId: 'client',
+		proxySource: pin,
+		iamUrl: 'https://iam.example.test',
+		iamKey: 'not-logged',
+		api: {
+			...createZeropsApi({
+				token: 'unused',
+				fetchImpl: async (url) => {
+					calls.push(String(url))
+					throw new Error('no other platform call expected')
+				},
+			}),
+			getAppVersion: async (input) => {
+				calls.push(`observe:${input.appVersionId}`)
+				return { id: input.appVersionId, status: 'ACTIVE', serviceStackId: 'proxy' }
+			},
+		},
+	})
+	const republish = capabilities.republish
+	if (republish === undefined) throw new Error('republish capability missing')
+	const result = await republish({
+		namespace: { id: 'apps-prod', env: 'prod', target: { provider: 'zerops', version: 1, payload: zeropsNamespaceTargetCodec.encode(f.target()) } },
+		members: [],
+		wait: 'active',
+		signal: new AbortController().signal,
+		events: { checkpoint: async () => {}, boundary: async () => {} },
+	})
+	expect(result.settled).toBe(true)
+	expect(calls).toEqual([`observe:${deployed.appVersionId}`])
 })

@@ -222,6 +222,7 @@ const deployProxy = async (
 	target: NormalizedZeropsNamespaceTarget,
 	options: ZeropsNamespaceOptions,
 	wait: ProviderNamespaceRepublishInput['wait'],
+	reuseActive: boolean,
 ): Promise<{ namespace: ProviderDeploymentNamespace; target: NormalizedZeropsNamespaceTarget }> => {
 	let currentNamespace = namespace
 	const manifest = compileNamespaceProxyManifest(namespace.id, input.members)
@@ -236,6 +237,7 @@ const deployProxy = async (
 		iamKey: options.iamKey,
 		signal: input.signal,
 		wait,
+		reuseActive,
 		sleep: options.sleep ?? defaultSleep,
 		boundary: () => input.events.boundary(),
 		checkpoint: async next => {
@@ -255,7 +257,7 @@ const republishNamespace = async (
 	if (target.proxyServiceId === undefined || (target.proxyBuild === undefined && !target.ready)) {
 		throw new Error(`Namespace ${namespace.id} is not ready`)
 	}
-	const deployed = await deployProxy(input, namespace, target, options, input.wait)
+	const deployed = await deployProxy(input, namespace, target, options, input.wait, true)
 	return { namespace: deployed.namespace, settled: deployed.target.proxyBuild === undefined && deployed.target.ready }
 }
 
@@ -433,7 +435,7 @@ const runNamespaceMutation = async (
 	}
 	namespace = await checkpoint(input, namespace, target)
 
-	const deployed = await deployProxy(input, namespace, target, options, 'active')
+	const deployed = await deployProxy(input, namespace, target, options, 'active', false)
 	namespace = deployed.namespace
 	target = { ...deployed.target, proxyConfigured: true }
 	// After the deploy, because the platform refuses a service with no HTTP port — and never before `ready`
