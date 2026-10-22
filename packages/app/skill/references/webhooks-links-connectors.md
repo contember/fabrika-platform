@@ -89,7 +89,7 @@ export const integrations = app.group({ callers: ['human'] }, (r) => ({
   that binds it takes an `app` capability: `access: { action, app: true }`, `binds`, and
   `ctx.webhooks('<webhook>').bind(ctx.app, account)`.
 - `limits: { maxBytes?, timeoutMs? }`: the body is 1 MiB by default and at most 48 MiB; the handler runs 10 s by
-  default, at most 60 s. A webhook may declare `kicks`, `signs`, `egress`, `sql` and `unscoped`, and `ctx.files.put`
+  default, at most 60 s (25 s on Cloudflare). A webhook may declare `kicks`, `signs`, `egress`, `sql` and `unscoped`, and `ctx.files.put`
   stores a file a provider sends (an inbound e-mail's attachment) for a file column: raise `limits.maxBytes` to the
   mail you accept.
 - Not covered: a provider that validates its URL with a `GET`, or that needs a custom answer body.

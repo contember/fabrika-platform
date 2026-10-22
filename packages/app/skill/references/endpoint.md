@@ -421,7 +421,7 @@ export const workloadRows = (
 ## Raw SQL: `sql: 'read'`
 
 Raw SQL is legitimate for a join, a report, an `OR` or `IS NULL` filter, or a bulk write. Declare it on the endpoint;
-`ctx.sql` exists only there.
+`ctx.sql` exists only there. It runs on Postgres only: on Cloudflare a site that declares `sql` is refused.
 
 ```ts src/reports/endpoints.ts
 import { attachment } from '@fabrika/app/contract'
@@ -564,7 +564,7 @@ Every procedure takes `admission` (who may send it, how often) and `limits` (how
 | `admission.origins`                 | `'same-origin'` (default) or `'listed'`                                                                | `'same-origin'`, `'listed'` or `'any'`                                                                                |
 | `admission.challenge`               | none                                                                                                   | `{ provider: 'altcha', secret, action?, cost?, maxAgeMs? }`, or `{ provider: 'turnstile', secret, siteKey, action? }` |
 | `limits.maxBytes`                   | 64 KiB, at most 1 MiB; with file fields 64 KiB plus each file at its kind's `maxBytes`, at most 48 MiB | the same                                                                                                              |
-| `limits.timeoutMs`                  | 10 s, at most 60 s                                                                                     | the same                                                                                                              |
+| `limits.timeoutMs`                  | 10 s, at most 60 s; at most 25 s on Cloudflare                                                         | the same                                                                                                              |
 
 - A declared `rate` merges into the default; `null` turns one bucket off. Past a bucket the answer is 429.
 - Every bucket is charged before the body is read and stays charged whatever the handler does. A bucket is a database

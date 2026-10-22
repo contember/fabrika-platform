@@ -42,10 +42,39 @@ this one import.
   checks its digest. The runner writes it to `<workspace>/<runId>.access.json` beside the checkout and names it in
   `FABRIKA_APPROVED_ACCESS_FILE`, set after every job-supplied name; the executor reads it (`readApprovedAccess`)
   before the config runs. Unset outside a runner (a local deploy).
-- **A deploy that carries a job's, a webhook's or a public procedure's key is refused** before the runner is asked:
-  a Worker runs no workload (they need `@fabrika/db` on Postgres), and the key would only sit in a generated config.
-  So is a contract with token purposes: `FABRIKA_TOKEN_KEYS` would be a plain-text Worker variable.
-  `FABRIKA_APP_ORIGIN` passes as a Worker var.
+- **A contract application from framework 0.9 runs in its Durable Object; an older one keeps its stateless Worker**
+  (ADR-0065, ADR-0062). The release gate is `runsInObject` (`src/contract-support.ts`), read from the release Control
+  read the application with: `ProviderEnvironment.access.checker` in `control.ts`, and
+  `CloudflareRunnerJob.approvedAccess.framework` in the deployer. Before 0.9, `control.ts` refuses a job's, a webhook's
+  or a public procedure's key, installation mail and token purposes (`assertStatelessEnvironment`) before the runner is
+  asked, and sends no `FABRIKA_PROXY_SECRET`; the deployer gives that Worker no object, bucket or tick. An approved
+  access that names no release (a Control older than the runner) deploys the stateless shape; a run without approved
+  access (a local deploy) deploys the object.
+- **What an application on Cloudflare cannot run is refused twice** (`assertCloudflareContract`): in `control.ts`
+  before the clone, and in the deployer from the contract it serves. A file kind or collection with `scan: true` (no
+  scanner runs there), a site that declares `sql` (`ctx.sql`, which SQLite does not serve), and a procedure's or a
+  webhook's `timeoutMs` above `CLOUDFLARE_MAX_HANDLER_MS` (25 s): the handler holds the object's transaction, and
+  workerd resets an object whose transaction runs about 30 s.
+- **The platform writes the application Worker's runtime** (`withApplicationRuntime` in `src/provider.ts`, from 0.9):
+  `FABRIKA_APPLICATION` bound first to its own `FabrikaApplication` (`new_sqlite_classes`, so oblaka numbers its one
+  migration `v0001` whatever else the application binds, and the tag never moves), `FABRIKA_FILES` to the environment's
+  bucket `<env>-<app>-files`, and `triggers.crons` always written: `* * * * *` when the contract has a job or a file
+  kind, else `[]`, which clears an older tick (wrangler leaves schedules alone when `triggers` is absent). The names are
+  `@fabrika/app/build`'s. `assertNoFrameworkVariables` refuses an authored binding of either name and authored
+  `triggers` before anything is generated; `assertApplicationRuntime` (`src/bounds.ts`) refuses any other object binding of that name or
+  class, a `script_name` on it, a migration history that does not open with that `v0001` or names the class again
+  (a committed `wrangler.jsonc` with a history of its own), another `FABRIKA_FILES` bucket, and triggers the platform
+  did not write.
+- **Every managed credential is a Worker secret, uploaded with the version** (`src/managed-secrets.ts`): token keys,
+  workload keys, mail, the platform transport, the Operations DSN, the IAM RPC key and the proxy secret. Only the names
+  in `PUBLIC_MANAGED_VARIABLES` (the release, the digest, the issuer and audience, the app id, the environment, the IAM
+  RPC URL, `FABRIKA_APP_ORIGIN`), each import's `_URL` and the platform receivers' URLs are plain vars; any other name
+  is a secret (fail closed). `wrangler deploy --secrets-file` (wrangler 4.74 or newer) reads them from a 0600 file in a
+  directory of its own, removed however the deploy ends; never write one into a generated config. After the deploy,
+  `deleteStaleSecrets` deletes each framework secret the Worker still holds that this deploy no longer writes.
+- **Control issues a proxy secret per environment** because the provider declares `applicationHopSecret`
+  (`createCloudflareControlProvider`): the application Worker forwards every request to its object with it, and the
+  object refuses a request without it.
 - **Every framework variable of each generated config is the platform's** (`assertFrameworkVariables` in
   `src/bounds.ts`, before provisioning and before each deploy): a binding's `configureBinding` writes the config
   after the deployer injected its values, so the config is where `FABRIKA_CONTRACT_DIGEST` is checked.
@@ -73,7 +102,8 @@ this one import.
 - **What a generated config may carry:**
   - keys only from `CONFIG_KEYS`; anything else (`build`, `site`, `tail_consumers`, an unreviewed binding
     kind) is refused. Adding a key is a security decision: it must not be able to name a resource, run a
-    command, or publish a directory;
+    command, or publish a directory. The platform proxy's config alone may also carry `define`, exactly the one
+    `PROXY_MANIFEST_DEFINE` literal the deployer baked (`assertBakedManifest`);
   - exactly one application config beside the platform proxy's: "only the application Worker and its proxy
     are deployable";
   - on every name it binds — the Worker's own name, `services`, D1, R2, queues, containers, workflows, a
@@ -126,7 +156,9 @@ this one import.
   endpoint table (`contractProxyTable(artifact)`). The contract is the one Control approved
   (`CloudflareDeployRun.contract`). Only outside Control is it read from the config's directory by
   `@fabrika/check/contract`'s static reader (`readContract` collaborator) — never evaluated. The deployer writes
-  `FABRIKA_CONTRACT_DIGEST` into the application Worker. An IAM schema whose `contract: true` disagrees with the
+  `FABRIKA_CONTRACT_DIGEST` into the application Worker. The proxy's manifest is baked into its bundle through
+  wrangler's `define` (`PROXY_MANIFEST_DEFINE`, read by `proxy-worker.ts` as `__FABRIKA_PROXY_MANIFEST__`), not a
+  Worker variable, which Cloudflare caps at 5,120 bytes; the wire format is unchanged. An IAM schema whose `contract: true` disagrees with the
   contract is refused. The manifest entry carries the contract's CSP origins and the origin of the run's
   `FABRIKA_OPERATIONS_DSN` (`operationsOrigin`, never the key), and the Worker replaces every header of the policy on
   the application's answer, or applies the file treatment for a download endpoint or a `response: 'file'` row, sets a cacheable row's lifetime
@@ -148,7 +180,7 @@ this one import.
   `FABRIKA_CONNECT_<IMPORT>` service binding to the owner's proxy Worker (`<env>-<owner>-proxy`), and
   `DeploymentBounds.connectors` admits exactly that binding, by name and remote, on the application Worker. An
   authored binding under a framework name is refused like an authored variable. Control writes the import's
-  `_KEY` and `_URL` as managed variables; a job's or a webhook's key is still refused (they run on Zerops only).
+  `_KEY` (a Worker secret) and `_URL` as managed values.
 - **Proxy invocation logs stay disabled.** The reserved handoff callback carries a one-time code in
   its query string, and Cloudflare's automatic invocation metadata is outside the proxy's redaction
   layer. Structured application logs remain enabled and redact request queries.

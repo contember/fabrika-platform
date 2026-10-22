@@ -22,6 +22,39 @@ this page.
    tests, then `fabrika-check` and the application's tests. The skill in `node_modules/@fabrika/app/skill/` describes
    the new release.
 
+## 0.8 → 0.9
+
+0.9 changes no 0.8 form. On Zerops, raise the pin; nothing else changes. On Cloudflare an application environment now
+runs in one Durable Object over its own SQLite
+([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)): `ctx.db`
+and table policies, jobs and kicks, webhooks, public procedures, file kinds (stored in R2), signed tokens and
+installation mail all run there. On 0.8 its Worker was stateless, and the deploy refused each of them.
+
+An application on Cloudflare that raises its pin to 0.9:
+
+1. Regenerates its entry with `fabrika app build`. `fabrika/entry.generated.ts` now exports `FabrikaApplication` and
+   imports `fabrika/migrations.generated.ts`, which the build writes from `db/migrations/`. Commit both where the
+   application commits its entry.
+2. Writes its migrations in SQLite under `db/migrations/` (the skill's `references/table-and-migration.md`), runs
+   `fabrika db codegen`, which needs no database URL, and serves `scoped(tables)` from `defineApp(vocabulary, tables)`
+   as on Zerops. There is no `fabrika db migrate`: the object applies the framework's tables and then the
+   application's migrations when it boots. `fabrika db test-scaffold` writes the generated tests on
+   `@fabrika/db/testing-sqlite`, which runs in memory; the application's own tests import `testDatabase` from there.
+   An application without tables skips this step.
+3. Keeps every procedure's and webhook's `limits.timeoutMs` at or below 25 s, declares no `sql` and no file kind with
+   `scan: true`: a handler holds the object's transaction, and a Durable Object has no runtime role under raw SQL and no
+   scanner. The checker (`cloudflare-sql`, `cloudflare-scan`), the deploy and the boot refuse each.
+4. Declares no `FABRIKA_APPLICATION` or `FABRIKA_FILES` binding and no cron trigger in `fabrika.config.ts`: the
+   platform writes them, and refuses a config that sets them.
+5. Runs locally on Lopata 0.30 or newer, which implements the object's `storage.transaction`.
+
+The first deploy at 0.9 adds what the object needs: the `FabrikaApplication` class and its Durable Object migration
+(`v0001`, `new_sqlite_classes`), the environment's bucket (`<env>-<app>-files`), the minute tick when the contract has
+a job or a file kind, and the proxy secret that the Worker forwards each request with, which Control issues per
+environment. The object's database starts empty. An application that stays on 0.8 keeps its stateless Worker: Control
+names the release it read the application with, and the deployer gives that Worker no object, bucket, tick or proxy
+secret, and refuses its jobs, webhooks, public procedures, installation mail and token purposes as before.
+
 ## 0.7 → 0.8
 
 0.8 changed no 0.7 form: it added the ALTCHA challenge provider. Raise the pin; nothing else changes. To move a public

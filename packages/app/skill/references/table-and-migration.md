@@ -1,7 +1,7 @@
 # references/table-and-migration.md — the vocabulary, migrations and table policies
 
-The order is fixed: the vocabulary, then the migration, then `fabrika db migrate` and `fabrika db codegen`, then the
-table policies, which take the generated `columns`.
+The order is fixed: the vocabulary, then the migration, then `fabrika db migrate` and `fabrika db codegen` (on
+Cloudflare `codegen` only), then the table policies, which take the generated `columns`.
 
 ## The vocabulary
 
@@ -154,6 +154,23 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
   a function overload, and calls outside the reviewed built-ins.
 - Never edit, rename or delete a committed migration; add a new one. Change a schema by expand, switch, contract, and
   ask before you drop or rename anything.
+
+## On Cloudflare: SQLite migrations
+
+An application on Cloudflare (its `fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`) writes
+its migrations in SQLite. Its Durable Object applies them when it boots, each file once in name order, in a transaction
+of its own, so there is no `fabrika db migrate`; `fabrika db codegen` applies them to an in-memory database and needs
+no URL. The rules above for keys, chains, composite foreign keys, `version` and `created_by` hold unchanged, and the
+database enforces foreign keys.
+
+- The declared types codegen reads: `TEXT` (a UUID too), `INTEGER`, `REAL`, `BLOB`; `BOOLEAN`, stored as 0 or 1 and
+  read as a boolean; `TIMESTAMP`, stored as UTC ISO text and read as a `Date`; `DATE`, `YYYY-MM-DD` text. Any other
+  declared type is refused. A `STRICT` table admits only `INTEGER`, `REAL`, `TEXT` and `BLOB`, so a table with a
+  `BOOLEAN`, `TIMESTAMP` or `DATE` column is not `STRICT`.
+- SQLite has no `ENUM`: a column with a fixed set of values is `TEXT` with `CHECK (<column> IN ('a', 'b'))`. The
+  generated tests write its first value.
+- No transaction control (`BEGIN`, `COMMIT`, `SAVEPOINT`) and no Postgres syntax (`timestamptz`, `::` casts,
+  `GENERATED ALWAYS AS IDENTITY`, `CREATE TYPE`).
 
 ## Database code is a declared deviation
 

@@ -258,7 +258,7 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 - No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`.
 - Never log an error object, a request, headers or the environment.
 - Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,
-  `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
+  `fabrika/migrations.generated.ts`, `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
 
 ## Ask the human first
 
@@ -293,6 +293,20 @@ bunx fabrika db test-scaffold                               # writes the generat
 bun test --isolate                                          # until it passes; needs FABRIKA_TEST_POSTGRES_URL; a skip proves nothing
 bunx tsc --noEmit                                           # once, at the end
 bunx fabrika-check .                                        # once, after tsc; refusals fail; hints print below them
+```
+
+**On Cloudflare** (`fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`) the application runs in
+one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
+object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
+The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
+object's transaction, so its `limits.timeoutMs` is at most 25 s. No `sql` (`ctx.sql`) and no `scan: true`: the
+checker, the deploy and the boot refuse both.
+
+```bash
+bunx fabrika db new <slug>                                  # a new SQLite migration file
+bunx fabrika db codegen                                     # applies the migrations in memory; writes src/db/schema.generated.ts
+bunx fabrika db test-scaffold                               # the generated tests, on @fabrika/db/testing-sqlite
+bun test --isolate                                          # no database URL; then tsc and fabrika-check as above
 ```
 
 A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.

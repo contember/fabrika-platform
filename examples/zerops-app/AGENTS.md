@@ -250,7 +250,7 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 - No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`.
 - Never log an error object, a request, headers or the environment.
 - Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,
-  `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
+  `fabrika/migrations.generated.ts`, `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
 
 ## Ask the human first
 
@@ -285,6 +285,20 @@ bunx fabrika db test-scaffold                               # writes the generat
 bun test --isolate                                          # until it passes; needs FABRIKA_TEST_POSTGRES_URL; a skip proves nothing
 bunx tsc --noEmit                                           # once, at the end
 bunx fabrika-check .                                        # once, after tsc; refusals fail; hints print below them
+```
+
+**On Cloudflare** (`fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`) the application runs in
+one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
+object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
+The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
+object's transaction, so its `limits.timeoutMs` is at most 25 s. No `sql` (`ctx.sql`) and no `scan: true`: the
+checker, the deploy and the boot refuse both.
+
+```bash
+bunx fabrika db new <slug>                                  # a new SQLite migration file
+bunx fabrika db codegen                                     # applies the migrations in memory; writes src/db/schema.generated.ts
+bunx fabrika db test-scaffold                               # the generated tests, on @fabrika/db/testing-sqlite
+bun test --isolate                                          # no database URL; then tsc and fabrika-check as above
 ```
 
 A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.
@@ -734,7 +748,8 @@ await Bun.write(
 # references/dev.md — previewing the application with `fabrika app dev`
 
 `bunx fabrika app dev` serves the application on `http://127.0.0.1:3000/` through its test kit: the proxy decision,
-the stand-in IAM, a throwaway schema of `FABRIKA_TEST_POSTGRES_URL`, and each SPA from its build (run
+the stand-in IAM, a throwaway schema of `FABRIKA_TEST_POSTGRES_URL` (on Cloudflare an in-memory SQLite database,
+without a URL), and each SPA from its build (run
 `bun run build:web` first). Use it to look at the screens, never in place of a test.
 
 ## The seed
@@ -1258,7 +1273,7 @@ export const workloadRows = (
 ## Raw SQL: `sql: 'read'`
 
 Raw SQL is legitimate for a join, a report, an `OR` or `IS NULL` filter, or a bulk write. Declare it on the endpoint;
-`ctx.sql` exists only there.
+`ctx.sql` exists only there. It runs on Postgres only: on Cloudflare a site that declares `sql` is refused.
 
 ```ts src/reports/endpoints.ts
 import { attachment } from '@fabrika/app/contract'
@@ -1401,7 +1416,7 @@ Every procedure takes `admission` (who may send it, how often) and `limits` (how
 | `admission.origins`                 | `'same-origin'` (default) or `'listed'`                                                                | `'same-origin'`, `'listed'` or `'any'`                                                                                |
 | `admission.challenge`               | none                                                                                                   | `{ provider: 'altcha', secret, action?, cost?, maxAgeMs? }`, or `{ provider: 'turnstile', secret, siteKey, action? }` |
 | `limits.maxBytes`                   | 64 KiB, at most 1 MiB; with file fields 64 KiB plus each file at its kind's `maxBytes`, at most 48 MiB | the same                                                                                                              |
-| `limits.timeoutMs`                  | 10 s, at most 60 s                                                                                     | the same                                                                                                              |
+| `limits.timeoutMs`                  | 10 s, at most 60 s; at most 25 s on Cloudflare                                                         | the same                                                                                                              |
 
 - A declared `rate` merges into the default; `null` turns one bucket off. Past a bucket the answer is 429.
 - Every bucket is charged before the body is read and stays charged whatever the handler does. A bucket is a database
@@ -1650,7 +1665,7 @@ The refusals agents meet most, and their fix:
 | `type-assertion`        | `as T` (other than `as const`), `<T>x`                                                                                                                           | fix the type; `fromRow` parses a row into a schema's type                                 |
 | `sensitive-log`         | a log of an error object, a request, headers or the environment                                                                                                  | log a short fixed message                                                                 |
 | `migration-name`        | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                                                            | `bunx fabrika db new <slug>`                                                              |
-| `test-only-import`      | `@fabrika/app/testing`, `@fabrika/app/react/testing` or `@fabrika/db/testing` outside a test file                                                                | import them only from `*.test.ts` or `__tests__/`                                         |
+| `test-only-import`      | `@fabrika/app/testing`, `@fabrika/app/react/testing`, `@fabrika/db/testing` or `@fabrika/db/testing-sqlite` outside a test file                                  | import them only from `*.test.ts` or `__tests__/`                                         |
 | `spa-server-import`     | the SPA loads a server module                                                                                                                                    | the SPA imports `@fabrika/app/client`, the contract, `src/schemas.ts` and `src/shared/`   |
 | `shared-import`         | a module under `src/shared/` loads a slice, `src/db/`, `@fabrika/*` or a builtin                                                                                 | a shared module imports `zod/v4` and other shared modules only                            |
 | `skipped-test`          | `.skip`, `.only`, `.todo`                                                                                                                                        | run the test                                                                              |
@@ -1658,6 +1673,8 @@ The refusals agents meet most, and their fix:
 | `on-conflict-index`     | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                                 | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns |
 | `cross-app-fetch`       | a `fetch` of an absolute URL under no origin a site declares in `egress`                                                                                         | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)              |
 | `url-endpoint`          | `ctx.url('<id>')` names no procedure of the contract                                                                                                             | the endpoint id `<mount>.<group>.<procedure>`                                             |
+| `cloudflare-sql`        | on Cloudflare, a site that declares `sql`                                                                                                                        | the handles (`ctx.db`), without `sql`                                                     |
+| `cloudflare-scan`       | on Cloudflare, a file kind with `scan: true`                                                                                                                     | the kind without `scan`, and no public procedure that takes its files                     |
 
 The hints:
 
@@ -5341,8 +5358,8 @@ read them there, or install them where an agent looks for skills.
 
 # references/table-and-migration.md — the vocabulary, migrations and table policies
 
-The order is fixed: the vocabulary, then the migration, then `fabrika db migrate` and `fabrika db codegen`, then the
-table policies, which take the generated `columns`.
+The order is fixed: the vocabulary, then the migration, then `fabrika db migrate` and `fabrika db codegen` (on
+Cloudflare `codegen` only), then the table policies, which take the generated `columns`.
 
 ## The vocabulary
 
@@ -5495,6 +5512,23 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
   a function overload, and calls outside the reviewed built-ins.
 - Never edit, rename or delete a committed migration; add a new one. Change a schema by expand, switch, contract, and
   ask before you drop or rename anything.
+
+## On Cloudflare: SQLite migrations
+
+An application on Cloudflare (its `fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`) writes
+its migrations in SQLite. Its Durable Object applies them when it boots, each file once in name order, in a transaction
+of its own, so there is no `fabrika db migrate`; `fabrika db codegen` applies them to an in-memory database and needs
+no URL. The rules above for keys, chains, composite foreign keys, `version` and `created_by` hold unchanged, and the
+database enforces foreign keys.
+
+- The declared types codegen reads: `TEXT` (a UUID too), `INTEGER`, `REAL`, `BLOB`; `BOOLEAN`, stored as 0 or 1 and
+  read as a boolean; `TIMESTAMP`, stored as UTC ISO text and read as a `Date`; `DATE`, `YYYY-MM-DD` text. Any other
+  declared type is refused. A `STRICT` table admits only `INTEGER`, `REAL`, `TEXT` and `BLOB`, so a table with a
+  `BOOLEAN`, `TIMESTAMP` or `DATE` column is not `STRICT`.
+- SQLite has no `ENUM`: a column with a fixed set of values is `TEXT` with `CHECK (<column> IN ('a', 'b'))`. The
+  generated tests write its first value.
+- No transaction control (`BEGIN`, `COMMIT`, `SAVEPOINT`) and no Postgres syntax (`timestamptz`, `::` casts,
+  `GENERATED ALWAYS AS IDENTITY`, `CREATE TYPE`).
 
 ## Database code is a declared deviation
 
@@ -5826,6 +5860,9 @@ if (postgres !== null) {
   `<label> skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests`, and the file registers no test.
   A skip proves nothing. To confirm a file ran, run it alone (`bun test --isolate src/tasks`) and check that the pass
   count is its number of tests, or set `FABRIKA_TEST_POSTGRES_REQUIRED=1`: a missing URL then fails the file.
+- On Cloudflare import `testDatabase` from `@fabrika/db/testing-sqlite` instead, with the same options: it migrates a
+  fresh in-memory SQLite database as the Durable Object does, needs no URL and never answers `null`. The generated tests
+  already use it.
 - `statusOf(call)` answers 200 when the call resolves and the status of the application's refusal otherwise; any other
   failure (no answer, a bug in the test) is rethrown. Import it beside `testKit`; do not write your own.
 - `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. A
@@ -6045,7 +6082,7 @@ export const integrations = app.group({ callers: ['human'] }, (r) => ({
   that binds it takes an `app` capability: `access: { action, app: true }`, `binds`, and
   `ctx.webhooks('<webhook>').bind(ctx.app, account)`.
 - `limits: { maxBytes?, timeoutMs? }`: the body is 1 MiB by default and at most 48 MiB; the handler runs 10 s by
-  default, at most 60 s. A webhook may declare `kicks`, `signs`, `egress`, `sql` and `unscoped`, and `ctx.files.put`
+  default, at most 60 s (25 s on Cloudflare). A webhook may declare `kicks`, `signs`, `egress`, `sql` and `unscoped`, and `ctx.files.put`
   stores a file a provider sends (an inbound e-mail's attachment) for a file column: raise `limits.maxBytes` to the
   mail you accept.
 - Not covered: a provider that validates its URL with a `GET`, or that needs a custom answer body.

@@ -62,10 +62,17 @@ label the envelope a registration carries.
 
 ## The `db` area
 
-`src/db.ts` serves an application's Postgres schema, run from the application root
+`src/db.ts` serves an application's database schema, run from the application root
 ([ADR-0017](../../docs/decisions/0017-service-owned-postgres-migrations.md)). It resolves
 no provider. The runner is `@fabrika/platform-node`'s application wrapper and the
 renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
+
+The dialect is `@fabrika/check`'s `applicationDialect`, read statically from `fabrika.config.ts` (`dialectAt`): an
+application whose config default-exports `@fabrika/provider-cloudflare`'s `defineApp` is on SQLite, in its Durable
+Object ([ADR-0065](../../docs/decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)),
+and every other one, a missing config included, on Postgres. On SQLite no command needs a database URL or
+`FABRIKA_APP_ID`: `migrate` refuses, `codegen` runs the migrations in memory, and the generated tests run on
+`@fabrika/db/testing-sqlite`. `db-cloudflare.test.ts` holds those paths and that a Zerops application keeps its own.
 
 - `db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`, the name the
   checker's `migration-name` rule accepts, and never overwrites.
@@ -74,12 +81,16 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
   `FABRIKA_APP_DATABASE_URL` creates and checks the role family, and the files are applied as
   the migration role `app_<id>` over ONE connection (the advisory lock is session state)
   (ADR-0017). It applies the framework's tables (`@fabrika/db/migrations`, bundle `fabrika`)
-  before `db/migrations/`. `codegen` reads the catalog with the provisioning credential.
+  before `db/migrations/`. `codegen` reads the catalog with the provisioning credential. On SQLite `db migrate`
+  refuses and says why: the object applies the migrations itself when it boots.
 - `db codegen [--verify]` writes `src/db/schema.generated.ts` from the migrated schema;
-  `--verify` writes nothing and fails when the file differs.
+  `--verify` writes nothing and fails when the file differs. On SQLite the schema is the bundles the object applies,
+  `SQLITE_FRAMEWORK_MIGRATIONS` then `db/migrations` (`applicationMigrations` of `@fabrika/app/build`, the files the
+  build bundles), run in an in-memory database by `@fabrika/db/codegen-sqlite`.
 - `db test-scaffold` writes `@fabrika/check`'s `generatedTests` of what `scaffoldInputs` reads (the checker's own
   read of the contract and `src/db/tables.ts`) and deletes a generated test it no longer writes; a hand-written test
-  is never touched. It connects to nothing. `src/__tests__/fixtures/isolation-app/` is an application whose
+  is never touched. It connects to nothing. The tests open the test database of the application's dialect
+  (`@fabrika/db/testing` or `@fabrika/db/testing-sqlite`). `src/__tests__/fixtures/isolation-app/` is an application whose
   generated tests are committed and run with this package's suite, always on a copy in a private temporary directory
   (concurrent runs of the suite share the committed directory); `db.test.ts` fails when they differ from what the
   scaffold writes, and when its `schema.generated.ts` differs from codegen's.
@@ -95,8 +106,10 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
   a failed run whose output names a refused connection (`reportsExhaustedConnections`) fails saying so, never as a
   count of passed cases (ADR-0043). **It prints none of the child's output**, only the counts and the failed case names, which come from the
   scaffold: a dependency may write a credential into the output in any form. `--verbose` prints it, locally only;
-  the init command never passes it.
-- `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` come from the ENVIRONMENT ONLY.
+  the init command never passes it. On SQLite it makes no provisioner, reads no database URL and passes no
+  `FABRIKA_TEST_POSTGRES_*` variable: the SQLite kit opens an in-memory database; the scaffold and JUnit checks are the
+  same.
+- `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` (Postgres) come from the ENVIRONMENT ONLY.
   An error reaches the output only as the runner's own message (a `PostgresMigrationError`, which every refusal of
   the bundle is: it names files, never a URL) or a server-reported Postgres error; any other driver error is replaced,
   because it may quote the URL.
@@ -144,11 +157,14 @@ arguments and reports.
 
 - `app build` writes `fabrika/entry.generated.ts` (`@fabrika/app/build`) when
   `fabrika.contract.ts` sits next to the config: the Bun entrypoint on Zerops, then
-  the provider's build; the Worker entrypoint on Cloudflare, and nothing else. An
-  application without a contract builds as before.
+  the provider's build; on Cloudflare the Worker entrypoint, which exports `FabrikaApplication`, and
+  `fabrika/migrations.generated.ts` (the `.sql` files of `db/migrations`, which the object applies when it boots), and
+  nothing else. An application without a contract builds as before.
 - `app dev` (`src/app-dev.ts`) resolves no provider: it loads `src/app.ts` with `@fabrika/app/bun`'s
   `implementationAt` and serves it through `@fabrika/app/testing`'s `devKit` (the test kit and its stand-in IAM), on
-  a throwaway schema of `FABRIKA_TEST_POSTGRES_URL` (`@fabrika/db/testing`). It is the kit and nothing else: never add
+  a throwaway schema of `FABRIKA_TEST_POSTGRES_URL` (`@fabrika/db/testing`), or for an application on Cloudflare (the
+  same `dialectAt` read) on an in-memory SQLite database of `@fabrika/db/testing-sqlite`, migrated from
+  `db/migrations` and gone on exit (`app-dev-cloudflare.test.ts`). It is the kit and nothing else: never add
   a proxy rule, an IAM or a second enforcement decision here.
   - The seed (`src/app-dev-seed.ts`): `--seed=<module>`, or `dev/seed.ts` when it exists, default-exports a `DevSeed`
     that gets the kit before the first request. Its answer is parsed at the boundary: a persona is a person that kit
