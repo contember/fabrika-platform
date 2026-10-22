@@ -117,7 +117,15 @@ bun run release:publish --tag=v1.2.3 --dry-run
 
 Packing copies each package into a temporary staging directory. It stamps the tag version, removes development dependencies and test files, and rewrites internal `workspace:*` ranges to the common released version. For a release tag the stamped version is the source version already; the stamp matters for the CI and local packs. Source manifests remain unchanged.
 
-The smoke command installs all tarballs into a temporary project with npm. It imports `@fabrika/app` and both providers, then executes `fabrika --help`. The publish dry-run checks npm's final package inputs without registry mutation.
+### Declarations
+
+A public package ships its TypeScript sources, which Bun runs, and a declaration file for each of them, which an application's type check reads ([ADR-0068](../decisions/0068-public-packages-ship-declarations-beside-their-sources.md)). `skipLibCheck` skips declarations but not a `.ts` file, so without them an application's type check would check the framework's sources too.
+
+- **Pack.** Packing emits the declarations of every shipped module into `types/` of the staged copy, which mirrors the package (`./src/index.ts` → `./types/src/index.d.ts`). It uses the compiler options of the package's own `tsconfig.json`. In the staged manifest every `types` condition names the declaration, a bare TypeScript target of `exports` or `imports` gains a `types` condition, and `files` gains `types`. `bun` and `default` keep the source. Any diagnostic of the emit fails the pack. So does an import in a declaration that is not a declared public dependency. The workspace manifests are not changed: in this repository `types` names the source, and nothing needs a build.
+- **Smoke.** Both `smoke` and `registry-smoke` type-check every typed entry of every package in the isolated consumer. They use the compiler options of the platform build's type check with `skipLibCheck` off, and `compilerOptions.types` of the package's own `tsconfig.json`. The consumer also installs the ambient type packages (`@types/*`, `@cloudflare/workers-types`) that the public packages develop against, at the versions this checkout installed. The smoke fails when an entry does not resolve, when a declaration has an error, or when the check reads a `@fabrika/*` source instead of a declaration.
+- **Compiler.** The repository's `typescript` writes the declarations. It must be the release that the Zerops build runs (`PLATFORM_TYPESCRIPT_VERSION`). `scripts/__tests__/declarations.test.ts` fails when the two differ, so bump them together.
+
+The smoke command installs all tarballs into a temporary project with npm. It imports `@fabrika/app` and both providers, executes `fabrika --help`, and type-checks the declarations ([Declarations](#declarations)). The publish dry-run checks npm's final package inputs without registry mutation.
 
 Artifacts live under ignored `.release/`. Delete that directory or run `release:pack` again before evaluating a different tag.
 
