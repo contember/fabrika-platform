@@ -76,12 +76,14 @@ export default createPage()
 						<input value={label} onChange={(e) => setLabel(e.target.value)} required placeholder="ci-deploy-bot" autoFocus />
 						<span className="hint">How this key shows up in the list and in the audit trail.</span>
 					</label>
-					<GrantComposer apps={data.apps} state={composer} idPrefix="apikey" />
-					<label>
-						Expires (optional)
-						<input type="datetime-local" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
-						<span className="hint">The key expires together with this date. Leave empty for a non-expiring key.</span>
-					</label>
+					<GrantComposer
+						apps={data.apps}
+						state={composer}
+						idPrefix="apikey"
+						expiry={expiry}
+						onExpiryChange={setExpiry}
+						expiryHint="The key and its access expire together. Without a date, the key does not expire."
+					/>
 					{error && <p className="error-text" role="alert">{error}</p>}
 					<div className="form-actions">
 						<button type="submit" className="primary" disabled={busy}>{busy ? 'Provisioning…' : 'Provision key'}</button>

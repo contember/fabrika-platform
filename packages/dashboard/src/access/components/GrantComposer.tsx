@@ -33,6 +33,9 @@ interface GrantComposerProps {
 	/** Called with a validated authorization, or throws an Error with a user message. */
 	state: GrantComposerState
 	idPrefix: string
+	expiry: string
+	onExpiryChange: (value: string) => void
+	expiryHint?: string
 }
 
 /** Hoisted state so the parent form can read/reset it and run `build()` on submit. */
@@ -51,14 +54,24 @@ export interface GrantComposerState {
 
 /** A fresh, empty composer state (defaults to role mode, unset app, global scope). */
 export function useGrantComposerState(): GrantComposerState & { reset: () => void; build: () => GrantAuthorization } {
-	const [appValue, setAppValue] = useState<AppValue>({ kind: 'unset' })
+	const [appValue, storeAppValue] = useState<AppValue>({ kind: 'unset' })
 	const [mode, setMode] = useState<Mode>('role')
 	const [roleKey, setRoleKey] = useState('')
 	const [permissions, setPermissions] = useState<string[]>([])
 	const [scope, setScope] = useState<ScopeValue>({ kind: 'global' })
 
+	function setAppValue(value: AppValue) {
+		if (value.kind === appValue.kind && (value.kind !== 'app' || (appValue.kind === 'app' && value.app === appValue.app))) return
+		storeAppValue(value)
+		// Roles, actions and scope dimensions belong to the selected application.
+		setMode('role')
+		setRoleKey('')
+		setPermissions([])
+		setScope({ kind: 'global' })
+	}
+
 	function reset() {
-		setAppValue({ kind: 'unset' })
+		storeAppValue({ kind: 'unset' })
 		setMode('role')
 		setRoleKey('')
 		setPermissions([])
@@ -73,7 +86,7 @@ export function useGrantComposerState(): GrantComposerState & { reset: () => voi
 			if (roleKey === '') throw new Error('Pick a role.')
 			return { app, roleKey, scopeType, scopeValue }
 		}
-		if (permissions.length === 0) throw new Error('Pick at least one action for an inline grant.')
+		if (permissions.length === 0) throw new Error('Choose at least one permission.')
 		return { app, permissions, scopeType, scopeValue }
 	}
 
@@ -85,63 +98,65 @@ export function useGrantComposerState(): GrantComposerState & { reset: () => voi
  * plus a scope. The role list, scope dimensions and action catalog all derive from the
  * chosen app (loaded reactively via `useAppVocab`). The parent owns submit / expiry.
  */
-export function GrantComposer({ apps, crossApp = true, state, idPrefix }: GrantComposerProps) {
+export function GrantComposer({ apps, crossApp = true, state, idPrefix, expiry, onExpiryChange, expiryHint }: GrantComposerProps) {
 	const { appValue, setAppValue, mode, setMode, roleKey, setRoleKey, permissions, setPermissions, scope, setScope } = state
 	const app = appValue.kind === 'unset' ? undefined : appValue.kind === 'all' ? null : appValue.app
 	const vocab = useAppVocab(app)
+	const catalog = vocab.status === 'ok' ? vocab.vocab : null
+	const selectedRole = catalog?.roles.find((role) => role.key === roleKey)
+	const custom = mode === 'inline'
+	const hasOptions = custom || scope.kind === 'scoped' || expiry !== ''
 
 	return (
-		<>
+		<div className="grant-composer">
 			<AppPicker apps={apps} value={appValue} onChange={setAppValue} idPrefix={`${idPrefix}-app`} crossApp={crossApp} />
-
-			{vocab.status === 'loading' && <p className="hint">Loading app roles & actions…</p>}
-			{vocab.status === 'error' && <p className="error-text" role="alert">{vocab.message}</p>}
-
-			<fieldset className="grant-mode">
-				<legend>Permissions</legend>
-				<label className="radio">
-					<input
-						type="radio"
-						name={`${idPrefix}-mode`}
-						checked={mode === 'role'}
-						onChange={() => setMode('role')}
-					/>
-					Named role / policy
-				</label>
-				<label className="radio">
-					<input
-						type="radio"
-						name={`${idPrefix}-mode`}
-						checked={mode === 'inline'}
-						onChange={() => setMode('inline')}
-						disabled={appValue.kind !== 'app'}
-					/>
-					Inline actions
-				</label>
-			</fieldset>
-
-			{mode === 'role'
-				? (
-					<label>
-						Role
-						<RolePicker roles={vocab.status === 'ok' ? vocab.vocab.roles : []} value={roleKey} onChange={setRoleKey} />
-					</label>
-				)
-				: (
-					<ActionPicker
-						actions={vocab.status === 'ok' ? vocab.vocab.actions : []}
-						value={permissions}
-						onChange={setPermissions}
-						idPrefix={`${idPrefix}-action`}
+			{custom
+				? <p className="hint">Using the custom permissions set in advanced options.</p>
+				: catalog && (
+					<RolePicker
+						roles={catalog.roles}
+						value={roleKey}
+						onChange={setRoleKey}
+						idPrefix={idPrefix}
+						emptyMessage={appValue.kind === 'unset' ? 'Choose an application to see its roles.' : undefined}
 					/>
 				)}
-
-			<ScopePicker
-				scopes={vocab.status === 'ok' ? vocab.vocab.scopes : []}
-				value={scope}
-				onChange={setScope}
-				idPrefix={`${idPrefix}-scope`}
-			/>
-		</>
+			{vocab.status === 'loading' && <p className="hint" role="status">Loading roles and permissions…</p>}
+			{vocab.status === 'error' && (
+				<div role="alert">
+					<p className="error-text">{vocab.message}</p>
+					<button type="button" className="small" onClick={vocab.retry}>Try again</button>
+				</div>
+			)}
+			<details
+				className="grant-options"
+				onInvalidCapture={(event) => {
+					// Reveal invalid controls synchronously so native validation can focus them.
+					event.currentTarget.open = true
+				}}
+			>
+				<summary>Advanced options{hasOptions && ' (configured)'}</summary>
+				<div className="grant-options-body">
+					{appValue.kind === 'app' && catalog && catalog.actions.length > 0 && (
+						<label className="checkbox">
+							<input type="checkbox" checked={custom} onChange={(event) => setMode(event.target.checked ? 'inline' : 'role')} />
+							Choose individual permissions instead of a role
+						</label>
+					)}
+					{custom && catalog && <ActionPicker actions={catalog.actions} value={permissions} onChange={setPermissions} idPrefix={`${idPrefix}-action`} />}
+					{!custom && selectedRole && (
+						<p className="hint">
+							Role permissions: <code>{selectedRole.permissions.join(', ') || 'None'}</code>
+						</p>
+					)}
+					<ScopePicker scopes={catalog?.scopes ?? []} value={scope} onChange={setScope} idPrefix={`${idPrefix}-scope`} />
+					<label>
+						Expires (optional)
+						<input type="datetime-local" value={expiry} onChange={(event) => onExpiryChange(event.target.value)} />
+						<span className="hint">{expiryHint ?? 'Leave empty for access that does not expire.'}</span>
+					</label>
+				</div>
+			</details>
+		</div>
 	)
 }

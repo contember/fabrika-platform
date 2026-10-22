@@ -104,11 +104,7 @@ export default createPage()
 					</label>
 					{withGrant && (
 						<div className="nested">
-							<GrantComposer apps={targets.apps} crossApp={targets.crossApp} state={composer} idPrefix="invite" />
-							<label>
-								Expires (optional)
-								<input type="datetime-local" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
-							</label>
+							<GrantComposer apps={targets.apps} crossApp={targets.crossApp} state={composer} idPrefix="invite" expiry={expiry} onExpiryChange={setExpiry} />
 						</div>
 					)}
 					{error && <p className="error-text" role="alert">{error}</p>}

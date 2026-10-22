@@ -1,19 +1,12 @@
 import type { AppDto } from '@fabrika/iam-contract'
 import { appOptionLabel } from '../lib/app-names'
 
-/**
- * Which app a grant / mapping applies to. Three explicit states (mirrors ScopePicker)
- * so a cross-app grant is never made by accident:
- *  - `{ kind: 'unset' }`: nothing chosen yet; the admin MUST pick
- *  - `{ kind: 'all' }`: every app → stored `app = null` (cross-app, e.g. super-admin)
- *  - `{ kind: 'app', app }`: scoped to one app (opice / poplach / …)
- */
+/** An explicit app choice: cross-app access is never the default. */
 export type AppValue =
 	| { kind: 'unset' }
 	| { kind: 'all' }
 	| { kind: 'app'; app: string }
 
-/** Resolve an AppValue to the API `app` field; throws if still unset. */
 export function resolveApp(value: AppValue): string | null {
 	if (value.kind === 'all') return null
 	if (value.kind === 'app') return value.app
@@ -25,57 +18,27 @@ interface AppPickerProps {
 	value: AppValue
 	onChange: (value: AppValue) => void
 	idPrefix?: string
-	/** Offer "All apps"; a user administrator never grants across applications (ADR-0058). */
+	/** A user administrator never grants across applications (ADR-0058). */
 	crossApp?: boolean
 }
 
-/**
- * Explicit All-apps-vs-one-app picker. Authorization is app-scoped: a grant counts only
- * for its app (or every app when "All apps"). Defaults to "unset" so the admin chooses
- * deliberately: "All apps" is a distinct, conscious option, not a silent default.
- */
 export function AppPicker({ apps, value, onChange, idPrefix = 'app', crossApp = true }: AppPickerProps) {
-	const allId = `${idPrefix}-all`
-	const oneId = `${idPrefix}-one`
-
 	return (
-		<fieldset className="scope-picker">
-			<legend>App</legend>
-			{crossApp && (
-				<label htmlFor={allId}>
-					<input
-						id={allId}
-						type="radio"
-						name={idPrefix}
-						checked={value.kind === 'all'}
-						onChange={() => onChange({ kind: 'all' })}
-					/>
-					All apps (cross-app)
-				</label>
-			)}
-			<label htmlFor={oneId}>
-				<input
-					id={oneId}
-					type="radio"
-					name={idPrefix}
-					checked={value.kind === 'app'}
-					onChange={() => onChange(apps[0] ? { kind: 'app', app: apps[0].id } : { kind: 'unset' })}
-					disabled={apps.length === 0}
-				/>
-				Specific app
-			</label>
-			{value.kind === 'app' && (
-				<select
-					aria-label="App"
-					value={value.app}
-					onChange={(e) => onChange({ kind: 'app', app: e.target.value })}
-				>
-					{apps.map((a) => <option key={a.id} value={a.id}>{appOptionLabel(a)}</option>)}
-				</select>
-			)}
-			{apps.length === 0 && (
-				<p className="hint">{crossApp ? 'No apps registered yet, so a grant can only be cross-app.' : 'You administer no application to grant at.'}</p>
-			)}
-		</fieldset>
+		<label htmlFor={idPrefix}>
+			Application
+			<select
+				id={idPrefix}
+				value={value.kind === 'app' ? `app:${value.app}` : value.kind === 'all' ? 'all' : ''}
+				onChange={(event) => {
+					const selected = event.target.value
+					onChange(selected === '' ? { kind: 'unset' } : selected === 'all' ? { kind: 'all' } : { kind: 'app', app: selected.slice(4) })
+				}}
+			>
+				<option value="">Choose an application…</option>
+				{apps.map((app) => <option key={app.id} value={`app:${app.id}`}>{appOptionLabel(app)}</option>)}
+				{crossApp && <option value="all">All applications (cross-app)</option>}
+			</select>
+			{apps.length === 0 && !crossApp && <span className="hint">You do not administer any applications.</span>}
+		</label>
 	)
 }

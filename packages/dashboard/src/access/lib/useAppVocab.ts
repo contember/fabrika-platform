@@ -21,7 +21,7 @@ export interface AppVocab {
 export type AppVocabState =
 	| { status: 'loading' }
 	| { status: 'ok'; vocab: AppVocab }
-	| { status: 'error'; message: string }
+	| { status: 'error'; message: string; retry: () => void }
 
 const EMPTY: AppVocab = { roles: [], scopes: [], actions: [] }
 
@@ -31,17 +31,15 @@ const EMPTY: AppVocab = { roles: [], scopes: [], actions: [] }
  * an app id. Re-fetches whenever `app` changes.
  */
 export function useAppVocab(app: string | null | undefined): AppVocabState {
-	const [state, setState] = useState<AppVocabState>(
-		app === undefined ? { status: 'ok', vocab: EMPTY } : { status: 'loading' },
-	)
+	const [attempt, setAttempt] = useState(0)
+	const [loaded, setLoaded] = useState<{ app: typeof app; state: AppVocabState }>({ app, state: { status: 'loading' } })
 
 	useEffect(() => {
 		let cancelled = false
 		if (app === undefined) {
-			setState({ status: 'ok', vocab: EMPTY })
 			return
 		}
-		setState({ status: 'loading' })
+		setLoaded({ app, state: { status: 'loading' } })
 
 		const rolesP = api.roles.list({ app })
 		const schemaP = app === null
@@ -51,20 +49,32 @@ export function useAppVocab(app: string | null | undefined): AppVocabState {
 		Promise.all([rolesP, schemaP])
 			.then(([roles, schema]) => {
 				if (cancelled) return
-				setState({
-					status: 'ok',
-					vocab: { roles: roles.items, scopes: schema?.scopes ?? [], actions: schema?.actions ?? [] },
+				setLoaded({
+					app,
+					state: {
+						status: 'ok',
+						vocab: { roles: roles.items, scopes: schema?.scopes ?? [], actions: schema?.actions ?? [] },
+					},
 				})
 			})
 			.catch((cause: unknown) => {
 				if (cancelled) return
-				setState({ status: 'error', message: cause instanceof ApiError ? cause.message : 'Failed to load app vocabulary.' })
+				setLoaded({
+					app,
+					state: {
+						status: 'error',
+						message: cause instanceof ApiError ? cause.message : 'Could not load roles and permissions.',
+						retry: () => setAttempt((value) => value + 1),
+					},
+				})
 			})
 
 		return () => {
 			cancelled = true
 		}
-	}, [app])
+	}, [app, attempt])
 
-	return state
+	if (app === undefined) return { status: 'ok', vocab: EMPTY }
+	// Do not render the previous app's choices for one frame before the effect runs.
+	return loaded.app === app ? loaded.state : { status: 'loading' }
 }
