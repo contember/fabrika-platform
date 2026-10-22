@@ -129,7 +129,9 @@ environment is promoted.
    outside `src/` and `db/` changed (beside the contract digest; a refusal rebuilds over the restored files), restarts the application and waits for its health endpoint. It reports the head,
    its status and the last lines of output.
 4. `apply_changes` waits up to 10 s for that report and answers `dev: { head, state, summary, url, log }` beside
-   `commitSha`. On a timeout `state` is `pending`, and `get_dev_status` reads the rest.
+   `commitSha`. On a timeout `state` is `pending`, and `get_dev_status` reads the rest. Once the commit persisted, the
+   call never fails: when following the dev environment fails, `state` is `unavailable` with a `reference`, and when the
+   audit entry cannot be written the answer carries a `warning` with a reference.
 
 `state` is one of:
 
