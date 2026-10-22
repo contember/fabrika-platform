@@ -32,14 +32,6 @@ function freshMillis(): number {
 	return timestampOf(uuidv7()) + 1
 }
 
-/** Spin until the wall clock is past the millisecond the generator last used. */
-function spinPastLastMinted(): void {
-	const target = timestampOf(uuidv7())
-	while (Date.now() <= target) {
-		// spin
-	}
-}
-
 describe('uuidv7', () => {
 	test('is a well-formed version 7, variant 10xx UUID', () => {
 		for (let i = 0; i < 100; i++) {
@@ -76,9 +68,11 @@ describe('uuidv7', () => {
 	test('stays ordered across a millisecond boundary', () => {
 		const ids: string[] = []
 		for (let batch = 0; batch < 4; batch++) {
-			spinPastLastMinted()
+			// A millisecond past the last one minted, passed in: another suite in this process may have minted under a
+			// fake clock ahead of the wall clock, and the generator never goes back.
+			const millis = freshMillis()
 			for (let i = 0; i < 50; i++) {
-				ids.push(uuidv7())
+				ids.push(uuidv7(millis))
 			}
 		}
 		expect(firstNonAscending(ids)).toBe(-1)
