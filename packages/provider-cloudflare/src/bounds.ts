@@ -1,3 +1,4 @@
+import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING } from '@fabrika/app/build'
 import { type AppEnvironment, FRAMEWORK_VARIABLE_NAMES, isFrameworkVariableName, parseAppEnvironmentId } from '@fabrika/auth-core'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { resolve } from 'node:path'
@@ -5,7 +6,7 @@ import type { GeneratedConfig, Worker } from 'oblaka-iac'
 import { CloudflareClient } from 'oblaka-iac/src/client'
 import { ResourceProcessor } from 'oblaka-iac/src/commands/resource-processor'
 import { PLATFORM_RESOURCE_NAMES } from './plan'
-import { CLOUDFLARE_PROXY_WORKER_DIR, IAM_APPLICATION_ENTRYPOINT, IAM_SERVICE } from './proxy'
+import { CLOUDFLARE_PROXY_WORKER_DIR, IAM_APPLICATION_ENTRYPOINT, IAM_SERVICE, PROXY_MANIFEST_DEFINE } from './proxy'
 
 type WranglerConfig = GeneratedConfig['config']
 
@@ -38,7 +39,25 @@ export interface DeploymentBounds {
 		readonly application: Readonly<Record<string, string>>
 		readonly proxy: Readonly<Record<string, string>> | null
 	}
+	/** The `define` literal of the manifest the deployer baked into its proxy Worker, or null when it built none. */
+	readonly proxyManifest: string | null
+	/** What the platform gives a contract application's Worker (ADR-0065), or null outside one. */
+	readonly application: ApplicationRuntime | null
 }
+
+/** The Durable Object, files bucket and minute tick of a contract application's Worker; the application authors none of them. */
+export interface ApplicationRuntime {
+	/** The remote name of the environment's files bucket. */
+	readonly filesBucket: string
+	/** The cron triggers the Worker carries: the minute tick when the contract has a job or a file kind, else an empty list. */
+	readonly crons: readonly string[]
+}
+
+/**
+ * The one migration of the application's object. Its tag is fixed: Cloudflare records the last tag a script applied, so
+ * a tag that moved would migrate the class twice. The deployer binds the object first, so oblaka numbers it `v0001`.
+ */
+const APPLICATION_OBJECT_MIGRATION = { tag: 'v0001', new_sqlite_classes: [CLOUDFLARE_APPLICATION_CLASS] } as const
 
 /** The framework variables among a Worker's `vars`, as the deployer wrote them. */
 export const frameworkValues = (vars: Readonly<Record<string, unknown>> | undefined): Record<string, string> => {
@@ -78,6 +97,9 @@ const CONFIG_KEYS: ReadonlySet<string> = new Set([
 	'containers',
 	'workflows',
 ])
+
+/** The platform proxy's config also carries the `define` that bakes its manifest into the bundle. */
+const PROXY_CONFIG_KEYS: ReadonlySet<string> = new Set([...CONFIG_KEYS, 'define'])
 
 /** Everything wrangler reads out of `assets`. `directory` is the only one that names a path. */
 const ASSETS_KEYS: ReadonlySet<string> = new Set(['binding', 'directory', 'html_handling', 'not_found_handling', 'run_worker_first'])
@@ -341,6 +363,64 @@ const assertFrameworkVariables = (worker: string, vars: unknown, expected: Reado
 	}
 }
 
+/** The proxy's `define` is exactly the manifest the deployer baked: nothing else is substituted into its bundle. */
+const assertBakedManifest = (worker: string, define: unknown, expected: string | null): void => {
+	const names = typeof define === 'object' && define !== null && !Array.isArray(define) ? Object.keys(define) : null
+	const exact = expected === null
+		? define === undefined
+		: names?.length === 1 && names[0] === PROXY_MANIFEST_DEFINE && field(define, PROXY_MANIFEST_DEFINE) === expected
+	if (!exact) {
+		throw new Error(`cloudflare: proxy Worker \`${worker}\` does not carry exactly the manifest Fabrika baked into it (\`define\`)`)
+	}
+}
+
+const isApplicationMigration = (migration: unknown): boolean => {
+	const keys = typeof migration === 'object' && migration !== null ? Object.keys(migration).sort() : []
+	const classes = field(migration, 'new_sqlite_classes')
+	return keys.join(',') === 'new_sqlite_classes,tag' && field(migration, 'tag') === APPLICATION_OBJECT_MIGRATION.tag
+		&& Array.isArray(classes) && classes.length === 1 && classes[0] === CLOUDFLARE_APPLICATION_CLASS
+}
+
+const namesApplicationClass = (migration: unknown): boolean => JSON.stringify(migration).includes(JSON.stringify(CLOUDFLARE_APPLICATION_CLASS))
+
+const isPlatformTriggers = (triggers: unknown, crons: readonly string[]): boolean => {
+	const keys = typeof triggers === 'object' && triggers !== null ? Object.keys(triggers) : []
+	const written = field(triggers, 'crons')
+	return keys.length === 1 && Array.isArray(written) && written.length === crons.length && crons.every((cron, index) => written[index] === cron)
+}
+
+/**
+ * A contract application's Worker binds its own object (`FABRIKA_APPLICATION`, the class the generated entry exports)
+ * under the one fixed migration, the environment's files bucket, and exactly the platform's cron triggers.
+ */
+const assertApplicationRuntime = (worker: string, config: WranglerConfig, runtime: ApplicationRuntime): void => {
+	const objects = entries(config.durable_objects?.bindings, worker, 'durable_objects.bindings').filter((entry) =>
+		field(entry, 'name') === CLOUDFLARE_APPLICATION_BINDING || field(entry, 'class_name') === CLOUDFLARE_APPLICATION_CLASS
+	)
+	const object = objects[0]
+	if (
+		objects.length !== 1 || field(object, 'name') !== CLOUDFLARE_APPLICATION_BINDING || field(object, 'class_name') !== CLOUDFLARE_APPLICATION_CLASS
+		|| field(object, 'script_name') !== undefined
+	) {
+		throw new Error(
+			`cloudflare: application Worker \`${worker}\` must bind \`${CLOUDFLARE_APPLICATION_BINDING}\` once, to its own \`${CLOUDFLARE_APPLICATION_CLASS}\`; the platform writes that binding`,
+		)
+	}
+	const migrations = entries(config.migrations, worker, 'migrations')
+	if (!isApplicationMigration(migrations[0]) || migrations.slice(1).some(namesApplicationClass)) {
+		throw new Error(
+			`cloudflare: application Worker \`${worker}\` must open its migrations with \`${APPLICATION_OBJECT_MIGRATION.tag}\` creating \`${CLOUDFLARE_APPLICATION_CLASS}\` and name the class nowhere else; a committed \`wrangler.jsonc\` with a history of its own cannot be deployed`,
+		)
+	}
+	const files = entries(config.r2_buckets, worker, 'r2_buckets').filter((entry) => field(entry, 'binding') === CLOUDFLARE_FILES_BINDING)
+	if (files.length !== 1 || field(files[0], 'bucket_name') !== runtime.filesBucket) {
+		throw new Error(`cloudflare: application Worker \`${worker}\` must bind \`${CLOUDFLARE_FILES_BINDING}\` once, to \`${runtime.filesBucket}\``)
+	}
+	if (!isPlatformTriggers(config.triggers, runtime.crons)) {
+		throw new Error(`cloudflare: application Worker \`${worker}\` sets \`triggers\` the platform did not write; its cron triggers are the platform's`)
+	}
+}
+
 const isPlatformProxy = (generated: GeneratedConfig, bounds: DeploymentBounds): boolean =>
 	bounds.proxy !== null && generated.config.name === bounds.proxy && resolve(bounds.cwd, generated.path) === PROXY_CONFIG_PATH
 
@@ -366,8 +446,9 @@ export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], boun
 	for (const generated of configs) {
 		const config = generated.config
 		const worker = config.name ?? generated.path
+		const keys = isPlatformProxy(generated, bounds) ? PROXY_CONFIG_KEYS : CONFIG_KEYS
 		for (const key of Object.keys(config)) {
-			if (!CONFIG_KEYS.has(key)) {
+			if (!keys.has(key)) {
 				throw new Error(`cloudflare: Worker \`${worker}\` sets \`${key}\`, which an app may not configure; declare resources in \`bindings\``)
 			}
 		}
@@ -378,6 +459,7 @@ export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], boun
 		if (isPlatformProxy(generated, bounds)) {
 			assertRoutedHere(worker, config, bounds)
 			assertFrameworkVariables(worker, config.vars, bounds.frameworkVariables.proxy ?? {})
+			assertBakedManifest(worker, config.define, bounds.proxyManifest)
 			continue
 		}
 		if (resolve(bounds.cwd, generated.path) === PROXY_CONFIG_PATH) {
@@ -385,6 +467,7 @@ export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], boun
 		}
 		assertUnexposed(worker, config)
 		assertFrameworkVariables(worker, config.vars, bounds.frameworkVariables.application)
+		if (bounds.application !== null) assertApplicationRuntime(worker, config, bounds.application)
 	}
 }
 

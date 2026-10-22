@@ -72,7 +72,8 @@ const deployCheckout = async (
 		apiToken: 'token',
 		collaborators: {
 			...defaultCloudflareCollaborators,
-			runCommand: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+			// The application Worker holds no secret yet, so the deploy has none to sweep.
+			runCommand: async (spec) => ({ exitCode: 0, stdout: spec.args[0] === 'secret' ? '[]' : '', stderr: '' }),
 			provision: async (input) => {
 				provisions.push(input)
 				if (input.definition === undefined) throw new Error('nothing to provision')

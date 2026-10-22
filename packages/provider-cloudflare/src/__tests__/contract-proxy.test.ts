@@ -27,7 +27,7 @@ import {
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
 import { FakeIam } from '../../../proxy-core/src/__tests__/helpers'
 import { createCloudflareDeployer, defineApp, generateWranglerConfigs } from '..'
-import { createCloudflareProxyWorker } from '../proxy'
+import { createCloudflareProxyWorker, proxyManifestJson } from '../proxy'
 import { createCloudflareProxyHandler } from '../proxy-worker'
 
 const HOST = 'notes.example.com'
@@ -92,7 +92,7 @@ async function deployedProxy(): Promise<Worker> {
 const proxyWorker = await deployedProxy()
 
 function bakedManifest(): string {
-	const encoded = proxyWorker.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+	const encoded = proxyManifestJson(proxyWorker)
 	if (typeof encoded !== 'string') {
 		throw new Error('the proxy Worker carries no manifest')
 	}

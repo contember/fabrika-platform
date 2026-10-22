@@ -1,3 +1,4 @@
+import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING } from '@fabrika/app/build'
 import {
 	type AppEnvironment,
 	appEnvironmentId,
@@ -13,10 +14,11 @@ import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type 
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { dirname, resolve } from 'node:path'
-import { type GeneratedConfig, ServiceReference, Worker } from 'oblaka-iac'
+import { DurableObject, type GeneratedConfig, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import { assertLiteralAssets } from './assets'
 import type { CloudflareAppConfig } from './authoring'
 import {
+	type ApplicationRuntime,
 	assertGeneratedConfigs,
 	assertGeneration,
 	assertStateNamespace,
@@ -27,8 +29,10 @@ import {
 import { runnerWorkerGraph } from './checkout'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
 import { configSchema } from './config-schema'
+import { assertCloudflareContract, needsMinuteTick } from './contract-support'
+import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
-import { createCloudflareProxyWorker } from './proxy'
+import { createCloudflareProxyWorker, PROXY_MANIFEST_DEFINE } from './proxy'
 import type { RunnerApprovedAccess } from './runner-protocol'
 import { defaultReconcileSchema } from './schema'
 
@@ -60,42 +64,100 @@ const assertRunning = (signal: AbortSignal): void => {
 	}
 }
 
+/** The bindings the platform writes into a contract application's Worker (ADR-0065). */
+const PLATFORM_BINDINGS: ReadonlySet<string> = new Set([CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_FILES_BINDING])
+
 /** An application never names a variable only the platform writes, whether or not this deploy writes it. */
 const assertNoFrameworkVariables = (config: CloudflareAppConfig, application: Worker, run: CloudflareDeployRun): void => {
 	const authored = [
 		...(config.pipeline?.vars ?? []),
+		...(config.pipeline?.secrets ?? []),
 		...Object.keys(application.options.vars ?? {}),
 		...Object.keys(application.options.bindings ?? {}),
 		...Object.keys(run.vars),
+		...Object.keys(run.secrets),
 	]
-	const reserved = authored.find(isFrameworkVariableName)
+	const reserved = authored.find((name) => isFrameworkVariableName(name) || PLATFORM_BINDINGS.has(name))
 	if (reserved !== undefined) {
 		throw new Error(`cloudflare: application variable \`${reserved}\` is managed by Fabrika`)
 	}
+	if (application.options.triggers !== undefined) {
+		throw new Error(`cloudflare: application Worker \`${application.options.name}\` sets \`triggers\`; the platform writes its cron triggers`)
+	}
 }
 
+/**
+ * Write the managed values into the application Worker: the public ones as vars, and the credentials as Worker secrets
+ * the deploy uploads with the version (`withSecretsFile`), never as plain text in a generated config.
+ */
 const withManagedEnvironment = (
 	config: CloudflareAppConfig,
 	authored: Worker,
 	run: CloudflareDeployRun,
 	managed: ProviderManagedEnvironment,
-): Worker => {
-	const present: Record<string, string> = {}
-	const declared = new Set(config.pipeline?.vars ?? [])
+): { readonly worker: Worker; readonly secrets: Readonly<Record<string, string>> } => {
+	const declared = new Set([...(config.pipeline?.vars ?? []), ...(config.pipeline?.secrets ?? [])])
 	const application = applicationWorker(authored)
-	for (const [name, value] of Object.entries(managed)) {
-		if (declared.has(name) || application.options.vars?.[name] !== undefined || run.vars[name] !== undefined) {
+	for (const name of Object.keys(managed)) {
+		if (
+			declared.has(name) || application.options.vars?.[name] !== undefined || run.vars[name] !== undefined || run.secrets[name] !== undefined
+		) {
 			throw new Error(`cloudflare: application variable \`${name}\` is managed by Fabrika`)
 		}
-		if (value !== null) present[name] = value
 	}
-	if (Object.keys(present).length === 0) return authored
+	const { vars, secrets } = splitManagedEnvironment(managed)
+	if (Object.keys(vars).length === 0) return { worker: authored, secrets }
 	const configured = new Worker({
 		...application.options,
 		vars: {
 			...(application.options.vars ?? {}),
-			...present,
+			...vars,
 		},
+	})
+	return { worker: replaceApplicationWorker(authored, configured), secrets }
+}
+
+/** R2's bucket names: 3 to 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. */
+const R2_BUCKET_NAME = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/
+
+/** The environment's files bucket, before oblaka's environment prefix. */
+const filesBucketName = (appId: string): string => `${appId}-files`
+
+/** The remote name oblaka gives the files bucket; it prefixes a bucket with the environment, `local` included. */
+const filesBucketRemote = (run: CloudflareDeployRun): string => {
+	const remote = `${run.env}-${filesBucketName(run.appId)}`
+	if (!R2_BUCKET_NAME.test(remote)) {
+		throw new Error(
+			`cloudflare: the files bucket \`${remote}\` of \`${run.appId}@${run.env}\` is not a valid R2 bucket name; shorten the app id or the environment`,
+		)
+	}
+	return remote
+}
+
+const MINUTE_TICK = '* * * * *'
+
+/** What the platform gives a contract application's Worker; the deployer writes exactly this and the bounds check it. */
+const applicationRuntime = (run: CloudflareDeployRun, contract: ContractArtifact): ApplicationRuntime => ({
+	filesBucket: filesBucketRemote(run),
+	crons: needsMinuteTick(contract) ? [MINUTE_TICK] : [],
+})
+
+/**
+ * Bind the application's Durable Object, which runs the application over its SQLite, the environment's files bucket,
+ * and the minute tick (ADR-0065). The object is bound first, so oblaka numbers its migration `v0001` whatever else the
+ * application binds, and the tag never moves.
+ */
+const withApplicationRuntime = (authored: Worker, run: CloudflareDeployRun, runtime: ApplicationRuntime): Worker => {
+	const application = applicationWorker(authored)
+	const configured = new Worker({
+		...application.options,
+		bindings: {
+			[CLOUDFLARE_APPLICATION_BINDING]: new DurableObject({ name: `${run.appId}-application`, className: CLOUDFLARE_APPLICATION_CLASS }),
+			...(application.options.bindings ?? {}),
+			[CLOUDFLARE_FILES_BINDING]: new R2Bucket({ name: filesBucketName(run.appId) }),
+		},
+		// Always written: wrangler leaves a Worker's schedules alone when `triggers` is absent, and clears them on `[]`.
+		triggers: { crons: [...runtime.crons] },
 	})
 	return replaceApplicationWorker(authored, configured)
 }
@@ -249,7 +311,60 @@ interface StepEnv {
 	readonly platformIam: PlatformIamTarget | undefined
 	readonly reconcileSchema: SchemaReconciler
 	readonly bounds: DeploymentBounds
+	/** The managed credentials the application Worker's version is uploaded with, as Worker secrets. */
+	readonly managedSecrets: Readonly<Record<string, string>>
 	generatedConfigs: readonly GeneratedConfig[]
+}
+
+/**
+ * `wrangler deploy`, with the managed secrets uploaded in the same version when there are any, so the version never
+ * serves without them, and a plain var of the same name an older release wrote goes with the old version.
+ */
+const wranglerDeploy = async (env: StepEnv, cwd: string, secrets: Readonly<Record<string, string>>): Promise<void> => {
+	const { run, credentials, cf } = env
+	const names = Object.keys(secrets)
+	if (run.dryRun) {
+		run.log(`  [dry-run] would run: wrangler deploy${names.length === 0 ? '' : ` with the secrets ${names.join(', ')}`} in ${cwd}`)
+		return
+	}
+	assertRunning(run.signal)
+	await withSecretsFile(secrets, async (path) => {
+		const args = path === null ? ['deploy'] : ['deploy', '--secrets-file', path]
+		const result = await cf.runCommand({ command: 'wrangler', args, cwd, env: wranglerEnv(credentials), signal: run.signal })
+		if (result.exitCode !== 0) throw commandError('wrangler deploy', result)
+	})
+}
+
+/** Delete the framework secrets the application Worker holds that this deploy no longer writes, as Zerops removes them. */
+const deleteStaleSecrets = async (env: StepEnv, cwd: string): Promise<void> => {
+	const { run, credentials, cf } = env
+	if (run.dryRun) {
+		run.log(`  [dry-run] would delete the managed secrets this deploy no longer writes in ${cwd}`)
+		return
+	}
+	assertRunning(run.signal)
+	const listed = await cf.runCommand({
+		command: 'wrangler',
+		args: ['secret', 'list', '--format', 'json'],
+		cwd,
+		env: wranglerEnv(credentials),
+		signal: run.signal,
+	})
+	if (listed.exitCode !== 0) throw commandError('wrangler secret list', listed)
+	for (const name of staleManagedSecrets(parseSecretNames(listed.stdout), env.managedSecrets)) {
+		assertRunning(run.signal)
+		// A piped stdin keeps wrangler non-interactive, so its confirmation takes its fallback answer.
+		const result = await cf.runCommand({
+			command: 'wrangler',
+			args: ['secret', 'delete', name],
+			cwd,
+			env: wranglerEnv(credentials),
+			stdin: '',
+			signal: run.signal,
+		})
+		if (result.exitCode !== 0) throw commandError(`wrangler secret delete ${name}`, result)
+		run.log(`  deleted the managed secret ${name}, which this deploy no longer writes`)
+	}
 }
 
 const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
@@ -311,26 +426,18 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			// The configs oblaka wrote, not the generation checked before the run: a stateful binding can emit differently twice.
 			assertGeneratedConfigs(configs, env.bounds)
 			if (configs.length === 0) {
-				if (dryRun) {
-					run.log(`  [dry-run] would run: wrangler deploy in ${dir}`)
-					return
-				}
-				assertRunning(signal)
-				const result = await cf.runCommand({ command: 'wrangler', args: ['deploy'], cwd: dir, env: wranglerEnv(credentials), signal })
-				if (result.exitCode !== 0) throw commandError('wrangler deploy', result)
+				await wranglerDeploy(env, dir, env.managedSecrets)
 				return
 			}
+			const application = `${run.env}-${applicationWorker(worker).options.name}`
 			for (const generated of configs) {
 				const generatedDir = dirname(resolve(dir, generated.path))
 				// The checkout's own build step has run by now, so this is the last moment the tree is still ours to check.
 				if (env.platformResources === 'refuse') await assertLiteralAssets(generated, generatedDir)
-				if (dryRun) {
-					run.log(`  [dry-run] would run: wrangler deploy in ${generatedDir}`)
-					continue
-				}
-				assertRunning(signal)
-				const result = await cf.runCommand({ command: 'wrangler', args: ['deploy'], cwd: generatedDir, env: wranglerEnv(credentials), signal })
-				if (result.exitCode !== 0) throw commandError('wrangler deploy', result)
+				const isApplication = generated.config.name === application
+				await wranglerDeploy(env, generatedDir, isApplication ? env.managedSecrets : {})
+				// A platform component's own secrets carry framework names (IAM's mail transport), so only an application's are swept.
+				if (isApplication && env.platformResources === 'refuse') await deleteStaleSecrets(env, generatedDir)
 			}
 			return
 		}
@@ -475,6 +582,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	if (platformResources === 'refuse' && served === null) {
 		throw new Error('cloudflare: the checkout has no `fabrika.contract.ts`; Fabrika deploys an application only with a contract')
 	}
+	if (platformResources === 'refuse' && contract !== null) assertCloudflareContract(contract)
 	// Read once, before `resources()` runs the checkout's code again: nothing below reads the config's schema.
 	const schema = configSchema(loaded.config)
 	assertContractSchema(schema, contract)
@@ -483,10 +591,10 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	const proxied = platformResources === 'refuse' && served !== null ? platformProxied(authored, served, run) : authored
 	if (platformResources === 'refuse') assertNoFrameworkVariables(loaded.config, applicationWorker(proxied), run)
 	const connectors = platformResources === 'refuse' ? connectorBindings(contract) : {}
-	const worker = withConnectorBindings(
-		withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served)),
-		connectors,
-	)
+	const runtime = platformResources === 'refuse' && contract !== null ? applicationRuntime(run, contract) : null
+	const managed = withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served))
+	const connected = withConnectorBindings(managed.worker, connectors)
+	const worker = runtime === null ? connected : withApplicationRuntime(connected, run, runtime)
 	const dir = workerDir(loaded.config, loaded.cwd)
 	const bounds: DeploymentBounds = {
 		env: run.env,
@@ -501,6 +609,8 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 			application: frameworkValues(applicationWorker(worker).options.vars),
 			proxy: proxied === authored ? null : frameworkValues(worker.options.vars),
 		},
+		proxyManifest: proxied === authored ? null : (worker.options.define?.[PROXY_MANIFEST_DEFINE] ?? null),
+		application: runtime,
 	}
 	assertStateNamespace(stateNamespace(loaded.config, run), platformResources)
 	assertGeneration(await generateWranglerConfigs(worker, run.env), bounds)
@@ -516,6 +626,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		platformIam: options.platformIam,
 		reconcileSchema: options.reconcileSchema ?? defaultReconcileSchema,
 		bounds,
+		managedSecrets: managed.secrets,
 		generatedConfigs: [],
 	}
 	const result = await runSteps(buildPlan(loaded.config, worker), run, (step) => runStep(step, env))

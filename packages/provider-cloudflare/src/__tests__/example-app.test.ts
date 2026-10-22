@@ -11,7 +11,7 @@ import { resolve } from 'node:path'
 import { Worker } from 'oblaka-iac'
 import { contract } from '../../../../examples/app/fabrika.contract'
 import { createCloudflareDeployer, defaultCloudflareCollaborators, generateWranglerConfigs, type ProvisionInput } from '..'
-import { CLOUDFLARE_PROXY_WORKER_DIR } from '../proxy'
+import { CLOUDFLARE_PROXY_WORKER_DIR, proxyManifestJson } from '../proxy'
 
 const EXAMPLE = resolve(import.meta.dir, '..', '..', '..', '..', 'examples', 'app')
 const artifact = compileContract(contract, {})
@@ -53,7 +53,7 @@ describe('the example application', () => {
 	test('deploys behind the proxy Worker the platform builds from the endpoint table it read in the checkout', async () => {
 		const root = await deployedRoot()
 		expect(root?.options).toMatchObject({ name: 'example-app-proxy', dir: CLOUDFLARE_PROXY_WORKER_DIR })
-		const manifest = root?.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+		const manifest = root === undefined ? null : proxyManifestJson(root)
 		const apps = typeof manifest === 'string' ? parseProxyManifestJson(manifest)?.apps : undefined
 		expect(apps).toEqual([{ id: 'example-app@stage', hosts: ['app.example.com'], upstream: 'APP', scheme: 'https', ...contractProxyTable(artifact) }])
 	})

@@ -3,11 +3,11 @@ import { type AppActionDef, type AppEnvironment, type ContractArtifact, contract
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { contractProxyTable, isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { symlinkSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { existsSync, symlinkSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { D1Database, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
+import { dirname, join } from 'node:path'
+import { D1Database, DurableObject, type GeneratedConfig, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type {
 	CloudflareAppConfig,
@@ -28,7 +28,7 @@ import {
 	iamServiceReference,
 } from '..'
 import type { PlatformIamTarget } from '../provider'
-import { CLOUDFLARE_PROXY_WORKER_DIR } from '../proxy'
+import { CLOUDFLARE_PROXY_WORKER_DIR, PROXY_MANIFEST_DEFINE, proxyManifestJson } from '../proxy'
 import type { RunnerOutcomeFile } from '../runner-protocol'
 
 interface Recorded {
@@ -76,10 +76,18 @@ type GeneratedService = { binding: string; service: string; entrypoint?: string 
 /** Any object oblaka calls `configureBinding` on: a checkout can hand it one of its own. */
 type Bindable = Pick<ServiceReference, 'configureBinding'>
 
+/** Every command succeeds; the application Worker holds no secret yet, so `wrangler secret list` prints an empty list. */
+const succeeded = (spec: CommandSpec): CommandResult => ({ exitCode: 0, stdout: isSecretList(spec) ? '[]' : '', stderr: '' })
+
+const isSecretList = (spec: CommandSpec): boolean => spec.args[0] === 'secret' && spec.args[1] === 'list'
+
+/** The command the deploy runs after the application Worker's `wrangler deploy`, to find the managed secrets it no longer writes. */
+const SECRET_LIST = ['wrangler', 'secret', 'list', '--format', 'json']
+
 const makeCollaborators = (
 	rec: Recorded,
 	appConfig: CloudflareAppConfig,
-	commandResult: (spec: CommandSpec) => CommandResult = () => ({ exitCode: 0, stdout: '', stderr: '' }),
+	commandResult: (spec: CommandSpec) => CommandResult = succeeded,
 	checkoutDir = '/repo/app',
 	runCommand?: CommandRunner,
 	generatedServices?: GeneratedService[],
@@ -222,7 +230,7 @@ afterEach(async () => {
 })
 
 describe('Cloudflare provider', () => {
-	test('merges platform-managed values into the application Worker without exposing them in logs', async () => {
+	test('merges the public platform-managed values into the application Worker, and no credential, without exposing them in logs', async () => {
 		const dsn = 'https://operations-public-key@errors.test/1'
 		await deploy(rec, config(), {
 			dryRun: true,
@@ -232,10 +240,8 @@ describe('Cloudflare provider', () => {
 				FABRIKA_SERVICE_KEY: null,
 			},
 		})
-		expect(rec.applicationVars[0]).toMatchObject({
-			FABRIKA_OPERATIONS_DSN: dsn,
-			FABRIKA_RELEASE: 'fabrika/demo/stage/default/commit',
-		})
+		expect(rec.applicationVars[0]).toMatchObject({ FABRIKA_RELEASE: 'fabrika/demo/stage/default/commit' })
+		expect(rec.applicationVars[0]).not.toHaveProperty('FABRIKA_OPERATIONS_DSN')
 		expect(rec.applicationVars[0]).not.toHaveProperty('FABRIKA_SERVICE_KEY')
 		expect(rec.logs.join('\n')).not.toContain(dsn)
 	})
@@ -261,10 +267,10 @@ describe('Cloudflare provider', () => {
 	})
 
 	test('targets platform-managed values at the private application Worker behind the platform proxy', async () => {
-		const dsn = 'https://operations-public-key@errors.test/1'
-		await deploy(rec, config(), { dryRun: true, managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn } })
-		expect(rec.provisionedVars[0]).not.toHaveProperty('FABRIKA_OPERATIONS_DSN')
-		expect(rec.applicationVars[0]).toMatchObject({ FABRIKA_OPERATIONS_DSN: dsn })
+		const release = 'fabrika/demo/stage/default/commit'
+		await deploy(rec, config(), { dryRun: true, managedEnvironment: { FABRIKA_RELEASE: release } })
+		expect(rec.provisionedVars[0]).not.toHaveProperty('FABRIKA_RELEASE')
+		expect(rec.applicationVars[0]).toMatchObject({ FABRIKA_RELEASE: release })
 	})
 
 	test('plans nested D1 migration and deploys every generated Worker config', async () => {
@@ -292,6 +298,7 @@ describe('Cloudflare provider', () => {
 			['wrangler', 'd1', 'migrations', 'apply', 'DB', '--remote'],
 			['wrangler', 'deploy'],
 			['wrangler', 'deploy'],
+			SECRET_LIST,
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
 		expect(rec.commands[1]?.cwd).toBe('/repo/app/worker')
@@ -299,6 +306,7 @@ describe('Cloudflare provider', () => {
 		expect(rec.commands[2]?.cwd).toBe(CLOUDFLARE_PROXY_WORKER_DIR)
 		expect(rec.commands[3]?.cwd).toBe('/repo/app/worker')
 		expect(rec.commands[4]?.cwd).toBe('/repo/app/worker')
+		expect(rec.commands[5]?.cwd).toBe('/repo/app/worker')
 	})
 
 	test('loads the checkout config and preserves the canonical Cloudflare plan', async () => {
@@ -344,10 +352,11 @@ describe('Cloudflare provider', () => {
 			['sh', '-c', 'bun run build'],
 			['wrangler', 'deploy'],
 			['wrangler', 'deploy'],
+			SECRET_LIST,
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
 		expect(rec.commands[1]?.env).toEqual({ CLOUDFLARE_API_TOKEN: 'tok-1', CLOUDFLARE_ACCOUNT_ID: 'acc-1' })
-		expect(rec.commands[3]?.stdin).toBe('secret-value')
+		expect(rec.commands[4]?.stdin).toBe('secret-value')
 		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: '{"scopes":[],"actions":[],"roles":{},"contract":true}' } }])
 	})
 
@@ -357,7 +366,7 @@ describe('Cloudflare provider', () => {
 
 		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: JSON.stringify(schema) } }])
 		expect(rec.reconciled).toEqual([])
-		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([['wrangler', 'deploy'], ['wrangler', 'deploy']])
+		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([['wrangler', 'deploy'], ['wrangler', 'deploy'], SECRET_LIST])
 	})
 
 	test("a platform deploy registers its component's schema with IAM itself, with the provisioning key", async () => {
@@ -776,7 +785,7 @@ describe('Cloudflare provider', () => {
 		for (const env of ['stage', 'prod']) {
 			rec.provisions.length = 0
 			await expect(deploy(rec, config(), { env })).resolves.toMatchObject({ status: 'succeeded' })
-			const manifest = provisioned().root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+			const manifest = proxyManifestJson(provisioned().root)
 			expect(parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps.map((app) => app.id)).toEqual([`demo@${env}`])
 		}
 	})
@@ -791,7 +800,6 @@ describe('Cloudflare provider', () => {
 			workers_dev: false,
 			preview_urls: false,
 			observability: { enabled: true },
-			triggers: { crons: ['0 3 * * *'] },
 			assets: { binding: 'ASSETS', directory: 'dist', not_found_handling: 'single-page-application' },
 			vars: { ENVIRONMENT: 'stage' },
 			routes: [],
@@ -859,6 +867,7 @@ describe('Cloudflare provider', () => {
 		expect(rec.commands.map((command) => [command.command, ...command.args, command.cwd === CLOUDFLARE_PROXY_WORKER_DIR])).toEqual([
 			['wrangler', 'deploy', true],
 			['wrangler', 'deploy', false],
+			[...SECRET_LIST, false],
 		])
 	})
 
@@ -964,7 +973,7 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		// The proxy code is the platform's own copy, never the one a checkout installs into its `node_modules`.
 		expect(root.options.dir).not.toContain('node_modules')
 		expect(root.options.vars?.['FABRIKA_IAM_ISSUER']).toBe('https://iam.example.test')
-		const manifest = root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+		const manifest = proxyManifestJson(root)
 		expect(parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps).toEqual([
 			{ id: 'demo@stage', hosts: ['stage.example.com'], upstream: 'APP', scheme: 'https', ...contractProxyTable(notesArtifact) },
 		])
@@ -1066,7 +1075,7 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		const result = await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: widened, contract: notesArtifact })
 		expect(result.status).toBe('succeeded')
 		const { root, app } = provisioned()
-		const manifest = root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+		const manifest = proxyManifestJson(root)
 		expect(parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps).toEqual([
 			{ id: 'demo@stage', hosts: ['stage.example.com'], upstream: 'APP', scheme: 'https', ...contractProxyTable(notesArtifact) },
 		])
@@ -1078,7 +1087,7 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		const result = await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { contract: notesArtifact, contractDigest: older })
 		expect(result.status).toBe('succeeded')
 		const { root, app } = provisioned()
-		const manifest = root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+		const manifest = proxyManifestJson(root)
 		expect(parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps[0]).toMatchObject({ snapshot: older })
 		expect(app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(older)
 	})
@@ -1086,7 +1095,7 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 	test("a contract proxy admits the origin of the application's Operations DSN in its policy, never the key", async () => {
 		const dsn = 'https://operations-public-key@errors.test/1'
 		await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { contract: notesArtifact, managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn } })
-		const manifest = provisioned().root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+		const manifest = proxyManifestJson(provisioned().root)
 		const [app] = parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps ?? []
 		expect(app !== undefined && isApplicationEntry(app) ? app.operationsOrigin : null).toBe('https://errors.test')
 		expect(typeof manifest === 'string' ? manifest : '').not.toContain('operations-public-key')
@@ -1102,7 +1111,7 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		const entry = async (crossOrigins?: readonly string[]) => {
 			rec.provisions.length = 0
 			await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { contract: notesArtifact, ...(crossOrigins === undefined ? {} : { crossOrigins }) })
-			const manifest = provisioned().root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+			const manifest = proxyManifestJson(provisioned().root)
 			const [app] = parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps ?? []
 			return app !== undefined && isApplicationEntry(app) ? app : null
 		}
@@ -1313,5 +1322,229 @@ describe("another application's names (ADR-0048)", () => {
 	test('a platform component is not bound by the registry', async () => {
 		await expect(deploy(rec, binding({ OTHER: new ServiceReference('otherapp') }), { env: 'prod', installationApps, platformResources: 'allow' }))
 			.resolves.toMatchObject({ status: 'succeeded' })
+	})
+})
+
+/** The wrangler config oblaka generates for the provisioned graph's Worker `name`. */
+const generatedConfig = async (name: string): Promise<GeneratedConfig['config']> => {
+	const { configs } = await generateWranglerConfigs(provisioned().root, 'stage')
+	const found = configs.find((generated) => generated.config.name === name)
+	if (found === undefined) throw new Error(`oblaka generated no config for \`${name}\``)
+	return found.config
+}
+
+/** A contract whose proxy manifest is past a Worker variable's 5,120 bytes: `notes` with forty more query endpoints. */
+const largeContract = (): ContractArtifact => {
+	const [me] = notesArtifact.endpoints
+	if (me === undefined) throw new Error('the fixture has endpoints')
+	const bulk = Array.from({ length: 40 }, (_, index) => ({ ...me, id: `api.bulk${index}`, path: `/api/bulk${index}` }))
+	return { ...notesArtifact, endpoints: [...notesArtifact.endpoints, ...bulk] }
+}
+
+/** The managed values Control hands an application that has a job, a webhook, mail, signed tokens and an Operations DSN. */
+const CREDENTIALS = {
+	FABRIKA_OPERATIONS_DSN: 'https://operations-private-key@errors.test/1',
+	FABRIKA_SERVICE_KEY: 'service-key-value',
+	FABRIKA_TOKEN_KEYS: 'kid12345:token-secret',
+	FABRIKA_JOB_NIGHTLY_KEY: 'px_job-secret',
+	FABRIKA_WEBHOOK_BILLING_KEY: 'px_webhook-secret',
+	FABRIKA_EMAIL_RESEND_API_KEY: 're_mail-secret',
+	FABRIKA_PLATFORM_MAIL_KEY: 'px_relay-secret',
+	FABRIKA_IAM_RPC_KEY: 'px_membership-secret',
+}
+
+const PUBLIC_MANAGED = {
+	FABRIKA_RELEASE: 'fabrika/demo/stage/default/commit',
+	FABRIKA_APP_ORIGIN: 'https://stage.example.com',
+	FABRIKA_PLATFORM_MAIL_URL: 'https://control.example.com',
+}
+
+describe('a full contract application on Cloudflare (ADR-0065)', () => {
+	test("a manifest past a Worker variable's 5 KB deploys, baked into the proxy Worker's bundle instead of a variable", async () => {
+		const contract = largeContract()
+		const result = await deploy(rec, config(), { contract })
+		expect(result.status).toBe('succeeded')
+		const proxy = await generatedConfig('stage-demo-proxy')
+		const literal = proxy.define?.[PROXY_MANIFEST_DEFINE]
+		const baked: unknown = literal === undefined ? undefined : JSON.parse(literal)
+		if (typeof baked !== 'string') throw new Error('the proxy config bakes no manifest')
+		expect(new TextEncoder().encode(baked).length).toBeGreaterThan(5120)
+		expect(baked).toBe(proxyManifestJson(provisioned().root) ?? '')
+		expect(parseProxyManifestJson(baked)?.apps[0]?.endpoints).toHaveLength(contractProxyTable(contract).endpoints.length)
+		expect(Object.keys(proxy.vars ?? {})).toEqual(['FABRIKA_IAM_ISSUER'])
+		expect(PROXY_MANIFEST_DEFINE).toBe('__FABRIKA_PROXY_MANIFEST__')
+	})
+
+	test('an application config cannot substitute values into its bundle (`define`): only the platform proxy carries one', async () => {
+		const authored = config({ resources: () => withRawOptions(appWorker(), { define: { FABRIKA_IAM_ISSUER: '"https://forged.example"' } }) })
+		await expect(deploy(rec, authored)).rejects.toThrow('Worker `stage-demo` sets `define`, which an app may not configure')
+	})
+
+	test('a managed credential never lands in the generated vars; it is uploaded with the version, from a file removed after a failed deploy', async () => {
+		const files: Array<{ readonly path: string; readonly mode: number; readonly secrets: unknown }> = []
+		const result = await deploy(rec, config(), {
+			managedEnvironment: { ...CREDENTIALS, ...PUBLIC_MANAGED, FABRIKA_IAM_ISSUER: 'https://iam.example.test' },
+			runCommand: async (spec) => {
+				const flag = spec.args.indexOf('--secrets-file')
+				const path = flag === -1 ? undefined : spec.args[flag + 1]
+				if (path === undefined) return succeeded(spec)
+				files.push({ path, mode: (await stat(path)).mode & 0o777, secrets: JSON.parse(await readFile(path, 'utf8')) })
+				return { exitCode: 1, stdout: '', stderr: 'upload refused' }
+			},
+		})
+		expect(result.status).toBe('failed')
+		expect(stepError(result, 'deploy-worker')).toBe('wrangler deploy failed (exit 1): upload refused')
+		const application = await generatedConfig('stage-demo')
+		for (const name of Object.keys(CREDENTIALS)) expect(application.vars).not.toHaveProperty(name)
+		expect(application.vars).toMatchObject(PUBLIC_MANAGED)
+		expect(files).toHaveLength(1)
+		expect(files[0]?.secrets).toEqual(CREDENTIALS)
+		expect(files[0]?.mode).toBe(0o600)
+		// Gone with its directory, although the deploy failed.
+		expect(existsSync(dirname(files[0]?.path ?? '/'))).toBe(false)
+		// The proxy is deployed first and gets none of them.
+		const deploys = rec.commands.filter((command) => command.args[0] === 'deploy')
+		expect(deploys.map((command) => command.cwd === CLOUDFLARE_PROXY_WORKER_DIR ? command.args : command.args.slice(0, 2))).toEqual([
+			['deploy'],
+			['deploy', '--secrets-file'],
+		])
+		const printed = [...rec.logs, ...(result.steps.map((step) => step.error ?? ''))].join('\n')
+		for (const value of Object.values(CREDENTIALS)) expect(printed).not.toContain(value)
+	})
+
+	test('a dry run names the secrets it would upload, never their values, and writes no file', async () => {
+		await deploy(rec, config(), { dryRun: true, managedEnvironment: { FABRIKA_TOKEN_KEYS: CREDENTIALS.FABRIKA_TOKEN_KEYS } })
+		expect(rec.commands).toEqual([])
+		expect(rec.logs.join('\n')).toContain('with the secrets FABRIKA_TOKEN_KEYS')
+		expect(rec.logs.join('\n')).not.toContain(CREDENTIALS.FABRIKA_TOKEN_KEYS)
+	})
+
+	test('a managed secret the deploy no longer writes is deleted after the deploy; an operator secret is kept', async () => {
+		const held = ['FABRIKA_OPERATIONS_DSN', 'FABRIKA_JOB_RETIRED_KEY', 'FABRIKA_TOKEN_KEYS', 'API_KEY'].map((name) => ({ name, type: 'secret_text' }))
+		const result = await deploy(rec, config(), {
+			managedEnvironment: { FABRIKA_OPERATIONS_DSN: CREDENTIALS.FABRIKA_OPERATIONS_DSN, FABRIKA_TOKEN_KEYS: null },
+			commandResult: (spec) => ({ exitCode: 0, stdout: isSecretList(spec) ? JSON.stringify(held) : '', stderr: '' }),
+		})
+		expect(result.status).toBe('succeeded')
+		const commands = rec.commands.map((command) => [command.command, ...command.args.filter((arg) => !arg.startsWith('/'))])
+		expect(commands).toEqual([
+			['wrangler', 'deploy'],
+			['wrangler', 'deploy', '--secrets-file'],
+			SECRET_LIST,
+			['wrangler', 'secret', 'delete', 'FABRIKA_JOB_RETIRED_KEY'],
+			['wrangler', 'secret', 'delete', 'FABRIKA_TOKEN_KEYS'],
+		])
+		const deletes = rec.commands.filter((command) => command.args[1] === 'delete')
+		expect(deletes.every((command) => command.stdin === '' && command.cwd === '/repo/app')).toBe(true)
+	})
+
+	test('a platform component sweeps no secret: its own carry framework names', async () => {
+		await deploy(rec, config(), { platformResources: 'allow' })
+		expect(rec.commands.some(isSecretList)).toBe(false)
+	})
+
+	test('an unreadable secret list fails the deploy rather than leaving a stale credential', async () => {
+		const result = await deploy(rec, config(), { commandResult: (spec) => ({ exitCode: 0, stdout: isSecretList(spec) ? 'Not JSON' : '', stderr: '' }) })
+		expect(stepError(result, 'deploy-worker')).toBe('wrangler secret list printed no readable list of secrets')
+	})
+
+	test('the application Worker binds its object under a fixed migration, the files bucket, and the minute tick of a job or a file kind', async () => {
+		await deploy(rec, config(), { contract: notesArtifact })
+		const application = await generatedConfig('stage-demo')
+		expect(application.durable_objects).toEqual({ bindings: [{ name: 'FABRIKA_APPLICATION', class_name: 'FabrikaApplication' }] })
+		expect(application.migrations).toEqual([{ tag: 'v0001', new_sqlite_classes: ['FabrikaApplication'] }])
+		expect(application.r2_buckets).toEqual([{ binding: 'FABRIKA_FILES', bucket_name: 'stage-demo-files' }])
+		expect(application.triggers).toEqual({ crons: ['* * * * *'] })
+		const { resources } = await generateWranglerConfigs(provisioned().root, 'stage')
+		expect(resources.filter((resource) => resource.kind === 'r2_bucket').map((resource) => resource.remote)).toEqual(['stage-demo-files'])
+	})
+
+	test('a contract with neither a job nor a file kind gets the object, the bucket and an empty cron list, which clears an older tick', async () => {
+		const quiet: ContractArtifact = {
+			...notesArtifact,
+			jobs: {},
+			files: {},
+			endpoints: notesArtifact.endpoints.filter((row) => row.source.kind !== 'files'),
+		}
+		await deploy(rec, config(), { contract: quiet })
+		const application = await generatedConfig('stage-demo')
+		expect(application.triggers).toEqual({ crons: [] })
+		expect(application.durable_objects?.bindings).toHaveLength(1)
+		expect(application.r2_buckets).toEqual([{ binding: 'FABRIKA_FILES', bucket_name: 'stage-demo-files' }])
+		const fileKind: ContractArtifact = { ...quiet, fileKinds: { photo: { types: ['image/png'], maxBytes: 1024 } } }
+		await deploy(rec, config(), { contract: fileKind })
+		expect(rec.provisions).toHaveLength(2)
+		rec.provisions.shift()
+		expect((await generatedConfig('stage-demo')).triggers).toEqual({ crons: ['* * * * *'] })
+	})
+
+	test("the object's migration keeps tag v0001 when the application binds an object of its own", async () => {
+		const own = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					...PRIVATE,
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: { COUNTER: new DurableObject({ name: 'counter', className: 'Counter' }) },
+					main: 'src/index.ts',
+				}),
+		})
+		await expect(deploy(rec, own)).resolves.toMatchObject({ status: 'succeeded' })
+		expect((await generatedConfig('stage-demo')).migrations).toEqual([
+			{ tag: 'v0001', new_sqlite_classes: ['FabrikaApplication'] },
+			{ tag: 'v0002', new_sqlite_classes: ['Counter'] },
+		])
+	})
+
+	test("an application authors none of its object's binding, migration, bucket or cron triggers", async () => {
+		const binds = (bindings: Record<string, Bindable>): CloudflareAppConfig =>
+			config({
+				resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings, main: 'src/index.ts' }),
+			})
+		await expect(deploy(rec, binds({ FABRIKA_APPLICATION: new DurableObject({ name: 'mine', className: 'Mine' }) }))).rejects.toThrow(
+			'application variable `FABRIKA_APPLICATION` is managed by Fabrika',
+		)
+		await expect(deploy(rec, binds({ FABRIKA_FILES: new R2Bucket({ name: 'demo-mine' }) }))).rejects.toThrow(
+			'application variable `FABRIKA_FILES` is managed by Fabrika',
+		)
+		await expect(deploy(rec, config({ resources: () => withRawOptions(appWorker(), { triggers: { crons: ['0 3 * * *'] } }) }))).rejects.toThrow(
+			'application Worker `demo` sets `triggers`; the platform writes its cron triggers',
+		)
+		await expect(deploy(rec, binds({ X: emitting({ triggers: { crons: ['0 3 * * *'] } }) }))).rejects.toThrow(
+			'sets `triggers` the platform did not write',
+		)
+		await expect(deploy(rec, binds({ X: emitting({ migrations: [{ tag: 'v0001', new_sqlite_classes: ['Other'] }] }) }))).rejects.toThrow(
+			'must open its migrations with `v0001` creating `FabrikaApplication`',
+		)
+		await expect(deploy(rec, binds({ X: emitting({ durable_objects: { bindings: [] } }) }))).rejects.toThrow(
+			'must bind `FABRIKA_APPLICATION` once, to its own `FabrikaApplication`',
+		)
+		const moved = { r2_buckets: [{ binding: 'FABRIKA_FILES', bucket_name: 'stage-demo-elsewhere' }] }
+		await expect(deploy(rec, binds({ X: emitting(moved) }))).rejects.toThrow('must bind `FABRIKA_FILES` once, to `stage-demo-files`')
+	})
+
+	test('an environment whose files bucket would not be a valid R2 name is refused before anything runs', async () => {
+		const id = `a${'b'.repeat(60)}`
+		const long = config({
+			id,
+			resources: () => new Worker({ dir: '.', ...PRIVATE, name: id, compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+		})
+		await expect(deploy(rec, long, { appId: id })).rejects.toThrow(
+			`the files bucket \`stage-${id}-files\` of \`${id}@stage\` is not a valid R2 bucket name`,
+		)
+		expect(rec.provisions).toEqual([])
+	})
+
+	test('a local deploy refuses a scanning file kind and raw SQL from the contract it reads, as Control does', async () => {
+		const scanning: ContractArtifact = { ...notesArtifact, fileKinds: { scans: { types: ['application/pdf'], maxBytes: 1024, scan: true } } }
+		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: scanning })).rejects.toThrow(
+			'cloudflare: file kind `scans` scans its uploads (`scan: true`), and no scanner runs on Cloudflare yet',
+		)
+		const raw: ContractArtifact = { ...notesArtifact, declared: { 'api.notes.report': { sql: 'write', unscoped: {}, connect: [], issues: null } } }
+		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: raw })).rejects.toThrow(
+			'cloudflare: `api.notes.report` declares raw SQL (`ctx.sql`)',
+		)
+		expect(rec.provisions).toEqual([])
 	})
 })

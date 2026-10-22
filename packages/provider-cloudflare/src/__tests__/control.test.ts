@@ -564,9 +564,8 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
 
-	test('refuses a job or a webhook key before any runner call: a Worker runs neither', async () => {
-		const jobs: CloudflareRunnerJob[] = []
-		const provider = createCloudflareControlProvider({
+	const recordingProvider = (jobs: CloudflareRunnerJob[]): ControlProvider =>
+		createCloudflareControlProvider({
 			accountId: 'account-1',
 			apiToken: 'token-1',
 			runnerKey: 'test-runner-key',
@@ -578,90 +577,58 @@ describe('Cloudflare control provider', () => {
 			},
 			cancelRun: async () => {},
 		})
-		const input = deployInput()
-		await expect(provider.deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, FABRIKA_JOB_NIGHTLY_KEY: 'px_private' } })).rejects
-			.toThrow('they run on Zerops only')
-		expect(jobs).toEqual([])
-	})
 
-	test('refuses the installation mail transport before any runner call, a dry run included: a Worker var is plain', async () => {
+	test('hands the runner the workload, mail, platform transport and token keys: the deploy writes them as Worker secrets (ADR-0065)', async () => {
 		const jobs: CloudflareRunnerJob[] = []
-		const provider = createCloudflareControlProvider({
-			accountId: 'account-1',
-			apiToken: 'token-1',
-			runnerKey: 'test-runner-key',
-			...sourceOptions,
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			startRun: async (job) => {
-				jobs.push(job)
-				return { state: 'succeeded' }
-			},
-			cancelRun: async () => {},
-		})
 		const input = deployInput()
-		const managedEnvironment = { ...input.managedEnvironment, FABRIKA_EMAIL_RESEND_API_KEY: 're_private-key' }
-		for (const dryRun of [false, true]) {
-			const refusal = provider.deploy({ ...input, dryRun, managedEnvironment })
-			await expect(refusal).rejects.toThrow(
-				'cloudflare: the contract declares a job that sends mail through the installation (FABRIKA_EMAIL_RESEND_API_KEY); jobs run on Zerops only',
-			)
-			await expect(refusal).rejects.not.toThrow('re_private-key')
+		const handed = {
+			FABRIKA_JOB_NIGHTLY_KEY: 'px_job',
+			FABRIKA_WEBHOOK_BILLING_KEY: 'px_webhook',
+			FABRIKA_EMAIL_RESEND_API_KEY: 're_private-key',
+			FABRIKA_PLATFORM_MAIL_KEY: 'px_private-relay-key',
+			FABRIKA_PLATFORM_MAIL_URL: 'http://control:3000',
+			FABRIKA_TOKEN_KEYS: 'kid12345:private-secret',
+			FABRIKA_APP_ORIGIN: 'https://demo.example',
 		}
-		expect(jobs).toEqual([])
+		await recordingProvider(jobs).deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, ...handed } })
+		expect(jobs[0]?.managedEnvironment).toMatchObject(handed)
+		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
 
-	test("refuses the platform's mail relay before any runner call, a dry run included: its key would be a plain Worker var", async () => {
+	test('a key the deploy no longer writes is left out of the job, for the deploy to delete', async () => {
 		const jobs: CloudflareRunnerJob[] = []
-		const provider = createCloudflareControlProvider({
-			accountId: 'account-1',
-			apiToken: 'token-1',
-			runnerKey: 'test-runner-key',
-			...sourceOptions,
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			startRun: async (job) => {
-				jobs.push(job)
-				return { state: 'succeeded' }
-			},
-			cancelRun: async () => {},
-		})
 		const input = deployInput()
-		for (const [name, value] of [['FABRIKA_PLATFORM_MAIL_KEY', 'px_private-relay-key'], ['FABRIKA_PLATFORM_MAIL_URL', 'http://control:3000']]) {
-			for (const dryRun of [false, true]) {
-				const refusal = provider.deploy({ ...input, dryRun, managedEnvironment: { ...input.managedEnvironment, [name]: value } })
-				await expect(refusal).rejects.toThrow(
-					`cloudflare: the contract declares a job that sends mail through the installation (${name}); jobs run on Zerops only`,
-				)
-				await expect(refusal).rejects.not.toThrow('px_private-relay-key')
-			}
-		}
-		expect(jobs).toEqual([])
-	})
-
-	test('refuses token keys before any runner call, and passes the canonical origin as a Worker var', async () => {
-		const jobs: CloudflareRunnerJob[] = []
-		const provider = createCloudflareControlProvider({
-			accountId: 'account-1',
-			apiToken: 'token-1',
-			runnerKey: 'test-runner-key',
-			...sourceOptions,
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			startRun: async (job) => {
-				jobs.push(job)
-				return { state: 'succeeded' }
-			},
-			cancelRun: async () => {},
-		})
-		const input = deployInput()
-		const refusal = provider.deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, FABRIKA_TOKEN_KEYS: 'kid12345:private-secret' } })
-		await expect(refusal).rejects.toThrow('cloudflare: the contract declares token purposes')
-		await expect(refusal).rejects.not.toThrow('private-secret')
-		expect(jobs).toEqual([])
-		await provider.deploy({
-			...input,
-			managedEnvironment: { ...input.managedEnvironment, FABRIKA_APP_ORIGIN: 'https://demo.example', FABRIKA_TOKEN_KEYS: null },
-		})
-		expect(jobs[0]?.managedEnvironment?.['FABRIKA_APP_ORIGIN']).toBe('https://demo.example')
+		await recordingProvider(jobs).deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, FABRIKA_TOKEN_KEYS: null } })
 		expect(jobs[0]?.managedEnvironment?.['FABRIKA_TOKEN_KEYS']).toBeUndefined()
+	})
+
+	test('refuses a file kind or a file collection that scans its uploads before any runner call: no scanner runs on Cloudflare', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const input = deployInput()
+		const attachments = notesArtifact.files['attachments']
+		if (attachments === undefined) throw new Error('the fixture has a file collection')
+		const cases = [
+			[{ ...notesArtifact, fileKinds: { scans: { types: ['application/pdf'], maxBytes: 1024, scan: true } } }, 'file kind `scans`'],
+			[{ ...notesArtifact, files: { attachments: { ...attachments, scan: true } } }, 'file collection `attachments`'],
+		] as const
+		for (const [contract, subject] of cases) {
+			const access = { ...APPROVED, contract, contractDigest: contractDigest(contract) }
+			await expect(recordingProvider(jobs).deploy({ ...input, environment: { ...input.environment, access } })).rejects.toThrow(
+				`cloudflare: ${subject} scans its uploads (\`scan: true\`), and no scanner runs on Cloudflare yet`,
+			)
+		}
+		expect(jobs).toEqual([])
+	})
+
+	test('refuses an application that declares raw SQL before any runner call: its SQLite has no role to bound it', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const input = deployInput()
+		const contract = { ...notesArtifact, declared: { 'api.notes.report': { sql: 'read' as const, unscoped: {}, connect: [], issues: null } } }
+		const access = { ...APPROVED, contract, contractDigest: contractDigest(contract) }
+		await expect(recordingProvider(jobs).deploy({ ...input, environment: { ...input.environment, access } })).rejects.toThrow(
+			'cloudflare: `api.notes.report` declares raw SQL (`ctx.sql`), which an application on Cloudflare cannot run',
+		)
+		expect(jobs).toEqual([])
 	})
 
 	test("sends every Cloudflare deployment of Control's registry with the job", async () => {

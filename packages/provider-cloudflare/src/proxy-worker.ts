@@ -49,6 +49,7 @@ const CLOUDFLARE_CLIENT_ADDRESS_HEADER = 'CF-Connecting-IP'
 
 export interface CloudflareProxyEnv {
 	readonly IAM?: unknown
+	/** The manifest JSON the handler serves; the deployed Worker passes the one baked into its bundle. */
 	readonly FABRIKA_PROXY_MANIFEST_JSON?: string
 	readonly FABRIKA_IAM_ISSUER?: string
 	readonly [binding: string]: unknown
@@ -296,8 +297,14 @@ function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null
 }
 
+/** Replaced with the manifest's string literal when wrangler bundles the Worker (`PROXY_MANIFEST_DEFINE` in `./proxy`). */
+declare const __FABRIKA_PROXY_MANIFEST__: string | undefined
+
+// `typeof` reads an identifier no bundle defined without throwing: an unbaked bundle serves its fixed 503.
+const BAKED_MANIFEST_JSON: string = typeof __FABRIKA_PROXY_MANIFEST__ === 'string' ? __FABRIKA_PROXY_MANIFEST__ : ''
+
 export default {
 	fetch(request: Request, env: CloudflareProxyEnv): Promise<Response> {
-		return createCloudflareProxyHandler(env)(request)
+		return createCloudflareProxyHandler({ ...env, FABRIKA_PROXY_MANIFEST_JSON: BAKED_MANIFEST_JSON })(request)
 	},
 }
