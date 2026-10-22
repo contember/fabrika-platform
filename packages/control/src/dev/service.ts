@@ -18,14 +18,17 @@ export interface DevIdleSummary {
 	readonly failed: number
 }
 
-/** Start the service when maintenance recorded it stopped. A provider without dev environments has nothing to start. */
-export async function startDevService(deps: DevServiceDeps, row: DevEnvironmentRow, signal: AbortSignal): Promise<void> {
+/**
+ * Start the service when maintenance recorded it stopped; returns whether it did. A provider without dev environments
+ * has nothing to start.
+ */
+export async function startDevService(deps: DevServiceDeps, row: DevEnvironmentRow, signal: AbortSignal): Promise<boolean> {
 	const capability = deps.provider.devEnvironments
-	if (row.stopped_at === null || capability === undefined) return
+	if (row.stopped_at === null || capability === undefined) return false
 	const appEnv = await deps.repositories.registry.getAppEnv(row.app_id, row.env)
-	if (appEnv === null) return
+	if (appEnv === null) return false
 	await capability.start({ environment: await providerEnvironment(deps.repositories, appEnv), signal })
-	await deps.repositories.devEnvironments.markStarted(row.app_id, row.env)
+	return deps.repositories.devEnvironments.markStarted(row.app_id, row.env)
 }
 
 /** Stop every bound `dev` environment that saw no activity for `idleSeconds`. One failure does not stop the others. */

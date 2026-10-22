@@ -45,6 +45,7 @@ export function controlMcpRoute(env: Env, source: WorkspaceSourcePort, provider:
 			dev: env.DEV_SOURCE === undefined ? undefined : {
 				signals: env.DEV_SOURCE.signals,
 				start: (row, startSignal) => startDevService({ repositories: env.REPOSITORIES, provider }, row, startSignal),
+				now: () => Math.floor(Date.now() / 1000),
 			},
 		}),
 	})

@@ -81,9 +81,13 @@ survive a service stop, start and restart (a deploy replaces the container and l
     - An operator registers it with kind `dev` (`apps.environments.put`). It is never production, never protected
       (ADR-0050), never an authoring target and has no trigger ref; it has its own service, schema, role family, proxy
       host and approved access. The proxy stays its only ingress (ADR-0022 unchanged).
-    - `bind_dev` binds a workspace of the app's authoring environment to it. The first bind, a bind after a failed
-      bootstrap and a bind after a refused sync start a **bootstrap run**: an ordinary run of the workspace head with
-      the full build and every check. Its provider starts the dev launcher instead of the serving entry
+    - `bind_dev` binds a workspace of the app's authoring environment to it. A bind starts a **bootstrap run** (an
+      ordinary run of the workspace head with the full build and every check) whenever the running launcher cannot
+      serve the workspace: the first bind, after a failed bootstrap or a refused sync, when the paths from the head the
+      container holds to the workspace head change something the build owns, and when the launcher is gone. It is gone
+      when Control cannot read its requests (an older or newer wire), or when it sent none for longer than it ever
+      waits (90 s; 15 min while it syncs or runs the checks); after a start from idle, `bind_dev` waits up to 15 s
+      for its first request. Such an environment is `needs_bootstrap`, and `apply_changes` does not wait for it. Its provider starts the dev launcher instead of the serving entry
       ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)). Binding another workspace syncs its
       tree and resets the schema.
     - The launcher holds a long poll on Control's public origin with a `source` workload key

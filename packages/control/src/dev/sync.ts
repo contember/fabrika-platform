@@ -1,6 +1,7 @@
 // The files that bring a `dev` container from the head it holds to the head it should serve, relayed from GitHub. Control
 // keeps none of them (ADR-0049): it compares the two commits, reads the changed paths at the target, and answers.
 
+import { bootstrapReason } from '@fabrika/app/dev/changes'
 import type { DevSourceFile, DevSync } from '@fabrika/app/dev/wire'
 import { isSourcePath } from '@fabrika/app/dev/wire'
 import type { WorkspaceSourceSession } from '../workspace-source-port'
@@ -21,21 +22,9 @@ const BOOTSTRAP = 'that needs a bootstrap run: call bind_dev again'
  * ancestor of `to` (another workspace, a rewritten branch) the reverse comparison adds what only `from` changed.
  */
 export async function buildDevSync(source: WorkspaceSourceSession, from: string, to: string): Promise<DevSyncOutcome> {
-	const forward = await source.compare({ baseSha: from, headSha: to })
-	const comparisons = forward.behindBy > 0 ? [forward, await source.compare({ baseSha: to, headSha: from })] : [forward]
-	if (comparisons.some((comparison) => comparison.filesCapped)) {
-		return { kind: 'refused', reason: `the change from ${from} to ${to} lists more files than GitHub compares; ${BOOTSTRAP}` }
-	}
-	const paths = [
-		...new Set(
-			comparisons.flatMap((comparison) => comparison.files.flatMap((file) => file.previousPath === null ? [file.path] : [file.path, file.previousPath])),
-		),
-	].sort()
-	if (paths.length > DEV_SYNC_MAX_FILES) {
-		return { kind: 'refused', reason: `the change from ${from} to ${to} touches ${paths.length} files, more than a sync relays; ${BOOTSTRAP}` }
-	}
-	const unsafe = paths.find((path) => !isSourcePath(path))
-	if (unsafe !== undefined) return { kind: 'refused', reason: `the path ${JSON.stringify(unsafe)} cannot be synced; ${BOOTSTRAP}` }
+	const changed = await changedPaths(source, from, to)
+	if (changed.kind === 'refused') return changed
+	const paths = changed.paths
 
 	const files = new Map<string, string | null>()
 	let bytes = 0
@@ -60,8 +49,41 @@ export async function buildDevSync(source: WorkspaceSourceSession, from: string,
 		if (next.length === pending.length) return { kind: 'refused', reason: `${pending[0]} could not be read at ${to}; ${BOOTSTRAP}` }
 		pending = next
 	}
-	const changed: DevSourceFile[] = paths.map((path) => ({ path, content: files.get(path) ?? null }))
-	return { kind: 'sync', sync: { from, to, files: changed } }
+	const synced: DevSourceFile[] = paths.map((path) => ({ path, content: files.get(path) ?? null }))
+	return { kind: 'sync', sync: { from, to, files: synced } }
+}
+
+/**
+ * Why a launcher holding `from` cannot sync to `to`, in one line, or null when it may: the paths alone decide, as the
+ * launcher's own rule does. A change of the contract digest the launcher still refuses after it writes the files.
+ */
+export async function syncRefusal(source: WorkspaceSourceSession, from: string, to: string): Promise<string | null> {
+	const changed = await changedPaths(source, from, to)
+	return changed.kind === 'refused' ? changed.reason : bootstrapReason(changed.paths)
+}
+
+/** Every path that differs between `from` and `to`, sorted; refused when a sync could not relay them. */
+async function changedPaths(
+	source: WorkspaceSourceSession,
+	from: string,
+	to: string,
+): Promise<{ readonly kind: 'paths'; readonly paths: readonly string[] } | { readonly kind: 'refused'; readonly reason: string }> {
+	const forward = await source.compare({ baseSha: from, headSha: to })
+	const comparisons = forward.behindBy > 0 ? [forward, await source.compare({ baseSha: to, headSha: from })] : [forward]
+	if (comparisons.some((comparison) => comparison.filesCapped)) {
+		return { kind: 'refused', reason: `the change from ${from} to ${to} lists more files than GitHub compares; ${BOOTSTRAP}` }
+	}
+	const paths = [
+		...new Set(
+			comparisons.flatMap((comparison) => comparison.files.flatMap((file) => file.previousPath === null ? [file.path] : [file.path, file.previousPath])),
+		),
+	].sort()
+	if (paths.length > DEV_SYNC_MAX_FILES) {
+		return { kind: 'refused', reason: `the change from ${from} to ${to} touches ${paths.length} files, more than a sync relays; ${BOOTSTRAP}` }
+	}
+	const unsafe = paths.find((path) => !isSourcePath(path))
+	if (unsafe !== undefined) return { kind: 'refused', reason: `the path ${JSON.stringify(unsafe)} cannot be synced; ${BOOTSTRAP}` }
+	return { kind: 'paths', paths }
 }
 
 const UNREADABLE = {

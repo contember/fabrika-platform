@@ -113,8 +113,11 @@ An application may have one environment of kind `dev`
 to it serves in seconds, without a run. `deploy_stage` stays the only path to a checked build, and nothing from the dev
 environment is promoted.
 
-1. `bind_dev` binds the workspace. The first bind, a bind after a failed bootstrap and a bind after a refused sync start
-   a **bootstrap run**: an ordinary run of the workspace head with every check, which `get_deployment` follows
+1. `bind_dev` binds the workspace. A bind starts a **bootstrap run** whenever the running launcher cannot serve the
+   workspace: the first bind, after a failed bootstrap or a refused sync, when the change from the head the container
+   holds to the workspace head needs one (below), and when the launcher is gone: Control cannot read its requests, or it
+   sent none for 90 s (15 min while it syncs or runs checks). A bind that starts an idle service waits up to 15 s for
+   the launcher's first request. A bootstrap run is an ordinary run of the workspace head with every check, which `get_deployment` follows
    (`bootstrapRun.id`). Its service starts the dev launcher instead of the serving entry. Binding another workspace
    replaces the bound one, syncs its tree and resets the schema; the answer says whose workspace was bound (`yours`).
 2. `apply_changes` commits as always. When the workspace is bound, Control records the new head and the launcher's long
@@ -130,19 +133,19 @@ environment is promoted.
 
 `state` is one of:
 
-| State              | Meaning                                                                                      |
-| ------------------ | -------------------------------------------------------------------------------------------- |
-| `unbound`          | No workspace is bound.                                                                       |
-| `bootstrapping`    | The bootstrap run has not finished.                                                          |
-| `bootstrap_failed` | The bootstrap run failed; fix the cause and call `bind_dev` again.                           |
-| `stopped`          | Stopped after 30 minutes without a sync; the next `apply_changes` or `bind_dev` starts it.   |
-| `pending`          | The launcher has not reported the newest commit yet.                                         |
-| `syncing`          | The launcher is applying a commit.                                                           |
-| `serving`          | `head` serves and answers its health endpoint.                                               |
-| `failed`           | `head` does not serve: a migration, the SPA build or the start failed; `message` says which. |
-| `needs_bootstrap`  | The commit changes what the build owns, or Control cannot relay it; `message` says why.      |
-| `resetting`        | `reset_dev` is dropping and migrating the schema.                                            |
-| `checking`         | `run_checks` is running.                                                                     |
+| State              | Meaning                                                                                                                                                                                      |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unbound`          | No workspace is bound.                                                                                                                                                                       |
+| `bootstrapping`    | The bootstrap run has not finished.                                                                                                                                                          |
+| `bootstrap_failed` | The bootstrap run failed; fix the cause and call `bind_dev` again.                                                                                                                           |
+| `stopped`          | Stopped after 30 minutes without a sync; the next `apply_changes` or `bind_dev` starts it.                                                                                                   |
+| `pending`          | The launcher has not reported the newest commit yet.                                                                                                                                         |
+| `syncing`          | The launcher is applying a commit.                                                                                                                                                           |
+| `serving`          | `head` serves and answers its health endpoint.                                                                                                                                               |
+| `failed`           | `head` does not serve: a migration, the SPA build or the start failed; `message` says which.                                                                                                 |
+| `needs_bootstrap`  | The commit changes what the build owns, Control cannot relay it, or the launcher is gone (Control cannot read it, or it went silent); `message` says why, and `apply_changes` does not wait. |
+| `resetting`        | `reset_dev` is dropping and migrating the schema.                                                                                                                                            |
+| `checking`         | `run_checks` is running.                                                                                                                                                                     |
 
 A commit **needs a bootstrap run** when it changes `package.json`, `bun.lock`, `bunfig.toml`, a `zerops.yaml`, anything
 under `fabrika/` or another `fabrika.*` file, when it changes the contract digest, or when the change is more than 300

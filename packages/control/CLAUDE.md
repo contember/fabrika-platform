@@ -464,7 +464,9 @@ other environment, before the provider prepares anything, and the write maps a r
   creation and never changes; one per app, never `prod`, never protected, never authoring, no trigger ref, and only
   on a provider with `devEnvironments` (Zerops). `dev_environments` holds metadata only: the bound workspace, the
   target head, what the launcher last reported (head, status, one-line message, its trimmed log), a refused head,
-  and the reset and check generations. `src/api/dev-environments.ts` holds `bind_dev` (a bootstrap run when none
+  and the reset and check generations. `src/api/dev-environments.ts` holds `bind_dev` (a bootstrap run when the launcher cannot serve the head: `needsBootstrap`
+  checks the paths from the held head with `syncRefusal`, and `launcherProblem` an unreadable or silent launcher, from
+  `launcher_refused`, `launcher_seen_at` and `service_started_at`; or when none
   succeeded or a head was refused), `get_dev_status`, `run_checks`, `reset_dev` and `followDevCommit`, which
   `apply_changes` calls. The launcher reaches the `source` receiver (`src/dev/receiver.ts`, the `dev-source`
   protocol row, ADR-0064) with the environment's key: a held wait answers the files between the head it holds and
