@@ -98,6 +98,15 @@ describe('AhaSendEmailSender', () => {
 		expect(error.code).toBe('malformed_response')
 	})
 
+	test('a 422 is a key conflict only when it names the idempotency key', async () => {
+		const answer = (text: string) => capturing(() => Response.json({ message: text }, { status: 422 })).fetch
+		const send = (fetch: EmailFetch) =>
+			caught(new AhaSendEmailSender({ apiKey: 'aha_secret', accountId: ACCOUNT_ID, from, fetch }).send(message, signal))
+		expect((await send(answer('idempotency key was already used with a different request payload'))).code).toBe('idempotency_conflict')
+		const other = await send(answer('attachment content type is not allowed'))
+		expect([other.code, other.outcome]).toEqual(['provider_rejected', 'not_sent'])
+	})
+
 	test('an unknown account is a configuration refusal', async () => {
 		const { fetch } = capturing(() => Response.json({ message: 'account not found' }, { status: 404 }))
 		const error = await caught(new AhaSendEmailSender({ apiKey: 'aha_secret', accountId: ACCOUNT_ID, from, fetch }).send(message, signal))

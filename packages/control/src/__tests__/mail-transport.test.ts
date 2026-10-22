@@ -1,5 +1,5 @@
 import { CONTRACT_FORMAT, type ContractArtifact, type DeclaredReach } from '@fabrika/auth-core'
-import { builtinEmailProviders } from '@fabrika/email/providers'
+import { builtinEmailProviders, builtinEmailProviderSince } from '@fabrika/email/providers'
 import { describe, expect, test } from 'bun:test'
 import {
 	type InstallationMail,
@@ -92,25 +92,61 @@ describe('the installation mail transport', () => {
 
 	test('a deploy hands the transport only when a job needs it, and redacts only its secrets', () => {
 		const needs = artifact({ 'job:digest': { ...REACH, mailer: 'installation' } })
-		expect(installationMailEnvironment(TRANSPORT, needs)).toEqual(VARIABLES)
+		expect(installationMailEnvironment(TRANSPORT, needs, '0.8.1')).toEqual(VARIABLES)
 		expect(installationMailSecrets(TRANSPORT, VARIABLES)).toEqual(['re_key'])
-		expect(installationMailEnvironment(TRANSPORT, artifact({ 'job:own': { ...REACH, mailer: 'own' } }))).toEqual({})
-		expect(installationMailEnvironment(NO_INSTALLATION_MAIL, null)).toEqual({})
-		expect(installationMailEnvironment(INVALID, null)).toEqual({})
+		expect(installationMailEnvironment(TRANSPORT, artifact({ 'job:own': { ...REACH, mailer: 'own' } }), '0.8.1')).toEqual({})
+		expect(installationMailEnvironment(NO_INSTALLATION_MAIL, null, '0.8.1')).toEqual({})
+		expect(installationMailEnvironment(INVALID, null, '0.8.1')).toEqual({})
 	})
 
 	test('an installation without a transport hands the explicit none, so the application tells it from a missing variable', () => {
 		const needs = artifact({ 'job:digest': { ...REACH, mailer: 'installation' } })
-		expect(installationMailEnvironment(NO_INSTALLATION_MAIL, needs)).toEqual({ FABRIKA_EMAIL_PROVIDER: 'none' })
+		expect(installationMailEnvironment(NO_INSTALLATION_MAIL, needs, '0.8.1')).toEqual({ FABRIKA_EMAIL_PROVIDER: 'none' })
 		expect(installationMailSecrets(NO_INSTALLATION_MAIL, { FABRIKA_EMAIL_PROVIDER: 'none' })).toEqual([])
 	})
 
 	test('an invalid transport refuses only a contract that needs it, naming each job and the operator step', () => {
-		expect(() => installationMailEnvironment(INVALID, artifact({ 'job:digest': { ...REACH, mailer: 'installation' } }))).toThrow(
+		expect(() => installationMailEnvironment(INVALID, artifact({ 'job:digest': { ...REACH, mailer: 'installation' } }), '0.8.1')).toThrow(
 			"the contract's job `digest` sends mail through the installation (mailer: 'installation'), and Control's mail transport is invalid: Email configuration is invalid: FABRIKA_EMAIL_RESEND_API_KEY is missing; set FABRIKA_EMAIL_* on both iam and control: see `fabrika platform guide --provider=zerops`, 'Set or rotate the mail transport', then restart control and deploy again",
 		)
 		const both = artifact({ 'job:b': { ...REACH, mailer: 'installation' }, 'job:a': { ...REACH, mailer: 'installation' } })
-		expect(() => installationMailEnvironment(INVALID, both)).toThrow("the contract's jobs `a`, `b` send mail through the installation")
+		expect(() => installationMailEnvironment(INVALID, both, '0.8.1')).toThrow("the contract's jobs `a`, `b` send mail through the installation")
+	})
+})
+
+describe('a provider newer than the application', () => {
+	const needs = artifact({ 'job:digest': { ...REACH, mailer: 'installation' } })
+	const variables = {
+		FABRIKA_EMAIL_PROVIDER: 'postmark',
+		FABRIKA_EMAIL_FROM: 'mail@example.test',
+		FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: 'pm-private-token',
+	}
+	const postmark: InstallationMail = { kind: 'transport', transport: { variables, secretNames: new Set(['FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN']) } }
+
+	test('is refused for a release that lacks it, naming the provider, the pin and the release it needs, never a value', () => {
+		const refusal = (): unknown => installationMailEnvironment(postmark, needs, '0.8.1')
+		expect(refusal).toThrow(
+			"the contract's job `digest` sends mail through the installation (mailer: 'installation'), and the installation's provider `postmark` is unknown to framework 0.8.1, which this version pins: it needs 0.8.2 or newer. Raise the application's @fabrika/* pin, or choose another provider for the installation",
+		)
+		expect(refusal).not.toThrow('pm-private-token')
+		expect(() => installationMailEnvironment(postmark, needs, undefined)).toThrow('unknown to the framework release this version was read with')
+	})
+
+	test('is handed to a release that holds it, and asks nothing of a contract without the job', () => {
+		expect(installationMailEnvironment(postmark, needs, '0.8.2')).toEqual(variables)
+		expect(installationMailEnvironment(postmark, needs, '0.9.0')).toEqual(variables)
+		expect(installationMailEnvironment(postmark, artifact({}), '0.4.0')).toEqual({})
+	})
+
+	test('the providers every release holds, and one only a local composition registers, are never refused', () => {
+		expect(installationMailEnvironment(TRANSPORT, needs, undefined)).toEqual(VARIABLES)
+		expect(installationMailEnvironment(TRANSPORT, needs, '0.5.0')).toEqual(VARIABLES)
+		const directory: InstallationMail = { kind: 'transport', transport: { variables: { FABRIKA_EMAIL_PROVIDER: 'directory' }, secretNames: new Set() } }
+		expect(installationMailEnvironment(directory, needs, '0.5.0')).toEqual({ FABRIKA_EMAIL_PROVIDER: 'directory' })
+	})
+
+	test('every built-in provider states its release', () => {
+		expect(Object.keys(builtinEmailProviderSince).sort()).toEqual(Object.keys(builtinEmailProviders).sort())
 	})
 })
 

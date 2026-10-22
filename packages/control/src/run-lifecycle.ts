@@ -648,7 +648,9 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		// From the approved contract only, like every other access the deploy publishes (ADR-0050); a dry run issues none.
 		const approvedContract = registration.environment.access?.contract ?? null
 		const relayedMail = relaysMail(deps.provider, approvedRow)
-		const mailEnvironment = relayedMail ? {} : installationMailEnvironment(deps.mailTransport ?? NO_INSTALLATION_MAIL, approvedContract)
+		const mailEnvironment = relayedMail
+			? {}
+			: installationMailEnvironment(deps.mailTransport ?? NO_INSTALLATION_MAIL, approvedContract, approvedSnapshot(approvedRow).snapshot.framework)
 		Object.assign(managedEnvironment, mailEnvironment)
 		const workloadKeys = dryRun ? {} : await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract)
 		Object.assign(managedEnvironment, workloadKeys, await connectorAddresses(deps.repositories.registry, appEnv.env, approvedContract))

@@ -12,6 +12,7 @@ import {
 	readEmailTransportConfig,
 } from '@fabrika/email'
 import { PLATFORM_EMAIL_PROVIDER } from '@fabrika/email/platform'
+import { builtinEmailProviderSince } from '@fabrika/email/providers'
 import { compareReleases, parseRelease, type Release } from './approval/readers'
 
 /** The installation's default transport: what Control hands an application whose job declares mailer 'installation'. */
@@ -69,18 +70,49 @@ export function installationMailJobs(artifact: ContractArtifact | null): string[
 
 /**
  * The variables a deploy hands: the transport, or `FABRIKA_EMAIL_PROVIDER=none` for an installation without one, so the
- * application tells "no mail here" from a variable that never reached it. Throws the refusal for an invalid transport.
+ * application tells "no mail here" from a variable that never reached it. Throws the refusal for an invalid transport,
+ * and for a provider the application's framework release (`framework`, absent for a snapshot read before Control
+ * recorded one) does not hold: it would build its sender from its own registry and fail to boot.
  */
-export function installationMailEnvironment(mail: InstallationMail, artifact: ContractArtifact | null): Readonly<Record<string, string>> {
+export function installationMailEnvironment(
+	mail: InstallationMail,
+	artifact: ContractArtifact | null,
+	framework: string | undefined,
+): Readonly<Record<string, string>> {
 	const jobs = installationMailJobs(artifact)
 	if (jobs.length === 0) return {}
 	if (mail.kind === 'none') return { [EMAIL_PROVIDER_VARIABLE]: NO_EMAIL_PROVIDER }
-	if (mail.kind === 'transport') return mail.transport.variables
 	const names = jobs.map((job) => `\`${job}\``).join(', ')
-	const subject = jobs.length === 1 ? `job ${names} sends` : `jobs ${names} send`
-	throw new Error(
-		`the contract's ${subject} mail through the installation (mailer: 'installation'), and Control's mail transport is invalid: ${mail.reason}; ${OPERATOR_STEP}, then restart control and deploy again`,
-	)
+	const subject = `the contract's ${
+		jobs.length === 1 ? `job ${names} sends` : `jobs ${names} send`
+	} mail through the installation (mailer: 'installation')`
+	if (mail.kind === 'invalid') {
+		throw new Error(`${subject}, and Control's mail transport is invalid: ${mail.reason}; ${OPERATOR_STEP}, then restart control and deploy again`)
+	}
+	const provider = mail.transport.variables[EMAIL_PROVIDER_VARIABLE] ?? ''
+	const since = providerSince(provider)
+	if (since !== undefined && !holdsRelease(framework, since)) {
+		const pinned = framework === undefined ? 'the framework release this version was read with' : `framework ${framework}, which this version pins`
+		throw new Error(
+			`${subject}, and the installation's provider \`${provider}\` is unknown to ${pinned}: it needs ${since.text} or newer. Raise the application's @fabrika/* pin, or choose another provider for the installation`,
+		)
+	}
+	return mail.transport.variables
+}
+
+/**
+ * The first release that holds a built-in provider; undefined when every release holds it, and for a provider only a
+ * local composition registers.
+ */
+function providerSince(provider: string): Release | undefined {
+	const since = Object.entries(builtinEmailProviderSince).find(([name]) => name === provider)?.[1]
+	return since === undefined || since === null ? undefined : (parseRelease(since) ?? undefined)
+}
+
+/** A snapshot that records no release predates every provider with a `since`. */
+function holdsRelease(framework: string | undefined, since: Release): boolean {
+	const release = framework === undefined ? null : parseRelease(framework)
+	return release !== null && compareReleases(release, since) >= 0
 }
 
 /** The secret values a deploy handed, for the run log to redact. */

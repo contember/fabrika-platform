@@ -21,11 +21,11 @@ const LETTERMINT_SEND_URL = 'https://api.lettermint.co/v1/send'
 const MAX_IDEMPOTENCY_KEY_LENGTH = 255
 /** `pending` and `scheduled` are documented; the id is what counts, so a new status is no failure. */
 const lettermintSuccessSchema = z.object({ message_id: z.string() })
-/** Lettermint refuses a text or HTML body shorter than this with a 422. */
+/** Lettermint refuses a text or HTML body shorter than this with a 422, counting characters once trimmed. */
 const LETTERMINT_MIN_BODY_LENGTH = 3
 /** A 409 carries only a `message`; the one for a key reused with another body says so in these words. */
 const lettermintErrorSchema = z.object({ message: z.string() })
-const OTHER_PAYLOAD = /different payload/i
+const OTHER_PAYLOAD = /payload/i
 /** Lettermint refuses a request over 25 MB with its attachments base64; 15 MiB of bytes leaves room for the bodies. */
 const LETTERMINT_MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
 
@@ -41,21 +41,16 @@ export class LettermintEmailSender extends HttpEmailSender {
 		maxBatch: 1,
 		listUnsubscribe: true,
 		maxAttachmentBytes: LETTERMINT_MAX_ATTACHMENT_BYTES,
+		minBodyLength: LETTERMINT_MIN_BODY_LENGTH,
 	}
 	readonly #projectToken: string
 
 	constructor(options: LettermintEmailSenderOptions) {
-		super({ label: 'Lettermint', provider: 'lettermint' }, options)
 		if (!isCredential(options.projectToken)) {
 			throw new EmailDeliveryError('Lettermint project token is invalid', { code: 'invalid_configuration' })
 		}
+		super({ label: 'Lettermint', provider: 'lettermint' }, options)
 		this.#projectToken = options.projectToken
-	}
-
-	protected override refuseMessage(message: EmailMessage): void {
-		if (message.text.length < LETTERMINT_MIN_BODY_LENGTH || (message.html !== undefined && message.html.length < LETTERMINT_MIN_BODY_LENGTH)) {
-			throw new EmailDeliveryError(`Lettermint sends no body shorter than ${LETTERMINT_MIN_BODY_LENGTH} characters`, { code: 'invalid_message' })
-		}
 	}
 
 	protected async request(message: EmailMessage): Promise<HttpEmailRequest> {
@@ -94,7 +89,8 @@ export class LettermintEmailSender extends HttpEmailSender {
 	protected override refusal(response: ProviderResponse): EmailDeliveryError | undefined {
 		const status = response.status
 		if (status !== 409) return undefined
-		// The 409 has no code, so its text is read, and only to tell the two apart; it never reaches the error.
+		// The 409 has no code, so its text is read, and only to tell the two apart; it never reaches the error. A wording
+		// that no longer names the payload reads as in progress, which a retry cannot turn into a second delivery.
 		const message = lettermintErrorSchema.safeParse(response.body).data?.message
 		if (message !== undefined && OTHER_PAYLOAD.test(message)) {
 			return new EmailDeliveryError('Lettermint already took a different request under this idempotency key', {

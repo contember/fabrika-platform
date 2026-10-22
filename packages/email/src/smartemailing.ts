@@ -38,13 +38,13 @@ export class SmartEmailingEmailSender extends HttpEmailSender {
 	readonly #tag: string
 
 	constructor(options: SmartEmailingEmailSenderOptions) {
-		super({ label: 'SmartEmailing', provider: 'smartemailing' }, options)
 		if (!validUsername(options.username)) {
 			throw new EmailDeliveryError('SmartEmailing username is invalid', { code: 'invalid_configuration' })
 		}
 		if (!isCredential(options.apiKey)) {
 			throw new EmailDeliveryError('SmartEmailing API key is invalid', { code: 'invalid_configuration' })
 		}
+		super({ label: 'SmartEmailing', provider: 'smartemailing' }, options)
 		const tag = options.tag ?? DEFAULT_TAG
 		if (!TAG_PATTERN.test(tag)) {
 			throw new EmailDeliveryError('SmartEmailing tag is invalid', { code: 'invalid_configuration' })

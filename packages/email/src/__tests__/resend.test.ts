@@ -25,6 +25,10 @@ async function caught(promise: Promise<unknown>): Promise<EmailDeliveryError> {
 }
 
 describe('ResendEmailSender', () => {
+	test('reports its credential before the sender when both are invalid', () => {
+		expect(() => new ResendEmailSender({ apiKey: '', from: { address: 'nope' } })).toThrow('Resend API key is invalid')
+	})
+
 	test('sends the documented request and returns the provider message id', async () => {
 		const requests: Request[] = []
 		const fetch: EmailFetch = async (input, init) => {

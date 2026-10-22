@@ -89,6 +89,16 @@ describe('PostmarkEmailSender', () => {
 		expect(requests).toHaveLength(2)
 	})
 
+	test('a refusal is read by its ErrorCode: out of credits is a quota, a sender or account not allowed is unauthorized', async () => {
+		const answer = (code: number) => capturing(() => Response.json({ ErrorCode: code, Message: `private detail ${code}` }, { status: 422 })).fetch
+		const send = (fetch: EmailFetch) => caught(new PostmarkEmailSender({ serverToken: 'pm_secret', from, fetch }).send(message, signal))
+		const credits = await send(answer(405))
+		expect([credits.code, credits.retryable, credits.outcome]).toEqual(['quota_exceeded', true, 'not_sent'])
+		for (const code of [400, 401, 412, 413]) expect((await send(answer(code))).code).toBe('provider_unauthorized')
+		for (const code of [300, 406, 411]) expect((await send(answer(code))).code).toBe('provider_rejected')
+		expect((await send(answer(405))).message).not.toContain('private detail')
+	})
+
 	test('the provider reads its token and names a bad one without its value', () => {
 		const env = { FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: 'pm_secret' }
 		expect(postmarkEmailProvider.create({ from, env })).toBeInstanceOf(PostmarkEmailSender)
