@@ -29,7 +29,8 @@ test('real daemon pairs through IAM and Control, completes two scoped exact-sour
 		expect((await f.rpc('apps.get', { appId: 'other' })).status).toBe(403)
 		expect((await f.rpc('builderPairing.approve', proof, credential.token)).status).toBe(403)
 		await f.local('deploy', {})
-		for (let i = 0; i < 100 && f.jobs.length === 0; i++) {
+		// Control queues the job inside the deploy call; the daemon records `pending` only once that call answers.
+		for (let i = 0; i < 100 && (f.jobs.length === 0 || (await f.local('platform')).deployment?.status === 'preparing'); i++) {
 			if ((await f.local('platform')).deployment?.status === 'failed') break
 			await Bun.sleep(100)
 		}
