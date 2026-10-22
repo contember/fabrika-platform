@@ -25,7 +25,7 @@ From the run log of `sprints/sprint-2026-10-19-declare-the-surface.md`:
    marker was already cleared before the sweep ran. Make the doc and the code say one thing.
 5. **Admission buckets** are charged one `take` each, not in one admission transaction as ADR-0012 states.
 6. **Custom IAM policies** may grant a public procedure's action (ADR-0063 consequence). Decide whether IAM refuses it.
-7. **Signed tokens on Cloudflare** are refused: Worker variables are plain text, and no secret path exists.
+7. _Shipped:_ signed tokens on Cloudflare travel as Worker secrets (ADR-0065).
 8. **A namespace proxy pin older than 0.5.3** still breaks on a 0.5 cross-origin field: Control does not record a
    pin's release. The fix is [backlog 189](189-cross-origin-endpoints-review-follow-ups.md) item 3.
 9. **Queues.** A row past `maxAttempts` has no staff path back into the queue; confirm the 30-day backoff cap.

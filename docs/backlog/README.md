@@ -69,7 +69,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [173](173-the-skills-test-recipes-leak-a-files-globals-and-render-outside-act.md) — The `fetch` stand-in recipe leaks under `--isolate`, and the screen example renders outside `act`.
 - [175](175-a-scoped-user-administrator-lists-every-principal.md) — A user administrator scoped to one application still reads the whole directory and anyone's sessions.
 - [176](176-the-runtime-does-not-know-the-declared-secret-names.md) — An error report scrubs an application secret only when its variable name says it is one; the platform does not hand the runtime the declared names.
-- [177](177-the-cloudflare-proxy-manifest-is-a-worker-variable.md) — A Cloudflare proxy Worker carries its manifest as a variable, which Cloudflare caps at 5 KB; bake it into the bundle.
 - [178](178-an-installation-transport-through-an-outside-relay.md) — Control's own transport can use only a built-in provider; a `relay` provider over the platform mail wire and a reference relay reach any adapter.
 - [179](179-build-a-platform-distribution-that-bundles-extra-email-adapters.md) — Build IAM and Control with extra email adapters as composition inputs; needs another build source, a version lock, and IAM's local-only `EMAIL_SENDER` guard kept.
 - [180](180-verify-the-smartemailing-adapter-on-a-live-account.md) — The SmartEmailing adapter is verified only against a stubbed `fetch`; six points of its mapping wait for a live account.
@@ -81,7 +80,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [190](190-the-overview-reads-each-applications-environments-separately.md): The console overview calls Control once per application for its environments; one read for many applications.
 - [191](191-the-audit-log-cannot-leave-out-admin-reads.md): `audit.list` cannot leave out admin reads, so the console pages past them in the browser.
 - [192](192-a-signed-in-person-cannot-manage-their-own-account.md): No self-service password change or sign-in list; an IAM account page, after rewriting ADR-0020.
-- [193](193-loose-ends-of-the-declared-surface.md): The approval of an upgrade to 0.7, admission buckets, tokens on Cloudflare and other P2s of the surface revision.
+- [193](193-loose-ends-of-the-declared-surface.md): The approval of an upgrade to 0.7, admission buckets and other P2s of the surface revision.
 - [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: a claim before the dispatcher sends (two double-send paths), maintenance and console edges, the sender's error mapping, expired keys' vault values, no final-failure answer to IAM or an application.
 - [197](197-local-compat-has-no-0.7-release.md): `local:compat` deploys no Notes at v0.7.0: its proof needs a release without a file collection.
 - [198](198-an-in-container-env-write-may-reach-another-services-credentials.md): Measure whether `zsc` can write a `${host_KEY}` reference that Zerops resolves; if so, a `cheap` namespace's superuser is reachable by its applications.
@@ -93,6 +92,10 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [204](204-a-redelivered-push-webhook-creates-a-second-run.md): A redelivered push creates another run; deduplicate over the signed push.
 - [205](205-operations-ingest-robustness.md): An item type echoed into a response header, an unbounded redaction recursion, untruncated frames.
 - [206](206-iam-token-and-oidc-hardening.md): The token verifier pins no algorithm; a thrown OIDC fetch skips the refusal path.
+- [207](207-the-cloudflare-application-runtime-is-unverified-on-a-live-account.md): The Durable Object runtime, the secrets upload and the baked manifest are verified on Lopata only.
+- [208](208-raw-sql-on-sqlite.md): `ctx.sql` is refused on SQLite: it needs a SQLite lexer, and a Durable Object has no role under it.
+- [209](209-file-scanning-on-cloudflare.md): A scanning file kind is refused on Cloudflare: no ClamAV runs in a Worker.
+- [210](210-cloudflare-application-runtime-follow-ups.md): Smaller gaps of the Cloudflare application runtime.
 - [207](207-three-service-log-lines-skip-redaction.md): Three `console.error` calls print an error's text or object without redaction.
 - [208](208-application-framework-and-data-layer-review-follow-ups.md): Six small `@fabrika/app` and `@fabrika/db` findings: two clocks, `bound` insert, `.input()`, prototype methods, insert under `in`, `releaseBytes`.
 - [209](209-a-public-procedure-binds-a-token-id-to-its-purpose.md): Any text of any verified token unlocks a row; bind the id to its purpose and table.
