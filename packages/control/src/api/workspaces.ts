@@ -463,7 +463,7 @@ function lineAround(line: string, at: number): string {
 export async function applyChangesUseCase(
 	c: WorkspaceUseCaseContext,
 	input: { workspaceId: string; expectedHeadSha: string; message: string; changes: readonly WorkspaceFileChange[] },
-): Promise<{ commitSha: string }> {
+): Promise<{ commitSha: string; written: WorkspaceFileWrite[] }> {
 	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_WRITE)
 	const protectedPaths = [...new Set(input.changes.map((change) => change.path))].filter((path) => isProtectedPath(path, c.protectedFiles))
 	if (protectedPaths.length > 0) {
@@ -482,7 +482,7 @@ export async function applyChangesUseCase(
 			const changes = await resolveChanges(source, input.expectedHeadSha, input.changes)
 			try {
 				const sha = await source.commit({ branch: owned.workspace.branch, expectedHeadSha: input.expectedHeadSha, message, author, changes })
-				return { sha, paths: changes.length }
+				return { sha, changes }
 			} catch (cause) {
 				if (cause instanceof WorkspaceSourceError && cause.kind === 'stale_head') {
 					const headSha = await requireHead(c, owned)
@@ -497,9 +497,9 @@ export async function applyChangesUseCase(
 		action: 'source.workspace.commit',
 		resourceType: 'workspace',
 		resourceId: owned.workspace.id,
-		metadata: { appId: owned.workspace.app_id, env: owned.workspace.env, commitSha, paths: committed.paths },
+		metadata: { appId: owned.workspace.app_id, env: owned.workspace.env, commitSha, paths: committed.changes.length },
 	})
-	return { commitSha }
+	return { commitSha, written: committed.changes }
 }
 
 /**
@@ -632,12 +632,13 @@ function deploymentSummary(run: RunDto, environment: 'stage' | 'dev'): string {
 
 /**
  * A line that names an error or a failure, or a non-zero exit. The stream says nothing: bun prints the commands it runs
- * and its test output on stderr. A count of none (`0 fail`) is no failure.
+ * and its test output on stderr. A count of none (`0 fail`) is no failure, colored or not.
  */
 const FAILURE_TEXT = /\b(?:error|errors|fail|failed|failure|failures|fatal|panic|exception)\b|\bexit(?:ed)?(?: with)?(?: code| status)?[ :]+[1-9]/i
-const NO_FAILURES = /^\s*0 (?:fail|failures|errors?)\s*$/i
+const ZERO_COUNT = /\b0 (?:fail|failed|failures?|errors?)\b/gi
+const COLOR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
 
-const isFailureLine = (text: string): boolean => FAILURE_TEXT.test(text) && !NO_FAILURES.test(text)
+const isFailureLine = (text: string): boolean => FAILURE_TEXT.test(text.replace(COLOR, '').replace(ZERO_COUNT, ''))
 
 /**
  * A window of `all`. `from`, `to` and `total` always index the whole log, so `after: to` resumes it whether or not the

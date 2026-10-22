@@ -127,8 +127,13 @@ interface CommandResult {
 }
 
 type SyncOutcome =
-	| { readonly kind: 'applied'; readonly migrations: boolean; readonly web: boolean }
+	| { readonly kind: 'applied'; readonly migrations: boolean; readonly spaFailure: string | null }
 	| { readonly kind: 'refused'; readonly reason: string }
+
+/** Control answers 409 to the container of a bootstrap run that a newer one replaced. */
+class SupersededError extends Error {}
+
+const SUPERSEDED = 'a newer bootstrap run replaced this container; it stops following Control and serves until it is stopped'
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -176,6 +181,8 @@ class Launcher {
 	private crashes = 0
 	private stopped = false
 	private reportFailing = false
+	/** A newer bootstrap run replaced this container: it keeps serving until the platform stops it, and asks nothing. */
+	private superseded = false
 
 	constructor(private readonly options: DevLauncherOptions) {
 		this.root = options.root
@@ -225,7 +232,12 @@ class Launcher {
 		while (!this.stopped) {
 			try {
 				return await this.wait(false)
-			} catch {
+			} catch (error) {
+				if (error instanceof SupersededError) {
+					this.say(SUPERSEDED, 'stderr')
+					this.superseded = true
+					return null
+				}
 				if (Date.now() >= deadline) {
 					this.say('Control did not answer at boot; serving the files this container holds', 'stderr')
 					return null
@@ -238,13 +250,18 @@ class Launcher {
 
 	private async follow(): Promise<void> {
 		let backoff = 1_000
-		while (!this.stopped) {
+		while (!this.stopped && !this.superseded) {
 			let answer: DevWaitAnswer
 			try {
 				answer = await this.wait(true)
 				backoff = 1_000
-			} catch {
+			} catch (error) {
 				if (this.stopped) return
+				if (error instanceof SupersededError) {
+					this.say(SUPERSEDED, 'stderr')
+					this.superseded = true
+					return
+				}
 				this.say(`the long poll on Control failed; retrying in ${backoff / 1000} s`, 'stderr')
 				await sleep(backoff)
 				backoff = Math.min(backoff * 2, 15_000)
@@ -255,9 +272,19 @@ class Launcher {
 	}
 
 	private async wait(hold: boolean): Promise<DevWaitAnswer> {
-		const body = encodeDevWaitRequest({ head: this.state.head, reset: this.state.reset, checks: this.state.checks, hold })
+		const body = encodeDevWaitRequest({
+			bootstrap: this.config.head,
+			head: this.state.head,
+			reset: this.state.reset,
+			checks: this.state.checks,
+			hold,
+		})
 		const signal = AbortSignal.any([this.controller.signal, AbortSignal.timeout(DEV_SOURCE_WAIT_MS + 15_000)])
 		const response = await this.fetch(this.request(DEV_SOURCE_WAIT_PATH, body, signal))
+		if (response.status === 409) {
+			await response.body?.cancel()
+			throw new SupersededError()
+		}
 		if (!response.ok) throw new Error(`the source receiver answered ${response.status}`)
 		const parsed = parseDevWaitAnswer(await response.json())
 		if (!parsed.ok) throw new Error('the source receiver answered a body this release does not read')
@@ -274,7 +301,9 @@ class Launcher {
 	}
 
 	private async report(): Promise<void> {
+		if (this.superseded) return
 		const body = encodeDevReport({
+			bootstrap: this.config.head,
 			head: this.state.head,
 			status: this.status,
 			target: this.target,
@@ -299,7 +328,7 @@ class Launcher {
 		if (this.state.checks === null) this.state = { ...this.state, checks: answer.checks }
 		let changed = boot
 		let migrate = boot
-		let web = false
+		let spaFailure: string | null = null
 		if (answer.sync !== null) {
 			const outcome = await this.writeSync(answer.sync)
 			if (outcome.kind === 'refused') {
@@ -311,16 +340,16 @@ class Launcher {
 			} else {
 				changed = true
 				migrate ||= outcome.migrations
-				web = outcome.web
+				spaFailure = outcome.spaFailure
 			}
 		}
 		const reset = answer.reset > (this.state.reset ?? answer.reset)
-		if (changed || reset) await this.converge({ migrate: migrate || reset, reset, web, resetTo: answer.reset })
+		if (changed || reset) await this.converge({ migrate: migrate || reset, reset, spaFailure, resetTo: answer.reset })
 		if (answer.checks > (this.state.checks ?? answer.checks)) await this.check(answer.checks)
 	}
 
 	/** Bring the database, the SPA and the running application to the files on disk, then report. */
-	private async converge(steps: { migrate: boolean; reset: boolean; web: boolean; resetTo: number }): Promise<void> {
+	private async converge(steps: { migrate: boolean; reset: boolean; spaFailure: string | null; resetTo: number }): Promise<void> {
 		this.status = steps.reset ? 'resetting' : 'syncing'
 		void this.report()
 		let failure: string | null = null
@@ -331,7 +360,7 @@ class Launcher {
 			this.state = { ...this.state, reset: steps.resetTo }
 		}
 		if (failure === null && steps.migrate) failure = await this.timed('the migration', () => this.migrate())
-		if (failure === null && steps.web) failure = await this.timed('the SPA build', () => this.buildSpa())
+		if (failure === null) failure = steps.spaFailure
 		const served = await this.timed('the restart until healthy', () => this.restartApplication())
 		failure ??= served
 		this.status = failure === null ? 'serving' : 'failed'
@@ -360,14 +389,21 @@ class Launcher {
 			sync.files.map(async (file) => ({ path: file.path, content: await readFile(join(this.root, file.path)).catch(() => null) })),
 		)
 		await this.writeFiles(sync.files)
-		const changedContract = await this.contractChange()
+		const web = this.config.spaBuild.length > 0 && webSourceChanged(paths)
+		// The SPA build runs beside the digest: a refusal is rare, and then the build runs again over the restored files.
+		const [changedContract, spaFailure] = await Promise.all([this.contractChange(), web ? this.spaBuild() : null])
 		if (changedContract !== null) {
 			await this.writeFiles(previous)
+			if (web) await this.spaBuild()
 			return { kind: 'refused', reason: changedContract }
 		}
 		this.state = { ...this.state, head: sync.to }
 		this.say(`synced ${sync.files.length} files to ${sync.to}`)
-		return { kind: 'applied', migrations: migrationsChanged(paths), web: this.config.spaBuild.length > 0 && webSourceChanged(paths) }
+		return { kind: 'applied', migrations: migrationsChanged(paths), spaFailure }
+	}
+
+	private spaBuild(): Promise<string | null> {
+		return this.timed('the SPA build', () => this.buildSpa())
 	}
 
 	private async writeFiles(files: readonly { readonly path: string; readonly content: string | Uint8Array | null }[]): Promise<void> {
@@ -460,11 +496,13 @@ class Launcher {
 		const results: DevCheckResult[] = []
 		for (const check of this.config.checks) {
 			this.say(`check ${check.name}: ${check.command}`)
+			const started = performance.now()
 			const result = await this.run(['sh', '-c', check.command], this.commandEnvironment, CHECK_TIMEOUT_MS)
 			results.push({
 				name: check.name,
 				ok: result.exitCode === 0,
 				exitCode: result.exitCode,
+				durationMs: Math.round(performance.now() - started),
 				output: result.lines.slice(-CHECK_OUTPUT_LINES).map((line) => line.slice(0, 2_000)),
 			})
 		}

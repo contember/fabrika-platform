@@ -46,7 +46,7 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `get_app_rules`       | The application rules or one topic, read-only, with a pin warning.  |
 | `bind_dev`            | Bind the workspace to the app's dev environment; bootstrap if due.  |
 | `get_dev_status`      | The dev environment's state, served head, checks and a log window.  |
-| `run_checks`          | Run tests, `fabrika-check` and `tsc` in the dev container; report.  |
+| `run_checks`          | Run tests, `tsc` and `fabrika-check` in the dev container; report.  |
 | `reset_dev`           | Drop the dev schema and roles, and migrate from scratch.            |
 
 Every tool carries MCP tool annotations. A tool that only reads has `readOnlyHint: true`, so a client such as ChatGPT
@@ -94,7 +94,8 @@ null for a provider that runs no process, such as Zerops. Each provider step log
 `get_deployment` answers a window of the build log, 30 lines by default and at most 500. `log.from` and `log.to` index
 the log, which only grows: a client polls with `after: log.to` and gets only the new lines, or pages back with
 `before: log.from`. `failuresOnly` keeps the lines that name an error, a failure or a non-zero exit, whichever stream
-carries them: bun prints the commands it runs and its test output on stderr. The indexes still count every line, so a
+carries them: bun prints the commands it runs and its test output on stderr. A count of none (`0 fail`, `Found 0
+errors`) is no failure, with or without color codes. The indexes still count every line, so a
 client may switch the filter between polls without reading a line twice. `logLines: 0` answers the counts alone.
 
 `get_app_rules` answers the application rules every agent gets, headed by their version (`fabrika-app <version>`):
@@ -119,9 +120,10 @@ environment is promoted.
 2. `apply_changes` commits as always. When the workspace is bound, Control records the new head and the launcher's long
    poll on Control's public origin (the `source` receiver,
    [ADR-0064](../decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md) §7) answers
-   with the changed files, read from a GitHub compare and never stored.
+   with the changed files: the ones `apply_changes` just wrote, handed over in memory when the same Control process
+   holds the wait, or else read from a GitHub compare. They are never stored.
 3. The launcher writes the files, migrates when `db/migrations/` changed, runs the authored SPA commands when a file
-   outside `src/` and `db/` changed, restarts the application and waits for its health endpoint. It reports the head,
+   outside `src/` and `db/` changed (beside the contract digest; a refusal rebuilds over the restored files), restarts the application and waits for its health endpoint. It reports the head,
    its status and the last lines of output.
 4. `apply_changes` waits up to 10 s for that report and answers `dev: { head, state, summary, url, log }` beside
    `commitSha`. On a timeout `state` is `pending`, and `get_dev_status` reads the rest.
@@ -152,7 +154,8 @@ The launcher keeps serving the head it has, and `bind_dev` starts the bootstrap.
 `get_dev_status` answers the window of the launcher's ring buffer of the application's and its own output, indexed like
 `get_deployment` (at most 200 lines). The launcher never reports the environment. `run_checks` runs the build's check
 chain on the files the container holds and waits up to 50 s for the results; they gate nothing. It is refused while the
-container holds another commit than the workspace's newest, and `checks.head` names the commit the results are for. `reset_dev` drops the
+container holds another commit than the workspace's newest, and `checks.head` names the commit the results are for. Each result carries its exit code, `durationMs` and the last
+lines of its output. `reset_dev` drops the
 environment's schema and role family and migrates from scratch; call it after editing a migration that was already
 applied, which otherwise fails the sync. `bind_dev`, `run_checks` and `reset_dev` need `deploy.trigger`; `get_dev_status`
 needs `deploy.read`.

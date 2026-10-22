@@ -699,6 +699,9 @@ for (const backend of backends) {
 				lines[2] = { ts: 2, stream: 'stderr', text: '$ bun test --isolate' }
 				lines[3] = { ts: 3, stream: 'stderr', text: ' 0 fail' }
 				lines[4] = { ts: 4, stream: 'stderr', text: 'script "build" exited with code 2' }
+				lines[5] = { ts: 5, stream: 'stderr', text: '\u001b[32m 12 pass\u001b[0m\n\u001b[2m\u001b[31m0 fail\u001b[0m 31 expect() calls' }
+				lines[8] = { ts: 8, stream: 'stdout', text: '[build] tsc: Found 0 errors.' }
+				lines[9] = { ts: 9, stream: 'stdout', text: '10 pass 0 fail' }
 				lines[6] = { ts: 6, stream: 'stdout', text: 'Error: build failed' }
 				lines[7] = { ts: 7, stream: 'stdout', text: 'terrorist is not a failure word, failure is' }
 				w.logs.set(`runs/${run.id}/logs.ndjson`, lines)

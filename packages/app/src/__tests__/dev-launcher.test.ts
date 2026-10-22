@@ -40,10 +40,13 @@ class StubControl {
 	private reportWaiters: (() => void)[] = []
 	reset = 0
 	checks = 0
+	/** The commit of the current bootstrap run: Control refuses a container of any other. */
+	bootstrap: string
 	readonly server: ReturnType<typeof Bun.serve>
 
 	constructor(head: string) {
 		this.history = [{ sha: head, files: [] }]
+		this.bootstrap = head
 		this.server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: (request) => this.handle(request) })
 	}
 
@@ -57,6 +60,11 @@ class StubControl {
 
 	commit(commitSha: string, files: Record<string, string | null>): void {
 		this.history.push({ sha: commitSha, files: Object.entries(files).map(([path, content]) => ({ path, content })) })
+		this.wake()
+	}
+
+	supersede(bootstrap: string): void {
+		this.bootstrap = bootstrap
 		this.wake()
 	}
 
@@ -97,6 +105,7 @@ class StubControl {
 		if (path === DEV_SOURCE_REPORT_PATH) {
 			const parsed = parseDevReport(await request.json())
 			if (!parsed.ok) return new Response('bad report', { status: 400 })
+			if (parsed.value.bootstrap !== this.bootstrap) return new Response('superseded', { status: 409 })
 			this.reports.push(parsed.value)
 			const waiters = this.reportWaiters
 			this.reportWaiters = []
@@ -108,7 +117,8 @@ class StubControl {
 		if (!parsed.ok) return new Response('bad wait', { status: 400 })
 		const wait = parsed.value
 		const pending = (): boolean =>
-			wait.head !== this.target || (wait.reset !== null && wait.reset < this.reset) || (wait.checks !== null && wait.checks < this.checks)
+			wait.bootstrap !== this.bootstrap || wait.head !== this.target || (wait.reset !== null && wait.reset < this.reset)
+			|| (wait.checks !== null && wait.checks < this.checks)
 		if (wait.hold && !pending()) {
 			await new Promise<void>((resolve) => {
 				const timer = setTimeout(resolve, 2_000)
@@ -118,6 +128,7 @@ class StubControl {
 				})
 			})
 		}
+		if (wait.bootstrap !== this.bootstrap) return new Response('superseded', { status: 409 })
 		return Response.json(this.answer(wait.head))
 	}
 
@@ -235,7 +246,7 @@ async function fixture(options: { controlHead?: string; contractApp?: boolean } 
 	return value
 }
 
-function start(value: Fixture, database?: { appId: string; url: string }, deployedDigest?: string): DevLauncher {
+function start(value: Fixture, database?: { appId: string; url: string }, deployedDigest?: string, spaBuild: string[] = []): DevLauncher {
 	const config: DevLauncherConfig = {
 		format: 1,
 		appId: database?.appId ?? 'devfixture',
@@ -244,7 +255,7 @@ function start(value: Fixture, database?: { appId: string; url: string }, deploy
 		healthPath: '/healthz',
 		serve: ['bun', 'src/server.ts'],
 		migrate: ['bun', CLI, 'db', 'migrate'],
-		spaBuild: [],
+		spaBuild,
 		checks: [{ name: 'tests', command: 'echo checked && exit 3' }],
 	}
 	const output: OutputSink = { write: (_stream, line) => value.lines.push(line) }
@@ -307,28 +318,48 @@ describe('the dev launcher', () => {
 		expect(await get(value)).toBe('one')
 	})
 
-	test('an edit of a handler syncs, and an edit that changes the contract digest is refused and rolled back', async () => {
+	test('a container that a newer bootstrap run replaced stops following Control and applies nothing', async () => {
+		const value = await fixture()
+		await start(value).ready
+		const reported = value.control.reports.length
+		value.control.supersede(sha(9))
+		value.control.commit(sha(2), { 'bun.lock': 'lockfile two', 'src/message.ts': "export const message = 'two'\n" })
+		const deadline = performance.now() + 5_000
+		while (!value.lines.some((line) => line.includes('a newer bootstrap run replaced this container'))) {
+			if (performance.now() > deadline) throw new Error('the launcher never stopped following Control')
+			await Bun.sleep(5)
+		}
+		expect(value.control.reports.length).toBe(reported)
+		expect(readFileSync(join(value.root, 'bun.lock'), 'utf8')).toBe('lockfile one')
+		expect(await get(value)).toBe('one')
+	})
+
+	test('an edit of a handler syncs, and an edit that changes the contract digest is refused and rolled back with its SPA', async () => {
 		const value = await fixture({ contractApp: true })
-		await start(value, undefined, await exampleDigest(value.root)).ready
+		await writeTree(value.root, { 'web/title.txt': 'one' })
+		const built = () => readFileSync(join(value.root, 'dist', 'title.txt'), 'utf8')
+		await start(value, undefined, await exampleDigest(value.root), ['mkdir -p dist && cp web/title.txt dist/title.txt']).ready
 		const endpoints = 'src/access/endpoints.ts'
 		const original = readFileSync(join(value.root, endpoints), 'utf8')
 		const reworded = original.replace('label: ctx.principal.label', 'label: `${ctx.principal.label}!`')
 		expect(reworded).not.toBe(original)
 
 		const serving = value.control.nextReport((report) => report.status === 'serving' && report.head === sha(2))
-		value.control.commit(sha(2), { [endpoints]: reworded, 'src/message.ts': "export const message = 'two'\n" })
+		value.control.commit(sha(2), { [endpoints]: reworded, 'src/message.ts': "export const message = 'two'\n", 'web/title.txt': 'two' })
 		expect((await serving).message).toBeNull()
 		expect(await get(value)).toBe('two')
+		expect(built()).toBe('two')
 
 		const widened = reworded.replace('access: { member: true }', "access: { action: 'example.read', over: 'project' }")
 		const refused = value.control.nextReport((report) => report.status === 'needs_bootstrap')
-		value.control.commit(sha(3), { [endpoints]: widened })
+		value.control.commit(sha(3), { [endpoints]: widened, 'web/title.txt': 'three' })
 		const report = await refused
 		expect(report.message).toContain('the change alters the contract')
 		expect(report.message).toContain('bind_dev')
 		expect(report.head).toBe(sha(2))
 		expect(readFileSync(join(value.root, endpoints), 'utf8')).toBe(reworded)
 		expect(await get(value)).toBe('two')
+		expect(built()).toBe('two')
 	})
 
 	test('a boot reconciles to the recorded head before it serves', async () => {
@@ -359,7 +390,7 @@ describe('the dev launcher', () => {
 		value.control.advance('checks')
 		const report = await checked
 		expect(report.checks?.request).toBe(1)
-		expect(report.checks?.results).toEqual([{ name: 'tests', ok: false, exitCode: 3, output: ['checked'] }])
+		expect(report.checks?.results).toEqual([{ name: 'tests', ok: false, exitCode: 3, durationMs: expect.any(Number), output: ['checked'] }])
 		expect(report.status).toBe('serving')
 		expect(await get(value)).toBe('one')
 	})
