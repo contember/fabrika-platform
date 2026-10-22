@@ -46,7 +46,7 @@ SQLite database. The Worker only forwards each request to it.**
    dialect; the SQLite engine compiles with a SQLite compiler and opens each transaction through the object's storage.
    A row lock is not needed: the object serves no other event while a transaction is open. The handler runs inside the
    transaction's callback, from its first statement to its commit (`InvocationTransaction.enclose`): while the callback
-   runs, the input gate also holds back the answers to the object's own outgoing I/O made outside it, so a handler
+   runs, the object's own outgoing I/O started outside it is not sent until the transaction ends, so a handler
    awaiting I/O outside the callback would wait for its own transaction to end. A transaction opened inside the callback
    nests as a savepoint (workerd's `ActorSqlite::ExplicitTxn`) and commits only with the enclosing one. A transaction
    longer than the platform's limit resets the object, so a handler keeps slow I/O out of its transaction, as it does

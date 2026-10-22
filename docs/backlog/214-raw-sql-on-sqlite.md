@@ -1,10 +1,10 @@
 ---
-id: 208
+id: 214
 title: Raw SQL on SQLite
 blocked-by: []
 ---
 
-# 208 — Raw SQL on SQLite
+# 214 — Raw SQL on SQLite
 
 **Summary.** `ctx.sql` is refused on SQLite (reason `sql_dialect`): its classifier reads Postgres's lexical rules,
 and a Durable Object has no runtime role under it. P3, size M.
