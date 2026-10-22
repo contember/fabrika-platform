@@ -426,7 +426,7 @@ describe('app environment namespace assignment', () => {
 		expect(recording.registrations.at(-1)?.environment.namespace?.id).toBe('apps-prod')
 		expect(audits.at(-1)).toEqual(expect.objectContaining({
 			action: 'app.env.upsert',
-			metadata: { triggerRef: null, namespaceId: 'apps-prod', previousNamespaceId: null },
+			metadata: { triggerRef: null, kind: 'standard', namespaceId: 'apps-prod', previousNamespaceId: null },
 		}))
 
 		const exclusive = await rpcResult(

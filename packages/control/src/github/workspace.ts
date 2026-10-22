@@ -132,6 +132,7 @@ export function githubWorkspaceSource(env: Env, createClient: WorkspaceGitHubCli
 					baseSha: comparison.baseSha,
 					headSha: comparison.headSha,
 					aheadBy: comparison.aheadBy,
+					behindBy: comparison.behindBy,
 					files: comparison.files,
 					filesCapped: comparison.filesCapped,
 				}

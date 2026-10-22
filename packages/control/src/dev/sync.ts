@@ -1,0 +1,77 @@
+// The files that bring a `dev` container from the head it holds to the head it should serve, relayed from GitHub. Control
+// keeps none of them (ADR-0049): it compares the two commits, reads the changed paths at the target, and answers.
+
+import type { DevSourceFile, DevSync } from '@fabrika/app/dev/wire'
+import { isSourcePath } from '@fabrika/app/dev/wire'
+import type { WorkspaceSourcePort, WorkspaceSourceTarget } from '../workspace-source-port'
+
+/** The most files and bytes one sync relays; a larger change needs a bootstrap run. */
+export const DEV_SYNC_MAX_FILES = 300
+export const DEV_SYNC_MAX_BYTES = 8 * 1024 * 1024
+
+export type DevSyncOutcome =
+	| { readonly kind: 'sync'; readonly sync: DevSync }
+	/** One line for the agent: why this head cannot be synced and needs a bootstrap run. */
+	| { readonly kind: 'refused'; readonly reason: string }
+
+const BOOTSTRAP = 'that needs a bootstrap run: call bind_dev again'
+
+/**
+ * Every path that differs between `from` and `to`, at `to`. GitHub compares from the merge base, so when `from` is no
+ * ancestor of `to` (another workspace, a rewritten branch) the reverse comparison adds what only `from` changed.
+ */
+export async function buildDevSync(
+	source: WorkspaceSourcePort,
+	target: WorkspaceSourceTarget,
+	from: string,
+	to: string,
+	signal: AbortSignal,
+): Promise<DevSyncOutcome> {
+	const forward = await source.compare({ target, baseSha: from, headSha: to, signal })
+	const comparisons = forward.behindBy > 0 ? [forward, await source.compare({ target, baseSha: to, headSha: from, signal })] : [forward]
+	if (comparisons.some((comparison) => comparison.filesCapped)) {
+		return { kind: 'refused', reason: `the change from ${from} to ${to} lists more files than GitHub compares; ${BOOTSTRAP}` }
+	}
+	const paths = [
+		...new Set(
+			comparisons.flatMap((comparison) => comparison.files.flatMap((file) => file.previousPath === null ? [file.path] : [file.path, file.previousPath])),
+		),
+	].sort()
+	if (paths.length > DEV_SYNC_MAX_FILES) {
+		return { kind: 'refused', reason: `the change from ${from} to ${to} touches ${paths.length} files, more than a sync relays; ${BOOTSTRAP}` }
+	}
+	const unsafe = paths.find((path) => !isSourcePath(path))
+	if (unsafe !== undefined) return { kind: 'refused', reason: `the path ${JSON.stringify(unsafe)} cannot be synced; ${BOOTSTRAP}` }
+
+	const files = new Map<string, string | null>()
+	let bytes = 0
+	let pending = paths
+	while (pending.length > 0) {
+		const read = await source.readFiles({ target, commitSha: to, paths: pending, signal })
+		const next: string[] = []
+		for (const file of read.files) {
+			if (file.content !== null) {
+				bytes += new TextEncoder().encode(file.content).byteLength
+				files.set(file.path, file.content)
+			} else if (file.reason === 'missing') {
+				files.set(file.path, null)
+			} else if (file.reason === 'budget') {
+				next.push(file.path)
+			} else {
+				return { kind: 'refused', reason: `${file.path} is ${UNREADABLE[file.reason]} at ${to}, which a sync does not relay; ${BOOTSTRAP}` }
+			}
+		}
+		if (bytes > DEV_SYNC_MAX_BYTES) return { kind: 'refused', reason: `the change from ${from} to ${to} is larger than a sync relays; ${BOOTSTRAP}` }
+		// A read that returned nothing but `budget` would never finish.
+		if (next.length === pending.length) return { kind: 'refused', reason: `${pending[0]} could not be read at ${to}; ${BOOTSTRAP}` }
+		pending = next
+	}
+	const changed: DevSourceFile[] = paths.map((path) => ({ path, content: files.get(path) ?? null }))
+	return { kind: 'sync', sync: { from, to, files: changed } }
+}
+
+const UNREADABLE = {
+	not_a_file: 'not a regular file',
+	too_large: 'over 512 KiB',
+	binary: 'not UTF-8 text',
+} as const

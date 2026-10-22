@@ -1,5 +1,6 @@
 export { BuilderConnectionRepository } from './db/builder-connections'
 export { type ControlRepositories, createControlRepositories } from './db/composition'
+export { type DevBindInput, DevEnvironmentRepository, type DevEnvironmentRow, type DevReportInput } from './db/dev-environments'
 export {
 	FINAL_MAIL_MESSAGE_STATES,
 	type MailMessageInput,

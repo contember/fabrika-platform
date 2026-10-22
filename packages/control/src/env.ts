@@ -21,6 +21,7 @@
 import type { IamRpc } from '@fabrika/auth'
 import type { AssetServer, BlobStore, HttpService, JobQueue, SqlDatabase, WaitUntil } from '@fabrika/platform'
 import type { ControlRepositories } from './db'
+import type { DevSource } from './dev/receiver'
 import type { CommitSource } from './github/source/commit-files'
 import type { MailRelay } from './mail-relay/queue'
 import type { InstallationMail } from './mail-transport'
@@ -75,6 +76,11 @@ export interface Env {
 	 * relay's row answers 404 and maintenance re-enqueues nothing.
 	 */
 	MAIL_RELAY?: MailRelay
+	/**
+	 * GitHub and this process's wake-ups for `dev` environments (ADR-0049). Only the Zerops root sets it: Cloudflare has no
+	 * dev environment. Without it the `source` receiver answers 404.
+	 */
+	DEV_SOURCE?: DevSource
 
 	// ── Vars ──────────────────────────────────────────────────────────────────
 	ENVIRONMENT: string

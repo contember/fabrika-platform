@@ -1,0 +1,60 @@
+// Wakes a request that waits on a `dev` environment's record when this process changes it. Another Control process
+// does not see the wake-up, so every waiter also re-reads the record at least once a second.
+
+/** How long a waiter sleeps between two reads of the record at most. */
+export const DEV_RECHECK_MS = 1_000
+
+export class DevSignals {
+	private readonly waiters = new Map<string, Set<() => void>>()
+
+	/** Resolves on `notify(key)`, after `ms`, or when `signal` aborts, whichever comes first. */
+	wait(key: string, ms: number, signal?: AbortSignal): Promise<void> {
+		return new Promise((resolve) => {
+			const done = () => {
+				clearTimeout(timer)
+				signal?.removeEventListener('abort', done)
+				const set = this.waiters.get(key)
+				set?.delete(done)
+				if (set?.size === 0) this.waiters.delete(key)
+				resolve()
+			}
+			const timer = setTimeout(done, Math.max(0, ms))
+			if (signal?.aborted === true) return done()
+			signal?.addEventListener('abort', done)
+			const set = this.waiters.get(key) ?? new Set()
+			set.add(done)
+			this.waiters.set(key, set)
+		})
+	}
+
+	notify(key: string): void {
+		for (const wake of [...(this.waiters.get(key) ?? [])]) wake()
+	}
+}
+
+/** The launcher waits on this key; a commit, a bind, a reset or a check request wakes it. */
+export const devTargetKey = (appId: string, env: string): string => `target:${appId}@${env}`
+
+/** `apply_changes`, `run_checks` and `get_dev_status` wait on this key; a launcher report wakes them. */
+export const devReportKey = (appId: string, env: string): string => `report:${appId}@${env}`
+
+/**
+ * Sleep in steps of at most `DEV_RECHECK_MS` until `ready` answers a value or `ms` passed; null on the timeout. A wake-up
+ * of `key` cuts the current step short.
+ */
+export async function waitForRecord<T>(
+	signals: DevSignals,
+	key: string,
+	ms: number,
+	ready: () => Promise<T | null>,
+	signal?: AbortSignal,
+): Promise<T | null> {
+	const deadline = Date.now() + ms
+	for (;;) {
+		const value = await ready()
+		if (value !== null) return value
+		const remaining = deadline - Date.now()
+		if (remaining <= 0 || signal?.aborted === true) return null
+		await signals.wait(key, Math.min(DEV_RECHECK_MS, remaining), signal)
+	}
+}

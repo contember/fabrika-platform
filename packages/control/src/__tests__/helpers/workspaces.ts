@@ -139,6 +139,7 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 			baseSha: input.baseSha,
 			headSha: input.headSha,
 			aheadBy: this.changedFiles.length === 0 ? 0 : 1,
+			behindBy: 0,
 			files: this.changedFiles,
 			filesCapped: false,
 		})

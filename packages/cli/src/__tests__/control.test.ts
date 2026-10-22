@@ -445,6 +445,18 @@ describe('control apps environments', () => {
 		).rejects.toThrow('An empty --cross-origin= clears the list and takes no other --cross-origin')
 	})
 
+	test('--kind names the kind of a new environment, and nothing else', async () => {
+		const manifest = `${import.meta.dir}/fixtures/manifest.json`
+		const captured = captureFetch({ result: { appId: 'notes', env: 'dev', provider: 'zerops' } })
+		await captureStdout(() =>
+			runControlCli('apps', ['environments', 'put', '--app=notes', '--env=dev', `--manifest=${manifest}`, '--kind=dev'], 'zerops', CONTROL_ENV)
+		)
+		expect(captured.calls[0]?.body).toMatchObject({ input: { env: 'dev', environment: { kind: 'dev' } } })
+		await expect(
+			runControlCli('apps', ['environments', 'put', '--app=notes', '--env=dev', `--manifest=${manifest}`, '--kind=preview'], 'zerops', CONTROL_ENV),
+		).rejects.toThrow('--kind must be one of standard, dev')
+	})
+
 	test('list prints the cross origins of each environment, comma-joined, and - for none', () => {
 		const base = { appId: 'notes', env: 'prod', provider: 'zerops', domain: 'notes.example.com' }
 		expect(environmentLine({ ...base, crossOrigins: ['https://a.example', 'https://b.example'] })).toBe(
