@@ -189,16 +189,18 @@ behind the launcher) is the same as stage's today, which also runs unreviewed wo
 - **ADR-0050.** Add: a `dev` environment is never protected and cannot be marked protected.
 - **ADR-0022.** No changes.
 
-## Open questions
+## Decisions (2026-10-22)
 
-- Should the authoring stage environment itself run in dev mode, instead of a separate `dev` environment? That would
-  save one container and one proxy host. The cost is that no environment would show the checked build of a workspace
-  before the pull request.
-- Should a lockfile change install in place (`bun install --frozen-lockfile --ignore-scripts` in the container) instead
-  of a bootstrap? That is seconds instead of minutes, but it moves a build step into a long-lived container.
-- How should application logs reach the agent? Options are the launcher's last lines in `get_dev_status`, or the
-  Operations plane. The launcher must never forward the environment.
-- Should Control push the head to the long poll at commit time, or should the launcher ask on a timer? A push saves one
-  round trip.
-- Which permission does `reset_dev` need? `deploy.trigger` alone, or a new one?
-- How long should the idle period be, and does Zerops bill a stopped service's disk?
+- **A separate `dev` environment.** The authoring stage environment stays an ordinary checked build, so a workspace
+  still shows its checked build before the pull request.
+- **A lockfile change needs a bootstrap run.** No build step runs in the long-lived container.
+- **`apply_changes` waits for the dev sync.** When the workspace is bound to `dev`, it waits up to about 10 s for the
+  launcher's report and returns `dev: { head, status, url, log }`. On a timeout it returns the pending state, and
+  `get_dev_status` reads the rest. One agent iteration is one call.
+- **A workspace is bound to `dev` by a tool, `bind_dev`.** The first bind is a bootstrap run.
+- **The launcher holds a long poll.** Control answers it when the head changes, which gives push latency without an
+  inbound route.
+- **Logs:** the launcher keeps a ring buffer of the application's output and reports the last lines only, never the
+  environment.
+- **`reset_dev`, `run_checks` and `bind_dev` need `deploy.trigger`.**
+- **Idle stop after 30 minutes** with no sync. Whether Zerops bills a stopped service's disk is still to be checked.
