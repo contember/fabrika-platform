@@ -898,25 +898,36 @@ function kitJobContext(
 		db: siteData(reads, (action) => reads.app(app(action))),
 		sql: site.sql === null ? undeclaredSql(job, 'job') : jobSqlOutsideTransaction(job),
 		files: putAndOpen(boundTo(frame, () => false, 'ctx.files')),
-		transaction: async <R>(work: (tx: object) => Promise<R>): Promise<R> => {
+		transaction: async <R>(body: (tx: object) => Promise<R>): Promise<R> => {
 			// Outside its attempt there is no lease to fence the transaction with, so it never opens.
 			boundTo(frame, () => false)()
-			return data.transaction(async (session) => {
-				let open = true
-				const writes = jobHandles(frame, data, site, principal, 'mutation', async () => session, () => !open, undefined, binding)
-				try {
-					const sql = site.sql === null ? undeclaredSql(job, 'job', 'tx.sql') : jobSql(frame, data, site.sql, session, () => !open)
-					// Located in this transaction, so an object it wrote is found before the commit.
-					const located = (action: string, dimension: string, id: string) => {
-						boundTo(frame, () => !open, 'tx.ref')()
-						return ref(action, dimension, id, session)
+			const mark = work.mark
+			let rolledBack = false
+			try {
+				return await data.transaction(async (session) => {
+					let open = true
+					const writes = jobHandles(frame, data, site, principal, 'mutation', async () => session, () => !open, undefined, binding)
+					try {
+						const sql = site.sql === null ? undeclaredSql(job, 'job', 'tx.sql') : jobSql(frame, data, site.sql, session, () => !open)
+						// Located in this transaction, so an object it wrote is found before the commit.
+						const located = (action: string, dimension: string, id: string) => {
+							boundTo(frame, () => !open, 'tx.ref')()
+							return ref(action, dimension, id, session)
+						}
+						const files = putAndOpen(boundTo(frame, () => !open, 'tx.files'))
+						return await body(Object.freeze({ db: siteData(writes, (action) => writes.app(app(action))), sql, files, ref: located }))
+					} catch (error) {
+						rolledBack = true
+						throw error
+					} finally {
+						open = false
 					}
-					const files = putAndOpen(boundTo(frame, () => !open, 'tx.files'))
-					return await work(Object.freeze({ db: siteData(writes, (action) => writes.app(app(action))), sql, files, ref: located }))
-				} finally {
-					open = false
-				}
-			})
+				})
+			} catch (error) {
+				// A transaction the work threw out of is a known rollback; a failed commit is not, and the sweep decides.
+				if (rolledBack) await kinds?.release(work, mark)
+				throw error
+			}
 		},
 	}
 }

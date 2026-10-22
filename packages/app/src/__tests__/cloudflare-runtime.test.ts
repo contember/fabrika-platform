@@ -129,6 +129,25 @@ async function fetchObject(testEnv: TestEnv, request: Request): Promise<Response
 	return response
 }
 
+/**
+ * Lopata 0.30 keeps a test env's R2 records in the database its objects' transactions roll back, which R2 on Cloudflare
+ * is not: the object reaches a bucket of an env of its own. Answers the keys the bucket holds.
+ */
+async function outsideBucket(target: Deployed): Promise<() => Promise<unknown>> {
+	const outside = await createTestEnv({ bindings: { FILES: 'r2' } })
+	deployed.push(outside)
+	const bucket: unknown = outside.env['FILES']
+	target.testEnv.env[CLOUDFLARE_FILES_BINDING] = bucket
+	const list: unknown = typeof bucket === 'object' && bucket !== null ? Reflect.get(bucket, 'list') : undefined
+	if (typeof list !== 'function') {
+		throw new Error('no R2 bucket')
+	}
+	return async () => {
+		const listed: unknown = await Reflect.apply(list, bucket, [])
+		return typeof listed === 'object' && listed !== null ? Reflect.get(listed, 'objects') : undefined
+	}
+}
+
 /** Waits for the runs the object handed to `waitUntil`. */
 async function runsAfter(world: NotesWorld, count: number): Promise<NotesWorld['runs']> {
 	for (let waited = 0; world.runs.length < count && waited < 3000; waited += 10) {
@@ -157,6 +176,13 @@ describe('the Worker forwards to the environment object', () => {
 			expect(failed.status).toBe(500)
 			expect(await titles(target)).toEqual({ result: { titles: ['kept'] } })
 		})
+	})
+
+	test('a handler that throws after its put leaves no object in the bucket: its pending row rolled back with it', async () => {
+		const target = await deploy()
+		const objects = await outsideBucket(target)
+		expect((await call(target, 'attachThenFail', { workspaceId: 'w1', title: 'gone' })).status).toBe(500)
+		expect(await objects()).toEqual([])
 	})
 
 	test("a caller's tick header is removed, so a forwarded request is never the minute tick", async () => {
@@ -207,6 +233,17 @@ describe('the minute tick', () => {
 			expect(await runsAfter(target.world, 2)).toEqual([{ job: 'nightly', notes: 1 }, { job: 'halfPast', notes: 1 }])
 			await target.testEnv.scheduled({ scheduledTime: Date.UTC(2026, 9, 22, 4, 31, 0) })
 			expect(await runsAfter(target.world, 3)).toHaveLength(2)
+		})
+	})
+
+	test("a job's transaction that throws after its put leaves no object in the bucket", async () => {
+		await keepingProcessEnvironment(async () => {
+			const target = await deploy()
+			const objects = await outsideBucket(target)
+			await target.testEnv.scheduled({ scheduledTime: Date.UTC(2026, 9, 22, 4, 15, 0) })
+			// The job fails, so no run is recorded to wait for; the object hands it to waitUntil.
+			await Bun.sleep(1000)
+			expect(await objects()).toEqual([])
 		})
 	})
 })
