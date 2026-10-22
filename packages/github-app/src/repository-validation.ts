@@ -106,9 +106,10 @@ export interface DecodedTree {
 	readonly truncated: boolean
 }
 
-export function decodeTree(body: unknown, expectedSha: string): DecodedTree {
+/** A tree read by `<commit>:<path>`, whose own sha the request did not name. */
+export function decodeTreeListing(body: unknown): DecodedTree {
 	const result = treeSchema.safeParse(body)
-	if (!result.success || result.data.sha !== expectedSha) throw responseError()
+	if (!result.success) throw responseError()
 	return { entries: result.data.tree, truncated: result.data.truncated }
 }
 
