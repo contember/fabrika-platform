@@ -44,6 +44,10 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `delete_workspace`    | Abandon a workspace: delete its branch and stop listing it.         |
 | `create_pull_request` | Open a pull request from the workspace to the default branch.       |
 | `get_app_rules`       | The application rules or one topic, read-only, with a pin warning.  |
+| `bind_dev`            | Bind the workspace to the app's dev environment; bootstrap if due.  |
+| `get_dev_status`      | The dev environment's state, served head, checks and a log window.  |
+| `run_checks`          | Run tests, `fabrika-check` and `tsc` in the dev container; report.  |
+| `reset_dev`           | Drop the dev schema and roles, and migrate from scratch.            |
 
 Every tool carries MCP tool annotations. A tool that only reads has `readOnlyHint: true`, so a client such as ChatGPT
 does not ask the user to confirm it. A writing tool states `destructiveHint` (it can overwrite or delete files, or replace
@@ -97,6 +101,58 @@ the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `refer
 `instructions` at about 2 KB, so the instructions stay under 2,000 characters: the workspace flow, a pointer to
 `get_app_rules`, and three rules (each endpoint and every step off the paved road declared; never loosen anything to
 make something pass; ask when a file is protected).
+
+## The dev environment
+
+An application may have one environment of kind `dev`
+([ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md) rule 10). A commit to the workspace bound
+to it serves in seconds, without a run. `deploy_stage` stays the only path to a checked build, and nothing from the dev
+environment is promoted.
+
+1. `bind_dev` binds the workspace. The first bind, a bind after a failed bootstrap and a bind after a refused sync start
+   a **bootstrap run**: an ordinary run of the workspace head with every check, which `get_deployment` follows
+   (`bootstrapRun.id`). Its service starts the dev launcher instead of the serving entry. Binding another workspace
+   replaces the bound one, syncs its tree and resets the schema; the answer says whose workspace was bound (`yours`).
+2. `apply_changes` commits as always. When the workspace is bound, Control records the new head and the launcher's long
+   poll on Control's public origin (the `source` receiver,
+   [ADR-0064](../decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md) §7) answers
+   with the changed files, read from a GitHub compare and never stored.
+3. The launcher writes the files, migrates when `db/migrations/` changed, runs the authored SPA commands when a file
+   outside `src/` and `db/` changed, restarts the application and waits for its health endpoint. It reports the head,
+   its status and the last lines of output.
+4. `apply_changes` waits up to 10 s for that report and answers `dev: { head, state, summary, url, log }` beside
+   `commitSha`. On a timeout `state` is `pending`, and `get_dev_status` reads the rest.
+
+`state` is one of:
+
+| State              | Meaning                                                                                      |
+| ------------------ | -------------------------------------------------------------------------------------------- |
+| `unbound`          | No workspace is bound.                                                                       |
+| `bootstrapping`    | The bootstrap run has not finished.                                                          |
+| `bootstrap_failed` | The bootstrap run failed; fix the cause and call `bind_dev` again.                           |
+| `stopped`          | Stopped after 30 minutes without a sync; the next `apply_changes` or `bind_dev` starts it.   |
+| `pending`          | The launcher has not reported the newest commit yet.                                         |
+| `syncing`          | The launcher is applying a commit.                                                           |
+| `serving`          | `head` serves and answers its health endpoint.                                               |
+| `failed`           | `head` does not serve: a migration, the SPA build or the start failed; `message` says which. |
+| `needs_bootstrap`  | The commit changes what the build owns, or Control cannot relay it; `message` says why.      |
+| `resetting`        | `reset_dev` is dropping and migrating the schema.                                            |
+| `checking`         | `run_checks` is running.                                                                     |
+
+A commit **needs a bootstrap run** when it changes `package.json`, `bun.lock`, `bunfig.toml`, a `zerops.yaml`, anything
+under `fabrika/`, `fabrika.contract.ts` or a module it imports by a relative path, or when the change is more than 300
+files or 8 MiB, or holds a binary or oversized file. The launcher keeps serving the head it has, and `bind_dev` starts
+the bootstrap.
+
+`get_dev_status` answers the window of the launcher's ring buffer of the application's and its own output, indexed like
+`get_deployment` (at most 200 lines). The launcher never reports the environment. `run_checks` runs the build's check
+chain on the files the container holds and waits up to 50 s for the results; they gate nothing. `reset_dev` drops the
+environment's schema and role family and migrates from scratch; call it after editing a migration that was already
+applied, which otherwise fails the sync. `bind_dev`, `run_checks` and `reset_dev` need `deploy.trigger`; `get_dev_status`
+needs `deploy.read`.
+
+At boot (after an idle stop, a restart or a new container) the launcher reconciles to the recorded head before it
+serves.
 
 ## Failures
 
@@ -163,6 +219,14 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
 4. **Grant the users** `source.workspace.read`, `source.workspace.write`,
    `source.pull-request.create`, `deploy.trigger` and `deploy.read`, scoped to the app. The token
    carries the intersection of these grants and the scope grant above.
+5. **Optionally, register a dev environment**:
+   `fabrika control apps environments put --provider=zerops --app=<id> --env=<name> --manifest=<path> --kind=dev`.
+   Control refuses it on a provider without dev environments (Cloudflare), on an app without a GitHub connection, under
+   the name `prod`, as an authoring target, with a trigger ref, and as a second dev environment of the app. Its
+   namespace's environment must equal the environment's name, as for any environment. The application must pin
+   `@fabrika/app` 0.9.0 or newer; the bootstrap run of an older release is refused before anything publishes, and the
+   application keeps `deploy_stage`. In a `zerops-subdomain` namespace the dev environment takes one of the six proxy
+   hosts. Control needs its public origin (`FABRIKA_CONTROL_DOMAIN`) and its vault for the `source` key.
 
 ## Registering Claude and ChatGPT
 
@@ -245,4 +309,6 @@ paved road and need closer review, parked or not.
   Revocation stops refresh and new code exchanges.
 - Zerops only.
 - One authoring environment per app, never production; it shows one workspace at a time.
+- One dev environment per app, never production or protected, on Zerops only; it shows one workspace at a time and
+  runs on one container.
 - Production is a human merge in GitHub followed by the existing Delivery trigger.
