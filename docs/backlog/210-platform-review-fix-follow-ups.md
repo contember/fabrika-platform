@@ -42,6 +42,16 @@ fixed hole. P3, size S each.
 11. **Zerops checks the branch for a manual pinned run; Cloudflare does not.** Zerops fetches the branch tarball and
     compares the commit for every run with an expected commit, so an approved manual run fails on Zerops after the
     branch moved and deploys on Cloudflare.
+12. **Access that 0.8.0 or 0.8.1 published into a namespace pinned to 0.4–0.6 is never judged again.** Those releases
+    judged with the 0.7 parser too, so an approved entry with a 0.7-only form may sit in such a namespace.
+    `assertNamespaceProxyReads` (`packages/provider-zerops/src/namespace/proxy-reads.ts`) judges only the entry being
+    deployed or approved, so another member's republish fails at the pinned proxy's parser, and the error names neither
+    that member's rows nor the re-pin. Fails closed; the old proxy keeps serving.
+13. **An empty `Authorization` is treated differently by the three enforcement points.** Caddy's replace route
+    (`packages/proxy/src/caddy.ts`) does not match an empty header, the Cloudflare proxy Worker and the test kit replace
+    it with the minted token. No key leaks; no test pins either behaviour.
+14. **`packages/auth/src/request.ts` still calls the `Authorization` fallback a machine `px_` key.** Behind a current
+    proxy it carries the minted token; a `px_` key reaches it only on a request that bypasses the proxy.
 
 ## Approach / acceptance
 
@@ -58,12 +68,18 @@ fixed hole. P3, size S each.
 9. Add the note to the framework migration guide of the next minor.
 10. Add `trigger` to `ProviderSourceResolutionInput` and pass it from Control (additive contract change).
 11. Decide one rule for manual pinned runs and apply it on both providers; state it in ADR-0048.
+12. Under the namespace lease, when the pin is not the current source, run `entriesNeedingCurrentProxy` over every member
+    before `republishProxy` and refuse with the member ids, row ids and the re-pin. Witness: a test with an already
+    published member that carries a 0.7 form.
+13. Replace only when the value is non-empty after trimming, in all three; one test per enforcement point.
+14. Reword the comment.
 
 ## Touch points
 
 `packages/iam/src/{password-crypto,env}.ts`, `packages/iam/src/auth/{password,known-device}.ts`,
 `packages/dashboard/src/routes/access/users/detail.tsx`, `packages/control/fabrika.service.ts`,
 `packages/auth-core/src/token.ts`, `packages/proxy/src/__tests__/caddy.live.test.ts`, `packages/app/src/testing/proxy.ts`,
-`packages/provider-contract`, `packages/control/src/platform-cf.ts`, `packages/provider-zerops`.
+`packages/provider-contract`, `packages/control/src/platform-cf.ts`, `packages/provider-zerops`, `packages/proxy/src/caddy.ts`,
+`packages/provider-cloudflare/src/proxy-worker.ts`, `packages/auth/src/request.ts`.
 
-<!-- Origin: the independent reviews of the platform review's fix units. -->
+<!-- Origin: the independent reviews of the platform review's fix units, and a second review of PR #35's P1 and security fixes (items 12–14). -->
