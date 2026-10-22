@@ -48,12 +48,29 @@ describeEmailSenderConformance('ResendEmailSender', {
 	answers: {
 		accepted: () => Response.json({ id: 'resend-message-1' }),
 		malformedSuccess: () => Response.json({ message: 'private provider detail without an id' }),
-		unauthorized: () => errorAnswer(401, 'missing_api_key'),
-		rejected: () => errorAnswer(422, 'validation_error'),
+		// The answers below with a recorded message are as a live account answered in October 2026.
+		unauthorized: () => Response.json({ message: 'API key is invalid', name: 'validation_error', statusCode: 401 }, { status: 401 }),
+		rejected: () =>
+			Response.json({
+				message: 'Invalid `to` field. The email address needs to follow the `email@example.com` or `Name <email@example.com>` format.',
+				name: 'validation_error',
+				statusCode: 422,
+			}, { status: 422 }),
 		rateLimited: () => errorAnswer(429, 'rate_limit_exceeded'),
 		quotaExceeded: () => errorAnswer(429, 'daily_quota_exceeded'),
 		unavailable: () => errorAnswer(500, 'internal_server_error'),
-		inProgress: () => errorAnswer(409, 'concurrent_idempotent_requests'),
-		idempotencyConflict: () => errorAnswer(409, 'invalid_idempotent_request'),
+		inProgress: () =>
+			Response.json({
+				message: 'There is another request in progress with the same idempotency key.',
+				name: 'concurrent_idempotent_requests',
+				statusCode: 409,
+			}, { status: 409 }),
+		idempotencyConflict: () =>
+			Response.json({
+				message:
+					"This idempotency key has been used with this HTTP method and endpoint within the last 24 hours, but the request body was modified and doesn't match the original request.",
+				name: 'invalid_idempotent_request',
+				statusCode: 409,
+			}, { status: 409 }),
 	},
 })
