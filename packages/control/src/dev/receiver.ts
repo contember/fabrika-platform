@@ -16,7 +16,7 @@ import {
 import { hashPlatformKey } from '@fabrika/email/platform'
 import { workspaceSourceTarget } from '../api/workspaces'
 import type { ControlAppContext } from '../app'
-import type { DevEnvironmentRepository, DevEnvironmentRow, PlatformTransportKeyRepository } from '../db'
+import type { DevEnvironmentRepository, DevEnvironmentRow, PlatformTransportKeyRepository, RunRow } from '../db'
 import { bearerOf, error, json, readBoundedText } from '../http'
 import { repositories } from '../services'
 import { WorkspaceSourceError, type WorkspaceSourcePort, type WorkspaceSourceTarget } from '../workspace-source-port'
@@ -46,9 +46,11 @@ export interface DevReceiverDeps {
 	readonly now: () => number
 	/** How long a held wait lasts at most. */
 	readonly waitMs: number
-	/** The commit a run built; null for a run that does not exist. */
-	readonly runCommit: (runId: string) => Promise<string | null>
+	/** A run, for the commit it built and when it finished; null for a run that does not exist. */
+	readonly run: (runId: string) => Promise<BootstrapRun | null>
 }
+
+export type BootstrapRun = Pick<RunRow, 'commit_sha' | 'status' | 'finished_at'>
 
 /** `POST /platform/source/wait` and `/platform/source/report`; anything else under the row, and the Worker, answer 404. */
 export function handleDevSource(ctx: ControlAppContext): Promise<Response> {
@@ -63,7 +65,7 @@ export function handleDevSource(ctx: ControlAppContext): Promise<Response> {
 		signals: dev.signals,
 		now: () => Math.floor(Date.now() / 1000),
 		waitMs: DEV_SOURCE_WAIT_MS,
-		runCommit: async (runId) => (await persistence.runs.getRun(runId))?.commit_sha ?? null,
+		run: (runId) => persistence.runs.getRun(runId),
 	}
 	const path = new URL(ctx.request.url).pathname
 	if (path === DEV_SOURCE_WAIT_PATH) return acceptDevWait(deps, ctx.request)
@@ -76,10 +78,11 @@ export async function acceptDevWait(deps: DevReceiverDeps, request: Request): Pr
 	if (environment instanceof Response) return environment
 	const body = await readJson(request, WAIT_MAX_BODY_BYTES)
 	const parsed = body === undefined ? null : parseDevWaitRequest(body)
-	if (parsed === null || !parsed.ok) return error(400, 'not a wait request this release reads')
+	if (parsed === null || !parsed.ok) return refuseLauncher(deps, environment, 'wait')
 	const { appId, env } = environment
 	try {
 		if (await superseded(deps, await deps.devEnvironments.get(appId, env), parsed.value.bootstrap)) return error(409, SUPERSEDED)
+		await deps.devEnvironments.recordLauncherSeen(appId, env)
 		const ready = async () => {
 			const row = await deps.devEnvironments.get(appId, env)
 			return row === null || answersNow(row, parsed.value) ? { row } : null
@@ -101,7 +104,7 @@ export async function acceptDevReport(deps: DevReceiverDeps, request: Request): 
 	if (environment instanceof Response) return environment
 	const body = await readJson(request, REPORT_MAX_BODY_BYTES)
 	const parsed = body === undefined ? null : parseDevReport(body)
-	if (parsed === null || !parsed.ok) return error(400, 'not a report this release reads')
+	if (parsed === null || !parsed.ok) return refuseLauncher(deps, environment, 'report')
 	const { appId, env } = environment
 	try {
 		if (await superseded(deps, await deps.devEnvironments.get(appId, env), parsed.value.bootstrap)) return error(409, SUPERSEDED)
@@ -135,8 +138,33 @@ const SUPERSEDED = 'a newer bootstrap run replaced this container'
  */
 async function superseded(deps: DevReceiverDeps, row: DevEnvironmentRow | null, bootstrap: string): Promise<boolean> {
 	if (row === null || row.bootstrap_run_id === null) return false
-	const built = await deps.runCommit(row.bootstrap_run_id)
+	const built = (await deps.run(row.bootstrap_run_id))?.commit_sha ?? null
 	return built !== null && built !== bootstrap
+}
+
+/** Why the environment needs a bootstrap run when its launcher speaks a wire this Control does not read. */
+export const LAUNCHER_UNREADABLE = 'the container runs a launcher whose requests this Control does not read (an older or newer framework '
+	+ 'release); call bind_dev to bootstrap the environment on the workspace head'
+
+/**
+ * A wait or report this release cannot parse is answered 400. When it comes from the container of the current
+ * bootstrap run, that launcher can never sync again, so the environment records why and the next bind bootstraps.
+ */
+async function refuseLauncher(deps: DevReceiverDeps, environment: { appId: string; env: string }, request: 'wait' | 'report'): Promise<Response> {
+	const { appId, env } = environment
+	try {
+		const row = await deps.devEnvironments.get(appId, env)
+		const run = row?.bootstrap_run_id == null ? null : await deps.run(row.bootstrap_run_id)
+		if (row !== null && run !== null && run.status === 'succeeded' && run.finished_at !== null) {
+			const booted = Math.max(run.finished_at, row.service_started_at ?? 0)
+			if (await deps.devEnvironments.recordLauncherRefused(appId, env, LAUNCHER_UNREADABLE, booted)) {
+				deps.signals.notify(devReportKey(appId, env))
+			}
+		}
+	} catch {
+		console.error(`dev source: recording an unreadable ${request} of ${appId}@${env} failed`)
+	}
+	return error(400, `not a ${request} this release reads`)
 }
 
 /** Whether the record asks the launcher for something it has not done: a head to sync to, a reset, or checks. */

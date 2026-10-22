@@ -8,6 +8,7 @@ import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { z } from 'zod/v4'
 import type { AppEnvRow, DevEnvironmentRow, RunRow } from '../db'
 import { devReportKey, type DevSignals, devTargetKey, waitForRecord } from '../dev/signals'
+import { syncRefusal } from '../dev/sync'
 import { fail } from './domain'
 import { canAtCoordinates, createManualRun, toRunDto } from './runs'
 import {
@@ -21,6 +22,7 @@ import {
 	requireOwner,
 	requireWorkspace,
 	type WorkspaceFileWrite,
+	workspaceSourceTarget,
 	type WorkspaceUseCaseContext,
 } from './workspaces'
 
@@ -28,14 +30,24 @@ import {
 export const DEV_APPLY_WAIT_MS = 10_000
 export const DEV_CHECKS_WAIT_MS = 50_000
 export const DEV_RESET_WAIT_MS = 20_000
+/** How long `bind_dev` waits for the first request of a launcher whose service it started, to learn whether it is usable. */
+export const DEV_BOOT_WAIT_MS = 15_000
 /** The lines `apply_changes` returns with the dev state. */
 export const DEV_APPLY_LOG_LINES = 20
+/**
+ * How long a running launcher may go without a request before Control counts it as gone. It holds a wait for at most
+ * 25 s and waits again at once, except while it syncs, resets or runs the checks, which may take minutes.
+ */
+export const DEV_LAUNCHER_SILENT_SECONDS = 90
+export const DEV_LAUNCHER_BUSY_SILENT_SECONDS = 15 * 60
 
 /** What the dev use cases need beyond a workspace's: this process's wake-ups and the provider's start of the service. */
 export interface DevUseCaseDeps {
 	readonly signals: DevSignals
-	/** Starts the environment's service when maintenance stopped it. */
-	readonly start: (row: DevEnvironmentRow, signal: AbortSignal) => Promise<void>
+	/** Starts the environment's service when maintenance stopped it; true when it did. */
+	readonly start: (row: DevEnvironmentRow, signal: AbortSignal) => Promise<boolean>
+	/** Unix seconds. */
+	readonly now: () => number
 }
 
 export interface DevUseCaseContext extends WorkspaceUseCaseContext {
@@ -142,8 +154,8 @@ export async function bindDevUseCase(c: DevUseCaseContext, input: { workspaceId:
 	const row = await c.repositories.devEnvironments.get(appEnv.app_id, appEnv.env)
 	const switching = row !== null && row.workspace_id !== null && row.workspace_id !== owned.workspace.id
 	// A stopped service first starts: a rebind syncs the running container, and a bootstrap deploys into it.
-	if (row !== null) await dev.start(row, c.signal)
-	const run = await needsBootstrap(c, row)
+	const contact = row !== null && await dev.start(row, c.signal) ? await firstContact(c, dev, row) : { row, silent: false }
+	const run = contact.silent || await needsBootstrap(c, dev, contact.row, owned, head)
 		? await createManualRun(c, { appId: appEnv.app_id, env: appEnv.env, ref: `refs/heads/${owned.workspace.branch}`, commitSha: head })
 		: null
 	const bound = await c.repositories.devEnvironments.bind({
@@ -181,11 +193,13 @@ export async function runChecksUseCase(c: DevUseCaseContext, input: { workspaceI
 	const dev = requireDev(c)
 	const { appEnv, row } = await requireBound(c, input.workspaceId)
 	if (row.head_sha !== row.target_sha) {
-		const state = stateOf(row, await bootstrapRunOf(c, row))
+		const run = await bootstrapRunOf(c, row)
+		const problem = launcherProblem(row, run, dev.now())
+		const state = stateOf(row, run, problem)
 		fail(
 			409,
 			`the dev environment holds ${row.head_sha ?? 'no commit yet'}, not the workspace's newest commit ${row.target_sha ?? 'unknown'} `
-				+ `(state ${state}): ${summaryOf(state, row)} Run the checks once it serves that commit.`,
+				+ `(state ${state}): ${problem ?? summaryOf(state, row)} Run the checks once it serves that commit.`,
 		)
 	}
 	await dev.start(row, c.signal)
@@ -241,7 +255,8 @@ export async function followDevCommit(
 	dev.signals.offer(key, { from: input.parentSha, to: input.commitSha, files: input.written.map(({ path, content }) => ({ path, content })) })
 	dev.signals.notify(key)
 	const bootstrap = await bootstrapRunOf(c, row)
-	const settled = bootstrap !== null && bootstrap.status !== 'succeeded'
+	// Nothing would answer: a bootstrap run builds the container, or its launcher is gone or unreadable.
+	const settled = (bootstrap !== null && bootstrap.status !== 'succeeded') || launcherProblem(row, bootstrap, dev.now()) !== null
 		? row
 		: await waitForRecord(dev.signals, devReportKey(row.app_id, row.env), DEV_APPLY_WAIT_MS, async () => {
 			const current = await c.repositories.devEnvironments.get(row.app_id, row.env)
@@ -259,12 +274,61 @@ function servesOrRefused(row: DevEnvironmentRow, commitSha: string): boolean {
 	return row.head_sha === commitSha && (row.status === 'serving' || row.status === 'failed')
 }
 
-async function needsBootstrap(c: DevUseCaseContext, row: DevEnvironmentRow | null): Promise<boolean> {
+/**
+ * The record once the launcher of a service that just started sent its first request, or Control refused it. `silent`
+ * when neither happened within `DEV_BOOT_WAIT_MS`: a launcher that does not talk after a start cannot follow a bind.
+ */
+async function firstContact(
+	c: DevUseCaseContext,
+	dev: DevUseCaseDeps,
+	row: DevEnvironmentRow,
+): Promise<{ row: DevEnvironmentRow | null; silent: boolean }> {
+	const read = () => c.repositories.devEnvironments.get(row.app_id, row.env)
+	const contacted = await waitForRecord(dev.signals, devReportKey(row.app_id, row.env), DEV_BOOT_WAIT_MS, async () => {
+		const current = await read()
+		if (current === null) return null
+		const booted = current.service_started_at ?? 0
+		return current.launcher_refused !== null || (current.launcher_seen_at ?? 0) >= booted ? current : null
+	}, c.signal)
+	return contacted === null ? { row: await read(), silent: true } : { row: contacted, silent: false }
+}
+
+/**
+ * Whether binding `head` needs a bootstrap run: none ran or the last one failed, a head was refused, the running
+ * launcher is gone or unreadable, or the files from what the container holds to `head` change something the build owns.
+ */
+async function needsBootstrap(
+	c: DevUseCaseContext,
+	dev: DevUseCaseDeps,
+	row: DevEnvironmentRow | null,
+	owned: OwnedWorkspace,
+	head: string,
+): Promise<boolean> {
 	if (row === null) return true
 	const run = await bootstrapRunOf(c, row)
 	if (run === null || run.status === 'failed') return true
 	if (run.status !== 'succeeded') return false
-	return row.refused_sha !== null
+	if (row.refused_sha !== null || launcherProblem(row, run, dev.now()) !== null) return true
+	const held = row.head_sha ?? run.commit_sha
+	if (held === null) return true
+	if (held === head) return false
+	const target = await workspaceSourceTarget(c.repositories, owned.workspace.app_id)
+	if (target === null) return true
+	return await c.source.session({ target, signal: c.signal }, (source) => syncRefusal(source, held, head)) !== null
+}
+
+/**
+ * Why the running launcher cannot follow the environment, in one line, or null. Its requests are unreadable to this
+ * Control, or it has sent none for longer than it ever waits. Only after its bootstrap run, and while its service runs.
+ */
+function launcherProblem(row: DevEnvironmentRow, run: RunRow | null, now: number): string | null {
+	if (run === null || run.status !== 'succeeded' || row.stopped_at !== null) return null
+	if (row.launcher_refused !== null) return row.launcher_refused
+	const since = Math.max(row.launcher_seen_at ?? 0, run.finished_at ?? 0, row.service_started_at ?? 0)
+	const silent = BUSY.has(row.status) ? DEV_LAUNCHER_BUSY_SILENT_SECONDS : DEV_LAUNCHER_SILENT_SECONDS
+	if (now - since <= silent) return null
+	return `the launcher has sent no request for ${now - since} s: its container stopped following Control or runs an older `
+		+ 'framework release; call bind_dev to bootstrap the environment on the workspace head'
 }
 
 async function bootstrapRunOf(c: DevUseCaseContext, row: DevEnvironmentRow): Promise<RunRow | null> {
@@ -279,7 +343,8 @@ async function describe(
 ): Promise<DevEnvironmentDto> {
 	const workspace = row?.workspace_id == null ? null : await c.repositories.workspaces.getWorkspace(row.workspace_id)
 	const run = row === null ? null : await bootstrapRunOf(c, row)
-	const state = stateOf(row, run)
+	const problem = row === null || c.dev === undefined ? null : launcherProblem(row, run, c.dev.now())
+	const state = stateOf(row, run, problem)
 	const url = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
 	return {
 		appId: appEnv.app_id,
@@ -288,21 +353,22 @@ async function describe(
 		yours: workspace !== null && workspace.owner_id === requireOwner(c.auth),
 		url,
 		state,
-		summary: summaryOf(state, row),
+		summary: problem ?? summaryOf(state, row),
 		head: row?.head_sha ?? null,
 		target: row?.target_sha ?? null,
-		message: row?.message ?? null,
+		message: problem ?? row?.message ?? null,
 		bootstrapRun: run === null ? null : toRunDto(run),
 		log: logWindow(parseLog(row?.log_json ?? '[]'), log),
 		checks: parseChecks(row?.checks_json ?? null),
 	}
 }
 
-function stateOf(row: DevEnvironmentRow | null, run: RunRow | null): DevStateDto {
+function stateOf(row: DevEnvironmentRow | null, run: RunRow | null, problem: string | null): DevStateDto {
 	if (row === null || row.workspace_id === null) return 'unbound'
 	if (run !== null && run.status === 'failed') return 'bootstrap_failed'
 	if (run !== null && run.status !== 'succeeded') return 'bootstrapping'
 	if (row.stopped_at !== null) return 'stopped'
+	if (problem !== null) return 'needs_bootstrap'
 	if (row.refused_sha !== null && row.refused_sha === row.target_sha) return 'needs_bootstrap'
 	if (row.head_sha !== row.target_sha && !BUSY.has(row.status)) return 'pending'
 	return isDevStatus(row.status) ? row.status : 'pending'

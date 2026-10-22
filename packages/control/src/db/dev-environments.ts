@@ -33,6 +33,12 @@ export interface DevEnvironmentRow {
 	/** Unix seconds when maintenance stopped its service; null while it runs. */
 	stopped_at: number | null
 	created_at: number
+	/** Unix seconds of the launcher's last accepted wait or report. */
+	launcher_seen_at: number | null
+	/** Why Control cannot read the requests of the current container, in one line; null when it can. */
+	launcher_refused: string | null
+	/** Unix seconds of the last start after an idle stop, which boots the container again. */
+	service_started_at: number | null
 }
 
 export interface DevBindInput {
@@ -92,6 +98,7 @@ export class DevEnvironmentRepository {
 						refused_sha = CASE WHEN ? = 1 THEN NULL ELSE dev_environments.refused_sha END,
 						status = CASE WHEN ? = 1 THEN 'unbound' ELSE dev_environments.status END,
 						message = CASE WHEN ? = 1 THEN NULL ELSE dev_environments.message END,
+						launcher_refused = CASE WHEN ? = 1 THEN NULL ELSE dev_environments.launcher_refused END,
 						reset_generation = dev_environments.reset_generation + ?,
 						activity_at = excluded.activity_at
 					RETURNING *`)
@@ -102,6 +109,7 @@ export class DevEnvironmentRepository {
 					input.bootstrapRunId,
 					input.targetSha,
 					now,
+					fresh ? 1 : 0,
 					fresh ? 1 : 0,
 					fresh ? 1 : 0,
 					fresh ? 1 : 0,
@@ -143,6 +151,27 @@ export class DevEnvironmentRepository {
 			.run()
 	}
 
+	/** The launcher's wait was accepted: it talks to Control, so nothing refuses it. */
+	async recordLauncherSeen(appId: string, env: string): Promise<void> {
+		await this.d1
+			.prepare('UPDATE dev_environments SET launcher_seen_at = ?, launcher_refused = NULL WHERE app_id = ? AND env = ?')
+			.bind(this.now(), appId, env)
+			.run()
+	}
+
+	/**
+	 * Control could not read a request of the launcher. Recorded only while no request was accepted since `since`, when
+	 * the current container booted: once it talks, a refused request comes from a container it replaced.
+	 */
+	async recordLauncherRefused(appId: string, env: string, reason: string, since: number): Promise<boolean> {
+		const result = await this.d1
+			.prepare(`UPDATE dev_environments SET launcher_refused = ?
+				WHERE app_id = ? AND env = ? AND (launcher_seen_at IS NULL OR launcher_seen_at < ?)`)
+			.bind(reason, appId, env, since)
+			.run()
+		return result.meta.changes > 0
+	}
+
 	/**
 	 * What the launcher reported. A report holding the refused head clears the refusal: a bootstrap run built it. Results
 	 * of checks are replaced only by a report that carries some.
@@ -159,7 +188,9 @@ export class DevEnvironmentRepository {
 					reset_applied = ?,
 					refused_sha = CASE WHEN CAST(? AS TEXT) IS NOT NULL THEN CAST(? AS TEXT) WHEN refused_sha = ? THEN NULL ELSE refused_sha END,
 					reported_at = ?,
-					activity_at = ?
+					activity_at = ?,
+					launcher_seen_at = ?,
+					launcher_refused = NULL
 				WHERE app_id = ? AND env = ? RETURNING *`)
 			.bind(
 				report.head,
@@ -171,6 +202,7 @@ export class DevEnvironmentRepository {
 				report.refused,
 				report.refused,
 				report.head,
+				now,
 				now,
 				now,
 				appId,
@@ -205,8 +237,9 @@ export class DevEnvironmentRepository {
 	/** The service was started again; returns whether it was recorded as stopped. */
 	async markStarted(appId: string, env: string): Promise<boolean> {
 		const result = await this.d1
-			.prepare('UPDATE dev_environments SET stopped_at = NULL, activity_at = ? WHERE app_id = ? AND env = ? AND stopped_at IS NOT NULL')
-			.bind(this.now(), appId, env)
+			.prepare(`UPDATE dev_environments SET stopped_at = NULL, activity_at = ?, service_started_at = ?
+				WHERE app_id = ? AND env = ? AND stopped_at IS NOT NULL`)
+			.bind(this.now(), this.now(), appId, env)
 			.run()
 		return result.meta.changes > 0
 	}

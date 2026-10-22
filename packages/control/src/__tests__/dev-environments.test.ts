@@ -21,7 +21,7 @@ import { putAppEnvUseCase } from '../api/registry/environments'
 import { createWorkspaceUseCase, getDeploymentUseCase } from '../api/workspaces'
 import { type ControlRepositories, createControlRepositories } from '../db'
 import { devLauncherRefusal } from '../dev/deploy'
-import { acceptDevReport, acceptDevWait, type DevReceiverDeps } from '../dev/receiver'
+import { acceptDevReport, acceptDevWait, type DevReceiverDeps, LAUNCHER_UNREADABLE } from '../dev/receiver'
 import { stopIdleDevServices } from '../dev/service'
 import { DevSignals } from '../dev/signals'
 import { createHarness } from './helpers/harness'
@@ -91,6 +91,8 @@ interface DevWorld extends WorkspaceWorld {
 	dev(auth?: ReturnType<typeof oauthUser>): DevUseCaseContext
 	receiver(waitMs?: number): DevReceiverDeps
 	workspaceId: string
+	/** The use cases' clock: real time moved by `skew` seconds. */
+	clock: { skew: number; readonly now: number }
 }
 
 for (const backend of backends) {
@@ -118,15 +120,22 @@ for (const backend of backends) {
 				created_at: Math.floor(Date.now() / 1000),
 			})
 			const signals = new DevSignals()
+			const clock = {
+				skew: 0,
+				get now() {
+					return Math.floor(Date.now() / 1000) + this.skew
+				},
+			}
 			const dev = (auth = oauthUser(AUTHOR_ACTIONS)): DevUseCaseContext => ({
 				...seeded.context(auth),
 				dev: {
 					signals,
 					start: async (row, signal) => {
-						if (row.stopped_at === null) return
+						if (row.stopped_at === null) return false
 						await provider.devEnvironments?.start({ environment: { appId: row.app_id, env: row.env, ...zeropsEnvelopes() }, signal })
-						await repositories.devEnvironments.markStarted(row.app_id, row.env)
+						return repositories.devEnvironments.markStarted(row.app_id, row.env)
 					},
+					now: () => clock.now,
 				},
 			})
 			const workspace = await createWorkspaceUseCase(dev(), { appId: 'shop', env: 'stage', title: 'Notes' })
@@ -138,13 +147,13 @@ for (const backend of backends) {
 				signals,
 				now: () => Math.floor(Date.now() / 1000),
 				waitMs,
-				runCommit: async (runId) => (await repositories.runs.getRun(runId))?.commit_sha ?? null,
+				run: (runId) => repositories.runs.getRun(runId),
 			})
-			return { ...seeded, provider, signals, dev, receiver, workspaceId: workspace.id }
+			return { ...seeded, provider, signals, dev, receiver, workspaceId: workspace.id, clock }
 		}
 
 		async function succeedRun(db: SqlDatabase, runId: string): Promise<void> {
-			await db.prepare("UPDATE runs SET status = 'succeeded' WHERE id = ?").bind(runId).run()
+			await db.prepare("UPDATE runs SET status = 'succeeded', finished_at = ? WHERE id = ?").bind(Math.floor(Date.now() / 1000), runId).run()
 		}
 
 		/** A launcher's wait; its container is the bootstrap of `sha('b')` unless `bootstrap` says otherwise. */
@@ -284,6 +293,7 @@ for (const backend of backends) {
 
 			// bind_dev again bootstraps the refused head; the new container's report clears the refusal.
 			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('c'))
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('c'))
 			const rebound = await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
 			expect(rebound.bootstrapRun?.commitSha).toBe(sha('c'))
 			expect(w.queued).toHaveLength(2)
@@ -393,6 +403,94 @@ for (const backend of backends) {
 			expect((await wait(w, { head: sha('b'), reset: null, checks: null, hold: false }, 'px_unknown')).status).toBe(401)
 			const malformed = await acceptDevWait(w.receiver(), receiverRequest('wait', '{"head":"x"}', SOURCE_KEY))
 			expect(malformed.status).toBe(400)
+		})
+
+		test('binding a workspace whose lockfile differs from what the container holds starts a bootstrap run at once', async () => {
+			const w = await world()
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
+			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
+			await report(w, { head: sha('b'), status: 'serving' })
+
+			const handlers = await createWorkspaceUseCase(w.dev(), { appId: 'shop', env: 'stage', title: 'Handlers' })
+			w.source.branches.set(`fabrika/${handlers.id}`, sha('c'))
+			w.source.changedFiles = [{ path: 'src/notes/handler.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, patch: null }]
+			expect((await bindDevUseCase(w.dev(), { workspaceId: handlers.id })).bootstrapRun?.commitSha).toBe(sha('b'))
+
+			const deps = await createWorkspaceUseCase(w.dev(), { appId: 'shop', env: 'stage', title: 'Deps' })
+			w.source.branches.set(`fabrika/${deps.id}`, sha('e'))
+			w.source.changedFiles = [{ path: 'bun.lock', previousPath: null, status: 'modified', additions: 3, deletions: 3, patch: null }]
+			const switched = await bindDevUseCase(w.dev(), { workspaceId: deps.id })
+			expect(switched.bootstrapRun?.commitSha).toBe(sha('e'))
+			expect(switched.state).toBe('bootstrapping')
+		})
+
+		test('a launcher this Control cannot read needs a bootstrap: apply_changes does not wait, and bind_dev bootstraps', async () => {
+			const w = await world()
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
+			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
+			// A launcher of an older wire sends no bootstrap commit.
+			const older = JSON.stringify({ head: sha('b'), reset: 0, checks: 0, hold: true })
+			expect((await acceptDevWait(w.receiver(), receiverRequest('wait', older, SOURCE_KEY))).status).toBe(400)
+
+			const status = await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 0, failuresOnly: false } })
+			expect({ state: status.state, summary: status.summary }).toEqual({ state: 'needs_bootstrap', summary: LAUNCHER_UNREADABLE })
+			const started = performance.now()
+			const applied = await followDevCommit(w.dev(), { workspaceId: w.workspaceId, commitSha: sha('c'), parentSha: sha('b'), written: [] })
+			expect(performance.now() - started).toBeLessThan(1_000)
+			expect(applied?.state).toBe('needs_bootstrap')
+
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('c'))
+			const rebound = await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
+			expect(rebound.bootstrapRun?.commitSha).toBe(sha('c'))
+			await succeedRun(dbOf(opened), rebound.bootstrapRun?.id ?? '')
+			expect((await wait(w, { bootstrap: sha('c'), head: sha('c'), reset: 0, checks: 0, hold: false })).status).toBe(200)
+			// Once the new container talks, an unreadable request comes from the one it replaced and changes nothing.
+			expect((await acceptDevWait(w.receiver(), receiverRequest('wait', older, SOURCE_KEY))).status).toBe(400)
+			await report(w, { bootstrap: sha('c'), head: sha('c'), status: 'serving' })
+			const serving = await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 0, failuresOnly: false } })
+			expect(serving.state).toBe('serving')
+		})
+
+		test('a launcher that sends nothing for longer than it ever waits needs a bootstrap', async () => {
+			const w = await world()
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
+			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
+			await report(w, { head: sha('b'), status: 'serving' })
+			const state = async () => getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 0, failuresOnly: false } })
+			w.clock.skew = 60
+			expect((await state()).state).toBe('serving')
+			w.clock.skew = 120
+			const silent = await state()
+			expect(silent.state).toBe('needs_bootstrap')
+			expect(silent.summary).toContain('has sent no request')
+			expect((await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.commitSha).toBe(sha('b'))
+		})
+
+		test('bind_dev of a stopped service waits for its launcher, and bootstraps when Control cannot read it', async () => {
+			const w = await world()
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
+			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
+			await report(w, { head: sha('b'), status: 'serving' })
+			const deps = { repositories: w.repositories, provider: w.provider }
+			const idle = Math.floor(Date.now() / 1000) + 31 * 60
+
+			expect(await stopIdleDevServices(deps, idle)).toEqual({ stopped: 1, failed: 0 })
+			const talking = bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
+			await Bun.sleep(1_100)
+			expect((await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: false })).status).toBe(200)
+			expect((await talking).bootstrapRun?.commitSha).toBe(sha('b'))
+			expect(w.queued).toHaveLength(1)
+
+			// Control counts in whole seconds: the next start is after that wait.
+			await Bun.sleep(1_000)
+			expect(await stopIdleDevServices(deps, idle + 31 * 60)).toEqual({ stopped: 1, failed: 0 })
+			const refused = bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
+			await Bun.sleep(1_100)
+			const older = JSON.stringify({ head: sha('b'), reset: 0, checks: 0, hold: false })
+			expect((await acceptDevWait(w.receiver(), receiverRequest('wait', older, SOURCE_KEY))).status).toBe(400)
+			expect(w.queued).toHaveLength(1)
+			await refused
+			expect(w.queued).toHaveLength(2)
 		})
 
 		test('maintenance stops an idle dev service, and the next commit starts it', async () => {
