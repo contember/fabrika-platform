@@ -27,7 +27,7 @@ chmodSync(CLI_AUTH_FILE, 0o600)
 const sessionManager = new SessionManager(SESSIONS_DIR)
 const wsManager = createWebSocketManager(sessionManager)
 const reviewStore = new ReviewStore(REVIEWS_DIR)
-const reviewProxies = new ReviewProxies(reviewStore, `http://localhost:${PORT}/assets/review.js`)
+const reviewProxies = new ReviewProxies(reviewStore, `http://localhost:${PORT}/assets/review.js`, (project, path) => review.fullReload(project, path))
 const review = createReviewServer(reviewStore, reviewProxies)
 
 type SocketData = WSData | ReviewSocketData

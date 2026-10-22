@@ -91,6 +91,13 @@ function takePendingReveal(): string | null {
 	}
 }
 
+/** Vite reloads every page for a module change, and for an HTML change only the page that file serves. */
+function reloadsThisPage(path: string): boolean {
+	if (!path.endsWith('.html')) return true
+	const page = decodeURI(location.pathname)
+	return path === '/index.html' || page === path || (page.endsWith('/') && `${page}index.html` === path)
+}
+
 function boxOf(element: Element): Box {
 	const rect = element.getBoundingClientRect()
 	return { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
@@ -215,6 +222,7 @@ function popoverPosition(box: Box): { top: number; left: number } {
 
 function Composer(props: {
 	draft: Draft
+	reloadPending: boolean
 	onChange: (body: string, screenshot: boolean) => void
 	onSubmit: (body: string, send: boolean, screenshot: boolean) => Promise<void>
 	onCancel: () => void
@@ -258,6 +266,12 @@ function Composer(props: {
 				<input type="checkbox" checked={screenshot} onChange={(event) => setScreenshot(event.currentTarget.checked)} />
 				Attach a screenshot
 			</label>
+			{props.reloadPending && (
+				<div class="reload-pending">
+					<span>The application changed. It reloads once you save or cancel this comment.</span>
+					<button type="button" class="ghost" onClick={() => location.reload()}>Reload now</button>
+				</div>
+			)}
 			{error !== null && <div class="error">{error}</div>}
 			<div class="actions">
 				<button type="button" class="ghost" onClick={props.onCancel}>Cancel</button>
@@ -341,6 +355,7 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 	const [hovered, setHovered] = useState<Element | null>(null)
 	const [draft, setDraft] = useState<Draft | null>(null)
 	const [unrestored, setUnrestored] = useState<SavedDraft | null>(loadDraft)
+	const [reloadPending, setReloadPending] = useState(false)
 	const [panelOpen, setPanelOpen] = useState(false)
 	const [showAll, setShowAll] = useState(false)
 	const [hideResolved, setHideResolved] = useState(false)
@@ -351,7 +366,14 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 	const tick = useLayoutTick()
 
 	useEffect(() => {
-		client.connect({ threads: setThreads, agentWatching: setWatching, connected: setConnected })
+		client.connect({
+			threads: setThreads,
+			agentWatching: setWatching,
+			connected: setConnected,
+			reload: (path) => {
+				if (reloadsThisPage(path)) setReloadPending(true)
+			},
+		})
 		return () => client.close()
 	}, [client])
 
@@ -409,6 +431,11 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 		setTimeout(() => setFlash(null), 1600)
 	}, [revealId, threads, page])
 
+	// The draft survives the reload in sessionStorage; held back only so the reviewer can finish writing.
+	useEffect(() => {
+		if (reloadPending && draft === null) location.reload()
+	}, [reloadPending, draft])
+
 	// The application may render the element a moment after the reload.
 	useEffect(() => {
 		if (unrestored === null || draft !== null || pageKey(unrestored.anchor.url) !== page) return
@@ -451,6 +478,7 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 			{draft !== null && (
 				<Composer
 					draft={draft}
+					reloadPending={reloadPending}
 					onChange={keepDraft}
 					onCancel={discardDraft}
 					onSubmit={async (body, send, screenshot) => {

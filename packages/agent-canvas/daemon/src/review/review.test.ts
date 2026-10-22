@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { renderReviewRequests } from './markdown'
 import { isLoopbackOrigin, type ReviewAnchor } from './model'
-import { ReviewProxies } from './proxy'
+import { ReviewProxies, viteFullReloadPath } from './proxy'
 import { createReviewServer } from './server'
 import { ReviewStore } from './store'
 
@@ -160,7 +160,7 @@ describe('review routes', () => {
 	const noUpgrade = { upgrade: () => false }
 
 	async function call(method: string, path: string, options: { origin?: string; body?: unknown } = {}) {
-		const proxies = new ReviewProxies(store, WIDGET)
+		const proxies = new ReviewProxies(store, WIDGET, () => {})
 		const review = createReviewServer(store, proxies)
 		const headers = new Headers({ 'Content-Type': 'application/json' })
 		if (options.origin !== undefined) headers.set('Origin', options.origin)
@@ -238,11 +238,22 @@ describe('review routes', () => {
 	})
 })
 
+describe('viteFullReloadPath', () => {
+	test('reads the path of a full reload and ignores every other frame', () => {
+		expect(viteFullReloadPath('{"type":"full-reload","path":"/about.html","triggeredBy":"/src/a.ts"}')).toBe('/about.html')
+		expect(viteFullReloadPath('{"type":"full-reload"}')).toBe('*')
+		expect(viteFullReloadPath('{"type":"update","updates":[{"path":"full-reload.ts"}]}')).toBeUndefined()
+		expect(viteFullReloadPath('full-reload')).toBeUndefined()
+	})
+})
+
 describe('ReviewProxies', () => {
 	let app: Bun.Server<undefined>
 	let proxies: ReviewProxies
+	let reloads: Array<[string, string]>
 
 	beforeEach(() => {
+		reloads = []
 		app = Bun.serve<undefined>({
 			port: 0,
 			hostname: 'localhost',
@@ -260,11 +271,16 @@ describe('ReviewProxies', () => {
 			},
 			websocket: {
 				message(socket, message) {
+					if (message === 'edit') {
+						socket.send(JSON.stringify({ type: 'full-reload', path: '*' }))
+						socket.send(JSON.stringify({ type: 'update', updates: [] }))
+						return
+					}
 					socket.send(`echo ${String(message)}`)
 				},
 			},
 		})
-		proxies = new ReviewProxies(store, WIDGET)
+		proxies = new ReviewProxies(store, WIDGET, (project, path) => reloads.push([project, path]))
 	})
 
 	afterEach(() => {
@@ -302,11 +318,24 @@ describe('ReviewProxies', () => {
 		expect(await echoThrough(`${origin}/socket`, [])).toEqual({ protocol: '', reply: 'echo ping' })
 	})
 
+	test('holds a Vite full reload back from the page and hands it to the widget', async () => {
+		const origin = new URL(proxies.open('demo', `http://localhost:${app.port}/`)).origin.replace('http:', 'ws:')
+		const socket = new WebSocket(`${origin}/hmr`, ['vite-hmr'])
+		const first = await new Promise<string>((resolve, reject) => {
+			socket.onopen = () => socket.send('edit')
+			socket.onmessage = (event) => resolve(String(event.data))
+			socket.onerror = () => reject(new Error('WebSocket failed'))
+		})
+		socket.close()
+		expect(JSON.parse(first)).toEqual({ type: 'update', updates: [] })
+		expect(reloads).toEqual([['demo', '*']])
+	})
+
 	test('a restarted daemon serves the proxy on the same port', () => {
 		const target = `http://localhost:${app.port}/`
 		const url = proxies.open('demo', target)
 		proxies.stop()
-		proxies = new ReviewProxies(store, WIDGET)
+		proxies = new ReviewProxies(store, WIDGET, () => {})
 		proxies.restore()
 		expect(proxies.open('demo', target)).toBe(url)
 	})

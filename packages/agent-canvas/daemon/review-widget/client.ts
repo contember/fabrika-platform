@@ -7,6 +7,7 @@ export interface ReviewEvents {
 	threads(threads: readonly ReviewThread[]): void
 	agentWatching(watching: boolean): void
 	connected(connected: boolean): void
+	reload(path: string): void
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -24,6 +25,7 @@ function readFrame(data: unknown): ReviewBrowserFrame | undefined {
 	}
 	if (!isRecord(frame)) return undefined
 	if (frame['type'] === 'agent-status' && typeof frame['watching'] === 'boolean') return { type: 'agent-status', watching: frame['watching'] }
+	if (frame['type'] === 'reload' && typeof frame['path'] === 'string') return { type: 'reload', path: frame['path'] }
 	if (frame['type'] !== 'threads') return undefined
 	const parsed = threadListSchema.safeParse(frame)
 	return parsed.success ? { type: 'threads', threads: parsed.data.threads } : undefined
@@ -51,6 +53,7 @@ export class ReviewClient {
 			const frame = readFrame(event.data)
 			if (frame?.type === 'threads') events.threads(frame.threads)
 			if (frame?.type === 'agent-status') events.agentWatching(frame.watching)
+			if (frame?.type === 'reload') events.reload(frame.path)
 		}
 		socket.onclose = () => {
 			events.connected(false)

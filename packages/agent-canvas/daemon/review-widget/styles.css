@@ -370,6 +370,20 @@ textarea:focus {
 	font-size: 12px;
 }
 
+.reload-pending {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 8px;
+	border-radius: 6px;
+	background: var(--bg-muted);
+	font-size: 12px;
+}
+
+.reload-pending button {
+	flex: none;
+}
+
 .panel > .error {
 	padding: 0 12px 8px;
 }

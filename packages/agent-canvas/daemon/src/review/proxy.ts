@@ -1,4 +1,21 @@
+import { z } from 'zod'
 import type { ReviewStore } from './store'
+
+/** Vite's hot reload message that makes its client reload the page. */
+const viteFullReloadSchema = z.object({ type: z.literal('full-reload'), path: z.string().default('*') })
+
+/** The page path a Vite full reload names, or `undefined` for any other frame. */
+export function viteFullReloadPath(frame: string): string | undefined {
+	if (!frame.includes('full-reload')) return undefined
+	let message: unknown
+	try {
+		message = JSON.parse(frame)
+	} catch {
+		return undefined
+	}
+	const parsed = viteFullReloadSchema.safeParse(message)
+	return parsed.success ? parsed.data.path : undefined
+}
 
 /** One browser socket proxied to the application, e.g. its dev server's hot reload. */
 interface ProxySocketData {
@@ -38,7 +55,15 @@ function connectUpstream(url: URL, protocols: string[]): Promise<WebSocket> {
 export class ReviewProxies {
 	private readonly running = new Map<string, RunningProxy>()
 
-	constructor(private readonly store: ReviewStore, private readonly widgetScript: string) {}
+	/**
+	 * `onFullReload` receives the full reloads the application's dev server asks for: the proxy holds them back from
+	 * the page, so a reload does not take the comment the reviewer is writing.
+	 */
+	constructor(
+		private readonly store: ReviewStore,
+		private readonly widgetScript: string,
+		private readonly onFullReload: (project: string, path: string) => void,
+	) {}
 
 	/** Serves the project's application at `target` and returns where the reviewer opens it, `target`'s path kept. */
 	open(project: string, target: string): string {
@@ -94,7 +119,7 @@ export class ReviewProxies {
 				const upstreamUrl = new URL(`${url.pathname}${url.search}`, target)
 				if (req.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
 					upstreamUrl.protocol = upstreamUrl.protocol === 'https:' ? 'wss:' : 'ws:'
-					return await this.upgrade(req, server, upstreamUrl)
+					return await this.upgrade(project, req, server, upstreamUrl)
 				}
 				return await forward(req, upstreamUrl, url.origin, widgetTag)
 			},
@@ -116,7 +141,7 @@ export class ReviewProxies {
 	}
 
 	/** Connects to the application first, so the browser gets the subprotocol the application chose. */
-	private async upgrade(req: Request, server: ProxyServer, upstreamUrl: URL): Promise<Response | undefined> {
+	private async upgrade(project: string, req: Request, server: ProxyServer, upstreamUrl: URL): Promise<Response | undefined> {
 		const protocols = (req.headers.get('Sec-WebSocket-Protocol') ?? '').split(',').map((protocol) => protocol.trim()).filter((protocol) =>
 			protocol !== ''
 		)
@@ -129,6 +154,8 @@ export class ReviewProxies {
 		const data: ProxySocketData = { upstream, early: [], browser: null }
 		upstream.onmessage = (event) => {
 			if (typeof event.data !== 'string' && !(event.data instanceof ArrayBuffer)) return
+			const reloadPath = typeof event.data === 'string' ? viteFullReloadPath(event.data) : undefined
+			if (reloadPath !== undefined) return this.onFullReload(project, reloadPath)
 			if (data.browser === null) data.early.push(event.data)
 			else data.browser.send(event.data)
 		}

@@ -140,6 +140,8 @@ export type ReviewProxy = z.infer<typeof reviewProxySchema>
 export type ReviewBrowserFrame =
 	| { type: 'threads'; threads: readonly ReviewThread[] }
 	| { type: 'agent-status'; watching: boolean }
+	/** The application's dev server asked for a full reload; the widget holds it while the reviewer writes. */
+	| { type: 'reload'; path: string }
 
 /** The frame a waiting CLI receives when the person sends threads; it reads them back through the claim endpoint. */
 export interface ReviewWaitFrame {

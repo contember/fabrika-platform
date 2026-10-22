@@ -179,6 +179,11 @@ export function createReviewServer(store: ReviewStore, proxies: ReviewProxies) {
 
 	return {
 		channel,
+		/** Hands a full reload the application asked for to the project's widgets, which reload unless the reviewer is writing. */
+		fullReload(project: string, path: string): void {
+			const frame: ReviewBrowserFrame = { type: 'reload', path }
+			channel.broadcast(project, frame)
+		},
 		/** Answers the request when it is review mode's: CORS preflight, a route, or a WebSocket upgrade. */
 		fetch(
 			req: Request,
