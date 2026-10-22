@@ -130,6 +130,15 @@ export function createReviewServer(store: ReviewStore, proxies: ReviewProxies) {
 			notifyAgent(project)
 			return { thread }
 		}),
+		route('POST', '/api/review/:project/notes/send', 'browser', async (_req, match) => {
+			const project = projectOf(match)
+			const threads = store.sendNotes(project)
+			if (threads.length > 0) {
+				publish(project)
+				notifyAgent(project)
+			}
+			return { threads }
+		}),
 		route('POST', '/api/review/:project/threads/:thread/resolve', 'browser', async (_req, match) => {
 			const project = projectOf(match)
 			const thread = store.setResolved(project, threadIdOf(match), true)

@@ -268,6 +268,14 @@ textarea:focus {
 	border-bottom: 1px solid var(--border);
 }
 
+.send-notes {
+	padding: 0 12px 8px;
+}
+
+.send-notes button {
+	width: 100%;
+}
+
 .tabs button.active {
 	background: var(--bg-muted);
 	font-weight: 600;
@@ -295,6 +303,10 @@ textarea:focus {
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
+}
+
+.thread.resolved {
+	opacity: 0.65;
 }
 
 .thread.current {
@@ -356,4 +368,8 @@ textarea:focus {
 .error {
 	color: var(--warn);
 	font-size: 12px;
+}
+
+.panel > .error {
+	padding: 0 12px 8px;
 }

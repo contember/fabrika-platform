@@ -75,6 +75,10 @@ export class ReviewClient {
 		return this.request('POST', `/threads/${threadId}/send`)
 	}
 
+	sendNotes(): Promise<unknown> {
+		return this.request('POST', '/notes/send')
+	}
+
 	setResolved(threadId: string, resolved: boolean): Promise<unknown> {
 		return this.request('POST', `/threads/${threadId}/${resolved ? 'resolve' : 'reopen'}`)
 	}

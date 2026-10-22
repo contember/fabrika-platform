@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import type { ReviewAnchor, ReviewSource, ReviewThread, ReviewThreadState } from '../src/review/model'
+import { isUnsentNote, type ReviewAnchor, type ReviewSource, type ReviewThread, type ReviewThreadState } from '../src/review/model'
 import { describe, find } from './anchor'
 import type { ReviewClient } from './client'
 import { captureElement } from './screenshot'
@@ -242,7 +242,7 @@ function ThreadCard(props: { thread: ReviewThread; number: number | null; client
 	}
 
 	return (
-		<div class={`thread${props.number === null ? '' : ' current'}`}>
+		<div class={`thread${props.number === null ? '' : ' current'}${thread.state === 'resolved' ? ' resolved' : ''}`}>
 			<div class="thread-head">
 				<button type="button" class="ghost" title="Show in page" aria-label="Show in page" onClick={props.onReveal}>
 					{props.number === null ? '↗' : `#${props.number}`}
@@ -301,7 +301,8 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 	const [draft, setDraft] = useState<Draft | null>(null)
 	const [panelOpen, setPanelOpen] = useState(false)
 	const [showAll, setShowAll] = useState(false)
-	const [showResolved, setShowResolved] = useState(false)
+	const [hideResolved, setHideResolved] = useState(false)
+	const [panelError, setPanelError] = useState<string | null>(null)
 	const [revealId, setRevealId] = useState<string | null>(takePendingReveal)
 	const [flash, setFlash] = useState<Box | null>(null)
 	const href = useHref()
@@ -332,12 +333,17 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 
 	const page = pageKey(href)
 	const onPage = useMemo(
-		() => threads.filter((thread) => pageKey(thread.anchor.url) === page && (showResolved || thread.state !== 'resolved')),
-		[threads, page, showResolved],
+		() => threads.filter((thread) => pageKey(thread.anchor.url) === page && (!hideResolved || thread.state !== 'resolved')),
+		[threads, page, hideResolved],
 	)
-	const listed = showAll ? threads.filter((thread) => showResolved || thread.state !== 'resolved') : onPage
+	const listed = showAll ? threads.filter((thread) => !hideResolved || thread.state !== 'resolved') : onPage
 	const numbers = new Map(onPage.map((thread, index) => [thread.id, index + 1]))
 	const pending = threads.filter((thread) => thread.state !== 'resolved').length
+	const notes = threads.filter(isUnsentNote).length
+	const sendNotes = () => {
+		setPanelError(null)
+		client.sendNotes().catch((failure: unknown) => setPanelError(failure instanceof Error ? failure.message : String(failure)))
+	}
 
 	useEffect(() => {
 		if (revealId === null) return
@@ -403,8 +409,16 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 					<div class="tabs">
 						<button type="button" class={showAll ? '' : 'active'} onClick={() => setShowAll(false)}>This page</button>
 						<button type="button" class={showAll ? 'active' : ''} onClick={() => setShowAll(true)}>All pages</button>
-						<button type="button" class={showResolved ? 'active' : ''} onClick={() => setShowResolved(!showResolved)}>Resolved</button>
+						<button type="button" class={hideResolved ? 'active' : ''} onClick={() => setHideResolved(!hideResolved)}>Hide resolved</button>
 					</div>
+					{notes > 0 && (
+						<div class="send-notes">
+							<button type="button" class="primary" onClick={sendNotes}>
+								Send {notes === 1 ? '1 note' : `${notes} notes`} to Claude
+							</button>
+						</div>
+					)}
+					{panelError !== null && <div class="error">{panelError}</div>}
 					<div class="threads">
 						{listed.length === 0 && <div class="empty">No comments yet. Click “Comment”, then an element or a text selection.</div>}
 						{listed.map((thread) => (
