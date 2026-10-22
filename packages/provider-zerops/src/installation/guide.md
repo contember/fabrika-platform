@@ -352,7 +352,10 @@ fabrika control namespaces update --namespace=<id> --proxy-source=current
 ```
 
 It re-pins the namespace and queues the reconcile that rebuilds its proxy; poll `namespaces get` until it is
-`ready`. A namespace pinned to a release before the proxy manifest moved into the build archive carries it in a
+`ready`. Re-pin every namespace after each upgrade. Until then, Control refuses a deploy into it that uses a form
+newer than 0.6 (a public procedure, a file output, a capabilities requirement, a forwarded webhook `Authorization`),
+also when its proxy reads the form, and a proxy older than the replacement of the caller's `Authorization` keeps
+forwarding a caller's `px_` key to the application (`docs/reference/deployment-namespaces.md`). A namespace pinned to a release before the proxy manifest moved into the build archive carries it in a
 service variable, which Zerops caps at about 32 KB: when a deploy fails with `serviceEnvValueTooLarge`, this is
 the fix, and it also accepts a namespace in `failed`.
 

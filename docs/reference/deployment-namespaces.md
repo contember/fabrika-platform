@@ -136,8 +136,10 @@ covers the forms newer than 0.6:
 
 A later form is covered without a change here. No parser of a minor newer than 0.6 is a judge, although the window
 serves 0.7: Control does not record a pin's release, so a form only 0.7 reads would reach a namespace pinned to
-0.4–0.6, and that proxy would refuse the whole manifest. A namespace pinned to 0.7.0 is therefore re-pinned before an
-application deploys one of these forms to it. A row one of those parsers reads deploys as before: every row of a 0.4, 0.5 or 0.6
+0.4–0.6, and that proxy would refuse the whole manifest. Every `fabrika platform upgrade`, a patch or a hotfix
+included, moves the source this control plane deploys from, and no namespace's pin moves with it. After each upgrade,
+an application deploys one of these forms to a namespace only once that namespace is re-pinned, also when its proxy
+reads the form (a pin to 0.7 or 0.8). Recording a pin's release removes this step (backlog 189 item 3). A row one of those parsers reads deploys as before: every row of a 0.4, 0.5 or 0.6
 application, and every row of a newer one that uses none of these forms. A GET mutation is such a row:
 an older proxy parses it and applies the same rules to it.
 
@@ -153,6 +155,12 @@ origin, because the refusal of an origin the row does not admit is newer than th
 a foreign page, whose widget cannot verify for the application's host). Control does not detect this. Before such an
 application deploys into an upgraded namespace, re-pin the namespace the same way. A public procedure with a file field
 is covered by the refusal above.
+
+A namespace proxy built before the proxy replaced the caller's `Authorization` with the minted token
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) rule 6) forwards a caller's `px_` key to a
+contract application on a credentialed row, and the application could act as that key's principal elsewhere. After
+upgrading to the release that ships the replacement, re-pin every namespace. On Cloudflare, an environment's proxy
+Worker changes only on that environment's next deploy: redeploy every environment.
 
 Deployment then adds control-owned managed environment values independently of
 the namespace and provider artifact. Providers reject an app-authored
