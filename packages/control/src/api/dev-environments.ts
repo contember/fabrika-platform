@@ -95,10 +95,26 @@ export interface DevEnvironmentDto {
 /** What `apply_changes` adds when the workspace is bound to the dev environment. */
 export interface DevApplyDto {
 	head: string | null
-	state: DevStateDto
+	/** `unavailable`: Control could not read or wake the environment after the commit, which persisted. */
+	state: DevStateDto | 'unavailable'
 	summary: string
 	url: string | null
 	log: DevLogLine[]
+	/** The reference of the logged failure, with `unavailable`. */
+	reference?: string
+}
+
+/** The dev answer of a commit that persisted while following the dev environment failed. */
+export function devUnavailable(reference: string): DevApplyDto {
+	return {
+		head: null,
+		state: 'unavailable',
+		summary: 'The commit persisted, but Control could not follow the dev environment. Read its state with get_dev_status; '
+			+ `if that fails too, tell the operator and quote reference ${reference}.`,
+		url: null,
+		log: [],
+		reference,
+	}
 }
 
 /** An authoring target with its application's dev environment, when it has one the caller may read. */
