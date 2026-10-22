@@ -261,6 +261,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 		if (process.env[TEST_POSTGRES_REQUIRED] === '1') {
 			throw new Error(`${options.label}: ${TEST_POSTGRES_REQUIRED}=1, but ${TEST_POSTGRES_URL} is unset`)
 		}
+		// The Zerops build counts this line's text in every framework release's output: never reword it.
 		console.warn(`${options.label} skipped: set ${TEST_POSTGRES_URL} to run the Postgres-backed tests`)
 		return null
 	}

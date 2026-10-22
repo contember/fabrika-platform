@@ -19,8 +19,8 @@ describe('contractRecipe', () => {
 	test('runs the authored tests before everything that produces or checks what deploys, and uploads source maps last', () => {
 		const steps = commands(contractRecipe(input))
 		const at = (fragment: string): number => steps.findIndex((step) => step.includes(fragment))
-		expect(at('bun test --isolate')).toBe(1)
-		expect(at('rm -rf node_modules')).toBeGreaterThan(at('bun test'))
+		expect(at("'test', '--isolate'")).toBe(1)
+		expect(at('rm -rf node_modules')).toBeGreaterThan(at("'test', '--isolate'"))
 		expect(at('writeGeneratedEntry')).toBeGreaterThan(at('rm -rf node_modules'))
 		expect(at('tsc -p /src/fabrika/tsconfig.platform.json')).toBeGreaterThan(at('writeGeneratedEntry'))
 		expect(at('fabrika-check /src')).toBeGreaterThan(at('tsc -p /src/fabrika/tsconfig.platform.json'))

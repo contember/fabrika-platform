@@ -50,6 +50,37 @@ const PLATFORM_TSCONFIG_CONTENTS = JSON.stringify({
 
 const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
 
+/**
+ * What `@fabrika/db/testing` prints after the label of a test file it skips without `FABRIKA_TEST_POSTGRES_URL`. Every
+ * framework release prints it, so the platform counts it for any application's release.
+ */
+const DATABASE_TEST_SKIP_MARKER = ' skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests'
+
+/** The prefix of the line the tests command prints after the test run. */
+const TESTS_REPORT_PREFIX = 'fabrika-tests:'
+
+/** One `bun -e "…"` running `script`, which may hold none of the characters a double-quoted shell word expands. */
+const bunEvalCommand = (script: readonly string[]): string => {
+	const source = script.join(' ')
+	if (/["$`\\!]/.test(source)) throw new Error('a generated bun -e script must not contain a quote, an expansion or a backslash')
+	return `bun -e "${source}"`
+}
+
+// The build has no database, so every Postgres-backed test file skips and the run still passes. This command runs the
+// tests as before and then says how many files did not run, so a green test step does not read as a tested database.
+const TESTS_COMMAND = bunEvalCommand([
+	"const child = Bun.spawn([process.execPath, 'test', '--isolate', '--pass-with-no-tests'], { stdout: 'inherit', stderr: 'pipe' });",
+	'const decoder = new TextDecoder();',
+	"let output = '';",
+	'for await (const chunk of child.stderr) { process.stderr.write(chunk); output += decoder.decode(chunk, { stream: true }) }',
+	'const code = await child.exited;',
+	`const marker = '${DATABASE_TEST_SKIP_MARKER}';`,
+	'const skipped = output.split(String.fromCharCode(10)).filter((line) => line.includes(marker)).map((line) => line.slice(0, line.indexOf(marker)).trim());',
+	`const prefix = '${TESTS_REPORT_PREFIX}';`,
+	"console.warn(skipped.length === 0 ? prefix + ' no Postgres-backed test file skipped' : prefix + ' ' + skipped.length + ' Postgres-backed test files did not run, because the build has no database: ' + skipped.join(', '));",
+	'process.exit(code);',
+])
+
 /** A `c.cron` job name, which a crontab line carries unquoted. */
 export const CONTRACT_JOB_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/
 /** Five cron fields of digits and `*`, `/`, `,`, `-` only. */
@@ -119,7 +150,7 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 	return {
 		build: [
 			{ run: INSTALL },
-			{ run: 'bun test --isolate --pass-with-no-tests' },
+			{ run: TESTS_COMMAND },
 			{ run: `rm -rf node_modules && ${INSTALL}` },
 			{ run: `bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"` },
 			{ write: PLATFORM_TSCONFIG, lines: [PLATFORM_TSCONFIG_CONTENTS] },
