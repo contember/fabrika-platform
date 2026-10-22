@@ -89,6 +89,8 @@ export function createRepositoryClient(config: RepositoryClientConfig): GitHubRe
 
 class RepositoryClient implements GitHubRepositoryClient {
 	readonly #config: RepositoryClientConfig
+	/** Commits and trees this client read, by request path: a sha names immutable content, so one client reads each once. */
+	readonly #objects = new Map<string, Promise<unknown>>()
 
 	constructor(config: RepositoryClientConfig) {
 		this.#config = config
@@ -230,9 +232,11 @@ class RepositoryClient implements GitHubRepositoryClient {
 		const changes = treeChanges(input.changes)
 
 		// Known limit: REST has no compare-and-swap, so a concurrent reset to an ancestor still lets the non-force PATCH fast-forward.
+		const parentRead = this.#readCommit(input.expectedHeadSha, input.signal)
+		parentRead.catch(() => undefined)
 		const head = await this.readRef(input.branch, input.signal)
 		if (head?.sha !== input.expectedHeadSha) throw new GitHubStaleHeadError()
-		const parent = await this.#readCommit(input.expectedHeadSha, input.signal)
+		const parent = await parentRead
 		const tree = await this.#resolveModes(changes, parent.treeSha, input.signal)
 
 		const createdTree = await this.#request('/git/trees', {
@@ -318,7 +322,17 @@ class RepositoryClient implements GitHubRepositoryClient {
 	}
 
 	/** Reads a commit, tree or blob by sha; GitHub answers 404 or 422 for an unknown one. */
-	async #readGitObject(path: string, signal: AbortSignal | undefined, maxResponseBytes?: number): Promise<unknown> {
+	#readGitObject(path: string, signal: AbortSignal | undefined, maxResponseBytes?: number): Promise<unknown> {
+		if (path.startsWith('/git/blobs/')) return this.#fetchGitObject(path, signal, maxResponseBytes)
+		const cached = this.#objects.get(path)
+		if (cached !== undefined) return cached
+		const read = this.#fetchGitObject(path, signal, maxResponseBytes)
+		this.#objects.set(path, read)
+		read.catch(() => this.#objects.delete(path))
+		return read
+	}
+
+	async #fetchGitObject(path: string, signal: AbortSignal | undefined, maxResponseBytes?: number): Promise<unknown> {
 		const result = await this.#request(path, { signal, maxResponseBytes, expectedFailures: [404, 422] })
 		if (!result.ok) throw new GitHubNotFoundError()
 		return result.body

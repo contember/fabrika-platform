@@ -491,7 +491,12 @@ export interface NamespaceRepublishOptions {
 	readonly signal?: AbortSignal
 	/** The caller's own step boundary, e.g. a deploy's cancellation read. */
 	readonly boundary?: () => Promise<void>
+	/** Progress lines while the provider republishes, e.g. into a deploy's log: the wait may take minutes. */
+	readonly log?: (line: string) => void
 }
+
+/** How often a waiting republish says it still waits. */
+const REPUBLISH_PROGRESS_MS = 15_000
 
 /**
  * Rebuild one namespace's entry point from the registry (ADR-0044). The namespace stays `provisioning`
@@ -538,6 +543,12 @@ export async function republishUnderLease(
 	await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
 	const reconcileLater = (): Promise<void> => deps.queue.send({ kind: 'namespace', namespaceId, mutation: 'reconcile' })
 	let settled: boolean
+	const started = Date.now()
+	const seconds = (): number => Math.round((Date.now() - started) / 1000)
+	options.log?.(`republishing the namespace proxy for ${members.length} applications; this waits for the provider`)
+	const progress = options.log === undefined
+		? undefined
+		: setInterval(() => options.log?.(`still waiting for the namespace proxy to republish (${seconds()} s)`), REPUBLISH_PROGRESS_MS)
 	try {
 		const result = await capabilities.republish({
 			namespace: current,
@@ -564,7 +575,10 @@ export async function republishUnderLease(
 	} catch (cause) {
 		await reconcileLater().catch(() => console.error(`namespace ${namespaceId}: the reconcile job could not be queued`))
 		throw cause
+	} finally {
+		clearInterval(progress)
 	}
+	options.log?.(`the namespace proxy ${settled ? 'republished' : 'is still republishing; a reconcile job finishes it'} after ${seconds()} s`)
 	await writeNamespace(deps.repositories, lease, row, current, settled ? 'ready' : 'provisioning')
 	if (!settled) await reconcileLater()
 }

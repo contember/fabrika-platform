@@ -151,7 +151,8 @@ async function answer(
 	}
 	let outcome: Awaited<ReturnType<typeof buildDevSync>>
 	try {
-		outcome = await buildDevSync(deps.source, target, request.head, row.target_sha, signal)
+		const to = row.target_sha
+		outcome = await deps.source.session({ target, signal }, (source) => buildDevSync(source, request.head, to))
 	} catch (cause) {
 		if (!(cause instanceof WorkspaceSourceError) || cause.kind !== 'not_found') throw cause
 		outcome = { kind: 'refused', reason: `GitHub does not know the commit ${request.head} this container holds; call bind_dev again` }

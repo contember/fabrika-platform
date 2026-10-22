@@ -11,7 +11,9 @@ import { devReportKey, type DevSignals, devTargetKey, waitForRecord } from '../d
 import { fail } from './domain'
 import { canAtCoordinates, createManualRun, toRunDto } from './runs'
 import {
+	type AuthoringTargetDto,
 	type DeploymentLogQuery,
+	listTargetsUseCase,
 	logWindow,
 	type LogWindowDto,
 	type OwnedWorkspace,
@@ -49,6 +51,8 @@ export type DevStateDto = 'unbound' | 'bootstrapping' | 'bootstrap_failed' | 'st
 
 export interface DevChecksDto {
 	request: number
+	/** The commit whose files the checks ran on. */
+	head: string
 	results: DevCheckResult[]
 }
 
@@ -82,6 +86,46 @@ export interface DevApplyDto {
 	summary: string
 	url: string | null
 	log: DevLogLine[]
+}
+
+/** An authoring target with its application's dev environment, when it has one the caller may read. */
+export interface DevTargetDto extends AuthoringTargetDto {
+	dev: DevEnvironmentSummaryDto | null
+}
+
+export interface DevEnvironmentSummaryDto {
+	env: string
+	kind: 'dev'
+	state: DevStateDto
+	summary: string
+	url: string | null
+	/** The bound workspace; null when none is. */
+	workspaceId: string | null
+	yours: boolean
+	head: string | null
+}
+
+/** `list_targets`: each stage target, and beside it the state of its application's dev environment. */
+export async function listDevTargetsUseCase(c: DevUseCaseContext): Promise<{ items: DevTargetDto[] }> {
+	const { items } = await listTargetsUseCase(c)
+	return { items: await Promise.all(items.map(async (item) => ({ ...item, dev: await devSummary(c, item.appId) }))) }
+}
+
+async function devSummary(c: DevUseCaseContext, appId: string): Promise<DevEnvironmentSummaryDto | null> {
+	if (c.dev === undefined) return null
+	const appEnv = (await c.repositories.registry.listAppEnvs(appId)).find((row) => row.kind === 'dev')
+	if (appEnv === undefined || !canAtCoordinates(c.auth, CONTROL_ACTIONS.DEPLOY_READ, appId, appEnv.env)) return null
+	const described = await describe(c, appEnv, await c.repositories.devEnvironments.get(appId, appEnv.env), { lines: 0, failuresOnly: false })
+	return {
+		env: described.env,
+		kind: 'dev',
+		state: described.state,
+		summary: described.summary,
+		url: described.url,
+		workspaceId: described.workspaceId,
+		yours: described.yours,
+		head: described.head,
+	}
 }
 
 /**
@@ -129,10 +173,20 @@ export async function getDevStatusUseCase(c: DevUseCaseContext, input: { workspa
 /**
  * Run the build's check chain in the dev container, on what it holds now. The results gate nothing; `deploy_stage`
  * still builds the head with every check. Waits for them, and answers the running state when they take longer.
+ * Refused while the container holds another commit than the workspace's newest: the results would name a commit
+ * the author no longer works on.
  */
 export async function runChecksUseCase(c: DevUseCaseContext, input: { workspaceId: string }): Promise<DevEnvironmentDto> {
 	const dev = requireDev(c)
 	const { appEnv, row } = await requireBound(c, input.workspaceId)
+	if (row.head_sha !== row.target_sha) {
+		const state = stateOf(row, await bootstrapRunOf(c, row))
+		fail(
+			409,
+			`the dev environment holds ${row.head_sha ?? 'no commit yet'}, not the workspace's newest commit ${row.target_sha ?? 'unknown'} `
+				+ `(state ${state}): ${summaryOf(state, row)} Run the checks once it serves that commit.`,
+		)
+	}
 	await dev.start(row, c.signal)
 	const requested = await c.repositories.devEnvironments.advanceChecks(appEnv.app_id, appEnv.env)
 	if (requested === null) fail(404, 'the dev environment disappeared')
@@ -281,7 +335,7 @@ function isDevStatus(value: string): value is DevStatus {
 }
 
 const storedLog = z.array(devLogLineSchema)
-const storedChecks = z.object({ request: z.number().int().min(0), results: z.array(devCheckResultSchema) })
+const storedChecks = z.object({ request: z.number().int().min(0), head: z.string(), results: z.array(devCheckResultSchema) })
 
 /** The stored log as the launcher reported it; a row this release cannot read shows no lines. */
 function parseLog(json: string): DevLogLine[] {

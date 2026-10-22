@@ -517,7 +517,9 @@ migration file is a widening in the approval diff
 - In a `dev` environment ([ADR-0049](0049-author-applications-through-mcp-in-control.md))
   the dev launcher is this launcher: it holds the provisioning credential,
   loads no application module, and starts the application with the runtime
-  credential only. It runs `fabrika db migrate` on every sync that changes a
+  credential only. To decide whether a sync changed the contract it starts a
+  child with no credential in its environment (only `PATH` and `HOME`), which
+  loads the application module and prints the contract digest. It runs `fabrika db migrate` on every sync that changes a
   migration, not only at deploy, so an edited applied migration fails that sync
   and says to call `reset_dev`. `reset_dev` drops that environment's schema and
   its role family and migrates from scratch; it exists only for kind `dev`. No

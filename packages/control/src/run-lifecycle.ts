@@ -696,6 +696,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 				// The proxy routes what the registry holds before the app it fronts changes (ADR-0022).
 				await republishUnderLease({ ...deps, queue }, namespaceLease, namespaceId, {
 					wait: 'active',
+					log: (line) => runLogs.log(line),
 					signal: invocation.work.signal,
 					boundary: async () => {
 						await invocation.boundary()

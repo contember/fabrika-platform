@@ -16,6 +16,7 @@ import {
 	type WorkspaceScanInput,
 	WorkspaceSourceError,
 	type WorkspaceSourcePort,
+	type WorkspaceSourceSession,
 	type WorkspaceSourceTarget,
 	type WorkspaceTree,
 	type WorkspaceTreeEntry,
@@ -159,6 +160,19 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 		const { target, signal: _signal, ...pullRequest } = input
 		this.record(target, { kind: 'pull-request', pullRequest })
 		return Promise.resolve({ number: 7, url: 'https://github.com/acme/shop/pull/7', created: true })
+	}
+
+	/** The sessions opened; their calls are recorded as the port's own. */
+	sessions = 0
+
+	session<T>(input: { target: WorkspaceSourceTarget; signal: AbortSignal }, use: (session: WorkspaceSourceSession) => Promise<T>): Promise<T> {
+		this.sessions += 1
+		const { target, signal } = input
+		return use({
+			readFiles: ({ commitSha, paths }) => this.readFiles({ target, commitSha, paths }),
+			compare: ({ baseSha, headSha }) => this.compare({ target, baseSha, headSha }),
+			commit: (commit) => this.commit({ ...commit, target, signal }),
+		})
 	}
 
 	kinds(): string[] {
