@@ -250,13 +250,17 @@ const VERIFY_SCRIPT = 'fabrika/verify.generated.sh'
 const START_SCRIPT = 'fabrika/start.generated.sh'
 const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
 
-/** The compiler options of the platform's type check; the application's own `tsconfig.json` and its `paths` are not read. */
+/**
+ * The compiler options of the platform's type check; the application's own `tsconfig.json` and its `paths` are not read.
+ * It covers the SPA under `web/` too: Bun bundles the SPA without checking its types.
+ */
 const PLATFORM_TSCONFIG_CONTENTS = JSON.stringify({
 	compilerOptions: {
 		target: 'ES2022',
 		module: 'ESNext',
 		moduleResolution: 'bundler',
 		lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+		jsx: 'react-jsx',
 		types: ['bun'],
 		strict: true,
 		noUncheckedIndexedAccess: true,
@@ -267,7 +271,7 @@ const PLATFORM_TSCONFIG_CONTENTS = JSON.stringify({
 		isolatedModules: true,
 		noEmit: true,
 	},
-	include: ['../fabrika.contract.ts', '../src', 'entry.generated.ts'],
+	include: ['../fabrika.contract.ts', '../src', '../web', 'entry.generated.ts'],
 })
 
 /** One `printf` writing `lines` to `path`. Each line is single-quoted, so it may hold neither `'` nor an expansion. */
@@ -334,7 +338,9 @@ const sourceMapBuildVariables = (upload: OperationsSourceMapBuildUpload): Record
 /**
  * The generated build commands, in order; the authored SPA commands run before all of them. The application's tests
  * run first: they are authored code, so everything after them is reinstalled, regenerated or checked again. They run
- * `--isolate`, as the application skill runs them: a test file's DOM globals otherwise leak into the next file.
+ * `--isolate`, as the application skill runs them: a test file's DOM globals otherwise leak into the next file. `tsc`
+ * runs before the checker, as in the skill's loop: the usual quick fix of a type error is a cast or an `any`, which only
+ * the checker refuses, so the checker is the last word on the code.
  */
 export function generatedBuildCommands(execution: ZeropsLockedExecution): readonly string[] {
 	if (!LOCKED_APP_ID_PATTERN.test(execution.appId)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
@@ -344,9 +350,9 @@ export function generatedBuildCommands(execution: ZeropsLockedExecution): readon
 		'bun test --isolate --pass-with-no-tests',
 		`rm -rf node_modules && ${INSTALL}`,
 		`bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"`,
-		`cd /tmp && bun x --bun -p @fabrika/check@${execution.checkRelease} fabrika-check ${SOURCE_ROOT}`,
 		writeFileCommand(PLATFORM_TSCONFIG, [PLATFORM_TSCONFIG_CONTENTS]),
 		`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${SOURCE_ROOT}/${PLATFORM_TSCONFIG}`,
+		`cd /tmp && bun x --bun -p @fabrika/check@${execution.checkRelease} fabrika-check ${SOURCE_ROOT}`,
 		...initScripts(execution).map((script) => writeFileCommand(script.path, script.lines)),
 		writeFileCommand(START_SCRIPT, startScript),
 		...(execution.sourceMaps === null ? [] : [sourceMapUpload(execution.checkRelease)]),
