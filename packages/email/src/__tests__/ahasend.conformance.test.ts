@@ -5,7 +5,7 @@ import { describeEmailSenderConformance } from '../conformance.js'
 const API_KEY = 'aha-sk-conformance-secret-8b1e'
 const ACCOUNT_ID = '0f4c6a52-6d1e-4c7a-9b0e-3a2f1d5c7e90'
 const requestSchema = z.object({
-	from: z.object({ email: z.literal('auth@example.test'), name: z.string().optional() }).strict(),
+	from: z.object({ email: z.enum(['auth@example.test', 'news@marketing.example.test']), name: z.string().optional() }).strict(),
 	recipients: z.tuple([z.object({ email: z.string() }).strict()]),
 	subject: z.string(),
 	text_content: z.string(),
@@ -23,7 +23,14 @@ describeEmailSenderConformance('AhaSendEmailSender', {
 	kind: 'http',
 	secrets: [API_KEY],
 	create: (fetch, { timeoutMs }) =>
-		new AhaSendEmailSender({ apiKey: API_KEY, accountId: ACCOUNT_ID, from: { address: 'auth@example.test' }, fetch, timeoutMs }),
+		new AhaSendEmailSender({
+			apiKey: API_KEY,
+			accountId: ACCOUNT_ID,
+			from: { address: 'auth@example.test' },
+			broadcastFrom: 'news@marketing.example.test',
+			fetch,
+			timeoutMs,
+		}),
 	async readRequest(request) {
 		const body = requestSchema.parse(await request.json())
 		return {
@@ -33,6 +40,7 @@ describeEmailSenderConformance('AhaSendEmailSender', {
 			...(body.html_content === undefined ? {} : { html: body.html_content }),
 			...(body.reply_to === undefined ? {} : { replyTo: body.reply_to.email }),
 			...(body.from.name === undefined ? {} : { fromName: body.from.name }),
+			...(body.from.email === 'news@marketing.example.test' ? { broadcast: true } : {}),
 			...(body.headers === undefined ? {} : { unsubscribeUrl: body.headers['List-Unsubscribe'].replace(/^<(.*)>$/, '$1') }),
 			...(body.attachments === undefined
 				? {}

@@ -13,9 +13,11 @@ import {
 	HttpEmailSender,
 	type HttpEmailSenderOptions,
 	isCredential,
+	optionalVariable,
 	providerIdempotencyKey,
 } from './http-sender.js'
 import type { ProviderResponse } from './http.js'
+import { isValidEmailAddress } from './validation.js'
 
 const AHASEND_API_URL = 'https://api.ahasend.com/v2/accounts'
 const ACCOUNT_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/
@@ -38,20 +40,20 @@ export interface AhaSendEmailSenderOptions extends HttpEmailSenderOptions {
 	readonly apiKey: string
 	/** The account the key belongs to: the path of every request. */
 	readonly accountId: string
+	/**
+	 * The address a `broadcast` message is sent from, on a domain the account has configured as a Marketing domain:
+	 * AhaSend's terms allow marketing mail through the API from such a domain only. Without it, a broadcast is refused.
+	 */
+	readonly broadcastFrom?: string
 }
 
 /** A refusal's body is one free-text `message`, so only the status is read. */
 export class AhaSendEmailSender extends HttpEmailSender {
-	/** No `broadcast`: AhaSend's terms allow it solely for transactional mail. */
-	readonly capabilities: EmailSenderCapabilities = {
-		idempotent: true,
-		confirmation: 'sync',
-		maxBatch: 1,
-		listUnsubscribe: true,
-		maxAttachmentBytes: AHASEND_MAX_ATTACHMENT_BYTES,
-	}
+	/** `broadcast` only with `broadcastFrom`. */
+	readonly capabilities: EmailSenderCapabilities
 	readonly #apiKey: string
 	readonly #messagesUrl: string
+	readonly #broadcastFrom: string | undefined
 
 	constructor(options: AhaSendEmailSenderOptions) {
 		if (!isCredential(options.apiKey)) {
@@ -60,9 +62,21 @@ export class AhaSendEmailSender extends HttpEmailSender {
 		if (!ACCOUNT_ID_PATTERN.test(options.accountId)) {
 			throw new EmailDeliveryError('AhaSend account ID is invalid', { code: 'invalid_configuration' })
 		}
+		if (options.broadcastFrom !== undefined && !isValidEmailAddress(options.broadcastFrom)) {
+			throw new EmailDeliveryError('AhaSend broadcast sender is invalid', { code: 'invalid_configuration' })
+		}
 		super({ label: 'AhaSend', provider: 'ahasend' }, options)
 		this.#apiKey = options.apiKey
 		this.#messagesUrl = `${AHASEND_API_URL}/${options.accountId}/messages`
+		this.#broadcastFrom = options.broadcastFrom
+		this.capabilities = {
+			idempotent: true,
+			confirmation: 'sync',
+			maxBatch: 1,
+			listUnsubscribe: true,
+			maxAttachmentBytes: AHASEND_MAX_ATTACHMENT_BYTES,
+			...(options.broadcastFrom === undefined ? {} : { broadcast: true }),
+		}
 	}
 
 	protected async request(message: EmailMessage): Promise<HttpEmailRequest> {
@@ -75,7 +89,10 @@ export class AhaSendEmailSender extends HttpEmailSender {
 				'Idempotency-Key': await providerIdempotencyKey(message.idempotencyKey, MAX_IDEMPOTENCY_KEY_LENGTH),
 			},
 			body: {
-				from: { email: this.from.address, ...(senderName === undefined ? {} : { name: senderName }) },
+				from: {
+					email: message.broadcast === true ? (this.#broadcastFrom ?? this.from.address) : this.from.address,
+					...(senderName === undefined ? {} : { name: senderName }),
+				},
 				recipients: [{ email: message.to }],
 				subject: message.subject,
 				text_content: message.text,
@@ -130,18 +147,21 @@ export class AhaSendEmailSender extends HttpEmailSender {
 const ahaSendVariablesSchema = z.object({
 	FABRIKA_EMAIL_AHASEND_API_KEY: credentialVariable,
 	FABRIKA_EMAIL_AHASEND_ACCOUNT_ID: z.string().regex(ACCOUNT_ID_PATTERN),
+	FABRIKA_EMAIL_AHASEND_BROADCAST_FROM: optionalVariable(isValidEmailAddress),
 })
 
 export const ahaSendEmailProvider: EmailProvider = {
 	variables: [
 		{ name: 'FABRIKA_EMAIL_AHASEND_API_KEY', secret: true, required: true },
 		{ name: 'FABRIKA_EMAIL_AHASEND_ACCOUNT_ID', secret: false, required: true },
+		{ name: 'FABRIKA_EMAIL_AHASEND_BROADCAST_FROM', secret: false, required: false },
 	],
 	create({ from, env, fetch }) {
 		const variables = parseProviderVariables(ahaSendVariablesSchema, env)
 		return new AhaSendEmailSender({
 			apiKey: variables.FABRIKA_EMAIL_AHASEND_API_KEY,
 			accountId: variables.FABRIKA_EMAIL_AHASEND_ACCOUNT_ID,
+			broadcastFrom: variables.FABRIKA_EMAIL_AHASEND_BROADCAST_FROM,
 			from,
 			fetch,
 		})

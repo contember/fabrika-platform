@@ -88,7 +88,8 @@ as `dropped`: an operator's decision, never a silent loss.
 - **Broadcast mail is marked, not inferred.** A message of a send to many recipients carries `broadcast: true` and
   needs an unsubscribe URL. Providers keep broadcast mail apart from transactional mail: Postmark has a broadcast
   stream and pauses a server whose transactional stream carries it, Lettermint a broadcast route on separate
-  infrastructure, and AhaSend's terms allow transactional mail only. The capability `broadcast` says whether a
+  infrastructure, and AhaSend's terms allow it through the API only from a domain the account configured as a Marketing
+  domain. The capability `broadcast` says whether a
   transport sends one, on its provider's channel for them; one without it refuses the message before any I/O, and the
   relay refuses it at the handoff while Control's own transport sends none. Rejected: one transport per kind for the
   installation, which doubles every operator step for a distinction one field carries; and inferring the kind from the
