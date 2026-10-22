@@ -86,4 +86,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [197](197-local-compat-has-no-0.7-release.md): `local:compat` deploys no Notes at v0.7.0: its proof needs a release without a file collection.
 - [198](198-a-zerops-platform-deploy-rebuilds-every-service.md): A Zerops platform deploy rebuilds all four services every time, and a bring-up compiles Caddy for 5 min.
 - [199](199-operator-traps-of-an-mcp-authoring-bring-up.md): MCP authoring bring-up traps: `put` loses bucket provenance, no `authoring` flag, a bare `forbidden`, `admin` offered for a contract app.
+- [200](200-the-platform-build-runs-no-postgres-backed-test.md): The Zerops build skips every Postgres-backed application test; a throwaway Postgres in the build container would run them.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
