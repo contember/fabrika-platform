@@ -17,6 +17,7 @@ import { hashPlatformKey } from '@fabrika/email/platform'
 import { workspaceSourceTarget } from '../api/workspaces'
 import type { ControlAppContext } from '../app'
 import type { DevEnvironmentRepository, DevEnvironmentRow, PlatformTransportKeyRepository, RunRow } from '../db'
+import { errorLabel } from '../error-label'
 import { bearerOf, error, json, readBoundedText } from '../http'
 import { repositories } from '../services'
 import { WorkspaceSourceError, type WorkspaceSourcePort, type WorkspaceSourceTarget } from '../workspace-source-port'
@@ -93,7 +94,7 @@ export async function acceptDevWait(deps: DevReceiverDeps, request: Request): Pr
 		const row = found?.row ?? await deps.devEnvironments.get(appId, env)
 		return json(await answer(deps, appId, env, row, parsed.value, request.signal))
 	} catch (cause) {
-		const failure = cause instanceof WorkspaceSourceError ? `GitHub answered ${cause.kind}` : 'an internal failure'
+		const failure = cause instanceof WorkspaceSourceError ? `GitHub answered ${cause.kind}` : errorLabel(cause)
 		console.error(`dev source: answering a wait of ${appId}@${env} failed: ${failure}`)
 		return error(503, 'the source is unavailable; retry')
 	}
@@ -109,8 +110,8 @@ export async function acceptDevReport(deps: DevReceiverDeps, request: Request): 
 	try {
 		if (await superseded(deps, await deps.devEnvironments.get(appId, env), parsed.value.bootstrap)) return error(409, SUPERSEDED)
 		await deps.devEnvironments.recordReport(appId, env, reportInput(parsed.value))
-	} catch {
-		console.error(`dev source: recording a report of ${appId}@${env} failed`)
+	} catch (cause) {
+		console.error(`dev source: recording a report of ${appId}@${env} failed: ${errorLabel(cause)}`)
 		return error(503, 'the report was not recorded; retry')
 	}
 	deps.signals.notify(devReportKey(appId, env))
@@ -161,8 +162,8 @@ async function refuseLauncher(deps: DevReceiverDeps, environment: { appId: strin
 				deps.signals.notify(devReportKey(appId, env))
 			}
 		}
-	} catch {
-		console.error(`dev source: recording an unreadable ${request} of ${appId}@${env} failed`)
+	} catch (cause) {
+		console.error(`dev source: recording an unreadable ${request} of ${appId}@${env} failed: ${errorLabel(cause)}`)
 	}
 	return error(400, `not a ${request} this release reads`)
 }
