@@ -1,5 +1,6 @@
 // The five-field cron expressions of `c.cron`, read in UTC: which minutes a job is due, so the runner can tell how
-// long ago it should last have succeeded. The crontab, not this module, triggers a run.
+// long ago it should last have succeeded. On Bun the crontab triggers a run; on Cloudflare the application's object
+// runs, at each minute tick, the jobs `isDueAt` that minute.
 
 interface Field {
 	readonly min: number
@@ -94,6 +95,11 @@ function dayMatches(schedule: CronSchedule, day: Date): boolean {
 	const byMonth = schedule.daysOfMonth.has(day.getUTCDate())
 	const byWeek = schedule.daysOfWeek.has(day.getUTCDay())
 	return schedule.eitherDay ? byMonth || byWeek : byMonth && byWeek
+}
+
+/** Whether the schedule is due in the UTC minute that holds `at`: what a Worker's minute tick runs (ADR-0065). */
+export function isDueAt(schedule: CronSchedule, at: Date): boolean {
+	return schedule.minutes.has(at.getUTCMinutes()) && schedule.hours.has(at.getUTCHours()) && dayMatches(schedule, at)
 }
 
 const descending = (values: ReadonlySet<number>): number[] => [...values].sort((left, right) => right - left)
