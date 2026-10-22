@@ -49,6 +49,7 @@ import {
 	WORKSPACE_FILE_MAX_BYTES,
 	type WorkspaceUseCaseContext,
 } from '../api/workspaces'
+import { errorLabel } from '../error-label'
 
 const MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024
 /** Room left in the commit-message bound for the Fabrika trailers. */
@@ -440,7 +441,7 @@ function toolFailure(cause: unknown): CallToolResult {
 	if (cause instanceof ControlApiError) return { isError: true, content: [{ type: 'text', text: cause.message }] }
 	// Never log or answer the error object: a GitHub or provider failure may carry repository detail or a credential.
 	const reference = crypto.randomUUID()
-	console.error(`mcp tool failed (reference ${reference}):`, cause instanceof Error ? cause.name : 'unknown error')
+	console.error(`mcp tool failed (reference ${reference}): ${errorLabel(cause)}`)
 	return {
 		isError: true,
 		content: [{
