@@ -220,6 +220,14 @@ const makeApi = (
 		configureCustomAutoscaling: () => Promise.reject(new Error('the control provider must not change autoscaling')),
 		getBackupConfig: () => Promise.reject(new Error('the control provider must not read a backup schedule')),
 		configureBackup: () => Promise.reject(new Error('the control provider must not change a backup schedule')),
+		startService: async ({ serviceId }) => {
+			recorded.calls.push(`startService:${serviceId}`)
+			return { id: 'process-start', status: 'PENDING' }
+		},
+		stopService: async ({ serviceId }) => {
+			recorded.calls.push(`stopService:${serviceId}`)
+			return { id: 'process-stop', status: 'PENDING' }
+		},
 		getService: async ({ serviceId }) => ({ id: serviceId, name: 'notes', projectId: 'project-1', activeAppVersionId: 'bootstrap-1' }),
 		findService: async ({ hostname }) => ({ id: 'service-1', name: hostname, subdomainAccess: false }),
 		getProject: async ({ projectId }) => ({ id: projectId, name: 'project' }),
@@ -1029,6 +1037,33 @@ describe('Zerops ControlProvider lifecycle', () => {
 			).toEqual({ state: 'running' })
 		})
 	}
+	test('stops and starts only a dev environment, waits for the process, and skips a service already in that state', async () => {
+		let status: 'ACTIVE' | 'STOPPED' = 'ACTIVE'
+		const control = createTestControlProvider({
+			accessToken: 'token',
+			sleep: async () => {},
+			api: {
+				...makeApi(recorded),
+				getService: async ({ serviceId }) => ({ id: serviceId, name: 'notes', status }),
+				getProcess: async ({ processId }) => {
+					recorded.calls.push(`getProcess:${processId}`)
+					return { id: processId, status: 'FINISHED' }
+				},
+			},
+		})
+		if (control.devEnvironments === undefined) throw new Error('missing dev environments')
+		const signal = new AbortController().signal
+		await expect(control.devEnvironments.stop({ environment: environment(), signal })).rejects.toThrow('only a dev environment')
+		const dev = environment({ kind: 'dev' })
+		await control.devEnvironments.stop({ environment: dev, signal })
+		status = 'STOPPED'
+		await control.devEnvironments.stop({ environment: dev, signal })
+		await control.devEnvironments.start({ environment: dev, signal })
+		status = 'ACTIVE'
+		await control.devEnvironments.start({ environment: dev, signal })
+		expect(recorded.calls).toEqual(['stopService:service-1', 'getProcess:process-stop', 'startService:service-1', 'getProcess:process-start'])
+	})
+
 	test('lease loss during upload never cancels source, deletes a version, or submits a build', async () => {
 		const controller = new AbortController()
 		const sourceCalls: string[] = []

@@ -7,6 +7,7 @@ import type {
 	ProviderDeployInput,
 	ProviderDeploymentNamespace,
 	ProviderDeployOutcome,
+	ProviderDevEnvironmentInput,
 	ProviderEnvelope,
 	ProviderEnvironment,
 	ProviderReconcileOutcome,
@@ -289,6 +290,26 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		return { commitSha: result.commitSha }
 	}
 
+	/** Stop or start the service of a `dev` environment outside a run, and wait for the platform's process. */
+	const runningState = async (input: ProviderDevEnvironmentInput, action: 'start' | 'stop'): Promise<void> => {
+		if (input.environment.kind !== 'dev') throw new Error('zerops: only a dev environment is stopped and started outside a run')
+		const placement = resolvedEnvironment(input.environment, { requireReady: false })
+		const serviceId = placement.target.serviceId
+		// Idempotent: Control's record of a stopped service can lag behind a start from elsewhere.
+		const status = (await api.getService({ serviceId, signal: input.signal })).status
+		if (status === (action === 'stop' ? 'STOPPED' : 'ACTIVE')) return
+		const process = action === 'stop'
+			? await api.stopService({ serviceId, signal: input.signal })
+			: await api.startService({ serviceId, signal: input.signal })
+		await waitForProcess({
+			api,
+			processId: process.id,
+			sleep: options.sleep ?? defaultSleep,
+			signal: input.signal,
+			label: `the ${action} of ${input.environment.appId}/${input.environment.env}`,
+		})
+	}
+
 	const controlProvider: ControlProvider = {
 		id: 'zerops',
 		normalizeRegistration,
@@ -345,6 +366,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			const result = await deployRun({
 				appId: input.app.id,
 				env: input.environment.env,
+				...(input.environment.kind === 'dev' && source !== undefined ? { dev: { head: source.commitSha } } : {}),
 				secrets: input.secrets,
 				vars: input.vars,
 				managedEnvironment: input.managedEnvironment,
@@ -358,6 +380,10 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			})
 			input.signal.throwIfAborted()
 			return { state: result.status, ...(result.artifactState === undefined ? {} : { artifactState: result.artifactState }) }
+		},
+		devEnvironments: {
+			stop: (input) => runningState(input, 'stop'),
+			start: (input) => runningState(input, 'start'),
 		},
 		cancel: async (input): Promise<ProviderCancelOutcome> => {
 			const signal = input.signal

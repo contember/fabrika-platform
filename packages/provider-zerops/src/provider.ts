@@ -50,6 +50,7 @@ import {
 import {
 	PLATFORM_TYPESCRIPT_VERSION,
 	renderLockedExecutionDescriptor,
+	type ZeropsDevExecution,
 	zeropsJobProcesses,
 	type ZeropsLockedExecution,
 	zeropsStartMinRam,
@@ -95,6 +96,8 @@ export interface ZeropsDeployRun {
 	readonly access?: ProviderApprovedAccess
 	/** The run-scoped source-map destination Control minted; the build uploads to it. */
 	readonly artifactUpload?: ProviderDeployInput['artifactUpload']
+	/** Present for an environment of kind `dev`: the launcher starts instead of the serving entry, on one container. */
+	readonly dev?: ZeropsDevExecution
 	readonly dryRun: boolean
 	readonly signal: AbortSignal
 	readonly events: ProviderRunEvents
@@ -667,6 +670,7 @@ const withMinRam = (custom: ZeropsServiceAutoscaling, minRam: number): ZeropsSer
  */
 const raiseStartMemory = async (env: StepEnv): Promise<void> => {
 	const { run, zerops, log, signal, dryRun } = env
+	if (run.dev !== undefined) await pinOneContainer(env)
 	const locked = lockedExecutionFor(run.artifact, run, dryRun)
 	const minRam = locked === null ? null : zeropsStartMinRam(locked)
 	const hostname = run.artifact.target.deployService
@@ -687,6 +691,42 @@ const raiseStartMemory = async (env: StepEnv): Promise<void> => {
 	}
 	const after = await raiseMinRam(env, service, hostname, minRam, 'its start needs')
 	log(`  minimum RAM of ${hostname}: ${before ?? 'the platform default'} → ${after} GB`)
+}
+
+/**
+ * A dev environment runs on exactly one container: the launcher writes the files it syncs into that container, and a
+ * second one would serve the bootstrap head. Sends the custom autoscaling whole with only the container counts changed,
+ * and decides by reading it back.
+ */
+const pinOneContainer = async (env: StepEnv): Promise<void> => {
+	const { run, zerops, log, signal, dryRun } = env
+	const hostname = run.artifact.target.deployService
+	if (dryRun) {
+		log(`  [dry-run] would pin ${hostname} to one container`)
+		return
+	}
+	assertRunning(signal)
+	const service = await zerops.api.getService({ serviceId: run.target.serviceId, signal })
+	const custom = service.customAutoscaling
+	const horizontal = service.currentAutoscaling?.horizontal
+	if (horizontal?.minContainerCount === 1 && horizontal.maxContainerCount === 1) {
+		log(`  ${hostname} runs on one container, unchanged`)
+		return
+	}
+	if (custom === undefined) throw new Error(`zerops: ${hostname} did not report its autoscaling whole, so it cannot be pinned to one container`)
+	const process = await zerops.api.configureCustomAutoscaling({
+		serviceId: service.id,
+		autoscaling: { ...custom, horizontal: { minContainerCount: 1, maxContainerCount: 1 } },
+		signal,
+	})
+	if (process !== null) {
+		await waitForProcess({ api: zerops.api, processId: process.id, sleep: zerops.sleep, signal, label: `the autoscaling change of ${hostname}` })
+	}
+	const after = (await zerops.api.getService({ serviceId: service.id, signal })).currentAutoscaling?.horizontal
+	if (after?.minContainerCount !== 1 || after.maxContainerCount !== 1) {
+		throw new Error(`zerops: ${hostname} reads back ${after?.maxContainerCount ?? 'no'} container(s) after it was pinned to one`)
+	}
+	log(`  ${hostname} pinned to one container`)
 }
 
 /** What raising a minimum RAM calls; the deploy's collaborators, and the live platform-facts probe of the same path. */

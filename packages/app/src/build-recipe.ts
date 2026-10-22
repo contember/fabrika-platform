@@ -22,6 +22,8 @@ const FABRIKA_BIN = './node_modules/.bin/fabrika'
 const MIGRATE_SCRIPT = 'fabrika/migrate.generated.sh'
 const VERIFY_SCRIPT = 'fabrika/verify.generated.sh'
 const START_SCRIPT = 'fabrika/start.generated.sh'
+const SERVE_ENTRY = 'fabrika/entry.generated.ts'
+const MIGRATE: readonly string[] = [FABRIKA_BIN, 'db', 'migrate']
 const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
 
 /**
@@ -109,13 +111,25 @@ export interface ContractRecipeInput {
 /** One build step: a command run in the source root, or a generated file written there, line by line. */
 export type ContractBuildStep = { readonly run: string } | { readonly write: string; readonly lines: readonly string[] }
 
+/** One check of the build: a command run in the source root that fails the build. */
+export interface ContractCheck {
+	readonly name: 'tests' | 'tsc' | 'fabrika-check'
+	readonly command: string
+}
+
 export interface ContractRecipe {
 	/** The steps after the authored SPA commands, in order. */
 	readonly build: readonly ContractBuildStep[]
+	/** The checks among `build`, in its order. */
+	readonly checks: readonly ContractCheck[]
 	/** The generated scripts every container runs before `start`, in order; any failure stops the activation. */
 	readonly init: readonly string[]
 	/** The generated script that starts the server, which only `exec`s it. */
 	readonly start: string
+	/** The generated entrypoint the start script serves, relative to the runtime root. */
+	readonly entry: string
+	/** The command that migrates the application's database, run from the runtime root. */
+	readonly migrate: readonly string[]
 	/** The jobs to schedule, each on one container; a command runs from the runtime root. */
 	readonly jobs: readonly { readonly schedule: string; readonly command: string }[]
 }
@@ -138,7 +152,7 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 	const script = (lines: readonly string[]): readonly string[] => ['#!/bin/sh', 'set -eu', `cd ${runtimeRoot}`, ...lines]
 	const init = input.database
 		? [
-			{ path: MIGRATE_SCRIPT, lines: script([`FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db migrate`]) },
+			{ path: MIGRATE_SCRIPT, lines: script([`FABRIKA_APP_ID=${appId} exec ${MIGRATE.join(' ')}`]) },
 			// The committed schema types must match the migrated schema, and every generated isolation test must pass on a
 			// throwaway schema.
 			{
@@ -147,22 +161,28 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 			},
 		]
 		: []
+	const tests: ContractCheck = { name: 'tests', command: TESTS_COMMAND }
+	const tsc: ContractCheck = { name: 'tsc', command: `cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${sourceRoot}/${PLATFORM_TSCONFIG}` }
+	const check: ContractCheck = { name: 'fabrika-check', command: `cd /tmp && bun x --bun -p @fabrika/check@${checkRelease} fabrika-check ${sourceRoot}` }
 	return {
 		build: [
 			{ run: INSTALL },
-			{ run: TESTS_COMMAND },
+			{ run: tests.command },
 			{ run: `rm -rf node_modules && ${INSTALL}` },
 			{ run: `bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"` },
 			{ write: PLATFORM_TSCONFIG, lines: [PLATFORM_TSCONFIG_CONTENTS] },
-			{ run: `cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${sourceRoot}/${PLATFORM_TSCONFIG}` },
-			{ run: `cd /tmp && bun x --bun -p @fabrika/check@${checkRelease} fabrika-check ${sourceRoot}` },
+			{ run: tsc.command },
+			{ run: check.command },
 			...init.map((generated) => ({ write: generated.path, lines: generated.lines })),
-			{ write: START_SCRIPT, lines: script([`exec bun --max-http-header-size=${APPLICATION_SERVER_MAX_HEADER_BYTES} fabrika/entry.generated.ts`]) },
+			{ write: START_SCRIPT, lines: script([`exec bun --max-http-header-size=${APPLICATION_SERVER_MAX_HEADER_BYTES} ${SERVE_ENTRY}`]) },
 			// After every check, so a map is uploaded only for a build that can deploy; the report line says how it went.
 			...(input.sourceMaps ? [{ run: `cd /tmp && bun x --bun -p @fabrika/check@${checkRelease} fabrika-source-maps ${sourceRoot} || true` }] : []),
 		],
+		checks: [tests, tsc, check],
 		init: init.map((generated) => generated.path),
 		start: START_SCRIPT,
+		entry: SERVE_ENTRY,
+		migrate: MIGRATE,
 		jobs: [
 			...input.jobs.map((job) => ({ schedule: job.schedule, command: `${FABRIKA_BIN} job run ${job.name}` })),
 			...(input.files ? [{ schedule: FILE_SWEEP_SCHEDULE, command: `${FABRIKA_BIN} job run ${FILE_SWEEP_JOB}` }] : []),

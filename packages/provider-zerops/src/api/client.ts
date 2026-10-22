@@ -347,6 +347,12 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			await request('enable subdomain access', 'PUT', `/service-stack/${serviceId}/enable-subdomain-access`, { signal })
 		},
 
+		startService: async ({ serviceId, signal }) =>
+			readResponse('start service', processSchema, await request('start service', 'PUT', `/service-stack/${serviceId}/start`, { signal })),
+
+		stopService: async ({ serviceId, signal }) =>
+			readResponse('stop service', processSchema, await request('stop service', 'PUT', `/service-stack/${serviceId}/stop`, { signal })),
+
 		configureAutoscaling: async ({ serviceId, autoscalingProfileId, signal }) => {
 			const payload = await request('configure autoscaling', 'PUT', `/service-stack/${serviceId}/autoscaling`, {
 				body: { autoscalingProfileId },

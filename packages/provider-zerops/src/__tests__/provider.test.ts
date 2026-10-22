@@ -165,7 +165,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 	const records = overrides.serviceEnv ?? []
 	let customMinRam = overrides.minRam === undefined ? ZEROPS_START_MIN_RAM_GB : overrides.minRam
 	let databaseMinRam = overrides.databaseMinRam ?? 1
-	const maxContainers = overrides.maxContainers === undefined ? 4 : overrides.maxContainers
+	let maxContainers = overrides.maxContainers === undefined ? 4 : overrides.maxContainers
 	const database = (): ZeropsService => ({
 		id: DATABASE_SERVICE_ID,
 		name: 'db',
@@ -240,6 +240,8 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		configureAutoscaling: () => Promise.reject(new Error('the deploy driver must not change a profile')),
 		getBackupConfig: () => Promise.reject(new Error('the deploy driver must not read a backup schedule')),
 		configureBackup: () => Promise.reject(new Error('the deploy driver must not change a backup schedule')),
+		startService: () => Promise.reject(new Error('the deploy driver never starts a service')),
+		stopService: () => Promise.reject(new Error('the deploy driver never stops a service')),
 		configureCustomAutoscaling: async ({ serviceId, autoscaling }) => {
 			if (serviceId === DATABASE_SERVICE_ID) {
 				recorded.calls.push('configureCustomAutoscaling:db')
@@ -250,7 +252,10 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 			recorded.calls.push('configureCustomAutoscaling')
 			if (overrides.autoscalingError !== undefined) throw overrides.autoscalingError
 			recorded.autoscaling.push(autoscaling)
-			if (overrides.autoscalingIgnored !== true) customMinRam = autoscaling.vertical.minResource.memoryGBytes
+			if (overrides.autoscalingIgnored !== true) {
+				customMinRam = autoscaling.vertical.minResource.memoryGBytes
+				maxContainers = autoscaling.horizontal.maxContainerCount
+			}
 			return { id: AUTOSCALING_PROCESS }
 		},
 		getService: async ({ serviceId }) =>
@@ -1131,6 +1136,19 @@ describe("the deploy service's minimum RAM", () => {
 		expect((await deploy({ minRam: null }, deployRun(recorded, target(), true))).status).toBe('succeeded')
 		expect(recorded.calls).not.toContain('configureCustomAutoscaling')
 		expect(recorded.logs).toContain(`  [dry-run] would raise the minimum RAM of api to ${ZEROPS_START_MIN_RAM_GB} GB where it is lower`)
+	})
+
+	test('a dev deploy pins the service to one container before the version is reserved, and starts the launcher', async () => {
+		const devRun = (): ZeropsDeployRun => ({ ...deployRun(recorded), dev: { head: 'd'.repeat(40) } })
+		expect((await deploy({ minRam: ZEROPS_START_MIN_RAM_GB, maxContainers: 4 }, devRun())).status).toBe('succeeded')
+		expect(recorded.autoscaling.map((autoscaling) => autoscaling.horizontal)).toEqual([{ minContainerCount: 1, maxContainerCount: 1 }])
+		expect(recorded.calls.indexOf('configureCustomAutoscaling')).toBeLessThan(recorded.calls.indexOf('createAppVersion:service-1'))
+		expect(recorded.logs).toContain('  api pinned to one container')
+		expect(recorded.builds[0]?.zeropsYaml).toContain('dev-init.generated.sh')
+		recorded = fresh()
+		expect((await deploy({ minRam: ZEROPS_START_MIN_RAM_GB, maxContainers: 1 }, devRun())).status).toBe('succeeded')
+		expect(recorded.calls).not.toContain('configureCustomAutoscaling')
+		expect(recorded.logs).toContain('  api runs on one container, unchanged')
 	})
 
 	test('the deploy stops before reserving a version when the RAM cannot be raised', async () => {

@@ -5,6 +5,10 @@
 import { type ContractRecipe, contractRecipe } from '@fabrika/app/build'
 import {
 	type ContractArtifact,
+	DEV_LAUNCHER_CONFIG_FILE,
+	DEV_LAUNCHER_MODULE,
+	DEV_LAUNCHER_STATE_FILE,
+	type DevLauncherConfig,
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_SOURCE_MAP_UPLOAD,
 	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
@@ -101,6 +105,16 @@ export interface ZeropsLockedExecution {
 	readonly runtimePackages: readonly ZeropsRuntimePackage[]
 	/** Where the build uploads its source maps, without the bearer; null when Control minted no upload for the run. */
 	readonly sourceMaps: OperationsSourceMapBuildUpload | null
+	/**
+	 * Present for an environment of kind `dev` (ADR-0049): `run.start` runs the dev launcher instead of the serving
+	 * entry. The environment's kind selects it; an application never authors it.
+	 */
+	readonly dev?: ZeropsDevExecution
+}
+
+export interface ZeropsDevExecution {
+	/** The commit the bootstrap run builds: what a new container holds before the launcher's first sync. */
+	readonly head: string
 }
 
 /** The application ids the generated scripts may name: the contract's own id rule, so a script needs no quoting. */
@@ -267,12 +281,12 @@ const readinessCommand = (path: string): string => {
 	return `bun -e "const end = Date.now() + 9000; while (Date.now() < end) { try { if ((await fetch('${url}', { signal: AbortSignal.timeout(2000) })).ok) process.exit(0) } catch {} await Bun.sleep(200) } process.exit(1)"`
 }
 
-/** `@fabrika/app/build`'s recipe at this installation's paths. */
-const recipeOf = (execution: ZeropsLockedExecution): ContractRecipe =>
+/** `@fabrika/app/build`'s recipe at this installation's paths; the dev launcher checks in the runtime root. */
+const recipeOf = (execution: ZeropsLockedExecution, sourceRoot: string = SOURCE_ROOT): ContractRecipe =>
 	contractRecipe({
 		appId: execution.appId,
 		checkRelease: execution.checkRelease,
-		sourceRoot: SOURCE_ROOT,
+		sourceRoot,
 		runtimeRoot: RUNTIME_ROOT,
 		// The build has no database; a container's init commands run the migrations and schema checks, and the readiness
 		// window opens only with `run.start`, after them (both verified live), so the CRM's ~3 minutes does not race it.
@@ -283,9 +297,65 @@ const recipeOf = (execution: ZeropsLockedExecution): ContractRecipe =>
 		scan: execution.contract.scan === true,
 	})
 
+const DEV_INIT_SCRIPT = 'fabrika/dev-init.generated.sh'
+
+// A dev environment starts the launcher of the application's own framework release, which runs the serving entry as its
+// child. Double quotes inside: a generated file line may hold no single quote.
+const devStartScript: readonly string[] = [
+	'#!/bin/sh',
+	'set -eu',
+	`cd ${RUNTIME_ROOT}`,
+	`exec bun -e "await import(\\"${DEV_LAUNCHER_MODULE}\\").then((dev) => dev.runDevLauncher(process.env))"`,
+]
+
+// The init commands of a dev container migrate and verify only what the bootstrap run built. A container that restarts
+// after a stop keeps the files the launcher synced since, and its state file: the launcher reconciles that one itself.
+const devInitScript = (recipe: ContractRecipe): readonly string[] => [
+	'#!/bin/sh',
+	'set -eu',
+	`cd ${RUNTIME_ROOT}`,
+	`if [ -f ${DEV_LAUNCHER_STATE_FILE} ]; then exit 0; fi`,
+	...recipe.init.map((path) => `sh ${RUNTIME_ROOT}/${path}`),
+]
+
+/** One command writing `content` to `path` through base64: the content may hold quotes and expansions, the command none. */
+const writeBase64Command = (path: string, content: string): string => {
+	const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(content)))
+	return `printf '%s' '${encoded}' | base64 -d > ${path}`
+}
+
+/** What the dev launcher reads (`DEV_LAUNCHER_CONFIG_FILE`): the platform's, written after the checks. */
+export function devLauncherConfig(execution: ZeropsLockedExecution, authoredSpa: readonly string[]): DevLauncherConfig {
+	const dev = execution.dev
+	if (dev === undefined) throw new Error('zerops: a dev launcher configuration needs a dev environment')
+	if (!/^[0-9a-f]{40}$/.test(dev.head)) throw new Error('zerops: a dev environment builds an exact commit')
+	const recipe = recipeOf(execution)
+	return {
+		format: 1,
+		appId: execution.appId,
+		head: dev.head,
+		port: ZEROPS_APPLICATION_PORT,
+		healthPath: execution.contract.readinessPath,
+		serve: ['bun', recipe.entry],
+		migrate: recipe.migrate,
+		spaBuild: authoredSpa,
+		// The build's check chain, in its order, on what the container holds.
+		checks: recipeOf(execution, RUNTIME_ROOT).checks,
+	}
+}
+
 /** The generated build commands, in order; the authored SPA commands run before all of them. */
-export function generatedBuildCommands(execution: ZeropsLockedExecution): readonly string[] {
-	return recipeOf(execution).build.map((step) => 'run' in step ? step.run : writeFileCommand(step.write, step.lines))
+export function generatedBuildCommands(execution: ZeropsLockedExecution, authoredSpa: readonly string[] = []): readonly string[] {
+	const recipe = recipeOf(execution)
+	return recipe.build.flatMap((step) => {
+		if ('run' in step) return [step.run]
+		if (execution.dev === undefined || step.write !== recipe.start) return [writeFileCommand(step.write, step.lines)]
+		return [
+			...(recipe.init.length === 0 ? [] : [writeFileCommand(DEV_INIT_SCRIPT, devInitScript(recipe))]),
+			writeFileCommand(recipe.start, devStartScript),
+			writeBase64Command(DEV_LAUNCHER_CONFIG_FILE, JSON.stringify(devLauncherConfig(execution, authoredSpa))),
+		]
+	})
 }
 
 const sortedUnique = (values: readonly string[]): string[] => [...new Set(values)].sort()
@@ -313,8 +383,13 @@ export function generatedInitCommands(execution: ZeropsLockedExecution): string[
 		// A container starts from the prepared image, whose signatures are as old as its build; a failed refresh leaves
 		// them to the daily one, and the scanner refuses signatures older than three days, so the scan fails closed.
 		...(execution.contract.scan === true ? [`${FRESHCLAM} || echo 'fabrika: freshclam did not refresh the malware signatures'`] : []),
-		...recipeOf(execution).init.map((path) => `sh ${RUNTIME_ROOT}/${path}`),
+		...initScripts(execution).map((path) => `sh ${RUNTIME_ROOT}/${path}`),
 	]
+}
+
+const initScripts = (execution: ZeropsLockedExecution): readonly string[] => {
+	const { init } = recipeOf(execution)
+	return execution.dev === undefined || init.length === 0 ? init : [DEV_INIT_SCRIPT]
 }
 
 /** The generated selected setup: the authored build kept, everything else the platform's. */
@@ -346,7 +421,7 @@ export function renderLockedSetup(
 		build: {
 			base: authored.base ?? [ZEROPS_APPLICATION_RUNTIME],
 			...(authored.os === null ? {} : { os: authored.os }),
-			buildCommands: [...authored.commands, ...generatedBuildCommands(execution)],
+			buildCommands: [...authored.commands, ...generatedBuildCommands(execution, authored.commands)],
 			...(execution.sourceMaps === null ? {} : { envVariables: sourceMapBuildVariables(execution.sourceMaps) }),
 			deployFiles: ['./'],
 			cache: ['node_modules'],
@@ -360,7 +435,11 @@ export function renderLockedSetup(
 			...(initCommands.length === 0 ? {} : { initCommands }),
 			start: `sh ${RUNTIME_ROOT}/${recipeOf(execution).start}`,
 			ports: [{ port: ZEROPS_APPLICATION_PORT, httpSupport: true }],
-			healthCheck: { httpGet: probe, execPeriod: '10s', disconnectTimeout: '30s', recoveryTimeout: '10s', failureTimeout: '120s' },
+			// A dev container keeps its launcher running while the application it respawns fails: Zerops restarting it
+			// would only boot the same failing head again.
+			...(execution.dev === undefined
+				? { healthCheck: { httpGet: probe, execPeriod: '10s', disconnectTimeout: '30s', recoveryTimeout: '10s', failureTimeout: '120s' } }
+				: {}),
 			...(crontab.length === 0 ? {} : { crontab }),
 			envVariables,
 		},
