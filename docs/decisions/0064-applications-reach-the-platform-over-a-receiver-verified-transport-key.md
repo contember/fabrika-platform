@@ -35,20 +35,21 @@ application to call an installation service that:
 ## Decision
 
 **An application calls a platform receiver with a key per application environment and receiver. Control issues,
-hashes, seals and rotates the key; the receiver verifies it on a `protocol` row and records each call under the
-caller's idempotency key. Mail is the first receiver.**
+hashes, seals and rotates the key; the receiver verifies it on a `protocol` row. A receiver with effects records each
+call under the caller's idempotency key. The receivers are `mail` and `source`.**
 
 ### 1. Receivers and variables
 
 - A receiver is a named platform service an application calls. The receivers are a closed list in `@fabrika/auth-core`
-  (`PLATFORM_RECEIVERS`); today it holds `mail` only.
+  (`PLATFORM_RECEIVERS`): `mail` and `source`.
 - Each receiver has two variables, `FABRIKA_PLATFORM_<RECEIVER>_URL` and `FABRIKA_PLATFORM_<RECEIVER>_KEY`
   (`platformTransportVariables`). `FABRIKA_PLATFORM_` is a framework-only family (`FRAMEWORK_VARIABLE_PREFIXES`), so
   no application sets a variable under it, and a deploy removes one it no longer hands.
 - The URL is an http(s) origin and public: the error-report scrubber of
   [ADR-0059](0059-application-server-errors-carry-their-stack-and-message.md) keeps it. The key is a secret.
-- Control derives the receivers from the approved artifact. A job with `mailer: 'installation'` uses the `mail`
-  receiver. Nothing new is declared, and the approval shows what it showed before.
+- Control derives the receivers from the approved artifact and the environment's kind. A job with
+  `mailer: 'installation'` uses the `mail` receiver; a `dev` environment uses the `source` receiver. Nothing new is
+  declared, and the approval shows what it showed before.
 
 ### 2. The key
 
@@ -86,6 +87,10 @@ caller's idempotency key. Mail is the first receiver.**
 
 ### 4. The receiver's idempotency contract
 
+This contract binds a receiver whose call has an effect downstream, such as `mail`. The `source` receiver has none
+(§7): a wait only reads, and a report replaces the environment's last report whole, so a repeat is harmless and carries
+no idempotency key.
+
 - Every request carries the caller's idempotency key. The receiver records `(sender, idempotency key)` with the
   fingerprint of the request, the SHA-256 of its canonical body, before it answers.
 - A repeat with the same fingerprint answers the first result and has no second effect. A different fingerprint
@@ -105,6 +110,8 @@ caller's idempotency key. Mail is the first receiver.**
 - An older release, and a snapshot that records no framework release, keeps what it had: for mail, the installation's
   `FABRIKA_EMAIL_*` with the provider credential. The platform transport is additive under ADR-0062.
 - Zerops writes the URL as a plain service variable and the key as a sensitive one.
+- The `source` receiver goes only to a `dev` environment whose snapshot records framework release 0.9.0 or newer,
+  the first that ships the dev launcher (§7).
 
 ### 6. The mail receiver
 
@@ -112,6 +119,27 @@ The wire is `POST <FABRIKA_PLATFORM_MAIL_URL>/platform/mail/send` with `Authoriz
 of the `EmailMessage` fields, attachments as base64. The answer is `200 { status: 'accepted', messageId }`, or an
 `EmailDeliveryErrorCode` with its status, so the receiver's `retryable` and `outcome` reach the caller unchanged.
 What the relay does with the message, its gate and its dispatcher, is [ADR-0019](0019-portable-outbound-email.md) §8.
+
+### 7. The source receiver
+
+The launcher of a `dev` environment ([ADR-0049](0049-author-applications-through-mcp-in-control.md)) follows the
+workspace bound to it. Its key is one per `<app>@<dev env>`, issued by every deploy of that environment, and it is read
+only: it reads the bound workspace's files between two heads, and nothing else.
+
+- `POST <FABRIKA_PLATFORM_SOURCE_URL>/platform/source/wait` with `{ head, reset, checks, hold }`: the head the
+  container holds and the last reset and check requests it carried out. Control holds the request up to 25 s (at once
+  when `hold` is false, at boot) and answers `{ sync, reset, checks }` when one of them moves. `sync` names `from`,
+  `to` and every changed path with its content at `to` (null deletes it). Control reads them from a GitHub compare
+  through the app's connection, relays them, and stores none. A change it cannot relay (more than 300 files or 8 MiB,
+  a binary or oversized file, an unsafe path) is recorded as needing a bootstrap run and is not answered.
+- `POST <FABRIKA_PLATFORM_SOURCE_URL>/platform/source/report` with
+  `{ head, status, target, message, log, reset, checks }`: what the container holds now, its state, the commit it
+  syncs to or refused, one line on a refusal or failure, the last lines of the application's and the launcher's
+  output, and the check results. The log is bounded and never carries the environment.
+- Both sides import one wire module, `@fabrika/app/dev/wire`, with strict parsers.
+- The receiver authorizes on the key's application environment and answers only for a `dev` environment with a bound
+  workspace. Unreviewed code in the container can read the key; it reads only source the code already runs, so it
+  grants nothing new.
 
 ## Consequences
 
@@ -144,6 +172,10 @@ What the relay does with the message, its gate and its dispatcher, is [ADR-0019]
    existing jobs table. No resource an older version created is checked again.
 4. **Floating pins.** None. The choice reads the framework release recorded in the approved snapshot, not a pin that
    floats. A snapshot recorded before Control recorded the release reads as an older application.
+
+The `source` receiver converges the same way: the console table gains the `dev-source` row, which `platform upgrade`
+republishes; migration `0016_dev_environments.sql` only adds a column with a default and a table; and only a newly
+registered `dev` environment gets the `FABRIKA_PLATFORM_SOURCE_*` pair, at its bootstrap run.
 
 ## Alternatives considered
 
