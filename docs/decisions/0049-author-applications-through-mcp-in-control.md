@@ -178,3 +178,6 @@ with the approval link.
   build before the pull request.
 - **Install dependencies in the long-lived container on a lockfile change.** Lost: a build step would run outside the
   checked build; a lockfile change takes a bootstrap run instead.
+- **Commit through GitHub's GraphQL `createCommitOnBranch`.** One mutation instead of the blob, tree, commit and ref
+  calls would save about 2 s per `apply_changes`. Lost: it cannot set the author, so the commit would name the GitHub
+  App instead of the person who made the change. Authorship matters more than the 2 s.
