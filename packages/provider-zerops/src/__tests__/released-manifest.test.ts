@@ -1,6 +1,6 @@
 // ADR-0062: an application on an older framework release registers the manifest its own CLI wrote. Each fixture is what
 // `fabrika app build --env=prod` of examples/crm wrote with the CLI from npm at its tag: 0.4.8 (0.5.5 and 0.6.0 write the
-// same bytes) and 0.7.0.
+// same bytes) and 0.7.0 (0.8.1 writes the same bytes).
 // This release must parse it and render its build with the checker release Control read the application with.
 
 import { describe, expect, test } from 'bun:test'
@@ -18,7 +18,8 @@ const RELEASES = [
 		startupDigest: 'sha256:88312782b8fe094862492595b599ab4b8e24d439de0b31afe9d6c63d9e536fb2',
 	},
 	{
-		name: '0.7.0',
+		// 0.8.1 writes the same bytes.
+		name: '0.7.0 or 0.8.1',
 		fixture: 'crm-manifest-0.7.0.json',
 		checkRelease: '0.7.0',
 		startupDigest: 'sha256:60cc6dd14474d3bb2c38af5861660add9316939b0a8eb5e54d05a3a93a856639',

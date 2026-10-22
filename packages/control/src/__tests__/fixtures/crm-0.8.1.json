@@ -1,0 +1,1042 @@
+{
+	"files": {
+		"bun.lock": "{\n  \"lockfileVersion\": 1,\n  \"configVersion\": 1,\n  \"workspaces\": {\n    \"\": {\n      \"name\": \"fabrika-example-crm\",\n      \"dependencies\": {\n        \"@fabrika/app\": \"0.8.1\",\n        \"@fabrika/db\": \"0.8.1\",\n        \"@fabrika/provider-zerops\": \"0.8.1\",\n        \"@fabrika/proxy-core\": \"0.8.1\",\n        \"@fabrika/ui\": \"0.8.1\",\n        \"kysely\": \"0.29.6\",\n        \"react\": \"^19.0.0\",\n        \"react-dom\": \"^19.0.0\",\n        \"zod\": \"^3.25.76\",\n      },\n      \"devDependencies\": {\n        \"@fabrika/check\": \"0.8.1\",\n        \"@fabrika/cli\": \"0.8.1\",\n        \"@fabrika/platform\": \"0.8.1\",\n        \"@happy-dom/global-registrator\": \"^20.11.2\",\n        \"@types/bun\": \"latest\",\n        \"@types/react\": \"^19.0.0\",\n        \"@types/react-dom\": \"^19.0.0\",\n        \"typescript\": \"^5.9.3\",\n      },\n    },\n  },\n  \"packages\": {\n    \"@babel/helper-string-parser\": [\"@babel/helper-string-parser@8.0.6\", \"\", {}, \"sha512-+6HYEBnsDRZHJtUTAEfMQd0zMDqdFHS7C+5vAsEZqBUr3vEMWOWlHJ0Jz1gS8jJIlCvLsuA6ivmeoqzH936YcA==\"],\n\n    \"@babel/helper-validator-identifier\": [\"@babel/helper-validator-identifier@8.0.6\", \"\", {}, \"sha512-HYx0YmuchRxRSpnjvcNffnPS8DCauKNmnumIuHG3jnQAVewRA7kfJGwF13ayEpSZs7s4R/oBH4eppuXcAQd5JQ==\"],\n\n    \"@babel/parser\": [\"@babel/parser@8.0.7\", \"\", { \"dependencies\": { \"@babel/types\": \"^8.0.6\" }, \"bin\": \"./bin/babel-parser.js\" }, \"sha512-UkDwEbPO1px2JQSrdh4qIgaH1JgG7GO/pFeJkpxhDxIETkT/QvGpnigXIw75ViHYPtIgKITmVUJqLjiO+JuWjA==\"],\n\n    \"@babel/types\": [\"@babel/types@8.0.6\", \"\", { \"dependencies\": { \"@babel/helper-string-parser\": \"^8.0.6\", \"@babel/helper-validator-identifier\": \"^8.0.6\" } }, \"sha512-c+xgSWboV2pdwXP67BUWDVRHi2BO5Q3KwxyFVs7taVTY+fsK47/L51ZXQoV9rozHJDNHvJ4v4WEsI/IlxV2l2A==\"],\n\n    \"@fabrika/app\": [\"@fabrika/app@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/auth\": \"0.8.1\", \"@fabrika/auth-core\": \"0.8.1\", \"@fabrika/db\": \"0.8.1\", \"@fabrika/email\": \"0.8.1\", \"@fabrika/jwks\": \"0.8.1\", \"@fabrika/platform\": \"0.8.1\", \"@fabrika/platform-node\": \"0.8.1\", \"@fabrika/proxy-core\": \"0.8.1\", \"altcha-lib\": \"2.6.0\", \"jose\": \"^5.9.0\" }, \"peerDependencies\": { \"@happy-dom/global-registrator\": \"^20.11.2\", \"react\": \"^19.0.0\", \"zod\": \"^3.25.76\" }, \"optionalPeers\": [\"@happy-dom/global-registrator\", \"react\"] }, \"sha512-0xKFDStdgEQ+X8oNJHADTFqzIb2yzhNkC6uksBfavRl/09Sz3788D7OlHcy2JUPVBrR4mQes3I35g9UnR52zog==\"],\n\n    \"@fabrika/auth\": [\"@fabrika/auth@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/auth-core\": \"0.8.1\", \"@fabrika/jwks\": \"0.8.1\", \"jose\": \"^5.9.0\", \"zod\": \"^3.25.76\" } }, \"sha512-qrjF7pKgF6Hu9MFZm6x+c0z4eN/90IfTEGFyNQ5DKCv1juNUnO12JV7DlEpIkQtS4dFyn12ALBsKKzmRLHYe7g==\"],\n\n    \"@fabrika/auth-core\": [\"@fabrika/auth-core@0.8.1\", \"\", {}, \"sha512-vbZ6Jt++Vth24aRbzF+gQNfpp0PEwGxeKUtcf4eDNJCK+wUewN+pMdIb55NISHdfY+N4mDukL82Rs/mFrPPISQ==\"],\n\n    \"@fabrika/check\": [\"@fabrika/check@0.8.1\", \"\", { \"dependencies\": { \"@babel/parser\": \"8.0.7\", \"@fabrika/app\": \"0.8.1\", \"@fabrika/auth-core\": \"0.8.1\", \"@fabrika/db\": \"0.8.1\", \"@fabrika/operations-contract\": \"0.8.1\", \"@fabrika/platform-node\": \"0.8.1\", \"zod\": \"^3.25.76\" }, \"bin\": { \"fabrika-check\": \"src/cli.ts\", \"fabrika-source-maps\": \"src/source-maps-cli.ts\" } }, \"sha512-uFu+Ai0Nrpio7Vc42AIdAb5OkMH8s3Z+gPiE2eZNqBkGa/ZrPyHM/Bd7sLI13OJH3p/tFISZLyk/mhIKKX1p7g==\"],\n\n    \"@fabrika/cli\": [\"@fabrika/cli@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/app\": \"0.8.1\", \"@fabrika/auth-core\": \"0.8.1\", \"@fabrika/check\": \"0.8.1\", \"@fabrika/control-contract\": \"0.8.1\", \"@fabrika/db\": \"0.8.1\", \"@fabrika/platform\": \"0.8.1\", \"@fabrika/platform-node\": \"0.8.1\", \"@fabrika/provider-contract\": \"0.8.1\", \"zod\": \"^3.25.76\" }, \"peerDependencies\": { \"@fabrika/builder\": \"0.8.1\", \"@fabrika/provider-cloudflare\": \"0.8.1\", \"@fabrika/provider-zerops\": \"0.8.1\" }, \"optionalPeers\": [\"@fabrika/builder\", \"@fabrika/provider-cloudflare\", \"@fabrika/provider-zerops\"], \"bin\": { \"fabrika\": \"src/index.ts\" } }, \"sha512-1vbDOu3RYz3hS7/vsgmmjIoONjll0gcJmUu2CmCvfkzrPsrQvBfLktih/PDxgdj2VoxfyfZAm7MFsUpT6ZaxhQ==\"],\n\n    \"@fabrika/control-contract\": [\"@fabrika/control-contract@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/app\": \"0.8.1\", \"@fabrika/auth-core\": \"0.8.1\", \"@fabrika/provider-contract\": \"0.8.1\", \"zod\": \"^3.25.76\" } }, \"sha512-lB7WeGYVxQ6PxDllzUi5Mor4eAsgWoURI9hFVVxtiw6OhpyvDlGUYH4QuKycqrupRgvF2DQ6woVA4rJbphpAVg==\"],\n\n    \"@fabrika/db\": [\"@fabrika/db@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/auth-core\": \"0.8.1\", \"@fabrika/platform-node\": \"0.8.1\", \"kysely\": \"0.29.6\", \"kysely-postgres-js\": \"5.0.1\", \"zod\": \"^3.25.76\" } }, \"sha512-ID6r6eAOcIBql4AMyywrNQL0V+zBGKs2Vp+0JE+1HBfumzD3VsGSGqz2W0xnkaC4ZB4pJxyVB4Up3q5UZMPXmQ==\"],\n\n    \"@fabrika/email\": [\"@fabrika/email@0.8.1\", \"\", { \"dependencies\": { \"zod\": \"^3.25.76\" } }, \"sha512-2bLzzqGGQ5dSwdXVfMxkBSDGZ/TUa490YcMKnU7kTVn313giCZ/dDD10/Lbp8xf2JbF+V44j+FlmjKjP3/HCqQ==\"],\n\n    \"@fabrika/iam-contract\": [\"@fabrika/iam-contract@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/app\": \"0.8.1\", \"@fabrika/auth-core\": \"0.8.1\" } }, \"sha512-R9Xl0hxzdGjXdwwZ6tzQGJ082Tod+NRdSUN927gsQWmdkLQBPrv7Ajp/fBl6PIwrflGzWbOUuJzii40e4Ey+rA==\"],\n\n    \"@fabrika/installation-init\": [\"@fabrika/installation-init@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/app\": \"0.8.1\", \"@fabrika/email\": \"0.8.1\", \"@fabrika/iam-contract\": \"0.8.1\", \"zod\": \"^3.25.76\" } }, \"sha512-f8ij1Q6ZXCmHy1HgQWJPuOkJVtbmKVp0M62uz9VHqgdGKwRU93jpuBxXpn3MNBJrnoqCafFhGBKBDybxTBypuw==\"],\n\n    \"@fabrika/jwks\": [\"@fabrika/jwks@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/auth-core\": \"0.8.1\", \"jose\": \"^5.9.0\", \"zod\": \"^3.25.76\" } }, \"sha512-8XjWRtsYgfpXzylTqv0xvfB2BUHLYb5XmgoWCfcB00qLvks7mxOCv+fKbUAy+leW1ifYJZD4g7UB4Us6rQsQkw==\"],\n\n    \"@fabrika/operations-contract\": [\"@fabrika/operations-contract@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/app\": \"0.8.1\", \"zod\": \"^3.25.76\" } }, \"sha512-8Nz0FUOpXDfh8m4RglYHp0+5xCNN6r2oiUaDBA4cJ0dk1uYjv10GEamm6EFGN4zPAs2I8CAwkd8SohWzq66gMw==\"],\n\n    \"@fabrika/platform\": [\"@fabrika/platform@0.8.1\", \"\", {}, \"sha512-k24i2vfD0X4oBwLOpEHfzckH4rIJmLbj0Nhq056B2xOZLkAvPJdpS76gdw2M3Rv37snA7L8K6+ztloZZdw2glw==\"],\n\n    \"@fabrika/platform-node\": [\"@fabrika/platform-node@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/platform\": \"0.8.1\" } }, \"sha512-PLNQJHrhqi3otlB/y14vTBKPLDadHJx+7wGtxLymG6D9dkwJ9EDLrWUTN42rh7agC2Z/Uf71jbSLh2DJnb0c9Q==\"],\n\n    \"@fabrika/provider-contract\": [\"@fabrika/provider-contract@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/auth-core\": \"0.8.1\" } }, \"sha512-mN4mKVXuRP4Yp3FvDGgjC6rmVeOCDLNMlSShMPXkFpVMo0aAbnp6vZqeWq3VJa2dy2XuTQ7Y/n45ClzBdfzufA==\"],\n\n    \"@fabrika/provider-zerops\": [\"@fabrika/provider-zerops@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/auth\": \"0.8.1\", \"@fabrika/auth-core\": \"0.8.1\", \"@fabrika/email\": \"0.8.1\", \"@fabrika/iam-contract\": \"0.8.1\", \"@fabrika/installation-init\": \"0.8.1\", \"@fabrika/operations-contract\": \"0.8.1\", \"@fabrika/provider-contract\": \"0.8.1\", \"@fabrika/proxy-core\": \"0.8.1\", \"yaml\": \"^2.9.1\", \"zod\": \"^3.25.76\" } }, \"sha512-J4DgbQt62rRe3zb82RsDq+Y0NGiUkr+6O6p4wit+3oJ46QsBLmvXFaWaaYdO6pV05rR2cSqS4vSUkXr7bQMnjw==\"],\n\n    \"@fabrika/proxy-core\": [\"@fabrika/proxy-core@0.8.1\", \"\", { \"dependencies\": { \"@fabrika/auth-core\": \"0.8.1\", \"@fabrika/jwks\": \"0.8.1\", \"@fabrika/platform\": \"0.8.1\", \"jose\": \"^5.9.0\", \"zod\": \"^3.25.76\" } }, \"sha512-kAUptoj7cdj8Zb/C8KOrWAWpyha7nQ3k85hQ812X/8MYH4ALIfR4MWKs8AU2z6cWS/IqOFj/AGkoefNtT81wQg==\"],\n\n    \"@fabrika/ui\": [\"@fabrika/ui@0.8.1\", \"\", { \"peerDependencies\": { \"altcha\": \"^3.4.0\", \"react\": \"^19.0.0\", \"react-dom\": \"^19.0.0\" }, \"optionalPeers\": [\"altcha\"] }, \"sha512-Qe/3IuInvFWZm10PatinLY2eTADMnSc9w0YXCPe4bmAUOBH5feDdxy4kE3eoDqq9x/1ame7jh4F6rNe+IJqLaA==\"],\n\n    \"@happy-dom/global-registrator\": [\"@happy-dom/global-registrator@20.14.6\", \"\", { \"dependencies\": { \"@types/node\": \">=20.0.0\", \"happy-dom\": \"^20.14.6\" } }, \"sha512-Xd2FwCdm0cAZ+EG0upp69tpxBT9jtvVxaZv1lnbgWsNaZyEuPs0PojYgvCmtQ1RRdRCYCyWTeLjn3Z0aSxDchA==\"],\n\n    \"@types/bun\": [\"@types/bun@1.4.3\", \"\", { \"dependencies\": { \"bun-types\": \"1.4.3\" } }, \"sha512-N67Pqy8JXbAY/j0tNraS3V5mubGvc6rrrNDmDCtZLlFzccbUJPDb0tvgUBC5q4m8ybkP93Jcn1QB+RYQ6PvBhw==\"],\n\n    \"@types/node\": [\"@types/node@26.6.5\", \"\", { \"dependencies\": { \"undici-types\": \"~8.9.0\" } }, \"sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==\"],\n\n    \"@types/react\": [\"@types/react@19.3.0\", \"\", { \"dependencies\": { \"csstype\": \"^3.2.2\" } }, \"sha512-N0rFCuH9YoxG9/m61l9MfpJKfmLOVU0em7ipIz6TRgSSkvReLB9vL85GB+yr8Bs5leqpvg96JSwF4ZS1s4viQg==\"],\n\n    \"@types/react-dom\": [\"@types/react-dom@19.3.0\", \"\", { \"peerDependencies\": { \"@types/react\": \"^19.3.0\" } }, \"sha512-ZI7bU42mZXXKHn/qNLEw2IrbiINU7X5+vfgdixBHkCNpYWXjKgfQ/P+uyGb5CjOLB9UcnTeg3rylQtV2hym44Q==\"],\n\n    \"@types/whatwg-mimetype\": [\"@types/whatwg-mimetype@3.0.2\", \"\", {}, \"sha512-c2AKvDT8ToxLIOUlN51gTiHXflsfIFisS4pO7pDPoKouJCESkhZnEy623gwP9laCy5lnLDAw1vAzu2vM2YLOrA==\"],\n\n    \"@types/ws\": [\"@types/ws@8.18.2\", \"\", { \"dependencies\": { \"@types/node\": \"*\" } }, \"sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==\"],\n\n    \"altcha-lib\": [\"altcha-lib@2.6.0\", \"\", { \"peerDependencies\": { \"@fastify/cookie\": \"^11.0.0\", \"@fastify/cors\": \"^11.0.0\", \"@fastify/formbody\": \"^8.0.0 || ^9.0.0\", \"@nestjs/common\": \"^10.0.0 || ^11.0.0 || ^12.0.0\", \"@nestjs/core\": \"^10.0.0 || ^11.0.0 || ^12.0.0\", \"@nestjs/platform-express\": \"^10.0.0 || ^11.0.0 || ^12.0.0\", \"@nestjs/platform-fastify\": \"^10.0.0 || ^11.0.0 || ^12.0.0\", \"@sveltejs/kit\": \"^2.0.0\", \"cookie-parser\": \"^1.0.0\", \"cors\": \"^2.0.0\", \"express\": \"^4.0.0 || ^5.0.0\", \"fastify\": \"^5.0.0\", \"h3\": \"^2.0.0\", \"hono\": \"^4.0.0\" }, \"optionalPeers\": [\"@fastify/cookie\", \"@fastify/cors\", \"@fastify/formbody\", \"@nestjs/common\", \"@nestjs/core\", \"@nestjs/platform-express\", \"@nestjs/platform-fastify\", \"@sveltejs/kit\", \"cookie-parser\", \"cors\", \"express\", \"fastify\", \"h3\", \"hono\"], \"bin\": { \"altcha-lib\": \"bin/cli.mjs\" } }, \"sha512-mBp/KxMZmQkckWX5iM0gHqCm0qTLGhF9r8hhFjNrBpzP0qHZBadR9oafxVx9cTLHl4h2+f56N4hRIrZzvonYLQ==\"],\n\n    \"buffer-image-size\": [\"buffer-image-size@0.6.4\", \"\", { \"dependencies\": { \"@types/node\": \"*\" } }, \"sha512-nEh+kZOPY1w+gcCMobZ6ETUp9WfibndnosbpwB1iJk/8Gt5ZF2bhS6+B6bPYz424KtwsR6Rflc3tCz1/ghX2dQ==\"],\n\n    \"bun-types\": [\"bun-types@1.4.3\", \"\", { \"dependencies\": { \"@types/node\": \"*\", \"undici-types\": \"*\" } }, \"sha512-tinRJNGOmUN+tEAsn2y2e942n9JHRHR42iUYzDH75NmhJqVBokGSQkkfSFdNWwsANIdrK6ACH9t01M452YyTwg==\"],\n\n    \"csstype\": [\"csstype@3.2.3\", \"\", {}, \"sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==\"],\n\n    \"entities\": [\"entities@7.0.1\", \"\", {}, \"sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA==\"],\n\n    \"happy-dom\": [\"happy-dom@20.14.6\", \"\", { \"dependencies\": { \"@types/node\": \">=20.0.0\", \"@types/whatwg-mimetype\": \"^3.0.2\", \"@types/ws\": \"^8.18.1\", \"buffer-image-size\": \"^0.6.4\", \"entities\": \"^7.0.1\", \"whatwg-mimetype\": \"^3.0.0\", \"ws\": \"^8.21.0\" } }, \"sha512-5DDsf4QmEIlRL6NkCv/fxSjYHHkZceL/IaYQdJc2h3G7DRTEai++VTjbfL0LB9geW2VrA3+vrjF3Efx+OTtX0Q==\"],\n\n    \"jose\": [\"jose@5.10.0\", \"\", {}, \"sha512-s+3Al/p9g32Iq+oqXxkW//7jk2Vig6FF1CFqzVXoTUXt2qz89YWbL+OwS17NFYEvxC35n0FKeGO2LGYSxeM2Gg==\"],\n\n    \"kysely\": [\"kysely@0.29.6\", \"\", {}, \"sha512-hHaB8C/rfzDDtr/t8YZwxAuPJTT0zHyaPoVzcXwDYhYNAgH/4sIfVhi/XLLIY+bL/FqaIJnjATDbi8ObSELmxg==\"],\n\n    \"kysely-postgres-js\": [\"kysely-postgres-js@5.0.1\", \"\", { \"peerDependencies\": { \"kysely\": \">= 0.29.0 < 1\", \"postgres\": \"^3.4.0\" }, \"optionalPeers\": [\"postgres\"] }, \"sha512-3qY2qzXJszS35CMuknpon79CE5G7MfcTMoIQHuFmGsaQQ2rau3rwx7eNaRJkO9nhli8yQedQroBZ/VehzNJy4w==\"],\n\n    \"react\": [\"react@19.3.1\", \"\", {}, \"sha512-QNhWdt7nrgVWWQG58QuGsAR3jv3Hbe4mb4vz7w2csnHavciZJgda1CPNaldF6eVxv90ud3jUXpKlHL69gO38yw==\"],\n\n    \"react-dom\": [\"react-dom@19.3.1\", \"\", { \"dependencies\": { \"scheduler\": \"^0.28.0\" }, \"peerDependencies\": { \"react\": \"^19.3.1\" } }, \"sha512-Y0bARz53lhEC1NMCASs0/j+faB/zqt3R8hpvg1e8+61ZVJ4UL0UdC4cBbXfZMcIuhrfgeILTLe+ZeBCavQPtKQ==\"],\n\n    \"scheduler\": [\"scheduler@0.28.0\", \"\", {}, \"sha512-juorfCmIkIw8tT+p5BXSm6PJjQF/ycEYmKyzURCIt/RaZIhL+PulbQ9Yu2z1HdOJDdqDTlxA1+xKBmHXJsczAw==\"],\n\n    \"typescript\": [\"typescript@5.9.3\", \"\", { \"bin\": { \"tsc\": \"bin/tsc\", \"tsserver\": \"bin/tsserver\" } }, \"sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==\"],\n\n    \"undici-types\": [\"undici-types@8.9.0\", \"\", {}, \"sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==\"],\n\n    \"whatwg-mimetype\": [\"whatwg-mimetype@3.0.0\", \"\", {}, \"sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q==\"],\n\n    \"ws\": [\"ws@8.22.0\", \"\", { \"peerDependencies\": { \"bufferutil\": \"^4.0.1\", \"utf-8-validate\": \">=5.0.2\" }, \"optionalPeers\": [\"bufferutil\", \"utf-8-validate\"] }, \"sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==\"],\n\n    \"yaml\": [\"yaml@2.9.1\", \"\", { \"bin\": { \"yaml\": \"bin.mjs\" } }, \"sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==\"],\n\n    \"zod\": [\"zod@3.25.76\", \"\", {}, \"sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==\"],\n\n    \"bun-types/undici-types\": [\"undici-types@8.12.3\", \"\", {}, \"sha512-EXE4ydL3S76dFb27UFjNVZHTyv/TLdATj/KUe29ptdcg6qXL48J2tZ3126E5kICj5jn781OR+XlVH1N6Mz8jbA==\"],\n  }\n}\n",
+		"db/migrations/20261012120000_crm.sql": "-- The CRM's schema. An org is the scope value IAM grants roles in; no table owns it. A company lies in an org, a\n-- contact and a deal in a company, a task in a deal. Every row carries its whole containment chain, and each contained\n-- table references UNIQUE (id, <chain>) of its container, so a moved company moves its contacts, deals and tasks.\n\nCREATE TYPE deal_stage AS ENUM ('lead', 'qualified', 'proposal', 'won', 'lost');\nCREATE TYPE activity_kind AS ENUM ('note', 'call', 'email', 'meeting');\n\nCREATE TABLE companies (\n\tid UUID PRIMARY KEY,\n\torg_id TEXT NOT NULL,\n\tname TEXT NOT NULL,\n\twebsite TEXT,\n\tcreated_by TEXT NOT NULL,\n\tversion INTEGER NOT NULL,\n\tUNIQUE (id, org_id)\n);\nCREATE INDEX companies_org ON companies (org_id);\n\nCREATE TABLE contacts (\n\tid UUID PRIMARY KEY,\n\tcompany_id UUID NOT NULL,\n\torg_id TEXT NOT NULL,\n\tname TEXT NOT NULL,\n\temail TEXT,\n\tphone TEXT,\n\tcreated_by TEXT NOT NULL,\n\tversion INTEGER NOT NULL,\n\tUNIQUE (id, company_id, org_id),\n\tFOREIGN KEY (company_id, org_id) REFERENCES companies (id, org_id) ON UPDATE CASCADE ON DELETE CASCADE\n);\nCREATE INDEX contacts_company ON contacts (company_id);\n\n-- `source` is where a deal came from (a referral, an event), free text; `owner` is the member who owns it.\nCREATE TABLE deals (\n\tid UUID PRIMARY KEY,\n\tcompany_id UUID NOT NULL,\n\torg_id TEXT NOT NULL,\n\ttitle TEXT NOT NULL,\n\tvalue INTEGER NOT NULL,\n\tstage deal_stage NOT NULL,\n\tsource TEXT,\n\towner TEXT NOT NULL,\n\towner_label TEXT NOT NULL,\n\tcreated_by TEXT NOT NULL,\n\tversion INTEGER NOT NULL,\n\tUNIQUE (id, company_id, org_id),\n\tFOREIGN KEY (company_id, org_id) REFERENCES companies (id, org_id) ON UPDATE CASCADE ON DELETE CASCADE\n);\nCREATE INDEX deals_company ON deals (company_id);\n\nCREATE TABLE tasks (\n\tid UUID PRIMARY KEY,\n\tdeal_id UUID NOT NULL,\n\tcompany_id UUID NOT NULL,\n\torg_id TEXT NOT NULL,\n\ttitle TEXT NOT NULL,\n\tdue_on DATE NOT NULL,\n\tassignee TEXT NOT NULL,\n\tassignee_label TEXT NOT NULL,\n\tdone BOOLEAN NOT NULL DEFAULT false,\n\toverdue BOOLEAN NOT NULL DEFAULT false,\n\tcreated_by TEXT NOT NULL,\n\tversion INTEGER NOT NULL,\n\tUNIQUE (id, deal_id, company_id, org_id),\n\tFOREIGN KEY (deal_id, company_id, org_id) REFERENCES deals (id, company_id, org_id) ON UPDATE CASCADE ON DELETE CASCADE\n);\nCREATE INDEX tasks_deal ON tasks (deal_id);\nCREATE INDEX tasks_open_due ON tasks (due_on) WHERE NOT done;\n\n-- Activities are notes on a contact or on a deal. A child table has one parent, so each parent has its own table.\nCREATE TABLE contact_activities (\n\tid UUID PRIMARY KEY,\n\tcontact_id UUID NOT NULL,\n\tcompany_id UUID NOT NULL,\n\torg_id TEXT NOT NULL,\n\tkind activity_kind NOT NULL,\n\tbody TEXT NOT NULL,\n\tauthor_label TEXT NOT NULL,\n\tcreated_by TEXT NOT NULL,\n\tcreated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n\tFOREIGN KEY (contact_id, company_id, org_id) REFERENCES contacts (id, company_id, org_id) ON UPDATE CASCADE ON DELETE CASCADE\n);\nCREATE INDEX contact_activities_contact ON contact_activities (contact_id);\n\nCREATE TABLE deal_activities (\n\tid UUID PRIMARY KEY,\n\tdeal_id UUID NOT NULL,\n\tcompany_id UUID NOT NULL,\n\torg_id TEXT NOT NULL,\n\tkind activity_kind NOT NULL,\n\tbody TEXT NOT NULL,\n\tauthor_label TEXT NOT NULL,\n\tcreated_by TEXT NOT NULL,\n\tcreated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n\tFOREIGN KEY (deal_id, company_id, org_id) REFERENCES deals (id, company_id, org_id) ON UPDATE CASCADE ON DELETE CASCADE\n);\nCREATE INDEX deal_activities_deal ON deal_activities (deal_id);\n\n-- The `attachments` collection of a deal, as fileTableSql('attachments', { table: 'deals', … }) writes it.\nCREATE TABLE fabrika_files_attachments (\n\tid UUID PRIMARY KEY,\n\towner_id UUID,\n\tcompany_id UUID,\n\torg_id TEXT,\n\tstatus TEXT NOT NULL CHECK (status IN ('pending', 'live')),\n\tobject_key TEXT NOT NULL UNIQUE,\n\tsize BIGINT,\n\tcontent_type TEXT NOT NULL,\n\tsha256 TEXT,\n\toriginal_name TEXT,\n\tcreated_by TEXT NOT NULL,\n\tcreated_at TIMESTAMPTZ NOT NULL,\n\tdeleted_at TIMESTAMPTZ,\n\tFOREIGN KEY (owner_id, company_id, org_id) REFERENCES deals (id, company_id, org_id) ON UPDATE CASCADE ON DELETE SET NULL\n);\nCREATE INDEX fabrika_files_attachments_owner ON fabrika_files_attachments (owner_id) WHERE deleted_at IS NULL;\nCREATE INDEX fabrika_files_attachments_removable ON fabrika_files_attachments (created_at) WHERE deleted_at IS NOT NULL OR owner_id IS NULL OR status = 'pending';\n",
+		"db/migrations/20261020120000_deal_attachments.sql": "-- A deal's attachments as rows with a file column, which replace the `attachments` file collection. The framework's\n-- 0008 migration copied the collection's files into fabrika_files under their own ids; each one becomes a row here,\n-- under the same id.\n\nCREATE TABLE deal_attachments (\n\tid UUID PRIMARY KEY,\n\tdeal_id UUID NOT NULL,\n\tcompany_id UUID NOT NULL,\n\torg_id TEXT NOT NULL,\n\tfile UUID NOT NULL REFERENCES fabrika_files (id),\n\tname TEXT NOT NULL,\n\tcreated_by TEXT NOT NULL,\n\tcreated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n\tFOREIGN KEY (deal_id, company_id, org_id) REFERENCES deals (id, company_id, org_id) ON UPDATE CASCADE ON DELETE CASCADE\n);\nCREATE INDEX deal_attachments_deal ON deal_attachments (deal_id);\nCREATE INDEX deal_attachments_file ON deal_attachments (file);\n\n-- The files an older instance, still serving during the rollout, wrote after 0008 are copied too, so every row the\n-- insert reads has its fabrika_files row: the rows not deleted, not pending, that still have a deal.\nSELECT fabrika_files_copy_legacy('attachments');\nINSERT INTO deal_attachments (id, deal_id, company_id, org_id, file, name, created_by, created_at)\nSELECT s.id, s.owner_id, s.company_id, s.org_id, s.id, COALESCE(s.original_name, 'attachment'), s.created_by, s.created_at\nFROM fabrika_files_attachments s\nWHERE s.owner_id IS NOT NULL AND s.deleted_at IS NULL AND s.status <> 'pending';\n",
+		"db/migrations/20261020120100_release_attachments.sql": "-- The last adoption migration of the `attachments` collection: the framework drops its table and lets the sweep\n-- delete what no row references.\nSELECT fabrika_files_release('attachments');\n",
+		"fabrika.contract.ts": "import { activities } from './src/activities/endpoints'\nimport { app } from './src/app-kit'\nimport { attachments } from './src/attachments/endpoints'\nimport { companies } from './src/companies/endpoints'\nimport { contacts } from './src/contacts/endpoints'\nimport { deals } from './src/deals/endpoints'\nimport { orgs } from './src/orgs/endpoints'\nimport { MAX_ATTACHMENT_BYTES } from './src/schemas'\nimport { overdue, tasks } from './src/tasks/endpoints'\n\nexport const contract = app.contract((c) => ({\n\tapi: c.rpc('/api', { orgs, companies, contacts, deals, tasks, activities, attachments }),\n\tsite: c.spa('/', { dir: 'dist/web', access: { action: 'crm.read', over: 'org' } }),\n\tfiles: {\n\t\tattachments: c.files({ maxBytes: MAX_ATTACHMENT_BYTES, types: ['image/png', 'image/jpeg', 'application/pdf', 'text/plain', 'text/csv'] }),\n\t},\n\tjobs: { overdue },\n\thealth: c.health('/healthz'),\n}))\n",
+		"package.json": "{\n\t\"name\": \"fabrika-example-crm\",\n\t\"private\": true,\n\t\"type\": \"module\",\n\t\"scripts\": {\n\t\t\"build:manifest\": \"fabrika app build --env=prod\",\n\t\t\"build:web\": \"bun build-web.ts\",\n\t\t\"typecheck\": \"tsc --noEmit\",\n\t\t\"test\": \"bun run build:web && bun test --isolate\"\n\t},\n\t\"dependencies\": {\n\t\t\"@fabrika/app\": \"0.8.1\",\n\t\t\"@fabrika/db\": \"0.8.1\",\n\t\t\"@fabrika/provider-zerops\": \"0.8.1\",\n\t\t\"@fabrika/proxy-core\": \"0.8.1\",\n\t\t\"@fabrika/ui\": \"0.8.1\",\n\t\t\"kysely\": \"0.29.6\",\n\t\t\"react\": \"^19.0.0\",\n\t\t\"react-dom\": \"^19.0.0\",\n\t\t\"zod\": \"^3.25.76\"\n\t},\n\t\"devDependencies\": {\n\t\t\"@fabrika/check\": \"0.8.1\",\n\t\t\"@fabrika/cli\": \"0.8.1\",\n\t\t\"@fabrika/platform\": \"0.8.1\",\n\t\t\"@happy-dom/global-registrator\": \"^20.11.2\",\n\t\t\"@types/bun\": \"latest\",\n\t\t\"@types/react\": \"^19.0.0\",\n\t\t\"@types/react-dom\": \"^19.0.0\",\n\t\t\"typescript\": \"^5.9.3\"\n\t}\n}\n",
+		"src/activities/endpoints.ts": "import { fromPage } from '@fabrika/app'\nimport { z } from 'zod/v4'\nimport { app } from '../app-kit'\nimport { Cursor, Done, Next } from '../schemas'\n\nconst ActivityKind = z.enum(['note', 'call', 'email', 'meeting'])\nconst Activity = z.strictObject({ id: z.uuid(), kind: ActivityKind, body: z.string(), authorLabel: z.string(), createdAt: z.iso.datetime() })\nconst ActivityPage = z.strictObject({ items: z.array(Activity), next: Next })\nconst Body = z.string().min(1).max(5000)\nconst OfContact = z.strictObject({ contactId: z.uuid(), after: Cursor.optional() })\nconst OfDeal = z.strictObject({ dealId: z.uuid(), after: Cursor.optional() })\nconst LogOnContact = z.strictObject({ contactId: z.uuid(), kind: ActivityKind, body: Body })\nconst LogOnDeal = z.strictObject({ dealId: z.uuid(), kind: ActivityKind, body: Body })\n\nexport const activities = app.group({ callers: ['human'] }, (r) => ({\n\tofContact: r.query({ input: OfContact, output: ActivityPage, access: { action: 'crm.read', on: 'contact', from: 'contactId' } })\n\t\t.handle(async ({ input, ctx }) =>\n\t\t\tfromPage(Activity, await ctx.db.target.contact_activities.list({ orderBy: [['created_at', 'desc']], after: input.after }))\n\t\t),\n\tofDeal: r.query({ input: OfDeal, output: ActivityPage, access: { action: 'crm.read', on: 'deal', from: 'dealId' } })\n\t\t.handle(async ({ input, ctx }) =>\n\t\t\tfromPage(Activity, await ctx.db.target.deal_activities.list({ orderBy: [['created_at', 'desc']], after: input.after }))\n\t\t),\n\tlogContact: r.mutation({ input: LogOnContact, output: Done, access: { action: 'activities.write', on: 'contact', from: 'contactId' } })\n\t\t.handle(({ input, ctx }) => ctx.db.target.contact_activities.insert({ kind: input.kind, body: input.body, author_label: ctx.principal.label })),\n\tlogDeal: r.mutation({ input: LogOnDeal, output: Done, access: { action: 'activities.write', on: 'deal', from: 'dealId' } })\n\t\t.handle(({ input, ctx }) => ctx.db.target.deal_activities.insert({ kind: input.kind, body: input.body, author_label: ctx.principal.label })),\n}))\n",
+		"src/app-kit.ts": "import { defineApp } from '@fabrika/app/contract'\nimport { tables } from './db/tables'\nimport { vocabulary } from './vocabulary'\n\nexport const app = defineApp(vocabulary, tables)\n",
+		"src/attachments/endpoints.ts": "import { ConflictError, fromPage } from '@fabrika/app'\nimport { file } from '@fabrika/app/contract'\nimport { z } from 'zod/v4'\nimport { app } from '../app-kit'\nimport { Cursor, Done, MAX_ATTACHMENTS_PER_DEAL, Name, Next } from '../schemas'\n\nconst FileInfo = z.strictObject({\n\tid: z.uuid(),\n\tname: z.nullable(z.string()),\n\ttype: z.string(),\n\tsize: z.int(),\n\tstatus: z.enum(['pending', 'quarantined', 'live', 'rejected']),\n})\nconst Attachment = z.strictObject({ id: z.uuid(), name: z.string(), file: FileInfo, createdAt: z.iso.datetime() })\nconst AttachmentPage = z.strictObject({ items: z.array(Attachment), next: Next })\nconst OfDeal = z.strictObject({ dealId: z.uuid(), after: Cursor.optional() })\nconst OneAttachment = z.strictObject({ dealId: z.uuid(), id: z.uuid() })\n\nexport const attachments = app.group({ callers: ['human'] }, (r) => ({\n\tupload: r.mutation({\n\t\tinput: z.strictObject({ dealId: z.uuid(), name: Name, file: file('attachments') }),\n\t\toutput: Done,\n\t\taccess: {\n\t\t\tcapabilities: {\n\t\t\t\tdeal: { action: 'deals.write', on: 'deal', from: 'dealId' },\n\t\t\t\tattached: { action: 'crm.read', on: 'deal', from: 'dealId' },\n\t\t\t},\n\t\t},\n\t}).handle(async ({ input, ctx }) => {\n\t\t// The deal's lock orders concurrent uploads, so the count cannot pass the limit.\n\t\tawait ctx.db.on(ctx.capabilities.deal).getForUpdate()\n\t\tconst held = await ctx.db.on(ctx.capabilities.attached).deal_attachments.list({ limit: MAX_ATTACHMENTS_PER_DEAL })\n\t\tif (held.items.length >= MAX_ATTACHMENTS_PER_DEAL) {\n\t\t\tthrow new ConflictError(`a deal holds at most ${MAX_ATTACHMENTS_PER_DEAL} attachments`)\n\t\t}\n\t\treturn ctx.db.on(ctx.capabilities.deal).deal_attachments.insert({ file: input.file, name: input.name })\n\t}),\n\tlist: r.query({ input: OfDeal, output: AttachmentPage, access: { action: 'crm.read', on: 'deal', from: 'dealId' } })\n\t\t.handle(async ({ input, ctx }) =>\n\t\t\tfromPage(Attachment, await ctx.db.target.deal_attachments.list({ orderBy: [['created_at', 'asc']], after: input.after }))\n\t\t),\n\tdownload: r.query({ input: OneAttachment, output: file('attachments'), access: { action: 'crm.read', on: 'deal', from: 'dealId' } })\n\t\t.handle(async ({ input, ctx }) => (await ctx.db.target.deal_attachments.get(input.id)).file),\n\tremove: r.mutation({ input: OneAttachment, output: Done, access: { action: 'crm.delete', on: 'deal', from: 'dealId' } })\n\t\t.handle(({ input, ctx }) => ctx.db.target.deal_attachments.remove(input.id).then(() => ({ id: input.id }))),\n}))\n",
+		"src/companies/endpoints.ts": "import { fromPage, fromRow } from '@fabrika/app'\nimport { z } from 'zod/v4'\nimport { app } from '../app-kit'\nimport { ById, ClearableText, Done, MaybeText, Name, Next, OptionalText, Page, Saved, ScopeValue, Versioned } from '../schemas'\n\nconst Company = z.strictObject({ id: z.uuid(), orgId: z.string(), name: z.string(), website: MaybeText, version: z.int() })\nconst CompanyPage = z.strictObject({ items: z.array(Company), next: Next })\nconst NewCompany = z.strictObject({ orgId: ScopeValue, name: Name, website: OptionalText })\nconst EditCompany = z.strictObject({ id: z.uuid(), name: Name, website: ClearableText, expectVersion: z.int().positive() })\n\nexport const companies = app.group({ callers: ['human'] }, (r) => ({\n\tlist: r.query({ input: Page, output: CompanyPage, access: { action: 'crm.read', over: 'org' } })\n\t\t.handle(async ({ input, ctx }) => fromPage(Company, await ctx.db.within.companies.list({ orderBy: [['name', 'asc']], after: input.after }))),\n\tget: r.query({ input: ById, output: Company, access: { action: 'crm.read', on: 'company', from: 'id' } })\n\t\t.handle(async ({ ctx }) => fromRow(Company, await ctx.db.target.get())),\n\tcreate: r.mutation({ input: NewCompany, output: Saved, access: { action: 'crm.write', in: 'org', from: 'orgId' } })\n\t\t.handle(({ input, ctx }) => ctx.db.target.companies.insert({ name: input.name, website: input.website ?? null })),\n\tedit: r.mutation({ input: EditCompany, output: Saved, access: { action: 'crm.write', on: 'company', from: 'id' } })\n\t\t.handle(({ input, ctx }) => ctx.db.target.update({ name: input.name, website: input.website }, { expectVersion: input.expectVersion })),\n\tremove: r.mutation({ input: Versioned, output: Done, access: { action: 'crm.delete', on: 'company', from: 'id' } })\n\t\t.handle(({ input, ctx }) => ctx.db.target.remove({ expectVersion: input.expectVersion }).then(() => ({ id: ctx.target.value }))),\n}))\n",
+		"src/contacts/endpoints.ts": "import { fromPage, fromRow } from '@fabrika/app'\nimport { z } from 'zod/v4'\nimport { app } from '../app-kit'\nimport { ById, ClearableText, Done, MaybeText, Name, Next, OptionalText, Page, Saved, Versioned } from '../schemas'\n\nconst Contact = z.strictObject({ id: z.uuid(), companyId: z.uuid(), name: z.string(), email: MaybeText, phone: MaybeText, version: z.int() })\nconst ContactPage = z.strictObject({ items: z.array(Contact), next: Next })\nconst NewContact = z.strictObject({ companyId: z.uuid(), name: Name, email: OptionalText, phone: OptionalText })\nconst EditContact = z.strictObject({ id: z.uuid(), name: Name, email: ClearableText, phone: ClearableText, expectVersion: z.int().positive() })\n\nexport const contacts = app.group({ callers: ['human'] }, (r) => ({\n\tlist: r.query({ input: Page, output: ContactPage, access: { action: 'crm.read', over: 'company' } })\n\t\t.handle(async ({ input, ctx }) => fromPage(Contact, await ctx.db.within.contacts.list({ orderBy: [['name', 'asc']], after: input.after }))),\n\tget: r.query({ input: ById, output: Contact, access: { action: 'crm.read', on: 'contact', from: 'id' } })\n\t\t.handle(async ({ ctx }) => fromRow(Contact, await ctx.db.target.get())),\n\tcreate: r.mutation({ input: NewContact, output: Saved, access: { action: 'crm.write', in: 'company', from: 'companyId' } })\n\t\t.handle(({ input, ctx }) => ctx.db.target.contacts.insert({ name: input.name, email: input.email ?? null, phone: input.phone ?? null })),\n\tedit: r.mutation({ input: EditContact, output: Saved, access: { action: 'crm.write', on: 'contact', from: 'id' } })\n\t\t.handle(({ input: { expectVersion, ...contact }, ctx }) => ctx.db.target.update(contact, { expectVersion })),\n\tremove: r.mutation({ input: Versioned, output: Done, access: { action: 'crm.delete', on: 'contact', from: 'id' } })\n\t\t.handle(({ input, ctx }) => ctx.db.target.remove({ expectVersion: input.expectVersion }).then(() => ({ id: ctx.target.value }))),\n}))\n",
+		"src/db/schema.generated.ts": "// @generated by fabrika db codegen from the migrated database. Do not edit: write a migration, then run fabrika db codegen.\n\nimport type { TypedColumnList } from '@fabrika/db'\nimport type { ColumnType, Generated } from 'kysely'\n\nexport interface CompaniesTable {\n\tid: string\n\torg_id: string\n\tname: string\n\twebsite: string | null\n\tcreated_by: string\n\tversion: number\n}\n\nexport interface ContactActivitiesTable {\n\tid: string\n\tcontact_id: string\n\tcompany_id: string\n\torg_id: string\n\tkind: 'note' | 'call' | 'email' | 'meeting'\n\tbody: string\n\tauthor_label: string\n\tcreated_by: string\n\tcreated_at: ColumnType<Date, Date | string | undefined, Date | string>\n}\n\nexport interface ContactsTable {\n\tid: string\n\tcompany_id: string\n\torg_id: string\n\tname: string\n\temail: string | null\n\tphone: string | null\n\tcreated_by: string\n\tversion: number\n}\n\nexport interface DealActivitiesTable {\n\tid: string\n\tdeal_id: string\n\tcompany_id: string\n\torg_id: string\n\tkind: 'note' | 'call' | 'email' | 'meeting'\n\tbody: string\n\tauthor_label: string\n\tcreated_by: string\n\tcreated_at: ColumnType<Date, Date | string | undefined, Date | string>\n}\n\nexport interface DealAttachmentsTable {\n\tid: string\n\tdeal_id: string\n\tcompany_id: string\n\torg_id: string\n\tfile: string\n\tname: string\n\tcreated_by: string\n\tcreated_at: ColumnType<Date, Date | string | undefined, Date | string>\n}\n\nexport interface DealsTable {\n\tid: string\n\tcompany_id: string\n\torg_id: string\n\ttitle: string\n\tvalue: number\n\tstage: 'lead' | 'qualified' | 'proposal' | 'won' | 'lost'\n\tsource: string | null\n\towner: string\n\towner_label: string\n\tcreated_by: string\n\tversion: number\n}\n\nexport interface TasksTable {\n\tid: string\n\tdeal_id: string\n\tcompany_id: string\n\torg_id: string\n\ttitle: string\n\tdue_on: string\n\tassignee: string\n\tassignee_label: string\n\tdone: Generated<boolean>\n\toverdue: Generated<boolean>\n\tcreated_by: string\n\tversion: number\n}\n\nexport interface DB {\n\tcompanies: CompaniesTable\n\tcontact_activities: ContactActivitiesTable\n\tcontacts: ContactsTable\n\tdeal_activities: DealActivitiesTable\n\tdeal_attachments: DealAttachmentsTable\n\tdeals: DealsTable\n\ttasks: TasksTable\n}\n\nexport const columns: TypedColumnList<DB> = {\n\t'companies': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'org_id',\n\t\t\t'name',\n\t\t\t'website',\n\t\t\t'created_by',\n\t\t\t'version',\n\t\t],\n\t\tforeignKeys: [],\n\t},\n\t'contact_activities': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'contact_id',\n\t\t\t'company_id',\n\t\t\t'org_id',\n\t\t\t'kind',\n\t\t\t'body',\n\t\t\t'author_label',\n\t\t\t'created_by',\n\t\t\t'created_at',\n\t\t],\n\t\tforeignKeys: [\n\t\t\t{\n\t\t\t\tcolumns: ['contact_id', 'company_id', 'org_id'],\n\t\t\t\ttable: 'contacts',\n\t\t\t\treferences: ['id', 'company_id', 'org_id'],\n\t\t\t},\n\t\t],\n\t\ttimestamps: ['created_at'],\n\t},\n\t'contacts': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'company_id',\n\t\t\t'org_id',\n\t\t\t'name',\n\t\t\t'email',\n\t\t\t'phone',\n\t\t\t'created_by',\n\t\t\t'version',\n\t\t],\n\t\tforeignKeys: [\n\t\t\t{\n\t\t\t\tcolumns: ['company_id', 'org_id'],\n\t\t\t\ttable: 'companies',\n\t\t\t\treferences: ['id', 'org_id'],\n\t\t\t},\n\t\t],\n\t},\n\t'deal_activities': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'deal_id',\n\t\t\t'company_id',\n\t\t\t'org_id',\n\t\t\t'kind',\n\t\t\t'body',\n\t\t\t'author_label',\n\t\t\t'created_by',\n\t\t\t'created_at',\n\t\t],\n\t\tforeignKeys: [\n\t\t\t{\n\t\t\t\tcolumns: ['deal_id', 'company_id', 'org_id'],\n\t\t\t\ttable: 'deals',\n\t\t\t\treferences: ['id', 'company_id', 'org_id'],\n\t\t\t},\n\t\t],\n\t\ttimestamps: ['created_at'],\n\t},\n\t'deal_attachments': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'deal_id',\n\t\t\t'company_id',\n\t\t\t'org_id',\n\t\t\t'file',\n\t\t\t'name',\n\t\t\t'created_by',\n\t\t\t'created_at',\n\t\t],\n\t\tforeignKeys: [\n\t\t\t{\n\t\t\t\tcolumns: ['deal_id', 'company_id', 'org_id'],\n\t\t\t\ttable: 'deals',\n\t\t\t\treferences: ['id', 'company_id', 'org_id'],\n\t\t\t},\n\t\t],\n\t\ttimestamps: ['created_at'],\n\t},\n\t'deals': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'company_id',\n\t\t\t'org_id',\n\t\t\t'title',\n\t\t\t'value',\n\t\t\t'stage',\n\t\t\t'source',\n\t\t\t'owner',\n\t\t\t'owner_label',\n\t\t\t'created_by',\n\t\t\t'version',\n\t\t],\n\t\tforeignKeys: [\n\t\t\t{\n\t\t\t\tcolumns: ['company_id', 'org_id'],\n\t\t\t\ttable: 'companies',\n\t\t\t\treferences: ['id', 'org_id'],\n\t\t\t},\n\t\t],\n\t},\n\t'tasks': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'deal_id',\n\t\t\t'company_id',\n\t\t\t'org_id',\n\t\t\t'title',\n\t\t\t'due_on',\n\t\t\t'assignee',\n\t\t\t'assignee_label',\n\t\t\t'done',\n\t\t\t'overdue',\n\t\t\t'created_by',\n\t\t\t'version',\n\t\t],\n\t\tforeignKeys: [\n\t\t\t{\n\t\t\t\tcolumns: ['deal_id', 'company_id', 'org_id'],\n\t\t\t\ttable: 'deals',\n\t\t\t\treferences: ['id', 'company_id', 'org_id'],\n\t\t\t},\n\t\t],\n\t\tdates: ['due_on'],\n\t},\n}\n",
+		"src/db/tables.ts": "import { defineTables } from '@fabrika/db/tables'\nimport { vocabulary } from '../vocabulary'\nimport { columns } from './schema.generated'\n\nexport const tables = defineTables(vocabulary, columns)({\n\tcompanies: {\n\t\tscope: { dimension: 'company' },\n\t\tactions: { read: 'crm.read', insert: 'crm.write', update: 'crm.write', delete: 'crm.delete' },\n\t\tinsert: ['name', 'website'],\n\t\tupdate: ['name', 'website'],\n\t\tversion: 'version',\n\t\tcreatedBy: 'created_by',\n\t},\n\tcontacts: {\n\t\tscope: { dimension: 'contact' },\n\t\tactions: { read: 'crm.read', insert: 'crm.write', update: 'crm.write', delete: 'crm.delete' },\n\t\tinsert: ['name', 'email', 'phone'],\n\t\tupdate: ['name', 'email', 'phone'],\n\t\tversion: 'version',\n\t\tcreatedBy: 'created_by',\n\t},\n\tdeals: {\n\t\tscope: { dimension: 'deal' },\n\t\tactions: { read: 'crm.read', insert: 'deals.write', update: 'deals.write', delete: 'crm.delete' },\n\t\tinsert: ['title', 'value', 'stage', 'source', 'owner', 'owner_label'],\n\t\tupdate: ['title', 'value', 'stage', 'source'],\n\t\tversion: 'version',\n\t\tcreatedBy: 'created_by',\n\t\tcolumns: { owner: { write: 'deals.assign' }, owner_label: { write: 'deals.assign' } },\n\t},\n\ttasks: {\n\t\tscope: { dimension: 'task' },\n\t\tactions: { read: 'crm.read', insert: 'tasks.write', update: 'tasks.write' },\n\t\tinsert: ['title', 'due_on', 'assignee', 'assignee_label'],\n\t\tupdate: ['done', 'overdue'],\n\t\tversion: 'version',\n\t\tcreatedBy: 'created_by',\n\t},\n\tcontact_activities: {\n\t\tscope: { child: 'contacts' },\n\t\tactions: { read: 'crm.read', insert: 'activities.write' },\n\t\tinsert: ['kind', 'body', 'author_label'],\n\t\tcreatedBy: 'created_by',\n\t},\n\tdeal_activities: {\n\t\tscope: { child: 'deals' },\n\t\tactions: { read: 'crm.read', insert: 'activities.write' },\n\t\tinsert: ['kind', 'body', 'author_label'],\n\t\tcreatedBy: 'created_by',\n\t},\n\tdeal_attachments: {\n\t\tscope: { child: 'deals' },\n\t\tactions: { read: 'crm.read', insert: 'deals.write', delete: 'crm.delete' },\n\t\tinsert: ['file', 'name'],\n\t\tfiles: { file: 'attachments' },\n\t\tcreatedBy: 'created_by',\n\t},\n})\n",
+		"src/deals/endpoints.ts": "import { ConflictError, fromPage, fromRow } from '@fabrika/app'\nimport { z } from 'zod/v4'\nimport { app } from '../app-kit'\nimport { picked } from '../orgs/logic'\nimport { ById, ClearableText, Done, MaybeText, Name, Next, OptionalText, Page, PrincipalId, Saved, Stage, Versioned } from '../schemas'\nimport { isClosed, pipelineOf } from './logic'\n\nconst Deal = z.strictObject({\n\tid: z.uuid(),\n\tcompanyId: z.uuid(),\n\ttitle: z.string(),\n\tvalue: z.int(),\n\tstage: Stage,\n\tsource: MaybeText,\n\towner: z.string(),\n\townerLabel: z.string(),\n\tversion: z.int(),\n})\nconst DealPage = z.strictObject({ items: z.array(Deal), next: Next })\nconst NewDeal = z.strictObject({ companyId: z.uuid(), title: Name, value: z.int().min(0), source: OptionalText })\nconst EditDeal = z.strictObject({ id: z.uuid(), title: Name, value: z.int().min(0), source: ClearableText, expectVersion: z.int().positive() })\nconst MoveDeal = z.strictObject({ id: z.uuid(), stage: Stage, expectVersion: z.int().positive() })\nconst AssignDeal = z.strictObject({ id: z.uuid(), newOwner: PrincipalId, expectVersion: z.int().positive() })\nconst StageTotal = z.strictObject({ stage: Stage, count: z.int(), value: z.int() })\nconst Pipeline = z.strictObject({ stages: z.array(StageTotal) })\n\nexport const deals = app.group({ callers: ['human'] }, (r) => ({\n\tlist: r.query({ input: Page, output: DealPage, access: { action: 'crm.read', over: 'company' } })\n\t\t.handle(async ({ input, ctx }) => fromPage(Deal, await ctx.db.within.deals.list({ orderBy: [['title', 'asc']], after: input.after }))),\n\tpipeline: r.query({ output: Pipeline, access: { action: 'crm.read', over: 'company' } })\n\t\t.handle(async ({ ctx }) => ({\n\t\t\tstages: pipelineOf(await ctx.db.within.deals.aggregate({ groupBy: ['stage'], count: true, sum: ['value'] })),\n\t\t})),\n\tget: r.query({ input: ById, output: Deal, access: { action: 'crm.read', on: 'deal', from: 'id' } })\n\t\t.handle(async ({ ctx }) => fromRow(Deal, await ctx.db.target.get())),\n\tcreate: r.mutation({ input: NewDeal, output: Saved, access: { action: 'deals.write', in: 'company', from: 'companyId' } })\n\t\t.handle(({ input, ctx }) =>\n\t\t\tctx.db.target.deals.insert({\n\t\t\t\ttitle: input.title,\n\t\t\t\tvalue: input.value,\n\t\t\t\tstage: 'lead',\n\t\t\t\tsource: input.source ?? null,\n\t\t\t\towner: ctx.principal.id,\n\t\t\t\towner_label: ctx.principal.label,\n\t\t\t})\n\t\t),\n\tedit: r.mutation({ input: EditDeal, output: Saved, access: { action: 'deals.write', on: 'deal', from: 'id' } })\n\t\t.handle(({ input: { expectVersion, ...deal }, ctx }) => ctx.db.target.update(deal, { expectVersion })),\n\tmove: r.mutation({ input: MoveDeal, output: Saved, access: { action: 'deals.write', on: 'deal', from: 'id' } })\n\t\t.handle(async ({ input, ctx }) => {\n\t\t\tif (isClosed((await ctx.db.target.getForUpdate()).stage)) throw new ConflictError('a won or lost deal is reopened before it moves')\n\t\t\treturn ctx.db.target.update({ stage: input.stage }, { expectVersion: input.expectVersion })\n\t\t}),\n\treopen: r.mutation({ input: Versioned, output: Saved, access: { action: 'deals.write', on: 'deal', from: 'id' } })\n\t\t.handle(async ({ input, ctx }) => {\n\t\t\tif (!isClosed((await ctx.db.target.getForUpdate()).stage)) throw new ConflictError('only a won or lost deal reopens')\n\t\t\treturn ctx.db.target.update({ stage: 'proposal' }, { expectVersion: input.expectVersion })\n\t\t}),\n\tassign: r.mutation({ input: AssignDeal, output: Saved, access: { action: 'deals.assign', on: 'deal', from: 'id' } })\n\t\t.handle(async ({ input, ctx }) => {\n\t\t\tconst owner = picked(await ctx.members.get(input.newOwner), 'new owner')\n\t\t\treturn ctx.db.target.update({ owner: owner.principalId, owner_label: owner.label }, { expectVersion: input.expectVersion })\n\t\t}),\n\tremove: r.mutation({ input: Versioned, output: Done, access: { action: 'crm.delete', on: 'deal', from: 'id' } })\n\t\t.handle(({ input, ctx }) => ctx.db.target.remove({ expectVersion: input.expectVersion }).then(() => ({ id: ctx.target.value }))),\n}))\n",
+		"src/orgs/endpoints.ts": "import { z } from 'zod/v4'\nimport { app } from '../app-kit'\nimport { ScopeValue } from '../schemas'\n\nconst OrgList = z.strictObject({ orgs: z.array(z.string()) })\nconst OrgInput = z.strictObject({ orgId: ScopeValue })\nconst Members = z.strictObject({ items: z.array(z.strictObject({ principalId: z.string(), label: z.string() })) })\n\nexport const orgs = app.group({ callers: ['human'] }, (r) => ({\n\tmine: r.query({ output: OrgList, access: { action: 'crm.read', over: 'org' } })\n\t\t.handle(({ ctx }) => ({ orgs: ctx.within.values === 'all' ? [] : [...ctx.within.values] })),\n\tmembers: r.query({ input: OrgInput, output: Members, access: { action: 'crm.read', in: 'org', from: 'orgId' } })\n\t\t.handle(async ({ ctx }) => ({ items: (await ctx.members.list()).map(({ principalId, label }) => ({ principalId, label })) })),\n}))\n",
+		"src/schemas.ts": "import { z } from 'zod/v4'\n\nexport const DEAL_STAGES = ['lead', 'qualified', 'proposal', 'won', 'lost'] as const\nexport const MAX_ATTACHMENT_BYTES = 5242880\nexport const MAX_ATTACHMENTS_PER_DEAL = 20\n\nexport const Stage = z.enum(DEAL_STAGES)\nexport const Name = z.string().min(1).max(200)\nexport const OptionalText = z.string().max(500).optional()\nexport const ClearableText = z.nullable(z.string().max(500))\nexport const MaybeText = z.nullable(z.string())\nexport const ScopeValue = z.string().min(1).max(100)\nexport const Cursor = z.string().max(500)\nexport const Next = z.nullable(z.string())\nexport const PrincipalId = z.string().min(1).max(200)\n\nexport const ById = z.strictObject({ id: z.uuid() })\nexport const Page = z.strictObject({ after: Cursor.optional() })\nexport const Versioned = z.strictObject({ id: z.uuid(), expectVersion: z.int().positive() })\nexport const Saved = z.strictObject({ id: z.uuid(), version: z.int() })\nexport const Done = z.strictObject({ id: z.uuid() })\n",
+		"src/tasks/endpoints.ts": "import { fromPage } from '@fabrika/app'\nimport { z } from 'zod/v4'\nimport { app } from '../app-kit'\nimport { picked } from '../orgs/logic'\nimport { Name, Next, Page, PrincipalId, Saved } from '../schemas'\n\nconst Task = z.strictObject({\n\tid: z.uuid(),\n\tdealId: z.uuid(),\n\ttitle: z.string(),\n\tdueOn: z.iso.date(),\n\tassignee: z.string(),\n\tassigneeLabel: z.string(),\n\tdone: z.boolean(),\n\toverdue: z.boolean(),\n\tversion: z.int(),\n})\nconst TaskPage = z.strictObject({ items: z.array(Task), next: Next })\nconst NewTask = z.strictObject({ dealId: z.uuid(), title: Name, dueOn: z.iso.date(), assignee: PrincipalId.optional() })\nconst CompleteTask = z.strictObject({ id: z.uuid(), done: z.boolean(), expectVersion: z.int().positive() })\n\nexport const tasks = app.group({ callers: ['human'] }, (r) => ({\n\tlist: r.query({ input: Page, output: TaskPage, access: { action: 'crm.read', over: 'deal' } })\n\t\t.handle(async ({ input, ctx }) => fromPage(Task, await ctx.db.within.tasks.list({ orderBy: [['due_on', 'asc']], after: input.after }))),\n\tcreate: r.mutation({ input: NewTask, output: Saved, access: { action: 'tasks.write', in: 'deal', from: 'dealId' } })\n\t\t.handle(async ({ input, ctx }) => {\n\t\t\tconst assignee = input.assignee === undefined\n\t\t\t\t? { principalId: ctx.principal.id, label: ctx.principal.label }\n\t\t\t\t: picked(await ctx.members.get(input.assignee), 'assignee')\n\t\t\treturn ctx.db.target.tasks.insert({ title: input.title, due_on: input.dueOn, assignee: assignee.principalId, assignee_label: assignee.label })\n\t\t}),\n\tcomplete: r.mutation({ input: CompleteTask, output: Saved, access: { action: 'tasks.write', on: 'task', from: 'id' } })\n\t\t.handle(({ input, ctx }) => ctx.db.target.update({ done: input.done }, { expectVersion: input.expectVersion })),\n}))\n\n/** Marks every open task past its due day, hourly; each is re-read under its lock, so a concurrent change is skipped. */\nexport const overdue = app.cron('15 * * * *', { actions: ['crm.read', 'tasks.write'], limits: { timeoutMs: 300000 }, retries: 2 })\n\t.handle(async ({ ctx }) => {\n\t\tconst today = new Date().toISOString().slice(0, 10)\n\t\tconst open = ctx.db.over(ctx.within('crm.read', 'deal')).tasks\n\t\tlet after: string | undefined\n\t\tdo {\n\t\t\tconst page = await open.list({ where: [['done', '=', false], ['overdue', '=', false], ['due_on', '<', today]], limit: 100, after })\n\t\t\tfor (const task of page.items) {\n\t\t\t\tconst ref = await ctx.ref('tasks.write', 'task', task.id)\n\t\t\t\tawait ctx.transaction(async (tx) => {\n\t\t\t\t\tconst locked = await tx.db.on(ref).getForUpdate()\n\t\t\t\t\tif (!locked.done && !locked.overdue) await tx.db.on(ref).update({ overdue: true }, { expectVersion: locked.version })\n\t\t\t\t})\n\t\t\t}\n\t\t\tafter = page.next ?? undefined\n\t\t} while (after !== undefined)\n\t})\n",
+		"src/vocabulary.ts": "import { defineVocabulary } from '@fabrika/app/contract'\n\nexport const vocabulary = defineVocabulary({\n\tapp: 'crm',\n\tdimensions: {\n\t\torg: { members: { manage: 'members.manage', list: 'crm.read' }, directory: 'labels' },\n\t\tcompany: { in: 'org' },\n\t\tcontact: { in: 'company' },\n\t\tdeal: { in: 'company' },\n\t\ttask: { in: 'deal' },\n\t},\n\tactions: {\n\t\t'crm.read': 'Read companies, contacts, deals, tasks, activities, attachments and the members of an org',\n\t\t'crm.write': 'Create and edit companies and contacts',\n\t\t'crm.delete': 'Delete companies, contacts, deals and attachments',\n\t\t'deals.write': 'Create deals, edit them, move them through the pipeline and attach files',\n\t\t'deals.assign': 'Choose the owner of a deal',\n\t\t'tasks.write': 'Create tasks and mark them done',\n\t\t'activities.write': 'Log activities on contacts and deals',\n\t\t'members.manage': 'Invite and remove the members of an org',\n\t},\n\troles: {\n\t\tmanager: {\n\t\t\tgrants: ['crm.read', 'crm.write', 'crm.delete', 'deals.write', 'deals.assign', 'tasks.write', 'activities.write', 'members.manage'],\n\t\t\tmember: { scope: 'org', assignableBy: ['manager'] },\n\t\t},\n\t\tsales: { grants: ['crm.read', 'deals.write', 'tasks.write', 'activities.write'], member: { scope: 'org', assignableBy: ['manager'] } },\n\t\tviewer: { grants: ['crm.read'], member: { scope: 'org', assignableBy: ['manager'] } },\n\t},\n})\n",
+		"tsconfig.json": "{\n\t\"compilerOptions\": {\n\t\t\"target\": \"ES2022\",\n\t\t\"module\": \"ESNext\",\n\t\t\"moduleResolution\": \"bundler\",\n\t\t\"lib\": [\n\t\t\t\"ES2022\",\n\t\t\t\"DOM\",\n\t\t\t\"DOM.Iterable\"\n\t\t],\n\t\t\"jsx\": \"react-jsx\",\n\t\t\"strict\": true,\n\t\t\"noUncheckedIndexedAccess\": true,\n\t\t\"noImplicitOverride\": true,\n\t\t\"noPropertyAccessFromIndexSignature\": true,\n\t\t\"forceConsistentCasingInFileNames\": true,\n\t\t\"skipLibCheck\": true,\n\t\t\"isolatedModules\": true,\n\t\t\"noEmit\": true,\n\t\t\"types\": [\n\t\t\t\"@types/bun\"\n\t\t]\n\t},\n\t\"include\": [\n\t\t\"src/**/*\",\n\t\t\"web/**/*\",\n\t\t\"*.ts\"\n\t]\n}\n"
+	},
+	"platform": {
+		"stored": "{\"version\":1,\"migrations\":[{\"name\":\"20261012120000_crm.sql\",\"checksum\":\"58cdb92cf47139d31a1a7f3a7fabb07bb20e35eac7cae42ca3a87fa6c56c2300\"},{\"name\":\"20261020120000_deal_attachments.sql\",\"checksum\":\"99f87571a30f77bd487a7bbfa404fa77b83222085f885996ae61e30c8f82edbd\"},{\"name\":\"20261020120100_release_attachments.sql\",\"checksum\":\"9d25f95290b9fc7838c648e117b3394f080d5abb01a35b1fd7d68a6a07e80b69\"}],\"checker\":\"0.8.1\",\"framework\":\"0.8.1\",\"contract\":{\"format\":2,\"app\":\"crm\",\"dimensions\":{\"org\":{\"in\":null,\"creator\":null,\"members\":{\"manage\":\"members.manage\",\"list\":\"crm.read\"},\"directory\":\"labels\"},\"company\":{\"in\":\"org\",\"creator\":null,\"members\":null},\"contact\":{\"in\":\"company\",\"creator\":null,\"members\":null},\"deal\":{\"in\":\"company\",\"creator\":null,\"members\":null},\"task\":{\"in\":\"deal\",\"creator\":null,\"members\":null}},\"actions\":{\"crm.read\":\"Read companies, contacts, deals, tasks, activities, attachments and the members of an org\",\"crm.write\":\"Create and edit companies and contacts\",\"crm.delete\":\"Delete companies, contacts, deals and attachments\",\"deals.write\":\"Create deals, edit them, move them through the pipeline and attach files\",\"deals.assign\":\"Choose the owner of a deal\",\"tasks.write\":\"Create tasks and mark them done\",\"activities.write\":\"Log activities on contacts and deals\",\"members.manage\":\"Invite and remove the members of an org\"},\"roles\":{\"manager\":{\"grants\":[\"activities.write\",\"crm.delete\",\"crm.read\",\"crm.write\",\"deals.assign\",\"deals.write\",\"members.manage\",\"tasks.write\"],\"member\":{\"scope\":\"org\",\"assignableBy\":[\"manager\"]}},\"sales\":{\"grants\":[\"activities.write\",\"crm.read\",\"deals.write\",\"tasks.write\"],\"member\":{\"scope\":\"org\",\"assignableBy\":[\"manager\"]}},\"viewer\":{\"grants\":[\"crm.read\"],\"member\":{\"scope\":\"org\",\"assignableBy\":[\"manager\"]}}},\"mounts\":{\"api\":{\"kind\":\"rpc\",\"prefix\":\"/api\",\"callers\":[\"human\"]},\"site\":{\"kind\":\"spa\",\"prefix\":\"/\",\"dir\":\"dist/web\"},\"health\":{\"kind\":\"health\",\"path\":\"/healthz\"}},\"files\":{},\"fileKinds\":{\"attachments\":{\"types\":[\"application/pdf\",\"image/jpeg\",\"image/png\",\"text/csv\",\"text/plain\"],\"maxBytes\":5242880}},\"jobs\":{\"overdue\":{\"schedule\":\"15 * * * *\",\"actions\":[\"crm.read\",\"tasks.write\"],\"scope\":{\"kind\":\"app\"},\"timeoutMs\":300000,\"retries\":2}},\"exports\":{},\"imports\":{},\"csp\":{\"connectSrc\":[],\"imgSrc\":[],\"frameAncestors\":[]},\"tables\":{\"companies\":{\"scope\":{\"mode\":\"dimension\",\"dimension\":\"company\",\"key\":\"id\",\"container\":{\"dimension\":\"org\",\"column\":\"org_id\"}},\"actions\":{\"read\":\"crm.read\",\"insert\":\"crm.write\",\"update\":\"crm.write\",\"delete\":\"crm.delete\"},\"insert\":[\"name\",\"website\"],\"update\":[\"name\",\"website\"],\"version\":\"version\",\"createdBy\":\"created_by\",\"columns\":{}},\"contact_activities\":{\"scope\":{\"mode\":\"child\",\"parent\":\"contacts\",\"key\":\"id\",\"column\":\"contact_id\",\"inherit\":[\"company_id\",\"org_id\"]},\"actions\":{\"read\":\"crm.read\",\"insert\":\"activities.write\",\"update\":null,\"delete\":null},\"insert\":[\"author_label\",\"body\",\"kind\"],\"update\":[],\"version\":null,\"createdBy\":\"created_by\",\"columns\":{}},\"contacts\":{\"scope\":{\"mode\":\"dimension\",\"dimension\":\"contact\",\"key\":\"id\",\"container\":{\"dimension\":\"company\",\"column\":\"company_id\"}},\"actions\":{\"read\":\"crm.read\",\"insert\":\"crm.write\",\"update\":\"crm.write\",\"delete\":\"crm.delete\"},\"insert\":[\"email\",\"name\",\"phone\"],\"update\":[\"email\",\"name\",\"phone\"],\"version\":\"version\",\"createdBy\":\"created_by\",\"columns\":{}},\"deal_activities\":{\"scope\":{\"mode\":\"child\",\"parent\":\"deals\",\"key\":\"id\",\"column\":\"deal_id\",\"inherit\":[\"company_id\",\"org_id\"]},\"actions\":{\"read\":\"crm.read\",\"insert\":\"activities.write\",\"update\":null,\"delete\":null},\"insert\":[\"author_label\",\"body\",\"kind\"],\"update\":[],\"version\":null,\"createdBy\":\"created_by\",\"columns\":{}},\"deal_attachments\":{\"scope\":{\"mode\":\"child\",\"parent\":\"deals\",\"key\":\"id\",\"column\":\"deal_id\",\"inherit\":[\"company_id\",\"org_id\"]},\"actions\":{\"read\":\"crm.read\",\"insert\":\"deals.write\",\"update\":null,\"delete\":\"crm.delete\"},\"insert\":[\"file\",\"name\"],\"update\":[],\"version\":null,\"createdBy\":\"created_by\",\"columns\":{},\"files\":{\"file\":\"attachments\"}},\"deals\":{\"scope\":{\"mode\":\"dimension\",\"dimension\":\"deal\",\"key\":\"id\",\"container\":{\"dimension\":\"company\",\"column\":\"company_id\"}},\"actions\":{\"read\":\"crm.read\",\"insert\":\"deals.write\",\"update\":\"deals.write\",\"delete\":\"crm.delete\"},\"insert\":[\"owner\",\"owner_label\",\"source\",\"stage\",\"title\",\"value\"],\"update\":[\"source\",\"stage\",\"title\",\"value\"],\"version\":\"version\",\"createdBy\":\"created_by\",\"columns\":{\"owner\":{\"write\":\"deals.assign\"},\"owner_label\":{\"write\":\"deals.assign\"}}},\"tasks\":{\"scope\":{\"mode\":\"dimension\",\"dimension\":\"task\",\"key\":\"id\",\"container\":{\"dimension\":\"deal\",\"column\":\"deal_id\"}},\"actions\":{\"read\":\"crm.read\",\"insert\":\"tasks.write\",\"update\":\"tasks.write\",\"delete\":null},\"insert\":[\"assignee\",\"assignee_label\",\"due_on\",\"title\"],\"update\":[\"done\",\"overdue\"],\"version\":\"version\",\"createdBy\":\"created_by\",\"columns\":{}}},\"endpoints\":[{\"id\":\"api.activities.logContact\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/activities.logContact\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"contactId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"kind\":{\"type\":\"enum\",\"values\":[\"call\",\"email\",\"meeting\",\"note\"]},\"body\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":5000,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"activities.write\",\"access\":{\"form\":\"on\",\"dimension\":\"contact\",\"from\":\"contactId\"}}},{\"id\":\"api.activities.logDeal\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/activities.logDeal\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"dealId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"kind\":{\"type\":\"enum\",\"values\":[\"call\",\"email\",\"meeting\",\"note\"]},\"body\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":5000,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"activities.write\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"dealId\"}}},{\"id\":\"api.activities.ofContact\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/activities.ofContact\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"contactId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"after\":{\"type\":\"optional\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"output\":{\"type\":\"object\",\"fields\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"kind\":{\"type\":\"enum\",\"values\":[\"call\",\"email\",\"meeting\",\"note\"]},\"body\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"authorLabel\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"createdAt\":{\"type\":\"string\",\"format\":\"datetime\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"minItems\":null,\"maxItems\":null},\"next\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"on\",\"dimension\":\"contact\",\"from\":\"contactId\"}}},{\"id\":\"api.activities.ofDeal\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/activities.ofDeal\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"dealId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"after\":{\"type\":\"optional\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"output\":{\"type\":\"object\",\"fields\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"kind\":{\"type\":\"enum\",\"values\":[\"call\",\"email\",\"meeting\",\"note\"]},\"body\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"authorLabel\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"createdAt\":{\"type\":\"string\",\"format\":\"datetime\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"minItems\":null,\"maxItems\":null},\"next\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"dealId\"}}},{\"id\":\"api.attachments.download\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"GET\",\"path\":\"/api/attachments.download\",\"admission\":null,\"input\":{\"type\":\"object\",\"fields\":{\"dealId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"output\":{\"type\":\"file\",\"kind\":\"attachments\"},\"response\":\"file\",\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"dealId\"}}},{\"id\":\"api.attachments.list\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/attachments.list\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"dealId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"after\":{\"type\":\"optional\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"output\":{\"type\":\"object\",\"fields\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"name\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"file\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"name\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"type\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"size\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null},\"status\":{\"type\":\"enum\",\"values\":[\"live\",\"pending\",\"quarantined\",\"rejected\"]}}},\"createdAt\":{\"type\":\"string\",\"format\":\"datetime\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"minItems\":null,\"maxItems\":null},\"next\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"dealId\"}}},{\"id\":\"api.attachments.remove\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/attachments.remove\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"dealId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.delete\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"dealId\"}}},{\"id\":\"api.attachments.upload\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/attachments.upload\",\"admission\":{\"contentTypes\":[\"multipart/form-data\"],\"maxBytes\":5308416},\"input\":{\"type\":\"object\",\"fields\":{\"dealId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"name\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":200,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"file\":{\"type\":\"file\",\"kind\":\"attachments\"}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"capabilities\",\"capabilities\":{\"deal\":{\"action\":\"deals.write\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"dealId\"}},\"attached\":{\"action\":\"crm.read\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"dealId\"}}}}},{\"id\":\"api.companies.create\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/companies.create\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"orgId\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":100,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"name\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":200,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"website\":{\"type\":\"optional\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.write\",\"access\":{\"form\":\"in\",\"dimension\":\"org\",\"from\":\"orgId\"}}},{\"id\":\"api.companies.edit\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/companies.edit\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"name\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":200,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"website\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"expectVersion\":{\"type\":\"number\",\"int\":true,\"min\":0,\"exclusiveMin\":true,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.write\",\"access\":{\"form\":\"on\",\"dimension\":\"company\",\"from\":\"id\"}}},{\"id\":\"api.companies.get\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/companies.get\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"orgId\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"name\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"website\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"on\",\"dimension\":\"company\",\"from\":\"id\"}}},{\"id\":\"api.companies.list\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/companies.list\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"after\":{\"type\":\"optional\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"output\":{\"type\":\"object\",\"fields\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"orgId\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"name\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"website\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"minItems\":null,\"maxItems\":null},\"next\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"over\",\"dimension\":\"org\"}}},{\"id\":\"api.companies.remove\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/companies.remove\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"expectVersion\":{\"type\":\"number\",\"int\":true,\"min\":0,\"exclusiveMin\":true,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.delete\",\"access\":{\"form\":\"on\",\"dimension\":\"company\",\"from\":\"id\"}}},{\"id\":\"api.contacts.create\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/contacts.create\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"companyId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"name\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":200,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"email\":{\"type\":\"optional\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"phone\":{\"type\":\"optional\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.write\",\"access\":{\"form\":\"in\",\"dimension\":\"company\",\"from\":\"companyId\"}}},{\"id\":\"api.contacts.edit\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/contacts.edit\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"name\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":200,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"email\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"phone\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"expectVersion\":{\"type\":\"number\",\"int\":true,\"min\":0,\"exclusiveMin\":true,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.write\",\"access\":{\"form\":\"on\",\"dimension\":\"contact\",\"from\":\"id\"}}},{\"id\":\"api.contacts.get\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/contacts.get\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"companyId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"name\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"email\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"phone\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"on\",\"dimension\":\"contact\",\"from\":\"id\"}}},{\"id\":\"api.contacts.list\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/contacts.list\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"after\":{\"type\":\"optional\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"output\":{\"type\":\"object\",\"fields\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"companyId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"name\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"email\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"phone\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"minItems\":null,\"maxItems\":null},\"next\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"over\",\"dimension\":\"company\"}}},{\"id\":\"api.contacts.remove\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/contacts.remove\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"expectVersion\":{\"type\":\"number\",\"int\":true,\"min\":0,\"exclusiveMin\":true,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.delete\",\"access\":{\"form\":\"on\",\"dimension\":\"contact\",\"from\":\"id\"}}},{\"id\":\"api.deals.assign\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/deals.assign\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"newOwner\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":200,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"expectVersion\":{\"type\":\"number\",\"int\":true,\"min\":0,\"exclusiveMin\":true,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"deals.assign\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"id\"}}},{\"id\":\"api.deals.create\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/deals.create\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"companyId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"title\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":200,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"value\":{\"type\":\"number\",\"int\":true,\"min\":0,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null},\"source\":{\"type\":\"optional\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"deals.write\",\"access\":{\"form\":\"in\",\"dimension\":\"company\",\"from\":\"companyId\"}}},{\"id\":\"api.deals.edit\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/deals.edit\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"title\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":200,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"value\":{\"type\":\"number\",\"int\":true,\"min\":0,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null},\"source\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"expectVersion\":{\"type\":\"number\",\"int\":true,\"min\":0,\"exclusiveMin\":true,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"deals.write\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"id\"}}},{\"id\":\"api.deals.get\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/deals.get\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"companyId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"title\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"value\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null},\"stage\":{\"type\":\"enum\",\"values\":[\"lead\",\"lost\",\"proposal\",\"qualified\",\"won\"]},\"source\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"owner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"ownerLabel\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"id\"}}},{\"id\":\"api.deals.list\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/deals.list\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"after\":{\"type\":\"optional\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"output\":{\"type\":\"object\",\"fields\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"companyId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"title\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"value\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null},\"stage\":{\"type\":\"enum\",\"values\":[\"lead\",\"lost\",\"proposal\",\"qualified\",\"won\"]},\"source\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}},\"owner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"ownerLabel\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"minItems\":null,\"maxItems\":null},\"next\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"over\",\"dimension\":\"company\"}}},{\"id\":\"api.deals.move\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/deals.move\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"stage\":{\"type\":\"enum\",\"values\":[\"lead\",\"lost\",\"proposal\",\"qualified\",\"won\"]},\"expectVersion\":{\"type\":\"number\",\"int\":true,\"min\":0,\"exclusiveMin\":true,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"deals.write\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"id\"}}},{\"id\":\"api.deals.pipeline\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/deals.pipeline\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":null,\"output\":{\"type\":\"object\",\"fields\":{\"stages\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"fields\":{\"stage\":{\"type\":\"enum\",\"values\":[\"lead\",\"lost\",\"proposal\",\"qualified\",\"won\"]},\"count\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null},\"value\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"minItems\":null,\"maxItems\":null}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"over\",\"dimension\":\"company\"}}},{\"id\":\"api.deals.remove\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/deals.remove\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"expectVersion\":{\"type\":\"number\",\"int\":true,\"min\":0,\"exclusiveMin\":true,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.delete\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"id\"}}},{\"id\":\"api.deals.reopen\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/deals.reopen\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"expectVersion\":{\"type\":\"number\",\"int\":true,\"min\":0,\"exclusiveMin\":true,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"deals.write\",\"access\":{\"form\":\"on\",\"dimension\":\"deal\",\"from\":\"id\"}}},{\"id\":\"api.orgs.members\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/orgs.members\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"orgId\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":100,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"fields\":{\"principalId\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"label\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}},\"minItems\":null,\"maxItems\":null}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"in\",\"dimension\":\"org\",\"from\":\"orgId\"}}},{\"id\":\"api.orgs.mine\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/orgs.mine\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":null,\"output\":{\"type\":\"object\",\"fields\":{\"orgs\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"minItems\":null,\"maxItems\":null}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"over\",\"dimension\":\"org\"}}},{\"id\":\"api.tasks.complete\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/tasks.complete\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"done\":{\"type\":\"boolean\"},\"expectVersion\":{\"type\":\"number\",\"int\":true,\"min\":0,\"exclusiveMin\":true,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"tasks.write\",\"access\":{\"form\":\"on\",\"dimension\":\"task\",\"from\":\"id\"}}},{\"id\":\"api.tasks.create\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/tasks.create\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"dealId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"title\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":200,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"dueOn\":{\"type\":\"string\",\"format\":\"date\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"assignee\":{\"type\":\"optional\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":1,\"maxLength\":200,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"output\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"kind\":\"mutation\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"tasks.write\",\"access\":{\"form\":\"in\",\"dimension\":\"deal\",\"from\":\"dealId\"}}},{\"id\":\"api.tasks.list\",\"source\":{\"kind\":\"mount\",\"name\":\"api\"},\"method\":\"POST\",\"path\":\"/api/tasks.list\",\"admission\":{\"contentTypes\":[\"application/json\"],\"maxBytes\":65536},\"input\":{\"type\":\"object\",\"fields\":{\"after\":{\"type\":\"optional\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":500,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"output\":{\"type\":\"object\",\"fields\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"fields\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"dealId\":{\"type\":\"string\",\"format\":\"uuid\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"title\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"dueOn\":{\"type\":\"string\",\"format\":\"date\",\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"assignee\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"assigneeLabel\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null},\"done\":{\"type\":\"boolean\"},\"overdue\":{\"type\":\"boolean\"},\"version\":{\"type\":\"number\",\"int\":true,\"min\":null,\"exclusiveMin\":false,\"max\":null,\"exclusiveMax\":false,\"multipleOf\":null}}},\"minItems\":null,\"maxItems\":null},\"next\":{\"type\":\"nullable\",\"inner\":{\"type\":\"string\",\"format\":null,\"minLength\":null,\"maxLength\":null,\"pattern\":null,\"startsWith\":null,\"endsWith\":null,\"includes\":null}}}},\"kind\":\"query\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"over\",\"dimension\":\"deal\"}}},{\"id\":\"health\",\"source\":{\"kind\":\"mount\",\"name\":\"health\"},\"method\":\"GET\",\"path\":\"/healthz\",\"admission\":null,\"input\":null,\"output\":null,\"kind\":\"health\",\"callers\":[],\"requirement\":null},{\"id\":\"site\",\"source\":{\"kind\":\"mount\",\"name\":\"site\"},\"method\":\"GET\",\"path\":\"/*\",\"admission\":null,\"input\":null,\"output\":null,\"kind\":\"spa\",\"callers\":[\"human\"],\"requirement\":{\"kind\":\"action\",\"action\":\"crm.read\",\"access\":{\"form\":\"over\",\"dimension\":\"org\"}}}],\"reservedPrefixes\":[\"/api\"],\"declared\":{},\"directories\":{\"api.orgs.members\":{\"dimension\":\"org\",\"lists\":true},\"api.companies.get\":{\"dimension\":\"org\",\"lists\":true},\"api.companies.create\":{\"dimension\":\"org\",\"lists\":false},\"api.companies.edit\":{\"dimension\":\"org\",\"lists\":false},\"api.companies.remove\":{\"dimension\":\"org\",\"lists\":false},\"api.contacts.get\":{\"dimension\":\"org\",\"lists\":true},\"api.contacts.create\":{\"dimension\":\"org\",\"lists\":false},\"api.contacts.edit\":{\"dimension\":\"org\",\"lists\":false},\"api.contacts.remove\":{\"dimension\":\"org\",\"lists\":false},\"api.deals.get\":{\"dimension\":\"org\",\"lists\":true},\"api.deals.create\":{\"dimension\":\"org\",\"lists\":false},\"api.deals.edit\":{\"dimension\":\"org\",\"lists\":false},\"api.deals.move\":{\"dimension\":\"org\",\"lists\":false},\"api.deals.reopen\":{\"dimension\":\"org\",\"lists\":false},\"api.deals.assign\":{\"dimension\":\"org\",\"lists\":false},\"api.deals.remove\":{\"dimension\":\"org\",\"lists\":false},\"api.tasks.create\":{\"dimension\":\"org\",\"lists\":false},\"api.tasks.complete\":{\"dimension\":\"org\",\"lists\":false},\"api.activities.ofContact\":{\"dimension\":\"org\",\"lists\":true},\"api.activities.ofDeal\":{\"dimension\":\"org\",\"lists\":true},\"api.activities.logContact\":{\"dimension\":\"org\",\"lists\":false},\"api.activities.logDeal\":{\"dimension\":\"org\",\"lists\":false},\"api.attachments.list\":{\"dimension\":\"org\",\"lists\":true},\"api.attachments.download\":{\"dimension\":\"org\",\"lists\":true},\"api.attachments.remove\":{\"dimension\":\"org\",\"lists\":false}},\"procedures\":{\"api.orgs.mine\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.orgs.members\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.companies.list\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.companies.get\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.companies.create\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.companies.edit\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.companies.remove\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.contacts.list\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.contacts.get\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.contacts.create\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.contacts.edit\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.contacts.remove\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.deals.list\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.deals.pipeline\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.deals.get\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.deals.create\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.deals.edit\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.deals.move\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.deals.reopen\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.deals.assign\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.deals.remove\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.tasks.list\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.tasks.create\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.tasks.complete\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.activities.ofContact\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.activities.ofDeal\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.activities.logContact\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.activities.logDeal\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.attachments.upload\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.attachments.list\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.attachments.download\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000},\"api.attachments.remove\":{\"rate\":{\"perClient\":null,\"perCaller\":null,\"perEndpoint\":null,\"bytesPerHour\":null},\"challenge\":null,\"timeoutMs\":10000}}}}",
+		"snapshotDigest": "sha256:e3a93da1c94eaa0769b73f315971f167db66b49ed5013d002439ecfb0f14eea7",
+		"contractDigest": "sha256:60cc6dd14474d3bb2c38af5861660add9316939b0a8eb5e54d05a3a93a856639",
+		"proxyTable": {
+			"endpoints": [
+				{
+					"id": "api.activities.logContact",
+					"method": "POST",
+					"path": "/api/activities.logContact",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "activities.write",
+						"access": {
+							"form": "on",
+							"dimension": "contact",
+							"from": "contactId"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:19249f8b614b1d67b23bb165bb32180a38c6528ce288ef8bccb83ffe11e6b36b"
+				},
+				{
+					"id": "api.activities.logDeal",
+					"method": "POST",
+					"path": "/api/activities.logDeal",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "activities.write",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "dealId"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:2e5b4a8c021a05a00580c9d70cdba9902f0a9455ecc6748f519f88a00738f646"
+				},
+				{
+					"id": "api.activities.ofContact",
+					"method": "POST",
+					"path": "/api/activities.ofContact",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "contact",
+							"from": "contactId"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:899161abe136c92feb51d16c03f93a4d3bab4acbf74489abf5af329b552f104f"
+				},
+				{
+					"id": "api.activities.ofDeal",
+					"method": "POST",
+					"path": "/api/activities.ofDeal",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "dealId"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:3fd476a0c8c6f4a71a7ca944b3e00f2192505c79c5d12385581f800f74249bff"
+				},
+				{
+					"id": "api.attachments.download",
+					"method": "GET",
+					"path": "/api/attachments.download",
+					"admission": null,
+					"response": "file",
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "dealId"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:b6d18555a52cdbbf24138c21eb1e8f9cc7174289ddc1c689a2ee8abb70e1d576"
+				},
+				{
+					"id": "api.attachments.list",
+					"method": "POST",
+					"path": "/api/attachments.list",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "dealId"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:870b02080a4adb0dd55e712b8b24cbb71921a1d231332a1bc4d20f246a0f7ccd"
+				},
+				{
+					"id": "api.attachments.remove",
+					"method": "POST",
+					"path": "/api/attachments.remove",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.delete",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "dealId"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:8f720b3d6344a36ce1dbaea12e6e5ac916bdf17f693e5f535a0142eb6c2de6c3"
+				},
+				{
+					"id": "api.attachments.upload",
+					"method": "POST",
+					"path": "/api/attachments.upload",
+					"admission": {
+						"contentTypes": [
+							"multipart/form-data"
+						],
+						"maxBytes": 5308416
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "capabilities",
+						"capabilities": {
+							"deal": {
+								"action": "deals.write",
+								"access": {
+									"form": "on",
+									"dimension": "deal",
+									"from": "dealId"
+								}
+							},
+							"attached": {
+								"action": "crm.read",
+								"access": {
+									"form": "on",
+									"dimension": "deal",
+									"from": "dealId"
+								}
+							}
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:d22e2c9f020e5b6192e6deadad1736c0b5577ad7b022f90368c330c71f050dde"
+				},
+				{
+					"id": "api.companies.create",
+					"method": "POST",
+					"path": "/api/companies.create",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.write",
+						"access": {
+							"form": "in",
+							"dimension": "org",
+							"from": "orgId"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:150b5861abb0fe9eef69afca1250dc22e6c32d852943a769854812e7b4bfffc0"
+				},
+				{
+					"id": "api.companies.edit",
+					"method": "POST",
+					"path": "/api/companies.edit",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.write",
+						"access": {
+							"form": "on",
+							"dimension": "company",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:06bb6c6782dae41efb216e2b83bb8708d83a3bcd6813ecccec824d879d529f92"
+				},
+				{
+					"id": "api.companies.get",
+					"method": "POST",
+					"path": "/api/companies.get",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "company",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:9c06b33efdc07e0cb39094de57dd06ff2e82b6204e62bb67bdb55a08d283f113"
+				},
+				{
+					"id": "api.companies.list",
+					"method": "POST",
+					"path": "/api/companies.list",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "org"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:263d4083af1da69651d44323257c818d923c36f46e6dcf5d85f829dac1649fe1"
+				},
+				{
+					"id": "api.companies.remove",
+					"method": "POST",
+					"path": "/api/companies.remove",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.delete",
+						"access": {
+							"form": "on",
+							"dimension": "company",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:8d208a37ac33dc6a821a51a8b7a35db7f83bf986bdaf4f4b4e98c9edae59bbd4"
+				},
+				{
+					"id": "api.contacts.create",
+					"method": "POST",
+					"path": "/api/contacts.create",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.write",
+						"access": {
+							"form": "in",
+							"dimension": "company",
+							"from": "companyId"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:3ae678822f3daedbf9123798dc5e72e8e2395fddb45cd71e3497b3717e671eaa"
+				},
+				{
+					"id": "api.contacts.edit",
+					"method": "POST",
+					"path": "/api/contacts.edit",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.write",
+						"access": {
+							"form": "on",
+							"dimension": "contact",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:dfe02a5afb17b199d68d045ed251cbdbc4c1c89eae0e601f8435231cef6091f1"
+				},
+				{
+					"id": "api.contacts.get",
+					"method": "POST",
+					"path": "/api/contacts.get",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "contact",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:1d834f1db36b00eb087fb5ff13f45f24b04977767ceb9966604dbc3cf7753945"
+				},
+				{
+					"id": "api.contacts.list",
+					"method": "POST",
+					"path": "/api/contacts.list",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "company"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:e2519ab41c5d22542021bbf8e900a9e7c241cf7d9c44f28cef1a38e1455204d2"
+				},
+				{
+					"id": "api.contacts.remove",
+					"method": "POST",
+					"path": "/api/contacts.remove",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.delete",
+						"access": {
+							"form": "on",
+							"dimension": "contact",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:002aeb2c679831e7f52c1058a70fa617db9d1a444b82ea7bfe9819aeea963542"
+				},
+				{
+					"id": "api.deals.assign",
+					"method": "POST",
+					"path": "/api/deals.assign",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "deals.assign",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:db9f9547b5cef33468f152aa00e432559410d8c088f5d4a319c5b71fca2a9f4e"
+				},
+				{
+					"id": "api.deals.create",
+					"method": "POST",
+					"path": "/api/deals.create",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "deals.write",
+						"access": {
+							"form": "in",
+							"dimension": "company",
+							"from": "companyId"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:ca8d16d63b2bb9aefc057fe53e97ad70274a31bee7b95f58e4301a1f32650251"
+				},
+				{
+					"id": "api.deals.edit",
+					"method": "POST",
+					"path": "/api/deals.edit",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "deals.write",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:0fca4ddf2ad48a6062202d1088d391f99bb101a513f427e953d56403e351bef1"
+				},
+				{
+					"id": "api.deals.get",
+					"method": "POST",
+					"path": "/api/deals.get",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:7a2b63966e0c349e72470c5164c3b12a2f5ab2a026b8f3fe9ce09d5ff9d1cbde"
+				},
+				{
+					"id": "api.deals.list",
+					"method": "POST",
+					"path": "/api/deals.list",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "company"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:3b17da918fa3787f8107f3c6933e467adf4e8674499666167ea4d78e7aa36f38"
+				},
+				{
+					"id": "api.deals.move",
+					"method": "POST",
+					"path": "/api/deals.move",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "deals.write",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:868d69d57213395c4cbb4b0b635c076e6d986184f777e4de8f3bdfb55c34558b"
+				},
+				{
+					"id": "api.deals.pipeline",
+					"method": "POST",
+					"path": "/api/deals.pipeline",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "company"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:ab380bee2bf8c3ad54399064c9a91e32f98cd6c4223a24d816ea5f3fcd878cd6"
+				},
+				{
+					"id": "api.deals.remove",
+					"method": "POST",
+					"path": "/api/deals.remove",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.delete",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:5df6ff5a12f5688eebe5d94b5c69b98af0a5f757b68cb60429045cda562a30f3"
+				},
+				{
+					"id": "api.deals.reopen",
+					"method": "POST",
+					"path": "/api/deals.reopen",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "deals.write",
+						"access": {
+							"form": "on",
+							"dimension": "deal",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:abe3ac0caf5444c1882755061043c05fed64da228d34831ccd430482e1995813"
+				},
+				{
+					"id": "api.orgs.members",
+					"method": "POST",
+					"path": "/api/orgs.members",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "in",
+							"dimension": "org",
+							"from": "orgId"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:6fc3c2ee4f9e424257b40cefe591f49e6ad938586121bca10da83338bcecdf58"
+				},
+				{
+					"id": "api.orgs.mine",
+					"method": "POST",
+					"path": "/api/orgs.mine",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "org"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:f58c1db698c30909357a181a9eadb5739b0c849a972a824d99e77d21332babac"
+				},
+				{
+					"id": "api.tasks.complete",
+					"method": "POST",
+					"path": "/api/tasks.complete",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "tasks.write",
+						"access": {
+							"form": "on",
+							"dimension": "task",
+							"from": "id"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:f1e94b146a4f757da6f09c851f6318a5a96daeb3faaf86db177ad22884933357"
+				},
+				{
+					"id": "api.tasks.create",
+					"method": "POST",
+					"path": "/api/tasks.create",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "mutation",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "tasks.write",
+						"access": {
+							"form": "in",
+							"dimension": "deal",
+							"from": "dealId"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:7aa12961ed15b7ae1fb4f5e7dc0769890be13f9afde9226843a79e3ed27c555d"
+				},
+				{
+					"id": "api.tasks.list",
+					"method": "POST",
+					"path": "/api/tasks.list",
+					"admission": {
+						"contentTypes": [
+							"application/json"
+						],
+						"maxBytes": 65536
+					},
+					"kind": "query",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "deal"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:52d61ff0990290e1947acecb81692e7530721769a8cf3fe373023b6c5a4f90bf"
+				},
+				{
+					"id": "health",
+					"method": "GET",
+					"path": "/healthz",
+					"admission": null,
+					"kind": "health",
+					"callers": [],
+					"requirement": null,
+					"delegation": null,
+					"digest": "sha256:f180f636975e69016cea9bf60a44f559f8c5b00572f70903979674bf936c086f"
+				},
+				{
+					"id": "site",
+					"method": "GET",
+					"path": "/*",
+					"admission": null,
+					"kind": "spa",
+					"callers": [
+						"human"
+					],
+					"requirement": {
+						"kind": "action",
+						"action": "crm.read",
+						"access": {
+							"form": "over",
+							"dimension": "org"
+						}
+					},
+					"delegation": null,
+					"digest": "sha256:82cc1bbd8a8b7049747b7af29ad838b8729e7e02ee5a90cb47d503164af2d190"
+				}
+			],
+			"reservedPrefixes": [
+				"/api"
+			],
+			"snapshot": "sha256:60cc6dd14474d3bb2c38af5861660add9316939b0a8eb5e54d05a3a93a856639",
+			"csp": {
+				"connectSrc": [],
+				"imgSrc": [],
+				"frameAncestors": [],
+				"scriptSrc": [],
+				"frameSrc": [],
+				"styleSrc": [],
+				"fontSrc": []
+			}
+		},
+		"schema": {
+			"scopes": [
+				{
+					"type": "company",
+					"in": "org"
+				},
+				{
+					"type": "contact",
+					"in": "company"
+				},
+				{
+					"type": "deal",
+					"in": "company"
+				},
+				{
+					"type": "org",
+					"members": {
+						"manage": "members.manage",
+						"list": "crm.read"
+					},
+					"directory": "labels",
+					"lookups": [
+						"activities.write",
+						"crm.delete",
+						"crm.read",
+						"crm.write",
+						"deals.assign",
+						"deals.write",
+						"tasks.write"
+					]
+				},
+				{
+					"type": "task",
+					"in": "deal"
+				}
+			],
+			"actions": [
+				{
+					"action": "activities.write",
+					"description": "Log activities on contacts and deals"
+				},
+				{
+					"action": "crm.delete",
+					"description": "Delete companies, contacts, deals and attachments"
+				},
+				{
+					"action": "crm.read",
+					"description": "Read companies, contacts, deals, tasks, activities, attachments and the members of an org"
+				},
+				{
+					"action": "crm.write",
+					"description": "Create and edit companies and contacts"
+				},
+				{
+					"action": "deals.assign",
+					"description": "Choose the owner of a deal"
+				},
+				{
+					"action": "deals.write",
+					"description": "Create deals, edit them, move them through the pipeline and attach files"
+				},
+				{
+					"action": "members.manage",
+					"description": "Invite and remove the members of an org"
+				},
+				{
+					"action": "tasks.write",
+					"description": "Create tasks and mark them done"
+				}
+			],
+			"roles": {
+				"manager": {
+					"name": "manager",
+					"permissions": [
+						"activities.write",
+						"crm.delete",
+						"crm.read",
+						"crm.write",
+						"deals.assign",
+						"deals.write",
+						"members.manage",
+						"tasks.write"
+					],
+					"member": {
+						"scope": "org",
+						"assignableBy": [
+							"manager"
+						]
+					}
+				},
+				"sales": {
+					"name": "sales",
+					"permissions": [
+						"activities.write",
+						"crm.read",
+						"deals.write",
+						"tasks.write"
+					],
+					"member": {
+						"scope": "org",
+						"assignableBy": [
+							"manager"
+						]
+					}
+				},
+				"viewer": {
+					"name": "viewer",
+					"permissions": [
+						"crm.read"
+					],
+					"member": {
+						"scope": "org",
+						"assignableBy": [
+							"manager"
+						]
+					}
+				}
+			},
+			"contract": true,
+			"links": {},
+			"delegations": {},
+			"workloads": [
+				{
+					"kind": "job",
+					"name": "overdue",
+					"actions": [
+						"crm.read",
+						"tasks.write"
+					]
+				}
+			]
+		}
+	}
+}

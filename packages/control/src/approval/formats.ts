@@ -14,6 +14,7 @@ import {
 } from '@fabrika/auth-core-0.5'
 import type { ContractArtifact as ContractArtifact06 } from '@fabrika/auth-core-0.6'
 import type { ContractArtifact as ContractArtifact07 } from '@fabrika/auth-core-0.7'
+import type { ContractArtifact as ContractArtifact08 } from '@fabrika/auth-core-0.8'
 
 /** An artifact of a format older than this release's, as its own release's reader produced it. */
 export type OlderArtifact = ContractArtifact05
@@ -59,6 +60,15 @@ export function from06(artifact: ContractArtifact06): SnapshotContract {
  * kept as it is, read by this release's schema, which refuses one that is not.
  */
 export function from07(artifact: ContractArtifact07): SnapshotContract {
+	return { contract: parseContractArtifact(artifact) }
+}
+
+/**
+ * A 0.8 artifact is this release's format: 0.9 changed neither the contract language nor the artifact (it added the
+ * dev launcher, which is not part of the contract), so its canonical form and contract digest are 0.8's. It is kept as
+ * it is, read by this release's schema, which refuses one that is not.
+ */
+export function from08(artifact: ContractArtifact08): SnapshotContract {
 	return { contract: parseContractArtifact(artifact) }
 }
 

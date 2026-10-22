@@ -248,7 +248,7 @@ bun test
   `fabrika control namespaces update --namespace=<id> --proxy-source=current`. The judges are those releases' own
   parsers, a row parser and the CSP field of the entry parser per release, which Control passes in as
   `namespaces.olderProxies` (`src/namespace/proxy-reads.ts`); never replace them with a list of fields. What one of them
-  parses deploys, so every 0.4/0.5/0.6/0.7 contract does.
+  parses deploys, so every 0.4/0.5/0.6/0.7/0.8 contract does.
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).

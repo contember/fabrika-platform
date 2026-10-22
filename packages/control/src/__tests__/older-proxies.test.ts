@@ -132,13 +132,16 @@ describe('the rows 0.7 added, for a namespace proxy pinned to an older source', 
 })
 
 describe("an entry's CSP, for a namespace proxy pinned to an older source", () => {
-	test("refuses worker-src blob:, which no older proxy's CSP parser knows, and deploys every directive they do", () => {
+	test('refuses worker-src blob: where no proxy before 0.8 knows it, deploys it where the 0.8 proxy does, and every directive they all know', () => {
 		const workers = { origin: 'blob:', purpose: 'the workers of the altcha challenge' }
 		const withWorkers = (base: ProviderApprovedAccess): ProviderApprovedAccess => {
 			const contract: ContractArtifact = { ...base.contract, csp: { ...base.contract.csp, workerSrc: [workers] } }
 			return { ...base, contract, contractDigest: contractDigest(contract) }
 		}
-		expect(entriesNeedingCurrentProxy(withWorkers(access([])), OLDER_PROXY_READERS)).toEqual(['csp'])
+		const [reader04, ...newer] = OLDER_PROXY_READERS
+		const before08: OlderProxyReaders = [reader04, ...newer.slice(0, 3)]
+		expect(entriesNeedingCurrentProxy(withWorkers(access([])), before08)).toEqual(['csp'])
+		expect(entriesNeedingCurrentProxy(withWorkers(access([])), OLDER_PROXY_READERS)).toEqual([])
 		const fonts = { origin: 'https://fonts.gstatic.com', purpose: 'the typeface files' }
 		const typeface: ContractArtifact = { ...notesArtifact, csp: { ...notesArtifact.csp, fontSrc: [fonts] } }
 		const withFonts = { ...access([]), contract: typeface, contractDigest: contractDigest(typeface) }
