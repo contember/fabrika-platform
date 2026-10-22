@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { isUnsentNote, type ReviewAnchor, type ReviewSource, type ReviewThread, type ReviewThreadState } from '../src/review/model'
+import { z } from 'zod'
+import {
+	isUnsentNote,
+	type ReviewAnchor,
+	reviewAnchorSchema,
+	type ReviewSource,
+	type ReviewThread,
+	type ReviewThreadState,
+} from '../src/review/model'
 import { describe, find } from './anchor'
 import type { ReviewClient } from './client'
 import { captureElement } from './screenshot'
@@ -19,6 +27,32 @@ interface Draft {
 	element: Element
 	/** Resolved while the reviewer writes: source maps can take a moment to load. */
 	sources: Promise<ReviewSource[]>
+	body: string
+	screenshot: boolean
+}
+
+/** The comment being written, kept for the tab: a dev server reloads the page on many edits. */
+const savedDraftSchema = z.object({ anchor: reviewAnchorSchema, body: z.string(), screenshot: z.boolean() })
+type SavedDraft = z.infer<typeof savedDraftSchema>
+
+const DRAFT_KEY = 'agent-canvas-review:draft'
+
+function saveDraft(draft: SavedDraft | null): void {
+	try {
+		if (draft === null) sessionStorage.removeItem(DRAFT_KEY)
+		else sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+	} catch {}
+}
+
+function loadDraft(): SavedDraft | null {
+	try {
+		const saved = sessionStorage.getItem(DRAFT_KEY)
+		if (saved === null) return null
+		const parsed = savedDraftSchema.safeParse(JSON.parse(saved))
+		return parsed.success ? parsed.data : null
+	} catch {
+		return null
+	}
 }
 
 const STATE_LABELS: Record<ReviewThreadState, string> = {
@@ -179,9 +213,16 @@ function popoverPosition(box: Box): { top: number; left: number } {
 	return { top, left }
 }
 
-function Composer(props: { draft: Draft; onSubmit: (body: string, send: boolean, screenshot: boolean) => Promise<void>; onCancel: () => void }) {
-	const [body, setBody] = useState('')
-	const [screenshot, setScreenshot] = useState(false)
+function Composer(props: {
+	draft: Draft
+	onChange: (body: string, screenshot: boolean) => void
+	onSubmit: (body: string, send: boolean, screenshot: boolean) => Promise<void>
+	onCancel: () => void
+}) {
+	const [body, setBody] = useState(props.draft.body)
+	const [screenshot, setScreenshot] = useState(props.draft.screenshot)
+	const { onChange } = props
+	useEffect(() => onChange(body, screenshot), [onChange, body, screenshot])
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const textarea = useRef<HTMLTextAreaElement>(null)
@@ -299,6 +340,7 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 	const [picking, setPicking] = useState(false)
 	const [hovered, setHovered] = useState<Element | null>(null)
 	const [draft, setDraft] = useState<Draft | null>(null)
+	const [unrestored, setUnrestored] = useState<SavedDraft | null>(loadDraft)
 	const [panelOpen, setPanelOpen] = useState(false)
 	const [showAll, setShowAll] = useState(false)
 	const [hideResolved, setHideResolved] = useState(false)
@@ -306,7 +348,7 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 	const [revealId, setRevealId] = useState<string | null>(takePendingReveal)
 	const [flash, setFlash] = useState<Box | null>(null)
 	const href = useHref()
-	useLayoutTick()
+	const tick = useLayoutTick()
 
 	useEffect(() => {
 		client.connect({ threads: setThreads, agentWatching: setWatching, connected: setConnected })
@@ -321,13 +363,23 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 		setPicking(false)
 		setHovered(null)
 		window.getSelection()?.removeAllRanges()
-		setDraft({ anchor: describe(element, location.href, range), box: boxOf(element), element, sources: resolveSources(bundleFrames(element)) })
+		setUnrestored(null)
+		const anchor = describe(element, location.href, range)
+		setDraft({ anchor, box: boxOf(element), element, sources: resolveSources(bundleFrames(element)), body: '', screenshot: false })
 	}, [])
+	const discardDraft = useCallback(() => {
+		setDraft(null)
+		saveDraft(null)
+	}, [])
+	const anchor = draft?.anchor
+	const keepDraft = useCallback((body: string, screenshot: boolean) => {
+		if (anchor !== undefined) saveDraft({ anchor, body, screenshot })
+	}, [anchor])
 	usePicker(host, picking, setHovered, pick, cancelPicking)
 	// The panel covers the right edge of the page, which the reviewer may want to pick from.
 	const startPicking = () => {
 		setPanelOpen(false)
-		setDraft(null)
+		discardDraft()
 		setPicking(true)
 	}
 
@@ -356,6 +408,15 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 		setTimeout(() => setFlash(boxOf(element)), 350)
 		setTimeout(() => setFlash(null), 1600)
 	}, [revealId, threads, page])
+
+	// The application may render the element a moment after the reload.
+	useEffect(() => {
+		if (unrestored === null || draft !== null || pageKey(unrestored.anchor.url) !== page) return
+		const element = find(document, unrestored.anchor)
+		if (element === null) return
+		setUnrestored(null)
+		setDraft({ ...unrestored, box: boxOf(element), element, sources: resolveSources(bundleFrames(element)) })
+	}, [unrestored, draft, page, tick])
 
 	const reveal = (thread: ReviewThread) => {
 		setRevealId(thread.id)
@@ -390,13 +451,14 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 			{draft !== null && (
 				<Composer
 					draft={draft}
-					onCancel={() => setDraft(null)}
+					onChange={keepDraft}
+					onCancel={discardDraft}
 					onSubmit={async (body, send, screenshot) => {
 						// The capture asks for the tab, which the browser allows only while the click still counts as a gesture.
 						const image = screenshot ? await captureElement(draft.element, host) : undefined
 						const sources = await draft.sources
 						await client.createThread(sources.length === 0 ? draft.anchor : { ...draft.anchor, sources }, body, send, image)
-						setDraft(null)
+						discardDraft()
 					}}
 				/>
 			)}
