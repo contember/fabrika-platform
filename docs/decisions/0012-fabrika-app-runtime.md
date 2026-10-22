@@ -355,7 +355,7 @@ The framework closes the same-process patches it knows of:
 
 - The Kysely compiler, `Database` (class and prototype) and the capability classes' prototypes are frozen at load,
   and the checks use built-ins captured at load.
-- The adapter takes `Database.postgres` before it imports the application. Each `boot` call makes its own
+- The adapter opens the database (`openPostgres` of `@fabrika/db/postgres`) before it imports the application. Each `boot` call makes its own
   capability issuer and binds its data layer to it, and every handle is bound to its invocation, so no import, also
   by URL, no second runtime booted with keys of the application's own, and no handle kept past its request reaches
   what the served runtime's data layer accepts.
