@@ -402,6 +402,7 @@
       "version": "0.8.2",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/platform": "workspace:*",
         "@fabrika/platform-node": "workspace:*",
         "kysely": "0.29.6",
         "kysely-postgres-js": "5.0.1",

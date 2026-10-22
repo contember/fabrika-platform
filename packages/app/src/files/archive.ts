@@ -4,7 +4,7 @@
 // stored or deflated entries, no encryption, a layout in which every byte belongs to an entry or the directory, sizes
 // and CRCs that match, bounded counts and sizes, and nested ZIPs to a small depth. Any other archive is refused.
 
-import { inflateRawSync } from 'node:zlib'
+import { crc32, inflateRawSync } from 'node:zlib'
 
 export const ARCHIVE_LIMITS = {
 	/** Entries of one archive, nested ones counted with their parent's. */
@@ -236,7 +236,7 @@ function unpacked(entry: Entry, data: Uint8Array, budget: Budget): Uint8Array {
 			throw new Refused('malformed')
 		}
 	}
-	if (content.length !== entry.uncompressed || Bun.hash.crc32(content) !== entry.crc) throw new Refused('malformed')
+	if (content.length !== entry.uncompressed || crc32(content) !== entry.crc) throw new Refused('malformed')
 	return content
 }
 

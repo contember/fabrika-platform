@@ -1,3 +1,4 @@
+import { uuidv7 } from '@fabrika/platform'
 import { BinaryOperationNode, type OperationNode, OperatorNode, type ReturningNode, ValueNode } from 'kysely'
 import { admissions } from './admissions'
 import {
@@ -1567,7 +1568,7 @@ export function prepareDimensionInsert(context: TableContext, target: unknown, v
 		stampInsert(context, grant, row, scope.key, grant.id)
 		return { row, destination: undefined, conflict }
 	}
-	stampInsert(context, grant, row, scope.key, Bun.randomUUIDv7())
+	stampInsert(context, grant, row, scope.key, uuidv7())
 	for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
 		row.set(link.column, value)
 	}
@@ -1579,7 +1580,7 @@ export function prepareApplicationInsert(context: TableContext, capability: unkn
 	const grant = appGrant(context, capability, 'insert')
 	const row = readValues(values, context.model.insert, 'insert', context.model)
 	const conflict = onConflictOf(context, options, grant.action, row)
-	stampInsert(context, grant, row, keyOf(context.model), Bun.randomUUIDv7())
+	stampInsert(context, grant, row, keyOf(context.model), uuidv7())
 	return { row, destination: undefined, conflict }
 }
 
@@ -1589,7 +1590,7 @@ export function prepareChildInsert(context: TableContext, parent: unknown, value
 	const grant = refGrant(context, parent, scope.parent.dimension, 'insert')
 	const row = readValues(values, context.model.insert, 'insert', context.model)
 	const conflict = onConflictOf(context, options, grant.action, row)
-	stampInsert(context, grant, row, scope.key, Bun.randomUUIDv7())
+	stampInsert(context, grant, row, scope.key, uuidv7())
 	for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
 		row.set(link.column, value)
 	}

@@ -1,6 +1,8 @@
 // The byte streams of a stored file on its way in and out: the head the sniff reads, the digest and the deadline of a
 // write, the exact read of a file a site opens, and the client's file name as metadata.
 
+import { createHash } from 'node:crypto'
+
 const MAX_NAME_CODE_POINTS = 255
 
 /** The client's file name, metadata only: at most 255 code points, never half a character, no control characters. */
@@ -62,7 +64,7 @@ export function digesting(body: ReadableStream<Uint8Array>, timeoutMs: number | 
 	timedOut(): boolean
 	stop(): void
 } {
-	const hasher = new Bun.CryptoHasher('sha256')
+	const hasher = createHash('sha256')
 	let timer: ReturnType<typeof setTimeout> | undefined
 	let expired = false
 	const stream = body.pipeThrough(

@@ -3,6 +3,7 @@
 // is that invocation, then refuses what the site may not do with the message its types give, then runs the store's
 // own checks of kind, dimension and action against the capability.
 
+import { uuidv7 } from '@fabrika/platform'
 import type { OperationNode } from 'kysely'
 import { BinaryOperationNode, OperatorNode, ValueNode } from 'kysely'
 import { freeze, hasOwn, inSet, isSafeInteger, nameSet, namesOf, ownDescriptor, ownKeys, ownNames, parseList, setOwn } from './builtins'
@@ -1010,7 +1011,7 @@ async function insertUnscoped(context: TableContext, run: Runner, principal: str
 			)
 		}
 	}
-	row.set(keyOf(model), Bun.randomUUIDv7())
+	row.set(keyOf(model), uuidv7())
 	if (model.version !== undefined) {
 		row.set(model.version, 1)
 	}

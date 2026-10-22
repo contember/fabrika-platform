@@ -10,6 +10,7 @@ import { type ContractArtifact, JOB_SITE_PREFIX, type JobArtifact, type JobMaile
 import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError, type Session } from '@fabrika/db/framework'
 import { EmailDeliveryError, type EmailSenderCapabilities, mayRetryDelivery } from '@fabrika/email'
+import { uuidv7 } from '@fabrika/platform'
 import { NotFoundError } from '../errors'
 import { FileWork, type StoredFileKinds, storedFilesHandle } from '../files/kinds'
 import {
@@ -432,7 +433,7 @@ function jobLinks(where: string, site: string, declaration: SiteDeclaration | nu
 	return { name, prefix: mount.prefix, dimension: mount.dimension, issuedBy: mount.issuedBy }
 }
 
-const attemptId = (): string => Bun.randomUUIDv7()
+const attemptId = (): string => uuidv7()
 
 /** Exponential from one second, capped at five minutes, with half of it jittered. */
 function backoffMs(attempt: number, random: number): number {

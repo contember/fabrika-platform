@@ -7,6 +7,7 @@
 
 import type { QuarantinedStoredFile } from '@fabrika/db/framework'
 import type { FileObjectStore } from '@fabrika/platform'
+import { createHash } from 'node:crypto'
 import type { OperationsReporter } from '../jobs/report'
 import { type ArchiveRefusal, checkArchive } from './archive'
 import { ZIP_TYPES } from './sniff'
@@ -181,7 +182,7 @@ class ScanPass {
 		}
 		const bytes = object.size === file.size ? await readExactly(object.body, file.size, signal) : null
 		if (object.size !== file.size) await object.body.cancel()
-		if (bytes === null || new Bun.CryptoHasher('sha256').update(bytes).digest('hex') !== file.sha256) {
+		if (bytes === null || createHash('sha256').update(bytes).digest('hex') !== file.sha256) {
 			if (!signal.aborted) this.#states.set(file.id, { kind: 'mismatch' })
 			throw new Error('the object differs from its upload')
 		}
