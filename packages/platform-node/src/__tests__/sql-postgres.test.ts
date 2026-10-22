@@ -329,3 +329,35 @@ describe.skipIf(!hasPostgres)('PostgresDatabase.connect', () => {
 		}
 	})
 })
+
+describe.skipIf(!hasPostgres)('PostgresDatabase — a schema change under a running client', () => {
+	// A pooled server session outlives the process that opened it, so a migration and a reader that started
+	// before it can share one session. A statement prepared before ADD COLUMN must still read the table after it.
+	test('SELECT * reads a column added after the client first ran it', async () => {
+		const session = PostgresDatabase.connect(postgresUrl ?? '', { max: 1 })
+		const table = `schema_change_${Math.random().toString(36).slice(2, 10)}`
+		try {
+			await session.prepare(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY)`).run()
+			await session.prepare(`INSERT INTO ${table} (id) VALUES (1)`).run()
+			const read = () => session.prepare(`SELECT * FROM ${table} WHERE id = ?`).bind(1).first()
+			expect(await read()).toEqual({ id: 1 })
+			await session.prepare(`ALTER TABLE ${table} ADD COLUMN seen_at INTEGER`).run()
+			expect(await read()).toEqual({ id: 1, seen_at: null })
+		} finally {
+			await session.prepare(`DROP TABLE IF EXISTS ${table}`).run()
+			await session.close()
+		}
+	})
+})
+
+describe.skipIf(!hasPostgres)('PostgresDatabase — bound types without a prepared statement', () => {
+	test('a Date, bytes, a boolean and a bigint bind as their Postgres types', async () => {
+		const row = await db.prepare('SELECT ?::timestamptz AS at, ?::bytea AS bytes, ?::boolean AS flag, ?::bigint AS big')
+			.bind(new Date('2026-01-02T03:04:05Z'), new Uint8Array([1, 2, 255]), true, 9007199254740993n)
+			.first<{ at: Date; bytes: Uint8Array; flag: boolean; big: string }>()
+		expect(row?.at.toISOString()).toBe('2026-01-02T03:04:05.000Z')
+		expect([...(row?.bytes ?? [])]).toEqual([1, 2, 255])
+		expect(row?.flag).toBe(true)
+		expect(row?.big).toBe('9007199254740993')
+	})
+})
