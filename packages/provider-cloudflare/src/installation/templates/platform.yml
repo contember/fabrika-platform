@@ -140,17 +140,15 @@ jobs:
           FABRIKA_IAM_OIDC_CLIENT_ID: ${{ vars.FABRIKA_IAM_OIDC_CLIENT_ID }}
           FABRIKA_IAM_OIDC_SCOPES: ${{ vars.FABRIKA_IAM_OIDC_SCOPES }}
           FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL: ${{ vars.FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL }}
-          # Every built-in mail provider's variables: IAM reads only the selected provider's, and an unset one is ''.
           FABRIKA_EMAIL_PROVIDER: ${{ vars.FABRIKA_EMAIL_PROVIDER }}
           FABRIKA_EMAIL_FROM: ${{ vars.FABRIKA_EMAIL_FROM }}
           FABRIKA_EMAIL_FROM_NAME: ${{ vars.FABRIKA_EMAIL_FROM_NAME }}
-          FABRIKA_EMAIL_SMARTEMAILING_TAG: ${{ vars.FABRIKA_EMAIL_SMARTEMAILING_TAG }}
           FABRIKA_IAM_SIGNING_KEYS: ${{ secrets.FABRIKA_IAM_SIGNING_KEYS }}
           OIDC_CLIENT_SECRET: ${{ secrets.FABRIKA_IAM_OIDC_CLIENT_SECRET }}
-          FABRIKA_EMAIL_RESEND_API_KEY: ${{ secrets.FABRIKA_EMAIL_RESEND_API_KEY }}
-          FABRIKA_EMAIL_SMARTEMAILING_USERNAME: ${{ secrets.FABRIKA_EMAIL_SMARTEMAILING_USERNAME }}
-          FABRIKA_EMAIL_SMARTEMAILING_API_KEY: ${{ secrets.FABRIKA_EMAIL_SMARTEMAILING_API_KEY }}
           FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
+          # Every built-in mail provider's variables, written by init from the provider registry: IAM reads only the
+          # selected provider's, and an unset one is ''.
+          # {{EMAIL_PROVIDER_ENV}}
         # `platform deploy`, not `app deploy`: IAM's own Worker is a PLATFORM resource name, and only the
         # platform verb may name one. The single-component form deploys just this config.
         run: fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts

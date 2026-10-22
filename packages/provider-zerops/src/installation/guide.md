@@ -127,10 +127,9 @@ fabrika platform install --provider=zerops --create-project --client-id=<clientI
   over the same project would destroy the vault key. Start over in a new empty project.
 - The account must be in the default region, or set `FABRIKA_ZEROPS_API_URL` for every command.
 - Mail is optional. Without `--email-provider` the installation sends no mail. With one, add
-  `--email-provider=<resend|smartemailing> --email-from=<address>`, optionally `--email-from-name=<name>`, and
-  export the provider's variables (`FABRIKA_EMAIL_RESEND_API_KEY`, or `FABRIKA_EMAIL_SMARTEMAILING_USERNAME`,
-  `FABRIKA_EMAIL_SMARTEMAILING_API_KEY` and optionally `FABRIKA_EMAIL_SMARTEMAILING_TAG`) from their own `0600`
-  files. They have no flag. The install writes the set on `iam` and `control`, the credentials sensitive. They
+  `--email-provider=<provider> --email-from=<address>`, optionally `--email-from-name=<name>`, and export the
+  provider's variables from their own `0600` files. `fabrika platform install --provider=zerops --help` lists the
+  providers and their variables, each named after its provider (for Resend `FABRIKA_EMAIL_RESEND_API_KEY`). They have no flag. The install writes the set on `iam` and `control`, the credentials sensitive. They
   are the human's own, so they are not copied into the secrets file.
 
 **Check.** The log ends with the `Hand off` step: where the credentials are, `The console answers at

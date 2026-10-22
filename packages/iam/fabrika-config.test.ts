@@ -1,3 +1,4 @@
+import { builtinEmailProviderVariables } from '@fabrika/email/providers'
 import { D1Database, Worker } from '@fabrika/provider-cloudflare'
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import config, { buildPropustkaWorker, iamPipelineSecrets, iamPipelineVars } from './fabrika.config'
@@ -24,10 +25,7 @@ const ENV_NAMES = [
 	'FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL',
 	'FABRIKA_EMAIL_FROM',
 	'FABRIKA_EMAIL_FROM_NAME',
-	'FABRIKA_EMAIL_RESEND_API_KEY',
-	'FABRIKA_EMAIL_SMARTEMAILING_USERNAME',
-	'FABRIKA_EMAIL_SMARTEMAILING_API_KEY',
-	'FABRIKA_EMAIL_SMARTEMAILING_TAG',
+	...builtinEmailProviderVariables.map((variable) => variable.name),
 ]
 const originalEnvironment = new Map(ENV_NAMES.map((name) => [name, process.env[name]]))
 
@@ -219,7 +217,7 @@ describe('IAM resource graph', () => {
 		delete noKey['FABRIKA_EMAIL_RESEND_API_KEY']
 		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noKey)).toThrow('FABRIKA_EMAIL_RESEND_API_KEY')
 		expect(() => iamPipelineVars({ ...REMOTE_SOURCE, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow(
-			'FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing',
+			'FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, lettermint, postmark, resend, smartemailing',
 		)
 	})
 

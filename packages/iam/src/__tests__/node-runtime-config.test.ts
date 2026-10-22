@@ -103,7 +103,7 @@ describe('the IAM Bun runtime environment', () => {
 		await expect(createRuntime({ ...source, FABRIKA_EMAIL_FROM: '' })).rejects.toThrow('FABRIKA_EMAIL_FROM is missing')
 		await expect(createRuntime({ ...source, FABRIKA_EMAIL_RESEND_API_KEY: '' })).rejects.toThrow('FABRIKA_EMAIL_RESEND_API_KEY is missing')
 		await expect(createRuntime({ ...source, FABRIKA_EMAIL_PROVIDER: 'smtp' })).rejects.toThrow(
-			'FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing',
+			'FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, lettermint, postmark, resend, smartemailing',
 		)
 	})
 
@@ -116,7 +116,9 @@ describe('the IAM Bun runtime environment', () => {
 		} finally {
 			await runtime.shutdown()
 		}
-		await expect(createRuntime(source)).rejects.toThrow('FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing')
+		await expect(createRuntime(source)).rejects.toThrow(
+			'FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, lettermint, postmark, resend, smartemailing',
+		)
 	})
 
 	test('a composition email sender serves only a local IAM with no provider configured', async () => {

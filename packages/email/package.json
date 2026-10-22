@@ -25,6 +25,21 @@
 			"types": "./src/resend.ts",
 			"default": "./src/resend.ts"
 		},
+		"./postmark": {
+			"bun": "./src/postmark.ts",
+			"types": "./src/postmark.ts",
+			"default": "./src/postmark.ts"
+		},
+		"./ahasend": {
+			"bun": "./src/ahasend.ts",
+			"types": "./src/ahasend.ts",
+			"default": "./src/ahasend.ts"
+		},
+		"./lettermint": {
+			"bun": "./src/lettermint.ts",
+			"types": "./src/lettermint.ts",
+			"default": "./src/lettermint.ts"
+		},
 		"./directory": {
 			"bun": "./src/directory.ts",
 			"types": "./src/directory.ts",

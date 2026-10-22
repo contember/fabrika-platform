@@ -80,9 +80,13 @@ as `dropped`: an operator's decision, never a silent loss.
 - A service gets its providers from its composition, as a name-to-factory map (`EmailProviderRegistry`), not from a
   closed switch. Each provider declares its variables and parses them; the common ones are `FABRIKA_EMAIL_PROVIDER`,
   `FABRIKA_EMAIL_FROM` and `FABRIKA_EMAIL_FROM_NAME`.
-- The built-in, env-selectable providers are **Resend** and **SmartEmailing**, both over `fetch`. Resend is
-  idempotent and synchronous. SmartEmailing is neither: it is built from the official API v3 document and has not yet
-  been verified against a live account ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)).
+- The built-in, env-selectable providers are **AhaSend**, **Lettermint**, **Postmark**, **Resend** and
+  **SmartEmailing**, all over `fetch` and all on one HTTP adapter base, so a provider is its own mapping and nothing
+  more. Resend, AhaSend and Lettermint are idempotent and synchronous. Postmark is synchronous with no idempotency key.
+  SmartEmailing is neither: it is built from the official API v3 document and has not yet been verified against a live
+  account ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)). Postmark, AhaSend and
+  Lettermint are built from their documentation and wait for the same check
+  ([backlog 198](../backlog/198-verify-the-postmark-ahasend-and-lettermint-adapters-on-live-accounts.md)).
 - Two more senders deliver nothing: **Directory** writes each message to a directory for a local composition, and
   **Memory** keeps them in memory for tests and `fabrika app dev`, with controls that inject each kind of failure.
   No variable selects Memory: the test kit and `fabrika app dev` pass it as a boot option (§3). IAM takes a Directory
@@ -287,6 +291,8 @@ none and answers its row with 404. Its senders reach it over the platform transp
 - A Cloudflare installation cannot drop a mail setting by re-running `platform init`: it writes the values it is given
   and deletes none, so an old provider's variables, a display name or a tag stay in the GitHub Environment until the
   operator deletes them.
+- **Postmark has no idempotency either**, so an unknown outcome over it is never retried automatically and needs a
+  person, as over SmartEmailing.
 - **SmartEmailing's limits.** It has no idempotency, so an unknown outcome is never retried automatically and needs a
   person. It confirms only that it queued a request. The status codes for a forbidden request, a server error and
   disabled sending, a text-only body, the format of `tag` and the wording of a daily-limit 429 are not verified.

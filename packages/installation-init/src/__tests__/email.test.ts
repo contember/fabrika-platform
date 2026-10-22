@@ -38,7 +38,7 @@ describe('the installation mail transport', () => {
 		expect(() => readInstallationEmail(['--email-provider=resend'], { FABRIKA_EMAIL_RESEND_API_KEY: 're_key' }, required)).toThrow(
 			'FABRIKA_EMAIL_FROM is missing',
 		)
-		expect(() => readInstallationEmail(['--email-provider=postmark'], {}, required)).toThrow('FABRIKA_EMAIL_PROVIDER must be none or one of')
+		expect(() => readInstallationEmail(['--email-provider=smtp'], {}, required)).toThrow('FABRIKA_EMAIL_PROVIDER must be none or one of')
 	})
 
 	test('a secret value never appears in a refusal', () => {

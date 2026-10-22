@@ -1,4 +1,4 @@
-import { builtinEmailProviders } from '@fabrika/email/providers'
+import { builtinEmailProviders, builtinEmailProviderVariables } from '@fabrika/email/providers'
 import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -114,12 +114,16 @@ describe('platform scaffold', () => {
 			expect(iamStep).toContain('FABRIKA_EMAIL_PROVIDER: ${{ vars.FABRIKA_EMAIL_PROVIDER }}')
 			expect(iamStep).toContain('FABRIKA_EMAIL_RESEND_API_KEY: ${{ secrets.FABRIKA_EMAIL_RESEND_API_KEY }}')
 			// Every built-in provider's variable reaches IAM, the secret ones from the Environment's secrets.
-			for (const provider of Object.values(builtinEmailProviders)) {
-				for (const variable of provider.variables) {
-					expect(iamStep).toContain(`${variable.name}: \${{ ${variable.secret ? 'secrets' : 'vars'}.${variable.name} }}`)
-				}
+			for (const variable of builtinEmailProviderVariables) {
+				expect(iamStep).toContain(`${variable.name}: \${{ ${variable.secret ? 'secrets' : 'vars'}.${variable.name} }}`)
 			}
 			expect(iamStep).toContain('FABRIKA_EMAIL_FROM_NAME: ${{ vars.FABRIKA_EMAIL_FROM_NAME }}')
+			// The README names every provider and its variables from the same registry, and no placeholder is left.
+			for (const [name, provider] of Object.entries(builtinEmailProviders)) {
+				expect(files['README.md']).toContain(`- \`${name}\`: `)
+				for (const variable of provider.variables) expect(files['README.md']).toContain(`\`${variable.name}\``)
+			}
+			expect(`${workflow}${files['README.md']}`).not.toContain('{{EMAIL_')
 			const operationsStep = workflow.slice(
 				workflow.indexOf('name: Deploy Operations'),
 				workflow.indexOf('name: Deploy fabrika runner + control plane'),

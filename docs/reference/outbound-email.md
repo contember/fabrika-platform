@@ -76,7 +76,8 @@ name, the subject, the body and the idempotency key before any provider I/O.
 
 A composition hands the package a provider registry, a name-to-factory map. The
 registry is open: a composition can add its own provider. `@fabrika/email/providers`
-exports `builtinEmailProviders` (`resend`, `smartemailing`). Memory is never
+exports `builtinEmailProviders` (`ahasend`, `lettermint`, `postmark`, `resend`, `smartemailing`), sorted by name, the
+order every help text and refusal lists them in. Memory is never
 selected by a variable. Directory is a composition input of IAM, and a `directory`
 provider that only a local composition registers (below).
 
@@ -89,25 +90,46 @@ one `invalid_configuration` error that lists every missing or invalid variable
 by name, never by value. To check the values, the parser builds the provider's
 sender, which does no I/O.
 
-| variable                               | secret | rule                                                                                      |
-| -------------------------------------- | ------ | ----------------------------------------------------------------------------------------- |
-| `FABRIKA_EMAIL_PROVIDER`               | no     | absent or `none`: no transport. Otherwise a registry key.                                 |
-| `FABRIKA_EMAIL_FROM`                   | no     | required with a provider. A bare address, or the legacy `Name <address>`, which is split. |
-| `FABRIKA_EMAIL_FROM_NAME`              | no     | optional display name; refused when `FABRIKA_EMAIL_FROM` already carries one              |
-| `FABRIKA_EMAIL_RESEND_API_KEY`         | yes    | required for `resend`                                                                     |
-| `FABRIKA_EMAIL_SMARTEMAILING_USERNAME` | yes    | required for `smartemailing`; visible ASCII, no `:`                                       |
-| `FABRIKA_EMAIL_SMARTEMAILING_API_KEY`  | yes    | required for `smartemailing`; visible ASCII                                               |
-| `FABRIKA_EMAIL_SMARTEMAILING_TAG`      | no     | optional, `[A-Za-z0-9_-]{1,64}`, default `fabrika`                                        |
+| variable                                 | secret | rule                                                                                      |
+| ---------------------------------------- | ------ | ----------------------------------------------------------------------------------------- |
+| `FABRIKA_EMAIL_PROVIDER`                 | no     | absent or `none`: no transport. Otherwise a registry key.                                 |
+| `FABRIKA_EMAIL_FROM`                     | no     | required with a provider. A bare address, or the legacy `Name <address>`, which is split. |
+| `FABRIKA_EMAIL_FROM_NAME`                | no     | optional display name; refused when `FABRIKA_EMAIL_FROM` already carries one              |
+| `FABRIKA_EMAIL_AHASEND_API_KEY`          | yes    | required for `ahasend`; an API key v2 scoped to `messages:send:{domain}` at least         |
+| `FABRIKA_EMAIL_AHASEND_ACCOUNT_ID`       | no     | required for `ahasend`; `[A-Za-z0-9-]{1,64}`                                              |
+| `FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN` | yes    | required for `lettermint`; a project API token                                            |
+| `FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN`    | yes    | required for `postmark`; a server token                                                   |
+| `FABRIKA_EMAIL_RESEND_API_KEY`           | yes    | required for `resend`                                                                     |
+| `FABRIKA_EMAIL_SMARTEMAILING_USERNAME`   | yes    | required for `smartemailing`; visible ASCII, no `:`                                       |
+| `FABRIKA_EMAIL_SMARTEMAILING_API_KEY`    | yes    | required for `smartemailing`; visible ASCII                                               |
+| `FABRIKA_EMAIL_SMARTEMAILING_TAG`        | no     | optional, `[A-Za-z0-9_-]{1,64}`, default `fabrika`                                        |
 
 Each provider declares its own variables with their secret flag, so deploy
 tooling knows which go to secret storage.
 
+## HTTP adapters
+
+Every built-in provider extends `HttpEmailSender` (`packages/email/src/http-sender.ts`), which holds what they share:
+it validates the sender identity and the timeout (ten seconds by default) when it is built; validates the message,
+refuses an unsubscribe URL without `listUnsubscribe` and attachments beyond `maxAttachmentBytes` before any I/O; sends
+the request through the portable Fetch surface; and classifies the answer. An adapter supplies only its provider's
+mapping: the request for a message, the message ID of an accepted answer, the refusals it tells apart beyond the HTTP
+status, and (`refuseMessage`) the valid messages its provider is known to refuse. Every other refusal is classified by status alone (`refusalByStatus`): 401 and 403
+`provider_unauthorized`, 429 `rate_limited`, 5xx `provider_unavailable`, any other `provider_rejected`. A provider's
+error text never reaches an error.
+
+A new provider is one module (its sender and its `EmailProvider` declaration), its entry in
+`builtinEmailProviders` (`builtinEmailProviderVariables` lists every provider's variables from it) and its
+`package.json` export, a unit test and a conformance harness. The installers, the
+Cloudflare workflow and its README read the registry, so neither needs an edit.
+
+A provider that takes a shorter idempotency key than the contract's 256 characters gets one through
+`providerIdempotencyKey`: a longer key is sent as `sha256:<hex>` of it, the same digest on every retry.
+
 ## Resend adapter
 
-`ResendEmailSender` (`@fabrika/email/resend`) calls the Resend HTTP API through
-the portable Fetch surface. It sends the idempotency key in Resend's
-idempotency header and quotes a display name that holds RFC 5322 specials. Its
-own timeout is ten seconds by default. Capabilities: idempotent, `sync`, `listUnsubscribe`, and `maxAttachmentBytes`
+`ResendEmailSender` (`@fabrika/email/resend`) calls the Resend HTTP API. It sends the idempotency key in Resend's
+idempotency header and quotes a display name that holds RFC 5322 specials. Capabilities: idempotent, `sync`, `listUnsubscribe`, and `maxAttachmentBytes`
 of 25 MiB: it sends attachments as base64 `attachments`, which stays within Resend's 40 MB message bound. It writes the
 unsubscribe URL as the two message headers.
 
@@ -115,6 +137,47 @@ A 409 is `request_in_progress` for `concurrent_idempotent_requests` and
 `idempotency_conflict` for `invalid_idempotent_request`. A 429 is
 `quota_exceeded` for `daily_quota_exceeded` and `monthly_quota_exceeded`, and
 `rate_limited` otherwise.
+
+## Postmark adapter
+
+`PostmarkEmailSender` (`@fabrika/email/postmark`) calls `POST https://api.postmarkapp.com/email` with the server
+token in `X-Postmark-Server-Token`, through the server's default transactional stream. Postmark has no idempotency
+key, and a 200 with `ErrorCode: 0` means it took the message. Capabilities: not idempotent, `sync`,
+`listUnsubscribe` (the two headers as `Headers` name and value pairs), and `maxAttachmentBytes` of 6 MiB: Postmark
+refuses a message over 10 MB with its attachments base64. Refusals are classified by status alone; an inactive
+recipient (`ErrorCode` 406) and an account still pending approval are a 422, `provider_rejected`. The `from` address
+needs a confirmed sender signature or domain.
+
+## AhaSend adapter
+
+`AhaSendEmailSender` (`@fabrika/email/ahasend`) calls `POST https://api.ahasend.com/v2/accounts/{account}/messages`
+with a bearer API key v2 and one recipient. It sends the idempotency key in `Idempotency-Key`, which AhaSend keeps
+for 24 hours and takes up to 255 characters. Capabilities: idempotent, `sync`, `listUnsubscribe`, and
+`maxAttachmentBytes` of 12 MiB: AhaSend refuses a message over 20 MiB once its attachments are base64 and
+MIME-wrapped.
+
+A 202 carries one result per recipient; a result with `status: 'error'` is `provider_rejected`, without its text,
+and any other status with an ID is accepted. A
+409 is `request_in_progress`, a 422 (documented only for the key reused for another request) `idempotency_conflict`, and a 404 (no such
+account) `provider_unauthorized`; a malformed request is a 400. AhaSend renders the subject and both bodies as
+MiniJinja templates, so the adapter writes every `{` that opens `{{`, `{%` or `{#` as `{{ '{' }}` (`literalTemplate`)
+and the content reaches the recipient unchanged.
+
+## Lettermint adapter
+
+`LettermintEmailSender` (`@fabrika/email/lettermint`) calls `POST https://api.lettermint.co/v1/send` with the project
+token in `x-lettermint-token`, through the project's default route. It sends the idempotency key in
+`Idempotency-Key`, which Lettermint keeps for 24 hours and takes up to 255 characters. Capabilities: idempotent,
+`sync`, `listUnsubscribe`, and `maxAttachmentBytes` of 15 MiB: Lettermint refuses a request over 25 MB with its
+attachments base64. A text or HTML body shorter than three characters, which Lettermint refuses, is `invalid_message`
+before any request. An accepted answer counts by its `message_id`, whatever its status.
+
+A 409 with the code `concurrent_idempotent_requests` is `request_in_progress`; Lettermint answers it too while an
+earlier request under the key failed with an unknown outcome, until the key expires. Any other 409 is
+`idempotency_conflict`, which is not retried.
+
+The three adapters above follow their providers' documentation and are verified only against a stubbed fetch
+([backlog 198](../backlog/198-verify-the-postmark-ahasend-and-lettermint-adapters-on-live-accounts.md)).
 
 ## SmartEmailing adapter
 

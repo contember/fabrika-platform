@@ -83,7 +83,7 @@ describe.skipIf(!hasPostgres)("the local stack's directory provider, through fab
 		const refused = await run(variables('https://iam.example.test')).then(() => null, (error: unknown) => error)
 		if (!(refused instanceof BootError)) throw new Error('expected a BootError')
 		expect(refused.problems).toEqual([
-			"the installation's mail transport: FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing",
+			"the installation's mail transport: FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, lettermint, postmark, resend, smartemailing",
 		])
 		expect(refused.message).not.toContain(directory)
 	})
