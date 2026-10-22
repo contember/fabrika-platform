@@ -104,9 +104,12 @@ export class LettermintEmailSender extends HttpEmailSender {
 		return lettermintSuccessSchema.safeParse(response.body).data?.message_id
 	}
 
-	protected override refusal(response: ProviderResponse): EmailDeliveryError | undefined {
+	protected override refusal(response: ProviderResponse, message: EmailMessage): EmailDeliveryError | undefined {
 		const status = response.status
-		if (status === 422 && UNKNOWN_ROUTE.test(lettermintApiErrorSchema.safeParse(response.body).data?.error.message ?? '')) {
+		// Only a broadcast message names a route; a transactional one takes the project's default, so its 422 is another.
+		if (
+			status === 422 && message.broadcast === true && UNKNOWN_ROUTE.test(lettermintApiErrorSchema.safeParse(response.body).data?.error.message ?? '')
+		) {
 			return new EmailDeliveryError(
 				'Lettermint knows no such route in the project: create its broadcast route, or name it in FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE (422)',
 				{ code: 'provider_rejected', httpStatus: status },
@@ -115,8 +118,8 @@ export class LettermintEmailSender extends HttpEmailSender {
 		if (status !== 409) return undefined
 		// The 409 has no code, so its text is read, and only to tell the two apart; it never reaches the error. A wording
 		// that no longer names the payload reads as in progress, which a retry cannot turn into a second delivery.
-		const message = lettermintErrorSchema.safeParse(response.body).data?.message
-		if (message !== undefined && OTHER_PAYLOAD.test(message)) {
+		const text = lettermintErrorSchema.safeParse(response.body).data?.message
+		if (text !== undefined && OTHER_PAYLOAD.test(text)) {
 			return new EmailDeliveryError('Lettermint already took a different request under this idempotency key', {
 				code: 'idempotency_conflict',
 				httpStatus: status,

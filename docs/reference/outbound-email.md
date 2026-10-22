@@ -499,8 +499,12 @@ local stack) runs it; on the Worker its row answers 404.
 - The relay reads at most the base64 of 10 MiB of attachments plus 4 MiB. A larger
   body, invalid JSON, and a message that fails validation answer 400
   `invalid_message`. So does a `broadcast` message while Control's own sender sends
-  none, refused before it is recorded; without a sender yet, it is held like any
-  message, and the transport decides at dispatch.
+  none, refused before it is recorded, unless its key names a message already recorded (before the transport changed),
+  which gets that message's answer as any repeated key does; without a sender yet, it is held like any message, and
+  the transport decides at dispatch. The application's `PlatformEmailSender` reports `broadcast` whatever Control's
+  transport is, because the wire carries no capabilities: it learns otherwise from that first refusal.
+- A stored message holding `broadcast` does not parse in a Control older than the field, so rolling Control back
+  past it settles those queued or held messages `failed`.
 - The answer is `200 { status: 'accepted', messageId }` or `{ error: { code } }`:
 
   | status | code                    | when                                          |

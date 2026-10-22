@@ -3,7 +3,13 @@
 
 import type { EmailMessage, EmailSender } from '@fabrika/email'
 import { MemoryEmailSender } from '@fabrika/email/memory'
-import { encodePlatformMailRequest, hashPlatformKey, installationMailKey, parsePlatformMailAnswer } from '@fabrika/email/platform'
+import {
+	encodePlatformMailRequest,
+	hashPlatformKey,
+	installationMailKey,
+	parsePlatformMailAnswer,
+	platformMailFingerprint,
+} from '@fabrika/email/platform'
 import type { JobQueue } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import type { MailRuleAction } from '../db'
@@ -294,6 +300,24 @@ describe('the mail relay: a broadcast message', () => {
 		const response = await r.send({ body: encodePlatformMailRequest(BROADCAST) })
 		expect(await answer(response)).toEqual({ status: 400, answer: { error: { code: 'invalid_message' } } })
 		expect(await r.harness.repositories.mailMessages.list({ limit: 10 })).toEqual([])
+		expect(r.jobs).toEqual([])
+	})
+
+	test('recorded before the transport changed, its retry gets the recorded answer, and other content a conflict', async () => {
+		const r = await relay({ sender: new MemoryEmailSender({ capabilities: { broadcast: false } }) })
+		const { row } = await r.harness.repositories.mailMessages.insertOrFind({
+			id: crypto.randomUUID(),
+			sender: 'notes@prod',
+			idempotency_key: BROADCAST.idempotencyKey,
+			fingerprint: await platformMailFingerprint(BROADCAST),
+			recipient_domain: 'example.com',
+			state: 'held',
+			rule_id: null,
+			content: encodePlatformMailRequest(BROADCAST),
+		}, NOW)
+		expect(await acceptedId(await r.send({ body: encodePlatformMailRequest(BROADCAST) }))).toBe(row.id)
+		const changed = await r.send({ body: encodePlatformMailRequest({ ...BROADCAST, subject: 'Another' }) })
+		expect(await answer(changed)).toEqual({ status: 409, answer: { error: { code: 'idempotency_conflict' } } })
 		expect(r.jobs).toEqual([])
 	})
 

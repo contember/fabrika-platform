@@ -1308,8 +1308,10 @@ artifact; the approval diff shows a new `installation` for closer review and a n
 - `broadcast: true` marks one message of a send to many recipients, as opposed to mail the recipient's own action
   triggers. It needs `unsubscribe`. The transport sends it on the provider's channel for broadcast mail (Postmark's
   broadcast stream, Lettermint's broadcast route); one without `capabilities.broadcast` refuses it as
-  `invalid_message`, on the relay already at the handoff when Control's own transport sends none. It is part of the
-  content a repeated idempotency key must match.
+  `invalid_message`, on the relay already at the handoff when Control's own transport sends none. Under the relay
+  `capabilities.broadcast` is true whatever Control's transport is, so that first refusal is how a job learns it.
+  `jobMail` checks the capability itself before the sender sees the message, so a sender written before the field
+  cannot send it as transactional mail. It is part of the content a repeated idempotency key must match.
 - `ctx.mail.available` is false where the installation has no transport: Control handed `FABRIKA_EMAIL_PROVIDER=none`,
   a local installation configures none, or the kit runs with `mail: 'none'`. Control never hands `none` to an
   application on the relay: the relay holds what it cannot send, so `available` is true there and an accepted message

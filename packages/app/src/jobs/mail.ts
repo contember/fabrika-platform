@@ -93,6 +93,10 @@ export function jobMail(input: JobMailInput): AppMail {
 			if (typeof key !== 'string' || !APP_MAIL_KEY.test(key)) {
 				throw new EmailDeliveryError(`Email idempotency key is not 1..${MAX_APP_MAIL_KEY_LENGTH} visible ASCII characters`, { code: 'invalid_message' })
 			}
+			// Checked here, not left to the sender: one written before `broadcast` existed would send it as transactional mail.
+			if (available && message.broadcast === true && sender.capabilities.broadcast !== true) {
+				throw new EmailDeliveryError('This mail transport sends no broadcast email', { code: 'invalid_message' })
+			}
 			// Without a transport the send fails `mail_not_configured` below, and no file is read for it.
 			const attachments = available ? await readAttachments(message.attachments ?? [], sender.capabilities.maxAttachmentBytes, open) : []
 			const transported: EmailMessage = {
@@ -310,6 +314,9 @@ const SenderCapabilities = z.object({
 	maxBatch: z.int().positive(),
 	listUnsubscribe: z.boolean().optional(),
 	maxAttachmentBytes: z.int().positive().optional(),
+	refusedAttachmentExtensions: z.array(z.string()).readonly().optional(),
+	minBodyLength: z.int().positive().optional(),
+	broadcast: z.boolean().optional(),
 })
 
 /** What `serve`'s `mail` returned: a sender, `null` for none, `undefined` for anything else. */
