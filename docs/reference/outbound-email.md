@@ -118,7 +118,7 @@ conformance kit against a stubbed `fetch`.
 | `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | live, 2026-10-22                                                                              |
 | `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | live, 2026-10-22                                                                              |
 | `postmark`      | no         | `sync`       | yes         | 10 MiB      | live, 2026-10-22                                                                              |
-| `resend`        | yes        | `sync`       | yes         | 25 MiB      | stubbed; no live check is recorded                                                            |
+| `resend`        | yes        | `sync`       | yes         | 25 MiB      | live, 2026-10-22                                                                              |
 | `smartemailing` | no         | `queued`     | no          | none        | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)) |
 
 A provider that is not idempotent leaves a message whose outcome is unknown (a timeout, a lost answer, a 5xx) to a
@@ -154,7 +154,11 @@ unsubscribe URL as the two message headers.
 A 409 is `request_in_progress` for `concurrent_idempotent_requests` and
 `idempotency_conflict` for `invalid_idempotent_request`. A 429 is
 `quota_exceeded` for `daily_quota_exceeded` and `monthly_quota_exceeded`, and
-`rate_limited` otherwise.
+`rate_limited` otherwise. A repeated request under its key answers the first `id` and sends nothing, and the retry of a
+request that lost a concurrent race gets the winner's `id`. A wrong key is a 401 and a sender on an unverified domain a
+403, both `provider_unauthorized`; an invalid recipient is a 422, and a key over 256 characters or a message over
+40 MB a 400, `provider_rejected`. Every refusal names its kind in `name`. Resend sends through Amazon SES: the
+`Message-ID` is SES's, not the `id`.
 
 ## Postmark adapter
 
