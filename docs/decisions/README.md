@@ -86,3 +86,4 @@ a commit message suffices.
 | [0062](0062-a-platform-release-serves-older-framework-releases.md)                     | A platform release runs and deploys applications on older framework releases             |
 | [0063](0063-a-public-procedure-runs-as-its-own-workload.md)                            | A public procedure runs as its own workload, which IAM signs for                         |
 | [0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md) | Applications reach the platform over a transport key that the receiver verifies          |
+| [0067](0067-public-packages-ship-declarations-beside-their-sources.md)                 | Public packages ship declarations beside their TypeScript sources; Bun runs the sources  |
