@@ -29,7 +29,7 @@ import {
 import { runnerWorkerGraph } from './checkout'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
 import { configSchema } from './config-schema'
-import { assertCloudflareContract, needsMinuteTick } from './contract-support'
+import { assertCloudflareContract, needsMinuteTick, runsInObject } from './contract-support'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker, PROXY_MANIFEST_DEFINE } from './proxy'
@@ -591,7 +591,9 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	const proxied = platformResources === 'refuse' && served !== null ? platformProxied(authored, served, run) : authored
 	if (platformResources === 'refuse') assertNoFrameworkVariables(loaded.config, applicationWorker(proxied), run)
 	const connectors = platformResources === 'refuse' ? connectorBindings(contract) : {}
-	const runtime = platformResources === 'refuse' && contract !== null ? applicationRuntime(run, contract) : null
+	// An older release's entry exports no object, and a Control older than the runner names no release (ADR-0062).
+	const objectRuntime = run.approved === undefined || (run.approved.framework !== undefined && runsInObject(run.approved.framework))
+	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract) : null
 	const managed = withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served))
 	const connected = withConnectorBindings(managed.worker, connectors)
 	const worker = runtime === null ? connected : withApplicationRuntime(connected, run, runtime)
