@@ -1,5 +1,6 @@
 // Lettermint's Sending API (https://lettermint.co/docs/api-reference/sending), built from its OpenAPI document and
-// verified only against a stubbed fetch. It keeps an idempotency key for 24 hours, and a 202 means it took the message.
+// verified on a live project in October 2026. It keeps an idempotency key for 24 hours, and a 202 means it took the
+// message.
 
 import { z } from 'zod'
 import { type EmailProvider, parseProviderVariables } from './config.js'
@@ -22,8 +23,9 @@ const MAX_IDEMPOTENCY_KEY_LENGTH = 255
 const lettermintSuccessSchema = z.object({ message_id: z.string() })
 /** Lettermint refuses a text or HTML body shorter than this with a 422. */
 const LETTERMINT_MIN_BODY_LENGTH = 3
-/** Its documented error codes, in the structured `error.code` or at the top level. */
-const lettermintErrorSchema = z.union([z.object({ error: z.object({ code: z.string() }) }), z.object({ code: z.string() })])
+/** A 409 carries only a `message`; the one for a key reused with another body says so in these words. */
+const lettermintErrorSchema = z.object({ message: z.string() })
+const OTHER_PAYLOAD = /different payload/i
 /** Lettermint refuses a request over 25 MB with its attachments base64; 15 MiB of bytes leaves room for the bodies. */
 const LETTERMINT_MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
 
@@ -92,17 +94,17 @@ export class LettermintEmailSender extends HttpEmailSender {
 	protected override refusal(response: ProviderResponse): EmailDeliveryError | undefined {
 		const status = response.status
 		if (status !== 409) return undefined
-		const parsed = lettermintErrorSchema.safeParse(response.body).data
-		const code = parsed === undefined ? undefined : 'error' in parsed ? parsed.error.code : parsed.code
-		if (code === 'concurrent_idempotent_requests') {
-			// Also the answer while an earlier request under the key failed with an unknown outcome, until the key expires.
-			return new EmailDeliveryError('A matching Lettermint request is still in progress', { code: 'request_in_progress', httpStatus: status })
+		// The 409 has no code, so its text is read, and only to tell the two apart; it never reaches the error.
+		const message = lettermintErrorSchema.safeParse(response.body).data?.message
+		if (message !== undefined && OTHER_PAYLOAD.test(message)) {
+			return new EmailDeliveryError('Lettermint already took a different request under this idempotency key', {
+				code: 'idempotency_conflict',
+				httpStatus: status,
+			})
 		}
-		// Unverified: its send endpoint documents a 409 body with no code. Without one, the conflict is not retried.
-		return new EmailDeliveryError('Lettermint already took a different request under this idempotency key', {
-			code: 'idempotency_conflict',
-			httpStatus: status,
-		})
+		// Every other 409 is a request under the key still in progress, or one whose outcome is unknown, which Lettermint
+		// answers the same way until the key expires. A retry cannot deliver twice, so it is retried.
+		return new EmailDeliveryError('A matching Lettermint request is still in progress', { code: 'request_in_progress', httpStatus: status })
 	}
 }
 

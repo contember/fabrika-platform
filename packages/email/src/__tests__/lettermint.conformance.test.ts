@@ -49,11 +49,23 @@ describeEmailSenderConformance('LettermintEmailSender', {
 	answers: {
 		accepted: () => Response.json({ message_id: 'lettermint-message-1', status: 'pending' }, { status: 202 }),
 		malformedSuccess: () => Response.json({ status: 'private provider detail without an id' }, { status: 202 }),
-		unauthorized: () => Response.json({ message: 'private provider detail for the token' }, { status: 401 }),
-		rejected: () => errorAnswer(422, 'VALIDATION_ERROR'),
+		unauthorized: () => Response.json({ message: 'Provided API token is invalid.' }, { status: 401 }),
+		rejected: () =>
+			Response.json({
+				message: "The domain 'example.com' is not verified or does not belong to your account.",
+				errors: { from: ["The domain 'example.com' is not verified or does not belong to your account."] },
+			}, { status: 422 }),
 		rateLimited: () => errorAnswer(429, 'RATE_LIMITED'),
 		unavailable: () => errorAnswer(500, 'INTERNAL_ERROR'),
-		inProgress: () => errorAnswer(409, 'concurrent_idempotent_requests'),
-		idempotencyConflict: () => errorAnswer(409, 'invalid_idempotent_request'),
+		// The two 409s as a live project answered them in October 2026.
+		inProgress: () =>
+			Response.json({ message: 'Another request with the same idempotency key is currently being processed. Please retry this request later.' }, {
+				status: 409,
+			}),
+		idempotencyConflict: () =>
+			Response.json({
+				message:
+					'This idempotency key has already been used on a request with a different payload. Retrying this request requires changing the idempotency key or payload.',
+			}, { status: 409 }),
 	},
 })

@@ -47,10 +47,18 @@ describe('LettermintEmailSender', () => {
 		})
 	})
 
-	test('a 409 without a code is a conflict that is not retried', async () => {
-		const { fetch } = capturing(() => Response.json({ message: 'private: the key was used with a different payload' }, { status: 409 }))
-		const error = await caught(new LettermintEmailSender({ projectToken: 'lm_secret', from, fetch }).send(message, signal))
-		expect([error.code, error.httpStatus, error.retryable]).toEqual(['idempotency_conflict', 409, false])
+	test('a 409 is retried unless it says the key went with another payload', async () => {
+		const answering = (text: unknown) => capturing(() => Response.json(text, { status: 409 })).fetch
+		const send = (fetch: EmailFetch) => caught(new LettermintEmailSender({ projectToken: 'lm_secret', from, fetch }).send(message, signal))
+
+		const conflict = await send(answering({ message: 'This idempotency key has already been used on a request with a different payload.' }))
+		expect([conflict.code, conflict.httpStatus, conflict.retryable]).toEqual(['idempotency_conflict', 409, false])
+		for (
+			const body of [{ message: 'Another request with the same idempotency key is currently being processed.' }, { message: 'reworded' }, 'not json']
+		) {
+			const error = await send(answering(body))
+			expect([error.code, error.retryable]).toEqual(['request_in_progress', true])
+		}
 	})
 
 	test('a body shorter than three characters is refused without a request', async () => {
