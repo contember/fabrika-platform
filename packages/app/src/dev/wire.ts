@@ -32,7 +32,14 @@ export function isSourcePath(path: string): boolean {
 
 const sourcePath = z.string().refine(isSourcePath, 'not a repository-relative path')
 
+/**
+ * The commit the container's bootstrap run built (`DevLauncherConfig.head`). Control answers only the container of the
+ * newest bootstrap run: a container a newer bootstrap replaces still runs for a while, and must not sync or report.
+ */
+const bootstrap = commitSha
+
 export const devWaitRequestSchema = z.object({
+	bootstrap,
 	/** The commit whose files the container holds now. */
 	head: commitSha,
 	/** The reset generation it applied last; null for a container with no record of one, which adopts the answer's. */
@@ -81,6 +88,7 @@ export const devCheckResultSchema = z.object({
 	name: z.string().min(1).max(64),
 	ok: z.boolean(),
 	exitCode: z.number().int().nullable(),
+	durationMs: z.number().int().min(0),
 	/** The last lines of its output. */
 	output: z.array(z.string().max(DEV_REPORT_MAX_LINE_CHARACTERS)).max(DEV_REPORT_MAX_LINES),
 }).strict()
@@ -88,6 +96,7 @@ export const devCheckResultSchema = z.object({
 export type DevCheckResult = z.infer<typeof devCheckResultSchema>
 
 export const devReportSchema = z.object({
+	bootstrap,
 	/** The commit whose files the container holds now. */
 	head: commitSha,
 	status: z.enum(DEV_STATUSES),

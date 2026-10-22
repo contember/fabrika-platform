@@ -1,11 +1,15 @@
 // Wakes a request that waits on a `dev` environment's record when this process changes it. Another Control process
 // does not see the wake-up, so every waiter also re-reads the record at least once a second.
 
+import type { DevSync } from '@fabrika/app/dev/wire'
+
 /** How long a waiter sleeps between two reads of the record at most. */
 export const DEV_RECHECK_MS = 1_000
 
 export class DevSignals {
 	private readonly waiters = new Map<string, Set<() => void>>()
+	/** The files of the newest commit this process made for each environment, until a wait takes them. */
+	private readonly handoffs = new Map<string, DevSync>()
 
 	/** Resolves on `notify(key)`, after `ms`, or when `signal` aborts, whichever comes first. */
 	wait(key: string, ms: number, signal?: AbortSignal): Promise<void> {
@@ -29,6 +33,22 @@ export class DevSignals {
 
 	notify(key: string): void {
 		for (const wake of [...(this.waiters.get(key) ?? [])]) wake()
+	}
+
+	/**
+	 * Hand a waiting launcher the files of a commit this process just made, so its answer needs no GitHub read. Held in
+	 * memory only, one per environment; another process, or a launcher at another head, reads the compare instead.
+	 */
+	offer(key: string, sync: DevSync): void {
+		this.handoffs.set(key, sync)
+	}
+
+	/** The offered files that bring `from` to `to`, once; null when this process holds none for that step. */
+	take(key: string, from: string, to: string): DevSync | null {
+		const offered = this.handoffs.get(key)
+		if (offered === undefined || offered.from !== from || offered.to !== to) return null
+		this.handoffs.delete(key)
+		return offered
 	}
 }
 

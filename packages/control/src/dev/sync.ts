@@ -69,3 +69,13 @@ const UNREADABLE = {
 	too_large: 'over 512 KiB',
 	binary: 'not UTF-8 text',
 } as const
+
+/**
+ * A sync made from the files a commit wrote, when it stays within what a relayed sync may hold; null otherwise, and
+ * the compare then decides, with its reason.
+ */
+export function relayableSync(sync: DevSync): DevSync | null {
+	if (sync.files.length > DEV_SYNC_MAX_FILES || sync.files.some((file) => !isSourcePath(file.path))) return null
+	const bytes = sync.files.reduce((total, file) => total + (file.content === null ? 0 : new TextEncoder().encode(file.content).byteLength), 0)
+	return bytes > DEV_SYNC_MAX_BYTES ? null : sync
+}

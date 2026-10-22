@@ -21,7 +21,7 @@ import { bearerOf, error, json, readBoundedText } from '../http'
 import { repositories } from '../services'
 import { WorkspaceSourceError, type WorkspaceSourcePort, type WorkspaceSourceTarget } from '../workspace-source-port'
 import { devReportKey, type DevSignals, devTargetKey, waitForRecord } from './signals'
-import { buildDevSync } from './sync'
+import { buildDevSync, relayableSync } from './sync'
 
 const SOURCE_RECEIVER = 'source'
 
@@ -46,6 +46,8 @@ export interface DevReceiverDeps {
 	readonly now: () => number
 	/** How long a held wait lasts at most. */
 	readonly waitMs: number
+	/** The commit a run built; null for a run that does not exist. */
+	readonly runCommit: (runId: string) => Promise<string | null>
 }
 
 /** `POST /platform/source/wait` and `/platform/source/report`; anything else under the row, and the Worker, answer 404. */
@@ -61,6 +63,7 @@ export function handleDevSource(ctx: ControlAppContext): Promise<Response> {
 		signals: dev.signals,
 		now: () => Math.floor(Date.now() / 1000),
 		waitMs: DEV_SOURCE_WAIT_MS,
+		runCommit: async (runId) => (await persistence.runs.getRun(runId))?.commit_sha ?? null,
 	}
 	const path = new URL(ctx.request.url).pathname
 	if (path === DEV_SOURCE_WAIT_PATH) return acceptDevWait(deps, ctx.request)
@@ -76,6 +79,7 @@ export async function acceptDevWait(deps: DevReceiverDeps, request: Request): Pr
 	if (parsed === null || !parsed.ok) return error(400, 'not a wait request this release reads')
 	const { appId, env } = environment
 	try {
+		if (await superseded(deps, await deps.devEnvironments.get(appId, env), parsed.value.bootstrap)) return error(409, SUPERSEDED)
 		const ready = async () => {
 			const row = await deps.devEnvironments.get(appId, env)
 			return row === null || answersNow(row, parsed.value) ? { row } : null
@@ -100,6 +104,7 @@ export async function acceptDevReport(deps: DevReceiverDeps, request: Request): 
 	if (parsed === null || !parsed.ok) return error(400, 'not a report this release reads')
 	const { appId, env } = environment
 	try {
+		if (await superseded(deps, await deps.devEnvironments.get(appId, env), parsed.value.bootstrap)) return error(409, SUPERSEDED)
 		await deps.devEnvironments.recordReport(appId, env, reportInput(parsed.value))
 	} catch {
 		console.error(`dev source: recording a report of ${appId}@${env} failed`)
@@ -120,6 +125,18 @@ function reportInput(report: DevReport) {
 		resetApplied: report.reset,
 		checksJson: report.checks === null ? null : JSON.stringify(report.checks),
 	}
+}
+
+const SUPERSEDED = 'a newer bootstrap run replaced this container'
+
+/**
+ * A container is the environment's only while its bootstrap commit is the newest bootstrap run's. The one a new run
+ * replaces keeps running until the platform swaps it, and a sync or report from it would overwrite the new one's.
+ */
+async function superseded(deps: DevReceiverDeps, row: DevEnvironmentRow | null, bootstrap: string): Promise<boolean> {
+	if (row === null || row.bootstrap_run_id === null) return false
+	const built = await deps.runCommit(row.bootstrap_run_id)
+	return built !== null && built !== bootstrap
 }
 
 /** Whether the record asks the launcher for something it has not done: a head to sync to, a reset, or checks. */
@@ -144,6 +161,9 @@ async function answer(
 	if (row === null) return { sync: null, reset: 0, checks: 0 }
 	const generations = { reset: row.reset_generation, checks: row.checks_generation }
 	if (!needsSync(row, request.head)) return { sync: null, ...generations }
+	const handedOff = deps.signals.take(devTargetKey(appId, env), request.head, row.target_sha)
+	const relayed = handedOff === null ? null : relayableSync(handedOff)
+	if (relayed !== null) return { sync: relayed, ...generations }
 	const target = await deps.sourceTarget(appId)
 	if (target === null) {
 		await deps.devEnvironments.recordRefusal(appId, env, row.target_sha, 'the application has no GitHub source any more')
