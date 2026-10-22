@@ -36,6 +36,8 @@ behaviour.
   behavior.
 - [`zerops-platform.md`](zerops-platform.md) — the Zerops facts the decisions rest
   on, each with a source (and each unverified claim marked as such).
+- [`cloudflare-platform.md`](cloudflare-platform.md) — the Cloudflare facts the application runtime rests on:
+  variable size, D1 and Durable Object transactions, input gates, latency.
 - [`portability-surface.md`](portability-surface.md) — every Cloudflare primitive in
   use and its portable counterpart; how portable each deploy layer is; the IAM
   and Operations port assessment.
