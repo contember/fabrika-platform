@@ -5,6 +5,7 @@
 import { createClient, RpcError } from '@fabrika/app/client'
 import { testKit } from '@fabrika/app/testing'
 import { applicationSchema, Database, type Ref, scoped, type Within } from '@fabrika/db'
+import { openPostgres } from '@fabrika/db/postgres'
 import { defineStore } from '@fabrika/db/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -67,7 +68,7 @@ async function admin(statement: string): Promise<void> {
 beforeAll(async () => {
 	if (hasPostgres) {
 		await admin(`create schema ${schema}; set search_path to ${schema}; ${migration}`)
-		database = Database.postgres({ url, schema, max: 2 })
+		database = openPostgres({ url, schema, max: 2 })
 	}
 })
 

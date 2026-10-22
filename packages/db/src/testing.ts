@@ -22,6 +22,7 @@ import { applicationSchema, Database, openFirstConnection } from './database'
 import type { Primitive } from './description'
 import { FILES_TABLE, FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from './migrations'
 import { type Container, type ForeignKey, modelOf, type TableModel, type TableModels, tableModels, type Tables } from './policy'
+import { openPostgres } from './postgres'
 import { refuseInProduction } from './production'
 import { frameworkSideOf } from './registry'
 import type { TableProbe } from './store'
@@ -750,7 +751,7 @@ async function openTestDatabase(url: string, directory: string): Promise<OpenedT
 	const runtimeUrl = applicationRuntimeUrl(url, appId)
 	const admin = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
 	const seeder = new SQL({ url: runtimeUrl, adapter: 'postgres', max: 1, prepare: false })
-	const database = Database.postgres({ url: runtimeUrl, schema, max: RUNTIME_CONNECTIONS })
+	const database = openPostgres({ url: runtimeUrl, schema, max: RUNTIME_CONNECTIONS })
 	let lock: ReservedSQL | undefined
 	try {
 		lock = await admin.reserve()

@@ -5,6 +5,7 @@
 import type { ChallengeFetch, ContractApp } from '@fabrika/app/implement'
 import { applicationSchema, Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from 'bun:test'
 import { BootError } from '../implement/boot'
@@ -70,7 +71,7 @@ function passed(_token: string, overrides: Record<string, unknown> = {}): Respon
 
 /** A fresh instance of the application over the shared schema, as a second container would be. */
 function start(verify: Siteverify = siteverify()): ContractApp {
-	const connection = Database.postgres({ url, schema, max: 2 })
+	const connection = openPostgres({ url, schema, max: 2 })
 	opened.push(connection)
 	const app = intakeApp()
 	const challengeFetch: ChallengeFetch = async (request) => {
@@ -307,7 +308,7 @@ describe.skipIf(!hasPostgres)('the challenge', () => {
 
 	test('the application does not boot without the variable its challenge names', () => {
 		const app = intakeApp()
-		const connection = Database.postgres({ url, schema, max: 1 })
+		const connection = openPostgres({ url, schema, max: 1 })
 		opened.push(connection)
 		expect(() => bootApp(app, { database: connection })).toThrow(BootError)
 		expect(() => bootApp(intakeApp(), { database: connection })).toThrow(

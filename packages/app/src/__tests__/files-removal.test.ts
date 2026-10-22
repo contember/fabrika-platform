@@ -7,6 +7,7 @@ import { createClient } from '@fabrika/app/client'
 import { FILE_SWEEP_JOB } from '@fabrika/app/implement'
 import { type TestKit, testKit } from '@fabrika/app/testing'
 import { applicationSchema, Database } from '@fabrika/db'
+import { openPostgres } from '@fabrika/db/postgres'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
@@ -38,7 +39,7 @@ async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 beforeAll(async () => {
 	if (!hasPostgres) return
 	await admin((sql) => sql.unsafe(`create schema ${schema}; set search_path to ${schema}; ${migration}`))
-	database = Database.postgres({ url, schema, max: 4 })
+	database = openPostgres({ url, schema, max: 4 })
 })
 
 beforeEach(async () => {

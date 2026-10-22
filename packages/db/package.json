@@ -40,10 +40,20 @@
 			"types": "./src/migrations.ts",
 			"default": "./src/migrations.ts"
 		},
+		"./migrations-sqlite": {
+			"bun": "./src/migrations-sqlite.ts",
+			"types": "./src/migrations-sqlite.ts",
+			"default": "./src/migrations-sqlite.ts"
+		},
 		"./production": {
 			"bun": "./src/production.ts",
 			"types": "./src/production.ts",
 			"default": "./src/production.ts"
+		},
+		"./postgres": {
+			"bun": "./src/postgres.ts",
+			"types": "./src/postgres.ts",
+			"default": "./src/postgres.ts"
 		},
 		"./codegen": {
 			"bun": "./src/codegen.ts",

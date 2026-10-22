@@ -7,6 +7,7 @@ import { boot, type ContractApp, type WorkloadTokenSource } from '@fabrika/app/i
 import { ENDPOINT_HEADER, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { applicationSchema, Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { compileContract, ContractError } from '../contract'
@@ -152,7 +153,7 @@ interface Running {
 function start(): Running {
 	const world = new World()
 	const { implementation, variables } = outboxApp(world)
-	const connection = Database.postgres({ url, schema, max: 4 })
+	const connection = openPostgres({ url, schema, max: 4 })
 	opened.push(connection)
 	const exchanged: string[] = []
 	const tokens = workloadTokensFor(implementation)
@@ -453,7 +454,7 @@ describe.skipIf(!hasPostgres)('a mutation that kicks its job', () => {
 	test("the test kit's drain waits for the run a mutation kicked", async () => {
 		const world = new World()
 		const { implementation, variables } = outboxApp(world)
-		const connection = Database.postgres({ url, schema, max: 4 })
+		const connection = openPostgres({ url, schema, max: 4 })
 		opened.push(connection)
 		const kit = testKit(implementation, { database: connection, env: variables })
 		const held = gate()

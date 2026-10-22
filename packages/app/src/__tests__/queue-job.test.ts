@@ -7,6 +7,7 @@ import { serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { applicationSchema, Database, scoped, type TypedColumnList } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { defineTables } from '@fabrika/db/tables'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
@@ -125,7 +126,7 @@ async function admin<T>(statement: string): Promise<T[]> {
 }
 
 function connection(): Database {
-	const opened = Database.postgres({ url, schema, max: 3 })
+	const opened = openPostgres({ url, schema, max: 3 })
 	connections.push(opened)
 	return opened
 }

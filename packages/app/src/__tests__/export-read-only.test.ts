@@ -9,6 +9,7 @@
 
 import { applicationSchema, Database, type Ref, scoped, type Within } from '@fabrika/db'
 import { bindScopedDatabase } from '@fabrika/db/framework'
+import { openPostgres } from '@fabrika/db/postgres'
 import { defineStore } from '@fabrika/db/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -168,14 +169,14 @@ beforeAll(async () => {
 			Bun.randomUUIDv7(),
 		])
 	)
-	connection = Database.postgres({ url, schema, max: 2 })
+	connection = openPostgres({ url, schema, max: 2 })
 	booted = bootApp(app, { database: connection })
 	bindScopedDatabase(direct, { database: connection, capabilities: issuer.authority, readOnly: requestIsReadOnly })
 	await admin((sql) => sql.unsafe(`create schema ${viewSchema}; set search_path to ${viewSchema}; ${VIEW_MIGRATION}`))
 	await admin((sql) =>
 		sql.unsafe(`insert into ${viewSchema}.notes_data (id, workspace_id, title, created_by, version) values ($1, 'w1', 'kept', 'user-9', 1)`, [viewNote])
 	)
-	viewConnection = Database.postgres({ url, schema: viewSchema, max: 2 })
+	viewConnection = openPostgres({ url, schema: viewSchema, max: 2 })
 	viewBooted = bootApp(locatingApp, { database: viewConnection })
 })
 

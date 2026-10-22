@@ -10,6 +10,7 @@
 import type { ContractApp } from '@fabrika/app/implement'
 import { applicationSchema, Database, MAX_WITHIN_VALUES } from '@fabrika/db'
 import { generateSchema } from '@fabrika/db/codegen'
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { join } from 'node:path'
@@ -107,7 +108,7 @@ beforeAll(async () => {
 		sql.unsafe(`create schema ${schema}; set search_path to ${schema}; ${migration}
 		insert into workspaces (id, organization_id) values ('wa1', 'oA'), ('wa2', 'oA'), ('wb1', 'oB'), ('wm', 'oA'), ('wr', 'oA'), ('wi', 'oA');`)
 	)
-	database = Database.postgres({ url, schema, max: 2 })
+	database = openPostgres({ url, schema, max: 2 })
 	app = bootApp(organizationsApp(hooks), { database })
 })
 

@@ -13,7 +13,15 @@ export type {
 	WithinGrant,
 } from './capability'
 export { MAX_WITHIN_VALUES } from './capability'
-export { applicationSchema, Database, type PostgresOptions } from './database'
+export {
+	applicationSchema,
+	Database,
+	type DatabaseEngine,
+	type Executor,
+	type SqlDialect,
+	type TransactionOptions,
+	type TransactionRunner,
+} from './database'
 export type {
 	AllowedOperator,
 	ComparisonOperator,

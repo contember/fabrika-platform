@@ -6,6 +6,7 @@ import { runContractJob, serveContract } from '@fabrika/app/bun'
 import { BootError, type ContractApp, type JobClock, type OperationsReport } from '@fabrika/app/implement'
 import { applicationSchema, Database, type Within } from '@fabrika/db'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test'
@@ -118,7 +119,7 @@ async function logged<T>(work: () => Promise<T>): Promise<{ readonly result: T; 
 const kinds = (reports: readonly OperationsReport[]) => reports.map((report) => [report.type, report.tags['code'] ?? null])
 
 describe('boot binds every job or does not start', () => {
-	const connection = Database.postgres({ url: 'postgres://user:secret@127.0.0.1:1/none', schema: 'app_notes' })
+	const connection = openPostgres({ url: 'postgres://user:secret@127.0.0.1:1/none', schema: 'app_notes' })
 	afterAll(() => connection.close())
 
 	function problemsOf(work: () => unknown): readonly string[] {
@@ -200,7 +201,7 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 			name: '20261011120000_notes.sql',
 			sql: migration,
 		}])
-		database = Database.postgres({ url: applicationRuntimeUrl(url, appId), schema, max: 4 })
+		database = openPostgres({ url: applicationRuntimeUrl(url, appId), schema, max: 4 })
 	})
 
 	afterAll(async () => {

@@ -18,6 +18,7 @@ import type {
 } from '@fabrika/auth-core'
 import { applicationSchema, Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
@@ -238,7 +239,7 @@ function start(log: string[] = []): Running {
 	const world = new World()
 	const iam = new LinkLedger()
 	const { implementation, variables } = intakeApp(world)
-	const connection = Database.postgres({ url, schema, max: 2 })
+	const connection = openPostgres({ url, schema, max: 2 })
 	opened.push(connection)
 	const app = bootApp(implementation, {
 		environment: environment({ ...frameworkEnvFor(implementation), ...variables, FABRIKA_IAM_APP_ID: APP }),

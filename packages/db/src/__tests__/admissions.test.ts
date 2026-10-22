@@ -2,6 +2,7 @@
 // record and reservation is one statement, so concurrent instances never admit past a limit or accept a token twice,
 // and each prunes what has expired. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset (see postgres.test.ts).
 
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { Database } from '../database'
@@ -51,7 +52,7 @@ beforeAll(async () => {
 		const framework = FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n')
 		await sql.unsafe(`set search_path to ${schema}; ${framework} ${migration}`)
 	})
-	database = Database.postgres({ url: url ?? '', schema, max: 8 })
+	database = openPostgres({ url: url ?? '', schema, max: 8 })
 	admissions = frameworkTablesOf(connected(tables, { database, capabilities: new TestAuthority('user:alice') }).database).admissions
 })
 

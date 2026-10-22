@@ -3,6 +3,7 @@
 // transaction. Prints the URL never.
 
 import { Database } from '@fabrika/db'
+import { openPostgres } from '@fabrika/db/postgres'
 import { bootApp, environment, frameworkEnvFor, ORIGIN } from '../implement/harness'
 import { signupApp } from './src/app'
 
@@ -19,7 +20,7 @@ const { implementation, variables } = signupApp({
 })
 const app = bootApp(implementation, {
 	environment: environment({ ...frameworkEnvFor(implementation), ...variables, TURNSTILE_SECRET: 'unused' }),
-	database: Database.postgres({ url, schema, max: 2 }),
+	database: openPostgres({ url, schema, max: 2 }),
 })
 const answer = await app.fetch(
 	new Request(`${ORIGIN}/api/visitors.signup`, {

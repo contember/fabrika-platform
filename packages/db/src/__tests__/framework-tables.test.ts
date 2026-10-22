@@ -1,5 +1,6 @@
 // The framework's own writes against a REAL Postgres: the webhook tables of `@fabrika/db/migrations`. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset (see postgres.test.ts).
 
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { Database } from '../database'
@@ -41,7 +42,7 @@ beforeAll(async () => {
 		const framework = FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n')
 		await sql.unsafe(`set search_path to ${schema}; ${framework} ${migration}`)
 	})
-	database = Database.postgres({ url: url ?? '', schema, max: 4 })
+	database = openPostgres({ url: url ?? '', schema, max: 4 })
 	layer = connected(tables, { database, capabilities: new TestAuthority('user:alice') }).database
 	framework = frameworkTablesOf(layer)
 })

@@ -1,6 +1,7 @@
 // How a bound Date reaches Postgres: as its ISO 8601 UTC text, whatever the process time zone, and an invalid Date
 // never reaches it. The Postgres half skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset (see postgres.test.ts).
 
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { Within } from '../capability'
@@ -57,7 +58,7 @@ beforeAll(async () => {
 			`insert into ${schema}.tasks (id, project_id, org_id, title, created_by, version) values ('t1', 'p1', 'o1', 't1', 'user:alice', 1), ('t2', 'p1', 'o1', 't2', 'user:alice', 1)`,
 		)
 	})
-	database = Database.postgres({ url: url ?? '', schema, max: 2 })
+	database = openPostgres({ url: url ?? '', schema, max: 2 })
 	const layer = connected(tasksTables, { database, capabilities: alice }).database
 	const tasks = defineStore(layer, 'tasks', (t) => ({
 		close: (task: string, at: Date, expectVersion: number) =>

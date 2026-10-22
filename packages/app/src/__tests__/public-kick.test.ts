@@ -6,6 +6,7 @@
 import type { ContractApp, OperationsReport, WorkloadTokenSource } from '@fabrika/app/implement'
 import { applicationSchema, Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { join } from 'node:path'
@@ -136,7 +137,7 @@ function start(options: { readonly max?: number; readonly hook?: StatementHook }
 	const world = new World()
 	const { implementation, variables } = signupApp(world)
 	const connection = options.hook === undefined
-		? Database.postgres({ url, schema, max: options.max ?? 4 })
+		? openPostgres({ url, schema, max: options.max ?? 4 })
 		: delayedDatabase(url, schema, options.hook)
 	opened.push(connection)
 	const exchanged: string[] = []
@@ -455,7 +456,7 @@ describe.skipIf(!hasPostgres)('a public procedure kicks its job', () => {
 	test("the test kit's runJob waits for the runs a call kicked, so it never races them", async () => {
 		const world = new World()
 		const { implementation, variables } = signupApp(world)
-		const connection = Database.postgres({ url, schema, max: 4 })
+		const connection = openPostgres({ url, schema, max: 4 })
 		opened.push(connection)
 		const kit = testKit(implementation, { database: connection, env: { ...variables, TURNSTILE_SECRET: 'turnstile-secret-1' } })
 		const answer = await kit.fetch('/api/visitors.signup', {

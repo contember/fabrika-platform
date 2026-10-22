@@ -12,6 +12,7 @@ import { defineApp } from '@fabrika/app/contract'
 import type { ContractApp, ContractImplementation, JobClock } from '@fabrika/app/implement'
 import { applicationSchema, Database, QueryRefusedError, scoped } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { z } from 'zod/v4'
@@ -185,7 +186,7 @@ function hooksOf(): Hooks {
 }
 
 function start(hooks: Hooks = hooksOf()): { app: ContractApp; hooks: Hooks } {
-	const connection = Database.postgres({ url, schema, max: 4 })
+	const connection = openPostgres({ url, schema, max: 4 })
 	opened.push(connection)
 	return { app: bootApp(sqlApp(hooks), { database: connection }), hooks }
 }
@@ -265,7 +266,7 @@ describe.skipIf(!hasPostgres)('ctx.sql through the pipeline', () => {
 	})
 
 	test('ctx.sql takes its mode from the approved contract: a handler that alone declares sql does not boot', () => {
-		const connection = Database.postgres({ url, schema, max: 1 })
+		const connection = openPostgres({ url, schema, max: 1 })
 		opened.push(connection)
 		const leafOnly = { ...sqlApp(hooksOf()), contract: ormContract }
 		expect(() => bootApp(leafOnly, { database: connection })).toThrow(

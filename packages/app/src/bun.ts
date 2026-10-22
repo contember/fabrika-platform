@@ -6,8 +6,9 @@
 // entrypoint.
 
 import { HttpIamMembership } from '@fabrika/auth'
-import type { Database, PostgresOptions } from '@fabrika/db'
+import type { Database } from '@fabrika/db'
 import { isScopedDatabase } from '@fabrika/db/framework'
+import type { PostgresOptions } from '@fabrika/db/postgres'
 import type { EmailProviderRegistry } from '@fabrika/email'
 import { directoryEmailProvider } from '@fabrika/email/directory'
 import { parseJwks } from '@fabrika/jwks'
@@ -117,7 +118,7 @@ export interface ContractServer {
 
 /**
  * What the adapter takes from `@fabrika/db` before the application loads, so no application module can stand in for
- * it: a replaced `Database.postgres` would receive the database URL.
+ * it: a replaced `openPostgres` would receive the database URL.
  */
 interface DataLayerOpeners {
 	readonly postgres: (options: PostgresOptions) => Database
@@ -126,8 +127,8 @@ interface DataLayerOpeners {
 
 /** Loads `@fabrika/db` before the application: it captures its built-ins and freezes the Kysely compiler at load. */
 async function loadDataLayer(): Promise<DataLayerOpeners> {
-	const { Database, applicationSchema } = await import('@fabrika/db')
-	return { postgres: Database.postgres, applicationSchema }
+	const [{ applicationSchema }, { openPostgres }] = await Promise.all([import('@fabrika/db'), import('@fabrika/db/postgres')])
+	return { postgres: openPostgres, applicationSchema }
 }
 
 /** How long a stopping process waits for the work its requests left running; a kicked run aborts at once. */

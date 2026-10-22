@@ -9,6 +9,7 @@
 import { type ContractApp, type JobClock, serve } from '@fabrika/app/implement'
 import { applicationSchema, Database, scoped } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { bootApp, grant, resultOf, send, token } from './fixtures/implement/harness'
@@ -40,7 +41,7 @@ async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 
 /** A fresh boot of the fixture, with its own data layer and connection. */
 function start(): ContractApp {
-	const connection = Database.postgres({ url, schema, max: 4 })
+	const connection = openPostgres({ url, schema, max: 4 })
 	opened.push(connection)
 	return bootApp(serve(contract, { database: scoped(tables) }), { database: connection })
 }

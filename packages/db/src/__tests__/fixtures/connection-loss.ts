@@ -3,12 +3,13 @@
 // the dead connection without anyone awaiting it; in a process of its own that rejection is printed, not attributed
 // to a test. Prints one result line per step, and the URL never.
 
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { Database, InvocationTransaction, runFixedStatement } from '../../database'
 import { DatabaseError } from '../../errors'
 
 const url = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? ''
-const database = Database.postgres({ url, schema: 'public', max: 1 })
+const database = openPostgres({ url, schema: 'public', max: 1 })
 const admin = new SQL({ url, adapter: 'postgres', max: 1 })
 
 const lost = new InvocationTransaction(database, false)
