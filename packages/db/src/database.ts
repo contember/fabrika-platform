@@ -412,6 +412,9 @@ export class InvocationTransaction {
 			this.#ended = true
 			this.#isReleased = true
 		}
+		if (result === undefined) {
+			throw new QueryRefusedError('ended', 'the transaction ended before the invocation answered')
+		}
 		return result.value
 	}
 
