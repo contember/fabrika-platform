@@ -305,6 +305,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 			permissions: [],
 			issuedAt: now,
 			expiresAt: now + 300,
+			session: true,
 		})
 		const approvalVerifier = randomToken(32)
 		const started = await env.REPOSITORIES.device.start({
