@@ -41,7 +41,8 @@ bun run release:validate   # publishability + dependency direction + tag = sourc
 bun run release:pack --local --artifacts=<dir>   # unreleased tarballs for an app outside the repo (app-setup.md)
 ```
 
-CPU-heavy runs (full typecheck, full test suite, docker builds, `check:ci`) go through `cpu-lease run -n 4 -- …`.
+On a machine with `cpu-lease`, CPU-heavy runs (full typecheck, full test suite, docker builds, `check:ci`) go through
+`cpu-lease run -n 4 -- …`; without it, run them directly. No script depends on it.
 
 Run `bun run check:ci` before a push to `main`: `release.yml` verifies a tag with the same workflow, so a red `main`
 blocks a release. It starts each backend it needs with docker unless `FABRIKA_TEST_POSTGRES_URL` or
