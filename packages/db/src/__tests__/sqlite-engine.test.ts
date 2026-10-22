@@ -13,7 +13,7 @@ import {
 	TableNode,
 	ValueNode,
 } from 'kysely'
-import { type Database, runFixedStatement, type Session, sessionOf } from '../database'
+import { type Database, InvocationTransaction, runFixedStatement, type Session, sessionOf } from '../database'
 import { DatabaseError, QueryRefusedError } from '../errors'
 import type { GuardContext } from '../guard'
 import { acknowledgement, column, containsPattern, equals, insertNode, lockNode, scopedWhere } from '../nodes'
@@ -271,5 +271,90 @@ describe('the engine', () => {
 		expect(ids()).toEqual([])
 		storage.transactionSync(() => storage.sql.exec("insert into items (id, org, title) values ('i1', 'o1', 'one')"))
 		expect(ids()).toEqual(['i1'])
+	})
+})
+
+describe('an invocation encloses its work in the transaction on SQLite', () => {
+	const insertItem = (into: Session, id: string) => runFixedStatement(into, "insert into items (id, org, title) values (?1, 'o1', ?1)", [id])
+	const ids = () => storage.sql.exec('select id from items order by id').toArray().map((row) => row['id'])
+
+	test('commit() decides, and the COMMIT runs once the work returned', async () => {
+		const invocation = new InvocationTransaction(database, false)
+		const answer = await invocation.enclose(async () => {
+			await insertItem(await invocation.session(), 'a')
+			// The handler awaits its own I/O inside the transaction.
+			await new Promise((resolve) => setTimeout(resolve, 5))
+			await insertItem(await invocation.session(), 'b')
+			await invocation.commit()
+			return 'answered'
+		})
+		expect(answer).toBe('answered')
+		expect(ids()).toEqual(['a', 'b'])
+		expect(invocation.ended).toBe(true)
+		expect(invocation.released).toBe(true)
+		await invocation.rollback()
+		expect(ids()).toEqual(['a', 'b'])
+	})
+
+	test('rollback() inside the work discards what it wrote, and the work still answers', async () => {
+		const invocation = new InvocationTransaction(database, false)
+		const answer = await invocation.enclose(async () => {
+			await insertItem(await invocation.session(), 'a')
+			await invocation.rollback()
+			return 'refused'
+		})
+		expect(answer).toBe('refused')
+		expect(ids()).toEqual([])
+	})
+
+	test('work that throws, or returns without committing, keeps nothing', async () => {
+		const thrown = new InvocationTransaction(database, false)
+		await expect(thrown.enclose(async () => {
+			await insertItem(await thrown.session(), 'a')
+			throw new Error('handler failed')
+		})).rejects.toThrow('handler failed')
+		const undecided = new InvocationTransaction(database, false)
+		await undecided.enclose(async () => {
+			await insertItem(await undecided.session(), 'b')
+		})
+		expect(ids()).toEqual([])
+	})
+
+	test('a failed statement the handler caught makes commit() throw, and nothing commits', async () => {
+		const invocation = new InvocationTransaction(database, false)
+		await expect(invocation.enclose(async () => {
+			const own = await invocation.session()
+			await insertItem(own, 'a')
+			await insertItem(own, 'a').catch(() => undefined)
+			await invocation.commit()
+		})).rejects.toThrow(QueryRefusedError)
+		expect(ids()).toEqual([])
+	})
+
+	test('a framework transaction inside the work nests in it, and rolls back with it', async () => {
+		const invocation = new InvocationTransaction(database, false)
+		await invocation.enclose(async () => {
+			await sessionOf({ database }).transaction((nested) => insertItem(nested, 'a'))
+			await expect(
+				sessionOf({ database }).transaction(async (nested) => {
+					await insertItem(nested, 'b')
+					throw new Error('nested failed')
+				}),
+			).rejects.toThrow('nested failed')
+			expect(ids()).toEqual(['a'])
+			await invocation.rollback()
+		})
+		expect(ids()).toEqual([])
+	})
+
+	test('a statement after the work ended is refused', async () => {
+		const invocation = new InvocationTransaction(database, false)
+		const own = await invocation.enclose(async () => {
+			const session = await invocation.session()
+			await invocation.commit()
+			return session
+		})
+		await expect(insertItem(own, 'late')).rejects.toThrow(QueryRefusedError)
+		await expect(invocation.session()).rejects.toThrow(QueryRefusedError)
 	})
 })
