@@ -67,6 +67,7 @@ export class FileWork {
 	readonly holder: object
 	readonly request: string
 	readonly #staged: string[] = []
+	readonly #written = new Map<string, string>()
 
 	constructor(holder: object, request: string) {
 		this.holder = holder
@@ -77,8 +78,22 @@ export class FileWork {
 		this.#staged.push(id)
 	}
 
-	get stagedIds(): readonly string[] {
-		return [...this.#staged]
+	/** The work wrote the object of a file it staged, under a key no other file has. */
+	wrote(id: string, objectKey: string): void {
+		this.#written.set(id, objectKey)
+	}
+
+	/** Where the files staged from now on start, for a release of only those. */
+	get mark(): number {
+		return this.#staged.length
+	}
+
+	stagedIds(from = 0): readonly string[] {
+		return this.#staged.slice(from)
+	}
+
+	writtenKey(id: string): string | null {
+		return this.#written.get(id) ?? null
 	}
 }
 
@@ -188,6 +203,7 @@ export class StoredFileKinds {
 		const body = digesting(stream, null)
 		try {
 			const { size } = await this.#store.write(objectKey, body.stream, { contentType: type, maxBytes: artifact.maxBytes })
+			work.wrote(id, objectKey)
 			const sha256 = body.digest()
 			await this.#files.written(id, { size, sha256 })
 			return fileReference({ id, kind: kind.name, name, type, size, status: 'pending' }, work.holder, true)
@@ -212,6 +228,13 @@ export class StoredFileKinds {
 		try {
 			const objectKey = await this.#files.abandon(id, work.request)
 			if (objectKey === null) {
+				// On SQLite the pending row is written in the work's own transaction and rolled back with it, so only the
+				// work knows the object; after a known rollback nothing references it.
+				const written = work.writtenKey(id)
+				if (written !== null) {
+					step = 'object_delete_failed'
+					await this.#store.delete(written)
+				}
 				return
 			}
 			step = 'object_delete_failed'
@@ -224,11 +247,11 @@ export class StoredFileKinds {
 	}
 
 	/**
-	 * After a known rollback: every file the work staged and nothing claimed goes now. After an uncertain outcome (a lost
-	 * commit answer, a crash) nothing is deleted here; the sweep decides from the database.
+	 * After a known rollback: every file the work staged (from `from`) and nothing claimed goes now. After an uncertain
+	 * outcome (a lost commit answer, a crash) nothing is deleted here; the sweep decides from the database.
 	 */
-	async release(work: FileWork): Promise<void> {
-		for (const id of work.stagedIds) {
+	async release(work: FileWork, from = 0): Promise<void> {
+		for (const id of work.stagedIds(from)) {
 			await this.#abandon(work, id)
 		}
 	}
