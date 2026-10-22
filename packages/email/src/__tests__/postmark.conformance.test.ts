@@ -50,8 +50,14 @@ describeEmailSenderConformance('PostmarkEmailSender', {
 		accepted: () =>
 			Response.json({ To: 'recipient@example.test', SubmittedAt: '2026-10-22T10:00:00Z', MessageID: 'postmark-message-1', ErrorCode: 0, Message: 'OK' }),
 		malformedSuccess: () => Response.json({ Message: 'private provider detail without an id' }),
-		unauthorized: () => errorAnswer(401, 10),
-		rejected: () => errorAnswer(422, 300),
+		// As a live server answered in October 2026.
+		unauthorized: () => Response.json({ ErrorCode: 10, Message: 'Request does not contain a valid Server token.' }, { status: 401 }),
+		rejected: () =>
+			Response.json({
+				ErrorCode: 400,
+				Message:
+					"The 'From' address you supplied (test@example.com) is not a Sender Signature on your account. Please add and confirm this address in order to be able to use it in the 'From' field of your messages.",
+			}, { status: 422 }),
 		rateLimited: () => new Response('private provider detail for the rate limit', { status: 429 }),
 		unavailable: () => errorAnswer(500, 0),
 	},

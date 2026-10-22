@@ -1,5 +1,5 @@
-// Postmark's Email API (https://postmarkapp.com/developer/api/email-api), built from its documentation and verified only
-// against a stubbed fetch. It has no idempotency key; a 200 means Postmark took the message.
+// Postmark's Email API (https://postmarkapp.com/developer/api/email-api), built from its documentation and verified on a
+// live server in October 2026. It has no idempotency key; a 200 means Postmark took the message.
 
 import { z } from 'zod'
 import { type EmailProvider, parseProviderVariables } from './config.js'
@@ -17,8 +17,42 @@ import type { ProviderResponse } from './http.js'
 
 const POSTMARK_EMAIL_URL = 'https://api.postmarkapp.com/email'
 const postmarkSuccessSchema = z.object({ MessageID: z.string(), ErrorCode: z.literal(0) })
-/** Postmark refuses a message over 10 MB once its attachments are base64; 6 MiB of bytes leaves room for the bodies. */
-const POSTMARK_MAX_ATTACHMENT_BYTES = 6 * 1024 * 1024
+/** Postmark counts the decoded bytes of every attachment together and takes fewer than 10 MiB; the bodies are apart. */
+const POSTMARK_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024 - 1
+/** The extensions Postmark refuses an attachment for (ErrorCode 411), from its documentation. */
+const FORBIDDEN_EXTENSIONS: ReadonlySet<string> = new Set([
+	'vbs',
+	'exe',
+	'bin',
+	'bat',
+	'chm',
+	'com',
+	'cpl',
+	'crt',
+	'hlp',
+	'hta',
+	'inf',
+	'ins',
+	'isp',
+	'jse',
+	'lnk',
+	'mdb',
+	'pcd',
+	'pif',
+	'reg',
+	'scr',
+	'sct',
+	'shs',
+	'vbe',
+	'vba',
+	'wsf',
+	'wsh',
+	'wsl',
+	'msc',
+	'msi',
+	'msp',
+	'mst',
+])
 
 export interface PostmarkEmailSenderOptions extends HttpEmailSenderOptions {
 	/** A server token: it sends through that server's default transactional stream. */
@@ -42,6 +76,15 @@ export class PostmarkEmailSender extends HttpEmailSender {
 			throw new EmailDeliveryError('Postmark server token is invalid', { code: 'invalid_configuration' })
 		}
 		this.#serverToken = options.serverToken
+	}
+
+	protected override refuseMessage(message: EmailMessage): void {
+		for (const attachment of message.attachments ?? []) {
+			const dot = attachment.filename.lastIndexOf('.')
+			if (dot >= 0 && FORBIDDEN_EXTENSIONS.has(attachment.filename.slice(dot + 1).toLowerCase())) {
+				throw new EmailDeliveryError('Postmark sends no attachment of this file type', { code: 'invalid_message' })
+			}
+		}
 	}
 
 	protected request(message: EmailMessage): HttpEmailRequest {

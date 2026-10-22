@@ -73,6 +73,22 @@ describe('PostmarkEmailSender', () => {
 		expect(malformed.code).toBe('malformed_response')
 	})
 
+	test('an attachment of a file type Postmark refuses is refused without a request', async () => {
+		const { fetch, requests } = capturing(() => Response.json({ MessageID: 'pm-4', ErrorCode: 0 }))
+		const sender = new PostmarkEmailSender({ serverToken: 'pm_secret', from, fetch })
+		const withFile = (filename: string) => ({
+			...message,
+			attachments: [{ filename, contentType: 'application/octet-stream', content: new Uint8Array([1]) }],
+		})
+		for (const filename of ['setup.exe', 'data.BIN', 'invoice.pdf.vbs']) {
+			expect((await caught(sender.send(withFile(filename), signal))).code).toBe('invalid_message')
+		}
+		expect(requests).toHaveLength(0)
+		await sender.send(withFile('data.dat'), signal)
+		await sender.send(withFile('exe'), signal)
+		expect(requests).toHaveLength(2)
+	})
+
 	test('the provider reads its token and names a bad one without its value', () => {
 		const env = { FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: 'pm_secret' }
 		expect(postmarkEmailProvider.create({ from, env })).toBeInstanceOf(PostmarkEmailSender)
