@@ -92,7 +92,10 @@ A Zerops namespace is one private network, so a sibling service can still reach 
 Zerops the proxy therefore authenticates itself to the application with a **secret per application and
 environment** (rule 5). On Cloudflare the service binding is the authenticated hop: the application
 Worker has no public route, and nothing else can bind it
-([ADR-0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)). Cloudflare has no proxy secret.
+([ADR-0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)), so the proxy Worker sends no proxy secret. The
+application Worker forwards each request to its environment's Durable Object with the secret, which the object
+verifies, because any Worker on the account can bind an exported object class
+([ADR-0065](0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)).
 This holds only against code without the account credential: until backlog 86 lands, repository code
 holds `CLOUDFLARE_API_TOKEN` and can bind or expose the application Worker directly
 ([ADR-0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md#on-cloudflare-these-are-a-strong-default-not-a-security-boundary)).
@@ -530,7 +533,8 @@ For a contract application, the hop carries more facts, and the application chec
 - **The proxy secret, on Zerops.** The application checks it before anything else and refuses a
   request without it. A direct dial inside a Zerops namespace therefore gets no answer from application
   code. Control generates the secret per application and environment and writes it as a managed
-  variable to the proxy and to the application. On Cloudflare the service binding takes its place
+  variable to the proxy and to the application. On Cloudflare the service binding takes its place between the
+  proxy and the application Worker, and the application Worker sends the secret on its hop to its Durable Object
   (rule 1).
 - **The endpoint.** The allow response carries `X-Fabrika-Endpoint: <id>@<digest>`. The digest covers
   the endpoint's kind, method, path, callers, requirement, admission, delegation, cross-origin form, file-response
@@ -561,10 +565,11 @@ IAM's Worker sits behind Cloudflare's edge and reads `CF-Connecting-IP` and `cf-
 Work unit B3 built the hop. `FABRIKA_HOP_HEADERS` in `@fabrika/auth-core` is the one list of every
 `X-Fabrika-*` name a hop carries; Caddy and the Cloudflare proxy Worker delete exactly it. The secret
 travels as `X-Fabrika-Proxy-Secret`. Control seals it in its vault the first time an environment
-joins a namespace proxy and never rotates it on its own. The proxy service holds one variable per
+joins a namespace proxy, or is deployed by a provider that declares `applicationHopSecret` (Cloudflare), and never
+rotates it on its own. The proxy service holds one variable per
 application, `proxySecretVariable('<app>@<env>')`, because one proxy fronts a whole namespace; the
 application holds `FABRIKA_PROXY_SECRET` and compares digests in constant time. The Bun adapter refuses to
-start without it. No authored variable may reference a framework-only variable, so the secret cannot be
+start without it, and so does the Cloudflare object. No authored variable may reference a framework-only variable, so the secret cannot be
 copied into one the application controls, and Control redacts it from run logs. A health
 endpoint is served without the secret, for the same reason it may arrive without the endpoint
 header. The Operations upload headers are not hop headers: a client sends them to Operations
@@ -740,8 +745,9 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
 - **IAM administration lists one entry per environment** of each application.
 - **A proxy table change is a proxy rebuild on Zerops**: about 190 s of build plus 60 s of deploy,
   because the manifest is read once at build, from the data file of the proxy's build archive
-  ([ADR-0045](0045-upload-immutable-platform-and-namespace-proxy-sources.md)). On Cloudflare it is a Worker
-  variable.
+  ([ADR-0045](0045-upload-immutable-platform-and-namespace-proxy-sources.md)). On Cloudflare it is a proxy Worker
+  deploy: the manifest is baked into the Worker's bundle through wrangler `define` (`PROXY_MANIFEST_DEFINE`), because a
+  Worker variable holds at most 5,120 bytes.
 - **The proxy is a per-deployment single point of failure** and the only thing that establishes an app
   session. Keep it thin. If the auth service dies, Caddy answers 502 and every request is denied.
 - **Zerops carries a second toolchain** (generated Caddy JSON, a pinned binary, an Alpine runtime) and
@@ -826,8 +832,9 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   answer 503 during a switch, not only the changed ones.
 - **Rely on the private network alone for the hop.** Rejected: every service in a Zerops namespace
   shares that network, so a sibling service could dial the application directly.
-- **A proxy secret on Cloudflare too.** Rejected: the service binding already authenticates the hop,
-  and the application Worker has no public route.
+- **A proxy secret from the Cloudflare proxy Worker too.** Rejected: the service binding already authenticates that
+  hop, and the application Worker has no public route. The secret travels only on the application Worker's hop to its
+  Durable Object, whose class another Worker on the account can bind.
 - **Let cross-application grants enter every application token.** Rejected: a token minted for one
   application would carry authority over others, and the requirement check would pass on a grant the
   application never declared.

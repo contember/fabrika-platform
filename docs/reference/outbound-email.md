@@ -395,7 +395,8 @@ whose jobs declare `mailer: 'installation'`.
   provider's variables to IAM; an unset one arrives empty and counts as absent. A
   re-run writes the values it is given and deletes none, so an old provider's
   variables, a display name or a tag stay until the operator deletes them. Control
-  on Cloudflare holds no transport: Cloudflare runs no jobs.
+  on Cloudflare holds no transport, so a deploy there hands a `mailer: 'installation'`
+  job `FABRIKA_EMAIL_PROVIDER=none` (below).
 
 ## Applications
 
@@ -428,8 +429,9 @@ never sends. `mailer: 'own'` takes the application's own `EmailSender` from
   keeps running.
 - Zerops removes the variables a deploy no longer hands, so an environment that moves
   to framework 0.7 loses the provider's credential at that deploy. A Cloudflare deploy
-  refuses any `FABRIKA_EMAIL_*` or `FABRIKA_PLATFORM_*`, so a credential never lands in
-  a plain Worker variable.
+  writes every `FABRIKA_EMAIL_*` and `FABRIKA_PLATFORM_*` it hands, but a platform URL, as
+  a Worker secret, so a credential never lands in a plain Worker variable, and deletes
+  the ones it no longer hands.
 - Without a transport, a deploy that hands the set hands
   `FABRIKA_EMAIL_PROVIDER=none` and nothing else. The application boots, its mailer
   jobs see `ctx.mail.available` false, and every send fails `mail_not_configured`. An

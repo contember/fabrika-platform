@@ -642,7 +642,7 @@ export const app = defineApp(vocabulary, tables, {
 - A public procedure updates or removes a row only by an id a verified token of its request carries, with
   `expectVersion`.
 - Single use and revocation are your state (a row the token names). The keys are the platform's: Control generates
-  and rotates them, and an old key verifies until its last token expires. Cloudflare has no signed tokens.
+  and rotates them, and an old key verifies until its last token expires.
 
 ## Outside calls: `egress`
 

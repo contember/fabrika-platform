@@ -145,9 +145,11 @@ that stops being true — it is the guard, not a description of one.
   dialect divergence for us. Rejected because the existing port is less
   machinery and repository operations also cover non-textual differences such as
   statement count and atomicity. The rejection covers the platform's own
-  dual-dialect services only. Applications are Postgres-only and use Kysely
-  through `@fabrika/db` (`packages/db/CLAUDE.md`), whose job is a scoped query
-  surface, not dialect portability.
+  dual-dialect services only. Applications use Kysely through `@fabrika/db`
+  (`packages/db/CLAUDE.md`), whose job is a scoped query surface: on Postgres on
+  Zerops, and on a Durable Object's SQLite on Cloudflare
+  ([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)),
+  each framework statement written once per dialect.
 
 Sequencing note that paid off: the **test harness was ported first**, before any
 production code, so dialect bugs surfaced against real tests rather than against

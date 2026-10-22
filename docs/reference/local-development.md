@@ -423,3 +423,14 @@ The first request reaches the private example app through the proxy and returns
 `200 public`. The second stops at the proxy and returns a login redirect. Lopata
 must show `APP -> propustka-example-app` and
 `IAM -> propustka-worker (PropustkaApplication)`; the app Worker config has no public route and sets `workers_dev: false` and `preview_urls: false`.
+
+That composition predates the application's Durable Object
+([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)): its app
+Worker binds no `FABRIKA_APPLICATION` object and gets no `FABRIKA_PROXY_SECRET`, both of which the current
+`createContractWorker` requires, so the curl witness above fails until the example binds them. The application runtime
+itself is witnessed in Lopata (0.30 or newer) by `packages/app/src/__tests__/cloudflare-runtime.test.ts`, which runs
+the Worker, its object and the R2 bucket in process:
+
+```bash
+bun test packages/app/src/__tests__/cloudflare-runtime.test.ts
+```
