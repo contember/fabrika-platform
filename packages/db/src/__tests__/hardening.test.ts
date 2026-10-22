@@ -4,8 +4,9 @@
 
 import { describe, expect, test } from 'bun:test'
 import { DefaultQueryCompiler, PostgresQueryCompiler } from 'kysely'
-import { Database, type PostgresOptions } from '../database'
+import { Database } from '../database'
 import { CapabilityError, QueryRefusedError } from '../errors'
+import * as postgres from '../postgres'
 import { defineStore } from '../store'
 import { call, type Outcome, recordingLayer } from './fixtures/harness'
 import { patchedChecks } from './fixtures/patch'
@@ -29,23 +30,23 @@ describe('the compiler cannot be patched after the guard ran', () => {
 })
 
 describe('the connection factory cannot be replaced by an application module', () => {
-	test('Database.postgres and Database.fromDialect are read-only, and no new static can be added', () => {
-		const original = Database.postgres
+	test('openPostgres, Database.fromDialect and Database.fromEngine are read-only, and no new static can be added', () => {
+		const original = postgres.openPostgres
 		const observed: string[] = []
-		const wrapper = (options: PostgresOptions): Database => {
+		const wrapper = (options: postgres.PostgresOptions): Database => {
 			observed.push(options.url)
 			return original(options)
 		}
 		expect(Object.isFrozen(Database)).toBe(true)
-		expect(() => {
-			Database.postgres = wrapper
-		}).toThrow(TypeError)
-		expect(Reflect.set(Database, 'postgres', wrapper)).toBe(false)
+		expect(Reflect.set(postgres, 'openPostgres', wrapper)).toBe(false)
+		expect(Reflect.defineProperty(postgres, 'openPostgres', { value: wrapper })).toBe(false)
 		expect(Reflect.defineProperty(Database, 'fromDialect', { value: wrapper })).toBe(false)
-		expect(Reflect.deleteProperty(Database, 'postgres')).toBe(false)
+		expect(Reflect.set(Database, 'fromEngine', wrapper)).toBe(false)
+		expect(Reflect.deleteProperty(Database, 'fromDialect')).toBe(false)
 		expect(Reflect.set(Database, 'open', wrapper)).toBe(false)
-		expect(Database.postgres).toBe(original)
-		expect(() => Database.postgres({ url: 'postgres://user:synthetic-secret@127.0.0.1:1/x', schema: 'Bad-Schema' })).toThrow(QueryRefusedError)
+		expect(Object.isFrozen(original)).toBe(true)
+		expect(postgres.openPostgres).toBe(original)
+		expect(() => postgres.openPostgres({ url: 'postgres://user:synthetic-secret@127.0.0.1:1/x', schema: 'Bad-Schema' })).toThrow(QueryRefusedError)
 		expect(observed).toEqual([])
 	})
 })

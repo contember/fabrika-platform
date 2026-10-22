@@ -1,6 +1,7 @@
 // Queue tables, claims and `insert(…, { onConflict })` on a REAL Postgres. Skips cleanly when FABRIKA_TEST_POSTGRES_URL
 // is unset (see postgres.test.ts). The handles are untyped here: the framework builds them, `orm-types.ts` types them.
 
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import type { LeaseFence } from '../capability'
@@ -141,7 +142,7 @@ beforeAll(async () => {
 		await sql.unsafe(`set search_path to ${schema}; ${framework} ${migration}`)
 		await sql.unsafe(`insert into ${schema}.deals (id, org_id, name) values ('d1', 'o1', 'One'), ('d2', 'o2', 'Two')`)
 	})
-	database = Database.postgres({ url: url ?? '', schema, max: 6 })
+	database = openPostgres({ url: url ?? '', schema, max: 6 })
 	const layer = scoped(readTables(columns, policies, vocabulary))
 	const locator = bindScopedDatabase(layer, { database, capabilities: job })
 	data = dataAccessOf(layer)

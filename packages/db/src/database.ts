@@ -1,12 +1,38 @@
-import { SQL } from 'bun'
-import { CompiledQuery, createQueryId, type Dialect, Kysely, PostgresQueryCompiler, type RootOperationNode, type TransactionBuilder } from 'kysely'
-import { PostgresJSDialect } from 'kysely-postgres-js'
+import { CompiledQuery, createQueryId, type Dialect, Kysely, PostgresQueryCompiler, type QueryCompiler, type RootOperationNode } from 'kysely'
 import { databaseError, QueryRefusedError } from './errors'
 import { assertAllowedTree, type GuardContext } from './guard'
 import { isPlainIdentifier } from './identifier'
 
-type LooseDB = Record<string, Record<string, unknown>>
-type Executor = Pick<Kysely<LooseDB>, 'executeQuery'>
+export type LooseDB = Record<string, Record<string, unknown>>
+/** What a statement runs on: the database's own executor, or the one of the transaction it runs in. */
+export type Executor = Pick<Kysely<LooseDB>, 'executeQuery'>
+
+/** The SQL a database speaks: Postgres on Bun, SQLite in a Cloudflare Durable Object (ADR-0065). */
+export type SqlDialect = 'postgres' | 'sqlite'
+
+export interface TransactionOptions {
+	/** A `READ ONLY` transaction where the database has one; a read-only session refuses writes either way. */
+	readonly readOnly: boolean
+	/** How long the transaction may sit idle before the database ends it; a database without the setting ignores it. */
+	readonly idleTimeoutMs?: number
+}
+
+/**
+ * Runs `body` in one transaction, on the executor it hands it: commits when `body` resolves, rolls back when it
+ * rejects, and rejects with `body`'s error. Its BEGIN, COMMIT and ROLLBACK failures reject with the driver's error.
+ */
+export type TransactionRunner = <T>(options: TransactionOptions, body: (executor: Executor) => Promise<T>) => Promise<T>
+
+/** What a `Database` runs on: the driver, the compiler of its dialect, and how it opens a transaction. */
+export interface DatabaseEngine {
+	readonly dialect: SqlDialect
+	readonly kysely: Kysely<LooseDB>
+	/** Compiles every guarded tree; frozen, since a patch to it after the guard ran would bypass the guard. */
+	readonly compiler: QueryCompiler
+	readonly transaction: TransactionRunner
+	/** The application's schema, the connection's `search_path`; `undefined` where the database has none. */
+	readonly schema?: string
+}
 
 /**
  * With `prepare: false`, Bun.SQL sends every parameter as text and a Date as `Date#toString()`, which Postgres
@@ -25,14 +51,14 @@ function timestampText(date: Date): string {
 	return date.toISOString()
 }
 
-const compiler = new ParameterCompiler()
-freezePrototypeChain(compiler)
+const postgresCompiler = new ParameterCompiler()
+freezePrototypeChain(postgresCompiler)
 
 /**
  * The compiler turns the guarded tree into SQL, so a patch to it after the guard ran would bypass the guard.
  * Freezing it when this module loads, before application modules, makes such a patch throw instead.
  */
-function freezePrototypeChain(object: object): void {
+export function freezePrototypeChain(object: object): void {
 	let current: object | null = object
 	while (current !== null && current !== Object.prototype) {
 		Object.freeze(current)
@@ -56,63 +82,73 @@ export function applicationSchema(appId: string): string {
 	return `app_${appId.replaceAll('-', '_')}`
 }
 
-export interface PostgresOptions {
-	readonly url: string
-	/** The application's schema (`app_<id>`), set as the connection's `search_path`. */
-	readonly schema: string
-	readonly max?: number
+const SQL_IDLE_TIMEOUT = "select set_config('idle_in_transaction_session_timeout', $1, true)"
+
+/** Postgres over Kysely's own transaction builder. */
+function postgresTransaction(kysely: Kysely<LooseDB>): TransactionRunner {
+	return (options, body) => {
+		const builder = kysely.transaction()
+		return (options.readOnly ? builder.setAccessMode('read only') : builder).execute(async (transaction) => {
+			if (options.idleTimeoutMs !== undefined) {
+				await transaction.executeQuery(CompiledQuery.raw(SQL_IDLE_TIMEOUT, [String(options.idleTimeoutMs)]))
+			}
+			return body(transaction)
+		})
+	}
 }
 
 let openSession: (database: Database, readOnly: boolean) => Session
-let transactionBuilder: (database: Database) => TransactionBuilder<LooseDB>
+let engineOf: (database: Database) => DatabaseEngine
 let firstConnection: (database: Database) => Promise<void>
 
 /** The connection the data layer runs on. It has no public query method: everything goes through a store. */
 export class Database {
-	readonly #kysely: Kysely<LooseDB>
-	readonly #schema: string | undefined
+	readonly #engine: DatabaseEngine
 
-	private constructor(kysely: Kysely<LooseDB>, schema: string | undefined) {
-		this.#kysely = kysely
-		this.#schema = schema
+	private constructor(engine: DatabaseEngine) {
+		if (engine.schema !== undefined && !isPlainIdentifier(engine.schema)) {
+			throw new QueryRefusedError('invalid_name', 'the schema must match ^[a-z_][a-z0-9_]*$')
+		}
+		this.#engine = Object.freeze({ ...engine })
 		Object.freeze(this)
 	}
 
 	static {
-		openSession = (database, readOnly) => new Session(database.#kysely, database.#kysely, readOnly)
-		transactionBuilder = (database) => database.#kysely.transaction()
+		openSession = (database, readOnly) => new Session(database.#engine.kysely, database.#engine, false, readOnly)
+		engineOf = (database) => database.#engine
 		firstConnection = async (database) => {
-			await database.#kysely.executeQuery(CompiledQuery.raw('SELECT 1'))
+			await database.#engine.kysely.executeQuery(CompiledQuery.raw('SELECT 1'))
 		}
 	}
 
 	/**
-	 * Over `Bun.SQL` with `prepare: false`: Bun otherwise keeps one prepared statement per distinct SQL text per
-	 * connection, and `in` lists of different lengths make that grow without bound.
+	 * Any Kysely Postgres dialect: `@fabrika/db/postgres` opens Bun.SQL through it, tests use one that records statements
+	 * instead of sending them.
 	 */
-	static postgres(options: PostgresOptions): Database {
-		if (!isPlainIdentifier(options.schema)) {
-			throw new QueryRefusedError('invalid_name', 'the schema must match ^[a-z_][a-z0-9_]*$')
-		}
-		const pool = new SQL({ url: options.url, adapter: 'postgres', prepare: false, max: options.max ?? 10, connection: { search_path: options.schema } })
-		return new Database(new Kysely<LooseDB>({ dialect: new PostgresJSDialect({ postgres: pool }) }), options.schema)
+	static fromDialect(dialect: Dialect, options: { readonly schema?: string } = {}): Database {
+		const kysely = new Kysely<LooseDB>({ dialect })
+		return new Database({ dialect: 'postgres', kysely, compiler: postgresCompiler, transaction: postgresTransaction(kysely), schema: options.schema })
 	}
 
-	/** Any Kysely Postgres dialect; tests use one that records statements instead of sending them. */
-	static fromDialect(dialect: Dialect): Database {
-		return new Database(new Kysely<LooseDB>({ dialect }), undefined)
+	/** A database of another dialect (`@fabrika/db/sqlite`), with its own frozen compiler and transaction runner. */
+	static fromEngine(engine: DatabaseEngine): Database {
+		return new Database(engine)
 	}
 
-	/** The application's schema, the connection's `search_path`; `undefined` over a bare dialect. */
+	get dialect(): SqlDialect {
+		return this.#engine.dialect
+	}
+
+	/** The application's schema, the connection's `search_path`; `undefined` over a bare dialect and on SQLite. */
 	get schema(): string | undefined {
-		return this.#schema
+		return this.#engine.schema
 	}
 
 	async close(): Promise<void> {
-		await this.#kysely.destroy()
+		await this.#engine.kysely.destroy()
 	}
 }
-// Application modules load after this one: a replaced `postgres` would receive the database URL.
+// Application modules load after this one: a replaced opener would receive the database's connection.
 Object.freeze(Database)
 Object.freeze(Database.prototype)
 
@@ -171,13 +207,15 @@ function untilAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Pro
  */
 export class Session {
 	readonly #executor: Executor
-	readonly #kysely: Kysely<LooseDB> | undefined
+	readonly #engine: DatabaseEngine
+	readonly #inTransaction: boolean
 	readonly #readOnly: boolean
 	readonly #hooks: SessionHooks
 
-	constructor(executor: Executor, kysely: Kysely<LooseDB> | undefined, readOnly: boolean, hooks: SessionHooks = {}) {
+	constructor(executor: Executor, engine: DatabaseEngine, inTransaction: boolean, readOnly: boolean, hooks: SessionHooks = {}) {
 		this.#executor = executor
-		this.#kysely = kysely
+		this.#engine = engine
+		this.#inTransaction = inTransaction
 		this.#readOnly = readOnly
 		this.#hooks = hooks
 		Object.freeze(this)
@@ -189,6 +227,11 @@ export class Session {
 
 	get readOnly(): boolean {
 		return this.#readOnly
+	}
+
+	/** The dialect of the database this session runs on: a framework statement picks its text by it. */
+	get dialect(): SqlDialect {
+		return this.#engine.dialect
 	}
 
 	/** Fails the transaction this session runs in, so it commits nothing: a statement refused before it was sent. */
@@ -214,11 +257,10 @@ export class Session {
 			throw new QueryRefusedError('read_only', 'this request is read-only: it reads, and no operation may write or lock a row')
 		}
 		// CompiledQuery's row type is a phantom: this is the one place where generated row types meet the wire.
-		const compiled: CompiledQuery<O> = compiler.compileQuery(node, createQueryId())
-		const kysely = this.#kysely
-		if (this.#readOnly && kysely !== undefined) {
+		const compiled: CompiledQuery<O> = this.#engine.compiler.compileQuery(node, createQueryId())
+		if (this.#readOnly && !this.#inTransaction) {
 			try {
-				const result = await kysely.transaction().setAccessMode('read only').execute((transaction) => transaction.executeQuery(compiled))
+				const result = await this.#engine.transaction({ readOnly: true }, (executor) => executor.executeQuery(compiled))
 				return result.rows
 			} catch (error) {
 				throw databaseError(error)
@@ -234,15 +276,14 @@ export class Session {
 	 * `work` returned or not; its session then runs nothing more.
 	 */
 	async transaction<T>(work: (session: Session) => Promise<T>, signal?: AbortSignal): Promise<T> {
-		if (this.#kysely === undefined) {
+		if (this.#inTransaction) {
 			return work(this)
 		}
-		const builder = this.#kysely.transaction()
 		let open = true
 		let failed = false
 		let failure: { readonly error: unknown } | undefined
 		try {
-			return await (this.#readOnly ? builder.setAccessMode('read only') : builder).execute(async (transaction) => {
+			return await this.#engine.transaction({ readOnly: this.#readOnly }, async (executor) => {
 				try {
 					const hooks: SessionHooks = {
 						open: () => open,
@@ -250,7 +291,7 @@ export class Session {
 							failed = true
 						},
 					}
-					const result = await untilAborted(work(new Session(transaction, undefined, this.#readOnly, hooks)), signal)
+					const result = await untilAborted(work(new Session(executor, this.#engine, true, this.#readOnly, hooks)), signal)
 					// A failure the work caught: Postgres would answer the COMMIT of an aborted transaction with a silent ROLLBACK.
 					if (failed) {
 						throw new QueryRefusedError('statement_failed', 'a statement of this transaction failed, so nothing it wrote commits')
@@ -273,8 +314,6 @@ Object.freeze(Session.prototype)
 
 /** How long an invocation's transaction may sit idle before Postgres ends it, and its connection with it. */
 export const INVOCATION_IDLE_TIMEOUT_MS = 30_000
-
-const SQL_IDLE_TIMEOUT = "select set_config('idle_in_transaction_session_timeout', $1, true)"
 
 /** What the invocation's transaction body throws to roll back; never seen outside this module. */
 class RolledBack extends Error {}
@@ -339,15 +378,15 @@ export class InvocationTransaction {
 	#open(): Promise<Session> {
 		const ready = Promise.withResolvers<Session>()
 		this.#isReleased = false
-		const builder = transactionBuilder(this.#database)
-		const run = (this.#readOnly ? builder.setAccessMode('read only') : builder).execute(async (transaction) => {
-			const session = new Session(transaction, undefined, this.#readOnly, {
+		const engine = engineOf(this.#database)
+		const options: TransactionOptions = { readOnly: this.#readOnly, idleTimeoutMs: INVOCATION_IDLE_TIMEOUT_MS }
+		const run = engine.transaction(options, async (executor) => {
+			const session = new Session(executor, engine, true, this.#readOnly, {
 				failed: () => {
 					this.#failed = true
 				},
 				open: () => !this.#ended,
 			})
-			await executeFixed(session, CompiledQuery.raw(SQL_IDLE_TIMEOUT, [String(INVOCATION_IDLE_TIMEOUT_MS)]))
 			ready.resolve(session)
 			if ((await this.#decision.promise) === 'rollback') {
 				throw new RolledBack()

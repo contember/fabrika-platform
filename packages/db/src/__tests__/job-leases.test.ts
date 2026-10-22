@@ -1,6 +1,7 @@
 // The job lease and the fence on every mutation, against a REAL Postgres. Skips cleanly when FABRIKA_TEST_POSTGRES_URL
 // is unset (see postgres.test.ts).
 
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import type { LeaseFence } from '../capability'
@@ -72,7 +73,7 @@ beforeAll(async () => {
 			insert into organizations (id, name) values ('o1', 'Org');
 			insert into workspaces (id, organization_id, name, created_by) values ('w1', 'o1', 'W1', 'u');`)
 	})
-	database = Database.postgres({ url: url ?? '', schema, max: 4 })
+	database = openPostgres({ url: url ?? '', schema, max: 4 })
 	leases = frameworkTablesOf(connected(tables, { database, capabilities: authority }).database).jobs
 })
 

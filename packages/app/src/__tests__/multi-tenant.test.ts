@@ -6,6 +6,7 @@ import { type ContractApp, LINK_BOOTSTRAP_SCRIPT, type SpaAssets, type WorkloadT
 import { DELEGATION_HEADER, type PermissionEntry } from '@fabrika/auth-core'
 import { applicationSchema, Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
@@ -69,7 +70,7 @@ async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 function start(workloadTokens?: WorkloadTokenSource): { app: ContractApp; iam: RecordingMembership; seen: Seen } {
 	const iam = new RecordingMembership()
 	const seen: Seen = { pushes: [], keys: [], failNextPush: false }
-	const connection = Database.postgres({ url, schema, max: 2 })
+	const connection = openPostgres({ url, schema, max: 2 })
 	opened.push(connection)
 	const app = multiTenantApp(seen)
 	const options = { database: connection, membership: iam, assets: htmlAssets, workloadTokens: workloadTokens ?? workloadTokensFor(app) }
@@ -97,7 +98,7 @@ beforeAll(async () => {
 	}
 	const framework = FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n')
 	await admin((sql) => sql.unsafe(`create schema ${schema}; set search_path to ${schema}; ${framework} ${migration}`))
-	database = Database.postgres({ url, schema, max: 1 })
+	database = openPostgres({ url, schema, max: 1 })
 })
 
 afterAll(async () => {
@@ -264,7 +265,7 @@ describe.skipIf(!hasPostgres)('a GitHub webhook bound by a mutation that declare
 	/** A boot of the kit application that binds the webhook; `tokens` stands in for IAM's exchange of its workload keys. */
 	function startHook(tokens?: (app: ReturnType<typeof githubApp>['implementation']) => WorkloadTokenSource): { app: ContractApp; seen: Seen } {
 		const seen: Seen = { pushes: [], keys: [], failNextPush: false }
-		const connection = Database.postgres({ url, schema, max: 2 })
+		const connection = openPostgres({ url, schema, max: 2 })
 		opened.push(connection)
 		const { implementation, variables } = githubApp(seen)
 		const app = bootApp(implementation, {

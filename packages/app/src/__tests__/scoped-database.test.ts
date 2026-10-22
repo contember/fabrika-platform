@@ -11,6 +11,7 @@ import { serveContract } from '@fabrika/app/bun'
 import { BootError, type ContractApp } from '@fabrika/app/implement'
 import { applicationSchema, type CapabilityAuthority, Database, type Ref, scoped } from '@fabrika/db'
 import { bindScopedDatabase } from '@fabrika/db/framework'
+import { openPostgres } from '@fabrika/db/postgres'
 import { defineStore } from '@fabrika/db/testing'
 import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
@@ -94,7 +95,7 @@ beforeAll(async () => {
 		return
 	}
 	await definePostgresApplicationMigrations({ appId, directory: '/unused' }).migrate(url, [{ name: '20261011120000_notes.sql', sql: migration }])
-	database = Database.postgres({ url: applicationRuntimeUrl(url, appId), schema, max: 2 })
+	database = openPostgres({ url: applicationRuntimeUrl(url, appId), schema, max: 2 })
 	app = bootApp(scopedNotesApp(hooks), { database })
 })
 
@@ -251,7 +252,7 @@ describe('boot binds the data layer once', () => {
 	})
 
 	test('a layer bound before boot (an application import of @fabrika/db/framework) makes boot fail', () => {
-		const connection = Database.postgres({ url: 'postgres://user:secret@127.0.0.1:1/none', schema: 'app_notes' })
+		const connection = openPostgres({ url: 'postgres://user:secret@127.0.0.1:1/none', schema: 'app_notes' })
 		const early = scoped(tables)
 		bindScopedDatabase(early, {
 			database: connection,
@@ -268,7 +269,7 @@ describe('boot binds the data layer once', () => {
 	})
 
 	test('a structural copy of scoped(tables) is not bound and does not boot', () => {
-		const connection = Database.postgres({ url: 'postgres://user:secret@127.0.0.1:1/none', schema: 'app_notes' })
+		const connection = openPostgres({ url: 'postgres://user:secret@127.0.0.1:1/none', schema: 'app_notes' })
 		const real = scoped(tables)
 		for (const copy of [{ ...real }, { tables: real.tables }]) {
 			expect(() => bootApp(scopedNotesApp(hooks, copy), { database: connection })).toThrow('not a copy or a wrapper of it')

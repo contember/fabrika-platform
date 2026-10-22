@@ -21,6 +21,7 @@ import {
 import { devKit, mailKeyPrefix, MemoryEmailSender, testKit, transportMailKey } from '@fabrika/app/testing'
 import { applicationSchema, Database, scoped } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import type { EmailMessage, EmailProvider } from '@fabrika/email'
 import { resendEmailProvider } from '@fabrika/email/resend'
 import { SQL } from 'bun'
@@ -406,7 +407,7 @@ beforeEach(() => {
 })
 
 function connection(): Database {
-	const opened = Database.postgres({ url, schema, max: 2 })
+	const opened = openPostgres({ url, schema, max: 2 })
 	connections.push(opened)
 	return opened
 }

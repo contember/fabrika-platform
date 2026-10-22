@@ -20,6 +20,7 @@ import {
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { applicationSchema, Database, scoped, type TypedColumnList } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { defineTables } from '@fabrika/db/tables'
 import type { FileObjectStore, ObjectMetadata, ObjectWriteOptions, StoredObject } from '@fabrika/platform'
 import { S3BlobStore } from '@fabrika/platform-node'
@@ -391,7 +392,7 @@ beforeAll(async () => {
 		return
 	}
 	await admin((sql) => sql.unsafe(`create schema ${schema}; set search_path to ${schema}; ${migration}`))
-	database = Database.postgres({ url, schema, max: 4 })
+	database = openPostgres({ url, schema, max: 4 })
 })
 
 afterAll(async () => {

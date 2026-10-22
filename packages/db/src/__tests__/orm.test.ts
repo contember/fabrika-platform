@@ -6,6 +6,7 @@
 //
 // The handles are untyped here (the framework builds them); `orm-types.ts` types them for a handler.
 
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
@@ -57,7 +58,7 @@ beforeAll(async () => {
 		await sql.unsafe(`alter table ${schema}.notes add constraint notes_body_allowed check (body is distinct from 'forbidden')`)
 		await sql.unsafe(`alter table ${schema}.organizations add constraint organizations_name_once unique (name) deferrable initially deferred`)
 	})
-	database = Database.postgres({ url: url ?? '', schema, max: 4 })
+	database = openPostgres({ url: url ?? '', schema, max: 4 })
 	const layer = scoped(tables)
 	bindScopedDatabase(layer, { database, capabilities: alice })
 	data = dataAccessOf(layer)
@@ -534,7 +535,7 @@ describe.skipIf(!hasPostgres)('the mini-ORM on Postgres', () => {
 	})
 
 	test('a failed COMMIT still releases the connection: the next invocation on a one-connection pool runs', async () => {
-		const single = Database.postgres({ url: url ?? '', schema, max: 1 })
+		const single = openPostgres({ url: url ?? '', schema, max: 1 })
 		const layer = scoped(tables)
 		bindScopedDatabase(layer, { database: single, capabilities: alice })
 		const one = dataAccessOf(layer)

@@ -10,6 +10,7 @@
 import { BootError, type ContractApp, type JobClock } from '@fabrika/app/implement'
 import { applicationSchema, Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
@@ -43,7 +44,7 @@ async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 
 /** A fresh boot of the fixture over the shared schema, with its own data layer and connection. */
 function start(hooks: OrmHooks = ormHooks()): { app: ContractApp; hooks: OrmHooks } {
-	const connection = Database.postgres({ url, schema, max: 4 })
+	const connection = openPostgres({ url, schema, max: 4 })
 	opened.push(connection)
 	return { app: bootApp(ormApp(hooks), { database: connection }), hooks }
 }
@@ -221,7 +222,7 @@ describe.skipIf(!hasPostgres)('ctx.db through the pipeline', () => {
 		})
 		const problems = (declaration: unknown): readonly string[] => {
 			try {
-				bootApp(declared(declaration), { database: Database.postgres({ url: 'postgres://u:p@127.0.0.1:1/none', schema }) })
+				bootApp(declared(declaration), { database: openPostgres({ url: 'postgres://u:p@127.0.0.1:1/none', schema }) })
 			} catch (error) {
 				return error instanceof BootError ? error.problems : []
 			}

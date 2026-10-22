@@ -7,6 +7,7 @@ import { type ContractApp, type ContractImplementation, defineDeps, serve } from
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { applicationSchema, Database, scoped } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
@@ -337,7 +338,7 @@ afterAll(async () => {
  * for the notes application, and the kit fixture is the crm one.
  */
 function bootOnPostgres(implementation: ContractImplementation, approved: ContractImplementation = implementation, variables = {}): ContractApp {
-	const connection = Database.postgres({ url, schema, max: 2 })
+	const connection = openPostgres({ url, schema, max: 2 })
 	connections.push(connection)
 	return bootApp(implementation, {
 		environment: environment({ ...frameworkEnvFor(approved), FABRIKA_IAM_APP_ID: 'crm@prod', ...variables }),
@@ -435,7 +436,7 @@ describe('serve', () => {
 describe.skipIf(!hasPostgres)('a link mount whose mutation declares kicks', () => {
 	test("kicks its job once the holder's mutation committed", async () => {
 		const served = serve(linkKicking, { database: scoped(tables) })
-		const connection = Database.postgres({ url, schema, max: 2 })
+		const connection = openPostgres({ url, schema, max: 2 })
 		connections.push(connection)
 		const kicked = bootApp(served, {
 			environment: environment({ ...frameworkEnvFor(served), FABRIKA_IAM_APP_ID: 'crm@prod' }),

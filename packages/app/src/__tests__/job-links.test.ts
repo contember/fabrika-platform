@@ -15,6 +15,7 @@ import { MemoryEmailSender } from '@fabrika/app/testing'
 import { parseAccessClaims } from '@fabrika/auth-core'
 import { applicationSchema, Database, scoped } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { decodeJwt } from 'jose'
@@ -148,7 +149,7 @@ function implementation(): ContractImplementation {
 
 function booted(iam: RecordingMembership | undefined, tokens?: (served: ContractImplementation) => WorkloadTokenSource) {
 	const served = implementation()
-	const connection = Database.postgres({ url, schema, max: 2 })
+	const connection = openPostgres({ url, schema, max: 2 })
 	connections.push(connection)
 	return bootApp(served, {
 		environment: environment({ ...frameworkEnvFor(served), FABRIKA_IAM_APP_ID: 'crm@prod' }),
@@ -296,7 +297,7 @@ describe.skipIf(!hasPostgres)('a job that declares its mailer', () => {
 			mailer: 'own',
 		})
 		const served = serve(mailingContract, { database: scoped(tables), mail: () => new MemoryEmailSender() })
-		const connection = Database.postgres({ url, schema, max: 2 })
+		const connection = openPostgres({ url, schema, max: 2 })
 		connections.push(connection)
 		const mailingApp = bootApp(served, {
 			environment: environment({ ...frameworkEnvFor(served), FABRIKA_IAM_APP_ID: 'crm@prod' }),
