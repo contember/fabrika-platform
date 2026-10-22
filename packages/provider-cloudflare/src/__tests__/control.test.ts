@@ -631,6 +631,22 @@ describe('Cloudflare control provider', () => {
 		expect(jobs[0]?.managedEnvironment?.['FABRIKA_TOKEN_KEYS']).toBeUndefined()
 	})
 
+	test('refuses a procedure that may run past the object transaction limit before any runner call', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const input = deployInput()
+		const contract = {
+			...notesArtifact,
+			procedures: {
+				'api.slow': { rate: { perClient: null, perCaller: null, perEndpoint: null, bytesPerHour: null }, challenge: null, timeoutMs: 25_001 },
+			},
+		}
+		const access = { ...APPROVED, contract, contractDigest: contractDigest(contract) }
+		await expect(recordingProvider(jobs).deploy({ ...input, environment: { ...input.environment, access } })).rejects.toThrow(
+			'cloudflare: procedure `api.slow` runs up to 25001 ms, and a handler on Cloudflare runs at most 25000 ms',
+		)
+		expect(jobs).toEqual([])
+	})
+
 	test('refuses a file kind or a file collection that scans its uploads before any runner call: no scanner runs on Cloudflare', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()

@@ -9,10 +9,29 @@ import {
 // Imported by `./control` (the `./runner` entry), so it stays clear of `oblaka-iac`.
 
 /**
+ * The longest a procedure's or a webhook's handler may run on Cloudflare. It runs inside the object's transaction, and
+ * workerd resets an object whose transaction runs about 30 s (docs/reference/cloudflare-platform.md).
+ */
+export const CLOUDFLARE_MAX_HANDLER_MS = 25_000
+
+/**
  * Refuse what a contract declares that an application on Cloudflare cannot run yet (ADR-0065): a file kind that scans
- * its uploads, and raw SQL (`ctx.sql`).
+ * its uploads, raw SQL (`ctx.sql`), and a handler allowed to outlive the object's transaction limit.
  */
 export const assertCloudflareContract = (contract: ContractArtifact): void => {
+	const handlers: [string, number][] = [
+		...Object.entries(contract.procedures ?? {}).map(([id, procedure]): [string, number] => [`procedure \`${id}\``, procedure.timeoutMs]),
+		...Object.entries(contract.mounts).flatMap(([name, mount]): [string, number][] =>
+			mount.kind === 'webhook' ? [[`webhook \`${name}\``, mount.timeoutMs]] : []
+		),
+	]
+	for (const [subject, timeoutMs] of handlers) {
+		if (timeoutMs > CLOUDFLARE_MAX_HANDLER_MS) {
+			throw new Error(
+				`cloudflare: ${subject} runs up to ${timeoutMs} ms, and a handler on Cloudflare runs at most ${CLOUDFLARE_MAX_HANDLER_MS} ms: it holds its Durable Object's transaction`,
+			)
+		}
+	}
 	for (const [name, kind] of Object.entries(contract.fileKinds ?? {})) {
 		if (kind.scan === true) {
 			throw new Error(`cloudflare: file kind \`${name}\` scans its uploads (\`scan: true\`), and no scanner runs on Cloudflare yet`)
