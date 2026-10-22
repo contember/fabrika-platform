@@ -30,10 +30,10 @@ On a Postmark server with a confirmed sender signature:
 2. Provoke a wrong token, an unconfirmed sender and an inactive recipient.
 3. Correct the adapter's mapping and its tests (the unit tests and the conformance harness's answers) to the
    recorded answers.
-4. Record the confirmed facts in `docs/reference/outbound-email.md` and drop the backlog link there and in
-   [ADR-0019](../decisions/0019-portable-outbound-email.md).
+4. Record the confirmed facts in the Postmark section of `docs/reference/outbound-email.md` and mark its row of the
+   built-in providers table live.
 
 ## Touch points
 
 `packages/email/src/postmark.ts`, `packages/email/src/__tests__/postmark*.test.ts`,
-`docs/reference/outbound-email.md`, `docs/decisions/0019-portable-outbound-email.md`.
+`docs/reference/outbound-email.md`.
