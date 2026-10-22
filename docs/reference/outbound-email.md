@@ -96,21 +96,22 @@ one `invalid_configuration` error that lists every missing or invalid variable
 by name, never by value. To check the values, the parser builds the provider's
 sender, which does no I/O.
 
-| variable                                   | secret | rule                                                                                      |
-| ------------------------------------------ | ------ | ----------------------------------------------------------------------------------------- |
-| `FABRIKA_EMAIL_PROVIDER`                   | no     | absent or `none`: no transport. Otherwise a registry key.                                 |
-| `FABRIKA_EMAIL_FROM`                       | no     | required with a provider. A bare address, or the legacy `Name <address>`, which is split. |
-| `FABRIKA_EMAIL_FROM_NAME`                  | no     | optional display name; refused when `FABRIKA_EMAIL_FROM` already carries one              |
-| `FABRIKA_EMAIL_AHASEND_API_KEY`            | yes    | required for `ahasend`; an API key v2 scoped to `messages:send:{domain}` at least         |
-| `FABRIKA_EMAIL_AHASEND_ACCOUNT_ID`         | no     | required for `ahasend`; `[A-Za-z0-9-]{1,64}`                                              |
-| `FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN`   | yes    | required for `lettermint`; a project API token                                            |
-| `FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE` | no     | optional, the project's broadcast route slug (`[A-Za-z0-9_-]{1,64}`), default `broadcast` |
-| `FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN`      | yes    | required for `postmark`; a server token                                                   |
-| `FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM`  | no     | optional, the server's broadcast stream ID (`[A-Za-z0-9_-]{1,64}`), default `broadcast`   |
-| `FABRIKA_EMAIL_RESEND_API_KEY`             | yes    | required for `resend`                                                                     |
-| `FABRIKA_EMAIL_SMARTEMAILING_USERNAME`     | yes    | required for `smartemailing`; visible ASCII, no `:`                                       |
-| `FABRIKA_EMAIL_SMARTEMAILING_API_KEY`      | yes    | required for `smartemailing`; visible ASCII                                               |
-| `FABRIKA_EMAIL_SMARTEMAILING_TAG`          | no     | optional, `[A-Za-z0-9_-]{1,64}`, default `fabrika`                                        |
+| variable                                   | secret | rule                                                                                                                          |
+| ------------------------------------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `FABRIKA_EMAIL_PROVIDER`                   | no     | absent or `none`: no transport. Otherwise a registry key.                                                                     |
+| `FABRIKA_EMAIL_FROM`                       | no     | required with a provider. A bare address, or the legacy `Name <address>`, which is split.                                     |
+| `FABRIKA_EMAIL_FROM_NAME`                  | no     | optional display name; refused when `FABRIKA_EMAIL_FROM` already carries one                                                  |
+| `FABRIKA_EMAIL_AHASEND_API_KEY`            | yes    | required for `ahasend`; an API key v2 scoped to `messages:send:{domain}` at least                                             |
+| `FABRIKA_EMAIL_AHASEND_ACCOUNT_ID`         | no     | required for `ahasend`; `[A-Za-z0-9-]{1,64}`                                                                                  |
+| `FABRIKA_EMAIL_AHASEND_BROADCAST_FROM`     | no     | optional, the address a `broadcast` message is sent from, on the account's Marketing domain; without it, `ahasend` sends none |
+| `FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN`   | yes    | required for `lettermint`; a project API token                                                                                |
+| `FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE` | no     | optional, the project's broadcast route slug (`[A-Za-z0-9_-]{1,64}`), default `broadcast`                                     |
+| `FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN`      | yes    | required for `postmark`; a server token                                                                                       |
+| `FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM`  | no     | optional, the server's broadcast stream ID (`[A-Za-z0-9_-]{1,64}`), default `broadcast`                                       |
+| `FABRIKA_EMAIL_RESEND_API_KEY`             | yes    | required for `resend`                                                                                                         |
+| `FABRIKA_EMAIL_SMARTEMAILING_USERNAME`     | yes    | required for `smartemailing`; visible ASCII, no `:`                                                                           |
+| `FABRIKA_EMAIL_SMARTEMAILING_API_KEY`      | yes    | required for `smartemailing`; visible ASCII                                                                                   |
+| `FABRIKA_EMAIL_SMARTEMAILING_TAG`          | no     | optional, `[A-Za-z0-9_-]{1,64}`, default `fabrika`                                                                            |
 
 Each provider declares its own variables with their secret flag, so deploy
 tooling knows which go to secret storage.
@@ -121,13 +122,13 @@ What each built-in provider offers, and what it has been checked against. "Live"
 recorded on a real account and the received messages inspected; "stubbed" means only the unit tests and the
 conformance kit against a stubbed `fetch`.
 
-| provider        | idempotent | confirmation | unsubscribe | attachments | broadcast                      | checked against                                                                               |
-| --------------- | ---------- | ------------ | ----------- | ----------- | ------------------------------ | --------------------------------------------------------------------------------------------- |
-| `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | no (its terms)                 | live, 2026-10-22                                                                              |
-| `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | its broadcast route, unchecked | live, 2026-10-22                                                                              |
-| `postmark`      | no         | `sync`       | yes         | 10 MiB      | its broadcast stream           | live, 2026-10-22                                                                              |
-| `resend`        | yes        | `sync`       | yes         | 25 MiB      | tagged `category: broadcast`   | live, 2026-10-22                                                                              |
-| `smartemailing` | no         | `queued`     | no          | none        | no                             | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)) |
+| provider        | idempotent | confirmation | unsubscribe | attachments | broadcast                            | checked against                                                                               |
+| --------------- | ---------- | ------------ | ----------- | ----------- | ------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | from its Marketing domain, unchecked | live, 2026-10-22                                                                              |
+| `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | its broadcast route, unchecked       | live, 2026-10-22                                                                              |
+| `postmark`      | no         | `sync`       | yes         | 10 MiB      | its broadcast stream                 | live, 2026-10-22                                                                              |
+| `resend`        | yes        | `sync`       | yes         | 25 MiB      | tagged `category: broadcast`         | live, 2026-10-22                                                                              |
+| `smartemailing` | no         | `queued`     | no          | none        | no                                   | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)) |
 
 A provider that is not idempotent leaves a message whose outcome is unknown (a timeout, a lost answer, a 5xx) to a
 person: it is never sent again automatically (`mayRetryDelivery`). When a provider is checked live, update its row and
@@ -221,6 +222,12 @@ domain or a bad recipient is a 400, `provider_rejected`. A request under a key w
 waits for it and answers its result with `Idempotent-Replayed: true`. AhaSend renders content as a template only when
 the request carries substitutions, which the adapter never sends, so `{{`, `{%` and `{#` reach the recipient as
 written. The `id` is the message's `Message-ID`, `<uuid@sender domain>`.
+
+AhaSend's terms (13 October 2026) allow marketing mail through the API only from a domain the account configured as a
+Marketing domain, with a `List-Unsubscribe` HTTPS header and an unsubscribe that needs no login. A `broadcast` message
+is therefore sent from `FABRIKA_EMAIL_AHASEND_BROADCAST_FROM`, an address on that domain, with the message's own
+unsubscribe headers; without it the sender has no `broadcast` capability and refuses one. Not checked live: the test
+account has no Marketing domain.
 
 ## Lettermint adapter
 
