@@ -48,7 +48,7 @@ export const buildZeropsPlan = (manifest: FabrikaManifest, target: ZeropsRuntime
 	steps.push({
 		id: 'raise-start-memory',
 		kind: 'raise-start-memory',
-		description: "Raise the deploy service's minimum RAM to what its init commands need",
+		description: "Raise the deploy service's minimum RAM to what its init commands need, and pin a dev environment to one container",
 	})
 	steps.push({
 		id: 'size-database',

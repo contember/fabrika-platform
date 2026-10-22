@@ -4,6 +4,10 @@
 
 import {
 	type ContractArtifact,
+	DEV_LAUNCHER_CONFIG_FILE,
+	DEV_LAUNCHER_MODULE,
+	DEV_LAUNCHER_STATE_FILE,
+	type DevLauncherConfig,
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_SOURCE_MAP_UPLOAD,
 	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
@@ -107,6 +111,16 @@ export interface ZeropsLockedExecution {
 	readonly runtimePackages: readonly ZeropsRuntimePackage[]
 	/** Where the build uploads its source maps, without the bearer; null when Control minted no upload for the run. */
 	readonly sourceMaps: OperationsSourceMapBuildUpload | null
+	/**
+	 * Present for an environment of kind `dev` (ADR-0049): `run.start` runs the dev launcher instead of the serving
+	 * entry. The environment's kind selects it; an application never authors it.
+	 */
+	readonly dev?: ZeropsDevExecution
+}
+
+export interface ZeropsDevExecution {
+	/** The commit the bootstrap run builds: what a new container holds before the launcher's first sync. */
+	readonly head: string
 }
 
 /** The application ids the generated scripts may name: the contract's own id rule, so a script needs no quoting. */
@@ -248,6 +262,7 @@ const FABRIKA_BIN = './node_modules/.bin/fabrika'
 const MIGRATE_SCRIPT = 'fabrika/migrate.generated.sh'
 const VERIFY_SCRIPT = 'fabrika/verify.generated.sh'
 const START_SCRIPT = 'fabrika/start.generated.sh'
+const DEV_INIT_SCRIPT = 'fabrika/dev-init.generated.sh'
 const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
 
 /** The compiler options of the platform's type check; the application's own `tsconfig.json` and its `paths` are not read. */
@@ -306,13 +321,76 @@ const readinessCommand = (path: string): string => {
 	return `bun -e "const end = Date.now() + 9000; while (Date.now() < end) { try { if ((await fetch('${url}', { signal: AbortSignal.timeout(2000) })).ok) process.exit(0) } catch {} await Bun.sleep(200) } process.exit(1)"`
 }
 
-const startScript: readonly string[] = ['#!/bin/sh', 'set -eu', `cd ${RUNTIME_ROOT}`, 'exec bun fabrika/entry.generated.ts']
+const SERVE_ENTRY = 'fabrika/entry.generated.ts'
 
-/** The scripts the build writes and every container's init commands run, in this order. */
+const startScript: readonly string[] = ['#!/bin/sh', 'set -eu', `cd ${RUNTIME_ROOT}`, `exec bun ${SERVE_ENTRY}`]
+
+// A dev environment starts the launcher of the application's own framework release, which runs the serving entry as its
+// child. Double quotes inside: a generated file line may hold no single quote.
+const devStartScript: readonly string[] = [
+	'#!/bin/sh',
+	'set -eu',
+	`cd ${RUNTIME_ROOT}`,
+	`exec bun -e "await import(\\"${DEV_LAUNCHER_MODULE}\\").then((dev) => dev.runDevLauncher(process.env))"`,
+]
+
+// The init commands of a dev container migrate and verify only what the bootstrap run built. A container that restarts
+// after a stop keeps the files the launcher synced since, and its state file: the launcher reconciles that one itself.
+const devInitScript: readonly string[] = [
+	'#!/bin/sh',
+	'set -eu',
+	`cd ${RUNTIME_ROOT}`,
+	`if [ -f ${DEV_LAUNCHER_STATE_FILE} ]; then exit 0; fi`,
+	`sh ${RUNTIME_ROOT}/${MIGRATE_SCRIPT}`,
+	`sh ${RUNTIME_ROOT}/${VERIFY_SCRIPT}`,
+]
+
+/** One command writing `content` to `path` through base64: the content may hold quotes and expansions, the command none. */
+const writeBase64Command = (path: string, content: string): string => {
+	const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(content)))
+	return `printf '%s' '${encoded}' | base64 -d > ${path}`
+}
+
+/** The build's check chain as the dev launcher runs it in the application root, on what the container holds. */
+const devChecks = (release: string): DevLauncherConfig['checks'] => [
+	{ name: 'tests', command: 'bun test --isolate --pass-with-no-tests' },
+	{ name: 'fabrika-check', command: `cd /tmp && bun x --bun -p @fabrika/check@${release} fabrika-check ${RUNTIME_ROOT}` },
+	{ name: 'tsc', command: `cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${RUNTIME_ROOT}/${PLATFORM_TSCONFIG}` },
+]
+
+/** What the dev launcher reads (`DEV_LAUNCHER_CONFIG_FILE`): the platform's, written after the checks. */
+export function devLauncherConfig(execution: ZeropsLockedExecution, authoredSpa: readonly string[]): DevLauncherConfig {
+	const dev = execution.dev
+	if (dev === undefined) throw new Error('zerops: a dev launcher configuration needs a dev environment')
+	if (!/^[0-9a-f]{40}$/.test(dev.head)) throw new Error('zerops: a dev environment builds an exact commit')
+	return {
+		format: 1,
+		appId: execution.appId,
+		head: dev.head,
+		port: ZEROPS_APPLICATION_PORT,
+		healthPath: execution.contract.readinessPath,
+		serve: ['bun', SERVE_ENTRY],
+		migrate: [FABRIKA_BIN, 'db', 'migrate'],
+		spaBuild: authoredSpa,
+		checks: devChecks(execution.checkRelease),
+	}
+}
+
+const devLauncherConfigJson = (execution: ZeropsLockedExecution, authoredSpa: readonly string[]): string =>
+	JSON.stringify(devLauncherConfig(execution, authoredSpa))
+
+/** The scripts the build writes, and the ones every container's init commands run, in this order. */
 const initScripts = (execution: ZeropsLockedExecution): readonly { readonly path: string; readonly lines: readonly string[] }[] =>
 	execution.databaseUrl === null
 		? []
-		: [{ path: MIGRATE_SCRIPT, lines: migrateScript(execution.appId) }, { path: VERIFY_SCRIPT, lines: verifyScript(execution.appId) }]
+		: [
+			{ path: MIGRATE_SCRIPT, lines: migrateScript(execution.appId) },
+			{ path: VERIFY_SCRIPT, lines: verifyScript(execution.appId) },
+			...(execution.dev === undefined ? [] : [{ path: DEV_INIT_SCRIPT, lines: devInitScript }]),
+		]
+
+const initCommandScripts = (execution: ZeropsLockedExecution): readonly string[] =>
+	execution.databaseUrl === null ? [] : execution.dev === undefined ? [MIGRATE_SCRIPT, VERIFY_SCRIPT] : [DEV_INIT_SCRIPT]
 
 const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
 
@@ -336,7 +414,7 @@ const sourceMapBuildVariables = (upload: OperationsSourceMapBuildUpload): Record
  * run first: they are authored code, so everything after them is reinstalled, regenerated or checked again. They run
  * `--isolate`, as the application skill runs them: a test file's DOM globals otherwise leak into the next file.
  */
-export function generatedBuildCommands(execution: ZeropsLockedExecution): readonly string[] {
+export function generatedBuildCommands(execution: ZeropsLockedExecution, authoredSpa: readonly string[] = []): readonly string[] {
 	if (!LOCKED_APP_ID_PATTERN.test(execution.appId)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
 	if (!FRAMEWORK_RELEASE_PATTERN.test(execution.checkRelease)) throw new Error('zerops: the checker release must be a release version')
 	return [
@@ -348,7 +426,9 @@ export function generatedBuildCommands(execution: ZeropsLockedExecution): readon
 		writeFileCommand(PLATFORM_TSCONFIG, [PLATFORM_TSCONFIG_CONTENTS]),
 		`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${SOURCE_ROOT}/${PLATFORM_TSCONFIG}`,
 		...initScripts(execution).map((script) => writeFileCommand(script.path, script.lines)),
-		writeFileCommand(START_SCRIPT, startScript),
+		...(execution.dev === undefined
+			? [writeFileCommand(START_SCRIPT, startScript)]
+			: [writeFileCommand(START_SCRIPT, devStartScript), writeBase64Command(DEV_LAUNCHER_CONFIG_FILE, devLauncherConfigJson(execution, authoredSpa))]),
 		...(execution.sourceMaps === null ? [] : [sourceMapUpload(execution.checkRelease)]),
 	]
 }
@@ -383,7 +463,7 @@ export function generatedInitCommands(execution: ZeropsLockedExecution): string[
 		// A container starts from the prepared image, whose signatures are as old as its build; a failed refresh leaves
 		// them to the daily one, and the scanner refuses signatures older than three days, so the scan fails closed.
 		...(execution.contract.scan === true ? [`${FRESHCLAM} || echo 'fabrika: freshclam did not refresh the malware signatures'`] : []),
-		...initScripts(execution).map((script) => `sh ${RUNTIME_ROOT}/${script.path}`),
+		...initCommandScripts(execution).map((script) => `sh ${RUNTIME_ROOT}/${script}`),
 	]
 }
 
@@ -416,7 +496,7 @@ export function renderLockedSetup(
 		build: {
 			base: authored.base ?? [ZEROPS_APPLICATION_RUNTIME],
 			...(authored.os === null ? {} : { os: authored.os }),
-			buildCommands: [...authored.commands, ...generatedBuildCommands(execution)],
+			buildCommands: [...authored.commands, ...generatedBuildCommands(execution, authored.commands)],
 			...(execution.sourceMaps === null ? {} : { envVariables: sourceMapBuildVariables(execution.sourceMaps) }),
 			deployFiles: ['./'],
 			cache: ['node_modules'],
@@ -430,7 +510,11 @@ export function renderLockedSetup(
 			...(initCommands.length === 0 ? {} : { initCommands }),
 			start: `sh ${RUNTIME_ROOT}/${START_SCRIPT}`,
 			ports: [{ port: ZEROPS_APPLICATION_PORT, httpSupport: true }],
-			healthCheck: { httpGet: probe, execPeriod: '10s', disconnectTimeout: '30s', recoveryTimeout: '10s', failureTimeout: '120s' },
+			// A dev container keeps its launcher running while the application it respawns fails: Zerops restarting it
+			// would only boot the same failing head again.
+			...(execution.dev === undefined
+				? { healthCheck: { httpGet: probe, execPeriod: '10s', disconnectTimeout: '30s', recoveryTimeout: '10s', failureTimeout: '120s' } }
+				: {}),
 			...(crontab.length === 0 ? {} : { crontab }),
 			envVariables,
 		},

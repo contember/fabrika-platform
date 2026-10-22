@@ -286,6 +286,7 @@ const runnerApprovedAccess = (environment: ProviderEnvironment): RunnerApprovedA
 
 const buildJob = async (options: CloudflareControlOptions, input: ProviderDeployInput): Promise<CloudflareRunnerJob> => {
 	input.signal.throwIfAborted()
+	if (input.environment.kind === 'dev') throw new Error('Cloudflare runs no dev environment (ADR-0049); a dev environment runs on Zerops only')
 	assertRegistrationApp(input)
 	const storedTarget = decodeEnvelope('target', 'cloudflare', input.environment.target, cloudflareStoredTargetCodec)
 	const artifact = decodeEnvelope('artifact', 'cloudflare', input.environment.artifact, cloudflareArtifactCodec)
