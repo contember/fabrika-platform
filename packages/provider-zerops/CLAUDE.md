@@ -273,7 +273,9 @@ bun test
   state file is absent, because after the first sync the files on disk are no longer the bootstrap's. There is no
   `healthCheck`: the launcher reports health itself, and a platform restart would discard the synced head. The deploy
   pins the service to one container (`pinOneContainer`); `devEnvironments.stop/start` stop it when idle and start it
-  again, and the runtime files survive both (measured for ADR-0049). The app never authors any of this.
+  again, and the runtime files survive both (measured for ADR-0049). The app never authors any of this. The
+  launcher's `checks` (what `run_checks` runs) are the build's own check commands in the build's order, on the runtime
+  root; change them together.
 
 ## Platform installation (`./installation`, `src/installation/`)
 

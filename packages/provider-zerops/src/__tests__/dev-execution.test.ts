@@ -80,13 +80,14 @@ describe('the run variant of a dev environment', () => {
 		expect(run['envVariables']).toEqual(mapping(ordinary['run'])['envVariables'])
 		const commands = mapping(dev['build'])['buildCommands']
 		if (!Array.isArray(commands)) throw new Error('expected build commands')
-		for (const check of ['bun test --isolate', 'fabrika-check', ' tsc ']) {
+		for (const check of ["'test', '--isolate'", 'fabrika-check', ' tsc ']) {
 			expect(commands.some((command) => String(command).includes(check))).toBe(true)
 		}
 	})
 
 	test('the launcher configuration names the bootstrap head, the authored SPA commands and the check chain', () => {
-		expect(devLauncherConfig(execution(true), SPA)).toEqual(
+		const config = devLauncherConfig(execution(true), SPA)
+		expect({ ...config, checks: [] }).toEqual(
 			{
 				format: 1,
 				appId: 'notes',
@@ -96,17 +97,23 @@ describe('the run variant of a dev environment', () => {
 				serve: ['bun', 'fabrika/entry.generated.ts'],
 				migrate: ['./node_modules/.bin/fabrika', 'db', 'migrate'],
 				spaBuild: SPA,
-				checks: [
-					{ name: 'tests', command: 'bun test --isolate --pass-with-no-tests' },
-					{ name: 'fabrika-check', command: `cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check /var/www` },
-					{
-						name: 'tsc',
-						command: `cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p /var/www/fabrika/tsconfig.platform.json`,
-					},
-				],
+				checks: [],
 			} satisfies DevLauncherConfig,
 		)
 		expect(() => devLauncherConfig(execution(false), SPA)).toThrow('needs a dev environment')
+	})
+
+	test("run_checks runs the build's own check commands, in the build's order, on the runtime root", () => {
+		const { checks } = devLauncherConfig(execution(true), SPA)
+		expect(checks.map((check) => check.name)).toEqual(['tests', 'tsc', 'fabrika-check'])
+		const build = generatedBuildCommands(execution(true), SPA)
+		const positions = checks.map((check) => build.indexOf(check.command.replaceAll('/var/www', '/build/source')))
+		expect(positions.every((position) => position >= 0)).toBe(true)
+		expect([...positions].sort((left, right) => left - right)).toEqual(positions)
+		expect(checks.find((check) => check.name === 'tsc')?.command).toBe(
+			`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p /var/www/fabrika/tsconfig.platform.json`,
+		)
+		expect(checks.find((check) => check.name === 'fabrika-check')?.command).toContain(`@fabrika/check@${FABRIKA_CHECK_VERSION}`)
 	})
 
 	test('the build writes the configuration whole, quotes and expansions included, and a start script that runs the launcher', async () => {
