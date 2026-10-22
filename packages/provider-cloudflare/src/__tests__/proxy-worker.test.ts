@@ -38,7 +38,7 @@ import {
 	signToken,
 	signUserToken,
 } from '../../../proxy-core/src/__tests__/helpers'
-import { createCloudflareProxyWorker } from '../proxy'
+import { createCloudflareProxyWorker, proxyManifestJson } from '../proxy'
 import { type CloudflareProxyEnv, createCloudflareProxyHandler } from '../proxy-worker'
 
 /**
@@ -1033,7 +1033,7 @@ describe('Cloudflare proxy Worker, cross-origin (ADR-0022 "Cross-origin endpoint
 	test("the deployer's origins land in the manifest entry, and none leave the key out", () => {
 		const app = new Worker({ dir: '.', name: APP, main: './src/index.ts', compatibility_flags: [], bindings: {}, routes: [], workers_dev: false })
 		const entryOf = (worker: Worker) => {
-			const entry = parseProxyManifestJson(String(worker.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']))?.apps[0]
+			const entry = parseProxyManifestJson(proxyManifestJson(worker) ?? '')?.apps[0]
 			if (entry === undefined || !isApplicationEntry(entry)) throw new Error('expected a contract entry')
 			return entry
 		}

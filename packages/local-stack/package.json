@@ -49,6 +49,7 @@
 	"devDependencies": {
 		"@fabrika/check": "workspace:*",
 		"@fabrika/db": "workspace:*",
+		"@fabrika/provider-cloudflare": "workspace:*",
 		"@types/bun": "^1.4.3"
 	}
 }

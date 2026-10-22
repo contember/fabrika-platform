@@ -1,14 +1,5 @@
 import { ReconcileSchemaError } from '@fabrika/auth'
-import {
-	type AppEnvironment,
-	appEnvironmentId,
-	type AppSchema,
-	FABRIKA_TOKEN_KEYS,
-	isEmailTransportVariable,
-	isPlatformTransportVariable,
-	isWorkloadKeyVariable,
-	parseAppEnvironmentId,
-} from '@fabrika/auth-core'
+import { type AppEnvironment, appEnvironmentId, type AppSchema, parseAppEnvironmentId } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -31,6 +22,7 @@ import { isCrossOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy-core/headers'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
+import { assertCloudflareContract } from './contract-support'
 import { type RunnerApprovedAccess, runnerApprovedAccessSchema, type RunnerIamReconcile } from './runner-protocol'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
 // cannot typecheck (they do not relax the two strict flags the raw TS needs).
@@ -297,22 +289,8 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	if (!input.dryRun && approvedAccess === undefined) {
 		throw new Error('Cloudflare deploy requires the access Control approved for this environment')
 	}
-	// A job, a webhook and a public procedure need `@fabrika/db` on Postgres, which a Worker has not; their keys would only
-	// sit in a config.
-	const workloadKey = Object.keys(input.managedEnvironment).find(isWorkloadKeyVariable)
-	if (workloadKey !== undefined) {
-		throw new Error(`cloudflare: the contract declares a job, a webhook or a public procedure (${workloadKey}); they run on Zerops only`)
-	}
-	// A dry run hands no workload key, and a mail credential must not land in a plain Worker var either way.
-	const mailVariable = Object.keys(input.managedEnvironment).find((name) => isEmailTransportVariable(name) || isPlatformTransportVariable(name))
-	if (mailVariable !== undefined) {
-		throw new Error(`cloudflare: the contract declares a job that sends mail through the installation (${mailVariable}); jobs run on Zerops only`)
-	}
-	// A Worker's vars are plain text in its config, so the signing keys of the application's tokens never go there.
-	const tokenKeys = input.managedEnvironment[FABRIKA_TOKEN_KEYS]
-	if (tokenKeys !== undefined && tokenKeys !== null) {
-		throw new Error('cloudflare: the contract declares token purposes, whose keys a Worker would hold as plain vars; signed tokens run on Zerops only')
-	}
+	// The deployer refuses it again from the contract it serves; this fails before the clone.
+	if (approvedAccess !== undefined) assertCloudflareContract(approvedAccess.contract)
 	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal, input.sourceBinding))
 	const listInstallationApps = options.installationApps
 	const installationApps = listInstallationApps === undefined
@@ -431,6 +409,8 @@ const isTransientIamFailure = (error: unknown): boolean => {
 /** Build the Cloudflare control capability over its runner and source-resolution ports. */
 export const createCloudflareControlProvider = (options: CloudflareControlOptions): ControlProvider => ({
 	id: 'cloudflare',
+	// The application's Worker forwards each request to its Durable Object with the environment's proxy secret.
+	applicationHopSecret: true,
 	normalizeRegistration,
 	applicationRoot: (source) => checkoutRelativeDirectory(source.workerDir),
 	source: { binding: 'connection' },

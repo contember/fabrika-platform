@@ -26,6 +26,6 @@ export type { CloudflareCloneSource, CloudflareControlOptions, CloudflareRunnerJ
 export { buildPlan, findMigratableDatabases, PLATFORM_RESOURCE_NAMES } from './plan'
 export type { CloudflareStep, CloudflareStepKind, MigratableDatabase } from './plan'
 export { type CloudflareDeployerOptions, type CloudflareDeployResult, type CloudflareDeployRun, createCloudflareDeployer } from './provider'
-export { createCloudflareProxyWorker, IAM_APPLICATION_ENTRYPOINT, iamServiceReference } from './proxy'
+export { createCloudflareProxyWorker, IAM_APPLICATION_ENTRYPOINT, iamServiceReference, proxyManifestJson } from './proxy'
 export type { CloudflareProxyWorkerOptions } from './proxy'
 export { type AppSchemaParse, parseAppSchema } from './schema'

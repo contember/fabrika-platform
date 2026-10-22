@@ -47,6 +47,20 @@ export type CloudflareProxyWorkerOptions =
 export const CLOUDFLARE_PROXY_WORKER_DIR: string = import.meta.dir
 export const CLOUDFLARE_PROXY_WORKER_MAIN = './proxy-worker.ts'
 
+/**
+ * The identifier the proxy Worker's bundle reads its manifest from. The generated config's `define` replaces it with
+ * the manifest as a string literal when wrangler bundles the Worker, so the table has no Worker variable's 5 KB cap.
+ */
+export const PROXY_MANIFEST_DEFINE = '__FABRIKA_PROXY_MANIFEST__'
+
+/** The manifest JSON a proxy Worker built here carries, or null for any other Worker. */
+export const proxyManifestJson = (worker: Worker): string | null => {
+	const literal = worker.options.define?.[PROXY_MANIFEST_DEFINE]
+	if (literal === undefined) return null
+	const value: unknown = JSON.parse(literal)
+	return typeof value === 'string' ? value : null
+}
+
 /** IAM's Worker: the one platform service an application binds, and only through the entrypoint below. */
 export const IAM_SERVICE = 'propustka-worker'
 
@@ -91,10 +105,8 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 		compatibility_date: '2025-05-25',
 		routes: domain === undefined || domain === '' ? [] : [{ pattern: domain, custom_domain: true }],
 		observability: { logs: { enabled: true, invocation_logs: false } },
-		vars: {
-			FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson(manifest),
-			FABRIKA_IAM_ISSUER: options.iamUrl ?? '',
-		},
+		define: { [PROXY_MANIFEST_DEFINE]: JSON.stringify(encodeProxyManifestJson(manifest)) },
+		vars: { FABRIKA_IAM_ISSUER: options.iamUrl ?? '' },
 		bindings: {
 			IAM: new ServiceReference(options.iamService ?? IAM_SERVICE, IAM_APPLICATION_ENTRYPOINT),
 			APP: options.app,

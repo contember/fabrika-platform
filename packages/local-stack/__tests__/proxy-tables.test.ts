@@ -21,6 +21,7 @@ import { controlServiceContract } from '@fabrika/control/service'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
 import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
+import { proxyManifestJson } from '@fabrika/provider-cloudflare'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE, type PlatformProxyComposition } from '@fabrika/provider-zerops/installation'
 import {
 	encodeProxyManifestJson,
@@ -36,19 +37,21 @@ import { buildControlWorker } from '../../control/fabrika.config'
 import { buildOperationsProxy } from '../../operations/fabrika.config'
 import { localPlatformProxyManifest } from '../src/prepare'
 
-/** The single app a production Cloudflare proxy Worker bakes into its own manifest. */
-function productionApp(vars: Record<string, unknown> | undefined): ProxyApp {
-	const encoded = vars?.['FABRIKA_PROXY_MANIFEST_JSON']
-	if (typeof encoded !== 'string') throw new Error('proxy Worker does not carry a manifest')
+type ProxyWorker = Parameters<typeof proxyManifestJson>[0]
+
+/** The single app a production Cloudflare proxy Worker bakes into its own bundle. */
+function productionApp(worker: ProxyWorker): ProxyApp {
+	const encoded = proxyManifestJson(worker)
+	if (encoded === null) throw new Error('proxy Worker does not carry a manifest')
 	const manifest = parseProxyManifestJson(encoded)
 	const app = manifest?.apps[0]
 	if (app === undefined) throw new Error('proxy Worker manifest declares no app')
 	return app
 }
 
-/** The service table a production Cloudflare proxy Worker bakes into its own manifest. */
-function productionAccess(vars: Record<string, unknown> | undefined): unknown {
-	return accessOf(productionApp(vars))
+/** The service table a production Cloudflare proxy Worker bakes into its own bundle. */
+function productionAccess(worker: ProxyWorker): unknown {
+	return accessOf(productionApp(worker))
 }
 
 function accessOf(app: ProxyApp | undefined): unknown {
@@ -62,11 +65,11 @@ const CONTROL_TABLE = serviceProxyTable(controlServiceContract({ mcp: false }), 
 
 describe('a deployed Cloudflare proxy Worker carries the declared service table', () => {
 	test('control, as an installation entry', () => {
-		expect(productionAccess(buildControlWorker({ env: 'local' }).options.vars)).toEqual(CONTROL_TABLE)
+		expect(productionAccess(buildControlWorker({ env: 'local' }))).toEqual(CONTROL_TABLE)
 	})
 
 	test('Operations, as an installation entry', () => {
-		expect(productionAccess(buildOperationsProxy({ env: 'local' }).options.vars)).toEqual(OPERATIONS_TABLE)
+		expect(productionAccess(buildOperationsProxy({ env: 'local' }))).toEqual(OPERATIONS_TABLE)
 	})
 
 	test('and the local manifest fronts the same services with them', () => {
@@ -83,7 +86,7 @@ describe('a deployed Cloudflare proxy Worker carries the declared service table'
  */
 describe('both compositions name the Operations host by the same app', () => {
 	test('the Cloudflare proxy Worker and the shared platform manifest agree', () => {
-		expect(productionApp(buildOperationsProxy({ env: 'local' }).options.vars).id).toBe(OPERATIONS_APP_ID)
+		expect(productionApp(buildOperationsProxy({ env: 'local' })).id).toBe(OPERATIONS_APP_ID)
 		expect(localPlatformProxyManifest().apps.map((app) => app.id)).toContain(OPERATIONS_APP_ID)
 	})
 })
@@ -127,10 +130,10 @@ describe("the installation's proxy manifest has no gates", () => {
 		)
 	})
 
-	test('the manifest each Cloudflare proxy Worker bakes into its variables', () => {
+	test('the manifest each Cloudflare proxy Worker bakes into its bundle', () => {
 		for (const worker of [buildControlWorker({ env: 'local' }), buildOperationsProxy({ env: 'local' })]) {
-			const encoded = worker.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
-			if (typeof encoded !== 'string') throw new Error('proxy Worker does not carry a manifest')
+			const encoded = proxyManifestJson(worker)
+			if (encoded === null) throw new Error('proxy Worker does not carry a manifest')
 			const manifest = parseProxyManifestJson(encoded)
 			if (manifest === null) throw new Error('the strict parser refuses a proxy Worker manifest')
 			expectNoGates(manifest)
