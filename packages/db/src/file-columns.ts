@@ -125,7 +125,10 @@ export async function storedRowScope(model: TableModel, session: Session, key: s
 	if (!isPlainIdentifier(model.name) || !isPlainIdentifier(column) || !isPlainIdentifier(key)) {
 		throw new QueryRefusedError('invalid_name', "a file column's table is named by plain identifiers")
 	}
-	const [found] = await runFixedStatement(session, `select ${column}::text as scope from ${model.name} where ${key}::text = $1`, [keyValue])
+	const statement = session.dialect === 'sqlite'
+		? `select cast(${column} as text) as scope from ${model.name} where cast(${key} as text) = ?1`
+		: `select ${column}::text as scope from ${model.name} where ${key}::text = $1`
+	const [found] = await runFixedStatement(session, statement, [keyValue])
 	const value: unknown = typeof found === 'object' && found !== null ? ownDescriptor(found, 'scope')?.value : undefined
 	if (typeof value !== 'string') {
 		throw new NotFoundError(`${model.name} not found`)

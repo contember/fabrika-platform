@@ -8,6 +8,7 @@ import { BinaryOperationNode, type OperationNode, OperatorNode, ValueNode } from
 import { runFixedStatement, type Session, sessionOf } from './database'
 import { QueryRefusedError } from './errors'
 import type { GuardContext } from './guard'
+import type { DialectTexts } from './job-leases'
 import { WEBHOOK_BINDINGS_TABLE, WEBHOOK_DELIVERIES_TABLE } from './migrations'
 import { acknowledgement, allOf, column, deleteNode, equals, insertNode, locateNode, scopedWhere, updateNode } from './nodes'
 import type { DataLayerRuntime } from './store'
@@ -72,16 +73,35 @@ export interface DeliveryClaim {
 const D = WEBHOOK_DELIVERIES_TABLE
 
 /** A new key, or one whose claim expired without completion; a completed one (no lease) is never taken. */
-const SQL_CLAIM = `insert into ${D} (binding_id, delivery_id, received_at, lease_until) values ($1, $2, $3::bigint, $4::bigint)
+const SQL_CLAIM: DialectTexts = {
+	postgres: `insert into ${D} (binding_id, delivery_id, received_at, lease_until) values ($1, $2, $3::bigint, $4::bigint)
 on conflict (binding_id, delivery_id) do update set received_at = excluded.received_at, lease_until = excluded.lease_until
 where ${D}.lease_until is not null and ${D}.lease_until < excluded.received_at
-returning delivery_id`
+returning delivery_id`,
+	sqlite: `insert into ${D} (binding_id, delivery_id, received_at, lease_until) values (?1, ?2, ?3, ?4)
+on conflict (binding_id, delivery_id) do update set received_at = excluded.received_at, lease_until = excluded.lease_until
+where ${D}.lease_until is not null and ${D}.lease_until < excluded.received_at
+returning delivery_id`,
+}
 
-const SQL_COMPLETE = `update ${D} set lease_until = null
+const SQL_COMPLETE: DialectTexts = {
+	postgres: `update ${D} set lease_until = null
 where binding_id = $1 and delivery_id = $2 and lease_until = $3::bigint
-returning delivery_id`
+returning delivery_id`,
+	sqlite: `update ${D} set lease_until = null
+where binding_id = ?1 and delivery_id = ?2 and lease_until = ?3
+returning delivery_id`,
+}
 
-const SQL_RELEASE = `delete from ${D} where binding_id = $1 and delivery_id = $2 and lease_until = $3::bigint returning delivery_id`
+const SQL_RELEASE: DialectTexts = {
+	postgres: `delete from ${D} where binding_id = $1 and delivery_id = $2 and lease_until = $3::bigint returning delivery_id`,
+	sqlite: `delete from ${D} where binding_id = ?1 and delivery_id = ?2 and lease_until = ?3 returning delivery_id`,
+}
+
+/** Runs the text of `session`'s dialect. */
+function run(session: Session, texts: DialectTexts, parameters: readonly (string | number)[]): Promise<readonly unknown[]> {
+	return runFixedStatement(session, texts[session.dialect], parameters)
+}
 
 const BINDING_COLUMNS = ['id', 'webhook', 'scope_type', 'scope_value', 'account', 'secret']
 
@@ -186,17 +206,17 @@ export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
 			)
 			const leaseUntil = now + leaseMs
 			// The primary key decides between concurrent copies of one delivery: exactly one inserts or takes over.
-			const claimed = await runFixedStatement(session(), SQL_CLAIM, [bindingId, deliveryKey, now, leaseUntil])
+			const claimed = await run(session(), SQL_CLAIM, [bindingId, deliveryKey, now, leaseUntil])
 			return claimed.length === 0 ? null : Object.freeze({ bindingId, key: deliveryKey, leaseUntil })
 		},
 
 		async completeDelivery(claim: DeliveryClaim, using?: Session): Promise<boolean> {
-			const completed = await runFixedStatement(using ?? session(), SQL_COMPLETE, [claim.bindingId, claim.key, claim.leaseUntil])
+			const completed = await run(using ?? session(), SQL_COMPLETE, [claim.bindingId, claim.key, claim.leaseUntil])
 			return completed.length > 0
 		},
 
 		async releaseDelivery(claim: DeliveryClaim): Promise<void> {
-			await runFixedStatement(session(), SQL_RELEASE, [claim.bindingId, claim.key, claim.leaseUntil])
+			await run(session(), SQL_RELEASE, [claim.bindingId, claim.key, claim.leaseUntil])
 		},
 	})
 }
