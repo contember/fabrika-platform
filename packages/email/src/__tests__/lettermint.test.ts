@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod'
 import { EmailDeliveryError, type EmailFetch } from '../email.js'
 import { lettermintEmailProvider, LettermintEmailSender } from '../lettermint.js'
 
@@ -82,6 +83,33 @@ describe('LettermintEmailSender', () => {
 		const { fetch, requests } = capturing(() => Response.json({ message_id: 'lm-2', status: 'pending' }, { status: 202 }))
 		await new LettermintEmailSender({ projectToken: 'lm_secret', from, fetch }).send({ ...message, idempotencyKey: 'k'.repeat(256) }, signal)
 		expect(requests[0]?.headers.get('idempotency-key')).toMatch(/^sha256:[0-9a-f]{64}$/)
+	})
+
+	test('a broadcast message goes through the broadcast route, a transactional one through the default', async () => {
+		const { fetch, requests } = capturing(() => Response.json({ message_id: 'lm-5', status: 'pending' }, { status: 202 }))
+		await new LettermintEmailSender({ projectToken: 'lm_secret', from, fetch }).send({
+			...message,
+			unsubscribeUrl: 'https://app.example.test/u?t=1',
+			broadcast: true,
+		}, signal)
+		await new LettermintEmailSender({ projectToken: 'lm_secret', from, fetch, broadcastRoute: 'news' }).send({
+			...message,
+			unsubscribeUrl: 'https://app.example.test/u?t=1',
+			broadcast: true,
+		}, signal)
+		await new LettermintEmailSender({ projectToken: 'lm_secret', from, fetch }).send(message, signal)
+		const routes = await Promise.all(requests.map(async (request) => z.object({ route: z.string().optional() }).parse(await request.json()).route))
+		expect(routes).toEqual(['broadcast', 'news', undefined])
+		const env = { FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN: 'lm_secret', FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE: 'news' }
+		expect(lettermintEmailProvider.create({ from, env })).toBeInstanceOf(LettermintEmailSender)
+	})
+
+	test('a route the project lacks is a rejection that says how to fix it', async () => {
+		const { fetch } = capturing(() => Response.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid route provided.' } }, { status: 422 }))
+		const sender = new LettermintEmailSender({ projectToken: 'lm_secret', from, fetch })
+		const error = await caught(sender.send({ ...message, unsubscribeUrl: 'https://app.example.test/u', broadcast: true }, signal))
+		expect([error.code, error.retryable]).toEqual(['provider_rejected', false])
+		expect(error.message).toContain('FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE')
 	})
 
 	test('the provider reads its token and names a bad one without its value', () => {

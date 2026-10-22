@@ -26,6 +26,8 @@ export interface WireMessage {
 	readonly unsubscribeUrl?: string
 	/** Each attachment with its bytes as base64. */
 	readonly attachments?: readonly EmailAttachmentContent[]
+	/** Whether the provider got it as broadcast mail, on its channel for them where it has one. */
+	readonly broadcast?: boolean
 }
 
 /** A stored or sent message in wire terms: what a local harness answers for an `EmailMessage` it kept. */
@@ -99,6 +101,8 @@ const UNSUBSCRIBE_MESSAGE: EmailMessage = {
 	unsubscribeUrl: 'https://app.example.test/api/mail.unsubscribe?t=conformance-token-6c2e',
 }
 
+const BROADCAST_MESSAGE: EmailMessage = { ...UNSUBSCRIBE_MESSAGE, idempotencyKey: 'conformance/broadcast-1', broadcast: true }
+
 const ATTACHMENT_MESSAGE: EmailMessage = {
 	...MINIMAL_MESSAGE,
 	idempotencyKey: 'conformance/attachment-1',
@@ -134,6 +138,7 @@ const INVALID_MESSAGES: readonly { readonly problem: string; readonly message: E
 	{ problem: 'a sender name over 128 characters', message: { ...MINIMAL_MESSAGE, fromName: 'x'.repeat(129) } },
 	{ problem: 'an unsubscribe URL over http', message: { ...MINIMAL_MESSAGE, unsubscribeUrl: 'http://app.example.test/u' } },
 	{ problem: 'an unsubscribe URL with a bracket', message: { ...MINIMAL_MESSAGE, unsubscribeUrl: 'https://app.example.test/u>x' } },
+	{ problem: 'a broadcast without an unsubscribe URL', message: { ...MINIMAL_MESSAGE, broadcast: true } },
 	{
 		problem: 'an attachment name with a path',
 		message: { ...MINIMAL_MESSAGE, attachments: [{ filename: '../etc/passwd', contentType: 'text/plain', content: ONE_BYTE }] },
@@ -228,6 +233,19 @@ function describeHttpSender(harness: EmailSenderHttpHarness): void {
 			return
 		}
 		await expectRejection(() => current.sender.send(UNSUBSCRIBE_MESSAGE, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
+		expect(current.requests).toHaveLength(0)
+	})
+
+	test('hands a broadcast message to the provider as one when it says it sends them, and refuses it otherwise', async () => {
+		const current = httpCase(async (request) => harness.answers.accepted(request))
+		if (current.sender.capabilities.broadcast === true) {
+			await current.sender.send(BROADCAST_MESSAGE, new AbortController().signal)
+			const wire = await harness.readRequest(only(current.requests))
+			expect(wire).toMatchObject({ ...contentOf(BROADCAST_MESSAGE), unsubscribeUrl: BROADCAST_MESSAGE.unsubscribeUrl })
+			expect(wire.broadcast).toBe(true)
+			return
+		}
+		await expectRejection(() => current.sender.send(BROADCAST_MESSAGE, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
 		expect(current.requests).toHaveLength(0)
 	})
 
@@ -407,6 +425,16 @@ function describeLocalSender(harness: EmailSenderLocalHarness): void {
 		expect(await harness.stored()).toHaveLength(0)
 	})
 
+	test('stores a broadcast message as one when it says it sends them, and refuses it otherwise', async () => {
+		if (current().capabilities.broadcast === true) {
+			await current().send(BROADCAST_MESSAGE, new AbortController().signal)
+			expect(only(await harness.stored()).broadcast).toBe(true)
+			return
+		}
+		await expectRejection(() => current().send(BROADCAST_MESSAGE, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
+		expect(await harness.stored()).toHaveLength(0)
+	})
+
 	test('stores the attachments it says it sends, and refuses them otherwise', async () => {
 		const limit = current().capabilities.maxAttachmentBytes
 		if (limit !== undefined) {
@@ -473,6 +501,7 @@ function expectOptionalFieldsAbsent(wire: WireMessage): void {
 	expect(wire.fromName).toBeUndefined()
 	expect(wire.unsubscribeUrl).toBeUndefined()
 	expect(wire.attachments).toBeUndefined()
+	expect(wire.broadcast ?? false).toBe(false)
 }
 
 function contentOf(message: EmailMessage): WireMessage {

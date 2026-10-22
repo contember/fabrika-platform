@@ -13,7 +13,14 @@ import {
 	type EmailSenderCapabilities,
 } from './email.js'
 import { parseTimeout, postToProvider, type ProviderResponse } from './http.js'
-import { isValidEmailSenderIdentity, isVisibleAscii, validateEmailAttachments, validateEmailBodies, validateEmailMessage } from './validation.js'
+import {
+	isValidEmailSenderIdentity,
+	isVisibleAscii,
+	validateEmailAttachments,
+	validateEmailBodies,
+	validateEmailBroadcast,
+	validateEmailMessage,
+} from './validation.js'
 
 /** The options every HTTP adapter takes beside its credentials. */
 export interface HttpEmailSenderOptions {
@@ -66,6 +73,7 @@ export abstract class HttpEmailSender implements EmailSender {
 		}
 		validateEmailAttachments(message, this.capabilities, this.#label)
 		validateEmailBodies(message, this.capabilities, this.#label)
+		validateEmailBroadcast(message, this.capabilities, this.#label)
 
 		const request = await this.request(message)
 		const response = await postToProvider({ label: this.#label, fetch: this.#fetch, ...request, signal, timeoutMs: this.#timeoutMs })
@@ -104,6 +112,11 @@ export function formatMailbox(address: string, name: string | undefined): string
 /** An API key or token: non-empty visible ASCII, so it fits a header unchanged. */
 export function isCredential(value: string): boolean {
 	return value.length > 0 && isVisibleAscii(value)
+}
+
+/** The name of a provider's stream or route: 1..64 letters, digits, `_` and `-`. */
+export function isChannelName(value: string): boolean {
+	return /^[A-Za-z0-9_-]{1,64}$/.test(value)
 }
 
 /** A provider variable that holds a credential. */

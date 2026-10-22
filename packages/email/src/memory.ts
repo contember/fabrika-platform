@@ -11,7 +11,7 @@ import {
 	type EmailSender,
 	type EmailSenderCapabilities,
 } from './email.js'
-import { validateEmailAttachments, validateEmailMessage } from './validation.js'
+import { validateEmailAttachments, validateEmailBroadcast, validateEmailMessage } from './validation.js'
 
 export interface MemoryEmail {
 	readonly message: EmailMessage
@@ -82,6 +82,7 @@ export class MemoryEmailSender implements EmailSender {
 			maxBatch: 1,
 			listUnsubscribe: true,
 			maxAttachmentBytes: MEMORY_MAX_ATTACHMENT_BYTES,
+			broadcast: true,
 			...options.capabilities,
 		}
 		if (!Number.isSafeInteger(this.capabilities.maxBatch) || this.capabilities.maxBatch < 1) {
@@ -138,6 +139,7 @@ export class MemoryEmailSender implements EmailSender {
 			throw new EmailDeliveryError('The memory sender writes no List-Unsubscribe header', { code: 'invalid_message' })
 		}
 		validateEmailAttachments(message, this.capabilities, 'The memory sender')
+		validateEmailBroadcast(message, this.capabilities, 'The memory sender')
 		if (signal.aborted) throw failure('aborted')
 		const handoff: MutableHandoff = { message, at: this.#now(), taken: false, answer: 'network_error' }
 		this.#handoffs.push(handoff)

@@ -9,7 +9,7 @@ import { z } from 'zod'
 import { type EmailProvider, parseProviderVariables } from './config.js'
 import { emailContentOf, sameEmailContent } from './content.js'
 import { EmailDeliveryError, type EmailDeliveryResult, type EmailMessage, type EmailSender, type EmailSenderCapabilities } from './email.js'
-import { validateEmailAttachments, validateEmailMessage } from './validation.js'
+import { validateEmailAttachments, validateEmailBroadcast, validateEmailMessage } from './validation.js'
 
 /** Resend's bound, so a local composition meets the limit a production transport has. */
 const DIRECTORY_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
@@ -24,6 +24,7 @@ const capturedEmailSchema = z.object({
 	replyTo: z.string().optional(),
 	fromName: z.string().optional(),
 	unsubscribeUrl: z.string().optional(),
+	broadcast: z.literal(true).optional(),
 	attachments: z.array(z.object({ filename: z.string(), contentType: z.string(), content: z.string() })).readonly().optional(),
 	capturedAt: z.number().int(),
 })
@@ -43,6 +44,7 @@ export class DirectoryEmailSender implements EmailSender {
 		maxBatch: 1,
 		listUnsubscribe: true,
 		maxAttachmentBytes: DIRECTORY_MAX_ATTACHMENT_BYTES,
+		broadcast: true,
 	}
 	readonly #directory: string
 	readonly #now: () => number
@@ -59,6 +61,7 @@ export class DirectoryEmailSender implements EmailSender {
 	async send(message: EmailMessage, signal: AbortSignal): Promise<EmailDeliveryResult> {
 		validateEmailMessage(message)
 		validateEmailAttachments(message, this.capabilities, 'The mail capture')
+		validateEmailBroadcast(message, this.capabilities, 'The mail capture')
 		if (signal.aborted) throw new EmailDeliveryError('The mail capture was aborted by the caller', { code: 'aborted' })
 		const messageId = createHash('sha256').update(message.idempotencyKey).digest('hex')
 		const captured: CapturedEmail = { messageId, idempotencyKey: message.idempotencyKey, ...emailContentOf(message), capturedAt: this.#now() }

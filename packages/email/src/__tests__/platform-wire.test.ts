@@ -101,12 +101,34 @@ describe('the request', () => {
 
 	test('the capabilities are the ones the relay promises', () => {
 		expect(PLATFORM_MAIL_CAPABILITIES).toEqual({
+			broadcast: true,
 			idempotent: true,
 			confirmation: 'queued',
 			maxBatch: 1,
 			listUnsubscribe: true,
 			maxAttachmentBytes: 10 * 1024 * 1024,
 		})
+	})
+})
+
+describe('a broadcast message', () => {
+	test('travels as `broadcast: true` and parses back, while a transactional one encodes without the field', () => {
+		const broadcast: EmailMessage = { ...message, broadcast: true }
+		const parsed = parsePlatformMailRequest(JSON.parse(encodePlatformMailRequest(broadcast)))
+		expect(parsed.ok && parsed.message.broadcast).toBe(true)
+		expect(encodePlatformMailRequest(message)).not.toContain('broadcast')
+		expect(encodePlatformMailRequest({ ...message, broadcast: false })).toBe(encodePlatformMailRequest(message))
+		expect(parsePlatformMailRequest({ ...JSON.parse(encodePlatformMailRequest(message)), broadcast: false }).ok).toBe(false)
+	})
+
+	test('fingerprints apart from the same message sent as transactional', async () => {
+		expect(await platformMailFingerprint({ ...message, broadcast: true })).not.toBe(await platformMailFingerprint(message))
+	})
+
+	test('needs an unsubscribe URL', () => {
+		const { unsubscribeUrl: _dropped, ...withoutUrl } = message
+		const parsed = parsePlatformMailRequest(JSON.parse(encodePlatformMailRequest({ ...withoutUrl, broadcast: true })))
+		expect(parsed).toEqual({ ok: false, code: 'invalid_message', reason: 'A broadcast email needs an unsubscribe URL' })
 	})
 })
 

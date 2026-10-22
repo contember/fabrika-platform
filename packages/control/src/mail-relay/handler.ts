@@ -2,7 +2,7 @@
 // authenticates the key, records the message under its idempotency key, decides the gate once, and queues it for the
 // dispatcher when it passes. Runtime-neutral, but only the Bun process hands it a `MailRelay`.
 
-import type { EmailMessage } from '@fabrika/email'
+import type { EmailMessage, EmailSenderCapabilities } from '@fabrika/email'
 import {
 	encodePlatformMailRequest,
 	hashPlatformKey,
@@ -39,6 +39,8 @@ export interface MailAcceptDeps {
 	readonly installationSecret: string
 	/** Whether Control has a mail transport; without one, every application message is held. */
 	readonly hasTransport: boolean
+	/** What Control's sender sends; `null` without one, when a held message waits for the transport to decide. */
+	readonly transportCapabilities: EmailSenderCapabilities | null
 	/** Unix seconds. */
 	readonly now: () => number
 }
@@ -57,6 +59,7 @@ export function handleMailRelay(ctx: ControlAppContext): Promise<Response> {
 		queue: relay.queue,
 		installationSecret: relay.installationSecret,
 		hasTransport: ctx.env.MAIL_TRANSPORT?.kind === 'transport',
+		transportCapabilities: relay.sender?.capabilities ?? null,
 		now: () => Math.floor(Date.now() / 1000),
 	}, ctx.request)
 }
@@ -95,6 +98,11 @@ export async function acceptMail(deps: MailAcceptDeps, request: Request): Promis
 async function record(deps: MailAcceptDeps, sender: string, message: EmailMessage): Promise<Response> {
 	// Nothing would ever send it, and an accepted answer would keep IAM from offering its manual link instead.
 	if (isInstallationSender(sender) && !deps.hasTransport) return refuse('mail_not_configured')
+	// Refused now, while the job can still tell, rather than failed at dispatch: the transport would refuse it there.
+	if (message.broadcast === true && deps.transportCapabilities !== null && deps.transportCapabilities.broadcast !== true) {
+		console.info('mail relay: a broadcast message refused: the transport sends none')
+		return refuse('invalid_message')
+	}
 	const domain = recipientDomain(message.to)
 	const fingerprint = await platformMailFingerprint(message)
 	const decision = await gate(deps, sender, domain)

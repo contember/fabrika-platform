@@ -11,11 +11,15 @@ import {
 	type HttpEmailRequest,
 	HttpEmailSender,
 	type HttpEmailSenderOptions,
+	isChannelName,
 	isCredential,
+	optionalVariable,
 } from './http-sender.js'
 import type { ProviderResponse } from './http.js'
 
 const POSTMARK_EMAIL_URL = 'https://api.postmarkapp.com/email'
+/** The ID Postmark suggests for a server's broadcast stream. */
+const DEFAULT_BROADCAST_STREAM = 'broadcast'
 const postmarkSuccessSchema = z.object({ MessageID: z.string(), ErrorCode: z.literal(0) })
 /** A refusal's `ErrorCode` is a documented number; its `Message` is free text and is never read. */
 const postmarkErrorSchema = z.object({ ErrorCode: z.number() })
@@ -32,6 +36,8 @@ const FORBIDDEN_EXTENSIONS: readonly string[] =
 export interface PostmarkEmailSenderOptions extends HttpEmailSenderOptions {
 	/** A server token: it sends through that server's default transactional stream. */
 	readonly serverToken: string
+	/** The ID of the server's broadcast stream, which a `broadcast` message goes through; `broadcast` by default. */
+	readonly broadcastStream?: string
 }
 
 export class PostmarkEmailSender extends HttpEmailSender {
@@ -42,15 +48,22 @@ export class PostmarkEmailSender extends HttpEmailSender {
 		listUnsubscribe: true,
 		maxAttachmentBytes: POSTMARK_MAX_ATTACHMENT_BYTES,
 		refusedAttachmentExtensions: FORBIDDEN_EXTENSIONS,
+		broadcast: true,
 	}
 	readonly #serverToken: string
+	readonly #broadcastStream: string
 
 	constructor(options: PostmarkEmailSenderOptions) {
 		if (!isCredential(options.serverToken)) {
 			throw new EmailDeliveryError('Postmark server token is invalid', { code: 'invalid_configuration' })
 		}
+		const broadcastStream = options.broadcastStream ?? DEFAULT_BROADCAST_STREAM
+		if (!isChannelName(broadcastStream)) {
+			throw new EmailDeliveryError('Postmark broadcast stream is invalid', { code: 'invalid_configuration' })
+		}
 		super({ label: 'Postmark', provider: 'postmark' }, options)
 		this.#serverToken = options.serverToken
+		this.#broadcastStream = broadcastStream
 	}
 
 	protected request(message: EmailMessage): HttpEmailRequest {
@@ -63,6 +76,8 @@ export class PostmarkEmailSender extends HttpEmailSender {
 				To: message.to,
 				Subject: message.subject,
 				TextBody: message.text,
+				// Postmark pauses a server whose transactional stream carries promotional mail.
+				...(message.broadcast === true ? { MessageStream: this.#broadcastStream } : {}),
 				...(message.html === undefined ? {} : { HtmlBody: message.html }),
 				...(message.replyTo === undefined ? {} : { ReplyTo: message.replyTo }),
 				...(message.unsubscribeUrl === undefined
@@ -99,12 +114,23 @@ export class PostmarkEmailSender extends HttpEmailSender {
 	}
 }
 
-const postmarkVariablesSchema = z.object({ FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: credentialVariable })
+const postmarkVariablesSchema = z.object({
+	FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: credentialVariable,
+	FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM: optionalVariable(isChannelName),
+})
 
 export const postmarkEmailProvider: EmailProvider = {
-	variables: [{ name: 'FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN', secret: true, required: true }],
+	variables: [
+		{ name: 'FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN', secret: true, required: true },
+		{ name: 'FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM', secret: false, required: false },
+	],
 	create({ from, env, fetch }) {
 		const variables = parseProviderVariables(postmarkVariablesSchema, env)
-		return new PostmarkEmailSender({ serverToken: variables.FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN, from, fetch })
+		return new PostmarkEmailSender({
+			serverToken: variables.FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN,
+			broadcastStream: variables.FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM,
+			from,
+			fetch,
+		})
 	},
 }

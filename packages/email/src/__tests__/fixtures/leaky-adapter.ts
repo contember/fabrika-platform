@@ -14,6 +14,7 @@ const requestSchema = z.object({
 	html: z.string().optional(),
 	reply_to: z.string().optional(),
 	headers: z.object({ 'List-Unsubscribe': z.string() }).optional(),
+	tags: z.array(z.object({ name: z.string(), value: z.string() })).optional(),
 	attachments: z.array(z.object({ filename: z.string(), content: z.string(), content_type: z.string() })).optional(),
 })
 
@@ -59,6 +60,7 @@ describeEmailSenderConformance('LeakyEmailSender', {
 				? {}
 				: { attachments: body.attachments.map(({ filename, content, content_type }) => ({ filename, contentType: content_type, content })) }),
 			...(body.from === 'auth@example.test' ? {} : { fromName: body.from.replace(/^"?(.*?)"? <auth@example\.test>$/, '$1') }),
+			...(body.tags?.some((tag) => tag.name === 'category' && tag.value === 'broadcast') === true ? { broadcast: true } : {}),
 			idempotencyKey: request.headers.get('idempotency-key') ?? undefined,
 		}
 	},

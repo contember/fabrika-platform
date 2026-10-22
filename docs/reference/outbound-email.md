@@ -21,24 +21,28 @@ An `EmailSender` accepts one message with these fields:
 - an optional one-click unsubscribe URL (`unsubscribeUrl`, an exact `https:` URL): the transport writes
   `List-Unsubscribe: <url>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058);
 - optional attachments: at most 20 (`MAX_EMAIL_ATTACHMENTS`), each a name without a path separator or a quote, a
-  media type and the bytes. An empty list is none.
+  media type and the bytes. An empty list is none;
+- `broadcast`: the message is one of a send to many recipients (a newsletter, an announcement), not mail the
+  recipient's own action triggered. It needs `unsubscribeUrl`. Providers keep broadcast mail apart from transactional
+  mail, and one (Postmark) pauses a server whose transactional stream carries it.
 
-The attachments and the unsubscribe URL are part of the content a repeated idempotency key must match.
+The attachments, the unsubscribe URL and `broadcast` are part of the content a repeated idempotency key must match.
 
 `send(message, signal)` takes the caller's `AbortSignal`. A successful call
 returns an accepted result with a provider-neutral message ID.
 
 Each sender reports its `capabilities`:
 
-| field                         | meaning                                                                                                                               |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `idempotent`                  | A repeated send under one key with the same message is not delivered again.                                                           |
-| `confirmation`                | `sync`: accepted means the provider took the message. `queued`: it may still drop the request.                                        |
-| `maxBatch`                    | The most messages one call carries. `send` carries one, so every built-in sender reports 1.                                           |
-| `listUnsubscribe`             | Whether it writes the unsubscribe headers. Absent is no: it refuses a message with `unsubscribeUrl` as `invalid_message`.             |
-| `maxAttachmentBytes`          | The most attachment bytes of one message, every file together. Absent: it refuses a message with any attachment as `invalid_message`. |
-| `refusedAttachmentExtensions` | File extensions it refuses an attachment for, lowercase without the dot. Absent: none.                                                |
-| `minBodyLength`               | The fewest characters a text or HTML body has once trimmed. Absent: any body that is not blank.                                       |
+| field                         | meaning                                                                                                                                   |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `idempotent`                  | A repeated send under one key with the same message is not delivered again.                                                               |
+| `confirmation`                | `sync`: accepted means the provider took the message. `queued`: it may still drop the request.                                            |
+| `maxBatch`                    | The most messages one call carries. `send` carries one, so every built-in sender reports 1.                                               |
+| `listUnsubscribe`             | Whether it writes the unsubscribe headers. Absent is no: it refuses a message with `unsubscribeUrl` as `invalid_message`.                 |
+| `maxAttachmentBytes`          | The most attachment bytes of one message, every file together. Absent: it refuses a message with any attachment as `invalid_message`.     |
+| `refusedAttachmentExtensions` | File extensions it refuses an attachment for, lowercase without the dot. Absent: none.                                                    |
+| `minBodyLength`               | The fewest characters a text or HTML body has once trimmed. Absent: any body that is not blank.                                           |
+| `broadcast`                   | Whether it sends a `broadcast` message, on its provider's channel for them where it has one. Absent: it refuses one as `invalid_message`. |
 
 Failures use `EmailDeliveryError`. The adapter names a code; one table,
 `EMAIL_DELIVERY_ERRORS`, derives `retryable` and `outcome` from it, so an adapter
@@ -92,19 +96,21 @@ one `invalid_configuration` error that lists every missing or invalid variable
 by name, never by value. To check the values, the parser builds the provider's
 sender, which does no I/O.
 
-| variable                                 | secret | rule                                                                                      |
-| ---------------------------------------- | ------ | ----------------------------------------------------------------------------------------- |
-| `FABRIKA_EMAIL_PROVIDER`                 | no     | absent or `none`: no transport. Otherwise a registry key.                                 |
-| `FABRIKA_EMAIL_FROM`                     | no     | required with a provider. A bare address, or the legacy `Name <address>`, which is split. |
-| `FABRIKA_EMAIL_FROM_NAME`                | no     | optional display name; refused when `FABRIKA_EMAIL_FROM` already carries one              |
-| `FABRIKA_EMAIL_AHASEND_API_KEY`          | yes    | required for `ahasend`; an API key v2 scoped to `messages:send:{domain}` at least         |
-| `FABRIKA_EMAIL_AHASEND_ACCOUNT_ID`       | no     | required for `ahasend`; `[A-Za-z0-9-]{1,64}`                                              |
-| `FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN` | yes    | required for `lettermint`; a project API token                                            |
-| `FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN`    | yes    | required for `postmark`; a server token                                                   |
-| `FABRIKA_EMAIL_RESEND_API_KEY`           | yes    | required for `resend`                                                                     |
-| `FABRIKA_EMAIL_SMARTEMAILING_USERNAME`   | yes    | required for `smartemailing`; visible ASCII, no `:`                                       |
-| `FABRIKA_EMAIL_SMARTEMAILING_API_KEY`    | yes    | required for `smartemailing`; visible ASCII                                               |
-| `FABRIKA_EMAIL_SMARTEMAILING_TAG`        | no     | optional, `[A-Za-z0-9_-]{1,64}`, default `fabrika`                                        |
+| variable                                   | secret | rule                                                                                      |
+| ------------------------------------------ | ------ | ----------------------------------------------------------------------------------------- |
+| `FABRIKA_EMAIL_PROVIDER`                   | no     | absent or `none`: no transport. Otherwise a registry key.                                 |
+| `FABRIKA_EMAIL_FROM`                       | no     | required with a provider. A bare address, or the legacy `Name <address>`, which is split. |
+| `FABRIKA_EMAIL_FROM_NAME`                  | no     | optional display name; refused when `FABRIKA_EMAIL_FROM` already carries one              |
+| `FABRIKA_EMAIL_AHASEND_API_KEY`            | yes    | required for `ahasend`; an API key v2 scoped to `messages:send:{domain}` at least         |
+| `FABRIKA_EMAIL_AHASEND_ACCOUNT_ID`         | no     | required for `ahasend`; `[A-Za-z0-9-]{1,64}`                                              |
+| `FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN`   | yes    | required for `lettermint`; a project API token                                            |
+| `FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE` | no     | optional, the project's broadcast route slug (`[A-Za-z0-9_-]{1,64}`), default `broadcast` |
+| `FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN`      | yes    | required for `postmark`; a server token                                                   |
+| `FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM`  | no     | optional, the server's broadcast stream ID (`[A-Za-z0-9_-]{1,64}`), default `broadcast`   |
+| `FABRIKA_EMAIL_RESEND_API_KEY`             | yes    | required for `resend`                                                                     |
+| `FABRIKA_EMAIL_SMARTEMAILING_USERNAME`     | yes    | required for `smartemailing`; visible ASCII, no `:`                                       |
+| `FABRIKA_EMAIL_SMARTEMAILING_API_KEY`      | yes    | required for `smartemailing`; visible ASCII                                               |
+| `FABRIKA_EMAIL_SMARTEMAILING_TAG`          | no     | optional, `[A-Za-z0-9_-]{1,64}`, default `fabrika`                                        |
 
 Each provider declares its own variables with their secret flag, so deploy
 tooling knows which go to secret storage.
@@ -115,13 +121,13 @@ What each built-in provider offers, and what it has been checked against. "Live"
 recorded on a real account and the received messages inspected; "stubbed" means only the unit tests and the
 conformance kit against a stubbed `fetch`.
 
-| provider        | idempotent | confirmation | unsubscribe | attachments | checked against                                                                               |
-| --------------- | ---------- | ------------ | ----------- | ----------- | --------------------------------------------------------------------------------------------- |
-| `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | live, 2026-10-22                                                                              |
-| `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | live, 2026-10-22                                                                              |
-| `postmark`      | no         | `sync`       | yes         | 10 MiB      | live, 2026-10-22                                                                              |
-| `resend`        | yes        | `sync`       | yes         | 25 MiB      | live, 2026-10-22                                                                              |
-| `smartemailing` | no         | `queued`     | no          | none        | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)) |
+| provider        | idempotent | confirmation | unsubscribe | attachments | broadcast                      | checked against                                                                               |
+| --------------- | ---------- | ------------ | ----------- | ----------- | ------------------------------ | --------------------------------------------------------------------------------------------- |
+| `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | no (its terms)                 | live, 2026-10-22                                                                              |
+| `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | its broadcast route, unchecked | live, 2026-10-22                                                                              |
+| `postmark`      | no         | `sync`       | yes         | 10 MiB      | its broadcast stream           | live, 2026-10-22                                                                              |
+| `resend`        | yes        | `sync`       | yes         | 25 MiB      | tagged `category: broadcast`   | live, 2026-10-22                                                                              |
+| `smartemailing` | no         | `queued`     | no          | none        | no                             | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)) |
 
 A provider that is not idempotent leaves a message whose outcome is unknown (a timeout, a lost answer, a 5xx) to a
 person: it is never sent again automatically (`mayRetryDelivery`). When a provider is checked live, update its row and
@@ -167,6 +173,10 @@ request that lost a concurrent race gets the winner's `id`. A wrong key is a 401
 40 MB a 400, `provider_rejected`. Every refusal names its kind in `name`. Resend sends through Amazon SES: the
 `Message-ID` is SES's, not the `id`.
 
+A `broadcast` message goes through the same API, which Resend's terms allow for marketing mail sent to one recipient
+at a time with consent and an unsubscribe; it carries the tag `category: broadcast`, so the account's logs and webhooks
+tell it apart. Checked live: the recipient got it with the message's own unsubscribe headers.
+
 ## Postmark adapter
 
 `PostmarkEmailSender` (`@fabrika/email/postmark`) calls `POST https://api.postmarkapp.com/email` with the server
@@ -185,6 +195,14 @@ A refusal is read by its numeric `ErrorCode`, never its `Message`. A wrong token
 and `provider_rejected` otherwise: an invalid recipient (300), an inactive one (406) or a refused file type (411). A repeated request is delivered again. The
 `Message-ID` is `<MessageID>@mtasv.net`. Open and click tracking are settings of the Postmark server; with click
 tracking on, a one-time link goes through Postmark's redirect.
+
+A `broadcast` message goes through the server's broadcast stream (`MessageStream`), `broadcast` unless
+`FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM` names another; the stream must exist on the server. Checked live: by default
+Postmark manages the stream's unsubscribes. It replaces the message's `List-Unsubscribe` with its own one-click link,
+appends an unsubscribe footer to the text and the HTML, and keeps whoever uses either in its suppression list, so the
+application does not learn of that unsubscribe and Postmark refuses that recipient's next broadcast (406,
+`provider_rejected`). The application's own link in the body still works. Managing unsubscribes yourself (handling
+`None`) takes Postmark support's approval.
 
 ## AhaSend adapter
 
@@ -223,6 +241,12 @@ display name was quoted, the subject RFC 2047-encoded, `Reply-To` and both unsub
 byte for byte with their media types and UTF-8 names, and an HTML template unchanged, its links not rewritten. The
 `Message-ID` is `<message_id>@lmta.net`. Open and click tracking are settings of the Lettermint project or route; with
 click tracking on, a one-time link goes through Lettermint's redirect.
+
+A `broadcast` message goes through the project's broadcast route (`route`), `broadcast` unless
+`FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE` names another. A project has only its transactional route until one is
+created; a route the project lacks is a 422 that the adapter answers as `provider_rejected`, naming the variable. Not
+checked live: the test project had no broadcast route, so how Lettermint treats the unsubscribe headers there is not
+known.
 
 ## SmartEmailing adapter
 
@@ -459,14 +483,17 @@ local stack) runs it; on the Worker its row answers 404.
 - An application calls it on Control's public host: the platform proxy serves the
   row there, makes no decision and passes `Authorization` on to the relay. IAM calls
   Control's private origin from the installation's project.
-- The body is the `EmailMessage` fields; each attachment is
+- The body is the `EmailMessage` fields, `broadcast` only when true (so a transactional message encodes as it did
+  before the field); each attachment is
   `{ filename, contentType, contentBase64 }` (standard padded base64).
   `encodePlatformMailRequest` writes it in a fixed field order, so the same message
   is the same text. `parsePlatformMailRequest` is the one parser: strict (an unknown
   field is refused) and ending in the package's own message validation.
 - The relay reads at most the base64 of 10 MiB of attachments plus 4 MiB. A larger
   body, invalid JSON, and a message that fails validation answer 400
-  `invalid_message`.
+  `invalid_message`. So does a `broadcast` message while Control's own sender sends
+  none, refused before it is recorded; without a sender yet, it is held like any
+  message, and the transport decides at dispatch.
 - The answer is `200 { status: 'accepted', messageId }` or `{ error: { code } }`:
 
   | status | code                    | when                                          |

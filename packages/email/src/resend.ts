@@ -14,6 +14,7 @@ import type { ProviderResponse } from './http.js'
 
 const RESEND_EMAILS_URL = 'https://api.resend.com/emails'
 const LABEL = 'Resend'
+const BROADCAST_TAG = { name: 'category', value: 'broadcast' }
 const resendSuccessSchema = z.object({ id: z.string() })
 const resendErrorSchema = z.object({ name: z.string() })
 const QUOTA_ERRORS: ReadonlySet<string> = new Set(['daily_quota_exceeded', 'monthly_quota_exceeded'])
@@ -31,6 +32,8 @@ export class ResendEmailSender extends HttpEmailSender {
 		maxBatch: 1,
 		listUnsubscribe: true,
 		maxAttachmentBytes: RESEND_MAX_ATTACHMENT_BYTES,
+		// Resend takes one-to-one marketing mail through this API, with consent and an unsubscribe; it has no channel apart.
+		broadcast: true,
 	}
 	readonly #apiKey: string
 
@@ -55,6 +58,8 @@ export class ResendEmailSender extends HttpEmailSender {
 				...(message.html === undefined ? {} : { html: message.html }),
 				...(message.replyTo === undefined ? {} : { reply_to: message.replyTo }),
 				...(message.unsubscribeUrl === undefined ? {} : { headers: oneClickUnsubscribeHeaders(message.unsubscribeUrl) }),
+				// Tagged, so the account's logs and webhooks tell broadcast mail from transactional.
+				...(message.broadcast === true ? { tags: [BROADCAST_TAG] } : {}),
 				...(attachments.length === 0
 					? {}
 					: {

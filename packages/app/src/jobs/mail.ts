@@ -104,6 +104,7 @@ export function jobMail(input: JobMailInput): AppMail {
 				...(message.replyTo === undefined ? {} : { replyTo: message.replyTo }),
 				...(message.fromName === undefined ? {} : { fromName: message.fromName }),
 				...(message.unsubscribe === undefined ? {} : { unsubscribeUrl: message.unsubscribe.url }),
+				...(message.broadcast === true ? { broadcast: true } : {}),
 				...(attachments.length === 0 ? {} : { attachments }),
 			}
 			try {

@@ -47,6 +47,8 @@ export interface MailMessageContentDto {
 	readonly replyTo?: string
 	readonly fromName?: string
 	readonly unsubscribeUrl?: string
+	/** A message of a send to many recipients, which the provider keeps apart from transactional mail. */
+	readonly broadcast?: true
 	readonly attachments: readonly MailAttachmentDto[]
 }
 

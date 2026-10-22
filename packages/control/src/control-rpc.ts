@@ -555,7 +555,7 @@ function mailContentOf(auth: AuthContext, row: MailMessageRow): MailContentDto {
 	if (row.content === null) return { kind: 'purged' }
 	const parsed = parsePlatformMailRequest(JSON.parse(row.content))
 	if (!parsed.ok) throw new Error('stored mail content does not parse')
-	const { to, subject, text, html, replyTo, fromName, unsubscribeUrl, attachments } = parsed.message
+	const { to, subject, text, html, replyTo, fromName, unsubscribeUrl, broadcast, attachments } = parsed.message
 	return {
 		kind: 'present',
 		message: {
@@ -566,6 +566,7 @@ function mailContentOf(auth: AuthContext, row: MailMessageRow): MailContentDto {
 			...(replyTo === undefined ? {} : { replyTo }),
 			...(fromName === undefined ? {} : { fromName }),
 			...(unsubscribeUrl === undefined ? {} : { unsubscribeUrl }),
+			...(broadcast === true ? { broadcast: true } : {}),
 			attachments: (attachments ?? []).map((attachment) => ({
 				filename: attachment.filename,
 				contentType: attachment.contentType,

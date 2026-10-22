@@ -64,6 +64,7 @@ export function validateEmailMessage(message: EmailMessage): void {
 	if (message.replyTo !== undefined && !isValidEmailAddress(message.replyTo)) throw invalidMessage('Email reply-to address is invalid')
 	if (message.fromName !== undefined && !isValidEmailDisplayName(message.fromName)) throw invalidMessage('Email sender name is invalid')
 	if (message.unsubscribeUrl !== undefined && !isUnsubscribeUrl(message.unsubscribeUrl)) throw invalidMessage('Email unsubscribe URL is invalid')
+	if (message.broadcast === true && message.unsubscribeUrl === undefined) throw invalidMessage('A broadcast email needs an unsubscribe URL')
 	const attachments = message.attachments ?? []
 	if (attachments.length > MAX_EMAIL_ATTACHMENTS) throw invalidMessage(`Email has more than ${MAX_EMAIL_ATTACHMENTS} attachments`)
 	for (const attachment of attachments) {
@@ -88,6 +89,11 @@ export function validateEmailAttachments(message: EmailMessage, capabilities: Em
 	if (refused.length > 0 && attachments.some((attachment) => refused.includes(extensionOf(attachment.filename)))) {
 		throw invalidMessage(`${label} sends no attachment of this file type`)
 	}
+}
+
+/** Refuses a `broadcast` message where the transport sends none. */
+export function validateEmailBroadcast(message: EmailMessage, capabilities: EmailSenderCapabilities, label: string): void {
+	if (message.broadcast === true && capabilities.broadcast !== true) throw invalidMessage(`${label} sends no broadcast email`)
 }
 
 /** Refuses a text or HTML body shorter than the transport's `minBodyLength`, counted in characters once trimmed. */

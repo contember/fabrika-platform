@@ -17,6 +17,8 @@ export const PLATFORM_MAIL_CAPABILITIES: EmailSenderCapabilities = {
 	maxBatch: 1,
 	listUnsubscribe: true,
 	maxAttachmentBytes: 10 * 1024 * 1024,
+	// Control refuses one at once when its own transport sends none, and dispatches it on the provider's channel.
+	broadcast: true,
 }
 
 const LABEL = 'Platform mail'
@@ -38,6 +40,8 @@ interface PlatformMailRequest {
 	readonly replyTo?: string
 	readonly fromName?: string
 	readonly unsubscribeUrl?: string
+	/** Present only when true, so a transactional message encodes, and fingerprints, as it did before the field. */
+	readonly broadcast?: true
 	readonly attachments?: readonly PlatformMailAttachment[]
 }
 
@@ -52,6 +56,7 @@ function platformMailRequestOf(message: EmailMessage): PlatformMailRequest {
 		...(message.replyTo === undefined ? {} : { replyTo: message.replyTo }),
 		...(message.fromName === undefined ? {} : { fromName: message.fromName }),
 		...(message.unsubscribeUrl === undefined ? {} : { unsubscribeUrl: message.unsubscribeUrl }),
+		...(message.broadcast === true ? { broadcast: true } : {}),
 		...(attachments.length === 0
 			? {}
 			: {
@@ -118,6 +123,7 @@ const requestSchema = z.object({
 	replyTo: z.string().optional(),
 	fromName: z.string().optional(),
 	unsubscribeUrl: z.string().optional(),
+	broadcast: z.literal(true).optional(),
 	attachments: z.array(attachmentSchema).optional(),
 }).strict()
 

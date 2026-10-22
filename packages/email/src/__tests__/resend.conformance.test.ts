@@ -12,6 +12,7 @@ const requestSchema = z.object({
 	reply_to: z.string().optional(),
 	attachments: z.array(z.object({ filename: z.string(), content: z.string(), content_type: z.string() }).strict()).optional(),
 	headers: z.object({ 'List-Unsubscribe': z.string(), 'List-Unsubscribe-Post': z.literal('List-Unsubscribe=One-Click') }).strict().optional(),
+	tags: z.array(z.object({ name: z.string(), value: z.string() }).strict()).optional(),
 })
 
 function errorAnswer(status: number, name: string): Response {
@@ -42,6 +43,7 @@ describeEmailSenderConformance('ResendEmailSender', {
 						content: attachment.content,
 					})),
 				}),
+			...(body.tags?.some((tag) => tag.name === 'category' && tag.value === 'broadcast') === true ? { broadcast: true } : {}),
 			idempotencyKey: request.headers.get('idempotency-key') ?? undefined,
 		}
 	},

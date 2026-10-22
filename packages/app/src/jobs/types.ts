@@ -55,6 +55,12 @@ export interface AppMailMessage {
 	 */
 	readonly unsubscribe?: { readonly url: string }
 	/**
+	 * One message of a send to many recipients (a newsletter, an announcement), not a reply to what the recipient did.
+	 * The transport sends it on the provider's channel for broadcast mail, which keeps it apart from sign-in links and
+	 * receipts. It needs `unsubscribe`. A transport without `capabilities.broadcast` refuses it as `invalid_message`.
+	 */
+	readonly broadcast?: boolean
+	/**
 	 * Files the message carries: references this attempt holds and may read, as `ctx.files.open` takes them. Only a
 	 * `live` file is sent; the bytes of all of them together stay within the transport's `maxAttachmentBytes`, and a
 	 * transport without it refuses the message. The idempotency key covers the attachments.

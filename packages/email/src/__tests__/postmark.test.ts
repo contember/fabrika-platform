@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod'
 import { EmailDeliveryError, type EmailFetch } from '../email.js'
 import { postmarkEmailProvider, PostmarkEmailSender } from '../postmark.js'
 
@@ -97,6 +98,30 @@ describe('PostmarkEmailSender', () => {
 		for (const code of [400, 401, 412, 413]) expect((await send(answer(code))).code).toBe('provider_unauthorized')
 		for (const code of [300, 406, 411]) expect((await send(answer(code))).code).toBe('provider_rejected')
 		expect((await send(answer(405))).message).not.toContain('private detail')
+	})
+
+	test('a broadcast message goes through the broadcast stream, a transactional one through the default', async () => {
+		const { fetch, requests } = capturing(() => Response.json({ MessageID: 'pm-5', ErrorCode: 0 }))
+		await new PostmarkEmailSender({ serverToken: 'pm_secret', from, fetch }).send({
+			...message,
+			unsubscribeUrl: 'https://app.example.test/u?t=1',
+			broadcast: true,
+		}, signal)
+		await new PostmarkEmailSender({ serverToken: 'pm_secret', from, fetch, broadcastStream: 'newsletters' }).send({
+			...message,
+			unsubscribeUrl: 'https://app.example.test/u?t=1',
+			broadcast: true,
+		}, signal)
+		await new PostmarkEmailSender({ serverToken: 'pm_secret', from, fetch }).send(message, signal)
+		const streams = await Promise.all(
+			requests.map(async (request) => z.object({ MessageStream: z.string().optional() }).parse(await request.json()).MessageStream),
+		)
+		expect(streams).toEqual(['broadcast', 'newsletters', undefined])
+		expect(() => new PostmarkEmailSender({ serverToken: 'pm_secret', from, broadcastStream: 'bad stream' })).toThrow(
+			'Postmark broadcast stream is invalid',
+		)
+		const env = { FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: 'pm_secret', FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM: 'private stream' }
+		expect(() => postmarkEmailProvider.create({ from, env })).toThrow('FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM is missing or invalid')
 	})
 
 	test('the provider reads its token and names a bad one without its value', () => {

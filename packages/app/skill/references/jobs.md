@@ -177,7 +177,12 @@ that says so): it records an outbox row and kicks the job (below). `references/p
   (RFC 8058), so a mailbox offers one-click unsubscribe. The URL is a public procedure of your own with a signed token
   (`ctx.url('api.mail.unsubscribe', { query: { t: ctx.tokens.sign('unsubscribe', claims, { days: 400 }) } })`,
   `references/endpoint.md`). There are no free headers. A transport without the header refuses the message.
-- The idempotency key covers the attachments and the unsubscribe URL: a repeated key with other content is refused.
+- `broadcast: true` marks one message of a send to many recipients (a newsletter, an announcement to every student),
+  as opposed to mail a recipient's own action triggers (a sign-in link, a confirmation). Providers keep the two apart
+  and pause an account whose transactional channel carries broadcast mail, so mark every message of a bulk send. It
+  needs `unsubscribe`. A transport without `ctx.mail.capabilities.broadcast` refuses it as `invalid_message`.
+- The idempotency key covers the attachments, the unsubscribe URL and `broadcast`: a repeated key with other content
+  is refused.
 - `idempotencyKey` is 1 to 200 visible ASCII characters, unique per message in the application environment, and
   derived from the outbox row (`intake-link-<link id>`), never random. `ctx.mail` puts a prefix of the installation
   and the environment in front of it, so no other application on the same provider account shares it.

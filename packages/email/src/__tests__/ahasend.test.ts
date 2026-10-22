@@ -113,6 +113,14 @@ describe('AhaSendEmailSender', () => {
 		expect([error.code, error.httpStatus]).toEqual(['provider_unauthorized', 404])
 	})
 
+	test('refuses a broadcast message without a request, as its terms allow only transactional mail', async () => {
+		const { fetch, requests } = capturing(() => accepted({ id: 'aha-5', status: 'queued' }))
+		const sender = new AhaSendEmailSender({ apiKey: 'aha_secret', accountId: ACCOUNT_ID, from, fetch })
+		const error = await caught(sender.send({ ...message, unsubscribeUrl: 'https://app.example.test/u?t=1', broadcast: true }, signal))
+		expect([error.code, error.message]).toEqual(['invalid_message', 'AhaSend sends no broadcast email'])
+		expect(requests).toHaveLength(0)
+	})
+
 	test('the provider reads its variables and names a bad one without its value', () => {
 		const env = { FABRIKA_EMAIL_AHASEND_API_KEY: 'aha_secret', FABRIKA_EMAIL_AHASEND_ACCOUNT_ID: ACCOUNT_ID }
 		expect(ahaSendEmailProvider.create({ from, env })).toBeInstanceOf(AhaSendEmailSender)
