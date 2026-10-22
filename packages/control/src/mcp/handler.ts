@@ -20,6 +20,7 @@ import {
 	type DevUseCaseContext,
 	followDevCommit,
 	getDevStatusUseCase,
+	listDevTargetsUseCase,
 	resetDevUseCase,
 	runChecksUseCase,
 } from '../api/dev-environments'
@@ -40,7 +41,6 @@ import {
 	LIST_FILES_DEFAULT_LIMIT,
 	LIST_FILES_MAX_LIMIT,
 	listFilesUseCase,
-	listTargetsUseCase,
 	listWorkspacesUseCase,
 	readFilesUseCase,
 	SEARCH_MAX_FILES,
@@ -230,38 +230,40 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 		}
 	})
 	server.registerTool('list_targets', {
-		description: 'List the app environments you may author. Each target is one stage environment of one app, with its GitHub repository '
-			+ 'and what it runs now (deployed: the last successful deploy, its workspace, and whether that workspace is yours). '
-			+ 'The environment shows one workspace at a time, so a deploy_stage replaces what another workspace deployed.',
+		description: 'List the app environments you may author. Each target is one stage environment of one app (kind standard), with '
+			+ 'its GitHub repository and what it runs now (deployed: the last successful deploy, its workspace, and whether that '
+			+ 'workspace is yours). The environment shows one workspace at a time, so a deploy_stage replaces what another workspace '
+			+ "deployed. dev is the application's dev environment (kind dev) when it has one: its state, URL and bound workspace; "
+			+ 'bind_dev binds yours.',
 		inputSchema: toolInput(toolInputs.listTargets),
 		annotations: READ_ONLY,
-	}, () => run(() => listTargetsUseCase(c)))
+	}, () => run('list_targets', () => listDevTargetsUseCase(c)))
 	server.registerTool('create_workspace', {
 		description: 'Create a workspace on an authoring target. A workspace is a new Git branch `fabrika/<id>` created from the default '
 			+ 'branch. Returns the workspace id and its head commit.',
 		inputSchema: toolInput(toolInputs.createWorkspace),
 		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-	}, (input) => run(() => createWorkspaceUseCase(c, input)))
+	}, (input) => run('create_workspace', () => createWorkspaceUseCase(c, input)))
 	server.registerTool('list_workspaces', {
 		description: 'List your own workspaces, optionally for one app and environment, each with its current head (headSha), its latest '
 			+ 'stage deploy and the pull request create_pull_request opened.',
 		inputSchema: toolInput(toolInputs.listWorkspaces),
 		annotations: READ_ONLY,
-	}, (input) => run(() => listWorkspacesUseCase(c, input)))
+	}, (input) => run('list_workspaces', () => listWorkspacesUseCase(c, input)))
 	server.registerTool('get_workspace', {
 		description: 'Read one of your workspaces: its branch, the current head commit (headSha), the latest stage deploy, whether the '
 			+ 'stage environment runs it now (onStage) and the pull request create_pull_request opened. '
 			+ 'Use headSha as expectedHeadSha for apply_changes.',
 		inputSchema: toolInput(toolInputs.getWorkspace),
 		annotations: READ_ONLY,
-	}, (input) => run(() => getWorkspaceUseCase(c, input)))
+	}, (input) => run('get_workspace', () => getWorkspaceUseCase(c, input)))
 	server.registerTool('get_workspace_diff', {
 		description: 'List the files the workspace changed since its base (the default-branch commit it was created from), at the '
 			+ 'current head, with their status and line counts. With includePatches each file carries its unified diff, at most 32 KiB '
 			+ 'each and 256 KiB together; paths narrows which files carry one. incomplete says what was left out.',
 		inputSchema: toolInput(toolInputs.getWorkspaceDiff),
 		annotations: READ_ONLY,
-	}, (input) => run(() => getWorkspaceDiffUseCase(c, input)))
+	}, (input) => run('get_workspace_diff', () => getWorkspaceDiffUseCase(c, input)))
 	server.registerTool('list_files', {
 		description: 'List the entries of a directory of the workspace branch (the repository root when no directory is given), '
 			+ 'at commitSha or at the current head. Without depth it lists every level below the directory; depth 1 lists its direct '
@@ -269,14 +271,14 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 			+ 'truncated means the repository is too large for one listing; name a directory.',
 		inputSchema: toolInput(toolInputs.listFiles),
 		annotations: READ_ONLY,
-	}, (input) => run(() => listFilesUseCase(c, input)))
+	}, (input) => run('list_files', () => listFilesUseCase(c, input)))
 	server.registerTool('read_files', {
 		description: 'Read up to 50 files of the workspace branch at commitSha or at the current head. The result names the commit read; '
 			+ 'use it as expectedHeadSha for apply_changes. A file that was not read has content null and a reason: missing, '
 			+ 'not_a_file, too_large (over 512 KiB), binary, or budget (past the 2 MiB one call returns; read it in another call).',
 		inputSchema: toolInput(toolInputs.readFiles),
 		annotations: READ_ONLY,
-	}, (input) => run(() => readFilesUseCase(c, input)))
+	}, (input) => run('read_files', () => readFilesUseCase(c, input)))
 	server.registerTool('search_files', {
 		description: 'Search the workspace branch at commitSha or at the current head. With glob alone it lists the matching file paths; '
 			+ 'the glob matches the whole repository path, ** crosses directories and * does not (src/**/*.ts). With text it lists the '
@@ -285,7 +287,7 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 			+ 'answer short; narrow glob or directory then.',
 		inputSchema: toolInput(toolInputs.searchFiles),
 		annotations: READ_ONLY,
-	}, (input) => run(() => searchFilesUseCase(c, input)))
+	}, (input) => run('search_files', () => searchFilesUseCase(c, input)))
 	server.registerTool('apply_changes', {
 		description: 'Commit a batch of file changes to the workspace branch as one ordinary Git commit. expectedHeadSha must be the '
 			+ 'current head from get_workspace or read_files; if the branch moved, the call fails with the new head and you must re-read '
@@ -300,9 +302,16 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 		inputSchema: toolInput(toolInputs.applyChanges),
 		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 	}, (input) =>
-		run(async () => {
+		run('apply_changes', async () => {
+			const started = performance.now()
 			const { commitSha } = await applyChangesUseCase(c, input)
+			const committed = performance.now()
 			const dev = await followDevCommit(c, { workspaceId: input.workspaceId, commitSha })
+			if (dev !== null) {
+				console.info(
+					`mcp apply_changes: committed in ${Math.round(committed - started)} ms, dev ${dev.state} after ${Math.round(performance.now() - committed)} ms`,
+				)
+			}
 			return dev === null ? { commitSha } : { commitSha, dev }
 		}))
 	server.registerTool('deploy_stage', {
@@ -311,7 +320,7 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 		inputSchema: toolInput(toolInputs.deployStage),
 		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 	}, (input) =>
-		run(async () => {
+		run('deploy_stage', async () => {
 			const deployed = await deployStageUseCase(c, input)
 			return { runId: deployed.id, ...deployed }
 		}))
@@ -320,72 +329,74 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 			+ 'commit and a window of its build log. exitCode stays null for a provider that runs no process. '
 			+ `The window is the last logLines lines (default ${DEPLOYMENT_LOG_DEFAULT_LINES}, at most ${DEPLOYMENT_LOG_MAX_LINES}); `
 			+ 'log.from and log.to index the log, so poll with after: log.to for new lines only, or page back with before: log.from. '
-			+ 'failuresOnly keeps stderr lines and lines that name an error or a failure. '
+			+ 'failuresOnly keeps the lines that name an error or a failure, or a non-zero exit; log.from and log.to still index '
+			+ 'the whole log, so polling with after: log.to never repeats a line whether or not the next call filters. '
 			+ 'A run whose access change waits for a person reports status awaiting_approval with the approval link and the change '
 			+ 'in plain language; you cannot approve it, and loosening access further only adds to what the person must approve. '
 			+ 'deviations names the changes off the paved road (declared sql, unscoped, connect, link issuing, database code) that need closer review.',
 		inputSchema: toolInput(toolInputs.getDeployment),
 		annotations: READ_ONLY,
 	}, ({ runId, logLines, after, before, failuresOnly }) =>
-		run(() =>
+		run('get_deployment', () =>
 			getDeploymentUseCase(c, {
 				runId,
 				log: { lines: logLines, failuresOnly, ...(after === undefined ? {} : { after }), ...(before === undefined ? {} : { before }) },
-			})
-		))
+			})))
 	server.registerTool('bind_dev', {
 		description: "Bind the workspace to its application's dev environment, which serves one workspace at a time. Afterwards each "
 			+ 'apply_changes reaches the running service in seconds, without a run: the launcher writes the changed files, migrates when '
 			+ 'db/migrations/ changed, rebuilds the SPA when web sources changed and restarts the application. The first bind is a '
 			+ 'bootstrap: an ordinary run with every check, which get_deployment follows (bootstrapRun). A change of package.json, '
-			+ 'bun.lock, the contract or a module it imports needs another bootstrap: call bind_dev again. Binding replaces the '
+			+ 'bun.lock or the build descriptor, or one that changes the contract digest (an endpoint, its access or a schema; not '
+			+ "a handler's code), needs another bootstrap: call bind_dev again. Binding replaces the "
 			+ "workspace another author bound, and switching workspaces resets the dev environment's data. Nothing in it is promoted: "
 			+ 'deploy_stage builds the head with every check, and production changes only through a reviewed pull request.',
 		inputSchema: toolInput(toolInputs.bindDev),
 		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-	}, (input) => run(() => bindDevUseCase(c, input)))
+	}, (input) => run('bind_dev', () => bindDevUseCase(c, input)))
 	server.registerTool('get_dev_status', {
 		description: "Read the workspace application's dev environment: the bound workspace, the commit it serves (head) and the one "
 			+ 'it should (target), its state with a one-line summary, the message of a refused or failed sync, the bootstrap run, the '
 			+ "last check results and a window of the application's output. "
 			+ `The window is the last logLines lines (default ${DEPLOYMENT_LOG_DEFAULT_LINES}, at most ${DEV_REPORT_MAX_LINES}), `
-			+ 'indexed like get_deployment: poll with after: log.to; failuresOnly keeps stderr lines and lines that name an error.',
+			+ 'indexed like get_deployment: poll with after: log.to; failuresOnly keeps the lines that name an error, a failure or '
+			+ 'a non-zero exit. checks names the commit it checked (head).',
 		inputSchema: toolInput(toolInputs.getDevStatus),
 		annotations: READ_ONLY,
 	}, ({ workspaceId, logLines, after, before, failuresOnly }) =>
-		run(() =>
+		run('get_dev_status', () =>
 			getDevStatusUseCase(c, {
 				workspaceId,
 				log: { lines: logLines, failuresOnly, ...(after === undefined ? {} : { after }), ...(before === undefined ? {} : { before }) },
-			})
-		))
+			})))
 	server.registerTool('run_checks', {
 		description: "Run the build's check chain (the tests, fabrika-check and tsc) in the dev environment on the files it serves, "
-			+ 'and wait up to 50 s for the results (checks). The results only report; deploy_stage still runs every check on a build. '
-			+ 'The workspace must be bound to the dev environment.',
+			+ 'and wait up to 50 s for the results (checks, whose head names the commit checked). The results only report; '
+			+ 'deploy_stage still runs every check on a build. The workspace must be bound to the dev environment, and it must '
+			+ "serve the workspace's newest commit: otherwise the call is refused with the state.",
 		inputSchema: toolInput(toolInputs.runChecks),
 		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-	}, (input) => run(() => runChecksUseCase(c, input)))
+	}, (input) => run('run_checks', () => runChecksUseCase(c, input)))
 	server.registerTool('reset_dev', {
 		description: "Drop the dev environment's schema and database roles, and migrate the workspace's migrations from scratch. "
 			+ 'Use it after you changed a migration that was already applied. Every row in the dev environment is lost. '
 			+ 'The workspace must be bound to the dev environment.',
 		inputSchema: toolInput(toolInputs.resetDev),
 		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-	}, (input) => run(() => resetDevUseCase(c, input)))
+	}, (input) => run('reset_dev', () => resetDevUseCase(c, input)))
 	server.registerTool('create_pull_request', {
 		description: 'Open a pull request from the workspace branch to the default branch, or return the one already open. '
 			+ 'Production changes only after a human reviews and merges it in GitHub.',
 		inputSchema: toolInput(toolInputs.createPullRequest),
 		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-	}, (input) => run(() => createPullRequestUseCase(c, input)))
+	}, (input) => run('create_pull_request', () => createPullRequestUseCase(c, input)))
 	server.registerTool('delete_workspace', {
 		description: 'Abandon one of your workspaces: delete its branch on GitHub, which closes an open pull request from it, and stop '
 			+ 'listing it. Its commits are no longer reachable from a branch. The stage environment keeps running what it last deployed. '
 			+ 'Ask the human before you call it.',
 		inputSchema: toolInput(toolInputs.deleteWorkspace),
 		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-	}, (input) => run(() => abandonWorkspaceUseCase(c, input)))
+	}, (input) => run('delete_workspace', () => abandonWorkspaceUseCase(c, input)))
 	return server
 }
 
@@ -406,11 +417,19 @@ async function pinWarning(c: WorkspaceUseCaseContext, workspaceId: string): Prom
 		+ 'Follow node_modules/@fabrika/app/skill/ of the pinned version where they differ, or ask the human to upgrade.'
 }
 
-async function run(effect: () => Promise<object>): Promise<CallToolResult> {
+/** Answer the tool's result as JSON, and log how long the call took; never its input or answer. */
+async function run(tool: string, effect: () => Promise<object>): Promise<CallToolResult> {
+	const started = performance.now()
+	let outcome = 'failed'
 	try {
-		return { content: [{ type: 'text', text: JSON.stringify(await effect()) }] }
+		const result: CallToolResult = { content: [{ type: 'text', text: JSON.stringify(await effect()) }] }
+		outcome = 'ok'
+		return result
 	} catch (cause) {
+		if (cause instanceof ControlApiError) outcome = `refused ${cause.httpStatus}`
 		return toolFailure(cause)
+	} finally {
+		console.info(`mcp ${tool}: ${outcome} in ${Math.round(performance.now() - started)} ms`)
 	}
 }
 

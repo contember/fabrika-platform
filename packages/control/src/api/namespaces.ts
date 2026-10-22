@@ -520,12 +520,17 @@ export interface NamespaceRepublishOptions {
 	readonly boundary?: () => Promise<void>
 	/** The logo a caller already read for several namespaces; absent, this republish reads it. */
 	readonly brand?: InstallationBrand | null
+	/** Progress lines while the provider republishes, e.g. into a deploy's log: the wait may take minutes. */
+	readonly log?: (line: string) => void
 }
 
 /** A republish that found the namespace's lease held: the reconcile it queued publishes the change after the holder. */
 export class NamespaceProxyBusyError extends Error {
 	override readonly name = 'NamespaceProxyBusyError'
 }
+
+/** How often a waiting republish says it still waits. */
+const REPUBLISH_PROGRESS_MS = 15_000
 
 /**
  * Rebuild one namespace's entry point from the registry (ADR-0044). The namespace stays `provisioning`
@@ -572,6 +577,12 @@ export async function republishUnderLease(
 	await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
 	const reconcileLater = (): Promise<void> => deps.queue.send({ kind: 'namespace', namespaceId, mutation: 'reconcile' })
 	let settled: boolean
+	const started = Date.now()
+	const seconds = (): number => Math.round((Date.now() - started) / 1000)
+	options.log?.(`republishing the namespace proxy for ${members.length} applications; this waits for the provider`)
+	const progress = options.log === undefined
+		? undefined
+		: setInterval(() => options.log?.(`still waiting for the namespace proxy to republish (${seconds()} s)`), REPUBLISH_PROGRESS_MS)
 	try {
 		const result = await capabilities.republish({
 			namespace: current,
@@ -599,7 +610,10 @@ export async function republishUnderLease(
 	} catch (cause) {
 		await reconcileLater().catch(() => console.error(`namespace ${namespaceId}: the reconcile job could not be queued`))
 		throw cause
+	} finally {
+		clearInterval(progress)
 	}
+	options.log?.(`the namespace proxy ${settled ? 'republished' : 'is still republishing; a reconcile job finishes it'} after ${seconds()} s`)
 	await writeNamespace(deps.repositories, lease, row, current, settled ? 'ready' : 'provisioning')
 	if (!settled) await reconcileLater()
 }

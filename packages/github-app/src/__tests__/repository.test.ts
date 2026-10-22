@@ -468,6 +468,22 @@ describe('commitFiles', () => {
 		})
 	})
 
+	test('reads the head commit and its trees once when the same client read files there first', async () => {
+		const routes = [
+			...writeRoutes(json(ref('work/one', NEW_COMMIT))),
+			on('GET', `/git/blobs/${BLOB_TEXT}`, json(blob(BLOB_TEXT, new TextEncoder().encode('index\n')))),
+		]
+		const { repository, requests } = await open(routes)
+		await repository.readFiles(HEAD, ['src/index.ts'])
+		await repository.commitFiles(input)
+		const objectReads = requests.filter((request) => request.method === 'GET' && /\/git\/(commits|trees)\//.test(request.url))
+		expect(objectReads.map((request) => request.url.slice(REPO.length))).toEqual([
+			`/git/commits/${HEAD}`,
+			`/git/trees/${ROOT_TREE}`,
+			`/git/trees/${SRC_TREE}`,
+		])
+	})
+
 	test('refuses a stale head before writing anything', async () => {
 		const { repository, requests } = await open([on('GET', '/git/ref/heads/work/one', json(ref('work/one', OTHER)))])
 		await expect(repository.commitFiles(input)).rejects.toBeInstanceOf(GitHubStaleHeadError)

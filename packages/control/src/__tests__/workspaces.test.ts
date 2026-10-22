@@ -147,6 +147,7 @@ for (const backend of backends) {
 					items: [{
 						appId: 'shop',
 						env: 'stage',
+						kind: 'standard',
 						repository: 'acme/shop',
 						defaultBranch: 'main',
 						publicOrigin: 'https://shop-stage.example.com',
@@ -564,6 +565,8 @@ for (const backend of backends) {
 						}),
 					}),
 				])
+				// The read and the commit share one opened repository.
+				expect(w.source.sessions).toBe(1)
 			})
 
 			test('an edit is refused unless oldString occurs exactly once in a readable file, before anything is committed', async () => {
@@ -689,7 +692,9 @@ for (const backend of backends) {
 				const created = await workspace(w)
 				const run = await deployStageUseCase(w.context(author), { workspaceId: created.id })
 				const lines = Array.from({ length: 10 }, (_, index): RunLogLine => ({ ts: index, stream: 'stdout', text: `step ${index}` }))
-				lines[3] = { ts: 3, stream: 'stderr', text: 'npm warn deprecated' }
+				lines[2] = { ts: 2, stream: 'stderr', text: '$ bun test --isolate' }
+				lines[3] = { ts: 3, stream: 'stderr', text: ' 0 fail' }
+				lines[4] = { ts: 4, stream: 'stderr', text: 'script "build" exited with code 2' }
 				lines[6] = { ts: 6, stream: 'stdout', text: 'Error: build failed' }
 				lines[7] = { ts: 7, stream: 'stdout', text: 'terrorist is not a failure word, failure is' }
 				w.logs.set(`runs/${run.id}/logs.ndjson`, lines)
@@ -700,7 +705,10 @@ for (const backend of backends) {
 				expect(await log({ after: 8 })).toEqual({ lines: lines.slice(8), from: 8, to: 10, total: 10 })
 				expect(await log({ after: 10 })).toEqual({ lines: [], from: 10, to: 10, total: 10 })
 				expect(await log({ lines: 0 })).toEqual({ lines: [], from: 10, to: 10, total: 10 })
-				expect(await log({ failuresOnly: true, lines: 10 })).toEqual({ lines: [lines[3], lines[6], lines[7]], from: 0, to: 3, total: 3 })
+				expect(await log({ failuresOnly: true, lines: 10 })).toEqual({ lines: [lines[4], lines[6], lines[7]], from: 0, to: 10, total: 10 })
+				expect(await log({ failuresOnly: true, lines: 2 })).toEqual({ lines: [lines[6], lines[7]], from: 6, to: 10, total: 10 })
+				expect(await log({ failuresOnly: true, lines: 1, after: 5 })).toEqual({ lines: [lines[6]], from: 5, to: 7, total: 10 })
+				expect(await log({ failuresOnly: true, lines: 1, after: 8 })).toEqual({ lines: [], from: 8, to: 10, total: 10 })
 				await expect(log({ after: 1, before: 2 })).rejects.toMatchObject({ httpStatus: 400 })
 			})
 

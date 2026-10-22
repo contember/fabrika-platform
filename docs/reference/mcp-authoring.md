@@ -73,7 +73,9 @@ narrows which files carry one, and `incomplete` names the files left without a p
 
 The authoring environment shows one workspace at a time. `list_targets` answers what it runs now as `deployed`: the last
 successful run, the workspace whose branch it deployed (null for another branch), and whether that workspace is the
-caller's. A workspace says the same as `onStage`.
+caller's. A workspace says the same as `onStage`. Each target names its `kind` (a stage environment is `standard`) and,
+in `dev`, its application's dev environment when it has one the caller may read: its state, summary, URL, served head
+and bound workspace.
 
 `get_workspace` and `list_workspaces` name the pull request that `create_pull_request` opened or found, as Control
 recorded it; a pull request opened on GitHub by hand is not shown, and the record does not follow a merge or a close.
@@ -91,8 +93,9 @@ null for a provider that runs no process, such as Zerops. Each provider step log
 
 `get_deployment` answers a window of the build log, 30 lines by default and at most 500. `log.from` and `log.to` index
 the log, which only grows: a client polls with `after: log.to` and gets only the new lines, or pages back with
-`before: log.from`. `failuresOnly` keeps the stderr lines and the lines that name an error or a failure; the indexes then
-count those lines only. `logLines: 0` answers the counts alone.
+`before: log.from`. `failuresOnly` keeps the lines that name an error, a failure or a non-zero exit, whichever stream
+carries them: bun prints the commands it runs and its test output on stderr. The indexes still count every line, so a
+client may switch the filter between polls without reading a line twice. `logLines: 0` answers the counts alone.
 
 `get_app_rules` answers the application rules every agent gets, headed by their version (`fabrika-app <version>`):
 the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `references/<topic>.md`
@@ -140,13 +143,16 @@ environment is promoted.
 | `checking`         | `run_checks` is running.                                                                     |
 
 A commit **needs a bootstrap run** when it changes `package.json`, `bun.lock`, `bunfig.toml`, a `zerops.yaml`, anything
-under `fabrika/`, `fabrika.contract.ts` or a module it imports by a relative path, or when the change is more than 300
-files or 8 MiB, or holds a binary or oversized file. The launcher keeps serving the head it has, and `bind_dev` starts
-the bootstrap.
+under `fabrika/` or another `fabrika.*` file, when it changes the contract digest, or when the change is more than 300
+files or 8 MiB, or holds a binary or oversized file. The launcher computes the digest after writing the files, in a
+child with no credential, and compares it with the one the bootstrap run deployed; a commit that changes it is
+restored and refused. An edit of a handler, its wording or its logic, syncs even in a module the contract imports.
+The launcher keeps serving the head it has, and `bind_dev` starts the bootstrap.
 
 `get_dev_status` answers the window of the launcher's ring buffer of the application's and its own output, indexed like
 `get_deployment` (at most 200 lines). The launcher never reports the environment. `run_checks` runs the build's check
-chain on the files the container holds and waits up to 50 s for the results; they gate nothing. `reset_dev` drops the
+chain on the files the container holds and waits up to 50 s for the results; they gate nothing. It is refused while the
+container holds another commit than the workspace's newest, and `checks.head` names the commit the results are for. `reset_dev` drops the
 environment's schema and role family and migrates from scratch; call it after editing a migration that was already
 applied, which otherwise fails the sync. `bind_dev`, `run_checks` and `reset_dev` need `deploy.trigger`; `get_dev_status`
 needs `deploy.read`.

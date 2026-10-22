@@ -12,6 +12,7 @@ import {
 	type DevUseCaseContext,
 	followDevCommit,
 	getDevStatusUseCase,
+	listDevTargetsUseCase,
 	resetDevUseCase,
 	runChecksUseCase,
 } from '../api/dev-environments'
@@ -196,6 +197,10 @@ for (const backend of backends) {
 			expect(again.bootstrapRun?.id).toBe(runId)
 			expect(w.queued).toHaveLength(1)
 			expect(again.state).toBe('pending')
+
+			const [target] = (await listDevTargetsUseCase(w.dev())).items
+			expect(target?.kind).toBe('standard')
+			expect(target?.dev).toEqual(expect.objectContaining({ env: 'dev', kind: 'dev', state: 'pending', workspaceId: w.workspaceId, yours: true }))
 		})
 
 		test('a launcher waits for the next head and receives the changed files at it', async () => {
@@ -276,12 +281,12 @@ for (const backend of backends) {
 			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
 			await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
 			await w.repositories.devEnvironments.advanceTarget('shop', 'dev', w.workspaceId, sha('c'))
-			const log = [0, 1, 2].map((n) => ({ n, stream: n === 1 ? 'stderr' as const : 'stdout' as const, text: `line ${n}` }))
+			const log = [0, 1, 2].map((n) => ({ n, stream: n === 1 ? 'stderr' as const : 'stdout' as const, text: n === 1 ? 'error: line 1' : `line ${n}` }))
 			await report(w, { head: sha('b'), status: 'needs_bootstrap', target: sha('c'), message: 'bun.lock changed', log })
 			const row = await w.repositories.devEnvironments.get('shop', 'dev')
 			expect(row?.refused_sha).toBe(sha('c'))
 			const status = await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 10, failuresOnly: true } })
-			expect(status.log).toEqual({ lines: [{ n: 1, stream: 'stderr', text: 'line 1' }], from: 0, to: 1, total: 1 })
+			expect(status.log).toEqual({ lines: [{ n: 1, stream: 'stderr', text: 'error: line 1' }], from: 0, to: 3, total: 3 })
 		})
 
 		test('run_checks and reset_dev advance their generations and wait for the report', async () => {
@@ -295,13 +300,18 @@ for (const backend of backends) {
 			const asked = (await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: true })).answer
 			expect(asked).toEqual({ sync: null, reset: 0, checks: 1 })
 			const results = [{ name: 'tsc', ok: true, exitCode: 0, output: [] }]
-			await report(w, { head: sha('b'), status: 'serving', checks: { request: 1, results } })
-			expect((await checking).checks).toEqual({ request: 1, results })
+			await report(w, { head: sha('b'), status: 'serving', checks: { request: 1, head: sha('b'), results } })
+			expect((await checking).checks).toEqual({ request: 1, head: sha('b'), results })
 
 			const resetting = resetDevUseCase(w.dev(), { workspaceId: w.workspaceId })
 			expect((await wait(w, { head: sha('b'), reset: 0, checks: 1, hold: true })).answer).toEqual({ sync: null, reset: 1, checks: 1 })
 			await report(w, { head: sha('b'), status: 'serving', reset: 1 })
 			expect((await resetting).state).toBe('serving')
+
+			await w.repositories.devEnvironments.advanceTarget('shop', 'dev', w.workspaceId, sha('c'))
+			await expect(runChecksUseCase(w.dev(), { workspaceId: w.workspaceId })).rejects.toThrow(
+				`holds ${sha('b')}, not the workspace's newest commit ${sha('c')}`,
+			)
 		})
 
 		test('switching the bound workspace resets the schema; another workspace cannot run checks', async () => {
