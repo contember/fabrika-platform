@@ -3,7 +3,7 @@
 
 import type { RunLogLine } from '@fabrika/control-contract'
 import { type SqlDatabase, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { putAppEnvUseCase } from '../api/registry/environments'
 import {
 	abandonWorkspaceUseCase,
@@ -497,6 +497,29 @@ for (const backend of backends) {
 						changes: [{ path: 'src/banner.ts', content: 'export {}' }, { path: 'old.txt', content: null }],
 					},
 				})
+			})
+
+			test('a failed audit write after the commit persisted answers the commit with a warning and a reference', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				const errorLog = spyOn(console, 'error').mockImplementation(() => {})
+				try {
+					const failingAudit = { ...author, audit: () => Promise.reject(new Error('the audit log is unavailable')) }
+					const result = await applyChangesUseCase(w.context(failingAudit), {
+						workspaceId: created.id,
+						expectedHeadSha: sha('a'),
+						message: 'Add a banner',
+						changes: [{ path: 'src/banner.ts', content: 'export {}' }],
+					})
+					expect(result.commitSha).toBe(sha('1'))
+					const reference = errorLog.mock.calls.flat().join(' ').match(/reference ([0-9a-f-]{36})/)?.[1]
+					expect(reference).toBeDefined()
+					expect(result.warning).toBe(
+						`The commit persisted, but Control could not record its audit entry; tell the operator and quote reference ${reference}.`,
+					)
+				} finally {
+					errorLog.mockRestore()
+				}
 			})
 
 			test('protected paths are refused before GitHub is called', async () => {
