@@ -88,6 +88,8 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 	if (!canAtCoordinates(c.auth, CONTROL_ACTIONS.ACCESS_APPROVE, input.appId, input.env)) fail(404, 'app env not found')
 	const before = await c.repositories.registry.getAppEnv(input.appId, input.env)
 	if (before === null) fail(404, 'app env not found')
+	// ADR-0050: a dev environment runs unreviewed workspace heads, and approval never applies to it.
+	if (before.kind === 'dev' && input.protected) fail(409, 'a dev environment is never protected')
 	// A job started under the old flag would still apply what it allowed, so the change waits for the deployment.
 	const lease = await acquireLease(c.lock, runLeaseKey(input.appId, input.env), c.leaseClock)
 	if (lease === null) fail(409, 'a deployment is running; retry')

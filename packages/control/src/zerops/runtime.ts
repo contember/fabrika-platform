@@ -32,6 +32,7 @@ import { z } from 'zod'
 import { controlMcpSwitch } from '../../fabrika.service'
 import type { McpRoute } from '../app'
 import { createControlRepositories } from '../db'
+import { DevSignals } from '../dev/signals'
 import type { Env } from '../env'
 import { gitHubAppClientFactory } from '../github/connections/credentials'
 import { createSourceConnections, type SourceConnectionPort } from '../github/connections/port'
@@ -182,17 +183,19 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		},
 	}
 	const github = zeropsGitHubSources(baseEnv, sourceSeams)
-	const env: Env = { ...baseEnv, COMMITS: github.commits }
+	const workspaceSource = githubWorkspaceSource(baseEnv, workspaceGitHubClientFactory(sourceSeams.githubAppFetch))
+	const env: Env = { ...baseEnv, COMMITS: github.commits, DEV_SOURCE: { source: workspaceSource, signals: new DevSignals() } }
 
+	const provider = zeropsControlProvider(env, source, github.port)
 	return {
 		env,
-		provider: zeropsControlProvider(env, source, github.port),
+		provider,
 		sourceConnection: createSourceConnections({
 			provider: 'zerops',
 			vault: () => vault(env),
 			createClient: gitHubAppClientFactory(sourceSeams.githubAppFetch),
 		}),
-		mcp: mcp ? controlMcpRoute(env, githubWorkspaceSource(env, workspaceGitHubClientFactory(sourceSeams.githubAppFetch))) : null,
+		mcp: mcp ? controlMcpRoute(env, workspaceSource, provider) : null,
 		config,
 		queue,
 		mailQueue,

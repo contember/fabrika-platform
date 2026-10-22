@@ -301,12 +301,13 @@ describe('GitHub workspace source', () => {
 		expect(repository.calls).toEqual([{ method: 'deleteBranch', args: ['fabrika/w1'] }, { method: 'deleteBranch', args: ['fabrika/missing'] }])
 	})
 
-	test('compares through the repository and leaves out how far the base moved on', async () => {
+	test('compares through the repository and says how far the base moved on', async () => {
 		const { source, repository } = await fixture()
 		expect(await source.compare({ target, baseSha: nextSha, headSha, signal: signal() })).toEqual({
 			baseSha: nextSha,
 			headSha,
 			aheadBy: 1,
+			behindBy: 3,
 			files: [{ path: 'a.ts', previousPath: null, status: 'added', additions: 1, deletions: 0, patch: '+a' }],
 			filesCapped: false,
 		})

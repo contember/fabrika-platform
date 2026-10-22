@@ -237,6 +237,7 @@ export function toAppEnvDto(row: AppEnvRow): AppEnvDto {
 	return {
 		appId: row.app_id,
 		env: row.env,
+		kind: row.kind,
 		domain: row.domain,
 		publicOrigin: row.public_origin,
 		crossOrigins: appEnvCrossOrigins(row),

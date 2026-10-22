@@ -434,6 +434,19 @@ other environment, before the provider prepares anything, and the write maps a r
   answers the body of `@fabrika/app`'s `skill/SKILL.md`; the server `instructions` stay under 2,000
   characters (some clients cut them at 2 KB) and point to it. Never restate the rules beyond those three lines.
   One authoring environment per app: `apps.environments.put` answers 409 while another env holds the flag.
+- **A `dev` environment follows one workspace without a run (ADR-0049).** `app_envs.kind = 'dev'` is set at
+  creation and never changes; one per app, never `prod`, never protected, never authoring, no trigger ref, and only
+  on a provider with `devEnvironments` (Zerops). `dev_environments` holds metadata only: the bound workspace, the
+  target head, what the launcher last reported (head, status, one-line message, its trimmed log), a refused head,
+  and the reset and check generations. `src/api/dev-environments.ts` holds `bind_dev` (a bootstrap run when none
+  succeeded or a head was refused), `get_dev_status`, `run_checks`, `reset_dev` and `followDevCommit`, which
+  `apply_changes` calls. The launcher reaches the `source` receiver (`src/dev/receiver.ts`, the `dev-source`
+  protocol row, ADR-0064) with the environment's key: a held wait answers the files between the head it holds and
+  the target, relayed from a GitHub compare (`src/dev/sync.ts`), and never stored. `DevSignals` wakes a wait in
+  this process; every wait also re-reads the row each second, for another Control container. A deploy of a `dev`
+  environment refuses a framework release before `DEV_LAUNCHER_SINCE` (`src/dev/deploy.ts`) before anything
+  publishes, and hands `FABRIKA_PLATFORM_SOURCE_URL`/`_KEY`. Maintenance stops a service idle for 30 minutes
+  (`src/dev/service.ts`); a bind, commit, reset or check request starts it. Only the Zerops root sets `DEV_SOURCE`.
 - **Published access comes ONLY from `approvedSnapshot(app, env)` (ADR-0050, `src/approval/`).** Right after the
   commit is pinned, `executeDeploy` reads the run's snapshot (`readAccessSnapshot` over `env.COMMITS`;
   `contractReaderInputs` names the files: on Zerops one archive pass keeps the files `snapshotReads(root)` wants,

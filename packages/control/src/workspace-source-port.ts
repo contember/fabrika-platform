@@ -89,6 +89,8 @@ export interface WorkspaceComparison {
 	readonly baseSha: string
 	readonly headSha: string
 	readonly aheadBy: number
+	/** Commits on the base that are not on the head: more than none means the base is no ancestor of the head. */
+	readonly behindBy: number
 	readonly files: readonly WorkspaceChangedFile[]
 	/** The host lists a bounded number of files; true when it listed that many, so more may have changed. */
 	readonly filesCapped: boolean
