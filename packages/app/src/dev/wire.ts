@@ -98,7 +98,8 @@ export const devReportSchema = z.object({
 	/** The newest lines of the application's and the launcher's output, oldest first. */
 	log: z.array(devLogLineSchema).max(DEV_REPORT_MAX_LINES),
 	reset: generation.nullable(),
-	checks: z.object({ request: generation, results: z.array(devCheckResultSchema).max(8) }).strict().nullable(),
+	/** The newest check run: the request it answers, the commit whose files it checked, and each check's result. */
+	checks: z.object({ request: generation, head: commitSha, results: z.array(devCheckResultSchema).max(8) }).strict().nullable(),
 }).strict()
 
 export type DevReport = z.infer<typeof devReportSchema>
