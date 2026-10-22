@@ -22,6 +22,17 @@ refusal and IAM's proxy proof, left out of that change.
 - **The hourly schedule may shorten the restore history.** If every automatic backup is tagged `daily`, `maxDaily` counts
   hours. Once the live row has measured the tagging and the default retention, decide whether the step raises `maxDaily`
   or uses a coarser period (`docs/reference/zerops-platform.md`).
+- **The hourly schedule also reaches `standard`.** `deploy.ts` gates the step on an `operationsdb` service, which
+  `standard` always has, so its HA `db` turns hourly on upgrade before the live row has measured tagging, retention and
+  whether a `backup-config` write restarts the database.
+- **Sending the default retention freezes it.** A service without its own `retentionPolicy` gets a copy of
+  `defaultRetentionPolicy` as its own, and a later change of Zerops' default no longer reaches it.
+- **A normalised read-back later reads as a chosen schedule.** If Zerops stores `0 * * * *` in another form, the first
+  deploy warns `unconfirmed` and every later one logs "a schedule someone chose".
+- **The shared-`db` test reads the wrong signal.** It tests that an `operationsdb` service exists, not that Operations'
+  `FABRIKA_OPERATIONS_DATABASE_URL` names it.
+- **The API still accepts an HA type without a profile.** The CLI pairs `--postgres-type` and `--postgres-profile`;
+  the namespace codec does not, so an API caller still gets the ~$72 `oltp-production` default.
 - **Console admin actions lose the proxy's request id.** Control forwards `/iam/admin/*` to `iam:3000` without the IAM
   proxy secret, so the audit rows get a generated id. Giving Control the secret widens who holds it.
 
