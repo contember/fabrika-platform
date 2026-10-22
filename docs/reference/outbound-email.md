@@ -117,7 +117,7 @@ conformance kit against a stubbed `fetch`.
 | --------------- | ---------- | ------------ | ----------- | ----------- | --------------------------------------------------------------------------------------------- |
 | `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | live, 2026-10-22                                                                              |
 | `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | live, 2026-10-22                                                                              |
-| `postmark`      | no         | `sync`       | yes         | 6 MiB       | stubbed ([backlog 198](../backlog/198-verify-the-postmark-adapter-on-a-live-account.md))      |
+| `postmark`      | no         | `sync`       | yes         | 10 MiB      | live, 2026-10-22                                                                              |
 | `resend`        | yes        | `sync`       | yes         | 25 MiB      | stubbed; no live check is recorded                                                            |
 | `smartemailing` | no         | `queued`     | no          | none        | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)) |
 
@@ -161,10 +161,18 @@ A 409 is `request_in_progress` for `concurrent_idempotent_requests` and
 `PostmarkEmailSender` (`@fabrika/email/postmark`) calls `POST https://api.postmarkapp.com/email` with the server
 token in `X-Postmark-Server-Token`, through the server's default transactional stream. Postmark has no idempotency
 key, and a 200 with `ErrorCode: 0` means it took the message. Capabilities: not idempotent, `sync`,
-`listUnsubscribe` (the two headers as `Headers` name and value pairs), and `maxAttachmentBytes` of 6 MiB: Postmark
-refuses a message over 10 MB with its attachments base64. Refusals are classified by status alone; an inactive
-recipient (`ErrorCode` 406) and an account still pending approval are a 422, `provider_rejected`. The `from` address
-needs a confirmed sender signature or domain.
+`listUnsubscribe` (the two headers as `Headers` name and value pairs), and `maxAttachmentBytes` of 10 MiB less one
+byte: Postmark counts the decoded bytes of every attachment together, not their base64, and refuses 10,485,760 or more
+with a 422 (`ErrorCode` 300); the bodies take up to 5 MB each beside them. It refuses an attachment by its extension
+(`ErrorCode` 411): `vbs`, `exe`, `bin`, `bat`, `chm`, `com`, `cpl`, `crt`, `hlp`, `hta`, `inf`, `ins`, `isp`, `jse`,
+`lnk`, `mdb`, `pcd`, `pif`, `reg`, `scr`, `sct`, `shs`, `vbe`, `vba`, `wsf`, `wsh`, `wsl`, `msc`, `msi`, `msp` and
+`mst`, which the adapter refuses as `invalid_message` before any request.
+
+Refusals are classified by status alone. A wrong token is a 401 (`ErrorCode` 10); a sender without a confirmed
+signature (400), an invalid recipient (300), an inactive recipient (406) and, per Postmark's documentation, an
+account still pending approval (412) are a 422, `provider_rejected`. A repeated request is delivered again. The
+`Message-ID` is `<MessageID>@mtasv.net`. Open and click tracking are settings of the Postmark server; with click
+tracking on, a one-time link goes through Postmark's redirect.
 
 ## AhaSend adapter
 
