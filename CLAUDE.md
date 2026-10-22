@@ -106,7 +106,7 @@ packages/
   cli email local-stack           # the `fabrika` command · outbound email · the Docker dev stack
   check                           # the application checker (`fabrika-check`), for applications, not this repo
   ui                              # the paved road's React component kit, router and theme for application SPAs (ADR-0052)
-  db                              # the scoped data layer applications use on Postgres (Kysely over Bun.SQL)
+  db                              # the scoped data layer applications use: Postgres (Bun.SQL), or a Durable Object's SQLite (ADR-0065)
 examples/app examples/zerops-app  # a worked app per provider
 examples/crm                      # the CRM on the paved road: the acceptance application of the framework
 tests/browser                     # opice end-to-end suites against the local stack

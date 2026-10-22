@@ -57,6 +57,8 @@ bun test src/__tests__/job-types.test.ts        # the job handler mistakes, comp
 bun test src/__tests__/connect.test.ts          # an export and an import, each in its own test kit
 bun test src/__tests__/connect-hardening.test.ts # captured connect methods, a hostile owner, budgets and deadlines
 bun test src/__tests__/export-read-only.test.ts # an export handler cannot write (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/cloudflare-runtime.test.ts          # the environment's Durable Object in Lopata: hop, migrations, ctx.db, tick, R2
+bun test src/__tests__/cloudflare-runtime-adapter.test.ts  # the object's bindings and crash reports, over bun:sqlite
 ```
 
 ## Structure
@@ -70,14 +72,25 @@ src/
   from-row.ts         fromRow: a row as an output object (snake → camel, Date → ISO, then the schema); fromPage: a list's page
   agent-skill.ts      @fabrika/app/agent-skill — reads skill/; installedAppAgentSkill; renderAgentsFile (node:fs)
   fetch.ts            FetchService and RequestExecutionContext: what both runtime adapters serve
-  cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker
+  cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker: the Worker that forwards each
+                      request and the minute tick to the environment's Durable Object; re-exports FabrikaApplication
+  cloudflare/         what @fabrika/app/cloudflare runs (ADR-0065)
+    application.ts    FabrikaApplication, the environment's one Durable Object: verifies the hop, migrates its SQLite,
+                      boots the application once per isolate, serves requests and the tick; registerApplication
+    bindings.ts       the bindings the object boots with, read structurally: IAM (keys, membership, workload tokens),
+                      ASSETS, FABRIKA_CONNECT_<IMPORT>
+    r2-files.ts       r2FileObjectStore: the FileObjectStore port over the FABRIKA_FILES bucket (conditional puts,
+                      multipart above R2_PART_BYTES, the etag as the version)
+    names.ts          the class and binding names the provider shares: FabrikaApplication, FABRIKA_APPLICATION,
+                      FABRIKA_FILES (re-exported by @fabrika/app/build)
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract; the local `directory`
                       mail provider, which boot honours only under a loopback issuer
   disk-assets.ts      diskAssets: the SPA mounts from their build directories, as the Bun deploy and the test kit serve them
   service/            @fabrika/app/service — the installation services' own tables and dispatcher
     define.ts         defineServiceContract: an endpoint table with the installation forms
     serve.ts          serveService: the dispatcher over planEndpoint
-  build.ts            @fabrika/app/build — the generated entrypoint fabrika app build writes
+  build.ts            @fabrika/app/build — the generated entrypoint fabrika app build writes; on Cloudflare also
+                      fabrika/migrations.generated.ts (db/migrations as a module: a Worker reads no file system)
   errors.ts           structural HTTP error mapping
   rpc/                procedure builder, types, and dispatcher
   client/             @fabrika/app/client — browser-safe
@@ -175,7 +188,8 @@ src/
     clamscan.ts       clamscanScanner: ClamAV's clamscan over a batch (Bun; @fabrika/app/bun only)
     sniff.ts          the declared type checked against the first bytes
     treatment.ts      FileDownload and the file treatment of ADR-0022
-  jobs/               c.cron at runtime; bound by boot, run by `fabrika job run <name>` (runContractJob)
+  jobs/               c.cron at runtime; bound by boot, run by `fabrika job run <name>` (runContractJob), on
+                      Cloudflare by the object at the minute tick (isDueAt)
     types.ts          JobContext, JobHandler, JobHandlersOf: handlers.jobs.<name>
     runner.ts         bindJobs, the run: lease, attempts, timeout, retries, reports, a site's kick; the framework's own jobs
     schedule.ts       five-field cron in UTC: the due minutes and the period
@@ -385,7 +399,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   `siteHandler` leaf or a plain function `implement` bound alike: `ctx.links` only for the mount it `issues`,
   `ctx.connect` only for its `connect`. Only a `siteHandler` leaf gets `ctx.db`. A `defineContract` contract keeps its
   reach by its imports' `usedBy` and its link mounts (`kit-reach.test.ts`).
-- **A kit without tables** is `defineApp(vocabulary)` (`NoTablesIndex`; on Cloudflare, which has no data layer):
+- **A kit without tables** is `defineApp(vocabulary)` (`NoTablesIndex`):
   `serve(contract, { database: null })`, and only then `null` (`kitOriginOf`, `handled.ts`: `serve` refuses a contract no kit built, a copy included, so the origin cannot be lost); its procedures are served
   without `ctx.db` (`servedWithoutData` in `boot.ts`), and a site that declares `sql` does not boot.
 - **`implement` is not on the application surface.** `@fabrika/app/implement` exports `serve`; the mirrored handler
@@ -429,8 +443,8 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **The proxy secret comes first** (ADR-0022 rule 5). When `FABRIKA_PROXY_SECRET` is set, a request
   without `X-Fabrika-Proxy-Secret` equal to it is a 403 before any other answer — also for an unknown or
   non-canonical path — and only a `health` endpoint is served without it. The 32-byte SHA-256 digests
-  are compared with `node:crypto`'s `timingSafeEqual`, never the secrets and never with `===`. `serveContract` passes `requireProxySecret`, so on Zerops the application does not
-  boot without one (or with one under 32 characters); the Worker adapter and the test kit set none.
+  are compared with `node:crypto`'s `timingSafeEqual`, never the secrets and never with `===`. `serveContract` and the Cloudflare object pass `requireProxySecret`, so the application does not
+  boot without one (or with one under 32 characters); the test kit sets none.
 - **Per request, in this order** (ADR-0012 §5): proxy secret → canonical path → `planEndpoint` →
   the proxy's endpoint (`X-Fabrika-Endpoint`) → token verification with `@fabrika/jwks`'s shared verifier → caller kind →
   requirement (`satisfies`) → admission → strict input (a string or key holding U+0000, which Postgres `text` cannot
@@ -488,7 +502,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   the layer does not boot. A `ContractDatabase` (`tables` and `locate`) of the
   application's own is served as it is and gets no connection.
   `serveContract` and `runContractJob` import `@fabrika/db` before the application (it
-  captures its built-ins and freezes the Kysely compiler at load), take `Database.postgres`
+  captures its built-ins and freezes the Kysely compiler at load), take `openPostgres` (`@fabrika/db/postgres`)
   then, and open it on `app_<FABRIKA_APP_ID>` as the runtime role `run_<FABRIKA_APP_ID>`, from
   `FABRIKA_APP_RUNTIME_DATABASE_URL` (ADR-0017), with at most `FABRIKA_APP_DATABASE_CONNECTIONS` connections, which a
   Zerops deploy sizes from the database's limit (ADR-0043; 10 without it, a value outside 1–100 is a `BootError`).
@@ -497,9 +511,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   run the same command again without the provisioning credential (stdio inherited, signals forwarded, exit code
   propagated; `launcher.test.ts`), after making themselves non-dumpable (`src/undumpable.ts`, `prctl` through
   `bun:ffi`) so the application cannot read their `/proc/<pid>/environ`. Never load application code in a process that holds it, and never open the layer
-  on it. No connection (Cloudflare)
-  or a layer bound before boot is a `BootError`. `boot.ts` imports only
-  `@fabrika/db/framework` at runtime (browser-safe), because the Worker adapter
+  on it. On Cloudflare the application's object opens `openSqlite` (`@fabrika/db/sqlite`) over its own
+  `ctx.storage` (see "The Cloudflare runtime"). No connection or a layer bound before boot is a `BootError`.
+  `boot.ts` imports only `@fabrika/db/framework` at runtime (browser-safe), because the Worker adapter
   imports `boot`.
 - **`on` needs a table that owns its dimension** (`ContractDatabase.tables`), and every
   access form needs a table for each dimension on its containment path that lies in
@@ -584,7 +598,7 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **A crash is reported only with a DSN, once, and fails as before** (`implement/crashes.ts`). `serveContract` reports a
   startup that throws, then rethrows; once it serves it listens (`ContractServerOptions.crashes`, `process` by
   default), reports the first uncaught exception or unhandled rejection, waits at most `CRASH_FLUSH_MS`, removes its
-  listeners and raises the value again so Bun prints it and exits with 1. `createContractWorker` reports an isolate's
+  listeners and raises the value again so Bun prints it and exits with 1. On Cloudflare the object reports an isolate's
   first failed boot and, once booted, each unhandled rejection (`ContractWorkerOptions.rejections`, the global event
   by default), within the per-minute budget. Listeners start only after a successful boot, so a boot failure is not
   reported twice; a request's and a job's failures are caught before any listener. Tests inject the event source:
@@ -593,8 +607,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   whose dimension no table owns, a webhook or a procedure with buckets without a `scoped(tables)` layer, a public
   procedure whose challenge names an application variable (its secret or its site key) that is not set, a job that cannot run (see Jobs), an endpoint that asks IAM with no
   membership transport (`BootOptions.membership`), a handler outside the contract, a
-  missing handler, an access form whose containment no table locates. Each refusal
-  lifts when its work unit ships the runtime.
+  missing handler, an access form whose containment no table locates; on a SQLite database (`sqliteProblems`) a site
+  that declares `sql` and a file kind with `scan: true`. Each refusal lifts when its work unit ships the runtime.
 - **The framework asks IAM; IAM decides** (`membership.ts`). Every request carries the
   verified token, the proxy's `X-Request-Id` (a delegation grant is bound to it) and the
   proxy's `X-Fabrika-Delegation`; `creates` without one is 503 and IAM is not asked.
@@ -718,7 +732,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   and `ctx.links` to the declared mount, and refuses a site without a `scoped(tables)` layer. `dispatch` opens an
   `Invocation` per request (`READ ONLY` for a query and an export), builds `ctx.db` by the access form
   (`endpointData`), ends the frame when the handler returns, validates the output, and only then commits; a throw, a
-  refused output or an aborted request rolls back. Every handle checks `boundTo(frame)`: a handle kept past its
+  refused output or an aborted request rolls back. A request, a public procedure and a webhook delivery run from the
+  handler to the commit inside `Invocation.enclose` (`enclosedAnswer`): on SQLite the Durable Object's transaction
+  encloses the handler, whose own I/O would otherwise wait for the transaction to end (`@fabrika/db`'s
+  `InvocationTransaction.enclose`); on Postgres it only runs the work. Kicks run after the enclosure, and a failed
+  COMMIT still cancels a file answer's object stream. Every handle checks `boundTo(frame)`: a handle kept past its
   handler, or called from another request or another `boot`, is a `CapabilityRefusedError`. `ctx.sql` runs only on
   a site that declares `sql`: `Invocation.sql(mode)` (a job's `tx.sql`: `jobSql`) asks `@fabrika/db`'s `DataAccess.sql`
   for the tag over the same session as the site's handles, bound by `boundTo` too. On a site without `sql`, `ctx.sql`
@@ -738,7 +756,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   `FABRIKA_OPERATIONS_DSN` (its origin joins `connect-src`), and hands `deps` the
   rest. `FABRIKA_APP_ID` is the Operations ingest coordinate and the application's
   database schema (`app_<id>`), never an audience. The
-  Worker adapter also keeps the `IAM` and `ASSETS` bindings from `deps`.
+  Cloudflare object also keeps the `IAM` and `ASSETS` bindings from `deps`.
 - **`handlers` is a function of what `deps` returned.** TypeScript cannot infer
   `deps`' type into `ctx` through the contract's conditional handler types, so a
   handler reaches its dependencies through that closure, not `ctx.deps`.
@@ -786,7 +804,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   `timeoutMs` (3 s by default, at most 10 s, `CONNECT_LIMITS`) bounds the call and its two retries on
   `unavailable` and `timeout`; the remaining time is shared by the attempts left.
 - **On Cloudflare a `FABRIKA_CONNECT_<IMPORT>` service binding carries the call** (the deployer generates
-  it; the Worker adapter keeps it from `deps`); the request URL names the owner's host, which its proxy Worker
+  it; the Cloudflare object keeps it from `deps`); the request URL names the owner's host, which its proxy Worker
   selects the application by. `connect-binding.test.ts` pins in Lopata that a binding routes by the binding,
   and that the consumer's app key reaches the owner through it. Without a binding the call uses `fetch`.
 - **`incompatibleChanges` (`contract/connect.ts`) is the rule Control applies to an owner deploy.** Over the
@@ -807,9 +825,12 @@ vocabulary (`packages/db/CLAUDE.md`).
   are the file's authority. The framework generates no file endpoint; a procedure takes a file (`file('<kind>')` in its
   input) or answers one (`file('<kind>')` as its output), and the dispatcher checks it like every row first.
 - **The pending row is written before the object and is the cleanup intent**, on a connection of its own, never the
-  handler's transaction. A known rollback deletes what the request staged (`StoredFileKinds.release`); after an
-  uncertain outcome nothing is deleted and the sweep decides from the database, past `FILE_PENDING_GRACE_MS`. Never
-  write an object without a row first.
+  handler's transaction. A known rollback deletes what the request staged (`StoredFileKinds.release`), and so does a
+  job's `ctx.transaction` the job threw out of (from its `FileWork.mark`); after an uncertain outcome nothing is deleted
+  and the sweep decides from the database, past `FILE_PENDING_GRACE_MS`. Never write an object without a row first.
+  On SQLite there is one database, so the pending row is written in the work's own transaction and rolls back with it:
+  the work records each object it wrote (`FileWork.wrote`), and a known rollback deletes an object whose row is gone
+  (`writtenKey`).
 - **Every answer of a file output carries the file treatment**, denials and errors included: `ContractRuntime.fetch`
   chooses it by the planned endpoint's row, and a file is a `FileDownload`, never a `Response`, so no handler or store
   can set its headers. Keep the treatment equal to ADR-0022's.
@@ -956,9 +977,37 @@ vocabulary (`packages/db/CLAUDE.md`).
   counts a text marker of the other scope's rows as a leak, wherever it is in the answer.
 - **The test kits refuse a serving process.** The generated entrypoint calls
   `markProductionProcess` (`@fabrika/db/production`, re-exported by both adapters) before it
-  imports the application; `@fabrika/app/testing*` and `@fabrika/db/testing` then refuse to
+  imports the application; `@fabrika/app/testing*`, `@fabrika/db/testing` and `@fabrika/db/testing-sqlite` then refuse to
   load, and `testKit` to run. `boot` does not mark: `testKit` and the adapter tests call it
   in-process. `generated-entry.test.ts` runs the entrypoint with each kit.
+
+## The Cloudflare runtime
+
+An application environment runs in one Durable Object
+([ADR-0065](../../docs/decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)).
+`cloudflare-runtime.test.ts` runs `cloudflare-fixture/` in Lopata; `cloudflare-runtime-adapter.test.ts` constructs the
+object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash reports).
+
+- **The generated Cloudflare entry exports `FabrikaApplication` and the Worker.** `fabrika app build` writes
+  `fabrika/entry.generated.ts` and `fabrika/migrations.generated.ts`, the `.sql` files of `db/migrations` by name with
+  their text verbatim, so their checksums stay the files'. `createContractWorker(load, { migrations })` registers the
+  loader; the Worker's `fetch` removes `X-Fabrika-Tick` (`TICK_HEADER`), sets the proxy secret and forwards the request
+  to the object named `application` of `FABRIKA_APPLICATION`; its `scheduled` sends the tick with the `scheduledTime`.
+  Without `FABRIKA_PROXY_SECRET` or the binding it forwards nothing.
+- **The object answers only its own Worker.** A request without the environment's proxy secret is an empty 404 before
+  anything else, the digests compared in constant time, so another Worker that binds the class learns nothing.
+- **It boots once per isolate.** The constructor runs the boot in `blockConcurrencyWhile` and settles either way: a
+  failed boot answers every request with its failure, is reported once, and is not kept, so the next instance boots
+  again. For an application with a data layer, before the boot and for every later instance of the isolate, it applies `SQLITE_FRAMEWORK_MIGRATIONS` and the
+  application's bundle through `migrateSqlite`, then binds the layer to `openSqlite` over a storage it swaps per
+  instance (the layer binds once). It captures the environment without `IAM` and `ASSETS`, and boots with
+  `requireProxySecret`, `clientAddress: 'vouched'` (the proxy Worker sets the client address from `CF-Connecting-IP`),
+  the R2 file store (`r2-files.ts`) and IAM's binding for keys, membership and workload tokens (`bindings.ts`).
+- **Jobs run on the minute tick.** The object runs every contract job whose schedule `isDueAt` the tick's UTC minute,
+  and the file sweep when the contract has file kinds, each in `waitUntil`, then `jobs.check()`; a kick runs in the
+  object after its commit. A scanning file kind does not boot there (`sqliteProblems`).
+- **Every handler holds the object's transaction.** workerd resets an object whose transaction runs about 30 s, so the
+  provider refuses a procedure's or a webhook's `timeoutMs` above 25 s (`CLOUDFLARE_MAX_HANDLER_MS`).
 
 ## Jobs
 

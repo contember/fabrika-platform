@@ -1,7 +1,8 @@
 # references/dev.md — previewing the application with `fabrika app dev`
 
 `bunx fabrika app dev` serves the application on `http://127.0.0.1:3000/` through its test kit: the proxy decision,
-the stand-in IAM, a throwaway schema of `FABRIKA_TEST_POSTGRES_URL`, and each SPA from its build (run
+the stand-in IAM, a throwaway schema of `FABRIKA_TEST_POSTGRES_URL` (on Cloudflare an in-memory SQLite database,
+without a URL), and each SPA from its build (run
 `bun run build:web` first). Use it to look at the screens, never in place of a test.
 
 ## The seed

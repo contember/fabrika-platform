@@ -196,6 +196,9 @@ if (postgres !== null) {
   `<label> skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests`, and the file registers no test.
   A skip proves nothing. To confirm a file ran, run it alone (`bun test --isolate src/tasks`) and check that the pass
   count is its number of tests, or set `FABRIKA_TEST_POSTGRES_REQUIRED=1`: a missing URL then fails the file.
+- On Cloudflare import `testDatabase` from `@fabrika/db/testing-sqlite` instead, with the same options: it migrates a
+  fresh in-memory SQLite database as the Durable Object does, needs no URL and never answers `null`. The generated tests
+  already use it.
 - `statusOf(call)` answers 200 when the call resolves and the status of the application's refusal otherwise; any other
   failure (no answer, a bug in the test) is rethrown. Import it beside `testKit`; do not write your own.
 - `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. A
