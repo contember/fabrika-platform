@@ -616,8 +616,9 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		for (const key of OPERATIONS_MANAGED_ENVIRONMENT_KEYS) managedEnvironment[key] = null
 		// Behind a namespace proxy the hop to the application and to IAM is no service binding.
 		const namespaceProxy = appEnv.namespace_id !== null && deps.provider.namespaces?.republish !== undefined
-		// Only a namespace proxy authenticates itself with a secret; a dry run generates none.
-		managedEnvironment[FABRIKA_PROXY_SECRET] = !dryRun && namespaceProxy ? (await deps.proxySecrets?.forAppEnv(app.id, appEnv.env)) ?? null : null
+		// A namespace proxy, or the provider's own hop to the application, authenticates itself with a secret; a dry run generates none.
+		const hopSecret = namespaceProxy || deps.provider.applicationHopSecret === true
+		managedEnvironment[FABRIKA_PROXY_SECRET] = !dryRun && hopSecret ? (await deps.proxySecrets?.forAppEnv(app.id, appEnv.env)) ?? null : null
 		// `null` means REMOVE, so an installation that cannot name its own issuer strips a stale one
 		// instead of deploying an app that verifies against the previous installation's tokens.
 		if (deps.iamIssuer !== undefined && deps.iamIssuer.trim() !== '') {
