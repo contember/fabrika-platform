@@ -18,8 +18,9 @@ import {
 	WORKLOAD_TOKEN_PATH,
 	workloadKeyVariable,
 } from '@fabrika/auth-core'
-import { applicationSchema, Database } from '@fabrika/db'
+import { applicationSchema, type Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { openPostgres } from '@fabrika/db/postgres'
 import { MemoryFileObjects, unusedDatabase } from '@fabrika/platform/testing'
 import { Authorizer, MemoryTokenCache, type ResolvedApp } from '@fabrika/proxy-core'
 import { type ContractProxyApp, contractProxyTable } from '@fabrika/proxy-core/manifest'
@@ -195,7 +196,7 @@ async function stack(): Promise<Stack> {
 	}
 
 	const rpc = createIamRpc(env, exec)
-	const connection = Database.postgres({ url, schema, max: 2 })
+	const connection = openPostgres({ url, schema, max: 2 })
 	opened.push(connection)
 	const workloadTokens = issuerWorkloadTokens(ISSUER, (request) => iamApp.fetch(request, env, exec))
 	const app = boot(implementation, {

@@ -79,7 +79,7 @@ export const trustedBindings = (file: string, program: AstNode, mappings: Import
 }
 
 /**
- * The trusted binding a member chain starts from (`Database.postgres`, `db['Database'].postgres` → `Database`, `db`),
+ * The trusted binding a member chain starts from (`Database.fromEngine`, `db['Database'].fromEngine` → `Database`, `db`),
  * when the name at `ancestors` denotes that declaration and no local that shadows it.
  */
 const trustedRoot = (
@@ -135,7 +135,7 @@ const WRITERS = new Set([
 
 /**
  * A write to a member of a value from `@fabrika/*` or `zod`: an assignment, `delete`, `++`, or a writer call on it. A
- * replaced `Database.postgres` receives the database URL; a patched schema changes what the contract admits. A write
+ * replaced `openPostgres` receives the database URL; a patched schema changes what the contract admits. A write
  * through a prototype is `prototype-assignment`'s. A local that shadows such a name is not one.
  */
 export const checkFrameworkWrite = (node: AstNode, ancestors: readonly AstNode[], bindings: TrustedBindings, report: Report): void => {
