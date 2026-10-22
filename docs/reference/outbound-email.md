@@ -107,6 +107,24 @@ sender, which does no I/O.
 Each provider declares its own variables with their secret flag, so deploy
 tooling knows which go to secret storage.
 
+## Built-in providers
+
+What each built-in provider offers, and what it has been checked against. "Live" means requests and answers were
+recorded on a real account and the received messages inspected; "stubbed" means only the unit tests and the
+conformance kit against a stubbed `fetch`.
+
+| provider        | idempotent | confirmation | unsubscribe | attachments | checked against                                                                               |
+| --------------- | ---------- | ------------ | ----------- | ----------- | --------------------------------------------------------------------------------------------- |
+| `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | live, 2026-10-22                                                                              |
+| `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | live, 2026-10-22                                                                              |
+| `postmark`      | no         | `sync`       | yes         | 6 MiB       | stubbed ([backlog 198](../backlog/198-verify-the-postmark-adapter-on-a-live-account.md))      |
+| `resend`        | yes        | `sync`       | yes         | 25 MiB      | stubbed; no live check is recorded                                                            |
+| `smartemailing` | no         | `queued`     | no          | none        | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)) |
+
+A provider that is not idempotent leaves a message whose outcome is unknown (a timeout, a lost answer, a 5xx) to a
+person: it is never sent again automatically (`mayRetryDelivery`). When a provider is checked live, update its row and
+its section below.
+
 ## HTTP adapters
 
 Every built-in provider extends `HttpEmailSender` (`packages/email/src/http-sender.ts`), which holds what they share:
@@ -174,8 +192,7 @@ token in `x-lettermint-token`, through the project's default route. It sends the
 attachments base64. A text or HTML body shorter than three characters, which Lettermint refuses, is `invalid_message`
 before any request. An accepted answer counts by its `message_id`, whatever its status.
 
-Verified on a live project on 2026-10-22: a repeated request under its key answers 202 with the first
-`message_id` and sends nothing (no `Idempotent-Replayed` header), a 256-character key is refused with a 422, and a
+A repeated request under its key answers 202 with the first `message_id` and sends nothing (no `Idempotent-Replayed` header), a 256-character key is refused with a 422, and a
 refusal carries only a `message` (401) or a `message` with field `errors` (422, for an unverified sender domain, an
 invalid recipient or a short body). Neither 409 carries a code or a `Retry-After`: the adapter reads the text only to
 find "different payload", the key reused with another body, which is `idempotency_conflict`. Every other 409, a
@@ -185,9 +202,6 @@ display name was quoted, the subject RFC 2047-encoded, `Reply-To` and both unsub
 byte for byte with their media types and UTF-8 names, and an HTML template unchanged, its links not rewritten. The
 `Message-ID` is `<message_id>@lmta.net`. Open and click tracking are settings of the Lettermint project or route; with
 click tracking on, a one-time link goes through Lettermint's redirect.
-
-The Lettermint and AhaSend adapters are verified on live accounts. The Postmark adapter follows its documentation and
-is verified only against a stubbed fetch ([backlog 198](../backlog/198-verify-the-postmark-adapter-on-a-live-account.md)).
 
 ## SmartEmailing adapter
 
@@ -199,8 +213,7 @@ request. Capabilities: not idempotent, `queued`, no `listUnsubscribe` and no `ma
 documents no message headers, so it refuses a message with an unsubscribe URL or an attachment. The API takes up to
 five tasks per request; `send` carries one.
 
-The adapter follows the official OpenAPI document and is verified only against a
-stubbed fetch. Not verified: the status codes for 403, 5xx and an account whose
+The adapter follows the official OpenAPI document. Not verified: the status codes for 403, 5xx and an account whose
 sending is still disabled; whether a message without `html_body` is accepted
 (the adapter omits it when the message has no HTML); the format rules for `tag`.
 The `from` and reply-to addresses must be confirmed in the SmartEmailing account.
