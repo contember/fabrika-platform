@@ -21,3 +21,17 @@ export const builtinEmailProviders = {
 export const builtinEmailProviderVariables: readonly EmailProviderVariable[] = Object.values(builtinEmailProviders).flatMap((provider) =>
 	provider.variables
 )
+
+/**
+ * The first framework release whose registry holds each built-in provider. An application on an older release builds
+ * its sender from its own registry, so it cannot be handed one it lacks; Control refuses that deploy. `null`: every
+ * release that sends through the installation (`mailer: 'installation'`, from 0.5.0) holds it. A new provider names
+ * the release after the newest one published without it.
+ */
+export const builtinEmailProviderSince = {
+	ahasend: '0.8.2',
+	lettermint: '0.8.2',
+	postmark: '0.8.2',
+	resend: null,
+	smartemailing: null,
+} as const satisfies Record<keyof typeof builtinEmailProviders, string | null>

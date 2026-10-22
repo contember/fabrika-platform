@@ -52,6 +52,7 @@ describe('LettermintEmailSender', () => {
 		const send = (fetch: EmailFetch) => caught(new LettermintEmailSender({ projectToken: 'lm_secret', from, fetch }).send(message, signal))
 
 		const conflict = await send(answering({ message: 'This idempotency key has already been used on a request with a different payload.' }))
+		expect((await send(answering({ message: 'Payload mismatch for this key' }))).code).toBe('idempotency_conflict')
 		expect([conflict.code, conflict.httpStatus, conflict.retryable]).toEqual(['idempotency_conflict', 409, false])
 		for (
 			const body of [{ message: 'Another request with the same idempotency key is currently being processed.' }, { message: 'reworded' }, 'not json']
@@ -61,12 +62,14 @@ describe('LettermintEmailSender', () => {
 		}
 	})
 
-	test('a body shorter than three characters is refused without a request', async () => {
+	test('a body shorter than three characters once trimmed is refused without a request, as Lettermint counts them', async () => {
 		const { fetch, requests } = capturing(() => Response.json({ message_id: 'lm-3', status: 'pending' }, { status: 202 }))
 		const sender = new LettermintEmailSender({ projectToken: 'lm_secret', from, fetch })
-		expect((await caught(sender.send({ ...message, text: 'ok' }, signal))).code).toBe('invalid_message')
+		for (const text of ['ok', '😀a', '  a  ', 'ab ']) expect((await caught(sender.send({ ...message, text }, signal))).code).toBe('invalid_message')
 		expect((await caught(sender.send({ ...message, html: '<b' }, signal))).code).toBe('invalid_message')
 		expect(requests).toHaveLength(0)
+		await sender.send({ ...message, text: 'žšč' }, signal)
+		expect(requests).toHaveLength(1)
 	})
 
 	test('an accepted answer with an undocumented status still counts by its message id', async () => {

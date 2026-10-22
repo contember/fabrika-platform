@@ -30,13 +30,15 @@ returns an accepted result with a provider-neutral message ID.
 
 Each sender reports its `capabilities`:
 
-| field                | meaning                                                                                                                               |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `idempotent`         | A repeated send under one key with the same message is not delivered again.                                                           |
-| `confirmation`       | `sync`: accepted means the provider took the message. `queued`: it may still drop the request.                                        |
-| `maxBatch`           | The most messages one call carries. `send` carries one, so every built-in sender reports 1.                                           |
-| `listUnsubscribe`    | Whether it writes the unsubscribe headers. Absent is no: it refuses a message with `unsubscribeUrl` as `invalid_message`.             |
-| `maxAttachmentBytes` | The most attachment bytes of one message, every file together. Absent: it refuses a message with any attachment as `invalid_message`. |
+| field                         | meaning                                                                                                                               |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `idempotent`                  | A repeated send under one key with the same message is not delivered again.                                                           |
+| `confirmation`                | `sync`: accepted means the provider took the message. `queued`: it may still drop the request.                                        |
+| `maxBatch`                    | The most messages one call carries. `send` carries one, so every built-in sender reports 1.                                           |
+| `listUnsubscribe`             | Whether it writes the unsubscribe headers. Absent is no: it refuses a message with `unsubscribeUrl` as `invalid_message`.             |
+| `maxAttachmentBytes`          | The most attachment bytes of one message, every file together. Absent: it refuses a message with any attachment as `invalid_message`. |
+| `refusedAttachmentExtensions` | File extensions it refuses an attachment for, lowercase without the dot. Absent: none.                                                |
+| `minBodyLength`               | The fewest characters a text or HTML body has once trimmed. Absent: any body that is not blank.                                       |
 
 Failures use `EmailDeliveryError`. The adapter names a code; one table,
 `EMAIL_DELIVERY_ERRORS`, derives `retryable` and `outcome` from it, so an adapter
@@ -132,12 +134,17 @@ it validates the sender identity and the timeout (ten seconds by default) when i
 refuses an unsubscribe URL without `listUnsubscribe` and attachments beyond `maxAttachmentBytes` before any I/O; sends
 the request through the portable Fetch surface; and classifies the answer. An adapter supplies only its provider's
 mapping: the request for a message, the message ID of an accepted answer, the refusals it tells apart beyond the HTTP
-status, and (`refuseMessage`) the valid messages its provider is known to refuse. Every other refusal is classified by status alone (`refusalByStatus`): 401 and 403
+status. The limits a provider sets on a valid message are capabilities (`maxAttachmentBytes`,
+`refusedAttachmentExtensions`, `minBodyLength`), which `validateEmailAttachments` and `validateEmailBodies` check
+before any I/O and the conformance kit exercises. An adapter checks its credentials before the base checks the sender.
+Every other refusal is classified by status alone (`refusalByStatus`): 401 and 403
 `provider_unauthorized`, 429 `rate_limited`, 5xx `provider_unavailable`, any other `provider_rejected`. A provider's
 error text never reaches an error.
 
 A new provider is one module (its sender and its `EmailProvider` declaration), its entry in
-`builtinEmailProviders` (`builtinEmailProviderVariables` lists every provider's variables from it) and its
+`builtinEmailProviders` (`builtinEmailProviderVariables` lists every provider's variables from it), its release in
+`builtinEmailProviderSince` (the release after the newest one published without it; the type refuses a provider
+without one), its
 `package.json` export, a unit test and a conformance harness. The installers, the
 Cloudflare workflow and its README read the registry, so neither needs an edit.
 
@@ -172,9 +179,10 @@ with a 422 (`ErrorCode` 300); the bodies take up to 5 MB each beside them. It re
 `lnk`, `mdb`, `pcd`, `pif`, `reg`, `scr`, `sct`, `shs`, `vbe`, `vba`, `wsf`, `wsh`, `wsl`, `msc`, `msi`, `msp` and
 `mst`, which the adapter refuses as `invalid_message` before any request.
 
-Refusals are classified by status alone. A wrong token is a 401 (`ErrorCode` 10); a sender without a confirmed
-signature (400), an invalid recipient (300), an inactive recipient (406) and, per Postmark's documentation, an
-account still pending approval (412) are a 422, `provider_rejected`. A repeated request is delivered again. The
+A refusal is read by its numeric `ErrorCode`, never its `Message`. A wrong token is a 401 (`ErrorCode` 10). A 422 is
+`quota_exceeded` when the account is out of credits (405), `provider_unauthorized` for a sender without a signature
+(400) or with an unconfirmed one (401) and, per Postmark's documentation, for an account pending approval (412, 413),
+and `provider_rejected` otherwise: an invalid recipient (300), an inactive one (406) or a refused file type (411). A repeated request is delivered again. The
 `Message-ID` is `<MessageID>@mtasv.net`. Open and click tracking are settings of the Postmark server; with click
 tracking on, a one-time link goes through Postmark's redirect.
 
@@ -188,7 +196,8 @@ MIME-wrapped.
 
 A 202 carries one result per recipient; a result with `status: 'error'` is `provider_rejected`, without its text,
 and any other status with an ID is accepted. A
-409 is `request_in_progress`, a 422 (documented only for the key reused for another request) `idempotency_conflict`, and a 404 (no such
+409 is `request_in_progress`; a 422 whose `message` names the idempotency key (the key reused for another request) is
+`idempotency_conflict`, any other 422 `provider_rejected`; and a 404 (no such
 account; a key of another account answers 401) `provider_unauthorized`; a malformed request, an unverified sender
 domain or a bad recipient is a 400, `provider_rejected`. A request under a key whose first request is still running
 waits for it and answers its result with `Idempotent-Replayed: true`. AhaSend renders content as a template only when
@@ -207,7 +216,7 @@ before any request. An accepted answer counts by its `message_id`, whatever its 
 A repeated request under its key answers 202 with the first `message_id` and sends nothing (no `Idempotent-Replayed` header), a 256-character key is refused with a 422, and a
 refusal carries only a `message` (401) or a `message` with field `errors` (422, for an unverified sender domain, an
 invalid recipient or a short body). Neither 409 carries a code or a `Retry-After`: the adapter reads the text only to
-find "different payload", the key reused with another body, which is `idempotency_conflict`. Every other 409, a
+find "payload", the key reused with another body, which is `idempotency_conflict`. Every other 409, a
 concurrent request under the key and, per Lettermint's guide, an earlier one whose outcome is unknown, is
 `request_in_progress`: a retry over an idempotent transport cannot deliver twice. As the recipient got them, the
 display name was quoted, the subject RFC 2047-encoded, `Reply-To` and both unsubscribe headers written, attachments
@@ -380,7 +389,12 @@ never sends. `mailer: 'own'` takes the application's own `EmailSender` from
   origin has no address to hand: each refuses the deploy.
 - Any other deploy whose approved contract has such a job hands the application the
   whole set (`installationMailEnvironment`), its credentials among the values the
-  run's logs redact. Zerops writes every name service-level and sensitive.
+  run's logs redact. Zerops writes every name service-level and sensitive. The
+  application builds its sender from its own release's registry, so Control refuses
+  the deploy before any effect when the installation's provider is newer than the
+  release the approved snapshot records (`builtinEmailProviderSince`, `@fabrika/email/providers`),
+  naming the provider, the pinned release and the one it needs. The running version
+  keeps running.
 - Zerops removes the variables a deploy no longer hands, so an environment that moves
   to framework 0.7 loses the provider's credential at that deploy. A Cloudflare deploy
   refuses any `FABRIKA_EMAIL_*` or `FABRIKA_PLATFORM_*`, so a credential never lands in

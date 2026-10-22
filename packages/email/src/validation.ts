@@ -73,15 +73,37 @@ export function validateEmailMessage(message: EmailMessage): void {
 }
 
 /**
- * Refuses a message whose attachments `capabilities` does not carry: any attachment where the transport sends none, or
- * more bytes together than its `maxAttachmentBytes`. `label` names the transport in the message.
+ * Refuses a message whose attachments `capabilities` does not carry: any attachment where the transport sends none,
+ * more bytes together than its `maxAttachmentBytes`, or a file whose extension it refuses. `label` names the transport
+ * in the message.
  */
 export function validateEmailAttachments(message: EmailMessage, capabilities: EmailSenderCapabilities, label: string): void {
-	if ((message.attachments ?? []).length === 0) return
+	const attachments = message.attachments ?? []
+	if (attachments.length === 0) return
 	const limit = capabilities.maxAttachmentBytes
 	if (limit === undefined) throw invalidMessage(`${label} sends no attachments`)
 	const bytes = attachmentBytes(message)
 	if (bytes > limit) throw invalidMessage(`Email attachments have ${bytes} bytes, more than the ${limit} ${label} sends`)
+	const refused = capabilities.refusedAttachmentExtensions ?? []
+	if (refused.length > 0 && attachments.some((attachment) => refused.includes(extensionOf(attachment.filename)))) {
+		throw invalidMessage(`${label} sends no attachment of this file type`)
+	}
+}
+
+/** Refuses a text or HTML body shorter than the transport's `minBodyLength`, counted in characters once trimmed. */
+export function validateEmailBodies(message: EmailMessage, capabilities: EmailSenderCapabilities, label: string): void {
+	const min = capabilities.minBodyLength
+	if (min === undefined) return
+	const short = (body: string): boolean => [...body.trim()].length < min
+	if (short(message.text) || (message.html !== undefined && short(message.html))) {
+		throw invalidMessage(`${label} sends no body shorter than ${min} characters`)
+	}
+}
+
+/** The extension after the last dot, lowercase; empty without one. */
+function extensionOf(filename: string): string {
+	const dot = filename.lastIndexOf('.')
+	return dot < 0 ? '' : filename.slice(dot + 1).toLowerCase()
 }
 
 /** The most files one message carries. */

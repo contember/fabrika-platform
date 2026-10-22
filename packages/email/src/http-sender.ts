@@ -13,7 +13,7 @@ import {
 	type EmailSenderCapabilities,
 } from './email.js'
 import { parseTimeout, postToProvider, type ProviderResponse } from './http.js'
-import { isValidEmailSenderIdentity, isVisibleAscii, validateEmailAttachments, validateEmailMessage } from './validation.js'
+import { isValidEmailSenderIdentity, isVisibleAscii, validateEmailAttachments, validateEmailBodies, validateEmailMessage } from './validation.js'
 
 /** The options every HTTP adapter takes beside its credentials. */
 export interface HttpEmailSenderOptions {
@@ -36,7 +36,7 @@ export abstract class HttpEmailSender implements EmailSender {
 	readonly #fetch: EmailFetch
 	readonly #timeoutMs: number
 
-	/** `label` names the provider in every message, `provider` in every result. */
+	/** `label` names the provider in every message, `provider` in every result. An adapter checks its credentials first. */
 	protected constructor(names: { readonly label: string; readonly provider: string }, options: HttpEmailSenderOptions) {
 		if (!isValidEmailSenderIdentity(options.from)) {
 			throw new EmailDeliveryError(`${names.label} sender is invalid`, { code: 'invalid_configuration' })
@@ -54,9 +54,6 @@ export abstract class HttpEmailSender implements EmailSender {
 	/** The message id of a 2xx answer; undefined when the answer is not a valid success. May throw a refusal. */
 	protected abstract messageId(response: ProviderResponse): string | undefined
 
-	/** Refuses, as `invalid_message`, a valid message the provider is known to refuse; runs before any I/O. */
-	protected refuseMessage(_message: EmailMessage): void {}
-
 	/** A failed answer the provider tells apart beyond its status; undefined leaves it to `refusalByStatus`. */
 	protected refusal(_response: ProviderResponse): EmailDeliveryError | undefined {
 		return undefined
@@ -68,7 +65,7 @@ export abstract class HttpEmailSender implements EmailSender {
 			throw new EmailDeliveryError(`${this.#label} cannot write the List-Unsubscribe headers`, { code: 'invalid_message' })
 		}
 		validateEmailAttachments(message, this.capabilities, this.#label)
-		this.refuseMessage(message)
+		validateEmailBodies(message, this.capabilities, this.#label)
 
 		const request = await this.request(message)
 		const response = await postToProvider({ label: this.#label, fetch: this.#fetch, ...request, signal, timeoutMs: this.#timeoutMs })

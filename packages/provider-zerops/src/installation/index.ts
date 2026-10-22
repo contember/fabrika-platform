@@ -1,5 +1,5 @@
 import { reconcileSchema } from '@fabrika/auth'
-import { builtinEmailProviders, builtinEmailProviderVariables } from '@fabrika/email/providers'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import {
 	describeArgument,
 	info as consoleInfo,
@@ -46,7 +46,16 @@ export {
 } from './proxy-manifest'
 
 const EMAIL_PROVIDERS = Object.keys(builtinEmailProviders).join(', ')
-const EMAIL_PROVIDER_VARIABLES = builtinEmailProviderVariables.map((variable) => variable.name)
+/** One line per provider: its variables, each marked secret or optional where it is. */
+const EMAIL_PROVIDER_VARIABLES = Object.entries(builtinEmailProviders)
+	.map(([name, provider]) => {
+		const variables = provider.variables.map((variable) => {
+			const marks = [variable.secret ? 'secret' : '', variable.required ? '' : 'optional'].filter((mark) => mark !== '')
+			return marks.length === 0 ? variable.name : `${variable.name} (${marks.join(', ')})`
+		})
+		return `\t                                  ${name}: ${variables.join(', ')}`
+	})
+	.join('\n')
 
 const USAGE = `Zerops installation
 
@@ -132,7 +141,7 @@ Options (a flag beats the environment variable beside it):
 	FABRIKA_ZEROPS_ACCESS_TOKEN       required   Zerops access token, environment only and no flag
 	FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
 	FABRIKA_EMAIL_<PROVIDER>_*        the selected provider's variables, environment only and no flag:
-	                                  ${EMAIL_PROVIDER_VARIABLES.join(', ')}
+${EMAIL_PROVIDER_VARIABLES}
 
 With a mail provider, IAM sends its own mail and Control hands the same transport to every application
 whose job declares \`mailer: 'installation'\`. To set or rotate it later, see \`platform guide\`.

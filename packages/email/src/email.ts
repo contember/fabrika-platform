@@ -47,6 +47,10 @@ export interface EmailSenderCapabilities {
 	readonly listUnsubscribe?: boolean
 	/** The most attachment bytes one message carries, every file together; absent: it sends no attachments. */
 	readonly maxAttachmentBytes?: number
+	/** File extensions it refuses an attachment for, lowercase and without the dot; absent: none. */
+	readonly refusedAttachmentExtensions?: readonly string[]
+	/** The fewest characters a text or HTML body has once trimmed; absent: any body that is not blank. */
+	readonly minBodyLength?: number
 }
 
 export interface EmailSender {

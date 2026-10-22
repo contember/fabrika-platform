@@ -19,6 +19,9 @@ import type { ProviderResponse } from './http.js'
 
 const AHASEND_API_URL = 'https://api.ahasend.com/v2/accounts'
 const ACCOUNT_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/
+/** A refusal carries only a free-text `message`, read here to tell a reused key from another 422 and never put into an error. */
+const ahaSendErrorSchema = z.object({ message: z.string() })
+const KEY_REUSED = /idempotency key/i
 const MAX_IDEMPOTENCY_KEY_LENGTH = 255
 const ahaSendResultSchema = z.object({
 	// `queued` and `scheduled` are documented; any status but `error` with an id is taken, so a new one is no failure.
@@ -50,13 +53,13 @@ export class AhaSendEmailSender extends HttpEmailSender {
 	readonly #messagesUrl: string
 
 	constructor(options: AhaSendEmailSenderOptions) {
-		super({ label: 'AhaSend', provider: 'ahasend' }, options)
 		if (!isCredential(options.apiKey)) {
 			throw new EmailDeliveryError('AhaSend API key is invalid', { code: 'invalid_configuration' })
 		}
 		if (!ACCOUNT_ID_PATTERN.test(options.accountId)) {
 			throw new EmailDeliveryError('AhaSend account ID is invalid', { code: 'invalid_configuration' })
 		}
+		super({ label: 'AhaSend', provider: 'ahasend' }, options)
 		this.#apiKey = options.apiKey
 		this.#messagesUrl = `${AHASEND_API_URL}/${options.accountId}/messages`
 	}
@@ -112,8 +115,8 @@ export class AhaSendEmailSender extends HttpEmailSender {
 		if (status === 409) {
 			return new EmailDeliveryError('A matching AhaSend request is still in progress', { code: 'request_in_progress', httpStatus: status })
 		}
-		// A malformed body is a 400; a 422 is only the key reused for another request.
-		if (status === 422) {
+		// A malformed body is a 400; a 422 names the key reused for another request, and any other is a rejection.
+		if (status === 422 && KEY_REUSED.test(ahaSendErrorSchema.safeParse(response.body).data?.message ?? '')) {
 			return new EmailDeliveryError('AhaSend refused the idempotency key for this request (422)', {
 				code: 'idempotency_conflict',
 				httpStatus: status,

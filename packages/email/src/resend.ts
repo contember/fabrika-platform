@@ -35,10 +35,10 @@ export class ResendEmailSender extends HttpEmailSender {
 	readonly #apiKey: string
 
 	constructor(options: ResendEmailSenderOptions) {
-		super({ label: LABEL, provider: 'resend' }, options)
 		if (!isCredential(options.apiKey)) {
 			throw new EmailDeliveryError('Resend API key is invalid', { code: 'invalid_configuration' })
 		}
+		super({ label: LABEL, provider: 'resend' }, options)
 		this.#apiKey = options.apiKey
 	}
 

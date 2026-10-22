@@ -250,6 +250,31 @@ function describeHttpSender(harness: EmailSenderHttpHarness): void {
 		expect(current.requests).toHaveLength(0)
 	})
 
+	test('refuses an attachment of a file type it says it refuses, without a request', async () => {
+		const current = httpCase(async (request) => harness.answers.accepted(request))
+		const extension = current.sender.capabilities.refusedAttachmentExtensions?.[0]
+		if (extension === undefined || current.sender.capabilities.maxAttachmentBytes === undefined) return
+		const message: EmailMessage = {
+			...ATTACHMENT_MESSAGE,
+			attachments: [{ filename: `report.${extension.toUpperCase()}`, contentType: 'application/octet-stream', content: ONE_BYTE }],
+		}
+		await expectRejection(() => current.sender.send(message, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
+		expect(current.requests).toHaveLength(0)
+	})
+
+	test('refuses a body shorter than it says it sends, counted in characters once trimmed, without a request', async () => {
+		const current = httpCase(async (request) => harness.answers.accepted(request))
+		const min = current.sender.capabilities.minBodyLength
+		if (min === undefined) return
+		const short = ` ${'😀'.repeat(min - 1)} `
+		for (const message of [{ ...MINIMAL_MESSAGE, text: short }, { ...MINIMAL_MESSAGE, html: short }]) {
+			await expectRejection(() => current.sender.send(message, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
+		}
+		expect(current.requests).toHaveLength(0)
+		await current.sender.send({ ...MINIMAL_MESSAGE, text: '😀'.repeat(min) }, new AbortController().signal)
+		expect(current.requests).toHaveLength(1)
+	})
+
 	test.each(INVALID_MESSAGES)('refuses $problem as invalid_message without a request', async ({ message }) => {
 		const current = httpCase(async (request) => harness.answers.accepted(request))
 		await expectRejection(() => current.sender.send(message, new AbortController().signal), 'invalid_message', forbidden(current))
