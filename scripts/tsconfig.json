@@ -9,5 +9,5 @@
 		"noEmit": true,
 		"types": ["bun"]
 	},
-	"include": ["release.ts", "check-ci.ts", "__tests__/**/*.ts"]
+	"include": ["release.ts", "declarations.ts", "check-ci.ts", "__tests__/**/*.ts"]
 }

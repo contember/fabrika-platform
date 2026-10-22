@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import ts from 'typescript'
 import { z } from 'zod'
+import { checkConsumerDeclarations, declarationManifest, emitDeclarations, shipsDeclarations, tsconfigTypes } from './declarations'
 
 const ROOT = resolve(import.meta.dir, '..')
 type DependencyField = 'dependencies' | 'optionalDependencies' | 'peerDependencies'
@@ -359,7 +360,7 @@ export const stagedManifest = (item: PackageInfo, version: string, publicNames: 
 			[...dependencies].map(([name, range]) => [name, publicNames.has(name) && range.startsWith('workspace:') ? version : range]),
 		)
 	}
-	return manifest
+	return shipsDeclarations(manifest) ? declarationManifest(manifest) : manifest
 }
 
 const SKILL_VERSION_LINE = /^(---\n[\s\S]*?\nversion: )\S+(\n[\s\S]*?\n---\n)/
@@ -381,7 +382,10 @@ const APP_SKILL_PACKAGE = '@fabrika/app'
 export const stagedAppSkill = (files: readonly { readonly path: string; readonly text: string }[], version: string, pinnedVersion = version) =>
 	files.map(({ path, text }) => ({ path, text: path === 'SKILL.md' ? stagedSkill(text, version) : rewriteExamplePins(text, pinnedVersion).text }))
 
-/** Copies `item` into `stagingDirectory` as `pack` packs it: its files, its staged manifest and, for the app, its skill. */
+/**
+ * Copies `item` into `stagingDirectory` as `pack` packs it: its files, its staged manifest and, for the app, its skill.
+ * `pack` then emits the declarations the staged manifest names (`stageDeclarations`).
+ */
 export const stagePackage = async (
 	item: PackageInfo,
 	version: string,
@@ -467,18 +471,17 @@ const packedFiles = async (item: PackageInfo): Promise<readonly string[]> => {
 }
 
 /**
- * Every import a public package ships — type-only ones included, because a consumer's typecheck resolves
- * them too — must name a declared public dependency or stay inside the package.
+ * The imports of `files` (absolute paths inside `directory`) that a consumer of `item` cannot resolve: one outside the
+ * package, or of a `@fabrika/*` package that is not a declared public dependency.
  */
-export const assertPackedImports = async (item: PackageInfo, publicNames: ReadonlySet<string>): Promise<void> => {
+const importViolations = async (item: PackageInfo, publicNames: ReadonlySet<string>, directory: string, files: readonly string[]) => {
 	const declared = new Set([...dependencyMap(item, 'dependencies').keys(), ...dependencyMap(item, 'peerDependencies').keys()])
 	const violations: string[] = []
-	for (const file of await packedFiles(item)) {
-		if (!SCRIPT_FILE.test(file)) continue
-		const path = join(item.directory, file)
+	for (const path of files) {
+		const file = relative(directory, path)
 		for (const { fileName: specifier } of ts.preProcessFile(await readFile(path, 'utf8'), true, true).importedFiles) {
 			if (specifier.startsWith('.')) {
-				if (relative(item.directory, resolve(dirname(path), specifier)).startsWith('..')) {
+				if (relative(directory, resolve(dirname(path), specifier)).startsWith('..')) {
 					violations.push(`${file} imports ${specifier}, which is outside the package`)
 				}
 				continue
@@ -490,7 +493,30 @@ export const assertPackedImports = async (item: PackageInfo, publicNames: Readon
 			else if (!publicNames.has(dependency)) violations.push(`${file} imports ${specifier}, which is a private package`)
 		}
 	}
+	return violations
+}
+
+/**
+ * Every import a public package ships — type-only ones included, because a consumer's typecheck resolves
+ * them too — must name a declared public dependency or stay inside the package.
+ */
+export const assertPackedImports = async (item: PackageInfo, publicNames: ReadonlySet<string>): Promise<void> => {
+	const files = (await packedFiles(item)).filter((file) => SCRIPT_FILE.test(file)).map((file) => join(item.directory, file))
+	const violations = await importViolations(item, publicNames, item.directory, files)
 	if (violations.length > 0) throw new Error(`${item.name}: packed files import what a consumer cannot resolve:\n  ${violations.join('\n  ')}`)
+}
+
+/**
+ * Emits the declarations of the TypeScript modules `item` ships into its staging copy, which its staged manifest
+ * types its entries by. An inferred type may name a package the source never imports, so the declarations' own
+ * imports are held to the rule of `assertPackedImports` too.
+ */
+export const stageDeclarations = async (item: PackageInfo, publicNames: ReadonlySet<string>, stagingDirectory: string): Promise<void> => {
+	if (!shipsDeclarations(item.manifest)) return
+	const sources = (await packedFiles(item)).map((file) => join(item.directory, file))
+	const declarations = emitDeclarations(item.directory, sources, stagingDirectory)
+	const violations = await importViolations(item, publicNames, stagingDirectory, declarations)
+	if (violations.length > 0) throw new Error(`${item.name}: declarations import what a consumer cannot resolve:\n  ${violations.join('\n  ')}`)
 }
 
 export const collectExportTargets = (value: unknown, source: string, targets: Set<string>): void => {
@@ -587,6 +613,7 @@ const pack = async (options: Options, order: readonly PackageInfo[]): Promise<Re
 			if (preparesRelease(item.manifest)) await run(['bun', 'run', 'release:prepare'], { cwd: item.directory })
 			const stagingDirectory = join(stagingRoot, basename(item.directory))
 			await stagePackage(item, options.version, publicNames, stagingDirectory, options.pinnedVersion)
+			await stageDeclarations(item, publicNames, stagingDirectory)
 			const filename = tarballFilename(item.name, options.version)
 			const path = join(options.artifactsDirectory, filename)
 			await rm(path, { force: true })
@@ -628,12 +655,40 @@ export const entryImportSmoke = (packageNames: readonly string[]): string =>
 		'',
 	].join('\n')
 
-const runConsumerSmoke = async (dependencies: Readonly<Record<string, string>>, expectedVersion: string, label: string): Promise<void> => {
+/** The development dependencies that supply ambient types: what an application installs beside the packages. */
+const AMBIENT_TYPE_PACKAGE = /^(?:@types\/|@cloudflare\/workers-types$)/
+
+const installedVersionSchema = z.object({ version: nonEmptyString })
+const devDependenciesSchema = z.record(z.string()).optional()
+
+/** Every ambient type package a public package develops against, at the version installed for that package. */
+const ambientTypePackages = async (packages: readonly PackageInfo[]): Promise<Record<string, string>> => {
+	const versions: Record<string, string> = {}
+	for (const item of packages) {
+		const devDependencies = devDependenciesSchema.parse(item.manifest['devDependencies'], { path: [item.name, 'devDependencies'] }) ?? {}
+		for (const name of Object.keys(devDependencies).filter((name) => AMBIENT_TYPE_PACKAGE.test(name))) {
+			const path = Bun.resolveSync(`${name}/package.json`, item.directory)
+			const { version } = installedVersionSchema.parse(parseJson(await readFile(path, 'utf8'), path), { path: [path] })
+			const chosen = versions[name]
+			if (chosen !== undefined && chosen !== version) throw new Error(`${name}: public packages develop against ${chosen} and ${version}`)
+			versions[name] = version
+		}
+	}
+	return versions
+}
+
+const runConsumerSmoke = async (
+	dependencies: Readonly<Record<string, string>>,
+	packages: readonly PackageInfo[],
+	expectedVersion: string,
+	label: string,
+): Promise<void> => {
 	const consumer = await mkdtemp(join(tmpdir(), 'fabrika-consumer-'))
 	try {
+		const installs = { ...(await ambientTypePackages(packages)), ...dependencies }
 		await writeFile(
 			join(consumer, 'package.json'),
-			`${JSON.stringify({ name: 'fabrika-release-smoke', private: true, type: 'module', dependencies }, null, '\t')}\n`,
+			`${JSON.stringify({ name: 'fabrika-release-smoke', private: true, type: 'module', dependencies: installs }, null, '\t')}\n`,
 		)
 		await writeFile(
 			join(consumer, 'smoke.ts'),
@@ -661,6 +716,11 @@ const runConsumerSmoke = async (dependencies: Readonly<Record<string, string>>, 
 		await run([join(consumer, 'node_modules', '.bin', 'fabrika'), '--help'], { cwd: consumer })
 		await run([join(consumer, 'node_modules', '.bin', 'fabrika'), 'builder', '--help'], { cwd: consumer })
 		for (const name of COMMAND_ONLY_PACKAGES) await run([join(consumer, 'node_modules', '.bin', name), '--help'], { cwd: consumer })
+		await checkConsumerDeclarations(
+			consumer,
+			await Promise.all(packages.map(async (item) => ({ name: item.name, types: await tsconfigTypes(item.directory) }))),
+		)
+		console.info(`${label}: the declarations of every typed entry resolve in an isolated consumer`)
 		console.info(`${label} passed for ${Object.keys(dependencies).length} packages in an isolated consumer`)
 	} finally {
 		await rm(consumer, { recursive: true, force: true })
@@ -675,7 +735,7 @@ const smoke = async (options: Options, expectedOrder: readonly PackageInfo[]): P
 	}
 	const dependencies: Record<string, string> = {}
 	for (const item of manifest.packages) dependencies[item.name] = `file:${join(options.artifactsDirectory, item.filename)}`
-	await runConsumerSmoke(dependencies, options.version, 'tarball smoke')
+	await runConsumerSmoke(dependencies, expectedOrder, options.version, 'tarball smoke')
 }
 
 export const parseRegistryIntegrity = (text: string, source: string): string => {
@@ -889,7 +949,7 @@ const registrySmoke = async (options: Options, expectedOrder: readonly PackageIn
 	})
 	const dependencies: Record<string, string> = {}
 	for (const item of expectedOrder) dependencies[item.name] = options.version
-	await runConsumerSmoke(dependencies, options.version, 'registry smoke')
+	await runConsumerSmoke(dependencies, expectedOrder, options.version, 'registry smoke')
 }
 
 // ── the example repository's pins ───────────────────────────────────────────────
