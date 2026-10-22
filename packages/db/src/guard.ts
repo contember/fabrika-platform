@@ -262,6 +262,14 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 			return
 		case 'TableNode':
 			return checkTable(node, parent, context)
+		case 'OrderByItemNode': {
+			// Kysely prints `nulls` as raw text; the layer only ever states the order Postgres has by default.
+			const nulls = read(node, 'nulls')
+			if (nulls !== undefined && nulls !== 'first' && nulls !== 'last') {
+				throw new QueryRefusedError('statement_shape', 'an order term states nulls first or nulls last, nothing else')
+			}
+			return
+		}
 		case 'JoinNode':
 			return checkJoin(node, context)
 		case 'ReferenceNode':

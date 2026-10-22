@@ -268,6 +268,28 @@ describe('root properties outside the allowlist', () => {
 	}
 })
 
+describe('the nulls order of an order term', () => {
+	const ordered = (nulls: string) => {
+		const orderBy = k.selectFrom('notes').select('notes.id').orderBy('notes.id', 'asc').toOperationNode().orderBy
+		// An unchecked value, as a tree built outside the layer could carry.
+		const items = orderBy?.items.map((item) => {
+			const forged = { ...item }
+			Reflect.set(forged, 'nulls', nulls)
+			return forged
+		}) ?? []
+		return select({ orderBy: orderBy === undefined ? undefined : { ...orderBy, items } })
+	}
+
+	test('nulls first and nulls last pass', () => {
+		expect(() => assertAllowedTree(ordered('first'), selectContext)).not.toThrow()
+		expect(() => assertAllowedTree(ordered('last'), selectContext)).not.toThrow()
+	})
+
+	test('any other text, which Kysely would print raw, is refused', () => {
+		refuses(ordered('last, (select secret from secrets)'), selectContext, 'nulls first or nulls last')
+	})
+})
+
 describe('tables, joins and selections', () => {
 	test('a join to a table that is not a declared child', () => {
 		refuses(select({ joins: base().innerJoin('secrets', 'secrets.id', 'notes.id').toOperationNode().joins }), selectContext)
