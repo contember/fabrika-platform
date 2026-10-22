@@ -138,6 +138,7 @@ for (const backend of backends) {
 				signals,
 				now: () => Math.floor(Date.now() / 1000),
 				waitMs,
+				runCommit: async (runId) => (await repositories.runs.getRun(runId))?.commit_sha ?? null,
 			})
 			return { ...seeded, provider, signals, dev, receiver, workspaceId: workspace.id }
 		}
@@ -146,13 +147,18 @@ for (const backend of backends) {
 			await db.prepare("UPDATE runs SET status = 'succeeded' WHERE id = ?").bind(runId).run()
 		}
 
-		async function wait(w: DevWorld, body: { head: string; reset: number | null; checks: number | null; hold: boolean }, key = SOURCE_KEY) {
-			const response = await acceptDevWait(w.receiver(), receiverRequest('wait', encodeDevWaitRequest(body), key))
+		/** A launcher's wait; its container is the bootstrap of `sha('b')` unless `bootstrap` says otherwise. */
+		async function wait(
+			w: DevWorld,
+			body: { head: string; reset: number | null; checks: number | null; hold: boolean; bootstrap?: string },
+			key = SOURCE_KEY,
+		) {
+			const response = await acceptDevWait(w.receiver(), receiverRequest('wait', encodeDevWaitRequest({ bootstrap: sha('b'), ...body }), key))
 			return { status: response.status, answer: response.ok ? answerOf(await response.json()) : null }
 		}
 
 		async function report(w: DevWorld, fields: Partial<DevReport> & { head: string; status: DevReport['status'] }) {
-			const body = encodeDevReport({ target: null, message: null, log: [], reset: 0, checks: null, ...fields })
+			const body = encodeDevReport({ bootstrap: sha('b'), target: null, message: null, log: [], reset: 0, checks: null, ...fields })
 			return acceptDevReport(w.receiver(), receiverRequest('report', body, SOURCE_KEY))
 		}
 
@@ -224,7 +230,8 @@ for (const backend of backends) {
 			w.source.unreadable.set('src/old.ts', 'missing')
 			const held = wait(w, { head: sha('b'), reset: 0, checks: 0, hold: true })
 			await Bun.sleep(50)
-			const applied = followDevCommit(w.dev(), { workspaceId: w.workspaceId, commitSha: sha('c') })
+			// The commit's parent is not the head the launcher holds, so the answer comes from the compare.
+			const applied = followDevCommit(w.dev(), { workspaceId: w.workspaceId, commitSha: sha('c'), parentSha: sha('a'), written: [] })
 			expect((await held).answer).toEqual({
 				sync: {
 					from: sha('b'),
@@ -247,6 +254,17 @@ for (const backend of backends) {
 				url: null,
 				log: [{ n: 0, stream: 'stdout', text: 'listening' }],
 			})
+
+			// A commit on the head the launcher holds hands it the written files: no GitHub read.
+			const calls = w.source.calls.length
+			const next = wait(w, { head: sha('c'), reset: 0, checks: 0, hold: true })
+			await Bun.sleep(50)
+			const written = [{ path: 'web/main.tsx', content: 'export {}\n' }, { path: 'src/gone.ts', content: null }]
+			const handedOff = followDevCommit(w.dev(), { workspaceId: w.workspaceId, commitSha: sha('d'), parentSha: sha('c'), written })
+			expect((await next).answer).toEqual({ sync: { from: sha('c'), to: sha('d'), files: written }, reset: 0, checks: 0 })
+			expect(w.source.calls.slice(calls)).toEqual([])
+			await report(w, { head: sha('d'), status: 'serving' })
+			expect((await handedOff)?.state).toBe('serving')
 		})
 
 		test('Control refuses a head it cannot relay, and the launcher keeps what it serves', async () => {
@@ -269,11 +287,40 @@ for (const backend of backends) {
 			const rebound = await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
 			expect(rebound.bootstrapRun?.commitSha).toBe(sha('c'))
 			expect(w.queued).toHaveLength(2)
+			// The replaced container still runs for a while: it may neither sync nor report.
+			expect((await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: false })).status).toBe(409)
 			await succeedRun(dbOf(opened), rebound.bootstrapRun?.id ?? '')
-			await report(w, { head: sha('c'), status: 'serving' })
+			expect((await report(w, { bootstrap: sha('c'), head: sha('c'), status: 'serving' })).status).toBe(204)
+			expect((await report(w, { head: sha('b'), status: 'needs_bootstrap', target: sha('c'), message: 'bun.lock changed' })).status).toBe(409)
 			const serving = await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 0, failuresOnly: false } })
 			expect(serving.state).toBe('serving')
+			expect(serving.head).toBe(sha('c'))
 			expect((await w.repositories.devEnvironments.get('shop', 'dev'))?.refused_sha).toBeNull()
+			expect((await wait(w, { bootstrap: sha('c'), head: sha('c'), reset: 0, checks: 0, hold: false })).answer?.sync).toBeNull()
+		})
+
+		test('switching to a workspace with another lockfile, then its bootstrap, serves on the first try', async () => {
+			const w = await world()
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
+			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
+			await report(w, { head: sha('b'), status: 'serving' })
+
+			const other = await createWorkspaceUseCase(w.dev(), { appId: 'shop', env: 'stage', title: 'Deps' })
+			w.source.branches.set(`fabrika/${other.id}`, sha('e'))
+			// A refusal left by the previous workspace makes this bind a bootstrap at once.
+			await w.repositories.devEnvironments.recordRefusal('shop', 'dev', sha('b'), 'bun.lock changed')
+			const switched = await bindDevUseCase(w.dev(), { workspaceId: other.id })
+			expect(switched.bootstrapRun?.commitSha).toBe(sha('e'))
+
+			// The old container (bootstrap b) wakes up during the build: it gets no sync, and its refusal is not recorded.
+			expect((await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: false })).status).toBe(409)
+			expect((await report(w, { head: sha('b'), status: 'needs_bootstrap', target: sha('e'), message: 'bun.lock changed' })).status).toBe(409)
+			await succeedRun(dbOf(opened), switched.bootstrapRun?.id ?? '')
+			expect((await report(w, { bootstrap: sha('e'), head: sha('e'), status: 'serving' })).status).toBe(204)
+			// Even after the new container reported, the old one cannot overwrite it.
+			expect((await report(w, { head: sha('b'), status: 'needs_bootstrap', target: sha('e'), message: 'bun.lock changed' })).status).toBe(409)
+			const status = await getDevStatusUseCase(w.dev(), { workspaceId: other.id, log: { lines: 0, failuresOnly: false } })
+			expect({ state: status.state, head: status.head }).toEqual({ state: 'serving', head: sha('e') })
 		})
 
 		test("a launcher's refusal is recorded, and get_dev_status reads its log window", async () => {
@@ -299,7 +346,7 @@ for (const backend of backends) {
 			const checking = runChecksUseCase(w.dev(), { workspaceId: w.workspaceId })
 			const asked = (await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: true })).answer
 			expect(asked).toEqual({ sync: null, reset: 0, checks: 1 })
-			const results = [{ name: 'tsc', ok: true, exitCode: 0, output: [] }]
+			const results = [{ name: 'tsc', ok: true, exitCode: 0, durationMs: 1200, output: [] }]
 			await report(w, { head: sha('b'), status: 'serving', checks: { request: 1, head: sha('b'), results } })
 			expect((await checking).checks).toEqual({ request: 1, head: sha('b'), results })
 
@@ -327,7 +374,7 @@ for (const backend of backends) {
 			expect(w.queued).toHaveLength(1)
 			expect((await w.repositories.devEnvironments.get('shop', 'dev'))?.reset_generation).toBe(1)
 			// A commit to the workspace that is no longer bound follows nothing.
-			expect(await followDevCommit(w.dev(), { workspaceId: w.workspaceId, commitSha: sha('e') })).toBeNull()
+			expect(await followDevCommit(w.dev(), { workspaceId: w.workspaceId, commitSha: sha('e'), parentSha: sha('d'), written: [] })).toBeNull()
 		})
 
 		test('the receiver answers only a source key', async () => {
@@ -360,7 +407,7 @@ for (const backend of backends) {
 			expect(w.provider.calls).toEqual(['stop shop/dev'])
 			expect((await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 0, failuresOnly: false } })).state).toBe('stopped')
 
-			const following = followDevCommit(w.dev(), { workspaceId: w.workspaceId, commitSha: sha('c') })
+			const following = followDevCommit(w.dev(), { workspaceId: w.workspaceId, commitSha: sha('c'), parentSha: sha('b'), written: [] })
 			await Bun.sleep(50)
 			await report(w, { head: sha('c'), status: 'serving' })
 			expect((await following)?.state).toBe('serving')

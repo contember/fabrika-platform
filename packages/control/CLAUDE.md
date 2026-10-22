@@ -463,8 +463,10 @@ other environment, before the provider prepares anything, and the write maps a r
   succeeded or a head was refused), `get_dev_status`, `run_checks`, `reset_dev` and `followDevCommit`, which
   `apply_changes` calls. The launcher reaches the `source` receiver (`src/dev/receiver.ts`, the `dev-source`
   protocol row, ADR-0064) with the environment's key: a held wait answers the files between the head it holds and
-  the target, relayed from a GitHub compare (`src/dev/sync.ts`) in one `WorkspaceSourcePort.session`, and never
-  stored. `apply_changes` reads its edited files and commits in one session too: one token, each commit and tree
+  the target, never stored: the files `apply_changes` just wrote when this process holds them (`DevSignals.offer/take`,
+  only from the exact parent to the target), else a GitHub compare (`src/dev/sync.ts`) in one
+  `WorkspaceSourcePort.session`. Both requests carry the container's bootstrap commit; one that is not the current
+  bootstrap run's commit gets 409, because the provider runs the replaced container beside the new one. `apply_changes` reads its edited files and commits in one session too: one token, each commit and tree
   read once. `run_checks` is refused while the served head is not the target. `DevSignals` wakes a wait in
   this process; every wait also re-reads the row each second, for another Control container. A deploy of a `dev`
   environment refuses a framework release before `DEV_LAUNCHER_SINCE` (`src/dev/deploy.ts`) before anything

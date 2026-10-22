@@ -87,7 +87,9 @@ survive a service stop, start and restart (a deploy replaces the container and l
       tree and resets the schema.
     - The launcher holds a long poll on Control's public origin with a `source` workload key
       ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)). Control answers
-      with the changed files of the bound head, read from a GitHub compare and relayed. Control stores the record of
+      with the changed files of the bound head: the files `apply_changes` just wrote, handed over in memory, or else
+      read from a GitHub compare. A container of a replaced bootstrap run is refused (409), so it cannot report over
+      the new one. Control stores the record of
       the environment (bound workspace, target and served head, status, time, a trimmed log), never file contents
       (rule 4 holds).
     - The launcher writes the files, migrates when `db/migrations/` changed, runs the authored SPA build when a web

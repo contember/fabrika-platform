@@ -126,16 +126,21 @@ The launcher of a `dev` environment ([ADR-0049](0049-author-applications-through
 workspace bound to it. Its key is one per `<app>@<dev env>`, issued by every deploy of that environment, and it is read
 only: it reads the bound workspace's files between two heads, and nothing else.
 
-- `POST <FABRIKA_PLATFORM_SOURCE_URL>/platform/source/wait` with `{ head, reset, checks, hold }`: the head the
-  container holds and the last reset and check requests it carried out. Control holds the request up to 25 s (at once
+- `POST <FABRIKA_PLATFORM_SOURCE_URL>/platform/source/wait` with `{ bootstrap, head, reset, checks, hold }`: the
+  commit its bootstrap run deployed, the head the container holds and the last reset and check requests it carried out. Control holds the request up to 25 s (at once
   when `hold` is false, at boot) and answers `{ sync, reset, checks }` when one of them moves. `sync` names `from`,
-  `to` and every changed path with its content at `to` (null deletes it). Control reads them from a GitHub compare
-  through the app's connection, relays them, and stores none. A change it cannot relay (more than 300 files or 8 MiB,
+  `to` and every changed path with its content at `to` (null deletes it). When the container holds the parent of an
+  `apply_changes` commit in the same Control process, Control relays the files that call just wrote, from memory;
+  otherwise it reads them from a GitHub compare through the app's connection. It stores none. A change it cannot relay (more than 300 files or 8 MiB,
   a binary or oversized file, an unsafe path) is recorded as needing a bootstrap run and is not answered.
 - `POST <FABRIKA_PLATFORM_SOURCE_URL>/platform/source/report` with
-  `{ head, status, target, message, log, reset, checks }`: what the container holds now, its state, the commit it
+  `{ bootstrap, head, status, target, message, log, reset, checks }`: what the container holds now, its state, the commit it
   syncs to or refused, one line on a refusal or failure, the last lines of the application's and the launcher's
-  output, and the check results. The log is bounded and never carries the environment.
+  output, and the check results (each with its exit code, duration and last lines). The log is bounded and never
+  carries the environment.
+- Control answers either request with 409 when `bootstrap` is not the commit of the environment's current bootstrap
+  run. During a bootstrap run the provider runs the old container beside the new one; the old one stops following
+  Control and never overwrites the new one's report.
 - Both sides import one wire module, `@fabrika/app/dev/wire`, with strict parsers.
 - The receiver authorizes on the key's application environment and answers only for a `dev` environment with a bound
   workspace. Unreviewed code in the container can read the key; it reads only source the code already runs, so it

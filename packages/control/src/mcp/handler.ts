@@ -304,9 +304,9 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 	}, (input) =>
 		run('apply_changes', async () => {
 			const started = performance.now()
-			const { commitSha } = await applyChangesUseCase(c, input)
+			const { commitSha, written } = await applyChangesUseCase(c, input)
 			const committed = performance.now()
-			const dev = await followDevCommit(c, { workspaceId: input.workspaceId, commitSha })
+			const dev = await followDevCommit(c, { workspaceId: input.workspaceId, commitSha, parentSha: input.expectedHeadSha, written })
 			if (dev !== null) {
 				console.info(
 					`mcp apply_changes: committed in ${Math.round(committed - started)} ms, dev ${dev.state} after ${Math.round(performance.now() - committed)} ms`,
@@ -370,8 +370,9 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 				log: { lines: logLines, failuresOnly, ...(after === undefined ? {} : { after }), ...(before === undefined ? {} : { before }) },
 			})))
 	server.registerTool('run_checks', {
-		description: "Run the build's check chain (the tests, fabrika-check and tsc) in the dev environment on the files it serves, "
-			+ 'and wait up to 50 s for the results (checks, whose head names the commit checked). The results only report; '
+		description: "Run the build's check chain (the tests, tsc and fabrika-check, in the build's order) in the dev environment on "
+			+ 'the files it serves, and wait up to 50 s for the results (checks, whose head names the commit checked; each result '
+			+ 'carries its exit code, its duration in durationMs and the last lines of its output). The results only report; '
 			+ 'deploy_stage still runs every check on a build. The workspace must be bound to the dev environment, and it must '
 			+ "serve the workspace's newest commit: otherwise the call is refused with the state.",
 		inputSchema: toolInput(toolInputs.runChecks),

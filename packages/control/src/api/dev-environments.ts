@@ -20,6 +20,7 @@ import {
 	requireHead,
 	requireOwner,
 	requireWorkspace,
+	type WorkspaceFileWrite,
 	type WorkspaceUseCaseContext,
 } from './workspaces'
 
@@ -222,7 +223,10 @@ export async function resetDevUseCase(c: DevUseCaseContext, input: { workspaceId
  * After a commit to a workspace: when it is bound to the dev environment, record the new head, wake the launcher and
  * wait a short while for it to serve. Null when the workspace is not bound, or the caller may not read the environment.
  */
-export async function followDevCommit(c: DevUseCaseContext, input: { workspaceId: string; commitSha: string }): Promise<DevApplyDto | null> {
+export async function followDevCommit(
+	c: DevUseCaseContext,
+	input: { workspaceId: string; commitSha: string; parentSha: string; written: readonly WorkspaceFileWrite[] },
+): Promise<DevApplyDto | null> {
 	const dev = c.dev
 	if (dev === undefined) return null
 	const bound = await c.repositories.devEnvironments.getByWorkspace(input.workspaceId)
@@ -232,7 +236,10 @@ export async function followDevCommit(c: DevUseCaseContext, input: { workspaceId
 	const row = await c.repositories.devEnvironments.advanceTarget(bound.app_id, bound.env, input.workspaceId, input.commitSha)
 	if (row === null) return null
 	await dev.start(row, c.signal)
-	dev.signals.notify(devTargetKey(row.app_id, row.env))
+	// A launcher at the parent gets these files without a GitHub read; at any other head it reads the compare.
+	const key = devTargetKey(row.app_id, row.env)
+	dev.signals.offer(key, { from: input.parentSha, to: input.commitSha, files: input.written.map(({ path, content }) => ({ path, content })) })
+	dev.signals.notify(key)
 	const bootstrap = await bootstrapRunOf(c, row)
 	const settled = bootstrap !== null && bootstrap.status !== 'succeeded'
 		? row
