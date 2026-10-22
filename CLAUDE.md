@@ -26,7 +26,7 @@ facts settled against a real account, several of which contradict Zerops' publis
 ```bash
 bun install
 bun run typecheck          # every package + scripts/
-bun run test               # all tests; isolates DOM-heavy agent-interface suites
+bun run test               # all tests; isolates DOM-heavy agent-interface suites and the Lopata ones (they replace globals)
 bun test packages/provider-contract/src/__tests__/steps.test.ts   # a single file
 bun run lint               # biome
 bun run format             # dprint fmt  (format:check to verify only)

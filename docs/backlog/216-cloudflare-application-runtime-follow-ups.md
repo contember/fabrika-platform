@@ -45,7 +45,9 @@ unless marked, size S.
     never reports a missing IAM method, and `boot`'s "no membership transport" refusal cannot fire on Cloudflare; a
     missing method fails at its call. Lopata's stub answers `false`, unlike workerd, which also breaks `bun run dev`
     of `examples/app` (the object finds no `IAM`), and Lopata applies no wrangler `define`, so the example's proxy has no
-    manifest. Both are Lopata fixes.
+    manifest. Both are Lopata fixes. So is a third: `lopata/testing` replaces the global `Request` with one that keeps
+    the source request's headers when `new Request(request, { headers })` passes others, which broke the proxy tests run
+    after it in one process; `bun run test` runs the Lopata suites in `test:lopata`, isolated, until Lopata is fixed.
 
 ## Approach / acceptance
 
