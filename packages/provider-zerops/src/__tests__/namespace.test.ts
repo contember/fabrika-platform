@@ -330,6 +330,8 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 	configureCustomAutoscaling: () => Promise.reject(new Error('a namespace never sets custom autoscaling')),
 	getBackupConfig: () => Promise.reject(new Error('a namespace never reads a backup schedule')),
 	configureBackup: () => Promise.reject(new Error('a namespace never changes a backup schedule')),
+	startService: () => Promise.reject(new Error('a namespace never starts a service')),
+	stopService: () => Promise.reject(new Error('a namespace never stops a service')),
 	getService: async ({ serviceId }) => {
 		for (const services of state.services.values()) {
 			const service = services.find((candidate) => candidate.id === serviceId)

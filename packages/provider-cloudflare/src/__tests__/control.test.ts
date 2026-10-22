@@ -95,6 +95,31 @@ const deployInput = (): ProviderDeployInput => ({
 })
 
 describe('Cloudflare control provider', () => {
+	test('refuses to deploy a dev environment before any runner call', async () => {
+		const calls: string[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account',
+			apiToken: 'token',
+			runnerKey: 'key',
+			...sourceOptions,
+			prepareClone: async (source) => {
+				calls.push('prepareClone')
+				return { repoUrl: source.repoUrl }
+			},
+			startRun: async () => {
+				calls.push('startRun')
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		const input = deployInput()
+		await expect(provider.deploy({ ...input, environment: { ...input.environment, kind: 'dev' } })).rejects.toThrow(
+			'Cloudflare runs no dev environment',
+		)
+		expect(calls).toEqual([])
+		expect(provider.devEnvironments).toBeUndefined()
+	})
+
 	test('exposes immutable resolution with recorded identity and independently validates registration', async () => {
 		const input = deployInput()
 		const calls: unknown[] = []
