@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { ahaSendEmailProvider, AhaSendEmailSender, literalTemplate } from '../ahasend.js'
+import { ahaSendEmailProvider, AhaSendEmailSender } from '../ahasend.js'
 import { EmailDeliveryError, type EmailFetch } from '../email.js'
 
 const signal = new AbortController().signal
@@ -59,17 +59,13 @@ describe('AhaSendEmailSender', () => {
 		})
 	})
 
-	test('keeps template syntax in the content literal', async () => {
-		expect(literalTemplate('Hi {{ name }}, {% if %} {# note #} {x} {')).toBe("Hi {{ '{' }}{ name }}, {{ '{' }}% if %} {{ '{' }}# note #} {x} {")
-		expect(literalTemplate('{{{')).toBe("{{ '{' }}{{ '{' }}{")
-
+	test('sends template syntax in the content as written, because it sends no substitutions', async () => {
 		const { fetch, requests } = capturing(() => accepted({ id: 'aha-2', status: 'queued' }))
 		const sender = new AhaSendEmailSender({ apiKey: 'aha_secret', accountId: ACCOUNT_ID, from, fetch })
-		await sender.send({ ...message, subject: 'Code {{x}}', html: '<style>p{color:red}</style>{%raw%}' }, signal)
-		expect(await requests[0]?.json()).toMatchObject({
-			subject: "Code {{ '{' }}{x}}",
-			html_content: "<style>p{color:red}</style>{{ '{' }}%raw%}",
-		})
+		await sender.send({ ...message, subject: 'Code {{x}}', text: 'Use {% raw %} here', html: '<style>p{color:red}</style>{# note #}' }, signal)
+		const body: unknown = await requests[0]?.json()
+		expect(body).toMatchObject({ subject: 'Code {{x}}', text_content: 'Use {% raw %} here', html_content: '<style>p{color:red}</style>{# note #}' })
+		expect(body).not.toHaveProperty('substitutions')
 	})
 
 	test('a key over its 255 characters is sent as its digest, the same one on every retry', async () => {

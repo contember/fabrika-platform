@@ -53,11 +53,12 @@ describeEmailSenderConformance('AhaSendEmailSender', {
 				data: [{ object: 'message', id: 'ahasend-message-1', recipient: { email: 'recipient@example.test', name: '' }, status: 'queued', error: null }],
 			}, { status: 202 }),
 		malformedSuccess: () => Response.json({ object: 'list', data: [] }, { status: 202 }),
-		unauthorized: () => errorAnswer(401),
-		rejected: () => errorAnswer(400),
+		// As a live account answered in October 2026.
+		unauthorized: () => Response.json({ message: 'invalid API key' }, { status: 401 }),
+		rejected: () => Response.json({ message: "domain 'example.com' not found" }, { status: 400 }),
 		rateLimited: () => errorAnswer(429),
 		unavailable: () => errorAnswer(500),
 		inProgress: () => errorAnswer(409),
-		idempotencyConflict: () => errorAnswer(422),
+		idempotencyConflict: () => Response.json({ message: 'idempotency key was already used with a different request payload' }, { status: 422 }),
 	},
 })

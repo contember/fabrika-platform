@@ -1,6 +1,7 @@
 // AhaSend's API v2 (https://ahasend.com/docs/api-reference/messages/create-message), built from its documentation and
-// verified only against a stubbed fetch. It keeps an idempotency key for 24 hours, and a 202 carries one result per
-// recipient, which can itself be a refusal.
+// verified on a live account in October 2026. It keeps an idempotency key for 24 hours, and a 202 carries one result
+// per recipient, which can itself be a refusal. It renders a message's content as a template only when the request
+// carries substitutions, which this adapter never sends, so `{{` in a message reaches the recipient as written.
 
 import { z } from 'zod'
 import { type EmailProvider, parseProviderVariables } from './config.js'
@@ -28,8 +29,6 @@ const ahaSendResultSchema = z.object({
  * the bodies, and its body stays under the 30 MB request bound.
  */
 const AHASEND_MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024
-/** The openers of a MiniJinja expression, statement and comment. */
-const TEMPLATE_OPENER = /\{(?=[{%#])/g
 
 export interface AhaSendEmailSenderOptions extends HttpEmailSenderOptions {
 	/** An API key v2, scoped to `messages:send:{domain}` at least. */
@@ -74,9 +73,9 @@ export class AhaSendEmailSender extends HttpEmailSender {
 			body: {
 				from: { email: this.from.address, ...(senderName === undefined ? {} : { name: senderName }) },
 				recipients: [{ email: message.to }],
-				subject: literalTemplate(message.subject),
-				text_content: literalTemplate(message.text),
-				...(message.html === undefined ? {} : { html_content: literalTemplate(message.html) }),
+				subject: message.subject,
+				text_content: message.text,
+				...(message.html === undefined ? {} : { html_content: message.html }),
 				...(message.replyTo === undefined ? {} : { reply_to: { email: message.replyTo } }),
 				...(message.unsubscribeUrl === undefined ? {} : { headers: oneClickUnsubscribeHeaders(message.unsubscribeUrl) }),
 				...(attachments.length === 0
@@ -105,9 +104,11 @@ export class AhaSendEmailSender extends HttpEmailSender {
 
 	protected override refusal(response: ProviderResponse): EmailDeliveryError | undefined {
 		const status = response.status
+		// Documented for an unknown account; a key of another account answers 401.
 		if (status === 404) {
 			return new EmailDeliveryError('AhaSend knows no such account (404)', { code: 'provider_unauthorized', httpStatus: status })
 		}
+		// Live, a concurrent request under the key waited for the first and replayed its answer; 409 is documented.
 		if (status === 409) {
 			return new EmailDeliveryError('A matching AhaSend request is still in progress', { code: 'request_in_progress', httpStatus: status })
 		}
@@ -120,14 +121,6 @@ export class AhaSendEmailSender extends HttpEmailSender {
 		}
 		return undefined
 	}
-}
-
-/**
- * AhaSend renders a message's subject and bodies as MiniJinja templates, so `{{`, `{%` or `{#` in the content would be
- * evaluated, or refused when it does not render. Each such `{` is written as an expression that outputs it.
- */
-export function literalTemplate(value: string): string {
-	return value.replace(TEMPLATE_OPENER, "{{ '{' }}")
 }
 
 const ahaSendVariablesSchema = z.object({
