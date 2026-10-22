@@ -504,6 +504,12 @@ export interface ControlProvider {
 	reconcile?(input: ProviderReconcileInput): Promise<ProviderReconcileOutcome>
 	readonly secrets?: ProviderManagedSecrets
 	readonly namespaces?: ProviderNamespaceCapabilities
+	/**
+	 * Every application environment gets `FABRIKA_PROXY_SECRET`, with or without a namespace proxy: the provider's own
+	 * hop to the application carries it (Cloudflare's Worker to its Durable Object, ADR-0065). Absent means only a
+	 * namespace proxy's environments get one.
+	 */
+	readonly applicationHopSecret?: true
 	/** Absent means the provider deploys public sources only. */
 	readonly source?: ProviderSourceCapabilities
 	/**

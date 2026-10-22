@@ -859,6 +859,19 @@ describe('provider-neutral run lifecycle', () => {
 		})
 	})
 
+	test('delivers the proxy secret without a namespace proxy only to a provider whose own hop carries it', async () => {
+		const secrets = { forAppEnv: (app: string, env: string) => Promise.resolve(`secret-of-${app}@${env}`) }
+		for (const [hop, expected] of [[false, null], [true, 'secret-of-app@prod']] as const) {
+			const { db } = createHarness()
+			const runId = await seedRun(db)
+			const inputs: ProviderDeployInput[] = []
+			const provider = makeProvider(inputs, { state: 'succeeded' })
+			const deps: RunDeps = { ...makeDeps(db, hop ? { ...provider, applicationHopSecret: true } : provider), proxySecrets: secrets }
+			expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
+			expect(inputs[0]?.managedEnvironment[FABRIKA_PROXY_SECRET]).toBe(expected)
+		}
+	})
+
 	test('delivers the IAM application id of the deploying environment, <app>@<env>', async () => {
 		// ADR-0022 rule 6: the proxy mints for `app@prod`, so the application must verify that audience.
 		const { db } = createHarness()
