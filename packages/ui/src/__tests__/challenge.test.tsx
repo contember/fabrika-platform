@@ -91,4 +91,9 @@ describe('Challenge', () => {
 		expect(registered?.['label']).toBe('Nejsem robot')
 		expect(registered?.['footer']).not.toContain('onerror')
 	})
+
+	test('the label of the hidden logo link registers no language of its own', async () => {
+		mounted = await mount(<Challenge url="/__fabrika/challenge/d" strings={{ ariaLinkLabel: 'Odkaz' }} />)
+		expect(setting(widget(mounted.container), 'language') ?? null).toBeNull()
+	})
 })

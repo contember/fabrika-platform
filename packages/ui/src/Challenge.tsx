@@ -28,8 +28,8 @@ export interface ChallengeStrings {
 	readonly error: string
 	readonly reload: string
 	readonly waitAlert: string
-	/** @deprecated The label of the widget's logo link, which the kit hides; it reaches nothing. */
-	readonly ariaLinkLabel: string
+	/** @deprecated The label of the widget's logo link, which the kit hides; it reaches nothing, so it is not sent. */
+	readonly ariaLinkLabel?: string
 }
 
 export interface ChallengeProps {
@@ -57,8 +57,8 @@ const CONFIGURATION = JSON.stringify({ hideLogo: true, hideFooter: true })
 /** Each set of strings is registered once with the widget, under a language code of its own. */
 const registered = new Map<string, string>()
 
-/** The fields of `ChallengeStrings`: only these reach the widget, whatever else an object passed as one carries. */
-const TEXT_FIELDS: readonly (keyof ChallengeStrings)[] = [
+/** The fields of `ChallengeStrings` that reach the widget, whatever else an object passed as one carries. */
+const TEXT_FIELDS: readonly Exclude<keyof ChallengeStrings, 'ariaLinkLabel'>[] = [
 	'label',
 	'verifying',
 	'verified',
@@ -67,7 +67,6 @@ const TEXT_FIELDS: readonly (keyof ChallengeStrings)[] = [
 	'error',
 	'reload',
 	'waitAlert',
-	'ariaLinkLabel',
 ]
 
 function languageOf(given: Partial<ChallengeStrings> | undefined): string | undefined {
