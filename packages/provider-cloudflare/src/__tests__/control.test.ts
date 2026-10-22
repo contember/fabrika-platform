@@ -41,7 +41,7 @@ const APPROVED = {
 	contract: notesArtifact,
 	contractDigest: contractDigest(notesArtifact),
 	schema: schemaFromContract(notesArtifact),
-	checker: '0.7.0',
+	checker: '0.9.0',
 }
 
 const RUN_ID = '0192f0c9-4d5e-7a10-9c3b-1f2e3d4c5b6a'
@@ -547,7 +547,7 @@ describe('Cloudflare control provider', () => {
 			configPath: 'deploy.config.ts',
 			stateNamespace: 'api-state',
 			domain: 'api.example.com',
-			approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: APPROVED.contractDigest },
+			approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: APPROVED.contractDigest, framework: APPROVED.checker },
 			dryRun: true,
 			runnerKey: 'test-runner-key',
 			credentials: {
@@ -593,6 +593,35 @@ describe('Cloudflare control provider', () => {
 		await recordingProvider(jobs).deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, ...handed } })
 		expect(jobs[0]?.managedEnvironment).toMatchObject(handed)
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
+	})
+
+	test('an application on a framework before 0.9 keeps the stateless Worker: no hop secret, and what it cannot run is refused (ADR-0062)', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const input = deployInput()
+		const access = { ...APPROVED, checker: '0.8.1' }
+		const environment = { ...input.environment, access }
+		await recordingProvider(jobs).deploy({
+			...input,
+			environment,
+			managedEnvironment: { ...input.managedEnvironment, FABRIKA_PROXY_SECRET: 'p'.repeat(43) },
+		})
+		expect(jobs[0]?.managedEnvironment?.['FABRIKA_PROXY_SECRET']).toBeUndefined()
+		expect(jobs[0]?.approvedAccess?.framework).toBe('0.8.1')
+		for (
+			const [name, value] of [['FABRIKA_JOB_NIGHTLY_KEY', 'px_job'], ['FABRIKA_EMAIL_RESEND_API_KEY', 're_key'], ['FABRIKA_TOKEN_KEYS', 'kid:secret']]
+		) {
+			await expect(recordingProvider(jobs).deploy({ ...input, environment, managedEnvironment: { ...input.managedEnvironment, [name]: value } })).rejects
+				.toThrow('framework 0.8.1')
+		}
+		expect(jobs).toHaveLength(1)
+	})
+
+	test('an application on 0.9 gets the hop secret its object checks', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const input = deployInput()
+		const secret = 'p'.repeat(43)
+		await recordingProvider(jobs).deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, FABRIKA_PROXY_SECRET: secret } })
+		expect(jobs[0]?.managedEnvironment?.['FABRIKA_PROXY_SECRET']).toBe(secret)
 	})
 
 	test('a key the deploy no longer writes is left out of the job, for the deploy to delete', async () => {
@@ -881,7 +910,12 @@ describe('Cloudflare control provider', () => {
 		expect(outcome).toMatchObject({ state: 'succeeded' })
 		expect(schemas).toEqual([access.schema])
 		// The runner deploys the proxy table and the digest from this, not from the checkout.
-		expect(jobs[0]?.approvedAccess).toEqual({ kind: 'contract', contract: notesArtifact, contractDigest: access.contractDigest })
+		expect(jobs[0]?.approvedAccess).toEqual({
+			kind: 'contract',
+			contract: notesArtifact,
+			contractDigest: access.contractDigest,
+			framework: access.checker,
+		})
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
 

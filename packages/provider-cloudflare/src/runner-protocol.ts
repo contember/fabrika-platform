@@ -1,5 +1,6 @@
 import { contractArtifactSchema } from '@fabrika/app/contract'
 import { type ContractArtifact, isDigest } from '@fabrika/auth-core'
+import { FRAMEWORK_RELEASE_PATTERN } from '@fabrika/provider-contract'
 import { z } from 'zod'
 
 export const runnerStateSchema = z.enum(['pending', 'cloning', 'installing', 'deploying', 'succeeded', 'failed'])
@@ -35,12 +36,18 @@ export interface RunnerApprovedAccess {
 	readonly kind: 'contract'
 	readonly contract: ContractArtifact
 	readonly contractDigest: string
+	/**
+	 * The framework release whose reader read the application. It picks the Worker's shape: the Durable Object from
+	 * 0.9, the stateless Worker before it. Absent from a Control older than the runner, which deploys the older shape.
+	 */
+	readonly framework?: string
 }
 
 export const runnerApprovedAccessSchema = z.object({
 	kind: z.literal('contract'),
 	contract: z.unknown(),
 	contractDigest: z.string().refine(isDigest),
+	framework: z.string().regex(FRAMEWORK_RELEASE_PATTERN).optional(),
 })
 	.strict()
 	.transform((access, context): RunnerApprovedAccess => {
@@ -49,7 +56,12 @@ export const runnerApprovedAccessSchema = z.object({
 			context.addIssue({ code: z.ZodIssueCode.custom, message: 'not a contract artifact' })
 			return z.NEVER
 		}
-		return { kind: 'contract', contract: contract.data, contractDigest: access.contractDigest }
+		return {
+			kind: 'contract',
+			contract: contract.data,
+			contractDigest: access.contractDigest,
+			...(access.framework === undefined ? {} : { framework: access.framework }),
+		}
 	})
 
 /** Where the runner leaves the job's `RunnerApprovedAccess` as JSON for the executor — beside the checkout, never inside it. */

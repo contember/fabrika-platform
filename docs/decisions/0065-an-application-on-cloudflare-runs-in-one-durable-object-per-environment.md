@@ -84,8 +84,11 @@ SQLite database. The Worker only forwards each request to it.**
 - Operators read an environment's data in the dashboard's Data Studio; there is no bulk export of an object's SQLite.
 - Local runs and tests need Lopata 0.30 or newer, which implements an object's `storage.transaction` over
   `bun:sqlite` and nests it as workerd does.
-- Existing Cloudflare applications are stateless and change only in their generated entry; the provider adds the
-  object class, its migration and the bucket on their next deploy.
+- The object runs from framework 0.9. An application on an older release keeps its stateless Worker: Control names the
+  release it read the application with, and the deployer gives that Worker no object, bucket, tick or hop secret, and
+  refuses what it cannot run (jobs, webhooks, public procedures, installation mail, token purposes), as before
+  ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)). On its first deploy at 0.9 the provider adds
+  the object class, its migration and the bucket.
 
 ## Alternatives considered
 

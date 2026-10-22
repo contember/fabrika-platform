@@ -1,5 +1,5 @@
 import { ReconcileSchemaError } from '@fabrika/auth'
-import { type AppEnvironment, appEnvironmentId, type AppSchema, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type AppEnvironment, appEnvironmentId, type AppSchema, FABRIKA_PROXY_SECRET, parseAppEnvironmentId } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -22,7 +22,7 @@ import { isCrossOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy-core/headers'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
-import { assertCloudflareContract } from './contract-support'
+import { assertCloudflareContract, assertStatelessEnvironment, runsInObject } from './contract-support'
 import { type RunnerApprovedAccess, runnerApprovedAccessSchema, type RunnerIamReconcile } from './runner-protocol'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
 // cannot typecheck (they do not relax the two strict flags the raw TS needs).
@@ -274,7 +274,12 @@ const awaitWithSignal = async <T>(signal: AbortSignal, invoke: () => Promise<T>)
 const runnerApprovedAccess = (environment: ProviderEnvironment): RunnerApprovedAccess | undefined =>
 	environment.access === undefined
 		? undefined
-		: { kind: 'contract', contract: environment.access.contract, contractDigest: environment.access.contractDigest }
+		: {
+			kind: 'contract',
+			contract: environment.access.contract,
+			contractDigest: environment.access.contractDigest,
+			framework: environment.access.checker,
+		}
 
 const buildJob = async (options: CloudflareControlOptions, input: ProviderDeployInput): Promise<CloudflareRunnerJob> => {
 	input.signal.throwIfAborted()
@@ -291,6 +296,9 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	}
 	// The deployer refuses it again from the contract it serves; this fails before the clone.
 	if (approvedAccess !== undefined) assertCloudflareContract(approvedAccess.contract)
+	const release = input.environment.access?.checker
+	const stateless = release !== undefined && !runsInObject(release)
+	if (stateless) assertStatelessEnvironment(input.managedEnvironment, release)
 	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal, input.sourceBinding))
 	const listInstallationApps = options.installationApps
 	const installationApps = listInstallationApps === undefined
@@ -300,7 +308,8 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		)
 	const managedEnvironment: Record<string, string> = {}
 	for (const [name, value] of Object.entries(input.managedEnvironment)) {
-		if (value !== null) managedEnvironment[name] = value
+		// An older release's Worker would demand the hop secret from a proxy Worker that never sends it.
+		if (value !== null && !(stateless && name === FABRIKA_PROXY_SECRET)) managedEnvironment[name] = value
 	}
 	return {
 		runId: input.runId,

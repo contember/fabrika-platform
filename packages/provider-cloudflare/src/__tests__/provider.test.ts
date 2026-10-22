@@ -153,6 +153,8 @@ const deploy = (
 		readonly contract?: ContractArtifact
 		/** The digest Control sends with `contract`: the application's own release's; `contractDigest(contract)` by default. */
 		readonly contractDigest?: string
+		/** The application's framework release Control names with `contract`: `0.9.0` by default, `null` for none. */
+		readonly framework?: string | null
 		readonly installationApps?: readonly AppEnvironment[]
 		readonly platformIam?: PlatformIamTarget
 	} = {},
@@ -190,7 +192,14 @@ const deploy = (
 		managedEnvironment: options.managedEnvironment ?? {},
 		...(contract === undefined
 			? {}
-			: { approved: { kind: 'contract' as const, contract, contractDigest: options.contractDigest ?? contractDigest(contract) } }),
+			: {
+				approved: {
+					kind: 'contract' as const,
+					contract,
+					contractDigest: options.contractDigest ?? contractDigest(contract),
+					...(options.framework === null ? {} : { framework: options.framework ?? '0.9.0' }),
+				},
+			}),
 		...(options.installationApps === undefined ? {} : { installationApps: options.installationApps }),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
@@ -1457,6 +1466,17 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		expect(application.triggers).toEqual({ crons: ['* * * * *'] })
 		const { resources } = await generateWranglerConfigs(provisioned().root, 'stage')
 		expect(resources.filter((resource) => resource.kind === 'r2_bucket').map((resource) => resource.remote)).toEqual(['stage-demo-files'])
+	})
+
+	test('an application on a framework before 0.9, or a run from a Control that names no release, keeps the stateless Worker (ADR-0062)', async () => {
+		for (const framework of ['0.8.1', null]) {
+			await deploy(rec, config(), { contract: notesArtifact, framework })
+			const application = await generatedConfig('stage-demo')
+			expect(application.durable_objects).toBeUndefined()
+			expect(application.migrations).toBeUndefined()
+			expect(application.r2_buckets).toBeUndefined()
+			rec.provisions.shift()
+		}
 	})
 
 	test('a contract with neither a job nor a file kind gets the object, the bucket and an empty cron list, which clears an older tick', async () => {
