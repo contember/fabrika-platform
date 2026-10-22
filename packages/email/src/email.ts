@@ -24,6 +24,12 @@ export interface EmailMessage {
 	 */
 	readonly unsubscribeUrl?: string
 	/**
+	 * One message of a send to many recipients (a newsletter, an announcement), not a reply to what the recipient did.
+	 * A provider keeps such mail apart from transactional mail, and the law and the mailbox providers ask it to carry
+	 * an unsubscribe, so it needs `unsubscribeUrl`. A transport without `broadcast` refuses it.
+	 */
+	readonly broadcast?: boolean
+	/**
 	 * Files the message carries, at most `MAX_EMAIL_ATTACHMENTS`, together at most the transport's `maxAttachmentBytes`.
 	 * A transport without `maxAttachmentBytes` refuses a message that has any; an empty list is none.
 	 */
@@ -51,6 +57,8 @@ export interface EmailSenderCapabilities {
 	readonly refusedAttachmentExtensions?: readonly string[]
 	/** The fewest characters a text or HTML body has once trimmed; absent: any body that is not blank. */
 	readonly minBodyLength?: number
+	/** Whether it sends a `broadcast` message, on its provider's channel for them where it has one; absent is no. */
+	readonly broadcast?: boolean
 }
 
 export interface EmailSender {

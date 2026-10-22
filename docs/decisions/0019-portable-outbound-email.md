@@ -85,6 +85,14 @@ as `dropped`: an operator's decision, never a silent loss.
   more. Resend, AhaSend and Lettermint are idempotent and synchronous. Postmark is synchronous with no idempotency key.
   SmartEmailing is neither. What each offers and what it has been checked against is the
   [reference's table](../reference/outbound-email.md#built-in-providers).
+- **Broadcast mail is marked, not inferred.** A message of a send to many recipients carries `broadcast: true` and
+  needs an unsubscribe URL. Providers keep broadcast mail apart from transactional mail: Postmark has a broadcast
+  stream and pauses a server whose transactional stream carries it, Lettermint a broadcast route on separate
+  infrastructure, and AhaSend's terms allow transactional mail only. The capability `broadcast` says whether a
+  transport sends one, on its provider's channel for them; one without it refuses the message before any I/O, and the
+  relay refuses it at the handoff while Control's own transport sends none. Rejected: one transport per kind for the
+  installation, which doubles every operator step for a distinction one field carries; and inferring the kind from the
+  unsubscribe URL, which a transactional message may carry too.
 - Two more senders deliver nothing: **Directory** writes each message to a directory for a local composition, and
   **Memory** keeps them in memory for tests and `fabrika app dev`, with controls that inject each kind of failure.
   No variable selects Memory: the test kit and `fabrika app dev` pass it as a boot option (§3). IAM takes a Directory

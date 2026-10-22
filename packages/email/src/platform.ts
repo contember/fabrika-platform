@@ -8,7 +8,7 @@ import {
 } from './email.js'
 import { parseTimeout, postToProvider } from './http.js'
 import { encodePlatformMailRequest, parsePlatformMailAnswer, PLATFORM_MAIL_CAPABILITIES, PLATFORM_MAIL_SEND_PATH } from './platform-wire.js'
-import { isVisibleAscii, validateEmailAttachments, validateEmailMessage } from './validation.js'
+import { isVisibleAscii, validateEmailAttachments, validateEmailBroadcast, validateEmailMessage } from './validation.js'
 
 export {
 	encodePlatformMailRequest,
@@ -68,6 +68,7 @@ export class PlatformEmailSender implements EmailSender {
 	async send(message: EmailMessage, signal: AbortSignal): Promise<EmailDeliveryResult> {
 		validateEmailMessage(message)
 		validateEmailAttachments(message, this.capabilities, LABEL)
+		validateEmailBroadcast(message, this.capabilities, LABEL)
 
 		// postToProvider serializes the body itself; the canonical text survives the round trip unchanged.
 		const body: unknown = JSON.parse(encodePlatformMailRequest(message))

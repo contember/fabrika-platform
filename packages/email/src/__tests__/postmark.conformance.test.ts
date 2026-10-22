@@ -11,6 +11,7 @@ const requestSchema = z.object({
 	HtmlBody: z.string().optional(),
 	ReplyTo: z.string().optional(),
 	Headers: z.array(z.object({ Name: z.string(), Value: z.string() }).strict()).optional(),
+	MessageStream: z.string().optional(),
 	Attachments: z.array(z.object({ Name: z.string(), Content: z.string(), ContentType: z.string() }).strict()).optional(),
 })
 
@@ -35,6 +36,7 @@ describeEmailSenderConformance('PostmarkEmailSender', {
 			...(body.ReplyTo === undefined ? {} : { replyTo: body.ReplyTo }),
 			...(fromName === undefined ? {} : { fromName }),
 			...(unsubscribe === undefined || oneClick !== true ? {} : { unsubscribeUrl: unsubscribe.Value.replace(/^<(.*)>$/, '$1') }),
+			...(body.MessageStream === 'broadcast' ? { broadcast: true } : {}),
 			...(body.Attachments === undefined
 				? {}
 				: {

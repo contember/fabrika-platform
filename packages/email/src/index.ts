@@ -37,5 +37,6 @@ export {
 	MAX_UNSUBSCRIBE_URL_LENGTH,
 	validateEmailAttachments,
 	validateEmailBodies,
+	validateEmailBroadcast,
 	validateEmailMessage,
 } from './validation.js'

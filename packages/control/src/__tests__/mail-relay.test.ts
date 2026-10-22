@@ -1,7 +1,8 @@
 // The relay's receiver: authentication, the body, idempotency and the gate, through `handleMailRelay` against the
 // shipped SQLite schema. The dispatcher and maintenance have their own files.
 
-import type { EmailMessage } from '@fabrika/email'
+import type { EmailMessage, EmailSender } from '@fabrika/email'
+import { MemoryEmailSender } from '@fabrika/email/memory'
 import { encodePlatformMailRequest, hashPlatformKey, installationMailKey, parsePlatformMailAnswer } from '@fabrika/email/platform'
 import type { JobQueue } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
@@ -31,6 +32,8 @@ interface Relay {
 interface RelayOptions {
 	transport?: InstallationMail
 	relay?: boolean
+	/** Control's sender; none by default. */
+	sender?: EmailSender
 }
 
 async function relay(options: RelayOptions = {}): Promise<Relay> {
@@ -61,7 +64,7 @@ async function relay(options: RelayOptions = {}): Promise<Relay> {
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'local',
 		MAIL_TRANSPORT: options.transport ?? TRANSPORT,
-		...(options.relay === false ? {} : { MAIL_RELAY: { queue, installationSecret: RPC_SECRET, sender: null } }),
+		...(options.relay === false ? {} : { MAIL_RELAY: { queue, installationSecret: RPC_SECRET, sender: options.sender ?? null } }),
 	}
 	return {
 		harness,
@@ -279,6 +282,28 @@ describe('the mail relay: the gate', () => {
 			await rule(r.harness, 'notes@prod', 'example.com', 'pass')
 			expect(await decided(r, await r.send({}))).toEqual({ state: 'held', ruleId: null })
 			expect(r.jobs).toEqual([])
+		}
+	})
+})
+
+describe('the mail relay: a broadcast message', () => {
+	const BROADCAST: EmailMessage = { ...MESSAGE, idempotencyKey: 'news:1', unsubscribeUrl: 'https://notes.example/unsubscribe?t=1', broadcast: true }
+
+	test("is refused as invalid_message and not recorded when Control's transport sends none", async () => {
+		const r = await relay({ sender: new MemoryEmailSender({ capabilities: { broadcast: false } }) })
+		const response = await r.send({ body: encodePlatformMailRequest(BROADCAST) })
+		expect(await answer(response)).toEqual({ status: 400, answer: { error: { code: 'invalid_message' } } })
+		expect(await r.harness.repositories.mailMessages.list({ limit: 10 })).toEqual([])
+		expect(r.jobs).toEqual([])
+	})
+
+	test('is stored as one and queued when the transport sends them, or when there is no sender to ask yet', async () => {
+		for (const sender of [new MemoryEmailSender(), undefined]) {
+			const r = await relay(sender === undefined ? {} : { sender })
+			await acceptedId(await r.send({ body: encodePlatformMailRequest(BROADCAST) }))
+			const [row] = await r.harness.repositories.mailMessages.list({ limit: 10 })
+			expect(row?.content).toBe(encodePlatformMailRequest(BROADCAST))
+			expect(r.jobs).toHaveLength(1)
 		}
 	})
 })

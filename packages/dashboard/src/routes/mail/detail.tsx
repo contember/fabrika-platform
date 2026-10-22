@@ -105,6 +105,7 @@ export function MailContent({ content, sender }: { content: MailContentDto; send
 					<Field label="Subject" wide>{message.subject}</Field>
 					{message.fromName !== undefined && <Field label="From name">{message.fromName}</Field>}
 					{message.replyTo !== undefined && <Field label="Reply to">{message.replyTo}</Field>}
+					{message.broadcast === true && <Field label="Kind">Broadcast</Field>}
 					{message.unsubscribeUrl !== undefined && (
 						<Field label="Unsubscribe" wide>
 							<code>{message.unsubscribeUrl}</code>

@@ -41,7 +41,7 @@ interface Fixture {
 	repositories: ControlRepositories
 	dispatched: MailDispatchMessage[]
 	call(auth: AuthContext, method: string, input?: unknown): Promise<Response>
-	seed(sender: string, state: MailMessageState): Promise<string>
+	seed(sender: string, state: MailMessageState, broadcast?: boolean): Promise<string>
 }
 
 function fixture(options: { relay?: boolean; idempotent?: boolean } = {}): Fixture {
@@ -72,7 +72,7 @@ function fixture(options: { relay?: boolean; idempotent?: boolean } = {}): Fixtu
 			}
 			return rpcResult(rpcRequest(method, input), deps)
 		},
-		async seed(sender, state) {
+		async seed(sender, state, broadcast = false) {
 			const id = uuidv7()
 			const content = encodePlatformMailRequest({
 				to: 'ada@example.com',
@@ -80,6 +80,7 @@ function fixture(options: { relay?: boolean; idempotent?: boolean } = {}): Fixtu
 				text: 'Hello',
 				html: '<p>Hello</p>',
 				idempotencyKey: id,
+				...(broadcast ? { unsubscribeUrl: 'https://notes.example/unsubscribe?t=1', broadcast: true } : {}),
 				attachments: [{ filename: 'invoice.pdf', contentType: 'application/pdf', content: new Uint8Array(12) }],
 			})
 			await repositories.mailMessages.insertOrFind({
@@ -177,6 +178,13 @@ describe('mail.messages.get', () => {
 				attachments: [{ filename: 'invoice.pdf', contentType: 'application/pdf', bytes: 12 }],
 			},
 		})
+	})
+
+	test('a broadcast message reads as one', async () => {
+		const f = fixture()
+		const id = await f.seed('notes@prod', 'held', true)
+		const detail = await json(await f.call(authWithActions(['mail.read', 'mail.content.read']), 'mail.messages.get', { id }), detailSchema)
+		expect(detail.content).toMatchObject({ kind: 'present', message: { unsubscribeUrl: 'https://notes.example/unsubscribe?t=1', broadcast: true } })
 	})
 
 	test("an installation service's content is withheld from every caller, whatever its state", async () => {

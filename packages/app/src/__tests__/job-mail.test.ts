@@ -249,6 +249,33 @@ describe('attachments', () => {
 	})
 })
 
+describe('a broadcast message', () => {
+	const mailOver = (sender: MemoryEmailSender) =>
+		jobMail({
+			transport: { sender, available: true },
+			keyPrefix: 'p:',
+			signal: new AbortController().signal,
+			assertLive: () => {},
+			open: () => Promise.reject(new Error('no file')),
+		})
+	const unsubscribe = { url: 'https://notes.example/unsubscribe?t=1' }
+
+	test('reaches the transport marked, and a transactional one unmarked', async () => {
+		const sender = new MemoryEmailSender()
+		await mailOver(sender).send({ ...message, unsubscribe, broadcast: true })
+		await mailOver(sender).send({ ...message, idempotencyKey: 'n-2' })
+		expect(sender.accepted[0]?.message.broadcast).toBe(true)
+		expect(sender.accepted[1]?.message).not.toHaveProperty('broadcast')
+	})
+
+	test('needs an unsubscribe, and is refused by a transport that sends none', async () => {
+		const sender = new MemoryEmailSender({ capabilities: { broadcast: false } })
+		await expect(mailOver(new MemoryEmailSender()).send({ ...message, broadcast: true })).rejects.toMatchObject({ code: 'invalid_message' })
+		await expect(mailOver(sender).send({ ...message, unsubscribe, broadcast: true })).rejects.toMatchObject({ code: 'invalid_message' })
+		expect(sender.accepted).toEqual([])
+	})
+})
+
 describe('an installation without a transport', () => {
 	test('a local composition gives each mailer job mail that is not available, and says so once per job', async () => {
 		const problems: string[] = []

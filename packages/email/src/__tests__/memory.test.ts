@@ -19,6 +19,7 @@ describe('MemoryEmailSender', () => {
 		expect(sender.accepted).toEqual([{ message, messageId: 'memory-1', acceptedAt: 42 }])
 		expect(sender.handoffs).toEqual([{ message, at: 42, taken: true, answer: 'accepted' }])
 		expect(sender.capabilities).toEqual({
+			broadcast: true,
 			idempotent: true,
 			confirmation: 'sync',
 			maxBatch: 1,
@@ -128,6 +129,7 @@ describe('MemoryEmailSender', () => {
 		expect(second.messageId).not.toBe(first.messageId)
 		expect(sender.accepted.map((email) => email.message)).toEqual([message, message])
 		expect(sender.capabilities).toEqual({
+			broadcast: true,
 			idempotent: false,
 			confirmation: 'queued',
 			maxBatch: 1,

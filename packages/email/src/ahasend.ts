@@ -42,6 +42,7 @@ export interface AhaSendEmailSenderOptions extends HttpEmailSenderOptions {
 
 /** A refusal's body is one free-text `message`, so only the status is read. */
 export class AhaSendEmailSender extends HttpEmailSender {
+	/** No `broadcast`: AhaSend's terms allow it solely for transactional mail. */
 	readonly capabilities: EmailSenderCapabilities = {
 		idempotent: true,
 		confirmation: 'sync',

@@ -11,6 +11,7 @@ const requestSchema = z.object({
 	html: z.string().optional(),
 	reply_to: z.tuple([z.string()]).optional(),
 	headers: z.object({ 'List-Unsubscribe': z.string(), 'List-Unsubscribe-Post': z.literal('List-Unsubscribe=One-Click') }).strict().optional(),
+	route: z.string().optional(),
 	attachments: z.array(z.object({ filename: z.string(), content: z.string(), content_type: z.string() }).strict()).optional(),
 })
 
@@ -34,6 +35,7 @@ describeEmailSenderConformance('LettermintEmailSender', {
 			...(body.reply_to === undefined ? {} : { replyTo: body.reply_to[0] }),
 			...(fromName === undefined ? {} : { fromName }),
 			...(body.headers === undefined ? {} : { unsubscribeUrl: body.headers['List-Unsubscribe'].replace(/^<(.*)>$/, '$1') }),
+			...(body.route === 'broadcast' ? { broadcast: true } : {}),
 			...(body.attachments === undefined
 				? {}
 				: {
