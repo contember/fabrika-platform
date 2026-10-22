@@ -497,8 +497,9 @@ migration file is a widening in the approval diff
   application it started. Processes the platform runs around it (on Zerops
   the service's supervisor and the start script's shell, which `exec`s the
   launcher) are outside this guarantee, and so is a process with root or
-  `CAP_SYS_PTRACE`: the local stack's containers run as root, and whether a
-  Zerops application's user can `sudo` at run time is unverified. The roles
+  `CAP_SYS_PTRACE`: the local stack's containers run as root, and a Zerops
+  application's user has passwordless `sudo` at run time (verified 2026-10-21,
+  [platform facts](../reference/zerops-platform.md)). The roles
   bound what the application's SQL can do in every case; the launcher keeps
   the credential out of reach of application code only where it runs as an
   unprivileged user. A cheap namespace's shared credential stays one trust
@@ -514,6 +515,14 @@ migration file is a widening in the approval diff
 - A `SECURITY DEFINER` function anywhere in the database that the
   application's roles may call stops every deploy of every application in that
   database until it is dropped or `EXECUTE` on it is revoked from `PUBLIC`.
+- In a `dev` environment ([ADR-0049](0049-author-applications-through-mcp-in-control.md))
+  the dev launcher is this launcher: it holds the provisioning credential,
+  loads no application module, and starts the application with the runtime
+  credential only. It runs `fabrika db migrate` on every sync that changes a
+  migration, not only at deploy, so an edited applied migration fails that sync
+  and says to call `reset_dev`. `reset_dev` drops that environment's schema and
+  its role family and migrates from scratch; it exists only for kind `dev`. No
+  rule above changes for it.
 
 ## Alternatives considered
 

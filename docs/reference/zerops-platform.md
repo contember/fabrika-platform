@@ -1149,6 +1149,20 @@ the outgoing container keeps logging past the new `pipelineStart`, so its own la
 A build longer than `limit` needs no `desc` — each poll re-reads the newest window and the caller
 dedupes. Consumed by `ZeropsApi.readBuildLog`.
 
+### Verified live (2026-10-21, a namespace project of a test installation, a throwaway `ubuntu/bun@1.3` service) — what a `dev` environment relies on
+
+[ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md)'s `dev` environment rests on these facts:
+
+| Fact                                                                                                    | Result                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Control from inside a namespace (`control:3000`, `control.zerops:3000`, `iam:3000`, the container name) | **Unreachable**: projects share no private network. The namespace's own `postgres:5432` and services connect in 1–19 ms. |
+| Control's public origin from a namespace container                                                      | 200 in 15–68 ms                                                                                                          |
+| Files written at runtime, across `service stop`/`start` and `service restart`                           | **Survive**. A deploy replaces the container and loses them.                                                             |
+| Stopped → `service start` → serving                                                                     | 8.9 s (1 run)                                                                                                            |
+| `service restart`                                                                                       | 17–19 s (4 runs)                                                                                                         |
+| `zops deploy` of a prebuilt artefact; `zops push` with a one-line build                                 | 21–43 s; 51–53 s: the floor of a pipeline, which creates a build container and a new runtime container on every run      |
+| `sudo -n true` as the application user (uid `zerops`)                                                   | Exits 0: passwordless. The runtime environment also carries `ZEROPS_CertKey` and `ZEROPS_CertCrt`.                       |
+
 ## Fabrika placement mapping
 
 The Fabrika platform project of the `standard` tier contains (the `light` tier has the same roles on
