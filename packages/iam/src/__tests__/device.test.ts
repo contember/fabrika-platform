@@ -75,6 +75,7 @@ function token(subject: string, type: 'user' | 'service' = 'user', app = 'vozka'
 		permissions: [{ action: '*', scope: null, source: 'grant' }],
 		issuedAt: now(),
 		expiresAt: now() + 300,
+		session: true,
 	})
 }
 
@@ -328,6 +329,30 @@ describe('device authorization', () => {
 		expect(await inspectDeviceAuthorization(services, env, setup.caller)).toEqual({ ok: false, reason: 'not_allowed' })
 		h.sqlite.run('UPDATE principals SET disabled_at = NULL, activated_at = NULL WHERE id = ?', [principalId])
 		expect(await inspectDeviceAuthorization(services, env, setup.caller)).toEqual({ ok: false, reason: 'not_allowed' })
+	})
+
+	test('a token minted from a key narrowed below the approval refuses every human procedure', async () => {
+		const setup = await attempt()
+		const key = `px_${randomToken(32)}`
+		await h.repositories.credentials.createCredential({
+			tokenHash: await hashToken(key),
+			label: 'narrowed',
+			principalId,
+			app: 'vozka',
+			issuedBy: principalId,
+			expiresAt: now() + 3600,
+			grants: [{ action: 'app.manage', scopeType: scope.type, scopeValue: scope.value }],
+		})
+		const minted = await mintFromKey(services, env, { app: 'vozka', key, requestId: 'narrowed-key' })
+		if (!minted.result.ok) throw new Error(`mintFromKey refused: ${minted.result.reason}`)
+		const caller = { ...setup.caller, credential: minted.result.token }
+		expect(await inspectDeviceAuthorization(services, env, caller)).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await approveDeviceAuthorization(services, env, { ...caller, scope })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await denyDeviceAuthorization(services, env, caller)).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await listOwnDeviceAuthorizations(services, env, { app: 'vozka', credential: minted.result.token, requestId: 'narrowed-key' })).toEqual({
+			ok: false,
+			reason: 'not_allowed',
+		})
 	})
 
 	for (const mutation of ['DELETE FROM grants', 'UPDATE principals SET disabled_at = 1']) {

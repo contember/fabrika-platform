@@ -39,7 +39,8 @@ import { getSigner, verifyAccessToken } from './signing'
 async function human(services: Services, env: Env, input: DeviceAuthorizationCaller) {
 	if (!services.config.adminAudiences.has(input.app) || input.credential.startsWith(API_KEY_PREFIX)) return null
 	const claims = await verifyAccessToken(await getSigner(env), input.credential, { issuer: services.config.issuer, audience: input.app })
-	if (claims?.ptype !== 'user') return null
+	// A token the proxy minted from a `px_` key carries that key's narrowed grants, but approval measures live permissions.
+	if (claims?.ptype !== 'user' || claims.session !== true) return null
 	return activeHuman(services, claims.sub)
 }
 
