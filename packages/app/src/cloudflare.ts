@@ -1,17 +1,26 @@
 // ─── Cloudflare Workers adapter ──────────────────────────────────────
 
-import { DecodedIamMembership } from '@fabrika/auth'
-import type { IamMembershipRpc } from '@fabrika/auth-core'
-import { parseJwks } from '@fabrika/jwks'
+import { FABRIKA_PROXY_SECRET, PROXY_SECRET_HEADER } from '@fabrika/auth-core'
+import {
+	APPLICATION_OBJECT_NAME,
+	type ContractWorkerOptions,
+	type ImplementationLoader,
+	registerApplication,
+	TICK_HEADER,
+} from './cloudflare/application.js'
+import { method } from './cloudflare/bindings.js'
+import { CLOUDFLARE_APPLICATION_BINDING } from './cloudflare/names.js'
 import type { FetchService, RequestExecutionContext } from './fetch.js'
-import { boot, type ContractApp, type IamKeySource } from './implement/boot.js'
-import { CONNECT_BINDING_PREFIX, type ConnectFetch } from './implement/connect.js'
-import { type CrashEvents, environmentCrashReporter, reportSurvivedCrashes } from './implement/crashes.js'
-import type { SpaAssets } from './implement/dispatch.js'
-import { captureEnvironment } from './implement/environment.js'
-import type { ContractImplementation } from './implement/implement.js'
 
 export { markProductionProcess } from '@fabrika/db/production'
+export {
+	type ApplicationMigration,
+	type ApplicationState,
+	type ApplicationStorage,
+	type ContractWorkerOptions,
+	FabrikaApplication,
+	type ImplementationLoader,
+} from './cloudflare/application.js'
 
 /** Minimal structural view of a Workers `ExecutionContext`. */
 export interface CloudflareExecutionContext extends RequestExecutionContext {
@@ -58,166 +67,67 @@ export function createCloudflareWorker<Env>(
 
 // ─── Contract applications ───────────────────────────────────────────
 
-/** The framework's bindings: IAM's application entrypoint and the Workers Assets of the SPA. No handler sees them. */
-const FRAMEWORK_BINDINGS: ReadonlySet<string> = new Set(['IAM', 'ASSETS'])
-
-function method(target: unknown, name: string): ((...args: unknown[]) => unknown) | null {
-	if (typeof target !== 'object' || target === null || !(name in target)) {
-		return null
+/** The environment's proxy secret, which every request the Worker forwards to its object carries. */
+function proxySecretOf(env: Readonly<Record<string, unknown>>): string {
+	const secret = env[FABRIKA_PROXY_SECRET]
+	if (typeof secret !== 'string' || secret === '') {
+		throw new Error(`${FABRIKA_PROXY_SECRET} is not set; the application's Worker forwards nothing to its object without it`)
 	}
-	const found: unknown = Reflect.get(target, name)
-	return typeof found === 'function' ? (...args) => Reflect.apply(found, target, args) : null
+	return secret
 }
 
-function bindingKeySource(binding: unknown): IamKeySource {
-	const getJwks = method(binding, 'getJwks')
-	if (getJwks === null) {
-		throw new Error('the IAM binding is missing (env.IAM); the platform binds it to every application Worker')
+/** The environment's one object (`FABRIKA_APPLICATION`), as a fetch. */
+function applicationObject(env: Readonly<Record<string, unknown>>): (request: Request) => Promise<Response> {
+	const namespace = env[CLOUDFLARE_APPLICATION_BINDING]
+	const idFromName = method(namespace, 'idFromName')
+	const get = method(namespace, 'get')
+	if (idFromName === null || get === null) {
+		throw new Error(`the ${CLOUDFLARE_APPLICATION_BINDING} binding is missing; the provider binds the application's Durable Object to its Worker`)
 	}
-	return {
-		async getJwks() {
-			const jwks = parseJwks(await getJwks())
-			if (jwks === null) {
-				throw new Error('IAM returned no usable key set')
-			}
-			return jwks
-		},
+	const stub: unknown = get(idFromName(APPLICATION_OBJECT_NAME))
+	// Read, not tested with `in`: a stub answers `fetch` without owning the property.
+	const fetchObject: unknown = typeof stub === 'object' && stub !== null ? Reflect.get(stub, 'fetch') : undefined
+	if (typeof fetchObject !== 'function') {
+		throw new Error(`the ${CLOUDFLARE_APPLICATION_BINDING} binding answered no object`)
 	}
-}
-
-/**
- * IAM's membership operations on the `IAM` binding (`PropustkaApplication`), every answer decoded like the HTTP
- * transport's. A binding without them is no membership transport, and `boot` refuses a contract that needs one.
- */
-function bindingMembership(binding: unknown): IamMembershipRpc | undefined {
-	const methods = ['requestDelegation', 'createScope', 'assignMember', 'revokeMember', 'listMembers', 'issueLink', 'revokeLink'] as const
-	if (!methods.every((name) => method(binding, name) !== null)) {
-		return undefined
-	}
-	return new DecodedIamMembership(async (name, input) => {
-		const call = method(binding, name)
-		if (call === null) {
-			throw new Error(`the IAM binding has no ${name}`)
+	return async (request) => {
+		const response: unknown = await Reflect.apply(fetchObject, stub, [request])
+		if (!(response instanceof Response)) {
+			throw new Error("the application's object answered something that is not a Response")
 		}
-		return await call(input)
-	})
-}
-
-function bindingAssets(binding: unknown): SpaAssets | undefined {
-	const fetchAsset = method(binding, 'fetch')
-	if (fetchAsset === null) {
-		return undefined
-	}
-	return {
-		async serve(_mount, request) {
-			const response: unknown = await fetchAsset(request)
-			if (!(response instanceof Response)) {
-				throw new Error('the ASSETS binding answered something that is not a Response')
-			}
-			return response
-		},
+		return response
 	}
 }
 
-/**
- * The service bindings to owners' proxy Workers (`FABRIKA_CONNECT_<IMPORT>`), which `captureEnvironment` keeps from
- * the application because no `FABRIKA_*` value reaches it. A binding routes by itself: the URL it is called with
- * carries the owner's host, which the proxy Worker selects the application by.
- */
-function connectBindings(env: Readonly<Record<string, unknown>>): Record<string, ConnectFetch> {
-	const bindings: Record<string, ConnectFetch> = {}
-	for (const [name, binding] of Object.entries(env)) {
-		// Read, not tested with `in`: a binding stub may answer `fetch` without owning the property (Lopata's does not).
-		const fetchOwner: unknown = name.startsWith(CONNECT_BINDING_PREFIX) && typeof binding === 'object' && binding !== null
-			? Reflect.get(binding, 'fetch')
-			: undefined
-		if (typeof fetchOwner === 'function') {
-			bindings[name] = async (request) => {
-				const response: unknown = await Reflect.apply(fetchOwner, binding, [request])
-				if (!(response instanceof Response)) {
-					throw new Error(`the ${name} binding answered something that is not a Response`)
-				}
-				return response
-			}
-		}
-	}
-	return bindings
-}
-
-/** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
-export type ImplementationLoader = () => Promise<{ readonly default: ContractImplementation }>
-
-export interface ContractWorkerOptions {
-	/** Where the isolate hears of an unhandled rejection; the global `unhandledrejection` event by default. */
-	readonly rejections?: CrashEvents
-	/** What posts a report to Operations' ingest; `fetch` by default. */
-	readonly operationsFetch?: (request: Request) => Promise<Response>
-}
-
-/** The isolate's `unhandledrejection` event. Listening leaves the runtime's own handling, its log line, in place. */
-function globalRejectionEvents(): CrashEvents {
-	return {
-		listen(listener) {
-			const rejection = (event: Event) => listener('unhandled_rejection', Reflect.get(event, 'reason'))
-			globalThis.addEventListener('unhandledrejection', rejection)
-			return () => globalThis.removeEventListener('unhandledrejection', rejection)
-		},
-	}
-}
-
-/**
- * A Worker module for a contract application, called only by the generated entrypoint. A Worker receives its
- * environment with the first request, so the framework captures it, scrubs the process environment and only then
- * imports the application and boots it, once per environment object. With an Operations DSN, the first failed boot
- * of an isolate is reported, and once one booted, every unhandled rejection of the isolate is, within a budget.
- */
-export function createContractWorker(load: ImplementationLoader, options: ContractWorkerOptions = {}): {
+export interface ContractWorker {
 	fetch(request: Request, env: Readonly<Record<string, unknown>>, exec: CloudflareExecutionContext): Promise<Response>
-} {
-	const booted = new WeakMap<object, Promise<ContractApp>>()
-	let bootFailureReported = false
-	let watchingRejections = false
-	const bootFor = async (env: Readonly<Record<string, unknown>>, exec: CloudflareExecutionContext): Promise<ContractApp> => {
-		const variables = Object.fromEntries(Object.entries(env).filter(([name]) => !FRAMEWORK_BINDINGS.has(name)))
-		const environment = captureEnvironment(variables)
-		const crashes = environmentCrashReporter(environment, options.operationsFetch)
-		let contractApp: ContractApp
-		try {
-			const { default: app } = await load()
-			contractApp = boot(app, {
-				environment,
-				iam: bindingKeySource(env['IAM']),
-				assets: bindingAssets(env['ASSETS']),
-				membership: bindingMembership(env['IAM']),
-				connectBindings: connectBindings(env),
-				// The proxy Worker sets `X-Fabrika-Client-Ip` from `CF-Connecting-IP`, the visitor Cloudflare saw.
-				clientAddress: 'vouched',
-				...(options.operationsFetch === undefined ? {} : { operationsFetch: options.operationsFetch }),
-			})
-		} catch (error) {
-			// Every request of a failed isolate boots again; one report says it.
-			if (crashes !== null && !bootFailureReported) {
-				bootFailureReported = true
-				exec.waitUntil(crashes.report('boot_failed', error))
-			}
-			throw error
-		}
-		if (crashes !== null && !watchingRejections) {
-			watchingRejections = true
-			reportSurvivedCrashes(options.rejections ?? globalRejectionEvents(), crashes)
-		}
-		return contractApp
-	}
+	scheduled(controller: CloudflareScheduledController, env: Readonly<Record<string, unknown>>, exec: CloudflareExecutionContext): Promise<void>
+}
+
+/**
+ * The Worker module of a contract application, called only by the generated entrypoint, which also exports
+ * `FabrikaApplication`. The application runs in the environment's one Durable Object (ADR-0065): `fetch` forwards
+ * every request to it with the proxy secret, the proxy's own headers unchanged, and `scheduled` forwards the minute
+ * tick. The object captures the environment, imports the application and boots it.
+ */
+export function createContractWorker(load: ImplementationLoader, options: ContractWorkerOptions = {}): ContractWorker {
+	registerApplication(load, options)
 	return {
-		async fetch(request, env, exec) {
-			let contractApp = booted.get(env)
-			if (contractApp === undefined) {
-				contractApp = bootFor(env, exec)
-				booted.set(env, contractApp)
-				// A failed boot is not cached: the next request boots again and fails with the same problems.
-				contractApp.catch(() => booted.delete(env))
+		async fetch(request, env) {
+			const headers = new Headers(request.headers)
+			headers.delete(TICK_HEADER)
+			headers.set(PROXY_SECRET_HEADER, proxySecretOf(env))
+			return await applicationObject(env)(new Request(request, { headers }))
+		},
+		async scheduled(controller, env) {
+			const tick = new Request('https://application.invalid/', {
+				method: 'POST',
+				headers: { [PROXY_SECRET_HEADER]: proxySecretOf(env), [TICK_HEADER]: String(controller.scheduledTime) },
+			})
+			const response = await applicationObject(env)(tick)
+			if (!response.ok) {
+				throw new Error(`the application's object answered the minute tick with ${response.status}`)
 			}
-			return (await contractApp).fetch(request, exec)
 		},
 	}
 }

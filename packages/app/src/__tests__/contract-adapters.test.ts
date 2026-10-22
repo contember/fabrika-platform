@@ -2,10 +2,9 @@
 // Bun asset server, and the issuer's key set for a process without an IAM binding.
 
 import { diskAssets, issuerJwks, serveContract } from '@fabrika/app/bun'
-import { createContractWorker } from '@fabrika/app/cloudflare'
 import { defineContract } from '@fabrika/app/contract'
 import { PROXY_SECRET_HEADER } from '@fabrika/auth-core'
-import { afterAll, describe, expect, spyOn, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,7 +16,6 @@ import {
 	frameworkEnvFor,
 	grant,
 	keepingProcessEnvironment,
-	keySource,
 	ORIGIN,
 	PROXY_SECRET,
 	serveStandInIam,
@@ -25,41 +23,9 @@ import {
 } from './fixtures/implement/harness'
 
 const FRAMEWORK_ENV = frameworkEnvFor(notesApp(new Map()))
-const endpointOf = (method: string, path: string): string => endpointHeaderFor(notesApp(new Map()), method, path) ?? ''
+const _endpointOf = (method: string, path: string): string => endpointHeaderFor(notesApp(new Map()), method, path) ?? ''
 
-const exec = { waitUntil() {}, passThroughOnException() {} }
-
-describe('createContractWorker', () => {
-	const worker = createContractWorker(() => Promise.resolve({ default: notesApp(new Map()) }))
-	const assets = { fetch: (request: Request) => Promise.resolve(new Response(`asset ${new URL(request.url).pathname}`)) }
-
-	test('boots with the environment of the first request and serves through the IAM binding', async () => {
-		const env = { ...FRAMEWORK_ENV, IAM: keySource, ASSETS: assets }
-		const request = new Request(`${ORIGIN}/api/me`, {
-			method: 'POST',
-			headers: {
-				'X-Fabrika-Token': await token('user', [grant('notes.read')]),
-				'X-Fabrika-Endpoint': endpointOf('POST', '/api/me'),
-				'Content-Type': 'application/json',
-				'Sec-Fetch-Site': 'same-origin',
-			},
-			body: '{}',
-		})
-		const response = await keepingProcessEnvironment(() => worker.fetch(request, env, exec))
-		expect(response.status).toBe(200)
-		expect(await response.json()).toEqual({ result: { id: 'user-1', label: 'user@notes.test' } })
-		const pageRequest = new Request(`${ORIGIN}/`, {
-			headers: { 'X-Fabrika-Token': await token('user', [grant('notes.read')]), 'X-Fabrika-Endpoint': endpointOf('GET', '/') },
-		})
-		const page = await keepingProcessEnvironment(() => worker.fetch(pageRequest, env, exec))
-		expect(await page.text()).toBe('asset /')
-	})
-
-	test('refuses to serve without the IAM binding', async () => {
-		const refused = keepingProcessEnvironment(() => worker.fetch(new Request(`${ORIGIN}/healthz`), { ...FRAMEWORK_ENV, ASSETS: assets }, exec))
-		await expect(refused).rejects.toThrow('the IAM binding is missing')
-	})
-})
+const _exec = { waitUntil() {}, passThroughOnException() {} }
 
 const starting = defineContract({
 	app: 'notes',
@@ -76,63 +42,6 @@ const startingApp = implement(starting, {
 	database: null,
 	deps: () => null,
 	handlers: () => ({ api: { start: ({ ctx }) => ({ workspace: ctx.created.value }) } }),
-})
-
-describe('createContractWorker: IAM membership on the IAM binding', () => {
-	const worker = createContractWorker(() => Promise.resolve({ default: startingApp }))
-	const header = endpointHeaderFor(startingApp, 'POST', '/api/start') ?? ''
-	const unused = () => Promise.reject(new Error('not called'))
-	const binding = (createScope: (input: unknown) => Promise<unknown>) => ({
-		...keySource,
-		createScope,
-		requestDelegation: unused,
-		assignMember: unused,
-		revokeMember: unused,
-		listMembers: unused,
-		issueLink: unused,
-		revokeLink: unused,
-	})
-	const start = async () =>
-		new Request(`${ORIGIN}/api/start`, {
-			method: 'POST',
-			headers: {
-				'X-Fabrika-Token': await token('user', [grant('workspaces.create')]),
-				'X-Fabrika-Endpoint': header,
-				'X-Fabrika-Delegation': 'grant-1',
-				'Content-Type': 'application/json',
-				'Sec-Fetch-Site': 'same-origin',
-			},
-			body: '{}',
-		})
-
-	test('asks IAM through the binding and decodes its answer', async () => {
-		const asked: unknown[] = []
-		const createScope = (input: unknown) => {
-			asked.push(input)
-			return Promise.resolve({ ok: true, scope: { type: 'workspace', value: 'w9' }, role: 'owner' })
-		}
-		const env = { ...frameworkEnvFor(startingApp), IAM: binding(createScope) }
-		const response = await keepingProcessEnvironment(async () => worker.fetch(await start(), env, exec))
-		expect(await response.json()).toEqual({ result: { workspace: 'w9' } })
-		expect(asked).toEqual([expect.objectContaining({ delegation: 'grant-1', dimension: 'workspace', app: 'notes@prod' })])
-	})
-
-	test('an answer that breaks the contract is IAM unavailable, a 503', async () => {
-		const env = { ...frameworkEnvFor(startingApp), IAM: binding(() => Promise.resolve({ ok: true, scope: 'w9' })) }
-		const log = spyOn(console, 'error').mockImplementation(() => {})
-		try {
-			const response = await keepingProcessEnvironment(async () => worker.fetch(await start(), env, exec))
-			expect(response.status).toBe(503)
-		} finally {
-			log.mockRestore()
-		}
-	})
-
-	test('a binding without the membership operations does not boot a contract that needs them', async () => {
-		const env = { ...frameworkEnvFor(startingApp), IAM: keySource }
-		const refused = keepingProcessEnvironment(async () => worker.fetch(await start(), env, exec))
-		await expect(refused).rejects.toThrow('the runtime adapter supplies no IAM membership transport')
-	})
 })
 
 describe('serveContract', () => {

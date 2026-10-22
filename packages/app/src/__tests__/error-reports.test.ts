@@ -3,15 +3,14 @@
 // outside any request or job run.
 
 import { serveContract } from '@fabrika/app/bun'
-import { createContractWorker } from '@fabrika/app/cloudflare'
-import { describe, expect, spyOn, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { type CrashEvents, type ProcessCrashKind, reportFatalCrashes, reportSurvivedCrashes } from '../implement/crashes'
 import { ServerFault } from '../implement/faults'
 import { exceptionChain, fitWithin, MAX_CAUSE_DEPTH, MAX_EXCEPTION_BYTES, MAX_FRAMES, MAX_MESSAGE_LENGTH, parseStack } from '../jobs/exception'
 import type { CrashKind, CrashReporter } from '../jobs/report'
 import { environmentScrubber, REDACTED, secretScrubber, secretValues } from '../jobs/scrub'
 import { notesApp } from './fixtures/implement/app'
-import { environment, FRAMEWORK_ENV, frameworkEnvFor, keepingProcessEnvironment, keySource, ORIGIN, PROXY_SECRET } from './fixtures/implement/harness'
+import { environment, FRAMEWORK_ENV, frameworkEnvFor, keepingProcessEnvironment, PROXY_SECRET } from './fixtures/implement/harness'
 
 const DSN = 'https://0123456789abcdef0123456789abcdef@operations.test/42'
 const SERVICE_KEY = 'px_service-key-of-the-environment-0123'
@@ -289,43 +288,5 @@ describe('serveContract', () => {
 			await reporting.stop()
 			expect(source.listening()).toBe(false)
 		})
-	})
-})
-
-describe('createContractWorker', () => {
-	const exec = () => {
-		const pending: Promise<unknown>[] = []
-		return { pending, context: { waitUntil: (promise: Promise<unknown>) => void pending.push(promise), passThroughOnException() {} } }
-	}
-
-	test("an isolate's first failed boot is reported once; once one booted, its rejections are reported", async () => {
-		const { envelopes, fetch } = capturingFetch()
-		const source = fakeEvents()
-		const worker = createContractWorker(() => Promise.resolve({ default: notesApp(new Map()) }), { rejections: source.events, operationsFetch: fetch })
-		const assets = { fetch: () => Promise.resolve(new Response('asset')) }
-		const env = { ...frameworkEnvFor(notesApp(new Map())), FABRIKA_OPERATIONS_DSN: DSN, ASSETS: assets }
-		const failing = exec()
-		for (let attempt = 0; attempt < 2; attempt++) {
-			await expect(keepingProcessEnvironment(() => worker.fetch(new Request(`${ORIGIN}/healthz`), env, failing.context))).rejects.toThrow(
-				'the IAM binding is missing',
-			)
-		}
-		await Promise.all(failing.pending)
-		expect(envelopes.map((envelope) => eventOf(envelope)['tags'])).toEqual([{ crash: 'boot_failed' }])
-		expect(source.listens()).toBe(0)
-
-		const serving = exec()
-		const response = await keepingProcessEnvironment(() => worker.fetch(new Request(`${ORIGIN}/healthz`), { ...env, IAM: keySource }, serving.context))
-		expect(response.status).toBe(200)
-		const log = spyOn(console, 'error').mockImplementation(() => {})
-		try {
-			source.fire('unhandled_rejection', new RangeError('late'))
-			await Bun.sleep(0)
-		} finally {
-			log.mockRestore()
-		}
-		expect(envelopes).toHaveLength(2)
-		expect(eventOf(envelopes[1])['tags']).toEqual({ crash: 'unhandled_rejection' })
-		expect(eventOf(envelopes[1])['exception']).toMatchObject({ values: [{ type: 'RangeError', value: 'late' }] })
 	})
 })

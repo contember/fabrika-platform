@@ -262,6 +262,23 @@ function readProxySecret(framework: Readonly<Record<string, string>>, required: 
 	return proxySecretDigest(secret)
 }
 
+/** What an application's SQLite database (a Durable Object's, ADR-0065) cannot serve: raw SQL and a scanning file kind. */
+function sqliteProblems(artifact: ContractArtifact, database: Database | undefined, problems: string[]): void {
+	if (database?.dialect !== 'sqlite') {
+		return
+	}
+	for (const [site, reach] of Object.entries(artifact.declared ?? {})) {
+		if (reach.sql !== null) {
+			problems.push(`'${site}' declares sql: '${reach.sql}'; ctx.sql runs only on Postgres, and this application's database is SQLite (Cloudflare)`)
+		}
+	}
+	for (const [name, kind] of Object.entries(artifact.fileKinds ?? {})) {
+		if (kind.scan === true) {
+			problems.push(`files '${name}' declares scan: true; no malware scanner runs on Cloudflare, so a scanning file kind is not served there`)
+		}
+	}
+}
+
 /** What this version cannot serve yet; a contract that declares it does not boot rather than answer nothing. */
 function unservable(
 	artifact: ContractArtifact,
@@ -673,6 +690,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
 	const containers = containersOf(artifact)
 	unservable(artifact, options.assets, owned, containers, problems)
+	sqliteProblems(artifact, options.database, problems)
 	// This runtime's own: what another `boot` call mints, application code's included, its stores refuse.
 	const issuer = createCapabilityIssuer()
 	const fileKinds = storedFileKinds(artifact, app.database, objects, problems)

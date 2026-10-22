@@ -117,7 +117,7 @@
 		"@types/react-dom": "^19.0.0",
 		"kysely": "0.29.6",
 		"kysely-postgres-js": "5.0.1",
-		"lopata": "^0.21.0",
+		"lopata": "^0.30.1",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0",
 		"typescript": "^5.9.3",
