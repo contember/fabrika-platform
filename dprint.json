@@ -21,6 +21,8 @@
 		"**/node_modules",
 		"**/*-lock.json",
 		".claude",
+		// What `fabrika app build` writes from the SQLite migrations, verbatim, so their checksums stay the files'.
+		"**/fabrika/migrations.generated.ts",
 		// What `fabrika db test-scaffold` writes: the checker compares it byte for byte (`generated-test-hash`).
 		"examples/*/src/__tests__/endpoint-access.test.ts",
 		"examples/*/src/db/__tests__/*.policy-isolation.test.ts",

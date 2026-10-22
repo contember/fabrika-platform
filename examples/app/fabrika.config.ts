@@ -1,13 +1,29 @@
+import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING } from '@fabrika/app/build'
 import { compileContract, schemaFromContract } from '@fabrika/app/contract'
-import { appEnvironmentId, contractDigest, FABRIKA_CONTRACT_DIGEST, FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
-import { createCloudflareProxyWorker, defineApp, iamServiceReference, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
+import {
+	appEnvironmentId,
+	contractDigest,
+	FABRIKA_CONTRACT_DIGEST,
+	FABRIKA_IAM_APP_ID,
+	FABRIKA_IAM_ISSUER,
+	FABRIKA_PROXY_SECRET,
+} from '@fabrika/auth-core'
+import {
+	createCloudflareProxyWorker,
+	defineApp,
+	DurableObject,
+	iamServiceReference,
+	R2Bucket,
+	type ResourceContext,
+	Worker,
+} from '@fabrika/provider-cloudflare'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { contract } from './fabrika.contract'
+import { tables } from './src/db/tables'
 
 export const exampleAppId = contract.vocabulary.app
 
-/** No `@fabrika/db` on Cloudflare, so the contract compiles without table policies. */
-export const exampleArtifact = compileContract(contract, {})
+export const exampleArtifact = compileContract(contract, tables)
 
 export const buildExampleWorker = (): Worker =>
 	new Worker({
@@ -34,18 +50,36 @@ export const LOCAL_IAM_ORIGIN = 'http://localhost:18191'
 
 /**
  * The proxy + app composition for a local run (`oblaka.ts`, lopata). A deploy never takes it: the deployer builds the
- * proxy Worker from the contract it reads in the checkout (ADR-0048) and writes the framework variables itself.
+ * proxy Worker from the contract it reads in the checkout (ADR-0048), and writes the framework variables and the
+ * application runtime (`withApplicationRuntime` of `@fabrika/provider-cloudflare`) itself.
  */
 export const buildExampleProxy = (ctx: ResourceContext): Worker => {
 	const iamUrl = LOCAL_IAM_ORIGIN
 	// The proxy mints for this environment's IAM application id, the audience the application verifies.
 	const appId = appEnvironmentId(exampleAppId, ctx.env)
 	const app = buildExampleWorker()
+	// A deploy writes one per environment as a Worker secret; each local generation draws its own into the ignored
+	// wrangler.jsonc.
+	const proxySecret = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', '')
 	return createCloudflareProxyWorker({
 		name: 'propustka-example-proxy',
 		app: new Worker({
 			...app.options,
-			vars: { [FABRIKA_IAM_ISSUER]: iamUrl, [FABRIKA_IAM_APP_ID]: appId, [FABRIKA_CONTRACT_DIGEST]: contractDigest(exampleArtifact) },
+			// What the provider binds on deploy (ADR-0065): the environment's object, first so its migration tag never
+			// moves, the files bucket, and the minute tick the object runs the jobs on.
+			bindings: {
+				[CLOUDFLARE_APPLICATION_BINDING]: new DurableObject({ name: `${exampleAppId}-application`, className: CLOUDFLARE_APPLICATION_CLASS }),
+				...(app.options.bindings ?? {}),
+				[CLOUDFLARE_FILES_BINDING]: new R2Bucket({ name: `${exampleAppId}-files` }),
+			},
+			triggers: { crons: ['* * * * *'] },
+			vars: {
+				[FABRIKA_IAM_ISSUER]: iamUrl,
+				[FABRIKA_IAM_APP_ID]: appId,
+				[FABRIKA_CONTRACT_DIGEST]: contractDigest(exampleArtifact),
+				// The Worker sends it on its hop to the object, which refuses a request without it.
+				[FABRIKA_PROXY_SECRET]: proxySecret,
+			},
 		}),
 		appId,
 		appHost: ctx.domain ?? 'localhost',

@@ -409,27 +409,39 @@ records the new profile id), provide HA, or reproduce Zerops logs.
 
 ## Cloudflare Worker proxy witness
 
-The local stack above exercises the Zerops-shaped Caddy boundary. The Cloudflare
-thin Worker is exercised separately with Lopata:
+The local stack above exercises the Zerops-shaped Caddy boundary. The Cloudflare composition of `examples/app` runs
+separately in Lopata (0.30 or newer): the proxy Worker, the application Worker with the environment's Durable Object
+(`FABRIKA_APPLICATION`, class `FabrikaApplication`, a SQLite class migration), its `FABRIKA_FILES` bucket and minute
+tick, and IAM, over service bindings
+([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)):
 
 ```bash
 cd packages/iam && bun run oblaka
 cd ../../examples/app && bun run oblaka && bun run dev
-curl -i http://127.0.0.1:18190/public/hello
-curl -i http://127.0.0.1:18190/private
 ```
 
-The first request reaches the private example app through the proxy and returns
-`200 public`. The second stops at the proxy and returns a login redirect. Lopata
-must show `APP -> propustka-example-app` and
-`IAM -> propustka-worker (PropustkaApplication)`; the app Worker config has no public route and sets `workers_dev: false` and `preview_urls: false`.
+`bun run oblaka` writes the framework variables into the application Worker's ignored `wrangler.jsonc`, with a
+`FABRIKA_PROXY_SECRET` it draws anew each time; the Worker sends it on its hop to the object, and the proxy Worker sends
+none. Lopata must show `APP -> propustka-example-app`, `IAM -> propustka-worker (PropustkaApplication)`,
+`FABRIKA_APPLICATION -> FabrikaApplication` and `FABRIKA_FILES (example-app-files)`; the app Worker config has no
+public route and sets `workers_dev: false` and `preview_urls: false`. `lopata.config.ts` gives the app Worker the local
+host `app.localhost`, so a request can skip the proxy, and IAM `iam.localhost`.
 
-That composition predates the application's Durable Object
-([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)): its app
-Worker binds no `FABRIKA_APPLICATION` object and gets no `FABRIKA_PROXY_SECRET`, both of which the current
-`createContractWorker` requires, so the curl witness above fails until the example binds them. The application runtime
-itself is witnessed in Lopata (0.30 or newer) by `packages/app/src/__tests__/cloudflare-runtime.test.ts`, which runs
-the Worker, its object and the R2 bucket in process:
+Before the application boots, IAM's D1 needs its migrations, the example's schema reconciled for `example-app@local`
+(`PUT /admin/apps/example-app@local/schema`), and the `review` job's workload key (`workloads.issueKey` on
+`/admin/rpc`) in `examples/app/.dev.vars` as `FABRIKA_JOB_REVIEW_KEY`. A caller key comes from `POST /admin/api-keys`.
+Then, through the proxy: a `POST /notes/create` with the caller's key writes a note (a multipart body adds a file),
+`POST /notes/list` reads it back, `GET /notes/attachment?id=…` downloads the file, and
+`/cdn-cgi/handler/scheduled?cron=*+*+*+*+*&worker=propustka-example-app` sends the minute tick, after which the list
+shows each note's `reviewedAt`. Straight to the app Worker (`Host: app.localhost`), a request without the proxy's
+endpoint header is 503 and one with a forged token is 401.
+
+`bun run dev` does not serve that yet. Lopata does not apply wrangler's `define`, which carries the proxy manifest, so
+the proxy Worker answers 503 `proxy unavailable`. And the object's binding readers (`method()` in
+`packages/app/src/cloudflare/bindings.ts`) test a binding's methods with `in`, which a Lopata service-binding stub does
+not answer, so the object refuses to boot with `the IAM binding is missing`. The application runtime itself is
+witnessed in Lopata by `packages/app/src/__tests__/cloudflare-runtime.test.ts`, which runs the Worker, its object and
+the R2 bucket in process:
 
 ```bash
 bun test packages/app/src/__tests__/cloudflare-runtime.test.ts
