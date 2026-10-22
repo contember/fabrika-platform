@@ -33,7 +33,11 @@ export const expectedGeneratedTests = async (
 > => {
 	try {
 		const inputs = scaffoldInputs(files)
-		return { ok: true, tests: await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures), missing: missingEndpointFixtures(inputs) }
+		return {
+			ok: true,
+			tests: await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures, inputs.dialect),
+			missing: missingEndpointFixtures(inputs),
+		}
 	} catch (error) {
 		if (error instanceof ContractSourceError) return { ok: false, findings: error.findings }
 		if (error instanceof ContractError) {

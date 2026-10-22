@@ -1,5 +1,7 @@
 /** Where an application keeps what the checker reads. Paths are relative to the application root. */
 export const CONTRACT_FILE = 'fabrika.contract.ts'
+/** The provider-authored application config, whose `defineApp` names the provider. */
+export const CONFIG_FILE = 'fabrika.config.ts'
 /** The named export of the contract module that holds `defineContract(…)`. */
 export const CONTRACT_EXPORT = 'contract'
 export const TABLES_FILE = 'src/db/tables.ts'
