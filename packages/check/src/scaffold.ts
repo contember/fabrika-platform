@@ -15,6 +15,7 @@ import {
 } from '@fabrika/auth-core'
 import { tablePolicies } from '@fabrika/db/tables'
 import { ContractSourceError, readContractSource, readTablesDefinition } from './contract'
+import { type ApplicationDialect, applicationDialect } from './dialect'
 import { type EndpointFixtures, isSampleObject, NO_FIXTURES, readEndpointFixtures } from './endpoint-fixtures'
 import type { Finding } from './finding'
 import { CONTRACT_FILE, ENDPOINT_ACCESS_TEST, ENDPOINT_FIXTURES_FILE, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR } from './layout'
@@ -32,6 +33,25 @@ export interface GeneratedTest {
 }
 
 type Policies = Readonly<Record<string, TablePolicyArtifact>>
+
+/** The test database kit of each dialect, and the name a generated test gives the database it opens. */
+const TEST_KITS: Readonly<Record<ApplicationDialect, { readonly module: string; readonly name: string }>> = {
+	postgres: { module: '@fabrika/db/testing', name: 'postgres' },
+	sqlite: { module: '@fabrika/db/testing-sqlite', name: 'database' },
+}
+
+/** The lines of a generated test that open its database: the kit's import and the call, against `migrations`. */
+const testDatabaseLines = (
+	dialect: ApplicationDialect,
+	migrations: string,
+): { readonly kit: string; readonly open: string; readonly name: string } => {
+	const { module, name } = TEST_KITS[dialect]
+	return {
+		kit: `import { testDatabase } from '${module}'`,
+		open: `const ${name} = await testDatabase({ migrations: new URL('${migrations}', import.meta.url), label })`,
+		name,
+	}
+}
 
 interface Case {
 	readonly name: string
@@ -209,6 +229,7 @@ const policyTestBody = (
 	policies: Policies,
 	table: string,
 	scopedSites: boolean,
+	dialect: ApplicationDialect,
 ): { readonly body: string; readonly cases: readonly string[] } | undefined => {
 	const policy = policies[table]
 	if (policy === undefined) return undefined
@@ -225,6 +246,7 @@ const policyTestBody = (
 		? `policy of ${table}: only a global holder of its actions reaches a row`
 		: `policy of ${table}: a caller of one ${dimension} reaches no row of another`
 	const kitOf = app ? 'appPolicyIsolationKit' : 'policyIsolationKit'
+	const database = testDatabaseLines(dialect, '../../../db/migrations/')
 	const blocks = [describeBlock(title, isolation)]
 	if (hidden.length > 0) blocks.push(describeBlock(`policy of ${table}: a column with its own read action is never returned`, hidden))
 	const body = [
@@ -233,16 +255,16 @@ const policyTestBody = (
 		'// Do not edit: @fabrika/check compares this file with what the scaffold writes; rerun it after a policy change.',
 		'',
 		`import { ${['afterAll', 'describe', 'expect', kitOf, 'test'].sort().join(', ')} } from '@fabrika/app/testing/isolation'`,
-		"import { testDatabase } from '@fabrika/db/testing'",
+		database.kit,
 		"import { contract } from '../../../fabrika.contract'",
 		"import { tables } from '../tables'",
 		'',
 		`const label = ${quote(`${table}${POLICY_TEST_SUFFIX}`)}`,
-		"const postgres = await testDatabase({ migrations: new URL('../../../db/migrations/', import.meta.url), label })",
+		database.open,
 		'',
-		'if (postgres !== null) {',
-		'\tafterAll(() => postgres.close())',
-		`\tconst kit = ${kitOf}(contract, tables, ${quote(table)}, postgres)`,
+		`if (${database.name} !== null) {`,
+		`\tafterAll(() => ${database.name}.close())`,
+		`\tconst kit = ${kitOf}(contract, tables, ${quote(table)}, ${database.name})`,
 		'',
 		blocks.join('\n\n'),
 		'}',
@@ -452,6 +474,7 @@ const endpointTestBody = (
 	artifact: ContractArtifact,
 	policies: Policies,
 	fixtures: EndpointFixtures,
+	dialect: ApplicationDialect,
 ): { readonly body: string; readonly cases: readonly string[] } | undefined => {
 	const cases = [...artifact.endpoints].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).flatMap((
 		row,
@@ -461,6 +484,7 @@ const endpointTestBody = (
 		...publicCases(row, artifact, fixtures),
 	])
 	if (cases.length === 0) return undefined
+	const database = testDatabaseLines(dialect, '../../db/migrations/')
 	const body = [
 		'// The endpoint access tests of this application, written by fabrika db test-scaffold from fabrika.contract.ts and',
 		'// src/db/tables.ts. They run src/app.ts itself: callers of two scopes that share no value ask every endpoint with an',
@@ -470,16 +494,16 @@ const endpointTestBody = (
 		'// Do not edit: @fabrika/check compares this file with what the scaffold writes; rerun it after a contract change.',
 		'',
 		"import { afterAll, describe, endpointAccessKit, expect, test } from '@fabrika/app/testing/isolation'",
-		"import { testDatabase } from '@fabrika/db/testing'",
+		database.kit,
 		"import app from '../app'",
 		"import { tables } from '../db/tables'",
 		'',
 		"const label = 'endpoint-access.test.ts'",
-		"const postgres = await testDatabase({ migrations: new URL('../../db/migrations/', import.meta.url), label })",
+		database.open,
 		'',
-		'if (postgres !== null) {',
-		'\tafterAll(() => postgres.close())',
-		'\tconst kit = endpointAccessKit(app, tables, postgres)',
+		`if (${database.name} !== null) {`,
+		`\tafterAll(() => ${database.name}.close())`,
+		`\tconst kit = endpointAccessKit(app, tables, ${database.name})`,
 		'',
 		describeBlock('endpoints: a caller of one scope reaches nothing of another', cases),
 		'}',
@@ -495,21 +519,23 @@ const generated = async ({ body, cases }: { readonly body: string; readonly case
 
 /**
  * Every test the scaffold writes for these policies and, when the application has a contract, its artifact; by path.
- * Endpoint access tests exist only for an application on `@fabrika/db`, which has policies to seed rows from.
+ * Endpoint access tests exist only for an application on `@fabrika/db`, which has policies to seed rows from. They
+ * open the test database of the application's dialect.
  */
 export const generatedTests = async (
 	policies: Policies,
 	artifact: ContractArtifact | null,
 	fixtures: EndpointFixtures = NO_FIXTURES,
+	dialect: ApplicationDialect = 'postgres',
 ): Promise<ReadonlyMap<string, GeneratedTest>> => {
 	const files = new Map<string, GeneratedTest>()
 	// The kit's scoped sites are `over` the vocabulary's first dimension: without one, no scoped site exists.
 	const scopedSites = artifact !== null && Object.keys(artifact.dimensions).length > 0
 	for (const table of Object.keys(policies).sort()) {
-		const test = policyTestBody(policies, table, scopedSites)
+		const test = policyTestBody(policies, table, scopedSites, dialect)
 		if (test !== undefined) files.set(policyTestPath(table), await generated(test))
 	}
-	const endpoints = artifact === null || files.size === 0 ? undefined : endpointTestBody(artifact, policies, fixtures)
+	const endpoints = artifact === null || files.size === 0 ? undefined : endpointTestBody(artifact, policies, fixtures, dialect)
 	if (endpoints !== undefined) files.set(ENDPOINT_ACCESS_TEST, await generated(endpoints))
 	return files
 }
@@ -518,6 +544,7 @@ export interface ScaffoldInputs {
 	readonly policies: Policies
 	readonly artifact: ContractArtifact | null
 	readonly fixtures: EndpointFixtures
+	readonly dialect: ApplicationDialect
 }
 
 /** What the scaffold reads from an application's files; throws `ContractSourceError` or `ContractError` as the reader does. */
@@ -528,7 +555,7 @@ export const scaffoldInputs = (files: ReadonlyMap<string, string>): ScaffoldInpu
 	if (!fixtures.ok) throw new ContractSourceError(fixtures.findings)
 	// Endpoint tests seed rows from the policies, so without src/db/tables.ts there is nothing to compile them against.
 	const artifact = files.has(CONTRACT_FILE) && tables !== null ? readContractSource(files, tables) : null
-	return { policies, artifact, fixtures: fixtures.fixtures }
+	return { policies, artifact, fixtures: fixtures.fixtures, dialect: applicationDialect(files) }
 }
 
 /**

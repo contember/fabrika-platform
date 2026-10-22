@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
+import { join } from 'node:path'
 import type { RuleId } from '../finding'
 import { RULE_IDS } from '../finding'
 import { STRUCTURE_RULE_IDS } from '../rules/structure'
 import { generatedTestHeader } from '../rules/tests'
 import { generatedTests, scaffoldInputs } from '../scaffold'
+import { readTree } from './colocated-helpers'
 import {
 	check,
 	CLEAN_APPLICATION,
@@ -33,6 +35,31 @@ const FILE_COLUMN_APPLICATION: Readonly<Record<string, string>> = {
 	...FILE_COLUMN_SOURCES,
 	...Object.fromEntries([...(await generatedTests(fileColumnInputs.policies, fileColumnInputs.artifact))].map(([file, test]) => [file, test.text])),
 }
+/** A `fabrika.config.ts` that `@fabrika/provider-cloudflare`'s `defineApp` authors: the application runs on SQLite. */
+const CLOUDFLARE_CONFIG =
+	"import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'notes', resources: () => [] })\n"
+
+/** The two-slice application, whose pipeline query declares sql. */
+const ARCHITECTURE_APPLICATION: Readonly<Record<string, string>> = Object.fromEntries(
+	readTree(join(import.meta.dir, 'fixtures', 'architecture-app'), ['.fixture', '.sql']),
+)
+
+/** The clean application on Cloudflare: its config, a file kind, and the generated tests on the SQLite kit. */
+const cloudflareApplication = async (fileKind: string): Promise<Readonly<Record<string, string>>> => {
+	const sources = Object.fromEntries(Object.entries(CLEAN_APPLICATION).filter(([path]) => !CLEAN_GENERATED_TESTS.has(path)))
+	const files = new Map(Object.entries({
+		...sources,
+		'fabrika.config.ts': CLOUDFLARE_CONFIG,
+		'fabrika.contract.ts': CLEAN_CONTRACT.replace(
+			"\thealth: c.health('/healthz'),\n",
+			`\tfiles: { pictures: ${fileKind} },\n\thealth: c.health('/healthz'),\n`,
+		),
+	}))
+	const inputs = scaffoldInputs(files)
+	for (const [path, test] of await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures, inputs.dialect)) files.set(path, test.text)
+	return Object.fromEntries(files)
+}
+
 const NOTES_TABLE = 'CREATE TABLE notes (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL, picture UUID'
 
 interface RuleCase {
@@ -640,6 +667,18 @@ const cases: readonly RuleCase[] = [
 			'.npmrc': 'save-exact=true\n',
 			'src/types.d.ts': "declare module 'some-library' {\n\texport const value: number\n}\n",
 		},
+	},
+	{
+		rule: 'cloudflare-sql',
+		bad: { ...ARCHITECTURE_APPLICATION, 'fabrika.config.ts': CLOUDFLARE_CONFIG },
+		expected: ['fabrika.contract.ts:1:1'],
+		good: ARCHITECTURE_APPLICATION,
+	},
+	{
+		rule: 'cloudflare-scan',
+		bad: await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024, scan: true })"),
+		expected: ['fabrika.contract.ts:1:1'],
+		good: await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
 	},
 	{
 		rule: 'crontab',

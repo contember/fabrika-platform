@@ -5,6 +5,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type AstNode, type ParsedModule, parseModule, walk } from './ast'
 import { contractModules, readContractModule } from './contract'
+import { applicationDialect } from './dialect'
 import { compareFindings, type Finding, reporter } from './finding'
 import { ModuleGraph } from './graph'
 import {
@@ -24,6 +25,7 @@ import { ReaderProblems } from './reader/problems'
 import { readTablesValue } from './reader/tables'
 import { type ModuleReference, moduleReferences } from './references'
 import { type ImportMappings, readImportMappings } from './resolution'
+import { checkCloudflareContract } from './rules/cloudflare'
 import { checkContractRead } from './rules/contract'
 import { checkCrontab, contractJobs } from './rules/crontab'
 import { checkFrameworkWrite, trustedBindings } from './rules/framework'
@@ -157,15 +159,18 @@ interface CompiledReach {
 	readonly origins: readonly string[]
 }
 
-/** The contract's procedures and origins, or `null` when it does not compile, which its own rule reports. */
-const compiledReach = (contract: AnyContract, tables: Tables<unknown, unknown> | null): CompiledReach | null => {
-	let artifact: ContractArtifact
+/** The contract's artifact, or `null` when it does not compile, which its own rule reports. */
+const compiledArtifact = (contract: AnyContract, tables: Tables<unknown, unknown> | null): ContractArtifact | null => {
 	try {
-		artifact = compileContract(contract, tables ?? {})
+		return compileContract(contract, tables ?? {})
 	} catch (error) {
 		if (error instanceof ContractError) return null
 		throw error
 	}
+}
+
+/** The contract's procedures and origins. */
+const compiledReach = (artifact: ContractArtifact): CompiledReach => {
 	const procedures = artifact.endpoints.filter((row) =>
 		(row.kind === 'query' || row.kind === 'mutation' || row.kind === 'public') && row.source.kind === 'mount'
 	)
@@ -254,7 +259,9 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	findings.push(...checkMigrationNames(checkedPaths))
 	const read = contract !== undefined && literal.length === 0 && contractRead.length === 0 ? readContractModule(graph) : undefined
 	const declaredTables = tables !== undefined && literal.length === 0 ? readTablesValue(graph, tables, new ReaderProblems()) : null
-	findings.push(...contractDependentFindings(dependent, read?.ok === true ? compiledReach(read.contract, declaredTables) : null))
+	const artifact = read?.ok === true ? compiledArtifact(read.contract, declaredTables) : null
+	findings.push(...contractDependentFindings(dependent, artifact === null ? null : compiledReach(artifact)))
+	if (artifact !== null && applicationDialect(tree.files) === 'sqlite') findings.push(...checkCloudflareContract(artifact))
 	if (declaredTables !== null) {
 		const policies = tablePolicies(declaredTables)
 		findings.push(...checkFileColumnMigrations(tree.files, fileColumns(policies)))

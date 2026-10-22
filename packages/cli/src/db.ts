@@ -1,4 +1,8 @@
+import { applicationMigrations as sqliteApplicationMigrations } from '@fabrika/app/build'
 import {
+	type ApplicationDialect,
+	applicationDialect,
+	CONFIG_FILE,
 	type Finding,
 	formatFinding,
 	GENERATED_TEST_HEADER,
@@ -9,8 +13,11 @@ import {
 	scaffoldInputs,
 } from '@fabrika/check'
 import { CodegenError, generateSchema, SCHEMA_FILE } from '@fabrika/db/codegen'
+import { generateSqliteSchema } from '@fabrika/db/codegen-sqlite'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
 import {
+	APPLICATION_MIGRATION_BUNDLE,
 	CONNECTION_CAPACITY_MESSAGE,
 	ConnectionCapacityError,
 	createTestProvisioner,
@@ -35,7 +42,7 @@ import { readJunitCases } from './junit'
 const MIGRATIONS_DIR = 'db/migrations'
 const SLUG = /^[a-z0-9]+(?:_[a-z0-9]+)*$/
 
-export const DB_USAGE = `fabrika db — an application's Postgres schema
+export const DB_USAGE = `fabrika db — an application's database schema: Postgres, or SQLite on Cloudflare
 
 Usage:
   fabrika db new <slug>           Write ${MIGRATIONS_DIR}/<UTC YYYYMMDDHHMMSS>_<slug>.sql; the slug is lowercase snake_case.
@@ -59,6 +66,10 @@ bunfig.toml, and checks the JUnit report against the case names the scaffold wro
 that killed runs left behind: expired, and without a session of their own or of a role they created. A database at its
 connection limit (SQLSTATE ${TOO_MANY_CONNECTIONS}) is waited for; one that never frees a slot fails the run saying so,
 never as failed cases.
+
+An application whose ${CONFIG_FILE} default-exports @fabrika/provider-cloudflare's defineApp runs on SQLite in its
+Durable Object, which applies the migrations itself when it boots: \`migrate\` refuses, \`codegen\` applies them to an
+in-memory database, and the generated tests run on @fabrika/db/testing-sqlite; none of them needs a database URL.
 `
 
 export interface DbCommandDependencies {
@@ -77,6 +88,12 @@ const required = (source: DbCommandDependencies['source'], name: string): string
 
 const refuseArguments = (command: string, argv: readonly string[]): void => {
 	if (argv.length > 0) throw new Error(`db ${command} takes no argument ${argv[0]}\n\n${DB_USAGE}`)
+}
+
+/** The dialect `fabrika.config.ts` names, read as the checker reads it; Postgres without a config. */
+const dialectAt = async (cwd: string): Promise<ApplicationDialect> => {
+	const config = await readFile(join(cwd, CONFIG_FILE), 'utf8').catch(() => undefined)
+	return applicationDialect(new Map(config === undefined ? [] : [[CONFIG_FILE, config]]))
 }
 
 const timestamp = (date: Date): string => date.toISOString().replace(/\.\d{3}Z$/, '').replaceAll(/[-:T]/g, '')
@@ -126,6 +143,11 @@ const applicationMigrations = (appId: string, cwd: string): PostgresApplicationM
 
 const migrate = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
 	refuseArguments('migrate', argv)
+	if ((await dialectAt(deps.cwd)) === 'sqlite') {
+		throw new Error(
+			'db migrate: an application on Cloudflare migrates its own SQLite database when its Durable Object boots (ADR-0065); there is nothing to run',
+		)
+	}
 	const migrations = applicationMigrations(required(deps.source, 'FABRIKA_APP_ID'), deps.cwd)
 	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
 	const files = migrations.read()
@@ -137,18 +159,29 @@ const migrate = async (argv: readonly string[], deps: DbCommandDependencies): Pr
 	}
 }
 
-const codegen = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
-	const verify = argv.includes('--verify')
-	refuseArguments('codegen', argv.filter((arg) => arg !== '--verify'))
+/** The schema module of the migrated application schema, read with the provisioning credential. */
+const postgresSchema = async (deps: DbCommandDependencies): Promise<string> => {
 	const migrations = applicationMigrations(required(deps.source, 'FABRIKA_APP_ID'), deps.cwd)
 	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
-	let source: string
 	try {
 		// The migrations' manifest: the start check refuses any database object no migration declares.
-		source = await generateSchema(url, migrations.schema, migrations.objects())
+		return await generateSchema(url, migrations.schema, migrations.objects())
 	} catch (error) {
 		throw reportable(error)
 	}
+}
+
+/** The schema module of the bundles the Durable Object applies, in its order, run in an in-memory database. */
+const sqliteSchema = async (cwd: string): Promise<string> =>
+	generateSqliteSchema([
+		{ bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: SQLITE_FRAMEWORK_MIGRATIONS },
+		{ bundle: APPLICATION_MIGRATION_BUNDLE, migrations: await sqliteApplicationMigrations(cwd) },
+	])
+
+const codegen = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
+	const verify = argv.includes('--verify')
+	refuseArguments('codegen', argv.filter((arg) => arg !== '--verify'))
+	const source = (await dialectAt(deps.cwd)) === 'sqlite' ? await sqliteSchema(deps.cwd) : await postgresSchema(deps)
 	const path = join(deps.cwd, SCHEMA_FILE)
 	if (verify) {
 		const committed = await readFile(path, 'utf8').catch(() => undefined)
@@ -168,7 +201,11 @@ const expectedTests = async (
 > => {
 	const { files } = await readApplicationTree(cwd)
 	const inputs = scaffoldInputs(files)
-	return { files, tests: await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures), missing: missingEndpointFixtures(inputs) }
+	return {
+		files,
+		tests: await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures, inputs.dialect),
+		missing: missingEndpointFixtures(inputs),
+	}
 }
 
 const testScaffold = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
@@ -194,11 +231,12 @@ const testScaffold = async (argv: readonly string[], deps: DbCommandDependencies
 }
 
 /**
- * Only what Bun needs to run; the URL arrives as the kit's own variable, and no framework variable is passed on. It is
- * a throwaway provisioner's, never FABRIKA_APP_DATABASE_URL: the generated tests load application code.
+ * Only what Bun needs to run; on Postgres the URL arrives as the kit's own variable, and no framework variable is passed
+ * on. It is a throwaway provisioner's, never FABRIKA_APP_DATABASE_URL: the generated tests load application code. The
+ * SQLite kit opens an in-memory database and needs none.
  */
-const testEnvironment = (source: DbCommandDependencies['source'], url: string): Record<string, string> => {
-	const environment: Record<string, string> = { FABRIKA_TEST_POSTGRES_URL: url, FABRIKA_TEST_POSTGRES_REQUIRED: '1' }
+const testEnvironment = (source: DbCommandDependencies['source'], url: string | undefined): Record<string, string> => {
+	const environment: Record<string, string> = url === undefined ? {} : { FABRIKA_TEST_POSTGRES_URL: url, FABRIKA_TEST_POSTGRES_REQUIRED: '1' }
 	for (const name of ['PATH', 'HOME', 'TMPDIR']) {
 		const value = source[name]
 		if (value !== undefined) environment[name] = value
@@ -226,11 +264,13 @@ export const reportsExhaustedConnections = (output: string): boolean => EXHAUSTE
  * application applies, and the platform's preload, which captures Bun's test functions before the application loads.
  * Fails unless every case the scaffold wrote is reported as passed with an assertion. The child's output is never
  * printed, because a dependency may write a credential into it; `--verbose`, which the platform never passes, prints it.
+ * On Postgres they run as a throwaway provisioner, dropped afterwards; on SQLite with no database URL at all.
  */
 const testIsolation = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
 	const verbose = argv.includes('--verbose')
 	refuseArguments('test-isolation', argv.filter((arg) => arg !== '--verbose'))
-	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
+	const sqlite = (await dialectAt(deps.cwd)) === 'sqlite'
+	const url = sqlite ? undefined : required(deps.source, 'FABRIKA_APP_DATABASE_URL')
 	const { files, tests, missing } = await expectedTests(deps.cwd)
 	if (missing.length > 0) throw new Error(`db test-isolation: the endpoint access tests are incomplete\n${missing.map(formatFinding).join('\n')}`)
 	for (const [path, { text }] of tests) {
@@ -240,6 +280,10 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 		deps.write('no generated tests\n')
 		return
 	}
+	if (url === undefined) {
+		await runGeneratedTests(tests, verbose, testEnvironment(deps.source, undefined), deps)
+		return
+	}
 	let provisioner: TestProvisioner
 	try {
 		provisioner = await withConnectionCapacity(() => createTestProvisioner(url))
@@ -247,6 +291,21 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 		throw reportable(error)
 	}
 	if (provisioner.swept.length > 0) deps.write(`dropped the test provisioners earlier runs left behind: ${provisioner.swept.join(', ')}\n`)
+	try {
+		await runGeneratedTests(tests, verbose, testEnvironment(deps.source, provisioner.url), deps)
+	} finally {
+		await withConnectionCapacity(() => provisioner.drop()).catch((error: unknown) => {
+			throw reportable(error)
+		})
+	}
+}
+
+const runGeneratedTests = async (
+	tests: ReadonlyMap<string, GeneratedTest>,
+	verbose: boolean,
+	env: Record<string, string>,
+	deps: DbCommandDependencies,
+): Promise<void> => {
 	const scratch = await mkdtemp(join(tmpdir(), 'fabrika-test-isolation-'))
 	try {
 		await writeFile(join(scratch, 'bunfig.toml'), '')
@@ -261,7 +320,7 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 				'--reporter=junit',
 				`--reporter-outfile=${report}`,
 			],
-			{ cwd: deps.cwd, env: testEnvironment(deps.source, provisioner.url), stdout: 'pipe', stderr: 'pipe' },
+			{ cwd: deps.cwd, env, stdout: 'pipe', stderr: 'pipe' },
 		)
 		const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
 		if (verbose) deps.write(`${stdout}${stderr}\n`)
@@ -296,9 +355,6 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 		deps.write(`${total} generated cases passed\n`)
 	} finally {
 		await rm(scratch, { recursive: true, force: true })
-		await withConnectionCapacity(() => provisioner.drop()).catch((error: unknown) => {
-			throw reportable(error)
-		})
 	}
 }
 

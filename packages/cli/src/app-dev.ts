@@ -1,6 +1,7 @@
 // `fabrika app dev`: a contract application served through its test kit on a loopback port, to click through its
 // screens. The kit is the whole server: production's proxy decision, the stand-in IAM, the real `boot`, the SPAs from
-// their build directories; Postgres is a throwaway schema of the tests' database. A seed module fills it through the
+// their build directories; Postgres is a throwaway schema of the tests' database, SQLite (Cloudflare) an in-memory
+// database. A seed module fills it through the
 // endpoints first. A caller picker chooses who the browser is; a cookie keeps the choice, and the kit's own session
 // never leaves the process. Every SPA page gets the dev toolbar, which switches the caller without leaving the page.
 
@@ -9,10 +10,12 @@ import { implementationAt } from '@fabrika/app/bun'
 import type { AnyContract } from '@fabrika/app/contract'
 import { BootError, type ContractImplementation } from '@fabrika/app/implement'
 import { DEV_OUTBOX_ORIGIN, type DevKit, devKit, type DevOutside, type LabelledTestCaller, type TestCaller } from '@fabrika/app/testing'
+import { type ApplicationDialect, applicationDialect, CONFIG_FILE } from '@fabrika/check'
+import { SqliteMigrationError } from '@fabrika/db/sqlite-migrate'
 import { TEST_POSTGRES_URL, type TestDatabase, testDatabase } from '@fabrika/db/testing'
 import { PostgresMigrationError } from '@fabrika/platform-node'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { DEV_ENV_FILE, DevEnvProblem, type DevOutbox, devOutbox, mailHeadOf, readDevEnv, shownBody } from './app-dev-outside'
@@ -41,7 +44,8 @@ Usage:
 
 Run from the application root. It serves ${IMPLEMENTATION_FILE} through its test kit: the production proxy decision,
 the kit's stand-in IAM, each SPA from its built directory (run the SPA build first; an unbuilt one is an empty page),
-and a throwaway schema of the database in ${TEST_POSTGRES_URL}, migrated from db/migrations/ and dropped on exit.
+and a throwaway schema of the database in ${TEST_POSTGRES_URL}, migrated from db/migrations/ and dropped on exit; an
+application on Cloudflare (its ${CONFIG_FILE} is @fabrika/provider-cloudflare's) gets an in-memory SQLite database instead.
 The seed module (--seed, or ${DEFAULT_SEED} when it exists) default-exports a DevSeed of @fabrika/app/testing: it
 receives the kit, writes through the endpoints, and answers the personas, link pages and scope values to offer.
 Pick who the browser is at /__fabrika/dev; every SPA page shows a toolbar that switches the caller and lists the
@@ -87,7 +91,7 @@ export class AppDevError extends Error {
 export function startupFailure(error: unknown): Error {
 	if (
 		error instanceof AppDevError || error instanceof SeedProblem || error instanceof DevEnvProblem || error instanceof BootError
-		|| error instanceof PostgresMigrationError
+		|| error instanceof PostgresMigrationError || error instanceof SqliteMigrationError
 	) {
 		return new Error(error.message)
 	}
@@ -190,21 +194,31 @@ function addressedHere(request: Request, port: number): boolean {
 const plain = (status: number, text: string): Response =>
 	new Response(`${text}\n`, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } })
 
+/** The dialect the application's `fabrika.config.ts` names, as the checker reads it. */
+function dialectAt(root: string): ApplicationDialect {
+	const path = join(root, CONFIG_FILE)
+	return applicationDialect(new Map(existsSync(path) ? [[CONFIG_FILE, readFileSync(path, 'utf8')]] : []))
+}
+
 /** Serves `app` through its test kit on a loopback port until `stop`. */
 export async function startAppDev(app: ContractImplementation<AnyContract>, options: AppDevOptions): Promise<AppDevServer> {
 	if (!LOOPBACK.has(options.host)) throw new AppDevError(`app dev serves this machine only, not ${options.host}`)
-	let postgres: TestDatabase | null = null
-	if (app.database !== null) {
+	let testDb: TestDatabase | null = null
+	if (app.database !== null && dialectAt(options.root) === 'sqlite') {
+		// The SQLite twin of the kit opens an in-memory database: no URL, and nothing left behind to drop.
+		const sqlite = await import('@fabrika/db/testing-sqlite')
+		testDb = await sqlite.testDatabase({ migrations: join(options.root, 'db', 'migrations'), label: 'fabrika app dev' })
+	} else if (app.database !== null) {
 		if ((options.env[TEST_POSTGRES_URL] ?? '') === '') {
 			throw new AppDevError(`app dev needs ${TEST_POSTGRES_URL}, the database the tests use: it migrates a throwaway schema there`)
 		}
-		postgres = await testDatabase({ migrations: join(options.root, 'db', 'migrations'), label: 'fabrika app dev' })
+		testDb = await testDatabase({ migrations: join(options.root, 'db', 'migrations'), label: 'fabrika app dev' })
 	}
 	try {
-		return await serveThroughKit(app, options, postgres)
+		return await serveThroughKit(app, options, testDb)
 	} catch (error) {
 		// The schema and its roles exist from here on: a failed start drops them as a stop does.
-		await postgres?.close()
+		await testDb?.close()
 		throw error
 	}
 }
@@ -232,18 +246,18 @@ const printHandlerError = (where: string, error: unknown): void => {
 }
 
 /**
- * The server over the kit of `app`, on `postgres` when it has a data layer; its `stop` also drops the schema. The dev
+ * The server over the kit of `app`, on `testDb` when it has a data layer; its `stop` also drops a Postgres schema. The dev
  * outbox captures the process's `fetch` from before the seed runs until `stop`, or until a failed start.
  */
 async function serveThroughKit(
 	app: ContractImplementation<AnyContract>,
 	options: AppDevOptions,
-	postgres: TestDatabase | null,
+	testDb: TestDatabase | null,
 ): Promise<AppDevServer> {
 	const outbox = devOutbox()
 	const restoreFetch = outbox.install()
 	try {
-		return await serveDevKit(app, options, postgres, outbox, restoreFetch)
+		return await serveDevKit(app, options, testDb, outbox, restoreFetch)
 	} catch (error) {
 		restoreFetch()
 		throw error
@@ -253,7 +267,7 @@ async function serveThroughKit(
 async function serveDevKit(
 	app: ContractImplementation<AnyContract>,
 	options: AppDevOptions,
-	postgres: TestDatabase | null,
+	testDb: TestDatabase | null,
 	outbox: DevOutbox,
 	restoreFetch: () => void,
 ): Promise<AppDevServer> {
@@ -263,7 +277,7 @@ async function serveDevKit(
 	const dev = devKit(app, {
 		root: options.root,
 		env: { ...applicationVariables(options.env), ...readDevEnv(options.root) },
-		...(postgres === null ? {} : { database: postgres.database }),
+		...(testDb === null ? {} : { database: testDb.database }),
 		...(hasFiles ? { files: new MemoryFileObjects() } : {}),
 		revealHandlerErrors: printHandlerError,
 	})
@@ -561,7 +575,7 @@ async function serveDevKit(
 				await server.stop(true)
 			} finally {
 				restoreFetch()
-				await postgres?.close()
+				await testDb?.close()
 			}
 		},
 	}
