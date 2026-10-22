@@ -38,6 +38,7 @@ import {
 	WhereNode,
 } from 'kysely'
 import { inSet, type NameSet, nameSet, namesOf } from './builtins'
+import type { SqlDialect } from './database'
 import type { Compare, Condition, Contains, JoinState, Primitive, SelectState } from './description'
 import { QueryRefusedError } from './errors'
 
@@ -167,6 +168,15 @@ function joinedSelections(join: JoinState): SelectionNode[] {
 	return columns.map((name) => SelectionNode.create(AliasNode.create(column(child, name), IdentifierNode.create(`${child}.${name}`))))
 }
 
+/**
+ * One order term. Postgres sorts nulls last ascending and first descending; SQLite the other way, so on SQLite the term
+ * states Postgres's order and a keyset page (`orm.ts`) reads the same rows after its cursor on both.
+ */
+function orderItem(table: string, order: SelectState['orderBy'][number], dialect: SqlDialect): OrderByItemNode {
+	const item = OrderByItemNode.create(column(table, order.column), RawNode.createWithSql(order.direction))
+	return dialect === 'postgres' ? item : Object.freeze({ ...item, nulls: order.direction === 'asc' ? 'last' : 'first' })
+}
+
 /** `after` is a keyset page's position, ANDed to the caller's conditions inside their parenthesis. */
 export function selectNode(
 	state: SelectState,
@@ -174,12 +184,13 @@ export function selectNode(
 	scope: OperationNode,
 	after?: OperationNode,
 	days: NameSet = NO_DAYS,
+	dialect: SqlDialect = 'postgres',
 ): SelectQueryNode {
 	const table = state.table
 	const columns = state.columns ?? visible
 	const conditions = conditionsNode(table, state.conditions)
 	const filter = after === undefined ? conditions : conditions === undefined ? after : AndNode.create(conditions, ParensNode.create(after))
-	const orderBy = state.orderBy.map((order) => OrderByItemNode.create(column(table, order.column), RawNode.createWithSql(order.direction)))
+	const orderBy = state.orderBy.map((order) => orderItem(table, order, dialect))
 	const node: SelectQueryNode = {
 		kind: 'SelectQueryNode',
 		from: FromNode.create([TableNode.create(table)]),
@@ -352,6 +363,7 @@ export function claimNode(
 	due: { readonly due: string; readonly attempts: string; readonly now: Date; readonly maxAttempts: number },
 	scope: OperationNode,
 	days: NameSet,
+	dialect: SqlDialect = 'postgres',
 ): SelectQueryNode {
 	const table = state.table
 	const waiting = allOf([
@@ -359,7 +371,7 @@ export function claimNode(
 		BinaryOperationNode.create(column(table, due.due), OperatorNode.create('<='), ValueNode.create(due.now)),
 		BinaryOperationNode.create(column(table, due.attempts), OperatorNode.create('<'), ValueNode.create(due.maxAttempts)),
 	])
-	const node = selectNode(state, columns, scope, waiting, days)
+	const node = selectNode(state, columns, scope, waiting, days, dialect)
 	return Object.freeze({ ...node, endModifiers: [SelectModifierNode.create('ForUpdate'), SelectModifierNode.create('SkipLocked')] })
 }
 
