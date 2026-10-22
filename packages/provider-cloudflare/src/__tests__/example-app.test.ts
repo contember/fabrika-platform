@@ -10,11 +10,12 @@ import { describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 import { Worker } from 'oblaka-iac'
 import { contract } from '../../../../examples/app/fabrika.contract'
+import { tables } from '../../../../examples/app/src/db/tables'
 import { createCloudflareDeployer, defaultCloudflareCollaborators, generateWranglerConfigs, type ProvisionInput } from '..'
 import { CLOUDFLARE_PROXY_WORKER_DIR, proxyManifestJson } from '../proxy'
 
 const EXAMPLE = resolve(import.meta.dir, '..', '..', '..', '..', 'examples', 'app')
-const artifact = compileContract(contract, {})
+const artifact = compileContract(contract, tables)
 
 async function deployedRoot(): Promise<Worker | undefined> {
 	const provisions: ProvisionInput[] = []
