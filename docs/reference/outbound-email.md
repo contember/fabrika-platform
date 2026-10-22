@@ -172,12 +172,20 @@ token in `x-lettermint-token`, through the project's default route. It sends the
 attachments base64. A text or HTML body shorter than three characters, which Lettermint refuses, is `invalid_message`
 before any request. An accepted answer counts by its `message_id`, whatever its status.
 
-A 409 with the code `concurrent_idempotent_requests` is `request_in_progress`; Lettermint answers it too while an
-earlier request under the key failed with an unknown outcome, until the key expires. Any other 409 is
-`idempotency_conflict`, which is not retried.
+Verified on a live project on 2026-10-22: a repeated request under its key answers 202 with the first
+`message_id` and sends nothing (no `Idempotent-Replayed` header), a 256-character key is refused with a 422, and a
+refusal carries only a `message` (401) or a `message` with field `errors` (422, for an unverified sender domain, an
+invalid recipient or a short body). Neither 409 carries a code or a `Retry-After`: the adapter reads the text only to
+find "different payload", the key reused with another body, which is `idempotency_conflict`. Every other 409, a
+concurrent request under the key and, per Lettermint's guide, an earlier one whose outcome is unknown, is
+`request_in_progress`: a retry over an idempotent transport cannot deliver twice. As the recipient got them, the
+display name was quoted, the subject RFC 2047-encoded, `Reply-To` and both unsubscribe headers written, attachments
+byte for byte with their media types and UTF-8 names, and an HTML template unchanged, its links not rewritten. The
+`Message-ID` is `<message_id>@lmta.net`. Open and click tracking are settings of the Lettermint project or route; with
+click tracking on, a one-time link goes through Lettermint's redirect.
 
-The three adapters above follow their providers' documentation and are verified only against a stubbed fetch
-([backlog 198](../backlog/198-verify-the-postmark-ahasend-and-lettermint-adapters-on-live-accounts.md)).
+The Postmark and AhaSend adapters follow their providers' documentation and are verified only against a stubbed fetch
+([backlog 198](../backlog/198-verify-the-postmark-and-ahasend-adapters-on-live-accounts.md)).
 
 ## SmartEmailing adapter
 
