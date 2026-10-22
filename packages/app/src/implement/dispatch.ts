@@ -534,47 +534,50 @@ export class ContractRuntime {
 				: this.#parts.tokens.verifyFields(served.row.input, await this.#fileInput(served, body.multipart, work), carried)
 			// The handler's time starts after the last body byte, so a slow upload does not eat it.
 			const signal = handlerSignal(request, admission.timeoutMs)
-			let result: unknown
-			try {
-				result = await runInRequest(frame, async () => {
-					const membership = this.#membershipRequest(served.row, caller, request, frame)
-					const access = await this.#access(served.row, caller, input, frame, membership)
-					const binding = this.#parts.fileKinds?.binding(work)
-					const ctx = Object.freeze({
-						principal: caller.principal,
-						requestId: frame.id,
-						signal,
-						client: requestClient(request, this.#parts.clientVouched),
-						url: this.#parts.url,
-						...access.context,
-						...this.#facilities(served.facilities, served.row, membership, access.context['target'], {
-							credential: caller.token,
-							requestId: request.headers.get(REQUEST_ID_HEADER) ?? frame.id,
-						}),
-						...(served.connect === undefined ? {} : { connect: connectContext(served.connect, frame) }),
-						...(site === undefined || invocation === null ? {} : siteContext(served.row, site, invocation, caller.subject, access.context, binding)),
-						// An export's consumer reaches its rows only, never the files of their owners.
-						...(site === undefined || invocation === null || served.readOnly === true
-							? {}
-							: { files: this.#files(served.row.id, invocation, site.kind, work) }),
-						...(served.binds === undefined || invocation === null
-							? {}
-							: { webhooks: this.#webhookBindings(served.row.id, served.binds, invocation, caller.subject) }),
-						...this.#signing(`'${served.row.id}'`, site?.declaration.signs ?? []),
-						kick: kicks.kick,
+			const answer = await enclosedAnswer(invocation, async () => {
+				let result: unknown
+				try {
+					result = await runInRequest(frame, async () => {
+						const membership = this.#membershipRequest(served.row, caller, request, frame)
+						const access = await this.#access(served.row, caller, input, frame, membership)
+						const binding = this.#parts.fileKinds?.binding(work)
+						const ctx = Object.freeze({
+							principal: caller.principal,
+							requestId: frame.id,
+							signal,
+							client: requestClient(request, this.#parts.clientVouched),
+							url: this.#parts.url,
+							...access.context,
+							...this.#facilities(served.facilities, served.row, membership, access.context['target'], {
+								credential: caller.token,
+								requestId: request.headers.get(REQUEST_ID_HEADER) ?? frame.id,
+							}),
+							...(served.connect === undefined ? {} : { connect: connectContext(served.connect, frame) }),
+							...(site === undefined || invocation === null ? {} : siteContext(served.row, site, invocation, caller.subject, access.context, binding)),
+							// An export's consumer reaches its rows only, never the files of their owners.
+							...(site === undefined || invocation === null || served.readOnly === true
+								? {}
+								: { files: this.#files(served.row.id, invocation, site.kind, work) }),
+							...(served.binds === undefined || invocation === null
+								? {}
+								: { webhooks: this.#webhookBindings(served.row.id, served.binds, invocation, caller.subject) }),
+							...this.#signing(`'${served.row.id}'`, site?.declaration.signs ?? []),
+							kick: kicks.kick,
+						})
+						const args = { input: access.input, ctx, ...(query === undefined ? {} : { query }) }
+						const egress = served.egress
+						return egress === undefined
+							? await served.handler(args)
+							: await runAsSite(`'${served.row.id}'`, egress, async () => await served.handler(args))
 					})
-					const args = { input: access.input, ctx, ...(query === undefined ? {} : { query }) }
-					const egress = served.egress
-					return egress === undefined
-						? await served.handler(args)
-						: await runAsSite(`'${served.row.id}'`, egress, async () => await served.handler(args))
-				})
-			} finally {
-				frame.end()
-			}
-			const answer = await this.#answerOf(served, result, request, work, carried)
-			outcome = 'committing'
-			await commitAnswer(invocation, signal, answer)
+				} finally {
+					frame.end()
+				}
+				const answer = await this.#answerOf(served, result, request, work, carried)
+				outcome = 'committing'
+				await commitAnswer(invocation, signal, answer)
+				return answer
+			})
 			this.#kickAll(kicks.kicked(), exec)
 			return answer
 		} finally {
@@ -1002,45 +1005,48 @@ export class ContractRuntime {
 				: this.#parts.tokens.verifyFields(served.row.input, await this.#fileInput(served, body.multipart, work), carried)
 			// The handler's time starts after the last body byte, so a slow upload does not eat it.
 			const signal = handlerSignal(request, served.admission.timeoutMs)
-			let result: unknown
-			try {
-				result = await runInRequest(frame, async () => {
-					const handles = invocation.handles(
-						served.site.kind,
-						served.site.declaration,
-						subject,
-						{ carried },
-						this.#parts.fileKinds?.binding(work),
-					)
-					const where = `'${served.row.id}'`
-					const ctx = Object.freeze({
-						principal: Object.freeze({ kind: 'public', endpoint: served.row.id }),
-						requestId: frame.id,
-						signal,
-						client: requestClient(request, this.#parts.clientVouched),
-						url: this.#parts.url,
-						app,
-						db: Object.freeze({ app: (action: string) => handles.app(app(action)) }),
-						...this.#signing(`'${served.row.id}'`, served.site.declaration.signs),
-						files: storedFilesHandle(this.#parts.fileKinds, work, {
-							where,
-							check: boundTo(frame, () => false, 'ctx.files'),
-							writes: served.site.kind !== 'query',
-						}),
-						kick: kicks.kick,
+			const answer = await enclosedAnswer(invocation, async () => {
+				let result: unknown
+				try {
+					result = await runInRequest(frame, async () => {
+						const handles = invocation.handles(
+							served.site.kind,
+							served.site.declaration,
+							subject,
+							{ carried },
+							this.#parts.fileKinds?.binding(work),
+						)
+						const where = `'${served.row.id}'`
+						const ctx = Object.freeze({
+							principal: Object.freeze({ kind: 'public', endpoint: served.row.id }),
+							requestId: frame.id,
+							signal,
+							client: requestClient(request, this.#parts.clientVouched),
+							url: this.#parts.url,
+							app,
+							db: Object.freeze({ app: (action: string) => handles.app(app(action)) }),
+							...this.#signing(`'${served.row.id}'`, served.site.declaration.signs),
+							files: storedFilesHandle(this.#parts.fileKinds, work, {
+								where,
+								check: boundTo(frame, () => false, 'ctx.files'),
+								writes: served.site.kind !== 'query',
+							}),
+							kick: kicks.kick,
+						})
+						const args = { input, ctx, ...(query === undefined ? {} : { query }) }
+						return await runAsSite(`'${served.row.id}'`, served.site.declaration.egress, async () => await served.handler(args))
 					})
-					const args = { input, ctx, ...(query === undefined ? {} : { query }) }
-					return await runAsSite(`'${served.row.id}'`, served.site.declaration.egress, async () => await served.handler(args))
-				})
-			} finally {
-				frame.end()
-			}
-			const output = served.row.output
-			const answer = output !== null && isFileShape(output)
-				? await this.#fileKinds(served.row.id).download(work, served.row.id, output.kind, result)
-				: outputResponse(served.row, served.output, result, request, carried)
-			outcome = 'committing'
-			await commitAnswer(invocation, signal, answer)
+				} finally {
+					frame.end()
+				}
+				const output = served.row.output
+				const answer = output !== null && isFileShape(output)
+					? await this.#fileKinds(served.row.id).download(work, served.row.id, output.kind, result)
+					: outputResponse(served.row, served.output, result, request, carried)
+				outcome = 'committing'
+				await commitAnswer(invocation, signal, answer)
+				return answer
+			})
 			this.#kickAll(kicks.kicked(), exec)
 			return answer
 		} finally {
@@ -1133,57 +1139,59 @@ export class ContractRuntime {
 		const signal = handlerSignal(request, budgetMs)
 		let committing = false
 		try {
-			try {
-				await runInRequest(frame, async () => {
-					const subject = webhookSubject(binding.id)
-					const reach = this.#webhookReach(served, frame, subject, binding.scope.value, chain)
-					const principal: WebhookPrincipal = Object.freeze({ kind: 'webhook', bindingId: binding.id })
-					const delivery = Object.freeze({ key })
-					const handles = site === undefined || invocation === null
-						? null
-						: invocation.handles('mutation', site, subject, 'declared', this.#parts.fileKinds?.binding(work))
-					const data = site === undefined || invocation === null || handles === null
-						? {}
-						: {
-							db: siteData(handles, (action) => handles.app(reach.app(action))),
-							sql: site.sql === null ? undeclaredSql(served.row.id, 'mutation') : invocation.sql(site.sql),
-						}
-					const client = requestClient(request, this.#parts.clientVouched)
-					const args = {
-						input,
-						ctx: Object.freeze({
-							principal,
-							requestId: frame.id,
-							signal,
-							client,
-							url: this.#parts.url,
-							...reach.context,
-							delivery,
-							files: storedFilesHandle(this.#parts.fileKinds, work, {
-								where: `webhook '${served.webhook}'`,
-								check: boundTo(frame, () => false, 'ctx.files'),
-								writes: true,
+			await enclosed(invocation, async () => {
+				try {
+					await runInRequest(frame, async () => {
+						const subject = webhookSubject(binding.id)
+						const reach = this.#webhookReach(served, frame, subject, binding.scope.value, chain)
+						const principal: WebhookPrincipal = Object.freeze({ kind: 'webhook', bindingId: binding.id })
+						const delivery = Object.freeze({ key })
+						const handles = site === undefined || invocation === null
+							? null
+							: invocation.handles('mutation', site, subject, 'declared', this.#parts.fileKinds?.binding(work))
+						const data = site === undefined || invocation === null || handles === null
+							? {}
+							: {
+								db: siteData(handles, (action) => handles.app(reach.app(action))),
+								sql: site.sql === null ? undeclaredSql(served.row.id, 'mutation') : invocation.sql(site.sql),
+							}
+						const client = requestClient(request, this.#parts.clientVouched)
+						const args = {
+							input,
+							ctx: Object.freeze({
+								principal,
+								requestId: frame.id,
+								signal,
+								client,
+								url: this.#parts.url,
+								...reach.context,
+								delivery,
+								files: storedFilesHandle(this.#parts.fileKinds, work, {
+									where: `webhook '${served.webhook}'`,
+									check: boundTo(frame, () => false, 'ctx.files'),
+									writes: true,
+								}),
+								...this.#signing(`webhook '${served.webhook}'`, site?.signs ?? []),
+								kick: kicks.kick,
+								...data,
 							}),
-							...this.#signing(`webhook '${served.webhook}'`, site?.signs ?? []),
-							kick: kicks.kick,
-							...data,
-						}),
-					}
-					if (site === undefined) {
-						await served.handler(args)
-					} else {
-						await runAsSite(`webhook '${served.webhook}'`, site.egress, async () => await served.handler(args))
-					}
-				})
-			} finally {
-				frame.end()
-			}
-			const using = invocation === null ? undefined : await invocation.frameworkSite('the delivery claim').session()
-			if (!(await tables.completeDelivery(claim, using))) {
-				throw new ServerFault('webhook_claim_lost', `the claim of a delivery to '${served.webhook}' expired and another copy took it over`)
-			}
-			committing = true
-			await invocation?.commit(signal)
+						}
+						if (site === undefined) {
+							await served.handler(args)
+						} else {
+							await runAsSite(`webhook '${served.webhook}'`, site.egress, async () => await served.handler(args))
+						}
+					})
+				} finally {
+					frame.end()
+				}
+				const using = invocation === null ? undefined : await invocation.frameworkSite('the delivery claim').session()
+				if (!(await tables.completeDelivery(claim, using))) {
+					throw new ServerFault('webhook_claim_lost', `the claim of a delivery to '${served.webhook}' expired and another copy took it over`)
+				}
+				committing = true
+				await invocation?.commit(signal)
+			})
 			this.#kickAll(kicks.kicked(), exec)
 		} catch (error) {
 			await invocation?.rollback()
@@ -1614,6 +1622,30 @@ async function openMultipart(
 			}
 			return values
 		},
+	}
+}
+
+/** Runs `work` in the invocation's transaction (`Invocation.enclose`), or as is without one. */
+function enclosed<T>(invocation: Invocation | null, work: () => Promise<T>): Promise<T> {
+	return invocation === null ? work() : invocation.enclose(work)
+}
+
+/**
+ * An answer's work, from the handler to its commit, in the invocation's transaction. Where the transaction encloses
+ * the work (SQLite) its COMMIT runs after `commitAnswer`, so a failed one cancels a file's object stream here.
+ */
+async function enclosedAnswer<A extends Response | FileDownload>(invocation: Invocation | null, work: () => Promise<A>): Promise<A> {
+	let answer: A | undefined
+	try {
+		return await enclosed(invocation, async () => {
+			answer = await work()
+			return answer
+		})
+	} catch (error) {
+		if (answer instanceof FileDownload) {
+			await answer.body.cancel()
+		}
+		throw error
 	}
 }
 
