@@ -92,6 +92,11 @@
 			"types": "./src/dev/wire.ts",
 			"default": "./src/dev/wire.ts"
 		},
+		"./dev/changes": {
+			"bun": "./src/dev/changes.ts",
+			"types": "./src/dev/changes.ts",
+			"default": "./src/dev/changes.ts"
+		},
 		"./agent-skill": {
 			"bun": "./src/agent-skill.ts",
 			"types": "./src/agent-skill.ts",

@@ -82,6 +82,7 @@ src/
   build.ts            @fabrika/app/build — the generated entrypoint fabrika app build writes
   dev/                @fabrika/app/dev — the launcher of a `dev` environment (ADR-0017, ADR-0064); Bun only
     wire.ts           @fabrika/app/dev/wire — the source receiver's wire, which Control imports too (runtime-neutral)
+    changes.ts        @fabrika/app/dev/changes — which paths need a bootstrap run; Control applies the same rule at bind_dev
     launcher.ts       runDevLauncher: the long poll, the sync, migrate, the SPA commands, the respawn, run_checks, reset_dev
     contract-digest.ts  the launcher's child that loads src/app.ts without any credential and prints the contract digest
     changes.ts        what a sync's paths mean: a bootstrap (the build owns it), a migration, an SPA build
