@@ -94,8 +94,14 @@ survive a service stop, start and restart (a deploy replaces the container and l
     - The launcher writes the files, migrates when `db/migrations/` changed, runs the authored SPA build when a web
       source changed, respawns the application (not `bun --watch`, so it knows when the new head serves), and reports
       `{ head, status, last log lines }`. A commit that changes something the build owns (`package.json`, `bun.lock`,
-      `fabrika.contract.ts` or a module it imports, generated files, which covers the framework pin) is refused in one
-      line: it needs a bootstrap run. At boot the launcher reconciles to the recorded head before it serves.
+      the build descriptor, generated files, which covers the framework pin) is refused in one line: it needs a
+      bootstrap run. So is a commit that changes the contract: after writing the files, a child of the launcher with no
+      credential computes the contract digest, and a digest other than the bootstrapped `FABRIKA_CONTRACT_DIGEST`
+      restores the files and refuses the commit. The digest decides, not the paths: an edit of a handler in a module
+      the contract imports syncs, and the proxy table and the approval, which follow the digest, stay true. At boot the
+      launcher reconciles to the recorded head before it serves.
+    - `run_checks` is refused while the container holds another commit than the workspace's newest, and its results
+      name the commit they checked.
     - `apply_changes` on a bound workspace waits up to 10 s for that report and returns
       `dev: { head, state, summary, url, log }`, or the pending state on a timeout. `get_dev_status` reads the rest.
     - `run_checks` runs the build's check chain (tests, `fabrika-check`, `tsc`) in the container on request. It

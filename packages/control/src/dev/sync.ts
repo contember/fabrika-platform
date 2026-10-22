@@ -3,7 +3,7 @@
 
 import type { DevSourceFile, DevSync } from '@fabrika/app/dev/wire'
 import { isSourcePath } from '@fabrika/app/dev/wire'
-import type { WorkspaceSourcePort, WorkspaceSourceTarget } from '../workspace-source-port'
+import type { WorkspaceSourceSession } from '../workspace-source-port'
 
 /** The most files and bytes one sync relays; a larger change needs a bootstrap run. */
 export const DEV_SYNC_MAX_FILES = 300
@@ -20,15 +20,9 @@ const BOOTSTRAP = 'that needs a bootstrap run: call bind_dev again'
  * Every path that differs between `from` and `to`, at `to`. GitHub compares from the merge base, so when `from` is no
  * ancestor of `to` (another workspace, a rewritten branch) the reverse comparison adds what only `from` changed.
  */
-export async function buildDevSync(
-	source: WorkspaceSourcePort,
-	target: WorkspaceSourceTarget,
-	from: string,
-	to: string,
-	signal: AbortSignal,
-): Promise<DevSyncOutcome> {
-	const forward = await source.compare({ target, baseSha: from, headSha: to, signal })
-	const comparisons = forward.behindBy > 0 ? [forward, await source.compare({ target, baseSha: to, headSha: from, signal })] : [forward]
+export async function buildDevSync(source: WorkspaceSourceSession, from: string, to: string): Promise<DevSyncOutcome> {
+	const forward = await source.compare({ baseSha: from, headSha: to })
+	const comparisons = forward.behindBy > 0 ? [forward, await source.compare({ baseSha: to, headSha: from })] : [forward]
 	if (comparisons.some((comparison) => comparison.filesCapped)) {
 		return { kind: 'refused', reason: `the change from ${from} to ${to} lists more files than GitHub compares; ${BOOTSTRAP}` }
 	}
@@ -47,7 +41,7 @@ export async function buildDevSync(
 	let bytes = 0
 	let pending = paths
 	while (pending.length > 0) {
-		const read = await source.readFiles({ target, commitSha: to, paths: pending, signal })
+		const read = await source.readFiles({ commitSha: to, paths: pending })
 		const next: string[] = []
 		for (const file of read.files) {
 			if (file.content !== null) {
