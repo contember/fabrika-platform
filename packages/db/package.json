@@ -55,6 +55,26 @@
 			"types": "./src/postgres.ts",
 			"default": "./src/postgres.ts"
 		},
+		"./sqlite": {
+			"bun": "./src/sqlite.ts",
+			"types": "./src/sqlite.ts",
+			"default": "./src/sqlite.ts"
+		},
+		"./sqlite-migrate": {
+			"bun": "./src/sqlite-migrate.ts",
+			"types": "./src/sqlite-migrate.ts",
+			"default": "./src/sqlite-migrate.ts"
+		},
+		"./codegen-sqlite": {
+			"bun": "./src/codegen-sqlite.ts",
+			"types": "./src/codegen-sqlite.ts",
+			"default": "./src/codegen-sqlite.ts"
+		},
+		"./testing-sqlite": {
+			"bun": "./src/testing-sqlite.ts",
+			"types": "./src/testing-sqlite.ts",
+			"default": "./src/testing-sqlite.ts"
+		},
 		"./codegen": {
 			"bun": "./src/codegen.ts",
 			"types": "./src/codegen.ts",
