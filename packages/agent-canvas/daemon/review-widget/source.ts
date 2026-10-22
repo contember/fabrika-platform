@@ -31,6 +31,8 @@ function nameOf(type: unknown): string | undefined {
 	return undefined
 }
 
+const LIBRARY = /\/node_modules\//
+
 /** The first application frame of a stack: where the JSX was written. */
 function creationFrame(stack: string): Omit<BundleFrame, 'label'> | undefined {
 	for (const line of stack.split('\n').slice(1)) {
@@ -59,11 +61,20 @@ export function bundleFrames(element: Element): BundleFrame[] {
 		const stack = isRecord(fiber['_debugStack']) ? fiber['_debugStack']['stack'] : undefined
 		if (typeof stack !== 'string') continue
 		const frame = creationFrame(stack)
-		if (frame === undefined) continue
+		// An element a dependency created is not the reviewer's code to change.
+		if (frame === undefined || LIBRARY.test(frame.url)) continue
 		const owner = isRecord(fiber['_debugOwner']) ? nameOf(fiber['_debugOwner']['type']) : undefined
 		frames.push({ label: owner === undefined ? `<${name}>` : `<${name}> in ${owner}`, ...frame })
 	}
 	return frames
+}
+
+/** Whether a dependency, not the application, created the fiber's element; unknown without a development stack. */
+export function createdInLibrary(fiber: Record<string, unknown>): boolean {
+	const stack = isRecord(fiber['_debugStack']) ? fiber['_debugStack']['stack'] : undefined
+	if (typeof stack !== 'string') return false
+	const frame = creationFrame(stack)
+	return frame !== undefined && LIBRARY.test(frame.url)
 }
 
 const traceMaps = new Map<string, Promise<TraceMap | null>>()

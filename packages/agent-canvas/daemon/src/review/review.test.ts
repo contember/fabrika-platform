@@ -42,6 +42,19 @@ describe('ReviewStore', () => {
 		expect(store.claimQueued('demo')).toEqual([])
 	})
 
+	test('sending notes queues every unsent note and leaves answered threads with the reviewer', () => {
+		const first = store.create('demo', anchor, 'Make it green', false)
+		const second = store.create('demo', anchor, 'Too much padding', false)
+		const answered = store.create('demo', anchor, 'Why is this red?', true)
+		store.claimQueued('demo')
+		store.agentReply('demo', answered.id, 'Which shade do you want?', false)
+
+		expect(store.sendNotes('demo').map((thread) => thread.id)).toEqual([first.id, second.id])
+		expect(store.claimQueued('demo').map((thread) => thread.id)).toEqual([first.id, second.id])
+		expect(store.list('demo').find((thread) => thread.id === answered.id)?.state).toBe('open')
+		expect(store.sendNotes('demo')).toEqual([])
+	})
+
 	test('an agent reply resolves the thread or hands it back to the reviewer', () => {
 		const thread = store.create('demo', anchor, 'Rename it', true)
 		store.claimQueued('demo')
@@ -112,6 +125,24 @@ describe('renderReviewRequests', () => {
 		expect(markdown).toContain(`- Screenshot, the element outlined in red: \`${thread.screenshot}\``)
 		expect(markdown).toContain('````html\n<button class="primary">Save ```</button>\n````')
 	})
+
+	test('adds the browser and the computed style, and leaves out text that repeats the name', () => {
+		const thread = store.create(
+			'demo',
+			{
+				...anchor,
+				text: 'Save',
+				browser: { name: 'Chrome 141 · Linux', viewport: { width: 1512, height: 982, scale: 2 }, colorScheme: 'dark' },
+				style: 'display: flex; gap: 4px',
+			},
+			'Make it green',
+			true,
+		)
+		const markdown = renderReviewRequests('demo', [thread])
+		expect(markdown).toContain('- Browser: Chrome 141 · Linux, viewport 1512×982 @2x, dark color scheme')
+		expect(markdown).toContain('- Computed style: `display: flex; gap: 4px`')
+		expect(markdown).not.toContain('- Text:')
+	})
 })
 
 describe('isLoopbackOrigin', () => {
@@ -168,6 +199,15 @@ describe('review routes', () => {
 		expect(created.status).toBe(200)
 		const [thread] = store.list('demo')
 		expect([...readFileSync(thread?.screenshot ?? '')]).toEqual([137, 80, 78, 71])
+	})
+
+	test('the widget sends all notes in one request', async () => {
+		store.create('demo', anchor, 'Make it green', false)
+		store.create('demo', anchor, 'Too much padding', false)
+
+		const sent = await call('POST', '/api/review/demo/notes/send', { origin: 'http://localhost:4317' })
+		expect(sent.status).toBe(200)
+		expect(store.list('demo').map((thread) => thread.state)).toEqual(['queued', 'queued'])
 	})
 
 	test('a foreign origin cannot create a thread', async () => {
