@@ -130,6 +130,15 @@ export function createReviewServer(store: ReviewStore, proxies: ReviewProxies) {
 			notifyAgent(project)
 			return { thread }
 		}),
+		route('POST', '/api/review/:project/notes/send', 'browser', async (_req, match) => {
+			const project = projectOf(match)
+			const threads = store.sendNotes(project)
+			if (threads.length > 0) {
+				publish(project)
+				notifyAgent(project)
+			}
+			return { threads }
+		}),
 		route('POST', '/api/review/:project/threads/:thread/resolve', 'browser', async (_req, match) => {
 			const project = projectOf(match)
 			const thread = store.setResolved(project, threadIdOf(match), true)
@@ -170,6 +179,11 @@ export function createReviewServer(store: ReviewStore, proxies: ReviewProxies) {
 
 	return {
 		channel,
+		/** Hands a full reload the application asked for to the project's widgets, which reload unless the reviewer is writing. */
+		fullReload(project: string, path: string): void {
+			const frame: ReviewBrowserFrame = { type: 'reload', path }
+			channel.broadcast(project, frame)
+		},
 		/** Answers the request when it is review mode's: CORS preflight, a route, or a WebSocket upgrade. */
 		fetch(
 			req: Request,

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import {
+	isUnsentNote,
 	PROJECT_RE,
 	type ReviewAnchor,
 	type ReviewAuthor,
@@ -59,6 +60,16 @@ export class ReviewStore {
 			if (thread.state === 'working') throw new ReviewError('The agent is already working on this thread', 409)
 			return { ...thread, state: 'queued', updatedAt: this.timestamp() }
 		})
+	}
+
+	/** Sends every unsent note at once, so the agent picks them up as one batch. */
+	sendNotes(project: string): readonly ReviewThread[] {
+		const threads = this.list(project)
+		const updatedAt = this.timestamp()
+		const sent = threads.filter(isUnsentNote).map((thread): ReviewThread => ({ ...thread, state: 'queued', updatedAt }))
+		const sentById = new Map(sent.map((thread) => [thread.id, thread]))
+		this.save(project, threads.map((thread) => sentById.get(thread.id) ?? thread))
+		return sent
 	}
 
 	setResolved(project: string, threadId: string, resolved: boolean): ReviewThread {

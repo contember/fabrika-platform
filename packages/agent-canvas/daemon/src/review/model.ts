@@ -25,12 +25,14 @@ export function isLoopbackOrigin(origin: string): boolean {
 const shortText = z.string().max(500)
 
 export const MAX_HTML = 4000
+export const MAX_SOURCE_FILE = 1000
+export const MAX_STYLE = 1000
 
 /** A position in the application's source, resolved from a development stack through the page's source maps. */
 export const reviewSourceSchema = z.object({
 	/** What was created there, e.g. `<a> in ProductListCell` or `<ProductListCell> in DataGrid`. */
 	label: shortText,
-	file: z.string().max(1000),
+	file: z.string().max(MAX_SOURCE_FILE),
 	line: z.number().int().positive(),
 	column: z.number().int().nonnegative(),
 })
@@ -53,6 +55,14 @@ export const reviewAnchorSchema = z.object({
 	sources: z.array(reviewSourceSchema).max(10).optional(),
 	/** The landmarks around the element: page heading, section, dialog. */
 	context: shortText.optional(),
+	/** The reviewer's browser and operating system, e.g. `Chrome 141 · Linux`, viewport and colour scheme. */
+	browser: z.object({
+		name: shortText,
+		viewport: z.object({ width: z.number().int().nonnegative(), height: z.number().int().nonnegative(), scale: z.number().positive() }),
+		colorScheme: z.enum(['light', 'dark']),
+	}).optional(),
+	/** The element's computed box, layout and type as CSS declarations, initial values left out. */
+	style: z.string().max(MAX_STYLE).optional(),
 	/** The element's markup, trimmed: deep subtrees, long lists and long texts are cut. */
 	html: z.string().max(MAX_HTML).optional(),
 	/** A text selection inside the element, with its surroundings. */
@@ -92,6 +102,11 @@ export const reviewThreadSchema = z.object({
 })
 export type ReviewThread = z.infer<typeof reviewThreadSchema>
 
+/** A note the person saved and has not sent: open, with their own comment last rather than the agent's answer. */
+export function isUnsentNote(thread: ReviewThread): boolean {
+	return thread.state === 'open' && thread.comments.at(-1)?.author === 'user'
+}
+
 export const reviewThreadsFileSchema = z.object({ threads: z.array(reviewThreadSchema) })
 
 const commentBody = z.string().trim().min(1).max(20_000)
@@ -125,6 +140,8 @@ export type ReviewProxy = z.infer<typeof reviewProxySchema>
 export type ReviewBrowserFrame =
 	| { type: 'threads'; threads: readonly ReviewThread[] }
 	| { type: 'agent-status'; watching: boolean }
+	/** The application's dev server asked for a full reload; the widget holds it while the reviewer writes. */
+	| { type: 'reload'; path: string }
 
 /** The frame a waiting CLI receives when the person sends threads; it reads them back through the claim endpoint. */
 export interface ReviewWaitFrame {

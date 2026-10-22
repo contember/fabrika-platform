@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import type { ReviewAnchor, ReviewSource, ReviewThread, ReviewThreadState } from '../src/review/model'
+import { z } from 'zod'
+import {
+	isUnsentNote,
+	type ReviewAnchor,
+	reviewAnchorSchema,
+	type ReviewSource,
+	type ReviewThread,
+	type ReviewThreadState,
+} from '../src/review/model'
 import { describe, find } from './anchor'
 import type { ReviewClient } from './client'
 import { captureElement } from './screenshot'
@@ -19,6 +27,32 @@ interface Draft {
 	element: Element
 	/** Resolved while the reviewer writes: source maps can take a moment to load. */
 	sources: Promise<ReviewSource[]>
+	body: string
+	screenshot: boolean
+}
+
+/** The comment being written, kept for the tab: a dev server reloads the page on many edits. */
+const savedDraftSchema = z.object({ anchor: reviewAnchorSchema, body: z.string(), screenshot: z.boolean() })
+type SavedDraft = z.infer<typeof savedDraftSchema>
+
+const DRAFT_KEY = 'agent-canvas-review:draft'
+
+function saveDraft(draft: SavedDraft | null): void {
+	try {
+		if (draft === null) sessionStorage.removeItem(DRAFT_KEY)
+		else sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+	} catch {}
+}
+
+function loadDraft(): SavedDraft | null {
+	try {
+		const saved = sessionStorage.getItem(DRAFT_KEY)
+		if (saved === null) return null
+		const parsed = savedDraftSchema.safeParse(JSON.parse(saved))
+		return parsed.success ? parsed.data : null
+	} catch {
+		return null
+	}
 }
 
 const STATE_LABELS: Record<ReviewThreadState, string> = {
@@ -55,6 +89,13 @@ function takePendingReveal(): string | null {
 	} catch {
 		return null
 	}
+}
+
+/** Vite reloads every page for a module change, and for an HTML change only the page that file serves. */
+function reloadsThisPage(path: string): boolean {
+	if (!path.endsWith('.html')) return true
+	const page = decodeURI(location.pathname)
+	return path === '/index.html' || page === path || (page.endsWith('/') && `${page}index.html` === path)
 }
 
 function boxOf(element: Element): Box {
@@ -179,9 +220,17 @@ function popoverPosition(box: Box): { top: number; left: number } {
 	return { top, left }
 }
 
-function Composer(props: { draft: Draft; onSubmit: (body: string, send: boolean, screenshot: boolean) => Promise<void>; onCancel: () => void }) {
-	const [body, setBody] = useState('')
-	const [screenshot, setScreenshot] = useState(false)
+function Composer(props: {
+	draft: Draft
+	reloadPending: boolean
+	onChange: (body: string, screenshot: boolean) => void
+	onSubmit: (body: string, send: boolean, screenshot: boolean) => Promise<void>
+	onCancel: () => void
+}) {
+	const [body, setBody] = useState(props.draft.body)
+	const [screenshot, setScreenshot] = useState(props.draft.screenshot)
+	const { onChange } = props
+	useEffect(() => onChange(body, screenshot), [onChange, body, screenshot])
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const textarea = useRef<HTMLTextAreaElement>(null)
@@ -217,6 +266,12 @@ function Composer(props: { draft: Draft; onSubmit: (body: string, send: boolean,
 				<input type="checkbox" checked={screenshot} onChange={(event) => setScreenshot(event.currentTarget.checked)} />
 				Attach a screenshot
 			</label>
+			{props.reloadPending && (
+				<div class="reload-pending">
+					<span>The application changed. It reloads once you save or cancel this comment.</span>
+					<button type="button" class="ghost" onClick={() => location.reload()}>Reload now</button>
+				</div>
+			)}
 			{error !== null && <div class="error">{error}</div>}
 			<div class="actions">
 				<button type="button" class="ghost" onClick={props.onCancel}>Cancel</button>
@@ -242,7 +297,7 @@ function ThreadCard(props: { thread: ReviewThread; number: number | null; client
 	}
 
 	return (
-		<div class={`thread${props.number === null ? '' : ' current'}`}>
+		<div class={`thread${props.number === null ? '' : ' current'}${thread.state === 'resolved' ? ' resolved' : ''}`}>
 			<div class="thread-head">
 				<button type="button" class="ghost" title="Show in page" aria-label="Show in page" onClick={props.onReveal}>
 					{props.number === null ? '↗' : `#${props.number}`}
@@ -299,16 +354,26 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 	const [picking, setPicking] = useState(false)
 	const [hovered, setHovered] = useState<Element | null>(null)
 	const [draft, setDraft] = useState<Draft | null>(null)
+	const [unrestored, setUnrestored] = useState<SavedDraft | null>(loadDraft)
+	const [reloadPending, setReloadPending] = useState(false)
 	const [panelOpen, setPanelOpen] = useState(false)
 	const [showAll, setShowAll] = useState(false)
-	const [showResolved, setShowResolved] = useState(false)
+	const [hideResolved, setHideResolved] = useState(false)
+	const [panelError, setPanelError] = useState<string | null>(null)
 	const [revealId, setRevealId] = useState<string | null>(takePendingReveal)
 	const [flash, setFlash] = useState<Box | null>(null)
 	const href = useHref()
-	useLayoutTick()
+	const tick = useLayoutTick()
 
 	useEffect(() => {
-		client.connect({ threads: setThreads, agentWatching: setWatching, connected: setConnected })
+		client.connect({
+			threads: setThreads,
+			agentWatching: setWatching,
+			connected: setConnected,
+			reload: (path) => {
+				if (reloadsThisPage(path)) setReloadPending(true)
+			},
+		})
 		return () => client.close()
 	}, [client])
 
@@ -320,24 +385,39 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 		setPicking(false)
 		setHovered(null)
 		window.getSelection()?.removeAllRanges()
-		setDraft({ anchor: describe(element, location.href, range), box: boxOf(element), element, sources: resolveSources(bundleFrames(element)) })
+		setUnrestored(null)
+		const anchor = describe(element, location.href, range)
+		setDraft({ anchor, box: boxOf(element), element, sources: resolveSources(bundleFrames(element)), body: '', screenshot: false })
 	}, [])
+	const discardDraft = useCallback(() => {
+		setDraft(null)
+		saveDraft(null)
+	}, [])
+	const anchor = draft?.anchor
+	const keepDraft = useCallback((body: string, screenshot: boolean) => {
+		if (anchor !== undefined) saveDraft({ anchor, body, screenshot })
+	}, [anchor])
 	usePicker(host, picking, setHovered, pick, cancelPicking)
 	// The panel covers the right edge of the page, which the reviewer may want to pick from.
 	const startPicking = () => {
 		setPanelOpen(false)
-		setDraft(null)
+		discardDraft()
 		setPicking(true)
 	}
 
 	const page = pageKey(href)
 	const onPage = useMemo(
-		() => threads.filter((thread) => pageKey(thread.anchor.url) === page && (showResolved || thread.state !== 'resolved')),
-		[threads, page, showResolved],
+		() => threads.filter((thread) => pageKey(thread.anchor.url) === page && (!hideResolved || thread.state !== 'resolved')),
+		[threads, page, hideResolved],
 	)
-	const listed = showAll ? threads.filter((thread) => showResolved || thread.state !== 'resolved') : onPage
+	const listed = showAll ? threads.filter((thread) => !hideResolved || thread.state !== 'resolved') : onPage
 	const numbers = new Map(onPage.map((thread, index) => [thread.id, index + 1]))
 	const pending = threads.filter((thread) => thread.state !== 'resolved').length
+	const notes = threads.filter(isUnsentNote).length
+	const sendNotes = () => {
+		setPanelError(null)
+		client.sendNotes().catch((failure: unknown) => setPanelError(failure instanceof Error ? failure.message : String(failure)))
+	}
 
 	useEffect(() => {
 		if (revealId === null) return
@@ -350,6 +430,20 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 		setTimeout(() => setFlash(boxOf(element)), 350)
 		setTimeout(() => setFlash(null), 1600)
 	}, [revealId, threads, page])
+
+	// The draft survives the reload in sessionStorage; held back only so the reviewer can finish writing.
+	useEffect(() => {
+		if (reloadPending && draft === null) location.reload()
+	}, [reloadPending, draft])
+
+	// The application may render the element a moment after the reload.
+	useEffect(() => {
+		if (unrestored === null || draft !== null || pageKey(unrestored.anchor.url) !== page) return
+		const element = find(document, unrestored.anchor)
+		if (element === null) return
+		setUnrestored(null)
+		setDraft({ ...unrestored, box: boxOf(element), element, sources: resolveSources(bundleFrames(element)) })
+	}, [unrestored, draft, page, tick])
 
 	const reveal = (thread: ReviewThread) => {
 		setRevealId(thread.id)
@@ -384,13 +478,15 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 			{draft !== null && (
 				<Composer
 					draft={draft}
-					onCancel={() => setDraft(null)}
+					reloadPending={reloadPending}
+					onChange={keepDraft}
+					onCancel={discardDraft}
 					onSubmit={async (body, send, screenshot) => {
 						// The capture asks for the tab, which the browser allows only while the click still counts as a gesture.
 						const image = screenshot ? await captureElement(draft.element, host) : undefined
 						const sources = await draft.sources
 						await client.createThread(sources.length === 0 ? draft.anchor : { ...draft.anchor, sources }, body, send, image)
-						setDraft(null)
+						discardDraft()
 					}}
 				/>
 			)}
@@ -403,8 +499,16 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 					<div class="tabs">
 						<button type="button" class={showAll ? '' : 'active'} onClick={() => setShowAll(false)}>This page</button>
 						<button type="button" class={showAll ? 'active' : ''} onClick={() => setShowAll(true)}>All pages</button>
-						<button type="button" class={showResolved ? 'active' : ''} onClick={() => setShowResolved(!showResolved)}>Resolved</button>
+						<button type="button" class={hideResolved ? 'active' : ''} onClick={() => setHideResolved(!hideResolved)}>Hide resolved</button>
 					</div>
+					{notes > 0 && (
+						<div class="send-notes">
+							<button type="button" class="primary" onClick={sendNotes}>
+								Send {notes === 1 ? '1 note' : `${notes} notes`} to Claude
+							</button>
+						</div>
+					)}
+					{panelError !== null && <div class="error">{panelError}</div>}
 					<div class="threads">
 						{listed.length === 0 && <div class="empty">No comments yet. Click “Comment”, then an element or a text selection.</div>}
 						{listed.map((thread) => (

@@ -1,5 +1,8 @@
 import type { ReviewAnchor } from '../src/review/model'
+import { browserOf } from './browser'
 import { contextOf, htmlOf } from './markup'
+import { createdInLibrary } from './source'
+import { styleOf } from './style'
 
 const MAX_TEXT = 120
 const QUOTE_CONTEXT = 40
@@ -8,6 +11,14 @@ const MAX_COMPONENTS = 8
 function shorten(text: string, max = MAX_TEXT): string {
 	const collapsed = text.replace(/\s+/g, ' ').trim()
 	return collapsed.length > max ? `${collapsed.slice(0, max - 1)}…` : collapsed
+}
+
+/** The element's text with a space between text nodes: adjacent inline elements otherwise run their words together. */
+function textOf(element: Element): string {
+	const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+	const parts: string[] = []
+	for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) parts.push(node.textContent ?? '')
+	return parts.join(' ')
 }
 
 const IMPLICIT_ROLES: Record<string, string> = {
@@ -65,7 +76,8 @@ export function nameOf(element: Element): string | undefined {
 	const role = roleOf(element)
 	const namedByContent = role === 'button' || role === 'link' || role === 'heading' || role === 'cell' || role === 'columnheader' || role === 'tab'
 		|| role === 'menuitem' || role === 'option'
-	if (namedByContent && element.textContent !== null && element.textContent.trim() !== '') return shorten(element.textContent)
+	const text = textOf(element)
+	if (namedByContent && text.trim() !== '') return shorten(text)
 	return undefined
 }
 
@@ -114,8 +126,9 @@ export function componentsOf(element: Element): string[] {
 	while (isRecord(fiber) && names.length < 40) {
 		// Bundlers suffix a name that collides in their scope (`Card` → `Card13`); the source still says `Card`.
 		const name = componentName(fiber['type'])?.replace(/(?<=[a-z])\d+$/, '')
-		// Context providers wrap whole apps and say nothing about where the element is.
-		if (name !== undefined && /^[A-Z]/.test(name) && !name.endsWith('Provider') && names[0] !== name) names.unshift(name)
+		// Context providers wrap whole apps and say nothing about where the element is; nor do a library's own wrappers.
+		const telling = name !== undefined && /^[A-Z]/.test(name) && !name.endsWith('Provider') && !createdInLibrary(fiber)
+		if (telling && names[0] !== name) names.unshift(name)
 		fiber = fiber['return']
 	}
 	return names.slice(-MAX_COMPONENTS)
@@ -144,10 +157,12 @@ function quoteOf(element: Element, range: Range): ReviewAnchor['quote'] {
 export function describe(element: Element, url: string, range?: Range): ReviewAnchor {
 	const role = roleOf(element)
 	const name = nameOf(element)
-	const text = element.textContent === null ? '' : shorten(element.textContent)
+	const text = shorten(textOf(element))
 	const components = componentsOf(element)
 	const quote = range === undefined ? undefined : quoteOf(element, range)
 	const context = contextOf(element)
+	const view = element.ownerDocument.defaultView
+	const style = view === null ? '' : styleOf(view.getComputedStyle(element))
 	return {
 		url,
 		selector: selectorOf(element),
@@ -157,6 +172,8 @@ export function describe(element: Element, url: string, range?: Range): ReviewAn
 		...(components.length === 0 ? {} : { components }),
 		...(quote === undefined ? {} : { quote }),
 		...(context === undefined ? {} : { context }),
+		...(view === null ? {} : { browser: browserOf(view) }),
+		...(style === '' ? {} : { style }),
 		html: htmlOf(element),
 	}
 }

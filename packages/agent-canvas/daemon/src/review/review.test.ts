@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { renderReviewRequests } from './markdown'
 import { isLoopbackOrigin, type ReviewAnchor } from './model'
-import { ReviewProxies } from './proxy'
+import { ReviewProxies, viteFullReloadPath } from './proxy'
 import { createReviewServer } from './server'
 import { ReviewStore } from './store'
 
@@ -40,6 +40,19 @@ describe('ReviewStore', () => {
 		const claimed = store.claimQueued('demo')
 		expect(claimed.map((thread) => [thread.id, thread.state])).toEqual([[note.id, 'working']])
 		expect(store.claimQueued('demo')).toEqual([])
+	})
+
+	test('sending notes queues every unsent note and leaves answered threads with the reviewer', () => {
+		const first = store.create('demo', anchor, 'Make it green', false)
+		const second = store.create('demo', anchor, 'Too much padding', false)
+		const answered = store.create('demo', anchor, 'Why is this red?', true)
+		store.claimQueued('demo')
+		store.agentReply('demo', answered.id, 'Which shade do you want?', false)
+
+		expect(store.sendNotes('demo').map((thread) => thread.id)).toEqual([first.id, second.id])
+		expect(store.claimQueued('demo').map((thread) => thread.id)).toEqual([first.id, second.id])
+		expect(store.list('demo').find((thread) => thread.id === answered.id)?.state).toBe('open')
+		expect(store.sendNotes('demo')).toEqual([])
 	})
 
 	test('an agent reply resolves the thread or hands it back to the reviewer', () => {
@@ -112,6 +125,24 @@ describe('renderReviewRequests', () => {
 		expect(markdown).toContain(`- Screenshot, the element outlined in red: \`${thread.screenshot}\``)
 		expect(markdown).toContain('````html\n<button class="primary">Save ```</button>\n````')
 	})
+
+	test('adds the browser and the computed style, and leaves out text that repeats the name', () => {
+		const thread = store.create(
+			'demo',
+			{
+				...anchor,
+				text: 'Save',
+				browser: { name: 'Chrome 141 · Linux', viewport: { width: 1512, height: 982, scale: 2 }, colorScheme: 'dark' },
+				style: 'display: flex; gap: 4px',
+			},
+			'Make it green',
+			true,
+		)
+		const markdown = renderReviewRequests('demo', [thread])
+		expect(markdown).toContain('- Browser: Chrome 141 · Linux, viewport 1512×982 @2x, dark color scheme')
+		expect(markdown).toContain('- Computed style: `display: flex; gap: 4px`')
+		expect(markdown).not.toContain('- Text:')
+	})
 })
 
 describe('isLoopbackOrigin', () => {
@@ -129,7 +160,7 @@ describe('review routes', () => {
 	const noUpgrade = { upgrade: () => false }
 
 	async function call(method: string, path: string, options: { origin?: string; body?: unknown } = {}) {
-		const proxies = new ReviewProxies(store, WIDGET)
+		const proxies = new ReviewProxies(store, WIDGET, () => {})
 		const review = createReviewServer(store, proxies)
 		const headers = new Headers({ 'Content-Type': 'application/json' })
 		if (options.origin !== undefined) headers.set('Origin', options.origin)
@@ -170,6 +201,15 @@ describe('review routes', () => {
 		expect([...readFileSync(thread?.screenshot ?? '')]).toEqual([137, 80, 78, 71])
 	})
 
+	test('the widget sends all notes in one request', async () => {
+		store.create('demo', anchor, 'Make it green', false)
+		store.create('demo', anchor, 'Too much padding', false)
+
+		const sent = await call('POST', '/api/review/demo/notes/send', { origin: 'http://localhost:4317' })
+		expect(sent.status).toBe(200)
+		expect(store.list('demo').map((thread) => thread.state)).toEqual(['queued', 'queued'])
+	})
+
 	test('a foreign origin cannot create a thread', async () => {
 		const response = await call('POST', '/api/review/demo/threads', {
 			origin: 'https://example.com',
@@ -198,11 +238,22 @@ describe('review routes', () => {
 	})
 })
 
+describe('viteFullReloadPath', () => {
+	test('reads the path of a full reload and ignores every other frame', () => {
+		expect(viteFullReloadPath('{"type":"full-reload","path":"/about.html","triggeredBy":"/src/a.ts"}')).toBe('/about.html')
+		expect(viteFullReloadPath('{"type":"full-reload"}')).toBe('*')
+		expect(viteFullReloadPath('{"type":"update","updates":[{"path":"full-reload.ts"}]}')).toBeUndefined()
+		expect(viteFullReloadPath('full-reload')).toBeUndefined()
+	})
+})
+
 describe('ReviewProxies', () => {
 	let app: Bun.Server<undefined>
 	let proxies: ReviewProxies
+	let reloads: Array<[string, string]>
 
 	beforeEach(() => {
+		reloads = []
 		app = Bun.serve<undefined>({
 			port: 0,
 			hostname: 'localhost',
@@ -220,11 +271,16 @@ describe('ReviewProxies', () => {
 			},
 			websocket: {
 				message(socket, message) {
+					if (message === 'edit') {
+						socket.send(JSON.stringify({ type: 'full-reload', path: '*' }))
+						socket.send(JSON.stringify({ type: 'update', updates: [] }))
+						return
+					}
 					socket.send(`echo ${String(message)}`)
 				},
 			},
 		})
-		proxies = new ReviewProxies(store, WIDGET)
+		proxies = new ReviewProxies(store, WIDGET, (project, path) => reloads.push([project, path]))
 	})
 
 	afterEach(() => {
@@ -262,11 +318,24 @@ describe('ReviewProxies', () => {
 		expect(await echoThrough(`${origin}/socket`, [])).toEqual({ protocol: '', reply: 'echo ping' })
 	})
 
+	test('holds a Vite full reload back from the page and hands it to the widget', async () => {
+		const origin = new URL(proxies.open('demo', `http://localhost:${app.port}/`)).origin.replace('http:', 'ws:')
+		const socket = new WebSocket(`${origin}/hmr`, ['vite-hmr'])
+		const first = await new Promise<string>((resolve, reject) => {
+			socket.onopen = () => socket.send('edit')
+			socket.onmessage = (event) => resolve(String(event.data))
+			socket.onerror = () => reject(new Error('WebSocket failed'))
+		})
+		socket.close()
+		expect(JSON.parse(first)).toEqual({ type: 'update', updates: [] })
+		expect(reloads).toEqual([['demo', '*']])
+	})
+
 	test('a restarted daemon serves the proxy on the same port', () => {
 		const target = `http://localhost:${app.port}/`
 		const url = proxies.open('demo', target)
 		proxies.stop()
-		proxies = new ReviewProxies(store, WIDGET)
+		proxies = new ReviewProxies(store, WIDGET, () => {})
 		proxies.restore()
 		expect(proxies.open('demo', target)).toBe(url)
 	})

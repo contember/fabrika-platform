@@ -19,9 +19,14 @@ function describeAnchor(anchor: ReviewAnchor, screenshot: string | undefined): s
 	}
 	if (anchor.quote !== undefined) {
 		lines.push(`- Selected text: …${anchor.quote.before}**${anchor.quote.exact}**${anchor.quote.after}…`)
-	} else if (anchor.text !== undefined && anchor.text !== '') {
+	} else if (anchor.text !== undefined && anchor.text !== '' && anchor.text !== anchor.name) {
 		lines.push(`- Text: "${anchor.text}"`)
 	}
+	if (anchor.browser !== undefined) {
+		const { name, viewport, colorScheme } = anchor.browser
+		lines.push(`- Browser: ${name}, viewport ${viewport.width}×${viewport.height} @${viewport.scale}x, ${colorScheme} color scheme`)
+	}
+	if (anchor.style !== undefined) lines.push(`- Computed style: \`${anchor.style}\``)
 	if (screenshot !== undefined) lines.push(`- Screenshot, the element outlined in red: \`${screenshot}\` (read the file to see it)`)
 	if (anchor.html !== undefined) lines.push('- Markup, trimmed:', '', fence('html', anchor.html))
 	return lines
