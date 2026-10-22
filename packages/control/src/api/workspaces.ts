@@ -11,6 +11,7 @@ import { uuidv7 } from '@fabrika/platform'
 import type { ProviderSourceBinding } from '@fabrika/provider-contract'
 import { parseClassification } from '../approval/publish'
 import { type AppEnvRow, type AppRow, type ControlRepositories, SourceBindingError, type WorkspaceRow } from '../db'
+import { logFailure } from '../error-label'
 import { parseGitHubRepo } from '../github/triggers/push-event'
 import {
 	type WorkspaceChangedFile,
@@ -463,7 +464,7 @@ function lineAround(line: string, at: number): string {
 export async function applyChangesUseCase(
 	c: WorkspaceUseCaseContext,
 	input: { workspaceId: string; expectedHeadSha: string; message: string; changes: readonly WorkspaceFileChange[] },
-): Promise<{ commitSha: string; written: WorkspaceFileWrite[] }> {
+): Promise<{ commitSha: string; written: WorkspaceFileWrite[]; warning: string | null }> {
 	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_WRITE)
 	const protectedPaths = [...new Set(input.changes.map((change) => change.path))].filter((path) => isProtectedPath(path, c.protectedFiles))
 	if (protectedPaths.length > 0) {
@@ -493,13 +494,20 @@ export async function applyChangesUseCase(
 		})
 	)
 	const commitSha = committed.sha
-	await c.auth.audit({
+	// The commit persisted, so a failed audit write is answered beside it rather than as a failed call.
+	const warning = await c.auth.audit({
 		action: 'source.workspace.commit',
 		resourceType: 'workspace',
 		resourceId: owned.workspace.id,
 		metadata: { appId: owned.workspace.app_id, env: owned.workspace.env, commitSha, paths: committed.changes.length },
-	})
-	return { commitSha, written: committed.changes }
+	}).then(
+		() => null,
+		(cause: unknown) => {
+			const reference = logFailure('apply_changes: the audit entry of a persisted commit', cause)
+			return `The commit persisted, but Control could not record its audit entry; tell the operator and quote reference ${reference}.`
+		},
+	)
+	return { commitSha, written: committed.changes, warning }
 }
 
 /**

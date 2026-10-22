@@ -12,3 +12,10 @@ export function errorLabel(cause: unknown): string {
 	})
 	return [cause.name, ...located].join(' ')
 }
+
+/** Log an unexpected failure under a fresh reference, and return the reference for the answer. */
+export function logFailure(what: string, cause: unknown): string {
+	const reference = crypto.randomUUID()
+	console.error(`${what} failed (reference ${reference}): ${errorLabel(cause)}`)
+	return reference
+}

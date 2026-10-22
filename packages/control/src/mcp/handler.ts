@@ -17,6 +17,7 @@ import {
 import { z } from 'zod/v4'
 import {
 	bindDevUseCase,
+	devUnavailable,
 	type DevUseCaseContext,
 	followDevCommit,
 	getDevStatusUseCase,
@@ -49,7 +50,7 @@ import {
 	WORKSPACE_FILE_MAX_BYTES,
 	type WorkspaceUseCaseContext,
 } from '../api/workspaces'
-import { errorLabel } from '../error-label'
+import { logFailure } from '../error-label'
 
 const MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024
 /** Room left in the commit-message bound for the Fabrika trailers. */
@@ -307,15 +308,17 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 	}, (input) =>
 		run('apply_changes', async () => {
 			const started = performance.now()
-			const { commitSha, written } = await applyChangesUseCase(c, input)
+			const { commitSha, written, warning } = await applyChangesUseCase(c, input)
 			const committed = performance.now()
+			// The commit persisted: from here a failure is reported beside commitSha, never as a failed call.
 			const dev = await followDevCommit(c, { workspaceId: input.workspaceId, commitSha, parentSha: input.expectedHeadSha, written })
+				.catch((cause: unknown) => devUnavailable(logFailure('mcp apply_changes: following the dev environment', cause)))
 			if (dev !== null) {
 				console.info(
 					`mcp apply_changes: committed in ${Math.round(committed - started)} ms, dev ${dev.state} after ${Math.round(performance.now() - committed)} ms`,
 				)
 			}
-			return dev === null ? { commitSha } : { commitSha, dev }
+			return { commitSha, ...(dev === null ? {} : { dev }), ...(warning === null ? {} : { warning }) }
 		}))
 	server.registerTool('deploy_stage', {
 		description: 'Deploy the current head of the workspace branch to its stage environment. Creates a deploy run for that exact commit; '
@@ -440,8 +443,7 @@ async function run(tool: string, effect: () => Promise<object>): Promise<CallToo
 function toolFailure(cause: unknown): CallToolResult {
 	if (cause instanceof ControlApiError) return { isError: true, content: [{ type: 'text', text: cause.message }] }
 	// Never log or answer the error object: a GitHub or provider failure may carry repository detail or a credential.
-	const reference = crypto.randomUUID()
-	console.error(`mcp tool failed (reference ${reference}): ${errorLabel(cause)}`)
+	const reference = logFailure('mcp tool', cause)
 	return {
 		isError: true,
 		content: [{
