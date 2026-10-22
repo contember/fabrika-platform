@@ -2,7 +2,6 @@
 // argument names, submits one signup, and prints `taken` once the kicked run holds the signup's row in its open
 // transaction. Prints the URL never.
 
-import { Database } from '@fabrika/db'
 import { openPostgres } from '@fabrika/db/postgres'
 import { bootApp, environment, frameworkEnvFor, ORIGIN } from '../implement/harness'
 import { signupApp } from './src/app'
