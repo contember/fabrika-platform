@@ -174,6 +174,10 @@ describe('the MCP endpoint', () => {
 			apply_changes: write(true, true),
 			deploy_stage: write(true, false),
 			get_deployment: read,
+			bind_dev: write(true, false),
+			get_dev_status: read,
+			run_checks: write(false, false),
+			reset_dev: write(true, false),
 			create_pull_request: write(false, true),
 			delete_workspace: write(true, true),
 		})
@@ -186,18 +190,22 @@ describe('the MCP endpoint', () => {
 		const listed = await rpc(fetch, token, 'tools/list', {})
 		expect(toolNames(listed)).toEqual([
 			'apply_changes',
+			'bind_dev',
 			'create_pull_request',
 			'create_workspace',
 			'delete_workspace',
 			'deploy_stage',
 			'get_app_rules',
 			'get_deployment',
+			'get_dev_status',
 			'get_workspace',
 			'get_workspace_diff',
 			'list_files',
 			'list_targets',
 			'list_workspaces',
 			'read_files',
+			'reset_dev',
+			'run_checks',
 			'search_files',
 		])
 

@@ -123,8 +123,11 @@ export interface DeploymentDto {
  * One window of the build log, oldest first. `from` and `to` index the log as filtered, which only grows: pass `to` as
  * `after` to poll for new lines, `from` as `before` to page back.
  */
-export interface DeploymentLogDto {
-	lines: RunLogLine[]
+export type DeploymentLogDto = LogWindowDto<RunLogLine>
+
+/** One window of a log that only grows; see `DeploymentLogDto`. */
+export interface LogWindowDto<Line> {
+	lines: Line[]
 	from: number
 	to: number
 	total: number
@@ -147,13 +150,13 @@ export interface DeploymentApprovalDto {
 	changes: string[]
 }
 
-interface AuthoringTarget {
+export interface AuthoringTarget {
 	app: AppRow
 	appEnv: AppEnvRow
 	source: WorkspaceSourceTarget
 }
 
-interface OwnedWorkspace extends AuthoringTarget {
+export interface OwnedWorkspace extends AuthoringTarget {
 	workspace: WorkspaceRow
 }
 
@@ -579,7 +582,9 @@ export async function getDeploymentUseCase(
 	const branch = row?.ref.startsWith(`refs/heads/${WORKSPACE_BRANCH_PREFIX}`) ? row.ref.slice('refs/heads/'.length) : null
 	const workspace = branch === null ? null : await c.repositories.workspaces.getWorkspaceByBranch(branch)
 	if (
-		row === null || workspace === null || workspace.owner_id !== ownerId || workspace.app_id !== row.app_id || workspace.env !== row.env
+		row === null || workspace === null || workspace.owner_id !== ownerId || workspace.app_id !== row.app_id
+		|| (workspace.env !== row.env && !await isDevEnvironment(c, row.app_id, row.env))
+		|| !canAtCoordinates(c.auth, CONTROL_ACTIONS.DEPLOY_READ, row.app_id, row.env)
 		|| await findAuthoringTarget(c, workspace.app_id, workspace.env, CONTROL_ACTIONS.DEPLOY_READ) === null
 	) fail(404, 'run not found')
 	const run = await getRunUseCase(c, input.runId)
@@ -593,10 +598,22 @@ export async function getDeploymentUseCase(
 		: null
 	const deviations = changes.filter((change) => change.review === 'closer').map((change) => change.line)
 	const finished = run.status === 'succeeded' || run.status === 'failed'
-	return { run, finished, summary: deploymentSummary(run), log: logWindow(log.lines, input.log), approval, deviations }
+	return {
+		run,
+		finished,
+		summary: deploymentSummary(run, row.env === workspace.env ? 'stage' : 'dev'),
+		log: logWindow(log.lines, input.log),
+		approval,
+		deviations,
+	}
 }
 
-function deploymentSummary(run: RunDto): string {
+/** A workspace's runs are its stage deploys and the bootstrap runs of its application's dev environment. */
+async function isDevEnvironment(c: WorkspaceUseCaseContext, appId: string, env: string): Promise<boolean> {
+	return (await c.repositories.registry.getAppEnv(appId, env))?.kind === 'dev'
+}
+
+function deploymentSummary(run: RunDto, environment: 'stage' | 'dev'): string {
 	switch (run.status) {
 		case 'pending':
 			return 'Queued and not started yet; poll again.'
@@ -605,7 +622,9 @@ function deploymentSummary(run: RunDto): string {
 		case 'awaiting_approval':
 			return 'Waiting for a person to approve its access change (see approval); it continues only after that.'
 		case 'succeeded':
-			return `Succeeded: the stage environment runs ${run.commitSha ?? 'the deployed commit'}.`
+			return environment === 'stage'
+				? `Succeeded: the stage environment runs ${run.commitSha ?? 'the deployed commit'}.`
+				: `Succeeded: the dev environment runs ${run.commitSha ?? 'the deployed commit'}; commits now sync without a run.`
 		case 'failed':
 			return 'Failed; read the log with failuresOnly for the lines that name the failure.'
 	}
@@ -613,7 +632,7 @@ function deploymentSummary(run: RunDto): string {
 
 const FAILURE_TEXT = /\b(error|errors|fail|failed|failure)\b/i
 
-function logWindow(all: readonly RunLogLine[], query: DeploymentLogQuery): DeploymentLogDto {
+export function logWindow<Line extends { stream: string; text: string }>(all: readonly Line[], query: DeploymentLogQuery): LogWindowDto<Line> {
 	if (query.after !== undefined && query.before !== undefined) fail(400, 'name after or before, not both')
 	const lines = query.failuresOnly ? all.filter((line) => line.stream === 'stderr' || FAILURE_TEXT.test(line.text)) : all
 	const end = Math.min(query.before ?? lines.length, lines.length)
@@ -703,23 +722,30 @@ async function findAuthoringTarget(c: WorkspaceUseCaseContext, appId: string, en
 	if (appEnv === null || appEnv.authoring !== 1) return null
 	const app = await c.repositories.registry.getApp(appId)
 	if (app === null) return null
+	const source = await sourceTargetOf(c.repositories, app)
+	return source === null ? null : { app, appEnv, source }
+}
+
+/** The repository of the application's GitHub source and the connection that reaches it; null when it has none. */
+export async function workspaceSourceTarget(repositories: ControlRepositories, appId: string): Promise<WorkspaceSourceTarget | null> {
+	const app = await repositories.registry.getApp(appId)
+	return app === null ? null : sourceTargetOf(repositories, app)
+}
+
+async function sourceTargetOf(repositories: ControlRepositories, app: AppRow): Promise<WorkspaceSourceTarget | null> {
 	let binding: ProviderSourceBinding | null
 	try {
-		binding = await c.repositories.registry.getSourceBinding(appId)
+		binding = await repositories.registry.getSourceBinding(app.id)
 	} catch (cause) {
 		if (cause instanceof SourceBindingError) return null
 		throw cause
 	}
 	const repository = parseGitHubRepo(app.repo_url)
 	if (binding === null || repository === null) return null
-	return {
-		app,
-		appEnv,
-		source: { connectionId: binding.connectionId, installationId: binding.installationId, owner: repository.owner, repository: repository.repo },
-	}
+	return { connectionId: binding.connectionId, installationId: binding.installationId, owner: repository.owner, repository: repository.repo }
 }
 
-async function requireWorkspace(
+export async function requireWorkspace(
 	c: WorkspaceUseCaseContext,
 	workspaceId: string,
 	action: string,
@@ -734,7 +760,7 @@ async function requireWorkspace(
 	return { ...target, workspace }
 }
 
-async function requireHead(c: WorkspaceUseCaseContext, owned: OwnedWorkspace): Promise<string> {
+export async function requireHead(c: WorkspaceUseCaseContext, owned: OwnedWorkspace): Promise<string> {
 	const headSha = await sourceCall(() => c.source.readBranch({ target: owned.source, branch: owned.workspace.branch, signal: c.signal }))
 	if (headSha === null) fail(404, 'the workspace branch no longer exists')
 	return headSha
@@ -795,7 +821,7 @@ function requirePrincipal(auth: AuthContext) {
 	return principal
 }
 
-function requireOwner(auth: AuthContext): string {
+export function requireOwner(auth: AuthContext): string {
 	return requirePrincipal(auth).id
 }
 

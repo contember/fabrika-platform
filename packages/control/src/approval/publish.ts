@@ -6,6 +6,7 @@ import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { consumerEdgeProblems, ownerEdgeProblems } from '../connectors'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
+import { devLauncherRefusal } from '../dev/deploy'
 import type { CommitSource } from '../github/source/commit-files'
 import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
@@ -136,6 +137,7 @@ export async function publishRunSnapshot(
 		const active = approvedSnapshot(appEnv)
 		await assertConnectorEdges(deps.repositories.registry, run, candidate, active, input.log)
 		assertMountCompatibility(candidate, active, input.log)
+		assertDevLauncher(candidate, appEnv, input.log)
 		await input.validateAccess?.(access, appEnv)
 		const classification = classify(active, candidate, appEnv)
 		logClassification(input.log, classification, appEnv.env)
@@ -229,6 +231,15 @@ async function assertConnectorEdges(
 	if (problems.length === 0) return
 	for (const problem of problems) log(`access: connector: ${problem}`)
 	throw new ConnectorEdgeRefused(problems)
+}
+
+/** A `dev` environment starts the dev launcher, which an older framework release lacks: refused before anything publishes. */
+function assertDevLauncher(candidate: AccessSnapshot, appEnv: AppEnvRow, log: (line: string) => void): void {
+	if (appEnv.kind !== 'dev') return
+	const refusal = devLauncherRefusal(candidate.framework)
+	if (refusal === null) return
+	log(`access: ${refusal}`)
+	throw new FrameworkReleaseRefused(refusal)
 }
 
 /** A deploy that breaks a mount's promise of backward compatibility fails, whoever approves it: its callers would break. */

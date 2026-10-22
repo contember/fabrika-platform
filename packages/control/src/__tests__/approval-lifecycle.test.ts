@@ -1380,3 +1380,52 @@ async function createdRun(w: World, env: string): Promise<string> {
 	await w.db.runs.createRun({ id: runId, appId: 'notes', env, ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
 	return runId
 }
+
+describe('a dev environment', () => {
+	async function seedDev(w: World): Promise<void> {
+		await seed(w)
+		await w.db.registry.createDeploymentNamespaceWithResourceClaims({
+			id: 'apps-dev',
+			env: 'dev',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: {} }),
+			state: 'ready',
+		}, [])
+		await w.db.registry.upsertAppEnv({
+			appId: 'notes',
+			env: 'dev',
+			kind: 'dev',
+			namespaceId: 'apps-dev',
+			provider: 'harbor',
+			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: {} }),
+			providerArtifactJson: HARBOR_ARTIFACT,
+		})
+	}
+
+	test('is never protected', async () => {
+		const w = world()
+		await seedDev(w)
+		expect(await status(setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'dev', protected: true }))).toBe(409)
+	})
+
+	test('a framework release without the dev launcher fails the run and publishes nothing', async () => {
+		const w = world()
+		await seedDev(w)
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const result = await executeDeploy({ ...deps(w), controlOrigin: 'https://control.example.test' }, { runId: await createdRun(w, 'dev') })
+			expect(result.status).toBe('failed')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect(w.deploys).toEqual([])
+		const log = [...w.logs.values()].join('\n')
+		expect(log).toContain(
+			`access: a dev environment starts the dev launcher of @fabrika/app 0.9.0 or newer, and the application pins ${CHECKER_VERSION}`,
+		)
+		expect(log).not.toContain('access: published')
+		expect((await w.db.registry.getAppEnv('notes', 'dev'))?.generation).toBe(0)
+		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'dev')).toEqual([])
+	})
+})

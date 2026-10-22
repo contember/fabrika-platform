@@ -47,6 +47,7 @@ import {
 	type RunRow,
 	serializeProviderJson,
 } from './db'
+import { devLauncherRefusal, platformSourceEnvironment, platformSourceOrigin } from './dev/deploy'
 import type { CommitSource } from './github/source/commit-files'
 import { type IamSchemaPort, isIamUnavailable } from './iam-schema'
 import type { InstallationBrandSource } from './installation-brand'
@@ -265,6 +266,7 @@ const storedProviderEnvironment = (
 ): ProviderEnvironment => ({
 	appId: row.app_id,
 	env: row.env,
+	...(row.kind === 'dev' ? { kind: 'dev' } : {}),
 	...(row.domain === null ? {} : { domain: row.domain }),
 	...(row.public_origin === null ? {} : { publicOrigin: row.public_origin }),
 	...crossOriginsField(row),
@@ -684,6 +686,8 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		// A version that no longer relays keeps the running one's key valid until it runs itself (`retirePlatformKeys`).
 		const platformMailKey = dryRun || !relayedMail ? null : await issuePlatformMailKey(deps, app.id, appEnv.env)
 		if (relayOrigin !== null) Object.assign(managedEnvironment, platformMailEnvironment(relayOrigin, platformMailKey))
+		const platformSourceKey = appEnv.kind === 'dev' ? await devSourceKey(deps, approvedRow, dryRun) : null
+		if (appEnv.kind === 'dev') Object.assign(managedEnvironment, platformSourceEnvironment(platformSourceOrigin(deps.controlOrigin), platformSourceKey))
 		// The canonical origin `ctx.url` builds links on; `null` removes a stale one from an environment that has none.
 		managedEnvironment[FABRIKA_APP_ORIGIN] = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
 		const tokenKeys = dryRun ? null : await reconcileTokenKeys(deps.tokenKeys, app.id, appEnv.env, approvedContract)
@@ -699,6 +703,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			...Object.values(workloadKeys),
 			membershipKey ?? '',
 			platformMailKey ?? '',
+			platformSourceKey ?? '',
 			tokenKeys ?? '',
 			...installationMailSecrets(deps.mailTransport ?? NO_INSTALLATION_MAIL, mailEnvironment),
 			// A Zerops build holds the source-map bearer, and the provider relays the build's log.
@@ -916,6 +921,20 @@ async function issuePlatformMailKey(deps: Pick<RunDeps, 'platformTransport'>, ap
 		)
 	}
 	return deps.platformTransport.issue(appId, env, 'mail')
+}
+
+/**
+ * The `source` key of a `dev` environment, after the refusal of a framework release without the launcher. The key is the
+ * environment's for as long as it exists: a dev environment's kind never changes. A dry run issues none.
+ */
+async function devSourceKey(deps: Pick<RunDeps, 'platformTransport'>, appEnv: AppEnvRow, dryRun: boolean): Promise<string | null> {
+	const refusal = devLauncherRefusal(approvedSnapshot(appEnv).snapshot.framework)
+	if (refusal !== null) throw new Error(refusal)
+	if (dryRun) return null
+	if (deps.platformTransport === undefined) {
+		throw new Error('a dev environment needs the platform transport key, and this installation cannot issue it (it needs FABRIKA_CONTROL_VAULT_KEY)')
+	}
+	return deps.platformTransport.issue(appEnv.app_id, appEnv.env, 'source')
 }
 
 /** Whether the environment's approved version sends its jobs' mail through Control's relay: only behind a namespace proxy. */

@@ -2,6 +2,7 @@
 // Bun host mounts it; the Worker graph must never import this module or the MCP SDK.
 
 import { readAppAgentSkill } from '@fabrika/app/agent-skill'
+import { DEV_REPORT_MAX_LINES } from '@fabrika/app/dev/wire'
 import type { AuthContext, AuthResult } from '@fabrika/auth'
 import { formatOAuthBearerChallenge } from '@fabrika/proxy-core/manifest'
 import {
@@ -14,6 +15,14 @@ import {
 	type ToolAnnotations,
 } from '@modelcontextprotocol/server'
 import { z } from 'zod/v4'
+import {
+	bindDevUseCase,
+	type DevUseCaseContext,
+	followDevCommit,
+	getDevStatusUseCase,
+	resetDevUseCase,
+	runChecksUseCase,
+} from '../api/dev-environments'
 import { ControlApiError } from '../api/domain'
 import {
 	abandonWorkspaceUseCase,
@@ -70,7 +79,7 @@ export interface ControlMcpOptions {
 	readonly authenticate: (request: Request) => Promise<AuthResult>
 	/** RFC 9728 metadata URL named in every bearer challenge. */
 	readonly resourceMetadata: string
-	readonly useCases: (auth: AuthContext, signal: AbortSignal) => WorkspaceUseCaseContext
+	readonly useCases: (auth: AuthContext, signal: AbortSignal) => DevUseCaseContext
 }
 
 interface Caller {
@@ -175,6 +184,15 @@ const toolInputs = {
 		before: z.number().int().min(0).optional(),
 		failuresOnly: z.boolean().default(false),
 	}).strict(),
+	bindDev: workspaceInput,
+	getDevStatus: workspaceInput.extend({
+		logLines: z.number().int().min(0).max(DEV_REPORT_MAX_LINES).default(DEPLOYMENT_LOG_DEFAULT_LINES),
+		after: z.number().int().min(0).optional(),
+		before: z.number().int().min(0).optional(),
+		failuresOnly: z.boolean().default(false),
+	}).strict(),
+	runChecks: workspaceInput,
+	resetDev: workspaceInput,
 	deleteWorkspace: workspaceInput,
 	createPullRequest: workspaceInput.extend({ title: z.string().min(1).max(256), body: z.string().max(65_536) }).strict(),
 }
@@ -192,7 +210,7 @@ function toolInput<T extends z.ZodType>(schema: T): StandardSchemaWithJSON<z.inp
 	}
 }
 
-function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
+function controlMcpServer(c: DevUseCaseContext): McpServer {
 	const server = new McpServer({ name: 'fabrika', version: '0.1.0' }, { instructions: CONTROL_MCP_INSTRUCTIONS })
 	server.registerTool('get_app_rules', {
 		description: 'Read the rules for writing and changing a Fabrika application: the paved road, the declared steps off it, '
@@ -278,10 +296,17 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 			}every fabrika.* file but fabrika.contract.ts and `
 			+ 'everything under .github/ are protected and cannot be changed. A change of the contract, its schema modules, '
 			+ 'src/db/tables.ts or db/migrations/ is classified at deploy time; on a protected environment a widening waits for '
-			+ 'a person to approve it. A file may hold at most 512 KiB.',
+			+ 'a person to approve it. A file may hold at most 512 KiB. When the workspace is bound to its dev environment (bind_dev), '
+			+ 'the answer also carries dev: the head it serves, its state, its URL and the newest log lines, after waiting up to 10 s '
+			+ 'for the commit to serve; state pending means get_dev_status reads the rest.',
 		inputSchema: toolInput(toolInputs.applyChanges),
 		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-	}, (input) => run(() => applyChangesUseCase(c, input)))
+	}, (input) =>
+		run(async () => {
+			const { commitSha } = await applyChangesUseCase(c, input)
+			const dev = await followDevCommit(c, { workspaceId: input.workspaceId, commitSha })
+			return dev === null ? { commitSha } : { commitSha, dev }
+		}))
 	server.registerTool('deploy_stage', {
 		description: 'Deploy the current head of the workspace branch to its stage environment. Creates a deploy run for that exact commit; '
 			+ 'follow it with get_deployment and the runId this answers. Production is never deployed from a workspace.',
@@ -310,6 +335,46 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 				log: { lines: logLines, failuresOnly, ...(after === undefined ? {} : { after }), ...(before === undefined ? {} : { before }) },
 			})
 		))
+	server.registerTool('bind_dev', {
+		description: "Bind the workspace to its application's dev environment, which serves one workspace at a time. Afterwards each "
+			+ 'apply_changes reaches the running service in seconds, without a run: the launcher writes the changed files, migrates when '
+			+ 'db/migrations/ changed, rebuilds the SPA when web sources changed and restarts the application. The first bind is a '
+			+ 'bootstrap: an ordinary run with every check, which get_deployment follows (bootstrapRun). A change of package.json, '
+			+ 'bun.lock, the contract or a module it imports needs another bootstrap: call bind_dev again. Binding replaces the '
+			+ "workspace another author bound, and switching workspaces resets the dev environment's data. Nothing in it is promoted: "
+			+ 'deploy_stage builds the head with every check, and production changes only through a reviewed pull request.',
+		inputSchema: toolInput(toolInputs.bindDev),
+		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+	}, (input) => run(() => bindDevUseCase(c, input)))
+	server.registerTool('get_dev_status', {
+		description: "Read the workspace application's dev environment: the bound workspace, the commit it serves (head) and the one "
+			+ 'it should (target), its state with a one-line summary, the message of a refused or failed sync, the bootstrap run, the '
+			+ "last check results and a window of the application's output. "
+			+ `The window is the last logLines lines (default ${DEPLOYMENT_LOG_DEFAULT_LINES}, at most ${DEV_REPORT_MAX_LINES}), `
+			+ 'indexed like get_deployment: poll with after: log.to; failuresOnly keeps stderr lines and lines that name an error.',
+		inputSchema: toolInput(toolInputs.getDevStatus),
+		annotations: READ_ONLY,
+	}, ({ workspaceId, logLines, after, before, failuresOnly }) =>
+		run(() =>
+			getDevStatusUseCase(c, {
+				workspaceId,
+				log: { lines: logLines, failuresOnly, ...(after === undefined ? {} : { after }), ...(before === undefined ? {} : { before }) },
+			})
+		))
+	server.registerTool('run_checks', {
+		description: "Run the build's check chain (the tests, fabrika-check and tsc) in the dev environment on the files it serves, "
+			+ 'and wait up to 50 s for the results (checks). The results only report; deploy_stage still runs every check on a build. '
+			+ 'The workspace must be bound to the dev environment.',
+		inputSchema: toolInput(toolInputs.runChecks),
+		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+	}, (input) => run(() => runChecksUseCase(c, input)))
+	server.registerTool('reset_dev', {
+		description: "Drop the dev environment's schema and database roles, and migrate the workspace's migrations from scratch. "
+			+ 'Use it after you changed a migration that was already applied. Every row in the dev environment is lost. '
+			+ 'The workspace must be bound to the dev environment.',
+		inputSchema: toolInput(toolInputs.resetDev),
+		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+	}, (input) => run(() => resetDevUseCase(c, input)))
 	server.registerTool('create_pull_request', {
 		description: 'Open a pull request from the workspace branch to the default branch, or return the one already open. '
 			+ 'Production changes only after a human reviews and merges it in GitHub.',

@@ -37,6 +37,11 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	const existing = await c.repositories.registry.getAppEnv(appId, env)
 	// Omitted keeps the stored list, which the new domain may now collide with, so the list in effect is what is judged.
 	assertCrossOrigins(input.crossOrigins ?? (existing === null ? [] : appEnvCrossOrigins(existing)), input.domain ?? null)
+	if (input.kind !== undefined && existing !== null && input.kind !== existing.kind) {
+		fail(409, `environment ${env} is ${existing.kind}; an environment's kind is set when it is created`)
+	}
+	const kind = existing?.kind ?? input.kind ?? 'standard'
+	if (kind === 'dev') await assertDevEnvironment(c, app, env, existing, input.authoring === true, triggerRef)
 	if (input.authoring === true) {
 		assertAuthoringTarget(c.provider, app)
 		// ADR-0049: one stage environment per app.
@@ -56,6 +61,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		environment: {
 			appId,
 			env,
+			...(kind === 'dev' ? { kind } : {}),
 			...(input.domain === undefined || input.domain === null ? {} : { domain: input.domain }),
 			...(publicOrigin === null ? {} : { publicOrigin }),
 			...(namespace === undefined ? {} : { namespace }),
@@ -88,6 +94,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		...(input.crossOrigins === undefined ? {} : { crossOrigins: input.crossOrigins }),
 		triggerRef,
 		...(input.authoring === undefined ? {} : { authoring: input.authoring }),
+		kind,
 		namespaceId: registration.environment.namespace?.id ?? null,
 		provider: c.provider.id,
 		providerTargetJson: JSON.stringify(registration.environment.target),
@@ -112,6 +119,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		resourceId: `${appId}/${env}`,
 		metadata: {
 			triggerRef,
+			kind: row.kind,
 			...(input.authoring === undefined ? {} : { authoring: input.authoring }),
 			...(input.crossOrigins === undefined ? {} : { crossOrigins: input.crossOrigins }),
 			namespaceId: row.namespace_id,
@@ -182,6 +190,32 @@ function assertAuthoringTarget(provider: ControlProvider, app: AppRow): void {
 	if (app.github_connection_id === null || app.github_installation_id === null) {
 		fail(409, 'only an environment of an app with a GitHub connection can be an authoring target')
 	}
+}
+
+/**
+ * ADR-0049: one `dev` environment per app, on a provider that runs one, for an app whose workspaces Control can read.
+ * It is never production, never protected (ADR-0050), never an authoring target, and deploys only through `bind_dev`.
+ */
+async function assertDevEnvironment(
+	c: RegistryUseCaseContext,
+	app: AppRow,
+	env: string,
+	existing: AppEnvRow | null,
+	authoring: boolean,
+	triggerRef: string | null,
+): Promise<void> {
+	if (c.provider.devEnvironments === undefined) fail(409, `the ${c.provider.id} provider runs no dev environment; it runs on Zerops only`)
+	if (app.github_connection_id === null || app.github_installation_id === null) {
+		fail(409, 'a dev environment follows a workspace, so its app needs a GitHub connection')
+	}
+	if (env === 'prod') fail(409, 'a dev environment is never production; give it another name, such as dev')
+	if (authoring) fail(409, "a dev environment is not an authoring target: bind_dev binds a workspace of the app's authoring environment to it")
+	if (triggerRef !== null) fail(409, 'a dev environment deploys only through bind_dev, so it has no trigger ref')
+	if (existing === null && (await c.repositories.registry.getKeptProtection(app.id, env)) === 1) {
+		fail(409, `environment ${env} was protected before it was deleted, and a dev environment never is; give it another name`)
+	}
+	const other = (await c.repositories.registry.listAppEnvs(app.id)).find((row) => row.kind === 'dev' && row.env !== env)
+	if (other !== undefined) fail(409, `app ${app.id} already has the dev environment ${other.env}`)
 }
 
 const toProviderApp = (row: AppRow): ProviderApp => ({

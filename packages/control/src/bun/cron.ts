@@ -11,6 +11,7 @@
 // An installation's composition root runs it with its provider: `bun src/zerops/cron.ts`.
 
 import { runMaintenance } from '../cron'
+import { stopIdleDevServices } from '../dev/service'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { iamSchemaDeps, locks, operationsReleaseDeps, platformTransportDeps, repositories } from '../services'
 import type { Runtime } from './runtime'
@@ -29,6 +30,7 @@ async function main(createRuntime: () => Runtime): Promise<void> {
 					...platformTransportDeps(runtime.env),
 					...iamSchemaDeps(runtime.env),
 				}),
+			devIdle: () => stopIdleDevServices({ repositories: repositories(runtime.env), provider: runtime.provider }, Math.floor(Date.now() / 1000)),
 		})
 	} finally {
 		await runtime.shutdown()

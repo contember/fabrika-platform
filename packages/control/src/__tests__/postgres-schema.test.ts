@@ -155,6 +155,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0013_mail_relay.sql' },
 			{ bundle: 'control', name: '0014_workspace_pull_requests.sql' },
 			{ bundle: 'control', name: '0015_workspace_abandon.sql' },
+			{ bundle: 'control', name: '0016_dev_environments.sql' },
 		])
 	})
 
@@ -168,6 +169,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			const table of [
 				'apps',
 				'app_envs',
+				'dev_environments',
 				'deployment_namespaces',
 				'namespace_resource_claims',
 				'app_secrets',

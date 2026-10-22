@@ -69,10 +69,18 @@ export interface ProviderApprovedAccess {
 	readonly checker: string
 }
 
+/**
+ * `dev`: the environment follows a workspace through a platform-owned launcher, which its provider starts instead of the
+ * serving entry (ADR-0043). The kind is Control's registry, never the application's.
+ */
+export type ProviderEnvironmentKind = 'standard' | 'dev'
+
 /** Persisted deploy data for one app environment. */
 export interface ProviderEnvironment {
 	readonly appId: string
 	readonly env: string
+	/** Absent means `standard`. */
+	readonly kind?: ProviderEnvironmentKind
 	readonly domain?: string
 	/** Canonical externally reachable HTTP(S) origin; independent of provider domain routing. */
 	readonly publicOrigin?: string
@@ -495,6 +503,21 @@ export interface ProviderAuthoring {
 	readonly protectedFiles: readonly string[]
 }
 
+/** One call on the service of a `dev` environment, between its bootstrap runs. */
+export interface ProviderDevEnvironmentInput {
+	readonly environment: ProviderEnvironment
+	readonly signal: AbortSignal
+}
+
+/**
+ * The service of a `dev` environment outside a run (ADR-0049): Control stops it after an idle period and starts it on
+ * the next commit. Files the launcher wrote survive both.
+ */
+export interface ProviderDevEnvironments {
+	stop(input: ProviderDevEnvironmentInput): Promise<void>
+	start(input: ProviderDevEnvironmentInput): Promise<void>
+}
+
 /**
  * The control-plane capability bundle selected statically by one composition root.
  *
@@ -524,6 +547,8 @@ export interface ControlProvider {
 	 * namespace proxy's environments get one.
 	 */
 	readonly applicationHopSecret?: true
+	/** Absent means the provider runs no `dev` environment, and Control refuses one. */
+	readonly devEnvironments?: ProviderDevEnvironments
 	/** Absent means the provider deploys public sources only. */
 	readonly source?: ProviderSourceCapabilities
 	/**

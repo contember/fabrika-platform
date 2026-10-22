@@ -4,6 +4,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
 import { ControlApiError } from '../api/domain'
 import type { McpRoute } from '../app'
+import { startDevService } from '../dev/service'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
 import { createControlMcpHandler } from '../mcp/handler'
@@ -41,6 +42,10 @@ export function controlMcpRoute(env: Env, source: WorkspaceSourcePort, provider:
 			signal,
 			consoleOrigin: publicOrigin,
 			protectedFiles,
+			dev: env.DEV_SOURCE === undefined ? undefined : {
+				signals: env.DEV_SOURCE.signals,
+				start: (row, startSignal) => startDevService({ repositories: env.REPOSITORIES, provider }, row, startSignal),
+			},
 		}),
 	})
 }
