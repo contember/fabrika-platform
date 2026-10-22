@@ -55,6 +55,7 @@ export const QUERY_REFUSALS = {
 	sql_function: 'ctx.sql calls a function that is not a reviewed built-in',
 	sql_outside_transaction: 'a job runs ctx.sql only inside ctx.transaction((tx) => …), as tx.sql',
 	sql_scope: 'ctx.sql.scope(…) stands alone, joined by AND, in a WHERE or JOIN … ON clause of its own invocation',
+	sql_dialect: 'ctx.sql runs only on Postgres; an application on SQLite (Cloudflare) reads and writes through ctx.db',
 	file_scan: "a scan verdict outside the scan job's lease",
 	claim_site: 'claim leases rows in a transaction of its own: a job calls it on ctx.db, never inside ctx.transaction or a request',
 	on_conflict: "an insert's onConflict names no column of the table, a column the insert leaves empty, or another action",

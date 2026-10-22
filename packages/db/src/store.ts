@@ -31,8 +31,11 @@ import {
 	type Within,
 	type WithinGrant,
 } from './capability'
-import { type Database, InvocationTransaction, type Session, sessionOf } from './database'
+import { type Database, InvocationTransaction, type Session, sessionOf, type SqlDialect } from './database'
 import {
+	type Compare,
+	type Condition,
+	type Contains,
 	finishSelect,
 	isPrimitive,
 	type JoinShape,
@@ -103,7 +106,7 @@ import { frameworkSideOf, type Locator, register } from './registry'
 import type { ScopeTerms, ScopeTest, ScopeUse } from './sql'
 import { storedFiles, storedFilesMetadata } from './stored-files'
 import { type TablePolicies, tablePolicies } from './tables'
-import { answerDays, dayInput, timestampInput } from './temporal'
+import { answerRows, dayInput, type RowColumns, storedTimestamp, timestampInput } from './temporal'
 
 export interface DataLayerRuntime {
 	readonly database: Database
@@ -124,7 +127,84 @@ export interface TableContext {
 	readonly destination: TableModel | undefined
 	readonly shape: TableShape
 	readonly joins: Readonly<Record<string, readonly ForeignKeyPair[]>>
+	/** The model of each child a select may join, by its table name. */
+	readonly children: Readonly<Record<string, TableModel>>
 	readonly connection: Connection
+}
+
+/** The dialect of the database the layer is bound to: what a read answers and a write binds depends on it. */
+export function dialectOf(context: TableContext): SqlDialect {
+	return runtimeOf(context.connection).database.dialect
+}
+
+/** The columns of `model`'s own rows that a read answers in a form of its own (`answerRows`). */
+export function rowColumnsOf(model: TableModel): RowColumns {
+	return { days: model.dates, timestamps: model.timestamps, booleans: model.booleans }
+}
+
+/** A timestamp's bound value on SQLite: its stored UTC text. Postgres takes a `Date` or ISO text as it is. */
+function boundTimestamp(model: TableModel, column: string, value: Primitive): Primitive {
+	if (typeof value !== 'string' && !(value instanceof Date)) {
+		throw new QueryRefusedError('invalid_value', `${model.name}.${column} takes a Date or ISO 8601 text with Z or an offset`)
+	}
+	return storedTimestamp(value, `${model.name}.${column}`)
+}
+
+/** The values a write binds: on SQLite each timestamp as its stored UTC text, so text order is time order. */
+export function boundValues(context: TableContext, values: ReadonlyMap<string, Primitive | null>): ReadonlyMap<string, Primitive | null> {
+	const model = context.model
+	if (dialectOf(context) === 'postgres' || ownKeys(model.timestamps).length === 0) {
+		return values
+	}
+	const bound = new Map<string, Primitive | null>()
+	for (const [name, value] of values) {
+		bound.set(name, value === null || !inSet(model.timestamps, name) ? value : boundTimestamp(model, name, value))
+	}
+	return bound
+}
+
+/** A term's values as they are bound: on SQLite, one over a timestamp of `model` compares stored UTC text. */
+function boundTerm(model: TableModel, term: Compare | Contains): Compare | Contains {
+	const value = term.kind === 'compare' ? term.value : null
+	if (term.kind !== 'compare' || value === null || !inSet(model.timestamps, term.column)) {
+		return term
+	}
+	const bind = (item: Primitive): Primitive => boundTimestamp(model, term.column, item)
+	return { ...term, value: isList(value) ? value.map(bind) : bind(value) }
+}
+
+function isList(value: Primitive | readonly Primitive[]): value is readonly Primitive[] {
+	return isArray(value)
+}
+
+/** A list's terms over `model`'s columns, as `boundTerm` binds each. */
+export function boundTerms(context: TableContext, model: TableModel, terms: readonly (Compare | Contains)[]): readonly (Compare | Contains)[] {
+	if (dialectOf(context) === 'postgres' || ownKeys(model.timestamps).length === 0) {
+		return terms
+	}
+	return terms.map((term) => boundTerm(model, term))
+}
+
+/** A description's conditions over `model`'s columns, an OR group's terms included, as `boundTerm` binds each. */
+function boundConditions(context: TableContext, model: TableModel, conditions: readonly Condition[]): readonly Condition[] {
+	if (dialectOf(context) === 'postgres' || ownKeys(model.timestamps).length === 0) {
+		return conditions
+	}
+	return conditions.map((condition) =>
+		condition.kind === 'any' ? { ...condition, conditions: condition.conditions.map((term) => boundTerm(model, term)) } : boundTerm(model, condition)
+	)
+}
+
+/** A select's conditions, its joined children's included, as they are bound. */
+function boundState(context: TableContext, state: SelectState): SelectState {
+	if (dialectOf(context) === 'postgres') {
+		return state
+	}
+	const joins = state.joins.map((join) => {
+		const child = ownEntry(context.children, join.join.shape.table)
+		return child === undefined ? join : { ...join, select: { ...join.select, conditions: boundConditions(context, child, join.select.conditions) } }
+	})
+	return { ...state, conditions: boundConditions(context, context.model, state.conditions), joins }
 }
 
 export function runtimeOf(connection: Connection): DataLayerRuntime {
@@ -895,29 +975,39 @@ async function selectRows<S>(
 	if (scope === undefined) {
 		return []
 	}
-	const node = selectNode(state, visible, scope, undefined, context.model.dates)
+	const dialect = dialectOf(context)
+	const node = selectNode(boundState(context, state), visible, scope, undefined, context.model.dates, dialect)
 	const rows = await (await run.read()).run<S>(node, guard(context, 'SelectQueryNode', scope))
-	return answerDays(context.model.name, joinedDays(context.model.dates, state), rows)
+	return answerRows(dialect, context.model.name, joinedColumns(context, state), rows)
 }
 
-/** The `date` columns of a select's rows: the table's own, and each joined child's under its `<child>.<column>` alias. */
-function joinedDays(own: NameSet, state: SelectState): NameSet {
+/** The column sets of a select's rows: the table's own, and each joined child's under its `<child>.<column>` alias. */
+function joinedColumns(context: TableContext, state: SelectState): RowColumns {
+	const own = rowColumnsOf(context.model)
 	if (state.joins.length === 0) {
 		return own
 	}
-	const names: string[] = []
-	const ownDates = namesOf(own)
-	for (let index = 0; index < ownDates.length; index++) {
-		names[names.length] = ownDates[index] ?? ''
-	}
-	for (let index = 0; index < state.joins.length; index++) {
-		const shape = state.joins[index]?.join.shape
-		const dates = shape === undefined ? [] : namesOf(shape.dates)
-		for (let position = 0; position < dates.length; position++) {
-			names[names.length] = `${shape?.table}.${dates[position]}`
+	const joined = (pick: (columns: RowColumns) => NameSet): NameSet => {
+		const names: string[] = []
+		const owned = namesOf(pick(own))
+		for (let index = 0; index < owned.length; index++) {
+			names[names.length] = owned[index] ?? ''
 		}
+		for (let index = 0; index < state.joins.length; index++) {
+			const table = state.joins[index]?.join.shape.table ?? ''
+			const child = ownEntry(context.children, table)
+			const columns = child === undefined ? [] : namesOf(pick(rowColumnsOf(child)))
+			for (let position = 0; position < columns.length; position++) {
+				names[names.length] = `${table}.${columns[position]}`
+			}
+		}
+		return nameSet(names)
 	}
-	return nameSet(names)
+	return {
+		days: joined((columns) => columns.days),
+		timestamps: joined((columns) => columns.timestamps),
+		booleans: joined((columns) => columns.booleans),
+	}
 }
 
 /**
@@ -933,10 +1023,11 @@ export async function selectOne<O>(
 ): Promise<O> {
 	const start = startSelect(context.shape)
 	const state = finishSelect(start, start)
-	const node = selectNode(state, visible, scope, undefined, context.model.dates)
+	const dialect = dialectOf(context)
+	const node = selectNode(state, visible, scope, undefined, context.model.dates, dialect)
 	const session = await run.read()
 	const rows = await session.run<O>(node, guard(context, 'SelectQueryNode', scope))
-	const [row] = answerDays(context.model.name, context.model.dates, rows)
+	const [row] = answerRows(dialect, context.model.name, rowColumnsOf(context.model), rows)
 	if (row === undefined) {
 		throw new NotFoundError(`${context.model.name} not found`)
 	}
@@ -1027,9 +1118,10 @@ async function lockDestination(transaction: Session, context: TableContext, gran
 export async function insertRow<O>(
 	context: TableContext,
 	run: Runner,
-	values: ReadonlyMap<string, Primitive | null>,
+	given: ReadonlyMap<string, Primitive | null>,
 	destination: RefGrant | undefined,
 ): Promise<O> {
+	const values = boundValues(context, given)
 	return run.write(async (transaction) => {
 		if (destination !== undefined) {
 			await lockDestination(transaction, context, destination)
@@ -1172,10 +1264,12 @@ async function insertOnConflict(
 	context: TableContext,
 	run: Runner,
 	transaction: Session,
-	values: ReadonlyMap<string, Primitive | null>,
+	given: ReadonlyMap<string, Primitive | null>,
 	conflict: OnConflict,
 ): Promise<Readonly<Record<string, unknown>>> {
 	const model = context.model
+	const values = boundValues(context, given)
+	const updates = boundValues(context, conflict.updates)
 	const matches: OperationNode[] = []
 	for (let index = 0; index < conflict.columns.length; index++) {
 		const name = conflict.columns[index] ?? ''
@@ -1201,17 +1295,17 @@ async function insertOnConflict(
 			return { inserted: false }
 		}
 		const where = scopedWhere(allOf(matches), scope)
-		const unchanged = conflict.updates.size === 0
+		const unchanged = updates.size === 0
 		const update = unchanged
 			? acknowledgementNode(model.name, keyOf(model), model.version, where)
-			: updateNode(model.name, conflict.updates, model.version, where, answer(context))
+			: updateNode(model.name, updates, model.version, where, answer(context))
 		const [updated] = await transaction.run<Readonly<Record<string, unknown>>>(
 			update,
 			guard(context, unchanged ? 'SelectQueryNode' : 'UpdateQueryNode', scope),
 		)
 		if (updated !== undefined) {
 			checkVersion(context, updated)
-			await referenceUpdated(context, run, transaction, conflict.updates, updated)
+			await referenceUpdated(context, run, transaction, updates, updated)
 			return { ...updated, inserted: false }
 		}
 	}
@@ -1264,11 +1358,12 @@ export async function updateRow<O>(
 	context: TableContext,
 	run: Runner,
 	target: Addressed,
-	changes: ReadonlyMap<string, Primitive | null>,
+	given: ReadonlyMap<string, Primitive | null>,
 	expectedVersion: OperationNode | undefined,
 	destination?: RefGrant,
 ): Promise<O> {
 	const { name: table, version } = context.model
+	const changes = boundValues(context, given)
 	const where = scopedWhere(conditionsWith(target, expectedVersion), target.scope)
 	const unchanged = changes.size === 0
 	const node = unchanged
@@ -1389,18 +1484,26 @@ export async function aggregateRows<Row, O>(
 	if (scope === undefined) {
 		return []
 	}
-	const node = aggregateNode(context.model.name, columns, filter?.conditions ?? [], scope, context.model.dates)
+	const dialect = dialectOf(context)
+	const conditions = boundConditions(context, context.model, filter?.conditions ?? [])
+	const node = aggregateNode(context.model.name, columns, conditions, scope, context.model.dates)
 	const rows = await (await run.read()).run<O>(node, guard(context, 'SelectQueryNode', scope))
-	return answerDays(context.model.name, aggregateDays(context.model.dates, columns), rows)
+	const own = rowColumnsOf(context.model)
+	const answered = answerRows(dialect, context.model.name, {
+		days: aggregated(own.days, columns),
+		timestamps: aggregated(own.timestamps, columns),
+		booleans: aggregated(own.booleans, columns),
+	}, rows)
+	return dialect === 'postgres' ? answered : sqliteAggregates(context.model.name, columns, answered)
 }
 
-/** The `date` columns of an aggregate's rows: a grouped one by its name, and its `min_` and `max_`. */
-function aggregateDays(dates: NameSet, columns: AggregateColumns): NameSet {
+/** The columns of `set` among an aggregate's: a grouped one by its name, and its `min_` and `max_`. */
+function aggregated(set: NameSet, columns: AggregateColumns): NameSet {
 	const names: string[] = []
 	const add = (prefix: string, list: readonly string[]) => {
 		for (let index = 0; index < list.length; index++) {
 			const name = list[index] ?? ''
-			if (inSet(dates, name)) {
+			if (inSet(set, name)) {
 				names[names.length] = `${prefix}${name}`
 			}
 		}
@@ -1409,6 +1512,37 @@ function aggregateDays(dates: NameSet, columns: AggregateColumns): NameSet {
 	add('min_', columns.min)
 	add('max_', columns.max)
 	return nameSet(names)
+}
+
+/**
+ * An aggregate's numbers as Postgres's driver answers them: `count` as bigint text, and an integral `sum` as text too
+ * (Postgres sums an integer as bigint or numeric). SQLite answers both as numbers, and a whole sum of a REAL column is
+ * text here where Postgres's float8 sum is a number; `AggregateRow` types a sum as either.
+ */
+function sqliteAggregates<O>(table: string, columns: AggregateColumns, rows: O[]): O[] {
+	const integral = (where: string, value: unknown): unknown => {
+		if (typeof value !== 'number' || !Number.isInteger(value)) {
+			return value
+		}
+		if (!isSafeInteger(value)) {
+			throw new QueryRefusedError('unexpected_row', `${where} came back as an integer past the safe range, which a number cannot hold exactly`)
+		}
+		return String(value)
+	}
+	for (let index = 0; index < rows.length; index++) {
+		const row = rows[index]
+		if (typeof row !== 'object' || row === null) {
+			continue
+		}
+		if (columns.count) {
+			defineValue(row, 'count', integral(`${table}.count`, ownDescriptor(row, 'count')?.value))
+		}
+		for (let position = 0; position < columns.sum.length; position++) {
+			const name = `sum_${columns.sum[position] ?? ''}`
+			defineValue(row, name, integral(`${table}.${name}`, ownDescriptor(row, name)?.value))
+		}
+	}
+	return rows
 }
 
 /** An insert's row, stamped from its capability, the destination it locks, and what it does on a conflict. */
@@ -1900,8 +2034,23 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 				setOwn(joins, child, join.on)
 			}
 		}
+		const childModels: Record<string, TableModel> = {}
+		for (let index = 0; index < children.length; index++) {
+			const child = modelOf(models, children[index] ?? '')
+			if (child !== undefined) {
+				setOwn(childModels, child.name, child)
+			}
+		}
 		const shape = shapeOf(model, joinable)
-		return freeze({ model, parent, destination: destinationOf(models, model, parent), shape, joins: freeze(joins), connection })
+		return freeze({
+			model,
+			parent,
+			destination: destinationOf(models, model, parent),
+			shape,
+			joins: freeze(joins),
+			children: freeze(childModels),
+			connection,
+		})
 	}
 
 	const database: ScopedDatabase<DB, P> = Object.freeze({ tables: tablePolicies(tables) })

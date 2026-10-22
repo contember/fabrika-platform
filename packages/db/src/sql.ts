@@ -830,6 +830,10 @@ export function sqlTag(site: SqlSite, schema: string | undefined, termsOf: Scope
 				const statement = classifySql(expanded.parts, site.mode, schema ?? '')
 				const parameters = expanded.values.map((value, index) => parameterOf(value, index + 1))
 				const session = await site.session()
+				// ADR-0065: the classifier reads Postgres's grammar, so nothing of it is sent to SQLite.
+				if (session.dialect !== 'postgres') {
+					refuse('sql_dialect', 'raw SQL runs only on Postgres; an application on Cloudflare reads and writes through ctx.db')
+				}
 				if (session.readOnly && site.mode === 'write') {
 					refuse('read_only', 'this invocation is read-only')
 				}

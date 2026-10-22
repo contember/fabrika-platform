@@ -41,11 +41,14 @@ import {
 	appListPredicate,
 	appRecordPredicate,
 	appRowPredicate,
+	boundTerms,
+	boundValues,
 	childObjectPredicate,
 	childScope,
 	claimedRowPredicate,
 	claimScope,
 	type DataLayerRuntime,
+	dialectOf,
 	heldAction,
 	insertPrepared,
 	insertRow,
@@ -60,6 +63,7 @@ import {
 	reachPredicate,
 	readValues,
 	removeRow,
+	rowColumnsOf,
 	type Runner,
 	runtimeOf,
 	scopedApplicationRead,
@@ -72,7 +76,7 @@ import {
 	updatingRef,
 	versionArgument,
 } from './store'
-import { answerDays, timestampInput } from './temporal'
+import { answerRows, timestampInput } from './temporal'
 
 /** A list page holds this many rows unless the caller asks for fewer, and never more than `MAX_LIST_LIMIT`. */
 export const DEFAULT_LIST_LIMIT = 50
@@ -331,7 +335,7 @@ function targetRow(
 		const node = lockedSelectNode(context.model.name, visibleFor(context.model, grant.action), scope, context.model.dates)
 		const session = await run.read()
 		const rows = await session.run(node, { root: 'SelectQueryNode', table: context.model.name, joins: {}, scope, lock: 'update' })
-		const [row] = answerDays(context.model.name, context.model.dates, rows)
+		const [row] = answerRows(dialectOf(context), context.model.name, rowColumnsOf(context.model), rows)
 		if (row === undefined) {
 			throw new NotFoundError(`${context.model.name} not found`)
 		}
@@ -590,7 +594,7 @@ function applicationRows(
 			const node = lockedSelectNode(table, visibleFor(model, action), scope, model.dates)
 			const session = await run.read()
 			const rows = await session.run(node, { root: 'SelectQueryNode', table, joins: {}, scope, lock: 'update' })
-			const [row] = answerDays(table, model.dates, rows)
+			const [row] = answerRows(dialectOf(context), table, rowColumnsOf(model), rows)
 			if (row === undefined) {
 				throw new NotFoundError(`${table} not found`)
 			}
@@ -752,10 +756,11 @@ async function claimRows(
 	}
 	const limit = limitOf(options['limit'])
 	const visible = visibleFor(model, grant.action)
-	const conditions = conditionsOf(actionShape(model, visible), options['where'])
+	const conditions = conditionsOf(context, actionShape(model, visible), options['where'])
 	if (scope === undefined) {
 		return []
 	}
+	const dialect = dialectOf(context)
 	const key = keyOf(model)
 	const chain = model.chain.map((link) => link.column)
 	const selected = namesOf(nameSet([...visible, key, version, queue.attempts, ...chain]))
@@ -769,6 +774,7 @@ async function claimRows(
 			{ due: queue.due, attempts: queue.attempts, now, maxAttempts: queue.maxAttempts },
 			scope,
 			model.dates,
+			dialect,
 		)
 		const rows = await session.run<Readonly<Record<string, unknown>>>(node, { root: 'SelectQueryNode', table, joins: {}, scope, lock: 'claim' })
 		const byAttempts = new Map<number, string[]>()
@@ -785,7 +791,7 @@ async function claimRows(
 			const due = new Date(now.getTime() + backoffMs(tickMs, attempts + 1))
 			const changes = new Map<string, Primitive>([[queue.attempts, attempts + 1], [queue.due, due]])
 			const updated = await session.run<Readonly<Record<string, unknown>>>(
-				updateNode(table, changes, version, scopedWhere(inList(table, key, ids), scope), answer(context)),
+				updateNode(table, boundValues(context, changes), version, scopedWhere(inList(table, key, ids), scope), answer(context)),
 				{ root: 'UpdateQueryNode', table, joins: {}, scope },
 			)
 			for (const row of updated) {
@@ -797,7 +803,7 @@ async function claimRows(
 				claimed.set(id, { version: next, attempts: attempts + 1, due })
 			}
 		}
-		return { rows: await answerFiles(model, site.files, session, answerDays(table, model.dates, rows), grant.action), claimed }
+		return { rows: await answerFiles(model, site.files, session, answerRows(dialect, table, rowColumnsOf(model), rows), grant.action), claimed }
 	})
 	return leased.rows.map((row) => {
 		const id = String(row[key])
@@ -957,10 +963,11 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, everything(), context.shape, spec)),
 		get: bound(site, async (id: unknown) => {
 			const scope = everything()
-			const node = selectNode(rowState(table, [], [], 1), visible, scope, byKey(id), model.dates)
+			const dialect = dialectOf(context)
+			const node = selectNode(rowState(table, [], [], 1), visible, scope, byKey(id), model.dates, dialect)
 			const session = await run.read()
 			const rows = await session.run(node, { root: 'SelectQueryNode', table, joins: {}, scope })
-			const [row] = answerDays(table, model.dates, rows)
+			const [row] = answerRows(dialect, table, rowColumnsOf(model), rows)
 			if (row === undefined) {
 				throw new NotFoundError(`${table} not found`)
 			}
@@ -1045,7 +1052,8 @@ function readOptions(options: unknown, allowed: readonly string[], what: string)
 	return read
 }
 
-function conditionsOf(shape: TableShape, where: unknown): (Compare | Contains)[] {
+/** A list's `where`, parsed, with each value as its dialect binds it (`boundTerms`). */
+function conditionsOf(context: TableContext, shape: TableShape, where: unknown): readonly (Compare | Contains)[] {
 	if (where === undefined) {
 		return []
 	}
@@ -1059,7 +1067,7 @@ function conditionsOf(shape: TableShape, where: unknown): (Compare | Contains)[]
 	if (conditions === undefined) {
 		throw new QueryRefusedError('invalid_argument', 'where takes a plain array of [column, operator, value] conditions')
 	}
-	return conditions
+	return boundTerms(context, context.model, conditions)
 }
 
 function orderOf(shape: TableShape, orderBy: unknown, tiebreak: readonly string[]): OrderColumn[] {
@@ -1202,15 +1210,16 @@ async function listRows(
 	const table = context.model.name
 	const options = readOptions(input, ['where', 'orderBy', 'limit', 'after'], 'list')
 	const shape = actionShape(context.model, visible)
-	const conditions = conditionsOf(shape, options['where'])
+	const conditions = conditionsOf(context, shape, options['where'])
 	const order = orderOf(shape, options['orderBy'], tiebreak)
 	const limit = limitOf(options['limit'])
 	const position = options['after'] === undefined ? undefined : keysetAfter(table, order, decodeCursor(options['after'], order))
 	if (scope === undefined) {
 		return { items: [], next: null }
 	}
+	const dialect = dialectOf(context)
 	const node = withCursorColumns(
-		selectNode(rowState(table, conditions, order, limit + 1), visible, scope, position, context.model.dates),
+		selectNode(rowState(table, conditions, order, limit + 1), visible, scope, position, context.model.dates, dialect),
 		table,
 		order.map((term) => term.column),
 	)
@@ -1221,7 +1230,7 @@ async function listRows(
 		joins: {},
 		scope,
 	})
-	const page = answerDays(table, context.model.dates, rows.slice(0, limit))
+	const page = answerRows(dialect, table, rowColumnsOf(context.model), rows.slice(0, limit))
 	const last = page[page.length - 1]
 	const items = page.map((row) => withoutCursor(row, order))
 	return {
@@ -1239,7 +1248,7 @@ async function countRows(
 ): Promise<number> {
 	const table = context.model.name
 	const options = readOptions(input, ['where'], 'count')
-	const conditions = conditionsOf(actionShape(context.model, visible), options['where'])
+	const conditions = conditionsOf(context, actionShape(context.model, visible), options['where'])
 	if (scope === undefined) {
 		return 0
 	}
