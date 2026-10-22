@@ -92,16 +92,16 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [204](204-a-redelivered-push-webhook-creates-a-second-run.md): A redelivered push creates another run; deduplicate over the signed push.
 - [205](205-operations-ingest-robustness.md): An item type echoed into a response header, an unbounded redaction recursion, untruncated frames.
 - [206](206-iam-token-and-oidc-hardening.md): The token verifier pins no algorithm; a thrown OIDC fetch skips the refusal path.
-- [207](207-the-cloudflare-application-runtime-is-unverified-on-a-live-account.md): The Durable Object runtime, the secrets upload and the baked manifest are verified on Lopata only.
-- [208](208-raw-sql-on-sqlite.md): `ctx.sql` is refused on SQLite: it needs a SQLite lexer, and a Durable Object has no role under it.
-- [209](209-file-scanning-on-cloudflare.md): A scanning file kind is refused on Cloudflare: no ClamAV runs in a Worker.
-- [210](210-cloudflare-application-runtime-follow-ups.md): Smaller gaps of the Cloudflare application runtime.
 - [207](207-three-service-log-lines-skip-redaction.md): Three `console.error` calls print an error's text or object without redaction.
 - [208](208-application-framework-and-data-layer-review-follow-ups.md): Six small `@fabrika/app` and `@fabrika/db` findings: two clocks, `bound` insert, `.input()`, prototype methods, insert under `in`, `releaseBytes`.
 - [209](209-a-public-procedure-binds-a-token-id-to-its-purpose.md): Any text of any verified token unlocks a row; bind the id to its purpose and table.
 - [210](210-platform-review-fix-follow-ups.md): Eleven P3s the reviews of the platform review's fixes left: cost default, console buttons, device bucket, test gaps, run trigger.
 - [211](211-zerops-preset-review-follow-ups.md): Minor findings of the Zerops presets review: adoption refusal on republish/update, the backup live row, restore history, hourly on `standard`, the admin hop's request id.
 - [212](212-the-console-shows-no-database-backups.md): The console shows no database backups; a provider-owned read of each database's schedule, newest and oldest restore point.
+- [213](213-the-cloudflare-application-runtime-is-unverified-on-a-live-account.md): The secrets upload, the object's migration on an existing Worker and a large upload are unverified on a live account.
+- [214](214-raw-sql-on-sqlite.md): `ctx.sql` is refused on SQLite: it needs a SQLite lexer, and a Durable Object has no role under it.
+- [215](215-file-scanning-on-cloudflare.md): A scanning file kind is refused on Cloudflare: no ClamAV runs in a Worker.
+- [216](216-cloudflare-application-runtime-follow-ups.md): Smaller gaps of the Cloudflare application runtime.
 - [217](217-postmark-managed-unsubscribes-never-reach-the-application.md): An unsubscribe through Postmark's own link or footer reaches only Postmark; the application's consent records drift.
 - [218](218-the-skill-names-no-working-one-click-unsubscribe-target.md): The skill's unsubscribe procedure is POST JSON, which refuses a mailbox's RFC 8058 one-click POST.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

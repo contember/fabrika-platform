@@ -1,10 +1,10 @@
 ---
-id: 210
+id: 216
 title: Cloudflare application runtime follow-ups
 blocked-by: []
 ---
 
-# 210 — Cloudflare application runtime follow-ups
+# 216 — Cloudflare application runtime follow-ups
 
 **Summary.** Smaller gaps left by the Cloudflare application runtime (ADR-0065), most from its review. P3 each
 unless marked, size S.
@@ -40,13 +40,19 @@ unless marked, size S.
     session is refused only by the classifier, where Postgres's `READ ONLY` transaction refuses it too.
 13. **`DEFAULT CURRENT_TIMESTAMP`** in an application migration stores `YYYY-MM-DD HH:MM:SS`, which every read of the
     table refuses as `unexpected_row`; codegen or the checker should refuse it and name the `strftime` default.
+14. **A binding's method cannot be feature-detected.** On workerd an RPC stub answers `in` and `typeof` with a function
+    for every name (local workerd, `wrangler dev` 4.74.0), so `method()` (`packages/app/src/cloudflare/bindings.ts`)
+    never reports a missing IAM method, and `boot`'s "no membership transport" refusal cannot fire on Cloudflare; a
+    missing method fails at its call. Lopata's stub answers `false`, unlike workerd, which also breaks `bun run dev`
+    of `examples/app` (the object finds no `IAM`), and Lopata applies no wrangler `define`, so the example's proxy has no
+    manifest. Both are Lopata fixes.
 
 ## Approach / acceptance
 
 1. The sweep lists the bucket's keys and deletes an object past the pending grace that no row names. 2. Document it,
    or fold with a registered function. 3. Detect the tag and refuse with a message. 4–6. Deduplicate. 7. Document it;
    open the transaction at the first statement where the input gate allows. 8. A platform-owned name no application id
-   can produce, or refuse such an id at registration. 9–13. As stated. Each with a test where one can reach it.
+   can produce, or refuse such an id at registration. 9–13. As stated. 14. Detect by the IAM release, or drop the detection; fix Lopata's stub and `define`. Each with a test where one can reach it.
 
 ## Touch points
 
