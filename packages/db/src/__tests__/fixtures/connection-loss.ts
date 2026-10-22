@@ -5,7 +5,7 @@
 
 import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
-import { Database, InvocationTransaction, runFixedStatement } from '../../database'
+import { InvocationTransaction, runFixedStatement } from '../../database'
 import { DatabaseError } from '../../errors'
 
 const url = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? ''
