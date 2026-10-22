@@ -9,7 +9,7 @@ import { freeze } from './builtins'
 import { type FixedParameter, runFixedStatement, type Session, sessionOf } from './database'
 import { DatabaseError, QueryRefusedError } from './errors'
 import { isPlainIdentifier } from './identifier'
-import { fencedTransaction } from './job-leases'
+import { type DialectTexts, fencedTransaction, SQLITE_NOW, sqliteNowPlus, sqliteTimestamp } from './job-leases'
 import { FILE_DELETIONS_TABLE, FILES_TABLE } from './migrations'
 import type { DataLayerRuntime } from './store'
 
@@ -112,55 +112,136 @@ export interface StoredFiles {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-/** Postgres' code of a foreign key violation: the delete of a file some column still references. */
+/** Postgres' code of a foreign key violation, which the SQLite engine maps its own to: the delete of a referenced file. */
 const FOREIGN_KEY_VIOLATION = '23503'
 
 const SERVED_COLUMNS = `id::text as id, kind, name, content_type, size, status, object_key, object_version`
+const SQLITE_SERVED_COLUMNS = `id, kind, name, content_type, size, status, object_key, object_version`
+const N = SQLITE_NOW
 
-const SQL_STAGE = `insert into ${F} (id, kind, status, object_key, content_type, name, request, created_at)
-values ($1::uuid, $2, 'pending', $3, $4, $5, $6, now())`
+const SQL_STAGE: DialectTexts = {
+	postgres: `insert into ${F} (id, kind, status, object_key, content_type, name, request, created_at)
+values ($1::uuid, $2, 'pending', $3, $4, $5, $6, now())`,
+	sqlite: `insert into ${F} (id, kind, status, object_key, content_type, name, request, created_at)
+values (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ${N})`,
+}
 
-const SQL_WRITTEN = `update ${F} set size = $2::bigint, sha256 = $3 where id = $1::uuid and status = 'pending' returning id`
+const SQL_WRITTEN: DialectTexts = {
+	postgres: `update ${F} set size = $2::bigint, sha256 = $3 where id = $1::uuid and status = 'pending' returning id`,
+	sqlite: `update ${F} set size = cast(?2 as integer), sha256 = ?3 where id = ?1 and status = 'pending' returning id`,
+}
 
 const SQL_ABANDON = `with gone as (delete from ${F} where id = $1::uuid and status = 'pending' and request = $2 returning object_key)
 insert into ${D} (object_key, recorded_at) select object_key, now() from gone on conflict (object_key) do nothing returning object_key`
 
-const SQL_FIND = `select ${SERVED_COLUMNS} from ${F} where id = $1::uuid`
+// SQLite has no data-modifying CTE: the delete and the record of its object are two statements in one transaction.
+const SQLITE_ABANDON = `delete from ${F} where id = ?1 and status = 'pending' and request = ?2 returning object_key`
+const SQLITE_RECORD_ABANDONED =
+	`insert into ${D} (object_key, recorded_at) values (?1, ${N}) on conflict (object_key) do nothing returning object_key`
 
-const SQL_REQUARANTINE = `update ${F} set status = 'quarantined', object_version = null, scan_attempts = 0, scan_after = now()
-where id = $1::uuid and status = 'live' and object_version is not distinct from $2`
+const SQL_FIND: DialectTexts = {
+	postgres: `select ${SERVED_COLUMNS} from ${F} where id = $1::uuid`,
+	sqlite: `select ${SQLITE_SERVED_COLUMNS} from ${F} where id = ?1`,
+}
 
-const SQL_METADATA = `select id::text as id, kind, name, content_type, size, status from ${F}
-where id = any(string_to_array($1, ',')::uuid[])`
+const SQL_REQUARANTINE: DialectTexts = {
+	postgres: `update ${F} set status = 'quarantined', object_version = null, scan_attempts = 0, scan_after = now()
+where id = $1::uuid and status = 'live' and object_version is not distinct from $2`,
+	sqlite: `update ${F} set status = 'quarantined', object_version = null, scan_attempts = 0, scan_after = ${N}
+where id = ?1 and status = 'live' and object_version is ?2`,
+}
 
-const SQL_QUARANTINED = `select id::text as id, object_key, size, sha256, content_type, scan_attempts, coalesce(scan_after, created_at) as due_since
+// The ids are one parameter: a comma-separated list on Postgres, a JSON array on SQLite.
+const SQL_METADATA: DialectTexts = {
+	postgres: `select id::text as id, kind, name, content_type, size, status from ${F}
+where id = any(string_to_array($1, ',')::uuid[])`,
+	sqlite: `select id, kind, name, content_type, size, status from ${F}
+where id in (select value from json_each(?1))`,
+}
+
+const SQL_QUARANTINED: DialectTexts = {
+	postgres: `select id::text as id, object_key, size, sha256, content_type, scan_attempts, coalesce(scan_after, created_at) as due_since
 from ${F} where status = 'quarantined' and kind = any(string_to_array($1, ',')) and (scan_after is null or scan_after < $2::timestamptz)
-order by scan_after nulls first, created_at limit $3::int`
+order by scan_after nulls first, created_at limit $3::int`,
+	sqlite: `select id, object_key, size, sha256, content_type, scan_attempts, coalesce(scan_after, created_at) as due_since
+from ${F} where status = 'quarantined' and kind in (select value from json_each(?1)) and (scan_after is null or scan_after < ?2)
+order by scan_after nulls first, created_at limit ?3`,
+}
 
-const SQL_PROMOTE = `update ${F} set status = 'live', object_version = $3 where id = $1::uuid and status = 'quarantined' and sha256 = $2 returning id`
+const SQL_PROMOTE: DialectTexts = {
+	postgres: `update ${F} set status = 'live', object_version = $3 where id = $1::uuid and status = 'quarantined' and sha256 = $2 returning id`,
+	sqlite: `update ${F} set status = 'live', object_version = ?3 where id = ?1 and status = 'quarantined' and sha256 = ?2 returning id`,
+}
 
-const SQL_DEFER = `update ${F} set scan_attempts = $2::int, scan_after = $3::timestamptz
-where id = $1::uuid and status = 'quarantined' and scan_attempts = $2::int - 1 returning id`
+const SQL_DEFER: DialectTexts = {
+	postgres: `update ${F} set scan_attempts = $2::int, scan_after = $3::timestamptz
+where id = $1::uuid and status = 'quarantined' and scan_attempts = $2::int - 1 returning id`,
+	sqlite: `update ${F} set scan_attempts = ?2, scan_after = ?3
+where id = ?1 and status = 'quarantined' and scan_attempts = ?2 - 1 returning id`,
+}
 
-const SQL_REJECT = `update ${F} set status = 'rejected' where id = $1::uuid and status = 'quarantined' returning id`
+const SQL_REJECT: DialectTexts = {
+	postgres: `update ${F} set status = 'rejected' where id = $1::uuid and status = 'quarantined' returning id`,
+	sqlite: `update ${F} set status = 'rejected' where id = ?1 and status = 'quarantined' returning id`,
+}
 
-const SQL_UNFINISHED = `select object_key from ${D} order by recorded_at limit $1::int`
+const SQL_UNFINISHED: DialectTexts = {
+	postgres: `select object_key from ${D} order by recorded_at limit $1::int`,
+	sqlite: `select object_key from ${D} order by recorded_at limit ?1`,
+}
 
-const SQL_FORGET = `delete from ${D} where object_key = $1`
+const SQL_FORGET: DialectTexts = {
+	postgres: `delete from ${D} where object_key = $1`,
+	sqlite: `delete from ${D} where object_key = ?1`,
+}
 
 const SQL_REMOVE = `with gone as (
 	delete from ${F} where id = $1::uuid and legacy is null and created_at < now() - $2::bigint * interval '1 millisecond' returning object_key
 )
 insert into ${D} (object_key, recorded_at) select object_key, now() from gone returning object_key`
 
-/** The lock a reference write takes: a file being deleted cannot gain a reference, and a referenced one is not deleted. */
-const SQL_LOCK = `select kind, status, request, scope, created_at > now() - $2::bigint * interval '1 millisecond' as fresh
-from ${F} where id = $1::uuid for share`
+const SQLITE_REMOVE = `delete from ${F} where id = ?1 and legacy is null and created_at < ${sqliteNowPlus('-?2')} returning object_key`
+const SQLITE_RECORD_REMOVED = `insert into ${D} (object_key, recorded_at) values (?1, ${N}) returning object_key`
 
-const SQL_CLAIM = `update ${F} set status = $2 where id = $1::uuid and status = 'pending' returning id`
+/** The lock a reference write takes: a file being deleted cannot gain a reference, and a referenced one is not deleted. */
+const SQL_LOCK: DialectTexts = {
+	postgres: `select kind, status, request, scope, created_at > now() - $2::bigint * interval '1 millisecond' as fresh
+from ${F} where id = $1::uuid for share`,
+	// No lock: while the reference write's transaction is open, the Durable Object runs no sweep.
+	sqlite: `select kind, status, request, scope, created_at > ${sqliteNowPlus('-?2')} as fresh
+from ${F} where id = ?1`,
+}
+
+const SQL_CLAIM: DialectTexts = {
+	postgres: `update ${F} set status = $2 where id = $1::uuid and status = 'pending' returning id`,
+	sqlite: `update ${F} set status = ?2 where id = ?1 and status = 'pending' returning id`,
+}
 
 /** The first dimensional reference stamps the scope; one from another top-level scope matches nothing. */
-const SQL_STAMP = `update ${F} set scope = $2 where id = $1::uuid and (scope is null or scope = $2) returning id`
+const SQL_STAMP: DialectTexts = {
+	postgres: `update ${F} set scope = $2 where id = $1::uuid and (scope is null or scope = $2) returning id`,
+	sqlite: `update ${F} set scope = ?2 where id = ?1 and (scope is null or scope = ?2) returning id`,
+}
+
+/** Runs the text of `session`'s dialect. */
+function run(session: Session, texts: DialectTexts, parameters: readonly FixedParameter[]): Promise<readonly unknown[]> {
+	return runFixedStatement(session, texts[session.dialect], parameters)
+}
+
+/**
+ * SQLite's form of a delete that records its object for deletion: the delete, then the record, in one transaction.
+ * The record's object key, or `null` when nothing was deleted or recorded.
+ */
+function deleteAndRecord(session: Session, deletion: string, parameters: readonly FixedParameter[], recording: string): Promise<string | null> {
+	return session.transaction(async (transaction) => {
+		const [gone] = await runFixedStatement(transaction, deletion, parameters)
+		if (gone === undefined) {
+			return null
+		}
+		const [recorded] = await runFixedStatement(transaction, recording, [text(record(gone), 'object_key')])
+		return recorded === undefined ? null : text(record(recorded), 'object_key')
+	})
+}
 
 /** `exists (select 1 from <table> where <column> = f.id)`, one per column, over the policies' validated identifiers. */
 function referencedBy(columns: readonly FileColumnRef[]): string {
@@ -227,8 +308,9 @@ function status(row: Readonly<Record<string, unknown>>): StoredFileStatus {
 	return found
 }
 
-function date(row: Readonly<Record<string, unknown>>, column: string): Date {
-	const value = row[column]
+/** A timestamp column: a `Date` from Postgres, a stored ISO text from SQLite. */
+function date(session: Session, row: Readonly<Record<string, unknown>>, column: string): Date {
+	const value = session.dialect === 'sqlite' ? sqliteTimestamp(row[column], `${F}.${column}`) : row[column]
 	if (!(value instanceof Date)) {
 		throw new QueryRefusedError('unexpected_row', `${F}.${column} came back as ${typeof value}`)
 	}
@@ -248,7 +330,7 @@ function metaOf(row: Readonly<Record<string, unknown>>): StoredFileMeta {
 
 /** Locks file `id` `for share` in `session`, the transaction that writes a reference to it; `null` when it is gone. */
 export async function lockStoredFile(session: Session, id: string, graceMs: number): Promise<LockedFile | null> {
-	const [found] = await runFixedStatement(session, SQL_LOCK, [uuid(id), positive(graceMs, 'a pending grace')])
+	const [found] = await run(session, SQL_LOCK, [uuid(id), positive(graceMs, 'a pending grace')])
 	if (found === undefined) {
 		return null
 	}
@@ -258,13 +340,14 @@ export async function lockStoredFile(session: Session, id: string, graceMs: numb
 		status: status(row),
 		request: nullableText(row, 'request'),
 		scope: nullableText(row, 'scope'),
-		fresh: row['fresh'] === true,
+		// SQLite answers a comparison as 1 or 0.
+		fresh: row['fresh'] === (session.dialect === 'sqlite' ? 1 : true),
 	})
 }
 
 /** Ends the pending state of a file the reference write locked: `quarantined` for a scanning kind, else `live`. */
 export async function claimStoredFile(session: Session, id: string, ended: 'quarantined' | 'live'): Promise<void> {
-	const rows = await runFixedStatement(session, SQL_CLAIM, [uuid(id), ended])
+	const rows = await run(session, SQL_CLAIM, [uuid(id), ended])
 	if (rows.length !== 1) {
 		throw new QueryRefusedError('unexpected_row', 'a pending file changed under its lock')
 	}
@@ -272,7 +355,7 @@ export async function claimStoredFile(session: Session, id: string, ended: 'quar
 
 /** Sets the scope of a file's first dimensional reference; `false` when it already holds another. */
 export async function stampStoredFile(session: Session, id: string, scope: string): Promise<boolean> {
-	return (await runFixedStatement(session, SQL_STAMP, [uuid(id), scope])).length === 1
+	return (await run(session, SQL_STAMP, [uuid(id), scope])).length === 1
 }
 
 /** Each file's metadata, by id, in `using`: one statement for every file column of a read. */
@@ -281,7 +364,8 @@ export async function storedFilesMetadata(using: Session, ids: readonly string[]
 	if (unique.length === 0) {
 		return new Map()
 	}
-	const rows = await runFixedStatement(using, SQL_METADATA, [unique.map(uuid).join(',')])
+	const checked = unique.map(uuid)
+	const rows = await run(using, SQL_METADATA, [using.dialect === 'sqlite' ? JSON.stringify(checked) : checked.join(',')])
 	return new Map(rows.map((found) => {
 		const meta = metaOf(record(found))
 		return [meta.id, meta] as const
@@ -290,32 +374,36 @@ export async function storedFilesMetadata(using: Session, ids: readonly string[]
 
 export function storedFiles(runtime: () => DataLayerRuntime): StoredFiles {
 	const session = () => sessionOf(runtime())
-	async function fenced(statement: string, parameters: readonly FixedParameter[]): Promise<boolean> {
+	async function fenced(statement: DialectTexts, parameters: readonly FixedParameter[]): Promise<boolean> {
 		const current = runtime()
 		const fence = current.capabilities.fence()
 		if (fence === null) {
 			throw new QueryRefusedError('file_scan', "a scan verdict is written only inside the scan job's lease")
 		}
-		const rows = await fencedTransaction(sessionOf(current), fence, (transaction) => runFixedStatement(transaction, statement, parameters))
+		const rows = await fencedTransaction(sessionOf(current), fence, (transaction) => run(transaction, statement, parameters))
 		return rows.length > 0
 	}
 	return freeze({
 		async stage(file: StagedFile): Promise<void> {
-			await runFixedStatement(session(), SQL_STAGE, [uuid(file.id), file.kind, file.objectKey, file.contentType, file.name, file.request])
+			await run(session(), SQL_STAGE, [uuid(file.id), file.kind, file.objectKey, file.contentType, file.name, file.request])
 		},
 
 		async written(id: string, written: { readonly size: number; readonly sha256: string }): Promise<void> {
 			if (!/^[0-9a-f]{64}$/.test(written.sha256) || !Number.isSafeInteger(written.size) || written.size < 0) {
 				throw new QueryRefusedError('invalid_argument', 'a written file records its size and the hex SHA-256 of its bytes')
 			}
-			const rows = await runFixedStatement(session(), SQL_WRITTEN, [uuid(id), String(written.size), written.sha256])
+			const rows = await run(session(), SQL_WRITTEN, [uuid(id), String(written.size), written.sha256])
 			if (rows.length !== 1) {
 				throw new QueryRefusedError('unexpected_row', 'a staged file is no longer pending')
 			}
 		},
 
 		async abandon(id: string, request: string): Promise<string | null> {
-			const [found] = await runFixedStatement(session(), SQL_ABANDON, [uuid(id), request])
+			const current = session()
+			if (current.dialect === 'sqlite') {
+				return deleteAndRecord(current, SQLITE_ABANDON, [uuid(id), request], SQLITE_RECORD_ABANDONED)
+			}
+			const [found] = await runFixedStatement(current, SQL_ABANDON, [uuid(id), request])
 			return found === undefined ? null : text(record(found), 'object_key')
 		},
 
@@ -323,7 +411,7 @@ export function storedFiles(runtime: () => DataLayerRuntime): StoredFiles {
 			if (!UUID.test(id)) {
 				return null
 			}
-			const [found] = await runFixedStatement(using ?? session(), SQL_FIND, [id])
+			const [found] = await run(using ?? session(), SQL_FIND, [id])
 			if (found === undefined) {
 				return null
 			}
@@ -332,7 +420,7 @@ export function storedFiles(runtime: () => DataLayerRuntime): StoredFiles {
 		},
 
 		async requarantine(id: string, version: string | null): Promise<void> {
-			await runFixedStatement(session(), SQL_REQUARANTINE, [uuid(id), version])
+			await run(session(), SQL_REQUARANTINE, [uuid(id), version])
 		},
 
 		metadata: storedFilesMetadata,
@@ -341,7 +429,9 @@ export function storedFiles(runtime: () => DataLayerRuntime): StoredFiles {
 			if (kinds.length === 0) {
 				return []
 			}
-			const rows = await runFixedStatement(session(), SQL_QUARANTINED, [kinds.join(','), now.toISOString(), positive(limit, 'a scan batch')])
+			const current = session()
+			const listed = current.dialect === 'sqlite' ? JSON.stringify(kinds) : kinds.join(',')
+			const rows = await run(current, SQL_QUARANTINED, [listed, now.toISOString(), positive(limit, 'a scan batch')])
 			return rows.map((found) => {
 				const row = record(found)
 				return freeze({
@@ -351,7 +441,7 @@ export function storedFiles(runtime: () => DataLayerRuntime): StoredFiles {
 					sha256: text(row, 'sha256'),
 					contentType: text(row, 'content_type'),
 					scanAttempts: count(row, 'scan_attempts'),
-					dueSince: date(row, 'due_since'),
+					dueSince: date(current, row, 'due_since'),
 				})
 			})
 		},
@@ -363,33 +453,46 @@ export function storedFiles(runtime: () => DataLayerRuntime): StoredFiles {
 		reject: (id: string) => fenced(SQL_REJECT, [uuid(id)]),
 
 		async unfinishedDeletions(limit: number): Promise<readonly string[]> {
-			const rows = await runFixedStatement(session(), SQL_UNFINISHED, [positive(limit, 'a sweep batch')])
+			const rows = await run(session(), SQL_UNFINISHED, [positive(limit, 'a sweep batch')])
 			return rows.map((found) => text(record(found), 'object_key'))
 		},
 
 		async forgetDeletion(objectKey: string): Promise<void> {
-			await runFixedStatement(session(), SQL_FORGET, [objectKey])
+			await run(session(), SQL_FORGET, [objectKey])
 		},
 
 		async adoptReferenced(columns: readonly FileColumnRef[]): Promise<number> {
 			if (columns.length === 0) {
 				return 0
 			}
-			const statement = `update ${F} f set legacy = null where f.legacy is not null and (${referencedBy(columns)}) returning id`
-			return (await runFixedStatement(session(), statement, [])).length
+			const current = session()
+			const statement = current.dialect === 'sqlite'
+				? `update ${F} as f set legacy = null where f.legacy is not null and (${referencedBy(columns)}) returning id`
+				: `update ${F} f set legacy = null where f.legacy is not null and (${referencedBy(columns)}) returning id`
+			return (await runFixedStatement(current, statement, [])).length
 		},
 
 		async unreferenced(columns: readonly FileColumnRef[], limit: number, graceMs: number): Promise<readonly string[]> {
-			const statement = `select f.id::text as id from ${F} f
+			const current = session()
+			const statement = current.dialect === 'sqlite'
+				? `select f.id as id from ${F} f
+where f.legacy is null and f.created_at < ${sqliteNowPlus('-?1')} and not (${referencedBy(columns)})
+order by f.created_at limit ?2`
+				: `select f.id::text as id from ${F} f
 where f.legacy is null and f.created_at < now() - $1::bigint * interval '1 millisecond' and not (${referencedBy(columns)})
 order by f.created_at limit $2::int`
-			const rows = await runFixedStatement(session(), statement, [positive(graceMs, 'a pending grace'), positive(limit, 'a sweep batch')])
+			const rows = await runFixedStatement(current, statement, [positive(graceMs, 'a pending grace'), positive(limit, 'a sweep batch')])
 			return rows.map((found) => text(record(found), 'id'))
 		},
 
 		async remove(id: string, graceMs: number): Promise<string | null> {
 			try {
-				const [found] = await runFixedStatement(session(), SQL_REMOVE, [uuid(id), positive(graceMs, 'a pending grace')])
+				const current = session()
+				const parameters = [uuid(id), positive(graceMs, 'a pending grace')]
+				if (current.dialect === 'sqlite') {
+					return await deleteAndRecord(current, SQLITE_REMOVE, parameters, SQLITE_RECORD_REMOVED)
+				}
+				const [found] = await runFixedStatement(current, SQL_REMOVE, parameters)
 				return found === undefined ? null : text(record(found), 'object_key')
 			} catch (error) {
 				if (error instanceof DatabaseError && error.sqlState === FOREIGN_KEY_VIOLATION) {

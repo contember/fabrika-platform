@@ -5,9 +5,10 @@
 // containers whose clocks disagree still agree on who holds a lease and when it expires.
 
 import type { LeaseFence } from './capability'
-import { runFixedStatement, type Session, sessionOf } from './database'
+import { runFixedStatement, type Session, sessionOf, type SqlDialect } from './database'
 import { DatabaseError, LeaseLostError, QueryRefusedError } from './errors'
 import { JOB_KICKS_TABLE, JOB_LEASES_TABLE } from './migrations'
+import { SQLITE_NOW_FORMAT } from './migrations-sqlite'
 import type { DataLayerRuntime } from './store'
 
 export type JobOutcome = 'succeeded' | 'failed'
@@ -82,69 +83,166 @@ export interface JobLeases {
 	state(job: string): Promise<JobLeaseState | null>
 }
 
+/** One framework statement in each dialect's text; a session runs the text of its own. */
+export type DialectTexts = Readonly<Record<SqlDialect, string>>
+
+/** SQLite's clock, as a stored timestamp: ISO text, so a comparison of two is a text comparison. */
+export const SQLITE_NOW = `strftime('${SQLITE_NOW_FORMAT}', 'now')`
+
+/** SQLite's clock moved by `ms`, an SQL expression of milliseconds (negative is earlier). */
+export function sqliteNowPlus(ms: string): string {
+	return `strftime('${SQLITE_NOW_FORMAT}', 'now', printf('%+.3f seconds', (${ms}) / 1000.0))`
+}
+
 const T = JOB_LEASES_TABLE
 const MS = `* interval '1 millisecond'`
+const N = SQLITE_NOW
+const SQLITE_RUN_MS = `cast(round((julianday('now') - julianday(last_started_at)) * 86400000) as integer)`
 const QUERY_CANCELED = '57014'
 const IDLE_TIMEOUT = '25P03'
 
 const STATE_COLUMNS =
 	'generation, holder, expires_at, attempt_deadline, first_seen_at, last_started_at, last_finished_at, last_status, last_succeeded_at, last_duration_ms, last_missed_reported_at'
 
-const SQL_NOW = 'select now() as now'
+const SQL_NOW: DialectTexts = {
+	postgres: 'select now() as now',
+	sqlite: `select ${N} as now`,
+}
 
-const SQL_REGISTER = `insert into ${T} (job, generation, holder, expires_at, attempt_deadline, first_seen_at)
-	values ($1, 0, null, now(), now(), now()) on conflict (job) do nothing`
+const SQL_REGISTER: DialectTexts = {
+	postgres: `insert into ${T} (job, generation, holder, expires_at, attempt_deadline, first_seen_at)
+	values ($1, 0, null, now(), now(), now()) on conflict (job) do nothing`,
+	sqlite: `insert into ${T} (job, generation, holder, expires_at, attempt_deadline, first_seen_at)
+	values (?1, 0, null, ${N}, ${N}, ${N}) on conflict (job) do nothing`,
+}
 
-const SQL_REAP = `update ${T} set holder = null, last_status = 'failed', last_finished_at = now(),
+const SQL_REAP: DialectTexts = {
+	postgres: `update ${T} set holder = null, last_status = 'failed', last_finished_at = now(),
 	last_duration_ms = (extract(epoch from now() - last_started_at) * 1000)::int
-	where job = $1 and holder is not null and expires_at <= now() returning job`
+	where job = $1 and holder is not null and expires_at <= now() returning job`,
+	sqlite: `update ${T} set holder = null, last_status = 'failed', last_finished_at = ${N},
+	last_duration_ms = ${SQLITE_RUN_MS}
+	where job = ?1 and holder is not null and expires_at <= ${N} returning job`,
+}
 
-const SQL_ACQUIRE = `insert into ${T} (job, generation, holder, expires_at, attempt_deadline, first_seen_at, last_started_at)
+const SQL_ACQUIRE: DialectTexts = {
+	postgres: `insert into ${T} (job, generation, holder, expires_at, attempt_deadline, first_seen_at, last_started_at)
 	values ($1, 1, $2, now() + $3::bigint ${MS}, now() + $4::bigint ${MS}, now(), now())
 	on conflict (job) do update set generation = ${T}.generation + 1, holder = excluded.holder, expires_at = excluded.expires_at,
 		attempt_deadline = excluded.attempt_deadline, last_started_at = excluded.last_started_at
-	where ${T}.holder is null returning generation`
+	where ${T}.holder is null returning generation`,
+	sqlite: `insert into ${T} (job, generation, holder, expires_at, attempt_deadline, first_seen_at, last_started_at)
+	values (?1, 1, ?2, ${sqliteNowPlus('?3')}, ${sqliteNowPlus('?4')}, ${N}, ${N})
+	on conflict (job) do update set generation = ${T}.generation + 1, holder = excluded.holder, expires_at = excluded.expires_at,
+		attempt_deadline = excluded.attempt_deadline, last_started_at = excluded.last_started_at
+	where ${T}.holder is null returning generation`,
+}
 
-const SQL_RENEW = `update ${T} set generation = generation + 1, holder = $4, expires_at = now() + $5::bigint ${MS},
+const SQL_RENEW: DialectTexts = {
+	postgres: `update ${T} set generation = generation + 1, holder = $4, expires_at = now() + $5::bigint ${MS},
 	attempt_deadline = now() + $6::bigint ${MS}
-	where job = $1 and generation = $2 and holder = $3 and expires_at > now() returning generation`
+	where job = $1 and generation = $2 and holder = $3 and expires_at > now() returning generation`,
+	sqlite: `update ${T} set generation = generation + 1, holder = ?4, expires_at = ${sqliteNowPlus('?5')},
+	attempt_deadline = ${sqliteNowPlus('?6')}
+	where job = ?1 and generation = ?2 and holder = ?3 and expires_at > ${N} returning generation`,
+}
 
-const SQL_FINISH = `update ${T} set holder = null, last_finished_at = now(), last_status = $4,
+const SQL_FINISH: DialectTexts = {
+	postgres: `update ${T} set holder = null, last_finished_at = now(), last_status = $4,
 	last_duration_ms = (extract(epoch from now() - last_started_at) * 1000)::int,
 	last_succeeded_at = case when $4 = 'succeeded' then now() else last_succeeded_at end
-	where job = $1 and generation = $2 and holder = $3 returning job`
+	where job = $1 and generation = $2 and holder = $3 returning job`,
+	sqlite: `update ${T} set holder = null, last_finished_at = ${N}, last_status = ?4,
+	last_duration_ms = ${SQLITE_RUN_MS},
+	last_succeeded_at = case when ?4 = 'succeeded' then ${N} else last_succeeded_at end
+	where job = ?1 and generation = ?2 and holder = ?3 returning job`,
+}
 
-// A free lease whose row no transaction holds (`skip locked`): an attempt's fence holds it `for share` while it writes.
-const SQL_TRY_ACQUIRE = `with free as (select job from ${T} where job = $1 and holder is null for update skip locked)
+const SQL_TRY_ACQUIRE: DialectTexts = {
+	// A free lease whose row no transaction holds (`skip locked`): an attempt's fence holds it `for share` while it writes.
+	postgres: `with free as (select job from ${T} where job = $1 and holder is null for update skip locked)
 	update ${T} set generation = ${T}.generation + 1, holder = $2, expires_at = now() + $3::bigint ${MS},
 		attempt_deadline = now() + $4::bigint ${MS}, last_started_at = now()
-	from free where ${T}.job = free.job returning ${T}.generation`
+	from free where ${T}.job = free.job returning ${T}.generation`,
+	// No lock to skip: while an attempt's fenced transaction is open, the Durable Object serves no kick.
+	sqlite: `update ${T} set generation = generation + 1, holder = ?2, expires_at = ${sqliteNowPlus('?3')},
+		attempt_deadline = ${sqliteNowPlus('?4')}, last_started_at = ${N}
+	where job = ?1 and holder is null returning generation`,
+}
 
 const K = JOB_KICKS_TABLE
 
-const SQL_MARK_PENDING = `insert into ${K} (job, pending) values ($1, true) on conflict (job) do update set pending = true where ${K}.pending = false`
+const SQL_MARK_PENDING: DialectTexts = {
+	postgres: `insert into ${K} (job, pending) values ($1, true) on conflict (job) do update set pending = true where ${K}.pending = false`,
+	sqlite: `insert into ${K} (job, pending) values (?1, 1) on conflict (job) do update set pending = 1 where ${K}.pending = 0`,
+}
 
-const SQL_TAKE_PENDING = `update ${K} set pending = false where job = $1 and pending returning job`
+const SQL_TAKE_PENDING: DialectTexts = {
+	postgres: `update ${K} set pending = false where job = $1 and pending returning job`,
+	sqlite: `update ${K} set pending = 0 where job = ?1 and pending = 1 returning job`,
+}
 
-const SQL_CLAIM_OVERDUE = `update ${T} set last_missed_reported_at = now()
+const SQL_CLAIM_OVERDUE: DialectTexts = {
+	postgres: `update ${T} set last_missed_reported_at = now()
 	where job = $1 and coalesce(last_succeeded_at, first_seen_at) < now() - 2 * $2::bigint ${MS}
 		and (last_missed_reported_at is null or last_missed_reported_at <= now() - $2::bigint ${MS})
-	returning last_succeeded_at, first_seen_at`
+	returning last_succeeded_at, first_seen_at`,
+	sqlite: `update ${T} set last_missed_reported_at = ${N}
+	where job = ?1 and coalesce(last_succeeded_at, first_seen_at) < ${sqliteNowPlus('-2 * ?2')}
+		and (last_missed_reported_at is null or last_missed_reported_at <= ${sqliteNowPlus('-?2')})
+	returning last_succeeded_at, first_seen_at`,
+}
 
-// Inside a mutation's transaction, so `clock_timestamp()`: `now()` is when the transaction began.
-const SQL_FENCE = `select pg_backend_pid() as pid, transaction_timestamp()::text as began,
+const SQL_STILL_HELD: DialectTexts = {
+	postgres: `select job from ${T} where job = $1 and generation = $2 and holder = $3 and attempt_deadline > clock_timestamp()`,
+	sqlite: `select job from ${T} where job = ?1 and generation = ?2 and holder = ?3 and attempt_deadline > ${N}`,
+}
+
+const SQL_FENCE: DialectTexts = {
+	// Inside a mutation's transaction, so `clock_timestamp()`: `now()` is when the transaction began.
+	postgres: `select pg_backend_pid() as pid, transaction_timestamp()::text as began,
 	greatest(1, ceil(extract(epoch from attempt_deadline - clock_timestamp()) * 1000))::int as remaining_ms
-	from ${T} where job = $1 and generation = $2 and holder = $3 and attempt_deadline > clock_timestamp() for share`
+	from ${T} where job = $1 and generation = $2 and holder = $3 and attempt_deadline > clock_timestamp() for share`,
+	// No lock: while the transaction is open the Durable Object serves no other event, so no takeover runs before it ends.
+	sqlite: SQL_STILL_HELD.sqlite,
+}
 
-// The attempt's remaining time bounds a statement and an idle wait alike: either past the deadline ends the transaction.
+// Postgres only. The attempt's remaining time bounds a statement and an idle wait alike: either past the deadline ends it.
 const SQL_TIMEOUTS = `select set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $1, true)`
 
-const SQL_STILL_HELD = `select job from ${T} where job = $1 and generation = $2 and holder = $3 and attempt_deadline > clock_timestamp()`
-
-// Only the backend still in the transaction the fence opened: a pid the pool reused for other work is left alone.
+// Postgres only. Only the backend still in the transaction the fence opened: a pid the pool reused is left alone.
 const SQL_CANCEL = `select pg_cancel_backend(pid) from pg_stat_activity where pid = $1 and xact_start = $2::timestamptz`
 
-const SQL_STATE = `select now() as now, ${STATE_COLUMNS} from ${T} where job = $1`
+const SQL_STATE: DialectTexts = {
+	postgres: `select now() as now, ${STATE_COLUMNS} from ${T} where job = $1`,
+	sqlite: `select ${N} as now, ${STATE_COLUMNS} from ${T} where job = ?1`,
+}
+
+/** The columns that hold a time; SQLite answers each as ISO text, which the row's entry reads as a `Date`. */
+const TIMESTAMP_COLUMNS: ReadonlySet<string> = new Set([
+	'now',
+	'expires_at',
+	'attempt_deadline',
+	'first_seen_at',
+	'last_started_at',
+	'last_finished_at',
+	'last_succeeded_at',
+	'last_missed_reported_at',
+])
+
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+
+/** A stored SQLite timestamp (`SQLITE_NOW_FORMAT`) as a `Date`, or `null`; anything else is refused. */
+export function sqliteTimestamp(value: unknown, what: string): Date | null {
+	if (value === null) {
+		return null
+	}
+	const parsed = typeof value === 'string' && ISO_TIMESTAMP.test(value) ? new Date(value) : undefined
+	if (parsed === undefined || Number.isNaN(parsed.getTime())) {
+		throw new QueryRefusedError('unexpected_row', `${what} is not a stored timestamp`)
+	}
+	return parsed
+}
 
 function record(row: unknown): Readonly<Record<string, unknown>> {
 	if (typeof row !== 'object' || row === null) {
@@ -153,8 +251,19 @@ function record(row: unknown): Readonly<Record<string, unknown>> {
 	return Object.fromEntries(Object.entries(row))
 }
 
-async function rows(session: Session, text: string, parameters: readonly (string | number | null)[]): Promise<Readonly<Record<string, unknown>>[]> {
-	return (await runFixedStatement(session, text, parameters)).map(record)
+async function rows(
+	session: Session,
+	texts: DialectTexts,
+	parameters: readonly (string | number | null)[],
+): Promise<Readonly<Record<string, unknown>>[]> {
+	const found = (await runFixedStatement(session, texts[session.dialect], parameters)).map(record)
+	return session.dialect === 'sqlite' ? found.map(sqliteRow) : found
+}
+
+function sqliteRow(row: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+	return Object.fromEntries(
+		Object.entries(row).map(([name, value]) => [name, TIMESTAMP_COLUMNS.has(name) ? sqliteTimestamp(value, `${T}.${name}`) : value]),
+	)
 }
 
 function integer(row: Readonly<Record<string, unknown>>, name: string): number {
@@ -254,7 +363,10 @@ function refuseEnded(fence: LeaseFence): void {
 	}
 }
 
-const SQL_CLOCK = 'select clock_timestamp() as now'
+const SQL_CLOCK: DialectTexts = {
+	postgres: 'select clock_timestamp() as now',
+	sqlite: `select ${N} as now`,
+}
 
 /**
  * The database's clock inside `session`'s transaction: a queue claim compares and moves `due` by it, so no process
@@ -275,6 +387,7 @@ const params = (fence: LeaseFence): (string | number)[] => [fence.job, fence.gen
  * stays locked `for share` until the commit (a takeover or a renewal waits), and every statement is bounded by the
  * attempt's remaining time. After it, just before the commit: the attempt still holds the lease within its deadline.
  * Otherwise the transaction rolls back with `LeaseLostError`; so does a statement the deadline or the runner cancelled.
+ * On SQLite only the two checks run: no other event reaches the Durable Object while the transaction is open.
  */
 export async function fencedTransaction<T>(session: Session, fence: LeaseFence, work: (transaction: Session) => Promise<T>): Promise<T> {
 	refuseEnded(fence)
@@ -285,12 +398,19 @@ export async function fencedTransaction<T>(session: Session, fence: LeaseFence, 
 			if (held === undefined) {
 				throw lost(fence)
 			}
-			backend = { pid: integer(held, 'pid'), began: text(held, 'began') }
-			const running = inFlight.get(fence) ?? new Set<Backend>()
-			running.add(backend)
-			inFlight.set(fence, running)
+			// SQLite has no backend to cancel and no statement timeout: the check before the commit refuses a late attempt,
+			// and a Durable Object resets a transaction that runs past its own limit.
+			const postgres = transaction.dialect === 'postgres'
+			if (postgres) {
+				backend = { pid: integer(held, 'pid'), began: text(held, 'began') }
+				const running = inFlight.get(fence) ?? new Set<Backend>()
+				running.add(backend)
+				inFlight.set(fence, running)
+			}
 			refuseEnded(fence)
-			await rows(transaction, SQL_TIMEOUTS, [String(integer(held, 'remaining_ms'))])
+			if (postgres) {
+				await runFixedStatement(transaction, SQL_TIMEOUTS, [String(integer(held, 'remaining_ms'))])
+			}
 			const result = await work(transaction)
 			refuseEnded(fence)
 			if ((await rows(transaction, SQL_STILL_HELD, params(fence))).length === 0) {
@@ -368,11 +488,11 @@ export function jobLeases(runtime: () => DataLayerRuntime): JobLeases {
 		async cancelInFlight(fence: LeaseFence): Promise<void> {
 			ended.add(fence)
 			// The transaction rolls back and gives its connection back now, even while its work waits on something else;
-			// a statement still running is cancelled, so the ROLLBACK queued behind it runs.
+			// a statement still running is cancelled, so the ROLLBACK queued behind it runs. SQLite records no backend.
 			stopOf(fence).abort(lost(fence))
 			const running = [...(inFlight.get(fence) ?? [])]
 			for (const backend of running) {
-				await rows(session(), SQL_CANCEL, [backend.pid, backend.began])
+				await runFixedStatement(session(), SQL_CANCEL, [backend.pid, backend.began])
 			}
 		},
 
