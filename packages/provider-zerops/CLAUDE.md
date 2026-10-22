@@ -136,7 +136,10 @@ bun test
   of the reader that read the application (`ZeropsLockedExecution.checkRelease`, from `ProviderApprovedAccess.checker`:
   the newest patch of the minor its `bun.lock` pins; ADR-0062) and the scripts. Keep the tests before every step that
   produces or checks what deploys, and `tsc` before the checker, as the application skill's loop runs them: the checker
-  refuses the cast or `any` that silences a type error, so it has the last word. The init commands run
+  refuses the cast or `any` that silences a type error, so it has the last word. The tests command counts the files
+  `@fabrika/db/testing` skipped (its skip line has the same text in every release) and prints `fabrika-tests: N
+  Postgres-backed test files did not run …`: the build has no database. Of those files only the generated ones run
+  again, at container start. The init commands run
   `fabrika db migrate`, then `fabrika db codegen --verify` and `fabrika db test-isolation` (the generated tests on
   a throwaway schema), and the start script only `exec`s the server, so a failed migration, a stale
   `schema.generated.ts` or a generated case that did not pass fails an init command, which stops the activation
