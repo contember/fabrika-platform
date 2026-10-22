@@ -96,10 +96,12 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 			items: [{
 				appId: 'shop',
 				env: 'stage',
+				kind: 'standard',
 				repository: 'acme/shop',
 				defaultBranch: 'main',
 				publicOrigin: 'https://shop-stage.example.com',
 				deployed: null,
+				dev: null,
 			}],
 		})
 
