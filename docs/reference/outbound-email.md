@@ -159,9 +159,11 @@ MIME-wrapped.
 A 202 carries one result per recipient; a result with `status: 'error'` is `provider_rejected`, without its text,
 and any other status with an ID is accepted. A
 409 is `request_in_progress`, a 422 (documented only for the key reused for another request) `idempotency_conflict`, and a 404 (no such
-account) `provider_unauthorized`; a malformed request is a 400. AhaSend renders the subject and both bodies as
-MiniJinja templates, so the adapter writes every `{` that opens `{{`, `{%` or `{#` as `{{ '{' }}` (`literalTemplate`)
-and the content reaches the recipient unchanged.
+account; a key of another account answers 401) `provider_unauthorized`; a malformed request, an unverified sender
+domain or a bad recipient is a 400, `provider_rejected`. A request under a key whose first request is still running
+waits for it and answers its result with `Idempotent-Replayed: true`. AhaSend renders content as a template only when
+the request carries substitutions, which the adapter never sends, so `{{`, `{%` and `{#` reach the recipient as
+written. The `id` is the message's `Message-ID`, `<uuid@sender domain>`.
 
 ## Lettermint adapter
 
@@ -184,8 +186,8 @@ byte for byte with their media types and UTF-8 names, and an HTML template uncha
 `Message-ID` is `<message_id>@lmta.net`. Open and click tracking are settings of the Lettermint project or route; with
 click tracking on, a one-time link goes through Lettermint's redirect.
 
-The Postmark and AhaSend adapters follow their providers' documentation and are verified only against a stubbed fetch
-([backlog 198](../backlog/198-verify-the-postmark-and-ahasend-adapters-on-live-accounts.md)).
+The Lettermint and AhaSend adapters are verified on live accounts. The Postmark adapter follows its documentation and
+is verified only against a stubbed fetch ([backlog 198](../backlog/198-verify-the-postmark-adapter-on-a-live-account.md)).
 
 ## SmartEmailing adapter
 

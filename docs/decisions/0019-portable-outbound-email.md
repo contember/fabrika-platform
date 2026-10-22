@@ -84,9 +84,9 @@ as `dropped`: an operator's decision, never a silent loss.
   **SmartEmailing**, all over `fetch` and all on one HTTP adapter base, so a provider is its own mapping and nothing
   more. Resend, AhaSend and Lettermint are idempotent and synchronous. Postmark is synchronous with no idempotency key.
   SmartEmailing is neither: it is built from the official API v3 document and has not yet been verified against a live
-  account ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)). Lettermint is
-  verified on a live project. Postmark and AhaSend are built from their documentation and wait for the same check
-  ([backlog 198](../backlog/198-verify-the-postmark-and-ahasend-adapters-on-live-accounts.md)).
+  account ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)). Lettermint and
+  AhaSend are verified on live accounts. Postmark is built from its documentation and waits for the same check
+  ([backlog 198](../backlog/198-verify-the-postmark-adapter-on-a-live-account.md)).
 - Two more senders deliver nothing: **Directory** writes each message to a directory for a local composition, and
   **Memory** keeps them in memory for tests and `fabrika app dev`, with controls that inject each kind of failure.
   No variable selects Memory: the test kit and `fabrika app dev` pass it as a boot option (§3). IAM takes a Directory

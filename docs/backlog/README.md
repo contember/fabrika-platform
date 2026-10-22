@@ -84,7 +84,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [193](193-loose-ends-of-the-declared-surface.md): The approval of an upgrade to 0.7, admission buckets, tokens on Cloudflare and other P2s of the surface revision.
 - [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: a claim before the dispatcher sends (two double-send paths), maintenance and console edges, the sender's error mapping, expired keys' vault values.
 - [197](197-local-compat-has-no-0.7-release.md): `local:compat` deploys no Notes at v0.7.0: its proof needs a release without a file collection.
-- [198](198-verify-the-postmark-and-ahasend-adapters-on-live-accounts.md): The Postmark and AhaSend adapters are verified only against a stubbed `fetch`; their attachment bounds and AhaSend's template rendering wait for live accounts.
+- [198](198-verify-the-postmark-adapter-on-a-live-account.md): The Postmark adapter is verified only against a stubbed `fetch`; its attachment bound and the status of an account pending approval wait for a live account.
 - [201](201-cloudflare-passwords-are-hashed-below-the-owasp-work-factor.md): A Worker caps PBKDF2 at 100 000 iterations; Argon2id through WASM on both runtimes.
 - [202](202-relayed-mail-content-is-plaintext-at-rest.md): Control stores relayed mail content, IAM's links included, as plain text until the row is final; seal it under the vault key.
 - [203](203-deleting-an-app-or-env-leaves-its-secrets-and-iam-keys.md): An app or env delete leaves its vault rows, its IAM keys and its IAM schema.
