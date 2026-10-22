@@ -24,13 +24,17 @@ const VERIFY_SCRIPT = 'fabrika/verify.generated.sh'
 const START_SCRIPT = 'fabrika/start.generated.sh'
 const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
 
-/** The compiler options of the platform's type check; the application's own `tsconfig.json` and its `paths` are not read. */
+/**
+ * The compiler options of the platform's type check; the application's own `tsconfig.json` and its `paths` are not read.
+ * It covers the SPA under `web/` too: Bun bundles the SPA without checking its types.
+ */
 const PLATFORM_TSCONFIG_CONTENTS = JSON.stringify({
 	compilerOptions: {
 		target: 'ES2022',
 		module: 'ESNext',
 		moduleResolution: 'bundler',
 		lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+		jsx: 'react-jsx',
 		types: ['bun'],
 		strict: true,
 		noUncheckedIndexedAccess: true,
@@ -41,7 +45,7 @@ const PLATFORM_TSCONFIG_CONTENTS = JSON.stringify({
 		isolatedModules: true,
 		noEmit: true,
 	},
-	include: ['../fabrika.contract.ts', '../src', 'entry.generated.ts'],
+	include: ['../fabrika.contract.ts', '../src', '../web', 'entry.generated.ts'],
 })
 
 const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
@@ -88,8 +92,10 @@ export interface ContractRecipe {
 /**
  * The recipe of one contract application. The application's tests run first: they are authored code, so everything
  * after them is reinstalled, regenerated or checked again. They run `--isolate`, as the application skill runs them: a
- * test file's DOM globals otherwise leak into the next file. The build has no database, so the schema checks run as
- * init scripts, after the migrations and before the readiness window opens.
+ * test file's DOM globals otherwise leak into the next file. `tsc` runs before the checker, as in the skill's loop: the
+ * usual quick fix of a type error is a cast or an `any`, which only the checker refuses, so the checker is the last word
+ * on the code. The build has no database, so the schema checks run as init scripts, after the migrations and before the
+ * readiness window opens.
  */
 export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 	const { appId, checkRelease, sourceRoot, runtimeRoot } = input
@@ -116,9 +122,9 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 			{ run: 'bun test --isolate --pass-with-no-tests' },
 			{ run: `rm -rf node_modules && ${INSTALL}` },
 			{ run: `bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"` },
-			{ run: `cd /tmp && bun x --bun -p @fabrika/check@${checkRelease} fabrika-check ${sourceRoot}` },
 			{ write: PLATFORM_TSCONFIG, lines: [PLATFORM_TSCONFIG_CONTENTS] },
 			{ run: `cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${sourceRoot}/${PLATFORM_TSCONFIG}` },
+			{ run: `cd /tmp && bun x --bun -p @fabrika/check@${checkRelease} fabrika-check ${sourceRoot}` },
 			...init.map((generated) => ({ write: generated.path, lines: generated.lines })),
 			{ write: START_SCRIPT, lines: script([`exec bun --max-http-header-size=${APPLICATION_SERVER_MAX_HEADER_BYTES} fabrika/entry.generated.ts`]) },
 			// After every check, so a map is uploaded only for a build that can deploy; the report line says how it went.
