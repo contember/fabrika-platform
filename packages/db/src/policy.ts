@@ -160,6 +160,8 @@ export interface TableColumns<Col extends string = string, Table extends string 
 	readonly dates?: readonly Col[]
 	/** The `timestamp` and `timestamptz` columns, which a write takes as a `Date` or strict ISO 8601 text; absent when none. */
 	readonly timestamps?: readonly Col[]
+	/** On SQLite, the columns declared `BOOLEAN`, stored as 0 or 1 and read as a boolean; absent when none. */
+	readonly booleans?: readonly Col[]
 }
 
 /** The columns and foreign keys of every table, generated next to the schema types. */
@@ -221,6 +223,8 @@ export interface TableModel {
 	readonly dates: NameSet
 	/** The `timestamp` and `timestamptz` columns: a write's text must be strict ISO 8601 with an offset. */
 	readonly timestamps: NameSet
+	/** On SQLite, the `BOOLEAN` columns, stored as 0 or 1. */
+	readonly booleans: NameSet
 	/** The table's foreign keys, from the column list; a containment column must be one to its container's key. */
 	readonly foreignKeys: readonly ForeignKey[]
 	/**
@@ -342,7 +346,7 @@ function parseVocabulary(input: unknown): VocabularyModel {
 	return freeze({ dimensions: freeze(containment), actions: nameSet(actions) })
 }
 
-const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps'])
+const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps', 'booleans'])
 const FOREIGN_KEY_FIELDS = nameSet(['columns', 'table', 'references'])
 const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns', 'queue', 'files'])
 const QUEUE_FIELDS = nameSet(['attempts', 'due', 'maxAttempts'])
@@ -524,6 +528,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	}
 	const dates = parseColumnSet(table, ownEntry(entry, 'dates'), column, 'dates')
 	const timestamps = parseColumnSet(table, ownEntry(entry, 'timestamps'), column, 'timestamps')
+	const booleans = parseColumnSet(table, ownEntry(entry, 'booleans'), column, 'booleans')
 	const queue = queueInput === undefined
 		? undefined
 		: parseQueue(table, queueInput, column, { columns, timestamps, version, actions, update, columnWrites })
@@ -551,6 +556,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		columnWrites: freeze(columnWrites),
 		dates,
 		timestamps,
+		booleans,
 		foreignKeys,
 	}
 }
@@ -673,7 +679,7 @@ function parseQueue(
 	return freeze({ attempts, due, maxAttempts: maxInput === undefined ? DEFAULT_MAX_ATTEMPTS : maxInput })
 }
 
-/** The column list's `date` (`dates`) or timestamp (`timestamps`) columns, each one of the table's. */
+/** The column list's `date` (`dates`), timestamp (`timestamps`) or boolean (`booleans`) columns, each one of the table's. */
 function parseColumnSet(table: string, input: unknown, column: (name: unknown, field: string) => string, field: string): NameSet {
 	if (input === undefined) {
 		return nameSet([])
