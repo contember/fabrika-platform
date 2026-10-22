@@ -7,6 +7,7 @@
  * base); `platform.yml` / `README.md` / `.gitignore` are CLI-owned and refreshed every run.
  */
 
+import { builtinEmailProviders, builtinEmailProviderVariables } from '@fabrika/email/providers'
 import {
 	INITIAL_SCAFFOLD_COMMIT_MESSAGE,
 	type ProtectionOutcome,
@@ -43,10 +44,36 @@ export interface ScaffoldResult {
 	branchProtection?: ProtectionOutcome
 }
 
-/** Render a template: replace every `{{ACCOUNT}}` token. (Account is the only placeholder today.) */
+/**
+ * Render a template: replace every `{{ACCOUNT}}` token, and the mail placeholders with the built-in providers, so a
+ * provider added to the registry reaches the workflow and the README without a template edit.
+ */
 async function renderTemplate(name: string, account: string): Promise<string> {
 	const raw = await Bun.file(resolve(TEMPLATES, name)).text()
-	return raw.replaceAll('{{ACCOUNT}}', account)
+	return raw
+		.replaceAll('{{ACCOUNT}}', () => account)
+		.replaceAll('{{EMAIL_PROVIDER_NAMES}}', () => Object.keys(builtinEmailProviders).join('|'))
+		.replaceAll(/^\{\{EMAIL_PROVIDER_VARIABLES\}\}$/gm, () => emailProviderVariablesList())
+		.replaceAll(/^( *)# \{\{EMAIL_PROVIDER_ENV\}\}$/gm, (_line, indent: string) => emailProviderEnv(indent))
+}
+
+/** Each provider's variables, a credential from the Environment's secrets and the rest from its variables. */
+function emailProviderEnv(indent: string): string {
+	return builtinEmailProviderVariables
+		.map((variable) => `${indent}${variable.name}: \${{ ${variable.secret ? 'secrets' : 'vars'}.${variable.name} }}`)
+		.join('\n')
+}
+
+/** The README's list: one line per provider, naming its variables and how each is stored. */
+function emailProviderVariablesList(): string {
+	return Object.entries(builtinEmailProviders)
+		.map(([name, provider]) => {
+			const variables = provider.variables.map((variable) =>
+				`\`${variable.name}\` (${variable.secret ? 'secret' : 'variable'}${variable.required ? '' : ', optional'})`
+			)
+			return `- \`${name}\`: ${variables.join(', ')}`
+		})
+		.join('\n')
 }
 
 /** Write the file at `rel` under `dir` with `content`, creating parent dirs as needed. */

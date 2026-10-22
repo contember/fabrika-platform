@@ -1,4 +1,4 @@
-import { builtinEmailProviders } from '@fabrika/email/providers'
+import { builtinEmailProviders, builtinEmailProviderVariables } from '@fabrika/email/providers'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import type { InstallationCli, InstallationCommand } from '@fabrika/provider-contract/installation'
 import { resolve } from 'node:path'
@@ -9,9 +9,7 @@ import { defaultReconcileSchema } from '../schema'
 import { initCommand } from './init'
 
 const EMAIL_PROVIDERS = Object.keys(builtinEmailProviders).join(', ')
-const EMAIL_PROVIDER_VARIABLES = Object.values(builtinEmailProviders)
-	.flatMap((provider) => provider.variables.map((variable) => variable.name))
-	.join(', ')
+const EMAIL_PROVIDER_VARIABLES = builtinEmailProviderVariables.map((variable) => variable.name).join(', ')
 
 const USAGE = `Cloudflare installation
 

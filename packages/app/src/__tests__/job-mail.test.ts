@@ -643,7 +643,7 @@ describe.skipIf(!hasPostgres)('the transports of a deployed application', () => 
 		expect(await deployment.jobs.run('notify')).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(local.accepted).toHaveLength(1)
 		expect(refusals(() => deployed(served(installationOnly), variables, options))).toEqual([
-			"the installation's mail transport: FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing",
+			"the installation's mail transport: FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, lettermint, postmark, resend, smartemailing",
 		])
 	})
 

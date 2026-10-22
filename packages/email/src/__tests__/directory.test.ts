@@ -132,7 +132,7 @@ describe('directoryEmailProvider', () => {
 	test('is no built-in provider: only a composition registers it', () => {
 		expect(Object.keys(builtinEmailProviders)).not.toContain('directory')
 		expect(refusal(() => emailSenderFromEnv(env({ FABRIKA_EMAIL_DIRECTORY: directory }), builtinEmailProviders))).toBe(
-			'FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing',
+			'FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, lettermint, postmark, resend, smartemailing',
 		)
 	})
 })

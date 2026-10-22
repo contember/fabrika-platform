@@ -17,5 +17,17 @@ FABRIKA_IAM_SIGNING_KEYS=
 # OIDC client secret — required only when OIDC is enabled. The provider is generic:
 # OIDC_ISSUER (a var) selects ANY OIDC provider via discovery; only the secret lives here.
 OIDC_CLIENT_SECRET=local-oidc-client-secret
-# Resend API key — required only when EMAIL_PROVIDER=resend.
+# The selected mail provider's own variables (FABRIKA_EMAIL_PROVIDER); fill in only that provider's.
+# resend
 FABRIKA_EMAIL_RESEND_API_KEY=
+# postmark
+FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN=
+# ahasend: the account ID is no secret, but the provider needs both
+FABRIKA_EMAIL_AHASEND_API_KEY=
+FABRIKA_EMAIL_AHASEND_ACCOUNT_ID=
+# lettermint
+FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN=
+# smartemailing (the tag is optional)
+FABRIKA_EMAIL_SMARTEMAILING_USERNAME=
+FABRIKA_EMAIL_SMARTEMAILING_API_KEY=
+FABRIKA_EMAIL_SMARTEMAILING_TAG=

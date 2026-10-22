@@ -71,7 +71,7 @@ describe('the installation mail transport', () => {
 		const mail = readInstallationMail({ FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'private@example.test' }, builtinEmailProviders)
 		expect(mail).toEqual({ kind: 'invalid', reason: expect.stringContaining('FABRIKA_EMAIL_RESEND_API_KEY is missing') })
 		expect(JSON.stringify(mail)).not.toContain('private@example.test')
-		expect(readInstallationMail({ FABRIKA_EMAIL_PROVIDER: 'postmark' }, builtinEmailProviders)).toEqual({
+		expect(readInstallationMail({ FABRIKA_EMAIL_PROVIDER: 'smtp' }, builtinEmailProviders)).toEqual({
 			kind: 'invalid',
 			reason: expect.stringContaining('FABRIKA_EMAIL_PROVIDER must be none or one of'),
 		})

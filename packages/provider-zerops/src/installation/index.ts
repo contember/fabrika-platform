@@ -1,5 +1,5 @@
 import { reconcileSchema } from '@fabrika/auth'
-import { builtinEmailProviders } from '@fabrika/email/providers'
+import { builtinEmailProviders, builtinEmailProviderVariables } from '@fabrika/email/providers'
 import {
 	describeArgument,
 	info as consoleInfo,
@@ -46,7 +46,7 @@ export {
 } from './proxy-manifest'
 
 const EMAIL_PROVIDERS = Object.keys(builtinEmailProviders).join(', ')
-const EMAIL_PROVIDER_VARIABLES = Object.values(builtinEmailProviders).flatMap((provider) => provider.variables.map((variable) => variable.name))
+const EMAIL_PROVIDER_VARIABLES = builtinEmailProviderVariables.map((variable) => variable.name)
 
 const USAGE = `Zerops installation
 
