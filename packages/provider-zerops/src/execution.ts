@@ -355,11 +355,11 @@ const writeBase64Command = (path: string, content: string): string => {
 	return `printf '%s' '${encoded}' | base64 -d > ${path}`
 }
 
-/** The build's check chain as the dev launcher runs it in the application root, on what the container holds. */
+/** The build's check chain, in its order, as the dev launcher runs it in the application root on what the container holds. */
 const devChecks = (release: string): DevLauncherConfig['checks'] => [
-	{ name: 'tests', command: 'bun test --isolate --pass-with-no-tests' },
-	{ name: 'fabrika-check', command: `cd /tmp && bun x --bun -p @fabrika/check@${release} fabrika-check ${RUNTIME_ROOT}` },
+	{ name: 'tests', command: TESTS_COMMAND },
 	{ name: 'tsc', command: `cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${RUNTIME_ROOT}/${PLATFORM_TSCONFIG}` },
+	{ name: 'fabrika-check', command: `cd /tmp && bun x --bun -p @fabrika/check@${release} fabrika-check ${RUNTIME_ROOT}` },
 ]
 
 /** What the dev launcher reads (`DEV_LAUNCHER_CONFIG_FILE`): the platform's, written after the checks. */
