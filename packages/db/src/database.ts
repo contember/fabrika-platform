@@ -335,6 +335,9 @@ export class InvocationTransaction {
 	#isReleased = true
 	#ended = false
 	#failed = false
+	/** Inside `enclose` on SQLite: `commit()` and `rollback()` only decide, and the enclosure ends the transaction. */
+	#enclosed = false
+	#decided: 'commit' | 'rollback' | undefined
 
 	constructor(database: Database, readOnly: boolean) {
 		this.#database = database
@@ -364,6 +367,52 @@ export class InvocationTransaction {
 	/** Its connection is back in the pool (or it never took one). */
 	get released(): boolean {
 		return this.#isReleased
+	}
+
+	/**
+	 * Runs `work`: the invocation from its handler to its `commit()`. On SQLite the transaction encloses `work`, opened
+	 * before it: a Durable Object's transaction holds back every other event, the answers to the object's own I/O
+	 * included, until its callback ends, so the handler runs inside it. There `commit()` and `rollback()` decide, the
+	 * COMMIT runs once `work` returned, and a failed COMMIT rejects with a `DatabaseError`. Elsewhere it runs `work`.
+	 */
+	async enclose<T>(work: () => Promise<T>): Promise<T> {
+		const engine = engineOf(this.#database)
+		if (engine.dialect !== 'sqlite') {
+			return work()
+		}
+		if (this.#opened !== undefined || this.#ended) {
+			throw new QueryRefusedError('ended', 'an invocation encloses its work before its first statement')
+		}
+		this.#enclosed = true
+		this.#isReleased = false
+		let result: { readonly value: T } | undefined
+		try {
+			await engine.transaction({ readOnly: this.#readOnly }, async (executor) => {
+				const session = new Session(executor, engine, true, this.#readOnly, {
+					failed: () => {
+						this.#failed = true
+					},
+					open: () => !this.#ended,
+				})
+				this.#opened = Promise.resolve(session)
+				result = { value: await work() }
+				this.#ended = true
+				if (this.#decided !== 'commit') {
+					throw new RolledBack()
+				}
+			})
+		} catch (error) {
+			if (result === undefined) {
+				throw error
+			}
+			if (!(error instanceof RolledBack)) {
+				throw databaseError(error)
+			}
+		} finally {
+			this.#ended = true
+			this.#isReleased = true
+		}
+		return result.value
 	}
 
 	/** The session the invocation's statements run in; the first call opens the transaction. */
@@ -410,6 +459,13 @@ export class InvocationTransaction {
 			throw new QueryRefusedError('ended', 'this invocation has already ended')
 		}
 		this.#ended = true
+		if (this.#enclosed) {
+			this.#decided = this.#failed ? 'rollback' : 'commit'
+			if (this.#failed) {
+				throw new QueryRefusedError('statement_failed', 'a statement of this invocation failed, so nothing it wrote commits')
+			}
+			return
+		}
 		const run = this.#run
 		if (this.#failed) {
 			this.#decision.resolve('rollback')
@@ -429,9 +485,13 @@ export class InvocationTransaction {
 		}
 	}
 
-	/** Discards what the invocation wrote; idempotent, never throws, and returns once the connection is back. */
+	/** Discards what the invocation wrote; idempotent, never throws, and returns once the connection is back (inside `enclose`, it only decides). */
 	async rollback(): Promise<void> {
 		this.#ended = true
+		if (this.#enclosed) {
+			this.#decided ??= 'rollback'
+			return
+		}
 		this.#decision.resolve('rollback')
 		await this.#released
 	}

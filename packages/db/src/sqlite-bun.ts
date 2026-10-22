@@ -2,6 +2,7 @@
 // a Worker never loads it.
 
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { SqliteCursor, SqliteStorage, SqliteValue } from './sqlite'
 
 export interface BunSqliteStorage extends SqliteStorage {
@@ -31,15 +32,23 @@ function storageRow(row: Record<string, unknown>): Record<string, SqliteValue> {
 	return Object.fromEntries(Object.entries(row).map(([name, value]) => [name, storageValue(value)]))
 }
 
+/** The transaction a `transaction` callback runs in: its savepoint depth, and the queue its own nested ones wait in. */
+interface OpenTransaction {
+	readonly depth: number
+	queue: Promise<void>
+}
+
 /**
  * `database` (a fresh `:memory:` one by default) with foreign keys enforced, as a Durable Object enforces them. One
- * `transaction` runs at a time; a statement outside one runs at once. A text of several statements runs whole when its
+ * `transaction` runs at a time; one started inside a callback nests in a savepoint, as workerd nests it, and its
+ * siblings wait for each other. A statement outside one runs at once. A text of several statements runs whole when its
  * first statement answers no rows, as a migration's does; otherwise only its first statement runs.
  */
 export function bunSqliteStorage(database: Database = new Database(':memory:')): BunSqliteStorage {
 	database.run('PRAGMA foreign_keys = ON')
 	const totalChanges = (): number => database.query<{ readonly changes: number }, []>('select total_changes() as changes').get()?.changes ?? 0
-	let queue: Promise<void> = Promise.resolve()
+	const root: OpenTransaction = { depth: 0, queue: Promise.resolve() }
+	const open = new AsyncLocalStorage<OpenTransaction>()
 
 	function exec(query: string, ...bindings: SqliteValue[]): SqliteCursor {
 		if (TRANSACTION_CONTROL.test(query)) {
@@ -65,19 +74,25 @@ export function bunSqliteStorage(database: Database = new Database(':memory:')):
 	return {
 		sql: { exec },
 		async transaction<T>(closure: () => Promise<T>): Promise<T> {
-			const previous = queue
+			const parent = open.getStore() ?? root
+			const previous = parent.queue
 			const done = Promise.withResolvers<void>()
-			queue = previous.then(() => done.promise)
+			parent.queue = previous.then(() => done.promise)
 			await previous
+			const depth = parent.depth + 1
+			const savepoint = `_test_savepoint_${depth}`
 			try {
-				database.run('BEGIN')
+				database.run(depth === 1 ? 'BEGIN' : `SAVEPOINT ${savepoint}`)
 				try {
-					const result = await closure()
-					database.run('COMMIT')
+					const result = await open.run({ depth, queue: Promise.resolve() }, closure)
+					database.run(depth === 1 ? 'COMMIT' : `RELEASE ${savepoint}`)
 					return result
 				} catch (error) {
-					if (database.inTransaction) {
+					if (depth === 1 && database.inTransaction) {
 						database.run('ROLLBACK')
+					} else if (depth > 1) {
+						database.run(`ROLLBACK TO ${savepoint}`)
+						database.run(`RELEASE ${savepoint}`)
 					}
 					throw error
 				}
@@ -86,13 +101,18 @@ export function bunSqliteStorage(database: Database = new Database(':memory:')):
 			}
 		},
 		transactionSync<T>(fn: () => T): T {
-			database.run('BEGIN')
+			// Inside an open transaction workerd nests it in a savepoint too.
+			const nested = database.inTransaction
+			database.run(nested ? 'SAVEPOINT _test_sync_savepoint' : 'BEGIN')
 			try {
 				const result = fn()
-				database.run('COMMIT')
+				database.run(nested ? 'RELEASE _test_sync_savepoint' : 'COMMIT')
 				return result
 			} catch (error) {
-				if (database.inTransaction) {
+				if (nested) {
+					database.run('ROLLBACK TO _test_sync_savepoint')
+					database.run('RELEASE _test_sync_savepoint')
+				} else if (database.inTransaction) {
 					database.run('ROLLBACK')
 				}
 				throw error
