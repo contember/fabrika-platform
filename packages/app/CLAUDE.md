@@ -60,6 +60,8 @@ bun test src/__tests__/connect-hardening.test.ts # captured connect methods, a h
 bun test src/__tests__/export-read-only.test.ts # an export handler cannot write (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/cloudflare-runtime.test.ts          # the environment's Durable Object in Lopata: hop, migrations, ctx.db, tick, R2
 bun test src/__tests__/cloudflare-runtime-adapter.test.ts  # the object's bindings and crash reports, over bun:sqlite
+bun test src/__tests__/dev-launcher.test.ts     # the dev launcher against a stub of Control's source receiver (migrate and reset need FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/dev-changes.test.ts      # what a dev sync's paths mean: a bootstrap, a migration, an SPA build
 ```
 
 ## Structure
@@ -95,6 +97,11 @@ src/
   build-recipe.ts     contractRecipe: a contract application's build, init, start and jobs in a Bun container, as
                       data a provider renders (re-exported by @fabrika/app/build). PLATFORM PROTOCOL: the
                       platform renders its own copy for older applications, so change it only additively
+  dev/                @fabrika/app/dev — the launcher of a `dev` environment (ADR-0017, ADR-0064); Bun only
+    wire.ts           @fabrika/app/dev/wire — the source receiver's wire, which Control imports too (runtime-neutral)
+    launcher.ts       runDevLauncher: the long poll, the sync, migrate, the SPA commands, the respawn, run_checks, reset_dev
+    changes.ts        what a sync's paths mean: a bootstrap (the build owns it), a migration, an SPA build
+    output.ts         the forwarded output and the ring of its newest lines, secret values redacted
   errors.ts           structural HTTP error mapping
   rpc/                procedure builder, types, and dispatcher
   client/             @fabrika/app/client — browser-safe
