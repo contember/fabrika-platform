@@ -180,7 +180,9 @@ that says so): it records an outbox row and kicks the job (below). `references/p
 - `broadcast: true` marks one message of a send to many recipients (a newsletter, an announcement to every student),
   as opposed to mail a recipient's own action triggers (a sign-in link, a confirmation). Providers keep the two apart
   and pause an account whose transactional channel carries broadcast mail, so mark every message of a bulk send. It
-  needs `unsubscribe`. A transport without `ctx.mail.capabilities.broadcast` refuses it as `invalid_message`.
+  needs `unsubscribe`. A transport without `ctx.mail.capabilities.broadcast` refuses it as `invalid_message`. Under
+  `mailer: 'installation'` the capability is true even where the installation's provider sends none; the first
+  message then fails `invalid_message`, so stop a bulk send at its first refusal instead of failing every row.
 - The idempotency key covers the attachments, the unsubscribe URL and `broadcast`: a repeated key with other content
   is refused.
 - `idempotencyKey` is 1 to 200 visible ASCII characters, unique per message in the application environment, and

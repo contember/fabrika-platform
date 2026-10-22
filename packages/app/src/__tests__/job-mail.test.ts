@@ -21,7 +21,7 @@ import {
 import { devKit, mailKeyPrefix, MemoryEmailSender, testKit, transportMailKey } from '@fabrika/app/testing'
 import { applicationSchema, Database, scoped } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
-import type { EmailProvider } from '@fabrika/email'
+import type { EmailMessage, EmailProvider } from '@fabrika/email'
 import { resendEmailProvider } from '@fabrika/email/resend'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
@@ -273,6 +273,51 @@ describe('a broadcast message', () => {
 		await expect(mailOver(new MemoryEmailSender()).send({ ...message, broadcast: true })).rejects.toMatchObject({ code: 'invalid_message' })
 		await expect(mailOver(sender).send({ ...message, unsubscribe, broadcast: true })).rejects.toMatchObject({ code: 'invalid_message' })
 		expect(sender.accepted).toEqual([])
+	})
+
+	test('is refused before a sender that does not know the flag sees it', async () => {
+		const sent: EmailMessage[] = []
+		const unaware: EmailSender = {
+			capabilities: { idempotent: true, confirmation: 'sync', maxBatch: 1, listUnsubscribe: true },
+			send: (transported) => {
+				sent.push(transported)
+				return Promise.resolve({ status: 'accepted', provider: 'stub', messageId: 'm-1' })
+			},
+		}
+		const mail = jobMail({
+			transport: { sender: unaware, available: true },
+			keyPrefix: 'p:',
+			signal: new AbortController().signal,
+			assertLive: () => {},
+			open: () => Promise.reject(new Error('no file')),
+		})
+		await expect(mail.send({ ...message, unsubscribe, broadcast: true })).rejects.toMatchObject({ code: 'invalid_message' })
+		expect(sent).toEqual([])
+	})
+
+	test("an own transport's capabilities reach ctx.mail whole", () => {
+		const capabilities = {
+			idempotent: true,
+			confirmation: 'sync',
+			maxBatch: 1,
+			listUnsubscribe: true,
+			maxAttachmentBytes: 1024,
+			refusedAttachmentExtensions: ['exe'],
+			minBodyLength: 3,
+			broadcast: true,
+		} as const
+		const problems: string[] = []
+		const transports = resolveMailTransports({
+			artifact: compileContract(contract, tables),
+			framework: {},
+			application: {},
+			own: () => ({ capabilities, send: () => Promise.resolve({ status: 'accepted', provider: 'stub', messageId: 'm-1' }) }),
+			standIn: undefined,
+			registry: {},
+			keyScope: DEPLOYED,
+			local: true,
+		}, problems)
+		expect(transports.own?.sender.capabilities).toEqual(capabilities)
 	})
 })
 

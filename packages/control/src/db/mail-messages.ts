@@ -83,12 +83,17 @@ export class MailMessageRepository {
 				now,
 			)
 			.run()
-		const row = await this.d1
-			.prepare('SELECT * FROM mail_messages WHERE sender = ? AND idempotency_key = ?')
-			.bind(input.sender, input.idempotency_key)
-			.first<MailMessageRow>()
+		const row = await this.find(input.sender, input.idempotency_key)
 		if (row === null) throw new Error('mail message vanished after its insert')
 		return { row, created: inserted.meta.changes > 0 }
+	}
+
+	/** The message its sender recorded under the key, if any. */
+	async find(sender: string, idempotencyKey: string): Promise<MailMessageRow | null> {
+		return await this.d1
+			.prepare('SELECT * FROM mail_messages WHERE sender = ? AND idempotency_key = ?')
+			.bind(sender, idempotencyKey)
+			.first<MailMessageRow>()
 	}
 
 	async get(id: string): Promise<MailMessageRow | null> {

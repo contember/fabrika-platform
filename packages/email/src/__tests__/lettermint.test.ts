@@ -110,6 +110,10 @@ describe('LettermintEmailSender', () => {
 		const error = await caught(sender.send({ ...message, unsubscribeUrl: 'https://app.example.test/u', broadcast: true }, signal))
 		expect([error.code, error.retryable]).toEqual(['provider_rejected', false])
 		expect(error.message).toContain('FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE')
+
+		const transactional = await caught(sender.send(message, signal))
+		expect(transactional.code).toBe('provider_rejected')
+		expect(transactional.message).not.toContain('FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE')
 	})
 
 	test('the provider reads its token and names a bad one without its value', () => {

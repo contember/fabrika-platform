@@ -16,7 +16,14 @@ import {
 } from '@fabrika/email/platform'
 import { type JobQueue, uuidv7 } from '@fabrika/platform'
 import type { ControlAppContext } from '../app'
-import type { MailMessageRepository, MailMessageState, MailRuleAction, MailRuleRepository, PlatformTransportKeyRepository } from '../db'
+import type {
+	MailMessageRepository,
+	MailMessageRow,
+	MailMessageState,
+	MailRuleAction,
+	MailRuleRepository,
+	PlatformTransportKeyRepository,
+} from '../db'
 import { error } from '../http'
 import { repositories } from '../services'
 import { enqueueMailDispatch, isInstallationSender, type MailDispatchMessage } from './queue'
@@ -98,13 +105,16 @@ export async function acceptMail(deps: MailAcceptDeps, request: Request): Promis
 async function record(deps: MailAcceptDeps, sender: string, message: EmailMessage): Promise<Response> {
 	// Nothing would ever send it, and an accepted answer would keep IAM from offering its manual link instead.
 	if (isInstallationSender(sender) && !deps.hasTransport) return refuse('mail_not_configured')
+	const fingerprint = await platformMailFingerprint(message)
 	// Refused now, while the job can still tell, rather than failed at dispatch: the transport would refuse it there.
+	// A retry of a message recorded before the transport changed gets that message's answer, as any retry does.
 	if (message.broadcast === true && deps.transportCapabilities !== null && deps.transportCapabilities.broadcast !== true) {
+		const recorded = await deps.messages.find(sender, message.idempotencyKey)
+		if (recorded !== null) return replayAnswer(recorded, fingerprint)
 		console.info('mail relay: a broadcast message refused: the transport sends none')
 		return refuse('invalid_message')
 	}
 	const domain = recipientDomain(message.to)
-	const fingerprint = await platformMailFingerprint(message)
 	const decision = await gate(deps, sender, domain)
 	const { row, created } = await deps.messages.insertOrFind({
 		id: uuidv7(),
@@ -116,12 +126,15 @@ async function record(deps: MailAcceptDeps, sender: string, message: EmailMessag
 		rule_id: decision.ruleId,
 		content: encodePlatformMailRequest(message),
 	}, deps.now())
-	if (!created) {
-		return row.fingerprint === fingerprint ? platformMailAnswerResponse({ status: 'accepted', messageId: row.id }) : refuse('idempotency_conflict')
-	}
+	if (!created) return replayAnswer(row, fingerprint)
 	if (row.state === 'queued') await enqueueMailDispatch(deps.queue, row.id)
 	console.info(`mail relay: message ${row.id} accepted as ${row.state}`)
 	return platformMailAnswerResponse({ status: 'accepted', messageId: row.id })
+}
+
+/** A repeated key: the recorded message's answer when the content is the same, a conflict when it is not. */
+function replayAnswer(row: MailMessageRow, fingerprint: string): Response {
+	return row.fingerprint === fingerprint ? platformMailAnswerResponse({ status: 'accepted', messageId: row.id }) : refuse('idempotency_conflict')
 }
 
 /** An installation sender always passes; without a transport a message waits for a person; else the most specific rule. */

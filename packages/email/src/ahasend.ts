@@ -81,6 +81,9 @@ export class AhaSendEmailSender extends HttpEmailSender {
 
 	protected async request(message: EmailMessage): Promise<HttpEmailRequest> {
 		const senderName = message.fromName ?? this.from.name
+		// `send` refused a broadcast message without `broadcastFrom`; never send one from the transactional domain.
+		const fromAddress = message.broadcast === true ? this.#broadcastFrom : this.from.address
+		if (fromAddress === undefined) throw new EmailDeliveryError('AhaSend sends no broadcast email', { code: 'invalid_message' })
 		const attachments = message.attachments ?? []
 		return {
 			url: this.#messagesUrl,
@@ -90,7 +93,7 @@ export class AhaSendEmailSender extends HttpEmailSender {
 			},
 			body: {
 				from: {
-					email: message.broadcast === true ? (this.#broadcastFrom ?? this.from.address) : this.from.address,
+					email: fromAddress,
 					...(senderName === undefined ? {} : { name: senderName }),
 				},
 				recipients: [{ email: message.to }],

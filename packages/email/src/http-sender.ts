@@ -61,8 +61,8 @@ export abstract class HttpEmailSender implements EmailSender {
 	/** The message id of a 2xx answer; undefined when the answer is not a valid success. May throw a refusal. */
 	protected abstract messageId(response: ProviderResponse): string | undefined
 
-	/** A failed answer the provider tells apart beyond its status; undefined leaves it to `refusalByStatus`. */
-	protected refusal(_response: ProviderResponse): EmailDeliveryError | undefined {
+	/** A failed answer to the message the provider tells apart beyond its status; undefined leaves it to `refusalByStatus`. */
+	protected refusal(_response: ProviderResponse, _message: EmailMessage): EmailDeliveryError | undefined {
 		return undefined
 	}
 
@@ -77,7 +77,7 @@ export abstract class HttpEmailSender implements EmailSender {
 
 		const request = await this.request(message)
 		const response = await postToProvider({ label: this.#label, fetch: this.#fetch, ...request, signal, timeoutMs: this.#timeoutMs })
-		if (!response.ok) throw this.refusal(response) ?? refusalByStatus(this.#label, response.status)
+		if (!response.ok) throw this.refusal(response, message) ?? refusalByStatus(this.#label, response.status)
 
 		const messageId = this.messageId(response)
 		if (messageId === undefined || messageId === '') {
