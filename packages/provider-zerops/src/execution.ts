@@ -265,13 +265,17 @@ const START_SCRIPT = 'fabrika/start.generated.sh'
 const DEV_INIT_SCRIPT = 'fabrika/dev-init.generated.sh'
 const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
 
-/** The compiler options of the platform's type check; the application's own `tsconfig.json` and its `paths` are not read. */
+/**
+ * The compiler options of the platform's type check; the application's own `tsconfig.json` and its `paths` are not read.
+ * It covers the SPA under `web/` too: Bun bundles the SPA without checking its types.
+ */
 const PLATFORM_TSCONFIG_CONTENTS = JSON.stringify({
 	compilerOptions: {
 		target: 'ES2022',
 		module: 'ESNext',
 		moduleResolution: 'bundler',
 		lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+		jsx: 'react-jsx',
 		types: ['bun'],
 		strict: true,
 		noUncheckedIndexedAccess: true,
@@ -282,7 +286,7 @@ const PLATFORM_TSCONFIG_CONTENTS = JSON.stringify({
 		isolatedModules: true,
 		noEmit: true,
 	},
-	include: ['../fabrika.contract.ts', '../src', 'entry.generated.ts'],
+	include: ['../fabrika.contract.ts', '../src', '../web', 'entry.generated.ts'],
 })
 
 /** One `printf` writing `lines` to `path`. Each line is single-quoted, so it may hold neither `'` nor an expansion. */
@@ -394,6 +398,37 @@ const initCommandScripts = (execution: ZeropsLockedExecution): readonly string[]
 
 const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
 
+/**
+ * What `@fabrika/db/testing` prints after the label of a test file it skips without `FABRIKA_TEST_POSTGRES_URL`. Every
+ * framework release prints it, so the platform counts it for any application's release.
+ */
+const DATABASE_TEST_SKIP_MARKER = ' skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests'
+
+/** The prefix of the line the tests command prints after the test run. */
+const TESTS_REPORT_PREFIX = 'fabrika-tests:'
+
+/** One `bun -e "…"` running `script`, which may hold none of the characters a double-quoted shell word expands. */
+const bunEvalCommand = (script: readonly string[]): string => {
+	const source = script.join(' ')
+	if (/["$`\\!]/.test(source)) throw new Error('zerops: a generated bun -e script must not contain a quote, an expansion or a backslash')
+	return `bun -e "${source}"`
+}
+
+// The build has no database, so every Postgres-backed test file skips and the run still passes. This command runs the
+// tests as before and then says how many files did not run, so a green test step does not read as a tested database.
+const TESTS_COMMAND = bunEvalCommand([
+	"const child = Bun.spawn([process.execPath, 'test', '--isolate', '--pass-with-no-tests'], { stdout: 'inherit', stderr: 'pipe' });",
+	'const decoder = new TextDecoder();',
+	"let output = '';",
+	'for await (const chunk of child.stderr) { process.stderr.write(chunk); output += decoder.decode(chunk, { stream: true }) }',
+	'const code = await child.exited;',
+	`const marker = '${DATABASE_TEST_SKIP_MARKER}';`,
+	'const skipped = output.split(String.fromCharCode(10)).filter((line) => line.includes(marker)).map((line) => line.slice(0, line.indexOf(marker)).trim());',
+	`const prefix = '${TESTS_REPORT_PREFIX}';`,
+	"console.warn(skipped.length === 0 ? prefix + ' no Postgres-backed test file skipped' : prefix + ' ' + skipped.length + ' Postgres-backed test files did not run, because the build has no database: ' + skipped.join(', '));",
+	'process.exit(code);',
+])
+
 // After every check: a map is uploaded only for a build that can deploy. A failed upload never fails the build; the
 // provider reads the state from the report line.
 const sourceMapUpload = (release: string): string => `cd /tmp && bun x --bun -p @fabrika/check@${release} fabrika-source-maps ${SOURCE_ROOT} || true`
@@ -412,19 +447,21 @@ const sourceMapBuildVariables = (upload: OperationsSourceMapBuildUpload): Record
 /**
  * The generated build commands, in order; the authored SPA commands run before all of them. The application's tests
  * run first: they are authored code, so everything after them is reinstalled, regenerated or checked again. They run
- * `--isolate`, as the application skill runs them: a test file's DOM globals otherwise leak into the next file.
+ * `--isolate`, as the application skill runs them: a test file's DOM globals otherwise leak into the next file. `tsc`
+ * runs before the checker, as in the skill's loop: the usual quick fix of a type error is a cast or an `any`, which only
+ * the checker refuses, so the checker is the last word on the code.
  */
 export function generatedBuildCommands(execution: ZeropsLockedExecution, authoredSpa: readonly string[] = []): readonly string[] {
 	if (!LOCKED_APP_ID_PATTERN.test(execution.appId)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
 	if (!FRAMEWORK_RELEASE_PATTERN.test(execution.checkRelease)) throw new Error('zerops: the checker release must be a release version')
 	return [
 		INSTALL,
-		'bun test --isolate --pass-with-no-tests',
+		TESTS_COMMAND,
 		`rm -rf node_modules && ${INSTALL}`,
 		`bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"`,
-		`cd /tmp && bun x --bun -p @fabrika/check@${execution.checkRelease} fabrika-check ${SOURCE_ROOT}`,
 		writeFileCommand(PLATFORM_TSCONFIG, [PLATFORM_TSCONFIG_CONTENTS]),
 		`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${SOURCE_ROOT}/${PLATFORM_TSCONFIG}`,
+		`cd /tmp && bun x --bun -p @fabrika/check@${execution.checkRelease} fabrika-check ${SOURCE_ROOT}`,
 		...initScripts(execution).map((script) => writeFileCommand(script.path, script.lines)),
 		...(execution.dev === undefined
 			? [writeFileCommand(START_SCRIPT, startScript)]
