@@ -326,7 +326,8 @@ e-mails them, a link holder's files, HR's review with its history.
 
 ## Not built yet
 
-- The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
+- On Cloudflare, where the application runs in one Durable Object over its SQLite and its `db/migrations/*.sql` are
+  SQLite, `sql` (`ctx.sql`) and a file kind with `scan: true` are refused. Everything else on the road runs there.
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job; it
   carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
 - A read across tables (a join, a filter over a related table, an aggregate over several) is off the road (`sql`).

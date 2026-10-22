@@ -363,7 +363,8 @@ export const erase = app.cron('30 2 * * *', {
 ## Malware scan
 
 `scan: true` on a kind holds every file of it `quarantined` until ClamAV answers clean; on Zerops the platform
-installs ClamAV and runs the scan job. A file answer is 409 `file_not_ready` until then and 409 `file_rejected` once
+installs ClamAV and runs the scan job. No scanner runs on Cloudflare: the deploy and the boot refuse a kind with
+`scan: true` there, and so a public procedure with a file field. A file answer is 409 `file_not_ready` until then and 409 `file_rejected` once
 the file is `rejected`; a list shows each file's `status`, so show it rather than a broken link. In a test, the scan runs with
 `kit.runJob(FILE_SCAN_JOB)` and a `scanner` passed to `testKit` (`references/tests.md`); the generated tests pass their
 own seeded files.
@@ -401,7 +402,8 @@ the transaction that deletes the row. The file is never copied; the sweep delete
 ## Storage
 
 On Zerops, declare one `object-storage` service in `fabrika.config.ts`; the platform writes `FABRIKA_APP_STORAGE_*`
-from it. Never read those variables, build a storage URL or import an S3 client.
+from it. Never read those variables, build a storage URL or import an S3 client. On Cloudflare the platform binds the
+environment's R2 bucket itself; declare nothing.
 
 ```text
 // in the services of fabrika.config.ts

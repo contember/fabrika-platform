@@ -44,14 +44,21 @@ SQLite database. The Worker only forwards each request to it.**
    a network hop.
 2. **The invocation transaction is `ctx.storage.transaction`.** `@fabrika/db` runs on a `DatabaseEngine` of its
    dialect; the SQLite engine compiles with a SQLite compiler and opens each transaction through the object's storage.
-   A row lock is not needed: the object serves no other event while a transaction is open. A transaction longer than
-   the platform's limit resets the object, so a handler keeps slow I/O out of its transaction, as it does on Postgres.
+   A row lock is not needed: the object serves no other event while a transaction is open. The handler runs inside the
+   transaction's callback, from its first statement to its commit (`InvocationTransaction.enclose`): while the callback
+   runs, the input gate also holds back the answers to the object's own outgoing I/O made outside it, so a handler
+   awaiting I/O outside the callback would wait for its own transaction to end. A transaction opened inside the callback
+   nests as a savepoint (workerd's `ActorSqlite::ExplicitTxn`) and commits only with the enclosing one. A transaction
+   longer than the platform's limit resets the object, so a handler keeps slow I/O out of its transaction, as it does
+   on Postgres.
 3. **The application's migrations are SQLite and run in the object.** An application on Cloudflare writes its
    migrations in SQLite; the object applies the framework bundle `fabrika` (`@fabrika/db/migrations-sqlite`) and then
    the application's bundle when it boots, in a ledger of its own, before it serves a request. Timestamps are UTC ISO
    text, booleans 0 or 1.
 4. **The object answers only its own Worker.** Every forwarded request carries the environment's proxy secret, which
-   the object verifies, so another Worker on the account that binds the exported class reaches nothing.
+   the object verifies, so another Worker on the account that binds the exported class reaches nothing. Control issues
+   the secret per environment because the provider declares the `ControlProvider.applicationHopSecret` capability; the
+   deploy writes it as a Worker secret.
 5. **Jobs run on the Worker's cron tick.** The provider gives the Worker one `* * * * *` trigger when the contract
    has a job; the object runs each job whose schedule is due that minute, and a kick runs in the object after its
    commit.
@@ -75,6 +82,8 @@ SQLite database. The Worker only forwards each request to it.**
 - An environment's data lives in one location, chosen when the object is first created; moving it is an export and an
   import.
 - Operators read an environment's data in the dashboard's Data Studio; there is no bulk export of an object's SQLite.
+- Local runs and tests need Lopata 0.30 or newer, which implements an object's `storage.transaction` over
+  `bun:sqlite` and nests it as workerd does.
 - Existing Cloudflare applications are stateless and change only in their generated entry; the provider adds the
   object class, its migration and the bucket on their next deploy.
 

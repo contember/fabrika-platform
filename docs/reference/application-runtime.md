@@ -240,14 +240,15 @@ composes. The kit types each handler by its endpoint: a returned field the outpu
 does not give and a write in a query are type errors. `serve` refuses an endpoint, job or webhook without `.handle(…)`.
 `defineDeps(build)` declares dependencies, which `build` makes at each boot from the application's own variables; a
 handler reads them with `get()`. `scoped(tables)` of `@fabrika/db` has no connection, no locator and no handle of its
-own; nothing reaches the database until `boot` binds it. An application without tables (on Cloudflare, which has no
-data layer yet) writes `defineApp(vocabulary)` and `serve(contract, { database: null })`; its handlers have no
+own; nothing reaches the database until `boot` binds it. An application without tables writes `defineApp(vocabulary)` and `serve(contract, { database: null })`; its handlers have no
 `ctx.db`, and its `sql` declaration is a type error. `serve` takes only the object `app.contract` returned: a copy
 loses what the kit keeps beside it (the handlers, whether it has tables) and is refused. The mirrored handler tree of `implement` is the framework's own test entry, not on the application surface.
 
 `fabrika app build` writes `fabrika/entry.generated.ts` for an application with a
 `fabrika.contract.ts`: `serveContract(() => import('../src/app'), process.env)` on
-Zerops, `createContractWorker(() => import('../src/app'))` on Cloudflare. The adapter
+Zerops; on Cloudflare `createContractWorker(() => import('../src/app'), { migrations })` and
+`export { FabrikaApplication }`, with `fabrika/migrations.generated.ts`, which holds every `.sql`
+file of `db/migrations` by name and text ([On Cloudflare](#on-cloudflare)). The adapter
 first takes every `FABRIKA_*` variable out of `process.env` and `Bun.env`, then imports
 the application, so no module of it can copy one through `process.env`. The process's original environment
 block (`/proc/self/environ` on Linux) still holds them. The adapter then calls
@@ -264,7 +265,7 @@ without it), which a Zerops deploy sizes from the database's connection limit
 ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md));
 `boot` binds the layer to it and to its runtime's capability authority, once, and keeps the locator the
 bind answers; the application receives neither. Only an object `scoped` created is bound.
-Without a connection (the data layer runs on Bun with Postgres only, so on Cloudflare),
+Without a connection,
 with a copy or a wrapper of the layer, or with a layer bound before boot, `boot` refuses
 to start. `boot` verifies tokens for the audience
 `FABRIKA_IAM_APP_ID` (`<app>@<env>`, whose application must be the contract's), reads
@@ -292,12 +293,14 @@ membership changes spend the proxy's delegation grant (a share link needs none, 
 Cloudflare). The surface serves no `requestDelegation`.
 
 Where the hop is not a service binding, `boot` also takes the proxy secret
-`FABRIKA_PROXY_SECRET` (ADR-0022 rule 5). The Bun adapter, which serves Zerops, refuses
-to start without one or with one shorter than 32 characters; the Worker adapter needs
-none. Control generates the secret once per application environment and keeps it in its
+`FABRIKA_PROXY_SECRET` (ADR-0022 rule 5). The Bun adapter, which serves Zerops, and the
+Cloudflare object refuse to start without one or with one shorter than 32 characters.
+Control generates the secret once per application environment and keeps it in its
 vault; the Zerops provider writes it to the application service and, under
 `proxySecretVariable('<app>@<env>')`, to the namespace proxy, whose Caddy sends it as
-`X-Fabrika-Proxy-Secret`.
+`X-Fabrika-Proxy-Secret`. The Cloudflare provider declares `applicationHopSecret`, so every
+Cloudflare environment gets one, as a Worker secret of the application Worker, which sends it
+on its hop to the environment's Durable Object.
 
 Per request, in this order:
 
@@ -382,6 +385,36 @@ with no metadata; the server log gets one short line without the error object.
 Every response carries the header policy of ADR-0022, and the proxy sets it again on the way out,
 replacing whatever the application sent (`@fabrika/proxy-core/headers` is the one definition). Both drop a
 report-only CSP, `Report-To`, `Reporting-Endpoints` and `NEL`; the proxy strips every header of a `1xx`.
+
+### On Cloudflare
+
+An application environment on Cloudflare runs in one Durable Object
+([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)). The
+Worker's `fetch` (`createContractWorker`, `packages/app/src/cloudflare.ts`) removes `X-Fabrika-Tick`, sets
+`X-Fabrika-Proxy-Secret` from `FABRIKA_PROXY_SECRET` and forwards the request to the object named `application` of its
+`FABRIKA_APPLICATION` binding; its `scheduled` sends the object the minute tick with the controller's `scheduledTime`.
+
+- **The object** (`FabrikaApplication`, `packages/app/src/cloudflare/application.ts`) answers an empty 404 to a request
+  without the secret or with another, before anything else. Under `blockConcurrencyWhile` it captures the environment,
+  imports the application, applies the framework bundle `fabrika` (`@fabrika/db/migrations-sqlite`) and then the bundle
+  `app` (the application's `db/migrations/*.sql`, written in SQLite) to its SQLite, each migration once, in the ledger
+  `fabrika_migrations` of the same database with the Postgres runner's identity and checksum rule, and boots it. The
+  data layer is `openSqlite` (`@fabrika/db/sqlite`) over `ctx.storage`; the file store is the R2 bucket `FABRIKA_FILES`
+  (`cloudflare/r2-files.ts`). An object instance whose boot failed throws that failure on every request; the failed boot is
+  not kept, so the next instance boots again.
+- **The invocation transaction is `ctx.storage.transaction`.** A request, a public procedure and a webhook delivery run
+  from the handler to the commit inside its callback (`Invocation.enclose`), because while it is open the input gate
+  also holds back the answers to the object's own I/O made outside it. The object serves no other event meanwhile, so
+  the SQLite compiler drops every row lock (`FOR UPDATE`, `FOR SHARE`, `SKIP LOCKED`). Timestamps are UTC ISO text,
+  booleans 0 or 1, and the scoped layer answers the same values as on Postgres.
+- **The minute tick** starts every job due in its UTC minute, the file sweep among them, and the jobs' check, each past
+  the 204 answer. A tick without an integer time is 400.
+- **Refused on SQLite.** `boot` refuses a site that declares `sql` (`ctx.sql` itself refuses with `sql_dialect`): the
+  classifier reads Postgres's grammar, and a Durable Object has no runtime role to bound raw SQL. It refuses a
+  `scan: true` file kind, because no scanner runs on Cloudflare. The Cloudflare deploy refuses both before any effect.
+- `cloudflare-runtime.test.ts` of `packages/app` runs the Worker, the object and the bucket in Lopata
+  (`lopata/testing`); `@fabrika/db`'s `*-sqlite.test.ts` run the framework's statements on `bun:sqlite`
+  (`bunSqliteStorage`, foreign keys on, transactions nested as savepoints, as workerd nests them).
 
 ### The staged kit's data handles (`ctx.db`)
 
@@ -649,7 +682,8 @@ deal_attachments: {
   records its object key in `fabrika_file_deletions` (the foreign key refuses the delete while a reference exists, and
   a write that holds the row `FOR SHARE` makes it wait); then the object is deleted; then the record. A failed sweep
   fails the run (`file_sweep_failed`), and the next run finishes it. The grace counts from the file's creation. On
-  Zerops the crontab runs the sweep when the contract declares a file kind.
+  Zerops the crontab runs the sweep when the contract declares a file kind; on Cloudflare the object runs it on the
+  Worker's minute tick.
 - **Legacy files.** `0008_files.sql` copies the held files of every file collection of framework 0.6 and earlier into
   `fabrika_files` with their ids, marked `legacy`; the old `fabrika_files_<collection>` tables stay. The sweep never
   deletes a legacy file, and drops the marker once a declared column references it. The application adopts the files
@@ -699,7 +733,9 @@ deal_attachments: {
   set stops the boot. On Zerops the platform writes all four into the generated run section as `${<host>_…}`
   references to the application's one `object-storage` service, which must be a bucket the platform created for it. A
   job run (`fabrika job run`) gets ClamAV's `clamscan` from `PATH` as its scanner; on Zerops the build installs it for
-  a contract with a `scan: true` kind (see [Zerops platform](zerops-platform.md)).
+  a contract with a `scan: true` kind (see [Zerops platform](zerops-platform.md)). On Cloudflare the store is the
+  environment's R2 bucket (`FABRIKA_FILES`), and a `scan: true` kind is refused at deploy and at boot: no scanner runs
+  there.
 - A public procedure with a file field also needs `admission.rate.bytesPerHour`, a challenge and scanning kinds
   ([Public procedures](#public-procedures)). `stored-files.test.ts`, `files-handle.test.ts`, `files-removal.test.ts`
   and `file-scan.test.ts` of `packages/app` cover the runtime; `packages/db`'s `stored-files.test.ts` the data layer.
@@ -897,8 +933,8 @@ const stats = app.group({}, (r) => ({
   public action, so a role change cannot widen it. Control issues one key per public procedure of the approved
   contract and writes it as `FABRIKA_PROCEDURE_<ID>_<8 hex of the id's SHA-256>_KEY`, rotated and revoked like a job
   key. `boot` exchanges it at IAM's workload token path, checks `ptype: 'public'` and the workload name, and keeps the
-  token until shortly before it expires. With IAM down and the cached token expired the call is 503. A Cloudflare
-  deploy refuses a workload key.
+  token until shortly before it expires. With IAM down and the cached token expired the call is 503. On Cloudflare the
+  key is a Worker secret.
 - **What the handler gets.** `ctx.principal` is `{ kind: 'public', endpoint }`. `ctx.app('<action>')` and
   `ctx.db.app('<action>')` mint only for a declared action the token carries
   ([The staged kit's data handles](#the-staged-kits-data-handles-ctxdb) says what the handle reaches). `ctx.files` puts
@@ -1145,8 +1181,8 @@ export const app = defineApp(vocabulary, tables, {
   `FABRIKA_TOKEN_KEYS`, the signing key first; `boot` refuses a contract with purposes when it is not set. A token
   carries its key's id. `apps.environments.rotateTokenKey` asks the next deploy of one environment to rotate. A
   retired key keeps verifying until its retirement plus the largest `maxDays` the contract had while it signed, so a
-  400-day unsubscribe link survives a rotation; a key no token can carry any more is deleted. Cloudflare refuses a
-  contract with token purposes, because a Worker variable is plain text.
+  400-day unsubscribe link survives a rotation; a key no token can carry any more is deleted. On Cloudflare
+  `FABRIKA_TOKEN_KEYS` is a Worker secret, never a plain variable.
 - A token is single-purpose and no credential: it opens no mount. Single use and revocation are the application's
   state. The artifact records `tokens` (claims and `maxDays`) and `declared[<site>].signs`; the approval shows a new
   purpose, a lifetime change and a site that starts signing (`signed-tokens.test.ts`).
@@ -1209,8 +1245,10 @@ export const contract = app.contract((c) => ({
 }))
 ```
 
-Each crontab entry runs `fabrika job run <name>` in the application's container
-(Zerops only: the lease lives in the application's Postgres schema). The command boots
+On Cloudflare the Worker's one `* * * * *` cron trigger forwards the minute tick to the environment's Durable Object,
+which starts every job due in that UTC minute and the jobs' check, each past its answer; the leases live in the
+object's SQLite. On Zerops each crontab entry runs `fabrika job run <name>` in the application's container, and the
+lease lives in the application's Postgres schema. The command boots
 the application exactly as `serveContract` does — the framework variables leave the
 process first — and runs one job:
 
@@ -1275,8 +1313,8 @@ key. A job may kick another job (`kicks`, [Kicks](#kicks)), claim the rows of a 
 is not a five-field cron expression, and a missing or undeclared job handler. A webhook
 has a key of principal kind `webhook` the same way (`FABRIKA_WEBHOOK_<NAME>_KEY`), one
 per webhook declaration: its `ctx.refs` exist only when the token carries every declared
-action. A public procedure has one of principal kind `public` ([Public procedures](#public-procedures)). A Cloudflare
-deploy refuses a workload key.
+action. A public procedure has one of principal kind `public` ([Public procedures](#public-procedures)). On
+Cloudflare every workload key is a Worker secret.
 
 ### E-mail from a job
 
@@ -1285,7 +1323,9 @@ A cron job of a kit contract that declares `mailer: 'installation' | 'own'` gets
 `ctx.mail` is an `Unavailable` that names the outbox, and on a job without `mailer` one that names the declaration.
 `mailer` is declared reach (`ContractArtifact.declared['job:<name>'].mailer`), which the runtime reads from the approved
 artifact; the approval diff shows a new `installation` for closer review and a new `own` as a widening. A
-`defineContract` contract cannot declare it, and Cloudflare runs no job, so no application there sends mail.
+`defineContract` contract cannot declare it. On Cloudflare Control holds no installation transport, so a
+`mailer: 'installation'` job there gets `FABRIKA_EMAIL_PROVIDER=none` and every send fails `mail_not_configured`;
+`mailer: 'own'` sends through the application's own sender.
 
 - `ctx.mail.send(message, signal?)` takes `{ to, subject, text, html?, idempotencyKey, replyTo?, fromName? }` and
   answers `{ status: 'accepted', provider, messageId }`. It aborts with the attempt's `ctx.signal` and with `signal`,
@@ -1488,9 +1528,11 @@ request behavior:
 - `@fabrika/app/cloudflare` exports `createCloudflareWorker()`. It builds a
   Worker-shaped `{ fetch, scheduled?, queue? }` module from a `FetchService`.
   Minimal structural types for the execution context, cron, and queues remain in
-  this entrypoint. `createContractWorker()` boots a contract application with the
-  first request's environment, verifying tokens through the `IAM` binding and serving
-  the SPA from `ASSETS`.
+  this entrypoint. `createContractWorker()` is the Worker of a contract application: its
+  `fetch` forwards every request to the environment's Durable Object, `FabrikaApplication`,
+  with the proxy secret, and its `scheduled` forwards the minute tick. The object boots the
+  application with its environment, verifying tokens through the `IAM` binding and serving
+  the SPA from `ASSETS` ([On Cloudflare](#on-cloudflare)).
 - `@fabrika/app/bun` exports `createBunHandler()`. It binds one `FetchService` to
   its process dependencies and returns `fetch()` plus `drain()`. It tracks every
   `waitUntil()` promise, reports rejected background tasks through a required
@@ -1883,6 +1925,10 @@ removes it from an environment without one), and `FABRIKA_TOKEN_KEYS`, the envir
 unless the approved contract declares a token purpose. Each workload of the approved contract gets its key: a job
 `FABRIKA_JOB_<NAME>_KEY`, a webhook `FABRIKA_WEBHOOK_<NAME>_KEY` and a public procedure
 `FABRIKA_PROCEDURE_<ID>_<8 hex>_KEY`.
+
+On Cloudflare the identities, origins and the release (`isPublicManagedVariable`, `provider-cloudflare/src/managed-secrets.ts`)
+are Worker vars, and every other managed value, `FABRIKA_PROXY_SECRET` among them, is a Worker secret uploaded with the
+version (`wrangler deploy --secrets-file`). The deploy then deletes the framework secrets it no longer writes.
 
 A name whose value the installation cannot supply is REMOVED from the service rather than left stale —
 an app verifying against a previous installation's issuer is worse than one that fails to boot.

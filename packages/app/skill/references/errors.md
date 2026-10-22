@@ -99,11 +99,11 @@ A 500 answers a fixed message; the server log has one line, `fabrika: <endpoint>
 fixed failure code and, for a framework refusal, its reason and the reason's fixed text, never a value or your error's
 message. The codes you meet most:
 
-| Code                 | Means                                                                                                                                                                                 |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction` …; the reason's text names the rule |
-| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), or one kept past its request (`ended`, `foreign_work`)    |
-| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                       |
+| Code                 | Means                                                                                                                                                                                                                                  |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_dialect` (`ctx.sql` on SQLite, Cloudflare) …; the reason's text names the rule |
+| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), or one kept past its request (`ended`, `foreign_work`)                                                     |
+| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                                                                        |
 
 With an Operations DSN the same 500 is a `RequestFailed` issue in Operations. Its event also carries what your handler
 threw: the error's type, its message, its stack and its `cause` chain. Read the stack there, not in the log. A crash

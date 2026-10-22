@@ -424,6 +424,25 @@ Worker in that graph, deploys each config, and targets application migrations,
 managed variables, and secrets at the child Worker. The proxy embeds only its
 manifest and service bindings; application secrets stay on the child.
 
+The proxy's manifest is baked into its bundle: the generated config's wrangler
+`define` replaces `__FABRIKA_PROXY_MANIFEST__` (`PROXY_MANIFEST_DEFINE`,
+`src/proxy.ts`) with the manifest as a string literal, because a Worker variable
+holds at most 5,120 bytes ([Cloudflare platform](cloudflare-platform.md)). The
+checks refuse a proxy config whose `define` is anything but that one manifest.
+
+A contract application runs in one Durable Object per environment
+([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)).
+The deployer writes into its Worker, and the application may author none of:
+`FABRIKA_APPLICATION`, bound to its own `FabrikaApplication` class under the fixed
+migration `v0001` (`new_sqlite_classes`); `FABRIKA_FILES`, bound to the R2 bucket
+`<env>-<app>-files`; and a `* * * * *` cron trigger when the contract declares a
+job, a file collection or a file kind. A config that binds either name or sets
+`triggers` is refused, and so is a contract with a `scan: true` file kind or
+collection or a site that declares `sql`. The public managed values are vars;
+every other managed value is a Worker secret, uploaded with the version
+(`wrangler deploy --secrets-file`), and after the deploy the provider deletes the
+framework secrets the deploy no longer writes.
+
 The public command exposes:
 
 ```text

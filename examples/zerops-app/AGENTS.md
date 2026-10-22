@@ -318,7 +318,8 @@ e-mails them, a link holder's files, HR's review with its history.
 
 ## Not built yet
 
-- The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
+- On Cloudflare, where the application runs in one Durable Object over its SQLite and its `db/migrations/*.sql` are
+  SQLite, `sql` (`ctx.sql`) and a file kind with `scan: true` are refused. Everything else on the road runs there.
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job; it
   carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
 - A read across tables (a join, a filter over a related table, an aggregate over several) is off the road (`sql`).
@@ -1478,7 +1479,7 @@ export const app = defineApp(vocabulary, tables, {
 - A public procedure updates or removes a row only by an id a verified token of its request carries, with
   `expectVersion`.
 - Single use and revocation are your state (a row the token names). The keys are the platform's: Control generates
-  and rotates them, and an old key verifies until its last token expires. Cloudflare has no signed tokens.
+  and rotates them, and an old key verifies until its last token expires.
 
 ## Outside calls: `egress`
 
@@ -1725,11 +1726,11 @@ A 500 answers a fixed message; the server log has one line, `fabrika: <endpoint>
 fixed failure code and, for a framework refusal, its reason and the reason's fixed text, never a value or your error's
 message. The codes you meet most:
 
-| Code                 | Means                                                                                                                                                                                 |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction` …; the reason's text names the rule |
-| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), or one kept past its request (`ended`, `foreign_work`)    |
-| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                       |
+| Code                 | Means                                                                                                                                                                                                                                  |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_dialect` (`ctx.sql` on SQLite, Cloudflare) …; the reason's text names the rule |
+| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), or one kept past its request (`ended`, `foreign_work`)                                                     |
+| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                                                                        |
 
 With an Operations DSN the same 500 is a `RequestFailed` issue in Operations. Its event also carries what your handler
 threw: the error's type, its message, its stack and its `cause` chain. Read the stack there, not in the log. A crash
@@ -2118,7 +2119,8 @@ export const erase = app.cron('30 2 * * *', {
 ## Malware scan
 
 `scan: true` on a kind holds every file of it `quarantined` until ClamAV answers clean; on Zerops the platform
-installs ClamAV and runs the scan job. A file answer is 409 `file_not_ready` until then and 409 `file_rejected` once
+installs ClamAV and runs the scan job. No scanner runs on Cloudflare: the deploy and the boot refuse a kind with
+`scan: true` there, and so a public procedure with a file field. A file answer is 409 `file_not_ready` until then and 409 `file_rejected` once
 the file is `rejected`; a list shows each file's `status`, so show it rather than a broken link. In a test, the scan runs with
 `kit.runJob(FILE_SCAN_JOB)` and a `scanner` passed to `testKit` (`references/tests.md`); the generated tests pass their
 own seeded files.
@@ -2156,7 +2158,8 @@ the transaction that deletes the row. The file is never copied; the sweep delete
 ## Storage
 
 On Zerops, declare one `object-storage` service in `fabrika.config.ts`; the platform writes `FABRIKA_APP_STORAGE_*`
-from it. Never read those variables, build a storage URL or import an S3 client.
+from it. Never read those variables, build a storage URL or import an S3 client. On Cloudflare the platform binds the
+environment's R2 bucket itself; declare nothing.
 
 ```text
 // in the services of fabrika.config.ts
