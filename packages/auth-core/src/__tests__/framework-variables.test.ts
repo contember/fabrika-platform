@@ -102,9 +102,10 @@ describe('framework-only variable names', () => {
 	})
 
 	test("name a platform receiver's address and key, and reserve the whole family", () => {
-		expect(PLATFORM_RECEIVERS).toEqual(['mail'])
+		expect(PLATFORM_RECEIVERS).toEqual(['mail', 'source'])
 		expect(platformTransportVariables('mail')).toEqual({ url: 'FABRIKA_PLATFORM_MAIL_URL', key: 'FABRIKA_PLATFORM_MAIL_KEY' })
-		for (const name of Object.values(platformTransportVariables('mail'))) {
+		expect(platformTransportVariables('source')).toEqual({ url: 'FABRIKA_PLATFORM_SOURCE_URL', key: 'FABRIKA_PLATFORM_SOURCE_KEY' })
+		for (const name of PLATFORM_RECEIVERS.flatMap((receiver) => Object.values(platformTransportVariables(receiver)))) {
 			expect(isPlatformTransportVariable(name)).toBe(true)
 			expect(isFrameworkVariableName(name)).toBe(true)
 			expect(isWorkloadKeyVariable(name)).toBe(false)

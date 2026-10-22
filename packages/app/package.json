@@ -82,6 +82,16 @@
 			"types": "./src/testing/preload.ts",
 			"default": "./src/testing/preload.ts"
 		},
+		"./dev": {
+			"bun": "./src/dev/index.ts",
+			"types": "./src/dev/index.ts",
+			"default": "./src/dev/index.ts"
+		},
+		"./dev/wire": {
+			"bun": "./src/dev/wire.ts",
+			"types": "./src/dev/wire.ts",
+			"default": "./src/dev/wire.ts"
+		},
 		"./agent-skill": {
 			"bun": "./src/agent-skill.ts",
 			"types": "./src/agent-skill.ts",
