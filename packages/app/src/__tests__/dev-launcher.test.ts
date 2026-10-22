@@ -1,14 +1,16 @@
 // The launcher of a dev environment against a stub of Control's source receiver: a handler change serves within a
-// second, a lockfile or contract change is refused with its reason, a boot reconciles before it serves, and (with
+// second, a lockfile change or a change of the contract digest is refused with its reason, a boot reconciles before it serves, and (with
 // FABRIKA_TEST_POSTGRES_URL) a migration change migrates and respawns, and a reset starts the schema from scratch.
 
-import { DEV_LAUNCHER_STATE_FILE, type DevLauncherConfig } from '@fabrika/auth-core'
+import { contractDigest, DEV_LAUNCHER_STATE_FILE, type DevLauncherConfig } from '@fabrika/auth-core'
 import { dropApplicationDatabase } from '@fabrika/platform-node'
 import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { CONTRACT_FILE, IMPLEMENTATION_FILE } from '../build.js'
+import { compileContract } from '../contract/compile.js'
 import { type DevLauncher, startDevLauncher } from '../dev/launcher.js'
 import { type OutputSink } from '../dev/output.js'
 import {
@@ -20,6 +22,7 @@ import {
 	parseDevReport,
 	parseDevWaitRequest,
 } from '../dev/wire.js'
+import { isContractImplementation } from '../implement/implement.js'
 
 setDefaultTimeout(60_000)
 
@@ -200,13 +203,28 @@ async function writeTree(root: string, files: Record<string, string>): Promise<v
 	}
 }
 
-async function fixture(options: { controlHead?: string; database?: { appId: string; url: string } } = {}): Promise<Fixture> {
-	const root = mkdtempSync(join(tmpdir(), 'fabrika-dev-launcher-'))
+const EXAMPLE_APP = join(import.meta.dir, '..', '..', '..', '..', 'examples', 'app')
+
+/** The digest the example application's boot computes, as the deploy writes it to `FABRIKA_CONTRACT_DIGEST`. */
+async function exampleDigest(root: string): Promise<string> {
+	const module: unknown = await import(join(root, IMPLEMENTATION_FILE))
+	const app = typeof module === 'object' && module !== null ? Reflect.get(module, 'default') : undefined
+	if (!isContractImplementation(app)) throw new Error('the example application does not default-export serve(…)')
+	return contractDigest(compileContract(app.contract, app.database?.tables ?? {}))
+}
+
+async function fixture(options: { controlHead?: string; contractApp?: boolean } = {}): Promise<Fixture> {
+	// The example application's sources need its `node_modules`, so that fixture lives inside it.
+	const root = options.contractApp === true
+		? mkdtempSync(join(EXAMPLE_APP, '.dev-launcher-'))
+		: mkdtempSync(join(tmpdir(), 'fabrika-dev-launcher-'))
+	if (options.contractApp === true) {
+		await cp(join(EXAMPLE_APP, 'src'), join(root, 'src'), { recursive: true })
+		await cp(join(EXAMPLE_APP, CONTRACT_FILE), join(root, CONTRACT_FILE))
+	}
 	await writeTree(root, {
 		'package.json': '{ "name": "dev-fixture" }',
 		'bun.lock': 'lockfile one',
-		'fabrika.contract.ts': "import { tables } from './src/db/tables'\nexport const contract = { tables }\n",
-		'src/db/tables.ts': 'export const tables = {}\n',
 		'src/server.ts': SERVER,
 		'src/message.ts': "export const message = 'one'\n",
 		'db/migrations/20260101000000_notes.sql': 'CREATE TABLE notes (id integer PRIMARY KEY);\n',
@@ -217,7 +235,7 @@ async function fixture(options: { controlHead?: string; database?: { appId: stri
 	return value
 }
 
-function start(value: Fixture, database?: { appId: string; url: string }): DevLauncher {
+function start(value: Fixture, database?: { appId: string; url: string }, deployedDigest?: string): DevLauncher {
 	const config: DevLauncherConfig = {
 		format: 1,
 		appId: database?.appId ?? 'devfixture',
@@ -236,6 +254,7 @@ function start(value: Fixture, database?: { appId: string; url: string }): DevLa
 		PORT: String(value.port),
 		FABRIKA_PLATFORM_SOURCE_URL: value.control.url,
 		FABRIKA_PLATFORM_SOURCE_KEY: KEY,
+		...(deployedDigest === undefined ? {} : { FABRIKA_CONTRACT_DIGEST: deployedDigest }),
 		...(database === undefined
 			? {}
 			: { FABRIKA_APP_DATABASE_URL: database.url, SCHEMA: `app_${database.appId.replaceAll('-', '_')}` }),
@@ -288,12 +307,28 @@ describe('the dev launcher', () => {
 		expect(await get(value)).toBe('one')
 	})
 
-	test('a change of a module the contract imports is refused', async () => {
-		const value = await fixture()
-		await start(value).ready
+	test('an edit of a handler syncs, and an edit that changes the contract digest is refused and rolled back', async () => {
+		const value = await fixture({ contractApp: true })
+		await start(value, undefined, await exampleDigest(value.root)).ready
+		const endpoints = 'src/access/endpoints.ts'
+		const original = readFileSync(join(value.root, endpoints), 'utf8')
+		const reworded = original.replace('label: ctx.principal.label', 'label: `${ctx.principal.label}!`')
+		expect(reworded).not.toBe(original)
+
+		const serving = value.control.nextReport((report) => report.status === 'serving' && report.head === sha(2))
+		value.control.commit(sha(2), { [endpoints]: reworded, 'src/message.ts': "export const message = 'two'\n" })
+		expect((await serving).message).toBeNull()
+		expect(await get(value)).toBe('two')
+
+		const widened = reworded.replace('access: { member: true }', "access: { action: 'example.read', over: 'project' }")
 		const refused = value.control.nextReport((report) => report.status === 'needs_bootstrap')
-		value.control.commit(sha(2), { 'src/db/tables.ts': 'export const tables = { notes: {} }\n' })
-		expect((await refused).message).toContain('src/db/tables.ts changed, which is the contract or a module it imports')
+		value.control.commit(sha(3), { [endpoints]: widened })
+		const report = await refused
+		expect(report.message).toContain('the change alters the contract')
+		expect(report.message).toContain('bind_dev')
+		expect(report.head).toBe(sha(2))
+		expect(readFileSync(join(value.root, endpoints), 'utf8')).toBe(reworded)
+		expect(await get(value)).toBe('two')
 	})
 
 	test('a boot reconciles to the recorded head before it serves', async () => {
