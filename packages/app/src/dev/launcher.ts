@@ -4,14 +4,20 @@
 // files, which it writes, then it migrates when `db/migrations/` changed, runs the SPA commands when a web source
 // changed, and respawns the application. A change the build owns is refused with one line: it needs a bootstrap run.
 
-import { DEV_LAUNCHER_CONFIG_FILE, DEV_LAUNCHER_STATE_FILE, type DevLauncherConfig, platformTransportVariables } from '@fabrika/auth-core'
+import {
+	DEV_LAUNCHER_CONFIG_FILE,
+	DEV_LAUNCHER_STATE_FILE,
+	type DevLauncherConfig,
+	FABRIKA_CONTRACT_DIGEST,
+	platformTransportVariables,
+} from '@fabrika/auth-core'
 import { applicationRuntimeUrl, dropApplicationDatabase } from '@fabrika/platform-node'
-import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { z } from 'zod/v4'
 import { makeProcessUndumpable } from '../undumpable.js'
-import { bootstrapReason, migrationsChanged, type SourceReader, webSourceChanged } from './changes.js'
+import { bootstrapReason, migrationsChanged, webSourceChanged } from './changes.js'
 import { OutputRing, type OutputSink, processOutput, readLines } from './output.js'
 import {
 	DEV_SOURCE_REPORT_PATH,
@@ -41,6 +47,9 @@ const STOP_GRACE_MS = 3_000
 const CHECK_TIMEOUT_MS = 10 * 60_000
 const CRASH_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000] as const
 const FORWARDED_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const
+const DIGEST_TIMEOUT_MS = 60_000
+const CONTRACT_DIGEST = /^sha256:[0-9a-f]{64}$/
+const CONTRACT_DIGEST_CHILD = fileURLToPath(new URL('./contract-digest.ts', import.meta.url))
 
 const commitSha = z.string().regex(/^[0-9a-f]{40}$/)
 /** A literal path of unreserved characters, as the provider's readiness probe requests it. */
@@ -318,12 +327,12 @@ class Launcher {
 		// A migration's ALTER would queue behind the live version's locks, and a reset drops the role it connects as.
 		if (this.provisioningUrl !== null && steps.migrate) await this.stopApplication()
 		if (steps.reset) {
-			failure = await this.resetDatabase()
+			failure = await this.timed('the reset', () => this.resetDatabase())
 			this.state = { ...this.state, reset: steps.resetTo }
 		}
-		if (failure === null && steps.migrate) failure = await this.migrate()
-		if (failure === null && steps.web) failure = await this.buildSpa()
-		const served = await this.restartApplication()
+		if (failure === null && steps.migrate) failure = await this.timed('the migration', () => this.migrate())
+		if (failure === null && steps.web) failure = await this.timed('the SPA build', () => this.buildSpa())
+		const served = await this.timed('the restart until healthy', () => this.restartApplication())
 		failure ??= served
 		this.status = failure === null ? 'serving' : 'failed'
 		this.target = null
@@ -332,17 +341,37 @@ class Launcher {
 		await this.report()
 	}
 
+	/** Run one step of a sync and log how long it took: what a slow `apply_changes` is read from. */
+	private async timed(step: string, run: () => Promise<string | null>): Promise<string | null> {
+		const started = performance.now()
+		const failure = await run()
+		this.say(`${step} ${failure === null ? 'took' : 'failed after'} ${Math.round(performance.now() - started)} ms`)
+		return failure
+	}
+
 	private async writeSync(sync: DevSync): Promise<SyncOutcome> {
 		if (sync.from !== this.state.head) {
 			return { kind: 'refused', reason: `Control sent changes from ${sync.from}, and this container holds ${this.state.head}; call bind_dev again` }
 		}
 		const paths = sync.files.map((file) => file.path)
-		const incoming = new Map(sync.files.map((file) => [file.path, file.content]))
-		const before: SourceReader = (path) => this.readLocal(path)
-		const after: SourceReader = (path) => incoming.has(path) ? incoming.get(path) ?? null : this.readLocal(path)
-		const reason = bootstrapReason(paths, before, after)
+		const reason = bootstrapReason(paths)
 		if (reason !== null) return { kind: 'refused', reason }
-		for (const file of sync.files) {
+		const previous = await Promise.all(
+			sync.files.map(async (file) => ({ path: file.path, content: await readFile(join(this.root, file.path)).catch(() => null) })),
+		)
+		await this.writeFiles(sync.files)
+		const changedContract = await this.contractChange()
+		if (changedContract !== null) {
+			await this.writeFiles(previous)
+			return { kind: 'refused', reason: changedContract }
+		}
+		this.state = { ...this.state, head: sync.to }
+		this.say(`synced ${sync.files.length} files to ${sync.to}`)
+		return { kind: 'applied', migrations: migrationsChanged(paths), web: this.config.spaBuild.length > 0 && webSourceChanged(paths) }
+	}
+
+	private async writeFiles(files: readonly { readonly path: string; readonly content: string | Uint8Array | null }[]): Promise<void> {
+		for (const file of files) {
 			const path = join(this.root, file.path)
 			if (file.content === null) {
 				await rm(path, { force: true })
@@ -352,19 +381,37 @@ class Launcher {
 			await writeFile(`${path}.fabrika-dev`, file.content)
 			await rename(`${path}.fabrika-dev`, path)
 		}
-		this.state = { ...this.state, head: sync.to }
-		this.say(`synced ${sync.files.length} files to ${sync.to}`)
-		return { kind: 'applied', migrations: migrationsChanged(paths), web: this.config.spaBuild.length > 0 && webSourceChanged(paths) }
 	}
 
-	private readLocal(path: string): string | null {
-		const absolute = join(this.root, path)
-		if (!existsSync(absolute)) return null
-		try {
-			return readFileSync(absolute, 'utf8')
-		} catch {
+	/**
+	 * Why the files on disk need a bootstrap run because their contract digest is not the one the bootstrap run deployed,
+	 * or null. A child computes it: it loads the application module, which the launcher never does, with no credential.
+	 * A digest it cannot compute is no reason: the respawned application then fails to boot and reports why.
+	 */
+	private async contractChange(): Promise<string | null> {
+		const deployed = this.options.environment[FABRIKA_CONTRACT_DIGEST] ?? ''
+		if (deployed === '') return null
+		const started = performance.now()
+		const child = Bun.spawn(['bun', CONTRACT_DIGEST_CHILD], {
+			cwd: this.root,
+			env: { PATH: this.options.environment['PATH'] ?? '', HOME: this.options.environment['HOME'] ?? '' },
+			stdin: 'ignore',
+			stdout: 'pipe',
+			stderr: 'pipe',
+		})
+		const timer = setTimeout(() => child.kill('SIGKILL'), DIGEST_TIMEOUT_MS)
+		const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+		clearTimeout(timer)
+		const digest = stdout.trim()
+		if (child.exitCode !== 0 || !CONTRACT_DIGEST.test(digest)) {
+			for (const line of stderr.split('\n').filter((text) => text.trim() !== '').slice(-5)) this.ring.push('stderr', line)
+			this.say('the contract digest could not be computed; the application is respawned and reports why', 'stderr')
 			return null
 		}
+		this.say(`contract digest computed in ${Math.round(performance.now() - started)} ms`)
+		if (digest === deployed) return null
+		return `the change alters the contract (its digest is ${digest}, and the bootstrap run deployed ${deployed}): the proxy table and `
+			+ 'the approval follow the contract, so that needs a bootstrap run: call bind_dev again'
 	}
 
 	private async persist(): Promise<void> {
@@ -421,7 +468,7 @@ class Launcher {
 				output: result.lines.slice(-CHECK_OUTPUT_LINES).map((line) => line.slice(0, 2_000)),
 			})
 		}
-		this.checkResults = { request, results }
+		this.checkResults = { request, head: this.state.head, results }
 		this.state = { ...this.state, checks: request }
 		this.status = before.status
 		this.message = before.message
