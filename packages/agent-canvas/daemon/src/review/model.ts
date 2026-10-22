@@ -25,12 +25,13 @@ export function isLoopbackOrigin(origin: string): boolean {
 const shortText = z.string().max(500)
 
 export const MAX_HTML = 4000
+export const MAX_SOURCE_FILE = 1000
 
 /** A position in the application's source, resolved from a development stack through the page's source maps. */
 export const reviewSourceSchema = z.object({
 	/** What was created there, e.g. `<a> in ProductListCell` or `<ProductListCell> in DataGrid`. */
 	label: shortText,
-	file: z.string().max(1000),
+	file: z.string().max(MAX_SOURCE_FILE),
 	line: z.number().int().positive(),
 	column: z.number().int().nonnegative(),
 })

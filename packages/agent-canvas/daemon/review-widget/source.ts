@@ -1,5 +1,5 @@
 import { originalPositionFor, TraceMap } from '@jridgewell/trace-mapping'
-import type { ReviewSource } from '../src/review/model'
+import { MAX_SOURCE_FILE, type ReviewSource } from '../src/review/model'
 
 /** A frame of a development stack, still in the bundle the page loaded. */
 export interface BundleFrame {
@@ -19,9 +19,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null
 }
 
+/** React Refresh assigns an anonymous component to `_c`, `_c2`, …, which then becomes its name. */
+const REFRESH_TEMPORARY = /^_c\d*$/
+
 function nameOf(type: unknown): string | undefined {
 	if (typeof type === 'string') return type
-	if (typeof type === 'function') return type.name === '' ? undefined : type.name.replace(/(?<=[a-z])\d+$/, '')
+	if (typeof type === 'function') {
+		return type.name === '' || REFRESH_TEMPORARY.test(type.name) ? undefined : type.name.replace(/(?<=[a-z])\d+$/, '')
+	}
 	if (isRecord(type)) return nameOf(type['type']) ?? nameOf(type['render'])
 	return undefined
 }
@@ -70,7 +75,17 @@ async function loadTraceMap(scriptUrl: string): Promise<TraceMap | null> {
 	const mapUrl = new URL(reference, scriptUrl).href
 	const map: unknown = await fetch(mapUrl).then((response) => response.json())
 	if (!isRecord(map) || map['version'] !== 3) return null
-	return new TraceMap(JSON.stringify(map), mapUrl)
+	return new TraceMap(JSON.stringify(map), sourcesBase(map, mapUrl, scriptUrl))
+}
+
+/**
+ * The URL a map's relative `sources` resolve against. An inline `data:` map has no location of its own: Vite names
+ * the module's absolute path in `file`; otherwise the sources sit next to the script.
+ */
+function sourcesBase(map: Record<string, unknown>, mapUrl: string, scriptUrl: string): string {
+	if (!mapUrl.startsWith('data:')) return mapUrl
+	const file = map['file']
+	return typeof file === 'string' && file.startsWith('/') ? new URL(file, 'file:///').href : scriptUrl
 }
 
 function traceMapFor(scriptUrl: string): Promise<TraceMap | null> {
@@ -82,8 +97,15 @@ function traceMapFor(scriptUrl: string): Promise<TraceMap | null> {
 	return map
 }
 
-function sourcePath(source: string): string {
-	return source.startsWith('file://') ? decodeURIComponent(new URL(source).pathname) : source
+/** A file path when the map names one; a source on the dev server becomes its path from the server's root. */
+function sourcePath(source: string, scriptUrl: string): string {
+	if (!URL.canParse(source)) return source
+	const url = new URL(source)
+	if (url.protocol === 'file:') return decodeURIComponent(url.pathname)
+	if (url.origin !== new URL(scriptUrl).origin) return source
+	const path = decodeURIComponent(url.pathname)
+	// Vite serves files outside its root under `/@fs/<absolute path>`.
+	return path.startsWith('/@fs/') ? path.slice('/@fs'.length) : path.slice(1)
 }
 
 async function resolveFrame(frame: BundleFrame): Promise<ReviewSource | null> {
@@ -92,7 +114,10 @@ async function resolveFrame(frame: BundleFrame): Promise<ReviewSource | null> {
 	// Stack columns count from 1, source map columns from 0.
 	const position = originalPositionFor(map, { line: frame.line, column: frame.column - 1 })
 	if (position.source === null || position.line === null) return null
-	return { label: frame.label, file: sourcePath(position.source), line: position.line, column: position.column + 1 }
+	const file = sourcePath(position.source, frame.url)
+	// One unusable source must not fail the whole thread against the schema.
+	if (file.length > MAX_SOURCE_FILE) return null
+	return { label: frame.label, file, line: position.line, column: position.column + 1 }
 }
 
 /** Source positions of the frames, through the bundles' source maps; frames a map does not cover are left out. */

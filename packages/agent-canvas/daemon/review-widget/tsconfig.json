@@ -12,5 +12,6 @@
 		"noEmit": true,
 		"types": []
 	},
-	"include": ["**/*.ts", "**/*.tsx", "../src/review/model.ts"]
+	"include": ["**/*.ts", "**/*.tsx", "../src/review/model.ts"],
+	"exclude": ["**/*.test.ts"]
 }
