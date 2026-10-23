@@ -82,7 +82,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [191](191-the-audit-log-cannot-leave-out-admin-reads.md): `audit.list` cannot leave out admin reads, so the console pages past them in the browser.
 - [192](192-a-signed-in-person-cannot-manage-their-own-account.md): No self-service password change or sign-in list; an IAM account page, after rewriting ADR-0020.
 - [193](193-loose-ends-of-the-declared-surface.md): The approval of an upgrade to 0.7, admission buckets, tokens on Cloudflare and other P2s of the surface revision.
-- [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: a claim before the dispatcher sends (two double-send paths), maintenance and console edges, the sender's error mapping, expired keys' vault values.
+- [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: a claim before the dispatcher sends (two double-send paths), maintenance and console edges, the sender's error mapping, expired keys' vault values, no final-failure answer to IAM or an application.
 - [197](197-local-compat-has-no-0.7-release.md): `local:compat` deploys no Notes at v0.7.0: its proof needs a release without a file collection.
 - [198](198-an-in-container-env-write-may-reach-another-services-credentials.md): Measure whether `zsc` can write a `${host_KEY}` reference that Zerops resolves; if so, a `cheap` namespace's superuser is reachable by its applications.
 - [199](199-operations-keeps-every-event-forever.md): Operations prunes nothing; a retention window for occurrences, dead events, observations and raw bodies.
@@ -99,4 +99,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [210](210-platform-review-fix-follow-ups.md): Eleven P3s the reviews of the platform review's fixes left: cost default, console buttons, device bucket, test gaps, run trigger.
 - [211](211-zerops-preset-review-follow-ups.md): Minor findings of the Zerops presets review: adoption refusal on republish/update, the backup live row, restore history, hourly on `standard`, the admin hop's request id.
 - [212](212-the-console-shows-no-database-backups.md): The console shows no database backups; a provider-owned read of each database's schedule, newest and oldest restore point.
+- [217](217-postmark-managed-unsubscribes-never-reach-the-application.md): An unsubscribe through Postmark's own link or footer reaches only Postmark; the application's consent records drift.
+- [218](218-the-skill-names-no-working-one-click-unsubscribe-target.md): The skill's unsubscribe procedure is POST JSON, which refuses a mailbox's RFC 8058 one-click POST.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

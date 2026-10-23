@@ -398,12 +398,15 @@ none, and `install` cannot be re-run.
 2. Restart `iam` and `control`. Each reads the transport at boot. IAM refuses to start on an invalid one.
    Control starts, logs a line that names the invalid variables, and refuses every deploy that needs the transport
    until you fix them and restart it.
-3. Redeploy every environment whose contract uses `installation` mail. An application gets the new transport
-   only at its next deploy. Until then it sends with the old one, and a revoked key fails its mail with
-   `provider_unauthorized`.
+3. Redeploy every environment whose contract uses `installation` mail and whose application pins a framework release
+   older than 0.7. Such an application holds its own copy of the transport and gets the new one only at its next
+   deploy. Until then it sends with the old one, and a revoked key fails its mail with `provider_unauthorized`. An
+   application on 0.7 or newer sends through Control's relay, which uses the new transport once step 2 restarted
+   Control: it needs no redeploy.
 
-Without a transport, a contract whose job declares `mailer: 'installation'` still deploys. Its jobs see that mail is
-not available and leave their messages queued. After step 3 the next run sends them.
+Without a transport, a contract whose job declares `mailer: 'installation'` still deploys. On a release older than 0.7
+its jobs see that mail is not available and leave their messages queued, and after step 3 the next run sends them. On
+0.7 or newer the relay accepts and holds the messages, and Control sends them once it has a transport.
 
 ## When something fails
 

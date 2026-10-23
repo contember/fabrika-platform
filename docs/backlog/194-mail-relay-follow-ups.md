@@ -74,6 +74,15 @@ blocked-by: []
     when the dispatcher later ends the message `failed` or `unknown`, IAM does not offer the manual link. Only Control's
     Mail page shows it.
 
+### Applications over the relay
+
+27. **An application learns nothing of a final failure either.** `PlatformEmailSender.send` (`packages/email/src/platform.ts`)
+    returns `accepted` with the relay's message id, and the relay has no read of that message's later state, so a job
+    records the message as sent. When the dispatcher ends it `failed` or `unknown`, only Control's Mail page shows it.
+    Seen in the Schrack CRM on Postmark: a recipient who unsubscribed through Postmark's footer has the next broadcast
+    refused (406, `provider_rejected`), and the CRM still shows it as sent. A fix for item 19 should serve both senders:
+    a status read by message id under the sender's own key, or a callback, not an IAM-only path.
+
 ### Upgrade, keys and senders
 
 21. **IAM has no fallback while the relay refuses.** IAM moves to the relay with the `zerops.yaml` that gives it
