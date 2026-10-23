@@ -13,7 +13,9 @@ unless marked, size S.
 
 1. **An orphan R2 object.** On SQLite a file's pending row is written in the invocation's transaction, so only the
    work's memory knows its object until the commit; a known rollback deletes it (`FileWork.wrote`). An object reset
-   between the R2 write and the commit loses that memory and leaves an object with no `fabrika_files` row.
+   between the R2 write and the commit loses that memory and leaves an object with no `fabrika_files` row. So does a
+   failed COMMIT: `dispatch.ts` treats it as an uncertain outcome and releases nothing, though on SQLite it is a known
+   rollback.
 2. **`ilike` on non-ASCII text.** SQLite's `like` folds ASCII case only, so `ilike` on SQLite misses `Č`/`č`.
 3. **An existing Worker with its own Durable Object tag.** The provider writes its migration tag; a Worker whose
    config already used that tag fails with 10074.
@@ -48,13 +50,26 @@ unless marked, size S.
     manifest. Both are Lopata fixes. So is a third: `lopata/testing` replaces the global `Request` with one that keeps
     the source request's headers when `new Request(request, { headers })` passes others, which broke the proxy tests run
     after it in one process; `bun run test` runs the Lopata suites in `test:lopata`, isolated, until Lopata is fixed.
+15. **A job's transaction has no cap.** `CLOUDFLARE_MAX_HANDLER_MS` bounds procedures and webhooks, but a job's
+    `timeoutMs` reaches 24 h, and its `ctx.transaction` holds the object's transaction like a handler does; one past
+    about 30 s resets the object and every invocation in it.
+16. **The minute tick for collections only.** `needsMinuteTick` (`packages/provider-cloudflare/src/contract-support.ts`)
+    counts the legacy `contract.files` collections, whose sweep `dueJobsOf` never schedules, so such an application is
+    woken every minute for nothing.
+17. **A job whose cron does not parse is dropped from the tick** (`dueJobsOf`) without an error; the boot should refuse
+    it.
+18. **An R2 read ignores a signal fired after it began** (`packages/app/src/cloudflare/r2-files.ts`): the `get` and its
+    body are not cancelled, unlike the `FileObjectStore` port's promise.
+19. **`bunSqliteStorage` runs a statement outside a transaction at once**, inside another task's open transaction,
+    where workerd holds it until that transaction ends; tests on it can pass or fail on an interleaving production does
+    not have.
 
 ## Approach / acceptance
 
 1. The sweep lists the bucket's keys and deletes an object past the pending grace that no row names. 2. Document it,
    or fold with a registered function. 3. Detect the tag and refuse with a message. 4–6. Deduplicate. 7. Document it;
    open the transaction at the first statement where the input gate allows. 8. A platform-owned name no application id
-   can produce, or refuse such an id at registration. 9–13. As stated. 14. Detect by the IAM release, or drop the detection; fix Lopata's stub and `define`. Each with a test where one can reach it.
+   can produce, or refuse such an id at registration. 9–13. As stated. 14. Detect by the IAM release, or drop the detection; fix Lopata's stub and `define`. 15. Cap a job's transaction, or its `timeoutMs`, on Cloudflare. 16–17. Count only what the object runs; refuse at boot. 18. Abort the read and cancel its body. 19. Queue an outside statement behind the open transaction. Each with a test where one can reach it.
 
 ## Touch points
 
