@@ -112,7 +112,6 @@ function binding(value: unknown): SqliteValue {
 /** The SQLSTATE of each constraint failure, by the start of the message workerd and bun:sqlite both give. */
 const CONSTRAINT_STATES: readonly (readonly [string, string])[] = Object.freeze([
 	['UNIQUE constraint failed', '23505'],
-	['PRIMARY KEY', '23505'],
 	['FOREIGN KEY constraint failed', '23503'],
 	['CHECK constraint failed', '23514'],
 	['NOT NULL constraint failed', '23502'],
