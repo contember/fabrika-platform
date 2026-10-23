@@ -2,7 +2,7 @@ import { createPage } from '@buzola/router'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import type { InstallationBrandDto } from '@fabrika/iam-contract'
 import { type BrandImage, brandImageDataUri } from '@fabrika/proxy-core/brand'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { api as iam } from '../../access/lib/api'
 import { BrandMark } from '../../components/Icon'
 import { api, ApiError } from '../../lib/api'
@@ -48,16 +48,24 @@ export function BrandingEditor(
 	const [outcome, setOutcome] = useState<Outcome | null>(null)
 	// A new key empties the file inputs once their files are saved.
 	const [inputs, setInputs] = useState(0)
+	// The latest choice of each slot: a file read after a later choice is dropped, so the slot holds the last one chosen.
+	const choices = useRef({ light: 0, dark: 0 })
 	const { light, dark, changed } = draftImages(current.brand, draft)
 
-	async function choose(slot: 'light' | 'dark', file: File | undefined) {
+	async function choose(slot: 'light' | 'dark', input: HTMLInputElement) {
+		const file = input.files?.[0]
+		const choice = ++choices.current[slot]
 		setOutcome(null)
 		// A refused file takes back the one chosen before it: the slot keeps what is stored, never a file the admin replaced.
 		setDraft((before) => slot === 'light' ? { ...before, light: 'stored' } : { ...before, dark: 'stored' })
 		if (file === undefined) return
-		const chosen = chosenImage(new Uint8Array(await file.arrayBuffer()), file.name, file.type)
+		const bytes = new Uint8Array(await file.arrayBuffer())
+		if (choice !== choices.current[slot]) return
+		const chosen = chosenImage(bytes, file.name, file.type)
 		if (!chosen.ok) {
 			setErrors((shown) => ({ ...shown, [slot]: chosen.message }))
+			// Emptied, so choosing the same file again once it is fixed is a change the input reports.
+			input.value = ''
 			return
 		}
 		setErrors((shown) => ({ ...shown, [slot]: undefined }))
@@ -115,7 +123,7 @@ export function BrandingEditor(
 							id="branding-light"
 							type="file"
 							accept="image/png,image/webp,image/svg+xml,.png,.webp,.svg"
-							onChange={(event) => void choose('light', event.target.files?.[0])}
+							onChange={(event) => void choose('light', event.currentTarget)}
 						/>
 						<span className="hint">PNG, WebP or SVG, at most 32 KB. A wide wordmark and a square symbol both fit.</span>
 					</label>
@@ -125,7 +133,7 @@ export function BrandingEditor(
 							id="branding-dark"
 							type="file"
 							accept="image/png,image/webp,image/svg+xml,.png,.webp,.svg"
-							onChange={(event) => void choose('dark', event.target.files?.[0])}
+							onChange={(event) => void choose('dark', event.currentTarget)}
 						/>
 						<span className="hint">Without it, the light logo stands on dark pages as it is.</span>
 					</label>
@@ -144,15 +152,23 @@ export function BrandingEditor(
 								Use the light logo on dark pages
 							</button>
 						)}
-						{current.brand !== null && (
-							<button className="danger" type="button" disabled={busy} onClick={() => void apply(() => iam.brand.clear())}>
-								Remove logo
-							</button>
-						)}
 					</div>
 				</form>
 				{outcome !== null && <OutcomeNotice outcome={outcome} />}
 			</section>
+
+			{current.brand !== null && (
+				<div className="danger-zone">
+					<div className="danger-zone-copy">
+						<strong>Remove the logo</strong>
+						Every page draws fabrika's mark again. The stored images are deleted; only an upload brings them back.
+					</div>
+					<span className="spacer" />
+					<button className="danger" type="button" disabled={busy} onClick={() => void apply(() => iam.brand.clear())}>
+						Remove logo
+					</button>
+				</div>
+			)}
 		</>
 	)
 }
@@ -169,6 +185,13 @@ function OutcomeNotice({ outcome }: { outcome: Outcome }) {
 		return (
 			<p className="notice" role="status">
 				Saved. The sign-in pages show it now. The error pages of applications show it once someone who manages namespaces republishes them.
+			</p>
+		)
+	}
+	if (outcome.namespaces.length === 0) {
+		return (
+			<p className="notice" role="status">
+				Saved. The sign-in pages show it now. No application proxy was republished: this installation has none that draws it.
 			</p>
 		)
 	}

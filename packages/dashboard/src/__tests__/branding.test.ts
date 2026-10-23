@@ -62,6 +62,8 @@ describe('the Branding page', () => {
 		const branded = renderToStaticMarkup(createElement(BrandingEditor, { current: set, republishes: true, onSaved: () => {} }))
 		expect(branded.split(`src="${brandImageDataUri({ type: 'image/png', base64: PNG })}"`).length - 1).toBe(2)
 		expect(branded).toContain('Remove logo')
+		// Removing deletes the stored images, so it stands in the danger zone at the foot, outside the form.
+		expect(branded).toMatch(/<\/form>[\s\S]*class="danger-zone"[\s\S]*Remove logo/)
 	})
 
 	test("is an installation administrator's, beside Source connection in the rail", () => {
