@@ -73,7 +73,7 @@ describe('the platform proxy archive', () => {
 	test('the generated proxy build reads the archived manifest and generates its Caddy config', async () => {
 		const descriptor = renderYaml(fabrikaZeropsYaml)
 		expect(zeropsProxyManifestCarrier(descriptor)).toBe('archive')
-		// A namespace pinned to this source may be sent the installation's client logo (ADR-0065).
+		// A namespace pinned to this source may be sent the installation's client logo (ADR-0066).
 		expect(zeropsProxyAcceptsBrand(descriptor)).toBe(true)
 		const proxy = fabrikaZeropsYaml.zerops.find((setup) => setup.setup === 'proxy')
 		const generate = proxy?.build?.buildCommands?.find((command) => command.includes('generate-config.ts'))

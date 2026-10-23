@@ -158,7 +158,7 @@ export function workloadCredentialDeps(env: Env): { workloadCredentials?: Worklo
 }
 
 /**
- * The installation's client logo is read from IAM with the provisioning key (ADR-0065); an installation without the
+ * The installation's client logo is read from IAM with the provisioning key (ADR-0066); an installation without the
  * issuer or the key publishes its proxies with the fabrika mark.
  */
 export function installationBrandDeps(env: Env): { brand?: InstallationBrandSource } {
@@ -189,7 +189,7 @@ export interface ControlRpcDeps {
 	vault?: () => Promise<Vault>
 	catalogChanged?: () => void
 	namespaceProxyChanged?: NamespaceProxyChanged
-	/** The installation's client logo, which IAM keeps (ADR-0065). */
+	/** The installation's client logo, which IAM keeps (ADR-0066). */
 	brand?: InstallationBrandSource
 	/** GitHub as a deploy reads it; `register` probes an anonymous source with it. */
 	commits?: CommitSource

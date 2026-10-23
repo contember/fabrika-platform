@@ -254,7 +254,7 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 		expect((await harness.repositories.registry.getDeploymentNamespace('apps-prod'))?.state).toBe('ready')
 	})
 
-	test("a logo IAM does not answer for publishes fabrika's mark and never fails the namespace (ADR-0065)", async () => {
+	test("a logo IAM does not answer for publishes fabrika's mark and never fails the namespace (ADR-0066)", async () => {
 		const record = recording()
 		const harness = createHarness()
 		const provider = namespacedProvider(record)

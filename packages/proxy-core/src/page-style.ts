@@ -155,7 +155,7 @@ main {
 	height: auto;
 }
 
-/* The client's logo (ADR-0065), fitted inside the grid whatever its proportions: a wordmark runs wide, a symbol tall. */
+/* The client's logo (ADR-0066), fitted inside the grid whatever its proportions: a wordmark runs wide, a symbol tall. */
 .art img {
 	display: block;
 	max-width: 80%;
@@ -460,7 +460,7 @@ form > button:first-of-type:hover {
 `
 
 /**
- * What the grid shows: the installation's client logo where it has one (ADR-0065), the designer's mark otherwise. The
+ * What the grid shows: the installation's client logo where it has one (ADR-0066), the designer's mark otherwise. The
  * dark variant takes over on a dark page; without one, the light logo stands on the dark panel as it is.
  */
 export function pageArt(brand: InstallationBrand | null): string {

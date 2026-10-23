@@ -48,7 +48,7 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   part no service answered is `null` and reads as usable, so an outage still shows its own page. Controls use
   `mayDo` at the object's app and environment (`ConsoleAccessContext`). The action names come from the contracts:
   `CONTROL_ACTIONS` (`@fabrika/control-contract`) and `OPERATIONS_ACTIONS` (`@fabrika/operations-contract/access`).
-- **Settings → Branding edits the installation's client logo, which IAM keeps (ADR-0065).** The page calls IAM's
+- **Settings → Branding edits the installation's client logo, which IAM keeps (ADR-0066).** The page calls IAM's
   `brand.set` / `brand.clear`, then Control's `namespaces.republishAll` when the caller holds `namespace.manage`, so the
   proxies of every namespace publish it; IAM's pages show it at once. `lib/branding.ts` holds a chosen file to
   proxy-core's own `brandImageProblem` before it is sent, so the page refuses what IAM would. The console itself keeps

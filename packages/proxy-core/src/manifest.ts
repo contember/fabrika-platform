@@ -120,7 +120,7 @@ export type ManifestEndpointRow = ProxyEndpointRow | InstallationProxyEndpointRo
 export interface ProxyManifest {
 	apps: ProxyApp[]
 	/**
-	 * The installation's client logo for the pages the proxy answers with (ADR-0065). Absent, a page draws the fabrika
+	 * The installation's client logo for the pages the proxy answers with (ADR-0066). Absent, a page draws the fabrika
 	 * mark. A producer sends it only to a proxy whose source parses it: an older parser refuses the key.
 	 */
 	brand?: InstallationBrand

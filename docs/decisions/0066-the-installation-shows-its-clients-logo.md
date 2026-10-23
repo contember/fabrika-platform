@@ -1,11 +1,11 @@
 ---
-id: 0065
+id: 0066
 title: The installation shows its client's logo
 status: accepted
 date: 2026-10-20
 ---
 
-# 0065: The installation shows its client's logo
+# 0066: The installation shows its client's logo
 
 ## Context
 

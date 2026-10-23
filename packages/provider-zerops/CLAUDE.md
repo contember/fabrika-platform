@@ -249,7 +249,7 @@ bun test
   parses deploys, so every 0.4/0.5/0.6 contract does. They are 0.4.8, 0.5.5 and 0.6.0; never add a parser of a minor newer
   than 0.6 while a pin's release is not recorded, so a form newer than 0.6 deploys only while the namespace's proxy
   source is current.
-- **The manifest carries the installation's client logo only for a proxy source that accepts it** (ADR-0065).
+- **The manifest carries the installation's client logo only for a proxy source that accepts it** (ADR-0066).
   `republishProxy` writes `brand` when Control handed one AND the pinned descriptor's proxy build declares
   `FABRIKA_PROXY_MANIFEST_BRAND` (`zeropsProxyAcceptsBrand`, `src/proxy-manifest-carrier.ts`). An older source's strict
   parser refuses the key and would fail its build, so it keeps fabrika's mark until the namespace is re-pinned. The

@@ -41,7 +41,7 @@ export interface ZeropsProxyRepublishInput {
 	readonly namespaceId: string
 	readonly target: ZeropsNamespaceTarget
 	readonly manifest: ProxyManifest
-	/** The installation's client logo (ADR-0065); added to the manifest only when the pinned proxy can parse it. */
+	/** The installation's client logo (ADR-0066); added to the manifest only when the pinned proxy can parse it. */
 	readonly brand?: InstallationBrand | null
 	readonly source?: ZeropsSourcePort
 	readonly api: ZeropsProxyApi

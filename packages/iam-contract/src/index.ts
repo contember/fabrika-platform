@@ -649,7 +649,7 @@ export interface RevokeAppRoleResponse {
 }
 
 /**
- * The installation's client logo on fabrika's own pages (ADR-0065): IAM's sign-in, account and invitation pages, and the
+ * The installation's client logo on fabrika's own pages (ADR-0066): IAM's sign-in, account and invitation pages, and the
  * proxy's error pages on every application host. `null` shows the fabrika mark. An installation serves one client, so
  * this is one setting of the installation, kept by IAM.
  */
@@ -748,7 +748,7 @@ export interface IamAdminRpcContract {
 		revoke: RpcProcedure<RevokeAppRoleRequest, RevokeAppRoleResponse>
 	}
 	/**
-	 * The installation's client logo (ADR-0065), an installation administrator's (`iam.admin`) to read and to change. A
+	 * The installation's client logo (ADR-0066), an installation administrator's (`iam.admin`) to read and to change. A
 	 * change writes `iam.brand.update` in its own transaction. IAM's pages show it on their next render; the proxy's
 	 * pages once Control republishes their manifests.
 	 */

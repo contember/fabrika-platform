@@ -93,7 +93,7 @@ export interface RunDeps {
 	iamIssuer?: string
 	/** The proxy secret of an environment behind a namespace proxy (ADR-0022 rule 5); absent without a vault. */
 	proxySecrets?: ProxySecrets
-	/** The installation's client logo for the namespace proxy a deploy republishes (ADR-0065); absent, the mark. */
+	/** The installation's client logo for the namespace proxy a deploy republishes (ADR-0066); absent, the mark. */
 	brand?: InstallationBrandSource
 	/**
 	 * The keys of the approved contract's jobs and webhooks (ADR-0022 "Principal kinds"); absent without a vault, an IAM

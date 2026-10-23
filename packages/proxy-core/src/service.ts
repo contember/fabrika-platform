@@ -101,7 +101,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 	const byId = new Map<string, ResolvedApp>()
 	const byHost = new Map<string, ResolvedApp>()
 	const policies = new Map<string, HeaderPolicy>()
-	// The client's logo on every page this service answers with (ADR-0065); the fabrika mark without one.
+	// The client's logo on every page this service answers with (ADR-0066); the fabrika mark without one.
 	const brand = config.manifest.brand ?? null
 	for (const app of config.manifest.apps) {
 		const resolved = resolveApp(app)

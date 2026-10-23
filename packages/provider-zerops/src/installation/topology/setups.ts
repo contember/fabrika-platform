@@ -403,7 +403,7 @@ const proxy: ZeropsYamlSetupSpec = {
 		envVariables: {
 			FABRIKA_PROXY_SESSION_OWNER_JSON: '${RUNTIME_FABRIKA_PROXY_SESSION_OWNER_JSON}',
 			// A marker, read by nothing at build time: a namespace pinned to this source has a manifest parser that knows
-			// `brand`, so Control may send the installation's client logo (ADR-0065). An older pin's parser refuses the
+			// `brand`, so Control may send the installation's client logo (ADR-0066). An older pin's parser refuses the
 			// key and fails its build, so it is sent only where this is (`zeropsProxyAcceptsBrand`).
 			[FABRIKA_PROXY_MANIFEST_BRAND]: '1',
 		},

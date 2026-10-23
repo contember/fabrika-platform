@@ -849,7 +849,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		memberOrigins: (string | undefined)[][]
 		memberCrossOrigins: (readonly string[] | undefined)[][]
 		deploySecrets: (string | null | undefined)[]
-		/** The installation's client logo each republish handed the provider (ADR-0065). */
+		/** The installation's client logo each republish handed the provider (ADR-0066). */
 		brands: (InstallationBrand | null | undefined)[]
 		/** Held open inside source resolution, while the deploy holds the namespace lease but has not republished. */
 		resolving: Promise<void> | null
@@ -955,7 +955,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		expect(harness.sent).toEqual([])
 	})
 
-	test("hands the provider the installation's client logo IAM keeps, and the mark without a source (ADR-0065)", async () => {
+	test("hands the provider the installation's client logo IAM keeps, and the mark without a source (ADR-0066)", async () => {
 		const record = republishing()
 		const harness = makeDeps(republishingProvider(record))
 		await seed(harness, ['alpha'])

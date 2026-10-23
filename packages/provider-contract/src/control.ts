@@ -332,7 +332,7 @@ export interface ProviderNamespaceMutationInput {
 	/** Every app environment assigned to the namespace, read under its lease. */
 	readonly members: readonly ProviderNamespaceMember[]
 	/**
-	 * The installation's client logo for the pages the namespace's proxy answers with (ADR-0065), read from IAM for this
+	 * The installation's client logo for the pages the namespace's proxy answers with (ADR-0066), read from IAM for this
 	 * mutation; absent or null shows the fabrika mark. A provider passes it only to a proxy that can parse it.
 	 */
 	readonly brand?: InstallationBrand | null

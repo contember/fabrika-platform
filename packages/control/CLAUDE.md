@@ -404,7 +404,7 @@ other environment, before the provider prepares anything, and the write maps a r
   until claim release is decided — releasing them is a USER decision, not a fix: fabrika deletes no provider
   resource (ADR-0034), so a freed name makes an orphaned service adoptable by the next app, carrying its old
   secrets.
-- **Every namespace mutation hands the provider the installation's client logo** (ADR-0065,
+- **Every namespace mutation hands the provider the installation's client logo** (ADR-0066,
   `src/installation-brand.ts`). IAM keeps it; Control reads it with the provisioning key (`iamBrandSource`, wired by
   `installationBrandDeps` when `FABRIKA_IAM_ISSUER` and `FABRIKA_IAM_PROVISIONING_KEY` are set) inside each provider
   mutation and republish. The logo is presentation, so a read that fails publishes fabrika's mark and logs a warning:

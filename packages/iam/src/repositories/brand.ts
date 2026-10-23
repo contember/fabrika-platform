@@ -22,7 +22,7 @@ export interface InstallationBrandImages {
 const COLUMNS = 'id, light_type, light_base64, dark_type, dark_base64, updated_at'
 
 /**
- * The installation's client logo (ADR-0065). The row is the installation's, so its key is the constant 1. The caller
+ * The installation's client logo (ADR-0066). The row is the installation's, so its key is the constant 1. The caller
  * has checked the images; this stores them as given, and the reader checks them again.
  */
 export class InstallationBrandRepository {

@@ -27,7 +27,7 @@ const legacyPin = {
 		`zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        ${FABRIKA_PROXY_MANIFEST_JSON}: "\${RUNTIME_${FABRIKA_PROXY_MANIFEST_JSON}}"\n`,
 	),
 }
-/** A namespace pinned to a source whose proxy parser knows the manifest's `brand` (ADR-0065). */
+/** A namespace pinned to a source whose proxy parser knows the manifest's `brand` (ADR-0066). */
 const brandPin = {
 	...pin,
 	commitSha: 'c'.repeat(40),

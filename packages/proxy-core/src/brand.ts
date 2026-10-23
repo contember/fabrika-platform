@@ -1,5 +1,5 @@
 /**
- * The client's brand on fabrika's own pages (ADR-0065). An installation serves one client, so its logo is one setting
+ * The client's brand on fabrika's own pages (ADR-0066). An installation serves one client, so its logo is one setting
  * of the installation: IAM keeps it, the console's Settings writes it, and the proxy manifest carries it to the pages the
  * proxy answers with on every application host. A page shows it where it would otherwise draw the fabrika mark.
  *

@@ -131,7 +131,7 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   header policy and `invoke`s the page, whose `static_response` keeps the headers already set (verified on 2.10.2). An
   error route picks the page by the status, a `vars` matcher on `{http.error.status_code}`: a 503 and a 504 their own,
   every other status (a 502 above all) `-failure`, which prints it. The body is the
-  installation's, the client logo of the manifest's `brand` in it (ADR-0065), so a copy per host would carry the logo
+  installation's, the client logo of the manifest's `brand` in it (ADR-0066), so a copy per host would carry the logo
   once per application.
 - **A cross-origin preflight and its decoration are the decision's, written by Caddy** (ADR-0022 "Cross-origin
   endpoints"). Only an entry with a `crossOrigin` row gets them, so every other entry's config is byte for byte what

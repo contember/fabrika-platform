@@ -74,7 +74,7 @@ export interface NamespaceUseCaseContext {
 	readonly auth: AuthContext
 	readonly queue: JobQueue<ControlJobMessage>
 	readonly namespaceProxyChanged?: NamespaceProxyChanged
-	/** The installation's client logo (ADR-0065), which `republishAll` reads once for every namespace. */
+	/** The installation's client logo (ADR-0066), which `republishAll` reads once for every namespace. */
 	readonly brand?: InstallationBrandSource
 }
 
@@ -343,7 +343,7 @@ export interface NamespaceJobDeps {
 	readonly leaseClock?: LeaseClock
 	/** Absent without a vault; then no member carries a proxy secret, and the provider refuses a contract member. */
 	readonly proxySecrets?: ProxySecrets
-	/** The installation's client logo (ADR-0065); absent without IAM's provisioning key, and the proxy draws the mark. */
+	/** The installation's client logo (ADR-0066); absent without IAM's provisioning key, and the proxy draws the mark. */
 	readonly brand?: InstallationBrandSource
 }
 
@@ -623,7 +623,7 @@ async function auditMutation(
 }
 
 /**
- * Publish the installation's current client logo (ADR-0065) to the proxy of every namespace: what the console runs after
+ * Publish the installation's current client logo (ADR-0066) to the proxy of every namespace: what the console runs after
  * the logo changes in IAM, whose proxy pages show it only once their manifest is published again.
  *
  * The logo is read ONCE, and here a failed read is the answer, because the change it was asked to publish would not

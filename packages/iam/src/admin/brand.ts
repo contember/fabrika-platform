@@ -1,4 +1,4 @@
-// The installation's client logo (ADR-0065): an installation administrator's to read and to change. Control reads it
+// The installation's client logo (ADR-0066): an installation administrator's to read and to change. Control reads it
 // with the provisioning key, which resolves to a synthetic installation administrator, and carries it to the proxy.
 
 import type { InstallationBrandDto, SetInstallationBrandRequest } from '@fabrika/iam-contract'

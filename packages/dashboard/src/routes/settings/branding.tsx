@@ -12,7 +12,7 @@ import { fmtDate } from '../../lib/format'
 import { consoleSession } from '../../lib/session'
 
 /**
- * The installation's client logo (ADR-0065). IAM keeps it and shows it on its own pages at once; the proxy's pages on
+ * The installation's client logo (ADR-0066). IAM keeps it and shows it on its own pages at once; the proxy's pages on
  * every application host show it once each namespace's proxy is published again, which this page starts after a change
  * when the caller may republish namespaces. The console itself stays fabrika's.
  */

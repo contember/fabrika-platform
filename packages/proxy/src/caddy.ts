@@ -453,7 +453,7 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 const NAVIGATION: CaddyMatcherSet = { header: { [FETCH_MODE_HEADER]: ['navigate'] } }
 
 /**
- * The pages Caddy answers with itself, each written once as a named route (ADR-0065). The body is the installation's
+ * The pages Caddy answers with itself, each written once as a named route (ADR-0066). The body is the installation's
  * and the same on every host, the client's logo in it included; only the header policy differs, so a host's route sets
  * its policy and invokes the page, whose `static_response` keeps the headers already set (verified on 2.10.2). A copy
  * per host would carry the logo once per application in `caddy.json`.

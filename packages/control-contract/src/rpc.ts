@@ -209,7 +209,7 @@ export interface ControlRpcContract {
 		/** Free a namespace id. Refused while any app environment is registered in it (backlog 73). */
 		remove: RpcProcedure<NamespaceIdInput, RemoveDeploymentNamespaceResponse>
 		/**
-		 * Republish the proxy of every ready namespace, as after a change of the installation's client logo (ADR-0065).
+		 * Republish the proxy of every ready namespace, as after a change of the installation's client logo (ADR-0066).
 		 * Returns once each rebuild is submitted; a failure is a 502 naming the namespaces to reconcile.
 		 */
 		republishAll: RpcProcedure<void, RepublishAllNamespacesResponse>

@@ -232,7 +232,7 @@ canonical matcher in `@fabrika/auth-core`.
 **The manifest parser is strict.** An entry parses as an application table or as an installation
 entry, and as nothing else. It refuses an unknown key — `gates` among them — instead of ignoring it.
 Besides its entries a manifest carries one presentation field, `brand`, the installation's client logo
-([ADR-0065](0065-the-installation-shows-its-clients-logo.md)). No decision reads it; only the proxy's pages draw it.
+([ADR-0066](0066-the-installation-shows-its-clients-logo.md)). No decision reads it; only the proxy's pages draw it.
 
 **Application tables.** The manifest carries `{ id, hosts, upstream, scheme, endpoints,
 reservedPrefixes, snapshot, csp, operationsOrigin?, crossOrigins? }` per application; `snapshot` is the contract

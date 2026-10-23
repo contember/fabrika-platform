@@ -71,7 +71,7 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   and fails on a drifted value, so change a colour in the console first and copy it here. Caddy serves it in a
   `static_response` body, so no `{` may be followed by a name. The footer links nowhere: the proxy's pages are read by
   an application's people, whom a link to fabrika would send to the wrong place for help.
-- **`@fabrika/proxy-core/brand` is the one check of the installation's client logo** (`src/brand.ts`, ADR-0065): a
+- **`@fabrika/proxy-core/brand` is the one check of the installation's client logo** (`src/brand.ts`, ADR-0066): a
   PNG, WebP or SVG of at most `MAX_BRAND_IMAGE_BYTES` (32 KB) decoded, in canonical base64, whose leading bytes are
   what its type says (`brandImageProblem`). IAM's write, the manifest parser and the console's pre-check all run it, so
   a logo one admits the others admit; it imports only zod, so the browser can use it. The manifest's optional top-level

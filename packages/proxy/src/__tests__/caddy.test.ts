@@ -209,7 +209,7 @@ describe('server shape', () => {
 		expect(JSON.stringify(rest)).not.toContain('<!doctype html>')
 	})
 
-	test("the installation's client logo is in each page once and nowhere else (ADR-0065)", () => {
+	test("the installation's client logo is in each page once and nowhere else (ADR-0066)", () => {
 		const branded = buildCaddyConfig({ ...MANIFEST, brand: { light: PIXEL } }, OPTIONS).apps.http.servers['proxy']
 		const pages = branded?.named_routes ?? {}
 		for (const name of ['fabrika-page-400', 'fabrika-page-404', 'fabrika-page-503', 'fabrika-page-504', 'fabrika-page-failure']) {

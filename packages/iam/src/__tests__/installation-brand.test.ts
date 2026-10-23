@@ -1,4 +1,4 @@
-// The installation's client logo (ADR-0065): an installation administrator sets it through `/admin/rpc`, IAM checks it
+// The installation's client logo (ADR-0066): an installation administrator sets it through `/admin/rpc`, IAM checks it
 // on the way in and again on the way out, each change writes `iam.brand.update` in its own statement group, and every
 // IAM page draws it in place of the fabrika mark under `img-src data:` and nothing wider. Every suite runs on SQLite and,
 // with FABRIKA_TEST_POSTGRES_URL, on Postgres.

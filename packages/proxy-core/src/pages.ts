@@ -99,7 +99,7 @@ export interface ErrorPageOptions {
 	 * `{http.error.status_code}`, a placeholder Caddy fills in for the status it answers with.
 	 */
 	readonly shownStatus?: string
-	/** The installation's client logo (ADR-0065), from the manifest; the fabrika mark without one. */
+	/** The installation's client logo (ADR-0066), from the manifest; the fabrika mark without one. */
 	readonly brand?: InstallationBrand | null
 }
 

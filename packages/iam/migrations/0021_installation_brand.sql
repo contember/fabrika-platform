@@ -1,4 +1,4 @@
--- The installation's client logo on fabrika's own pages (ADR-0065). SQLite/D1 dialect;
+-- The installation's client logo on fabrika's own pages (ADR-0066). SQLite/D1 dialect;
 -- `../migrations-postgres/0021_installation_brand.sql` states the same outcome.
 --
 -- An installation serves one client, so this is one row or none: `id` is always 1. An installation administrator sets

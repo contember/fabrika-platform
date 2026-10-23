@@ -31,7 +31,7 @@ export const zeropsProxyManifestCarrier = (descriptorContents: string, setup = '
 	return 'archive'
 }
 
-/** The build variable that marks a proxy source whose manifest parser knows `brand` (ADR-0065). */
+/** The build variable that marks a proxy source whose manifest parser knows `brand` (ADR-0066). */
 export const FABRIKA_PROXY_MANIFEST_BRAND = 'FABRIKA_PROXY_MANIFEST_BRAND'
 
 /**
