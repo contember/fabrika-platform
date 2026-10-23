@@ -115,7 +115,6 @@ async function providerRateLimit<T>(operation: () => Promise<T>): Promise<T> {
 
 /** Compose the only provider available in the process installation. */
 export function zeropsControlProvider(
-	env: Env,
 	source: Record<string, string | undefined>,
 	sourcePort: ZeropsSourcePort,
 ): ControlProvider {
@@ -127,10 +126,6 @@ export function zeropsControlProvider(
 			const apiBaseUrl = source['FABRIKA_ZEROPS_API_BASE_URL']
 			return apiBaseUrl === undefined ? {} : { apiBaseUrl }
 		})(),
-		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { propustkaUrl: env.FABRIKA_IAM_ISSUER }),
-		...(env.FABRIKA_IAM_PROVISIONING_KEY === undefined
-			? {}
-			: { adminKey: env.FABRIKA_IAM_PROVISIONING_KEY }),
 		namespaces: { ...namespaces, olderProxies: OLDER_PROXY_READERS },
 	})
 }

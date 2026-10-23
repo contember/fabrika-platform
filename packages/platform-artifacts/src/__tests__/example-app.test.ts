@@ -60,7 +60,6 @@ interface Recorded {
 	externalIds: string[]
 	externalStates: unknown[]
 	checkpoints: unknown[]
-	schemas: Array<{ url: string; app: string }>
 	/** The key of every service variable written, never its value. */
 	envWrites: string[]
 	logs: string[]
@@ -91,7 +90,6 @@ const fresh = (): Recorded => ({
 	externalIds: [],
 	externalStates: [],
 	checkpoints: [],
-	schemas: [],
 	envWrites: [],
 	logs: [],
 	minRams: [],
@@ -225,11 +223,6 @@ const makeSource = (rec: Recorded): ZeropsSourcePort => ({
 const makeCollaborators = (rec: Recorded, statuses: ZeropsAppVersionStatus[], source: ZeropsSourcePort): ZeropsCollaborators => ({
 	api: makeApi(rec, statuses),
 	source,
-	reconcileSchema: (input) => {
-		rec.calls.push('reconcileSchema')
-		rec.schemas.push({ url: input.url, app: input.app })
-		return Promise.resolve()
-	},
 	alertExposure: () => {
 		rec.calls.push('alertExposure')
 		return Promise.resolve()
@@ -249,8 +242,6 @@ const TARGET: ZeropsRuntimeTarget = {
 	projectId: 'proj-apps-prod',
 	serviceId: 'svc-api',
 	accessToken: 'zt-not-a-real-token',
-	propustkaUrl: 'https://iam.example.test',
-	adminKey: 'px_admin_placeholder',
 }
 
 const notesSchema = notesConfig.schema
@@ -450,7 +441,6 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 			'upload-source',
 			'trigger-build',
 			'await-version',
-			'reconcile-schema',
 		])
 	})
 
@@ -475,7 +465,6 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 			'[dry-run] would upload the resolved repository snapshot to the reserved app version',
 			'[dry-run] would trigger build+deploy with the generated run section and build checks',
 			'[dry-run] would poll the pipeline process when available and /app-version until it is ACTIVE, relaying the build log',
-			`[dry-run] would reconcile schema for \`${NOTES_APP_ID}@prod\` against https://iam.example.test`,
 		])
 	})
 
@@ -496,7 +485,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 })
 
 describe('a real run makes exactly these calls, in exactly this order', () => {
-	test('resolve → import → create → upload → build+deploy → observe → reconcile', async () => {
+	test('resolve → import → create → upload → build+deploy → observe', async () => {
 		const result = await deployExample(rec, ['BUILDING', 'DEPLOYING', 'ACTIVE'])
 		expect(result.status).toBe('succeeded')
 		expect(rec.calls).toEqual([
@@ -544,8 +533,6 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 			'getProcess',
 			'getAppVersion',
 			'readBuildLog',
-			// N+1. the one portable step: reconcile the authz vocabulary into IAM
-			'reconcileSchema',
 		])
 		expect(rec.minRams).toEqual([['svc-api', 0.5], ['svc-db', 1]])
 		expect(rec.resolves).toEqual([{ requestedRef: 'refs/heads/main', descriptorSha256: SOURCE_DESCRIPTOR.sha256 }])
@@ -575,12 +562,6 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 		assertSubmittedDescriptor(rec)
 	})
 
-	test("the schema reconcile names the app id the token's `aud` will carry", async () => {
-		const result = await deployExample(rec)
-		expect(result.status).toBe('succeeded')
-		expect(rec.schemas).toEqual([{ url: 'https://iam.example.test', app: `${NOTES_APP_ID}@prod` }])
-	})
-
 	test('NO application secret is pushed as part of the deploy: only the managed proxy secret and the bucket marker', async () => {
 		const result = await deployExample(rec, ['ACTIVE'], { secrets: { NOTES_SESSION_PEPPER: 'x' } })
 		expect(result.status).toBe('succeeded')
@@ -591,11 +572,10 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 		expect(rec.calls).not.toContain('deleteServiceEnv')
 	})
 
-	test('a failed build fails the run and SKIPS the reconcile — a broken build never touches IAM', async () => {
+	test('a failed build fails the run', async () => {
 		const result = await deployExample(rec, ['BUILDING', 'BUILD_FAILED'])
 		expect(result.status).toBe('failed')
-		expect(result.steps.find((step) => step.id === 'reconcile-schema')?.status).toBe('skipped')
-		expect(rec.calls).not.toContain('reconcileSchema')
+		expect(result.steps.find((step) => step.id === 'await-version')?.status).toBe('failed')
 	})
 })
 

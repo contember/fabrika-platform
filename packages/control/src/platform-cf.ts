@@ -58,18 +58,6 @@ export interface WorkerBindings
 	IAM?: IamRpc & HttpService
 }
 
-/** Provider options must come from the `Env` the shared layer consumes, never the raw Worker bindings. */
-export function cloudflareIamControlOptions(
-	env: Pick<Env, 'FABRIKA_IAM_ISSUER' | 'FABRIKA_IAM_PROVISIONING_KEY'>,
-): { propustkaUrl?: string; propustkaProvisioningKey?: string } {
-	return {
-		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { propustkaUrl: env.FABRIKA_IAM_ISSUER }),
-		...(env.FABRIKA_IAM_PROVISIONING_KEY === undefined
-			? {}
-			: { propustkaProvisioningKey: env.FABRIKA_IAM_PROVISIONING_KEY }),
-	}
-}
-
 /** Present the Worker's bindings as the runtime-neutral `Env` the shared layer consumes. */
 export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL']): Env {
 	const env: Env = {
@@ -282,7 +270,6 @@ export function cloudflareControlProvider(bindings: WorkerBindings, env: Env, se
 	return createCloudflareControlProvider({
 		accountId: bindings.CLOUDFLARE_ACCOUNT_ID ?? '',
 		apiToken: bindings.CLOUDFLARE_API_TOKEN ?? '',
-		...cloudflareIamControlOptions(env),
 		runnerKey: env.FABRIKA_RUNNER_KEY ?? '',
 		installationApps: () => cloudflareDeployments(env.REPOSITORIES),
 		resolveSource: source.resolveSource,

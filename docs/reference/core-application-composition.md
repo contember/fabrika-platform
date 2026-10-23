@@ -150,13 +150,13 @@ on one of the two matched resources answers 405:
 
 | Operation                             | Caller                                                  |
 | ------------------------------------- | ------------------------------------------------------- |
-| `PUT /admin/apps/:app/schema`         | `reconcileSchema` (`@fabrika/auth`) during a deploy     |
+| `PUT /admin/apps/:app/schema`         | `reconcileSchema` (`@fabrika/auth`) after a deploy      |
 | `GET /admin/apps/:app/schema`         | reading back what a deploy reconciled                   |
 | `POST /admin/api-keys`                | first-machine-caller bootstrap, before a console exists |
 | `DELETE /admin/api-keys/:principalId` | the same bootstrap tearing its key down                 |
 
-Both callers run outside the installation with nothing but a URL and a key: a
-deploy step has no service binding, and bootstrap has no browser. Everything an
+Both callers hold nothing but a URL and a key: Control reaches IAM's public issuer
+after a run, an installation's own deploy runs outside it, and bootstrap has no browser. Everything an
 operator does — principals, grants, roles, policies, share links, sessions,
 audit, the auth log — is an `IamAdminRpcContract` procedure at `/admin/rpc` and
 is reachable no other way. Adding a route back means showing that no RPC

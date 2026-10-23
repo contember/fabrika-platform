@@ -179,13 +179,12 @@ IAM's registry is keyed by the IAM application id `<app>@<env>`
 stores for `notes@prod` is the `app_envs.public_origin` of `notes`'s `prod` environment, projected
 on every deploy:
 
-1. `executeDeploy` reads the deploying environment's public origin and puts it on the
-   provider deploy input. Another environment's origin never travels with it: registered
-   under `notes@prod`, a `stage` host would be handed production sessions.
-2. It reaches the deploy step that already talks to IAM (`reconcileSchema`), which makes
-   a **second** call — `apps.setReturnOrigins` over `/admin/rpc`, after the schema PUT,
-   because that PUT is what registers the app and `setReturnOrigins` 404s for an unknown
-   one.
+1. Once a run succeeds, on any provider, Control reads the deploying environment's public
+   origin. Another environment's origin is never read: registered under `notes@prod`, a
+   `stage` host would be handed production sessions.
+2. Control writes the approved schema (`reconcileSchema`) and then makes a **second** call —
+   `apps.setReturnOrigins` over `/admin/rpc`, after the schema PUT, because that PUT is what
+   registers the app and `setReturnOrigins` 404s for an unknown one.
 
 Three consequences worth knowing:
 

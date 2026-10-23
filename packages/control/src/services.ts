@@ -10,6 +10,7 @@ import { GitHubConnectionWebhookSecretProvider } from './github/connections/webh
 import type { CommitSource } from './github/source/commit-files'
 import { ConnectionWebhookVerifier, type PushWebhookVerifier } from './github/triggers/push-event'
 import { controlPublicOrigin } from './iam'
+import { iamAdminSchema, type IamSchemaPort } from './iam-schema'
 import { iamBrandSource, type InstallationBrandSource } from './installation-brand'
 import type { MailRelay } from './mail-relay/queue'
 import { iamMembershipKeyIssuer, type MembershipTransportPort, VaultMembershipTransport } from './membership-transport'
@@ -100,6 +101,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		operations: operationsReleaseDeps(env),
 		// The installation's own IAM issuer, which every application it deploys verifies against (ADR-0035).
 		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { iamIssuer: env.FABRIKA_IAM_ISSUER }),
+		...iamSchemaDeps(env),
 		...controlOriginDeps(env),
 		...proxySecretDeps(env),
 		...installationBrandDeps(env),
@@ -108,6 +110,14 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		...platformTransportDeps(env),
 		...tokenKeyDeps(env),
 	}
+}
+
+/** A succeeded run's schema goes to IAM at the installation's issuer; an installation that names none writes no schema. */
+export function iamSchemaDeps(env: Env): { iamSchema?: IamSchemaPort } {
+	const origin = env.FABRIKA_IAM_ISSUER?.trim() ?? ''
+	if (origin === '') return {}
+	const provisioningKey = env.FABRIKA_IAM_PROVISIONING_KEY?.trim() ?? ''
+	return { iamSchema: iamAdminSchema({ origin, ...(provisioningKey === '' ? {} : { provisioningKey }) }) }
 }
 
 /** The token keys live in the vault, so an installation without one keeps none, and a contract with a purpose does not deploy. */
@@ -173,7 +183,10 @@ export function proxySecretDeps(env: Env): { proxySecrets?: ProxySecrets } {
 }
 
 export async function cancelRun(env: Env, provider: ControlProvider, run: RunRow): Promise<void> {
-	await cancelDeploy({ repositories: repositories(env), provider, lock: locks(env), ...platformTransportDeps(env) }, run)
+	await cancelDeploy(
+		{ repositories: repositories(env), provider, lock: locks(env), runLogs: env.RUN_LOGS, ...platformTransportDeps(env), ...iamSchemaDeps(env) },
+		run,
+	)
 }
 
 export interface ControlRpcDeps {

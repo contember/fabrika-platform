@@ -69,6 +69,12 @@ uploads the SPA source maps; see
 Shared lifecycle code calls these capabilities directly. It does not select from
 a runtime registry and does not branch on `cloudflare` or `zerops`.
 
+A `succeeded` outcome of `deploy`, `reconcile` or `cancel` means the version is live. Control
+then writes the environment's approved IAM schema and return origins itself, before it marks
+the run terminal ([ADR-0011](../decisions/0011-static-provider-bundles.md)); no provider calls
+IAM for an application. An IAM that does not answer keeps a reconciled or cancelled run
+unsettled for the next pass; a refusal fails it.
+
 The namespace capability receives the provider-neutral
 `ProviderDeploymentNamespace` coordinates and an opaque target envelope. Its
 optional operator surface publishes provider-defined presets, produces a

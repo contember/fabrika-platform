@@ -205,8 +205,8 @@ bun test
   `src/namespace/manifest.ts` builds a member's endpoint table from `member.access`
   (`contractProxyTable(access.contract)`, the upstream from the artifact); a member without approved access is
   not routed and its artifact is not decoded, so a legacy `proxy.gates` artifact cannot stop a republish. `lockedExecutionFor` locks the descriptor down whenever `environment.access` is present — a config
-  that drops `target.contract` cannot drop it — and refuses a non-dry deploy without it. `approvedSchemaOf` gives
-  the IAM schema of deploy, cancel and reconcile: `access.schema`, otherwise none. Control refuses a commit
+  that drops `target.contract` cannot drop it — and refuses a non-dry deploy without it. The deploy has no IAM step:
+  once a version is ACTIVE, Control writes `access.schema` itself (ADR-0011). Control refuses a commit
   without `fabrika.contract.ts` before it calls the provider.
 - **The namespace proxy attempt follows the same rule** (`republishProxy`, `src/namespace/proxy-attempt.ts`).
   `proxyBuild` on the namespace target is `{ appVersionId, triggered, manifestSha256? }` and the codec

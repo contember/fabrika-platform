@@ -179,7 +179,7 @@ describe('the Zerops namespace process configuration', () => {
 			WAIT_UNTIL: () => {},
 			ENVIRONMENT: 'prod',
 		}
-		const provider = zeropsControlProvider(env, {
+		const provider = zeropsControlProvider({
 			...namespaceEnvironment(),
 			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
 		}, zeropsGitHubSources(env).port)

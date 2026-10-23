@@ -26,7 +26,7 @@ import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION, ZEROPS_SCAN_MIN_RAM
 import type { ExposureAlert } from '../exposure'
 import type { ManagedValues } from '../managed-env'
 import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor } from '../manifest'
-import { CANCELLED, createZeropsDeployer, type ZeropsDeployResult, type ZeropsDeployRun } from '../provider'
+import { createZeropsDeployer, type ZeropsDeployResult, type ZeropsDeployRun } from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsSourceArchive } from '../source/port'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
@@ -39,9 +39,6 @@ interface Recorded {
 	triggers: Array<{ serviceId: string; buildFromGit?: string; zeropsSetup?: string }>
 	externalIds: string[]
 	logs: string[]
-	schemas: string[]
-	schemaBodies: AppSchema[]
-	schemaSignals: AbortSignal[]
 	sleeps: number[]
 	externalStates: Array<JsonValue | undefined>
 	checkpoints: JsonValue[]
@@ -64,9 +61,6 @@ const fresh = (): Recorded => ({
 	triggers: [],
 	externalIds: [],
 	logs: [],
-	schemas: [],
-	schemaBodies: [],
-	schemaSignals: [],
 	sleeps: [],
 	externalStates: [],
 	checkpoints: [],
@@ -331,12 +325,6 @@ const makeCollaborators = (recorded: Recorded, overrides: Overrides = {}): Zerop
 			return { commitSha: input.commitSha, descriptorSha256: input.descriptorSha256, entryCount: 1, expandedBytes: 1 }
 		},
 	},
-	reconcileSchema: async ({ app, schema, signal }) => {
-		recorded.calls.push('reconcileSchema')
-		recorded.schemas.push(app)
-		recorded.schemaBodies.push(schema)
-		recorded.schemaSignals.push(signal)
-	},
 	alertExposure: async ({ alert }) => {
 		recorded.calls.push('alertExposure')
 		recorded.alerts.push(alert)
@@ -372,8 +360,6 @@ const target = (overrides: Partial<ZeropsRuntimeTarget> = {}): ZeropsRuntimeTarg
 		repository: { owner: 'acme', name: 'demo' },
 		commitSha: '0123456789abcdef0123456789abcdef01234567',
 	},
-	propustkaUrl: 'https://iam.test',
-	adminKey: 'px-secret',
 	...overrides,
 })
 
@@ -486,7 +472,6 @@ describe('Zerops provider', () => {
 			'upload-source',
 			'trigger-build',
 			'await-version',
-			'reconcile-schema',
 		])
 		expect(recorded.calls).toEqual([
 			'importServices',
@@ -502,7 +487,6 @@ describe('Zerops provider', () => {
 			'getAppVersion',
 			'getProcess',
 			'getAppVersion',
-			'reconcileSchema',
 		])
 		expect(recorded.externalIds).toEqual(['version-1'])
 		expect(recorded.externalStates).toEqual([{ appVersionId: 'version-1', triggered: false }])
@@ -523,8 +507,6 @@ describe('Zerops provider', () => {
 		expect(recorded.sleeps).toEqual([3000])
 		expect(recorded.imports[0]?.yaml).toContain('registry.test/demo:v2')
 		expect(recorded.triggers).toEqual([])
-		expect(recorded.schemas).toEqual(['demo@prod'])
-		expect(recorded.schemaSignals).toEqual([controller.signal])
 		const log = recorded.logs.join('\n')
 		expect(log).toContain('reserved app-version version-1')
 		expect(log).toContain('uploaded 0123456789abcdef0123456789abcdef01234567 to version-1')
@@ -1056,7 +1038,6 @@ describe('Zerops provider', () => {
 			'succeeded',
 			'succeeded',
 			'failed',
-			'skipped',
 		])
 		expect(recorded.calls.slice(-3)).toEqual(['buildAndDeployAppVersion:version-waiting', 'getProcess', 'getAppVersion'])
 		expect(recorded.sleeps).toEqual([])
@@ -1113,37 +1094,6 @@ describe('Zerops provider', () => {
 			'putServiceEnv:FABRIKA_PROXY_SECRET',
 			'findService:db',
 		])
-	})
-
-	test('propagates cancellation into an active schema reconciliation', async () => {
-		const controller = new AbortController()
-		const started = Promise.withResolvers<void>()
-		const provider = createZeropsDeployer(() => ({
-			...makeCollaborators(recorded),
-			reconcileSchema: (input) => {
-				recorded.schemaSignals.push(input.signal)
-				return new Promise<void>((_resolve, reject) => {
-					const abort = (): void => {
-						recorded.calls.push('reconcileSchemaAborted')
-						reject(input.signal.reason)
-					}
-					if (input.signal.aborted) {
-						abort()
-						return
-					}
-					input.signal.addEventListener('abort', abort, { once: true })
-					started.resolve()
-				})
-			},
-		}))
-		const deploying = provider(deployRun(recorded, target(), false, controller.signal))
-		await started.promise
-		controller.abort()
-
-		const result = await deploying
-		expect(stepError(result, 'reconcile-schema')).toBe(CANCELLED)
-		expect(recorded.calls.at(-1)).toBe('reconcileSchemaAborted')
-		expect(recorded.schemaSignals).toEqual([controller.signal])
 	})
 
 	test('dry-run skips every platform and IAM mutation and names only the keys it would write', async () => {
@@ -1636,13 +1586,11 @@ describe('a contract application deploy', () => {
 			expect(stepError(result, 'raise-start-memory')).toBe('zerops: Control approved no access for this environment')
 		}
 		expect(recorded.builds).toEqual([])
-		expect(recorded.schemaBodies).toEqual([])
 	})
 
 	test('the approved contract locks the descriptor down even when the configuration declares none', async () => {
 		expect((await contractRun(false, approved)).status).toBe('succeeded')
 		expect(recorded.builds[0]?.zeropsYaml).toContain(`FABRIKA_CONTRACT_DIGEST: "${approved.contractDigest}"`)
-		expect(recorded.schemaBodies).toEqual([approved.schema])
 	})
 
 	test('sends the generated execution descriptor with the contract digest and release as literals', async () => {

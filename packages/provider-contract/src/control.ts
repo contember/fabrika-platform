@@ -138,12 +138,6 @@ export interface ProviderDeployInput {
 	readonly vars: Readonly<Record<string, string>>
 	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
 	readonly managedEnvironment: ProviderManagedEnvironment
-	/**
-	 * Every origin IAM may hand this app a session at (ADR-0022). App-wide, not per-environment:
-	 * IAM's registry is keyed by app id, so the set is assembled from every environment of the app.
-	 * Absent when the app has no public origin at all, which leaves IAM's registry untouched.
-	 */
-	readonly returnOrigins?: readonly string[]
 	readonly dryRun: boolean
 	readonly sourceBinding?: ProviderSourceBinding
 	/** Optional short-lived, run-scoped Operations artifact destination. */
@@ -160,7 +154,10 @@ export interface ProviderDeployInput {
 	readonly events: ProviderRunEvents
 }
 
-/** A terminal provider operation result. */
+/**
+ * A terminal provider operation result. `succeeded` means the version is live: Control then writes the environment's
+ * approved IAM schema itself (ADR-0011), so a provider never calls IAM for an application.
+ */
 export interface ProviderTerminalOutcome {
 	readonly state: 'succeeded' | 'failed'
 	readonly exitCode?: number
@@ -223,14 +220,10 @@ export interface ProviderRunReference {
 
 export interface ProviderCancelInput extends ProviderRunReference {
 	readonly signal: AbortSignal
-	/** See `ProviderDeployInput.returnOrigins`; a cancel that settles an activated deploy projects the same set. */
-	readonly returnOrigins?: readonly string[]
 }
 
 export interface ProviderReconcileInput extends ProviderRunReference {
 	readonly signal: AbortSignal
-	/** See `ProviderDeployInput.returnOrigins`; a provider that settles a deploy here projects the same set. */
-	readonly returnOrigins?: readonly string[]
 	/** Append a line to the run's log. */
 	log?(line: string): Promise<void>
 }

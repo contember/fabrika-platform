@@ -432,7 +432,6 @@ describe('Runner pipeline', () => {
 		const spawn = makeSpawner(rec, () => ({ exitCode: 0 }))
 		const job = baseJob({
 			domain: 'stage.acme.com',
-			returnOrigins: ['https://app.acme.com', 'https://stage.acme.com'],
 			stateNamespace: 'legacy-state',
 			runnerKey: 'test-runner-key',
 			credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef' },
@@ -450,7 +449,6 @@ describe('Runner pipeline', () => {
 			CLOUDFLARE_ACCOUNT_ID: 'acc-123456',
 			CLOUDFLARE_API_TOKEN: 'tok-abcdef',
 			FABRIKA_CONTROL_DOMAIN: 'stage.acme.com',
-			FABRIKA_IAM_RETURN_ORIGINS: 'https://app.acme.com,https://stage.acme.com',
 			CLOUDFLARE_STATE_NAMESPACE: 'legacy-state',
 			SAMPLE_API_KEY: 'super-secret-value',
 			PUBLIC_ORIGIN: 'public-value',

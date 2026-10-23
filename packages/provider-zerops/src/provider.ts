@@ -8,7 +8,7 @@
 // runs. Recovery never resumes a deploy (ADR-0044): a version reserved but never triggered is deleted, and
 // one whose build may have been requested is settled only by polling it.
 
-import { appEnvironmentId, FABRIKA_SOURCE_MAP_UPLOAD_KEY } from '@fabrika/auth-core'
+import { FABRIKA_SOURCE_MAP_UPLOAD_KEY } from '@fabrika/auth-core'
 import { type OperationsSourceMapUploadState, readSourceMapUploadReport } from '@fabrika/operations-contract/releases'
 import {
 	type DeployStepResult,
@@ -78,7 +78,6 @@ import {
 } from './managed-env'
 import {
 	applicationDatabaseOf,
-	approvedSchemaOf,
 	type FabrikaImportDocument,
 	type FabrikaManifest,
 	lockedExecutionFor,
@@ -96,8 +95,6 @@ export const CANCELLED = 'deploy cancelled'
 export interface ZeropsDeployRun {
 	readonly appId: string
 	readonly env: string
-	/** Every origin IAM may hand this app a session at; app-wide, because IAM's registry is keyed by app id. */
-	readonly returnOrigins?: readonly string[]
 	readonly secrets: Readonly<Record<string, string>>
 	readonly vars: Readonly<Record<string, string>>
 	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
@@ -989,35 +986,6 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 			await awaitVersion(env, appVersionId, attempt.processId, locked !== null && locked.databaseUrl !== null)
 			return
 		}
-
-		case 'reconcile-schema': {
-			const schema = approvedSchemaOf(run)
-			const propustkaUrl = target.propustkaUrl
-			if (schema === undefined || propustkaUrl === undefined) {
-				return
-			}
-			// Return origins ride this step because `apps.setReturnOrigins` 404s for an app IAM has never
-			// heard of, and the schema reconcile is what registers it. Separate call, same moment.
-			const returnOrigins = run.returnOrigins !== undefined && run.returnOrigins.length > 0 ? run.returnOrigins : undefined
-			const iamApp = appEnvironmentId(artifact.app.id, artifact.app.env)
-			if (dryRun) {
-				log(`  [dry-run] would reconcile schema for \`${iamApp}\` against ${propustkaUrl}`)
-				if (returnOrigins !== undefined) {
-					log(`  [dry-run] would register return origins for \`${iamApp}\`: ${returnOrigins.join(', ')}`)
-				}
-				return
-			}
-			assertRunning(signal)
-			await zerops.reconcileSchema({
-				url: propustkaUrl,
-				app: iamApp,
-				schema,
-				...(returnOrigins === undefined ? {} : { returnOrigins }),
-				adminKey: target.adminKey,
-				signal,
-			})
-			return
-		}
 	}
 }
 
@@ -1065,7 +1033,7 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 		familyVariables,
 		deadlineMs: Date.now() + ZEROPS_VERSION_DEADLINE_MS,
 	}
-	const steps = buildZeropsPlan(run.artifact, run.target)
+	const steps = buildZeropsPlan(run.artifact)
 	const options = { appId: run.appId, env: run.env, dryRun: run.dryRun, signal: run.signal, log: run.events.log }
 	const result = await runSteps(steps, options, (step) => runStep(step, env))
 	const { appVersionId, triggered } = env.attempt

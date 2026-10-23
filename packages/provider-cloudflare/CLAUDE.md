@@ -21,10 +21,10 @@ this one import.
   exactly `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`, `cloudflareRunnerJobSchema` refuses any other
   key, and the checkout's own `pipeline.build` child runs with those names removed from its
   environment (`CommandSpec.omitEnv`). IAM's provisioning key never leaves the control plane.
-- **The executor REPORTS, it does not call IAM.** It writes `RunnerOutcomeFile` (`$FABRIKA_RUNNER_OUTCOME_FILE`);
-  the control-side `deploy` and `reconcile` decide what IAM hears, with the control plane's own key and the projected
-  return origins. They apply Control's approved contract's `access.schema` (`environment.access`, ADR-0050),
-  whatever the runner reported. Without approved access, any report fails the run.
+- **Neither the executor nor this provider calls IAM for an application (ADR-0011).** The executor writes
+  `RunnerOutcomeFile` (`$FABRIKA_RUNNER_OUTCOME_FILE`); the control-side `deploy` and `reconcile` only validate its
+  report: a report without Control's approved access, or from a dry run, fails the run. Control writes the approved
+  contract's `access.schema` (ADR-0050) and the return origins itself once the run succeeds, whatever the runner reported.
 - **A platform deploy (`allow`) registers its component's schema with IAM ITSELF** (ADR-0058). The installation's own
   deploy runs fabrika's code and holds IAM's provisioning key, so `reconcile-schema` calls IAM at
   `CloudflareDeployerOptions.platformIam` (`FABRIKA_IAM_ISSUER` + `FABRIKA_IAM_PROVISIONING_KEY`, read by

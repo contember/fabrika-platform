@@ -145,3 +145,9 @@ WU1 → WU2 → WU3 touch the same run lifecycle and go in order. WU4 follows WU
 WU5, WU6, WU7 and WU9 are independent of each other. WU8 follows WU7.
 
 ## Run log
+
+- **WU1.** Control writes the schema through `IamSchemaPort` (`packages/control/src/iam-schema.ts`). A dry run logs
+  the write only when the environment already has approved access: a dry run publishes nothing, so a first dry run
+  has no schema to name. The Cloudflare platform path (`platformResources: 'allow'`) still registers its own
+  component's schema and reads `FABRIKA_IAM_RETURN_ORIGINS` from the installation workflow; only application deploys
+  moved.
