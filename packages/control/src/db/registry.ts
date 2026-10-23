@@ -540,6 +540,18 @@ export class ControlRegistryRepository {
 			.run()
 	}
 
+	/** Release exactly these keys of one owner and answer the ones released: a key claimed meanwhile by another owner stays. */
+	async releaseNamespaceResourceClaims(namespaceId: string, ownerAppId: string, ownerEnv: string, resourceKeys: readonly string[]): Promise<string[]> {
+		if (resourceKeys.length === 0) return []
+		const { results } = await this.d1
+			.prepare(`DELETE FROM namespace_resource_claims
+				WHERE namespace_id = ? AND owner_app_id = ? AND owner_env = ? AND resource_key IN (${resourceKeys.map(() => '?').join(', ')})
+				RETURNING resource_key`)
+			.bind(namespaceId, ownerAppId, ownerEnv, ...resourceKeys)
+			.all<{ resource_key: string }>()
+		return results.map((row) => row.resource_key).sort()
+	}
+
 	// ── App environments ──────────────────────────────────────────────────────
 
 	async listAppEnvs(appId: string): Promise<AppEnvRow[]> {

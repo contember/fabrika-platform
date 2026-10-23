@@ -75,6 +75,7 @@ Usage:
   fabrika control namespaces reconcile --namespace=<id>
   fabrika control namespaces update --namespace=<id> --proxy-source=current
   fabrika control namespaces remove --namespace=<id>
+  fabrika control namespaces release-claims --namespace=<id> --app=<id> --env=<name>
   fabrika control deploy --app=<id> --env=<name> [--ref=<ref>]
   fabrika control runs list [--app=<id>] [--env=<name>] [--limit=<n>]
   fabrika control runs get --run=<id>
@@ -138,6 +139,10 @@ of a placement no application is registered in. It deletes nothing at the provid
 the provider resources it stopped tracking. \`namespaces update --proxy-source=current\` re-pins a placement's
 proxy to the source this control plane deploys new placements from — a placement keeps the one it was created
 with until you do — and queues the reconcile that rebuilds the proxy from it; a \`failed\` placement accepts it.
+
+\`namespaces release-claims\` frees the resource names one app environment holds in a placement, which an
+environment or app delete otherwise refuses over. Delete those resources at the provider first: the release
+reads each one back and refuses, naming it, while any still exists. It prints one released key per line.
 
 Every command accepts --json, which prints the procedure's result verbatim.
 
@@ -882,6 +887,15 @@ const runNamespaces = async (verb: string | undefined, flags: Flags, env: Readon
 			console.warn(`retained\t${fact.label}\t${fact.value}`)
 		}
 		emit(flags, result, () => namespaceLine(result.removed))
+		return
+	}
+	if (verb === 'release-claims') {
+		const result = await client.namespaces.releaseClaims({
+			namespaceId: required(flags, 'namespace'),
+			appId: required(flags, 'app'),
+			env: required(flags, 'env'),
+		})
+		emit(flags, result, () => result.released.map((key) => `released\t${key}`).join('\n'))
 		return
 	}
 	if (verb === 'update') {

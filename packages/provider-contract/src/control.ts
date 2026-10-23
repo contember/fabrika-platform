@@ -470,6 +470,19 @@ export interface ProviderNamespaceOperator {
 	present(namespace: ProviderDeploymentNamespace): ProviderNamespacePresentation
 }
 
+/** The app-owned claims of one namespace whose resources Control is asked to confirm gone. */
+export interface ProviderClaimedResourcesInput {
+	readonly namespace: ProviderDeploymentNamespace
+	readonly resourceKeys: readonly string[]
+	readonly signal: AbortSignal
+}
+
+/** What the provider observed for one claimed resource. */
+export interface ProviderClaimedResource {
+	readonly resourceKey: string
+	readonly exists: boolean
+}
+
 /** Optional placement lifecycle owned by providers that use deployment namespaces. */
 export interface ProviderNamespaceCapabilities {
 	normalize(namespace: ProviderDeploymentNamespace): ProviderDeploymentNamespace
@@ -486,6 +499,11 @@ export interface ProviderNamespaceCapabilities {
 	reconcile(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
 	/** Absent means the namespace has no entry point that follows its members. */
 	republish?(input: ProviderNamespaceRepublishInput): Promise<ProviderNamespaceRepublishResult>
+	/**
+	 * Read-only: whether each claimed resource still exists, one answer per key. Throws when it cannot tell, so Control
+	 * releases a claim only over a resource the provider confirmed gone. Absent means no claim can be released.
+	 */
+	claimedResources?(input: ProviderClaimedResourcesInput): Promise<readonly ProviderClaimedResource[]>
 	/** Absent means the provider changes no namespace in place. */
 	readonly updates?: ProviderNamespaceUpdates
 	readonly operator?: ProviderNamespaceOperator

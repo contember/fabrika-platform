@@ -931,6 +931,23 @@ Each round took 5.5–6.6 s in all, where eight sequential writes take about 20 
 `userDataSyncRunning` conflict stays a deploy's: `write-service-env` therefore writes up to six variables at a time
 and returns only after every started write's sync has finished.
 
+### Verified live (2026-10-23, account `prg1`) — reading back a deleted project
+
+Measured when a throwaway dev namespace's project was deleted (`DELETE /project/{id}`, `project.delete`
+`FINISHED` in 28 s), with the installation's own token and through fabrika's API client.
+
+| Behaviour                                                                         | Result                                                           |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `GET /project/{id}` of the deleted project                                        | **`400 projectNotFound`**                                        |
+| `GET /project/{id}/service-stack` of the deleted project                          | **`400 projectNotFound`**                                        |
+| `GET /service-stack-by-name/{projectId}/{name}` of the deleted project            | **`400 serviceStackNotFound`**, the answer for a missing service |
+| `GET /service-stack/{id}` of a service the deletion removed                       | **`400 serviceStackNotFound`**                                   |
+| `GET /project/{id}` and the by-name read on a project the token holds no grant on | **`403 insufficientPermissions`**, never `projectNotFound`       |
+| `GET /service-stack-by-name/{projectId}/{name}` with an id no project ever had    | **`400 projectNotFound`**                                        |
+
+A claim release reads the project first: `projectNotFound` makes every claimed service gone, and a `403`
+fails the check rather than reading an unreachable project as empty.
+
 **Fresh creation provenance witness, 2026-10-02.** A collision-rejecting codeless import created
 disposable service `9YWl1QygSmGeGnmKvYISDw`. The response's `serviceStacks` entry identified its
 name and ID, and associated both processes with that same `serviceStackId`: creation

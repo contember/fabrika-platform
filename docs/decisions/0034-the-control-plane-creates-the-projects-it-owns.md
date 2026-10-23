@@ -56,6 +56,12 @@ project it has created, with `OWNER` on the latter — which includes deleting t
 increase and it is the price of the feature; the mitigation is that `OWNER` is confined to projects
 fabrika itself created, and that the org-wide role stays `NO_ACCESS`.
 
+Fabrika still deletes none of these projects, or any service in them: removing an application from a
+namespace is the operator's deletion at the provider, then a claim release that Control grants only once
+the provider reads every claimed resource back as gone
+([ADR-0014](0014-provider-owned-deployment-namespaces.md)). `OWNER` makes that read-back possible on the
+projects fabrika created; it is never used to delete.
+
 Existing installations are NOT fixed by deploying this. Their token was already minted, and grants are
 fixed at mint time. An operator updates the live token in place — `zops token integration update <id>
 --can-create-projects` — and must re-pass the existing project grants in the same call, because the

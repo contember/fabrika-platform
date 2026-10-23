@@ -26,6 +26,9 @@ versioned JSON envelope.
 - `registrationResourceClaims`, which derives app-owned keys from a normalized
   application registration;
 - idempotent `provision` and `reconcile` operations;
+- an optional read-only `claimedResources` check, which answers whether each
+  claimed resource still exists and throws when it cannot tell (see
+  [Releasing a claim](#releasing-a-claim));
 - an optional operator surface with presets, mutation-free planning, and a
   credential-free presentation.
 
@@ -170,12 +173,38 @@ provider resource inside one namespace. Its key is
   historical reservation in the old namespace.
 - A claim outlives its owner's deletion. Deleting an application or an
   application environment that still holds one answers **409**, naming the
-  namespace and the resource keys that hold it. The claim is not released:
+  namespace and the resource keys that hold it. The delete does not release it:
   fabrika deletes no provider resource
   ([ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md)),
-  so freeing the name would make the orphaned live service adoptable by the next
-  application, carrying its old secrets. Releasing a claim is an undecided
-  operator action, not a step the delete performs.
+  so freeing the name over a live service would make that service adoptable by
+  the next application, carrying its old secrets.
+
+### Releasing a claim
+
+An operator removes an application environment from a namespace in this order:
+
+1. Delete its resources at the provider (for Zerops, the services, or the whole
+   project of an exclusive namespace). Fabrika deletes none.
+2. `fabrika control namespaces release-claims --namespace=<id> --app=<id> --env=<name>`
+   (`namespaces.releaseClaims`, behind `namespace.manage`). Under the namespace
+   lease, which every deploy into the namespace takes, Control asks the
+   provider's `claimedResources` whether each claimed resource still exists. It
+   releases the owner's claims only when every one is confirmed gone; one that
+   exists is refused with **409** naming it, and a read-back that fails (a
+   forbidden project, an unknown key, an outage) is **502** and releases
+   nothing. The namespace's own claims are never touched. The release is
+   audited as `namespace.claims.release` with the released keys.
+3. `apps.environments.delete`, then, when the namespace is empty and no longer
+   wanted, `fabrika control namespaces remove --namespace=<id>`.
+
+A provider without `claimedResources` releases no claim. Cloudflare has no
+deployment namespaces, so it holds no claim to release. On Zerops a claimed
+`service:<hostname>` is gone when the namespace's project reads
+`projectNotFound` (a deleted project), or when the project exists and has no
+service under that hostname. A project the token holds no grant on answers
+`403 insufficientPermissions` and is never read as gone; a namespace that
+recorded no `projectId` cannot be checked
+([zerops-platform.md](./zerops-platform.md)).
 
 Before a deploy calls the provider, shared lifecycle code rehydrates the stored
 namespace and verifies provider, environment, readiness, exclusivity, normalized

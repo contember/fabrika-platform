@@ -36,6 +36,7 @@ import type {
 	PutAppVarRequest,
 	RegisterAppRequest,
 	RegisterAppResponse,
+	ReleaseNamespaceClaimsResponse,
 	RemoveDeploymentNamespaceResponse,
 	RunDto,
 	RunLogResponse,
@@ -117,6 +118,12 @@ export interface AdoptNamespaceInput extends NamespaceIdInput {
 
 export interface UpdateNamespaceInput extends NamespaceIdInput {
 	readonly namespace: UpdateDeploymentNamespaceRequest
+}
+
+/** The app environment whose claims in the namespace are released. */
+export interface ReleaseNamespaceClaimsInput extends NamespaceIdInput {
+	readonly appId: string
+	readonly env: string
 }
 
 export interface RunListInput {
@@ -207,6 +214,11 @@ export interface ControlRpcContract {
 		update: RpcProcedure<UpdateNamespaceInput, DeploymentNamespaceDetailDto>
 		/** Free a namespace id. Refused while any app environment is registered in it (backlog 73). */
 		remove: RpcProcedure<NamespaceIdInput, RemoveDeploymentNamespaceResponse>
+		/**
+		 * Release one app environment's resource claims in the namespace, only when the provider confirms every claimed
+		 * resource gone. The operator deletes the resources first; fabrika deletes none (ADR-0034).
+		 */
+		releaseClaims: RpcProcedure<ReleaseNamespaceClaimsInput, ReleaseNamespaceClaimsResponse>
 	}
 	runs: {
 		list: RpcProcedure<RunListInput, CursorList<RunDto>>
