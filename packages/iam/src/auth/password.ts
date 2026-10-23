@@ -1,6 +1,6 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
 import { z } from 'zod'
-import { actionLandingOrigin, type AppPresentation, INSTALLATION_PRESENTATION, landingUrl, presentationFor } from '../app-presentation'
+import { actionLandingOrigin, type AppPresentation, installationPresentation, landingUrl, presentationFor } from '../app-presentation'
 import { type AuditEventInput } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 
@@ -89,10 +89,16 @@ export async function handlePasswordLogin(
 	clientAddress: string | null,
 	requestId: string,
 ): Promise<Response> {
-	if (!services.config.authentication.password.enabled) return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'password_disabled' }, 404)
+	if (!services.config.authentication.password.enabled) {
+		return authFailurePage(await installationPresentation(services), { kind: 'password_disabled' }, 404)
+	}
 	// Before the form is read no application is known, so these refusals speak the installation's language.
 	const refused = (reason: LoginRefusal, failure: AuthFailure, status: number) =>
-		refuseLogin(services, { requestId, principalId: null, reason }, () => authFailurePage(INSTALLATION_PRESENTATION, failure, status))
+		refuseLogin(
+			services,
+			{ requestId, principalId: null, reason },
+			async () => authFailurePage(await installationPresentation(services), failure, status),
+		)
 	if (!sameOrigin(request, services.config)) return refused('login_cross_origin', { kind: 'cross_origin' }, 403)
 	const form = await readForm(request)
 	if (form === null) return refused('password_malformed', { kind: 'malformed_form' }, 400)
@@ -324,7 +330,7 @@ export async function handlePasswordAction(
 	const tokenHash = await hashToken(submittedToken)
 	const action = await services.repositories.passwords.inspectActionToken(tokenHash, purpose)
 	if (action === null) return invalidActionPage(linked)
-	const presentation = await presentationFor(services, action.app)
+	const presentation = await presentationFor(services, action.app, linked.brand)
 	const principal = await services.repositories.principals.getPrincipalById(action.principal_id)
 	if (principal === null || principal.disabled_at !== null) return invalidActionPage(presentation)
 	const policy = validatePassword(password, { email: principal.email, label: principal.label })

@@ -42,12 +42,17 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   `iamAdministrationScope` of its permissions says whether of the installation or of some applications' people,
   ADR-0058) and `appPeople.apps`. `mayOpen` gives each rail page the rule its LOADER needs, so a page in the rail loads: the
   overview needs `app.manage`, `namespace.manage` and `deploy.read` globally, Applications `app.manage` globally,
-  Deploy runs `deploy.read` in any scope, Operations `operations.read` in any scope, Access's Users any IAM administration, every other Access page the
-  installation's. The root layout drops the rest,
+  Deploy runs `deploy.read` in any scope, Operations `operations.read` in any scope, Access's Users any IAM administration, every other Access page and
+  Settings → Branding the installation's. The root layout drops the rest,
   answers a hidden page reached by URL with "not available", and shows the no-access page when nothing is left. A
   part no service answered is `null` and reads as usable, so an outage still shows its own page. Controls use
   `mayDo` at the object's app and environment (`ConsoleAccessContext`). The action names come from the contracts:
   `CONTROL_ACTIONS` (`@fabrika/control-contract`) and `OPERATIONS_ACTIONS` (`@fabrika/operations-contract/access`).
+- **Settings → Branding edits the installation's client logo, which IAM keeps (ADR-0066).** The page calls IAM's
+  `brand.set` / `brand.clear`, then Control's `namespaces.republishAll` when the caller holds `namespace.manage`, so the
+  proxies of every namespace publish it; IAM's pages show it at once. `lib/branding.ts` holds a chosen file to
+  proxy-core's own `brandImageProblem` before it is sent, so the page refuses what IAM would. The console itself keeps
+  fabrika's mark: never draw the client logo in the shell.
 - **An IAM application reads as its display name** (`src/access/lib/app-names.tsx`). The Access layout reads
   `apps.list` once and provides the names; `AppName` renders the name with the id as its tooltip, and a picker
   option shows both. The console itself is `vozka`, named `Console`.

@@ -24,6 +24,7 @@ import type {
 	RoleDef,
 	WorkloadKind,
 } from '@fabrika/auth-core'
+import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 
 // ── Common wrappers ───────────────────────────────────────────────────────────
 
@@ -647,6 +648,21 @@ export interface RevokeAppRoleResponse {
 	revoked: boolean
 }
 
+/**
+ * The installation's client logo on fabrika's own pages (ADR-0066): IAM's sign-in, account and invitation pages, and the
+ * proxy's error pages on every application host. `null` shows the fabrika mark. An installation serves one client, so
+ * this is one setting of the installation, kept by IAM.
+ */
+export interface InstallationBrandDto {
+	brand: InstallationBrand | null
+	/** When it was last set or cleared, in epoch seconds; null when it never was. */
+	updatedAt: number | null
+}
+
+export interface SetInstallationBrandRequest {
+	brand: InstallationBrand
+}
+
 export interface IamAdminRpcContract {
 	me: RpcProcedure<void, MeDto>
 	principals: {
@@ -730,6 +746,16 @@ export interface IamAdminRpcContract {
 		list: RpcProcedure<AppPeopleInput, AppPeopleDto>
 		grant: RpcProcedure<GrantAppRoleRequest, GrantAppRoleResponse>
 		revoke: RpcProcedure<RevokeAppRoleRequest, RevokeAppRoleResponse>
+	}
+	/**
+	 * The installation's client logo (ADR-0066), an installation administrator's (`iam.admin`) to read and to change. A
+	 * change writes `iam.brand.update` in its own transaction. IAM's pages show it on their next render; the proxy's
+	 * pages once Control republishes their manifests.
+	 */
+	brand: {
+		get: RpcProcedure<void, InstallationBrandDto>
+		set: RpcProcedure<SetInstallationBrandRequest, InstallationBrandDto>
+		clear: RpcProcedure<void, InstallationBrandDto>
 	}
 }
 

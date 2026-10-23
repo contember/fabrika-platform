@@ -1,3 +1,4 @@
+import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
 import { actionLandingOrigin, type AppPresentation, landingUrl, presentationFor } from '../app-presentation'
 import { type InvitationRow, principalStatus } from '../db'
@@ -52,7 +53,7 @@ export async function handleInvitation(request: Request, services: Services, ctx
 		// The new account would replace the browser's session silently, and the application would keep the old identity.
 		if ((await currentSession(request, services)) !== null) {
 			return invitationOutcomePage({
-				presentation: await presentationFor(services, offer.invitation.app),
+				presentation: await presentationFor(services, offer.invitation.app, linked.brand),
 				title: (t) => t.otherAccountTitle,
 				text: (t) => t.otherAccountText(offer.invitation.email),
 				status: 409,
@@ -61,9 +62,9 @@ export async function handleInvitation(request: Request, services: Services, ctx
 		}
 		const password = stringValue(form?.get('password') ?? null)
 		if (password !== null) {
-			return createAndAccept(request, services, ctx, { invitation: offer.invitation, token: token.data, password, requestId })
+			return createAndAccept(request, services, ctx, { invitation: offer.invitation, token: token.data, password, requestId, brand: linked.brand })
 		}
-		const presentation = await presentationFor(services, offer.invitation.app)
+		const presentation = await presentationFor(services, offer.invitation.app, linked.brand)
 		return invitationPasswordPage({
 			presentation,
 			landingOrigin: await actionLandingOrigin(services, presentation),
@@ -101,7 +102,7 @@ export async function handleInvitation(request: Request, services: Services, ctx
 		}
 	}
 	const { invitation } = outcome
-	const presentation = await presentationFor(services, invitation.app)
+	const presentation = await presentationFor(services, invitation.app, linked.brand)
 	const landing = landingUrl(presentation)
 	if (landing !== null) {
 		return new Response(null, { status: 302, headers: redirectHeaders(landing) })
@@ -124,10 +125,17 @@ async function createAndAccept(
 	request: Request,
 	services: Services,
 	ctx: RequestContext,
-	input: { readonly invitation: InvitationRow; readonly token: string; readonly password: string; readonly requestId: string },
+	input: {
+		readonly invitation: InvitationRow
+		readonly token: string
+		readonly password: string
+		readonly requestId: string
+		/** The logo the request's page already read. */
+		readonly brand: InstallationBrand | null
+	},
 ): Promise<Response> {
 	const { invitation } = input
-	const presentation = await presentationFor(services, invitation.app)
+	const presentation = await presentationFor(services, invitation.app, input.brand)
 	const policy = validatePassword(input.password, { email: invitation.email, label: invitation.email })
 	if (!policy.ok) {
 		return invitationPasswordPage({

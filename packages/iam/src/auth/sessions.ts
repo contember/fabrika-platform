@@ -1,7 +1,7 @@
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { iamAdministrationScope } from '@fabrika/iam-contract'
 import { IAM_APP } from '../admin/router'
-import { INSTALLATION_PRESENTATION, installationLanding } from '../app-presentation'
+import { installationLanding, installationPresentation } from '../app-presentation'
 import { sessionUsable } from '../auth'
 import { type AuthenticationMethod, type PrincipalRow, principalStatus, type SessionRow } from '../db'
 import { type RequestContext } from '../env'
@@ -100,7 +100,7 @@ export async function issueSession(
 		})
 	} catch (err) {
 		logError(`login could not be recorded for request '${input.requestId}'`, err)
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'login_unavailable' }, 503)
+		return authFailurePage(await installationPresentation(services), { kind: 'login_unavailable' }, 503)
 	}
 
 	// The IAM cookie is set either way: it is what spares the NEXT handoff, to this or any other app, a
@@ -154,7 +154,7 @@ export async function refuseLogin(
 		})
 	} catch (err) {
 		logError(`a refused login could not be recorded for request '${entry.requestId}'`, err)
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'login_unavailable' }, 503)
+		return authFailurePage(await installationPresentation(services), { kind: 'login_unavailable' }, 503)
 	}
 	return answer()
 }
@@ -175,8 +175,10 @@ async function administersIam(services: Services, principalId: string): Promise<
  */
 export async function handleLogout(request: Request, services: Services, requestId: string): Promise<Response> {
 	// Logout names no application, like its confirmation page: these answers speak the installation's language.
-	if (!sameOrigin(request, services.config)) return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'cross_origin' }, 403)
-	if (!await endLogin(request, services, requestId)) return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'logout_unavailable' }, 503)
+	if (!sameOrigin(request, services.config)) return authFailurePage(await installationPresentation(services), { kind: 'cross_origin' }, 403)
+	if (!await endLogin(request, services, requestId)) {
+		return authFailurePage(await installationPresentation(services), { kind: 'logout_unavailable' }, 503)
+	}
 	const url = new URL(request.url)
 	return signedOutRedirect(safeRedirect(url.searchParams.get('redirect'), services.config) ?? await installationLanding(services))
 }

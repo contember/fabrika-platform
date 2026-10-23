@@ -404,6 +404,19 @@ other environment, before the provider prepares anything, and the write maps a r
   until claim release is decided — releasing them is a USER decision, not a fix: fabrika deletes no provider
   resource (ADR-0034), so a freed name makes an orphaned service adoptable by the next app, carrying its old
   secrets.
+- **Every namespace mutation hands the provider the installation's client logo** (ADR-0066,
+  `src/installation-brand.ts`). IAM keeps it; Control reads it with the provisioning key (`iamBrandSource`, wired by
+  `installationBrandDeps` when `FABRIKA_IAM_ISSUER` and `FABRIKA_IAM_PROVISIONING_KEY` are set) inside each provider
+  mutation and republish. The logo is presentation, so a read that fails, or that IAM leaves unanswered for
+  `BRAND_READ_TIMEOUT_MS`, publishes fabrika's mark and logs a warning:
+  an IAM that does not answer holds up no namespace and no deploy, and the next publish draws the logo again.
+  `namespaces.republishAll` (`namespace.manage`) is the one exception: it reads the logo once, refuses with a 502 when
+  IAM does not answer (the change it was asked to publish would reach no proxy), republishes every ready namespace at
+  once with it (one a deploy holds is no failure: `NamespaceProxyBusyError`, the republish queued its reconcile), moves
+  one still `provisioning` back to `pending` and queues its reconcile, as `namespaces.reconcile` does, and audits each
+  before it reports a failure; the
+  console calls it after a logo change. Control keeps no copy. Control's calls to IAM as itself (the brand, membership
+  keys, workload keys) share one client, `iamProvisioningClient` (`src/iam-provisioning.ts`).
 - **`namespaces.update` runs in the request, not behind the queue** (backlog 79). The provider PLANS the
   merged target first (pure; an unknown field → 400; `PROVIDER_NAMESPACE_IMMUTABLE` → 409 naming a new
   namespace id, because removal keeps the provider project and recreating the id adopts it). Then, under the

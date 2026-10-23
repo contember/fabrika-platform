@@ -35,6 +35,7 @@ import {
 } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
 import { Authorizer, type AuthorizerOptions, type Decision, type DenyReason, type ForwardedRequest, type ResolvedApp } from './authorize'
+import type { InstallationBrand } from './brand'
 import type { TokenCache } from './cache'
 import {
 	APP_QUERY_PARAM,
@@ -100,6 +101,8 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 	const byId = new Map<string, ResolvedApp>()
 	const byHost = new Map<string, ResolvedApp>()
 	const policies = new Map<string, HeaderPolicy>()
+	// The client's logo on every page this service answers with (ADR-0066); the fabrika mark without one.
+	const brand = config.manifest.brand ?? null
 	for (const app of config.manifest.apps) {
 		const resolved = resolveApp(app)
 		byId.set(app.id, resolved)
@@ -145,14 +148,14 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			const read = readForwardedRequest(request, requestId)
 			if (!read.ok) {
 				const status = read.reason === 'non_canonical_path' ? 400 : 403
-				return withPolicy(denied(logger, { requestId }, { outcome: 'deny', status, reason: read.reason }, { asPage }), earlyPolicy(request, url))
+				return withPolicy(denied(logger, { requestId }, { outcome: 'deny', status, reason: read.reason }, { asPage, brand }), earlyPolicy(request, url))
 			}
 			const forwarded = read.request
 
 			const resolved = selectApp(url, forwarded.url.host, byId, byHost)
 			if (resolved === null) {
 				const fields = { requestId, host: forwarded.url.host, path: redactPath(forwarded.url.pathname) }
-				return withPolicy(denied(logger, fields, { outcome: 'deny', status: 403, reason: 'no_app' }, { asPage }), BASE_HEADER_POLICY)
+				return withPolicy(denied(logger, fields, { outcome: 'deny', status: 403, reason: 'no_app' }, { asPage, brand }), BASE_HEADER_POLICY)
 			}
 
 			if (url.pathname === OAUTH_METADATA_VERIFY_PATH) {
@@ -209,7 +212,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			const download = isDownload(resolved, forwarded)
 			const answer = decision.outcome === 'handoff'
 				? handoff(logger, fields, decision)
-				: denied(logger, fields, decision, { isCallback, asPage: asPage && !download })
+				: denied(logger, fields, decision, { isCallback, asPage: asPage && !download, brand })
 			const treated = download ? withFileTreatment(answer, appFileTreatment(resolved.app)) : withPolicy(answer, policy)
 			if (decision.outcome === 'deny' && decision.crossOrigin !== undefined) {
 				applyCrossOriginHeaders(treated.headers, crossOriginHeaders(decision.crossOrigin))
@@ -219,7 +222,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			// The last line of the fail-closed guarantee. No `err` is inspected or logged: a caught
 			// error can stringify a URL, a header or a body, any of which may carry a credential.
 			logger.error('verify failed', { requestId })
-			return withPolicy(errorAnswer(403, DENY_TEXT[403], isPageNavigation(request.headers)), earlyPolicy(request, null))
+			return withPolicy(errorAnswer(403, DENY_TEXT[403], isPageNavigation(request.headers), brand), earlyPolicy(request, null))
 		}
 	}
 
@@ -299,7 +302,7 @@ function denied(
 	logger: ProxyLogger,
 	fields: LogFields,
 	decision: Extract<Decision, { outcome: 'deny' | 'login' }>,
-	{ isCallback = false, asPage }: { isCallback?: boolean; asPage: boolean },
+	{ isCallback = false, asPage, brand }: { isCallback?: boolean; asPage: boolean; brand: InstallationBrand | null },
 ): Response {
 	const reason: DenyReason = decision.reason
 	if (decision.outcome === 'login') {
@@ -309,7 +312,7 @@ function denied(
 			: loginRequired(decision.location, decision.handoff)
 	}
 	logger.warn('deny', { ...fields, reason, status: decision.status })
-	const response = isCallback ? callbackFailure(decision.status) : errorAnswer(decision.status, DENY_TEXT[decision.status], asPage)
+	const response = isCallback ? callbackFailure(decision.status, brand) : errorAnswer(decision.status, DENY_TEXT[decision.status], asPage, brand)
 	if (decision.clearHandoffState !== undefined) {
 		response.headers.append('set-cookie', clearHandoffCookie(decision.clearHandoffState))
 	}
@@ -331,14 +334,14 @@ function denied(
  * out here anyway: `invalid_session` covers an expired verifier and a code IAM refused alike. Coarse
  * deny reasons stay in the log (`../proxy/CLAUDE.md`).
  */
-function callbackFailure(status: number): Response {
+function callbackFailure(status: number, brand: InstallationBrand | null): Response {
 	const content: Omit<PageContent, 'action'> = status === 503
 		? { title: 'Sign-in is unavailable', detail: 'The sign-in service could not be reached. Please try again in a moment.' }
 		: {
 			title: 'Sign-in did not complete',
 			detail: 'The sign-in link has expired or has already been used. Signing in again will issue a new one.',
 		}
-	return pageResponse(status, renderPage({ ...content, action: { href: '/', label: 'Start again' } }, String(status)))
+	return pageResponse(status, renderPage({ ...content, action: { href: '/', label: 'Start again' } }, String(status), brand))
 }
 
 /** The bounce a document navigation gets: the browser follows it and comes back signed in. */

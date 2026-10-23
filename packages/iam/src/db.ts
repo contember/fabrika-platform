@@ -2,6 +2,7 @@ import type { SqlDatabase } from '@fabrika/platform'
 import { PasswordRepository } from './password-db'
 import { AppSchemaRepository } from './repositories/app-schema'
 import { AuditRepository, AuditWriter, type SqlDialect } from './repositories/audit'
+import { InstallationBrandRepository } from './repositories/brand'
 import { CredentialRepository } from './repositories/credentials'
 import { DeviceAuthorizationRepository } from './repositories/device'
 import { GrantRepository } from './repositories/grants'
@@ -37,6 +38,7 @@ export {
 	type SqlChange,
 	type SqlDialect,
 } from './repositories/audit'
+export { type InstallationBrandImages, InstallationBrandRepository, type InstallationBrandRow } from './repositories/brand'
 export { type CredentialGrantRow, CredentialRepository, type CredentialRow } from './repositories/credentials'
 export { DeviceAuthorizationRepository, type DeviceAuthorizationRow, type DeviceReceiptRow } from './repositories/device'
 export { type DelegatedAuthority, ExternalGrantError, GrantRepository, type GrantRow } from './repositories/grants'
@@ -73,6 +75,7 @@ export interface IamRepositories {
 	audit: AuditRepository
 	workloads: WorkloadRepository
 	membershipTransport: MembershipTransportKeyRepository
+	brand: InstallationBrandRepository
 }
 
 /**
@@ -99,6 +102,7 @@ export function createIamRepositories(
 		audit: replacements.audit ?? new AuditRepository(db, writer),
 		workloads: replacements.workloads ?? new WorkloadRepository(db),
 		membershipTransport: replacements.membershipTransport ?? new MembershipTransportKeyRepository(db),
+		brand: replacements.brand ?? new InstallationBrandRepository(db, writer),
 	}
 }
 

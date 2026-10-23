@@ -21,6 +21,7 @@ import {
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
+import type { BrandImage } from '@fabrika/proxy-core/brand'
 import { appFileTreatment, appHeaderPolicy, BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, NO_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import type { ContractProxyApp, InstallationProxyApp, ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
@@ -52,6 +53,12 @@ const MANIFEST: ProxyManifest = {
 
 const OPTIONS = { authUpstream: '127.0.0.1:9000' }
 
+/** A one-pixel PNG, the smallest image the brand validator admits. */
+const PIXEL: BrandImage = {
+	type: 'image/png',
+	base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+}
+
 function rawSubrouteOf(route: CaddyRoute): CaddySubrouteHandler {
 	const handler = route.handle[0]
 	if (handler === undefined || handler.handler !== 'subroute') {
@@ -73,20 +80,21 @@ function policyValues(policy: HeaderPolicy): Record<string, string[]> {
 	return Object.fromEntries(policy.map(([name, value]) => [name, [value]]))
 }
 
-/** What a browser's top-level navigation reads in place of `otherwise`: the page of `status`, under the same policy. */
+/**
+ * What a browser's top-level navigation reads in place of `otherwise`: the host's policy on the answer, then the named
+ * page of `status`, written once for the whole server.
+ */
 function pageOr(status: ErrorPageStatus, policy: HeaderPolicy, otherwise: CaddyStaticResponseHandler): CaddySubrouteHandler {
-	const body = errorPage(status)
+	const route = `fabrika-page-${status}`
 	return {
 		handler: 'subroute',
 		routes: [
 			{
 				match: [{ header: { 'Sec-Fetch-Mode': ['navigate'] } }],
-				handle: [{
-					handler: 'static_response',
-					status_code: status,
-					headers: { ...policyValues(policy), 'Content-Type': ['text/html; charset=utf-8'] },
-					body,
-				}],
+				handle: [
+					{ handler: 'headers', response: { set: { ...policyValues(policy), 'Content-Type': ['text/html; charset=utf-8'] } } },
+					{ handler: 'invoke', name: route },
+				],
 				terminal: true,
 			},
 			{ handle: [otherwise] },
@@ -99,25 +107,23 @@ function pageOr(status: ErrorPageStatus, policy: HeaderPolicy, otherwise: CaddyS
  * status the page of an application that does not answer, printing the status.
  */
 function failurePageOr(policy: HeaderPolicy, otherwise: CaddyStaticResponseHandler): CaddySubrouteHandler {
-	const page = (status: number | string, body: string): CaddyStaticResponseHandler => ({
-		handler: 'static_response',
-		status_code: status,
-		headers: { ...policyValues(policy), 'Content-Type': ['text/html; charset=utf-8'] },
-		body,
-	})
+	const status = '{http.error.status_code}'
 	return {
 		handler: 'subroute',
 		routes: [
 			{
 				match: [{ header: { 'Sec-Fetch-Mode': ['navigate'] } }],
-				handle: [{
-					handler: 'subroute',
-					routes: [
-						{ match: [{ vars: { '{http.error.status_code}': ['503'] } }], handle: [page(503, errorPage(503))], terminal: true },
-						{ match: [{ vars: { '{http.error.status_code}': ['504'] } }], handle: [page(504, errorPage(504))], terminal: true },
-						{ handle: [page('{http.error.status_code}', errorPage(502, '{http.error.status_code}'))] },
-					],
-				}],
+				handle: [
+					{ handler: 'headers', response: { set: { ...policyValues(policy), 'Content-Type': ['text/html; charset=utf-8'] } } },
+					{
+						handler: 'subroute',
+						routes: [
+							{ match: [{ vars: { [status]: ['503'] } }], handle: [{ handler: 'invoke', name: 'fabrika-page-503' }], terminal: true },
+							{ match: [{ vars: { [status]: ['504'] } }], handle: [{ handler: 'invoke', name: 'fabrika-page-504' }], terminal: true },
+							{ handle: [{ handler: 'invoke', name: 'fabrika-page-failure' }] },
+						],
+					},
+				],
 				terminal: true,
 			},
 			{ handle: [otherwise] },
@@ -182,6 +188,35 @@ describe('server shape', () => {
 		// Nothing falls off the end into a default handler.
 		expect(routes[2]?.match).toBeUndefined()
 		expect(routes[2]?.handle).toEqual([refusal(404, 'not found', BASE_HEADER_POLICY)])
+	})
+
+	test("the pages are written once, as named routes, and a host's route only invokes them", () => {
+		const pages = config.apps.http.servers['proxy']?.named_routes ?? {}
+		expect(Object.keys(pages).sort()).toEqual(['fabrika-page-400', 'fabrika-page-404', 'fabrika-page-503', 'fabrika-page-504', 'fabrika-page-failure'])
+		const statuses: (400 | 404 | 503 | 504)[] = [400, 404, 503, 504]
+		for (const status of statuses) {
+			expect(pages[`fabrika-page-${status}`]).toEqual({ handle: [{ handler: 'static_response', status_code: status, body: errorPage(status) }] })
+		}
+		expect(pages['fabrika-page-failure']).toEqual({
+			handle: [{
+				handler: 'static_response',
+				status_code: '{http.error.status_code}',
+				body: errorPage(502, { shownStatus: '{http.error.status_code}' }),
+			}],
+		})
+		// No page body outside the named routes: a page is the size of a logo, and there are as many hosts as apps.
+		const { named_routes: _pages, ...rest } = config.apps.http.servers['proxy'] ?? { listen: [], routes: [] }
+		expect(JSON.stringify(rest)).not.toContain('<!doctype html>')
+	})
+
+	test("the installation's client logo is in each page once and nowhere else (ADR-0066)", () => {
+		const branded = buildCaddyConfig({ ...MANIFEST, brand: { light: PIXEL } }, OPTIONS).apps.http.servers['proxy']
+		const pages = branded?.named_routes ?? {}
+		for (const name of ['fabrika-page-400', 'fabrika-page-404', 'fabrika-page-503', 'fabrika-page-504', 'fabrika-page-failure']) {
+			expect(JSON.stringify(pages[name]).split(PIXEL.base64).length - 1).toBe(1)
+		}
+		expect(JSON.stringify(branded?.routes)).not.toContain(PIXEL.base64)
+		expect(JSON.stringify(branded?.errors)).not.toContain(PIXEL.base64)
 	})
 
 	test('the health route is on its own listener, so it shadows no app path', () => {

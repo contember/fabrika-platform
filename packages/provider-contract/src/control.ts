@@ -1,4 +1,5 @@
 import type { AppSchema, ContractArtifact } from '@fabrika/auth-core'
+import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import type { JsonValue, ProviderEnvelope } from './json'
 
 /** Events whose persistence and presentation belong to the control plane. */
@@ -330,6 +331,11 @@ export interface ProviderNamespaceMutationInput {
 	readonly namespace: ProviderDeploymentNamespace
 	/** Every app environment assigned to the namespace, read under its lease. */
 	readonly members: readonly ProviderNamespaceMember[]
+	/**
+	 * The installation's client logo for the pages the namespace's proxy answers with (ADR-0066), read from IAM for this
+	 * mutation; absent or null shows the fabrika mark. A provider passes it only to a proxy that can parse it.
+	 */
+	readonly brand?: InstallationBrand | null
 	readonly signal: AbortSignal
 	readonly events: ProviderNamespaceEvents
 }

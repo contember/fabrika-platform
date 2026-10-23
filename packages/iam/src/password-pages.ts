@@ -1,4 +1,5 @@
 import { DEFAULT_LOCALE, type Locale } from '@fabrika/auth-core'
+import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { PAGE_STYLE, pageBody } from '@fabrika/proxy-core/page-style'
 import { type AppPresentation, appQuery, landingUrl } from './app-presentation'
 import type { AuthFailure } from './auth/failure'
@@ -40,6 +41,7 @@ export function loginPage(input: {
 	const title = text.signIn.title(input.presentation.displayName)
 	return htmlPage({
 		locale: input.presentation.locale,
+		brand: input.presentation.brand,
 		title,
 		content: `<h1>${escapeHtml(title)}</h1>${message(input.invalidCredentials === true ? text.signIn.invalidCredentials : undefined)}
 		<form method="post" action="/auth/login">
@@ -83,6 +85,7 @@ export function chooseAccountPage(input: {
 	const { handoff } = input
 	return htmlPage({
 		locale: input.presentation.locale,
+		brand: input.presentation.brand,
 		title,
 		content: `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(text.signedInAs)} <strong>${escapeHtml(input.label)}</strong>.</p>
 		<form method="post" action="${ACCOUNT_CHOICE_PATH}">
@@ -115,7 +118,12 @@ export function forgotPasswordPage(input: { readonly presentation: AppPresentati
 			<label>${escapeHtml(text.email)}<input name="email" type="email" autocomplete="username" inputmode="email" required></label>
 			<button type="submit">${escapeHtml(text.forgot.submit)}</button>
 		</form>`
-	return htmlPage({ locale: presentation.locale, title: input.sent === true ? text.forgot.sentTitle : text.forgot.title, content })
+	return htmlPage({
+		locale: presentation.locale,
+		brand: presentation.brand,
+		title: input.sent === true ? text.forgot.sentTitle : text.forgot.title,
+		content,
+	})
 }
 
 /**
@@ -137,6 +145,7 @@ export function setPasswordPage(input: {
 	const problem = input.problem === undefined ? undefined : text.setPassword.problem(input.problem, PASSWORD_MIN_CODE_POINTS, PASSWORD_MAX_CODE_POINTS)
 	return htmlPage({
 		locale: presentation.locale,
+		brand: presentation.brand,
 		title,
 		content: `<h1>${escapeHtml(title)}</h1>${message(problem)}<p>${
 			escapeHtml(text.setPassword.rule(PASSWORD_MIN_CODE_POINTS, PASSWORD_MAX_CODE_POINTS))
@@ -161,11 +170,14 @@ export function logoutPage(input: {
 	readonly redirect: string | null
 	/** The console's origin when the sign-out lands there, which `form-action` therefore admits. */
 	readonly landingOrigin: string | null
+	/** The installation's logo (`installationBrand`), or null for the fabrika mark. */
+	readonly brand: InstallationBrand | null
 }): Response {
 	const text = catalogFor(DEFAULT_LOCALE).pages
 	const query = input.redirect === null ? '' : `?redirect=${encodeURIComponent(input.redirect)}`
 	return htmlPage({
 		locale: DEFAULT_LOCALE,
+		brand: input.brand,
 		title: text.logout.title,
 		content: `<h1>${escapeHtml(text.logout.title)}</h1><p>${escapeHtml(text.logout.text)}</p>
 		<form method="post" action="${escapeHtml(`/auth/logout${query}`)}">
@@ -180,6 +192,7 @@ export function authFailurePage(presentation: AppPresentation, failure: AuthFail
 	const text = catalogFor(presentation.locale).pages.failure
 	return htmlPage({
 		locale: presentation.locale,
+		brand: presentation.brand,
 		title: text.title,
 		content: `<h1>${escapeHtml(text.title)}</h1><p>${escapeHtml(text.text(failure))}</p>`,
 		status,
@@ -190,6 +203,7 @@ export function invalidActionPage(presentation: AppPresentation): Response {
 	const text = catalogFor(presentation.locale).pages
 	return htmlPage({
 		locale: presentation.locale,
+		brand: presentation.brand,
 		title: text.invalidLink.title,
 		content: `<h1>${escapeHtml(text.invalidLink.title)}</h1><p>${escapeHtml(text.invalidLink.text)}</p><p><a href="${
 			escapeHtml(`/auth/forgot-password${appQuery(presentation)}`)
@@ -207,6 +221,7 @@ export function invitationPage(presentation: AppPresentation): Response {
 	const text = catalogFor(presentation.locale).pages
 	return htmlPage({
 		locale: presentation.locale,
+		brand: presentation.brand,
 		title: text.invitation.title,
 		content: `<h1>${escapeHtml(text.invitation.title)}</h1><p>${escapeHtml(text.invitation.text)}</p>
 		<form method="post" action="${escapeHtml(`/auth/invitations/accept${appQuery(presentation)}`)}">
@@ -236,6 +251,7 @@ export function invitationPasswordPage(input: {
 	const problem = input.problem === undefined ? undefined : text.setPassword.problem(input.problem, PASSWORD_MIN_CODE_POINTS, PASSWORD_MAX_CODE_POINTS)
 	return htmlPage({
 		locale: presentation.locale,
+		brand: presentation.brand,
 		title: text.invitation.createTitle,
 		content: `<h1>${escapeHtml(text.invitation.createTitle)}</h1>${message(problem)}<p>${escapeHtml(text.invitation.createText(input.address))}</p><p>${
 			escapeHtml(text.setPassword.rule(PASSWORD_MIN_CODE_POINTS, PASSWORD_MAX_CODE_POINTS))
@@ -269,6 +285,7 @@ export function invitationOutcomePage(
 	const signOut = input.signOut === undefined ? '' : `<p><a class="button" href="${escapeHtml(input.signOut)}">${escapeHtml(text.signOut)}</a></p>`
 	return htmlPage({
 		locale: input.presentation.locale,
+		brand: input.presentation.brand,
 		title,
 		content: `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(input.text(text))}</p>${signIn}${signOut}`,
 		status: input.status,
@@ -292,9 +309,14 @@ function message(value: string | undefined): string {
  * registered origin an action or an invitation page lands on. It must already be an origin (scheme + host + optional
  * port) that `normalizeOrigin` admitted, which refuses every character that would end or widen the directive; the
  * registry stores only its output, and `presentationFor` checks a stored origin again.
+ *
+ * `brand` is required, so no page forgets the installation's logo; null draws the fabrika mark. The logo is an `<img>`
+ * of a `data:` URI, which is all `img-src data:` admits: an image runs no script, and a `data:` URI loads nothing from
+ * anywhere. `default-src` and `script-src` stay closed to it.
  */
 export function htmlPage(page: {
 	readonly locale: Locale
+	readonly brand: InstallationBrand | null
 	readonly title: string
 	readonly content: string
 	readonly status?: number
@@ -306,7 +328,9 @@ export function htmlPage(page: {
 		`<!doctype html><html lang="${page.locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${
 			escapeHtml(page.title)
 		}</title>
-	<style nonce="${nonce}">${PAGE_STYLE}</style></head><body>${pageBody(page.content, { runsOn: escapeHtml(catalogFor(page.locale).pages.runsOn) })}
+	<style nonce="${nonce}">${PAGE_STYLE}</style></head><body>${
+			pageBody(page.content, { runsOn: escapeHtml(catalogFor(page.locale).pages.runsOn) }, page.brand)
+		}
 	<script nonce="${nonce}">var actionToken=document.getElementById('action-token');if(actionToken&&!actionToken.value){var fragment=new URLSearchParams(location.hash.slice(1));var token=fragment.get('token');if(token){actionToken.value=token;history.replaceState(null,'',location.pathname+location.search);}}document.querySelectorAll('[data-show]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.dataset.show);if(!input)return;var show=input.type==='password';input.type=show?'text':'password';button.textContent=show?button.dataset.labelHide:button.dataset.labelShow;} );});</script></body></html>`
 	return new Response(html, {
 		status: page.status ?? 200,
@@ -314,7 +338,7 @@ export function htmlPage(page: {
 			'content-type': 'text/html; charset=utf-8',
 			'cache-control': 'no-store',
 			'content-security-policy':
-				`default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action ${formAction}; base-uri 'none'; frame-ancestors 'none'`,
+				`default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src data:; form-action ${formAction}; base-uri 'none'; frame-ancestors 'none'`,
 			'referrer-policy': 'no-referrer',
 			'x-content-type-options': 'nosniff',
 			'x-frame-options': 'DENY',

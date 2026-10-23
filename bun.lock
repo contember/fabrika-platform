@@ -381,6 +381,7 @@
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
+        "@fabrika/proxy-core": "workspace:*",
         "@fontsource-variable/ibm-plex-sans": "5.3.0",
         "@fontsource/ibm-plex-mono": "5.3.0",
         "react": "^19.0.0",
@@ -466,6 +467,7 @@
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/proxy-core": "workspace:*",
       },
     },
     "packages/installation-init": {
@@ -616,6 +618,7 @@
       "version": "0.8.2",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/proxy-core": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.4.3",

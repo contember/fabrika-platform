@@ -11,6 +11,7 @@ export type NavPage =
 	| 'approvals'
 	| 'mail'
 	| 'settings/source'
+	| 'settings/branding'
 	| 'access'
 	| 'access/users'
 	| 'access/credentials'
@@ -89,6 +90,9 @@ export function mayOpen(caller: ConsoleCaller, page: NavPage): boolean {
 			return control(caller, (access) => holdsAnywhere(access, MAIL_READ))
 		case 'settings/source':
 			return control(caller, (access) => holdsGlobally(access, SOURCE_CONNECTION_MANAGE))
+		// IAM keeps the logo and lets only an installation administrator change it (ADR-0066).
+		case 'settings/branding':
+			return caller.iam === null || (caller.iam !== false && caller.iam.kind === 'installation')
 		case 'access/users':
 			return caller.iam !== false
 		case 'access':

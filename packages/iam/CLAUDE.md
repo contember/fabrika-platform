@@ -487,6 +487,17 @@ fails if that stops being true — it is the guard, not documentation of one.
   `messageTemplateFor` (`src/messages.ts`) is the one place a message's template is chosen. A refused browser-facing request answers
   `authFailurePage` with a typed `AuthFailure`, in the request's language where an application is known before the
   refusal; a failure before any application is known, and logout, speak the default.
+- **THE INSTALLATION'S LOGO IS AN INSTALLATION ADMINISTRATOR'S, AND EVERY PAGE READS IT AT RENDER** (ADR-0066,
+  `installation_brand`, `src/installation-brand.ts`). One row, key 1: `brand.get`, `brand.set` and `brand.clear` of
+  `/admin/rpc` all require `iam.admin` (Control reads it with the provisioning key), never a user administrator. `set`
+  checks it with `installationBrandSchema` (`@fabrika/proxy-core/brand`) whatever the console checked, a clear keeps the
+  row without images so `updatedAt` stays, and each change writes `iam.brand.update` naming the image types, never the
+  bytes; clearing an absent brand writes nothing. `presentationFor` and `installationPresentation` read it with every
+  page (`AppPresentation.brand`; `htmlPage` requires it) and check it again, once per request: a second presentation
+  takes the brand the first one read, and an e-mail's takes `null`; a row the check refuses or a read that
+  fails draws the fabrika mark, never a failed page. The page CSP adds `img-src data:` and nothing else: the logo is an
+  `<img>` of a `data:` URI, an image runs no script and a `data:` URI loads nothing. Never widen `default-src` or
+  `script-src` for it, and never render a logo as markup.
 - **AN APPLICATION'S E-MAIL TEMPLATE IS PLAIN TEXT, OR HTML OF A CLOSED SUBSET IAM RENDERS FROM TOKENS; IAM PUTS IN THE
   LINK** (`app_mail_templates`, `src/messages.ts`). The contract's `mail` is a subject, a text and optionally an `html`
   per message and language, with placeholders from the closed set `MAIL_PLACEHOLDERS` (`@fabrika/auth-core`);

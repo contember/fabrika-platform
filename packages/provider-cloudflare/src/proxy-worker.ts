@@ -68,8 +68,8 @@ type ProxyFetch = (request: Request) => Promise<Response>
  * A failure the Worker answers itself: the status's page to a navigation that does not select a download endpoint
  * (whose file treatment would save the page as a file), its fixed text to everything else.
  */
-function failure(status: ErrorPageStatus, text: string, request: Request, download: boolean): Response {
-	return errorAnswer(status, text, !download && isPageNavigation(request.headers))
+function failure(status: ErrorPageStatus, text: string, request: Request, download: boolean, manifest: ProxyManifest | null): Response {
+	return errorAnswer(status, text, !download && isPageNavigation(request.headers), manifest?.brand ?? null)
 }
 
 let cached: {
@@ -130,7 +130,7 @@ export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: Pr
 function unavailable(manifest: ProxyManifest | null): ProxyFetch {
 	return (request) => {
 		const app = manifest === null ? null : findApp(manifest, new URL(request.url))
-		const answer = failure(503, 'proxy unavailable', request, false)
+		const answer = failure(503, 'proxy unavailable', request, false, manifest)
 		return Promise.resolve(
 			app === null || !isApplicationEntry(app) ? answer : withResponseHeaders(answer, contractAnswerHeaders(app)(null, answer.status)),
 		)
@@ -171,13 +171,13 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		// An admitted preflight: the decision's 2xx is the whole answer, and the application never sees the request.
 		if (verification.headers.get(PREFLIGHT_HEADER) === '1') return withResponseHeaders(verification, (headers) => headers.delete(PREFLIGHT_HEADER))
 
-		if (app === null) return failure(404, 'not found', request, false)
+		if (app === null) return failure(404, 'not found', request, false, manifest)
 		const treatment = answerHeaders.get(app.id)
 		const endpoint = verification.headers.get(ENDPOINT_HEADER)
 		const download = selectsDownload(app, endpoint)
 		const upstream = env[app.upstream]
 		if (!isWorkerService(upstream)) {
-			const unavailable = failure(503, 'proxy unavailable', request, download)
+			const unavailable = failure(503, 'proxy unavailable', request, download, manifest)
 			return treatment === undefined ? unavailable : withResponseHeaders(unavailable, treatment(endpoint, unavailable.status))
 		}
 
@@ -205,7 +205,7 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 			answer = await upstream.fetch(new Request(request, { headers: upstreamHeaders }))
 		} catch {
 			// Nothing of the error is answered or logged: it can carry the upstream request, a token header included.
-			answer = failure(502, 'bad gateway', request, download)
+			answer = failure(502, 'bad gateway', request, download, manifest)
 		}
 		if (treatment === undefined) return answer
 		// The treatment deleted the application's own `Access-Control-*`; only the origin the decision admitted is set.

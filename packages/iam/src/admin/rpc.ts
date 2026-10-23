@@ -1,6 +1,7 @@
 import { type AuthContext, ForbiddenError, initRpc, type RpcRouterFor, toErrorResponse, UnauthorizedError } from '@fabrika/app'
 import { permits, scopedValues, WORKLOAD_KINDS } from '@fabrika/auth-core'
 import type { IamAdminRpcContract } from '@fabrika/iam-contract'
+import { installationBrandSchema } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
 import type { IamAppContext } from '../app'
 import { logError } from '../log'
@@ -214,6 +215,15 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 		revoke: t.procedure
 			.input(z.object({ app: nonEmpty, role: nonEmpty, principalId: nonEmpty }))
 			.mutation(({ ctx, input }) => revokeAppRole(ctx, input)),
+	}),
+	// The installation's own setting: `iam.admin` only, also to read it. Control reads it with the provisioning key.
+	brand: t.router({
+		get: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => adminUseCases.getInstallationBrand(context(ctx))),
+		set: t.procedure
+			.input(z.object({ brand: installationBrandSchema }))
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.setInstallationBrand(context(ctx), input)),
+		clear: t.procedure.require(ADMIN_ACTION).mutation(({ ctx }) => adminUseCases.clearInstallationBrand(context(ctx))),
 	}),
 })
 

@@ -1,4 +1,5 @@
 import { ProviderInvocationAbort, ProviderNamespaceError } from '@fabrika/provider-contract'
+import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { contractProxyTable, FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
@@ -10,6 +11,7 @@ import { ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, ZEROPS_NAMESPACE_IAM_KEY_VARIABLE
 import { asNamespaceError } from '../namespace/errors'
 import { republishProxy, type ZeropsProxyApi, type ZeropsProxyRepublishInput } from '../namespace/proxy-attempt'
 import type { ZeropsNamespaceTarget } from '../namespace/types'
+import { FABRIKA_PROXY_MANIFEST_BRAND } from '../proxy-manifest-carrier'
 import type { ZeropsSourceArchive, ZeropsSourcePort } from '../source/port'
 
 const pin = {
@@ -24,6 +26,17 @@ const legacyPin = {
 	descriptor: await createZeropsArtifactSourceDescriptor(
 		`zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        ${FABRIKA_PROXY_MANIFEST_JSON}: "\${RUNTIME_${FABRIKA_PROXY_MANIFEST_JSON}}"\n`,
 	),
+}
+/** A namespace pinned to a source whose proxy parser knows the manifest's `brand` (ADR-0066). */
+const brandPin = {
+	...pin,
+	commitSha: 'c'.repeat(40),
+	descriptor: await createZeropsArtifactSourceDescriptor(
+		`zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        ${FABRIKA_PROXY_MANIFEST_BRAND}: "1"\n`,
+	),
+}
+const LOGO: InstallationBrand = {
+	light: { type: 'image/png', base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=' },
 }
 const sha256 = (text: string): string => new Bun.CryptoHasher('sha256').update(text).digest('hex')
 const EMPTY: ProxyManifest = { apps: [] }
@@ -383,6 +396,27 @@ test("the manifest travels as the archive's data file and never through the envi
 	await republishProxy({ ...f.input(), manifest: CHANGED })
 	expect(f.uploadedArchives).toEqual([{ kind: 'platform', dataFile: { path: 'proxy.manifest.json', contents: JSON.stringify(CHANGED) } }])
 	expect(f.calls).not.toContain(`env:${FABRIKA_PROXY_MANIFEST_JSON}`)
+})
+
+test("the installation's client logo rides in the manifest only to a proxy whose pin parses it, and a new logo rebuilds", async () => {
+	const archived = (f: ReturnType<typeof fixture>, index: number): unknown => {
+		const archive = f.uploadedArchives[index]
+		return JSON.parse(archive?.kind === 'platform' ? archive.dataFile?.contents ?? '{}' : '{}')
+	}
+	const accepting = fixture(brandPin)
+	await republishProxy({ ...accepting.input(), manifest: CHANGED, brand: LOGO })
+	expect(archived(accepting, 0)).toEqual({ ...CHANGED, brand: LOGO })
+
+	// An older parser refuses the key and would fail the build, so that pin keeps the mark.
+	const older = fixture()
+	await republishProxy({ ...older.input(), manifest: CHANGED, brand: LOGO })
+	expect(archived(older, 0)).toEqual(CHANGED)
+
+	const unbranded = fixture(brandPin)
+	const first = await republishProxy({ ...unbranded.input(), manifest: CHANGED, wait: 'active' })
+	const second = await republishProxy({ ...unbranded.input(), manifest: CHANGED, brand: LOGO, wait: 'active' })
+	expect(second.proxyDeployment?.manifestSha256).not.toBe(first.proxyDeployment?.manifestSha256)
+	expect(archived(unbranded, 1)).toEqual({ ...CHANGED, brand: LOGO })
 })
 
 test('a 1 MB manifest reaches the build through the archive', async () => {

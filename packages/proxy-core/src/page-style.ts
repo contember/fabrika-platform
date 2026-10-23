@@ -1,3 +1,5 @@
+import type { BrandImage, InstallationBrand } from './brand'
+
 /**
  * The one stylesheet of every page fabrika renders outside the console and an application's own interface: IAM's
  * sign-in, account, invitation and consent pages, Control's GitHub handoff, and the proxy's error pages (`./pages`).
@@ -150,6 +152,15 @@ main {
 .art svg {
 	display: block;
 	width: min(70%, 10rem);
+	height: auto;
+}
+
+/* The client's logo (ADR-0066), fitted inside the grid whatever its proportions: a wordmark runs wide, a symbol tall. */
+.art img {
+	display: block;
+	max-width: 80%;
+	max-height: 8rem;
+	width: auto;
 	height: auto;
 }
 
@@ -431,6 +442,10 @@ form > button:first-of-type:hover {
 		width: 4.5rem;
 	}
 
+	.art img {
+		max-height: 4.5rem;
+	}
+
 	/* A smaller input makes a phone zoom the page in when it is focused. */
 	input {
 		font-size: 1rem;
@@ -443,6 +458,21 @@ form > button:first-of-type:hover {
 	}
 }
 `
+
+/**
+ * What the grid shows: the installation's client logo where it has one (ADR-0066), the designer's mark otherwise. The
+ * dark variant takes over on a dark page; without one, the light logo stands on the dark panel as it is.
+ */
+export function pageArt(brand: InstallationBrand | null): string {
+	if (brand === null) return brandMark(160)
+	const dark = brand.dark === undefined ? '' : `<source media="(prefers-color-scheme: dark)" srcset="${dataUri(brand.dark)}">`
+	return `<picture>${dark}<img src="${dataUri(brand.light)}" alt=""></picture>`
+}
+
+/** `brandImageDataUri` of `./brand`, written here so this module stays without a runtime import. Base64 holds no `{`. */
+function dataUri(image: BrandImage): string {
+	return `data:${image.type};base64,${image.base64}`
+}
 
 /** The designer's mark, as the console's `BrandMark` draws it: `height` tall and a hair narrower. */
 export function brandMark(height: number): string {
@@ -459,16 +489,17 @@ export interface PageFooter {
 }
 
 /**
- * The body every page in this stylesheet has: the panel with the page's `content` at the left and the mark on the grid
- * at the right, and the footer under it. Every value is markup the caller has already escaped.
+ * The body every page in this stylesheet has: the panel with the page's `content` at the left and the art on the grid
+ * at the right (`pageArt`), and the footer under it, which names fabrika whatever the art shows. Every value is markup
+ * the caller has already escaped; the brand is checked where it was written and again where it was read.
  */
-export function pageBody(content: string, footer: PageFooter): string {
+export function pageBody(content: string, footer: PageFooter, brand: InstallationBrand | null = null): string {
 	const status = footer.status === undefined ? '' : `<span class="status">${footer.status}</span>`
 	return `<main>
 <div class="copy">
 ${content}
 </div>
-<div class="art" aria-hidden="true">${brandMark(160)}</div>
+<div class="art" aria-hidden="true">${pageArt(brand)}</div>
 </main>
 <footer class="made-with"><span class="runs-on">${footer.runsOn} ${brandMark(12)} fabrika</span>${status}</footer>`
 }

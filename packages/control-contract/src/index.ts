@@ -385,6 +385,11 @@ export interface RemoveDeploymentNamespaceResponse {
 	readonly removed: DeploymentNamespaceDetailDto
 }
 
+/** The namespaces whose proxy rebuild `namespaces.republishAll` submitted. */
+export interface RepublishAllNamespacesResponse {
+	readonly namespaceIds: readonly string[]
+}
+
 export interface PlanDeploymentNamespaceRequest {
 	id: string
 	env: string

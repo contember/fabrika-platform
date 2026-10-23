@@ -33,7 +33,6 @@ import {
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
 	errorPage,
-	type ErrorPageStatus,
 	FETCH_MODE_HEADER,
 	FORWARD_AUTHORIZATION_HEADER,
 	FORWARDED_METHOD_HEADER,
@@ -46,6 +45,7 @@ import {
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
+import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import {
 	appFileTreatment,
 	appHeaderPolicy,
@@ -137,9 +137,16 @@ export interface CaddyReverseProxyHandler {
 	handle_response?: CaddyResponseHandler[]
 }
 
+/** Runs a route of the server's `named_routes` in place, on the same request and response (verified on 2.10.2). */
+export interface CaddyInvokeHandler {
+	handler: 'invoke'
+	name: string
+}
+
 export type CaddyHandler =
 	| CaddyCopyResponseHandler
 	| CaddyHeadersHandler
+	| CaddyInvokeHandler
 	| CaddyReverseProxyHandler
 	| CaddyStaticResponseHandler
 	| CaddySubrouteHandler
@@ -173,6 +180,8 @@ export interface CaddyServer {
 	routes: CaddyRoute[]
 	/** What answers an error a handler returned instead of a response, such as a refused upstream dial. */
 	errors?: { routes: CaddyRoute[] }
+	/** Routes an `invoke` handler runs by name: the pages, written once however many hosts answer with them. */
+	named_routes?: Record<string, CaddyRoute>
 	automatic_https?: { disable: boolean }
 	logs?: { should_log_credentials: boolean }
 	trusted_proxies?: CaddyStaticIpSource
@@ -317,6 +326,7 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 							: { trusted_proxies: { source: 'static', ranges: trustedProxies }, trusted_proxies_strict: 1 }),
 						routes,
 						errors: { routes: errorRoutes(manifest) },
+						named_routes: pageRoutes(manifest.brand ?? null),
 					},
 					// The liveness probe lives on its OWN listener, which is never published. Putting it on
 					// the public listener would mean one path per proxy that shadows an app's path and
@@ -443,23 +453,55 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 const NAVIGATION: CaddyMatcherSet = { header: { [FETCH_MODE_HEADER]: ['navigate'] } }
 
 /**
+ * The pages Caddy answers with itself, each written once as a named route (ADR-0066). The body is the installation's
+ * and the same on every host, the client's logo in it included; only the header policy differs, so a host's route sets
+ * its policy and invokes the page, whose `static_response` keeps the headers already set (verified on 2.10.2). A copy
+ * per host would carry the logo once per application in `caddy.json`.
+ */
+const PAGE_ROUTE: Record<'400' | '404' | OwnFailurePage | 'failure', string> = {
+	'400': 'fabrika-page-400',
+	'404': 'fabrika-page-404',
+	'503': 'fabrika-page-503',
+	'504': 'fabrika-page-504',
+	failure: 'fabrika-page-failure',
+}
+
+function pageRoutes(brand: InstallationBrand | null): Record<string, CaddyRoute> {
+	const page = (status: number | string, body: string): CaddyRoute => ({ handle: [{ handler: 'static_response', status_code: status, body }] })
+	return {
+		[PAGE_ROUTE['400']]: page(400, errorPage(400, { brand })),
+		[PAGE_ROUTE['404']]: page(404, errorPage(404, { brand })),
+		[PAGE_ROUTE['503']]: page(503, errorPage(503, { brand })),
+		[PAGE_ROUTE['504']]: page(504, errorPage(504, { brand })),
+		// It prints the status Caddy answers with: the placeholder is expanded in a `static_response` body as in its
+		// status, and neither the page's CSS nor a logo's base64 holds a `{name}` that could be read as one.
+		[PAGE_ROUTE.failure]: page(ERROR_STATUS, errorPage(502, { shownStatus: ERROR_STATUS, brand })),
+	}
+}
+
+/**
  * A refusal Caddy writes itself, under a policy: the status's page to a navigation, its fixed text to anything else.
  * One handler, so the refusal stays one route of the chain.
  */
-function refusal(status: ErrorPageStatus, text: string, policy: HeaderPolicy): CaddySubrouteHandler {
+function refusal(status: 400 | 404, text: string, policy: HeaderPolicy): CaddySubrouteHandler {
 	return navigationChoice(
-		pageHandler(status, errorPage(status), policy),
+		pageHandlers(status === 400 ? PAGE_ROUTE['400'] : PAGE_ROUTE['404'], policy),
 		{ handler: 'static_response', status_code: status, headers: headerValues(policy), body: text },
 	)
 }
 
 /** `page` when the request is a navigation, `otherwise` for everything else. */
-function navigationChoice(page: CaddyHandler, otherwise: CaddyStaticResponseHandler): CaddySubrouteHandler {
-	return { handler: 'subroute', routes: [{ match: [NAVIGATION], handle: [page], terminal: true }, { handle: [otherwise] }] }
+function navigationChoice(page: CaddyHandler[], otherwise: CaddyStaticResponseHandler): CaddySubrouteHandler {
+	return { handler: 'subroute', routes: [{ match: [NAVIGATION], handle: page, terminal: true }, { handle: [otherwise] }] }
 }
 
-function pageHandler(status: number | string, body: string, policy: HeaderPolicy): CaddyStaticResponseHandler {
-	return { handler: 'static_response', status_code: status, headers: { ...headerValues(policy), 'Content-Type': [PAGE_CONTENT_TYPE] }, body }
+/** A host's policy on the answer, then the named page that writes the body. */
+function pageHandlers(route: string, policy: HeaderPolicy): CaddyHandler[] {
+	return [pagePolicy(policy), { handler: 'invoke', name: route }]
+}
+
+function pagePolicy(policy: HeaderPolicy): CaddyHeadersHandler {
+	return { handler: 'headers', response: { set: { ...headerValues(policy), 'Content-Type': [PAGE_CONTENT_TYPE] } } }
 }
 
 /** A header policy as Caddy's `set` and `static_response` headers: one value per name, replacing any other. */
@@ -580,27 +622,30 @@ function errorRoutes(manifest: ProxyManifest): CaddyRoute[] {
 const ERROR_STATUS = '{http.error.status_code}'
 
 /** The failures whose page has words of its own: nothing to route the request to, and an upstream that did not answer in time. */
-const OWN_FAILURE_PAGES: readonly (503 | 504)[] = [503, 504]
+type OwnFailurePage = '503' | '504'
+const OWN_FAILURE_PAGES: readonly OwnFailurePage[] = ['503', '504']
 
 /**
- * The page of a failure Caddy answers. A 503 and a 504 read their own words; every other status, a 502 above all (an
- * upstream it cannot dial, the application's or the auth service's), reads the page of an application that does not
- * answer and prints the status: the placeholder is expanded in a `static_response` body as in its status, and the
- * page's CSS holds no `{name}` that could be read as one. A `vars` matcher reads the status from the same placeholder
- * (verified on 2.10.2).
+ * The page of a failure Caddy answers, under the host's policy. A 503 and a 504 read their own words; every other
+ * status, a 502 above all (an upstream it cannot dial, the application's or the auth service's), reads the page of an
+ * application that does not answer, which prints the status. A `vars` matcher reads the status from the error's
+ * placeholder (verified on 2.10.2).
  */
-function failurePage(policy: HeaderPolicy): CaddySubrouteHandler {
-	return {
-		handler: 'subroute',
-		routes: [
-			...OWN_FAILURE_PAGES.map((status): CaddyRoute => ({
-				match: [{ vars: { [ERROR_STATUS]: [String(status)] } }],
-				handle: [pageHandler(status, errorPage(status), policy)],
-				terminal: true,
-			})),
-			{ handle: [pageHandler(ERROR_STATUS, errorPage(502, ERROR_STATUS), policy)] },
-		],
-	}
+function failurePage(policy: HeaderPolicy): CaddyHandler[] {
+	return [
+		pagePolicy(policy),
+		{
+			handler: 'subroute',
+			routes: [
+				...OWN_FAILURE_PAGES.map((status): CaddyRoute => ({
+					match: [{ vars: { [ERROR_STATUS]: [status] } }],
+					handle: [{ handler: 'invoke', name: PAGE_ROUTE[status] }],
+					terminal: true,
+				})),
+				{ handle: [{ handler: 'invoke', name: PAGE_ROUTE.failure }] },
+			],
+		},
+	]
 }
 
 /**

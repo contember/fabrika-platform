@@ -25,6 +25,11 @@
 			"types": "./src/manifest.ts",
 			"default": "./src/manifest.ts"
 		},
+		"./brand": {
+			"bun": "./src/brand.ts",
+			"types": "./src/brand.ts",
+			"default": "./src/brand.ts"
+		},
 		"./page-style": {
 			"bun": "./src/page-style.ts",
 			"types": "./src/page-style.ts",

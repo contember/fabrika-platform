@@ -1,4 +1,5 @@
 import { followLeaseLoss, isLeaseLoss, ProviderNamespaceError } from '@fabrika/provider-contract'
+import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import {
 	readableContent,
@@ -11,7 +12,12 @@ import {
 } from '../api'
 import type { Sleeper } from '../collaborators'
 import { prepareZeropsDescriptor } from '../descriptor'
-import { ZEROPS_PROXY_MANIFEST_PATH, type ZeropsProxyManifestCarrier, zeropsProxyManifestCarrier } from '../proxy-manifest-carrier'
+import {
+	ZEROPS_PROXY_MANIFEST_PATH,
+	zeropsProxyAcceptsBrand,
+	type ZeropsProxyManifestCarrier,
+	zeropsProxyManifestCarrier,
+} from '../proxy-manifest-carrier'
 import { isZeropsUploadDestination } from '../source'
 import type { ZeropsSourcePort } from '../source/port'
 import { deleteVersion } from '../version-attempt'
@@ -35,6 +41,8 @@ export interface ZeropsProxyRepublishInput {
 	readonly namespaceId: string
 	readonly target: ZeropsNamespaceTarget
 	readonly manifest: ProxyManifest
+	/** The installation's client logo (ADR-0066); added to the manifest only when the pinned proxy can parse it. */
+	readonly brand?: InstallationBrand | null
 	readonly source?: ZeropsSourcePort
 	readonly api: ZeropsProxyApi
 	readonly iamUrl: string
@@ -100,7 +108,11 @@ export async function republishProxy(input: ZeropsProxyRepublishInput): Promise<
 	await verifyZeropsNamespaceProxySource(pin)
 	// The pinned descriptor decides: a namespace kept on an older proxy revision still lifts the variable (ADR-0045).
 	const carrier = zeropsProxyManifestCarrier(pin.descriptor.contents)
-	const manifest = encodeProxyManifestJson(input.manifest)
+	// So does it for the logo: an older parser refuses the key, and the namespace keeps the mark until it is re-pinned.
+	const brand = input.brand ?? null
+	const manifest = encodeProxyManifestJson(
+		brand !== null && zeropsProxyAcceptsBrand(pin.descriptor.contents) ? { ...input.manifest, brand } : input.manifest,
+	)
 	// The attempt's identity covers the IAM configuration and the proxy secrets too, so rotating any forces a rebuild.
 	const proxySecrets = input.proxySecrets ?? new Map<string, string>()
 	const secrets = proxySecrets.size === 0 ? '' : `\n${await proxySecretsDigest(proxySecrets)}`

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { TEST_BRAND } from './brand'
 
 export interface RouterLeaf {
 	method: string
@@ -130,6 +131,9 @@ const INPUTS: Record<string, unknown> = {
 	'appPeople.list': { app: 'nowhere@prod' },
 	'appPeople.grant': { app: 'nowhere@prod', role: 'staff', email: 'nobody@example.com' },
 	'appPeople.revoke': { app: 'nowhere@prod', role: 'staff', principalId: 'nobody' },
+	'brand.get': null,
+	'brand.set': { brand: TEST_BRAND },
+	'brand.clear': null,
 }
 
 /** The input `INPUTS` names for `method`, or `{}`. */

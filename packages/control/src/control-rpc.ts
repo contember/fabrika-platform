@@ -38,6 +38,7 @@ import {
 	planNamespaceUseCase,
 	reconcileNamespaceUseCase,
 	removeNamespaceUseCase,
+	republishAllNamespacesUseCase,
 	updateNamespaceUseCase,
 } from './api/namespaces'
 import { providerEnvelopeSchema } from './api/provider-envelope'
@@ -353,6 +354,9 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 			remove: rpc.procedure.input(namespaceId).require(CONTROL_ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
 				controlCall(() => removeNamespaceUseCase(namespaceContext(ctx), input.namespaceId))
 			),
+			republishAll: rpc.procedure.require(CONTROL_ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx }) =>
+				controlCall(() => republishAllNamespacesUseCase(namespaceContext(ctx)))
+			),
 		}),
 		runs: rpc.router({
 			list: rpc.procedure.input(runListInput).query(({ ctx, input }) => controlCall(() => listRunsUseCase(runsContext(ctx), input))),
@@ -446,6 +450,7 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 			signal: ctx.request.signal,
 			queue: deps.queue,
 			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
+			...(deps.brand === undefined ? {} : { brand: deps.brand }),
 		}
 	}
 

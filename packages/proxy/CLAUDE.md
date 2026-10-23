@@ -126,7 +126,13 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   is the old answer. An absent header keeps the text: curl and scripts read what they always read. An error route's
   page prints `{http.error.status_code}`, which Caddy expands in a `static_response` body, and the page's CSS holds no
   `{` followed by a non-space, so no part of it is read as a placeholder (served byte for byte by caddy 2.10.2). A
-  download endpoint's failure never gets a page: its file treatment would save it as a file.
+  download endpoint's failure never gets a page: its file treatment would save it as a file. The bodies are written
+  ONCE, as the server's `named_routes` (`fabrika-page-400`, `-404`, `-503`, `-504`, `-failure`): a host's route sets its
+  header policy and `invoke`s the page, whose `static_response` keeps the headers already set (verified on 2.10.2). An
+  error route picks the page by the status, a `vars` matcher on `{http.error.status_code}`: a 503 and a 504 their own,
+  every other status (a 502 above all) `-failure`, which prints it. The body is the
+  installation's, the client logo of the manifest's `brand` in it (ADR-0066), so a copy per host would carry the logo
+  once per application.
 - **A cross-origin preflight and its decoration are the decision's, written by Caddy** (ADR-0022 "Cross-origin
   endpoints"). Only an entry with a `crossOrigin` row gets them, so every other entry's config is byte for byte what
   it was. `forward_auth`'s first `handle_response` entry matches a 2xx carrying `PREFLIGHT_HEADER` and answers it with

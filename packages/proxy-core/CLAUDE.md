@@ -30,7 +30,7 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   `@fabrika/provider-cloudflare` is published and needs the decision — it must never need the Caddy
   deployment. Anything added here becomes public API; the release gate (`bun run release:validate`)
   enforces the direction and the public inventory in `scripts/release.ts` is deliberate.
-- **`@fabrika/proxy-core/manifest` imports only zod, `@fabrika/auth-core` and `./headers`.** Producers
+- **`@fabrika/proxy-core/manifest` imports only zod, `@fabrika/auth-core`, `./headers`, `./oauth-resource` and `./brand`.** Producers
   (providers, control, local-stack) import it without the decision, so never import `jose`, the
   verifier, or anything else from `src/` into `src/manifest.ts`. Malformed input never becomes a
   partially accepted manifest.
@@ -71,6 +71,13 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   and fails on a drifted value, so change a colour in the console first and copy it here. Caddy serves it in a
   `static_response` body, so no `{` may be followed by a name. The footer links nowhere: the proxy's pages are read by
   an application's people, whom a link to fabrika would send to the wrong place for help.
+- **`@fabrika/proxy-core/brand` is the one check of the installation's client logo** (`src/brand.ts`, ADR-0066): a
+  PNG, WebP or SVG of at most `MAX_BRAND_IMAGE_BYTES` (32 KB) decoded, in canonical base64, whose leading bytes are
+  what its type says (`brandImageProblem`). IAM's write, the manifest parser and the console's pre-check all run it, so
+  a logo one admits the others admit; it imports only zod, so the browser can use it. The manifest's optional top-level
+  `brand` is the installation's, the same on every host; a page shows it on the grid in place of the mark
+  (`pageArt`), as an `<img>` of a `data:` URI and never as markup, with a `<source>` for a dark page, and the footer
+  still names fabrika. A producer sends `brand` only to a proxy whose parser knows the key: an older one refuses it.
 - **Every `catch` maps to a deny.** Nothing in `src/authorize.ts` returns an allow on an unexpected
   condition. A request that selects no endpoint is denied (403 `no_endpoint`).
 - **The request being authorized is described ENTIRELY by the forwarded headers.** Never read the

@@ -87,3 +87,4 @@ a commit message suffices.
 | [0063](0063-a-public-procedure-runs-as-its-own-workload.md)                             | A public procedure runs as its own workload, which IAM signs for                         |
 | [0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)  | Applications reach the platform over a transport key that the receiver verifies          |
 | [0065](0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md) | An application on Cloudflare runs in one Durable Object per environment, over its SQLite |
+| [0066](0066-the-installation-shows-its-clients-logo.md)                                 | The installation shows its client's logo on IAM's and the proxy's pages, kept in IAM     |
