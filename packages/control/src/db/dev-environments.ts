@@ -82,7 +82,7 @@ export class DevEnvironmentRepository {
 
 	/**
 	 * Bind a workspace. A bootstrap run starts a container from its own commit, so the record of what the previous one
-	 * held, refused or ran is cleared.
+	 * held, refused, logged or checked is cleared: its check results would read as the new container's.
 	 */
 	async bind(input: DevBindInput): Promise<DevEnvironmentRow> {
 		const now = this.now()
@@ -99,6 +99,8 @@ export class DevEnvironmentRepository {
 						status = CASE WHEN ? = 1 THEN 'unbound' ELSE dev_environments.status END,
 						message = CASE WHEN ? = 1 THEN NULL ELSE dev_environments.message END,
 						launcher_refused = CASE WHEN ? = 1 THEN NULL ELSE dev_environments.launcher_refused END,
+						checks_json = CASE WHEN ? = 1 THEN NULL ELSE dev_environments.checks_json END,
+						log_json = CASE WHEN ? = 1 THEN '[]' ELSE dev_environments.log_json END,
 						reset_generation = dev_environments.reset_generation + ?,
 						activity_at = excluded.activity_at
 					RETURNING *`)
@@ -109,6 +111,8 @@ export class DevEnvironmentRepository {
 					input.bootstrapRunId,
 					input.targetSha,
 					now,
+					fresh ? 1 : 0,
+					fresh ? 1 : 0,
 					fresh ? 1 : 0,
 					fresh ? 1 : 0,
 					fresh ? 1 : 0,

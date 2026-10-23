@@ -346,6 +346,20 @@ for (const backend of backends) {
 			expect(status.log).toEqual({ lines: [{ n: 1, stream: 'stderr', text: 'error: line 1' }], from: 0, to: 3, total: 3 })
 		})
 
+		test("a bootstrap bind drops the replaced container's check results and log", async () => {
+			const w = await world()
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
+			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
+			const killed = [{ name: 'tsc', ok: false, exitCode: null, durationMs: 17609, output: ['check tsc was killed (SIGKILL)'] }]
+			const log: DevLogLine[] = [{ n: 0, stream: 'stdout', text: 'serving' }]
+			await report(w, { head: sha('b'), status: 'serving', log, checks: { request: 1, head: sha('b'), results: killed } })
+			await w.repositories.devEnvironments.recordRefusal('shop', 'dev', sha('b'), 'bun.lock changed')
+
+			const rebound = await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
+			expect(rebound.bootstrapRun?.id).not.toBe(undefined)
+			expect({ checks: rebound.checks, log: rebound.log.lines }).toEqual({ checks: null, log: [] })
+		})
+
 		test("get_dev_status indexes the log by the launcher's line numbers, so after stays put across reports", async () => {
 			const w = await world()
 			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))

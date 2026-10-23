@@ -401,6 +401,19 @@ describe('the dev launcher', () => {
 		expect(await get(value)).toBe('one')
 	})
 
+	test('a check killed by a signal fails with a line that says so, and the next check still runs', async () => {
+		const value = await fixture()
+		await start(value, undefined, undefined, [], [{ name: 'tsc', command: 'kill -9 $$' }, { name: 'tests', command: 'echo checked' }]).ready
+		const checked = value.control.nextReport((report) => report.checks !== null)
+		value.control.advance('checks')
+		const [killed, passed] = (await checked).checks?.results ?? []
+		expect({ ok: killed?.ok, exitCode: killed?.exitCode }).toEqual({ ok: false, exitCode: null })
+		expect(killed?.output.at(-1)).toBe(
+			'check tsc was killed (SIGKILL) before it finished, most likely because the container ran out of memory; it failed',
+		)
+		expect({ ok: passed?.ok, exitCode: passed?.exitCode }).toEqual({ ok: true, exitCode: 0 })
+	})
+
 	test('a report carries the lines of the newest sync and the output after it, not the lines before', async () => {
 		const value = await fixture()
 		await start(value).ready
