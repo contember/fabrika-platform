@@ -37,9 +37,15 @@ default provider, and no closed union of provider ids.
 
 **The provider owns its deploy.** A provider's `deploy()` runs its own steps, in its own
 order, as plain code. No shared engine derives or executes a plan. Control passes the run's
-universal inputs — app, environment, secrets, vars, managed environment, return origins,
-`dryRun`, an `AbortSignal`, and an event sink for logs and the external id. Control does not
-see the provider's steps.
+universal inputs — app, environment, secrets, vars, managed environment, `dryRun`, an
+`AbortSignal`, and an event sink for logs and the external id. Control does not see the
+provider's steps.
+
+**A provider package holds what is true of its cloud, and nothing else.** Behaviour that would be
+the same on every cloud belongs to Control, or to a neutral library a provider calls. Control
+applies an environment's approved IAM schema and return origins once a run succeeds, whichever
+provider ran it; a provider never calls IAM's admin surface for an application. A provider
+library may be shared by two providers; a shared step list may not.
 
 **The provider owns its collaborators and credentials.** The composition root constructs the
 provider with its clients and installation credentials (Cloudflare account and token, Zerops
@@ -100,6 +106,8 @@ blobs, locks). The composition root binds one runtime implementation set to one 
 
 - Adding a cloud means writing one provider package and one composition root. Shared Control
   code, the contract, and the database schema do not change.
+- What two providers would both implement is moved out of them, not copied. Copies drift: the two
+  providers' IAM reconciles disagreed on when an unavailable IAM fails a run.
 - A provider's deploy log shows only steps that really happen. There are no no-op steps and
   no split of one atomic platform operation into two.
 - Progress, failure, and cancellation semantics are per provider. Each `deploy()` must honour
