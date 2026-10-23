@@ -17,7 +17,7 @@ import {
 	type ZeropsService,
 } from '../api'
 import { defaultSleep } from '../collaborators'
-import { claimedResources, namespaceResourceClaims, registrationResourceClaims } from './claims'
+import { claimedResources, namespaceResourceClaims, projectExists, registrationResourceClaims, ZEROPS_PROJECT_NOT_FOUND } from './claims'
 import { checkpoint, decodeEnvelope, normalizedNamespace, normalizeTarget } from './codec'
 import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME, ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE } from './constants'
 import { asNamespaceError, namespaceError, ZEROPS_NAMESPACE_CANCELLED, ZEROPS_SUBDOMAIN_NOT_PUBLISHED } from './errors'
@@ -360,6 +360,14 @@ const runNamespaceMutation = async (
 		} catch {
 			input.signal.throwIfAborted()
 			await checkpoint(input, namespace, { ...target, ready: false })
+			// A deleted project never resolves the version: retrying would hold the namespace `provisioning`, unremovable.
+			if (target.projectId !== undefined && !(await projectExists(options.api, target.projectId, input.signal))) {
+				throw namespaceError(
+					ZEROPS_PROJECT_NOT_FOUND,
+					`Zerops project ${target.projectId} of namespace \`${namespace.id}\` no longer exists; remove the namespace`,
+					false,
+				)
+			}
 			throw namespaceError('proxyAttemptUnresolved', `Proxy version ${target.proxyDeployment.appVersionId} remains unresolved`, true)
 		}
 	}

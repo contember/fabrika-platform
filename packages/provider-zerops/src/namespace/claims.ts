@@ -87,7 +87,7 @@ export const registrationResourceClaims = (registration: ProviderRegistration): 
  * The platform's answer for a project that does not exist, a deleted one included. A project the token holds no grant
  * on answers `403 insufficientPermissions` instead (zerops-platform.md), so this never reads an unreachable one as gone.
  */
-const ZEROPS_PROJECT_NOT_FOUND = 'projectNotFound'
+export const ZEROPS_PROJECT_NOT_FOUND = 'projectNotFound'
 
 const SERVICE_CLAIM_PREFIX = 'service:'
 
@@ -121,7 +121,7 @@ export const claimedResources = async (
 	}
 }
 
-const projectExists = async (api: Pick<ZeropsApi, 'getProject'>, projectId: string, signal: AbortSignal): Promise<boolean> => {
+export const projectExists = async (api: Pick<ZeropsApi, 'getProject'>, projectId: string, signal: AbortSignal): Promise<boolean> => {
 	try {
 		await api.getProject({ projectId, signal })
 		return true
