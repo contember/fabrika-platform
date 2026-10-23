@@ -63,22 +63,17 @@ export default createPage()
 						<Icon name="chevron-left" size={14} />
 						Back to user
 					</Link>
-					<h1>Add grant</h1>
+					<h1>Add access</h1>
 					<p className="hint">
-						Granting to <strong>{principal.label}</strong>. Takes effect immediately and is audited.
+						Choose the application and role for <strong>{principal.label}</strong>.
 					</p>
 				</div>
 
-				<form className="panel form" onSubmit={submit}>
-					<GrantComposer apps={targets.apps} crossApp={targets.crossApp} state={composer} idPrefix="grant" />
-					<label>
-						Expires (optional)
-						<input type="datetime-local" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
-						<span className="hint">Leave empty for a grant that does not expire.</span>
-					</label>
+				<form className="panel form" onSubmit={submit} onChange={() => setError(null)}>
+					<GrantComposer apps={targets.apps} crossApp={targets.crossApp} state={composer} idPrefix="grant" expiry={expiry} onExpiryChange={setExpiry} />
 					{error && <p className="error-text" role="alert">{error}</p>}
 					<div className="form-actions">
-						<button type="submit" className="primary" disabled={busy}>{busy ? 'Granting…' : 'Add grant'}</button>
+						<button type="submit" className="primary" disabled={busy}>{busy ? 'Adding access…' : 'Add access'}</button>
 						<button type="button" onClick={back} disabled={busy}>Cancel</button>
 					</div>
 				</form>

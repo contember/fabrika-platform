@@ -67,13 +67,16 @@ export default createPage()
 					</p>
 				</div>
 
-				<form className="panel form" onSubmit={submit}>
-					<GrantComposer apps={targets.apps} crossApp={targets.crossApp} state={composer} idPrefix="key-grant" />
-					<label>
-						Expires (optional)
-						<input type="datetime-local" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
-						<span className="hint">Leave empty for a grant that lasts as long as the key.</span>
-					</label>
+				<form className="panel form" onSubmit={submit} onChange={() => setError(null)}>
+					<GrantComposer
+						apps={targets.apps}
+						crossApp={targets.crossApp}
+						state={composer}
+						idPrefix="key-grant"
+						expiry={expiry}
+						onExpiryChange={setExpiry}
+						expiryHint="Without an expiration, access lasts as long as the key."
+					/>
 					{error && <p className="error-text" role="alert">{error}</p>}
 					<div className="form-actions">
 						<button type="submit" className="primary" disabled={busy}>{busy ? 'Granting…' : 'Add grant'}</button>

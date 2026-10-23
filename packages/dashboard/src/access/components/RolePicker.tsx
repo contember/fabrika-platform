@@ -1,46 +1,35 @@
 import type { RoleDto } from '@fabrika/iam-contract'
 
 interface RolePickerProps {
-	/** Roles for the chosen app: built-in (cross-app) + the app's app/custom roles. */
 	roles: RoleDto[]
 	value: string
 	onChange: (roleKey: string) => void
-	id?: string
+	idPrefix: string
+	emptyMessage?: string
 }
 
-/**
- * A `<select>` of named roles available for the chosen app (from `GET /roles?app=…`).
- * Options are grouped by origin (built-in / app / custom). The empty option forces an
- * explicit pick.
- */
-export function RolePicker({ roles, value, onChange, id }: RolePickerProps) {
-	const byOrigin: Record<RoleDto['origin'], RoleDto[]> = { builtin: [], app: [], custom: [] }
-	for (const role of roles) byOrigin[role.origin].push(role)
-	const groups: { origin: RoleDto['origin']; label: string }[] = [
-		{ origin: 'builtin', label: 'Built-in' },
-		{ origin: 'app', label: 'App roles' },
-		{ origin: 'custom', label: 'Custom policies' },
-	]
+export function RolePicker({ roles, value, onChange, idPrefix, emptyMessage = 'No roles are available for this application.' }: RolePickerProps) {
+	const order: Record<RoleDto['origin'], number> = { app: 0, custom: 1, builtin: 2 }
+	const sorted = [...roles].sort((a, b) => order[a.origin] - order[b.origin])
 
 	return (
-		<select
-			id={id}
-			aria-label="Role"
-			value={value}
-			onChange={(e) => onChange(e.target.value)}
-		>
-			<option value="">Select a role…</option>
-			{groups.map(({ origin, label }) =>
-				byOrigin[origin].length === 0 ? null : (
-					<optgroup key={origin} label={label}>
-						{byOrigin[origin].map((role) => (
-							<option key={role.key} value={role.key}>
-								{role.name} ({role.key})
-							</option>
-						))}
-					</optgroup>
-				)
-			)}
-		</select>
+		<fieldset className="role-picker">
+			<legend>Role</legend>
+			{sorted.map((role) => (
+				<label key={role.key}>
+					<input
+						type="radio"
+						name={`${idPrefix}-role`}
+						checked={value === role.key}
+						onChange={() => onChange(role.key)}
+					/>
+					<span>
+						<strong title={role.key}>{role.name}</strong>
+						<span className="hint">{role.description ?? (role.permissions.join(', ') || 'This role has no permissions.')}</span>
+					</span>
+				</label>
+			))}
+			{roles.length === 0 && <p className="hint">{emptyMessage}</p>}
+		</fieldset>
 	)
 }

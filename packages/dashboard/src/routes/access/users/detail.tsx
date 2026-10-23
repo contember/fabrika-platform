@@ -88,18 +88,18 @@ export default createPage()
 				<section>
 					<div className="section-head">
 						<Icon name="key" size={15} />
-						<h2>Grants</h2>
+						<h2>Assigned access</h2>
 						<span className="spacer" />
-						<Link to="access/users/grant" params={{ id: principal.id }} className="btn small primary">Add grant</Link>
+						<Link to="access/users/grant" params={{ id: principal.id }} className="btn small primary">Add access</Link>
 					</div>
 					<Table
 						colSpan={7}
 						isEmpty={principal.grants.length === 0}
 						empty={
 							<EmptyState
-								title="No explicit grants"
+								title="No assigned access"
 								body="They only have whatever their group mappings or bootstrap give them."
-								action={<Link to="access/users/grant" params={{ id: principal.id }} className="btn small">Add the first grant</Link>}
+								action={<Link to="access/users/grant" params={{ id: principal.id }} className="btn small">Add access</Link>}
 							/>
 						}
 						head={<GrantTableHead />}

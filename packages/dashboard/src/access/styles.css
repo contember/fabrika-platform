@@ -3,6 +3,65 @@
  * the copy-out field. Written in `../styles.css` tokens; declares no base, shell or colour rules.
  */
 
+.grant-composer,
+.grant-options-body,
+.grant-scope {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-4);
+	min-width: 0;
+}
+
+.grant-options > summary {
+	font-size: var(--t-sm);
+	color: var(--ink-2);
+	cursor: pointer;
+}
+
+.grant-options-body {
+	padding-top: var(--s-4);
+	overflow-wrap: anywhere;
+}
+
+.role-picker {
+	margin: 0;
+	padding: 0;
+	border: 0;
+	min-width: 0;
+}
+
+.role-picker legend {
+	padding: 0;
+	font-size: var(--t-sm);
+	font-weight: 600;
+	color: var(--ink-2);
+}
+
+.form .role-picker label {
+	flex-direction: row;
+	align-items: flex-start;
+	gap: var(--s-2);
+	padding: var(--s-2) 0;
+	font-weight: 400;
+	cursor: pointer;
+}
+
+.role-picker input {
+	flex-shrink: 0;
+	margin: var(--s-1) 0 0;
+}
+
+.role-picker strong {
+	font-weight: 500;
+	color: var(--ink);
+}
+
+.role-picker .hint {
+	display: block;
+	margin-top: 0;
+	overflow-wrap: anywhere;
+}
+
 /* ── Fieldset pickers: scope, grant mode, action catalog ───────────────────── */
 
 .scope-picker,

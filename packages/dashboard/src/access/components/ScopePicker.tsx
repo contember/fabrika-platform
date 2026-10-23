@@ -35,52 +35,46 @@ interface ScopePickerProps {
  * text input: scope values are app-owned and never validated or enumerated here.
  */
 export function ScopePicker({ scopes, value, onChange, idPrefix = 'scope' }: ScopePickerProps) {
-	const globalId = `${idPrefix}-global`
 	const scopedId = `${idPrefix}-scoped`
 	const firstType = scopes[0]?.type ?? ''
+	if (scopes.length === 0) return null
+	const dimension = value.kind === 'scoped' ? scopes.find((scope) => scope.type === value.type) : undefined
 
 	return (
-		<fieldset className="scope-picker">
-			<legend>Scope</legend>
-			<label htmlFor={globalId}>
-				<input
-					id={globalId}
-					type="radio"
-					name={idPrefix}
-					checked={value.kind === 'global'}
-					onChange={() => onChange({ kind: 'global' })}
-				/>
-				Global / all scopes
-			</label>
-			<label htmlFor={scopedId}>
+		<div className="grant-scope">
+			<label htmlFor={scopedId} className="checkbox">
 				<input
 					id={scopedId}
-					type="radio"
-					name={idPrefix}
+					type="checkbox"
 					checked={value.kind === 'scoped'}
-					onChange={() => onChange({ kind: 'scoped', type: firstType, value: '' })}
-					disabled={scopes.length === 0}
+					onChange={(event) => onChange(event.target.checked ? { kind: 'scoped', type: firstType, value: '' } : { kind: 'global' })}
 				/>
-				Scoped to a dimension
+				Limit access to a specific scope
 			</label>
 			{value.kind === 'scoped' && (
-				<div className="scope-fields">
-					<select
-						aria-label="Scope dimension"
-						value={value.type}
-						onChange={(e) => onChange({ kind: 'scoped', type: e.target.value, value: value.value })}
-					>
-						{scopes.map((s) => <option key={s.type} value={s.type}>{s.label ? `${s.label} (${s.type})` : s.type}</option>)}
-					</select>
-					<input
-						aria-label="Scope value"
-						value={value.value}
-						onChange={(e) => onChange({ kind: 'scoped', type: value.type, value: e.target.value })}
-						placeholder="opaque value"
-					/>
+				<div className="form-row">
+					<label>
+						Scope dimension
+						<select
+							value={value.type}
+							onChange={(e) => onChange({ kind: 'scoped', type: e.target.value, value: '' })}
+						>
+							{scopes.map((s) => <option key={s.type} value={s.type}>{s.label ? `${s.label} (${s.type})` : s.type}</option>)}
+						</select>
+					</label>
+					<label>
+						Scope value
+						<input
+							value={value.value}
+							onChange={(e) => onChange({ kind: 'scoped', type: value.type, value: e.target.value })}
+							placeholder={`Enter ${dimension?.label ?? value.type} ID`}
+						/>
+					</label>
 				</div>
 			)}
-			{scopes.length === 0 && <p className="hint">Pick an app with declared scope dimensions to scope this; otherwise it stays global.</p>}
-		</fieldset>
+			<p className="hint">
+				{value.kind === 'global' ? 'Applies to all scopes within the selected application.' : 'Use the exact scope ID from the application.'}
+			</p>
+		</div>
 	)
 }
