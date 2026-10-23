@@ -783,6 +783,29 @@ describe('namespace deployed source evidence and settlement', () => {
 		})
 	}
 
+	test('a namespace whose project was deleted fails for good instead of retrying an unresolved proxy version', async () => {
+		const state = freshState()
+		const base = options(state)
+		const initial = await run(createZeropsNamespaceCapabilities(base), namespace({}), [])
+		const capabilities = createZeropsNamespaceCapabilities({
+			...base,
+			api: {
+				...base.api,
+				getAppVersion: async () => {
+					throw new ZeropsApiError('zerops: get app version failed (400) — appVersionNotFound', 400, 'appVersionNotFound')
+				},
+				getProject: async () => {
+					throw new ZeropsApiError('zerops: get project failed (400) — projectNotFound', 400, 'projectNotFound')
+				},
+			},
+		})
+		const failure = await run(capabilities, initial, [], 'reconcile').then(() => null, (error: unknown) => error)
+		expect(failure).toBeInstanceOf(ProviderNamespaceError)
+		if (!(failure instanceof ProviderNamespaceError)) throw failure
+		expect({ code: failure.code, retryable: failure.retryable }).toEqual({ code: 'projectNotFound', retryable: false })
+		expect(failure.message).toContain('no longer exists; remove the namespace')
+	})
+
 	test('an adopted exclusive namespace retains adoption after a transient readiness failure', async () => {
 		const state = freshState()
 		state.projects.set(projectId, project(projectId, 'apps-prod', 'operator project'))
