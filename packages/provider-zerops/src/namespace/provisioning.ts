@@ -17,7 +17,7 @@ import {
 	type ZeropsService,
 } from '../api'
 import { defaultSleep } from '../collaborators'
-import { namespaceResourceClaims, registrationResourceClaims } from './claims'
+import { claimedResources, namespaceResourceClaims, registrationResourceClaims } from './claims'
 import { checkpoint, decodeEnvelope, normalizedNamespace, normalizeTarget } from './codec'
 import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME, ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE } from './constants'
 import { asNamespaceError, namespaceError, ZEROPS_NAMESPACE_CANCELLED, ZEROPS_SUBDOMAIN_NOT_PUBLISHED } from './errors'
@@ -472,6 +472,7 @@ export const createZeropsNamespaceCapabilities = (options: ZeropsNamespaceOption
 		provision: (input) => mutateNamespace(input, options, 'provision'),
 		reconcile: (input) => mutateNamespace(input, options, 'reconcile'),
 		republish: (input) => republishNamespace(input, options),
+		claimedResources: (input) => claimedResources(options.api, input),
 		updates: createZeropsNamespaceUpdates(options),
 		operator: createZeropsNamespaceOperator({ proxySource: options.proxySource }),
 	}

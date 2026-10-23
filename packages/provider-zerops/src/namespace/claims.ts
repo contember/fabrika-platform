@@ -1,9 +1,16 @@
-import type { ProviderDeploymentNamespace, ProviderRegistration } from '@fabrika/provider-contract'
+import type {
+	ProviderClaimedResource,
+	ProviderClaimedResourcesInput,
+	ProviderDeploymentNamespace,
+	ProviderRegistration,
+} from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
+import { type ZeropsApi, ZeropsApiError } from '../api'
 import { assertFabrikaManifestCoordinates, manifestServiceHostnames, zeropsArtifactCodec } from '../manifest'
 import { zeropsSharedServicePrefix } from '../service-names'
 import { decodeEnvelope } from './codec'
 import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME } from './constants'
+import { asNamespaceError } from './errors'
 
 export const namespaceResourceClaims = (namespace: ProviderDeploymentNamespace): string[] => {
 	const target = decodeEnvelope(namespace.target)
@@ -74,4 +81,52 @@ export const registrationResourceClaims = (registration: ProviderRegistration): 
 		}
 	}
 	return hostnames.map((hostname) => `service:${hostname}`).sort()
+}
+
+/**
+ * The platform's answer for a project that does not exist, a deleted one included. A project the token holds no grant
+ * on answers `403 insufficientPermissions` instead (zerops-platform.md), so this never reads an unreachable one as gone.
+ */
+const ZEROPS_PROJECT_NOT_FOUND = 'projectNotFound'
+
+const SERVICE_CLAIM_PREFIX = 'service:'
+
+/**
+ * Whether each claimed service still exists in the namespace's project. Gone means the project reads `projectNotFound`,
+ * or it exists and has no service under the claimed hostname. Any other answer, a key that names no service, or a
+ * namespace that never recorded its project throws: Control then releases nothing.
+ */
+export const claimedResources = async (
+	api: Pick<ZeropsApi, 'getProject' | 'findService'>,
+	input: ProviderClaimedResourcesInput,
+): Promise<ProviderClaimedResource[]> => {
+	try {
+		const services = input.resourceKeys.map((resourceKey) => {
+			const hostname = resourceKey.startsWith(SERVICE_CLAIM_PREFIX) ? resourceKey.slice(SERVICE_CLAIM_PREFIX.length) : ''
+			if (hostname === '') throw new Error(`Zerops cannot tell whether claimed resource \`${resourceKey}\` exists`)
+			return { resourceKey, hostname }
+		})
+		const projectId = decodeEnvelope(input.namespace.target).projectId
+		// An interrupted first provision can leave a project its marker names but the target does not.
+		if (projectId === undefined) {
+			throw new Error(`Zerops namespace \`${input.namespace.id}\` records no project, so its services cannot be read back`)
+		}
+		if (!(await projectExists(api, projectId, input.signal))) return services.map(({ resourceKey }) => ({ resourceKey, exists: false }))
+		return await Promise.all(services.map(async ({ resourceKey, hostname }) => ({
+			resourceKey,
+			exists: (await api.findService({ projectId, hostname, signal: input.signal })) !== null,
+		})))
+	} catch (cause) {
+		throw asNamespaceError(cause, 'claim check')
+	}
+}
+
+const projectExists = async (api: Pick<ZeropsApi, 'getProject'>, projectId: string, signal: AbortSignal): Promise<boolean> => {
+	try {
+		await api.getProject({ projectId, signal })
+		return true
+	} catch (error) {
+		if (error instanceof ZeropsApiError && error.code === ZEROPS_PROJECT_NOT_FOUND) return false
+		throw error
+	}
 }
