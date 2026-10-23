@@ -258,6 +258,12 @@ if (postgres !== null) {
 			expect((await kit.runJob(FILE_SWEEP_JOB)).status).toBe('succeeded')
 			expect((await files()).map((row) => row.id)).not.toContain(orphan?.id ?? '')
 		})
+		test('a job transaction that rolls back keeps the live file another of its transactions committed', async () => {
+			expect((await kit.runJob('catalogRace')).status).toBe('succeeded')
+			const [raced] = await admin((sql) => sql.unsafe(`select id from ${schema}.products where name = 'raced'`))
+			const measured = await json('catalog.measure', { id: z.strictObject({ id: z.string() }).parse(raced).id })
+			expect((await measured.json()).result).toEqual({ size: PNG.byteLength, name: 'raced.png' })
+		})
 	})
 
 	describe('a mail attachment', () => {

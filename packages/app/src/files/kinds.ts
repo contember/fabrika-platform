@@ -83,13 +83,8 @@ export class FileWork {
 		this.#written.set(id, objectKey)
 	}
 
-	/** Where the files staged from now on start, for a release of only those. */
-	get mark(): number {
-		return this.#staged.length
-	}
-
-	stagedIds(from = 0): readonly string[] {
-		return this.#staged.slice(from)
+	get stagedIds(): readonly string[] {
+		return [...this.#staged]
 	}
 
 	writtenKey(id: string): string | null {
@@ -229,9 +224,9 @@ export class StoredFileKinds {
 			const objectKey = await this.#files.abandon(id, work.request)
 			if (objectKey === null) {
 				// On SQLite the pending row is written in the work's own transaction and rolled back with it, so only the
-				// work knows the object; after a known rollback nothing references it.
+				// work knows the object; a row still there is a file something claimed, whose object stays.
 				const written = work.writtenKey(id)
-				if (written !== null) {
+				if (written !== null && (await this.#files.find(id)) === null) {
 					step = 'object_delete_failed'
 					await this.#store.delete(written)
 				}
@@ -247,11 +242,11 @@ export class StoredFileKinds {
 	}
 
 	/**
-	 * After a known rollback: every file the work staged (from `from`) and nothing claimed goes now. After an uncertain
-	 * outcome (a lost commit answer, a crash) nothing is deleted here; the sweep decides from the database.
+	 * After a known rollback: every file the work staged and nothing claimed goes now. After an uncertain outcome (a lost
+	 * commit answer, a crash) nothing is deleted here; the sweep decides from the database.
 	 */
-	async release(work: FileWork, from = 0): Promise<void> {
-		for (const id of work.stagedIds(from)) {
+	async release(work: FileWork): Promise<void> {
+		for (const id of work.stagedIds) {
 			await this.#abandon(work, id)
 		}
 	}

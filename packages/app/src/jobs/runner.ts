@@ -902,7 +902,8 @@ function kitJobContext(
 		transaction: async <R>(body: (tx: object) => Promise<R>): Promise<R> => {
 			// Outside its attempt there is no lease to fence the transaction with, so it never opens.
 			boundTo(frame, () => false)()
-			const mark = work.mark
+			// Its own files: a rollback releases only what this transaction staged, never a file of a concurrent one.
+			const own = new FileWork(frame, frame.id)
 			let rolledBack = false
 			try {
 				return await data.transaction(async (session) => {
@@ -915,7 +916,7 @@ function kitJobContext(
 							boundTo(frame, () => !open, 'tx.ref')()
 							return ref(action, dimension, id, session)
 						}
-						const files = putAndOpen(boundTo(frame, () => !open, 'tx.files'))
+						const files = storedFilesHandle(kinds, own, { where: job, check: boundTo(frame, () => !open, 'tx.files'), writes: true })
 						return await body(Object.freeze({ db: siteData(writes, (action) => writes.app(app(action))), sql, files, ref: located }))
 					} catch (error) {
 						rolledBack = true
@@ -926,7 +927,7 @@ function kitJobContext(
 				})
 			} catch (error) {
 				// A transaction the work threw out of is a known rollback; a failed commit is not, and the sweep decides.
-				if (rolledBack) await kinds?.release(work, mark)
+				if (rolledBack) await kinds?.release(own)
 				throw error
 			}
 		},
