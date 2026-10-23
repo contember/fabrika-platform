@@ -43,6 +43,6 @@
 		"@fabrika/platform": "workspace:*"
 	},
 	"devDependencies": {
-		"@types/bun": "latest"
+		"@types/bun": "^1.4.3"
 	}
 }

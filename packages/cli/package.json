@@ -56,7 +56,7 @@
 		}
 	},
 	"devDependencies": {
-		"@types/bun": "latest",
+		"@types/bun": "^1.4.3",
 		"@fabrika/builder": "workspace:*",
 		"@fabrika/provider-cloudflare": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*"

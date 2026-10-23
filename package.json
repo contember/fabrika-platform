@@ -46,7 +46,7 @@
 		"@fabrika/operations-contract": "workspace:*",
 		"@opice/cli": "0.11.0",
 		"@opice/harness": "0.11.0",
-		"@types/bun": "latest",
+		"@types/bun": "^1.4.3",
 		"dprint": "^0.51.1",
 		"playwright": "^1.60.0",
 		"typescript": "^5.9.3"

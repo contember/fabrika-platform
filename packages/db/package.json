@@ -68,7 +68,7 @@
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
-		"@types/bun": "latest",
+		"@types/bun": "^1.4.3",
 		"typescript": "^5.9.3",
 		"@fabrika/check": "workspace:*"
 	}

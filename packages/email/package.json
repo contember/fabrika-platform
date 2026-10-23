@@ -76,7 +76,7 @@
 		"test": "bun test src/__tests__"
 	},
 	"devDependencies": {
-		"@types/bun": "latest"
+		"@types/bun": "^1.4.3"
 	},
 	"dependencies": {
 		"zod": "^3.25.76"

@@ -28,6 +28,6 @@
 		"fabrika-example-zerops": "workspace:*",
 		"@fabrika/iam": "workspace:*",
 		"@fabrika/proxy": "workspace:*",
-		"@types/bun": "latest"
+		"@types/bun": "^1.4.3"
 	}
 }
