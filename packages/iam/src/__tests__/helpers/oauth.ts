@@ -21,7 +21,12 @@ export const SIGNING_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' 
  */
 export async function oauthFixture(
 	repositories: IamRepositories,
-	options: { document?: (clientId: string) => Record<string, unknown>; failFetch?: boolean } = {},
+	options: {
+		document?: (clientId: string) => Record<string, unknown>
+		failFetch?: boolean
+		/** The first fetch never settles, even past its abort signal: a Workers fetch whose request was cancelled. */
+		stallFirstFetch?: boolean
+	} = {},
 ) {
 	const principal = await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.test`)
 	await repositories.grants.createGrant({
@@ -64,6 +69,7 @@ export async function oauthFixture(
 	const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(
 		(input: Parameters<typeof fetch>[0]) => {
 			fetched.push(input instanceof Request ? input.url : String(input))
+			if (options.stallFirstFetch === true && fetched.length === 1) return new Promise<Response>(() => {})
 			return Promise.resolve(options.failFetch === true ? new Response('unavailable', { status: 503 }) : Response.json(document))
 		},
 		{ preconnect: nativeFetch.preconnect },

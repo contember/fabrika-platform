@@ -17,17 +17,29 @@ const cache = new Map<string, { expiresAt: number; metadata: Promise<OAuthClient
  */
 export function clientMetadata(registration: ManagedOAuthClient): Promise<OAuthClientMetadataDocument | null> {
 	const key = JSON.stringify(registration)
+	const now = Date.now()
 	const cached = cache.get(key)
-	if (cached !== undefined && cached.expiresAt > Date.now()) return cached.metadata
+	// On Workers a fetch belongs to the request that started it and never settles once that request is
+	// cancelled, so a caller sharing it waits no longer than the entry lives.
+	if (cached !== undefined && cached.expiresAt > now) return withinDeadline(cached.metadata, cached.expiresAt - now)
 	if (cache.size >= CACHE_MAX_ENTRIES) cache.clear()
 	const metadata = fetchMetadata(registration)
-	// An in-flight entry lives until the fetch settles; the outcome then sets how long it is kept.
-	const entry = { expiresAt: Number.POSITIVE_INFINITY, metadata }
+	// An in-flight entry lives as long as its fetch may run; the outcome then sets how long it is kept.
+	const entry = { expiresAt: now + FETCH_TIMEOUT_MS, metadata }
 	cache.set(key, entry)
 	void metadata.then((document) => {
 		entry.expiresAt = Date.now() + (document === null ? FAILURE_TTL_MS : CACHE_TTL_MS)
 	})
 	return metadata
+}
+
+/** The shared outcome, or `null` — a failed fetch — once `ms` have passed. */
+function withinDeadline(metadata: Promise<OAuthClientMetadataDocument | null>, ms: number): Promise<OAuthClientMetadataDocument | null> {
+	let timer: ReturnType<typeof setTimeout> | undefined
+	const deadline = new Promise<null>((resolve) => {
+		timer = setTimeout(() => resolve(null), ms)
+	})
+	return Promise.race([metadata, deadline]).finally(() => clearTimeout(timer))
 }
 
 async function fetchMetadata(registration: ManagedOAuthClient): Promise<OAuthClientMetadataDocument | null> {

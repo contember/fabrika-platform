@@ -1,9 +1,10 @@
 import { buildAccessClaims, matchesTokenAudience, parseAccessClaims, RESOURCE_ACCESS_TOKEN_TYP, TOKEN_ALG } from '@fabrika/auth-core'
-import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { afterEach, describe, expect, jest, spyOn, test } from 'bun:test'
 import { decodeJwt, decodeProtectedHeader } from 'jose'
 import { resolveAdmin } from '../admin/router'
 import { resolveCaller } from '../auth'
 import { narrowPermissions } from '../oauth'
+import { clientMetadata } from '../oauth-client'
 import { parseOAuthConfig } from '../oauth-config'
 import { handleOAuth } from '../oauth-http'
 import { getSigner, verifyAccessToken, verifyResourceAccessToken } from '../signing'
@@ -416,5 +417,23 @@ describe('mint races and client metadata fetches', () => {
 		expect((await f.authorize()).status).toBe(400)
 		expect((await f.authorize()).status).toBe(400)
 		expect(f.fetched).toHaveLength(1)
+	})
+
+	test('a fetch that never settles holds a caller sharing it only until its deadline, and is then fetched again', async () => {
+		const f = await fixture({ stallFirstFetch: true })
+		const registration = f.config.clients[0]
+		if (registration === undefined) throw new Error('the fixture registers one client')
+		jest.useFakeTimers()
+		try {
+			void clientMetadata(registration)
+			const shared = clientMetadata(registration)
+			jest.advanceTimersByTime(5_000)
+			// Fake timers stop the test timeout too, so a caller still waiting must fail here rather than hang.
+			expect(await Promise.race([shared, new Promise((resolve) => setImmediate(() => resolve('still waiting')))])).toBeNull()
+			expect((await f.authorize()).status).toBe(200)
+			expect(f.fetched).toHaveLength(2)
+		} finally {
+			jest.useRealTimers()
+		}
 	})
 })
