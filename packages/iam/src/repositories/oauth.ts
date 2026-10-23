@@ -63,6 +63,12 @@ export class OAuthRepository {
 		return this.db.prepare('SELECT * FROM oauth_grants WHERE id = ?').bind(id).first<OAuthGrantRow>()
 	}
 
+	async listForPrincipal(principalId: string, before: string | undefined, limit: number): Promise<OAuthGrantRow[]> {
+		const { results } = await this.db.prepare(`SELECT * FROM oauth_grants WHERE principal_id = ?${before === undefined ? '' : ' AND id < ?'}
+			ORDER BY id DESC LIMIT ?`).bind(principalId, ...(before === undefined ? [] : [before]), limit).all<OAuthGrantRow>()
+		return results
+	}
+
 	/** Revoke a grant; `audit` is written exactly when this call revoked it. */
 	async revokeGrant(id: string, now: number, audit?: AuditEventInput): Promise<void> {
 		await this.writer.run([{ sql: 'UPDATE oauth_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL RETURNING id', binds: [now, id] }], audit)

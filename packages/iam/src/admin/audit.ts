@@ -50,6 +50,7 @@ export async function listAuditUseCase(c: AdminContext, input: ListAuditInput): 
 		...(input.resourceType ? { resourceType: input.resourceType } : {}),
 		...(input.resourceId ? { resourceId: input.resourceId } : {}),
 		...(input.principalId ? { principalId: input.principalId } : {}),
+		...(input.subjectPrincipalId ? { subjectPrincipalId: input.subjectPrincipalId } : {}),
 		...(input.action ? { action: input.action } : {}),
 		...(input.requestId ? { requestId: input.requestId } : {}),
 		...(input.before ? { before: input.before } : {}),

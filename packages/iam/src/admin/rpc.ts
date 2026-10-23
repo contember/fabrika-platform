@@ -6,6 +6,7 @@ import type { IamAppContext } from '../app'
 import { logError } from '../log'
 import { recordAdminAccess, rpcProcedureOf } from './access'
 import { grantAppRole, listAdministeredApps, listAppPeople, revokeAppRole } from './app-people'
+import { listConnections, revokeConnection } from './connections'
 import type { AdminContext } from './handlers'
 import { adminUseCases } from './handlers'
 import { ADMIN_ACTION, extractCredentials, IAM_APP, resolveAdmin } from './router'
@@ -69,7 +70,7 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	// call and never a sweep — see `SessionRepository.revokeSessionById`.
 	sessions: t.router({
 		list: t.procedure
-			.input(z.object({ principalId: nonEmpty, ...pageInput }))
+			.input(z.object({ principalId: nonEmpty, signInsOnly: z.boolean().optional(), ...pageInput }))
 			.query(({ ctx, input }) => adminUseCases.listSessions(context(ctx), input)),
 		revoke: t.procedure
 			.input(z.object({ id: nonEmpty }))
@@ -91,6 +92,8 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	}),
 	grants: t.router({
 		create: t.procedure.input(grantSchema).mutation(({ ctx, input }) => adminUseCases.createGrant(context(ctx), input)),
+		update: t.procedure.input(z.object({ id: nonEmpty, ...authorization }).omit({ app: true }))
+			.mutation(({ ctx, input }) => adminUseCases.updateGrant(context(ctx), input)),
 		delete: t.procedure.input(z.object({ id: nonEmpty })).mutation(({ ctx, input }) => adminUseCases.deleteGrant(context(ctx), input)),
 	}),
 	apps: t.router({
@@ -100,6 +103,12 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.input(z.object({ app: nonEmpty, origins: z.array(nonEmpty) }))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.setReturnOrigins(context(ctx), input)),
+	}),
+	connections: t.router({
+		list: t.procedure.input(z.object({ principalId: nonEmpty, ...pageInput })).require(ADMIN_ACTION)
+			.query(({ ctx, input }) => listConnections(context(ctx), input)),
+		revoke: t.procedure.input(z.object({ id: nonEmpty })).require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => revokeConnection(context(ctx), input)),
 	}),
 	roles: t.router({
 		list: t.procedure
@@ -176,6 +185,7 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 				resourceType: z.string().optional(),
 				resourceId: z.string().optional(),
 				principalId: z.string().optional(),
+				subjectPrincipalId: z.string().optional(),
 				action: z.string().optional(),
 				requestId: z.string().optional(),
 				before: z.string().optional(),

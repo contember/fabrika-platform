@@ -106,6 +106,220 @@
 
 /* ── Per-user authentication methods ──────────────────────────────────────── */
 
+.user-detail-head h1 {
+	overflow-wrap: anywhere;
+}
+
+.user-identity-status,
+.user-item-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--s-3);
+}
+
+.user-identity-status {
+	margin-top: var(--s-3);
+}
+
+.user-detail-tabs,
+.user-activity-filters {
+	display: flex;
+	gap: var(--s-5);
+	flex-wrap: wrap;
+	margin-bottom: var(--s-5);
+}
+
+.user-detail-tabs {
+	border-bottom: 1px solid var(--rule);
+}
+
+.user-detail-tabs a,
+.user-activity-filters a {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	color: var(--ink-3);
+	text-decoration: none;
+}
+
+.user-detail-tabs a[aria-current='page'] {
+	color: var(--ink);
+	box-shadow: inset 0 -2px var(--brand);
+}
+
+.user-activity-filters a[aria-current='page'] {
+	color: var(--blueprint);
+	text-decoration: underline;
+	text-underline-offset: 6px;
+}
+
+.user-state-note {
+	padding: var(--s-4);
+	margin-bottom: var(--s-5);
+	background: var(--tile);
+	border-radius: var(--r-2);
+}
+
+.user-state-note p {
+	color: var(--ink-2);
+	margin: var(--s-2) 0;
+	max-width: var(--measure);
+}
+
+.user-access-list {
+	display: grid;
+	gap: var(--s-3);
+}
+
+.user-access-item {
+	background: var(--tile);
+	border-radius: var(--r-2);
+	min-width: 0;
+}
+
+.user-item-row,
+.user-access-item > summary {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--s-4);
+	padding: var(--s-4);
+}
+
+.user-access-item summary {
+	cursor: pointer;
+}
+
+.user-item-title {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-1);
+	flex: 1 1 16rem;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.user-access-item > summary::after {
+	content: '+';
+	color: var(--ink-3);
+	font-family: var(--font-mono);
+}
+
+.user-access-item[open] > summary::after {
+	content: '−';
+}
+
+.user-access-explanation,
+.user-session-apps {
+	border-top: 1px solid var(--rule-soft);
+}
+
+.user-access-explanation > summary,
+.user-session-apps > summary {
+	padding: var(--s-3) var(--s-4);
+	font-size: var(--t-sm);
+	color: var(--ink-2);
+}
+
+.user-access-explanation > summary span {
+	margin-left: var(--s-4);
+}
+
+.user-item-detail {
+	padding: var(--s-3) var(--s-4) var(--s-4);
+	overflow-wrap: anywhere;
+}
+
+.user-item-detail .inline-actions {
+	margin-bottom: var(--s-3);
+}
+
+.user-permissions {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+.user-permissions li {
+	display: grid;
+	grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+	gap: var(--s-3);
+	padding: var(--s-2) 0;
+	border-top: 1px solid var(--rule-soft);
+	font-size: var(--t-sm);
+}
+
+.user-password-actions {
+	margin: var(--s-4) 0;
+}
+
+.user-password-actions .hint {
+	margin-top: var(--s-3);
+}
+
+.user-account-facts dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.user-timeline {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.user-timeline > li {
+	display: grid;
+	grid-template-columns: 13rem minmax(0, 1fr);
+	gap: var(--s-5);
+	padding: var(--s-4) 0;
+	border-bottom: 1px solid var(--rule-soft);
+	overflow-wrap: anywhere;
+}
+
+.user-timeline time,
+.user-timeline summary {
+	font-size: var(--t-sm);
+	color: var(--ink-3);
+}
+
+.user-timeline summary {
+	cursor: pointer;
+	padding: var(--s-2) 0;
+}
+
+@media (max-width: 640px) {
+	.user-detail-head .page-head-row {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.user-detail-tabs,
+	.user-activity-filters {
+		gap: var(--s-4);
+	}
+
+	.user-timeline > li,
+	.user-permissions li {
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--s-1);
+	}
+
+	.user-item-title {
+		flex-basis: 100%;
+	}
+
+	.user-item-actions {
+		margin-left: auto;
+	}
+
+	.user-access-explanation > summary span {
+		display: block;
+		margin: var(--s-1) 0 0;
+	}
+}
+
 .authentication-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));

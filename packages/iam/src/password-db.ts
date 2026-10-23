@@ -94,6 +94,12 @@ export class PasswordRepository {
 		return this.db.prepare('SELECT * FROM password_accounts WHERE principal_id = ?').bind(principalId).first<PasswordAccountRow>()
 	}
 
+	/** Metadata only: a closed link may have been used, replaced or revoked. */
+	latestAction(principalId: string): Promise<Pick<PasswordActionTokenRow, 'purpose' | 'created_at' | 'expires_at' | 'consumed_at'> | null> {
+		return this.db.prepare(`SELECT purpose, created_at, expires_at, consumed_at FROM password_action_tokens
+			WHERE principal_id = ? ORDER BY id DESC LIMIT 1`).bind(principalId).first()
+	}
+
 	/** Preserve the administrator's opt-in independently of enrollment token lifetime. */
 	async enableEnrollment(principalId: string): Promise<void> {
 		await this.enableEnrollmentStatement(principalId).run()

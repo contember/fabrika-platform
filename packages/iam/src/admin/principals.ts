@@ -1,11 +1,10 @@
-import { type PermissionEntry } from '@fabrika/auth-core'
-
 import {
 	type CursorList,
 	type InviteRequest,
 	type ListPrincipalsInput,
 	type MeDto,
 	type PrincipalDetail,
+	type PrincipalGrantDto,
 	type PrincipalIdInput,
 	type PrincipalListItem,
 	type UpdatePrincipalInput,
@@ -13,10 +12,11 @@ import {
 import { type PrincipalRow, principalStatus } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 import { resolvePermissionsAt } from '../resolve'
+import { listRolesUseCase } from './app-schema'
 import { type AdminContext, adminEvent, fail } from './context'
 import { toGrantDtos } from './grant-support'
 import { cursorOf, normalizeLimit } from './pagination'
-import { requireActableTarget } from './user-admin'
+import { canManagePrincipal, managesApp, requireActableTarget } from './user-admin'
 
 function toPrincipalListItem(row: PrincipalRow): PrincipalListItem {
 	return {
@@ -62,10 +62,38 @@ export async function getPrincipalUseCase(c: AdminContext, input: PrincipalIdInp
 	}
 	const grants = await c.services.repositories.grants.listGrants(id)
 
-	// Effective permissions: resolve them the same way authenticate() does, but
-	// without the live token (groups need a cookie we don't have here) — so this
-	// reflects explicit grants + bootstrap; group-derived perms are login-time.
-	const permissions = await effectivePermissionsForAdmin(c, row)
+	const permissions = row.disabled_at === null ? await resolvePermissionsAt(c.services, row, c.app) : []
+	const canManage = await canManagePrincipal(c, row)
+	const lastSignIns = await c.services.repositories.sessions.lastAppSignIns(id)
+	const apps = new Set([...grants.flatMap((grant) => grant.app === null ? [] : [grant.app]), ...lastSignIns.map((login) => login.app)])
+	if (grants.some((grant) => grant.app === null) || (bootstrapMailbox(c, row) && row.affiliation === 'internal')) {
+		for (const app of c.services.config.platformAudiences) apps.add(app)
+	}
+	const access = await Promise.all(
+		[...apps].sort().map(async (app) => ({
+			app,
+			permissions: row.disabled_at === null ? await resolvePermissionsAt(c.services, row, app) : [],
+			lastSignInAt: lastSignIns.find((login) => login.app === app)?.signed_in_at ?? null,
+		})),
+	)
+	const roles = new Map(
+		await Promise.all([...new Set(grants.map((grant) => grant.app))].map(async (app) => [app, (await listRolesUseCase(c, { app })).items] as const)),
+	)
+	const authors = new Map(
+		await Promise.all([...new Set(grants.flatMap((grant) => grant.granted_by === null ? [] : [grant.granted_by]))]
+			.map(async (author) => [author, (await c.services.repositories.principals.getPrincipalById(author))?.label ?? author] as const)),
+	)
+	const grantDetails: PrincipalGrantDto[] = (await toGrantDtos(grants, c.services)).map((grant) => {
+		const role = roles.get(grant.app)?.find((role) => role.key === grant.roleKey)
+		return {
+			...grant,
+			roleName: role?.name ?? null,
+			rolePermissions: role?.permissions ?? [],
+			grantedByLabel: grant.grantedBy === null ? null : authors.get(grant.grantedBy) ?? grant.grantedBy,
+			canManage: (c.administration.kind === 'installation' || row.type === 'user') && managesApp(c.services, c.administration, grant.app),
+		}
+	})
+	const latestAction = await c.services.repositories.passwords.latestAction(id)
 	const passwordAccount = row.type === 'user' && c.services.config.authentication.password.enabled
 		? await c.services.repositories.passwords.getAccount(row.id)
 		: null
@@ -73,8 +101,16 @@ export async function getPrincipalUseCase(c: AdminContext, input: PrincipalIdInp
 	const detail: PrincipalDetail = {
 		...toPrincipalListItem(row),
 		bootstrapMailbox: bootstrapMailbox(c, row),
-		grants: await toGrantDtos(grants, c.services),
+		grants: grantDetails,
 		permissions,
+		access,
+		management: {
+			account: canManage,
+			passwordLinks: canManage && (c.services.email !== null || c.administration.kind === 'installation'),
+			audit: c.administration.kind === 'installation',
+		},
+		activatedAt: row.activated_at,
+		disabledAt: row.disabled_at,
 		authentication: {
 			oidc: {
 				state: !c.services.config.authentication.oidc.enabled
@@ -84,6 +120,13 @@ export async function getPrincipalUseCase(c: AdminContext, input: PrincipalIdInp
 					: 'unlinked',
 			},
 			password: {
+				delivery: c.services.email === null ? 'manual' : 'email',
+				latestAction: latestAction === null ? null : {
+					purpose: latestAction.purpose,
+					createdAt: latestAction.created_at,
+					expiresAt: latestAction.expires_at,
+					closedAt: latestAction.consumed_at,
+				},
 				state: !c.services.config.authentication.password.enabled
 					? 'unavailable'
 					: row.type !== 'user'
@@ -93,21 +136,6 @@ export async function getPrincipalUseCase(c: AdminContext, input: PrincipalIdInp
 		},
 	}
 	return detail
-}
-
-/**
- * Effective permissions for the admin detail view, resolved FOR IAM'S OWN APP — the same question
- * `authenticate()` answers, asked about `propustka`.
- *
- * It used to expand every app's grants against IAM's role table: a `vozka` grant naming role
- * `deploy-operator` was looked up among propustka's roles, so it either resolved to nothing or, on a
- * key collision, to the wrong permissions (CORR-8). The grant fetch is now app-filtered exactly as
- * `getActiveGrantsForApp` filters on the real authz path, so what this shows is a true answer to a
- * narrow question rather than an approximate answer to a broad one. Other apps' grants remain visible
- * in the grants list below, which is where a per-app view belongs.
- */
-function effectivePermissionsForAdmin(c: AdminContext, row: PrincipalRow): Promise<PermissionEntry[]> {
-	return resolvePermissionsAt(c.services, row, c.app)
 }
 
 export async function invitePrincipalUseCase(c: AdminContext, input: InviteRequest): Promise<PrincipalListItem> {

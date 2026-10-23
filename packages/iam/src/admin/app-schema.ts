@@ -16,7 +16,7 @@ import { normalizeOrigin } from '../handoff'
 import { BUILTIN_ROLES } from '../roles'
 import { parseStoredPermissions } from '../stored-permissions'
 import { type AdminContext, adminEvent, fail } from './context'
-import { dbRoleToDef, knownApps, rolePermissions } from './grant-support'
+import { dbRoleToDef, knownApps } from './grant-support'
 import { error, json, readJson } from './http'
 
 /** The app ids a grant can be scoped to — the apps that have registered a vocabulary — with their display names. */
@@ -45,9 +45,7 @@ export async function listRolesUseCase(c: AdminContext, input: ListRolesInput): 
 			}
 			items.push({
 				key: row.role_key,
-				name: row.name,
-				...(row.description !== null ? { description: row.description } : {}),
-				permissions: rolePermissions(row.permissions),
+				...dbRoleToDef(row),
 				origin: row.origin,
 			})
 		}

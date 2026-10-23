@@ -86,9 +86,13 @@ const fakeApi = (options: FakeOptions = {}): { api: FirstAdministratorApi; calls
 					return {
 						...created,
 						bootstrapMailbox: false,
-						grants: options.grants ?? [],
+						grants: (options.grants ?? []).map((grant) => ({ ...grant, roleName: null, rolePermissions: [], grantedByLabel: null, canManage: true })),
 						permissions: [],
-						authentication: { oidc: { state: 'unavailable' }, password: { state: options.password ?? 'disabled' } },
+						access: [],
+						management: { account: true, passwordLinks: true, audit: true },
+						activatedAt: null,
+						disabledAt: null,
+						authentication: { oidc: { state: 'unavailable' }, password: { state: options.password ?? 'disabled', delivery: 'manual', latestAction: null } },
 					}
 				},
 			},

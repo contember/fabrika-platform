@@ -49,10 +49,14 @@ export function requireGrantablePrincipal(c: AdminContext, principal: Pick<Princ
  * administrator, a deployer, a console admin, a bootstrap mailbox and every other user administrator out of reach.
  */
 export async function requireActableTarget(c: AdminContext, principal: PrincipalRow): Promise<void> {
-	if (c.administration.kind === 'installation') return
-	if (!(await isActable(c.services, c.administration, principal))) {
+	if (!(await canManagePrincipal(c, principal))) {
 		return fail(403, 'this person holds access outside the applications you administer; only an installation administrator acts on them')
 	}
+}
+
+/** The same rule serves UI capabilities and the write guard. */
+export function canManagePrincipal(c: AdminContext, principal: PrincipalRow): Promise<boolean> {
+	return c.administration.kind === 'installation' ? Promise.resolve(true) : isActable(c.services, c.administration, principal)
 }
 
 async function isActable(services: Services, administration: Administration, principal: PrincipalRow): Promise<boolean> {

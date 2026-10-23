@@ -1,34 +1,32 @@
 import {
-	type CursorList,
 	type ListSessionsInput,
 	type PrincipalIdInput,
 	type RevokedSessionsResponse,
 	type SessionDto,
 	type SessionIdInput,
+	type SessionList,
 } from '@fabrika/iam-contract'
-import { type SessionRow } from '../db'
+import { sessionUsable } from '../auth'
+import type { ListedSessionRow } from '../repositories/sessions'
 
 import { type AdminContext, adminEvent, fail } from './context'
 
 import { cursorOf, normalizeLimit } from './pagination'
 import { requireActableTarget } from './user-admin'
 
-/**
- * Sessions an operator can see and end.
- *
- * Before this, the only answer to "that session should not exist" was to disable the whole
- * principal, which also locks the person out — `revokeSessionByHash` is reachable from
- * `/auth/logout` and nowhere else, so only the session's own holder could end it. That is exactly
- * the wrong shape for the case that motivated it (backlog 52): an installation that switched
- * authentication method still honoured sessions minted under the old one for another thirty days.
- *
- * **Authorization is the same check every other principal-scoped operation uses**: the `iam.admin`
- * gate on the procedure. That action is scope-less, so it is satisfied only by a GLOBAL permission —
- * there is no such thing here as an admin who may administer some principals and not others, and a
- * caller who cannot pass the gate reaches none of this. The gate is enumerated from the contract and
- * asserted for a non-admin in `admin-rpc-gates.test.ts`, so a new procedure cannot lose it quietly.
- */
-function toSessionDto(row: SessionRow, now: number): SessionDto {
+/** Stored lifecycle stays compatible; availability also reflects the parent, account and installation switches. */
+function toSessionDto(c: AdminContext, row: ListedSessionRow, now: number, disabled: boolean): SessionDto {
+	const unavailableReason = row.revoked_at !== null
+		? 'revoked'
+		: row.expires_at <= now
+		? 'expired'
+		: row.parent_session_id !== null && (row.parent_expires_at === null || row.parent_expires_at <= now || row.parent_revoked_at !== null)
+		? 'parent_ended'
+		: disabled
+		? 'account_disabled'
+		: !sessionUsable(row, c.services.config)
+		? 'method_disabled'
+		: null
 	return {
 		id: row.id,
 		principalId: row.principal_id,
@@ -39,18 +37,12 @@ function toSessionDto(row: SessionRow, now: number): SessionDto {
 		createdAt: row.created_at,
 		expiresAt: row.expires_at,
 		revokedAt: row.revoked_at,
+		unavailableReason,
 	}
 }
 
-/**
- * One page of a principal's sessions, newest first, INCLUDING revoked and expired ones — an operator
- * asking "what did this account have open" needs the ones that are already dead too.
- *
- * A child session's own status is what is reported. It can read `active` while its parent is
- * revoked, because revocation cascades at LOOKUP (the join in `getActiveSessionByHash`) and does not
- * rewrite the child row; `parentSessionId` is on the DTO so the reader can follow it.
- */
-export async function listSessionsUseCase(c: AdminContext, input: ListSessionsInput): Promise<CursorList<SessionDto>> {
+/** Page by sign-in when requested, keeping all of that page's application sessions with their parent. */
+export async function listSessionsUseCase(c: AdminContext, input: ListSessionsInput): Promise<SessionList> {
 	const principal = await c.services.repositories.principals.getPrincipalById(input.principalId)
 	if (!principal) {
 		return fail(404, 'principal not found')
@@ -59,10 +51,16 @@ export async function listSessionsUseCase(c: AdminContext, input: ListSessionsIn
 	const rows = await c.services.repositories.sessions.listSessionsForPrincipal(input.principalId, {
 		...(input.before ? { before: input.before } : {}),
 		limit,
+		signInsOnly: input.signInsOnly,
 	})
 	const now = Math.floor(Date.now() / 1000)
-	const items = rows.map((row) => toSessionDto(row, now))
-	return { items, nextCursor: cursorOf(items, limit, (item) => item.id) }
+	const items = rows.map((row) => toSessionDto(c, row, now, principal.disabled_at !== null))
+	const children = input.signInsOnly ? await c.services.repositories.sessions.listChildren(rows.map((row) => row.id)) : []
+	return {
+		items,
+		nextCursor: cursorOf(items, limit, (item) => item.id),
+		applications: children.map((row) => toSessionDto(c, row, now, principal.disabled_at !== null)),
+	}
 }
 
 /**

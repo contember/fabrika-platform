@@ -81,15 +81,38 @@ export interface GrantDto {
 export interface PrincipalDetail extends PrincipalListItem {
 	/** The mailbox is listed in `IAM_BOOTSTRAP_ADMINS`: an internal user with it is an installation admin. */
 	bootstrapMailbox: boolean
-	grants: GrantDto[]
-	/** Effective permissions with `source` (grant / bootstrap / group:<ref>). */
+	grants: PrincipalGrantDto[]
+	/** Permissions at IAM only. Prefer `access` for the per-application view. */
 	permissions: PermissionEntry[]
+	access: PrincipalAppAccess[]
+	/** Presentation capabilities. Every mutation still checks the caller live. */
+	management: { account: boolean; passwordLinks: boolean; audit: boolean }
+	activatedAt: number | null
+	disabledAt: number | null
 	authentication: {
 		/** OIDC is linked when this user has claimed an identity-provider subject. */
 		oidc: { state: 'unavailable' | 'unlinked' | 'linked' }
 		/** Password access is globally opt-in and then enabled per user. */
-		password: { state: 'unavailable' | 'disabled' | 'pending' | 'enabled' }
+		password: {
+			state: 'unavailable' | 'disabled' | 'pending' | 'enabled'
+			delivery: 'email' | 'manual'
+			latestAction: { purpose: 'enrollment' | 'reset'; createdAt: number; expiresAt: number; closedAt: number | null } | null
+		}
 	}
+}
+
+export interface PrincipalGrantDto extends GrantDto {
+	roleName: string | null
+	rolePermissions: string[]
+	grantedByLabel: string | null
+	canManage: boolean
+}
+
+export interface PrincipalAppAccess {
+	app: string
+	/** Resolved by IAM using the same per-app resolver as token issuance; empty for a disabled account. */
+	permissions: PermissionEntry[]
+	lastSignInAt: number | null
 }
 
 export interface InviteRequest {
@@ -122,6 +145,13 @@ export interface SessionDto {
 	createdAt: number
 	expiresAt: number
 	revokedAt: number | null
+	/** Why this session cannot be used now, independently of its own stored lifecycle. */
+	unavailableReason: 'revoked' | 'expired' | 'parent_ended' | 'account_disabled' | 'method_disabled' | null
+}
+
+export interface SessionList extends CursorList<SessionDto> {
+	/** App sessions belonging to the sign-ins on this page, when `signInsOnly` is requested. */
+	applications: SessionDto[]
 }
 
 // ── Grants ────────────────────────────────────────────────────────────────────
@@ -141,6 +171,11 @@ export interface CreateGrantRequest {
 	expiresAt?: number | null
 }
 
+/** Change access within its original application, preserving the grant's identity and author. */
+export interface UpdateGrantInput extends Omit<CreateGrantRequest, 'principalId' | 'app'> {
+	id: string
+}
+
 // ── Apps (read-only; the live registry derived from the schema tables) ────────
 
 /** The set of app ids propustka knows about — the choices for a grant's `app`. */
@@ -155,11 +190,8 @@ export interface AppDto {
 // ── Roles & policies (per-app, DB-backed) ─────────────────────────────────────
 
 /** A role available for the calling app — a built-in or a DB row (app/custom). */
-export interface RoleDto {
+export interface RoleDto extends RoleDef {
 	key: string
-	name: string
-	description?: string
-	permissions: string[]
 	/** 'builtin' (cross-app, e.g. admin), 'app' (reconciled), or 'custom' (admin-made). */
 	origin: 'builtin' | 'app' | 'custom'
 }
@@ -398,6 +430,7 @@ export interface PrincipalIdInput {
 export interface ListSessionsInput extends PageInput {
 	/** Whose sessions to list. */
 	principalId: string
+	signInsOnly?: boolean
 }
 
 export interface SessionIdInput {
@@ -471,6 +504,8 @@ export interface ListAuditInput {
 	resourceType?: string
 	resourceId?: string
 	principalId?: string
+	/** The person affected by the change, distinct from `principalId` (the actor). */
+	subjectPrincipalId?: string
 	action?: string
 	requestId?: string
 	before?: string
@@ -630,7 +665,7 @@ export interface IamAdminRpcContract {
 	 * derived from it — a child is only valid while its parent is — so this is one call, not a sweep.
 	 */
 	sessions: {
-		list: RpcProcedure<ListSessionsInput, CursorList<SessionDto>>
+		list: RpcProcedure<ListSessionsInput, SessionList>
 		revoke: RpcProcedure<SessionIdInput, RevokedSessionsResponse>
 		revokeAll: RpcProcedure<PrincipalIdInput, RevokedSessionsResponse>
 	}
@@ -642,7 +677,12 @@ export interface IamAdminRpcContract {
 	grants: {
 		/** A role grant the principal already holds — same role, scope and app — answers 409 naming it. */
 		create: RpcProcedure<CreateGrantRequest, GrantDto>
+		update: RpcProcedure<UpdateGrantInput, GrantDto>
 		delete: RpcProcedure<GrantIdInput, OkResponse>
+	}
+	connections: {
+		list: RpcProcedure<ListSessionsInput, CursorList<UserConnectionDto>>
+		revoke: RpcProcedure<GrantIdInput, OkResponse>
 	}
 	apps: {
 		list: RpcProcedure<void, ListResponse<AppDto>>
@@ -691,6 +731,17 @@ export interface IamAdminRpcContract {
 		grant: RpcProcedure<GrantAppRoleRequest, GrantAppRoleResponse>
 		revoke: RpcProcedure<RevokeAppRoleRequest, RevokeAppRoleResponse>
 	}
+}
+
+export interface UserConnectionDto {
+	id: string
+	clientId: string
+	app: string
+	resource: string
+	scopes: string[]
+	createdAt: number
+	expiresAt: number
+	status: 'active' | 'revoked' | 'expired' | 'unavailable'
 }
 
 export type { AppActionDef, AppMemberItem, AppSchema, AppScopeDef, PermissionEntry, PermissionSource, PrincipalAffiliation, PrincipalType, RoleDef }

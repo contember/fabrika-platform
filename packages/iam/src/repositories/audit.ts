@@ -261,6 +261,7 @@ export class AuditRepository {
 		resourceType?: string
 		resourceId?: string
 		principalId?: string
+		subjectPrincipalId?: string
 		action?: string
 		requestId?: string
 		before?: string
@@ -268,6 +269,16 @@ export class AuditRepository {
 	}): Promise<AuditEventRow[]> {
 		const where: string[] = []
 		const binds: (string | number)[] = []
+		if (filter.subjectPrincipalId) {
+			// Old events already identify the affected person in metadata. Guard malformed legacy JSON on both engines.
+			const subject = this.writer.dialect === 'postgres'
+				? "CASE WHEN metadata IS JSON THEN CAST(metadata AS jsonb) ->> 'principalId' END"
+				: "CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.principalId') END"
+			where.push(`((resource_type = 'principal' AND resource_id = ?) OR ${subject} = ?
+				OR (action = 'iam.member.accept' AND principal_id = ?)
+				OR (resource_type = 'oauth_grant' AND resource_id IN (SELECT id FROM oauth_grants WHERE principal_id = ?)))`)
+			binds.push(filter.subjectPrincipalId, filter.subjectPrincipalId, filter.subjectPrincipalId, filter.subjectPrincipalId)
+		}
 		if (filter.resourceType) {
 			where.push('resource_type = ?')
 			binds.push(filter.resourceType)

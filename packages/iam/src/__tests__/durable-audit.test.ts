@@ -269,6 +269,20 @@ function durableAuditSuite(backend: () => Backend): void {
 			expect(await eventsOfRequest(b, schemaRead)).toEqual([{ action: 'iam.admin.access', resource_id: '/admin/apps/:app/schema', app: 'vozka' }])
 		})
 
+		test('a failed audit insert rolls back an access edit and its delegation revision together', async () => {
+			const b = backend()
+			const a = await admin(b)
+			const user = await b.repositories.principals.createUser(unique('edit-sub'), `${unique('edit')}@example.test`)
+			const grant = await b.repositories.grants.createGrant({ principalId: user.id, roleKey: 'admin' })
+			const restore = await b.fault('audit_events', 'action', 'iam.grant.update')
+			const result = await a.call('grants.update', { id: grant.id, roleKey: 'admin', expiresAt: Math.floor(Date.now() / 1000) + 3600 }, unique('req'))
+			await restore()
+			expect(result.status).toBe(500)
+			expect(await b.repositories.grants.getGrantById(grant.id)).toEqual(grant)
+			expect((await b.repositories.principals.getPrincipalById(user.id))?.grant_revision).toBe(user.grant_revision)
+			expect(await events(b, 'iam.grant.update', grant.id)).toEqual([])
+		})
+
 		test('an admin request whose access cannot be recorded does not run', async () => {
 			const b = backend()
 			const a = await admin(b)
