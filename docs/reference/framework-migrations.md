@@ -24,7 +24,9 @@ this page.
 
 ## 0.8 → 0.9
 
-0.9 changes no 0.8 form. On Zerops, raise the pin; nothing else changes. On Cloudflare an application environment now
+0.9 changes no 0.8 form of an application's contract or handlers. On Zerops, raise the pin; the one other change is
+for code that opens a database itself: `Database.postgres(options)` and the root `PostgresOptions` type moved to
+`openPostgres(options)` and `PostgresOptions` in `@fabrika/db/postgres`. On Cloudflare an application environment now
 runs in one Durable Object over its own SQLite
 ([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)): `ctx.db`
 and table policies, jobs and kicks, webhooks, public procedures, file kinds (stored in R2), signed tokens and
