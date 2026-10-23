@@ -401,6 +401,11 @@ export interface RepublishAllNamespacesResponse {
 	readonly namespaceIds: readonly string[]
 }
 
+/** The resource keys released; each was confirmed gone at the provider in the same call. */
+export interface ReleaseNamespaceClaimsResponse {
+	readonly released: readonly string[]
+}
+
 export interface PlanDeploymentNamespaceRequest {
 	id: string
 	env: string
@@ -583,6 +588,7 @@ export type {
 	PutAppEnvironmentInput,
 	PutAppSecretInput,
 	PutAppVarInput,
+	ReleaseNamespaceClaimsInput,
 	RotateTokenKeyResponse,
 	RunIdInput,
 	RunListInput,

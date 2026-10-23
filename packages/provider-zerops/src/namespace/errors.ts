@@ -42,7 +42,7 @@ const splitApiMessage = (message: string, code: string): { summary: string; deta
 }
 
 /** Every namespace lifecycle failure leaves this provider as one typed, coded error. */
-export const asNamespaceError = (cause: unknown, mode: 'provision' | 'reconcile' | 'update'): ProviderNamespaceError => {
+export const asNamespaceError = (cause: unknown, mode: 'provision' | 'reconcile' | 'update' | 'claim check'): ProviderNamespaceError => {
 	if (cause instanceof ProviderNamespaceError) return cause
 	// The same value is refused again on every retry; only a smaller manifest or a new carrier fixes it.
 	if (cause instanceof ZeropsServiceEnvValueTooLargeError) return namespaceError(cause.code, cause.message, false)

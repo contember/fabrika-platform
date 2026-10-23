@@ -38,6 +38,7 @@ import {
 	type NamespaceUseCaseContext,
 	planNamespaceUseCase,
 	reconcileNamespaceUseCase,
+	releaseNamespaceClaimsUseCase,
 	removeNamespaceUseCase,
 	republishAllNamespacesUseCase,
 	updateNamespaceUseCase,
@@ -167,6 +168,7 @@ const variableBody = z.object({
 const putVariableInput = z.object({ appId: nonEmpty, variable: variableBody })
 const secretValueInput = z.object({ appId: nonEmpty, name: nonEmpty, env: nullableString, value: z.string() })
 const namespaceId = z.object({ namespaceId: nonEmpty })
+const releaseClaimsInput = z.object({ namespaceId: nonEmpty, appId: nonEmpty, env: nonEmpty })
 const namespaceBody = z.object({ id: nonEmpty, env: nonEmpty, exclusiveAppId: nullableString, target: providerEnvelopeSchema })
 const adoptNamespaceInput = z.object({ namespaceId: nonEmpty, namespace: namespaceBody.omit({ id: true }) })
 const updateNamespaceInput = z.object({ namespaceId: nonEmpty, namespace: z.object({ target: providerEnvelopeSchema }) })
@@ -359,6 +361,9 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 			),
 			republishAll: rpc.procedure.require(CONTROL_ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx }) =>
 				controlCall(() => republishAllNamespacesUseCase(namespaceContext(ctx)))
+			),
+			releaseClaims: rpc.procedure.input(releaseClaimsInput).require(CONTROL_ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
+				controlCall(() => releaseNamespaceClaimsUseCase(namespaceContext(ctx), input))
 			),
 		}),
 		runs: rpc.router({
