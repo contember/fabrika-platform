@@ -2,12 +2,12 @@ import type { DeviceAuthorizationConsent, DeviceAuthorizationReceipt, StartDevic
 import { parseStartDeviceAuthorizationInput } from '@fabrika/auth-core'
 import type { AppDto, BuilderConnectionReceiptDto } from '@fabrika/control-contract'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { BUILDER_DAEMON_HOST } from '../../shared/urls'
 import { BuilderPlatform, type BuilderPlatformOptions } from '../src/platform'
+import { scratchDir } from './scratch'
 
 const record = z.record(z.unknown()).parse
 const text = z.string().min(1).max(8192).parse
@@ -24,7 +24,7 @@ export async function until(check: () => boolean): Promise<void> {
 }
 
 export function fixture() {
-	const directory = mkdtempSync(join(tmpdir(), 'builder-platform-'))
+	const directory = scratchDir('builder-platform-')
 	const root = join(directory, 'project')
 	mkdirSync(join(root, '.fabrika'), { recursive: true })
 	mkdirSync(join(directory, 'keys'), { mode: 0o700 })

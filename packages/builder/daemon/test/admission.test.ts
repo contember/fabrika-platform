@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { rmSync } from 'node:fs'
 import { request } from 'node:http'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BUILDER_DAEMON_HOST, builderDaemonUrl } from '../../shared/urls'
 import { admitRequest } from '../src/admission'
 import { type RunningDaemon, startDaemon } from '../src/index'
+import { scratchDir } from './scratch'
 
 let daemon: RunningDaemon
 let directory: string
@@ -13,7 +13,7 @@ let authority: string
 let origin: string
 
 beforeAll(() => {
-	directory = mkdtempSync(join(tmpdir(), 'builder-admission-'))
+	directory = scratchDir('builder-admission-')
 	daemon = startDaemon({ port: 0, sessionsDir: join(directory, 'sessions') })
 	origin = builderDaemonUrl(daemon.port)
 	authority = new URL(origin).host

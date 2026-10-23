@@ -1,16 +1,16 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { BASE_URL, DAEMON_PORT, WS_URL } from '../../cli/src/config'
 import { BUILDER_DAEMON_HOST, builderDaemonUrl } from '../../shared/urls'
 import { type RunningDaemon, startDaemon } from '../src/index'
+import { scratchDir } from './scratch'
 
 let daemon: RunningDaemon
 let directory: string
 
 beforeAll(() => {
-	directory = mkdtempSync(join(tmpdir(), 'builder-address-'))
+	directory = scratchDir('builder-address-')
 	daemon = startDaemon({ port: 0, sessionsDir: join(directory, 'sessions') })
 })
 
