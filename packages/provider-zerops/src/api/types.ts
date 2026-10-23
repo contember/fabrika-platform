@@ -472,6 +472,18 @@ export interface ZeropsApi {
 	 */
 	enableSubdomainAccess(input: { serviceId: string; signal: AbortSignal }): Promise<void>
 
+	// ── service-stack: running state ──────────────────────────────────────────────
+
+	/**
+	 * Start a stopped service. VERIFIED AS A SHAPE: `PUT /service-stack/{id}/start` (`StartServiceStack`), no body,
+	 * `ResponseProcess`. Measured 2026-10-21: a stopped Bun service served again about 9 s after the call. Files written
+	 * at runtime survive a stop and a start; a deploy replaces the container and loses them.
+	 */
+	startService(input: { serviceId: string; signal: AbortSignal }): Promise<ZeropsProcess>
+
+	/** Stop a service. VERIFIED AS A SHAPE: `PUT /service-stack/{id}/stop` (`StopServiceStack`), no body, `ResponseProcess`. */
+	stopService(input: { serviceId: string; signal: AbortSignal }): Promise<ZeropsProcess>
+
 	// ── service-stack: autoscaling ────────────────────────────────────────────────
 
 	/**

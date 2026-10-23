@@ -44,6 +44,10 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `delete_workspace`    | Abandon a workspace: delete its branch and stop listing it.         |
 | `create_pull_request` | Open a pull request from the workspace to the default branch.       |
 | `get_app_rules`       | The application rules or one topic, read-only, with a pin warning.  |
+| `bind_dev`            | Bind the workspace to the app's dev environment; bootstrap if due.  |
+| `get_dev_status`      | The dev environment's state, served head, checks and a log window.  |
+| `run_checks`          | Run tests, `tsc` and `fabrika-check` in the dev container; report.  |
+| `reset_dev`           | Drop the dev schema and roles, and migrate from scratch.            |
 
 Every tool carries MCP tool annotations. A tool that only reads has `readOnlyHint: true`, so a client such as ChatGPT
 does not ask the user to confirm it. A writing tool states `destructiveHint` (it can overwrite or delete files, or replace
@@ -69,7 +73,9 @@ narrows which files carry one, and `incomplete` names the files left without a p
 
 The authoring environment shows one workspace at a time. `list_targets` answers what it runs now as `deployed`: the last
 successful run, the workspace whose branch it deployed (null for another branch), and whether that workspace is the
-caller's. A workspace says the same as `onStage`.
+caller's. A workspace says the same as `onStage`. Each target names its `kind` (a stage environment is `standard`) and,
+in `dev`, its application's dev environment when it has one the caller may read: its state, summary, URL, served head
+and bound workspace.
 
 `get_workspace` and `list_workspaces` name the pull request that `create_pull_request` opened or found, as Control
 recorded it; a pull request opened on GitHub by hand is not shown, and the record does not follow a merge or a close.
@@ -87,8 +93,10 @@ null for a provider that runs no process, such as Zerops. Each provider step log
 
 `get_deployment` answers a window of the build log, 30 lines by default and at most 500. `log.from` and `log.to` index
 the log, which only grows: a client polls with `after: log.to` and gets only the new lines, or pages back with
-`before: log.from`. `failuresOnly` keeps the stderr lines and the lines that name an error or a failure; the indexes then
-count those lines only. `logLines: 0` answers the counts alone.
+`before: log.from`. `failuresOnly` keeps the lines that name an error, a failure or a non-zero exit, whichever stream
+carries them: bun prints the commands it runs and its test output on stderr. A count of none (`0 fail`, `Found 0
+errors`) is no failure, with or without color codes. The indexes still count every line, so a
+client may switch the filter between polls without reading a line twice. `logLines: 0` answers the counts alone.
 
 `get_app_rules` answers the application rules every agent gets, headed by their version (`fabrika-app <version>`):
 the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `references/<topic>.md`
@@ -97,6 +105,72 @@ the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `refer
 `instructions` at about 2 KB, so the instructions stay under 2,000 characters: the workspace flow, a pointer to
 `get_app_rules`, and three rules (each endpoint and every step off the paved road declared; never loosen anything to
 make something pass; ask when a file is protected).
+
+## The dev environment
+
+An application may have one environment of kind `dev`
+([ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md) rule 10). A commit to the workspace bound
+to it serves in seconds, without a run. `deploy_stage` stays the only path to a checked build, and nothing from the dev
+environment is promoted.
+
+1. `bind_dev` binds the workspace. A bind starts a **bootstrap run** whenever the running launcher cannot serve the
+   workspace: the first bind, after a failed bootstrap or a refused sync, when the change from the head the container
+   holds to the workspace head needs one (below), and when the launcher is gone: Control cannot read its requests, or it
+   sent none for 90 s (15 min while it syncs or runs checks). A bind that starts an idle service waits up to 15 s for
+   the launcher's first request. A bootstrap run is an ordinary run of the workspace head with every check, which `get_deployment` follows
+   (`bootstrapRun.id`). Its service starts the dev launcher instead of the serving entry. Binding another workspace
+   replaces the bound one, syncs its tree and resets the schema; the answer says whose workspace was bound (`yours`).
+2. `apply_changes` commits as always. When the workspace is bound, Control records the new head and the launcher's long
+   poll on Control's public origin (the `source` receiver,
+   [ADR-0064](../decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md) §7) answers
+   with the changed files: the ones `apply_changes` just wrote, handed over in memory when the same Control process
+   holds the wait, or else read from a GitHub compare. They are never stored.
+3. The launcher writes the files, migrates when `db/migrations/` changed, runs the authored SPA commands when a file
+   outside `src/` and `db/` changed (beside the contract digest; a refusal rebuilds over the restored files), restarts the application and waits for its health endpoint. It reports the head,
+   its status and the last lines of output.
+4. `apply_changes` waits up to 10 s for that report and answers `dev: { head, state, summary, url, log }` beside
+   `commitSha`. On a timeout `state` is `pending`, and `get_dev_status` reads the rest. Once the commit persisted, the
+   call never fails: when following the dev environment fails, `state` is `unavailable` with a `reference`, and when the
+   audit entry cannot be written the answer carries a `warning` with a reference.
+
+`state` is one of:
+
+| State              | Meaning                                                                                                                                                                                      |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unbound`          | No workspace is bound.                                                                                                                                                                       |
+| `bootstrapping`    | The bootstrap run has not finished.                                                                                                                                                          |
+| `bootstrap_failed` | The bootstrap run failed; fix the cause and call `bind_dev` again.                                                                                                                           |
+| `stopped`          | Stopped after 30 minutes without a sync; the next `apply_changes` or `bind_dev` starts it.                                                                                                   |
+| `pending`          | The launcher has not reported the newest commit yet.                                                                                                                                         |
+| `syncing`          | The launcher is applying a commit.                                                                                                                                                           |
+| `serving`          | `head` serves and answers its health endpoint.                                                                                                                                               |
+| `failed`           | `head` does not serve: a migration, the SPA build or the start failed; `message` says which.                                                                                                 |
+| `needs_bootstrap`  | The commit changes what the build owns, Control cannot relay it, or the launcher is gone (Control cannot read it, or it went silent); `message` says why, and `apply_changes` does not wait. |
+| `resetting`        | `reset_dev` is dropping and migrating the schema.                                                                                                                                            |
+| `checking`         | `run_checks` is running.                                                                                                                                                                     |
+
+A commit **needs a bootstrap run** when it changes `package.json`, `bun.lock`, `bunfig.toml`, a `zerops.yaml`, anything
+under `fabrika/` or another `fabrika.*` file, when it changes the contract digest, or when the change is more than 300
+files or 8 MiB, or holds a binary or oversized file. The launcher computes the digest after writing the files, in a
+child with no credential, and compares it with the one the bootstrap run deployed; a commit that changes it is
+restored and refused. An edit of a handler, its wording or its logic, syncs even in a module the contract imports.
+The launcher keeps serving the head it has, and `bind_dev` starts the bootstrap.
+
+`get_dev_status` answers a window of the launcher's and the application's output since the newest sync or reset (at most
+200 lines); `apply_changes` answers the newest 20 of them. The window is indexed by the launcher's line numbers, so
+`after: log.to` stays put across reports; a smaller `log.total` means a new container. A bootstrap bind drops the
+previous container's log and check results. Bun's echo of the script it runs (`$ bun build-web.ts`) is reported on
+stdout. The launcher never reports the environment. `run_checks` runs the build's check
+chain on the files the container holds and waits up to 50 s for the results; they gate nothing. It is refused while the
+container holds another commit than the workspace's newest, and `checks.head` names the commit the results are for. Each result carries its exit code, `durationMs` and the last
+lines of its output. A check killed by a signal (the out-of-memory killer, or the launcher's 10-minute timeout) has
+`exitCode: null`, fails, and its last output line says so. `reset_dev` drops the
+environment's schema and role family and migrates from scratch; call it after editing a migration that was already
+applied, which otherwise fails the sync. `bind_dev`, `run_checks` and `reset_dev` need `deploy.trigger`; `get_dev_status`
+needs `deploy.read`.
+
+At boot (after an idle stop, a restart or a new container) the launcher reconciles to the recorded head before it
+serves.
 
 ## Failures
 
@@ -163,6 +237,14 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
 4. **Grant the users** `source.workspace.read`, `source.workspace.write`,
    `source.pull-request.create`, `deploy.trigger` and `deploy.read`, scoped to the app. The token
    carries the intersection of these grants and the scope grant above.
+5. **Optionally, register a dev environment**:
+   `fabrika control apps environments put --provider=zerops --app=<id> --env=<name> --manifest=<path> --kind=dev`.
+   Control refuses it on a provider without dev environments (Cloudflare), on an app without a GitHub connection, under
+   the name `prod`, as an authoring target, with a trigger ref, and as a second dev environment of the app. Its
+   namespace's environment must equal the environment's name, as for any environment. The application must pin
+   `@fabrika/app` 0.9.0 or newer; the bootstrap run of an older release is refused before anything publishes, and the
+   application keeps `deploy_stage`. In a `zerops-subdomain` namespace the dev environment takes one of the six proxy
+   hosts. Control needs its public origin (`FABRIKA_CONTROL_DOMAIN`) and its vault for the `source` key.
 
 ## Registering Claude and ChatGPT
 
@@ -245,4 +327,6 @@ paved road and need closer review, parked or not.
   Revocation stops refresh and new code exchanges.
 - Zerops only.
 - One authoring environment per app, never production; it shows one workspace at a time.
+- One dev environment per app, never production or protected, on Zerops only; it shows one workspace at a time and
+  runs on one container.
 - Production is a human merge in GitHub followed by the existing Delivery trigger.

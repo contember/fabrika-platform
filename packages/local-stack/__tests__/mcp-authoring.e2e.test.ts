@@ -73,18 +73,22 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 		const tools = toolListSchema.parse(await rpc(internet, MCP, token, 'tools/list', {})).result.tools.map((tool) => tool.name).sort()
 		expect(tools).toEqual([
 			'apply_changes',
+			'bind_dev',
 			'create_pull_request',
 			'create_workspace',
 			'delete_workspace',
 			'deploy_stage',
 			'get_app_rules',
 			'get_deployment',
+			'get_dev_status',
 			'get_workspace',
 			'get_workspace_diff',
 			'list_files',
 			'list_targets',
 			'list_workspaces',
 			'read_files',
+			'reset_dev',
+			'run_checks',
 			'search_files',
 		])
 
@@ -92,10 +96,12 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 			items: [{
 				appId: 'shop',
 				env: 'stage',
+				kind: 'standard',
 				repository: 'acme/shop',
 				defaultBranch: 'main',
 				publicOrigin: 'https://shop-stage.example.com',
 				deployed: null,
+				dev: null,
 			}],
 		})
 

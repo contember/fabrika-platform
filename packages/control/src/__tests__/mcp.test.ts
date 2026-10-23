@@ -6,6 +6,7 @@ import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
 import type { DeployQueue } from '../api/runs'
+import { DevSignals } from '../dev/signals'
 import type { Env } from '../env'
 import { controlMcpRoute } from '../zerops/mcp'
 import { createFetchHandler } from '../zerops/server'
@@ -25,7 +26,10 @@ afterEach(() => {
 	harness = null
 })
 
-async function fixture(queue?: DeployQueue): Promise<{ world: WorkspaceWorld; fetch: (request: Request) => Promise<Response> }> {
+async function fixture(
+	queue?: DeployQueue,
+	options: { dev?: boolean } = {},
+): Promise<{ world: WorkspaceWorld; fetch: (request: Request) => Promise<Response> }> {
 	harness = createHarness()
 	const world = await seedWorkspaceWorld(harness.repositories, harness.d1)
 	// The world's queue and log reader stand in for the process ports.
@@ -44,8 +48,9 @@ async function fixture(queue?: DeployQueue): Promise<{ world: WorkspaceWorld; fe
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'stage',
 		FABRIKA_CONTROL_DOMAIN: ORIGIN,
+		...(options.dev === true ? { DEV_SOURCE: { source: world.source, signals: new DevSignals() } } : {}),
 	}
-	const mcp = controlMcpRoute(env, world.source)
+	const mcp = controlMcpRoute(env, world.source, zeropsProvider)
 	const served = createFetchHandler(env, zeropsProvider, unusedSourceConnection('zerops'), mcp)
 	return { world, fetch: (request) => served(proxiedRequest(request, { mcp: true })) }
 }
@@ -174,6 +179,10 @@ describe('the MCP endpoint', () => {
 			apply_changes: write(true, true),
 			deploy_stage: write(true, false),
 			get_deployment: read,
+			bind_dev: write(true, false),
+			get_dev_status: read,
+			run_checks: write(false, false),
+			reset_dev: write(true, false),
 			create_pull_request: write(false, true),
 			delete_workspace: write(true, true),
 		})
@@ -186,18 +195,22 @@ describe('the MCP endpoint', () => {
 		const listed = await rpc(fetch, token, 'tools/list', {})
 		expect(toolNames(listed)).toEqual([
 			'apply_changes',
+			'bind_dev',
 			'create_pull_request',
 			'create_workspace',
 			'delete_workspace',
 			'deploy_stage',
 			'get_app_rules',
 			'get_deployment',
+			'get_dev_status',
 			'get_workspace',
 			'get_workspace_diff',
 			'list_files',
 			'list_targets',
 			'list_workspaces',
 			'read_files',
+			'reset_dev',
+			'run_checks',
 			'search_files',
 		])
 
@@ -206,10 +219,12 @@ describe('the MCP endpoint', () => {
 			items: [{
 				appId: 'shop',
 				env: 'stage',
+				kind: 'standard',
 				repository: 'acme/shop',
 				defaultBranch: 'main',
 				publicOrigin: 'https://shop-stage.example.com',
 				deployed: null,
+				dev: null,
 			}],
 		})
 
@@ -303,6 +318,38 @@ describe('the MCP endpoint', () => {
 			expect(deploy).toContain('Control created the run but could not queue it: the deploy queue is unavailable.')
 			expect(JSON.stringify(errorLog.mock.calls)).not.toContain('ghs_')
 		} finally {
+			errorLog.mockRestore()
+		}
+	})
+
+	test('apply_changes answers a persisted commit even when following the dev environment fails', async () => {
+		const { fetch, world } = await fixture(undefined, { dev: true })
+		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const errorLog = spyOn(console, 'error').mockImplementation(() => {})
+		const failing = spyOn(world.repositories.devEnvironments, 'getByWorkspace').mockRejectedValue(new Error('cached plan must not change result type'))
+		try {
+			const workspace = toolJson(
+				await rpc(fetch, token, 'tools/call', { name: 'create_workspace', arguments: { appId: 'shop', env: 'stage', title: 'Banner' } }),
+			)
+			const applied = toolJson(
+				await rpc(fetch, token, 'tools/call', {
+					name: 'apply_changes',
+					arguments: {
+						workspaceId: field(workspace, 'id'),
+						expectedHeadSha: sha('a'),
+						message: 'm',
+						changes: [{ path: 'src/a.ts', content: 'export {}' }],
+					},
+				}),
+			)
+			expect(field(applied, 'commitSha')).toBe(sha('1'))
+			const dev = field(applied, 'dev')
+			expect(field(dev, 'state')).toBe('unavailable')
+			expect(String(field(dev, 'summary'))).toContain(`quote reference ${String(field(dev, 'reference'))}`)
+			expect(JSON.stringify(errorLog.mock.calls)).toContain(`reference ${String(field(dev, 'reference'))}`)
+			expect(JSON.stringify(errorLog.mock.calls)).not.toContain('cached plan')
+		} finally {
+			failing.mockRestore()
 			errorLog.mockRestore()
 		}
 	})

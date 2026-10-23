@@ -11,6 +11,7 @@
 // Run it: `bun src/zerops/cron.ts`.
 
 import { runMaintenance } from '../cron'
+import { stopIdleDevServices } from '../dev/service'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { locks, operationsReleaseDeps, platformTransportDeps, repositories } from '../services'
 import { createRuntime } from './runtime'
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
 					operations: operationsReleaseDeps(runtime.env),
 					...platformTransportDeps(runtime.env),
 				}),
+			devIdle: () => stopIdleDevServices({ repositories: repositories(runtime.env), provider: runtime.provider }, Math.floor(Date.now() / 1000)),
 		})
 	} finally {
 		await runtime.shutdown()

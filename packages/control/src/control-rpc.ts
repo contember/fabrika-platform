@@ -2,6 +2,7 @@ import { HttpError, initRpc, isStructuralError, type RpcRouterFor } from '@fabri
 import type { AuthContext } from '@fabrika/auth'
 import { parseAppEnvironmentId } from '@fabrika/auth-core'
 import {
+	APP_ENV_KINDS,
 	BUILDER_APPROVAL_VERIFIER,
 	BUILDER_CONNECTION_ATTEMPT_ID,
 	BUILDER_CONNECTION_IDENTIFIER,
@@ -137,6 +138,7 @@ const appEnvironmentBody = z.object({
 	crossOrigins,
 	triggerRef: nullableString,
 	authoring: z.boolean().optional(),
+	kind: z.enum(APP_ENV_KINDS).optional(),
 	namespaceId: nullableString,
 	target: providerEnvelopeSchema,
 	artifact: providerEnvelopeSchema,

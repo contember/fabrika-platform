@@ -11,9 +11,11 @@
 
 import { createRpcClient, type InferRpcClient, RpcError } from '@fabrika/app'
 import { type IssueKeyInput, type IssueKeyResult, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
+import { APP_ENV_KINDS } from '@fabrika/control-contract'
 import type {
 	AppDto,
 	AppEnvDto,
+	AppEnvKind,
 	AppSecretDto,
 	ControlRpcContract,
 	DeploymentNamespaceDetailDto,
@@ -56,7 +58,7 @@ Usage:
   fabrika control apps environments list --app=<id>
   fabrika control apps environments put --provider=<name> --app=<id> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>] [--namespace=<id>]
-                           [--cross-origin=<origin> ...]
+                           [--cross-origin=<origin> ...] [--kind=standard|dev]
   fabrika control apps variables list --app=<id>
   fabrika control apps variables put --app=<id> --name=<name> --value=<text> [--env=<name>]
   fabrika control apps variables delete --app=<id> --name=<name> [--env=<name>]
@@ -577,6 +579,7 @@ const runEnvironments = async (
 		const origins = crossOrigins(flags)
 		const triggerRef = optional(flags, 'trigger-ref')
 		const namespaceId = optional(flags, 'namespace')
+		const kind = environmentKind(flags)
 		const environment: PutAppEnvRequest = {
 			// The same empty placeholder `register` sends: the target is DISCOVERED from the manifest.
 			target: { provider, version, payload: {} },
@@ -586,12 +589,22 @@ const runEnvironments = async (
 			...(origins === undefined ? {} : { crossOrigins: origins }),
 			...(triggerRef === undefined ? {} : { triggerRef }),
 			...(namespaceId === undefined ? {} : { namespaceId }),
+			...(kind === undefined ? {} : { kind }),
 		}
 		const result = await client.apps.environments.put({ appId: required(flags, 'app'), env: required(flags, 'env'), environment })
 		emit(flags, result, () => `${result.appId}\t${result.env}\t${result.provider}`)
 		return
 	}
 	throw new Error(`Unknown \`control apps environments\` verb: ${verb ?? '(missing)'}`)
+}
+
+/** `--kind`, set only when the environment is created: a `dev` environment follows one workspace (ADR-0049). */
+const environmentKind = (flags: Flags): AppEnvKind | undefined => {
+	const kind = optional(flags, 'kind')
+	if (kind === undefined) return undefined
+	const known = APP_ENV_KINDS.find((candidate) => candidate === kind)
+	if (known === undefined) throw new Error(`--kind must be one of ${APP_ENV_KINDS.join(', ')}`)
+	return known
 }
 
 /** One environment per line; the cross origins are comma-joined, `-` when it lists none (a Control older than the field included). */

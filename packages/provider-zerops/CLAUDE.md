@@ -252,12 +252,22 @@ bun test
   `fabrika control namespaces update --namespace=<id> --proxy-source=current`. The judges are those releases' own
   parsers, a row parser and the CSP field of the entry parser per release, which Control passes in as
   `namespaces.olderProxies` (`src/namespace/proxy-reads.ts`); never replace them with a list of fields. What one of them
-  parses deploys, so every 0.4/0.5/0.6/0.7 contract does.
+  parses deploys, so every 0.4/0.5/0.6/0.7/0.8 contract does.
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).
   Commands are not variables: `start: echo ${FABRIKA_RELEASE}` reads the service's own environment.
   `secrets.put` refuses the same references.
+- **A `dev` environment changes only `run`, selected by Control's environment kind (ADR-0049, ADR-0043).** The build
+  is the ordinary one with every check. `ZeropsDeployRun.dev` makes `run.start` run `@fabrika/app/dev` of the
+  application's own release, writes its configuration (`devLauncherConfig`) as base64, so authored SPA commands survive
+  any quoting, and replaces the init commands with `dev-init.generated.sh`: migrate and verify only while the launcher's
+  state file is absent, because after the first sync the files on disk are no longer the bootstrap's. There is no
+  `healthCheck`: the launcher reports health itself, and a platform restart would discard the synced head. The deploy
+  pins the service to one container (`pinOneContainer`); `devEnvironments.stop/start` stop it when idle and start it
+  again, and the runtime files survive both (measured for ADR-0049). The app never authors any of this. The
+  launcher's `checks` (what `run_checks` runs) are the build's own check commands in the build's order, on the runtime
+  root; change them together.
 
 ## Platform installation (`./installation`, `src/installation/`)
 

@@ -25,6 +25,14 @@ stops it from widening access, but it also stops it from adding an endpoint or a
 of access changes ([ADR-0050](0050-approved-access.md)), the platform can let the agent edit the
 contract and classify what it changed instead.
 
+An agent that iterates on a handler or a screen through the stage environment waits for a full build every time. On
+Zerops one build process of a small application took 80–142 s, after about 15 s of variable writes, and a Zerops
+pipeline cannot go below about 51 s, because it creates a build container and deploys a new runtime container on every
+run. Writing a file into a running container and restarting the application serves the change in well under a second.
+Control is not reachable from a namespace (another Zerops project shares no private network with it), but a namespace
+container reaches Control's public origin in 15–68 ms, a GitHub compare takes about 0.6 s, and files written at runtime
+survive a service stop, start and restart (a deploy replaces the container and loses them).
+
 ## Decision
 
 1. **Control serves MCP at `/mcp`** (Streamable HTTP). Each tool calls a Control use case. MCP is a
@@ -66,6 +74,46 @@ contract and classify what it changed instead.
 8. **No MCP token approves.** An OAuth or MCP token is refused by `approvals.complete`, whatever its
    scope (ADR-0050). Every run records its actor, including runs created through MCP.
 9. **Zerops only** for this version.
+10. **An application may have one `dev` environment.** A commit to the workspace bound to it reaches the running
+    service through the dev launcher, without a run. `deploy_stage` stays the only path to a checked build.
+    Per-workspace environments are future work.
+    - An operator registers it with kind `dev` (`apps.environments.put`). It is never production, never protected
+      (ADR-0050), never an authoring target and has no trigger ref; it has its own service, schema, role family, proxy
+      host and approved access. The proxy stays its only ingress (ADR-0022 unchanged).
+    - `bind_dev` binds a workspace of the app's authoring environment to it. A bind starts a **bootstrap run** (an
+      ordinary run of the workspace head with the full build and every check) whenever the running launcher cannot
+      serve the workspace: the first bind, after a failed bootstrap or a refused sync, when the paths from the head the
+      container holds to the workspace head change something the build owns, and when the launcher is gone. It is gone
+      when Control cannot read its requests (an older or newer wire), or when it sent none for longer than it ever
+      waits (90 s; 15 min while it syncs or runs the checks); after a start from idle, `bind_dev` waits up to 15 s
+      for its first request. Such an environment is `needs_bootstrap`, and `apply_changes` does not wait for it. Its provider starts the dev launcher instead of the serving entry
+      ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)). Binding another workspace syncs its
+      tree and resets the schema.
+    - The launcher holds a long poll on Control's public origin with a `source` workload key
+      ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)). Control answers
+      with the changed files of the bound head: the files `apply_changes` just wrote, handed over in memory, or else
+      read from a GitHub compare. A container of a replaced bootstrap run is refused (409), so it cannot report over
+      the new one. Control stores the record of
+      the environment (bound workspace, target and served head, status, time, a trimmed log), never file contents
+      (rule 4 holds).
+    - The launcher writes the files, migrates when `db/migrations/` changed, runs the authored SPA build when a web
+      source changed, respawns the application (not `bun --watch`, so it knows when the new head serves), and reports
+      `{ head, status, last log lines }`. A commit that changes something the build owns (`package.json`, `bun.lock`,
+      the build descriptor, generated files, which covers the framework pin) is refused in one line: it needs a
+      bootstrap run. So is a commit that changes the contract: after writing the files, a child of the launcher with no
+      credential computes the contract digest, and a digest other than the bootstrapped `FABRIKA_CONTRACT_DIGEST`
+      restores the files and refuses the commit. The digest decides, not the paths: an edit of a handler in a module
+      the contract imports syncs, and the proxy table and the approval, which follow the digest, stay true. At boot the
+      launcher reconciles to the recorded head before it serves.
+    - `run_checks` is refused while the container holds another commit than the workspace's newest, and its results
+      name the commit they checked.
+    - `apply_changes` on a bound workspace waits up to 10 s for that report and returns
+      `dev: { head, state, summary, url, log }`, or the pending state on a timeout. `get_dev_status` reads the rest.
+    - `run_checks` runs the build's check chain (tests, `fabrika-check`, `tsc`) in the container on request. It
+      gates nothing. `reset_dev` drops and recreates the environment's role family and schema and migrates from
+      scratch. `bind_dev`, `run_checks` and `reset_dev` need `deploy.trigger`; `get_dev_status` needs `deploy.read`.
+    - Control stops the service after 30 minutes with no sync; the next `apply_changes` or `bind_dev` starts it.
+    - Nothing from a `dev` container is promoted. A commit reaches stage and production only by its own build.
 
 Built (work unit B6): a workspace may edit `fabrika.contract.ts`, and every other `fabrika.*` file stays
 protected; a widening it brings to a protected environment parks the run, and `get_deployment` reports it
@@ -77,7 +125,20 @@ with the approval link.
 - Control gains the MCP SDK dependency and a second user protocol.
 - MCP cannot scale separately from Control.
 - Concurrent edits are serialized by the expected head; there is no automatic rebase.
-- A stage environment shows one workspace at a time. Per-workspace previews are future work.
+- A stage environment shows one workspace at a time, and so does a `dev` environment. Per-workspace environments are
+  future work.
+- A `dev` environment serves a commit about 1–2 s after `apply_changes` instead of after a 2–4 minute build. What it
+  serves skipped the checks; `run_checks` and `deploy_stage` are how an agent learns whether the head passes them.
+- A `dev` environment costs one container per application, pinned to one container, one schema, and one proxy host of
+  the six a `zerops-subdomain` namespace publishes. A bootstrap takes a namespace lease
+  ([ADR-0044](0044-zerops-delivery-ownership-and-recovery.md)); a sync is not a Zerops operation and takes none.
+- The dev container holds what a stage container holds, plus the `source` key. Unreviewed code there can read that key,
+  which reads only source the code already runs.
+- Rollout: an existing installation needs no operator step. Control's migration adds the environment kind (default
+  `standard`) and the record on start. The console's proxy table gains the `dev-source` row, so its digest changes, and
+  `platform upgrade` republishes it like any table change. An application gets a
+  `dev` environment only when an operator registers one and its framework release ships the launcher
+  ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
 - The application owns its data and data authorization; the platform does not isolate generated code
   from the app's database.
 - An agent can add endpoints, roles and tables without an operator. A stage environment is not
@@ -102,3 +163,21 @@ with the approval link.
   diff, and the approval page shows the access change in plain language.
 - **Platform-owned data language with sandboxed generated code.** Lost: a large trusted runtime that
   limits what applications can do, for an isolation property the first users do not need.
+- **A faster stage build as the only loop.** Kept as separate work, not an alternative: it shortens the path to stage
+  and production, but a Zerops pipeline does not go below about 51 s.
+- **Control pushes files over SSH or SFTP into a codeless service** (Zerops' own agent workflow). Lost: Control cannot
+  reach a namespace without a VPN client and a new key, a codeless service breaks ADR-0043's refusal of
+  `startWithoutCode`, and that workflow gives the agent an operator token.
+- **`zops deploy` of a prebuilt artefact.** Lost: 21–43 s per deploy, and Control has no builder on Zerops
+  ([ADR-0003](0003-no-deploy-runner-on-zerops.md)).
+- **An agent in the container that Control pushes to over a public route.** Lost: a second public route beside the
+  proxy, which ADR-0022 refuses with no approval path.
+- **`fabrika app dev` run remotely.** Lost: its stand-in IAM issues tokens, and the proxy admits no credential-less
+  caller (ADR-0022, ADR-0035).
+- **The authoring stage environment itself as the dev environment.** Lost: a workspace would no longer show its checked
+  build before the pull request.
+- **Install dependencies in the long-lived container on a lockfile change.** Lost: a build step would run outside the
+  checked build; a lockfile change takes a bootstrap run instead.
+- **Commit through GitHub's GraphQL `createCommitOnBranch`.** One mutation instead of the blob, tree, commit and ref
+  calls would save about 2 s per `apply_changes`. Lost: it cannot set the author, so the commit would name the GitHub
+  App instead of the person who made the change. Authorship matters more than the 2 s.

@@ -92,7 +92,13 @@ upgraded first.
    release's own platform recorded for it. It compares the reader, the contract and snapshot digests, the proxy rows
    and the IAM schema, and the next unchanged deploy shows no change. `examples/crm` in the workspace stays on HEAD
    and is rewritten in the same change as a framework break.
-8. **The source version moves first.** A breaking framework minor sets the repository's source version to the next
+8. **A capability an older release lacks is refused per environment, never forced.** The dev launcher of
+   [ADR-0049](0049-author-applications-through-mcp-in-control.md), the `source` receiver and its
+   `FABRIKA_PLATFORM_SOURCE_*` variables ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md))
+   are protocol additions. A `dev` environment needs framework release 0.9.0 or newer, the first that ships
+   `@fabrika/app/dev`. Control refuses a deploy of a `dev` environment for an older release, or a snapshot that records
+   none, before anything publishes, with one line, and the application keeps the ordinary loop (`deploy_stage`).
+9. **The source version moves first.** A breaking framework minor sets the repository's source version to the next
    minor before anything else. Bun links an `npm:` alias to the workspace when name and version match, so while the
    source said the previous minor, its reader alias would resolve to the working tree instead of npm
    (`reference/release-process.md`).
@@ -126,6 +132,8 @@ upgraded first.
   published `@fabrika/check`, and bundles the readers 0.4.8, 0.5.5 and 0.6.0. An application on 0.3 or older
   redeploys only after it raises its pin into the window
   ([`framework-migrations.md`](../reference/framework-migrations.md)).
+- A `dev` environment adds no step for an existing installation or application: its record and variables exist only
+  once an operator registers one, and only an application on 0.9.0 or newer can run it.
 
 ## Alternatives considered
 

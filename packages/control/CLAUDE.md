@@ -434,6 +434,25 @@ other environment, before the provider prepares anything, and the write maps a r
   answers the body of `@fabrika/app`'s `skill/SKILL.md`; the server `instructions` stay under 2,000
   characters (some clients cut them at 2 KB) and point to it. Never restate the rules beyond those three lines.
   One authoring environment per app: `apps.environments.put` answers 409 while another env holds the flag.
+- **A `dev` environment follows one workspace without a run (ADR-0049).** `app_envs.kind = 'dev'` is set at
+  creation and never changes; one per app, never `prod`, never protected, never authoring, no trigger ref, and only
+  on a provider with `devEnvironments` (Zerops). `dev_environments` holds metadata only: the bound workspace, the
+  target head, what the launcher last reported (head, status, one-line message, its trimmed log), a refused head,
+  and the reset and check generations. `src/api/dev-environments.ts` holds `bind_dev` (a bootstrap run when the launcher cannot serve the head: `needsBootstrap`
+  checks the paths from the held head with `syncRefusal`, and `launcherProblem` an unreadable or silent launcher, from
+  `launcher_refused`, `launcher_seen_at` and `service_started_at`; or when none
+  succeeded or a head was refused), `get_dev_status`, `run_checks`, `reset_dev` and `followDevCommit`, which
+  `apply_changes` calls. The launcher reaches the `source` receiver (`src/dev/receiver.ts`, the `dev-source`
+  protocol row, ADR-0064) with the environment's key: a held wait answers the files between the head it holds and
+  the target, never stored: the files `apply_changes` just wrote when this process holds them (`DevSignals.offer/take`,
+  only from the exact parent to the target), else a GitHub compare (`src/dev/sync.ts`) in one
+  `WorkspaceSourcePort.session`. Both requests carry the container's bootstrap commit; one that is not the current
+  bootstrap run's commit gets 409, because the provider runs the replaced container beside the new one. `apply_changes` reads its edited files and commits in one session too: one token, each commit and tree
+  read once. `run_checks` is refused while the served head is not the target. `DevSignals` wakes a wait in
+  this process; every wait also re-reads the row each second, for another Control container. A deploy of a `dev`
+  environment refuses a framework release before `DEV_LAUNCHER_SINCE` (`src/dev/deploy.ts`) before anything
+  publishes, and hands `FABRIKA_PLATFORM_SOURCE_URL`/`_KEY`. Maintenance stops a service idle for 30 minutes
+  (`src/dev/service.ts`); a bind, commit, reset or check request starts it. Only the Zerops root sets `DEV_SOURCE`.
 - **Published access comes ONLY from `approvedSnapshot(app, env)` (ADR-0050, `src/approval/`).** Right after the
   commit is pinned, `executeDeploy` reads the run's snapshot (`readAccessSnapshot` over `env.COMMITS`;
   `contractReaderInputs` names the files: on Zerops one archive pass keeps the files `snapshotReads(root)` wants,
@@ -455,13 +474,13 @@ other environment, before the provider prepares anything, and the write maps a r
 - **An application is read by the reader of the framework release it pins (ADR-0062, `readers.ts`, `formats.ts`).**
   `readAccessSnapshot` reads the `@fabrika/app` release from `<root>/bun.lock` and picks this release's reader for its
   own minor, or the bundled npm alias of an older one (`@fabrika/check-0.4`, `@fabrika/check-0.5`,
-  `@fabrika/check-0.6`, `@fabrika/check-0.7`). A release outside the window, newer than the platform, or a root without a registry `bun.lock`
+  `@fabrika/check-0.6`, `@fabrika/check-0.7`, `@fabrika/check-0.8`). A release outside the window, newer than the platform, or a root without a registry `bun.lock`
   entry fails the run with `FrameworkReleaseRefused`, one line of versions and fixed names. The snapshot keeps an older
   release's artifact in `older` and stores and digests that one; `contract` is it upcast to this release's model, which
   the diff, the proxy table and the IAM schema read. `approvedAccess` hands the provider the digest the application's
   release computes (`applicationContractDigest`) and the reader's release (`checker`), which the build checks with;
   never recompute a digest from the upcast contract. A 0.4 or 0.6 artifact is a 0.5 one (`from04`, `from06`); a 0.7 one is
-  this release's format, kept and read as it is (`from07`). A 0.5
+  this release's format, kept and read as it is (`from07`), and so is a 0.8 one (`from08`). A 0.5
   artifact keeps its forms, collection rows, `then` and inbox policies, which the proxy table, the IAM schema and the
   diff still serve; the upcast gives a job's `timeout` as `timeoutMs` (15 min without one) and a webhook the 10 s it ran
   with. A model change adds its upcast rule in `formats.ts`, and `framework-compat.test.ts` keeps every older minor of

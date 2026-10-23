@@ -17,6 +17,7 @@ import {
 	zeropsAssetRoots,
 	type ZeropsContractRun,
 	zeropsContractRun,
+	type ZeropsDevExecution,
 	type ZeropsLockedExecution,
 	type ZeropsRuntimePackage,
 } from './execution'
@@ -475,8 +476,11 @@ export const lockedExecutionOf = (manifest: FabrikaManifest): ZeropsLockedExecut
 	}
 }
 
-/** What Control lets a provider publish for one environment (`ProviderEnvironment.access`). */
-export type ZeropsAccess = Pick<ProviderEnvironment, 'access'>
+/**
+ * What Control lets a provider publish for one environment (`ProviderEnvironment.access`), and, for an environment of
+ * kind `dev`, the commit its bootstrap builds.
+ */
+export type ZeropsAccess = Pick<ProviderEnvironment, 'access'> & { readonly dev?: ZeropsDevExecution }
 
 /**
  * The execution descriptor's lock-down at deploy (ADR-0050): Control's approved contract decides it, not the artifact,
@@ -505,6 +509,7 @@ export function lockedExecutionFor(
 		storageHostname: applicationStorageHostname(manifest.target.importDocument.services),
 		runtimePackages: manifest.target.runtimePackages ?? [],
 		sourceMaps: artifactUpload === undefined ? null : sourceMapUpload(artifactUpload, access.contract),
+		...(granted.dev === undefined ? {} : { dev: granted.dev }),
 	}
 }
 

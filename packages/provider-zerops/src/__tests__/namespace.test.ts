@@ -328,6 +328,8 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 		return { id: `autoscaling-${serviceId}`, status: 'PENDING', actionName: 'stack.autoscaling' }
 	},
 	configureCustomAutoscaling: () => Promise.reject(new Error('a namespace never sets custom autoscaling')),
+	startService: () => Promise.reject(new Error('a namespace never starts a service')),
+	stopService: () => Promise.reject(new Error('a namespace never stops a service')),
 	getService: async ({ serviceId }) => {
 		for (const services of state.services.values()) {
 			const service = services.find((candidate) => candidate.id === serviceId)

@@ -14,6 +14,15 @@ export interface WorkspaceSourcePort {
 	compare(input: WorkspaceSourceCall & { baseSha: string; headSha: string }): Promise<WorkspaceComparison>
 	commit(input: WorkspaceSourceCall & WorkspaceCommit): Promise<string>
 	openPullRequest(input: WorkspaceSourceCall & WorkspacePullRequestInput): Promise<WorkspacePullRequest>
+	/** Several calls through one opened repository: one credential read and one token, and each commit and tree read once. */
+	session<T>(input: WorkspaceSourceCall, use: (session: WorkspaceSourceSession) => Promise<T>): Promise<T>
+}
+
+/** The calls of one session; each fails as the port's own call does, and an error `use` throws passes through unchanged. */
+export interface WorkspaceSourceSession {
+	readFiles(input: { commitSha: string; paths: readonly string[] }): Promise<WorkspaceFiles>
+	compare(input: { baseSha: string; headSha: string }): Promise<WorkspaceComparison>
+	commit(input: WorkspaceCommit): Promise<string>
 }
 
 /** The repository and the connection binding whose GitHub App reaches it. */
@@ -89,6 +98,8 @@ export interface WorkspaceComparison {
 	readonly baseSha: string
 	readonly headSha: string
 	readonly aheadBy: number
+	/** Commits on the base that are not on the head: more than none means the base is no ancestor of the head. */
+	readonly behindBy: number
 	readonly files: readonly WorkspaceChangedFile[]
 	/** The host lists a bounded number of files; true when it listed that many, so more may have changed. */
 	readonly filesCapped: boolean

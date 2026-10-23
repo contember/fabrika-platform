@@ -1,6 +1,7 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { GitHubConnectionStore } from '../github/connections/store'
 import { BuilderConnectionRepository } from './builder-connections'
+import { DevEnvironmentRepository } from './dev-environments'
 import { MailMessageRepository } from './mail-messages'
 import { MailRuleRepository } from './mail-rules'
 import { MembershipKeyRepository } from './membership-keys'
@@ -24,6 +25,7 @@ export interface ControlRepositories {
 	operationsReleases: OperationsReleaseRepository
 	githubConnections: GitHubConnectionStore
 	workspaces: WorkspaceRepository
+	devEnvironments: DevEnvironmentRepository
 	workloadCredentials: WorkloadCredentialRepository
 	membershipKeys: MembershipKeyRepository
 	tokenKeys: TokenKeyRepository
@@ -44,6 +46,7 @@ export function createControlRepositories(db: SqlDatabase, options: { now?: () =
 		operationsReleases: new OperationsReleaseRepository(db, now),
 		githubConnections: new GitHubConnectionStore(db, now),
 		workspaces: new WorkspaceRepository(db, now),
+		devEnvironments: new DevEnvironmentRepository(db, now),
 		workloadCredentials: new WorkloadCredentialRepository(db),
 		membershipKeys: new MembershipKeyRepository(db),
 		tokenKeys: new TokenKeyRepository(db),

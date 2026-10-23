@@ -153,19 +153,22 @@ describe('private_key_jwt client authentication', () => {
 
 	test('an unknown kid refetches the key set once, and not again within the interval', async () => {
 		let rotated = false
-		const f = await fixture({ jwks: () => ({ keys: rotated ? [first.jwk, second.jwk] : [first.jwk] }) })
-		expect((await f.exchange(await f.approve(), await authenticated(f))).status).toBe(200)
-		rotated = true
-		setSystemTime(new Date(Date.now() + 31_000))
+		// The first fetch happens 31 s in the past instead of the rest in the future: a clock moved ahead leaves a future
+		// timestamp in the process-wide UUIDv7 generator, and every later test file in the process inherits it.
+		setSystemTime(new Date(Date.now() - 31_000))
+		let f: Fixture
 		try {
-			expect((await f.exchange(await f.approve(), await authenticated(f, { key: second }))).status).toBe(200)
-			expect(f.fetched.filter((url) => url === f.jwksUri)).toHaveLength(2)
-			const unknown = await signingKey('key-3')
-			await expectInvalidClient(await f.exchange(await f.approve(), await authenticated(f, { key: unknown })))
-			expect(f.fetched.filter((url) => url === f.jwksUri)).toHaveLength(2)
+			f = await fixture({ jwks: () => ({ keys: rotated ? [first.jwk, second.jwk] : [first.jwk] }) })
+			expect((await f.exchange(await f.approve(), await authenticated(f))).status).toBe(200)
 		} finally {
 			setSystemTime()
 		}
+		rotated = true
+		expect((await f.exchange(await f.approve(), await authenticated(f, { key: second }))).status).toBe(200)
+		expect(f.fetched.filter((url) => url === f.jwksUri)).toHaveLength(2)
+		const unknown = await signingKey('key-3')
+		await expectInvalidClient(await f.exchange(await f.approve(), await authenticated(f, { key: unknown })))
+		expect(f.fetched.filter((url) => url === f.jwksUri)).toHaveLength(2)
 	})
 
 	test('an unknown kid within the refetch interval of the last fetch is refused without a fetch', async () => {

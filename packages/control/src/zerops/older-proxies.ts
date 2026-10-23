@@ -15,6 +15,10 @@ import {
 	contractProxyAppSchema as contractProxyAppSchema07,
 	proxyEndpointRowSchema as proxyEndpointRowSchema07,
 } from '@fabrika/proxy-core-0.7/manifest'
+import {
+	contractProxyAppSchema as contractProxyAppSchema08,
+	proxyEndpointRowSchema as proxyEndpointRowSchema08,
+} from '@fabrika/proxy-core-0.8/manifest'
 
 /**
  * The strict manifest parsers of the namespace proxies a Zerops namespace pinned to an older release runs (ADR-0062): the
@@ -37,5 +41,9 @@ export const OLDER_PROXY_READERS: OlderProxyReaders = [
 	{
 		row: (row) => proxyEndpointRowSchema07.safeParse(row).success,
 		csp: (csp) => contractProxyAppSchema07.innerType().shape.csp.safeParse(csp).success,
+	},
+	{
+		row: (row) => proxyEndpointRowSchema08.safeParse(row).success,
+		csp: (csp) => contractProxyAppSchema08.innerType().shape.csp.safeParse(csp).success,
 	},
 ]

@@ -5,17 +5,19 @@
 
 import type { AuthContext } from '@fabrika/auth'
 import { CONTRACT_FILE } from '@fabrika/check/contract'
-import type { RunDto, RunLogLine } from '@fabrika/control-contract'
+import type { AppEnvKind, RunDto, RunLogLine } from '@fabrika/control-contract'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { uuidv7 } from '@fabrika/platform'
 import type { ProviderSourceBinding } from '@fabrika/provider-contract'
 import { parseClassification } from '../approval/publish'
 import { type AppEnvRow, type AppRow, type ControlRepositories, SourceBindingError, type WorkspaceRow } from '../db'
+import { logFailure } from '../error-label'
 import { parseGitHubRepo } from '../github/triggers/push-event'
 import {
 	type WorkspaceChangedFile,
 	WorkspaceSourceError,
 	type WorkspaceSourcePort,
+	type WorkspaceSourceSession,
 	type WorkspaceSourceTarget,
 	type WorkspaceTreeEntry,
 	type WorkspaceUnreadableReason,
@@ -44,6 +46,8 @@ export interface WorkspaceUseCaseContext {
 export interface AuthoringTargetDto {
 	appId: string
 	env: string
+	/** The environment's kind; an authoring target is always a stage environment, `standard`. */
+	kind: AppEnvKind
 	/** `owner/name` on GitHub. */
 	repository: string
 	defaultBranch: string
@@ -118,11 +122,14 @@ export interface DeploymentDto {
 }
 
 /**
- * One window of the build log, oldest first. `from` and `to` index the log as filtered, which only grows: pass `to` as
- * `after` to poll for new lines, `from` as `before` to page back.
+ * One window of the build log, oldest first. `from` and `to` index the whole log, which only grows, filtered or not:
+ * pass `to` as `after` to poll for new lines, `from` as `before` to page back.
  */
-export interface DeploymentLogDto {
-	lines: RunLogLine[]
+export type DeploymentLogDto = LogWindowDto<RunLogLine>
+
+/** One window of a log that only grows; see `DeploymentLogDto`. */
+export interface LogWindowDto<Line> {
+	lines: Line[]
 	from: number
 	to: number
 	total: number
@@ -145,13 +152,13 @@ export interface DeploymentApprovalDto {
 	changes: string[]
 }
 
-interface AuthoringTarget {
+export interface AuthoringTarget {
 	app: AppRow
 	appEnv: AppEnvRow
 	source: WorkspaceSourceTarget
 }
 
-interface OwnedWorkspace extends AuthoringTarget {
+export interface OwnedWorkspace extends AuthoringTarget {
 	workspace: WorkspaceRow
 }
 
@@ -163,6 +170,7 @@ export async function listTargetsUseCase(c: WorkspaceUseCaseContext): Promise<{ 
 		items.push({
 			appId: target.app.id,
 			env: target.appEnv.env,
+			kind: target.appEnv.kind,
 			repository: `${target.source.owner}/${target.source.repository}`,
 			defaultBranch: target.app.default_branch,
 			publicOrigin: target.appEnv.public_origin,
@@ -454,7 +462,7 @@ function lineAround(line: string, at: number): string {
 export async function applyChangesUseCase(
 	c: WorkspaceUseCaseContext,
 	input: { workspaceId: string; expectedHeadSha: string; message: string; changes: readonly WorkspaceFileChange[] },
-): Promise<{ commitSha: string }> {
+): Promise<{ commitSha: string; written: WorkspaceFileWrite[]; warning: string | null }> {
 	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_WRITE)
 	const protectedPaths = [...new Set(input.changes.map((change) => change.path))].filter(isProtectedPath)
 	if (protectedPaths.length > 0) {
@@ -463,35 +471,41 @@ export async function applyChangesUseCase(
 	const principal = requirePrincipal(c.auth)
 	const message = commitMessage(input.message, principal.id, c.auth.oauth?.clientId)
 	if (new TextEncoder().encode(message).byteLength > COMMIT_MESSAGE_MAX_BYTES) fail(400, 'the commit message is too long')
-	const changes = await resolveChanges(c, owned, input.expectedHeadSha, input.changes)
-	let commitSha: string
-	try {
-		commitSha = await c.source.commit({
-			target: owned.source,
-			branch: owned.workspace.branch,
-			expectedHeadSha: input.expectedHeadSha,
-			message,
-			author: {
-				name: (principal.label === '' ? principal.id : principal.label).slice(0, AUTHOR_NAME_MAX_LENGTH),
-				email: `${principal.id}@users.noreply.fabrika`,
-			},
-			changes,
-			signal: c.signal,
-		})
-	} catch (cause) {
-		if (cause instanceof WorkspaceSourceError && cause.kind === 'stale_head') {
-			const headSha = await requireHead(c, owned)
-			fail(409, `the workspace head moved to ${headSha}; re-read the files at that commit and retry with expectedHeadSha ${headSha}`)
-		}
-		throw sourceFailure(cause, 'the workspace branch changed in a conflicting way; re-read the workspace and retry')
+	const author = {
+		name: (principal.label === '' ? principal.id : principal.label).slice(0, AUTHOR_NAME_MAX_LENGTH),
+		email: `${principal.id}@users.noreply.fabrika`,
 	}
-	await c.auth.audit({
+	// One session reads the edited files and commits: one token, and the head's commit and trees read once.
+	const committed = await sourceCall(() =>
+		c.source.session({ target: owned.source, signal: c.signal }, async (source) => {
+			const changes = await resolveChanges(source, input.expectedHeadSha, input.changes)
+			try {
+				const sha = await source.commit({ branch: owned.workspace.branch, expectedHeadSha: input.expectedHeadSha, message, author, changes })
+				return { sha, changes }
+			} catch (cause) {
+				if (cause instanceof WorkspaceSourceError && cause.kind === 'stale_head') {
+					const headSha = await requireHead(c, owned)
+					fail(409, `the workspace head moved to ${headSha}; re-read the files at that commit and retry with expectedHeadSha ${headSha}`)
+				}
+				throw sourceFailure(cause, 'the workspace branch changed in a conflicting way; re-read the workspace and retry')
+			}
+		})
+	)
+	const commitSha = committed.sha
+	// The commit persisted, so a failed audit write is answered beside it rather than as a failed call.
+	const warning = await c.auth.audit({
 		action: 'source.workspace.commit',
 		resourceType: 'workspace',
 		resourceId: owned.workspace.id,
-		metadata: { appId: owned.workspace.app_id, env: owned.workspace.env, commitSha, paths: changes.length },
-	})
-	return { commitSha }
+		metadata: { appId: owned.workspace.app_id, env: owned.workspace.env, commitSha, paths: committed.changes.length },
+	}).then(
+		() => null,
+		(cause: unknown) => {
+			const reference = logFailure('apply_changes: the audit entry of a persisted commit', cause)
+			return `The commit persisted, but Control could not record its audit entry; tell the operator and quote reference ${reference}.`
+		},
+	)
+	return { commitSha, written: committed.changes, warning }
 }
 
 /**
@@ -499,8 +513,7 @@ export async function applyChangesUseCase(
  * each refused unless its `oldString` occurs exactly once; a path written whole appears in no other change.
  */
 async function resolveChanges(
-	c: WorkspaceUseCaseContext,
-	owned: OwnedWorkspace,
+	source: WorkspaceSourceSession,
 	expectedHeadSha: string,
 	changes: readonly WorkspaceFileChange[],
 ): Promise<WorkspaceFileWrite[]> {
@@ -514,9 +527,7 @@ async function resolveChanges(
 		else edits.set(change.path, [...(edits.get(change.path) ?? []), { change, index }])
 	}
 	if (edits.size === 0) return [...writes.values()]
-	const read = await sourceCall(() =>
-		c.source.readFiles({ target: owned.source, commitSha: expectedHeadSha, paths: [...edits.keys()], signal: c.signal })
-	)
+	const read = await sourceCall(() => source.readFiles({ commitSha: expectedHeadSha, paths: [...edits.keys()] }))
 	for (const file of read.files) {
 		if (file.content === null) {
 			fail(409, `cannot edit ${file.path} at ${expectedHeadSha}: ${UNEDITABLE[file.reason]}`)
@@ -577,7 +588,9 @@ export async function getDeploymentUseCase(
 	const branch = row?.ref.startsWith(`refs/heads/${WORKSPACE_BRANCH_PREFIX}`) ? row.ref.slice('refs/heads/'.length) : null
 	const workspace = branch === null ? null : await c.repositories.workspaces.getWorkspaceByBranch(branch)
 	if (
-		row === null || workspace === null || workspace.owner_id !== ownerId || workspace.app_id !== row.app_id || workspace.env !== row.env
+		row === null || workspace === null || workspace.owner_id !== ownerId || workspace.app_id !== row.app_id
+		|| (workspace.env !== row.env && !await isDevEnvironment(c, row.app_id, row.env))
+		|| !canAtCoordinates(c.auth, CONTROL_ACTIONS.DEPLOY_READ, row.app_id, row.env)
 		|| await findAuthoringTarget(c, workspace.app_id, workspace.env, CONTROL_ACTIONS.DEPLOY_READ) === null
 	) fail(404, 'run not found')
 	const run = await getRunUseCase(c, input.runId)
@@ -591,10 +604,22 @@ export async function getDeploymentUseCase(
 		: null
 	const deviations = changes.filter((change) => change.review === 'closer').map((change) => change.line)
 	const finished = run.status === 'succeeded' || run.status === 'failed'
-	return { run, finished, summary: deploymentSummary(run), log: logWindow(log.lines, input.log), approval, deviations }
+	return {
+		run,
+		finished,
+		summary: deploymentSummary(run, row.env === workspace.env ? 'stage' : 'dev'),
+		log: logWindow(log.lines, input.log),
+		approval,
+		deviations,
+	}
 }
 
-function deploymentSummary(run: RunDto): string {
+/** A workspace's runs are its stage deploys and the bootstrap runs of its application's dev environment. */
+async function isDevEnvironment(c: WorkspaceUseCaseContext, appId: string, env: string): Promise<boolean> {
+	return (await c.repositories.registry.getAppEnv(appId, env))?.kind === 'dev'
+}
+
+function deploymentSummary(run: RunDto, environment: 'stage' | 'dev'): string {
 	switch (run.status) {
 		case 'pending':
 			return 'Queued and not started yet; poll again.'
@@ -603,21 +628,52 @@ function deploymentSummary(run: RunDto): string {
 		case 'awaiting_approval':
 			return 'Waiting for a person to approve its access change (see approval); it continues only after that.'
 		case 'succeeded':
-			return `Succeeded: the stage environment runs ${run.commitSha ?? 'the deployed commit'}.`
+			return environment === 'stage'
+				? `Succeeded: the stage environment runs ${run.commitSha ?? 'the deployed commit'}.`
+				: `Succeeded: the dev environment runs ${run.commitSha ?? 'the deployed commit'}; commits now sync without a run.`
 		case 'failed':
 			return 'Failed; read the log with failuresOnly for the lines that name the failure.'
 	}
 }
 
-const FAILURE_TEXT = /\b(error|errors|fail|failed|failure)\b/i
+/**
+ * A line that names an error or a failure, or a non-zero exit. The stream says nothing: bun prints the commands it runs
+ * and its test output on stderr. A count of none (`0 fail`) is no failure, colored or not.
+ */
+const FAILURE_TEXT = /\b(?:error|errors|fail|failed|failure|failures|fatal|panic|exception)\b|\bexit(?:ed)?(?: with)?(?: code| status)?[ :]+[1-9]/i
+const ZERO_COUNT = /\b0 (?:fail|failed|failures?|errors?)\b/gi
+const COLOR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
 
-function logWindow(all: readonly RunLogLine[], query: DeploymentLogQuery): DeploymentLogDto {
+const isFailureLine = (text: string): boolean => FAILURE_TEXT.test(text.replace(COLOR, '').replace(ZERO_COUNT, ''))
+
+/**
+ * A window of `all`. `from`, `to` and `total` always index the whole log, so `after: to` resumes it whether or not the
+ * next call filters. With `failuresOnly` the window holds up to `lines` failure lines between `from` and `to`.
+ */
+export function logWindow<Line extends { stream: string; text: string }>(all: readonly Line[], query: DeploymentLogQuery): LogWindowDto<Line> {
 	if (query.after !== undefined && query.before !== undefined) fail(400, 'name after or before, not both')
-	const lines = query.failuresOnly ? all.filter((line) => line.stream === 'stderr' || FAILURE_TEXT.test(line.text)) : all
-	const end = Math.min(query.before ?? lines.length, lines.length)
-	const from = query.after === undefined ? Math.max(0, end - query.lines) : Math.min(query.after, lines.length)
-	const to = query.after === undefined ? end : Math.min(from + query.lines, lines.length)
-	return { lines: lines.slice(from, to), from, to, total: lines.length }
+	const total = all.length
+	const keep = (line: Line): boolean => !query.failuresOnly || isFailureLine(line.text)
+	if (query.after !== undefined) {
+		const from = Math.min(query.after, total)
+		const lines: Line[] = []
+		let to = from
+		while (to < total && lines.length < query.lines) {
+			const line = all[to]
+			to += 1
+			if (line !== undefined && keep(line)) lines.push(line)
+		}
+		return { lines, from, to: lines.length < query.lines ? total : to, total }
+	}
+	const to = Math.min(query.before ?? total, total)
+	const lines: Line[] = []
+	let from = to
+	while (from > 0 && lines.length < query.lines) {
+		from -= 1
+		const line = all[from]
+		if (line !== undefined && keep(line)) lines.unshift(line)
+	}
+	return { lines, from: lines.length < query.lines ? 0 : from, to, total }
 }
 
 export async function createPullRequestUseCase(
@@ -701,23 +757,30 @@ async function findAuthoringTarget(c: WorkspaceUseCaseContext, appId: string, en
 	if (appEnv === null || appEnv.authoring !== 1) return null
 	const app = await c.repositories.registry.getApp(appId)
 	if (app === null) return null
+	const source = await sourceTargetOf(c.repositories, app)
+	return source === null ? null : { app, appEnv, source }
+}
+
+/** The repository of the application's GitHub source and the connection that reaches it; null when it has none. */
+export async function workspaceSourceTarget(repositories: ControlRepositories, appId: string): Promise<WorkspaceSourceTarget | null> {
+	const app = await repositories.registry.getApp(appId)
+	return app === null ? null : sourceTargetOf(repositories, app)
+}
+
+async function sourceTargetOf(repositories: ControlRepositories, app: AppRow): Promise<WorkspaceSourceTarget | null> {
 	let binding: ProviderSourceBinding | null
 	try {
-		binding = await c.repositories.registry.getSourceBinding(appId)
+		binding = await repositories.registry.getSourceBinding(app.id)
 	} catch (cause) {
 		if (cause instanceof SourceBindingError) return null
 		throw cause
 	}
 	const repository = parseGitHubRepo(app.repo_url)
 	if (binding === null || repository === null) return null
-	return {
-		app,
-		appEnv,
-		source: { connectionId: binding.connectionId, installationId: binding.installationId, owner: repository.owner, repository: repository.repo },
-	}
+	return { connectionId: binding.connectionId, installationId: binding.installationId, owner: repository.owner, repository: repository.repo }
 }
 
-async function requireWorkspace(
+export async function requireWorkspace(
 	c: WorkspaceUseCaseContext,
 	workspaceId: string,
 	action: string,
@@ -732,7 +795,7 @@ async function requireWorkspace(
 	return { ...target, workspace }
 }
 
-async function requireHead(c: WorkspaceUseCaseContext, owned: OwnedWorkspace): Promise<string> {
+export async function requireHead(c: WorkspaceUseCaseContext, owned: OwnedWorkspace): Promise<string> {
 	const headSha = await sourceCall(() => c.source.readBranch({ target: owned.source, branch: owned.workspace.branch, signal: c.signal }))
 	if (headSha === null) fail(404, 'the workspace branch no longer exists')
 	return headSha
@@ -793,7 +856,7 @@ function requirePrincipal(auth: AuthContext) {
 	return principal
 }
 
-function requireOwner(auth: AuthContext): string {
+export function requireOwner(auth: AuthContext): string {
 	return requirePrincipal(auth).id
 }
 
