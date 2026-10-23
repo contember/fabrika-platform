@@ -64,7 +64,9 @@ mark. Every page keeps the footer "Runs on fabrika", with no link.**
    mark instead of failing its build. The logo is part of the manifest digest, so a new logo rebuilds the proxy.
 6. **IAM's pages admit `img-src data:` and nothing more.** IAM draws the logo itself on every page it serves, and on
    the OAuth consent and error pages. A failed read, or a stored row that fails the check, draws fabrika's mark and
-   logs the message only. The installation's own proxy, in front of IAM and the console, keeps fabrika's mark on its
+   logs the message only. Every page reads the row, but the check runs once per distinct pair of images: IAM keeps the
+   answer for the images it last checked, keyed on the images themselves, so a change made on another instance is
+   checked when it is first read. The installation's own proxy, in front of IAM and the console, keeps fabrika's mark on its
    pages, its 502 among them: its manifest is written at install, and when IAM does not answer nothing can ask it for
    the logo.
 7. **Cloudflare comes after backlog 177.** The proxy Worker already draws a manifest's `brand`, but Control does not
@@ -96,6 +98,11 @@ mark. Every page keeps the footer "Runs on fabrika", with no link.**
 - **Control owns the logo.** Control publishes the manifests, so it would need no second read. It lost because IAM
   draws its own pages without Control, and IAM's sign-in page is the one every user sees first: IAM would have to ask
   Control per page, or keep a copy that drifts.
+- **Control keeps a copy of the logo** and reads IAM only when the console republishes. Each namespace mutation would
+  save one provisioning-key call to IAM, with its `iam.admin.access` row and up to two 32 KB images, beside the calls a
+  deploy already makes. It lost because the copy would change only with `republishAll`: a change saved by an
+  administrator without `namespace.manage`, or one whose republish IAM left unanswered, would never reach a proxy, and
+  every later deploy would publish the old logo. Reading IAM per mutation, every publish converges on what IAM holds.
 - **The proxy fetches the logo at runtime.** One logo for every namespace, changed without a rebuild. It lost because
   the proxy has no store, and a fetch at the moment it shows an error page (often because something upstream is down)
   is the fetch most likely to fail. It would also be a second request path out of the proxy beside `forward_auth`.
