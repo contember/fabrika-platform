@@ -611,50 +611,74 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 	assertRunning(signal)
 	// One read: every write below waits for its own user-data sync, so the build request never meets `userDataSyncRunning`.
 	const records = await zerops.api.listServiceEnv({ serviceId, signal })
+	const changes: ServiceEnvChange[] = []
+	const put = (key: string, value: string, sensitive: boolean): void => {
+		changes.push({ line: `${key}: updated`, apply: () => zerops.api.putServiceEnv({ serviceId, key, value, sensitive, signal }) })
+	}
+	const remove = (key: string, envId: string): void => {
+		changes.push({ line: `${key}: removed`, apply: () => zerops.api.deleteServiceEnv({ envId, signal }) })
+	}
 	// A credential is written sensitive and never read back, so it is written every time.
 	for (const { key, value, credential } of written) {
 		const existing = records.find((record) => record.key === key)
-		assertRunning(signal)
-		if (credential || readableContent(existing) !== value) {
-			await zerops.api.putServiceEnv({ serviceId, key, value, sensitive: credential, signal })
-			log(`  ${key}: updated`)
-		} else {
-			log(`  ${key}: unchanged`)
-		}
+		if (credential || readableContent(existing) !== value) put(key, value, credential)
+		else changes.push({ line: `${key}: unchanged`, apply: null })
 	}
 	// A variable Control no longer hands is removed, so no stale key stays readable. `/env` also reports the descriptor's
 	// `FABRIKA_RELEASE`, which Zerops refuses to delete.
 	const stale = new Set(staleManagedVariables(records.map((record) => record.key), new Set([...writtenKeys, 'FABRIKA_RELEASE'])))
 	for (const record of records) {
-		if (!stale.has(record.key)) continue
-		assertRunning(signal)
-		await zerops.api.deleteServiceEnv({ envId: record.id, signal })
-		log(`  ${record.key}: removed`)
+		if (stale.has(record.key)) remove(record.key, record.id)
 	}
 	const provenance = env.attempt.storageProvenance
 	const marker = records.find((record) => record.key === STORAGE_PROVENANCE_KEY)
-	if (typeof provenance === 'string' && readableContent(marker) !== provenance) {
-		assertRunning(signal)
-		// Not a credential, and the exposure read-back above reads it: it must stay readable.
-		await zerops.api.putServiceEnv({ serviceId, key: STORAGE_PROVENANCE_KEY, value: provenance, sensitive: false, signal })
-		log(`  ${STORAGE_PROVENANCE_KEY}: updated`)
-	} else if (provenance === null && marker !== undefined) {
-		assertRunning(signal)
-		await zerops.api.deleteServiceEnv({ envId: marker.id, signal })
-		log(`  ${STORAGE_PROVENANCE_KEY}: removed`)
-	}
+	// Not a credential, and the exposure read-back above reads it: it must stay readable.
+	if (typeof provenance === 'string' && readableContent(marker) !== provenance) put(STORAGE_PROVENANCE_KEY, provenance, false)
+	else if (provenance === null && marker !== undefined) remove(STORAGE_PROVENANCE_KEY, marker.id)
 	// The build lifts the upload's bearer from here (`${RUNTIME_…}`), so the descriptor never holds it.
 	const bearer = env.run.artifactUpload?.bearer ?? null
 	const uploadKey = records.find((record) => record.key === FABRIKA_SOURCE_MAP_UPLOAD_KEY)
-	if (bearer !== null) {
-		assertRunning(signal)
-		await zerops.api.putServiceEnv({ serviceId, key: FABRIKA_SOURCE_MAP_UPLOAD_KEY, value: bearer, sensitive: true, signal })
-		log(`  ${FABRIKA_SOURCE_MAP_UPLOAD_KEY}: updated`)
-	} else if (uploadKey !== undefined) {
-		assertRunning(signal)
-		await zerops.api.deleteServiceEnv({ envId: uploadKey.id, signal })
-		log(`  ${FABRIKA_SOURCE_MAP_UPLOAD_KEY}: removed`)
+	if (bearer !== null) put(FABRIKA_SOURCE_MAP_UPLOAD_KEY, bearer, true)
+	else if (uploadKey !== undefined) remove(FABRIKA_SOURCE_MAP_UPLOAD_KEY, uploadKey.id)
+	await applyServiceEnvChanges(changes, log, signal)
+}
+
+/** One service variable write or removal `write-service-env` decided on, or a key it leaves as it is (`apply: null`). */
+interface ServiceEnvChange {
+	readonly line: string
+	readonly apply: (() => Promise<void>) | null
+}
+
+/** Each write waits ~3 s for its own user-data sync; concurrent writes to one service do not conflict (zerops-platform.md). */
+const SERVICE_ENV_WRITE_CONCURRENCY = 6
+
+/**
+ * Applies the changes `SERVICE_ENV_WRITE_CONCURRENCY` at a time and waits for every started one, so no sync still runs
+ * when the step ends. A failure or a cancel starts no further write; lines follow the decision order.
+ */
+const applyServiceEnvChanges = async (changes: readonly ServiceEnvChange[], log: (line: string) => void, signal: AbortSignal): Promise<void> => {
+	const applied = new Set<number>()
+	const failures: unknown[] = []
+	let next = 0
+	const worker = async (): Promise<void> => {
+		while (next < changes.length && failures.length === 0 && !signal.aborted) {
+			const index = next++
+			const apply = changes[index]?.apply ?? null
+			if (apply === null) continue
+			try {
+				await apply()
+				applied.add(index)
+			} catch (error) {
+				failures.push(error)
+			}
+		}
 	}
+	await Promise.all(Array.from({ length: SERVICE_ENV_WRITE_CONCURRENCY }, worker))
+	for (const [index, change] of changes.entries()) {
+		if (change.apply === null || applied.has(index)) log(`  ${change.line}`)
+	}
+	if (failures.length > 0) throw failures[0]
+	assertRunning(signal)
 }
 
 /** The custom autoscaling with its minimum RAM raised to `minRam`; every other field is sent back as it was read. */

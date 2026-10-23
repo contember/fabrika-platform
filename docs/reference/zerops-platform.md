@@ -926,6 +926,13 @@ which is why `putServiceEnv`, `createServiceEnv` and `deleteServiceEnv` now poll
 before returning. And an endpoint whose error CODE is dropped is undiagnosable: `build-and-deploy`
 keeps its code from now on, because nothing in that request or response is a secret.
 
+**Concurrent user-data writes, 2026-10-23 (account `prg1`, a throwaway variable set on a stopped runtime).** Eight
+`POST /service-stack/{id}/user-data` sent at once (half `sensitive`), then eight `PUT /user-data/{id}` at once, then
+eight `DELETE` at once: every process `FINISHED` without an error, and the variable list matched after each round.
+Each round took 5.5–6.6 s in all, where eight sequential writes take about 20 s. No rate limit was met. The
+`userDataSyncRunning` conflict stays a deploy's: `write-service-env` therefore writes up to six variables at a time
+and returns only after every started write's sync has finished.
+
 **Fresh creation provenance witness, 2026-10-02.** A collision-rejecting codeless import created
 disposable service `9YWl1QygSmGeGnmKvYISDw`. The response's `serviceStacks` entry identified its
 name and ID, and associated both processes with that same `serviceStackId`: creation
