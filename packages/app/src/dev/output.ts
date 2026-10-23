@@ -16,10 +16,14 @@ export const processOutput: OutputSink = {
 	},
 }
 
-/** The newest `capacity` lines, numbered from 0 since the launcher started, with every known secret value replaced. */
+/**
+ * The newest `capacity` lines, numbered from 0 since the launcher started, with every known secret value replaced. A
+ * mark starts the lines a report carries: those of the newest sync or reset, and the output after it.
+ */
 export class OutputRing {
 	private readonly lines: DevLogLine[] = []
 	private next = 0
+	private marked = 0
 
 	constructor(private readonly capacity: number, private readonly secrets: readonly string[], private readonly sink: OutputSink) {}
 
@@ -31,9 +35,15 @@ export class OutputRing {
 		if (this.lines.length > this.capacity) this.lines.shift()
 	}
 
-	/** The newest `count` lines, oldest first. */
+	/** Report from the next line on: the lines before it belong to an older head. */
+	mark(): void {
+		this.marked = this.next
+	}
+
+	/** The newest `count` lines since the mark, oldest first. */
 	tail(count: number): DevLogLine[] {
-		return this.lines.slice(Math.max(0, this.lines.length - count))
+		const since = this.lines.filter((line) => line.n >= this.marked)
+		return since.slice(Math.max(0, since.length - count))
 	}
 
 	private redact(text: string): string {
