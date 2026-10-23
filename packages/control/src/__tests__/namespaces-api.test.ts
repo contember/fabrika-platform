@@ -13,6 +13,7 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import {
 	enqueueUnsettledNamespaces,
 	type NamespaceJobResult,
+	NamespaceProxyBusyError,
 	type NamespaceProxyChanged,
 	type NamespaceUseCaseContext,
 	reconcileNamespaceUseCase,
@@ -1040,6 +1041,8 @@ describe('a namespace republish rebuilds the entry point from the registry under
 			expect(reads).toEqual(['read'])
 			expect(published.sort()).toEqual([['apps-prod', LOGO], ['apps-qa', LOGO]])
 			expect(harness.sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-stage', mutation: 'reconcile' }])
+			// Back to `pending`, so the job settling it now leaves the row to the reconcile, which reads the logo again.
+			expect((await harness.deps.repositories.registry.getDeploymentNamespace('apps-stage'))?.state).toBe('pending')
 			expect(harness.audits.map((audit) => `${audit.action} ${audit.resourceId}`).sort()).toEqual([
 				'namespace.reconcile apps-stage',
 				'namespace.republish apps-prod',
@@ -1059,6 +1062,19 @@ describe('a namespace republish rebuilds the entry point from the registry under
 			const context = republishAllContext(harness, (namespaceId) => namespaceId === 'apps-qa' ? Promise.reject(new Error('busy')) : Promise.resolve())
 
 			await expect(republishAllNamespacesUseCase(context)).rejects.toThrow('apps-qa')
+			expect(harness.audits.map((audit) => `${audit.action} ${audit.resourceId}`)).toEqual(['namespace.republish apps-prod'])
+		})
+
+		test('a namespace a deploy holds is no failure: its republish queued the reconcile that publishes the logo after it', async () => {
+			const harness = makeDeps(namespacedProvider(providerRecording()))
+			await seedNamespace(harness, 'apps-prod', 'ready')
+			await seedNamespace(harness, 'apps-qa', 'ready')
+			const context = republishAllContext(harness, (namespaceId) =>
+				namespaceId === 'apps-qa'
+					? Promise.reject(new NamespaceProxyBusyError(`Namespace ${namespaceId} proxy is busy; a reconcile is queued`))
+					: Promise.resolve())
+
+			expect(await republishAllNamespacesUseCase(context)).toEqual({ namespaceIds: ['apps-prod', 'apps-qa'] })
 			expect(harness.audits.map((audit) => `${audit.action} ${audit.resourceId}`)).toEqual(['namespace.republish apps-prod'])
 		})
 

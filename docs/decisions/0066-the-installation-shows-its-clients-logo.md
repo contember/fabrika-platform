@@ -49,13 +49,15 @@ mark. Every page keeps the footer "Runs on fabrika", with no link.**
    route.
 4. **Control carries it from IAM to the provider.** Control reads it with the provisioning key once per namespace
    mutation (provision, reconcile, republish) and hands it as `ProviderNamespaceMutationInput.brand`. The logo is
-   presentation, so a read that fails publishes fabrika's mark and logs a warning; it never fails the mutation. A
+   presentation, so a read that fails, or that IAM leaves unanswered for five seconds, publishes fabrika's mark and
+   logs a warning; it never fails the mutation. A
    namespace that failed for a logo would refuse every deploy, and a republish carries the registry's routing, which
    is authorization state the proxy must receive (ADR-0022). The next publish draws the logo again.
    `namespaces.republishAll` (`namespace.manage`), which the console calls after a change, is the exception: it reads
    the logo once and refuses when IAM does not answer, because the change it was asked to publish would reach no proxy.
-   It republishes every ready namespace with it and queues a reconcile for one still mid-change, which may have read
-   the logo before it changed.
+   It republishes every ready namespace with it; one whose lease a deploy holds is no failure, since that republish
+   queues a reconcile that publishes after the deploy. One still mid-change may have read the logo before it changed,
+   so it goes back to `pending` with a reconcile queued, which reads the logo again after the running job.
 5. **A Zerops proxy gets it only from a source that accepts it.** The generated proxy build declares the literal
    variable `FABRIKA_PROXY_MANIFEST_BRAND`. The provider writes `brand` into the manifest only when the namespace's
    pinned descriptor carries it (`zeropsProxyAcceptsBrand`), so a namespace pinned to an older source keeps fabrika's

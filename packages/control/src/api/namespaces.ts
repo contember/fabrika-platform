@@ -522,6 +522,11 @@ export interface NamespaceRepublishOptions {
 	readonly brand?: InstallationBrand | null
 }
 
+/** A republish that found the namespace's lease held: the reconcile it queued publishes the change after the holder. */
+export class NamespaceProxyBusyError extends Error {
+	override readonly name = 'NamespaceProxyBusyError'
+}
+
 /**
  * Rebuild one namespace's entry point from the registry (ADR-0044). The namespace stays `provisioning`
  * until the rebuild is live; one that ends any other way is handed to a `reconcile` job. A provider
@@ -534,7 +539,7 @@ export async function republishNamespace(deps: NamespaceRepublishDeps, namespace
 		// The holder may have read the members before this change; a queued reconcile publishes it after.
 		await deps.repositories.registry.requeueDeploymentNamespace(namespaceId)
 		await deps.queue.send({ kind: 'namespace', namespaceId, mutation: 'reconcile' })
-		throw new Error(`Namespace ${namespaceId} proxy is busy; a reconcile is queued`)
+		throw new NamespaceProxyBusyError(`Namespace ${namespaceId} proxy is busy; a reconcile is queued`)
 	}
 	try {
 		await republishUnderLease(deps, lease, namespaceId, options)
@@ -627,10 +632,12 @@ async function auditMutation(
  * the logo changes in IAM, whose proxy pages show it only once their manifest is published again.
  *
  * The logo is read ONCE, and here a failed read is the answer, because the change it was asked to publish would not
- * reach a proxy. A ready namespace republishes with it, all of them at once; one mid-change may have read the logo
- * before it changed, so it gets a reconcile, which reads it again under the lease. A failed namespace publishes
- * nothing until it is repaired, and reads the logo then. Every namespace is attempted, and each one that publishes is
- * audited, before a failure is reported; the answer names the ones that will show the logo.
+ * reach a proxy. A ready namespace republishes with it, all of them at once; one whose lease a deploy holds is not a
+ * failure, because the republish queued a reconcile that publishes after the deploy. One mid-change may have read the
+ * logo before it changed, so it goes back to `pending` and gets a reconcile, which reads it again under the lease (as
+ * `namespaces.reconcile` does: a reconcile sent to a row its running job then marks `ready` would be skipped). A
+ * failed namespace publishes nothing until it is repaired, and reads the logo then. Every namespace is attempted, and
+ * each one that publishes is audited, before a failure is reported; the answer names the ones that will show the logo.
  */
 export async function republishAllNamespacesUseCase(c: NamespaceUseCaseContext): Promise<RepublishAllNamespacesResponse> {
 	const hook = c.namespaceProxyChanged
@@ -650,6 +657,7 @@ export async function republishAllNamespacesUseCase(c: NamespaceUseCaseContext):
 			try {
 				await hook(row.id, { brand })
 			} catch (cause) {
+				if (cause instanceof NamespaceProxyBusyError) return
 				failed.add(row.id)
 				const described = cause instanceof Error ? cause.message : 'unknown error'
 				console.error(`namespace proxy sync failed for ${row.id}: ${redactNamespaceErrorText(described)}`)
@@ -659,8 +667,12 @@ export async function republishAllNamespacesUseCase(c: NamespaceUseCaseContext):
 		}),
 	)
 	for (const row of rows.filter((candidate) => candidate.state === 'provisioning')) {
-		await c.queue.send({ kind: 'namespace', namespaceId: row.id, mutation: 'reconcile' })
-		await auditMutation(c, 'namespace.reconcile', row)
+		// State only, as `namespaces.reconcile` requeues: the running job leaves the row `pending`, so the reconcile runs
+		// after it. A row that moved on meanwhile is skipped; one an update marked replays the request when it completes.
+		const queued = await c.repositories.registry.requeueDeploymentNamespace(row.id)
+		if (queued === null || isUnconfirmedNamespaceUpdate(queued)) continue
+		await enqueueNamespaceJob(c, queued, 'reconcile')
+		await auditMutation(c, 'namespace.reconcile', queued)
 	}
 	if (failed.size > 0) fail(502, `the proxy manifest did not publish for deployment namespace ${[...failed].join(', ')}: reconcile the namespace`)
 	return { namespaceIds: rows.filter((row) => row.state === 'provisioning' || row.state === 'ready').map((row) => row.id) }
