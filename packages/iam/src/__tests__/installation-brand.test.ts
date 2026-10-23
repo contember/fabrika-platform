@@ -6,9 +6,10 @@
 import { IAM_APP_ID, IAM_APP_SCHEMA, USER_ADMIN_ROLE } from '@fabrika/iam-contract'
 import type { SqlDatabase } from '@fabrika/platform'
 import { brandMark } from '@fabrika/proxy-core/page-style'
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { handleAuth } from '../auth/routes'
 import { createPostgresIamRepositories, type IamRepositories, InstallationBrandRepository, type InstallationBrandRow } from '../db'
+import { storedBrand } from '../installation-brand'
 import { prop } from '../json'
 import { consoleRpc, errorType, result } from './helpers/app-people'
 import { PNG_BASE64, SVG_BASE64, TEST_BRAND } from './helpers/brand'
@@ -193,6 +194,31 @@ describe('IAM pages and the brand', () => {
 		expect(directives.get('script-src')).toEqual([expect.stringMatching(/^'nonce-[0-9a-f]{32}'$/)])
 		expect(directives.get('style-src')).toEqual([expect.stringMatching(/^'nonce-[0-9a-f]{32}'$/)])
 		expect([...directives.entries()].filter(([name, values]) => name !== 'img-src' && values.includes('data:'))).toEqual([])
+	})
+
+	test('a row read again takes the check of its images, and a row with other images is checked anew', () => {
+		const row = (light_type: string, light_base64: string): InstallationBrandRow => ({
+			id: 1,
+			light_type,
+			light_base64,
+			dark_type: null,
+			dark_base64: null,
+			updated_at: 1_700_000_000,
+		})
+		const warn = spyOn(console, 'warn').mockImplementation(() => {})
+		try {
+			const first = storedBrand(row('image/png', PNG_BASE64))
+			expect(first).toEqual({ light: TEST_BRAND.light })
+			// A fresh read of the same row is a new object with equal strings: it takes the earlier answer.
+			expect(storedBrand(row('image/png', PNG_BASE64))).toBe(first)
+			// The same images under another type, as another instance could have stored them in the same second.
+			expect(storedBrand(row('image/png', SVG_BASE64))).toBeNull()
+			expect(storedBrand(row('image/png', SVG_BASE64))).toBeNull()
+			expect(warn).toHaveBeenCalledTimes(1)
+			expect(storedBrand(row('image/svg+xml', SVG_BASE64))).toEqual({ light: { type: 'image/svg+xml', base64: SVG_BASE64 } })
+		} finally {
+			warn.mockRestore()
+		}
 	})
 
 	test('a brand that cannot be read draws the fabrika mark instead of failing the page', async () => {

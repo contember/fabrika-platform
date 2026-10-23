@@ -493,8 +493,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   checks it with `installationBrandSchema` (`@fabrika/proxy-core/brand`) whatever the console checked, a clear keeps the
   row without images so `updatedAt` stays, and each change writes `iam.brand.update` naming the image types, never the
   bytes; clearing an absent brand writes nothing. `presentationFor` and `installationPresentation` read it with every
-  page (`AppPresentation.brand`; `htmlPage` requires it) and check it again, once per request: a second presentation
-  takes the brand the first one read, and an e-mail's takes `null`; a row the check refuses or a read that
+  page (`AppPresentation.brand`; `htmlPage` requires it), once per request: a second presentation takes the brand the
+  first one read, and an e-mail's takes `null`. `storedBrand` checks the row again only when its images differ from the
+  ones it checked last (the key is the images, never `updated_at`, which two writes in one second share); a row the check refuses or a read that
   fails draws the fabrika mark, never a failed page. The page CSP adds `img-src data:` and nothing else: the logo is an
   `<img>` of a `data:` URI, an image runs no script and a `data:` URI loads nothing. Never widen `default-src` or
   `script-src` for it, and never render a logo as markup.
