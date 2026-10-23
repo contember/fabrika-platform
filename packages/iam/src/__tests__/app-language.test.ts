@@ -127,6 +127,7 @@ describe('a cs application', () => {
 		expect(signInHtml).toContain('<html lang="cs">')
 		expect(signInHtml).toContain('<h1>Přihlášení do aplikace Partnerský portál</h1>')
 		expect(signInHtml).toContain('href="/auth/forgot-password?app=portal%40prod">Zapomenuté heslo?</a>')
+		expect(signInHtml).toMatch(/<span class="runs-on">Běží na platformě <svg[^>]*>.*?<\/svg> fabrika<\/span>/)
 		expect(formAction(signIn)).toBe(`'self' ${PORTAL_ORIGIN}`)
 
 		const forgot = await p.send(new Request(`${ISSUER}/auth/forgot-password?app=${encodeURIComponent(PORTAL)}`))
@@ -262,6 +263,7 @@ describe('the language falls back to the installation default', () => {
 		const html = await (await p.send(handoffLogin())).text()
 		expect(html).toContain('<html lang="en">')
 		expect(html).toContain('<h1>Sign in to Partner portal</h1>')
+		expect(html).toMatch(/<span class="runs-on">Runs on <svg[^>]*>.*?<\/svg> fabrika<\/span>/)
 	})
 
 	test('a stored locale IAM no longer speaks is English', async () => {

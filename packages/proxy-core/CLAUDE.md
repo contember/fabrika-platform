@@ -53,6 +53,24 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   it. The manifest is the authority on hosts (ADR-0022), and Caddy's `host` matcher reads `*` as a
   wildcard label: on Zerops one proxy fronts every app in a namespace, so an accepted pattern captures
   the sibling apps' hostnames. Never relax it to accommodate a producer; fix the producer.
+- **A navigation reads a page, every other caller the text** (`src/pages.ts`, ADR-0022's answers keep their status).
+  `isPageNavigation` is `Sec-Fetch-Mode: navigate` exactly; unlike the login bounce, an absent header is NOT a
+  browser here, so a client that sends none keeps reading `forbidden`. A page's text is fixed per status and names no
+  deny reason, and its 403 says "does not exist, or no access", because a path no endpoint serves is a 403 too. A
+  download endpoint's refusal stays the text: the file treatment makes every one of its answers an attachment. The
+  callback refusal is always a page. Pages load nothing (no script, no external reference) and are served under the
+  answer's own header policy; the same `errorPage` renders Caddy's own refusals and the Cloudflare Worker's failures.
+- **`@fabrika/proxy-core/page-style` is the one stylesheet and frame of fabrika's own pages** (`src/page-style.ts`):
+  the proxy's error pages, IAM's sign-in, account, invitation and consent pages, and Control's GitHub handoff, which
+  adds only its steps. A page is the console's welcome set alone (`pageBody`): one panel in the middle of the window
+  with the page's words at the left and the mark on the blueprint grid at the right, a plate in light and the
+  welcome's dark panel in dark, and a footer under it, "Runs on [mark] fabrika" (IAM's words in its language) with the
+  status at the right where the page has one. Buttons are the console's: outlined, the brand blue only on a form's first
+  button. It imports nothing and loads nothing, and it repeats the console's tokens (`packages/dashboard/src/styles.css`)
+  because it cannot read them: `page-style.test.ts` resolves the console's `light-dark()`, `var()` and `color-mix()`
+  and fails on a drifted value, so change a colour in the console first and copy it here. Caddy serves it in a
+  `static_response` body, so no `{` may be followed by a name. The footer links nowhere: the proxy's pages are read by
+  an application's people, whom a link to fabrika would send to the wrong place for help.
 - **Every `catch` maps to a deny.** Nothing in `src/authorize.ts` returns an allow on an unexpected
   condition. A request that selects no endpoint is denied (403 `no_endpoint`).
 - **The request being authorized is described ENTIRELY by the forwarded headers.** Never read the

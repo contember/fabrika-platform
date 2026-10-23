@@ -48,6 +48,7 @@ import {
 	oauthResourceOfRow,
 	type ProxyApp,
 } from './manifest'
+import { FETCH_MODE_HEADER } from './pages'
 import { TokenVerifier } from './verifier'
 
 /** Every way a request can be refused. Coarse on purpose — these are logged, not returned to clients. */
@@ -177,13 +178,6 @@ export interface AuthorizerOptions {
 	 */
 	delegations?: DelegationIssuer | null
 }
-
-/**
- * The browser's own description of what issued the request. Read from the FORWARDED headers like
- * everything else a decision depends on — verified against caddy 2.10.2, whose `forward_auth`
- * subrequest carries the original `Sec-Fetch-*` verbatim.
- */
-const FETCH_MODE_HEADER = 'Sec-Fetch-Mode'
 
 /** Fetch metadata the browser writes and page script cannot: `same-origin` only for a request from this origin. */
 const FETCH_SITE_HEADER = 'Sec-Fetch-Site'

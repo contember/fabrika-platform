@@ -14,6 +14,8 @@ import {
 	CLIENT_ADDRESS_HEADER,
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
+	errorPage,
+	type ErrorPageStatus,
 	FORWARD_AUTHORIZATION_HEADER,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
@@ -71,6 +73,63 @@ function policyValues(policy: HeaderPolicy): Record<string, string[]> {
 	return Object.fromEntries(policy.map(([name, value]) => [name, [value]]))
 }
 
+/** What a browser's top-level navigation reads in place of `otherwise`: the page of `status`, under the same policy. */
+function pageOr(status: ErrorPageStatus, policy: HeaderPolicy, otherwise: CaddyStaticResponseHandler): CaddySubrouteHandler {
+	const body = errorPage(status)
+	return {
+		handler: 'subroute',
+		routes: [
+			{
+				match: [{ header: { 'Sec-Fetch-Mode': ['navigate'] } }],
+				handle: [{
+					handler: 'static_response',
+					status_code: status,
+					headers: { ...policyValues(policy), 'Content-Type': ['text/html; charset=utf-8'] },
+					body,
+				}],
+				terminal: true,
+			},
+			{ handle: [otherwise] },
+		],
+	}
+}
+
+/**
+ * What a navigation reads in place of one of Caddy's own failures: the 503 and the 504 their own page, every other
+ * status the page of an application that does not answer, printing the status.
+ */
+function failurePageOr(policy: HeaderPolicy, otherwise: CaddyStaticResponseHandler): CaddySubrouteHandler {
+	const page = (status: number | string, body: string): CaddyStaticResponseHandler => ({
+		handler: 'static_response',
+		status_code: status,
+		headers: { ...policyValues(policy), 'Content-Type': ['text/html; charset=utf-8'] },
+		body,
+	})
+	return {
+		handler: 'subroute',
+		routes: [
+			{
+				match: [{ header: { 'Sec-Fetch-Mode': ['navigate'] } }],
+				handle: [{
+					handler: 'subroute',
+					routes: [
+						{ match: [{ vars: { '{http.error.status_code}': ['503'] } }], handle: [page(503, errorPage(503))], terminal: true },
+						{ match: [{ vars: { '{http.error.status_code}': ['504'] } }], handle: [page(504, errorPage(504))], terminal: true },
+						{ handle: [page('{http.error.status_code}', errorPage(502, '{http.error.status_code}'))] },
+					],
+				}],
+				terminal: true,
+			},
+			{ handle: [otherwise] },
+		],
+	}
+}
+
+/** A refusal Caddy writes itself: the page to a navigation, the fixed text to anything else. */
+function refusal(status: ErrorPageStatus, text: string, policy: HeaderPolicy): CaddySubrouteHandler {
+	return pageOr(status, policy, { handler: 'static_response', status_code: status, headers: policyValues(policy), body: text })
+}
+
 /** The app upstream of a step-3 route: its last handler, after any deferred response handlers that wrap it. */
 function upstreamOf(route: CaddyRoute | undefined): CaddyReverseProxyHandler {
 	const handler = route?.handle.at(-1)
@@ -122,7 +181,7 @@ describe('server shape', () => {
 		expect(routes[1]?.match?.[0]?.host).toEqual(['two.example.com', 'alias.example.com'])
 		// Nothing falls off the end into a default handler.
 		expect(routes[2]?.match).toBeUndefined()
-		expect(routes[2]?.handle[0]).toEqual({ handler: 'static_response', status_code: 404, headers: policyValues(BASE_HEADER_POLICY), body: 'not found' })
+		expect(routes[2]?.handle).toEqual([refusal(404, 'not found', BASE_HEADER_POLICY)])
 	})
 
 	test('the health route is on its own listener, so it shadows no app path', () => {
@@ -202,7 +261,7 @@ describe('the per-app chain is fail-closed by construction', () => {
 		// removeConnectionHeaders), so a client could strip the client address, the token or the endpoint.
 		for (const route of routes.slice(0, 2)) {
 			const first = rawSubrouteOf(route).routes[0]
-			expect(first?.handle).toEqual([{ handler: 'static_response', status_code: 400, headers: policyValues(BASE_HEADER_POLICY), body: 'bad request' }])
+			expect(first?.handle).toEqual([refusal(400, 'bad request', BASE_HEADER_POLICY)])
 			expect(first?.terminal).toBe(true)
 			const pattern = first?.match?.[0]?.header_regexp?.['Connection']?.pattern ?? ''
 			expect(pattern.startsWith('(?i)')).toBe(true)
@@ -263,7 +322,8 @@ describe('the per-app chain is fail-closed by construction', () => {
 		const upstreams = MANIFEST.apps.map((app) => app.upstream)
 		let found = 0
 		for (const route of routes) {
-			if (route.handle[0]?.handler !== 'subroute') {
+			// Only an app's route matches a host; the unmatched-host 404 is a subroute too, and dials nothing.
+			if (route.match?.[0]?.host === undefined) {
 				expect(JSON.stringify(route)).not.toContain('reverse_proxy')
 				continue
 			}
@@ -707,8 +767,7 @@ describe('a contract app — the response headers', () => {
 	})
 
 	test("the app's own refusal of a Connection nomination carries its policy too", () => {
-		const refusal = chain[0]?.handle[0]
-		expect(refusal).toEqual({ handler: 'static_response', status_code: 400, headers: policyValues(policy), body: 'bad request' })
+		expect(chain[0]?.handle).toEqual([refusal(400, 'bad request', policy)])
 	})
 
 	test('a download endpoint, named by the endpoint the decision asserted, gets the file treatment instead', () => {
@@ -773,17 +832,22 @@ describe('a contract app — the response headers', () => {
 
 	test("Caddy's own failures answer with the host's policy, a download's with its file treatment, any other host's with the base", () => {
 		const errors = buildCaddyConfig({ apps: [contract, defined(MANIFEST.apps[0])] }, OPTIONS).apps.http.servers['proxy']?.errors?.routes
-		const failure = (headers: HeaderPolicy): CaddyStaticResponseHandler[] => [
-			{ handler: 'static_response', status_code: '{http.error.status_code}', headers: policyValues(headers) },
-		]
+		const failure = (headers: HeaderPolicy): CaddyStaticResponseHandler => ({
+			handler: 'static_response',
+			status_code: '{http.error.status_code}',
+			headers: policyValues(headers),
+		})
+		// A navigation reads the page of an application that does not answer; a download never does, because its file
+		// treatment would save the page as a file.
+		const failureOrPage = (headers: HeaderPolicy) => [failurePageOr(headers, failure(headers))]
 		expect(errors).toEqual([
 			{
 				match: [{ host: ['notes.example.com'], header: { [ENDPOINT_HEADER]: ['files.avatar.download@*'] } }],
-				handle: failure(appFileTreatment(contract)),
+				handle: [failure(appFileTreatment(contract))],
 				terminal: true,
 			},
-			{ match: [{ host: ['notes.example.com'] }], handle: failure(policy), terminal: true },
-			{ handle: failure(BASE_HEADER_POLICY) },
+			{ match: [{ host: ['notes.example.com'] }], handle: failureOrPage(policy), terminal: true },
+			{ handle: failureOrPage(BASE_HEADER_POLICY) },
 		])
 	})
 
@@ -791,12 +855,7 @@ describe('a contract app — the response headers', () => {
 		const steps = rawSubrouteOf(defined(installationRoute)).routes
 		expect(proxyHandler(steps.at(-1)).headers?.response).toBeUndefined()
 		expect(JSON.stringify(steps)).not.toContain('status_code":[1]')
-		expect(steps[0]?.handle[0]).toEqual({
-			handler: 'static_response',
-			status_code: 400,
-			headers: policyValues(BASE_HEADER_POLICY),
-			body: 'bad request',
-		})
+		expect(steps[0]?.handle).toEqual([refusal(400, 'bad request', BASE_HEADER_POLICY)])
 	})
 })
 
@@ -848,7 +907,7 @@ describe('an installation entry — the hop of an installation service', () => {
 		expect(upstream.headers?.request?.set).toBeUndefined()
 		expect(JSON.stringify(steps.slice(1))).not.toContain(PROXY_SECRET_HEADER)
 		expect(JSON.stringify(raw)).not.toContain('status_code":[1]')
-		expect(raw[0]?.handle[0]).toEqual({ handler: 'static_response', status_code: 400, headers: policyValues(BASE_HEADER_POLICY), body: 'bad request' })
+		expect(raw[0]?.handle).toEqual([refusal(400, 'bad request', BASE_HEADER_POLICY)])
 	})
 
 	test('answers its RFC 9728 metadata path at the auth service before forward_auth', () => {

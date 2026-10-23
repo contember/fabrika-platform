@@ -1,4 +1,5 @@
 import { Outlet } from '@buzola/router'
+import { GateScreen } from '../../components/GateScreen'
 
 export default function OperationsLayout() {
 	return (
@@ -13,11 +14,9 @@ export default function OperationsLayout() {
 function OperationsUnavailable({ error }: { error: unknown }) {
 	const message = error instanceof Error ? error.message : 'The Operations page could not be loaded.'
 	return (
-		<div className="gate-screen">
-			<p className="eyebrow">Operations plane</p>
-			<h1>Operations is unavailable</h1>
+		<GateScreen icon="globe" tone="run" title="Operations is unavailable" context="Operations plane">
 			<p className="error-text">{message}</p>
 			<button type="button" onClick={() => location.reload()}>Retry connection</button>
-		</div>
+		</GateScreen>
 	)
 }

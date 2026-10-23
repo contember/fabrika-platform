@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // (`release:validate` holds every package and the tag to it), so the console's version is the installation's.
 import { version as fabrikaVersion } from '../../package.json'
 import { type Command, CommandPalette, shortcutLabel, usePaletteShortcut } from '../components/CommandPalette'
+import { GateScreen } from '../components/GateScreen'
 import { BrandMark, Icon, type IconName } from '../components/Icon'
 import { RouteError } from '../components/RouteError'
 import { api } from '../lib/api'
@@ -512,9 +513,7 @@ function Workspace({ session, here, pathname }: { session: ConsoleSession; here:
 
 export function NoAccess({ session }: { session: ConsoleSession }) {
 	return (
-		<div className="gate-screen">
-			<p className="eyebrow">Console</p>
-			<h1>You have no access to this console yet</h1>
+		<GateScreen icon="lock" title="You have no access to this console yet" context="Console">
 			<p>
 				{session.principal === null ? 'You are signed in' : (
 					<>
@@ -523,17 +522,15 @@ export function NoAccess({ session }: { session: ConsoleSession }) {
 				)}, but no role in this console is granted to you. Ask an administrator to grant you a role.
 			</p>
 			{session.signOutUrl !== null && <a href={session.signOutUrl} className="btn">Sign in as someone else</a>}
-		</div>
+		</GateScreen>
 	)
 }
 
 function NotAvailable() {
 	return (
-		<div className="gate-screen">
-			<p className="eyebrow">Console</p>
-			<h1>This page is not available to you</h1>
+		<GateScreen icon="lock" title="This page is not available to you" context="Console">
 			<p>None of your roles in this console includes it. Ask an administrator if you need it.</p>
-		</div>
+		</GateScreen>
 	)
 }
 

@@ -25,6 +25,11 @@
 			"types": "./src/manifest.ts",
 			"default": "./src/manifest.ts"
 		},
+		"./page-style": {
+			"bun": "./src/page-style.ts",
+			"types": "./src/page-style.ts",
+			"default": "./src/page-style.ts"
+		},
 		"./headers": {
 			"bun": "./src/headers.ts",
 			"types": "./src/headers.ts",

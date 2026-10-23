@@ -41,6 +41,8 @@ export type { DelegationIssuer, DelegationRequest, HttpIamGatewayOptions, IamGat
 export { consoleLogger, redactPath, redactUrl, silentLogger } from './log'
 export type { LogFields, LogValue, ProxyLogger } from './log'
 export { findOAuthMetadata, OAUTH_METADATA_VERIFY_PATH, oauthMetadataResponse } from './oauth'
+export { errorAnswer, errorPage, FETCH_MODE_HEADER, isPageNavigation, PAGE_CONTENT_TYPE, pageResponse, renderPage } from './pages'
+export type { ErrorPageStatus, PageAction, PageContent } from './pages'
 export { createVerifyService } from './service'
 export type { VerifyService, VerifyServiceConfig } from './service'
 export { TokenVerifier } from './verifier'
