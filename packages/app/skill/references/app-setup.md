@@ -34,7 +34,7 @@ the SPA is added with it.
 		"@fabrika/cli": "0.8.1",
 		"@fabrika/platform": "0.8.1",
 		"@happy-dom/global-registrator": "^20.11.2",
-		"@types/bun": "latest",
+		"@types/bun": "^1.4.3",
 		"@types/react": "^19.0.0",
 		"@types/react-dom": "^19.0.0",
 		"typescript": "^5.9.3"
