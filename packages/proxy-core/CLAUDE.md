@@ -74,7 +74,8 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
 - **`@fabrika/proxy-core/brand` is the one check of the installation's client logo** (`src/brand.ts`, ADR-0066): a
   PNG, WebP or SVG of at most `MAX_BRAND_IMAGE_BYTES` (32 KB) decoded, in canonical base64, whose leading bytes are
   what its type says (`brandImageProblem`). IAM's write, the manifest parser and the console's pre-check all run it, so
-  a logo one admits the others admit; it imports only zod, so the browser can use it. The manifest's optional top-level
+  a logo one admits the others admit; it imports only zod, so the browser can use it. `BRAND_IMAGE_TYPES` and
+  `brandImageBase64` (the canonical spelling the check requires) are the one type list and the one encoder. The manifest's optional top-level
   `brand` is the installation's, the same on every host; a page shows it on the grid in place of the mark
   (`pageArt`), as an `<img>` of a `data:` URI and never as markup, with a `<source>` for a dark page, and the footer
   still names fabrika. A producer sends `brand` only to a proxy whose parser knows the key: an older one refuses it.

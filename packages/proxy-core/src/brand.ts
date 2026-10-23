@@ -11,9 +11,9 @@
 
 import { z } from 'zod'
 
-export type BrandImageType = 'image/png' | 'image/webp' | 'image/svg+xml'
+export const BRAND_IMAGE_TYPES = ['image/png', 'image/webp', 'image/svg+xml'] as const
 
-export const BRAND_IMAGE_TYPES: readonly BrandImageType[] = ['image/png', 'image/webp', 'image/svg+xml']
+export type BrandImageType = (typeof BRAND_IMAGE_TYPES)[number]
 
 /** The most one image may weigh, decoded. A page carries it in every copy Caddy serves, so it stays a logo's size. */
 export const MAX_BRAND_IMAGE_BYTES = 32 * 1024
@@ -42,7 +42,7 @@ export function brandImageProblem(image: { readonly type: string; readonly base6
 	if (image.base64.length > MAX_BASE64_LENGTH) return 'size'
 	const bytes = decode(image.base64)
 	// Base64 with stray bits in its last character decodes to the same bytes; only the canonical spelling is one image.
-	if (bytes === null || encode(bytes) !== image.base64) return 'encoding'
+	if (bytes === null || brandImageBase64(bytes) !== image.base64) return 'encoding'
 	if (bytes.length > MAX_BRAND_IMAGE_BYTES) return 'size'
 	return sniff(bytes) === image.type ? null : 'content'
 }
@@ -52,7 +52,7 @@ export function isBrandImageType(value: string): value is BrandImageType {
 }
 
 export const brandImageSchema = z.object({
-	type: z.enum(['image/png', 'image/webp', 'image/svg+xml']),
+	type: z.enum(BRAND_IMAGE_TYPES),
 	base64: z.string(),
 }).strict().superRefine((image, ctx) => {
 	const problem = brandImageProblem(image)
@@ -111,8 +111,11 @@ function decode(base64: string): Uint8Array | null {
 	}
 }
 
-function encode(bytes: Uint8Array): string {
+/** Canonical base64 of `bytes`, the spelling the check requires. Chunked, so a large file stays within `fromCharCode`'s arguments. */
+export function brandImageBase64(bytes: Uint8Array): string {
 	let binary = ''
-	for (const byte of bytes) binary += String.fromCharCode(byte)
+	for (let start = 0; start < bytes.length; start += 0x8000) {
+		binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000))
+	}
 	return btoa(binary)
 }

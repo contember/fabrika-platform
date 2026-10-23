@@ -1,5 +1,6 @@
 import {
 	type BrandImage,
+	brandImageBase64,
 	type BrandImageProblem,
 	brandImageProblem,
 	type BrandImageType,
@@ -21,7 +22,7 @@ export function chosenImage(bytes: Uint8Array, name: string, reportedType: strin
 	const type = isBrandImageType(reportedType) ? reportedType : EXTENSION_TYPES[name.split('.').pop()?.toLowerCase() ?? '']
 	if (type === undefined) return { ok: false, message: problemMessage('type') }
 	if (bytes.length > MAX_BRAND_IMAGE_BYTES) return { ok: false, message: problemMessage('size') }
-	const image: BrandImage = { type, base64: base64Of(bytes) }
+	const image: BrandImage = { type, base64: brandImageBase64(bytes) }
 	const problem = brandImageProblem(image)
 	return problem === null ? { ok: true, image } : { ok: false, message: problemMessage(problem) }
 }
@@ -62,13 +63,4 @@ export function draftImages(
 		dark: draft.dark === 'stored' ? stored?.dark ?? null : draft.dark,
 		changed: draft.light !== 'stored' || draft.dark !== 'stored',
 	}
-}
-
-/** Canonical base64, in chunks small enough for `String.fromCharCode` on a large file. */
-function base64Of(bytes: Uint8Array): string {
-	let binary = ''
-	for (let start = 0; start < bytes.length; start += 0x8000) {
-		binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000))
-	}
-	return btoa(binary)
 }
