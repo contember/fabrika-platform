@@ -246,7 +246,13 @@ async function fixture(options: { controlHead?: string; contractApp?: boolean } 
 	return value
 }
 
-function start(value: Fixture, database?: { appId: string; url: string }, deployedDigest?: string, spaBuild: string[] = []): DevLauncher {
+function start(
+	value: Fixture,
+	database?: { appId: string; url: string },
+	deployedDigest?: string,
+	spaBuild: string[] = [],
+	checks: DevLauncherConfig['checks'] = [{ name: 'tests', command: 'echo checked && exit 3' }],
+): DevLauncher {
 	const config: DevLauncherConfig = {
 		format: 1,
 		appId: database?.appId ?? 'devfixture',
@@ -256,7 +262,7 @@ function start(value: Fixture, database?: { appId: string; url: string }, deploy
 		serve: ['bun', 'src/server.ts'],
 		migrate: ['bun', CLI, 'db', 'migrate'],
 		spaBuild,
-		checks: [{ name: 'tests', command: 'echo checked && exit 3' }],
+		checks,
 	}
 	const output: OutputSink = { write: (_stream, line) => value.lines.push(line) }
 	const environment: Record<string, string> = {
@@ -393,6 +399,22 @@ describe('the dev launcher', () => {
 		expect(report.checks?.results).toEqual([{ name: 'tests', ok: false, exitCode: 3, durationMs: expect.any(Number), output: ['checked'] }])
 		expect(report.status).toBe('serving')
 		expect(await get(value)).toBe('one')
+	})
+
+	test('a report carries the lines of the newest sync and the output after it, not the lines before', async () => {
+		const value = await fixture()
+		await start(value).ready
+		const first = value.control.nextReport((report) => report.status === 'serving' && report.head === sha(2))
+		value.control.commit(sha(2), { 'src/message.ts': "export const message = 'two'\n" })
+		const firstLog = (await first).log
+		expect(firstLog.some((line) => line.text.includes(`synced 1 files to ${sha(2)}`))).toBe(true)
+
+		const second = value.control.nextReport((report) => report.status === 'serving' && report.head === sha(3))
+		value.control.commit(sha(3), { 'src/message.ts': "export const message = 'three'\n" })
+		const secondLog = (await second).log
+		expect(secondLog.some((line) => line.text.includes(`synced 1 files to ${sha(3)}`))).toBe(true)
+		expect(secondLog.some((line) => line.text.includes(sha(2)))).toBe(false)
+		expect(secondLog.every((line) => line.n > (firstLog.at(-1)?.n ?? -1))).toBe(true)
 	})
 })
 

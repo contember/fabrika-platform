@@ -361,10 +361,11 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 	server.registerTool('get_dev_status', {
 		description: "Read the workspace application's dev environment: the bound workspace, the commit it serves (head) and the one "
 			+ 'it should (target), its state with a one-line summary, the message of a refused or failed sync, the bootstrap run, the '
-			+ "last check results and a window of the application's output. "
-			+ `The window is the last logLines lines (default ${DEPLOYMENT_LOG_DEFAULT_LINES}, at most ${DEV_REPORT_MAX_LINES}), `
-			+ 'indexed like get_deployment: poll with after: log.to; failuresOnly keeps the lines that name an error, a failure or '
-			+ 'a non-zero exit. checks names the commit it checked (head).',
+			+ "last check results and a window of the output since the newest sync or reset: the launcher's lines and the "
+			+ `application's. The window is the last logLines lines (default ${DEPLOYMENT_LOG_DEFAULT_LINES}, at most `
+			+ `${DEV_REPORT_MAX_LINES}), indexed by the launcher's line numbers: poll with after: log.to (a smaller log.total means `
+			+ 'a new container); failuresOnly keeps the lines that name an error, a failure or a non-zero exit. checks names the '
+			+ 'commit it checked (head).',
 		inputSchema: toolInput(toolInputs.getDevStatus),
 		annotations: READ_ONLY,
 	}, ({ workspaceId, logLines, after, before, failuresOnly }) =>

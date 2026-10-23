@@ -374,7 +374,7 @@ async function describe(
 		target: row?.target_sha ?? null,
 		message: problem ?? row?.message ?? null,
 		bootstrapRun: run === null ? null : toRunDto(run),
-		log: logWindow(parseLog(row?.log_json ?? '[]'), log),
+		log: devLogWindow(parseLog(row?.log_json ?? '[]'), log),
 		checks: parseChecks(row?.checks_json ?? null),
 	}
 }
@@ -421,6 +421,18 @@ const DEV_STATES: ReadonlySet<string> = new Set<DevStatus>(['syncing', 'serving'
 
 function isDevStatus(value: string): value is DevStatus {
 	return DEV_STATES.has(value)
+}
+
+/**
+ * A window of the launcher's reported lines, indexed by their line numbers (`n`) rather than their place in the report:
+ * each report replaces the stored lines, so `after: log.to` stays put across reports. A `total` smaller than the
+ * previous one means a new container, whose numbers start again from 0.
+ */
+function devLogWindow(lines: readonly DevLogLine[], query: DeploymentLogQuery): LogWindowDto<DevLogLine> {
+	const first = lines[0]?.n ?? 0
+	const shift = (index: number | undefined): number | undefined => index === undefined ? undefined : Math.max(0, index - first)
+	const window = logWindow(lines, { ...query, after: shift(query.after), before: shift(query.before) })
+	return { lines: window.lines, from: window.from + first, to: window.to + first, total: window.total + first }
 }
 
 const storedLog = z.array(devLogLineSchema)
