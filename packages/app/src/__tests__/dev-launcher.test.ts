@@ -429,6 +429,17 @@ describe('the dev launcher', () => {
 		expect(secondLog.some((line) => line.text.includes(sha(2)))).toBe(false)
 		expect(secondLog.every((line) => line.n > (firstLog.at(-1)?.n ?? -1))).toBe(true)
 	})
+
+	test("bun's echo of the SPA script it runs is reported on stdout, not as an error", async () => {
+		const value = await fixture()
+		await writeTree(value.root, { 'web/title.txt': 'one' })
+		await start(value, undefined, undefined, ["echo '$ bun build-web.ts' >&2 && echo built"]).ready
+		const serving = value.control.nextReport((report) => report.status === 'serving' && report.head === sha(2))
+		value.control.commit(sha(2), { 'web/title.txt': 'two' })
+		const log = (await serving).log
+		expect(log.find((line) => line.text === '$ bun build-web.ts')?.stream).toBe('stdout')
+		expect(log.find((line) => line.text === 'built')?.stream).toBe('stdout')
+	})
 })
 
 describe.skipIf(POSTGRES_URL === '')('the dev launcher with a database', () => {

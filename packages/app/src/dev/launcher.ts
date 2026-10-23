@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { z } from 'zod/v4'
 import { makeProcessUndumpable } from '../undumpable.js'
 import { bootstrapReason, migrationsChanged, webSourceChanged } from './changes.js'
-import { OutputRing, type OutputSink, processOutput, readLines } from './output.js'
+import { OutputRing, type OutputSink, type OutputStream, processOutput, readLines } from './output.js'
 import {
 	DEV_SOURCE_REPORT_PATH,
 	DEV_SOURCE_WAIT_MS,
@@ -127,6 +127,9 @@ interface CommandResult {
 	readonly signal: string | null
 	readonly lines: readonly string[]
 }
+
+/** Bun echoes the script it runs (`$ bun build-web.ts`) on stderr; it names the command, not a failure. */
+const BUN_SCRIPT_ECHO = /^\$ \S/
 
 type SyncOutcome =
 	| { readonly kind: 'applied'; readonly migrations: boolean; readonly spaFailure: string | null }
@@ -486,7 +489,12 @@ class Launcher {
 
 	private async buildSpa(): Promise<string | null> {
 		for (const command of this.config.spaBuild) {
-			const result = await this.run(['sh', '-c', command], this.commandEnvironment)
+			const result = await this.run(
+				['sh', '-c', command],
+				this.commandEnvironment,
+				CHECK_TIMEOUT_MS,
+				(stream, line) => stream === 'stderr' && BUN_SCRIPT_ECHO.test(line) ? 'stdout' : stream,
+			)
 			if (result.exitCode !== 0) return `the SPA command \`${command}\` failed: ${lastLine(result)}`
 		}
 		return null
@@ -521,12 +529,17 @@ class Launcher {
 	}
 
 	/** Run a command in the root; its output goes to the log, and its lines are returned. */
-	private async run(argv: readonly string[], env: Record<string, string>, timeoutMs = CHECK_TIMEOUT_MS): Promise<CommandResult> {
+	private async run(
+		argv: readonly string[],
+		env: Record<string, string>,
+		timeoutMs = CHECK_TIMEOUT_MS,
+		classify: (stream: OutputStream, line: string) => OutputStream = (stream) => stream,
+	): Promise<CommandResult> {
 		const child = Bun.spawn([...argv], { cwd: this.root, env, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' })
 		const lines: string[] = []
-		const collect = (stream: 'stdout' | 'stderr') => (line: string) => {
+		const collect = (stream: OutputStream) => (line: string) => {
 			lines.push(line)
-			this.ring.push(stream, line)
+			this.ring.push(classify(stream, line), line)
 		}
 		const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs)
 		await Promise.all([readLines(child.stdout, collect('stdout')), readLines(child.stderr, collect('stderr')), child.exited])
