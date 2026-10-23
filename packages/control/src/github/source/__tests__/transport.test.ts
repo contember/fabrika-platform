@@ -203,23 +203,27 @@ describe('source upload', () => {
 	})
 
 	test('bounds archive preparation plus PUT with one overall deadline', async () => {
+		// Nothing here finishes on a timer, so a slow runner cannot move the timeout into the archive stage: the PUT
+		// waits for its abort, and the archive's signal aborting with it shows both stages share the one deadline.
 		const prepared = preparedArchive()
+		let archiveSignal: AbortSignal | undefined
 		await expect(
 			transport({
 				repository: {
 					resolve: noResolve,
 					archive: async (input) => {
-						await delay(20, input.signal)
+						archiveSignal = input.signal
 						return prepared.archive
 					},
 				},
 				timeoutsMs: { upload: 30 },
-				uploadFetch: async (_destination, init) => {
-					await delay(20, init.signal ?? new AbortController().signal)
-					return new Response(null, { status: 200 })
-				},
+				uploadFetch: async (_destination, init) =>
+					await new Promise<Response>((_resolve, reject) => {
+						init.signal?.addEventListener('abort', () => reject(new DOMException('private reason', 'AbortError')), { once: true })
+					}),
 			}).upload(uploadInput()),
 		).rejects.toMatchObject({ code: 'upload_failed', stage: 'upload' })
+		expect(archiveSignal?.aborted).toBe(true)
 		expect(prepared.disposed()).toBe(true)
 	})
 
