@@ -73,9 +73,13 @@ const fakeIam = (options: FakeOptions = {}): FakeIam => {
 	const detail = (found: FakePrincipal): PrincipalDetail => ({
 		...found.item,
 		bootstrapMailbox: false,
-		grants: found.grants,
+		grants: found.grants.map((grant) => ({ ...grant, roleName: null, rolePermissions: [], grantedByLabel: null, canManage: true })),
 		permissions: [],
-		authentication: { oidc: { state: 'unavailable' }, password: { state: found.password } },
+		access: [],
+		management: { account: true, passwordLinks: true, audit: true },
+		activatedAt: null,
+		disabledAt: null,
+		authentication: { oidc: { state: 'unavailable' }, password: { state: found.password, delivery: 'manual', latestAction: null } },
 	})
 
 	/** The one refusal the flow is expected to absorb rather than report. */

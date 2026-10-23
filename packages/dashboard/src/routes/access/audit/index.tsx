@@ -18,6 +18,7 @@ interface FilterParams {
 	resourceType?: string
 	resourceId?: string
 	principalId?: string
+	subjectPrincipalId?: string
 	action?: string
 	requestId?: string
 }
@@ -27,6 +28,7 @@ export default createPage()
 		resourceType: '?string',
 		resourceId: '?string',
 		principalId: '?string',
+		subjectPrincipalId: '?string',
 		action: '?string',
 		requestId: '?string',
 		before: '?string',
@@ -36,6 +38,7 @@ export default createPage()
 			resourceType: trimmedQueryValue(params.resourceType),
 			resourceId: trimmedQueryValue(params.resourceId),
 			principalId: trimmedQueryValue(params.principalId),
+			subjectPrincipalId: trimmedQueryValue(params.subjectPrincipalId),
 			action: trimmedQueryValue(params.action),
 			requestId: trimmedQueryValue(params.requestId),
 			before: trimmedQueryValue(params.before),
@@ -52,6 +55,7 @@ export default createPage()
 			resourceType: params.resourceType,
 			resourceId: params.resourceId,
 			principalId: params.principalId,
+			subjectPrincipalId: params.subjectPrincipalId,
 			action: params.action,
 			requestId: params.requestId,
 		}
@@ -127,6 +131,7 @@ const AUDIT_QUERY: QueryLanguage<keyof FilterParams> = {
 		{ key: 'resourceType', name: 'type', aliases: ['resource-type'] },
 		{ key: 'resourceId', name: 'resource', aliases: ['resource-id'] },
 		{ key: 'principalId', name: 'principal', aliases: ['principal-id', 'actor'] },
+		{ key: 'subjectPrincipalId', name: 'subject', aliases: ['affected-user'] },
 		{ key: 'requestId', name: 'request', aliases: ['request-id'] },
 	],
 	freeText: false,

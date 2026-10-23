@@ -13,6 +13,8 @@ import { routerLeaves } from './helpers/admin-router'
 const NON_PRINCIPAL_ID: Record<string, string> = {
 	'sessions.revoke': 'session',
 	'grants.delete': 'grant',
+	'grants.update': 'grant',
+	'connections.revoke': 'OAuth grant',
 	'shareLinks.revoke': 'share link',
 }
 
@@ -23,6 +25,8 @@ describe('the admin RPC principal key', () => {
 		const leaves = routerLeaves(adminRpcRouter)
 		const offenders = leaves.flatMap((leaf) =>
 			leaf.inputKeys
+				// Audit distinguishes the affected person from `principalId`, which has always meant the actor.
+				.filter((key) => !(leaf.method === 'audit.list' && key === 'subjectPrincipalId'))
 				.filter((key) => key === 'id' ? NON_PRINCIPAL_ID[leaf.method] === undefined : PRINCIPAL_KEY.test(key) && key !== 'principalId')
 				.map((key) => `${leaf.method}: ${key}`)
 		)

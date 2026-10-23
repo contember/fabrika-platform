@@ -36,7 +36,7 @@ export function AppPicker({ apps, value, onChange, idPrefix = 'app', crossApp = 
 			>
 				<option value="">Choose an application…</option>
 				{apps.map((app) => <option key={app.id} value={`app:${app.id}`}>{appOptionLabel(app)}</option>)}
-				{crossApp && <option value="all">All applications (cross-app)</option>}
+				{crossApp && <option value="all">Platform services (cross-app)</option>}
 			</select>
 			{apps.length === 0 && !crossApp && <span className="hint">You do not administer any applications.</span>}
 		</label>

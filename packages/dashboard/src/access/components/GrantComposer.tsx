@@ -1,5 +1,6 @@
-import type { AppDto } from '@fabrika/iam-contract'
+import type { AppDto, GrantDto } from '@fabrika/iam-contract'
 import { useState } from 'react'
+import { AppName } from '../lib/app-names'
 import { useAppVocab } from '../lib/useAppVocab'
 import { ActionPicker } from './ActionPicker'
 import { AppPicker, type AppValue, resolveApp } from './AppPicker'
@@ -36,6 +37,8 @@ interface GrantComposerProps {
 	expiry: string
 	onExpiryChange: (value: string) => void
 	expiryHint?: string
+	fixedApp?: boolean
+	externalOnly?: boolean
 }
 
 /** Hoisted state so the parent form can read/reset it and run `build()` on submit. */
@@ -53,12 +56,16 @@ export interface GrantComposerState {
 }
 
 /** A fresh, empty composer state (defaults to role mode, unset app, global scope). */
-export function useGrantComposerState(): GrantComposerState & { reset: () => void; build: () => GrantAuthorization } {
-	const [appValue, storeAppValue] = useState<AppValue>({ kind: 'unset' })
-	const [mode, setMode] = useState<Mode>('role')
-	const [roleKey, setRoleKey] = useState('')
-	const [permissions, setPermissions] = useState<string[]>([])
-	const [scope, setScope] = useState<ScopeValue>({ kind: 'global' })
+export function useGrantComposerState(initial?: GrantDto): GrantComposerState & { reset: () => void; build: () => GrantAuthorization } {
+	const [appValue, storeAppValue] = useState<AppValue>(
+		initial === undefined ? { kind: 'unset' } : initial.app === null ? { kind: 'all' } : { kind: 'app', app: initial.app },
+	)
+	const [mode, setMode] = useState<Mode>(initial?.permissions ? 'inline' : 'role')
+	const [roleKey, setRoleKey] = useState(initial?.roleKey ?? '')
+	const [permissions, setPermissions] = useState<string[]>(initial?.permissions ?? [])
+	const [scope, setScope] = useState<ScopeValue>(
+		initial?.scopeType ? { kind: 'scoped', type: initial.scopeType, value: initial.scopeValue ?? '' } : { kind: 'global' },
+	)
 
 	function setAppValue(value: AppValue) {
 		if (value.kind === appValue.kind && (value.kind !== 'app' || (appValue.kind === 'app' && value.app === appValue.app))) return
@@ -98,25 +105,40 @@ export function useGrantComposerState(): GrantComposerState & { reset: () => voi
  * plus a scope. The role list, scope dimensions and action catalog all derive from the
  * chosen app (loaded reactively via `useAppVocab`). The parent owns submit / expiry.
  */
-export function GrantComposer({ apps, crossApp = true, state, idPrefix, expiry, onExpiryChange, expiryHint }: GrantComposerProps) {
+export function GrantComposer(
+	{ apps, crossApp = true, state, idPrefix, expiry, onExpiryChange, expiryHint, fixedApp = false, externalOnly = false }: GrantComposerProps,
+) {
 	const { appValue, setAppValue, mode, setMode, roleKey, setRoleKey, permissions, setPermissions, scope, setScope } = state
 	const app = appValue.kind === 'unset' ? undefined : appValue.kind === 'all' ? null : appValue.app
 	const vocab = useAppVocab(app)
 	const catalog = vocab.status === 'ok' ? vocab.vocab : null
-	const selectedRole = catalog?.roles.find((role) => role.key === roleKey)
+	const roles = catalog?.roles.filter((role) => !externalOnly || role.external) ?? []
+	const selectedRole = mode === 'role' ? roles.find((role) => role.key === roleKey) : undefined
+	const memberScope = selectedRole?.member?.scope
 	const custom = mode === 'inline'
-	const hasOptions = custom || scope.kind === 'scoped' || expiry !== ''
+	const hasOptions = custom || (scope.kind === 'scoped' && !memberScope) || expiry !== ''
 
 	return (
 		<div className="grant-composer">
-			<AppPicker apps={apps} value={appValue} onChange={setAppValue} idPrefix={`${idPrefix}-app`} crossApp={crossApp} />
+			{fixedApp
+				? (
+					<p>
+						Application: <strong>{app == null ? 'Platform services' : <AppName app={app} />}</strong>
+					</p>
+				)
+				: <AppPicker apps={apps} value={appValue} onChange={setAppValue} idPrefix={`${idPrefix}-app`} crossApp={crossApp && !externalOnly} />}
+			{externalOnly && <p className="hint">External people can hold only roles the application declares external.</p>}
 			{custom
 				? <p className="hint">Using the custom permissions set in advanced options.</p>
 				: catalog && (
 					<RolePicker
-						roles={catalog.roles}
+						roles={roles}
 						value={roleKey}
-						onChange={setRoleKey}
+						onChange={(key) => {
+							setRoleKey(key)
+							const dimension = roles.find((role) => role.key === key)?.member?.scope
+							if (dimension && (scope.kind !== 'scoped' || scope.type !== dimension)) setScope({ kind: 'scoped', type: dimension, value: '' })
+						}}
 						idPrefix={idPrefix}
 						emptyMessage={appValue.kind === 'unset' ? 'Choose an application to see its roles.' : undefined}
 					/>
@@ -128,6 +150,17 @@ export function GrantComposer({ apps, crossApp = true, state, idPrefix, expiry, 
 					<button type="button" className="small" onClick={vocab.retry}>Try again</button>
 				</div>
 			)}
+			{memberScope && (
+				<label>
+					{memberScope} value
+					<input
+						required
+						value={scope.kind === 'scoped' ? scope.value : ''}
+						onChange={(event) => setScope({ kind: 'scoped', type: memberScope, value: event.target.value })}
+					/>
+					<span className="hint">This membership role requires a specific {memberScope}.</span>
+				</label>
+			)}
 			<details
 				className="grant-options"
 				onInvalidCapture={(event) => {
@@ -137,7 +170,7 @@ export function GrantComposer({ apps, crossApp = true, state, idPrefix, expiry, 
 			>
 				<summary>Advanced options{hasOptions && ' (configured)'}</summary>
 				<div className="grant-options-body">
-					{appValue.kind === 'app' && catalog && catalog.actions.length > 0 && (
+					{!externalOnly && appValue.kind === 'app' && catalog && catalog.actions.length > 0 && (
 						<label className="checkbox">
 							<input type="checkbox" checked={custom} onChange={(event) => setMode(event.target.checked ? 'inline' : 'role')} />
 							Choose individual permissions instead of a role
@@ -149,7 +182,7 @@ export function GrantComposer({ apps, crossApp = true, state, idPrefix, expiry, 
 							Role permissions: <code>{selectedRole.permissions.join(', ') || 'None'}</code>
 						</p>
 					)}
-					<ScopePicker scopes={catalog?.scopes ?? []} value={scope} onChange={setScope} idPrefix={`${idPrefix}-scope`} />
+					{!memberScope && <ScopePicker scopes={catalog?.scopes ?? []} value={scope} onChange={setScope} idPrefix={`${idPrefix}-scope`} />}
 					<label>
 						Expires (optional)
 						<input type="datetime-local" value={expiry} onChange={(event) => onExpiryChange(event.target.value)} />

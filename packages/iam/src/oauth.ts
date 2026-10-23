@@ -230,7 +230,7 @@ async function mintForGrant(services: Services, env: SigningEnv, grant: OAuthGra
  * grant live, its client and resource still configured, the IAM session it was given under live and
  * usable, the principal an active user. The permissions are resolved live, never from the consent.
  */
-async function grantAuthority(
+export async function grantAuthority(
 	services: Services,
 	grant: OAuthGrantRow,
 	now: number,

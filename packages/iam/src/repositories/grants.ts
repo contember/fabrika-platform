@@ -343,7 +343,35 @@ export class GrantRepository {
 		}
 	}
 
-	/** Delete a grant, after its principal's revision (`grantRemovalStatement`). `audit` is written exactly when this call deleted it. */
+	/** Keep the audit's before-value true if another administrator edited this grant after it was read. */
+	async updateGrant(grant: GrantRow, input: CreateGrantInput, audit: AuditEventInput): Promise<GrantRow | null> {
+		await this.refuseWorkload(grant.principal_id)
+		const update = this.writer.changed([{
+			sql: `UPDATE grants SET role_key = ?, permissions = ?, scope_type = ?, scope_value = ?, expires_at = ?
+				WHERE id = ? AND role_key IS NOT DISTINCT FROM ? AND permissions IS NOT DISTINCT FROM ?
+					AND scope_type IS NOT DISTINCT FROM ? AND scope_value IS NOT DISTINCT FROM ? AND expires_at IS NOT DISTINCT FROM ?
+					AND ${eligibleGrantSql(this.writer.dialect)} RETURNING *`,
+			binds: [
+				input.roleKey ?? null,
+				input.permissions === null || input.permissions === undefined ? null : JSON.stringify(input.permissions),
+				input.scopeType ?? null,
+				input.scopeValue ?? null,
+				input.expiresAt ?? null,
+				grant.id,
+				grant.role_key,
+				grant.permissions,
+				grant.scope_type,
+				grant.scope_value,
+				grant.expires_at,
+				...eligibleGrantBinds(input),
+			],
+		}], audit)
+		// Editing can remove authority too. Invalidate pending delegation checks before changing the grant.
+		const results = await this.db.batch<GrantRow>([grantRemovalStatement(this.db, { principalId: grant.principal_id }), ...update.statements])
+		return update.rows(results, 1)[0] ?? null
+	}
+
+	/** Delete a grant, after its principal's revision. */
 	async deleteGrant(id: string, audit?: AuditEventInput): Promise<boolean> {
 		const removal = this.writer.changed([{ sql: 'DELETE FROM grants WHERE id = ? RETURNING id', binds: [id] }], audit)
 		const results = await this.db.batch([grantRemovalStatement(this.db, { grantId: id }), ...removal.statements])

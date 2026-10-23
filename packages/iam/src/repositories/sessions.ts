@@ -29,6 +29,11 @@ export interface SessionRow {
 	parent_session_id: string | null
 }
 
+export interface ListedSessionRow extends SessionRow {
+	parent_expires_at: number | null
+	parent_revoked_at: number | null
+}
+
 export class SessionRepository {
 	constructor(
 		protected readonly db: SqlDatabase,
@@ -181,13 +186,32 @@ export class SessionRepository {
 	 * One page of a principal's sessions, newest first, valid or not. `before` is a keyset cursor over
 	 * the UUIDv7 id, which is monotonic with creation — the same paging every other admin list uses.
 	 */
-	async listSessionsForPrincipal(principalId: string, options: { before?: string; limit: number }): Promise<SessionRow[]> {
-		const where = options.before === undefined ? '' : ' AND id < ?'
+	async listSessionsForPrincipal(
+		principalId: string,
+		options: { before?: string; limit: number; signInsOnly?: boolean },
+	): Promise<ListedSessionRow[]> {
+		const where = options.before === undefined ? '' : ' AND s.id < ?'
 		const bindings = options.before === undefined ? [principalId, options.limit] : [principalId, options.before, options.limit]
 		const { results } = await this.db
-			.prepare(`SELECT * FROM sessions WHERE principal_id = ?${where} ORDER BY id DESC LIMIT ?`)
+			.prepare(`SELECT s.*, p.expires_at AS parent_expires_at, p.revoked_at AS parent_revoked_at FROM sessions s
+				LEFT JOIN sessions p ON p.id = s.parent_session_id
+				WHERE s.principal_id = ?${where}${options.signInsOnly ? ' AND s.parent_session_id IS NULL' : ''} ORDER BY s.id DESC LIMIT ?`)
 			.bind(...bindings)
-			.all<SessionRow>()
+			.all<ListedSessionRow>()
+		return results
+	}
+
+	async listChildren(parentIds: string[]): Promise<ListedSessionRow[]> {
+		if (parentIds.length === 0) return []
+		const { results } = await this.db.prepare(`SELECT s.*, p.expires_at AS parent_expires_at, p.revoked_at AS parent_revoked_at
+			FROM sessions s JOIN sessions p ON p.id = s.parent_session_id
+			WHERE s.parent_session_id IN (${parentIds.map(() => '?').join(', ')}) ORDER BY s.id DESC`).bind(...parentIds).all<ListedSessionRow>()
+		return results
+	}
+
+	async lastAppSignIns(principalId: string): Promise<{ app: string; signed_in_at: number }[]> {
+		const { results } = await this.db.prepare('SELECT app, signed_in_at FROM app_sign_ins WHERE principal_id = ?')
+			.bind(principalId).all<{ app: string; signed_in_at: number }>()
 		return results
 	}
 

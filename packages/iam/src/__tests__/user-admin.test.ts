@@ -144,6 +144,27 @@ function userAdministrationSuite(label: string, repositories: () => IamRepositor
 			expect(await i.f.repositories.grants.listGrants(admin.id)).toHaveLength(1)
 		})
 
+		test('editing access stays within the original application and detail capabilities follow the same management rules', async () => {
+			const i = await installation(repositories())
+			const admin = await i.userAdmin([CRM])
+			const person = await i.person('managed')
+			await i.grant(person, CRM, 'viewer')
+			const c = await i.direct(admin)
+			let detail = await adminUseCases.getPrincipal(c, { principalId: person.id })
+			expect(detail.management).toEqual({ account: true, passwordLinks: false, audit: false })
+			const grant = detail.grants[0]
+			if (grant === undefined) throw new Error('grant')
+			expect(grant.canManage).toBe(true)
+			expect(await status(consoleRpc(i.f, admin.id, 'grants.update', { id: grant.id, roleKey: 'admin' }))).toBe(200)
+			await i.grant(person, CONSOLE_APP, 'deployer')
+			detail = await adminUseCases.getPrincipal(c, { principalId: person.id })
+			expect(detail.management.account).toBe(false)
+			const consoleGrant = detail.grants.find((grant) => grant.app === CONSOLE_APP)
+			expect(consoleGrant?.canManage).toBe(false)
+			expect(await status(consoleRpc(i.f, admin.id, 'grants.update', { id: consoleGrant?.id, roleKey: 'admin' }))).toBe(403)
+			expect(await status(consoleRpc(i.f, admin.id, 'connections.list', { principalId: person.id }))).toBe(403)
+		})
+
 		test("granting at the console or at IAM is refused, `user-admin` and the console's own `admin` included", async () => {
 			const i = await installation(repositories())
 			const admin = await i.userAdmin()

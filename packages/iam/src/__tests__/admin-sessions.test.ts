@@ -95,6 +95,7 @@ function sessionItems(result: unknown): SessionDto[] {
 			createdAt: z.number(),
 			expiresAt: z.number(),
 			revokedAt: z.number().nullable(),
+			unavailableReason: z.enum(['revoked', 'expired', 'parent_ended', 'account_disabled', 'method_disabled']).nullable(),
 		})),
 	}).parse(result).items
 }

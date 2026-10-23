@@ -1,4 +1,4 @@
-import { type CreateGrantRequest, type GrantDto, type OkResponse } from '@fabrika/iam-contract'
+import { type CreateGrantRequest, type GrantDto, type OkResponse, type UpdateGrantInput } from '@fabrika/iam-contract'
 import { contractGrantProblem, externalGrantProblem } from '../contract-rules'
 import { ExternalGrantError, type GrantRow } from '../db'
 import { type AdminContext, adminEvent, fail } from './context'
@@ -104,6 +104,74 @@ export async function deleteGrantUseCase(c: AdminContext, input: { id: string })
 		}),
 	)
 	return { ok: true }
+}
+
+/** Edit a grant in place within its original application. Both paths use the same role, scope and external-person rules. */
+export async function updateGrantUseCase(c: AdminContext, input: UpdateGrantInput): Promise<GrantDto> {
+	const grant = await c.services.repositories.grants.getGrantById(input.id)
+	if (grant === null) return fail(404, 'grant not found')
+	requireManagedApp(c, grant.app)
+	const principal = await c.services.repositories.principals.getPrincipalById(grant.principal_id)
+	if (principal === null) return fail(404, 'principal not found')
+	requireGrantablePrincipal(c, principal)
+	const authorization = await parseRoleOrInline(c, input, grant.app)
+	if (!authorization.ok) return fail(400, authorization.message)
+	const scope = parseScope(input)
+	if (!scope.ok) return fail(400, 'scopeType and scopeValue must be both set or both omitted')
+	const problem = await contractGrantProblem(c.services.repositories.appSchema, grant.app, { ...authorization, scopeType: scope.scopeType })
+		?? await externalGrantProblem(c.services.repositories.appSchema, principal, grant.app, authorization)
+	if (problem !== null) return fail(409, problem)
+	const expiresAt = input.expiresAt ?? null
+	if (expiresAt !== null && expiresAt <= Math.floor(Date.now() / 1000)) return fail(400, 'Choose an expiration in the future, or no expiration.')
+	const values = { principalId: principal.id, app: grant.app, ...authorization, ...scope, expiresAt }
+	if (
+		grant.role_key === authorization.roleKey
+		&& grant.permissions === (authorization.permissions === null ? null : JSON.stringify(authorization.permissions))
+		&& grant.scope_type === scope.scopeType && grant.scope_value === scope.scopeValue && grant.expires_at === expiresAt
+	) {
+		return toGrantDto(grant, new RoleKnownCache(c.services))
+	}
+	const duplicate = async () =>
+		authorization.roleKey !== null
+		&& (await c.services.repositories.grants.listGrants(principal.id)).some((other) =>
+			other.id !== grant.id && other.app === grant.app && other.role_key === authorization.roleKey
+			&& other.scope_type === scope.scopeType && other.scope_value === scope.scopeValue
+		)
+	if (await duplicate()) return fail(409, 'This user already has that role in this scope. Edit the existing access instead.')
+	let updated: GrantRow | null
+	try {
+		updated = await c.services.repositories.grants.updateGrant(
+			grant,
+			values,
+			adminEvent(c, {
+				action: 'iam.grant.update',
+				resourceType: 'grant',
+				resourceId: grant.id,
+				metadata: { principalId: principal.id, app: grant.app },
+				diff: {
+					before: {
+						roleKey: grant.role_key,
+						permissions: grant.permissions === null ? null : JSON.parse(grant.permissions),
+						scopeType: grant.scope_type,
+						scopeValue: grant.scope_value,
+						expiresAt: grant.expires_at,
+					},
+					after: {
+						roleKey: authorization.roleKey,
+						permissions: authorization.permissions,
+						scopeType: scope.scopeType,
+						scopeValue: scope.scopeValue,
+						expiresAt,
+					},
+				},
+			}),
+		)
+	} catch (cause) {
+		if (await duplicate()) return fail(409, 'This user already has that role in this scope. Edit the existing access instead.')
+		throw cause
+	}
+	if (updated === null) return fail(409, 'The access changed or is no longer allowed. Refresh and try again.')
+	return toGrantDto(updated, new RoleKnownCache(c.services))
 }
 
 /** The held grant a refused role grant duplicates, to name it in the 409; it may be gone by the time this reads. */

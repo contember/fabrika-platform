@@ -56,6 +56,35 @@ while its parent is — the lookup joins to the parent on every use, so it is on
 statement rather than a sweep. An access token already minted stays valid for the
 rest of its TTL; that bound is what local verification buys.
 
+## User administration in the console
+
+The user detail opens on **Access**, followed by **Sign-in**, **Activity** and
+**Account**. Its identity and account status stay visible in every section.
+
+- Access shows each assignment's application, role, scope, expiration and author.
+  `grants.update` edits it within its original application, retaining its id and
+  author. The change and its before/after audit record commit together. Editing
+  also advances the principal's delegation revision, because it can remove authority.
+- Permissions are resolved separately for each application through the token
+  resolver. Disabled accounts have no usable permissions; their assignments remain.
+  Cross-app assignments and bootstrap administration reach platform services only.
+- Sign-in groups application sessions under their IAM sign-in, with pagination.
+  `SessionDto.status` keeps the stored lifecycle; `unavailableReason` additionally
+  reports an ended parent, a disabled account or a disabled sign-in method.
+  Signing out everywhere covers every session, including those on other pages.
+- Password links show their issue time, expiration and whether they are closed.
+  A closed link can have been used, replaced or revoked; metadata cannot tell which.
+  Connected OAuth clients can be inspected and disconnected by installation administrators.
+- Activity distinguishes changes **to** the person (`subjectPrincipalId`) from
+  actions **by** the person (`principalId`, the existing actor filter), and provides
+  a separate sign-in decision history. Audit and connected-client reads require
+  installation administration. Other controls reflect the same live management
+  rules their IAM mutations enforce.
+
+Access changes and sign-outs do not invalidate already issued access tokens;
+their default lifetime is five minutes. Disabling an account keeps its sessions
+as well as its assignments, so enabling it can restore an unexpired session.
+
 ## A browser already signed in
 
 A browser that holds an IAM login opens an application its login has not used yet: IAM asks `Continue

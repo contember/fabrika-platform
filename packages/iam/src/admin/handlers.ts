@@ -9,7 +9,7 @@ import {
 import { getAppSchemaUseCase, listAppsUseCase, listRolesUseCase, setReturnOriginsUseCase } from './app-schema'
 import { listAuditUseCase, listAuthLogUseCase } from './audit'
 import { type AdminContext } from './context'
-import { createGrantUseCase, deleteGrantUseCase } from './grants'
+import { createGrantUseCase, deleteGrantUseCase, updateGrantUseCase } from './grants'
 import { json, readJson } from './http'
 import { issueMembershipKeyUseCase } from './membership-keys'
 import { disablePasswordUseCase, issuePasswordEnrollmentUseCase, issuePasswordResetUseCase } from './passwords'
@@ -62,6 +62,7 @@ export const adminUseCases = {
 	issuePasswordReset: issuePasswordResetUseCase,
 	disablePassword: disablePasswordUseCase,
 	createGrant: createGrantUseCase,
+	updateGrant: updateGrantUseCase,
 	deleteGrant: deleteGrantUseCase,
 	listApps: listAppsUseCase,
 	listRoles: listRolesUseCase,
