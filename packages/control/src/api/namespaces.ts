@@ -11,6 +11,7 @@ import type {
 	DeploymentNamespacePresentationDto,
 	PlanDeploymentNamespaceRequest,
 	PlanDeploymentNamespaceResponse,
+	ReleaseNamespaceClaimsResponse,
 	RemoveDeploymentNamespaceResponse,
 	RepublishAllNamespacesResponse,
 	UpdateDeploymentNamespaceRequest,
@@ -21,6 +22,7 @@ import {
 	isLeaseLoss,
 	PROVIDER_NAMESPACE_IMMUTABLE,
 	PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED,
+	type ProviderClaimedResource,
 	type ProviderDeploymentNamespace,
 	type ProviderNamespaceCapabilities,
 	ProviderNamespaceError,
@@ -200,7 +202,7 @@ function asProviderNamespaceError(cause: unknown): ProviderNamespaceError | null
  * message; the log gets the same text UNCAPPED and, for an untyped cause, everything the cause said.
  * Neither is ever the error OBJECT: a cause can carry a clone URL with an embedded token.
  */
-function namespaceFailure(cause: unknown, mutation: NamespaceJobMutation | 'update'): { code: string; message: string; log: string } {
+function namespaceFailure(cause: unknown, mutation: NamespaceJobMutation | 'update' | 'claim check'): { code: string; message: string; log: string } {
 	const generic = `namespace ${mutation} failed`
 	const typed = asProviderNamespaceError(cause)
 	if (typed !== null) {
@@ -620,7 +622,14 @@ async function enqueueNamespaceJob(c: NamespaceUseCaseContext, row: DeploymentNa
 
 async function auditMutation(
 	c: NamespaceUseCaseContext,
-	action: 'namespace.create' | 'namespace.adopt' | 'namespace.reconcile' | 'namespace.republish' | 'namespace.update' | 'namespace.remove',
+	action:
+		| 'namespace.create'
+		| 'namespace.adopt'
+		| 'namespace.reconcile'
+		| 'namespace.republish'
+		| 'namespace.update'
+		| 'namespace.remove'
+		| 'namespace.claims.release',
 	row: DeploymentNamespaceRow,
 	extra: Readonly<Record<string, unknown>> = {},
 ): Promise<void> {
@@ -1058,6 +1067,53 @@ export async function removeNamespaceUseCase(c: NamespaceUseCaseContext, id: str
 	// removal stopped tracking — an audit row without it cannot answer "what did we orphan, and where".
 	await auditMutation(c, 'namespace.remove', deleted, { target: removed.target })
 	return { removed }
+}
+
+/**
+ * Release one app environment's resource claims in a namespace, only when the provider confirms every claimed resource
+ * gone: a freed name over a live service would let the next application adopt it with its old secrets. The operator
+ * deletes the resources first; fabrika deletes none (ADR-0034). Held under the namespace lease, which every deploy into
+ * the namespace takes, so nothing recreates a service between the read-back and the release.
+ */
+export async function releaseNamespaceClaimsUseCase(
+	c: NamespaceUseCaseContext,
+	input: { readonly namespaceId: string; readonly appId: string; readonly env: string },
+): Promise<ReleaseNamespaceClaimsResponse> {
+	const registry = c.repositories.registry
+	const row = await registry.getDeploymentNamespace(input.namespaceId)
+	if (row === null) fail(404, 'deployment namespace not found')
+	if (row.provider !== c.provider.id) fail(409, `deployment namespace belongs to provider ${row.provider}`)
+	const check = c.provider.namespaces?.claimedResources
+	if (check === undefined) fail(409, `provider ${c.provider.id} cannot confirm that a claimed resource is gone, so it releases no claim`)
+	const owner = `app env ${input.appId}/${input.env}`
+	const lease = await acquireLease(registry.namespaceLocks(), namespaceLeaseKey(row.id))
+	if (lease === null) fail(409, `deployment namespace ${row.id} is being changed by another operation; retry when it finishes`)
+	try {
+		const keys = (await registry.listNamespaceResourceClaims(row.id))
+			.filter((claim) => claim.owner_app_id === input.appId && claim.owner_env === input.env)
+			.map((claim) => claim.resource_key)
+		if (keys.length === 0) fail(404, `${owner} holds no resource claim in deployment namespace ${row.id}`)
+		let observed: readonly ProviderClaimedResource[]
+		try {
+			observed = await check({ namespace: toProviderNamespace(row), resourceKeys: keys, signal: c.signal })
+		} catch (cause) {
+			fail(502, `provider ${c.provider.id} could not confirm that the claimed resources are gone: ${namespaceFailure(cause, 'claim check').message}`)
+		}
+		const gone = new Set(observed.filter((resource) => !resource.exists).map((resource) => resource.resourceKey))
+		const live = keys.filter((key) => !gone.has(key))
+		if (live.length > 0) {
+			fail(409, `${owner} still has ${live.join(', ')} in deployment namespace ${row.id}; delete it at the provider first, fabrika deletes none`)
+		}
+		lease.assertHeld()
+		const released = await registry.releaseNamespaceResourceClaims(row.id, input.appId, input.env, keys)
+		await auditMutation(c, 'namespace.claims.release', row, { appId: input.appId, env: input.env, released })
+		return { released }
+	} catch (cause) {
+		if (isLeaseLoss(cause)) fail(409, `deployment namespace ${row.id} lost its lease while its claims were checked; retry`)
+		throw cause
+	} finally {
+		await lease.release()
+	}
 }
 
 async function refuseNamespaceRemoval(c: NamespaceUseCaseContext, row: DeploymentNamespaceRow | null): Promise<void> {

@@ -823,6 +823,15 @@ describe('control namespaces', () => {
 		expect(err).toBe('retained\tProject\tnotes-prod (project-1)')
 	})
 
+	test('release-claims names the owner and prints each released key', async () => {
+		const captured = captureFetch({ result: { released: ['service:notesapi', 'service:notesfiles'] } })
+		const out = await captureStdout(() =>
+			runControlCli('namespaces', ['release-claims', '--namespace=dev', '--app=notes', '--env=dev'], undefined, CONTROL_ENV)
+		)
+		expect(captured.calls[0]?.body).toEqual({ method: 'namespaces.releaseClaims', input: { namespaceId: 'dev', appId: 'notes', env: 'dev' } })
+		expect(out).toBe('released\tservice:notesapi\nreleased\tservice:notesfiles')
+	})
+
 	test('carries an exclusive app through both calls for the full preset', async () => {
 		const captured = captureFetch({ result: zeropsPlan({}, 'notes') })
 		await captureStdout(() =>

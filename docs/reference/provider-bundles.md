@@ -40,8 +40,9 @@ The control plane receives one `ControlProvider`. Every provider implements
 - `cancel` for platform-owned work;
 - `reconcile` for unfinished external operations;
 - `secrets` for immediate writes to provider-managed secret storage.
-- `namespaces` for provider-owned placement validation, resource claims,
-  provisioning, reconciliation, proxy republishing, and operator planning;
+- `namespaces` for provider-owned placement validation, resource claims and the
+  read-back that releases them, provisioning, reconciliation, proxy republishing,
+  and operator planning;
 - `declaredVariables` to name the variables an artifact declares.
 
 The bound-source inputs and credential-free `ProviderSourceBinding` are declared
