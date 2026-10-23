@@ -158,10 +158,12 @@ The launcher keeps serving the head it has, and `bind_dev` starts the bootstrap.
 
 `get_dev_status` answers a window of the launcher's and the application's output since the newest sync or reset (at most
 200 lines); `apply_changes` answers the newest 20 of them. The window is indexed by the launcher's line numbers, so
-`after: log.to` stays put across reports; a smaller `log.total` means a new container. The launcher never reports the environment. `run_checks` runs the build's check
+`after: log.to` stays put across reports; a smaller `log.total` means a new container. A bootstrap bind drops the
+previous container's log and check results. The launcher never reports the environment. `run_checks` runs the build's check
 chain on the files the container holds and waits up to 50 s for the results; they gate nothing. It is refused while the
 container holds another commit than the workspace's newest, and `checks.head` names the commit the results are for. Each result carries its exit code, `durationMs` and the last
-lines of its output. `reset_dev` drops the
+lines of its output. A check killed by a signal (the out-of-memory killer, or the launcher's 10-minute timeout) has
+`exitCode: null`, fails, and its last output line says so. `reset_dev` drops the
 environment's schema and role family and migrates from scratch; call it after editing a migration that was already
 applied, which otherwise fails the sync. `bind_dev`, `run_checks` and `reset_dev` need `deploy.trigger`; `get_dev_status`
 needs `deploy.read`.
