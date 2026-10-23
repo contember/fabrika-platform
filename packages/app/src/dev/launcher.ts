@@ -123,6 +123,8 @@ interface RunningApplication {
 
 interface CommandResult {
 	readonly exitCode: number | null
+	/** The signal that ended the command, when one did: it never exited on its own. */
+	readonly signal: string | null
 	readonly lines: readonly string[]
 }
 
@@ -499,12 +501,15 @@ class Launcher {
 			this.say(`check ${check.name}: ${check.command}`)
 			const started = performance.now()
 			const result = await this.run(['sh', '-c', check.command], this.commandEnvironment, CHECK_TIMEOUT_MS)
+			const durationMs = Math.round(performance.now() - started)
+			const killed = result.signal === null ? [] : [killedLine(check.name, result.signal, durationMs >= CHECK_TIMEOUT_MS)]
+			for (const line of killed) this.say(line, 'stderr')
 			results.push({
 				name: check.name,
 				ok: result.exitCode === 0,
 				exitCode: result.exitCode,
-				durationMs: Math.round(performance.now() - started),
-				output: result.lines.slice(-CHECK_OUTPUT_LINES).map((line) => line.slice(0, 2_000)),
+				durationMs,
+				output: [...result.lines.slice(-(CHECK_OUTPUT_LINES - killed.length)), ...killed].map((line) => line.slice(0, 2_000)),
 			})
 		}
 		this.checkResults = { request, head: this.state.head, results }
@@ -526,7 +531,7 @@ class Launcher {
 		const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs)
 		await Promise.all([readLines(child.stdout, collect('stdout')), readLines(child.stderr, collect('stderr')), child.exited])
 		clearTimeout(timer)
-		return { exitCode: child.exitCode, lines }
+		return { exitCode: child.exitCode, signal: child.signalCode === null ? null : String(child.signalCode), lines }
 	}
 
 	private async restartApplication(): Promise<string | null> {
@@ -609,6 +614,12 @@ class Launcher {
 		clearTimeout(timer)
 	}
 }
+
+/** Why a check has no exit code: the launcher's timeout, or a signal from outside, most often the out-of-memory killer. */
+const killedLine = (name: string, signal: string, timedOut: boolean): string =>
+	timedOut
+		? `check ${name} was killed (${signal}) after the ${CHECK_TIMEOUT_MS / 60_000}-minute timeout; it failed`
+		: `check ${name} was killed (${signal}) before it finished, most likely because the container ran out of memory; it failed`
 
 const lastLine = (result: CommandResult): string => [...result.lines].reverse().find((line) => line.trim() !== '')?.trim() ?? 'no output'
 
