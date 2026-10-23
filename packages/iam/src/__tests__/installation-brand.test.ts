@@ -9,7 +9,7 @@ import { brandMark } from '@fabrika/proxy-core/page-style'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { handleAuth } from '../auth/routes'
 import { createPostgresIamRepositories, type IamRepositories, InstallationBrandRepository, type InstallationBrandRow } from '../db'
-import { storedBrand } from '../installation-brand'
+import { REFUSED_BRAND_WARN_INTERVAL_MS, storedBrand } from '../installation-brand'
 import { prop } from '../json'
 import { consoleRpc, errorType, result } from './helpers/app-people'
 import { PNG_BASE64, SVG_BASE64, TEST_BRAND } from './helpers/brand'
@@ -211,10 +211,16 @@ describe('IAM pages and the brand', () => {
 			expect(first).toEqual({ light: TEST_BRAND.light })
 			// A fresh read of the same row is a new object with equal strings: it takes the earlier answer.
 			expect(storedBrand(row('image/png', PNG_BASE64))).toBe(first)
-			// The same images under another type, as another instance could have stored them in the same second.
-			expect(storedBrand(row('image/png', SVG_BASE64))).toBeNull()
-			expect(storedBrand(row('image/png', SVG_BASE64))).toBeNull()
+			// Other bytes are checked anew: an SVG stored as a PNG is refused, and logged once, not on every read.
+			const now = 1_700_000_000_000
+			expect(storedBrand(row('image/png', SVG_BASE64), now)).toBeNull()
+			expect(storedBrand(row('image/png', SVG_BASE64), now + 1)).toBeNull()
 			expect(warn).toHaveBeenCalledTimes(1)
+			// While the pages keep reading it, the refusal is logged again once the interval has passed.
+			expect(storedBrand(row('image/png', SVG_BASE64), now + REFUSED_BRAND_WARN_INTERVAL_MS)).toBeNull()
+			expect(storedBrand(row('image/png', SVG_BASE64), now + REFUSED_BRAND_WARN_INTERVAL_MS + 1)).toBeNull()
+			expect(warn).toHaveBeenCalledTimes(2)
+			// The same bytes under the type they are: the type is part of the key, so they are checked anew and admitted.
 			expect(storedBrand(row('image/svg+xml', SVG_BASE64))).toEqual({ light: { type: 'image/svg+xml', base64: SVG_BASE64 } })
 		} finally {
 			warn.mockRestore()

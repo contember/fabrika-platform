@@ -5,8 +5,11 @@ import type { Services } from './services'
 
 type StoredImages = Pick<InstallationBrandRow, 'light_type' | 'light_base64' | 'dark_type' | 'dark_base64'>
 
-/** The images last checked, and what the check made of them (`storedBrand`). */
-let lastChecked: { readonly row: StoredImages; readonly brand: InstallationBrand | null } | null = null
+/** The images last checked, what the check made of them, and when a refusal of them was last logged (`storedBrand`). */
+let lastChecked: { readonly row: StoredImages; readonly brand: InstallationBrand | null; warnedAt: number } | null = null
+
+/** How often a stored logo the check refuses is logged again, so the reason the pages lost it stays in the logs. */
+export const REFUSED_BRAND_WARN_INTERVAL_MS = 60 * 60 * 1000
 
 /**
  * The brand a stored row holds, checked again as every reader of a brand checks it (`@fabrika/proxy-core/brand`), or
@@ -15,19 +18,31 @@ let lastChecked: { readonly row: StoredImages; readonly brand: InstallationBrand
  * Every page reads the row, and it changes only with `brand.set` and `brand.clear`, so the check of the images last
  * read is kept and a row with the same images takes its answer: comparing the stored strings is far cheaper than
  * decoding them again. The key is the images themselves, never a time, so a change is checked whichever instance made it.
+ * A refused logo is logged when it is checked and again every `REFUSED_BRAND_WARN_INTERVAL_MS` while pages read it.
  */
-export function storedBrand(row: InstallationBrandRow | null): InstallationBrand | null {
-	if (row === null || row.light_type === null || row.light_base64 === null) return null
-	if (lastChecked !== null && sameImages(lastChecked.row, row)) return lastChecked.brand
+export function storedBrand(row: InstallationBrandRow | null, now: number = Date.now()): InstallationBrand | null {
+	if (row === null || row.light_type === null || row.light_base64 === null) {
+		lastChecked = null
+		return null
+	}
+	if (lastChecked !== null && sameImages(lastChecked.row, row)) {
+		if (lastChecked.brand === null && now - lastChecked.warnedAt >= REFUSED_BRAND_WARN_INTERVAL_MS) {
+			warnRefused()
+			lastChecked.warnedAt = now
+		}
+		return lastChecked.brand
+	}
 	const light = { type: row.light_type, base64: row.light_base64 }
 	const dark = row.dark_type === null || row.dark_base64 === null ? {} : { dark: { type: row.dark_type, base64: row.dark_base64 } }
 	const parsed = installationBrandSchema.safeParse({ light, ...dark })
-	if (!parsed.success) {
-		console.warn('installation brand: the stored logo fails the brand check, so the pages draw the fabrika mark')
-	}
+	if (!parsed.success) warnRefused()
 	const brand = parsed.success ? parsed.data : null
-	lastChecked = { row, brand }
+	lastChecked = { row, brand, warnedAt: now }
 	return brand
+}
+
+function warnRefused(): void {
+	console.warn('installation brand: the stored logo fails the brand check, so the pages draw the fabrika mark')
 }
 
 function sameImages(a: StoredImages, b: StoredImages): boolean {

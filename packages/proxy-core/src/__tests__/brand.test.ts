@@ -4,7 +4,15 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { type BrandImage, brandImageDataUri, brandImageProblem, type BrandImageType, installationBrandSchema, MAX_BRAND_IMAGE_BYTES } from '../brand'
+import {
+	type BrandImage,
+	brandImageBase64,
+	brandImageDataUri,
+	brandImageProblem,
+	type BrandImageType,
+	installationBrandSchema,
+	MAX_BRAND_IMAGE_BYTES,
+} from '../brand'
 import { parseProxyManifest } from '../manifest'
 import { pageArt } from '../page-style'
 import { errorPage } from '../pages'
@@ -15,6 +23,7 @@ function bytesOf(text: string): Uint8Array {
 	return new TextEncoder().encode(text)
 }
 
+/** Byte by byte, the oracle the exported, chunked encoder is held to. */
 function base64Of(bytes: Uint8Array): string {
 	let binary = ''
 	for (const byte of bytes) binary += String.fromCharCode(byte)
@@ -33,6 +42,13 @@ function webp(): { type: BrandImageType; base64: string } {
 }
 
 describe('a brand image', () => {
+	test('the exported encoder spells what a byte-by-byte encoder spells, across its chunk boundary', () => {
+		for (const length of [0, 1, 2, 3, 0x8000 - 1, 0x8000, 0x8000 + 1, MAX_BRAND_IMAGE_BYTES + 2]) {
+			const bytes = Uint8Array.from({ length }, (_, index) => (index * 131 + 7) % 256)
+			expect(brandImageBase64(bytes)).toBe(base64Of(bytes))
+		}
+	})
+
 	test('a PNG, a WebP and an SVG are admitted, the SVG after a declaration, comments and a doctype', () => {
 		expect(brandImageProblem({ type: 'image/png', base64: PNG })).toBeNull()
 		expect(brandImageProblem(webp())).toBeNull()
