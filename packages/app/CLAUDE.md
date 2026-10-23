@@ -956,7 +956,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   across every table that lies in the dimension), and `own` (a caller with only the endpoint's action, or a link
   holder, reaches its own object; on an endpoint that manages members, also on the target's value one assigning role
   and the actions of the roles its input names, and on one that issues links the actions they grant, as IAM requires); each takes the author's seed, the state
-  `seedWorlds` writes into both rows. An `app` or `creates` procedure gets `scoped` (a holder of the action in one
+  `seedWorlds` writes into both rows. `leaked` and `own` also take the author's application rows (`appRows`), which
+  `seedApplicationRows` writes before they ask and removes, with every row that refers to them, once the case and the runs
+  it kicked are over; both scopes may see them, so their values are never counted as the other scope's. An `app` or `creates` procedure gets `scoped` (a holder of the action in one
   scope: exactly 403, from the proxy or IAM) and `global` (a global holder: answered unless a 401, 403 or 5xx), and an application table `appPolicyIsolationKit`, whose probe procedures are
   `app` endpoints over one row `seedRow` writes. A leak scans every value of
   the other row's chain, so an outer dimension's value is a leak too. A subpath of its

@@ -7,7 +7,8 @@ blocked-by: []
 # 122 — A generated case cannot seed a child row's state or a row under an `in` target
 
 **Summary.** The seed now leaves a foreign key outside the chain `null` or references a reference row, satisfies an
-`IN` list CHECK, names what it cannot seed (`SeedLimitError`), and `rows` names a child row by id. Three limits of the
+`IN` list CHECK, names what it cannot seed (`SeedLimitError`), `rows` names a child row by id, and `appRows` seeds a row
+of an application table, in a state, that a leak and an own case read (the guide a link holder downloads). Three limits of the
 evidence remain. Effort: S–M.
 
 ## Problem

@@ -90,6 +90,7 @@ describe('the endpoint access cases of a kit application', () => {
 			invitations: {},
 			links: {},
 			rows: {},
+			appRows: {},
 		})
 		expect(read("export const rows = { 'api.notes.get': { commentId: 'note_comments' } }\n").rows).toEqual({
 			'api.notes.get': { commentId: 'note_comments' },
@@ -209,5 +210,69 @@ describe('the rows of the fixtures: input fields that name a row lying in the en
 		expect(findings("export const rows = { 'api.notes.create': { title: 'notes' } }\n")).toEqual([
 			'api.notes.create is no tested endpoint on an object a table owns, in which the kit could seed a row',
 		])
+	})
+})
+
+describe('the application rows of the fixtures: rows of application tables an own case reads', () => {
+	const ISOLATION_ROOT = join(import.meta.dir, '..', '..', '..', 'cli', 'src', '__tests__', 'fixtures', 'isolation-app')
+	const withFixtures = (text: string) => new Map([...tree(ISOLATION_ROOT), [ENDPOINT_FIXTURES_FILE, text]])
+	const findings = (text: string) => missingEndpointFixtures(scaffoldInputs(withFixtures(text))).map((finding) => finding.message)
+
+	test('the leak and own cases of an endpoint with application rows get them, after its seed', async () => {
+		const text = await endpointTest(tree(ISOLATION_ROOT))
+		expect(text).toContain("expect(await kit.own('shared.notice', {}, {}, { notices: { slug: 'welcome', published: true } })).toEqual({ status: 200 })")
+		expect(text).toContain("expect(await kit.own('shared.note', {})).toEqual({ status: 200 })")
+		const seeded = await endpointTest(
+			withFixtures("export const seeds = { 'api.notes.rename': { pinned: true } }\nexport const appRows = { 'api.notes.rename': { notices: {} } }\n"),
+		)
+		const input = "{ expectVersion: 1, id: 'x', title: 'x' }"
+		expect(seeded).toContain(`kit.own('api.notes.rename', ${input}, { pinned: true }, { notices: {} })`)
+		expect(seeded).toContain(`kit.leaked('api.notes.rename', ${input}, { pinned: true }, { notices: {} })`)
+		expect(seeded).toContain(`kit.leaked('api.notes.rename', ${input}, {}, { notices: {} })`)
+		expect(seeded).toContain(`kit.denied('api.notes.rename', ${input}))`)
+	})
+
+	test('no application rows leave every other generated file as it was', async () => {
+		const without = await endpointTest(withFixtures("export const rows = { 'api.notes.editComment': { commentId: 'note_comments' } }\n"))
+		expect(without).toContain("expect(await kit.own('shared.notice', {})).toEqual({ status: 200 })")
+		expect(without).not.toMatch(/kit\.own\([^)]*, \{\}, \{/)
+	})
+
+	test('a table that is no application table, a stamped column, and an endpoint whose handler no leak or own case runs, are findings', () => {
+		expect(findings("export const appRows = { 'shared.notice': { notices: { published: true } } }\n")).toEqual([])
+		// A read by the owner's read action has no own case, and a list no object, but both leak cases run the handler.
+		expect(findings("export const appRows = { 'api.notes.get': { notices: {} }, 'api.notes.list': { notices: {} } }\n")).toEqual([])
+		expect(findings("export const appRows = { 'shared.notice': { notes: { body: { x: 1 } }, countries: {}, missing: {} } }\n")).toEqual([
+			'shared.notice: countries is a reference table, and an application row is seeded only in an application table (scope: { app })',
+			'shared.notice: missing is no table of src/db/tables.ts, and an application row is seeded only in an application table (scope: { app })',
+			'shared.notice: notes is a dimension table, and an application row is seeded only in an application table (scope: { app })',
+		])
+		// A create of a scope and an `in` write without sql run the handler in no leak or own case.
+		expect(findings("export const appRows = { 'api.notes.create': { notices: {} }, 'api.organizations.create': { notices: {} } }\n")).toEqual([
+			'api.notes.create is no endpoint with a leak or an own case, whose handler could read an application row the kit seeds',
+			'api.organizations.create is no endpoint with a leak or an own case, whose handler could read an application row the kit seeds',
+		])
+		expect(findings("export const appRows = { 'shared.notice': { notices: { id: 'x', slug: 'welcome' } } }\n")).toEqual([
+			"shared.notice: notices.id is the row's key, version or creator, which the seeding stamps",
+		])
+		expect(findings("export const appRows = { 'shared.notice': { constructor: {}, notices: { slug: ['a'], body: { x: 1 } } } }\n")).toEqual([
+			'shared.notice: constructor is no table of src/db/tables.ts, and an application row is seeded only in an application table (scope: { app })',
+			'shared.notice: notices.body is given an object, and a seeded column takes one value',
+			'shared.notice: notices.slug is given an array, and a seeded column takes one value',
+		])
+		// A column the table does not have fails at the checker, not when the generated test runs.
+		expect(findings("export const appRows = { 'shared.notice': { notices: { publshed: true, tags: ['a'] } } }\n")).toEqual([
+			'shared.notice: notices.publshed is no column of notices',
+			'shared.notice: notices.tags is no column of notices',
+		])
+	})
+
+	test('each table of the application rows is an object of columns', () => {
+		const read = (text: string) => scaffoldInputs(withFixtures(text)).fixtures.appRows
+		expect(read("export const appRows = { 'shared.notice': { notices: { published: true } } }\n")).toEqual({
+			'shared.notice': { notices: { published: true } },
+		})
+		expect(() => read("export const appRows = { 'shared.notice': { notices: true } }\n")).toThrow()
+		expect(() => read("export const appRows = { 'shared.notice': 'notices' }\n")).toThrow()
 	})
 })

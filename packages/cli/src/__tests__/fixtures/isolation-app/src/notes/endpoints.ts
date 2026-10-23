@@ -1,5 +1,6 @@
 // The handlers reach rows only through `ctx.db`, bound to the capability each access form minted.
 
+import { NotFoundError } from '@fabrika/app'
 import { app } from '../app-kit'
 import {
 	ById,
@@ -17,6 +18,7 @@ import {
 	NewNote,
 	Note,
 	Notes,
+	Notice,
 	RemoveMember,
 	Rename,
 	Share,
@@ -76,6 +78,12 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({
 			items: (await ctx.db.target.note_comments.list({ orderBy: [['id', 'asc']] })).items.map((comment) => ({ id: comment.id, body: comment.body })),
 		})),
+	notice: r.query({ input: ById, output: Notice, access: { action: 'notes.write', on: 'note', from: 'id' } })
+		.handle(async ({ ctx }) => {
+			const [notice] = (await ctx.db.app.notices.list({ where: [['published', '=', true]], orderBy: [['id', 'desc']], limit: 1 })).items
+			if (notice === undefined) throw new NotFoundError('no notice is published')
+			return { id: notice.id, body: notice.body }
+		}),
 	editComment: r.mutation({ input: EditComment, output: Done, access: { action: 'notes.write', on: 'note', from: 'id' } })
 		.handle(async ({ input, ctx }) => ({ id: (await ctx.db.target.note_comments.update(input.commentId, { body: input.body })).id })),
 	share: r.mutation({ input: Share, output: Shared, access: { action: 'notes.share', on: 'note', from: 'id' }, issues: 'shared' })
@@ -101,6 +109,12 @@ export const shared = app.link('/s', {
 			.handle(async ({ ctx }) => {
 				const note = await ctx.db.target.get()
 				return { id: note.id, title: note.title }
+			}),
+		notice: l.query({ output: Notice, access: { action: 'notes.read' } })
+			.handle(async ({ ctx }) => {
+				const [notice] = (await ctx.db.app.notices.list({ where: [['published', '=', true]], orderBy: [['id', 'desc']], limit: 1 })).items
+				if (notice === undefined) throw new NotFoundError('no notice is published')
+				return { id: notice.id, body: notice.body }
 			}),
 	}),
 })

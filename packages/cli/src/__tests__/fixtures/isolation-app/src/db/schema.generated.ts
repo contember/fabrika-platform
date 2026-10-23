@@ -29,6 +29,13 @@ export interface NotesTable {
 	version: number
 }
 
+export interface NoticesTable {
+	id: string
+	slug: string
+	body: string
+	published: boolean
+}
+
 export interface OrganizationsTable {
 	id: string
 	name: string
@@ -53,6 +60,7 @@ export interface DB {
 	countries: CountriesTable
 	note_comments: NoteCommentsTable
 	notes: NotesTable
+	notices: NoticesTable
 	organizations: OrganizationsTable
 	workspace_events: WorkspaceEventsTable
 	workspaces: WorkspacesTable
@@ -108,6 +116,15 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id', 'organization_id'],
 			},
 		],
+	},
+	'notices': {
+		columns: [
+			'id',
+			'slug',
+			'body',
+			'published',
+		],
+		foreignKeys: [],
 	},
 	'organizations': {
 		columns: [

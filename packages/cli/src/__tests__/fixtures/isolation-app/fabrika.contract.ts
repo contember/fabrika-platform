@@ -4,6 +4,8 @@
 // and for a machine caller; and the endpoints that write through IAM: one that creates an organization, one that
 // invites the members of a workspace, one that removes one and one that cancels an invitation by id, one that issues a
 // link of the share mount and one that revokes a link by id. A child table's writes need the workspace's members.manage.
+// A link procedure and an editor's query read the published notice, an application row their generated cases seed
+// (appRows).
 
 import { app } from './src/app-kit'
 import { notes, ops, organizations, shared, workspaces } from './src/notes/endpoints'

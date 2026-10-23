@@ -4,10 +4,13 @@
 // that name a member the handler looks up (`deals.assign`'s `ownerId`), which the kit fills with a real member;
 // `invitations` and `links` the fields that name an invitation the handler cancels or a share link it revokes, which the
 // kit fills with one it holds; `rows` the fields that name a row lying in the endpoint's object (a note's comment), by
-// table, which the kit seeds in each scope's object. Read from source, never executed, within the reader's budget:
-// `export const fixtures = { '<endpoint id>': { … } }`, `export const seeds = { '<endpoint id>': { <column>: <value> } }`,
-// `export const members = { '<endpoint id>': ['<field>'] }` (`invitations`, `links` alike) and
-// `export const rows = { '<endpoint id>': { <field>: '<table>' } }`, plain literals only.
+// table, which the kit seeds in each scope's object; `appRows` the rows of application tables an endpoint's own case
+// reads (the guide a link holder downloads), by table, with their columns, which the kit seeds before each leak or own
+// case asks and removes once it is over.
+// Read from source, never executed, within the reader's budget: `export const fixtures = { '<endpoint id>': { … } }`,
+// `export const seeds = { '<endpoint id>': { <column>: <value> } }`, `export const members = { '<endpoint id>':
+// ['<field>'] }` (`invitations`, `links` alike), `export const rows = { '<endpoint id>': { <field>: '<table>' } }` and
+// `export const appRows = { '<endpoint id>': { <table>: { <column>: <value> } } }`, plain literals only.
 // Browser-safe.
 
 import { type AstNode, child, children, identifierName, nodeDepth, parseModule, positionOf, staticKey, staticString } from './ast'
@@ -22,6 +25,7 @@ export const MEMBERS_EXPORT = 'members'
 export const INVITATIONS_EXPORT = 'invitations'
 export const LINKS_EXPORT = 'links'
 export const ROWS_EXPORT = 'rows'
+export const APP_ROWS_EXPORT = 'appRows'
 
 /** The exports that list, by endpoint id, the input fields the kit fills with something it holds. */
 const FIELD_EXPORTS = [MEMBERS_EXPORT, INVITATIONS_EXPORT, LINKS_EXPORT] as const
@@ -29,7 +33,7 @@ type FieldExport = (typeof FIELD_EXPORTS)[number]
 const isFieldExport = (name: string | undefined): name is FieldExport => FIELD_EXPORTS.some((field) => field === name)
 
 const ALLOWED =
-	"export const fixtures = { 'api.notes.get': { id: '…' } }, export const seeds = { 'api.deals.reopen': { stage: 'won' } }, export const members = { 'api.deals.assign': ['ownerId'] }, export const invitations = { 'api.members.cancel': ['invitationId'] }, export const links = { 'api.notes.unshare': ['linkId'] } and export const rows = { 'api.notes.editComment': { commentId: 'note_comments' } }: string keys, and strings, numbers, booleans, null, arrays and objects"
+	"export const fixtures = { 'api.notes.get': { id: '…' } }, export const seeds = { 'api.deals.reopen': { stage: 'won' } }, export const members = { 'api.deals.assign': ['ownerId'] }, export const invitations = { 'api.members.cancel': ['invitationId'] }, export const links = { 'api.notes.unshare': ['linkId'] }, export const rows = { 'api.notes.editComment': { commentId: 'note_comments' } } and export const appRows = { 'portal.guide': { guides: { active: true } } }: string keys, and strings, numbers, booleans, null, arrays and objects"
 
 type ById = Readonly<Record<string, Readonly<Record<string, Sample>>>>
 
@@ -46,9 +50,11 @@ export interface EndpointFixtures {
 	readonly links: Readonly<Record<string, readonly string[]>>
 	/** The input fields that name a row lying in the endpoint's object, with that row's table, by endpoint id. */
 	readonly rows: Readonly<Record<string, Readonly<Record<string, string>>>>
+	/** The rows of application tables the endpoint's own case reads, by table, each with its columns, by endpoint id. */
+	readonly appRows: Readonly<Record<string, Readonly<Record<string, Readonly<Record<string, Sample>>>>>>
 }
 
-export const NO_FIXTURES: EndpointFixtures = { inputs: {}, seeds: {}, members: {}, invitations: {}, links: {}, rows: {} }
+export const NO_FIXTURES: EndpointFixtures = { inputs: {}, seeds: {}, members: {}, invitations: {}, links: {}, rows: {}, appRows: {} }
 
 const finding = (at: AstNode | undefined, message: string): Finding => {
 	const { line, column } = at === undefined ? { line: 1, column: 1 } : positionOf(at)
@@ -118,7 +124,8 @@ function byId(
 	const entries: Record<string, Readonly<Record<string, Sample>>> = {}
 	for (const [id, entry] of Object.entries(all)) {
 		if (!isSampleObject(entry)) {
-			return { ok: false, findings: [finding(init, `the ${name} of ${id} is not an object of ${name === SEEDS_EXPORT ? 'columns' : 'input fields'}`)] }
+			const of = name === SEEDS_EXPORT ? 'columns' : name === APP_ROWS_EXPORT ? 'tables' : 'input fields'
+			return { ok: false, findings: [finding(init, `the ${name} of ${id} is not an object of ${of}`)] }
 		}
 		entries[id] = entry
 	}
@@ -173,7 +180,8 @@ export function readEndpointFixtures(
 		const name = declarator === null || declarator === undefined ? undefined : identifierName(child(declarator, 'id'))
 		if (
 			statement?.type !== 'ExportNamedDeclaration' || declarator === null || declarator === undefined
-			|| (name !== FIXTURES_EXPORT && name !== SEEDS_EXPORT && name !== ROWS_EXPORT && !isFieldExport(name)) || read.has(name)
+			|| (name !== FIXTURES_EXPORT && name !== SEEDS_EXPORT && name !== ROWS_EXPORT && name !== APP_ROWS_EXPORT && !isFieldExport(name))
+			|| read.has(name)
 			|| (isFieldExport(name) && fields.has(name))
 		) {
 			return {
@@ -181,7 +189,7 @@ export function readEndpointFixtures(
 				findings: [
 					finding(
 						statement ?? undefined,
-						`the file holds export const ${FIXTURES_EXPORT}, ${SEEDS_EXPORT}, ${MEMBERS_EXPORT}, ${INVITATIONS_EXPORT} and ${LINKS_EXPORT} = { … }, each at most once`,
+						`the file holds export const ${FIXTURES_EXPORT}, ${SEEDS_EXPORT}, ${MEMBERS_EXPORT}, ${INVITATIONS_EXPORT}, ${LINKS_EXPORT}, ${ROWS_EXPORT} and ${APP_ROWS_EXPORT} = { … }, each at most once`,
 					),
 				],
 			}
@@ -200,6 +208,12 @@ export function readEndpointFixtures(
 				return { ok: false, findings: [finding(child(declarator, 'init'), `the rows of ${named[0]} name each field's table as a string`)] }
 			}
 		}
+		if (name === APP_ROWS_EXPORT) {
+			const named = Object.entries(value.value).find(([, tables]) => Object.values(tables).some((columns) => !isSampleObject(columns)))
+			if (named !== undefined) {
+				return { ok: false, findings: [finding(child(declarator, 'init'), `the appRows of ${named[0]} give each table's row as an object of columns`)] }
+			}
+		}
 		read.set(name, value.value)
 	}
 	return {
@@ -214,6 +228,12 @@ export function readEndpointFixtures(
 				Object.entries(read.get(ROWS_EXPORT) ?? {}).map(([id, named]) => [
 					id,
 					Object.fromEntries(Object.entries(named).flatMap(([field, table]) => (typeof table === 'string' ? [[field, table]] : []))),
+				]),
+			),
+			appRows: Object.fromEntries(
+				Object.entries(read.get(APP_ROWS_EXPORT) ?? {}).map(([id, tables]) => [
+					id,
+					Object.fromEntries(Object.entries(tables).flatMap(([table, columns]) => (isSampleObject(columns) ? [[table, columns]] : []))),
 				]),
 			),
 		},

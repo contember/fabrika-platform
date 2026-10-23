@@ -90,7 +90,7 @@ describe('fabrika db on Cloudflare', () => {
 /** The fixture application whose generated tests are committed for Postgres; its migrations are also valid SQLite. */
 const ISOLATION_APP = join(import.meta.dir, 'fixtures', 'isolation-app')
 const GENERATED = [
-	...['note_comments', 'notes', 'organizations', 'workspace_events', 'workspaces'].map((table) =>
+	...['note_comments', 'notes', 'notices', 'organizations', 'workspace_events', 'workspaces'].map((table) =>
 		`src/db/__tests__/${table}.policy-isolation.test.ts`
 	),
 	'src/__tests__/endpoint-access.test.ts',
@@ -128,6 +128,6 @@ describe('the generated tests on Cloudflare', () => {
 		const root = isolationApp(CLOUDFLARE_CONFIG)
 		symlinkSync(join(import.meta.dir, '..', '..', 'node_modules'), join(root, 'node_modules'))
 		await run(root, 'test-scaffold')
-		expect(await run(root, 'test-isolation', [], { PATH: process.env['PATH'] })).toBe('95 generated cases passed\n')
+		expect(await run(root, 'test-isolation', [], { PATH: process.env['PATH'] })).toBe('104 generated cases passed\n')
 	})
 })

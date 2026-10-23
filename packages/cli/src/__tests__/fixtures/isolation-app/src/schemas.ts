@@ -6,6 +6,7 @@ export const NewNote = z.strictObject({ workspaceId: z.string(), title: z.string
 export const Rename = z.strictObject({ id: z.string(), title: z.string().min(1), expectVersion: z.int().positive() })
 export const Note = z.strictObject({ id: z.string(), title: z.string() })
 export const Notes = z.strictObject({ items: z.array(Note) })
+export const Notice = z.strictObject({ id: z.string(), body: z.string() })
 export const Named = z.strictObject({ id: z.string(), name: z.string() })
 export const NamedList = z.strictObject({ items: z.array(Named) })
 export const EditComment = z.strictObject({ id: z.string(), commentId: z.string(), body: z.string().min(1) })

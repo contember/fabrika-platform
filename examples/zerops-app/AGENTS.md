@@ -5723,6 +5723,14 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   table of the table that owns it, or a table it contains; the checker refuses a row further down
   (`endpoint-fixture`). Without it they send a sample, the handler
   finds no row (404), and the case fails.
+- `appRows['<endpoint id>']` gives the rows of application tables (`scope: { app }`) that the endpoint's handler reads
+  for the caller's own scope, by table, with the columns they need: `export const appRows = { 'portal.guide': { guides:
+  { active: true } } }`. Each of its leak and own-object cases seeds one row of each before it asks and removes them
+  once it is over, with every row that refers to them (a download the handler logged), so a handler that reads the
+  newest guide answers 200 instead of 404, and no other endpoint's case finds the row. A foreign key from one given row
+  to another holds that row's key. A text column may be given; the key, the version, the creator and a file column may
+  not (a file column holds a live, scanned file). Only application tables, and only for an endpoint with a leak or an
+  own-object case: the checker refuses a table in a scope, which `rows` and `seeds` address (`endpoint-fixture`).
 - The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).
 - The seed of the tests fills every text column with a marker and every other required column with a sample of its
   type: an enum's first label, `1`, `false`, today. A column with a `DEFAULT` keeps it (`status` is `open`). A column

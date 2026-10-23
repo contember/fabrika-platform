@@ -22,8 +22,11 @@ import {
 	type CheckConstraint,
 	checkLimit,
 	foreignKeyLimit,
+	type InsertedRow,
+	MAX_REMOVED_ROWS,
 	probeTable,
 	randomHex,
+	removalLimit,
 	type SampleValue,
 	type SeedColumn,
 	type SeedingBackend,
@@ -39,6 +42,7 @@ export {
 	type IsolationWorlds,
 	type SampleValue,
 	SEEDED_OBJECT_VERSION,
+	type SeededApplicationRows,
 	type SeededRow,
 	SeedLimitError,
 	type TestDatabase,
@@ -105,7 +109,8 @@ function readColumns(exec: Exec): SeedColumn[] {
 				table: table.name,
 				name: column.name,
 				type: column.type,
-				nullable: !rowid && column.notnull === 0,
+				// SQLite lets a primary key other than the rowid hold NULL unless it says NOT NULL; a seeded row's key never does.
+				nullable: !rowid && column.notnull === 0 && column.pk === 0,
 				defaulted: rowid || column.dflt_value !== null || column.hidden === 2 || column.hidden === 3,
 				text: TEXT_TYPES.has(type),
 				uuid: type === 'UUID',
@@ -293,6 +298,41 @@ function tableChecks(table: string, sql: string, columns: readonly string[]): Ch
 	return checks
 }
 
+const foreignKeyRows = z.array(z.object({ id: z.number(), seq: z.number(), table: z.string(), from: z.string(), to: z.string().nullable() }))
+const keyRows = z.array(z.object({ name: z.string(), pk: z.number() }))
+const rowidRows = z.array(z.object({ id: z.number() }))
+
+/** A foreign key of `table` and the columns of the table it references, in order. */
+interface Referrer {
+	readonly table: string
+	readonly columns: readonly string[]
+	readonly refs: readonly string[]
+}
+
+/** Every foreign key of the database's tables, by the table it references; a key that names no columns references its primary key. */
+function readReferrers(exec: Exec): ReadonlyMap<string, readonly Referrer[]> {
+	const tables = tableRows.parse(exec(`SELECT name, wr FROM pragma_table_list WHERE schema = 'main' AND type = 'table' ORDER BY name`))
+		.filter((table) => !table.name.startsWith('sqlite_'))
+	const referrers = new Map<string, Referrer[]>()
+	for (const table of tables) {
+		const keys = new Map<number, { table: string; columns: string[]; refs: (string | null)[] }>()
+		for (
+			const row of foreignKeyRows.parse(exec('SELECT id, seq, "table", "from", "to" FROM pragma_foreign_key_list(?) ORDER BY id, seq', table.name))
+		) {
+			const key = keys.get(row.id) ?? { table: row.table, columns: [], refs: [] }
+			key.columns.push(row.from)
+			key.refs.push(row.to)
+			keys.set(row.id, key)
+		}
+		for (const key of keys.values()) {
+			const primary = keyRows.parse(exec('SELECT name, pk FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk', key.table)).map((column) => column.name)
+			const refs = key.refs.map((ref, index) => ref ?? primary[index] ?? '')
+			referrers.set(key.table, [...(referrers.get(key.table) ?? []), { table: table.name, columns: key.columns, refs }])
+		}
+	}
+	return referrers
+}
+
 /** Every CHECK constraint of the database's tables. */
 function readChecks(exec: Exec, columns: readonly SeedColumn[]): CheckConstraint[] {
 	const tables = schemaRows.parse(exec(`SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND sql IS NOT NULL ORDER BY name`))
@@ -365,6 +405,16 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	}
 	const exec: Exec = (query, ...bindings) => storage.sql.exec(query, ...bindings).toArray()
 	const columns = readColumns(exec)
+	const withoutRowid = new Set(
+		tableRows.parse(exec(`SELECT name, wr FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND wr = 1`)).map((table) => table.name),
+	)
+	const referrers = readReferrers(exec)
+	/** A removal finds a table's rows again by their rowid; a table without one is a limit of the fixture. */
+	const requireRowid = (table: string): void => {
+		if (withoutRowid.has(table)) {
+			throw new SeedLimitError(`the isolation fixture cannot remove the rows of ${table}, a WITHOUT ROWID table; declare it with a rowid`)
+		}
+	}
 	const backend: SeedingBackend = {
 		columns,
 		checks: async () => readChecks(exec, columns),
@@ -393,6 +443,53 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 				file.sha256,
 				file.objectVersion,
 			)
+		},
+		async remove(rows: readonly InsertedRow[]) {
+			// One object, one writer: nothing writes between finding the rows and deleting them. The foreign keys are checked
+			// at the commit, so rows that refer to each other go together.
+			storage.transactionSync(() => {
+				exec('PRAGMA defer_foreign_keys = ON')
+				const found = new Map<string, Set<number>>()
+				let count = 0
+				let level = new Map<string, number[]>()
+				const add = (table: string, rowid: number): void => {
+					let rowids = found.get(table)
+					if (rowids === undefined) {
+						rowids = new Set()
+						found.set(table, rowids)
+					}
+					if (rowids.has(rowid)) return
+					if (++count > MAX_REMOVED_ROWS) throw removalLimit()
+					rowids.add(rowid)
+					level.set(table, [...(level.get(table) ?? []), rowid])
+				}
+				for (const row of rows) {
+					const where = [...row.match.keys()].map((column) => `${quoted(column)} = ?`).join(' AND ')
+					requireRowid(row.table)
+					const located = rowidRows.parse(exec(`SELECT rowid AS id FROM ${quoted(row.table)} WHERE ${where}`, ...[...row.match.values()].map(binding)))
+					for (const { id } of located) add(row.table, id)
+				}
+				while (level.size > 0) {
+					const current = level
+					level = new Map()
+					for (const [table, rowids] of current) {
+						for (const key of referrers.get(table) ?? []) {
+							requireRowid(key.table)
+							const on = key.columns.map((column, position) => `r.${quoted(column)} = t.${quoted(key.refs[position] ?? '')}`).join(' AND ')
+							const referring = rowidRows.parse(
+								exec(
+									`SELECT r.rowid AS id FROM ${quoted(key.table)} r JOIN ${quoted(table)} t ON ${on} WHERE t.rowid IN (SELECT value FROM json_each(?))`,
+									JSON.stringify(rowids),
+								),
+							)
+							for (const referrer of referring) add(key.table, referrer.id)
+						}
+					}
+				}
+				for (const [table, rowids] of found) {
+					exec(`DELETE FROM ${quoted(table)} WHERE rowid IN (SELECT value FROM json_each(?))`, JSON.stringify([...rowids]))
+				}
+			})
 		},
 	}
 	const database = openSqlite(storage)

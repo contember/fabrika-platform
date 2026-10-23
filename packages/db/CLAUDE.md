@@ -25,7 +25,8 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `orm-types.ts`         | The mini-ORM's handle types and `DbIndex`, which `@fabrika/app`'s kit builds once; types only, exported by `@fabrika/db/tables` too.                                                                                                                      |
 | `orm.ts`               | The mini-ORM at runtime: the `ctx.db` handles of one site, own-target read, `getForUpdate`, keyset lists, `unscoped`, queue claims; `dataAccess`.                                                                                                         |
 | `vocabulary-tables.ts` | The vocabulary form of the policies (authoring and normalized types), `TypedColumnList`; types only.                                                                                                                                                      |
-| `tables.ts`            | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.                                                                                                                                                     |
+| `tables.ts`            | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`, `applicationRowsPlan` and `applicationRowRefusalText`.                                                                                              |
+| `application-rows.ts`  | `planApplicationRows`: the rule of the `appRows` an endpoint access case seeds (tables, columns, values, links, order), which `@fabrika/check` reports and the test kits throw.                                                                           |
 | `temporal.ts`          | Days and timestamps at the boundary: a read's `YYYY-MM-DD` (`answerDays`), a write's strict day and ISO 8601 text (`dayInput`, `timestampInput`); on SQLite a timestamp's stored text (`storedTimestamp`) and a read's `Date` and boolean (`answerRows`). |
 | `description.ts`       | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                                                                                                                                   |
 | `nodes.ts`             | Kysely operation nodes built from a description and a scope predicate.                                                                                                                                                                                    |
@@ -94,7 +95,9 @@ application runner (`migrate`, as the migration role: the framework's tables, th
 `fabrika db migrate` applies them), connects and seeds as its runtime role, so every test of
 application code runs least-privileged, or answers `null` after the standard skip message; `seedWorlds` seeds one row of a table in each of two containment
 chains that share no value, every container row a table owns first, with the author's seed values in the table's own
-row (never a column that places it, nor a text column that holds a marker the leak cases look for), and answers each row's `chain` of dimension values (a share link's chain); `seedUnder` seeds a row in a seeded row's object (a child row a fixture names); `tableProbe` reaches one table of a layer by
+row (never a column that places it, nor a text column that holds a marker the leak cases look for), and answers each row's `chain` of dimension values (a share link's chain); `seedRow` seeds one row of an application
+table, with the author's values in any column it does not stamp or fill with a file, and `seedApplicationRows` several,
+in foreign-key order and linked (every table's values checked before the first insert, and a table that fails removes the rows seeded before it), with a `remove` that deletes them, the rows their required foreign keys and file columns made it insert, and every row that refers to any of them, however deep, each locked once found and all deleted in one statement (a foreign key is checked at its end, so rows that refer to each other go together); `seedUnder` seeds a row in a seeded row's object (a child row a fixture names); `tableProbe` reaches one table of a layer by
 name. `@fabrika/app/testing/isolation` builds the policy isolation and endpoint access tests on them. Every text
 column the seeding fills holds a distinct marker, so a leaked value is recognised anywhere in an answer, except a
 foreign key outside the chain (`null`, or the key of a reference or application row) and a column a CHECK names (an
@@ -106,7 +109,9 @@ migrates a fresh in-memory `bun:sqlite` database (`bunSqliteStorage`) with the o
 object's engine, so it needs no backend and never answers `null` (its type stays assignable to the Postgres kit's, so a
 generated test compiles against both). There are no roles on SQLite: the seeding writes through the same storage. The
 seeding plan, the worlds and the probe are `testing-shared.ts`, each kit giving it a `SeedingBackend` (its columns,
-CHECKs and inserts).
+CHECKs, inserts and the removal of seeded application rows). On SQLite that removal finds rows by their rowid (a
+`WITHOUT ROWID` table it reaches is a `SeedLimitError`) and defers the foreign keys to its commit; the object's one
+writer needs no lock.
 
 ## Two dialects (ADR-0065)
 

@@ -35,4 +35,5 @@ export const tables = defineTables(vocabulary, columns)({
 		insert: ['summary', 'kind'],
 	},
 	countries: { scope: { reference: 'lookup data' }, actions: { read: 'notes.read' } },
+	notices: { scope: { app: 'the notice every shared note and every editor shows' }, actions: { read: ['notes.read', 'notes.write'] } },
 })

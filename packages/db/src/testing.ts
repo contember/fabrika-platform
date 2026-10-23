@@ -27,8 +27,11 @@ import {
 	type CheckConstraint,
 	checkLimit,
 	foreignKeyLimit,
+	type InsertedRow,
+	MAX_REMOVED_ROWS,
 	probeTable,
 	randomHex,
+	removalLimit,
 	type SeedColumn,
 	type SeedingBackend,
 	type SeedLimitError,
@@ -43,6 +46,7 @@ export {
 	type IsolationWorlds,
 	type SampleValue,
 	SEEDED_OBJECT_VERSION,
+	type SeededApplicationRows,
 	type SeededRow,
 	SeedLimitError,
 	type TestDatabase,
@@ -130,6 +134,27 @@ JOIN pg_namespace n ON n.oid = r.relnamespace
 WHERE n.nspname = $1 AND c.contype = 'c'
 ORDER BY r.relname, c.conname
 `
+
+const referrerRows = z.array(z.object({ table_name: z.string(), columns: z.array(z.string()), refs: z.array(z.string()) }))
+
+/** Every foreign key of the schema's tables that references the table `$2`, with its columns and the ones it references, in order. */
+const REFERRER_QUERY = `
+SELECT r.relname::text AS table_name,
+	ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(attnum, ord) JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum ORDER BY k.ord) AS columns,
+	ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(attnum, ord) JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum ORDER BY k.ord) AS refs
+FROM pg_constraint c
+JOIN pg_class r ON r.oid = c.conrelid
+JOIN pg_namespace n ON n.oid = r.relnamespace
+JOIN pg_class t ON t.oid = c.confrelid
+WHERE n.nspname = $1 AND t.relnamespace = n.oid AND t.relname = $2 AND c.contype = 'f'
+ORDER BY r.relname, c.conname
+`
+
+// A row's ctid is its place, unique in a table: an application migration creates no partitioned table (ADR-0017).
+const ctidRows = z.array(z.object({ ctid: z.string() }))
+
+/** Ctids as one array literal parameter, `{"(0,1)","(0,2)"}`: the driver mis-binds a JS array. */
+const tidArray = (ctids: Iterable<string>): string => `{${[...ctids].map((ctid) => `"${ctid}"`).join(',')}}`
 
 /** `CHECK ((status = ANY (ARRAY['open'::text, 'done'::text])))`, a one-column `IN` list as Postgres prints it. */
 const IN_LIST = /^CHECK \(\(\(?"?([^"()\s]+)"?\)?(?:::[a-z ]+)? = ANY \(\(?ARRAY\[(.+)\]\)?(?:::[a-z ]+\[\])?\)\)\)$/
@@ -251,6 +276,67 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 		throw new Error(`${options.label}: ${error.message}; its cases did not run`)
 	}
 	const { schema, lock, seeder, catalog } = opened
+	const referrers = new Map<string, Promise<z.infer<typeof referrerRows>>>()
+	/** The foreign keys that reference `table`, read from the catalog once. */
+	const referrersOf = (table: string): Promise<z.infer<typeof referrerRows>> => {
+		let known = referrers.get(table)
+		if (known === undefined) {
+			known = lock.unsafe(REFERRER_QUERY, [schema, table]).then((rows: unknown) => referrerRows.parse(rows))
+			referrers.set(table, known)
+			// A failed read is not kept: the next removal reads the catalog again.
+			known.catch(() => referrers.delete(table))
+		}
+		return known
+	}
+	/**
+	 * Deletes the rows `start` names (table → ctids) and every row that refers to one of them, however deep. Rows are
+	 * found a level at a time, one statement per table and foreign key, by joining on the key's columns, so no value
+	 * leaves the database and comes back as a parameter. Each found row is locked (`FOR UPDATE`) until the transaction
+	 * ends: no write moves it to another ctid, and no new row refers to it, before the delete. All go in one statement,
+	 * so rows that refer to each other (a reply its notice pins) go together: a foreign key is checked at its end.
+	 */
+	const removeRows = async (tx: SQL, start: ReadonlyMap<string, readonly string[]>): Promise<void> => {
+		const found = new Map<string, Set<string>>()
+		let count = 0
+		let level = new Map<string, string[]>()
+		const add = (table: string, ctid: string): void => {
+			let ctids = found.get(table)
+			if (ctids === undefined) {
+				ctids = new Set()
+				found.set(table, ctids)
+			}
+			if (ctids.has(ctid)) return
+			if (++count > MAX_REMOVED_ROWS) throw removalLimit()
+			ctids.add(ctid)
+			level.set(table, [...(level.get(table) ?? []), ctid])
+		}
+		for (const [table, ctids] of start) for (const ctid of ctids) add(table, ctid)
+		while (level.size > 0) {
+			const current = level
+			level = new Map()
+			for (const [table, ctids] of current) {
+				const target = `${quoted(schema)}.${quoted(table)}`
+				for (const key of await referrersOf(table)) {
+					const on = key.columns.map((column, position) => `r.${quoted(column)} = t.${quoted(key.refs[position] ?? '')}`).join(' AND ')
+					const referring = ctidRows.parse(
+						await tx.unsafe(
+							`SELECT r.ctid::text AS ctid FROM ${quoted(schema)}.${
+								quoted(key.table_name)
+							} r JOIN ${target} t ON ${on} WHERE t.ctid = ANY($1::tid[]) FOR UPDATE OF r`,
+							[tidArray(ctids)],
+						),
+					)
+					for (const referrer of referring) add(key.table_name, referrer.ctid)
+				}
+			}
+		}
+		if (found.size === 0) return
+		const tables = [...found]
+		const deletes = tables.map(([table], index) =>
+			`d${index} AS (DELETE FROM ${quoted(schema)}.${quoted(table)} WHERE ctid = ANY($${index + 1}::tid[]))`
+		)
+		await tx.unsafe(`WITH ${deletes.join(', ')} SELECT 1`, tables.map(([, ctids]) => tidArray(ctids)))
+	}
 	const backend: SeedingBackend = {
 		columns: catalog.map(seedColumn),
 		checks: async () =>
@@ -286,6 +372,21 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 				VALUES ($1, $2, 'live', $3, 0, $4, 'application/octet-stream', 'seeded', now(), $5)`,
 				[file.id, file.kind, file.objectKey, file.sha256, file.objectVersion],
 			)
+		},
+		async remove(rows: readonly InsertedRow[]) {
+			await seeder.begin(async (tx) => {
+				const start = new Map<string, string[]>()
+				for (const row of rows) {
+					const where = [...row.match.keys()].map((column, index) => `${quoted(column)} = $${index + 1}`).join(' AND ')
+					const located = ctidRows.parse(
+						await tx.unsafe(`SELECT ctid::text AS ctid FROM ${quoted(schema)}.${quoted(row.table)} WHERE ${where} FOR UPDATE`, [
+							...row.match.values(),
+						]),
+					)
+					start.set(row.table, [...(start.get(row.table) ?? []), ...located.map((found) => found.ctid)])
+				}
+				await removeRows(tx, start)
+			})
 		},
 	}
 

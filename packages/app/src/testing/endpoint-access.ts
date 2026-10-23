@@ -58,6 +58,13 @@ export type ReachOutcome = { readonly answered: true } | { readonly answered: fa
 /** Column → value of the row of the table that owns the endpoint's dimension, in both scopes: the author's seed. */
 export type Seed = Readonly<Record<string, SampleValue>>
 
+/**
+ * Table → column → value: one row of each application table the handler reads for the caller's own scope, seeded
+ * before a leak or an own case asks and removed once it is over, with every row that refers to it, so no other case
+ * finds it. Both scopes may see it, so its values are never counted as the other scope's.
+ */
+export type AppRows = Readonly<Record<string, Seed>>
+
 export interface EndpointAccessKit {
 	/**
 	 * A caller holding the endpoint's action in one scope names an object (`on`) or a scope value (`in`) of another;
@@ -66,16 +73,18 @@ export interface EndpointAccessKit {
 	denied(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<DeniedOutcome>
 	/**
 	 * A caller of the other scope asks first, then a caller of one scope asks for its own object (`on`), its list
-	 * (`over`) or, for every table that lies in the dimension, its scope value (`in`).
+	 * (`over`) or, for every table that lies in the dimension, its scope value (`in`). `appRows` are seeded first, as
+	 * for `own`.
 	 */
-	leaked(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<LeakOutcome>
+	leaked(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed, appRows?: AppRows): Promise<LeakOutcome>
 	/**
 	 * A caller that holds only the endpoint's action asks for its own object: a person or a script in its scope, or, on
 	 * a link mount, the holder of a link bound to the object. A write action reads its own target. Where IAM requires more
 	 * of the caller, it holds that too: a member manager an assigning role and the assigned role's actions, a link's
-	 * issuer the actions the link grants.
+	 * issuer the actions the link grants. `appRows` are the rows of application tables its handler reads (the guide a link
+	 * holder downloads), each seeded first.
 	 */
-	own(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<DeniedOutcome>
+	own(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed, appRows?: AppRows): Promise<DeniedOutcome>
 	/**
 	 * An `app` or a `creates` endpoint asked by a caller who holds its action in one value of a dimension only, never
 	 * globally: refused (403), by the proxy for `app` and by IAM for `creates`, since both need a global grant.
@@ -724,147 +733,181 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		return { fetch, rows: (await rowsIn(own, rowFields(input))).rows }
 	}
 
-	const accessKit: EndpointAccessKit = {
-		async denied(endpoint, input, seed = {}) {
-			const row = endpointOf(endpoint)
-			const { action, access } = row
-			if (access.form !== 'on' && access.form !== 'in') {
-				throw new Error(`${endpoint} has the access form ${access.form}; only on and in name an object or a scope value`)
-			}
-			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
-			const asked = addressing(input, access.from, scopes.other)
-			const { status } = await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), asked, scopes.own.chain)
-			return { status }
-		},
-		async leaked(endpoint, input, seed = {}) {
-			const row = endpointOf(endpoint)
-			const { action, access } = row
-			if (access.form === 'in') {
-				const scopes = await inScopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
-				const grants = (targets: readonly InTarget[]): Grant[] =>
-					targets.flatMap(({ target, chain }) => holding(row, input, [{ action, scope: { type: access.dimension, value: target } }], chain))
-				const marks: string[] = []
-				for (const side of scopes.other) {
-					const answer = await ask(row, grants(scopes.other), addressing(input, access.from, side), side.chain)
-					marks.push(...answer.marks)
+	// The cases of one call: `removals` takes the removal of the application rows it seeds, which `drained` runs once
+	// the call and the runs it kicked are over. A list per call, so a concurrent case never removes the rows another
+	// was given; the generated cases run one after another, since a row a required foreign key needed is shared.
+	const accessKitOf = (removals: (() => Promise<void>)[]): EndpointAccessKit => {
+		/** One row of each application table `appRows` names, for this call only. */
+		const seedAppRows = async (appRows: AppRows): Promise<void> => {
+			if (Object.keys(appRows).length === 0) return
+			removals.push((await postgres.seedApplicationRows(tables, appRows)).remove)
+		}
+
+		return {
+			async denied(endpoint, input, seed = {}) {
+				const row = endpointOf(endpoint)
+				const { action, access } = row
+				if (access.form !== 'on' && access.form !== 'in') {
+					throw new Error(`${endpoint} has the access form ${access.form}; only on and in name an object or a scope value`)
 				}
-				const answers = []
-				for (const side of scopes.own) {
-					answers.push(await ask(row, grants(scopes.own), addressing(input, access.from, side), side.chain))
-				}
-				return leakOutcome(answers, [...scopes.values, ...marks])
-			}
-			if (access.form !== 'on' && access.form !== 'over') {
-				throw new Error(`${endpoint} has the access form ${access.form}; only on, in and over answer with rows of a scope`)
-			}
-			const scopes = access.form === 'on'
-				? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
-				: await listScopesOf(action, access.dimension)
-			const from = access.form === 'on' ? access.from : null
-			const other = await ask(
-				row,
-				holding(row, input, scopes.other.grants, scopes.other.chain),
-				addressing(input, from, scopes.other),
-				scopes.other.chain,
-			)
-			const answer = await ask(
-				row,
-				holding(row, input, scopes.own.grants, scopes.own.chain),
-				addressing(input, from, scopes.own),
-				scopes.own.chain,
-			)
-			return leakOutcome([answer], [...scopes.other.values, ...other.marks])
-		},
-		async own(endpoint, input, seed = {}) {
-			const row = endpointOf(endpoint)
-			const { action, access } = row
-			if (access.form !== 'on') {
-				throw new Error(`${endpoint} has the access form ${access.form}; only on addresses an object of its own`)
-			}
-			if (row.link !== null) {
-				const holder = await linkHolder(row, row.link, seed, input)
-				const { status } = await askAs(row, holder.fetch, { ...input, ...holder.rows })
+				const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
+				const asked = addressing(input, access.from, scopes.other)
+				const { status } = await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), asked, scopes.own.chain)
 				return { status }
-			}
-			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
-			const { status } = await ask(
-				row,
-				holding(row, input, scopes.own.grants, scopes.own.chain),
-				addressing(input, access.from, scopes.own),
-				scopes.own.chain,
-			)
-			return { status }
-		},
-		async scoped(endpoint, input) {
-			const row = globalEndpointOf(endpoint)
-			const dimension = row.access.form === 'creates' ? row.access.dimension : scopeTypeOf(kit.artifact.dimensions)
-			const { status } = await ask(row, [{ action: row.action, scope: { type: dimension, value: freshValue(dimension, 'own', undefined) } }], input, [])
-			return { status }
-		},
-		async anyone(endpoint, input) {
-			const row = kit.artifact.endpoints.find((candidate) => candidate.id === endpoint)
-			if (row?.kind !== 'public') {
-				throw new Error(`${endpoint} is not a public procedure of the contract`)
-			}
-			const response = await kit.fetch(row.path, {
-				method: row.method,
-				headers: { 'Content-Type': 'application/json', Origin: kit.origin, 'Sec-Fetch-Site': 'same-origin' },
-				body: JSON.stringify(input),
-			})
-			const status = response.status
-			const challenged = status === 400 && errorType(await response.text()) === 'challenge_failed'
-			return status >= 500 || status === 401 || status === 403 || challenged ? { answered: false, status } : { answered: true }
-		},
-		async global(endpoint, input) {
-			const row = globalEndpointOf(endpoint)
-			const { status } = await askAs(row, callerFor(row, [], [{ action: row.action }]).fetch, input)
-			// Neither form refuses with 404, so a 404 is the handler's own answer (a row the sampled input names is missing).
-			return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
-		},
-		async capability(endpoint, capability, input, seed = {}) {
-			const capabilities = capabilitiesEndpointOf(endpoint)
-			const named = capabilities.get(capability)
-			if (named === undefined) {
-				throw new Error(`${endpoint} has no capability '${capability}' (capabilities: ${[...capabilities.keys()].join(', ')})`)
-			}
-			const grants: Grant[] = []
-			const global: { readonly action: string }[] = []
-			let asked = input
-			for (const [name, other] of capabilities) {
-				if (name === capability) continue
-				if (other.access.form === 'over') {
-					global.push({ action: other.action })
-				} else if (other.access.form === 'on' || other.access.form === 'in') {
-					const { own } = await scopesOf(other.action, other.access.dimension, fieldOf(other.input, other.access.from), {}, input)
-					asked = addressing(asked, other.access.from, own)
-					grants.push(...own.grants)
+			},
+			async leaked(endpoint, input, seed = {}, appRows = {}) {
+				const row = endpointOf(endpoint)
+				const { action, access } = row
+				if (access.form === 'in') {
+					await seedAppRows(appRows)
+					const scopes = await inScopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
+					const grants = (targets: readonly InTarget[]): Grant[] =>
+						targets.flatMap(({ target, chain }) => holding(row, input, [{ action, scope: { type: access.dimension, value: target } }], chain))
+					const marks: string[] = []
+					for (const side of scopes.other) {
+						const answer = await ask(row, grants(scopes.other), addressing(input, access.from, side), side.chain)
+						marks.push(...answer.marks)
+					}
+					const answers = []
+					for (const side of scopes.own) {
+						answers.push(await ask(row, grants(scopes.own), addressing(input, access.from, side), side.chain))
+					}
+					return leakOutcome(answers, [...scopes.values, ...marks])
 				}
-			}
-			const { access } = named
-			if (access.form === 'on' || access.form === 'in') {
-				const scopes = await scopesOf(named.action, access.dimension, fieldOf(named.input, access.from), seed, input)
-				asked = addressing(asked, access.from, scopes.other)
-				grants.push(...scopes.own.grants)
-			}
-			const { status } = await askAs(named, callerFor(named, grants, global).fetch, asked)
-			return { status }
-		},
-	}
-	// Each case waits for the runs its requests kicked, so the suite's teardown never closes the database under one.
-	const drained = <A extends readonly unknown[], R>(method: (...args: A) => Promise<R>) => async (...args: A): Promise<R> => {
-		try {
-			return await method(...args)
-		} finally {
-			await kit.drain()
+				if (access.form !== 'on' && access.form !== 'over') {
+					throw new Error(`${endpoint} has the access form ${access.form}; only on, in and over answer with rows of a scope`)
+				}
+				await seedAppRows(appRows)
+				const scopes = access.form === 'on'
+					? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
+					: await listScopesOf(action, access.dimension)
+				const from = access.form === 'on' ? access.from : null
+				const other = await ask(
+					row,
+					holding(row, input, scopes.other.grants, scopes.other.chain),
+					addressing(input, from, scopes.other),
+					scopes.other.chain,
+				)
+				const answer = await ask(
+					row,
+					holding(row, input, scopes.own.grants, scopes.own.chain),
+					addressing(input, from, scopes.own),
+					scopes.own.chain,
+				)
+				return leakOutcome([answer], [...scopes.other.values, ...other.marks])
+			},
+			async own(endpoint, input, seed = {}, appRows = {}) {
+				const row = endpointOf(endpoint)
+				const { action, access } = row
+				if (access.form !== 'on') {
+					throw new Error(`${endpoint} has the access form ${access.form}; only on addresses an object of its own`)
+				}
+				await seedAppRows(appRows)
+				if (row.link !== null) {
+					const holder = await linkHolder(row, row.link, seed, input)
+					const { status } = await askAs(row, holder.fetch, { ...input, ...holder.rows })
+					return { status }
+				}
+				const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
+				const { status } = await ask(
+					row,
+					holding(row, input, scopes.own.grants, scopes.own.chain),
+					addressing(input, access.from, scopes.own),
+					scopes.own.chain,
+				)
+				return { status }
+			},
+			async scoped(endpoint, input) {
+				const row = globalEndpointOf(endpoint)
+				const dimension = row.access.form === 'creates' ? row.access.dimension : scopeTypeOf(kit.artifact.dimensions)
+				const { status } = await ask(row, [{ action: row.action, scope: { type: dimension, value: freshValue(dimension, 'own', undefined) } }], input, [])
+				return { status }
+			},
+			async anyone(endpoint, input) {
+				const row = kit.artifact.endpoints.find((candidate) => candidate.id === endpoint)
+				if (row?.kind !== 'public') {
+					throw new Error(`${endpoint} is not a public procedure of the contract`)
+				}
+				const response = await kit.fetch(row.path, {
+					method: row.method,
+					headers: { 'Content-Type': 'application/json', Origin: kit.origin, 'Sec-Fetch-Site': 'same-origin' },
+					body: JSON.stringify(input),
+				})
+				const status = response.status
+				const challenged = status === 400 && errorType(await response.text()) === 'challenge_failed'
+				return status >= 500 || status === 401 || status === 403 || challenged ? { answered: false, status } : { answered: true }
+			},
+			async global(endpoint, input) {
+				const row = globalEndpointOf(endpoint)
+				const { status } = await askAs(row, callerFor(row, [], [{ action: row.action }]).fetch, input)
+				// Neither form refuses with 404, so a 404 is the handler's own answer (a row the sampled input names is missing).
+				return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
+			},
+			async capability(endpoint, capability, input, seed = {}) {
+				const capabilities = capabilitiesEndpointOf(endpoint)
+				const named = capabilities.get(capability)
+				if (named === undefined) {
+					throw new Error(`${endpoint} has no capability '${capability}' (capabilities: ${[...capabilities.keys()].join(', ')})`)
+				}
+				const grants: Grant[] = []
+				const global: { readonly action: string }[] = []
+				let asked = input
+				for (const [name, other] of capabilities) {
+					if (name === capability) continue
+					if (other.access.form === 'over') {
+						global.push({ action: other.action })
+					} else if (other.access.form === 'on' || other.access.form === 'in') {
+						const { own } = await scopesOf(other.action, other.access.dimension, fieldOf(other.input, other.access.from), {}, input)
+						asked = addressing(asked, other.access.from, own)
+						grants.push(...own.grants)
+					}
+				}
+				const { access } = named
+				if (access.form === 'on' || access.form === 'in') {
+					const scopes = await scopesOf(named.action, access.dimension, fieldOf(named.input, access.from), seed, input)
+					asked = addressing(asked, access.from, scopes.other)
+					grants.push(...scopes.own.grants)
+				}
+				const { status } = await askAs(named, callerFor(named, grants, global).fetch, asked)
+				return { status }
+			},
 		}
 	}
+	// Each case waits for the runs its requests kicked, so the suite's teardown never closes the database under one, and
+	// only then removes its application rows, which those runs may still read. Every step runs whatever failed before
+	// it, and the case's own error is thrown first.
+	const drained =
+		<A extends readonly unknown[], R>(method: (kit: EndpointAccessKit) => (...args: A) => Promise<R>) => async (...args: A): Promise<R> => {
+			const removals: (() => Promise<void>)[] = []
+			let outcome: { readonly ok: true; readonly value: R } | { readonly ok: false; readonly error: unknown }
+			try {
+				outcome = { ok: true, value: await method(accessKitOf(removals))(...args) }
+			} catch (error) {
+				outcome = { ok: false, error }
+			}
+			const failures: unknown[] = []
+			for (const step of [() => kit.drain(), ...removals]) {
+				try {
+					await step()
+				} catch (error) {
+					failures.push(error)
+				}
+			}
+			if (!outcome.ok) {
+				if (failures.length === 0) throw outcome.error
+				throw new AggregateError([outcome.error, ...failures], 'the case failed, and so did its cleanup')
+			}
+			if (failures.length === 1) throw failures[0]
+			if (failures.length > 1) throw new AggregateError(failures, 'the cleanup of the case failed')
+			return outcome.value
+		}
 	return Object.freeze({
-		denied: drained(accessKit.denied),
-		leaked: drained(accessKit.leaked),
-		own: drained(accessKit.own),
-		scoped: drained(accessKit.scoped),
-		global: drained(accessKit.global),
-		anyone: drained(accessKit.anyone),
-		capability: drained(accessKit.capability),
+		denied: drained((cases) => cases.denied),
+		leaked: drained((cases) => cases.leaked),
+		own: drained((cases) => cases.own),
+		scoped: drained((cases) => cases.scoped),
+		global: drained((cases) => cases.global),
+		anyone: drained((cases) => cases.anyone),
+		capability: drained((cases) => cases.capability),
 	})
 }

@@ -13,7 +13,7 @@ import {
 	tableActions,
 	type TablePolicyArtifact,
 } from '@fabrika/auth-core'
-import { tablePolicies } from '@fabrika/db/tables'
+import { type ApplicationRowRefusal, applicationRowRefusalText, applicationRowsPlan, tablePolicies, type Tables } from '@fabrika/db/tables'
 import { ContractSourceError, readContractSource, readTablesDefinition } from './contract'
 import { type ApplicationDialect, applicationDialect } from './dialect'
 import { type EndpointFixtures, isSampleObject, NO_FIXTURES, readEndpointFixtures } from './endpoint-fixtures'
@@ -56,9 +56,17 @@ const testDatabaseLines = (
 interface Case {
 	readonly name: string
 	readonly lines: readonly string[]
+	/** A leak or an own case: it runs the handler for the caller's own scope, which application rows can serve. */
+	readonly ownScope?: true
 }
 
 const testCase = (name: string, ...lines: readonly string[]): Case => ({ name, lines })
+
+/** A case that runs the handler for the caller's own scope: a leak or an own case. */
+const ownScopeCase = (name: string, line: string): Case => ({ name, lines: [line], ownScope: true })
+
+/** Orders entries by their key, as every fixture is reported and seeded. */
+const byKey = ([left]: readonly [string, unknown], [right]: readonly [string, unknown]): number => (left < right ? -1 : left > right ? 1 : 0)
 
 const quote = (text: string): string => `'${text.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`
 
@@ -336,6 +344,17 @@ const ownerRead = (policies: Policies, dimension: string): string | undefined =>
 	)[0]
 
 /**
+ * Whether an endpoint gets the `own` case: `on` an object a table owns, as a link procedure or with an action other
+ * than the owner's read action (a caller holding only that one reaches every object, which proves nothing).
+ */
+const hasOwnCase = (row: EndpointRow, policies: Policies): boolean => {
+	if (row.requirement?.kind !== 'action') return false
+	const { access, action } = row.requirement
+	const read = access.form === 'on' ? ownerRead(policies, access.dimension) : undefined
+	return read !== undefined && (isLinkProcedure(row) || read !== action)
+}
+
+/**
  * What the `own` case's caller holds: the endpoint's action, plus what IAM requires of a link's issuer (the actions the
  * link grants) and of a member manager (an assigning role and the assigned role's actions).
  */
@@ -363,21 +382,27 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 	const seed = fixtures.seeds[row.id]
 	const args = `${quote(row.id)}, ${renderSample(input)}`
 	const seeded = seed === undefined ? args : `${args}, ${renderSample(seed)}`
+	// The application rows reach every case that runs the handler on the caller's own object: its leak cases and its own
+	// case. Only an endpoint with them gets the fourth argument, so every other generated file stays as it was.
+	const appRows = fixtures.appRows[row.id]
+	const rowsTail = appRows === undefined ? '' : `, ${renderSample(appRows)}`
+	const unseededArgs = appRows === undefined ? args : `${args}, {}${rowsTail}`
+	const seededArgs = seed === undefined ? unseededArgs : `${seeded}${rowsTail}`
 	const declared = artifact.declared?.[row.id]
 	const unscoped = declared !== undefined && Object.keys(declared.unscoped).length > 0
-	const read = access.form === 'on' ? ownerRead(policies, access.dimension) : undefined
-	const own = read !== undefined && (linked || read !== action)
+	const own = hasOwnCase(row, policies)
 	const cases: Case[] = []
-	// The unseeded probe always runs: a seed meets a precondition, and must not also set aside the state that leaks.
+	// The unseeded probe always runs: a seed meets a precondition, and must not also set aside the state that leaks. The
+	// application rows reach it too: they are rows of the whole application, which the handler needs to answer at all.
 	const leaked = (): Case[] => [
-		testCase(
+		ownScopeCase(
 			`${row.id}: the answer to one scope holds nothing of the scope answered before it`,
-			`expect(await kit.leaked(${args})).toEqual({ answered: true, leaked: [] })`,
+			`expect(await kit.leaked(${unseededArgs})).toEqual({ answered: true, leaked: [] })`,
 		),
 		...(seed === undefined ? [] : [
-			testCase(
+			ownScopeCase(
 				`${row.id}: with its seed, the answer to one scope holds nothing of the scope answered before it`,
-				`expect(await kit.leaked(${seeded})).toEqual({ answered: true, leaked: [] })`,
+				`expect(await kit.leaked(${seededArgs})).toEqual({ answered: true, leaked: [] })`,
 			),
 		]),
 	]
@@ -402,7 +427,10 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 	if (linked) {
 		if (own) {
 			cases.push(
-				testCase(`${row.id}: the holder of a link to a ${access.dimension} reaches it`, `expect(await kit.own(${seeded})).toEqual({ status: 200 })`),
+				ownScopeCase(
+					`${row.id}: the holder of a link to a ${access.dimension} reaches it`,
+					`expect(await kit.own(${seededArgs})).toEqual({ status: 200 })`,
+				),
 			)
 		}
 		return cases
@@ -412,9 +440,9 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 		if (!unscoped) cases.push(...leaked())
 		if (own) {
 			cases.push(
-				testCase(
+				ownScopeCase(
 					`${row.id}: a caller with only ${ownGrants(row, artifact, action, access.dimension)} reaches its own ${access.dimension}`,
-					`expect(await kit.own(${seeded})).toEqual({ status: 200 })`,
+					`expect(await kit.own(${seededArgs})).toEqual({ status: 200 })`,
 				),
 			)
 		}
@@ -541,10 +569,42 @@ export const generatedTests = async (
 }
 
 export interface ScaffoldInputs {
+	/** What `src/db/tables.ts` defines, its column list included; `null` without the file. */
+	readonly tables: Tables<unknown, unknown> | null
 	readonly policies: Policies
 	readonly artifact: ContractArtifact | null
 	readonly fixtures: EndpointFixtures
 	readonly dialect: ApplicationDialect
+}
+
+/**
+ * Whether an endpoint's generated cases run its handler for the caller's own scope, which application rows can serve: a
+ * leak or an own case, read off the cases `endpointCases` writes. An input it lacks a fixture for does not matter here.
+ */
+const runsOnOwnScope = (row: EndpointRow, artifact: ContractArtifact, policies: Policies, fixtures: EndpointFixtures): boolean => {
+	const withInput = { ...fixtures, inputs: { ...fixtures.inputs, [row.id]: fixtures.inputs[row.id] ?? {} } }
+	return endpointCases(row, artifact, policies, withInput).some((item) => item.ownScope === true)
+}
+
+/** The allowed form of an `appRows` entry `applicationRowsPlan` refuses; the message is the kit's own words. */
+const appRowAllowed = (refusal: ApplicationRowRefusal): string => {
+	switch (refusal.kind) {
+		case 'table':
+			return refusal.mode === null
+				? 'the name of a table with scope: { app } in src/db/tables.ts'
+				: "rows, for a row in the endpoint's object; seeds, for the state of the object's own row"
+		case 'column':
+			return `a column of ${refusal.table} in src/db/schema.generated.ts`
+		case 'stamped':
+		case 'file':
+			return "the row's other columns"
+		case 'value':
+			return 'a string, a number, a boolean or null'
+		case 'partial-key':
+			return `all of ${refusal.key.columns.join(', ')}, or none, which the kit then fills`
+		case 'cycle':
+			return 'a value for one of the foreign keys (null, where it may be), which the kit then does not fill'
+	}
 }
 
 /** What the scaffold reads from an application's files; throws `ContractSourceError` or `ContractError` as the reader does. */
@@ -555,15 +615,15 @@ export const scaffoldInputs = (files: ReadonlyMap<string, string>): ScaffoldInpu
 	if (!fixtures.ok) throw new ContractSourceError(fixtures.findings)
 	// Endpoint tests seed rows from the policies, so without src/db/tables.ts there is nothing to compile them against.
 	const artifact = files.has(CONTRACT_FILE) && tables !== null ? readContractSource(files, tables) : null
-	return { policies, artifact, fixtures: fixtures.fixtures, dialect: applicationDialect(files) }
+	return { tables, policies, artifact, fixtures: fixtures.fixtures, dialect: applicationDialect(files) }
 }
 
 /**
  * What stops the endpoint access tests from covering every endpoint: one whose input the scaffold cannot sample and
  * the author gave no fixture, and a fixture of no tested endpoint. Each is an `endpoint-fixture` finding.
  */
-export const missingEndpointFixtures = ({ policies, artifact, fixtures }: ScaffoldInputs): readonly Finding[] => {
-	if (artifact === null || Object.keys(policies).length === 0) return []
+export const missingEndpointFixtures = ({ tables, policies, artifact, fixtures }: ScaffoldInputs): readonly Finding[] => {
+	if (artifact === null || tables === null || Object.keys(policies).length === 0) return []
 	const at = (message: string, allowed: string): Finding => ({
 		file: ENDPOINT_FIXTURES_FILE,
 		line: 1,
@@ -587,7 +647,7 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 			)
 		}
 	}
-	for (const [id, fields] of Object.entries(fixtures.members).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {
+	for (const [id, fields] of Object.entries(fixtures.members).sort(byKey)) {
 		const row = tested.find((candidate) => candidate.id === id && !isLinkProcedure(candidate))
 		const directory = row === undefined ? null : endpointDirectory(artifact, row)
 		if (row === undefined || directory === null) {
@@ -606,8 +666,6 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 			}
 		}
 	}
-	const sortedById = (fields: Readonly<Record<string, readonly string[]>>) =>
-		Object.entries(fields).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
 	const holders = [
 		{
 			fields: fixtures.invitations,
@@ -625,7 +683,7 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 		},
 	]
 	for (const holder of holders) {
-		for (const [id, fields] of sortedById(holder.fields)) {
+		for (const [id, fields] of Object.entries(holder.fields).sort(byKey)) {
 			const row = tested.find((candidate) => candidate.id === id && !isLinkProcedure(candidate) && holder.admits(candidate))
 			if (row === undefined) {
 				findings.push(at(holder.refusal(id), holder.allowed))
@@ -638,7 +696,7 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 			}
 		}
 	}
-	for (const [id, fields] of Object.entries(fixtures.rows).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {
+	for (const [id, fields] of Object.entries(fixtures.rows).sort(byKey)) {
 		const row = tested.find((candidate) => candidate.id === id)
 		const access = row?.requirement?.kind === 'action' ? row.requirement.access : undefined
 		const owned = access?.form === 'on' && ownerRead(policies, access.dimension) !== undefined
@@ -651,7 +709,7 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 			)
 			continue
 		}
-		for (const [field, table] of Object.entries(fields).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {
+		for (const [field, table] of Object.entries(fields).sort(byKey)) {
 			if (row.input?.type !== 'object' || !admitsString(row.input.fields[field])) {
 				findings.push(at(`${id}: ${field} is no string field of its input, so it cannot name a row`, 'a top-level string field of the input'))
 			} else if (!liesDirectlyIn(policies, table, access.dimension)) {
@@ -662,6 +720,21 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 					),
 				)
 			}
+		}
+	}
+	for (const [id, rows] of Object.entries(fixtures.appRows).sort(byKey)) {
+		if (!tested.some((row) => row.id === id && runsOnOwnScope(row, artifact, policies, fixtures))) {
+			findings.push(
+				at(
+					`${id} is no endpoint with a leak or an own case, whose handler could read an application row the kit seeds`,
+					"export const appRows = { '<endpoint id>': { <table>: { <column>: <value> } } }, for an endpoint on, in or over a scope",
+				),
+			)
+			continue
+		}
+		// The rule the kit seeds by, read from the policies and the column list: one rule, so the two cannot drift.
+		for (const refusal of applicationRowsPlan(tables, rows).refusals) {
+			findings.push(at(`${id}: ${applicationRowRefusalText(refusal)}`, appRowAllowed(refusal)))
 		}
 	}
 	const seeded = (row: EndpointRow): boolean =>

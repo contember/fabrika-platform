@@ -40,6 +40,10 @@ create table team_tasks (
 create table badges (id text primary key, code text not null constraint badges_code_check check (length(code) = 2));
 create table stamps (id text primary key, code text not null check (length(code) = 3));
 create table links (id text primary key, team_id text not null references teams (id));
+create table inks (id uuid primary key, name text not null);
+create table prints (id uuid primary key, ink_id uuid not null references inks (id), copies integer not null default 1 check (copies > 0));
+create table threads (id uuid primary key, pinned uuid references posts (id));
+create table posts (id uuid primary key, thread_id uuid not null references threads (id), parent uuid references posts (id));
 `
 
 interface DB {
@@ -62,6 +66,10 @@ interface DB {
 	badges: { id: string; code: string }
 	stamps: { id: string; code: string }
 	links: { id: string; team_id: string }
+	inks: { id: string; name: string }
+	prints: { id: string; ink_id: string; copies: number }
+	threads: { id: string; pinned: string | null }
+	posts: { id: string; thread_id: string; parent: string | null }
 }
 
 const columns: TypedColumnList<DB> = {
@@ -81,6 +89,13 @@ const columns: TypedColumnList<DB> = {
 	badges: { columns: ['id', 'code'], foreignKeys: [] },
 	stamps: { columns: ['id', 'code'], foreignKeys: [] },
 	links: { columns: ['id', 'team_id'], foreignKeys: [{ columns: ['team_id'], table: 'teams', references: ['id'] }] },
+	inks: { columns: ['id', 'name'], foreignKeys: [] },
+	prints: { columns: ['id', 'ink_id', 'copies'], foreignKeys: [{ columns: ['ink_id'], table: 'inks', references: ['id'] }] },
+	threads: { columns: ['id', 'pinned'], foreignKeys: [{ columns: ['pinned'], table: 'posts', references: ['id'] }] },
+	posts: {
+		columns: ['id', 'thread_id', 'parent'],
+		foreignKeys: [{ columns: ['thread_id'], table: 'threads', references: ['id'] }, { columns: ['parent'], table: 'posts', references: ['id'] }],
+	},
 }
 
 const vocabulary = {
@@ -102,6 +117,10 @@ const tables = defineTables(vocabulary, columns)({
 	badges: { scope: { dimension: 'badge' }, actions: { read: 'teams.read' } },
 	stamps: { scope: { dimension: 'stamp' }, actions: { read: 'teams.read' } },
 	links: { scope: { dimension: 'link' }, actions: { read: 'teams.read' } },
+	inks: { scope: { app: 'the inks a print takes' }, actions: { read: 'teams.read' } },
+	prints: { scope: { app: 'the prints of an ink' }, actions: { read: 'teams.read' } },
+	threads: { scope: { app: 'the threads of the app' }, actions: { read: 'teams.read', update: 'teams.write' }, update: ['pinned'] },
+	posts: { scope: { app: 'the posts of a thread' }, actions: { read: 'teams.read', insert: 'teams.write' }, insert: ['thread_id', 'parent'] },
 })
 
 describe('the isolation fixture over constrained columns on SQLite', () => {
@@ -182,5 +201,34 @@ describe('the isolation fixture over constrained columns on SQLite', () => {
 
 	test('a probe insert samples a required foreign key and an IN list too', async () => {
 		expect(await sqlite.sampleInsert(tables, 'team_tasks')).toEqual({ title: expect.any(String) })
+	})
+
+	const count = (table: string): Promise<string> => tableProbe(layer, table).count(authority.app('teams.read'))
+
+	test('application rows leave nothing behind: not the row a required foreign key needed, nor a seed that failed partway', async () => {
+		// No ink is given, so the print's required key makes the fixture insert one, and the removal deletes it too.
+		const print = await sqlite.seedApplicationRows(tables, { prints: {} })
+		expect([await count('inks'), await count('prints')]).toEqual(['1', '1'])
+		await print.remove()
+		expect([await count('inks'), await count('prints')]).toEqual(['0', '0'])
+		// A CHECK the print fails removes the ink seeded before it.
+		await expect(sqlite.seedApplicationRows(tables, { inks: {}, prints: { copies: 0 } })).rejects.toThrow(SeedLimitError)
+		expect(await count('inks')).toBe('0')
+	})
+
+	test('rows that refer to each other, however deep, are removed together', async () => {
+		const seeded = await sqlite.seedApplicationRows(tables, { threads: { pinned: null }, posts: {} })
+		const thread = seeded.keys['threads'] ?? ''
+		// What a handler writes: twenty replies, each to the one before, and the thread pins the last.
+		const write = authority.app('teams.write')
+		let parent = seeded.keys['posts'] ?? ''
+		for (let reply = 0; reply < 20; reply++) {
+			const written = await tableProbe(layer, 'posts').insert(write, { thread_id: thread, parent })
+			parent = typeof written === 'object' && written !== null ? String(Reflect.get(written, 'id')) : ''
+		}
+		await tableProbe(layer, 'threads').update(write, thread, { pinned: parent })
+		expect(await count('posts')).toBe('21')
+		await seeded.remove()
+		expect([await count('threads'), await count('posts')]).toEqual(['0', '0'])
 	})
 })

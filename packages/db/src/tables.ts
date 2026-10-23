@@ -2,10 +2,13 @@
 // driver, so `@fabrika/app/contract` and the static contract reader in `@fabrika/check` import it.
 
 import type { ColumnPolicyArtifact, TableActionArtifact, TablePolicyArtifact, TableScope } from '@fabrika/auth-core'
+import { type ApplicationRowsPlan, planApplicationRows } from './application-rows'
 import { freeze, namesOf, ownEntry, ownKeys, setOwn } from './builtins'
 import { PolicyError } from './errors'
 import { modelOf, type ScopeModel, type TableModel, tableModels, type Tables } from './policy'
 
+export { applicationRowRefusalText } from './application-rows'
+export type { ApplicationRowRefusal, ApplicationRowsPlan } from './application-rows'
 export { PolicyError } from './errors'
 export type { FileReference } from './file-references'
 export type {
@@ -95,6 +98,19 @@ export type {
 	VocabularyPolicyMap,
 	VocabularyTablePolicy,
 } from './vocabulary-tables'
+
+/**
+ * The plan of seeding one row of each application table `rows` names (table → column → value), as an endpoint access
+ * case seeds its `appRows`: the order, the foreign keys that link one given row to another, and every refusal.
+ * `@fabrika/check` reports the refusals from source; `@fabrika/db/testing` throws the first, both in the words of
+ * `applicationRowRefusalText`.
+ */
+export function applicationRowsPlan<DB, P>(
+	tables: Tables<DB, P>,
+	rows: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
+): ApplicationRowsPlan {
+	return planApplicationRows(tableModels(tables), rows)
+}
 
 /** Every table's policy in the form the contract artifact carries, by table name. */
 export type TablePolicies = Readonly<Record<string, TablePolicyArtifact>>

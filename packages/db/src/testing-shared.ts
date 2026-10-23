@@ -3,9 +3,11 @@
 // probe. Not a subpath: each kit refuses a production process before it imports this module.
 
 import { createHash } from 'node:crypto'
+import { type ApplicationRowRefusal, applicationRowRefusalText, type ApplicationRowsPlan, planApplicationRows } from './application-rows'
 import { inSet, namesOf } from './builtins'
 import type { Database } from './database'
 import type { Primitive } from './description'
+import { FILES_TABLE } from './migrations'
 import { type Container, type ForeignKey, modelOf, type TableModel, type TableModels, tableModels, type Tables } from './policy'
 import { refuseInProduction } from './production'
 import { frameworkSideOf } from './registry'
@@ -45,6 +47,18 @@ export interface ApplicationRow {
 	readonly markers: readonly string[]
 }
 
+/** Rows of application tables seeded together for one case, and their removal once the case is over. */
+export interface SeededApplicationRows {
+	/** Each table's row key, by table. */
+	readonly keys: Readonly<Record<string, string>>
+	/**
+	 * Deletes the rows, the rows their required foreign keys and file columns made the fixture insert, and every row
+	 * that refers to one of them, however deep (what the case's handler wrote about them), in one transaction, so rows
+	 * that refer to each other go together. A row already gone is skipped.
+	 */
+	remove(): Promise<void>
+}
+
 /** A row seeded under another: its key, and the distinct value written into every text column the fixture filled. */
 export interface SeededRow {
 	readonly key: string
@@ -79,8 +93,22 @@ export interface TestSeeding {
 	 * marker, so a seed of one, or of a column that places the row, throws.
 	 */
 	seedWorlds<DB, P>(tables: Tables<DB, P>, table: string, values?: Readonly<Record<string, SampleValue>>): Promise<IsolationWorlds>
-	/** Seeds one row of the application table `table`: its key, version and creator stamped, every other column sampled. */
-	seedRow<DB, P>(tables: Tables<DB, P>, table: string): Promise<ApplicationRow>
+	/**
+	 * Seeds one row of the application table `table`: its key, version and creator stamped, `values` (column → value)
+	 * as given, a text column too, every other column sampled. A value for a stamped column or a file column throws.
+	 */
+	seedRow<DB, P>(tables: Tables<DB, P>, table: string, values?: Readonly<Record<string, SampleValue>>): Promise<ApplicationRow>
+	/**
+	 * Seeds one row of each application table `rows` names (table → column → value), as `seedRow` does, in foreign-key
+	 * order: a foreign key from one of them to another holds that row's key unless the values give it. Every table's
+	 * values are checked before the first insert, and a table that fails removes the rows seeded before it. `remove`
+	 * deletes them, the rows a required foreign key of theirs made it insert, and every row that refers to any of them,
+	 * so the next case starts without them.
+	 */
+	seedApplicationRows<DB, P>(
+		tables: Tables<DB, P>,
+		rows: Readonly<Record<string, Readonly<Record<string, SampleValue>>>>,
+	): Promise<SeededApplicationRows>
 	/**
 	 * Seeds one row of `table`, a child or dimension table that lies in the object of `under` (a row `seedWorlds`
 	 * seeded), placed in that row's chain: the row a fixture names by id, such as a note's comment. Answers its key and
@@ -140,6 +168,20 @@ export interface SeededFile {
 	readonly objectVersion: string
 }
 
+/** A row the fixture inserted, found again by `match` (column → value): what a removal deletes. */
+export interface InsertedRow {
+	readonly table: string
+	readonly match: ReadonlyMap<string, SampleValue>
+}
+
+/** How many rows one removal deletes, referring rows included, before it gives up. */
+export const MAX_REMOVED_ROWS = 10_000
+
+/** The seed limit of a removal that reaches more than `MAX_REMOVED_ROWS` rows. */
+export function removalLimit(): SeedLimitError {
+	return new SeedLimitError(`the isolation fixture cannot remove the application rows: more than ${MAX_REMOVED_ROWS} rows refer to them`)
+}
+
 /** What a kit gives the seeding: its schema's columns and CHECK constraints, and the statements it runs. */
 export interface SeedingBackend {
 	readonly columns: readonly SeedColumn[]
@@ -150,6 +192,12 @@ export interface SeedingBackend {
 	/** One row of `table`, of `columns`, or `undefined` when it has none. */
 	firstRow(table: string, columns: readonly string[]): Promise<Readonly<Record<string, unknown>> | undefined>
 	insertFile(file: SeededFile): Promise<void>
+	/**
+	 * Deletes `rows` (each found by its `match`; one already gone is skipped) and every row that refers to one of them,
+	 * however deep, in one transaction whose foreign keys are checked once all are gone, so rows that refer to each other
+	 * go together. No write moves or adds a referring row between finding the rows and deleting them.
+	 */
+	remove(rows: readonly InsertedRow[]): Promise<void>
 }
 
 /** The seed limit of a CHECK a seeded row fails. */
@@ -171,6 +219,12 @@ export function typeLimit(table: string, column: string, type: string): SeedLimi
 
 export function randomHex(): string {
 	return crypto.randomUUID().replaceAll('-', '').slice(0, 8)
+}
+
+/** The error a refusal of `planApplicationRows` throws when a test seeds the rows anyway. */
+function applicationRowError(refusal: ApplicationRowRefusal): Error {
+	const text = applicationRowRefusalText(refusal)
+	return refusal.kind === 'cycle' ? new SeedLimitError(`the isolation fixture cannot order the application rows: ${text}`) : new Error(text)
 }
 
 /** A key value as the database returned it, for the foreign key that references it. */
@@ -294,9 +348,17 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 	/**
 	 * The values of a foreign key outside the containment chain: `null` where every open column admits it, else the
 	 * key of a row of the referenced table, an existing one (a reference table's rows come from a migration) or one the
-	 * fixture inserts. A required key to a dimension or child table is refused: its row would lie in another chain.
+	 * fixture inserts, which `inserted` records when given. A required key to a dimension or child table is refused: its
+	 * row would lie in another chain.
 	 */
-	async function referencedKey(models: TableModels, table: string, key: ForeignKey, open: readonly string[], depth: number) {
+	async function referencedKey(
+		models: TableModels,
+		table: string,
+		key: ForeignKey,
+		open: readonly string[],
+		depth: number,
+		inserted?: InsertedRow[],
+	) {
 		const columns = columnsOf(table)
 		const values = new Map<string, SampleValue>()
 		if (open.every((name) => columns.find((column) => column.name === name)?.nullable === true)) {
@@ -313,11 +375,15 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			)
 		}
 		const existing = await backend.firstRow(key.table, key.references)
-		const row = existing ?? (await insert(models, key.table, new Map(), [], depth + 1)).stored
+		const row = existing ?? (await insert(models, key.table, new Map(), [], depth + 1, inserted)).stored
+		const match = new Map<string, SampleValue>()
 		key.columns.forEach((name, index) => {
 			const referenced = key.references[index] ?? ''
-			values.set(name, keyValue(row[referenced], `${key.table}.${referenced}`))
+			const value = keyValue(row[referenced], `${key.table}.${referenced}`)
+			values.set(name, value)
+			match.set(referenced, value)
 		})
+		if (existing === undefined) inserted?.push({ table: key.table, match })
 		return values
 	}
 
@@ -329,12 +395,16 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		throw new Error(`${table}.${name} holds a ${dimension} as ${column.type}; a key or containment column holds its scope value as text or uuid`)
 	}
 
-	/** A live, empty file of `kind`, as the framework's put leaves one once a reference claims it: what a seeded file column holds. */
-	async function seedFile(kind: string): Promise<string> {
+	/**
+	 * A live, empty file of `kind`, as the framework's put leaves one once a reference claims it: what a seeded file column
+	 * holds. `inserted` records it when given.
+	 */
+	async function seedFile(kind: string, inserted?: InsertedRow[]): Promise<string> {
 		const id = crypto.randomUUID()
 		const objectKey = `${kind}/${id}`
 		seededObjects.push(objectKey)
 		await backend.insertFile({ id, kind, objectKey, sha256: EMPTY_SHA256, objectVersion: SEEDED_OBJECT_VERSION })
+		inserted?.push({ table: FILES_TABLE, match: new Map([['id', id]]) })
 		return id
 	}
 
@@ -342,7 +412,8 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 	 * Inserts one row: `assigned` as given, a file column a seeded file, a foreign key outside the chain `null` or referencing a row, a column a CHECK
 	 * names its `IN` list's first value or `null`, every other text column a marker and every other required column a
 	 * sample. Answers what the fixture wrote, and the row as stored (its database defaults filled). A CHECK or a foreign
-	 * key the values still fail is a `SeedLimitError` that names the constraint.
+	 * key the values still fail is a `SeedLimitError` that names the constraint. `inserted` records every row a foreign
+	 * key or a file column made it insert, not the row itself.
 	 */
 	async function insert(
 		models: TableModels,
@@ -350,6 +421,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		assigned: ReadonlyMap<string, SampleValue>,
 		markers: string[],
 		depth = 0,
+		inserted?: InsertedRow[],
 	): Promise<{ readonly row: ReadonlyMap<string, SampleValue>; readonly stored: Readonly<Record<string, unknown>> }> {
 		const model = modelOf(models, table)
 		const columns = columnsOf(table)
@@ -359,7 +431,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		for (const key of model?.foreignKeys ?? []) {
 			const open = key.columns.filter((column) => !assigned.has(column) && !defaulted.has(column))
 			if (open.length === 0) continue
-			for (const [name, value] of await referencedKey(models, table, key, open, depth)) keyed.set(name, value)
+			for (const [name, value] of await referencedKey(models, table, key, open, depth, inserted)) keyed.set(name, value)
 		}
 		const row = new Map<string, SampleValue>()
 		for (const column of columns) {
@@ -374,7 +446,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			const kind = model !== undefined && Object.hasOwn(model.files, name) ? model.files[name] : undefined
 			const checked = kind === undefined ? await checkedValue(table, column) : undefined
 			if (kind !== undefined) {
-				row.set(name, await seedFile(kind))
+				row.set(name, await seedFile(kind, inserted))
 			} else if (checked !== undefined) {
 				row.set(name, checked)
 			} else if (await holdsMarker(model, table, column)) {
@@ -408,6 +480,49 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			assigned.set(model.createdBy, 'isolation-fixture')
 		}
 		return assigned
+	}
+
+	/**
+	 * The plan of seeding `rows` (table → column → value), after `planApplicationRows`, the rule `@fabrika/check` reports
+	 * from source, and the migrated schema passed it: each given column is a column of the database too. Throws the first
+	 * refusal; inserts nothing, so a seed of several tables checks them all first.
+	 */
+	function checkApplicationValues(models: TableModels, rows: Readonly<Record<string, Readonly<Record<string, SampleValue>>>>): ApplicationRowsPlan {
+		const plan = planApplicationRows(models, rows)
+		const [refusal] = plan.refusals
+		if (refusal !== undefined) throw applicationRowError(refusal)
+		for (const table of plan.order) {
+			for (const name of Object.keys(rows[table] ?? {})) columnOf(table, name)
+		}
+		return plan
+	}
+
+	/**
+	 * One row of the application table `model`, whose values `checkApplicationValues` passed: its key, version and
+	 * creator stamped, `linked` (a foreign key to a row seeded beside it) and `values` as given, a text column too, every
+	 * other column sampled. A key `linked` gives (a table that shares its referenced row's key) is the row's key.
+	 * `inserted` records the row and each row a foreign key or a file column made it insert, referenced rows first.
+	 */
+	async function seedApplicationRow(
+		models: TableModels,
+		model: TableModel,
+		values: Readonly<Record<string, SampleValue>>,
+		linked: ReadonlyMap<string, SampleValue>,
+		markers: string[],
+		inserted?: InsertedRow[],
+	) {
+		const table = model.name
+		const scope = model.scope
+		if (scope.mode !== 'app') throw new Error(`${table} is a ${scope.mode} table, not an application table`)
+		const shared = linked.get(scope.key)
+		const key = shared === undefined || shared === null ? scopeValue(table, scope.key, table, 'app') : String(shared)
+		const assigned = placement(model, new Map(), key)
+		for (const [name, value] of linked) assigned.set(name, value)
+		// A given text column holds no marker: no leak case counts an application row's values as another scope's.
+		for (const [name, value] of Object.entries(values)) assigned.set(name, value)
+		const seeded = await insert(models, table, assigned, markers, 0, inserted)
+		inserted?.push({ table, match: new Map([[scope.key, key]]) })
+		return { key, ...seeded }
 	}
 
 	async function seedWorld(models: TableModels, model: TableModel, world: string, seed: Readonly<Record<string, SampleValue>>): Promise<WorldRow> {
@@ -476,19 +591,53 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			const dimension = grantDimension(models, model)
 			return { dimension, own: await seedWorld(models, model, 'own', values), other: await seedWorld(models, model, 'other', values) }
 		},
-		async seedRow(tables, table) {
+		async seedRow(tables, table, values = {}) {
 			const { models, model } = scopedModel(tables, table)
-			if (model.scope.mode !== 'app') {
-				throw new Error(`${table} is a ${model.scope.mode} table; seedWorlds seeds a dimension or child table`)
-			}
+			checkApplicationValues(models, { [table]: values })
 			const markers: string[] = []
-			const key = scopeValue(table, model.scope.key, table, 'app')
-			const { row } = await insert(models, table, placement(model, new Map(), key), markers)
+			const { key, row } = await seedApplicationRow(models, model, values, new Map(), markers)
 			const updates: Record<string, SampleValue> = {}
 			for (const name of namesOf(model.update)) {
 				updates[name] = row.get(name) ?? await updateSample(table, name)
 			}
 			return { key, updates, markers }
+		},
+		async seedApplicationRows(tables, rows) {
+			const models = tableModels(tables)
+			const plan = checkApplicationValues(models, rows)
+			const order = plan.order.flatMap((table) => modelOf(models, table) ?? [])
+			const inserted: InsertedRow[] = []
+			// Every row the fixture inserted: the given rows, the rows a foreign key or a file column of theirs made it
+			// insert, and every row that refers to one of them.
+			const remove = (): Promise<void> => backend.remove(inserted)
+			const stored = new Map<string, Readonly<Record<string, unknown>>>()
+			const keys: Record<string, string> = {}
+			try {
+				for (const model of order) {
+					const values = rows[model.name] ?? {}
+					const linked = new Map<string, SampleValue>()
+					for (const key of plan.links[model.name] ?? []) {
+						const referenced = stored.get(key.table)
+						if (referenced === undefined) continue
+						key.columns.forEach((column, index) => {
+							const name = key.references[index] ?? ''
+							linked.set(column, keyValue(referenced[name], `${key.table}.${name}`))
+						})
+					}
+					const seeded = await seedApplicationRow(models, model, values, linked, [], inserted)
+					stored.set(model.name, seeded.stored)
+					keys[model.name] = seeded.key
+				}
+			} catch (error) {
+				// A table that fails leaves none of the rows seeded before it for the next case.
+				try {
+					await remove()
+				} catch (cleanup) {
+					throw new AggregateError([error, cleanup], 'the isolation fixture could not seed the application rows, nor remove those it had seeded')
+				}
+				throw error
+			}
+			return { keys, remove }
 		},
 		async seedUnder(tables, table, under) {
 			const { models, model } = scopedModel(tables, table)
