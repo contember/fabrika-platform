@@ -2,7 +2,7 @@
 // waits on and reports to, and the MCP use cases, against SQLite always and Postgres when FABRIKA_TEST_POSTGRES_URL is
 // set. GitHub is the recording fake; the SQL runs against the real schema.
 
-import { type DevReport, type DevWaitAnswer, encodeDevReport, encodeDevWaitRequest, parseDevWaitAnswer } from '@fabrika/app/dev/wire'
+import { type DevLogLine, type DevReport, type DevWaitAnswer, encodeDevReport, encodeDevWaitRequest, parseDevWaitAnswer } from '@fabrika/app/dev/wire'
 import { hashPlatformKey } from '@fabrika/email/platform'
 import type { SqlDatabase } from '@fabrika/platform'
 import type { ControlProvider, ProviderDevEnvironmentInput } from '@fabrika/provider-contract'
@@ -344,6 +344,23 @@ for (const backend of backends) {
 			expect(row?.refused_sha).toBe(sha('c'))
 			const status = await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 10, failuresOnly: true } })
 			expect(status.log).toEqual({ lines: [{ n: 1, stream: 'stderr', text: 'error: line 1' }], from: 0, to: 3, total: 3 })
+		})
+
+		test("get_dev_status indexes the log by the launcher's line numbers, so after stays put across reports", async () => {
+			const w = await world()
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
+			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
+			const lines = (from: number, to: number): DevLogLine[] =>
+				Array.from({ length: to - from }, (_, i) => ({ n: from + i, stream: 'stdout', text: `line ${from + i}` }))
+			const status = (query: { after?: number }) =>
+				getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 3, failuresOnly: false, ...query } })
+
+			await report(w, { head: sha('b'), status: 'serving', log: lines(50, 56) })
+			expect((await status({})).log).toEqual({ lines: lines(53, 56), from: 53, to: 56, total: 56 })
+			// The next report starts later, after a sync: the same after reads only the new lines.
+			await report(w, { head: sha('b'), status: 'serving', log: lines(54, 60) })
+			expect((await status({ after: 56 })).log).toEqual({ lines: lines(56, 59), from: 56, to: 59, total: 60 })
+			expect((await status({ after: 10 })).log).toEqual({ lines: lines(54, 57), from: 54, to: 57, total: 60 })
 		})
 
 		test('run_checks and reset_dev advance their generations and wait for the report', async () => {

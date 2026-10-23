@@ -329,6 +329,8 @@ class Launcher {
 		let changed = boot
 		let migrate = boot
 		let spaFailure: string | null = null
+		const reset = answer.reset > (this.state.reset ?? answer.reset)
+		if (answer.sync !== null || reset) this.ring.mark()
 		if (answer.sync !== null) {
 			const outcome = await this.writeSync(answer.sync)
 			if (outcome.kind === 'refused') {
@@ -343,7 +345,6 @@ class Launcher {
 				spaFailure = outcome.spaFailure
 			}
 		}
-		const reset = answer.reset > (this.state.reset ?? answer.reset)
 		if (changed || reset) await this.converge({ migrate: migrate || reset, reset, spaFailure, resetTo: answer.reset })
 		if (answer.checks > (this.state.checks ?? answer.checks)) await this.check(answer.checks)
 	}
