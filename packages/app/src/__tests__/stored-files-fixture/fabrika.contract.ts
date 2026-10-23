@@ -1,14 +1,14 @@
 // A kit application whose files are values in table columns (`stored-files.test.ts`).
 
 import { app } from './src/app-kit'
-import { attachments, catalog, catalogMail, inbox, intake, intakeMail, scans, shop } from './src/deals/endpoints'
+import { attachments, catalog, catalogMail, catalogRace, inbox, intake, intakeMail, scans, shop } from './src/deals/endpoints'
 
 export const contract = app.contract((c) => ({
 	api: c.rpc('/api', { attachments, catalog, shop, intake }),
 	health: c.health('/healthz'),
 	scans,
 	inbox,
-	jobs: { catalogMail, intakeMail },
+	jobs: { catalogMail, catalogRace, intakeMail },
 	files: {
 		attachments: c.files({ types: ['application/pdf', 'image/png'], maxBytes: 1048576 }),
 		catalog: c.files({ types: ['image/png'], maxBytes: 262144 }),

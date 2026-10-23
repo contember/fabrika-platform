@@ -176,6 +176,24 @@ export const catalogMail = app.cron('0 7 * * *', { actions: ['catalog.read'], ma
 	})
 })
 
+/**
+ * A transaction that throws once a file put after it began went live in another: its rollback leaves that file alone.
+ */
+export const catalogRace = app.cron('0 9 * * *', { actions: ['catalog.write'], retries: 0 }).handle(async ({ ctx }) => {
+	const committed = Promise.withResolvers<void>()
+	const failing = ctx.transaction(async () => {
+		await committed.promise
+		throw new Error('the transaction fails after the other committed')
+	})
+	try {
+		const image = await ctx.files.put('catalog', new Uint8Array(PNG_BYTES), { type: 'image/png', name: 'raced.png' })
+		await ctx.transaction((tx) => tx.db.app('catalog.write').products.insert({ name: 'raced', image }))
+	} finally {
+		committed.resolve()
+	}
+	await failing.catch(() => undefined)
+})
+
 /** Mails the photos of the submissions; a photo the scan has not cleared yet is refused. */
 export const intakeMail = app.cron('0 8 * * *', { actions: ['intake.drain'], mailer: 'installation', retries: 0 }).handle(
 	async ({ ctx }) => {
