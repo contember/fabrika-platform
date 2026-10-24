@@ -73,6 +73,7 @@ export async function listRunsUseCase(c: RunsUseCaseContext, input: RunListInput
 	const rows = await c.repositories.runs.listRuns({
 		...(appId !== undefined ? { appId } : {}),
 		...(env !== undefined ? { env } : {}),
+		...(input.statuses === undefined ? {} : { statuses: input.statuses }),
 		...(before !== undefined ? { before } : {}),
 		limit,
 	})

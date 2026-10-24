@@ -798,6 +798,27 @@ describe('onboarding + registry CRUD', () => {
 })
 
 describe('run history API', () => {
+	test('filters active runs before pagination and rejects invalid status filters', async () => {
+		const { deps, sqlite } = makeDeps()
+		await deps.repositories.registry.createApp({ id: 'active', repoUrl: 'r' })
+		await deps.repositories.registry.upsertAppEnv(storedEnvironment('active', 'prod'))
+		const ids: string[] = []
+		for (const status of ['pending', 'running', 'awaiting_approval', 'succeeded', 'failed']) {
+			const id = uuidv7()
+			ids.push(id)
+			await deps.repositories.runs.createRun({ id, appId: 'active', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
+			sqlite.query('UPDATE runs SET status = ? WHERE id = ?').run(status, id)
+		}
+		const first = await rpcResult(rpcRequest('runs.list', { statuses: ['pending', 'running'], limit: 1 }), deps)
+		expect(first.status).toBe(200)
+		expect(await first.json()).toMatchObject({ items: [{ id: ids[1], status: 'running' }], nextCursor: ids[1] })
+		const next = await rpcResult(rpcRequest('runs.list', { statuses: ['pending', 'running'], before: ids[1], limit: 10 }), deps)
+		expect(await next.json()).toMatchObject({ items: [{ id: ids[0], status: 'pending' }], nextCursor: null })
+		for (const statuses of [[], ['invented']]) {
+			expect((await rpcResult(rpcRequest('runs.list', { statuses }), deps)).status).toBe(400)
+		}
+	})
+
 	test('lists runs newest-first and filters by app/env', async () => {
 		const { deps } = makeDeps()
 		await deps.repositories.registry.createApp({ id: 'a', repoUrl: 'r1' })

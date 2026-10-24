@@ -40,6 +40,7 @@ import type {
 	RepublishAllNamespacesResponse,
 	RunDto,
 	RunLogResponse,
+	RunStatus,
 	RunTailResponse,
 	SetEnvironmentProtectionRequest,
 	StartGitHubSourceConnectionRequest,
@@ -123,6 +124,8 @@ export interface UpdateNamespaceInput extends NamespaceIdInput {
 export interface RunListInput {
 	readonly appId?: string
 	readonly env?: string
+	/** Filter before pagination, so an old queued or running deploy is not hidden by newer finished runs. */
+	readonly statuses?: RunStatus[]
 	readonly before?: string
 	readonly limit?: number
 }

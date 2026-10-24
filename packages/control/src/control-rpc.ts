@@ -178,6 +178,7 @@ const planNamespaceInput = z.object({
 const runListInput = z.object({
 	appId: z.string().optional(),
 	env: z.string().optional(),
+	statuses: z.array(z.enum(['pending', 'running', 'awaiting_approval', 'succeeded', 'failed'])).min(1).max(5).optional(),
 	before: z.string().optional(),
 	limit: z.number().int().min(1).max(200).optional(),
 })

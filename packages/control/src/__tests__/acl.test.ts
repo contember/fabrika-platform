@@ -79,6 +79,12 @@ describe('ACL enforcement (resolved auth context)', () => {
 		expect((await rpcResult(rpcRequest('runs.list', { appId: 'alpha' }), appRead.deps)).status).toBe(200)
 		expect((await rpcResult(rpcRequest('runs.list', { appId: 'beta' }), appRead.deps)).status).toBe(403)
 		expect((await rpcResult(rpcRequest('runs.list', {}), appRead.deps)).status).toBe(403)
+		expect((await rpcResult(rpcRequest('runs.list', { statuses: ['pending', 'running'] }), appRead.deps)).status).toBe(403)
+		const scopedActive = await rpcResult(rpcRequest('runs.list', { appId: 'alpha', statuses: ['pending', 'running'] }), appRead.deps)
+		expect(scopedActive.status).toBe(200)
+		const scopedActiveBody = await scopedActive.text()
+		expect(scopedActiveBody).toContain(alphaRun)
+		expect(scopedActiveBody).not.toContain(betaRun)
 		for (const id of [alphaRun, betaRun]) {
 			appRead.sqlite.query(`UPDATE runs SET status = 'failed', finished_at = 1 WHERE id = ?`).run(id)
 		}
