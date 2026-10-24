@@ -20,6 +20,7 @@ import {
 	parseInspectDeviceAuthorizationInput,
 	parseListOwnDeviceAuthorizationsInput,
 	parseStartDeviceAuthorizationInput,
+	type PermissionEntry,
 	permits,
 	type PollDeviceAuthorizationResult,
 	type StartDeviceAuthorizationResult,
@@ -31,7 +32,7 @@ import type { Env } from './env'
 import { pkceChallenge } from './oidc'
 import type { DeviceAuthorizationRow, DeviceReceiptRow } from './repositories/device'
 import { unixNow } from './repositories/sql'
-import { resolvePermissionsAt } from './resolve'
+import { authorityDeadline, resolveAuthorityAt, resolvePermissionsAt } from './resolve'
 import { generateToken, hashToken, timingSafeEqualHex } from './secret'
 import type { Services } from './services'
 import { getSigner, verifyAccessToken } from './signing'
@@ -169,20 +170,26 @@ export async function approveDeviceAuthorization(services: Services, env: Env, r
 	const row = await inspectedRow(services, input)
 	if (!row) return { ok: false, reason: 'invalid_attempt' }
 	if (row.expires_at <= unixNow()) return { ok: false, reason: 'expired' }
-	const permissions = await resolvePermissionsAt(services, principal, row.app)
+	const authority = await resolveAuthorityAt(services, principal, row.app)
 	const request = requestFromRow(row)
-	if (!request.permissions.every((action) => permits(permissions, action, input.scope))) return { ok: false, reason: 'not_allowed' }
+	if (!request.permissions.every((action) => permits(authority.permissions, action, input.scope))) return { ok: false, reason: 'not_allowed' }
 	// The key's grant is written by raw SQL at exchange (`repositories/device.ts`), so the write rule is checked here.
 	if (await contractPatternsProblem(services.repositories.appSchema, row.app, request.permissions) !== null) {
 		return { ok: false, reason: 'not_allowed' }
 	}
+	// S8: the key ends no later than the approver's grants behind every action it carries.
+	const carried = request.permissions.map((action): PermissionEntry => ({ action, scope: input.scope, source: 'grant' }))
+	const deadline = authorityDeadline(authority, carried, unixNow())
+	const requested = unixNow() + row.key_lifetime_seconds
+	const keyExpiresAt = deadline === null ? requested : Math.min(requested, deadline)
+	if (keyExpiresAt <= unixNow()) return { ok: false, reason: 'not_allowed' }
 	const consent: DeviceAuthorizationConsent = {
 		consentId: uuidv7(),
 		app: row.app,
 		label: row.label,
 		permissions: request.permissions,
 		scope: input.scope,
-		keyExpiresAt: unixNow() + row.key_lifetime_seconds,
+		keyExpiresAt,
 	}
 	if (await services.repositories.device.approve(row.id, principal.id, consent)) return { ok: true, consent }
 	const current = await services.repositories.device.get(row.id)

@@ -109,6 +109,17 @@ function count(table: string) {
 }
 
 describe('device authorization', () => {
+	test("the approved key ends no later than the approver's grants behind it (S8)", async () => {
+		const until = now() + 3600
+		h.sqlite.run('UPDATE grants SET expires_at = ? WHERE principal_id = ?', [until, principalId])
+		const setup = await approved()
+		expect(setup.consent.keyExpiresAt).toBe(until)
+		const exchanged = await exchangeDeviceAuthorization(services, setup.exchange, 'device-s8')
+		if (!exchanged.ok) throw new Error(`exchange failed: ${exchanged.reason}`)
+		const stored = await h.repositories.credentials.getCredentialById(exchanged.receipt.credentialId)
+		expect(stored?.expires_at).toBe(until)
+	})
+
 	test('a contract application refuses to approve a wildcard key, whose grant the exchange writes by raw SQL', async () => {
 		seedInlineGrant(h.sqlite, principalId, ['*'], scope, 'vozka')
 		await h.repositories.appSchema.reconcileAppSchema({ app: 'vozka', scopes: [], actions: [], roles: [], contract: true })

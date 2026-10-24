@@ -221,7 +221,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   permanent credential from itself; a service key is a new principal and a share link frozen
   authority, and neither may outlive the bound either. 30 days is the longest any current caller
   asks for (the builder's device-authorized key; `fabrika control key issue` requires
-  `--expires-in`). The device repository caps its keys with the same constant.
+  `--expires-in`). The device repository caps its keys with the same constant,
+  and an approval caps the key further at the approver's authority deadline (S8).
 - **A KEY LISTS EXACT ACTIONS OF ITS APP'S CATALOG, NO WILDCARD.** `issueKey` refuses `*` and
   `prefix.*` in every mode and requires each action verbatim in `app_actions`, before delegation —
   so an issuer holding `*` still cannot mint a key for an action the app never declared, and a key
