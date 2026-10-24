@@ -2,7 +2,7 @@
 // fixed codes and bounded identifiers only, never an error's name or message: application code, drivers and even the
 // framework's own refusals can put request data there. The event adds what was thrown as its cause chain, scrubbed of
 // the environment's secrets and of credential patterns, a framework failure's message replaced by its catalog text
-// (ADR-0059).
+// (ADR-0059). A writing invocation that held its Durable Object's transaction too long is an event on the same budget.
 
 import { CAPABILITY_ERRORS, CapabilityError, QUERY_REFUSALS, QueryRefusedError } from '@fabrika/db/framework'
 import { isStructuralError } from '../errors'
@@ -125,6 +125,22 @@ export class FailureReports {
 			message: `endpoint '${failure.endpoint}' answered ${failure.status}: ${code}`,
 			tags,
 			error: failure.error,
+		})
+	}
+
+	/**
+	 * A writing invocation that held its object's transaction past `@fabrika/db`'s report threshold, which already
+	 * logged it. Never rejects; the delivery may outlive the response like a failure's.
+	 */
+	held(endpoint: string, heldMs: number): Promise<void> {
+		if (this.#reporter === null || !this.#budget.admit()) {
+			return Promise.resolve()
+		}
+		return this.#reporter.report({
+			fingerprint: ['fabrika-transaction-held', endpoint],
+			type: 'TransactionHeld',
+			message: `endpoint '${endpoint}' held its object's transaction for ${heldMs} ms`,
+			tags: { endpoint, code: 'transaction_held', held_ms: String(heldMs) },
 		})
 	}
 }

@@ -3,6 +3,9 @@ import { FABRIKA_IAM_APP_ID } from '../app-environment'
 import { FABRIKA_IAM_ISSUER } from '../environment'
 import {
 	connectVariables,
+	FABRIKA_APPLICATION_OBJECT,
+	FABRIKA_APPLICATION_OBJECTS,
+	FABRIKA_OPS_KEY_DIGESTS,
 	FRAMEWORK_VARIABLE_NAMES,
 	frameworkVariableReference,
 	isConnectKeyVariable,
@@ -31,6 +34,18 @@ describe('framework-only variable names', () => {
 		expect(isFrameworkVariableName('FABRIKA_SOURCE_MAP_UPLOAD')).toBe(true)
 		expect(isFrameworkVariableName('FABRIKA_SOURCE_MAP_UPLOAD_KEY')).toBe(true)
 		expect(frameworkVariableReference('${RUNTIME_FABRIKA_SOURCE_MAP_UPLOAD_KEY}')).not.toBeNull()
+	})
+
+	test('reserve the ops key digests and the object names of an environment on Cloudflare', () => {
+		expect([FABRIKA_OPS_KEY_DIGESTS, FABRIKA_APPLICATION_OBJECT, FABRIKA_APPLICATION_OBJECTS]).toEqual([
+			'FABRIKA_OPS_KEY_DIGESTS',
+			'FABRIKA_APPLICATION_OBJECT',
+			'FABRIKA_APPLICATION_OBJECTS',
+		])
+		for (const name of [FABRIKA_OPS_KEY_DIGESTS, FABRIKA_APPLICATION_OBJECT, FABRIKA_APPLICATION_OBJECTS]) {
+			expect(isFrameworkVariableName(name)).toBe(true)
+			expect(frameworkVariableReference(`\${RUNTIME_${name}}`)).not.toBeNull()
+		}
 	})
 
 	test('leave application names and public build values to the application', () => {

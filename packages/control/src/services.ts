@@ -4,6 +4,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import type { BuilderPairingIam } from './api/builder-pairing'
 import { type NamespaceProxyChanged, republishNamespace } from './api/namespaces'
 import type { DeployQueue, LogReader } from './api/runs'
+import { httpOpsTransport, type OpsTransport } from './data-operations'
 import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
 import { GitHubConnectionWebhookSecretProvider } from './github/connections/webhook-secret'
@@ -21,6 +22,7 @@ import {
 	replayOperationsCatalog,
 } from './operations-catalog'
 import type { OperationsReleaseProjectionDeps } from './operations-releases'
+import { type OpsKeysPort, VaultOpsKeys } from './ops-key'
 import { type PlatformTransportPort, VaultPlatformTransport } from './platform-transport'
 import { type ProxySecrets, VaultProxySecrets } from './proxy-secret'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
@@ -109,6 +111,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		...membershipTransportDeps(env),
 		...platformTransportDeps(env),
 		...tokenKeyDeps(env),
+		...opsKeyDeps(env),
 	}
 }
 
@@ -123,6 +126,17 @@ export function iamSchemaDeps(env: Env): { iamSchema?: IamSchemaPort } {
 /** The token keys live in the vault, so an installation without one keeps none, and a contract with a purpose does not deploy. */
 export function tokenKeyDeps(env: Env): { tokenKeys?: TokenKeysPort } {
 	return env.FABRIKA_CONTROL_VAULT_KEY === undefined ? {} : { tokenKeys: new VaultTokenKeys(repositories(env).tokenKeys, () => vault(env)) }
+}
+
+/** The ops keys live in the vault, so an installation without one keeps none, and a deploy at a gated release fails. */
+export function opsKeyDeps(env: Env): { opsKeys?: OpsKeysPort } {
+	return env.FABRIKA_CONTROL_VAULT_KEY === undefined ? {} : { opsKeys: new VaultOpsKeys(repositories(env).opsKeys, () => vault(env)) }
+}
+
+function opsTransportDeps(env: Env): { opsTransport?: OpsTransport } {
+	const { opsKeys } = opsKeyDeps(env)
+	if (opsKeys === undefined) return {}
+	return { opsTransport: httpOpsTransport({ registry: repositories(env).registry, opsKeysFor: (appId, name) => opsKeys.opsKeysFor(appId, name) }) }
 }
 
 /**
@@ -211,6 +225,8 @@ export interface ControlRpcDeps {
 	 * has no dispatcher.
 	 */
 	mailRelay?: Pick<MailRelay, 'queue' | 'sender'>
+	/** The ops channel to an environment's object; absent without a vault, and the `data.*` calls to an object answer 503. */
+	opsTransport?: OpsTransport
 }
 
 /** Assemble RPC use-case dependencies around the installation's provider. Vault creation stays lazy. */
@@ -228,6 +244,7 @@ export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: A
 		...(env.COMMITS === undefined ? {} : { commits: env.COMMITS }),
 		...(env.MAIL_RELAY === undefined ? {} : { mailRelay: env.MAIL_RELAY }),
 		...installationBrandDeps(env),
+		...opsTransportDeps(env),
 		...(provider.namespaces?.republish === undefined
 			? {}
 			: {

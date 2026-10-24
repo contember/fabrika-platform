@@ -305,6 +305,18 @@ other environment, before the provider prepares anything, and the write maps a r
   only when the approved contract declares a token purpose; `apps.environments.rotateTokenKey` asks the next deploy to
   rotate, and a retired key verifies until its retirement plus the largest `maxDays` the contract had while it signed.
   Every deploy writes `FABRIKA_APP_ORIGIN` (the environment's public origin, or `null`, which removes it).
+- **The ops key is Control's, and the object holds only its digests (`src/ops-key.ts`, ADR-0069).** A non-dry deploy
+  of an environment with a domain hands `FABRIKA_OPS_KEY_DIGESTS` only when the provider's `opsChannel(access)` says the
+  approved release serves the channel (the release gate is the provider's), and `null` otherwise, which removes it after
+  a downgrade. The digests are a public variable: a SHA-256 of a 256-bit random key forges nothing. Each key is sealed
+  under `opsKeyPurpose(app, env, keyId)` and recorded in `app_env_ops_keys` with its digest and `handed_by`, the newest
+  run that handed it while no running version accepted it; that run's success is the acceptance, so a dry run's never
+  counts. Every record write is fenced on the run's lease in the same batch. A key at least 15 days old rotates: the
+  deploy hands the old digest and the new. The old key goes only at a deploy after one carrying the new key succeeded,
+  its record first, under the lease, and then its vault row; a ref not sealed under the key's own purpose is never
+  deleted and its record stays. `opsKeysFor` answers the keys Control may present, the newest first and at most two (a
+  pending key, then the accepted one), because a version can run although its run failed later; a caller tries each in
+  turn. Without a vault a gated deploy fails.
 - **No authored value may copy a framework-only variable, and no run log keeps a secret Control handed out.**
   `assertNoFrameworkReference` refuses an app variable or secret VALUE that references a
   `FRAMEWORK_VARIABLE_NAMES` name in any Zerops form (`${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, a
@@ -370,6 +382,21 @@ other environment, before the provider prepares anything, and the write maps a r
   A settled cancellation finishes the run with the provider's `outcome`: when activation won first the
   run SUCCEEDS — cancellation never implies rollback (ADR-0044). Control hands every cancel and
   reconcile the run start (`startedAtMs`, from `started_at ?? created_at`) so a provider can bound its polling.
+- **A data operation drives an environment's object under its `<app>:<env>` deploy lease (`src/data-operations.ts`,
+  ADR-0069).** Control allocates every generation, records each step fenced on the lease, and calls the object only
+  through the injected `OpsTransport` (`httpOpsTransport`: the environment's domain, each ops key the running version
+  accepts as a bearer, newest first, the next one only after the uniform refusal; no redirect followed). A lost answer
+  repeats the same generation and mode. A successor (`advanceDataOperation`, or a recovery's resumed operation) first
+  publishes a generation above every reserved one in the recorded mode. `advanceDataOperation` drives only the
+  environment's newest running operation, and a succeeding recovery retires every operation still running in the chain
+  it recovers, so the newest record is the object's mode. A 409 naming a higher generation is adopted once, behind a
+  fenced write; any other 409 fails the operation `stale_generation`. A lost lease stops it with no further write or
+  request. `executeDeploy` refuses an environment whose recorded mode (`recordedMaintenance`) is not `open`; the only
+  deploy of such an environment is `executeDeployUnderLease`, which runs under the operation's live lease and never
+  releases it. `data.read` and `data.manage` are checked at the coordinates, `data.content.read` as a global grant only,
+  and every denial is the 404 of an absent environment; `data.view` refuses an answer that carries content.
+  `data.start` and `data.recover` answer 501 while no release's object serves `state`: an operation no object
+  acknowledges would stay running, and a running record refuses every deploy.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.

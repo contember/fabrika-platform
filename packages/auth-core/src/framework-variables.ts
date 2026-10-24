@@ -16,6 +16,12 @@ export const FABRIKA_SOURCE_MAP_UPLOAD_KEY = 'FABRIKA_SOURCE_MAP_UPLOAD_KEY'
 export const FABRIKA_TOKEN_KEYS = 'FABRIKA_TOKEN_KEYS'
 /** The environment's canonical origin (`https://crm.example`), which `ctx.url` builds absolute links on. */
 export const FABRIKA_APP_ORIGIN = 'FABRIKA_APP_ORIGIN'
+/** The digests of the environment's ops keys, which the object checks Control's key against (`parseOpsKeyDigests`, ADR-0069). */
+export const FABRIKA_OPS_KEY_DIGESTS = 'FABRIKA_OPS_KEY_DIGESTS'
+/** The name of the object that serves an environment's ordinary traffic on Cloudflare; `application` without it. */
+export const FABRIKA_APPLICATION_OBJECT = 'FABRIKA_APPLICATION_OBJECT'
+/** The object names an ops request may target, all in the environment's own namespace (`parseApplicationObjects`). */
+export const FABRIKA_APPLICATION_OBJECTS = 'FABRIKA_APPLICATION_OBJECTS'
 
 /**
  * The environment names only the platform writes into an application
@@ -47,6 +53,9 @@ export const FRAMEWORK_VARIABLE_NAMES = [
 	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
 	FABRIKA_TOKEN_KEYS,
 	FABRIKA_APP_ORIGIN,
+	FABRIKA_OPS_KEY_DIGESTS,
+	FABRIKA_APPLICATION_OBJECT,
+	FABRIKA_APPLICATION_OBJECTS,
 ] as const
 
 export type FrameworkVariableName = (typeof FRAMEWORK_VARIABLE_NAMES)[number]

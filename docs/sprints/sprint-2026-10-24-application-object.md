@@ -25,11 +25,21 @@ unit before the units that build on it. Paths below `app/`, `db/`, `control/` me
 
 ## Decisions
 
-Open; each blocks the units named under Sequencing:
+Settled by the owner on 2026-10-24:
 
-- **D0**: release placement. Does this work ship in framework 0.9.0, and may the SQLite `fabrika` bundle change in
-  place (ADR-0017)?
-- **Q1–Q6**: the proposal's §7 open questions.
+- **D0**: this work ships in framework 0.9.0, so the gate constants equal `runsInObject`. The SQLite `fabrika` bundle
+  keeps `0001_framework.sql` unchanged: every new framework table goes in a new migration file (ADR-0017).
+- **Q1**: an environment without a domain gets no ops channel, and so no backups.
+- **Q2**: `data.content.read` belongs to the installation's operators only. App owners get `data.read` (metadata:
+  sizes, counts, state, the backup list), never row contents.
+- **Q3**: the barrier fails closed. A cold start that cannot read its maintenance state from R2 answers 503.
+- **Q4**: daily consistent backups are the default for every Cloudflare environment, kept 30 days, and the file
+  tombstone window is 30 days too. An environment can opt out.
+- **Q5**: 14-minute segments with chunking through claims stay the rule (5.6). A contract-declared Workflow,
+  generated into the entry, is planned as the escape hatch:
+  [backlog 235](../backlog/235-a-long-job-on-cloudflare-has-no-workflow-escape-hatch.md).
+- **Q6**: option E stays out.
+- **3.0** is accepted through its PR. Waves 2–4 build on the draft in the same sprint branch.
 
 ## Seams and shared files
 
@@ -202,6 +212,15 @@ ADRs: rewrite ADR-0065 §5; amend ADR-0060. Rollout as §6 Phase 5.
      transient → leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("→ ADR-0022"). -->
 
-- 2026-10-24: D0 is still open. The gate constants are provisional at 0.9 (`OBJECT_RUNTIME_SINCE`, `PINNED_ENTRY_SINCE`), and every new SQLite table is self-created, so the code is valid under either answer.
+- 2026-10-24: D0 settled (see Decisions): 0.9.0, new migration files only.
 - 2026-10-24: 5.1 (the wakes store) moved from wave 1 to wave 5, next to its driver, so that no framework table ships unused.
 - 2026-10-24: Waves 0–1 shipped: S1, S2, 1.1, 1.3, 1.4, 1.5, 1.6 and 2.1. Review P2s and two open decisions (pinning a local deploy, refusing queue consumers) → [backlog 228](../backlog/228-application-object-review-follow-ups.md).
+- 2026-10-24: 0.1 is done. The probe project lives outside the repo, nothing was deployed, and the human runs it (0.2). A dry run on local workerd, to be confirmed live:
+  - **Probe 5:** a timer set inside a `storage.transaction` callback does not fire while the callback awaits R2 I/O, so a timer cannot cap a transaction at 25 s.
+  - **Probe 8:** `transactionSync` is a savepoint inside the request's implicit transaction, so a deferred foreign-key violation fails only when the request ends, and it resets the object. A bigint binding throws, and `cast(real as text)` loses precision, which 4.1's projection has to avoid.
+  - **Probe 9:** R2 refuses multipart parts of unequal size (10048), so 4.1's gzip parts need a fixed part size or one object per part.
+- 2026-10-24: Waves 2–3 shipped: 2.2, ADR-0069 (accepted through the PR), S3, S4, 3.1, 3.2, 3.3a and 3.4a. Review P2s → [backlog 228](../backlog/228-application-object-review-follow-ups.md) items 17–24.
+- 2026-10-24: 3.3a: an ops request never boots the object, so boot now starts lazily on the first ordinary request or tick, not in the constructor. The application Worker authenticates the ops key before it selects an object, so an anonymous request wakes none.
+- 2026-10-24: 3.1: Control presents up to two candidate ops keys, newest first, instead of tracking which digest the running version activated; the transport tries the next one only after the uniform refusal. The digests are a public variable.
+- 2026-10-24: 4.4 must settle a Cloudflare deploy started under a data operation's lease under that same lease (`RunInvocation.underLease` + `settleUnfinishedRun`); otherwise the cron waits until the operation ends.
+- 2026-10-24: Merge review of #59: one started maintenance operation made the environment undeployable, because the object answers `state` with 501 until 3.3b and the record stays `running`. `data.start` and `data.recover` now answer 501. 3.3b lifts that only for an environment whose release serves `state`, and an object's "not implemented" must fail the record, not leave it running.

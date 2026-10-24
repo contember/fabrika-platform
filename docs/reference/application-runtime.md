@@ -402,11 +402,16 @@ report-only CSP, `Report-To`, `Reporting-Endpoints` and `NEL`; the proxy strips 
 An application environment on Cloudflare runs in one Durable Object
 ([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)). The
 Worker's `fetch` (`createContractWorker`, `packages/app/src/cloudflare.ts`) removes `X-Fabrika-Tick`, sets
-`X-Fabrika-Proxy-Secret` from `FABRIKA_PROXY_SECRET` and forwards the request to the object named `application` of its
-`FABRIKA_APPLICATION` binding; its `scheduled` sends the object the minute tick with the controller's `scheduledTime`.
+`X-Fabrika-Proxy-Secret` from `FABRIKA_PROXY_SECRET` and forwards the request to the object that
+`FABRIKA_APPLICATION_OBJECT` names in its `FABRIKA_APPLICATION` binding (`application` without the object variables, as
+an older deploy has); its `scheduled` sends that object the minute tick with the controller's `scheduledTime`. An ops
+request under `/__fabrika/ops/` goes to the object its body names
+([ADR-0069](../decisions/0069-control-reaches-an-application-environments-object.md)); the Worker authenticates it
+first and the object again, and it never boots the application.
 
 - **The object** (`FabrikaApplication`, `packages/app/src/cloudflare/application.ts`) answers an empty 404 to a request
-  without the secret or with another, before anything else. Under `blockConcurrencyWhile` it captures the environment,
+  without the secret or with another, before anything else. On the first request or tick that needs the application,
+  under `blockConcurrencyWhile`, it captures the environment,
   imports the application, applies the framework bundle `fabrika` (`@fabrika/db/migrations-sqlite`) and then the bundle
   `app` (the application's `db/migrations/*.sql`, written in SQLite) to its SQLite, each migration once, in the ledger
   `fabrika_migrations` of the same database with the Postgres runner's identity and checksum rule, and boots it. The
@@ -417,7 +422,8 @@ Worker's `fetch` (`createContractWorker`, `packages/app/src/cloudflare.ts`) remo
   procedure) and a webhook delivery run from the handler to the commit inside its callback (`Invocation.enclose`),
   because while it is open the input gate also holds back the answers to the object's own I/O made outside it. The
   object serves no other event meanwhile, so the SQLite compiler drops every row lock (`FOR UPDATE`, `FOR SHARE`,
-  `SKIP LOCKED`). A read-only
+  `SKIP LOCKED`). The enclosure measures how long it held the object: past 1 s it logs the endpoint and the ms, past
+  5 s it also reports a `transaction_held` event (`FailureReports.held`). A read-only
   invocation (a query, an export) is not enclosed: each of its statements runs in a `storage.transactionSync` of its
   own, which holds nothing across an await and rolls back a statement whose cursor reports `rowsWritten`
   (`DatabaseError` `25006`). The object serves other events while a query awaits, so two of its reads may see different

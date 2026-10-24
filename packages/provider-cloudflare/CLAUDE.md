@@ -65,6 +65,14 @@ this one import.
   class, a `script_name` on it, a migration history that does not open with that `v0001` or names the class again
   (a committed `wrangler.jsonc` with a history of its own), another `FABRIKA_FILES` bucket, and triggers the platform
   did not write.
+- **From `servesOps` the platform composes Control's ops channel** (ADR-0069, `src/provider.ts`): `platformProxied`
+  builds the proxy's table with `contractProxyTable(…, { ops: true })`, which adds the canonical ops row, and
+  `withApplicationRuntime` writes `FABRIKA_APPLICATION_OBJECT` and `FABRIKA_APPLICATION_OBJECTS` (`application`) as plain
+  vars. Only for a release Control names; an environment without a domain gets no row (no Custom Domain carries it). An
+  older pin, a Control that names no release and a local deploy get neither, and a later deploy without them drops
+  them with the version's vars. The proxy Worker forwards the row's request to `APP` with `Authorization` and no token,
+  as the decision marks every `protocol` row; authored copies of the variables are refused by the framework-variable
+  rules below.
 - **From `pinsGeneratedEntry` the application Worker runs only the entry the deploy regenerates** (`src/contract-support.ts`).
   For a release Control names at or above that gate, `assertGeneratedEntry` (`src/bounds.ts`) requires the Worker's
   `main` to resolve to `fabrika/entry.generated.ts` beside the config, and refuses `workflows`, `containers` and any

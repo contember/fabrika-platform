@@ -17,7 +17,15 @@ describe('the credential rule', () => {
 			expect(isManagedCredential(name)).toBe(false)
 		}
 		for (
-			const name of ['FABRIKA_IAM_RPC_URL', 'FABRIKA_APP_ORIGIN', 'FABRIKA_CONTRACT_DIGEST', 'FABRIKA_CONNECT_CATALOG_URL', 'FABRIKA_PLATFORM_MAIL_URL']
+			const name of [
+				'FABRIKA_IAM_RPC_URL',
+				'FABRIKA_APP_ORIGIN',
+				'FABRIKA_CONTRACT_DIGEST',
+				'FABRIKA_CONNECT_CATALOG_URL',
+				'FABRIKA_PLATFORM_MAIL_URL',
+				// A digest of a random key forges no key.
+				'FABRIKA_OPS_KEY_DIGESTS',
+			]
 		) {
 			expect(isManagedCredential(name)).toBe(false)
 		}
@@ -114,6 +122,8 @@ describe('the variables a deploy no longer hands', () => {
 	test('names a managed variable not written and a family member no longer handed; keeps what Control never writes', () => {
 		const present = [
 			'FABRIKA_TOKEN_KEYS',
+			// Removed after a downgrade to a release without the ops channel (ADR-0069).
+			'FABRIKA_OPS_KEY_DIGESTS',
 			'FABRIKA_IAM_APP_ID',
 			'FABRIKA_JOB_RETIRED_KEY',
 			'FABRIKA_EMAIL_RESEND_API_KEY',
@@ -125,6 +135,7 @@ describe('the variables a deploy no longer hands', () => {
 		]
 		expect(staleManagedVariables(present, new Set(['FABRIKA_IAM_APP_ID']))).toEqual([
 			'FABRIKA_TOKEN_KEYS',
+			'FABRIKA_OPS_KEY_DIGESTS',
 			'FABRIKA_JOB_RETIRED_KEY',
 			'FABRIKA_EMAIL_RESEND_API_KEY',
 		])

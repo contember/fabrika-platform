@@ -105,16 +105,9 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [218](218-the-skill-names-no-working-one-click-unsubscribe-target.md): The skill's unsubscribe procedure is POST JSON, which refuses a mailbox's RFC 8058 one-click POST.
 - [223](223-terminal-authority-outlives-the-terminal-in-a-membership-change.md): A membership change made on a terminal rests on the terminal's grants and outlives sign-out, release or revoke.
 - [230](230-a-zerops-platform-deploy-rebuilds-every-service.md): A Zerops platform deploy rebuilds all four services every time, and a bring-up compiles Caddy for 5 min.
-- [230](230-a-zerops-platform-deploy-rebuilds-every-service.md): A Zerops platform deploy rebuilds all four services every time, and a bring-up compiles Caddy for 5 min.
-- [231](231-operator-traps-of-an-mcp-authoring-bring-up.md): MCP authoring bring-up traps: `put` loses bucket provenance, no `authoring` flag, a bare `forbidden`, `admin` offered for a contract app.
-- [230](230-a-zerops-platform-deploy-rebuilds-every-service.md): A Zerops platform deploy rebuilds all four services every time, and a bring-up compiles Caddy for 5 min.
-- [231](231-operator-traps-of-an-mcp-authoring-bring-up.md): MCP authoring bring-up traps: `put` loses bucket provenance, no `authoring` flag, a bare `forbidden`, `admin` offered for a contract app.
-- [232](232-the-platform-build-runs-no-postgres-backed-test.md): The Zerops build skips every Postgres-backed application test; a throwaway Postgres in the build container would run them.
-- [230](230-a-zerops-platform-deploy-rebuilds-every-service.md): A Zerops platform deploy rebuilds all four services every time, and a bring-up compiles Caddy for 5 min.
 - [231](231-operator-traps-of-an-mcp-authoring-bring-up.md): MCP authoring bring-up traps: `put` loses bucket provenance, no `authoring` flag, a bare `forbidden`, `admin` offered for a contract app.
 - [232](232-the-platform-build-runs-no-postgres-backed-test.md): The Zerops build skips every Postgres-backed application test; a throwaway Postgres in the build container would run them.
 - [233](233-platform-services-share-postgres-server-sessions.md): On Zerops one Postgres server session serves IAM, Operations and Control in turn; find the pooler, check what leaks between services, and decide whether to connect directly.
-- [223](223-terminal-authority-outlives-the-terminal-in-a-share-link.md): A share link issued on a terminal keeps the terminal's grants after sign-out, release or revoke.
 - [224](224-terminal-follow-ups.md): Smaller gaps of terminals: sign-out without `Sec-Fetch-Site`, re-enrolment, sign-out of a personal login.
 - [225](225-password-minimum-follow-ups.md): Smaller gaps of the installation's minimum password length: audit, an upper cap, the console page.
 - [226](226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md): A narrowing is not in force while the IAM write after a deploy fails; decided: narrowings before the manifest is published, widenings after.
@@ -124,4 +117,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [220](220-the-provider-conformance-suite-checks-no-checkpoint-size.md): The provider conformance suite checks no checkpoint size, and Zerops' harness hands no upload bearer.
 - [229](229-provider-neutral-core-review-follow-ups.md): The provider-neutral core reviews' gaps; P2: a late cancel leaves a Cloudflare version without its IAM schema.
 - [234](234-mcp-authoring-review-follow-ups.md): Review follow-ups of MCP authoring and dev environments: one failing repository fails `list_workspaces`, a long `run_checks` reads as a gone launcher, a crash loop never idles, an abandoned workspace stays bound, a committed launcher state file or booted marker misleads a new container, and the SPA type check awaits an ADR-0062 decision.
+- [235](235-a-long-job-on-cloudflare-has-no-workflow-escape-hatch.md): A job that cannot chunk through claims has no form on Cloudflare; a contract-declared Workflow generated into the entry.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

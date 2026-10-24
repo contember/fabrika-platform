@@ -321,9 +321,12 @@ export class Invocation {
 		return { check: boundTo(this.#frame, () => transaction.ended, handle), session: () => transaction.session() }
 	}
 
-	/** Runs `work`, from the handler to `commit`, in this invocation's transaction; on SQLite it encloses `work`. */
-	enclose<T>(work: () => Promise<T>): Promise<T> {
-		return this.#transaction.enclose(work)
+	/**
+	 * Runs `work`, from the handler to `commit`, in this invocation's transaction. On SQLite it encloses `work`, and a
+	 * hold past `@fabrika/db`'s report threshold reaches `held`, logged under `site`.
+	 */
+	enclose<T>(work: () => Promise<T>, site: string, held: (heldMs: number) => void): Promise<T> {
+		return this.#transaction.enclose(work, { site, held })
 	}
 
 	/** Commits; a request the caller abandoned meanwhile rolls back instead. */

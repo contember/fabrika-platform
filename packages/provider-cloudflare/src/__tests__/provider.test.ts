@@ -1,7 +1,7 @@
 import { schemaFromContract } from '@fabrika/app/contract'
 import { type AppActionDef, type AppEnvironment, type ContractArtifact, contractDigest, parseManagedEnvironment } from '@fabrika/auth-core'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
-import { contractProxyTable, isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, isApplicationEntry, OPS_ROW_MAX_BYTES, opsProxyRow, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, symlinkSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
@@ -159,7 +159,8 @@ const deploy = (
 		readonly returnOrigins?: readonly string[]
 		readonly crossOrigins?: readonly string[]
 		readonly operationsOrigin?: string
-		readonly domain?: string
+		/** `stage.example.com` by default; `null` deploys an environment without a domain. */
+		readonly domain?: string | null
 		readonly platformResources?: 'refuse' | 'allow'
 		readonly stateNamespace?: string
 		readonly env?: string
@@ -206,7 +207,7 @@ const deploy = (
 	})({
 		appId: options.appId ?? 'demo',
 		env: options.env ?? 'stage',
-		domain: options.domain ?? 'stage.example.com',
+		...(options.domain === null ? {} : { domain: options.domain ?? 'stage.example.com' }),
 		...(options.returnOrigins === undefined ? {} : { returnOrigins: options.returnOrigins }),
 		...(options.crossOrigins === undefined ? {} : { crossOrigins: options.crossOrigins }),
 		...(options.operationsOrigin === undefined ? {} : { operationsOrigin: options.operationsOrigin }),
@@ -1160,7 +1161,13 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		const { root, app } = provisioned()
 		const manifest = proxyManifestJson(root)
 		expect(parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps).toEqual([
-			{ id: 'demo@stage', hosts: ['stage.example.com'], upstream: 'APP', scheme: 'https', ...contractProxyTable(notesArtifact) },
+			{
+				id: 'demo@stage',
+				hosts: ['stage.example.com'],
+				upstream: 'APP',
+				scheme: 'https',
+				...contractProxyTable(notesArtifact, undefined, { ops: true }),
+			},
 		])
 		expect(app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(contractDigest(notesArtifact))
 	})
@@ -1468,7 +1475,7 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		if (typeof baked !== 'string') throw new Error('the proxy config bakes no manifest')
 		expect(new TextEncoder().encode(baked).length).toBeGreaterThan(5120)
 		expect(baked).toBe(proxyManifestJson(provisioned().root) ?? '')
-		expect(parseProxyManifestJson(baked)?.apps[0]?.endpoints).toHaveLength(contractProxyTable(contract).endpoints.length)
+		expect(parseProxyManifestJson(baked)?.apps[0]?.endpoints).toHaveLength(contractProxyTable(contract, undefined, { ops: true }).endpoints.length)
 		expect(Object.keys(proxy.vars ?? {})).toEqual(['FABRIKA_IAM_ISSUER'])
 		expect(PROXY_MANIFEST_DEFINE).toBe('__FABRIKA_PROXY_MANIFEST__')
 	})
@@ -1782,5 +1789,62 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 		const built = await deploy(rec, config({ pipeline: { build: 'bun run build' } }), { framework: '0.8.2' })
 		expect(built.steps.map((step) => step.id)).toEqual(['build', 'provision-resources', 'deploy-worker', 'reconcile-schema'])
 		expect(rec.commands.map((command) => command.command)).toEqual(['sh', 'wrangler', 'wrangler', 'wrangler'])
+	})
+})
+
+describe('the ops channel of a gated release (servesOps, ADR-0069)', () => {
+	/** The endpoint table the proxy Worker of the provisioned graph serves. */
+	const proxiedEndpoints = () => {
+		const manifest = parseProxyManifestJson(proxyManifestJson(provisioned().root) ?? '')
+		const entry = manifest?.apps[0]
+		if (entry === undefined || !isApplicationEntry(entry)) throw new Error('the proxy Worker serves no application entry')
+		return entry.endpoints
+	}
+	const OBJECT_VARIABLES = { FABRIKA_APPLICATION_OBJECT: 'application', FABRIKA_APPLICATION_OBJECTS: 'application' }
+
+	test('a gated release gets the ops row in its proxy and both object variables in its Worker', async () => {
+		const result = await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.0' })
+		expect(result.status).toBe('succeeded')
+		expect(proxiedEndpoints()).toEqual(contractProxyTable(notesArtifact, undefined, { ops: true }).endpoints)
+		expect(proxiedEndpoints()).toContainEqual(opsProxyRow())
+		expect(opsProxyRow().admission?.maxBytes).toBe(OPS_ROW_MAX_BYTES)
+		const application = await generatedConfig('stage-demo')
+		expect(application.vars).toMatchObject(OBJECT_VARIABLES)
+		// Plain variables: a deploy without them removes them, as every var of a Worker version.
+		expect(rec.commands.some((command) => command.args.includes('FABRIKA_APPLICATION_OBJECT'))).toBe(false)
+	})
+
+	test('a redeploy of an older pin, or from a Control that names no release, writes neither the row nor the variables (ADR-0062)', async () => {
+		for (const framework of ['0.8.1', null]) {
+			await deploy(rec, config(), { contract: notesArtifact, framework })
+			expect(proxiedEndpoints()).toEqual(contractProxyTable(notesArtifact).endpoints)
+			const application = await generatedConfig('stage-demo')
+			expect(application.vars ?? {}).not.toHaveProperty('FABRIKA_APPLICATION_OBJECT')
+			expect(application.vars ?? {}).not.toHaveProperty('FABRIKA_APPLICATION_OBJECTS')
+			rec.provisions.shift()
+		}
+	})
+
+	test('an environment without a domain has no ops channel: no row (Q1)', async () => {
+		await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.0', domain: null })
+		expect(proxiedEndpoints()).toEqual(contractProxyTable(notesArtifact).endpoints)
+	})
+
+	test('an application authors neither object variable, and a generated config carries them only as the platform wrote them', async () => {
+		const authored = (vars: Record<string, string>, bindings: Record<string, Bindable> = {}): CloudflareAppConfig =>
+			config({ resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings, main: ENTRY, vars }) })
+		for (const name of Object.keys(OBJECT_VARIABLES)) {
+			await expect(deploy(rec, authored({ [name]: 'application' }), { contract: notesArtifact })).rejects.toThrow(
+				`application variable \`${name}\` is managed by Fabrika`,
+			)
+		}
+		// A binding that adds a variable to whatever the deployer wrote, after the deployer wrote it.
+		const redirecting: Bindable = {
+			configureBinding: ({ config }) => ({ ...config, vars: { ...config.vars, FABRIKA_APPLICATION_OBJECT: 'restored' } }),
+		}
+		const redirected = (framework: string) => deploy(rec, authored({}, { X: redirecting }), { contract: notesArtifact, framework })
+		await expect(redirected('0.9.0')).rejects.toThrow('sets `FABRIKA_APPLICATION_OBJECT` to a value Fabrika did not write')
+		await expect(redirected('0.8.1')).rejects.toThrow('sets `FABRIKA_APPLICATION_OBJECT` to a value Fabrika did not write')
+		expect(rec.provisions).toEqual([])
 	})
 })

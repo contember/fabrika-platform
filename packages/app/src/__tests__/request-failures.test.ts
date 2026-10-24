@@ -3,14 +3,22 @@
 // the headers never leave.
 
 import { HttpError } from '@fabrika/app'
-import { boot } from '@fabrika/app/implement'
+import { boot, serve } from '@fabrika/app/implement'
+import { scoped } from '@fabrika/db'
 import { QUERY_REFUSALS, QueryRefusedError } from '@fabrika/db/framework'
-import { describe, expect, test } from 'bun:test'
+import { openSqlite } from '@fabrika/db/sqlite'
+import { describe, expect, setSystemTime, test } from 'bun:test'
+import { z } from 'zod/v4'
+import { TRANSACTION_HELD_REPORT_MS } from '../../../db/src/database'
+import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
+import type { RequestExecutionContext } from '../fetch'
 import { CAPABILITY_REFUSALS, CapabilityRefusedError } from '../implement/capability'
 import { FailureReports, MAX_FAILURE_REPORTS_PER_MINUTE } from '../implement/failures'
 import { SERVER_FAULTS, ServerFault } from '../implement/faults'
 import { implement } from '../implement/implement'
 import type { OperationsReport } from '../jobs/report'
+import { app as notesKit } from './cloudflare-fixture/src/app-kit'
+import { tables } from './cloudflare-fixture/src/db/tables'
 import { contract } from './fixtures/implement/fabrika.contract'
 import {
 	bootApp,
@@ -246,5 +254,129 @@ describe('the report budget', () => {
 			await failures.record(failure('a b'))
 		})
 		expect(reports.map((report) => report.tags['request'])).toEqual([undefined, undefined])
+	})
+
+	test('a held transaction takes from the same budget', async () => {
+		const { reports, reporter } = recorder()
+		const failures = new FailureReports(reporter, () => 0)
+		await quietly(async () => {
+			for (let index = 0; index < MAX_FAILURE_REPORTS_PER_MINUTE; index++) {
+				await failures.record(failure(null))
+			}
+		})
+		await failures.held('api.notes.create', 6_000)
+		expect(reports).toHaveLength(MAX_FAILURE_REPORTS_PER_MINUTE)
+	})
+})
+
+describe('a transaction held past the threshold', () => {
+	test('becomes one transaction_held event naming the site and the ms', async () => {
+		const reports: OperationsReport[] = []
+		const failures = new FailureReports({ report: (report) => Promise.resolve(void reports.push(report)) })
+		await failures.held('api.notes.create', 6_250)
+		expect(reports).toEqual([{
+			fingerprint: ['fabrika-transaction-held', 'api.notes.create'],
+			type: 'TransactionHeld',
+			message: "endpoint 'api.notes.create' held its object's transaction for 6250 ms",
+			tags: { endpoint: 'api.notes.create', code: 'transaction_held', held_ms: '6250' },
+		}])
+	})
+
+	test('without an Operations DSN it reports nothing and never rejects', async () => {
+		await expect(new FailureReports(null).held('api.notes.create', 6_250)).resolves.toBeUndefined()
+	})
+
+	interface SlowRun {
+		readonly status: number
+		readonly envelopes: string[]
+		readonly logged: string[]
+	}
+
+	/** A writing mutation on SQLite whose handler moves the clock past the report threshold, as a slow handler would. */
+	async function slowMutation(
+		exec: RequestExecutionContext | undefined,
+		deliver: (request: Request) => Promise<Response> = () => Promise.resolve(new Response(null, { status: 202 })),
+	): Promise<SlowRun> {
+		const Done = z.strictObject({ done: z.boolean() })
+		const held = notesKit.group({ callers: ['human'] }, (r) => ({
+			slow: r.mutation({ output: Done, access: { action: 'notes.write', app: true } }).handle(() => {
+				// The clock the enclosure measures by moves while the handler holds the object's transaction.
+				setSystemTime(new Date(Date.now() + TRANSACTION_HELD_REPORT_MS + 1_000))
+				return { done: true }
+			}),
+		}))
+		const implementation = serve(notesKit.contract((c) => ({ api: c.rpc('/api', { held }) })), { database: scoped(tables) })
+		const envelopes: string[] = []
+		const operationsFetch = async (request: Request): Promise<Response> => {
+			envelopes.push(await request.text())
+			return await deliver(request)
+		}
+		const variables = { ...frameworkEnvFor(implementation), FABRIKA_OPERATIONS_DSN: DSN }
+		const served = bootApp(implementation, { environment: environment(variables), operationsFetch, database: openSqlite(bunSqliteStorage()) })
+		const logged: string[] = []
+		const original = console.warn
+		console.warn = (...args: unknown[]) => void logged.push(args.map(String).join(' '))
+		try {
+			const request = new Request(`${ORIGIN}/api/held.slow`, {
+				method: 'POST',
+				headers: {
+					'Sec-Fetch-Site': 'same-origin',
+					'Content-Type': 'application/json',
+					'X-Fabrika-Token': await token('user', [grant('notes.write')]),
+				},
+				body: '{}',
+			})
+			const response = await served.fetch(request, exec)
+			return { status: response.status, envelopes, logged }
+		} finally {
+			setSystemTime()
+			console.warn = original
+		}
+	}
+
+	/** Waits for a delivery nobody keeps: the response does not await it. */
+	async function envelopesOf(run: SlowRun, count: number): Promise<string[]> {
+		for (let waited = 0; run.envelopes.length < count && waited < 100; waited++) {
+			await Bun.sleep(1)
+		}
+		return run.envelopes
+	}
+
+	function expectHeldEvent(envelopes: readonly string[]): void {
+		expect(envelopes).toHaveLength(1)
+		const event = eventOf(envelopes[0])
+		expect(event['fingerprint']).toEqual(['fabrika-transaction-held', 'api.held.slow'])
+		expect(event['tags']).toMatchObject({ endpoint: 'api.held.slow', code: 'transaction_held' })
+	}
+
+	test('a slow writing mutation on SQLite reaches Operations through waitUntil, and still answers', async () => {
+		const kept: Promise<unknown>[] = []
+		const run = await slowMutation({ waitUntil: (promise) => void kept.push(promise) })
+		expect(run.status).toBe(200)
+		expect(kept).toHaveLength(1)
+		await Promise.all(kept)
+		expect(run.logged).toHaveLength(1)
+		expect(run.logged[0]).toStartWith("fabrika: api.held.slow: held its object's transaction for ")
+		expectHeldEvent(run.envelopes)
+	})
+
+	test('without an execution context the hold is still reported', async () => {
+		const run = await slowMutation(undefined)
+		expect(run.status).toBe(200)
+		expectHeldEvent(await envelopesOf(run, 1))
+	})
+
+	test('a waitUntil that throws, or a delivery that never settles, leaves the answer as it was', async () => {
+		const throwing = await slowMutation({
+			waitUntil: () => {
+				throw new Error('the context refused the promise')
+			},
+		})
+		expect(throwing.status).toBe(200)
+		const gate = Promise.withResolvers<Response>()
+		const pending = await slowMutation({ waitUntil: () => {} }, () => gate.promise)
+		expect(pending.status).toBe(200)
+		expect(await envelopesOf(pending, 1)).toHaveLength(1)
+		gate.resolve(new Response(null, { status: 202 }))
 	})
 })

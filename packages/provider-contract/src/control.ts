@@ -567,6 +567,12 @@ export interface ControlProvider {
 	readonly applicationHopSecret?: true
 	/** Absent means the provider runs no `dev` environment, and Control refuses one. */
 	readonly devEnvironments?: ProviderDevEnvironments
+	/**
+	 * Whether an environment at this approved access is served the ops channel through which Control reaches its object
+	 * (ADR-0069), so its deploy gets `FABRIKA_OPS_KEY_DIGESTS`. The release gate is the provider's, so core keeps no
+	 * release logic. Absent means no environment of this provider is.
+	 */
+	opsChannel?(access: ProviderApprovedAccess): boolean
 	/** Absent means the provider deploys public sources only. */
 	readonly source?: ProviderSourceCapabilities
 	/**

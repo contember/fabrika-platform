@@ -4,6 +4,7 @@ import {
 	FABRIKA_APP_ORIGIN,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
+	FABRIKA_OPS_KEY_DIGESTS,
 	FABRIKA_PROXY_SECRET,
 	FABRIKA_TOKEN_KEYS,
 	isFrameworkVariableName,
@@ -33,6 +34,7 @@ import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { publishRunSnapshot } from './approval/publish'
 import { approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
+import { recordedMaintenance } from './data-operations'
 import {
 	type AppEnvRow,
 	type AppRow,
@@ -64,6 +66,7 @@ import {
 import { type MembershipTransportPort, needsMembershipTransport } from './membership-transport'
 import { ingestOrigin } from './operations-catalog'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
+import { type OpsKeysPort, reconcileOpsKey } from './ops-key'
 import type { PlatformTransportPort } from './platform-transport'
 import type { ProxySecrets } from './proxy-secret'
 import { projectedReturnOrigins } from './return-origins'
@@ -118,6 +121,8 @@ export interface RunDeps {
 	 * declares a token purpose does not deploy.
 	 */
 	tokenKeys?: TokenKeysPort
+	/** Each environment's ops key, sealed in the vault (ADR-0069); absent without a vault, and then a gated deploy fails. */
+	opsKeys?: OpsKeysPort
 	/**
 	 * The installation's mail transport; absent means none, and then a job that declares `mailer: 'installation'` gets
 	 * `FABRIKA_EMAIL_PROVIDER=none`. An invalid one refuses only the deploys that need it.
@@ -421,7 +426,13 @@ class RunSettled extends Error {}
 export class RunInvocation {
 	readonly work = new AbortController()
 
-	private constructor(readonly lease: Lease, private readonly runs: RunRepository, readonly runId: string) {
+	private constructor(
+		readonly lease: Lease,
+		private readonly runs: RunRepository,
+		readonly runId: string,
+		/** False for a lease another holder took and hands in: that holder renews and releases it, never this invocation. */
+		private readonly ownsLease: boolean,
+	) {
 		const follow = (): void => this.work.abort(lease.signal.reason)
 		if (lease.signal.aborted) follow()
 		else lease.signal.addEventListener('abort', follow, { once: true })
@@ -429,12 +440,22 @@ export class RunInvocation {
 
 	static async acquire(deps: Pick<RunDeps, 'repositories' | 'lock' | 'leaseClock'>, candidate: RunRow): Promise<RunInvocation | null> {
 		const lease = await acquireLease(deps.lock, runLeaseKey(candidate.app_id, candidate.env), deps.leaseClock)
-		return lease === null ? null : new RunInvocation(lease, deps.repositories.runs, candidate.id)
+		return lease === null ? null : new RunInvocation(lease, deps.repositories.runs, candidate.id, true)
+	}
+
+	/**
+	 * A run of the environment whose live lease `lease` already holds, as a data operation's own deploy (ADR-0069). The
+	 * lease is not taken again; throws `lease_lost` unless it is still held and is this run's environment's.
+	 */
+	static underLease(deps: Pick<RunDeps, 'repositories'>, lease: Lease, candidate: RunRow): RunInvocation {
+		if (lease.key !== runLeaseKey(candidate.app_id, candidate.env)) throw new Error(`run ${candidate.id} belongs to another environment's lease`)
+		lease.assertHeld()
+		return new RunInvocation(lease, deps.repositories.runs, candidate.id, false)
 	}
 
 	/** Another run of the same environment, under the same lease. */
 	forRun(runId: string): RunInvocation {
-		return new RunInvocation(this.lease, this.runs, runId)
+		return new RunInvocation(this.lease, this.runs, runId, this.ownsLease)
 	}
 
 	get lost(): boolean {
@@ -481,7 +502,7 @@ export class RunInvocation {
 	}
 
 	release(): Promise<void> {
-		return this.lease.release()
+		return this.ownsLease ? this.lease.release() : Promise.resolve()
 	}
 }
 
@@ -506,6 +527,35 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 	if (invocation === null) {
 		return { runId: candidate.id, status: 'deferred' }
 	}
+	return await deployUnder(deps, message, candidate, invocation, false)
+}
+
+/**
+ * The deploy a data operation runs itself, under the environment's lease it already holds (ADR-0069 "Leases"): the
+ * only deploy of an environment that is not `open`. The lease stays the operation's; it is never released here.
+ */
+export async function executeDeployUnderLease(
+	deps: RunDeps,
+	message: DeployJobMessage,
+	lease: Lease,
+): Promise<{ runId: string; status: DeployStatus }> {
+	const candidate = await deps.repositories.runs.getRun(message.runId)
+	if (candidate === null) {
+		return { runId: message.runId, status: 'skipped' }
+	}
+	if (candidate.status !== 'pending') {
+		return { runId: candidate.id, status: 'skipped' }
+	}
+	return await deployUnder(deps, message, candidate, RunInvocation.underLease(deps, lease, candidate), true)
+}
+
+async function deployUnder(
+	deps: RunDeps,
+	message: DeployJobMessage,
+	candidate: RunRow,
+	invocation: RunInvocation,
+	operationDeploy: boolean,
+): Promise<{ runId: string; status: DeployStatus }> {
 	const runId = candidate.id
 	const dryRun = message.dryRun === true
 	const runs = deps.repositories.runs
@@ -546,6 +596,11 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			throw new Error(
 				`configured provider "${deps.provider.id}" cannot deploy ${app.id}/${appEnv.env} owned by "${appEnv.provider}"`,
 			)
+		}
+		// Read under the lease every data operation holds, so no transition moves while this deploy runs.
+		const maintenance = operationDeploy ? 'open' : await recordedMaintenance(deps, { appId: app.id, env: appEnv.env })
+		if (maintenance !== 'open') {
+			throw new Error(`the environment is not open (${maintenance}): a data operation must open it before it deploys`)
 		}
 		const sourceBinding = await loadSourceBinding(deps, app)
 		const appInput = providerApp(app, run)
@@ -692,6 +747,12 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		managedEnvironment[FABRIKA_APP_ORIGIN] = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
 		const tokenKeys = dryRun ? null : await reconcileTokenKeys(deps.tokenKeys, app.id, appEnv.env, approvedContract)
 		managedEnvironment[FABRIKA_TOKEN_KEYS] = tokenKeys
+		// Only an environment with a domain, at a release the provider serves the ops channel at, gets the digests (ADR-0069);
+		// `null` removes them after a downgrade.
+		const approvedAccess = registration.environment.access
+		const hasDomain = appEnv.domain !== null && appEnv.domain !== ''
+		const opsChannel = !dryRun && hasDomain && approvedAccess !== undefined && deps.provider.opsChannel?.(approvedAccess) === true
+		managedEnvironment[FABRIKA_OPS_KEY_DIGESTS] = opsChannel ? await reconcileOpsKey(deps, app.id, appEnv.env, runId, invocation) : null
 		// Parsed once, before any provider effect: a provider writes what it is handed and checks none of it again.
 		const handed = parseManagedEnvironment(managedEnvironment)
 		// A provider removes a managed name it is not handed, so a name missing here would delete the variable.

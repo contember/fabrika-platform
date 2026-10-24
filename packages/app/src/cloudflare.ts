@@ -1,15 +1,20 @@
 // ─── Cloudflare Workers adapter ──────────────────────────────────────
 
-import { FABRIKA_PROXY_SECRET, PROXY_SECRET_HEADER } from '@fabrika/auth-core'
 import {
-	APPLICATION_OBJECT_NAME,
-	type ContractWorkerOptions,
-	type ImplementationLoader,
-	registerApplication,
-	TICK_HEADER,
-} from './cloudflare/application.js'
+	type ApplicationObjects,
+	FABRIKA_APPLICATION_OBJECT,
+	FABRIKA_APPLICATION_OBJECTS,
+	FABRIKA_PROXY_SECRET,
+	OPS_PREFIX,
+	opsRefusal,
+	parseApplicationObjects,
+	parseOpsOperation,
+	PROXY_SECRET_HEADER,
+} from '@fabrika/auth-core'
+import { type ContractWorkerOptions, type ImplementationLoader, registerApplication, TICK_HEADER } from './cloudflare/application.js'
 import { method } from './cloudflare/bindings.js'
 import { CLOUDFLARE_APPLICATION_BINDING } from './cloudflare/names.js'
+import { jsonBody, objectNamed, opsAccess, opsAuthenticated } from './cloudflare/ops.js'
 import type { FetchService, RequestExecutionContext } from './fetch.js'
 
 export { markProductionProcess } from '@fabrika/db/production'
@@ -76,15 +81,29 @@ function proxySecretOf(env: Readonly<Record<string, unknown>>): string {
 	return secret
 }
 
-/** The environment's one object (`FABRIKA_APPLICATION`), as a fetch. */
-function applicationObject(env: Readonly<Record<string, unknown>>): (request: Request) => Promise<Response> {
+/**
+ * The object of ordinary traffic and the objects an ops request may name, all in the environment's own namespace.
+ * Without either variable (an older deploy) the one object is `application`.
+ */
+function applicationObjects(env: Readonly<Record<string, unknown>>): ApplicationObjects {
+	const object = env[FABRIKA_APPLICATION_OBJECT]
+	const objects = env[FABRIKA_APPLICATION_OBJECTS]
+	const parsed = parseApplicationObjects(typeof object === 'string' ? object : undefined, typeof objects === 'string' ? objects : undefined)
+	if (parsed === null) {
+		throw new Error(`${FABRIKA_APPLICATION_OBJECT} and ${FABRIKA_APPLICATION_OBJECTS} name no valid set of objects; a deploy writes both`)
+	}
+	return parsed
+}
+
+/** The object `name` of the environment's namespace (`FABRIKA_APPLICATION`), as a fetch. */
+function applicationObject(env: Readonly<Record<string, unknown>>, name: string): (request: Request) => Promise<Response> {
 	const namespace = env[CLOUDFLARE_APPLICATION_BINDING]
 	const idFromName = method(namespace, 'idFromName')
 	const get = method(namespace, 'get')
 	if (idFromName === null || get === null) {
 		throw new Error(`the ${CLOUDFLARE_APPLICATION_BINDING} binding is missing; the provider binds the application's Durable Object to its Worker`)
 	}
-	const stub: unknown = get(idFromName(APPLICATION_OBJECT_NAME))
+	const stub: unknown = get(idFromName(name))
 	// Read, not tested with `in`: a stub answers `fetch` without owning the property.
 	const fetchObject: unknown = typeof stub === 'object' && stub !== null ? Reflect.get(stub, 'fetch') : undefined
 	if (typeof fetchObject !== 'function') {
@@ -99,6 +118,25 @@ function applicationObject(env: Readonly<Record<string, unknown>>): (request: Re
 	}
 }
 
+/**
+ * An ops request reaches the object its body names, when the environment lists it (ADR-0069 §1). Every refusal here
+ * is the same answer the object gives, and the object checks everything again.
+ */
+async function forwardOps(request: Request, env: Readonly<Record<string, unknown>>): Promise<Response> {
+	const access = opsAccess(env)
+	// Receiver authentication of Control's key, as the object runs it; no enforcement decision. It runs before the body is
+	// read or any object looked up, so an unauthenticated caller wakes no object and learns nothing of the names.
+	if (access === null || !opsAuthenticated(request, access)) {
+		return opsRefusal()
+	}
+	const operation = parseOpsOperation(new URL(request.url).pathname)
+	const object = operation === null ? null : objectNamed(operation, await jsonBody(request.clone()))
+	if (object === null || !access.objects.objects.includes(object)) {
+		return opsRefusal()
+	}
+	return await applicationObject(env, object)(request)
+}
+
 export interface ContractWorker {
 	fetch(request: Request, env: Readonly<Record<string, unknown>>, exec: CloudflareExecutionContext): Promise<Response>
 	scheduled(controller: CloudflareScheduledController, env: Readonly<Record<string, unknown>>, exec: CloudflareExecutionContext): Promise<void>
@@ -106,9 +144,10 @@ export interface ContractWorker {
 
 /**
  * The Worker module of a contract application, called only by the generated entrypoint, which also exports
- * `FabrikaApplication`. The application runs in the environment's one Durable Object (ADR-0065): `fetch` forwards
- * every request to it with the proxy secret, the proxy's own headers unchanged, and `scheduled` forwards the minute
- * tick. The object captures the environment, imports the application and boots it.
+ * `FabrikaApplication`. The application runs in the environment's Durable Object (ADR-0065): `fetch` forwards every
+ * request to it with the proxy secret, the proxy's own headers unchanged, and `scheduled` forwards the minute tick.
+ * An ops request goes to the object its body names instead (ADR-0069). The object captures the environment, imports
+ * the application and boots it.
  */
 export function createContractWorker(load: ImplementationLoader, options: ContractWorkerOptions = {}): ContractWorker {
 	registerApplication(load, options)
@@ -117,14 +156,18 @@ export function createContractWorker(load: ImplementationLoader, options: Contra
 			const headers = new Headers(request.headers)
 			headers.delete(TICK_HEADER)
 			headers.set(PROXY_SECRET_HEADER, proxySecretOf(env))
-			return await applicationObject(env)(new Request(request, { headers }))
+			const forwarded = new Request(request, { headers })
+			if (new URL(request.url).pathname.startsWith(OPS_PREFIX)) {
+				return await forwardOps(forwarded, env)
+			}
+			return await applicationObject(env, applicationObjects(env).object)(forwarded)
 		},
 		async scheduled(controller, env) {
 			const tick = new Request('https://application.invalid/', {
 				method: 'POST',
 				headers: { [PROXY_SECRET_HEADER]: proxySecretOf(env), [TICK_HEADER]: String(controller.scheduledTime) },
 			})
-			const response = await applicationObject(env)(tick)
+			const response = await applicationObject(env, applicationObjects(env).object)(tick)
 			if (!response.ok) {
 				throw new Error(`the application's object answered the minute tick with ${response.status}`)
 			}

@@ -76,7 +76,8 @@ src/
   agent-skill.ts      @fabrika/app/agent-skill — reads skill/; installedAppAgentSkill; renderAgentsFile (node:fs)
   fetch.ts            FetchService and RequestExecutionContext: what both runtime adapters serve
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker: the Worker that forwards each
-                      request and the minute tick to the environment's Durable Object; re-exports FabrikaApplication
+                      request and the minute tick to the environment's Durable Object, and an ops request to the
+                      object its body names; re-exports FabrikaApplication
   cloudflare/         what @fabrika/app/cloudflare runs (ADR-0065)
     application.ts    FabrikaApplication, the environment's one Durable Object: verifies the hop, migrates its SQLite,
                       boots the application once per isolate, serves requests and the tick; registerApplication
@@ -86,6 +87,8 @@ src/
                       multipart above R2_PART_BYTES, the etag as the version)
     names.ts          the class and binding names the provider shares: FabrikaApplication, FABRIKA_APPLICATION,
                       FABRIKA_FILES (re-exported by @fabrika/app/build)
+    ops.ts            Control's ops channel at the object (ADR-0069): authentication, the uniform refusal, the
+                      inspect view read from storage alone
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract; the local `directory`
                       mail provider, which boot honours only under a loopback issuer
   disk-assets.ts      diskAssets: the SPA mounts from their build directories, as the Bun deploy and the test kit serve them
@@ -1010,11 +1013,20 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   `fabrika/entry.generated.ts` and `fabrika/migrations.generated.ts`, the `.sql` files of `db/migrations` by name with
   their text verbatim, so their checksums stay the files'. `createContractWorker(load, { migrations })` registers the
   loader; the Worker's `fetch` removes `X-Fabrika-Tick` (`TICK_HEADER`), sets the proxy secret and forwards the request
-  to the object named `application` of `FABRIKA_APPLICATION`; its `scheduled` sends the tick with the `scheduledTime`.
-  Without `FABRIKA_PROXY_SECRET` or the binding it forwards nothing.
+  to the object `FABRIKA_APPLICATION_OBJECT` names in `FABRIKA_APPLICATION` (`application` without the object
+  variables, an older deploy); its `scheduled` sends the tick there with the `scheduledTime`. Without
+  `FABRIKA_PROXY_SECRET` or the binding it forwards nothing.
+- **An ops request reaches only framework code and never boots the application** (ADR-0069, `cloudflare/ops.ts`). The
+  Worker first runs `opsAuthenticated` (the ops row's method and `X-Fabrika-Endpoint` from `opsProxyRow()`, the key's
+  digest against `FABRIKA_OPS_KEY_DIGESTS` in constant time), then sends the request to the object its body's `object`
+  names, only when `FABRIKA_APPLICATION_OBJECTS` lists it. The object checks the hop secret and `opsAuthenticated` again,
+  and only then waits for a boot under way; it never starts one or a retry. Every refusal is `opsRefusal()`. `inspect`
+  reads storage only, never writes, skips a table name the wire refuses, and shows the last boot failure's text only in
+  the content view; `state` and `migrate` answer 501 until the barrier lands.
 - **The object answers only its own Worker.** A request without the environment's proxy secret is an empty 404 before
   anything else, the digests compared in constant time, so another Worker that binds the class learns nothing.
-- **It boots once per isolate.** The constructor runs the boot in `blockConcurrencyWhile` and settles either way: a
+- **It boots once per isolate.** The first request or tick that needs the application starts the boot in
+  `blockConcurrencyWhile`, and every later event shares it; the boot settles either way: a
   failed boot answers every request with its failure, is reported once, and is not kept, so the next instance boots
   again. For an application with a data layer, before the boot and for every later instance of the isolate, it applies `SQLITE_FRAMEWORK_MIGRATIONS` and the
   application's bundle through `migrateSqlite`, then binds the layer to `openSqlite` over a storage it resolves

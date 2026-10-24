@@ -597,3 +597,15 @@ export type {
 	TailRunInput,
 	UpdateNamespaceInput,
 } from './rpc.js'
+export type {
+	DataOperationDto,
+	DataOperationKind,
+	DataOperationListInput,
+	DataOperationResolution,
+	DataOperationState,
+	DataOperationStep,
+	MaintenanceMode,
+	RecoverDataOperationInput,
+	StartDataOperationInput,
+} from './rpc.js'
+export { DATA_OPERATION_MAX_PAGE_SIZE, dataOperationListInputSchema, recoverDataOperationInputSchema, startDataOperationInputSchema } from './rpc.js'

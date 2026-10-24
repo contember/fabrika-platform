@@ -114,8 +114,8 @@ export type Decision =
 		/** The `Access-Control-Allow-Origin` the answer carries: the request's admitted origin, `*`, or none. */
 		crossOrigin: string | null
 		/**
-		 * Whether the request's own `Authorization` reaches the application: on a webhook row that forwards it, unless it
-		 * carries a platform key. Every other anonymous request loses it (ADR-0022 rule 3).
+		 * Whether the request's own `Authorization` reaches the application: on the ops row, and on a webhook row that
+		 * forwards it unless it carries a platform key. Every other anonymous request loses it (ADR-0022 rule 3).
 		 */
 		forwardsAuthorization: boolean
 	}
@@ -791,10 +791,13 @@ function isDocumentNavigation(headers: Headers): boolean {
 }
 
 /**
- * The `Authorization` of an anonymous request is the application's only on a row that forwards it, and never when it
- * carries a platform key. The proxy reads no credential from it either way: no key lookup, no session.
+ * The `Authorization` of an anonymous request goes on only on a `protocol` row, whose receiver authenticates the caller
+ * itself (ADR-0069: the ops key reaches framework code only), and on a webhook row that forwards it, never with a
+ * platform key. The proxy reads no credential from it either way: no key lookup, no session.
  */
 function forwardsAuthorization(row: ManifestEndpointRow, request: ForwardedRequest): boolean {
 	const authorization = request.headers.get('Authorization')
-	return 'authorization' in row && row.authorization === 'forward' && authorization !== null && !carriesPlatformKey(authorization, API_KEY_PREFIX)
+	if (authorization === null) return false
+	if (row.kind === 'protocol') return true
+	return 'authorization' in row && row.authorization === 'forward' && !carriesPlatformKey(authorization, API_KEY_PREFIX)
 }

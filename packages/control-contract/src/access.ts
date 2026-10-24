@@ -45,6 +45,18 @@ export const CONTROL_ACTIONS = Object.freeze({
 	MAIL_CONTENT_READ: 'mail.content.read',
 	/** Release or drop a held message, requeue a final one, and change the gate's rules. Global. */
 	MAIL_MANAGE: 'mail.manage',
+	/**
+	 * Read an application environment's data as a metadata projection: sizes, counts, state and the backup list
+	 * (ADR-0069 §2). Scoped by app/environment.
+	 */
+	DATA_READ: 'data.read',
+	/**
+	 * Read row contents, exports, backup downloads and content fields of every tenant of an environment. Checked as a
+	 * global grant only, so a grant scoped to an app never carries it: content is for the installation's operators.
+	 */
+	DATA_CONTENT_READ: 'data.content.read',
+	/** Run maintenance transitions, backups and restores, and recover an interrupted operation. Scoped by app/environment. */
+	DATA_MANAGE: 'data.manage',
 })
 
 /**

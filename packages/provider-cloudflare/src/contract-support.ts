@@ -80,11 +80,17 @@ const OBJECT_RUNTIME_SINCE = { major: 0, minor: 9 }
  */
 export const runsInObject = (release: string): boolean => releaseAtLeast(release, OBJECT_RUNTIME_SINCE)
 
-/** The first framework minor whose Cloudflare deploy pins the generated entry; which release gets it is still open. */
+/** The first framework minor whose Cloudflare deploy pins the generated entry. */
 const PINNED_ENTRY_SINCE = { major: 0, minor: 9 }
 
 /** Whether the Cloudflare deploy of release `release` accepts only the generated entry and regenerates it. */
 export const pinsGeneratedEntry = (release: string): boolean => releaseAtLeast(release, PINNED_ENTRY_SINCE)
+
+/** The first framework minor whose application object serves Control's ops row (ADR-0069). */
+const SERVES_OPS_SINCE = { major: 0, minor: 9 }
+
+/** Whether an environment on release `release` gets the ops row, the ops key digests and the object variables. */
+export const servesOps = (release: string): boolean => releaseAtLeast(release, SERVES_OPS_SINCE)
 
 /**
  * Refuse what a stateless Worker of an older release cannot run: a job, a webhook, a public procedure, installation

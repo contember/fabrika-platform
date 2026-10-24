@@ -1,6 +1,7 @@
 import {
 	ANY_ORIGIN_KINDS,
 	APP_ENVIRONMENT_SEPARATOR,
+	type BodyAdmission,
 	type Caller,
 	compileEndpointTable,
 	type ContractArtifact,
@@ -17,6 +18,11 @@ import {
 	type InstallationEndpointTable,
 	isDigest,
 	MAX_CACHE_AGE_SECONDS,
+	OPS_CONTENT_TYPE,
+	OPS_METHOD,
+	OPS_PREFIX,
+	OPS_ROW_ID,
+	OPS_ROW_PATH,
 	parseAppEnvironmentId,
 	requirementDigest,
 } from '@fabrika/auth-core'
@@ -94,8 +100,8 @@ interface ProxyEndpointExtras {
 	delegation: EndpointDelegation | null
 }
 
-/** An endpoint row as the proxy applies it: the rules without the schemas, plus the digest and the delegation. */
-export type ProxyEndpointRow =
+/** A row a contract declares, as the proxy applies it: the rules without the schemas, plus the digest and the delegation. */
+export type DeclaredProxyEndpointRow =
 	| (
 		& Pick<CredentialedEndpoint, 'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin' | 'response'>
 		& ProxyEndpointExtras
@@ -110,6 +116,42 @@ export type ProxyEndpointRow =
 			delegation: null
 		}
 	)
+
+/** An endpoint row of an application table: a declared row, or the ops row that only platform composition adds. */
+export type ProxyEndpointRow = DeclaredProxyEndpointRow | OpsProxyEndpointRow
+
+/**
+ * The canonical ops row (ADR-0069): Control's channel to an environment's object, which platform composition adds to an
+ * application's table for a framework release that serves it. The parser admits only `opsProxyRow()`, field for field.
+ */
+export interface OpsProxyEndpointRow {
+	id: string
+	kind: 'protocol'
+	method: typeof OPS_METHOD
+	path: string
+	callers: []
+	requirement: null
+	admission: BodyAdmission
+	delegation: null
+	digest: string
+}
+
+/** The ops row's body limit: every ops request is a small JSON object. */
+export const OPS_ROW_MAX_BYTES = 64 * 1024
+
+/** The ops row, digested like every row; the provider composes it and the framework checks `X-Fabrika-Endpoint` against it. */
+export function opsProxyRow(): OpsProxyEndpointRow {
+	const rules = {
+		kind: 'protocol',
+		method: OPS_METHOD,
+		path: OPS_ROW_PATH,
+		callers: [],
+		requirement: null,
+		admission: { contentTypes: [OPS_CONTENT_TYPE], maxBytes: OPS_ROW_MAX_BYTES },
+		delegation: null,
+	} satisfies Omit<OpsProxyEndpointRow, 'id' | 'digest'>
+	return { id: OPS_ROW_ID, ...rules, digest: requirementDigest({ ...rules, oauth: null }) }
+}
 
 /** An installation row as the proxy applies it: the row with its digest and no delegation. */
 export type InstallationProxyEndpointRow = InstallationEndpointRow & { digest: string; delegation: null }
@@ -196,7 +238,10 @@ const endpointRuleFields = {
 	admission: admissionSchema.nullable(),
 	digest: z.string().refine(isDigest),
 }
-/** One row of a contract app's endpoint table; it refuses a digest that does not describe the row's rules. */
+/**
+ * One row a contract declares, of a contract app's endpoint table; it refuses a digest that does not describe the row's
+ * rules. It never admits the ops row, which only `contractProxyAppSchema` reads.
+ */
 export const proxyEndpointRowSchema = z.union([
 	z.object({
 		...endpointRuleFields,
@@ -244,13 +289,28 @@ export const proxyEndpointRowSchema = z.union([
 	(row) => row.digest === requirementDigest(row),
 	'endpoint digest does not match its rules',
 ) satisfies z.ZodType<
-	ProxyEndpointRow,
+	DeclaredProxyEndpointRow,
 	z.ZodTypeDef,
 	unknown
 >
 
+const OPS_ROW = opsProxyRow()
+
+/** The ops row exactly as `opsProxyRow()` builds it: every field a literal, its digest included. */
+const opsProxyEndpointRowSchema = z.object({
+	id: z.literal(OPS_ROW_ID),
+	kind: z.literal('protocol'),
+	method: z.literal(OPS_METHOD),
+	path: z.literal(OPS_ROW_PATH),
+	callers: z.tuple([]),
+	requirement: z.null(),
+	admission: z.object({ contentTypes: z.tuple([z.literal(OPS_CONTENT_TYPE)]), maxBytes: z.literal(OPS_ROW_MAX_BYTES) }).strict(),
+	delegation: z.null(),
+	digest: z.literal(OPS_ROW.digest),
+}).strict() satisfies z.ZodType<OpsProxyEndpointRow, z.ZodTypeDef, unknown>
+
 /** Only an RPC procedure, a public procedure and a form open to another origin, and only the anonymous two to any (ADR-0022). */
-function crossOriginAllowed(kind: ProxyEndpointRow['kind'], form: CrossOriginForm | undefined): boolean {
+function crossOriginAllowed(kind: DeclaredProxyEndpointRow['kind'], form: CrossOriginForm | undefined): boolean {
 	return form === undefined || (CROSS_ORIGIN_KINDS.includes(kind) && (form !== 'any' || ANY_ORIGIN_KINDS.includes(kind)))
 }
 
@@ -282,7 +342,7 @@ const cspOriginsSchema = z.object({
 export const contractProxyAppSchema = z.object({
 	...proxyAppFields,
 	scheme: proxyAppScheme,
-	endpoints: z.array(proxyEndpointRowSchema),
+	endpoints: z.array(z.union([proxyEndpointRowSchema, opsProxyEndpointRowSchema])),
 	reservedPrefixes: z.array(z.string()),
 	snapshot: z.string().refine(isDigest),
 	csp: cspOriginsSchema,
@@ -290,6 +350,10 @@ export const contractProxyAppSchema = z.object({
 	crossOrigins: z.array(z.string().refine(isCrossOrigin)).nonempty().max(MAX_CROSS_ORIGINS).optional(),
 }).strict().superRefine((app, ctx) => {
 	checkCrossOrigins(app, ctx)
+	// Only the ops row lies under the ops prefix: another row there would be an application route at a platform path.
+	if (app.endpoints.some((row) => row.path.startsWith(OPS_PREFIX) && row.kind !== 'protocol')) {
+		ctx.addIssue({ code: 'custom', message: 'only the ops row serves the ops prefix' })
+	}
 	checkEndpointTable(app, ctx)
 }) satisfies z.ZodType<ContractProxyApp, z.ZodTypeDef, unknown>
 
@@ -380,9 +444,14 @@ export const proxyAppSchema = z.union([contractProxyAppSchema, installationProxy
  * The manifest form of a compiled contract: every endpoint's rules with their digest and delegation, the reserved
  * prefixes, the contract digest and the named CSP origins. Producers call this; they never assemble rows by hand.
  * `digest` is the one the application's own release computes; Control passes it for an artifact it upcast from an
- * older release's (ADR-0062).
+ * older release's (ADR-0062). `ops` adds the ops row, which only platform composition asks for and the artifact never
+ * carries.
  */
-export function contractProxyTable(artifact: ContractArtifact, digest: string = contractDigest(artifact)): ContractProxyTable {
+export function contractProxyTable(
+	artifact: ContractArtifact,
+	digest: string = contractDigest(artifact),
+	options: { readonly ops?: boolean } = {},
+): ContractProxyTable {
 	return {
 		endpoints: artifact.endpoints.map((row): ProxyEndpointRow => {
 			const rules = {
@@ -407,7 +476,7 @@ export function contractProxyTable(artifact: ContractArtifact, digest: string = 
 				delegation: endpointDelegation(artifact, row),
 			}
 			return { ...credentialed, digest: requirementDigest(credentialed) }
-		}),
+		}).concat(options.ops === true ? [opsProxyRow()] : []),
 		reservedPrefixes: [...artifact.reservedPrefixes],
 		snapshot: digest,
 		csp: cspOrigins(artifact.csp),

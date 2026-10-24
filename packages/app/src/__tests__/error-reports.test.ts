@@ -75,6 +75,17 @@ describe('the scrubber', () => {
 		)
 	})
 
+	test("the ops key digests and the object names stay, so a message naming the 'application' object is not mangled", () => {
+		const digest = `sha256:${'a'.repeat(64)}`
+		const ops = environmentScrubber(environment({
+			FABRIKA_OPS_KEY_DIGESTS: digest,
+			FABRIKA_APPLICATION_OBJECT: 'application',
+			FABRIKA_APPLICATION_OBJECTS: 'application,application-restore',
+		}))
+		const message = `the application object (application,application-restore) refused a key, none of ${digest}`
+		expect(ops.scrub(message)).toBe(message)
+	})
+
 	test('a JWT, an authorization scheme and a credential header are removed', () => {
 		const jwt = 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.c2lnbmF0dXJl'
 		expect(noSecrets.scrub(`token ${jwt} expired`)).toBe(`token ${REDACTED} expired`)

@@ -6,6 +6,9 @@ import {
 	connectVariables,
 	type ContractArtifact,
 	contractDigest,
+	DEFAULT_APPLICATION_OBJECT,
+	FABRIKA_APPLICATION_OBJECT,
+	FABRIKA_APPLICATION_OBJECTS,
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_ISSUER,
 	isFrameworkVariableName,
@@ -32,7 +35,7 @@ import {
 import { runnerWorkerGraph } from './checkout'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
 import { configSchema } from './config-schema'
-import { assertCloudflareContract, needsMinuteTick, pinsGeneratedEntry, runsInObject } from './contract-support'
+import { assertCloudflareContract, needsMinuteTick, pinsGeneratedEntry, runsInObject, servesOps } from './contract-support'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE } from './proxy'
@@ -213,15 +216,22 @@ const buildEntry = async (build: EntryBuild, run: CloudflareDeployRun, cf: Cloud
 	if (result.exitCode !== 0) throw commandError('fabrika app build', result)
 }
 
+/** The object variables of a release that serves ops (ADR-0069): ordinary traffic and ops requests reach `application`. */
+const OBJECT_VARIABLES: Readonly<Record<string, string>> = {
+	[FABRIKA_APPLICATION_OBJECT]: DEFAULT_APPLICATION_OBJECT,
+	[FABRIKA_APPLICATION_OBJECTS]: DEFAULT_APPLICATION_OBJECT,
+}
+
 /**
  * Bind the application's Durable Object, which runs the application over its SQLite, the environment's files bucket,
- * and the minute tick (ADR-0065). The object is bound first, so oblaka numbers its migration `v0001` whatever else the
- * application binds, and the tag never moves.
+ * and the minute tick (ADR-0065), and on a release that serves ops name its objects. The object is bound first, so
+ * oblaka numbers its migration `v0001` whatever else the application binds, and the tag never moves.
  */
-const withApplicationRuntime = (authored: Worker, run: CloudflareDeployRun, runtime: ApplicationRuntime): Worker => {
+const withApplicationRuntime = (authored: Worker, run: CloudflareDeployRun, runtime: ApplicationRuntime, ops: boolean): Worker => {
 	const application = applicationWorker(authored)
 	const configured = new Worker({
 		...application.options,
+		...(ops ? { vars: { ...(application.options.vars ?? {}), ...OBJECT_VARIABLES } } : {}),
 		bindings: {
 			[CLOUDFLARE_APPLICATION_BINDING]: new DurableObject({ name: `${run.appId}-application`, className: CLOUDFLARE_APPLICATION_CLASS }),
 			...(application.options.bindings ?? {}),
@@ -306,8 +316,9 @@ const assertContractSchema = (schema: AppSchema | null, contract: ContractArtifa
 /**
  * The proxy Worker is the platform's (ADR-0048): built here, from this package's own entrypoint, around the
  * application Worker the config returns, never taken from the checkout. A config that returns a proxy is refused.
+ * `ops` adds Control's ops row to the table.
  */
-const platformProxied = (authored: Worker, served: ServedContract, run: CloudflareDeployRun): Worker => {
+const platformProxied = (authored: Worker, served: ServedContract, run: CloudflareDeployRun, ops: boolean): Worker => {
 	if (authored.options.bindings?.['APP'] !== undefined) {
 		throw new Error(
 			`cloudflare: \`resources\` returns the Worker \`${authored.options.name}\` binding \`APP\`, a proxy of its own; return the application Worker, and the platform builds the proxy Worker from its contract`,
@@ -324,7 +335,7 @@ const platformProxied = (authored: Worker, served: ServedContract, run: Cloudfla
 		appHost: run.domain ?? 'localhost',
 		...(run.domain === undefined ? {} : { domain: run.domain }),
 		...(run.crossOrigins === undefined ? {} : { crossOrigins: run.crossOrigins }),
-		endpoints: contractProxyTable(served.contract, served.digest),
+		endpoints: contractProxyTable(served.contract, served.digest, { ops }),
 		...operationsOrigin(run),
 		iamUrl: managedValue(run.managedEnvironment, FABRIKA_IAM_ISSUER) ?? '',
 	})
@@ -675,20 +686,24 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	const schema = configSchema(loaded.config)
 	assertContractSchema(schema, contract)
 	const authored = runnerWorkerGraph(loaded.config.resources({ env: run.env, domain: run.domain }))
-	// Fabrika's own components compose their own proxies; every application gets the platform's.
-	const proxied = platformResources === 'refuse' && served !== null ? platformProxied(authored, served, run) : authored
+	// Only a release Control named pins the entry or serves ops; a local deploy names none and keeps its authored `main`.
+	const release = run.approved?.framework
+	const opsRelease = release !== undefined && servesOps(release)
+	// Fabrika's own components compose their own proxies; every application gets the platform's. Without a domain no
+	// Custom Domain carries the ops channel, so the proxy gets no ops row (ADR-0069).
+	const proxied = platformResources === 'refuse' && served !== null
+		? platformProxied(authored, served, run, opsRelease && run.domain !== undefined)
+		: authored
 	if (platformResources === 'refuse') assertNoFrameworkVariables(loaded.config, applicationWorker(proxied), run)
 	const connectors = platformResources === 'refuse' ? connectorBindings(contract) : {}
 	// An older release's entry exports no object, and a Control older than the runner names no release (ADR-0062).
 	const objectRuntime = run.approved === undefined || (run.approved.framework !== undefined && runsInObject(run.approved.framework))
-	// Only a release Control named pins the entry; a local deploy names none and keeps its authored `main`.
-	const release = run.approved?.framework
 	const entry = release !== undefined && pinsGeneratedEntry(release) ? resolve(loaded.cwd, GENERATED_ENTRY_FILE) : null
 	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract, entry) : null
 	const managed = withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served))
 	const identified = platformResources === 'refuse' ? withIamIdentity(managed.worker, appEnvironmentId(run.appId, run.env)) : managed.worker
 	const connected = withConnectorBindings(identified, connectors)
-	const worker = runtime === null ? connected : withApplicationRuntime(connected, run, runtime)
+	const worker = runtime === null ? connected : withApplicationRuntime(connected, run, runtime, opsRelease)
 	const dir = workerDir(loaded.config, loaded.cwd)
 	const bounds: DeploymentBounds = {
 		env: run.env,

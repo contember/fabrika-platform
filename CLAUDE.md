@@ -156,7 +156,9 @@ needed only when there is no app config. Platform commands load the provider's
   and `health` rows ignore that header, because they authenticate themselves and also arrive unfronted —
   so does a private gateway hop that still carries the console's endpoint id. Only an entry that platform composition marks
   `installation: true` may use the installation-only forms (`protocol`, `service`, method `*`, caller
-  `oauth`, requirement `authenticated`); never let an application declare one.
+  `oauth`, requirement `authenticated`), with one exception: the canonical ops row (`protocol`, `POST /__fabrika/ops/*`,
+  ADR-0069), which platform composition alone adds to a contract application's table, fixed field for field; never let an
+  application declare one.
 - **`fabrika.config.ts` is the single source of truth** for a worker's own resources; `oblaka.ts` is a
   thin shim over it. Never re-declare resources in `oblaka.ts`.
 - **Postgres migration identity is `(bundle, filename)` in a service-owned

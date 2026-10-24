@@ -1,5 +1,17 @@
 export { BuilderConnectionRepository } from './db/builder-connections'
 export { type ControlRepositories, createControlRepositories } from './db/composition'
+export {
+	type DataOperationAdvance,
+	type DataOperationFields,
+	type DataOperationInput,
+	type DataOperationKind,
+	DataOperationRepository,
+	type DataOperationResolution,
+	type DataOperationRow,
+	type DataOperationState,
+	type DataOperationStep,
+	type MaintenanceMode,
+} from './db/data-operations'
 export { type DevBindInput, DevEnvironmentRepository, type DevEnvironmentRow, type DevReportInput } from './db/dev-environments'
 export {
 	FINAL_MAIL_MESSAGE_STATES,
@@ -19,6 +31,7 @@ export {
 	type OperationsIngestConfigRow,
 } from './db/operations-catalog'
 export { OperationsReleaseRepository, type OperationsReleaseSyncRow, type TerminalOperationsReleaseRow } from './db/operations-releases'
+export { type OpsKeyRecord, OpsKeyRepository, type OpsKeyRow } from './db/ops-keys'
 export { PlatformTransportKeyRepository, type PlatformTransportKeyRow } from './db/platform-transport-keys'
 export { RepoPollingRepository, type RepoPollStateRow } from './db/polling'
 export { ControlRegistryRepository, isUnconfirmedNamespaceUpdate } from './db/registry'

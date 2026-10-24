@@ -321,6 +321,40 @@ export const INVOCATION_IDLE_TIMEOUT_MS = 30_000
 /** What the invocation's transaction body throws to roll back; never seen outside this module. */
 class RolledBack extends Error {}
 
+/** A writing invocation that holds its object's storage transaction longer than this logs one line. */
+export const TRANSACTION_HELD_LOG_MS = 1_000
+/** A writing invocation that holds its object's storage transaction longer than this is also reported. */
+export const TRANSACTION_HELD_REPORT_MS = 5_000
+
+/** Where an enclosure tells how long it held its object: every other event of the object waited that long. */
+export interface HoldWatch {
+	/** The site the invocation serves, which the log line names. */
+	readonly site: string
+	/** Hears a hold longer than `TRANSACTION_HELD_REPORT_MS`, in whole ms. */
+	readonly held: (heldMs: number) => void
+}
+
+/**
+ * Runs once the transaction settled, so it never throws: a failed log or report must not turn a committed invocation
+ * into a failed one. Each has its own guard; the line names the site and the ms only, never a value or a statement.
+ */
+function reportHold(watch: HoldWatch, heldMs: number): void {
+	try {
+		if (heldMs > TRANSACTION_HELD_LOG_MS) {
+			console.warn(`fabrika: ${watch.site}: held its object's transaction for ${heldMs} ms`)
+		}
+	} catch {
+		// The report below still goes out.
+	}
+	try {
+		if (heldMs > TRANSACTION_HELD_REPORT_MS) {
+			watch.held(heldMs)
+		}
+	} catch {
+		// The hold was logged; the invocation's own outcome stands.
+	}
+}
+
 /**
  * The one transaction of an invocation (a request, a webhook delivery): opened by its first statement, then ended
  * once by the framework — committed after the handler returned and its output passed validation, rolled back
@@ -331,6 +365,7 @@ class RolledBack extends Error {}
 export class InvocationTransaction {
 	readonly #database: Database
 	readonly #readOnly: boolean
+	readonly #now: () => number
 	readonly #decision = Promise.withResolvers<'commit' | 'rollback'>()
 	#opened: Promise<Session> | undefined
 	#run: Promise<void> | undefined
@@ -342,9 +377,11 @@ export class InvocationTransaction {
 	#enclosed = false
 	#decided: 'commit' | 'rollback' | undefined
 
-	constructor(database: Database, readOnly: boolean) {
+	/** `now` is the clock an enclosure's hold is measured by. */
+	constructor(database: Database, readOnly: boolean, now: () => number = Date.now) {
 		this.#database = database
 		this.#readOnly = readOnly
+		this.#now = now
 	}
 
 	/** A `READ ONLY` transaction: a query's or an export's. */
@@ -379,8 +416,11 @@ export class InvocationTransaction {
 	 * decide, the COMMIT runs once `work` returned, and a failed COMMIT rejects with a `DatabaseError`. A read-only
 	 * invocation, and every invocation elsewhere, runs `work` as is: a read-only one on SQLite holds no storage
 	 * transaction, so the object serves other events while it awaits.
+	 *
+	 * Only the SQLite enclosure is measured for `watch`, from entering the transaction until it settled: it holds the
+	 * whole object, where a Postgres transaction holds one pooled connection and other requests go on.
 	 */
-	async enclose<T>(work: () => Promise<T>): Promise<T> {
+	async enclose<T>(work: () => Promise<T>, watch: HoldWatch): Promise<T> {
 		const engine = engineOf(this.#database)
 		if (engine.dialect !== 'sqlite' || this.#readOnly) {
 			return work()
@@ -391,8 +431,10 @@ export class InvocationTransaction {
 		this.#enclosed = true
 		this.#isReleased = false
 		let result: { readonly value: T } | undefined
+		let entered: number | undefined
 		try {
 			await engine.transaction({ readOnly: this.#readOnly }, async (executor) => {
+				entered = this.#now()
 				const session = new Session(executor, engine, true, this.#readOnly, {
 					failed: () => {
 						this.#failed = true
@@ -416,6 +458,9 @@ export class InvocationTransaction {
 		} finally {
 			this.#ended = true
 			this.#isReleased = true
+			if (entered !== undefined) {
+				reportHold(watch, Math.round(this.#now() - entered))
+			}
 		}
 		if (result === undefined) {
 			throw new QueryRefusedError('ended', 'the transaction ended before the invocation answered')

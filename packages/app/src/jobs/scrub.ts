@@ -1,7 +1,16 @@
 // What an error report must not carry (ADR-0059): the values of the application's secrets, and anything shaped like a
 // credential — a JWT, an `Authorization` scheme or header, a URL's userinfo, a sensitive query parameter.
 
-import { FABRIKA_CONTRACT_DIGEST, FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, PLATFORM_RECEIVERS, platformTransportVariables } from '@fabrika/auth-core'
+import {
+	FABRIKA_APPLICATION_OBJECT,
+	FABRIKA_APPLICATION_OBJECTS,
+	FABRIKA_CONTRACT_DIGEST,
+	FABRIKA_IAM_APP_ID,
+	FABRIKA_IAM_ISSUER,
+	FABRIKA_OPS_KEY_DIGESTS,
+	PLATFORM_RECEIVERS,
+	platformTransportVariables,
+} from '@fabrika/auth-core'
 import type { CapturedEnvironment } from '../implement/environment'
 
 export const REDACTED = '[redacted]'
@@ -21,6 +30,10 @@ const PUBLIC_FRAMEWORK_VARIABLES: ReadonlySet<string> = new Set([
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
+	// Digests of the ops keys, which are no credential; the object names are words (`application`) a message carries.
+	FABRIKA_OPS_KEY_DIGESTS,
+	FABRIKA_APPLICATION_OBJECT,
+	FABRIKA_APPLICATION_OBJECTS,
 	...PLATFORM_RECEIVERS.map((receiver) => platformTransportVariables(receiver).url),
 ])
 
