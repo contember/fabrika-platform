@@ -1,6 +1,6 @@
 import { HttpError, initRpc, isStructuralError, type RpcRouterFor } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
-import { parseAppEnvironmentId } from '@fabrika/auth-core'
+import { DEFAULT_APPLICATION_OBJECT, type OpsContentView, type OpsView, parseAppEnvironmentId } from '@fabrika/auth-core'
 import {
 	APP_ENV_KINDS,
 	BUILDER_APPROVAL_VERIFIER,
@@ -9,14 +9,22 @@ import {
 	CONTROL_ACTIONS,
 	type ControlRpcContract,
 	type CursorList,
+	DATA_OPERATION_MAX_PAGE_SIZE,
+	type DataOperationDto,
+	type DataOperationListInput,
+	dataOperationListInputSchema,
 	githubSourceConnectionListInputSchema,
 	type MailContentDto,
 	type MailMessageDetailDto,
 	type MailMessageDto,
 	type MailRuleDto,
+	type RecoverDataOperationInput,
+	recoverDataOperationInputSchema,
+	type StartDataOperationInput,
+	startDataOperationInputSchema,
 } from '@fabrika/control-contract'
 import { parsePlatformMailRequest } from '@fabrika/email/platform'
-import { uuidv7 } from '@fabrika/platform'
+import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
@@ -78,6 +86,16 @@ import {
 } from './approval/api'
 import { describeConnector } from './connectors'
 import { consoleAccess } from './console-access'
+import {
+	type DataOperationOutcome,
+	listDataOperations,
+	type OpsInspection,
+	type OpsTransport,
+	type OpsUnavailable,
+	startMaintenance,
+	startRecovery,
+	toDataOperationDto,
+} from './data-operations'
 import type { ControlRepositories, MailMessageRow, MailRuleRow } from './db'
 import type { Env } from './env'
 import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from './github/connections/installation'
@@ -87,7 +105,7 @@ import { sourceConnectionList } from './github/connections/status'
 import { appScope } from './iam'
 import { jsonValueSchema } from './json-value'
 import { isInstallationSender, type MailRelay, mayRequeueMail, releaseMailMessage, requeueMailMessage } from './mail-relay/queue'
-import { buildControlRpcDeps } from './services'
+import { buildControlRpcDeps, type ControlRpcDeps } from './services'
 
 interface ControlRpcContext {
 	readonly env: Env
@@ -221,6 +239,8 @@ const startSourceConnectionInput = z.object({
 }).strict()
 
 const MAIL_RULE_ANY = '*'
+/** A view is read live, within one request. */
+const DATA_VIEW_TIMEOUT_MS = 30_000
 const MAIL_PAGE_SIZE = 50
 
 const mailMessageState = z.enum(['held', 'queued', 'sending', 'sent', 'failed', 'unknown', 'dropped'])
@@ -232,9 +252,15 @@ const setMailRuleInput = z.object({
 	action: z.enum(['pass', 'hold', 'drop']),
 }).strict()
 
+const dataOperationId = z.object({ operationId: nonEmpty }).strict()
+const dataEnvironment = appEnvironment.strict()
+
+/** The composition's deps; without an ops transport the `data.*` procedures that call an object answer 503. */
+type ControlRpcDepsBuilder = (...args: Parameters<typeof buildControlRpcDeps>) => ControlRpcDeps & { readonly opsTransport?: OpsTransport }
+
 export const controlRpcRouter = createControlRpcRouter(buildControlRpcDeps)
 
-export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): RpcRouterFor<ControlRpcContext, ControlRpcContract> {
+export function createControlRpcRouter(buildDeps: ControlRpcDepsBuilder): RpcRouterFor<ControlRpcContext, ControlRpcContract> {
 	return rpc.router({
 		installation: rpc.procedure.query(({ ctx }) => ({ provider: ctx.provider.id })),
 		consoleAccess: rpc.procedure.query(({ ctx }) => consoleAccess(ctx.auth)),
@@ -426,7 +452,39 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 				),
 			}),
 		}),
+		// An application environment's data (ADR-0069 §2): `data.read` and `data.manage` at the coordinates, hidden as 404
+		// like runs; `data.content.read` as a global grant only.
+		data: rpc.router({
+			operations: rpc.router({
+				list: rpc.procedure.input(dataOperationListInputSchema).query(({ ctx, input }) =>
+					controlCall(() => listDataOperationsUseCase(dataContext(ctx), input))
+				),
+				get: rpc.procedure.input(dataOperationId).query(({ ctx, input }) =>
+					controlCall(() => getDataOperationUseCase(dataContext(ctx), input.operationId))
+				),
+			}),
+			view: rpc.procedure.input(dataEnvironment).query(({ ctx, input }) => controlCall(() => readDataViewUseCase(dataContext(ctx), input))),
+			content: rpc.procedure.input(dataEnvironment).require(CONTROL_ACTIONS.DATA_CONTENT_READ).query(({ ctx, input }) =>
+				controlCall(() => readDataContentUseCase(dataContext(ctx), input))
+			),
+			start: rpc.procedure.input(startDataOperationInputSchema).mutation(({ ctx, input }) =>
+				controlCall(() => startDataOperationUseCase(dataContext(ctx), input))
+			),
+			recover: rpc.procedure.input(recoverDataOperationInputSchema).mutation(({ ctx, input }) =>
+				controlCall(() => recoverDataOperationUseCase(dataContext(ctx), input))
+			),
+		}),
 	})
+
+	function dataContext(ctx: ControlRpcContext): DataUseCaseContext {
+		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		return {
+			repositories: deps.repositories,
+			auth: ctx.auth,
+			...(deps.lock === undefined ? {} : { lock: deps.lock }),
+			...(deps.opsTransport === undefined ? {} : { ops: deps.opsTransport }),
+		}
+	}
 
 	function pairingContext(ctx: ControlRpcContext): BuilderPairingContext {
 		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
@@ -627,6 +685,89 @@ async function setMailRule(c: MailUseCaseContext, input: z.infer<typeof setMailR
 		fail(400, `no application environment ${input.scope}`)
 	}
 	return toMailRuleDto(await c.repositories.mailRules.upsert({ id: uuidv7(), ...input }, nowSeconds()))
+}
+
+interface DataUseCaseContext {
+	readonly repositories: ControlRepositories
+	readonly auth: AuthContext
+	/** The environment's deploy lease every operation runs under; absent, operations answer 503. */
+	readonly lock?: DeployLocks
+	/** The ops channel; absent, the views and operations answer 503. */
+	readonly ops?: OpsTransport
+}
+
+/** An environment the caller may act on with `action`; any other, existing or not, is the same 404. */
+async function requireDataEnvironment(c: DataUseCaseContext, action: string, appId: string, env: string): Promise<void> {
+	if (!canAtCoordinates(c.auth, action, appId, env) || (await c.repositories.registry.getAppEnv(appId, env)) === null) {
+		fail(404, 'app env not found')
+	}
+}
+
+async function listDataOperationsUseCase(c: DataUseCaseContext, input: DataOperationListInput): Promise<CursorList<DataOperationDto>> {
+	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_READ, input.appId, input.env)
+	const limit = input.limit ?? DATA_OPERATION_MAX_PAGE_SIZE
+	const items = await listDataOperations(c, input, { ...(input.before === undefined ? {} : { before: input.before }), limit })
+	const last = items.at(-1)
+	return { items, nextCursor: items.length === limit && last !== undefined ? last.id : null }
+}
+
+async function getDataOperationUseCase(c: DataUseCaseContext, id: string): Promise<DataOperationDto> {
+	const row = await c.repositories.dataOperations.get(id)
+	if (row === null || !canAtCoordinates(c.auth, CONTROL_ACTIONS.DATA_READ, row.app_id, row.env)) fail(404, 'data operation not found')
+	return toDataOperationDto(row)
+}
+
+/** The allowlisted projection: an answer that carries content is refused, never passed on. */
+async function readDataViewUseCase(c: DataUseCaseContext, input: { appId: string; env: string }): Promise<OpsView> {
+	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_READ, input.appId, input.env)
+	const inspection = await inspectData(c, input, false)
+	if (inspection.content) fail(502, 'the environment answered a metadata request with content')
+	return inspection.view
+}
+
+async function readDataContentUseCase(c: DataUseCaseContext, input: { appId: string; env: string }): Promise<OpsContentView> {
+	if ((await c.repositories.registry.getAppEnv(input.appId, input.env)) === null) fail(404, 'app env not found')
+	const inspection = await inspectData(c, input, true)
+	if (!inspection.content) fail(502, 'the environment answered a content request without content')
+	return inspection.view
+}
+
+async function inspectData(c: DataUseCaseContext, target: { appId: string; env: string }, content: boolean): Promise<OpsInspection> {
+	if (c.ops === undefined) fail(503, 'data operations unavailable')
+	const answer = await c.ops.inspect(target, { object: DEFAULT_APPLICATION_OBJECT, content }, AbortSignal.timeout(DATA_VIEW_TIMEOUT_MS))
+	if (answer.kind === 'unavailable') failUnavailable(answer.reason)
+	return answer.value
+}
+
+async function startDataOperationUseCase(c: DataUseCaseContext, input: StartDataOperationInput): Promise<DataOperationDto> {
+	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
+	if (input.kind === 'backup') fail(501, 'backups are not available in this release')
+	const outcome = await startMaintenance(operationDeps(c), { appId: input.appId, env: input.env, mode: input.mode, actor: runActor(c.auth) })
+	return dataOperationResult(outcome)
+}
+
+async function recoverDataOperationUseCase(c: DataUseCaseContext, input: RecoverDataOperationInput): Promise<DataOperationDto> {
+	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
+	return dataOperationResult(await startRecovery(operationDeps(c), { ...input, actor: runActor(c.auth) }))
+}
+
+function operationDeps(c: DataUseCaseContext): { repositories: ControlRepositories; lock: DeployLocks; ops: OpsTransport } {
+	if (c.lock === undefined || c.ops === undefined) fail(503, 'data operations unavailable')
+	return { repositories: c.repositories, lock: c.lock, ops: c.ops }
+}
+
+/** The record as the operation left it: one the object left unanswered is still `running`, at its step. */
+function dataOperationResult(outcome: DataOperationOutcome): DataOperationDto {
+	if (outcome.kind === 'busy') fail(409, 'a deploy or another data operation holds this environment')
+	if (outcome.kind === 'driven') return toDataOperationDto(outcome.operation)
+	if (outcome.reason === 'operation_running') fail(409, 'an operation of this environment is still running: recover it first')
+	if (outcome.reason === 'not_recoverable') fail(409, 'that operation is not one this environment can recover')
+	failUnavailable(outcome.reason)
+}
+
+function failUnavailable(reason: OpsUnavailable): never {
+	if (reason === 'no_channel') fail(409, 'the environment has no ops channel: it needs a domain and a deploy at a release that serves one')
+	fail(502, reason === 'channel_refused' ? "the environment's ops channel refused Control" : "the environment's object gave no usable answer")
 }
 
 function toMailMessageDto(row: MailMessageRow): MailMessageDto {

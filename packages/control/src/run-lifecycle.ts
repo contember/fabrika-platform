@@ -34,6 +34,7 @@ import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { publishRunSnapshot } from './approval/publish'
 import { approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
+import { recordedMaintenance } from './data-operations'
 import {
 	type AppEnvRow,
 	type AppRow,
@@ -425,7 +426,13 @@ class RunSettled extends Error {}
 export class RunInvocation {
 	readonly work = new AbortController()
 
-	private constructor(readonly lease: Lease, private readonly runs: RunRepository, readonly runId: string) {
+	private constructor(
+		readonly lease: Lease,
+		private readonly runs: RunRepository,
+		readonly runId: string,
+		/** False for a lease another holder took and hands in: that holder renews and releases it, never this invocation. */
+		private readonly ownsLease: boolean,
+	) {
 		const follow = (): void => this.work.abort(lease.signal.reason)
 		if (lease.signal.aborted) follow()
 		else lease.signal.addEventListener('abort', follow, { once: true })
@@ -433,12 +440,22 @@ export class RunInvocation {
 
 	static async acquire(deps: Pick<RunDeps, 'repositories' | 'lock' | 'leaseClock'>, candidate: RunRow): Promise<RunInvocation | null> {
 		const lease = await acquireLease(deps.lock, runLeaseKey(candidate.app_id, candidate.env), deps.leaseClock)
-		return lease === null ? null : new RunInvocation(lease, deps.repositories.runs, candidate.id)
+		return lease === null ? null : new RunInvocation(lease, deps.repositories.runs, candidate.id, true)
+	}
+
+	/**
+	 * A run of the environment whose live lease `lease` already holds, as a data operation's own deploy (ADR-0069). The
+	 * lease is not taken again; throws `lease_lost` unless it is still held and is this run's environment's.
+	 */
+	static underLease(deps: Pick<RunDeps, 'repositories'>, lease: Lease, candidate: RunRow): RunInvocation {
+		if (lease.key !== runLeaseKey(candidate.app_id, candidate.env)) throw new Error(`run ${candidate.id} belongs to another environment's lease`)
+		lease.assertHeld()
+		return new RunInvocation(lease, deps.repositories.runs, candidate.id, false)
 	}
 
 	/** Another run of the same environment, under the same lease. */
 	forRun(runId: string): RunInvocation {
-		return new RunInvocation(this.lease, this.runs, runId)
+		return new RunInvocation(this.lease, this.runs, runId, this.ownsLease)
 	}
 
 	get lost(): boolean {
@@ -485,7 +502,7 @@ export class RunInvocation {
 	}
 
 	release(): Promise<void> {
-		return this.lease.release()
+		return this.ownsLease ? this.lease.release() : Promise.resolve()
 	}
 }
 
@@ -510,6 +527,35 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 	if (invocation === null) {
 		return { runId: candidate.id, status: 'deferred' }
 	}
+	return await deployUnder(deps, message, candidate, invocation, false)
+}
+
+/**
+ * The deploy a data operation runs itself, under the environment's lease it already holds (ADR-0069 "Leases"): the
+ * only deploy of an environment that is not `open`. The lease stays the operation's; it is never released here.
+ */
+export async function executeDeployUnderLease(
+	deps: RunDeps,
+	message: DeployJobMessage,
+	lease: Lease,
+): Promise<{ runId: string; status: DeployStatus }> {
+	const candidate = await deps.repositories.runs.getRun(message.runId)
+	if (candidate === null) {
+		return { runId: message.runId, status: 'skipped' }
+	}
+	if (candidate.status !== 'pending') {
+		return { runId: candidate.id, status: 'skipped' }
+	}
+	return await deployUnder(deps, message, candidate, RunInvocation.underLease(deps, lease, candidate), true)
+}
+
+async function deployUnder(
+	deps: RunDeps,
+	message: DeployJobMessage,
+	candidate: RunRow,
+	invocation: RunInvocation,
+	operationDeploy: boolean,
+): Promise<{ runId: string; status: DeployStatus }> {
 	const runId = candidate.id
 	const dryRun = message.dryRun === true
 	const runs = deps.repositories.runs
@@ -550,6 +596,11 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			throw new Error(
 				`configured provider "${deps.provider.id}" cannot deploy ${app.id}/${appEnv.env} owned by "${appEnv.provider}"`,
 			)
+		}
+		// Read under the lease every data operation holds, so no transition moves while this deploy runs.
+		const maintenance = operationDeploy ? 'open' : await recordedMaintenance(deps, { appId: app.id, env: appEnv.env })
+		if (maintenance !== 'open') {
+			throw new Error(`the environment is not open (${maintenance}): a data operation must open it before it deploys`)
 		}
 		const sourceBinding = await loadSourceBinding(deps, app)
 		const appInput = providerApp(app, run)
