@@ -61,8 +61,14 @@ interface HashedFiles {
 	readonly migrations: readonly HashedMigration[]
 }
 
-/** The migration arrays are static module values: each is hashed once per isolate. */
-const hashedFiles = new WeakMap<SqliteMigrationBundle['migrations'], Promise<HashedFiles>>()
+/** The files an array held when it was hashed, and their hashes: reused while the array still holds the same files. */
+interface HashedEntry {
+	readonly snapshot: readonly { readonly name: string; readonly sql: string }[]
+	readonly files: Promise<HashedFiles>
+}
+
+/** The migration arrays are module values, hashed once per isolate; an array mutated since is hashed again. */
+const hashedFiles = new WeakMap<SqliteMigrationBundle['migrations'], HashedEntry>()
 
 /** The SHA-256 hex of the file's UTF-8 text: the Postgres runner's `migrationChecksum`, so both ledgers agree. */
 async function checksumOf(sql: string): Promise<string> {
@@ -103,17 +109,21 @@ async function hash(files: SqliteMigrationBundle['migrations']): Promise<HashedF
 	return { digest, migrations }
 }
 
+function holdsSnapshot(files: SqliteMigrationBundle['migrations'], snapshot: HashedEntry['snapshot']): boolean {
+	return files.length === snapshot.length && files.every((file, index) => file.name === snapshot[index]?.name && file.sql === snapshot[index]?.sql)
+}
+
 /** Each bundle's migrations in name order, the bundles in the order given; refuses a malformed bundle before any SQL runs. */
 async function plan(bundles: readonly SqliteMigrationBundle[]): Promise<readonly PlannedBundle[]> {
 	check(bundles)
 	const planned: PlannedBundle[] = []
 	for (const bundle of bundles) {
-		let files = hashedFiles.get(bundle.migrations)
-		if (files === undefined) {
-			files = hash(bundle.migrations)
-			hashedFiles.set(bundle.migrations, files)
+		let entry = hashedFiles.get(bundle.migrations)
+		if (entry === undefined || !holdsSnapshot(bundle.migrations, entry.snapshot)) {
+			entry = { snapshot: bundle.migrations.map(({ name, sql }) => ({ name, sql })), files: hash(bundle.migrations) }
+			hashedFiles.set(bundle.migrations, entry)
 		}
-		const { digest, migrations } = await files
+		const { digest, migrations } = await entry.files
 		planned.push({ bundle: bundle.bundle, digest, migrations: migrations.map((migration) => ({ ...migration, bundle: bundle.bundle })) })
 	}
 	return planned

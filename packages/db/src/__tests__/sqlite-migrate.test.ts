@@ -228,5 +228,35 @@ describe('migrateSqlite', () => {
 			expect(next.transactions).toBe(0)
 			expect(next.queries).toHaveLength(bundles.length + 1)
 		})
+
+		test('a file appended to an array already hashed is applied', async () => {
+			const db = open()
+			const files = [notes]
+			await migrateSqlite(target(db), [app(files)])
+			files.push(tags)
+			expect((await migrateSqlite(target(db), [app(files)])).applied).toEqual([`app/${TAGS}`])
+			expect(tables(db)).toContain('tags')
+		})
+
+		test('an applied file replaced in an array already hashed is refused', async () => {
+			const db = open()
+			const files = [notes]
+			await migrateSqlite(target(db), [app(files)])
+			files[0] = { ...notes, sql: `${notes.sql}\n-- edited` }
+			const error = await rejection(migrateSqlite(target(db), [app(files)]))
+			expect(error).toBeInstanceOf(SqliteMigrationError)
+			expect(String(error)).toContain(`app/${NOTES} changed after it was applied`)
+		})
+
+		test('an applied file whose text is edited in place in an array already hashed is refused', async () => {
+			const db = open()
+			const file = { name: NOTES, sql: notes.sql }
+			const files = [file]
+			await migrateSqlite(target(db), [app(files)])
+			file.sql = `${notes.sql}\n-- edited`
+			const error = await rejection(migrateSqlite(target(db), [app(files)]))
+			expect(error).toBeInstanceOf(SqliteMigrationError)
+			expect(String(error)).toContain(`app/${NOTES} changed after it was applied`)
+		})
 	})
 })
