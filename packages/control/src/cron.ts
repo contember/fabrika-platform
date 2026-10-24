@@ -1,7 +1,7 @@
 // Scheduled maintenance — the work behind the Worker's `scheduled` handler, extracted so the
 // long-running process runs exactly the same code on exactly the same schedule.
 //
-// Event-driven targets call this from a scheduled handler; long-running targets invoke `zerops/cron.ts`
+// Event-driven targets call this from a scheduled handler; long-running targets invoke `bun/cron.ts` through their composition root
 // from their platform scheduler. There is no in-process timer: in a horizontally-scaled service it
 // would fire once per container and silently reset on every deploy. Both operations tolerate an
 // overlapping run — the poll is a conditional GET whose only mutation is guarded by a changed head

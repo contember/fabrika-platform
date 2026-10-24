@@ -244,6 +244,8 @@ describe('the one MCP switch: the table the proxy publishes', () => {
 			process({ FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: true }), FABRIKA_CONTROL_DOMAIN: 'console.example.com' }),
 		)
 		expect(on.mcp).not.toBeNull()
+		// The workspace refuses the files the composed provider names, so Zerops' deploy files are never editable.
+		expect(on.provider.authoring?.protectedFiles).toEqual(['zerops.yaml', 'zerops.yml'])
 		await on.shutdown()
 		const off = createRuntime(process({ FABRIKA_CONTROL_DOMAIN: 'console.example.com' }))
 		expect(off.mcp).toBeNull()

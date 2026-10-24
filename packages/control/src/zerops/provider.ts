@@ -14,7 +14,6 @@
 // the local stack read the same code and are not subject to the platform's reservation, so one name
 // works everywhere.
 
-import type { GitHubAppFetch } from '@fabrika/github-app'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import {
 	createZeropsControlProvider,
@@ -25,9 +24,10 @@ import {
 	type ZeropsSourcePort,
 	ZeropsSourceRateLimitedError,
 } from '@fabrika/provider-zerops'
+import type { BunProviderComposition, GitHubSourceSeams } from '../bun/runtime'
 import type { Env } from '../env'
 import { gitHubAppClientFactory, vaultGitHubCredentials } from '../github/connections/credentials'
-import { createGitHubSource, type GitHubMetadataFetch, type SourceDownloadFetch, SourceRateLimited, type SourceUploadFetch } from '../github/source'
+import { createGitHubSource, SourceRateLimited } from '../github/source'
 import type { CommitSource } from '../github/source/commit-files'
 import { OLDER_PROXY_READERS } from './older-proxies'
 
@@ -71,14 +71,6 @@ function readProxySource(raw: string): ZeropsNamespaceProxySource {
 			'FABRIKA_ZEROPS_PROXY_SOURCE_JSON must contain a valid immutable proxy source; upgrade the installation configuration before starting Control',
 		)
 	}
-}
-
-/** Transport seams only the local stack and tests inject; the GitHub and Zerops origins stay fixed (ADR-0029). */
-export interface GitHubSourceSeams {
-	readonly metadataFetch?: GitHubMetadataFetch
-	readonly downloadFetch?: SourceDownloadFetch
-	readonly uploadFetch?: SourceUploadFetch
-	readonly githubAppFetch?: GitHubAppFetch
 }
 
 /**
@@ -128,4 +120,12 @@ export function zeropsControlProvider(
 		})(),
 		namespaces: { ...namespaces, olderProxies: OLDER_PROXY_READERS },
 	})
+}
+
+/** The Zerops installation's provider, over the in-process GitHub source, for the Bun host. */
+export const zeropsComposition: BunProviderComposition = {
+	compose: (env, source, seams) => {
+		const github = zeropsGitHubSources(env, seams)
+		return { provider: zeropsControlProvider(source, github.port), commits: github.commits }
+	},
 }

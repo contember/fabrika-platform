@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { readIamRpcProcessConfig } from '../zerops/runtime'
+import { readIamRpcProcessConfig } from '../bun/runtime'
 
 describe('the Node IAM RPC process configuration', () => {
 	test('uses the private RPC origin independently of the public issuer', () => {

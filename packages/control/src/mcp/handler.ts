@@ -1,5 +1,5 @@
 // The MCP endpoint (ADR-0049): a user-facing protocol adapter over the workspace use cases. Only the
-// Bun/Zerops composition mounts it; the Worker graph must never import this module or the MCP SDK.
+// Bun host mounts it; the Worker graph must never import this module or the MCP SDK.
 
 import { readAppAgentSkill } from '@fabrika/app/agent-skill'
 import type { AuthContext, AuthResult } from '@fabrika/auth'
@@ -204,7 +204,9 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 	server.registerTool('apply_changes', {
 		description: 'Commit a batch of file changes to the workspace branch as one ordinary Git commit. expectedHeadSha must be the '
 			+ 'current head from get_workspace or read_files; if the branch moved, the call fails with the new head and you must re-read '
-			+ 'and retry. content null deletes a file. zerops.yaml, zerops.yml, every fabrika.* file but fabrika.contract.ts and '
+			+ `and retry. content null deletes a file. ${
+				c.protectedFiles.map((file) => `${file}, `).join('')
+			}every fabrika.* file but fabrika.contract.ts and `
 			+ 'everything under .github/ are protected and cannot be changed. A change of the contract, its schema modules, '
 			+ 'src/db/tables.ts or db/migrations/ is classified at deploy time; on a protected environment a widening waits for '
 			+ 'a person to approve it. A file may hold at most 512 KiB.',

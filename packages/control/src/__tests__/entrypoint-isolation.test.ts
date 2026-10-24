@@ -131,6 +131,15 @@ describe('entrypoint isolation', () => {
 		expect(packagesOf(graph)).not.toContain('@fabrika/provider-zerops')
 	})
 
+	test('the Bun host names no provider: the composition root passes it in', () => {
+		for (const entry of ['bun/server.ts', 'bun/cron.ts', 'bun/migrate.ts']) {
+			const graph = walk(entry)
+			expect({ entry, zerops: graph.files.filter((file) => file.startsWith('zerops/')) }).toEqual({ entry, zerops: [] })
+			expect({ entry, providers: packagesOf(graph).filter((name) => name.startsWith('@fabrika/provider-') && name !== '@fabrika/provider-contract') })
+				.toEqual({ entry, providers: [] })
+		}
+	})
+
 	test('the Bun entrypoint reaches no Cloudflare-only module', () => {
 		const graph = walk('zerops/server.ts')
 		expect([...graph.externals].filter(CLOUDFLARE_ONLY)).toEqual([])

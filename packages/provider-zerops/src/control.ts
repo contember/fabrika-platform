@@ -292,6 +292,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 	const controlProvider: ControlProvider = {
 		id: 'zerops',
 		normalizeRegistration,
+		// The deploy reads `zerops.yaml` from the repository, so a workspace may not change it (ADR-0049 D6).
+		authoring: { protectedFiles: ['zerops.yaml', 'zerops.yml'] },
 		source: { binding: 'connection' },
 		/**
 		 * A Zerops artifact IS the compiled manifest, so the declaration is right here and core can refuse

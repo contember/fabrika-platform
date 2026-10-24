@@ -5,9 +5,9 @@ import { readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
+import { controlMcpRoute } from '../bun/mcp'
+import { createFetchHandler } from '../bun/server'
 import type { Env } from '../env'
-import { controlMcpRoute } from '../zerops/mcp'
-import { createFetchHandler } from '../zerops/server'
 import { createHarness, type Harness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 import { proxiedRequest } from './helpers/proxy'
@@ -44,7 +44,7 @@ async function fixture(): Promise<{ world: WorkspaceWorld; fetch: (request: Requ
 		ENVIRONMENT: 'stage',
 		FABRIKA_CONTROL_DOMAIN: ORIGIN,
 	}
-	const mcp = controlMcpRoute(env, world.source)
+	const mcp = controlMcpRoute(env, world.source, zeropsProvider)
 	const served = createFetchHandler(env, zeropsProvider, unusedSourceConnection('zerops'), mcp)
 	return { world, fetch: (request) => served(proxiedRequest(request, { mcp: true })) }
 }
