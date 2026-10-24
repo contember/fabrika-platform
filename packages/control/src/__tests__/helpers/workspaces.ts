@@ -7,6 +7,7 @@ import type { WorkspaceUseCaseContext } from '../../api/workspaces'
 import type { ControlRepositories } from '../../db'
 import type { ControlJobMessage } from '../../run-lifecycle'
 import {
+	WORKSPACE_READ_MAX_PATHS,
 	type WorkspaceChangedFile,
 	type WorkspaceCommit,
 	type WorkspaceComparison,
@@ -109,6 +110,8 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 
 	readFiles(input: { target: WorkspaceSourceTarget; commitSha: string; paths: readonly string[] }) {
 		this.record(input.target, { kind: 'read-files', commitSha: input.commitSha, paths: input.paths })
+		// GitHub's client refuses a larger read as a configuration error.
+		if (input.paths.length > WORKSPACE_READ_MAX_PATHS) return Promise.reject(new Error(`read of ${input.paths.length} paths`))
 		return Promise.resolve({
 			commitSha: input.commitSha,
 			files: input.paths.map((path): WorkspaceFile => {
