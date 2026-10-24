@@ -4,7 +4,16 @@
 
 import { compileContract } from '@fabrika/app/contract'
 import { boot, BootError, serve } from '@fabrika/app/implement'
-import { PROXY_SECRET_HEADER } from '@fabrika/auth-core'
+import {
+	ENDPOINT_HEADER,
+	FABRIKA_APPLICATION_OBJECT,
+	FABRIKA_APPLICATION_OBJECTS,
+	FABRIKA_OPS_KEY_DIGESTS,
+	formatOpsKeyDigests,
+	opsKeyDigest,
+	parseOpsView,
+	PROXY_SECRET_HEADER,
+} from '@fabrika/auth-core'
 import { scoped } from '@fabrika/db'
 import { openSqlite } from '@fabrika/db/sqlite'
 import { ObjectExistsError, ObjectTooLargeError } from '@fabrika/platform'
@@ -26,6 +35,7 @@ import {
 	writeGeneratedEntry,
 } from '../build'
 import { type ApplicationState, createContractWorker, FabrikaApplication } from '../cloudflare'
+import { OPS_ENDPOINT } from '../cloudflare/ops'
 import { R2_PART_BYTES, r2FileObjectStore } from '../cloudflare/r2-files'
 import { type NotesApp, notesApp } from './cloudflare-fixture/src/app'
 import { app as notesKit } from './cloudflare-fixture/src/app-kit'
@@ -71,7 +81,7 @@ afterEach(() => {
 })
 
 /** The fixture as the provider deploys it: the Worker, its object class and binding, and the files bucket. */
-async function deploy(options: { readonly secret?: string | null } = {}): Promise<Deployed> {
+async function deploy(options: { readonly secret?: string | null; readonly vars?: Readonly<Record<string, string>> } = {}): Promise<Deployed> {
 	const world: NotesWorld = { runs: [] }
 	const served = notesApp(world)
 	const migrations = await applicationMigrations(FIXTURE_ROOT)
@@ -82,7 +92,7 @@ async function deploy(options: { readonly secret?: string | null } = {}): Promis
 			[CLOUDFLARE_APPLICATION_BINDING]: { type: 'durable-object', className: CLOUDFLARE_APPLICATION_CLASS },
 			[CLOUDFLARE_FILES_BINDING]: 'r2',
 		},
-		vars: variablesOf(served, options.secret === undefined ? PROXY_SECRET : options.secret),
+		vars: { ...variablesOf(served, options.secret === undefined ? PROXY_SECRET : options.secret), ...options.vars },
 	})
 	deployed.push(testEnv)
 	testEnv.env['IAM'] = iamBinding(served)
@@ -218,6 +228,69 @@ describe('the Worker forwards to the environment object', () => {
 			await expect(target.testEnv.scheduled({ scheduledTime: Date.UTC(2026, 9, 22, 3, 0) })).rejects.toThrow('FABRIKA_PROXY_SECRET is not set')
 			const refused = await fetchObject(target.testEnv, new Request(`${ORIGIN}/healthz`, { headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET } }))
 			expect(refused.status).toBe(404)
+		})
+	})
+})
+
+describe("Control's ops channel", () => {
+	const OPS_KEY = 'ops-key-of-the-environment-0123456789abcdef'
+	const OBJECTS = {
+		[FABRIKA_APPLICATION_OBJECT]: 'primary',
+		[FABRIKA_APPLICATION_OBJECTS]: 'primary,clone',
+		[FABRIKA_OPS_KEY_DIGESTS]: formatOpsKeyDigests([opsKeyDigest(OPS_KEY)]),
+	}
+
+	/** An ops request as the proxy forwards it on the composed row. */
+	function ops(target: Deployed, operation: string, body: string): Promise<Response> {
+		return target.testEnv.fetch(
+			new Request(`${ORIGIN}/__fabrika/ops/${operation}`, {
+				method: 'POST',
+				headers: { Authorization: `Bearer ${OPS_KEY}`, [ENDPOINT_HEADER]: OPS_ENDPOINT, 'Content-Type': 'application/json' },
+				body,
+			}),
+		)
+	}
+
+	async function notesRows(target: Deployed, object: string): Promise<number | undefined> {
+		const response = await ops(target, 'inspect', JSON.stringify({ object, content: false }))
+		expect(response.status).toBe(200)
+		return parseOpsView(await response.json())?.database.tables.find((table) => table.name === 'notes')?.rows
+	}
+
+	test('an ops request reaches the object its body names; ordinary traffic reaches the default object', async () => {
+		await keepingProcessEnvironment(async () => {
+			const target = await deploy({ vars: OBJECTS })
+			expect((await call(target, 'create', { workspaceId: 'w1', title: 'in primary' })).status).toBe(200)
+			expect(await notesRows(target, 'primary')).toBe(1)
+			expect(await notesRows(target, 'clone')).toBe(0)
+		})
+	})
+
+	test('the Worker refuses an object the environment does not list, an unknown operation and a malformed body alike', async () => {
+		await keepingProcessEnvironment(async () => {
+			const target = await deploy({ vars: OBJECTS })
+			const refused: readonly (readonly [string, string])[] = [
+				['inspect', JSON.stringify({ object: 'application', content: false })],
+				['backup', JSON.stringify({ object: 'primary', content: false })],
+				['inspect', '{not json'],
+			]
+			for (const [operation, body] of refused) {
+				const response = await ops(target, operation, body)
+				expect({ status: response.status, headers: [...response.headers.entries()], body: await response.text() }).toEqual({
+					status: 404,
+					headers: [],
+					body: '',
+				})
+			}
+		})
+	})
+
+	test('without the object variables, ordinary traffic and the only ops target are the object named application', async () => {
+		await keepingProcessEnvironment(async () => {
+			const target = await deploy({ vars: { [FABRIKA_OPS_KEY_DIGESTS]: OBJECTS[FABRIKA_OPS_KEY_DIGESTS] } })
+			expect((await call(target, 'create', { workspaceId: 'w1', title: 'in application' })).status).toBe(200)
+			expect(await notesRows(target, 'application')).toBe(1)
+			expect((await ops(target, 'inspect', JSON.stringify({ object: 'primary', content: false }))).status).toBe(404)
 		})
 	})
 })

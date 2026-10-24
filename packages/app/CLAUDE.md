@@ -76,7 +76,8 @@ src/
   agent-skill.ts      @fabrika/app/agent-skill — reads skill/; installedAppAgentSkill; renderAgentsFile (node:fs)
   fetch.ts            FetchService and RequestExecutionContext: what both runtime adapters serve
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker: the Worker that forwards each
-                      request and the minute tick to the environment's Durable Object; re-exports FabrikaApplication
+                      request and the minute tick to the environment's Durable Object, and an ops request to the
+                      object its body names; re-exports FabrikaApplication
   cloudflare/         what @fabrika/app/cloudflare runs (ADR-0065)
     application.ts    FabrikaApplication, the environment's one Durable Object: verifies the hop, migrates its SQLite,
                       boots the application once per isolate, serves requests and the tick; registerApplication
@@ -86,6 +87,8 @@ src/
                       multipart above R2_PART_BYTES, the etag as the version)
     names.ts          the class and binding names the provider shares: FabrikaApplication, FABRIKA_APPLICATION,
                       FABRIKA_FILES (re-exported by @fabrika/app/build)
+    ops.ts            Control's ops channel at the object (ADR-0069): authentication, the uniform refusal, the
+                      inspect view read from storage alone
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract; the local `directory`
                       mail provider, which boot honours only under a loopback issuer
   disk-assets.ts      diskAssets: the SPA mounts from their build directories, as the Bun deploy and the test kit serve them
@@ -1010,8 +1013,15 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   `fabrika/entry.generated.ts` and `fabrika/migrations.generated.ts`, the `.sql` files of `db/migrations` by name with
   their text verbatim, so their checksums stay the files'. `createContractWorker(load, { migrations })` registers the
   loader; the Worker's `fetch` removes `X-Fabrika-Tick` (`TICK_HEADER`), sets the proxy secret and forwards the request
-  to the object named `application` of `FABRIKA_APPLICATION`; its `scheduled` sends the tick with the `scheduledTime`.
-  Without `FABRIKA_PROXY_SECRET` or the binding it forwards nothing.
+  to the object `FABRIKA_APPLICATION_OBJECT` names in `FABRIKA_APPLICATION` (`application` without the object
+  variables, an older deploy); its `scheduled` sends the tick there with the `scheduledTime`. Without
+  `FABRIKA_PROXY_SECRET` or the binding it forwards nothing.
+- **An ops request reaches only framework code** (ADR-0069, `cloudflare/ops.ts`). The Worker sends a request under
+  `/__fabrika/ops/` to the object its body's `object` names, only when `FABRIKA_APPLICATION_OBJECTS` lists it. The object
+  serves it before boot: hop secret, then the ops row's `X-Fabrika-Endpoint` and the key's digest against
+  `FABRIKA_OPS_KEY_DIGESTS` (constant time), then the operation. Every refusal is `opsRefusal()`. `inspect` reads storage
+  only, never writes, and shows the last boot failure's text only in the content view; `state` and `migrate` answer 501
+  until the barrier lands.
 - **The object answers only its own Worker.** A request without the environment's proxy secret is an empty 404 before
   anything else, the digests compared in constant time, so another Worker that binds the class learns nothing.
 - **It boots once per isolate.** The constructor runs the boot in `blockConcurrencyWhile` and settles either way: a

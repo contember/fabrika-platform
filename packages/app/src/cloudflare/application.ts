@@ -2,7 +2,7 @@
 // serves every request and minute tick its Worker forwards. A plain class, so Bun and Lopata load it without
 // `cloudflare:workers`.
 
-import { FABRIKA_PROXY_SECRET, PROXY_SECRET_HEADER } from '@fabrika/auth-core'
+import { FABRIKA_PROXY_SECRET, OPS_PREFIX, type OpsBootFailureContent, PROXY_SECRET_HEADER } from '@fabrika/auth-core'
 import { isScopedDatabase } from '@fabrika/db/framework'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
 import { openSqlite, type SqliteStorage } from '@fabrika/db/sqlite'
@@ -17,8 +17,10 @@ import { type CapturedEnvironment, captureEnvironment } from '../implement/envir
 import type { ContractImplementation } from '../implement/implement.js'
 import type { CrashReporter } from '../jobs/report.js'
 import { isDueAt } from '../jobs/schedule.js'
+import { environmentScrubber, type Scrubber } from '../jobs/scrub.js'
 import { bindingAssets, bindingKeySource, bindingMembership, bindingTerminals, bindingWorkloadTokens, connectBindings } from './bindings.js'
 import { CLOUDFLARE_FILES_BINDING } from './names.js'
+import { type OpsAccess, opsAccess, type OpsStorage, serveOps } from './ops.js'
 import { r2FileObjectStore } from './r2-files.js'
 
 /** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
@@ -39,9 +41,6 @@ export interface ContractWorkerOptions {
 	readonly operationsFetch?: (request: Request) => Promise<Response>
 }
 
-/** The name the Worker gets its environment's one object by: a Worker is one application environment. */
-export const APPLICATION_OBJECT_NAME = 'application'
-
 /**
  * Marks the Worker's minute tick, with its `scheduledTime`. The Worker's `fetch` removes it from every request it
  * forwards, so only its own `scheduled` handler reaches the tick.
@@ -49,7 +48,7 @@ export const APPLICATION_OBJECT_NAME = 'application'
 export const TICK_HEADER = 'X-Fabrika-Tick'
 
 /** What the object needs of its `ctx.storage`; a Durable Object's `DurableObjectStorage` fits it. */
-export type ApplicationStorage = SqliteStorage
+export type ApplicationStorage = SqliteStorage & OpsStorage
 
 /** What the object needs of its `DurableObjectState`. */
 export interface ApplicationState {
@@ -164,7 +163,12 @@ async function bootApplication(
  * The isolate's booted application with this instance's storage migrated, or the first boot. Reports the first failure
  * of a streak as `boot_failed`, whichever instance or step it comes from; an attachment that succeeds ends the streak.
  */
-async function attach(setup: ApplicationSetup | null, state: ApplicationState, env: Readonly<Record<string, unknown>>): Promise<Booted> {
+async function attach(
+	setup: ApplicationSetup | null,
+	state: ApplicationState,
+	env: Readonly<Record<string, unknown>>,
+	failed: (failure: OpsBootFailureContent) => void,
+): Promise<Booted> {
 	if (setup === null) {
 		throw new Error('no contract application is registered: the generated entrypoint calls createContractWorker before an object starts')
 	}
@@ -175,6 +179,7 @@ async function attach(setup: ApplicationSetup | null, state: ApplicationState, e
 		setup.failureReported = false
 		return booted
 	} catch (error) {
+		failed(bootFailure(error, environmentScrubber(environment)))
 		if (crashes !== null && !setup.failureReported) {
 			setup.failureReported = true
 			state.waitUntil(crashes.report('boot_failed', error))
@@ -206,6 +211,16 @@ async function attachOnce(
 	return booted
 }
 
+/** A failed boot as the ops view shows it, its text scrubbed as a crash report's is. */
+function bootFailure(error: unknown, scrubber: Scrubber): OpsBootFailureContent {
+	const at = new Date().toISOString()
+	if (error instanceof Error) {
+		return { at, message: scrubber.scrub(error.message), stack: typeof error.stack === 'string' ? scrubber.scrub(error.stack) : null }
+	}
+	const message = typeof error === 'string' ? scrubber.scrub(error) : `a thrown ${error === null ? 'null' : typeof error} that is not an Error`
+	return { at, message, stack: null }
+}
+
 type Outcome = { readonly booted: Booted } | { readonly failure: unknown }
 
 /** The wait after an instance's first failed boot before an event boots again; it doubles with each failure, to the cap. */
@@ -228,6 +243,10 @@ export class FabrikaApplication {
 	readonly #setup: ApplicationSetup | null
 	/** `proxySecretDigest` of the environment's proxy secret; `null` refuses every request. */
 	readonly #secret: Uint8Array | null
+	/** What the platform wrote for Control's ops channel; `null` refuses every ops request. */
+	readonly #ops: OpsAccess | null
+	/** The instance's last failed boot, kept in memory for the ops view. */
+	#bootFailure: OpsBootFailureContent | null = null
 	#outcome: Promise<Outcome>
 	#failedBoots = 0
 	/** When an event may boot again after a failed boot; until then every request answers the failure. */
@@ -239,6 +258,7 @@ export class FabrikaApplication {
 		this.#setup = registered
 		const secret = env[FABRIKA_PROXY_SECRET]
 		this.#secret = typeof secret === 'string' && secret !== '' ? proxySecretDigest(secret) : null
+		this.#ops = opsAccess(env)
 		this.#outcome = this.#boot()
 	}
 
@@ -246,6 +266,11 @@ export class FabrikaApplication {
 		// Another Worker on the account that binds this class reaches nothing, not even an answer that the object exists.
 		if (!this.#fromWorker(request)) {
 			return new Response(null, { status: 404 })
+		}
+		if (new URL(request.url).pathname.startsWith(OPS_PREFIX)) {
+			// Served from storage alone, also after a failed boot: it waits for the boot under way and starts no retry.
+			await this.#outcome
+			return await serveOps(request, this.#ops, { storage: this.#state.storage, bootFailure: this.#bootFailure })
 		}
 		const outcome = await this.#current()
 		if ('failure' in outcome) {
@@ -257,7 +282,9 @@ export class FabrikaApplication {
 	/** Settles either way: a callback that rejects would reset the object, and every request answers the failure instead. */
 	#boot(): Promise<Outcome> {
 		return this.#state.blockConcurrencyWhile(() =>
-			attach(this.#setup, this.#state, this.#env).then((booted): Outcome => ({ booted }), (failure: unknown): Outcome => {
+			attach(this.#setup, this.#state, this.#env, (failure) => {
+				this.#bootFailure = failure
+			}).then((booted): Outcome => ({ booted }), (failure: unknown): Outcome => {
 				this.#failedBoots++
 				this.#retryAt = Date.now() + Math.min(BOOT_RETRY_MS * 2 ** (this.#failedBoots - 1), BOOT_RETRY_CAP_MS)
 				return { failure }
