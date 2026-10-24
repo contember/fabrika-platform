@@ -2,7 +2,8 @@
 // the table's policy is its authority. This module stages a file (an incoming part or a `ctx.files.put`): its pending
 // row first, on a connection of its own, then its object, sniffed and bounded by the kind. It serves and opens a file
 // only through a reference the work holds and may read, and only a live one, by its scanned version. The sweep
-// deletes the files no declared column references, and the scan job decides about the quarantined ones (`scan.ts`).
+// deletes the files no declared column references, and their objects once past the runtime's retention window, and the
+// scan job decides about the quarantined ones (`scan.ts`).
 
 import type { ContractArtifact, FileKindArtifact } from '@fabrika/auth-core'
 import {
@@ -17,6 +18,7 @@ import {
 	type StoredFiles,
 } from '@fabrika/db/framework'
 import { type FileObjectStore, type StoredObject, uuidv7 } from '@fabrika/platform'
+import { RESERVED_FILE_KIND_PREFIX } from '../contract/build'
 import type { FileRef } from '../contract/file'
 import { HttpError, NotFoundError } from '../errors'
 import { CapabilityRefusedError } from '../implement/capability'
@@ -33,6 +35,11 @@ export { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE } from './job-names'
 export const FILE_SWEEP_TIMEOUT_MS = 10 * 60_000
 /** How long a staged file waits for its first reference before the sweep may delete it. */
 export const FILE_PENDING_GRACE_MS = 60 * 60 * 1000
+/**
+ * How long a removed file's object outlives its row on Cloudflare, so the rows of a restored backup still find their
+ * files: the 30 days backups are kept, which never exceeds this window.
+ */
+export const FILE_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 /** How many files one sweep batch handles; the next batch, or the next run, takes the rest. */
 const SWEEP_BATCH = 20
 
@@ -96,12 +103,14 @@ export class StoredFileKinds {
 	readonly #store: FileObjectStore
 	readonly #files: StoredFiles
 	readonly #columns: readonly FileColumnRef[]
+	readonly #retentionMs: number
 
-	constructor(kinds: readonly Kind[], store: FileObjectStore, files: StoredFiles, columns: readonly FileColumnRef[]) {
+	constructor(kinds: readonly Kind[], store: FileObjectStore, files: StoredFiles, columns: readonly FileColumnRef[], retentionMs: number) {
 		this.#kinds = new Map(kinds.map((kind) => [kind.name, kind]))
 		this.#store = store
 		this.#files = files
 		this.#columns = columns
+		this.#retentionMs = retentionMs
 	}
 
 	/** Whether the contract declares kind `name`. */
@@ -317,39 +326,34 @@ export class StoredFileKinds {
 	}
 
 	/**
-	 * The sweep: it finishes deletions a crash interrupted, adopts the migrated files a declared column references, then
-	 * deletes, batch by batch, every file past the grace that no declared column references: its row and the record of
-	 * its object in one transaction (the foreign key keeps a referenced one), then the object, then the record.
+	 * The sweep: it adopts the migrated files a declared column references, then removes, batch by batch, every file past
+	 * the grace that no declared column references: its row and the record of its object in one transaction (the foreign
+	 * key keeps a referenced one). Last it deletes each recorded object past the retention window, then its record; a
+	 * deletion a crash interrupted is finished the same way.
 	 */
 	async sweep(signal: AbortSignal): Promise<void> {
 		let step = 'rows_read_failed'
 		try {
-			for (let keys = await this.#files.unfinishedDeletions(SWEEP_BATCH); keys.length > 0 && !signal.aborted;) {
-				for (const key of keys) {
-					step = 'object_delete_failed'
-					await this.#store.delete(key)
-					step = 'deletion_record_failed'
-					await this.#files.forgetDeletion(key)
-				}
-				step = 'rows_read_failed'
-				keys = keys.length === SWEEP_BATCH ? await this.#files.unfinishedDeletions(SWEEP_BATCH) : []
-			}
 			await this.#files.adoptReferenced(this.#columns)
 			for (let more = true; more && !signal.aborted;) {
 				step = 'rows_read_failed'
 				const batch = await this.#files.unreferenced(this.#columns, SWEEP_BATCH, FILE_PENDING_GRACE_MS)
 				for (const id of batch) {
 					step = 'row_delete_failed'
-					const key = await this.#files.remove(id, FILE_PENDING_GRACE_MS)
-					if (key === null) {
-						continue
-					}
+					await this.#files.remove(id, FILE_PENDING_GRACE_MS)
+				}
+				more = batch.length === SWEEP_BATCH
+			}
+			for (let more = true; more && !signal.aborted;) {
+				step = 'rows_read_failed'
+				const keys = await this.#files.dueDeletions(SWEEP_BATCH, this.#retentionMs)
+				for (const key of keys) {
 					step = 'object_delete_failed'
 					await this.#store.delete(key)
 					step = 'deletion_record_failed'
 					await this.#files.forgetDeletion(key)
 				}
-				more = batch.length === SWEEP_BATCH
+				more = keys.length === SWEEP_BATCH
 			}
 		} catch {
 			console.error(`fabrika: stored files sweep: ${step}`)
@@ -430,13 +434,15 @@ function fileColumns(artifact: ContractArtifact): FileColumnRef[] {
 
 /**
  * The file kinds of `artifact`, or `null` when it declares none. Every reason a kind cannot be served goes into
- * `problems`, so `boot` refuses to start rather than take a file it cannot check.
+ * `problems`, so `boot` refuses to start rather than take a file it cannot check. A removed file's object outlives its
+ * row by `retentionMs`.
  */
 export function storedFileKinds(
 	artifact: ContractArtifact,
 	database: ImplementationDatabase | null,
 	store: FileObjectStore | undefined,
 	problems: string[],
+	retentionMs: number,
 ): StoredFileKinds | null {
 	const entries = Object.entries(artifact.fileKinds ?? {})
 	if (entries.length === 0) {
@@ -450,6 +456,9 @@ export function storedFileKinds(
 		return null
 	}
 	for (const [name, kind] of entries) {
+		if (name.startsWith(RESERVED_FILE_KIND_PREFIX)) {
+			problems.push(`files '${name}' is a file kind name the framework reserves (${RESERVED_FILE_KIND_PREFIX}*)`)
+		}
 		for (const type of kind.types.filter((candidate) => !SNIFFABLE_TYPES.includes(candidate))) {
 			problems.push(`files '${name}' admits '${type}', whose bytes the framework cannot verify (allowed: ${SNIFFABLE_TYPES.join(', ')})`)
 		}
@@ -462,5 +471,6 @@ export function storedFileKinds(
 		store,
 		frameworkTablesOf(database).files,
 		fileColumns(artifact),
+		retentionMs,
 	)
 }

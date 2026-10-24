@@ -144,6 +144,8 @@ const TURNSTILE_CHALLENGE_FIELDS = ['provider', 'secret', 'siteKey', 'action']
 const ALTCHA_CHALLENGE_FIELDS = ['provider', 'secret', 'action', 'cost', 'maxAgeMs']
 /** Tables the framework keeps in the application's schema; no site reaches them unscoped. */
 const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
+/** A file's object key starts with its kind: the framework keeps its own objects in the files bucket under this prefix. */
+export const RESERVED_FILE_KIND_PREFIX = '__fabrika'
 /** The most origins one site calls: a site that reaches more is an integration hub, which a connector import serves. */
 const MAX_EGRESS_ORIGINS = 16
 const DECLARED_ALLOWED =
@@ -1712,6 +1714,10 @@ class ArtifactBuilder {
 		const kinds: Record<string, FileKindArtifact> = {}
 		for (const [name, declared] of Object.entries(this.#contract.files)) {
 			const where = `files '${name}'`
+			if (name.startsWith(RESERVED_FILE_KIND_PREFIX)) {
+				this.#problem(where, `is a file kind name the framework reserves (${RESERVED_FILE_KIND_PREFIX}*)`)
+				continue
+			}
 			if (!this.#name(where, name) || !this.#kind(where, declared, 'file-kind', 'c.files({ types, maxBytes, scan? })')) {
 				continue
 			}

@@ -27,6 +27,7 @@ if (!hasPostgres) {
 
 const schema = `files_${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
 const GRACE = 3_600_000
+const RETENTION = 30 * 24 * 3_600_000
 
 /** A collection table as an earlier `fileTableSql` created it, with one live, one removed and one pending file. */
 const legacyCollection = `
@@ -326,10 +327,56 @@ describeDb('the sweep', () => {
 		expect(await files.remove(idOf(fresh), GRACE)).toBeNull()
 		expect(await files.remove('01900000-0000-7000-8000-000000000001', GRACE)).toBeNull()
 		expect(await files.remove(idOf(orphan), GRACE)).toBe(`attachments/${idOf(orphan)}`)
-		expect(await files.unfinishedDeletions(10)).toEqual([`attachments/${idOf(orphan)}`])
+		expect(await files.dueDeletions(10, 0)).toEqual([`attachments/${idOf(orphan)}`])
 		await files.forgetDeletion(`attachments/${idOf(orphan)}`)
-		expect(await files.unfinishedDeletions(10)).toEqual([])
+		expect(await files.dueDeletions(10, 0)).toEqual([])
 		expect(await fileRow(idOf(orphan))).toBeUndefined()
+	})
+
+	/** An unreferenced file past the grace whose row the sweep removed: its key is queued, its object kept. */
+	async function removed(): Promise<string> {
+		const file = await staged(request(), 'attachments')
+		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_files set created_at = now() - interval '2 hours' where id = $1`, [idOf(file)]))
+		const key = await files.remove(idOf(file), GRACE)
+		if (key === null) {
+			throw new Error('the sweep kept an unreferenced file')
+		}
+		return key
+	}
+
+	async function backdateDeletion(key: string, days: number): Promise<void> {
+		await admin((sql) =>
+			sql.unsafe(`update ${schema}.fabrika_file_deletions set recorded_at = now() - $2::int * interval '1 day' where object_key = $1`, [key, days])
+		)
+	}
+
+	test('a queued key inside the retention window survives; past it, it is due, oldest first', async () => {
+		const inside = await removed()
+		const past = await removed()
+		const older = await removed()
+		await backdateDeletion(inside, 29)
+		await backdateDeletion(past, 31)
+		await backdateDeletion(older, 40)
+		expect(await files.dueDeletions(10, RETENTION)).toEqual([older, past])
+		expect(await files.dueDeletions(1, RETENTION)).toEqual([older])
+		await expect(files.dueDeletions(10, -1)).rejects.toBeInstanceOf(QueryRefusedError)
+	})
+
+	test('with a zero window, as on Bun, a key queued now is due at once', async () => {
+		const key = await removed()
+		expect(await files.dueDeletions(10, RETENTION)).toEqual([])
+		expect(await files.dueDeletions(10, 0)).toEqual([key])
+	})
+
+	test('a cancelled tombstone is never due, and the others stay queued', async () => {
+		const cancelled = await removed()
+		const other = await removed()
+		await backdateDeletion(cancelled, 31)
+		await backdateDeletion(other, 31)
+		expect(await files.cancelDeletions([cancelled, `attachments/${Bun.randomUUIDv7()}`])).toBe(1)
+		expect(await files.cancelDeletions([])).toBe(0)
+		expect(await files.dueDeletions(10, RETENTION)).toEqual([other])
+		expect(await files.dueDeletions(10, 0)).toEqual([other])
 	})
 })
 

@@ -96,10 +96,12 @@ export interface StoredFiles {
 	promote(id: string, sha256: string, version: string): Promise<boolean>
 	deferScan(id: string, attempts: number, after: Date): Promise<boolean>
 	reject(id: string): Promise<boolean>
-	// The sweep.
-	/** Objects whose rows a sweep deleted and whose own deletion it did not finish. */
-	unfinishedDeletions(limit: number): Promise<readonly string[]>
+	// The sweep. A queued object key is a tombstone: its object outlives its row by the retention window.
+	/** At most `limit` queued object keys recorded at least `retentionMs` ago, oldest first: the objects the sweep deletes. */
+	dueDeletions(limit: number, retentionMs: number): Promise<readonly string[]>
 	forgetDeletion(objectKey: string): Promise<void>
+	/** Takes `objectKeys` out of the queue, so their objects stay: a restore's rows reference them again. The number taken. */
+	cancelDeletions(objectKeys: readonly string[]): Promise<number>
 	/** Clears the legacy marker of every migrated file that one of `columns` references: it is an ordinary file now. */
 	adoptReferenced(columns: readonly FileColumnRef[]): Promise<number>
 	/** At most `limit` files past the grace that no column of `columns` references (pending ones included), oldest first. */
@@ -185,14 +187,20 @@ const SQL_REJECT: DialectTexts = {
 	sqlite: `update ${F} set status = 'rejected' where id = ?1 and status = 'quarantined' returning id`,
 }
 
-const SQL_UNFINISHED: DialectTexts = {
-	postgres: `select object_key from ${D} order by recorded_at limit $1::int`,
-	sqlite: `select object_key from ${D} order by recorded_at limit ?1`,
+const SQL_DUE: DialectTexts = {
+	postgres: `select object_key from ${D} where recorded_at <= now() - $2::bigint * interval '1 millisecond' order by recorded_at limit $1::int`,
+	sqlite: `select object_key from ${D} where recorded_at <= ${sqliteNowPlus('-?2')} order by recorded_at limit ?1`,
 }
 
 const SQL_FORGET: DialectTexts = {
 	postgres: `delete from ${D} where object_key = $1`,
 	sqlite: `delete from ${D} where object_key = ?1`,
+}
+
+// The keys are one parameter, a JSON array.
+const SQL_CANCEL: DialectTexts = {
+	postgres: `delete from ${D} where object_key in (select jsonb_array_elements_text($1::jsonb)) returning object_key`,
+	sqlite: `delete from ${D} where object_key in (select value from json_each(?1)) returning object_key`,
 }
 
 const SQL_REMOVE = `with gone as (
@@ -266,6 +274,13 @@ function uuid(value: string): string {
 function positive(value: number, what: string): number {
 	if (!Number.isSafeInteger(value) || value < 1) {
 		throw new QueryRefusedError('invalid_argument', `${what} must be a whole number of at least 1`)
+	}
+	return value
+}
+
+function nonNegative(value: number, what: string): number {
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new QueryRefusedError('invalid_argument', `${what} must be a whole number of at least 0`)
 	}
 	return value
 }
@@ -452,13 +467,20 @@ export function storedFiles(runtime: () => DataLayerRuntime): StoredFiles {
 
 		reject: (id: string) => fenced(SQL_REJECT, [uuid(id)]),
 
-		async unfinishedDeletions(limit: number): Promise<readonly string[]> {
-			const rows = await run(session(), SQL_UNFINISHED, [positive(limit, 'a sweep batch')])
+		async dueDeletions(limit: number, retentionMs: number): Promise<readonly string[]> {
+			const rows = await run(session(), SQL_DUE, [positive(limit, 'a sweep batch'), nonNegative(retentionMs, 'a retention window')])
 			return rows.map((found) => text(record(found), 'object_key'))
 		},
 
 		async forgetDeletion(objectKey: string): Promise<void> {
 			await run(session(), SQL_FORGET, [objectKey])
+		},
+
+		async cancelDeletions(objectKeys: readonly string[]): Promise<number> {
+			if (objectKeys.length === 0) {
+				return 0
+			}
+			return (await run(session(), SQL_CANCEL, [JSON.stringify(objectKeys)])).length
 		},
 
 		async adoptReferenced(columns: readonly FileColumnRef[]): Promise<number> {

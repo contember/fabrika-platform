@@ -100,6 +100,11 @@ export interface BootOptions {
 	/** The object storage of the stored files, which the Bun adapter opens. Without it, a contract with file kinds does not boot. */
 	readonly files?: FileObjectStore
 	/**
+	 * How long a removed file's object outlives its row, so a restored backup's rows find their files:
+	 * `FILE_TOMBSTONE_RETENTION_MS` on Cloudflare. Zero when omitted, as on Bun.
+	 */
+	readonly fileRetentionMs?: number
+	/**
 	 * The malware scanner of the scan job of `scan: true` file kinds, which the Bun adapter supplies to a job run
 	 * (`clamscanScanner`). Without it the scan job leaves every quarantined file quarantined and reports.
 	 */
@@ -725,7 +730,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 	sqliteProblems(artifact, options.database, problems)
 	// This runtime's own: what another `boot` call mints, application code's included, its stores refuse.
 	const issuer = createCapabilityIssuer()
-	const fileKinds = storedFileKinds(artifact, app.database, objects, problems)
+	const fileKinds = storedFileKinds(artifact, app.database, objects, problems, options.fileRetentionMs ?? 0)
 	const bound = contractDatabase(app.database, options.database, issuer.authority, problems)
 	binding.release = bound?.release ?? null
 	const framework = bound?.framework ?? null
