@@ -65,8 +65,8 @@ Public because both provider packages are, and
 - **A thrown error names the command and its exit code, never the child env and
   never the raw error object** — a clone URL can carry an embedded token.
 - **A variable name in `service-environment.ts` is platform protocol.** An existing installation's next deploy
-  writes what it returns, so a rename leaves the old variable behind and needs an upgrade step. The providers'
-  exact-output tests (`provider-zerops`' `install.test.ts`, `deploy.test.ts`) pin the names.
+  writes what it returns, so a rename leaves the old variable behind and needs an upgrade step.
+  `service-environment.test.ts` pins every service's names, for the bring-up and for a deploy.
 - **Scaffold commits skip CI** (`[skip ci]`), so a push cannot deploy before the
   GitHub Environment exists. `init` dispatches the workflow explicitly, afterwards.
 - **A repository this run created is hardened; an existing one is PROBED, never PUT

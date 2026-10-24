@@ -114,3 +114,85 @@ describe('the deployed environment', () => {
 		expect(deployed(true).iam.get(IAM_OAUTH_CONFIG_VARIABLE)).toBe(JSON.stringify({ clients: [], resources: [] }))
 	})
 })
+
+/**
+ * The names an existing installation already carries. A deploy writes by name, so a renamed one leaves the old variable
+ * behind and the service reads none: change this list only with an upgrade step that converges an installation.
+ */
+describe('the variable names an installation carries', () => {
+	const names = (env: ReadonlyMap<string, string>): string[] => [...env.keys()].sort()
+
+	test('the bring-up writes exactly these names, without mail', () => {
+		const env = installationServiceEnvironment(input())
+		expect(names(env.iam)).toEqual([
+			'ENVIRONMENT',
+			'FABRIKA_IAM_DATABASE_URL',
+			'FABRIKA_IAM_OIDC_ENABLED',
+			'FABRIKA_IAM_PASSWORD_ENABLED',
+			'FABRIKA_IAM_PROVISIONING_KEY',
+			'FABRIKA_IAM_PROXY_KEY',
+			'FABRIKA_IAM_RPC_KEY',
+			'FABRIKA_IAM_SIGNING_KEYS',
+			'ISSUER',
+		])
+		expect(names(env.operations)).toEqual([
+			'ENVIRONMENT',
+			'FABRIKA_IAM_ISSUER',
+			'FABRIKA_IAM_RPC_KEY',
+			'FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID',
+			'FABRIKA_OPERATIONS_BLOB_BUCKET',
+			'FABRIKA_OPERATIONS_BLOB_ENDPOINT',
+			'FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY',
+			'FABRIKA_OPERATIONS_DATABASE_URL',
+			'FABRIKA_OPERATIONS_PUBLIC_HOST',
+			'OPERATIONS_SYNC_KEY',
+		])
+		expect(names(env.control)).toEqual([
+			'ENVIRONMENT',
+			'FABRIKA_CONTROL_DATABASE_URL',
+			'FABRIKA_CONTROL_DOMAIN',
+			'FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID',
+			'FABRIKA_CONTROL_RUN_LOGS_BUCKET',
+			'FABRIKA_CONTROL_RUN_LOGS_ENDPOINT',
+			'FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY',
+			'FABRIKA_CONTROL_VAULT_KEY',
+			'FABRIKA_IAM_ISSUER',
+			'FABRIKA_IAM_PROVISIONING_KEY',
+			'FABRIKA_IAM_RPC_KEY',
+			'OPERATIONS_ARTIFACT_ORIGIN',
+			'OPERATIONS_SYNC_KEY',
+		])
+		expect(names(env.proxy)).toEqual(['ENVIRONMENT', 'FABRIKA_IAM_ISSUER', 'FABRIKA_IAM_KEY', 'FABRIKA_PROXY_SESSION_OWNER_JSON'])
+	})
+
+	test('a deploy writes exactly these names, and IAM the OAuth configuration only with MCP', () => {
+		const deployed = (oauth: boolean) =>
+			deployedServiceEnvironment({
+				environment: 'stage',
+				scheme: 'https',
+				hosts: { iam: 'iam.example.com', control: 'console.example.com', operations: 'errors.example.com' },
+				iamUpstream: 'iam:3000',
+				provisioningKey: 'px_admin',
+				controlTableDigest: 'digest',
+				...(oauth ? { oauthConfig: { clients: [], resources: [] } } : {}),
+			})
+		const env = deployed(true)
+		expect(names(env.iam)).toEqual(['ENVIRONMENT', IAM_OAUTH_CONFIG_VARIABLE, IAM_PROXY_SECRET_VARIABLE, 'ISSUER'])
+		expect(names(deployed(false).iam)).toEqual(['ENVIRONMENT', IAM_PROXY_SECRET_VARIABLE, 'ISSUER'])
+		expect(names(env.operations)).toEqual(['ENVIRONMENT', 'FABRIKA_IAM_ISSUER', 'FABRIKA_OPERATIONS_PUBLIC_HOST'])
+		expect(names(env.control)).toEqual([
+			'ENVIRONMENT',
+			'FABRIKA_CONTROL_DOMAIN',
+			'FABRIKA_IAM_ISSUER',
+			FABRIKA_SERVICE_TABLE_DIGEST,
+			'OPERATIONS_ARTIFACT_ORIGIN',
+		])
+		expect(names(env.proxy)).toEqual(['ENVIRONMENT', 'FABRIKA_IAM_ISSUER', IAM_PROXY_SECRET_VARIABLE, 'FABRIKA_PROXY_SESSION_OWNER_JSON'])
+		// The two constants are the names an installation carries, not names of their own.
+		expect([IAM_OAUTH_CONFIG_VARIABLE, IAM_PROXY_SECRET_VARIABLE, FABRIKA_SERVICE_TABLE_DIGEST]).toEqual([
+			'FABRIKA_IAM_OAUTH_CONFIG',
+			'FABRIKA_INSTALLATION_PROXY_SECRET_IAM',
+			'FABRIKA_SERVICE_TABLE_DIGEST',
+		])
+	})
+})
