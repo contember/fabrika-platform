@@ -7,7 +7,10 @@
 // render the application's own copy.
 
 import { APPLICATION_SERVER_MAX_HEADER_BYTES, FRAMEWORK_RELEASE_PATTERN } from '@fabrika/auth-core'
+import { CONTRACT_APP_ID_PATTERN } from './contract/app-id.js'
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE } from './files/job-names.js'
+
+export { CONTRACT_APP_ID_PATTERN } from './contract/app-id.js'
 
 export { FILE_SCAN_JOB, FILE_SWEEP_JOB } from './files/job-names.js'
 
@@ -43,8 +46,6 @@ const PLATFORM_TSCONFIG_CONTENTS = JSON.stringify({
 
 const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
 
-/** The contract's own id rule; an id that holds to it reaches a generated script unquoted. */
-export const CONTRACT_APP_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/
 /** A `c.cron` job name, which a crontab line carries unquoted. */
 export const CONTRACT_JOB_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/
 /** Five cron fields of digits and `*`, `/`, `,`, `-` only. */

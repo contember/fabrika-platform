@@ -64,7 +64,7 @@ import {
 } from '@fabrika/auth-core'
 import { isPolicyOrigin, MAX_CSP_ORIGINS, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
-import { CONTRACT_APP_ID_PATTERN as APP_ID } from '../build-recipe.js'
+import { CONTRACT_APP_ID_PATTERN as APP_ID } from './app-id'
 import { contractArtifactSchema } from './artifact-schema'
 import {
 	type AccessDeclaration,
