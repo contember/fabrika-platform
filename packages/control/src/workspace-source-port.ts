@@ -1,3 +1,6 @@
+/** The most paths one `readFiles` call reads; GitHub's client refuses a larger read. */
+export const WORKSPACE_READ_MAX_PATHS = 100
+
 /** Provider-neutral Git workspace operations on an app's repository (ADR-0049). */
 export interface WorkspaceSourcePort {
 	readBranch(input: WorkspaceSourceCall & { branch: string }): Promise<string | null>
@@ -7,6 +10,7 @@ export interface WorkspaceSourcePort {
 	/** Idempotent: false when the branch did not exist. */
 	deleteBranch(input: WorkspaceSourceCall & { branch: string }): Promise<boolean>
 	listTree(input: WorkspaceSourceCall & { commitSha: string; directory?: string }): Promise<WorkspaceTree>
+	/** At most `WORKSPACE_READ_MAX_PATHS` distinct paths. */
 	readFiles(input: WorkspaceSourceCall & { commitSha: string; paths: readonly string[] }): Promise<WorkspaceFiles>
 	/** Read the regular files under `directory` that `include` admits, the first `maxFiles` of them in tree order. */
 	scanFiles(input: WorkspaceSourceCall & WorkspaceScanInput): Promise<WorkspaceScan>
@@ -20,6 +24,7 @@ export interface WorkspaceSourcePort {
 
 /** The calls of one session; each fails as the port's own call does, and an error `use` throws passes through unchanged. */
 export interface WorkspaceSourceSession {
+	/** At most `WORKSPACE_READ_MAX_PATHS` distinct paths. */
 	readFiles(input: { commitSha: string; paths: readonly string[] }): Promise<WorkspaceFiles>
 	compare(input: { baseSha: string; headSha: string }): Promise<WorkspaceComparison>
 	commit(input: WorkspaceCommit): Promise<string>

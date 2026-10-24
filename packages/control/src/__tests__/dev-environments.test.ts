@@ -24,6 +24,7 @@ import { devLauncherRefusal } from '../dev/deploy'
 import { acceptDevReport, acceptDevWait, type DevReceiverDeps, LAUNCHER_UNREADABLE } from '../dev/receiver'
 import { stopIdleDevServices } from '../dev/service'
 import { DevSignals } from '../dev/signals'
+import { DEV_SYNC_MAX_FILES } from '../dev/sync'
 import { createHarness } from './helpers/harness'
 import { createPostgres, hasPostgres, skipReason } from './helpers/postgres'
 import {
@@ -307,6 +308,35 @@ for (const backend of backends) {
 			expect(serving.head).toBe(sha('c'))
 			expect((await w.repositories.devEnvironments.get('shop', 'dev'))?.refused_sha).toBeNull()
 			expect((await wait(w, { bootstrap: sha('c'), head: sha('c'), reset: 0, checks: 0, hold: false })).answer?.sync).toBeNull()
+		})
+
+		test('a sync reads a change of up to its cap in reads GitHub serves, and refuses a larger one for a bootstrap', async () => {
+			const w = await world()
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
+			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
+			const changed = (count: number) =>
+				Array.from({ length: count }, (_, i) => ({
+					path: `src/generated/file-${String(i).padStart(3, '0')}.ts`,
+					previousPath: null,
+					status: 'added' as const,
+					additions: 1,
+					deletions: 0,
+					patch: null,
+				}))
+			w.source.changedFiles = changed(DEV_SYNC_MAX_FILES)
+			await w.repositories.devEnvironments.advanceTarget('shop', 'dev', w.workspaceId, sha('c'))
+			const served = await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: false })
+			expect(served.status).toBe(200)
+			expect(served.answer?.sync?.files).toHaveLength(DEV_SYNC_MAX_FILES)
+
+			w.source.changedFiles = changed(DEV_SYNC_MAX_FILES + 1)
+			await w.repositories.devEnvironments.advanceTarget('shop', 'dev', w.workspaceId, sha('d'))
+			const refused = await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: false })
+			expect({ status: refused.status, sync: refused.answer?.sync }).toEqual({ status: 200, sync: null })
+			const status = await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 0, failuresOnly: false } })
+			expect(status.state).toBe('needs_bootstrap')
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('d'))
+			expect((await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.commitSha).toBe(sha('d'))
 		})
 
 		test('switching to a workspace with another lockfile, then its bootstrap, serves on the first try', async () => {

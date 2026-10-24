@@ -4,7 +4,7 @@
 import { bootstrapReason } from '@fabrika/app/dev/changes'
 import type { DevSourceFile, DevSync } from '@fabrika/app/dev/wire'
 import { isSourcePath } from '@fabrika/app/dev/wire'
-import type { WorkspaceSourceSession } from '../workspace-source-port'
+import { WORKSPACE_READ_MAX_PATHS, type WorkspaceFile, type WorkspaceSourceSession } from '../workspace-source-port'
 
 /** The most files and bytes one sync relays; a larger change needs a bootstrap run. */
 export const DEV_SYNC_MAX_FILES = 300
@@ -30,9 +30,12 @@ export async function buildDevSync(source: WorkspaceSourceSession, from: string,
 	let bytes = 0
 	let pending = paths
 	while (pending.length > 0) {
-		const read = await source.readFiles({ commitSha: to, paths: pending })
+		const read: WorkspaceFile[] = []
+		for (let start = 0; start < pending.length; start += WORKSPACE_READ_MAX_PATHS) {
+			read.push(...(await source.readFiles({ commitSha: to, paths: pending.slice(start, start + WORKSPACE_READ_MAX_PATHS) })).files)
+		}
 		const next: string[] = []
-		for (const file of read.files) {
+		for (const file of read) {
 			if (file.content !== null) {
 				bytes += new TextEncoder().encode(file.content).byteLength
 				files.set(file.path, file.content)
