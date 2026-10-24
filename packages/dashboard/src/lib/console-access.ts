@@ -68,6 +68,11 @@ export function opensApplications(access: ConsoleAccessDto | null): boolean {
 	return access === null || holdsGlobally(access, CONTROL_ACTIONS.APP_MANAGE)
 }
 
+/** An environment's data view (ADR-0068) needs `data.read` in some scope; its procedures decide at the environment. */
+export function opensDataView(access: ConsoleAccessDto | null): boolean {
+	return access === null || holdsAnywhere(access, CONTROL_ACTIONS.DATA_READ)
+}
+
 /** Unknown access reads as usable; see `ConsoleCaller`. */
 function control(caller: ConsoleCaller, holds: (access: ConsoleAccessDto) => boolean): boolean {
 	return caller.access === null || holds(caller.access)

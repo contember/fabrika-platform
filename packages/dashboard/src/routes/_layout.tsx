@@ -8,7 +8,7 @@ import { GateScreen } from '../components/GateScreen'
 import { BrandMark, Icon, type IconName } from '../components/Icon'
 import { RouteError } from '../components/RouteError'
 import { api } from '../lib/api'
-import { type ConsoleCaller, mayOpen, type NavPage } from '../lib/console-access'
+import { type ConsoleCaller, mayOpen, type NavPage, opensDataView } from '../lib/console-access'
 import { ConsoleAccessContext } from '../lib/console-caller'
 import { findPeople } from '../lib/iam'
 import { type ConsoleSession, consoleSession } from '../lib/session'
@@ -134,7 +134,6 @@ export default function RootLayout() {
 	const [paletteOpen, setPaletteOpen] = useState(false)
 	// Only once the session is read: a press before that would open the palette seconds later, over whatever is then shown.
 	usePaletteShortcut(session !== null, setPaletteOpen)
-	const here = [LEAD, ...NAV.flatMap((section) => section.items)].find((item) => isActive(item, pathname)) ?? null
 
 	return (
 		<div className="app-shell">
@@ -165,7 +164,7 @@ export default function RootLayout() {
 						? <div className="loading">Loading console…</div>
 						: (
 							<ConsoleAccessContext.Provider value={session.access}>
-								<Workspace session={session} here={here} pathname={pathname} />
+								<Workspace session={session} pathname={pathname} />
 							</ConsoleAccessContext.Provider>
 						)}
 				</div>
@@ -500,23 +499,44 @@ function Navigation({ caller, pathname }: { caller: ConsoleCaller; pathname: str
 	)
 }
 
+/** The data view lies under Applications' path, but its rule is its own: no global `app.manage`, and no rail page. */
+const DATA_VIEW_PATH = /^\/apps\/[^/]+\/environments\/[^/]+\/data$/
+
+export type WorkspaceGate =
+	| { readonly kind: 'page' }
+	| { readonly kind: 'redirect'; readonly to: NavPage }
+	| { readonly kind: 'no-access' }
+	| { readonly kind: 'not-available' }
+
 /**
- * The page, or why it is not shown. Hiding is presentation only: each procedure behind a page still decides. The
+ * What the workspace shows at `pathname`. Hiding is presentation only: each procedure behind a page still decides. The
  * overview needs the whole Delivery plane, so a caller without it starts on the first page they may use.
  */
-function Workspace({ session, here, pathname }: { session: ConsoleSession; here: NavItem | null; pathname: string }) {
-	const navigate = useNavigate()
-	const { lead, sections } = visibleNav(session)
+export function workspaceGate(caller: ConsoleCaller, pathname: string): WorkspaceGate {
+	const { lead, sections } = visibleNav(caller)
 	const first = lead ?? sections[0]?.items[0] ?? null
-	const redirect = pathname === '/' && lead === null ? first : null
+	const dataView = DATA_VIEW_PATH.test(pathname)
+	if (dataView && opensDataView(caller.access)) return { kind: 'page' }
+	if (first === null) return { kind: 'no-access' }
+	if (pathname === '/' && lead === null) return { kind: 'redirect', to: first.to }
+	const here = [LEAD, ...NAV.flatMap((section) => section.items)].find((item) => isActive(item, pathname)) ?? null
+	if (dataView || (here !== null && !mayOpen(caller, here.to))) return { kind: 'not-available' }
+	return { kind: 'page' }
+}
+
+/** The page, or why it is not shown (`workspaceGate`). */
+function Workspace({ session, pathname }: { session: ConsoleSession; pathname: string }) {
+	const navigate = useNavigate()
+	const gate = workspaceGate(session, pathname)
+	const redirect = gate.kind === 'redirect' ? gate.to : null
 
 	useEffect(() => {
-		if (redirect !== null) navigate(redirect.to)
+		if (redirect !== null) navigate(redirect)
 	}, [redirect, navigate])
 
-	if (first === null) return <NoAccess session={session} />
-	if (redirect !== null) return <div className="loading">Loading console…</div>
-	if (here !== null && !mayOpen(session, here.to)) return <NotAvailable />
+	if (gate.kind === 'no-access') return <NoAccess session={session} />
+	if (gate.kind === 'redirect') return <div className="loading">Loading console…</div>
+	if (gate.kind === 'not-available') return <NotAvailable />
 	return (
 		<Outlet
 			fallback={<div className="loading">Loading console…</div>}

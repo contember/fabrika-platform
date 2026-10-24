@@ -1,20 +1,29 @@
 import { describe, expect, test } from 'bun:test'
+import { isValidElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { type ConsoleAccessDto, type ControlFetch, createControlClient, type CursorList, type DataOperationDto } from '../lib/api'
+import type { ConsoleCaller } from '../lib/console-access'
 import { ConsoleAccessContext } from '../lib/console-caller'
 import { fmtDate } from '../lib/format'
+import { workspaceGate } from '../routes/_layout'
 import {
 	ActionOutcome,
+	BootFailureMessage,
+	BootFailureText,
 	type DataAction,
+	DataPage,
 	type DataRead,
+	DataSections,
 	DataView,
 	type DataViewDto,
 	loadDataView,
 	readBootFailure,
+	RecoverControl,
 	recoverOperation,
 	recoveryChoice,
 	RecoveryEffect,
 	startMaintenance,
+	StateSection,
 } from '../routes/apps/data'
 
 const view = (overrides: Partial<DataViewDto> = {}): DataViewDto => ({
@@ -215,7 +224,7 @@ describe('controls follow consoleAccess', () => {
 
 	test('the content view shows only to a global data.content.read holder, and only when a boot failed', () => {
 		expect(markup(holding(['data.read', 'data.content.read']))).toContain('Show the error message')
-		expect(markup(null)).toContain('Show the error message')
+		expect(markup(null)).not.toContain('Show the error message')
 		expect(markup(holding(['data.read']))).not.toContain('Show the error message')
 		expect(markup(holding(['data.read'], { type: 'app', value: 'notes', actions: ['data.content.read'] }))).not.toContain('Show the error message')
 		expect(markup(holding(['data.content.read']), { kind: 'ok', value: view({ bootFailure: null }) })).not.toContain('Show the error message')
@@ -320,5 +329,124 @@ describe('starting and recovering through Control', () => {
 		expect(await readBootFailure(createControlClient(fakeControl([], { 'data.content': refusal(404) })), 'notes', 'prod')).toEqual({
 			kind: 'not-allowed',
 		})
+	})
+})
+
+/** Every element of type `type` in a tree that is not rendered: what React mounts, and the key it mounts it under. */
+function elementsOf(node: ReactNode, type: unknown): { key: string | null; props: unknown }[] {
+	if (Array.isArray(node)) return node.flatMap((child: ReactNode) => elementsOf(child, type))
+	if (!isValidElement<{ children?: ReactNode }>(node)) return []
+	const own = node.type === type ? [{ key: node.key, props: node.props }] : []
+	return [...own, ...elementsOf(node.props.children, type)]
+}
+
+const DATA_PATH = '/apps/notes/environments/prod/data'
+
+const consoleCaller = (access: ConsoleAccessDto | null): ConsoleCaller => ({ access, iam: false, administersPeople: false })
+
+describe('a data reader reaches the page', () => {
+	test('a global or app-scoped data.read opens the data view without app.manage', () => {
+		expect(workspaceGate(consoleCaller(holding(['data.read'])), DATA_PATH)).toEqual({ kind: 'page' })
+		expect(workspaceGate(consoleCaller(holding([], { type: 'app', value: 'notes', actions: ['data.read'] })), DATA_PATH)).toEqual({ kind: 'page' })
+		expect(workspaceGate(consoleCaller(holding([], { type: 'environment', value: 'prod', actions: ['data.read'] })), DATA_PATH)).toEqual({
+			kind: 'page',
+		})
+	})
+
+	test('the data reader gets no other application page, and a caller without data.read does not get the data view', () => {
+		const reader = consoleCaller(holding(['data.read']))
+		expect(workspaceGate(reader, '/apps/notes')).toEqual({ kind: 'no-access' })
+		expect(workspaceGate(consoleCaller(holding(['data.read', 'deploy.read'])), '/apps/notes')).toEqual({ kind: 'not-available' })
+		expect(workspaceGate(consoleCaller(holding(['app.manage'])), DATA_PATH)).toEqual({ kind: 'not-available' })
+		expect(workspaceGate(consoleCaller(holding([])), DATA_PATH)).toEqual({ kind: 'no-access' })
+		expect(workspaceGate(consoleCaller(holding(['app.manage'])), '/apps/notes')).toEqual({ kind: 'page' })
+	})
+
+	test('the back link to the application shows only to an app.manage holder', () => {
+		const page = (access: ConsoleAccessDto | null) =>
+			renderToStaticMarkup(
+				<ConsoleAccessContext.Provider value={access}>
+					<DataPage appId="notes" env="prod" data={{ view: { kind: 'not-allowed' }, operations: { kind: 'not-allowed' } }} onChanged={() => undefined} />
+				</ConsoleAccessContext.Provider>,
+			)
+		expect(page(holding(['data.read']))).not.toContain('back-link')
+		expect(page(holding([], { type: 'app', value: 'notes', actions: ['data.read'] }))).not.toContain('back-link')
+	})
+})
+
+describe('state stays with its environment, failure and operation', () => {
+	const data: Awaited<ReturnType<typeof loadDataView>> = { view: { kind: 'ok', value: view() }, operations: page([operation('op-2')]) }
+
+	test('navigating to another environment mounts a fresh view: no fetched content, mode selection or 501 carries over', () => {
+		const keyAt = (appId: string, env: string) =>
+			elementsOf(DataPage({ appId, env, data, onChanged: () => undefined }), DataView).map((element) => element.key)
+		expect(keyAt('notes', 'prod')).toHaveLength(1)
+		expect(keyAt('notes', 'prod')).toEqual(keyAt('notes', 'prod'))
+		expect(keyAt('notes', 'stage')).not.toEqual(keyAt('notes', 'prod'))
+		expect(keyAt('blog', 'prod')).not.toEqual(keyAt('notes', 'prod'))
+	})
+
+	test('the boot message is bound to the failure it was read for', () => {
+		const keyFor = (at: string) =>
+			elementsOf(StateSection({ appId: 'notes', env: 'prod', view: view({ bootFailure: { at } }), readsContent: true }), BootFailureMessage)
+				.map((element) => element.key)
+		expect(keyFor('2026-10-24T09:30:00.000Z')).toEqual(['2026-10-24T09:30:00.000Z'])
+		expect(keyFor('2026-10-24T10:00:00.000Z')).toEqual(['2026-10-24T10:00:00.000Z'])
+	})
+
+	test('the recovery control is bound to the operation it recovers', () => {
+		const keyFor = (id: string) =>
+			elementsOf(
+				DataSections({
+					appId: 'notes',
+					env: 'prod',
+					view: data.view,
+					operations: page([operation(id)]),
+					onChanged: () => undefined,
+					manages: true,
+					readsContent: false,
+				}),
+				RecoverControl,
+			).map((element) => element.key)
+		expect(keyFor('op-2')).toEqual(['op-2'])
+		expect(keyFor('op-3')).toEqual(['op-3'])
+	})
+})
+
+describe('capped counts, outages and content text', () => {
+	test('a count at the cap reads as a lower bound, with the reason', () => {
+		const html = markup(holding(['data.read']), {
+			kind: 'ok',
+			value: view({ database: { sizeBytes: 1, tables: [{ name: 'events', rows: 100_000 }] } }),
+		})
+		expect(html).toContain(`${(100_000).toLocaleString()}+`)
+		expect(html).toContain('lower bound')
+		expect(markup(holding(['data.read']), { kind: 'ok', value: view({ database: { sizeBytes: 1, tables: [{ name: 'events', rows: 99_999 }] } }) })).not
+			.toContain(
+				`${(99_999).toLocaleString()}+`,
+			)
+	})
+
+	test('a 503 from Control reads as unavailable', async () => {
+		const read = await loadDataView(
+			createControlClient(fakeControl([], { 'data.view': refusal(503), 'data.operations.list': refusal(503) })),
+			'notes',
+			'prod',
+		)
+		expect(read).toEqual({ view: { kind: 'unavailable' }, operations: { kind: 'unavailable' } })
+		expect(await readBootFailure(createControlClient(fakeControl([], { 'data.content': refusal(503) })), 'notes', 'prod')).toEqual({
+			kind: 'unavailable',
+		})
+		expect(markup(holding(['data.read']), { kind: 'unavailable' })).toContain('could not read')
+	})
+
+	test("the application's boot text is rendered as text, never as markup", () => {
+		const html = renderToStaticMarkup(
+			<BootFailureText failure={{ at: '2026-10-24T09:30:00.000Z', message: '<script>alert(1)</script>', stack: '<img src=x onerror=alert(2)>' }} />,
+		)
+		expect(html).not.toContain('<script>')
+		expect(html).not.toContain('<img')
+		expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+		expect(html).toContain('&lt;img src=x onerror=alert(2)&gt;')
 	})
 })

@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import { CONTROL_ACTIONS } from '@fabrika/control-contract'
+import { CONTROL_ACTIONS, OPS_ROW_COUNT_CAP, type OpsContentView, type OpsView } from '@fabrika/control-contract'
 import { type ReactNode, useState } from 'react'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
@@ -15,7 +15,7 @@ import {
 	type DataOperationState,
 	type MaintenanceMode,
 } from '../../lib/api'
-import { holdsGlobally, mayDo } from '../../lib/console-access'
+import { holdsGlobally, mayDo, opensApplications } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate } from '../../lib/format'
 
@@ -25,8 +25,8 @@ import { fmtDate } from '../../lib/format'
 type ControlClient = ReturnType<typeof createControlClient>
 
 /** Control's `data.view`: counts, sizes, timestamps and codes, never content. */
-export type DataViewDto = Awaited<ReturnType<ControlClient['data']['view']>>
-type BootFailureContent = NonNullable<Awaited<ReturnType<ControlClient['data']['content']>>['bootFailure']>
+export type DataViewDto = OpsView
+type BootFailureContent = NonNullable<OpsContentView['bootFailure']>
 
 /** A read's outcome: Control answers a refusal as 404 (or 403), and an environment without an ops channel as 409. */
 export type DataRead<T> =
@@ -119,21 +119,41 @@ export default createPage()
 	.params({ id: 'string', env: 'string' })
 	.loader(({ params }) => loadDataView(api, params.id, params.env))
 	.route('/apps/:id/environments/:env/data')
-	.render(({ data, params, invalidate }) => (
+	.render(({ data, params, invalidate }) => <DataPage appId={params.id} env={params.env} data={data} onChanged={invalidate} />)
+
+export function DataPage(
+	{ appId, env, data, onChanged }: {
+		appId: string
+		env: string
+		data: Awaited<ReturnType<typeof loadDataView>>
+		onChanged: () => void
+	},
+) {
+	return (
 		<>
 			<div className="page-head">
-				<Link to="apps/detail" params={{ id: params.id }} className="back-link">
-					<Icon name="chevron-left" size={14} />
-					{params.id}
-				</Link>
+				<BackLink appId={appId} />
 				<h1>
-					Data <Chip>{params.env}</Chip>
+					Data <Chip>{env}</Chip>
 				</h1>
 				<p className="hint">What this environment's application object holds and admits, and the operations Control ran on it.</p>
 			</div>
-			<DataView appId={params.id} env={params.env} view={data.view} operations={data.operations} onChanged={invalidate} />
+			{/* Buzola reuses the page across params: nothing fetched, selected or refused may carry into another environment. */}
+			<DataView key={JSON.stringify([appId, env])} appId={appId} env={env} view={data.view} operations={data.operations} onChanged={onChanged} />
 		</>
-	))
+	)
+}
+
+/** A data reader may hold no global `app.manage`, so the application page is linked only for one who does. */
+function BackLink({ appId }: { appId: string }) {
+	if (!opensApplications(useConsoleAccess())) return null
+	return (
+		<Link to="apps/detail" params={{ id: appId }} className="back-link">
+			<Icon name="chevron-left" size={14} />
+			{appId}
+		</Link>
+	)
+}
 
 export function DataView(
 	{ appId, env, view, operations, onChanged }: {
@@ -145,9 +165,31 @@ export function DataView(
 	},
 ) {
 	const access = useConsoleAccess()
-	const manages = mayDo(access, CONTROL_ACTIONS.DATA_MANAGE, { app: appId, env })
-	// Content is a global grant only (ADR-0068 §2), so a grant at the app or the environment does not offer it.
-	const readsContent = access === null || holdsGlobally(access, CONTROL_ACTIONS.DATA_CONTENT_READ)
+	return (
+		<DataSections
+			appId={appId}
+			env={env}
+			view={view}
+			operations={operations}
+			onChanged={onChanged}
+			manages={mayDo(access, CONTROL_ACTIONS.DATA_MANAGE, { app: appId, env })}
+			// Content is a global grant only (ADR-0068 §2): an unknown answer or a grant at the app or the environment does not offer it.
+			readsContent={access !== null && holdsGlobally(access, CONTROL_ACTIONS.DATA_CONTENT_READ)}
+		/>
+	)
+}
+
+export function DataSections(
+	{ appId, env, view, operations, onChanged, manages, readsContent }: {
+		appId: string
+		env: string
+		view: DataRead<DataViewDto>
+		operations: DataRead<CursorList<DataOperationDto>>
+		onChanged: () => void
+		manages: boolean
+		readsContent: boolean
+	},
+) {
 	const stuck = operations.kind === 'ok' ? recoveryChoice(operations.value.items) : null
 
 	return (
@@ -165,7 +207,7 @@ export function DataView(
 				<div className="section-head">
 					<h2>Operations</h2>
 					<span className="spacer" />
-					{manages && stuck !== null && <RecoverControl appId={appId} env={env} stuck={stuck} onChanged={onChanged} />}
+					{manages && stuck !== null && <RecoverControl key={stuck.operation.id} appId={appId} env={env} stuck={stuck} onChanged={onChanged} />}
 				</div>
 				<p className="section-note">Maintenance, backups, migrations and recoveries Control ran on this environment, newest first.</p>
 				{operations.kind === 'ok' ? <OperationsTable page={operations.value} /> : <ReadProblem read={operations} />}
@@ -174,7 +216,7 @@ export function DataView(
 	)
 }
 
-function StateSection({ appId, env, view, readsContent }: { appId: string; env: string; view: DataViewDto; readsContent: boolean }) {
+export function StateSection({ appId, env, view, readsContent }: { appId: string; env: string; view: DataViewDto; readsContent: boolean }) {
 	const { maintenance, bootFailure } = view
 	return (
 		<section>
@@ -199,14 +241,15 @@ function StateSection({ appId, env, view, readsContent }: { appId: string; env: 
 				: (
 					<>
 						<p>The application last failed to boot at {fmtIso(bootFailure.at)}.</p>
-						{readsContent && <BootFailureMessage appId={appId} env={env} />}
+						{/* A new failure, after an invalidation, must not keep the message read for the last one. */}
+						{readsContent && <BootFailureMessage key={bootFailure.at} appId={appId} env={env} />}
 					</>
 				)}
 		</section>
 	)
 }
 
-function BootFailureMessage({ appId, env }: { appId: string; env: string }) {
+export function BootFailureMessage({ appId, env }: { appId: string; env: string }) {
 	const [busy, setBusy] = useState(false)
 	const [content, setContent] = useState<DataRead<BootFailureContent | null> | null>(null)
 
@@ -225,7 +268,12 @@ function BootFailureMessage({ appId, env }: { appId: string; env: string }) {
 	}
 	if (content.kind !== 'ok') return <ReadProblem read={content} />
 	if (content.value === null) return <p className="muted">No boot failure recorded now.</p>
-	return <pre>{content.value.stack === null ? content.value.message : `${content.value.message}\n\n${content.value.stack}`}</pre>
+	return <BootFailureText failure={content.value} />
+}
+
+/** The application's own error text: content, rendered as text only. */
+export function BootFailureText({ failure }: { failure: BootFailureContent }) {
+	return <pre>{failure.stack === null ? failure.message : `${failure.message}\n\n${failure.stack}`}</pre>
 }
 
 function MaintenanceControl({ appId, env, current, onChanged }: { appId: string; env: string; current: MaintenanceMode; onChanged: () => void }) {
@@ -266,7 +314,7 @@ function MaintenanceControl({ appId, env, current, onChanged }: { appId: string;
 	)
 }
 
-function RecoverControl(
+export function RecoverControl(
 	{ appId, env, stuck, onChanged }: {
 		appId: string
 		env: string
@@ -375,6 +423,9 @@ function ContentsSections({ view }: { view: DataViewDto }) {
 				<div className="section-head">
 					<h2>Tables</h2>
 				</div>
+				<p className="section-note">
+					The object counts each table's rows up to {OPS_ROW_COUNT_CAP.toLocaleString()}, so a table at that count shows it as a lower bound.
+				</p>
 				<Table
 					colSpan={2}
 					isEmpty={view.database.tables.length === 0}
@@ -391,7 +442,7 @@ function ContentsSections({ view }: { view: DataViewDto }) {
 							<td>
 								<code>{table.name}</code>
 							</td>
-							<td className="numeric">{table.rows.toLocaleString()}</td>
+							<td className="numeric">{table.rows >= OPS_ROW_COUNT_CAP ? `${OPS_ROW_COUNT_CAP.toLocaleString()}+` : table.rows.toLocaleString()}</td>
 						</tr>
 					))}
 				</Table>
