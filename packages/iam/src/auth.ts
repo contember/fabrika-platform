@@ -136,7 +136,7 @@ async function resolveAnyCaller(services: Services, env: CallerEnv, input: Calle
 		const eff = await resolveCredential(services, cred, input.app)
 		if (!eff.ok) {
 			// A credential presented to the wrong app is indistinguishable from one that does not exist.
-			return { ok: false, reason: eff.reason === 'wrong_app' ? 'invalid_token' : eff.reason }
+			return { ok: false, reason: eff.reason === 'wrong_app' || eff.reason === 'issuer_unauthorized' ? 'invalid_token' : eff.reason }
 		}
 		return {
 			ok: true,

@@ -9,6 +9,7 @@ import {
 	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
 	type FrameworkVariableName,
 } from '@fabrika/auth-core'
+import { APPLICATION_SERVER_MAX_HEADER_BYTES } from '@fabrika/auth-core'
 import type { OperationsAssetRoot, OperationsSourceMapBuildUpload } from '@fabrika/operations-contract/releases'
 import { FRAMEWORK_RELEASE_PATTERN, type JsonValue } from '@fabrika/provider-contract'
 import packageManifest from '../package.json'
@@ -294,7 +295,12 @@ const verifyScript = (appId: string): readonly string[] => [
 	`FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db test-isolation`,
 ]
 
-const startScript: readonly string[] = ['#!/bin/sh', 'set -eu', `cd ${RUNTIME_ROOT}`, 'exec bun fabrika/entry.generated.ts']
+const startScript: readonly string[] = [
+	'#!/bin/sh',
+	'set -eu',
+	`cd ${RUNTIME_ROOT}`,
+	`exec bun --max-http-header-size=${APPLICATION_SERVER_MAX_HEADER_BYTES} fabrika/entry.generated.ts`,
+]
 
 /** The scripts the build writes and every container's init commands run, in this order. */
 const initScripts = (execution: ZeropsLockedExecution): readonly { readonly path: string; readonly lines: readonly string[] }[] =>

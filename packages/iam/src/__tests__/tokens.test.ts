@@ -1,4 +1,4 @@
-import { DEFAULT_TOKEN_TTL_SECONDS, MAX_ACCESS_TOKEN_BYTES, parseAccessClaims, permits } from '@fabrika/auth-core'
+import { DEFAULT_TOKEN_TTL_SECONDS, MAX_ACCESS_TOKEN_BYTES, MAX_APPLICATION_TOKEN_BYTES, parseAccessClaims, permits } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, jwtVerify } from 'jose'
 import { hashToken } from '../secret'
@@ -100,6 +100,37 @@ describe('mintToken', () => {
 		expect(long.result.expiresAt).toBe(Math.floor(Date.now() / 1000) + DEFAULT_TOKEN_TTL_SECONDS)
 	})
 
+	test('the token never outlives the grants it carries', async () => {
+		const h = createHarness()
+		const principalId = seedUser(h.sqlite, { sub: 'g-grant-clamp', email: 'grant-clamp@b.cz' })
+		const grantEnds = Math.floor(Date.now() / 1000) + 60
+		const grant = seedInlineGrant(h.sqlite, principalId, ['project.read'], null, 'a')
+		h.sqlite.run('UPDATE grants SET expires_at = ? WHERE id = ?', [grantEnds, grant])
+		const sessionToken = 'grant-bound-session'
+		await h.repositories.sessions.createSession({
+			tokenHash: await hashToken(sessionToken),
+			principalId,
+			idpSub: 'g-grant-clamp',
+			email: 'grant-clamp@b.cz',
+			expiresAt: FUTURE,
+		})
+		const fromSession = await mintToken(h.makeServices(), ENV, { app: 'a', session: sessionToken, requestId: 'r' })
+		if (!fromSession.result.ok) throw new Error('expected ok')
+		expect(fromSession.result.expiresAt).toBe(grantEnds)
+
+		const key = 'px_grant-bound-personal-key'
+		await h.repositories.credentials.createCredential({ tokenHash: await hashToken(key), principalId, issuedBy: principalId, app: 'a', grants: [] })
+		const fromKey = await mintFromKey(h.makeServices(), ENV, { app: 'a', key, requestId: 'r' })
+		if (!fromKey.result.ok) throw new Error('expected ok')
+		expect(fromKey.result.expiresAt).toBe(grantEnds)
+
+		// A second grant of the same action without expiry keeps the action held: the latest support counts.
+		seedInlineGrant(h.sqlite, principalId, ['project.read'], null, 'a')
+		const renewed = await mintToken(h.makeServices(), ENV, { app: 'a', session: sessionToken, requestId: 'r' })
+		if (!renewed.result.ok) throw new Error('expected ok')
+		expect(renewed.result.expiresAt).toBe(Math.floor(Date.now() / 1000) + DEFAULT_TOKEN_TTL_SECONDS)
+	})
+
 	test('no session → no_session', async () => {
 		const h = createHarness()
 		const { result } = await mintToken(h.makeServices(), ENV, { app: 'a', session: null, requestId: 'r' })
@@ -133,6 +164,7 @@ describe('mintFromKey', () => {
 	async function shareLink(app: string | null, action = 'report.read') {
 		const h = createHarness()
 		const issuer = seedUser(h.sqlite, { sub: 'g-issuer', email: 'issuer@b.cz' })
+		seedInlineGrant(h.sqlite, issuer, [action], null, app)
 		const key = `px_link-for-${app ?? 'nowhere'}`
 		await h.repositories.credentials.createCredential({
 			tokenHash: await hashToken(key),
@@ -162,6 +194,52 @@ describe('mintFromKey', () => {
 		// whether the credential exists.
 		const elsewhere = await mintFromKey(services, ENV, { app: 'app-b', key, requestId: 'r' })
 		expect(elsewhere.result).toEqual({ ok: false, reason: 'invalid_key' })
+	})
+
+	test('an anonymous key mints only while its issuer is enabled and still holds what it delegated (S8)', async () => {
+		const h = createHarness()
+		const issuer = seedUser(h.sqlite, { sub: 'g-delegator', email: 'delegator@b.cz' })
+		const grant = seedInlineGrant(h.sqlite, issuer, ['report.read'], null, 'app-a')
+		const key = 'px_link-of-a-delegator'
+		await h.repositories.credentials.createCredential({
+			tokenHash: await hashToken(key),
+			issuedBy: issuer,
+			app: 'app-a',
+			grants: [{ action: 'report.read' }],
+		})
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const mint = () => mintFromKey(services, ENV, { app: 'app-a', key, requestId: 'r' })
+
+		// The token ends when the issuer's grant does.
+		const grantEnds = Math.floor(Date.now() / 1000) + 120
+		h.sqlite.run('UPDATE grants SET expires_at = ? WHERE id = ?', [grantEnds, grant])
+		const capped = await mint()
+		if (!capped.result.ok) throw new Error('expected ok')
+		expect(capped.result.expiresAt).toBe(grantEnds)
+
+		h.sqlite.run('UPDATE principals SET disabled_at = ? WHERE id = ?', [Math.floor(Date.now() / 1000), issuer])
+		expect((await mint()).result).toEqual({ ok: false, reason: 'invalid_key' })
+		h.sqlite.run('UPDATE principals SET disabled_at = NULL WHERE id = ?', [issuer])
+		expect((await mint()).result.ok).toBe(true)
+
+		h.sqlite.run('DELETE FROM grants WHERE id = ?', [grant])
+		expect((await mint()).result).toEqual({ ok: false, reason: 'invalid_key' })
+	})
+
+	test('an anonymous key without an issuer mints nothing', async () => {
+		const h = createHarness()
+		const issuer = seedUser(h.sqlite, { sub: 'g-gone', email: 'gone@b.cz' })
+		seedInlineGrant(h.sqlite, issuer, ['report.read'], null, 'app-a')
+		const key = 'px_link-of-nobody'
+		const id = await h.repositories.credentials.createCredential({
+			tokenHash: await hashToken(key),
+			issuedBy: issuer,
+			app: 'app-a',
+			grants: [{ action: 'report.read' }],
+		})
+		h.sqlite.run('UPDATE credentials SET issued_by = NULL WHERE id = ?', [id])
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		expect((await mintFromKey(services, ENV, { app: 'app-a', key, requestId: 'r' })).result).toEqual({ ok: false, reason: 'invalid_key' })
 	})
 
 	test('an anonymous key with NO app is dead everywhere — the hard cutover', async () => {
@@ -200,10 +278,13 @@ describe('mintFromKey', () => {
 
 describe('the access token size bound', () => {
 	/** A user in enough workspaces that the token would not fit in one proxy header. */
-	async function memberOfManyWorkspaces() {
+	async function memberOfManyWorkspaces(count = 400, contract = false) {
 		const h = createHarness()
+		if (contract) {
+			await h.repositories.appSchema.reconcileAppSchema({ app: 'example-app', scopes: [], actions: [], roles: [], contract: true })
+		}
 		const principalId = seedUser(h.sqlite, { sub: 'g-wide', email: 'wide@b.cz' })
-		for (let index = 0; index < 200; index++) {
+		for (let index = 0; index < count; index++) {
 			seedInlineGrant(h.sqlite, principalId, ['note.read', 'note.write'], { type: 'workspace', value: `workspace-${index}` }, 'example-app')
 		}
 		return { h, principalId }
@@ -230,6 +311,37 @@ describe('the access token size bound', () => {
 		const services = h.makeServices({ issuer: 'https://propustka.test' })
 		const { result } = await mintFromKey(services, ENV, { app: 'example-app', key, requestId: 'wide-key' })
 		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
+	})
+
+	test('at an installation service the bound stays MAX_ACCESS_TOKEN_BYTES', async () => {
+		const { h, principalId } = await memberOfManyWorkspaces(80)
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const { result } = await mintToken(services, ENV, { app: 'example-app', session: await h.signSession(principalId), requestId: 'svc' })
+		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
+	})
+
+	test('at a contract application a token above MAX_APPLICATION_TOKEN_BYTES is refused', async () => {
+		const { h, principalId } = await memberOfManyWorkspaces(400, true)
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const { result } = await mintToken(services, ENV, { app: 'example-app', session: await h.signSession(principalId), requestId: 'app-wide' })
+		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
+	})
+
+	test('at a contract application a token between 8 KiB and MAX_APPLICATION_TOKEN_BYTES is signed, and verifies with every entry', async () => {
+		const { h, principalId } = await memberOfManyWorkspaces(80, true)
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const session = await h.signSession(principalId)
+		const { result } = await mintToken(services, ENV, { app: 'example-app', session, requestId: 'wide-fits' })
+		if (!result.ok) throw new Error(`expected a token: ${result.reason}`)
+		expect(result.token.length).toBeGreaterThan(MAX_ACCESS_TOKEN_BYTES)
+		expect(result.token.length).toBeLessThanOrEqual(MAX_APPLICATION_TOKEN_BYTES)
+		const { payload } = await jwtVerify(result.token, createLocalJWKSet((await getSigner(ENV)).jwks()), {
+			issuer: 'https://propustka.test',
+			audience: 'example-app',
+		})
+		const perms = parseAccessClaims(payload)?.perms ?? []
+		expect(perms).toHaveLength(160)
+		expect(permits(perms, 'note.write', { type: 'workspace', value: 'workspace-79' })).toBe(true)
 	})
 
 	test('a token at the bound still mints', async () => {

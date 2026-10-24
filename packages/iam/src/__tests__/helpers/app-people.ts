@@ -79,7 +79,7 @@ export class DelegatedBetweenCheckAndWrite extends GrantRepository {
 	between: (() => Promise<unknown>) | null = null
 
 	override async createDelegatedRoleGrant(
-		input: { principalId: string; roleKey: string; grantedBy: string },
+		input: { principalId: string; roleKey: string; grantedBy: string; expiresAt?: number | null },
 		authority: DelegatedAuthority,
 		audit: (grantId: string) => AuditEventInput,
 	): Promise<GrantRow | null> {

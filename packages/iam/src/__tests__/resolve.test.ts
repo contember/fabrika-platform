@@ -1,7 +1,7 @@
 import type { PermissionEntry, RoleDef, Scope } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import type { GrantRow } from '../db'
-import { computePermissions, type ResolutionInputs } from '../resolve'
+import { authorityDeadline, computeAuthority, computePermissions, type ResolutionInputs } from '../resolve'
 import { makeRoleSource } from '../roles'
 
 // computePermissions is PURE: it takes already-fetched rows plus an app-aware
@@ -223,5 +223,59 @@ describe('computePermissions — an external principal (ADR-0051)', () => {
 	test('an internal principal holds an external role like any other', () => {
 		const entries = computePermissions({ ...base, grants: [roleGrant('partner', TEAM('acme')), roleGrant('owner', TEAM('acme'))] }, externalRoles)
 		expect(entries.map((entry) => entry.action).sort()).toEqual(['project.read', 'project.write'])
+	})
+})
+
+describe('authorityDeadline — a credential never outlives the grants it carries', () => {
+	const NOW = 1_000
+	const expiring = (grant: GrantRow, expiresAt: number | null): GrantRow => ({ ...grant, id: `${grant.id}-${expiresAt}`, expires_at: expiresAt })
+
+	test('per entry the latest supporting grant counts, then the earliest across entries', () => {
+		const authority = computeAuthority({
+			...base,
+			grants: [
+				expiring(inlineGrant(['project.read'], null), 2_000),
+				expiring(inlineGrant(['project.read'], null), 5_000),
+				expiring(inlineGrant(['report.read'], null), 3_000),
+			],
+		}, roles)
+		expect(authorityDeadline(authority, authority.permissions, NOW)).toBe(3_000)
+	})
+
+	test('a grant without expiry is no deadline, also beside an expiring grant of the same entry', () => {
+		const authority = computeAuthority({
+			...base,
+			grants: [expiring(inlineGrant(['project.read'], null), 2_000), expiring(roleGrant('viewer', null), null)],
+		}, roles)
+		expect(authorityDeadline(authority, authority.permissions, NOW)).toBeNull()
+	})
+
+	test('a covering global grant supports a scoped entry; an uncovered expiring one still caps', () => {
+		const authority = computeAuthority({
+			...base,
+			grants: [expiring(inlineGrant(['project.read'], TEAM('acme')), 2_000), expiring(inlineGrant(['project.*'], null), 4_000)],
+		}, roles)
+		expect(authorityDeadline(authority, [{ action: 'project.read', scope: TEAM('acme'), source: 'grant' }], NOW)).toBe(4_000)
+		expect(authorityDeadline(authority, authority.permissions, NOW)).toBe(4_000)
+		const scopedOnly = computeAuthority({ ...base, grants: [expiring(inlineGrant(['project.read'], TEAM('acme')), 2_000)] }, roles)
+		expect(authorityDeadline(scopedOnly, scopedOnly.permissions, NOW)).toBe(2_000)
+	})
+
+	test('an entry nothing supports gives the deadline now', () => {
+		const authority = computeAuthority({ ...base, grants: [] }, roles)
+		expect(authorityDeadline(authority, [{ action: 'project.read', scope: null, source: 'grant' }], NOW)).toBe(NOW)
+	})
+})
+
+describe('computePermissions — a contract application holds exact actions only', () => {
+	test('a pattern, inline or through a role, contributes nothing; exact actions stay', () => {
+		const grants = [roleGrant('editor', null), roleGrant('viewer', null), inlineGrant(['report.*', 'report.export'], null)]
+		const entries = computePermissions({ ...base, grants, exactActions: true }, roles)
+		expect(entries.map((entry) => entry.action).sort()).toEqual(['project.read', 'report.export', 'report.read'])
+	})
+
+	test('the built-in admin grants nothing there', () => {
+		expect(computePermissions({ ...base, grants: [roleGrant('admin', null)], exactActions: true }, roles)).toEqual([])
+		expect(computePermissions({ ...base, grants: [roleGrant('admin', null)] }, roles)).toHaveLength(1)
 	})
 })

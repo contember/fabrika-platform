@@ -1,4 +1,12 @@
-import type { PermissionEntry, PermissionSource, PrincipalAffiliation, RoleDef, RoleSource, Scope } from '@fabrika/auth-core'
+import {
+	matchAction,
+	type PermissionEntry,
+	type PermissionSource,
+	type PrincipalAffiliation,
+	type RoleDef,
+	type RoleSource,
+	type Scope,
+} from '@fabrika/auth-core'
 import type { AuditEventInput, GrantRow, IamRepositories, PrincipalRow, RoleRow } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import { logWarn } from './log'
@@ -25,6 +33,11 @@ export interface ResolutionInputs {
 	 * cross-app or built-in grant, and no bootstrap `admin`.
 	 */
 	affiliation: PrincipalAffiliation
+	/**
+	 * A contract application holds exact actions of its approved catalog: a pattern (a stored `*` or `prefix.*`, the
+	 * built-in `admin` included) contributes nothing there, so nothing tracks the catalog beyond its approved revision.
+	 */
+	exactActions?: boolean
 }
 
 /**
@@ -34,6 +47,23 @@ export interface ResolutionInputs {
  */
 function rowScope(scopeType: string | null, scopeValue: string | null): Scope | null {
 	return scopeType === null || scopeValue === null ? null : { type: scopeType, value: scopeValue }
+}
+
+/**
+ * A principal's resolved permissions and how long they hold. `supports` keeps, per identical action-and-scope entry,
+ * the latest expiry among the grants behind it (`null` = no deadline), so a credential can be capped by the authority
+ * it carries (`authorityDeadline`).
+ */
+export interface ResolvedAuthority {
+	permissions: PermissionEntry[]
+	supports: readonly HeldEntry[]
+}
+
+/** One `(action, scope)` a principal holds and until when; `null` is no deadline. */
+export interface HeldEntry {
+	action: string
+	scope: Scope | null
+	until: number | null
 }
 
 /**
@@ -49,11 +79,26 @@ function rowScope(scopeType: string | null, scopeValue: string | null): Scope | 
  * `can()` / `scopedTo()` ignore `source` anyway.
  */
 export function computePermissions(inputs: ResolutionInputs, roles: RoleSource): PermissionEntry[] {
+	return computeAuthority(inputs, roles).permissions
+}
+
+/** `computePermissions`, plus each entry's latest supporting expiry. */
+export function computeAuthority(inputs: ResolutionInputs, roles: RoleSource): ResolvedAuthority {
 	const entries: PermissionEntry[] = []
 	const seen = new Set<string>()
+	const supports = new Map<string, HeldEntry>()
 
-	const add = (action: string, scope: Scope | null, source: PermissionSource): void => {
+	const add = (action: string, scope: Scope | null, source: PermissionSource, until: number | null): void => {
+		if (inputs.exactActions === true && action.includes('*')) {
+			return
+		}
 		const scopeKey = scope === null ? '' : `${scope.type}:${scope.value}`
+		const held = supports.get(`${action} ${scopeKey}`)
+		if (held === undefined) {
+			supports.set(`${action} ${scopeKey}`, { action, scope, until })
+		} else if (held.until !== null) {
+			held.until = until === null ? null : Math.max(held.until, until)
+		}
 		const key = `${action} ${scopeKey} ${source}`
 		if (seen.has(key)) {
 			return
@@ -63,7 +108,7 @@ export function computePermissions(inputs: ResolutionInputs, roles: RoleSource):
 	}
 
 	const external = inputs.affiliation === 'external'
-	const expandRole = (roleKey: string, scope: Scope | null, source: PermissionSource): void => {
+	const expandRole = (roleKey: string, scope: Scope | null, source: PermissionSource, until: number | null): void => {
 		const role = roles.getRole(inputs.app, roleKey)
 		if (!role) {
 			// Dangling role key — resolves to zero permissions (fail-closed).
@@ -78,7 +123,7 @@ export function computePermissions(inputs: ResolutionInputs, roles: RoleSource):
 			return
 		}
 		for (const permission of role.permissions) {
-			add(permission, scope, source)
+			add(permission, scope, source, until)
 		}
 	}
 
@@ -89,10 +134,10 @@ export function computePermissions(inputs: ResolutionInputs, roles: RoleSource):
 			continue
 		}
 		if (grant.role_key !== null) {
-			expandRole(grant.role_key, scope, 'grant')
+			expandRole(grant.role_key, scope, 'grant', grant.expires_at)
 		} else if (grant.permissions !== null) {
 			for (const pattern of parseStoredPermissions(grant.permissions)) {
-				add(pattern, scope, 'grant')
+				add(pattern, scope, 'grant', grant.expires_at)
 			}
 		}
 	}
@@ -100,10 +145,39 @@ export function computePermissions(inputs: ResolutionInputs, roles: RoleSource):
 	// 2. Bootstrap admins (users only) — the built-in global `admin` role, source
 	// 'bootstrap'. `admin` is a cross-app built-in, so it resolves even at app=null.
 	if (inputs.isBootstrapAdmin && !external) {
-		expandRole('admin', null, 'bootstrap')
+		expandRole('admin', null, 'bootstrap', null)
 	}
 
-	return entries
+	return { permissions: entries, supports: [...supports.values()] }
+}
+
+/**
+ * The earliest time at which some entry of `carried` loses all its support in `authority`, or `null` when none ever
+ * does. An entry is supported by every held entry that covers it under `permits` semantics (a global entry covers a
+ * scoped one, a pattern the actions it matches); an entry nothing supports gives the deadline `now`, which no caller
+ * meets because it carries only what `authority` holds.
+ */
+export function authorityDeadline(authority: Pick<ResolvedAuthority, 'supports'>, carried: readonly PermissionEntry[], now: number): number | null {
+	let deadline: number | null = null
+	for (const entry of carried) {
+		let latest: number | null | undefined
+		for (const held of authority.supports) {
+			const scopeOk = held.scope === null || (entry.scope !== null && held.scope.type === entry.scope.type && held.scope.value === entry.scope.value)
+			if (!scopeOk || !matchAction(held.action, entry.action)) {
+				continue
+			}
+			if (held.until === null || latest === null) {
+				latest = null
+			} else {
+				latest = latest === undefined ? held.until : Math.max(latest, held.until)
+			}
+		}
+		const until = latest === undefined ? now : latest
+		if (until !== null && (deadline === null || until < deadline)) {
+			deadline = until
+		}
+	}
+	return deadline
 }
 
 // ── Principal resolution (the 3-step claim-then-lazy flow) ────────────────────
@@ -281,10 +355,20 @@ export async function resolvePermissionsAt(
 	principal: PrincipalRow,
 	app: string,
 ): Promise<PermissionEntry[]> {
+	return (await resolveAuthorityAt(services, principal, app)).permissions
+}
+
+/** `resolvePermissionsAt`, with each entry's latest supporting expiry, for a mint front that caps its credential. */
+export async function resolveAuthorityAt(
+	services: { readonly repositories: IamRepositories; readonly config: Pick<Config, 'bootstrapAdmins' | 'platformAudiences'> },
+	principal: PrincipalRow,
+	app: string,
+): Promise<ResolvedAuthority> {
 	const crossApp = reachesCrossAppAuthority(services.config, app)
 	const grants = await services.repositories.grants.getActiveGrantsForApp(principal.id, app, { includeCrossApp: crossApp })
 	const isBootstrapAdmin = crossApp && principal.type === 'user' && principal.affiliation === 'internal' && principal.email !== null
 		&& services.config.bootstrapAdmins.has(normalizeEmailIdentity(principal.email))
 	const roles = await loadRoleSource(services.repositories, app)
-	return computePermissions({ app, grants, isBootstrapAdmin, affiliation: principal.affiliation }, roles)
+	const exactActions = await services.repositories.appSchema.isContractApp(app)
+	return computeAuthority({ app, grants, isBootstrapAdmin, affiliation: principal.affiliation, exactActions }, roles)
 }

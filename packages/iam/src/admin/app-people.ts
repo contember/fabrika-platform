@@ -26,7 +26,8 @@ import {
 	type RoleRow,
 } from '../db'
 import { appMemberPage } from '../membership'
-import { resolvePermissionsAt } from '../resolve'
+import { unixNow } from '../repositories/sql'
+import { authorityDeadline, type HeldEntry, resolveAuthorityAt } from '../resolve'
 import { BUILTIN_ROLES } from '../roles'
 import type { Services } from '../services'
 import { parseStoredPermissions } from '../stored-permissions'
@@ -48,6 +49,7 @@ interface AdministeredApp {
 	readonly app: string
 	readonly people: AppMembersRow
 	readonly permissions: PermissionEntry[]
+	readonly supports: readonly HeldEntry[]
 	readonly authority: DelegatedAuthority
 }
 
@@ -72,9 +74,10 @@ async function administeredApp(admin: PeopleAdministrator, app: string): Promise
 	const schemaRevision = await admin.services.repositories.appSchema.getSchemaRevision(app)
 	const people = await admin.services.repositories.appSchema.getAppMembers(app)
 	if (people === null) return null
-	const permissions = await resolvePermissionsAt(admin.services, admin.principal, app)
+	const live = await resolveAuthorityAt(admin.services, admin.principal, app)
+	const permissions = live.permissions
 	const authority = { administratorId: admin.principal.id, app, grantRevision: admin.principal.grant_revision, schemaRevision }
-	return permits(permissions, people.manage) ? { app, people, permissions, authority } : null
+	return permits(permissions, people.manage) ? { app, people, permissions, supports: live.supports, authority } : null
 }
 
 /** A delegated change that wrote nothing because the authority its check read changed meanwhile. */
@@ -160,8 +163,13 @@ export async function grantAppRole(ctx: IamAppContext, input: GrantAppRoleReques
 	const contract = await contractGrantProblem(appSchema, administered.app, { roleKey: role.role_key, permissions: null, scopeType: null })
 	if (contract !== null) return fail(400, contract)
 	try {
+		// S8: the grant ends no later than the administrator's own grants of `manage` and of every action of the role.
+		const carried = [administered.people.manage, ...parseStoredPermissions(role.permissions)].map(
+			(action): PermissionEntry => ({ action, scope: null, source: 'grant' }),
+		)
+		const expiresAt = authorityDeadline(administered, carried, unixNow())
 		const granted = await grants.createDelegatedRoleGrant(
-			{ principalId: target.id, roleKey: role.role_key, grantedBy: admin.principal.id },
+			{ principalId: target.id, roleKey: role.role_key, grantedBy: admin.principal.id, expiresAt },
 			administered.authority,
 			(grantId) =>
 				peopleEvent(admin, administered.app, {

@@ -176,6 +176,36 @@ describe("the application's administrator grants and revokes its global roles in
 		expect(prop(result(listed.body), 'members')).toContainEqual(expect.objectContaining({ principalId: newcomer.id, email: 'newcomer@example.test' }))
 	})
 
+	test('a grant ends no later than the administrator grants behind it (S8)', async () => {
+		const f = await people()
+		const administrator = await f.person('administrator')
+		const until = Math.floor(Date.now() / 1000) + 3600
+		await f.repositories.grants.createRoleGrantUnlessHeld({ principalId: administrator.id, app: APP, roleKey: 'administrator', expiresAt: until })
+		const newcomer = await f.person('newcomer')
+		const granted = await consoleRpc(f, administrator.id, 'appPeople.grant', { app: APP, role: 'staff', email: 'newcomer@example.test' })
+		expect(granted.status).toBe(200)
+		const grants = (await f.repositories.grants.listGrants(newcomer.id)).filter((grant) => grant.role_key === 'staff')
+		expect(grants.map((grant) => grant.expires_at)).toEqual([until])
+	})
+
+	test('a grant over an expired one renews it in place with its audit row; an unexpired one stays', async () => {
+		const f = await people()
+		const administrator = await holding(f, 'administrator', 'administrator')
+		const newcomer = await f.person('newcomer')
+		const lapsed = await f.repositories.grants.createRoleGrantUnlessHeld({ principalId: newcomer.id, app: APP, roleKey: 'staff', expiresAt: 1 })
+		if (lapsed === null) throw new Error('fixture')
+		const grant = () => consoleRpc(f, administrator.id, 'appPeople.grant', { app: APP, role: 'staff', email: 'newcomer@example.test' })
+
+		expect(await grant()).toEqual({ status: 200, body: { result: { principalId: newcomer.id, role: 'staff', granted: true } } })
+		const staff = (await f.repositories.grants.listGrants(newcomer.id)).filter((row) => row.role_key === 'staff')
+		expect(staff.map((row) => [row.id, row.expires_at, row.granted_by])).toEqual([[lapsed.id, null, administrator.id]])
+		const events = await f.repositories.audit.listAuditEvents({ action: 'iam.grant.create', limit: 10 })
+		expect(events.map((event) => event.resource_id)).toEqual([lapsed.id])
+
+		expect(await grant()).toEqual({ status: 200, body: { result: { principalId: newcomer.id, role: 'staff', granted: false } } })
+		expect(await f.repositories.audit.listAuditEvents({ action: 'iam.grant.create', limit: 10 })).toHaveLength(1)
+	})
+
 	test('a revoke removes the global grant with its audit row; repeating it answers the same', async () => {
 		const f = await people()
 		const administrator = await holding(f, 'administrator', 'administrator')

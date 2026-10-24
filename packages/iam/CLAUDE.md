@@ -211,13 +211,18 @@ fails if that stops being true — it is the guard, not documentation of one.
   installation administrator's only (`requireGrantablePrincipal`), under the rules provisioning applies; the secret
   stays. A token minted before the change keeps its `perms` until it expires (`DEFAULT_TOKEN_TTL_SECONDS`, the
   proxy's cache included). A grant at an app other than the credential's binding never reaches the key's token.
+  A key whose issuer is not its principal is delegation (S8): `issueKey` stores the grant and the key ending no later
+  than the issuer's supporting grants, and every mint narrows the key to what its issuer still covers at the app
+  (`issuerCoverage`, `src/delegation.ts`); a disabled or missing issuer is `invalid_key`. An issuer holding `iam.admin`
+  covers everything, and `provisioning-admin` is a named exception.
 - **EVERY KEY `issueKey` WRITES EXPIRES, AT MOST 30 DAYS OUT** (`MAX_KEY_LIFETIME_SECONDS`,
   `@fabrika/auth-core`), in all three modes — service, standalone, self-bound. A self-bound key
   carries the issuer's live permissions, so without a bound a 300-second access token could mint a
   permanent credential from itself; a service key is a new principal and a share link frozen
   authority, and neither may outlive the bound either. 30 days is the longest any current caller
   asks for (the builder's device-authorized key; `fabrika control key issue` requires
-  `--expires-in`). The device repository caps its keys with the same constant.
+  `--expires-in`). The device repository caps its keys with the same constant,
+  and an approval caps the key further at the approver's authority deadline (S8).
 - **A KEY LISTS EXACT ACTIONS OF ITS APP'S CATALOG, NO WILDCARD.** `issueKey` refuses `*` and
   `prefix.*` in every mode and requires each action verbatim in `app_actions`, before delegation —
   so an issuer holding `*` still cannot mint a key for an action the app never declared, and a key
@@ -332,7 +337,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   schema parser refuses it, and scope creation also applies `contractGrantProblem` to the creator role.
   Repeating an assign or a revoke answers the same result — an active grant is kept, an expired one is
   renewed in the same statement (backlog 82's 409 stays for
-  the admin grant API). `listMembers` needs `members.list` there and shows ids and roles (an
+  the admin grant API); an `appPeople.grant` over an expired global role renews that row likewise, keeping its id. Every grant a delegation writes — an assignment, a self-assignment included, an accepted
+  invitation (the inviter's grants read at acceptance), a scope's creator role and an `appPeople` grant — expires no later than the earliest
+  expiry among the grants that authorize it (`delegationDeadline`, `authorityDeadline`; S8 of the authorization model). `listMembers` needs `members.list` there and shows ids and roles (an
   application's member directory); labels only to `members.manage`, or to `members.list` too where the dimension
   declares `directory: 'labels'` (`app_scopes.members_directory`) — a user's label spells its address; emails, last
   sign-ins and open invitations only to `members.manage`. A last sign-in is per application: the child session a
@@ -424,22 +431,34 @@ fails if that stops being true — it is the guard, not documentation of one.
   external role for a mailbox `organizationMailbox` names is `internal_mailbox` before anything is written.
 - **A SHARE LINK IS BOUND TO ITS MOUNT AND ITS CHAIN** (`credentials.link_mount`, `link_dimension`,
   `link_chain`). `issueLink` checks the chain against the schema's containment, requires an expiry of
-  at most the mount's `maxDays`, and requires the issuer to hold `issuedBy` and every granted action on
+  at most the mount's `maxDays`, stores the earlier of that and the issuer's authority deadline over every delegated
+  action (a standalone anonymous key likewise), and requires the issuer to hold `issuedBy` and every granted action on
   some link of the chain; the grants are frozen on the object. Its token carries `link: { mount, chain }`
   and no `ptype`, and the framework re-checks the chain per request. `createLinkCredential` locks the
   mount row and inserts only while the schema still declares exactly what was checked (`CheckedLinkDeclaration`: the
   mount's dimension, grants, `issuedBy` and `maxDays`, the chain's containment, and an issuing job's actions and
   `issues`), so a reconcile in between either makes the write insert nothing (`not_allowed`) or comes after the
-  committed key, which it revokes if it removes or moves the mount. The issuer or a holder of
+  committed key, which it revokes if it removes or moves the mount. Every mint checks the issuer again
+  (`issuerAuthority`, `src/delegation.ts`; S8): it exists, is enabled and still holds the mount's `issuedBy` and every
+  frozen action on some link of the chain (a job: its current declaration, `issues` naming the mount), and the token
+  ends with the issuer's supporting grants. A standalone anonymous key is checked the same way for its frozen grants.
+  A missing issuer, or one that lost any of it, is `invalid_key`; `provisioning-admin` is the named exception. The issuer or a holder of
   `members.manage` on a value of the chain revokes it (a job only as its issuer); a reconcile that removes the mount, or moves it
   to another dimension, revokes its keys in the same batch.
 - **The admin router percent-decodes its path segments** (`decodedSegments`): an application id
   `notes@prod` arrives as `notes%40prod`, and registering the encoded spelling would create a second app.
-- **IAM SIGNS NO ACCESS TOKEN ABOVE `MAX_ACCESS_TOKEN_BYTES` (8192, from `@fabrika/auth-core`).** The proxy
-  forwards the token as one header and Bun, the application runtime on Zerops, refuses more than
-  16 KiB of headers per request. Every bearer passes `boundedToken`: both mint fronts answer
+- **IAM SIGNS NO ACCESS TOKEN ABOVE `MAX_ACCESS_TOKEN_BYTES` (8192, from `@fabrika/auth-core`)**, except a token
+  `mintToken` or `mintFromKey` mints at a contract application, bounded by `MAX_APPLICATION_TOKEN_BYTES` (24576;
+  `proxyMintedBound`). A client sends the 8 KiB kinds itself (OAuth, console bearers), through the proxy's auth service
+  and to installation services, whose Bun keeps its 16 KiB header limit; only the proxy injects the application token,
+  twice on a bearer request, toward an application started with a 64 KiB limit. A workload's token keeps 8 KiB. Every bearer passes `boundedToken`: both mint fronts answer
   `token_too_large`, a decided refusal the proxy turns into a 403 — never a login bounce, because a
   new login mints the same token — and the OAuth code exchange and refresh answer `invalid_grant`.
+- **AN ACCESS TOKEN NEVER OUTLIVES THE GRANTS IT CARRIES** (`authorityDeadline`, `src/resolve.ts`). Every mint front
+  (`mintToken`, `mintFromKey`, the OAuth exchange and refresh) caps `exp` at the earliest time some carried entry loses
+  its last supporting grant: per entry the latest expiry among the grants that cover it (`NULL` is no deadline), then the
+  earliest across entries, beside the session's or the key's own expiry. A grant in its last
+  `TOKEN_REFRESH_SKEW_SECONDS` therefore costs the proxy a mint per request until it expires.
 - **`revokeKey` ACTS ONLY ON A CREDENTIAL OF THE CALLER'S VERIFIED APP.** Any other credential,
   including a cross-app (`app IS NULL`) one, is `not_found` — the answer for an unknown id — so one
   app can neither end nor probe another app's keys.
@@ -636,7 +655,10 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **Permission resolution is fail-closed and pure.** `computePermissions` (`src/resolve.ts`) takes
   already-fetched rows, so it is unit-testable without a database. Unparseable inline grant JSON and
   an unresolvable role key both contribute ZERO permissions. Wildcards stay as patterns — `permits()`
-  in `@fabrika/auth-core` matches them; never pre-expand.
+  in `@fabrika/auth-core` matches them; never pre-expand. At a CONTRACT application a pattern contributes nothing
+  (`exactActions`), the built-in `admin` included, so no grant tracks the catalog beyond its approved revision; only a
+  platform audience still resolves one. Migration `0027_application_exact_actions.sql` is the preflight: it refuses
+  while a contract application holds a pattern in a grant, a role or a key, or a grant of `admin`.
 - **Both migration sets must land the same OUTCOME.** `migrations/` (SQLite/D1) and
   `migrations-postgres/` state the same schema; `src/db.ts` runs against both with one dialect switch (how a guarded
   change writes its record, above), and

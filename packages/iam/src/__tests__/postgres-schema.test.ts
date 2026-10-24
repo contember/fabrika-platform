@@ -14,6 +14,8 @@
 import { buildAccessClaims } from '@fabrika/auth-core'
 import { createBackgroundTasks, type PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import type { Env } from '../env'
 import { prop } from '../json'
@@ -124,6 +126,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0024_app_terminals.sql' },
 			{ bundle: 'iam', name: '0025_terminal_completion.sql' },
 			{ bundle: 'iam', name: '0026_terminal_generation.sql' },
+			{ bundle: 'iam', name: '0027_application_exact_actions.sql' },
 		])
 	})
 
@@ -259,6 +262,25 @@ describe.skipIf(!hasPostgres)('the Postgres schema — constraints', () => {
 		// Inline grants are deliberately unconstrained — each is its own attachment.
 		await db.grants.createGrant({ principalId: p.id, permissions: ['report.export'], scopeType: 'team', scopeValue: 'acme', app: 'opice' })
 		await db.grants.createGrant({ principalId: p.id, permissions: ['report.export'], scopeType: 'team', scopeValue: 'acme', app: 'opice' })
+	})
+
+	test('0027 refuses while a contract application holds a wildcard, and applies once it holds exact actions', async () => {
+		await reset()
+		const p = await db.principals.createUser('sub-preflight', 'preflight@x.cz')
+		await raw.prepare('INSERT INTO contract_apps (app, created_at) VALUES (?, ?)').bind('crm@prod', now()).run()
+		const grant = await db.grants.createGrant({ principalId: p.id, app: 'crm@prod', permissions: ['crm.*'] })
+		const file = readFileSync(join(import.meta.dir, '..', '..', 'migrations-postgres', '0027_application_exact_actions.sql'), 'utf8')
+		const statements = file.split('\n').filter((line) => !line.startsWith('--')).join('\n').split(';').map((part) => part.trim()).filter((part) =>
+			part !== ''
+		)
+		const apply = async (): Promise<void> => {
+			for (const statement of statements) await raw.prepare(statement).run()
+		}
+		await expect(apply()).rejects.toThrow('contract app holds a wildcard')
+		await raw.prepare('DELETE FROM iam_preflight_exact_actions').run()
+		await raw.prepare('DELETE FROM grants WHERE id = ?').bind(grant.id).run()
+		await apply()
+		await raw.prepare('DELETE FROM contract_apps').run()
 	})
 
 	test('a grant carries EITHER a role_key OR inline permissions, and scope is both-or-neither', async () => {

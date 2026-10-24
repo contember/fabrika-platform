@@ -527,8 +527,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   database only when the caller holds the action on the value or in a container
   dimension, and a missing scope is 404 only to a caller holding the value itself.
   `over` reads nothing: its `Within` carries the direct values and, separately, the
-  container grants (`{ dimension, values }` per container on the chain), and the data
-  layer matches the containers against each row's chain columns in the same statement.
+  container grants (`{ dimension, values }` per container on the chain) and the contained
+  grants (`contained`: the action's grants on dimensions inside the `over` dimension, the
+  listed resource's own included, S4), and the data layer matches each against the row's
+  own key or chain columns in the same statement, so a list returns what a single read admits.
   Never expand a container grant into values: a scope moved out after the check would
   stay reachable. A `Within` over `MAX_WITHIN_VALUES` values in total is refused at mint
   (`CapabilityLimitError`: 403 to the caller, one log line).

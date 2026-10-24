@@ -769,17 +769,21 @@ export class ContractRuntime {
 		}
 	}
 
-	/** The values of `dimension` in which the caller holds `action`, directly or through a container; all for a global grant. */
+	/**
+	 * The values of `dimension` in which the caller holds `action`, directly or through a container, and its grants on the
+	 * dimensions inside it, so a list returns every row a single-object read admits (S4); all for a global grant.
+	 */
 	#within(caller: Caller, action: string, dimension: string, frame: RequestFrame): Within<string, string> {
 		const direct = scopedValues(caller.perms, action, dimension)
 		if (direct === null) {
 			return this.#parts.mint.within(frame, dimension, action, caller.subject, 'all')
 		}
 		const held = this.#heldContainers(caller.perms, action, dimension)
-		if (direct.length === 0 && held.length === 0) {
+		const inside = this.#heldContained(caller.perms, action, dimension)
+		if (direct.length === 0 && held.length === 0 && inside.length === 0) {
 			throw new ForbiddenError(`The caller holds '${action}' in no ${dimension}`)
 		}
-		return this.#parts.mint.within(frame, dimension, action, caller.subject, direct, held)
+		return this.#parts.mint.within(frame, dimension, action, caller.subject, direct, held, inside)
 	}
 
 	/** A scope value the caller acts in: without a grant on it or on a container of it, 403 whether it exists or not. */
@@ -1276,6 +1280,14 @@ export class ContractRuntime {
 		return (this.#parts.containers.get(dimension) ?? []).flatMap((container) => {
 			const values = scopedValues(perms, action, container) ?? []
 			return values.length === 0 ? [] : [{ dimension: container, values }]
+		})
+	}
+
+	/** The caller's grants of `action` on every dimension that lies inside `dimension`. */
+	#heldContained(perms: PermissionEntry[], action: string, dimension: string): ContainerGrant[] {
+		return [...this.#parts.containers].flatMap(([inner, containers]) => {
+			const values = containers.includes(dimension) ? scopedValues(perms, action, inner) ?? [] : []
+			return values.length === 0 ? [] : [{ dimension: inner, values }]
 		})
 	}
 }

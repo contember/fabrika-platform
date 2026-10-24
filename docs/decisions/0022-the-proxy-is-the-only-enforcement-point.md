@@ -602,7 +602,9 @@ decision, and the proxy's decision never replaces them.
 
 **Invariant: an application issues no credentials.** `@fabrika/auth` issues and redeems nothing.
 IAM issues every `px_` credential: share links on an application's request, checked against its
-caller's live permissions or, for a job, its approved declaration ([ADR-0012](0012-fabrika-app-runtime.md)), share links and API keys from
+caller's live permissions or, for a job, its approved declaration ([ADR-0012](0012-fabrika-app-runtime.md)), and
+checked again at every mint, so a link whose issuer is disabled or no longer holds what it delegated mints nothing (an API key one principal
+issued for another is narrowed to what its issuer still covers, and each ends no later than its issuer's grants), share links and API keys from
 its admin surface, machine keys through `fabrika control key issue`, a job's and a webhook's key and an application
 environment's membership transport key through Control's reconcile, builder credentials through device authorization
 ([ADR-0042](0042-connect-local-builders-through-human-consent.md)). IAM signs an access token only from a session (`mintToken`)
@@ -654,7 +656,9 @@ still refuses any `Authorization` header, as authorization.
   the dimension's `members.manage` there, every action of that role there, and a role that the role's `assignableBy`
   names. `assignableBy` names membership roles of the same dimension, held in that value, or application-wide roles
   (roles with no `member`), held in that value or globally. So a staff member with a global role invites into any
-  value. IAM checks the inviter again when an invitation is accepted, and the write that consumes it requires what
+  value. The grant expires no later than the earliest expiry among the grants that authorize it (the assigning role,
+  `members.manage` and every action of the role), whoever the target is, the assigner itself included; a scope's
+  creator role ends with the creating action, and an application administrator's grant (below) with its own grants. IAM checks the inviter again when an invitation is accepted, and the write that consumes it requires what
   that check relied on: the inviter still enabled, still holding the assigning role, the application's schema at
   the revision the check read, and the inviter's grants at the revision the check read (every removal of a grant
   moves the principal's revision on, in its own transaction), so a reconcile, a disable or the removal of any grant of
@@ -689,7 +693,10 @@ still refuses any `Authorization` header, as authorization.
   carries a company label and a personal message as plain text, and a resend rotates its link and restarts its 7 days;
   each is one membership write under the same delegation.
 - **Exact actions on every write path.** For a contract application, IAM refuses a wildcard action on
-  every write path. In every IAM schema, an installation service's included, IAM refuses a
+  every write path, and resolves none: a pattern stored before the rule, the built-in `admin` included, contributes
+  nothing to its token, so no grant tracks the catalog beyond the approved revision. **Rollout:** IAM's migration 0027
+  refuses while a contract application holds such a row, so the deploy stops with the old release serving until an
+  administrator gives the row exact actions; it changes no row. In every IAM schema, an installation service's included, IAM refuses a
   global grant of a role declared with `member.scope`, and such a grant resolves to no permission.
 - **Eligible grants.** An external principal ([ADR-0051](0051-external-principals.md)) holds only grants of a
   role its application declares `external`, a membership role. IAM refuses every other grant for it on every write
@@ -697,11 +704,14 @@ still refuses any `Authorization` header, as authorization.
   it; and resolves such a grant to no permission. Neither a cross-app grant nor the bootstrap `admin` reaches an
   external principal, at any audience, and it issues only a key bound to itself.
 - **A bound on token size**, so that a person in many workspaces cannot exceed the proxy's header
-  limit. IAM signs no access token above 8 KiB and answers `token_too_large`, which the proxy turns
-  into a 403, never a login bounce. Bun, the application runtime on Zerops, refuses more than
-  16 KiB of request headers; Caddy and Cloudflare allow more.
+  limit. IAM signs no access token above 8 KiB, and no token the proxy injects toward a contract application above
+  24 KiB, and answers `token_too_large`, which the proxy turns into a 403, never a login bounce. Bun refuses more than
+  16 KiB of request headers by default, which the proxy's auth service and installation services keep; the platform
+  starts an application with 64 KiB, which fits the application token twice (`X-Fabrika-Token` and `Authorization`).
+  Caddy (1 MiB) and Cloudflare (128 KiB) allow more.
 - **Revocation takes effect within the token lifetime of 300 s.** This holds for sessions and for keys,
-  share links included. Membership operations are checked live at IAM.
+  share links included. Membership operations are checked live at IAM. An expiring grant is a hard deadline: a token
+  expires no later than the earliest time at which an entry it carries loses its last supporting grant.
 
 Work units B5 and A12 built rule 6 at IAM, and B2 built the proxy side of delegation grants: a row
 marked `members` or `creates` gets a fresh grant from IAM's `requestDelegation` for every request,

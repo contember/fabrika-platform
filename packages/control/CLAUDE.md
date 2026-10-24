@@ -506,6 +506,11 @@ other environment, before the provider prepares anything, and the write maps a r
   refuses it. Checker structure hints never enter the snapshot. `AppEnvDto.deviationSubjects` lists the published
   snapshot's, grouped by site and migration, and `AppEnvDto.surface` (`surface.ts`) its endpoints under their most
   exposed caller, in `diff.ts`'s words.
+- **An opaque root is derived from the artifact, never a field of it (`opaqueRoots`, `diff.ts`).** A root dimension
+  (`in: null`) that no `dimension`-mode table owns has no row to check a value against: an application-wide grant admits
+  any well-formed value, as `boot` derives it from the same `tables`. The diff shows one becoming opaque as a widening
+  and one gaining its table as a narrowing; the surface notes it on every endpoint that takes its value (`in`, or `on` an
+  input field). Every reader's artifact already states it, so no digest moves and an unchanged deploy shows nothing.
 - **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and
   `apps.environments.protect` need `access.approve` at the coordinates (outside `deploy.*`) from a `user`
   principal with no OAuth claims, no link claims and no `Authorization` header (`src/approval/human.ts`); the

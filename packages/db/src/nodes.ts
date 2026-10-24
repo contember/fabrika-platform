@@ -50,29 +50,53 @@ export function equals(table: string, name: string, value: Primitive): Operation
 	return BinaryOperationNode.create(column(table, name), OperatorNode.create('='), ValueNode.create(value))
 }
 
+// The scope predicates are built through these, so they read their nodes by index, never through an iterator or a method.
 export function allOf(nodes: readonly OperationNode[]): OperationNode {
-	const [first, ...rest] = nodes
-	if (first === undefined) {
+	let joined = nodes[0]
+	if (joined === undefined) {
 		throw new QueryRefusedError('statement_shape', 'an empty conjunction')
 	}
-	return rest.reduce<OperationNode>((left, right) => AndNode.create(left, right), first)
+	for (let index = 1; index < nodes.length; index++) {
+		const node = nodes[index]
+		if (node !== undefined) {
+			joined = AndNode.create(joined, node)
+		}
+	}
+	return joined
 }
 
 /** One node, or the OR of several in a parenthesis: inside an AND, `a and b or c` would read as `(a and b) or c`. */
 export function anyOf(nodes: readonly OperationNode[]): OperationNode {
-	const [first, ...rest] = nodes
-	if (first === undefined) {
+	let joined = nodes[0]
+	if (joined === undefined) {
 		throw new QueryRefusedError('statement_shape', 'an empty disjunction')
 	}
-	return rest.length === 0 ? first : ParensNode.create(rest.reduce<OperationNode>((left, right) => OrNode.create(left, right), first))
+	for (let index = 1; index < nodes.length; index++) {
+		const node = nodes[index]
+		if (node !== undefined) {
+			joined = OrNode.create(joined, node)
+		}
+	}
+	return nodes.length === 1 ? joined : ParensNode.create(joined)
 }
 
 export function inList(table: string, name: string, values: readonly string[]): OperationNode {
 	return BinaryOperationNode.create(
 		column(table, name),
 		OperatorNode.create('in'),
-		ValueListNode.create(values.map((value) => ValueNode.create(value))),
+		ValueListNode.create(valueNodes(values)),
 	)
+}
+
+function valueNodes(values: readonly string[]): ValueNode[] {
+	const nodes: ValueNode[] = []
+	for (let index = 0; index < values.length; index++) {
+		const value = values[index]
+		if (value !== undefined) {
+			nodes[nodes.length] = ValueNode.create(value)
+		}
+	}
+	return nodes
 }
 
 /** The scope of a `Within` that is not limited to scope values. */

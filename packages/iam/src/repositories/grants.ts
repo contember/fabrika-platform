@@ -238,21 +238,31 @@ export class GrantRepository {
 	}
 
 	/**
-	 * `createRoleGrantUnlessHeld` of a global role under a delegated `authority`: null when the principal already holds
-	 * it or the authority changed since its check (`delegatedAuthorityHolds` tells them apart). Throws
-	 * `ExternalGrantError` for a grant the principal may not hold.
+	 * `createRoleGrantUnlessHeld` of a global role under a delegated `authority`, renewing an expired one in place with the
+	 * new expiry: null when the principal holds it unexpired or the authority changed since its check
+	 * (`delegatedAuthorityHolds` tells them apart). Throws `ExternalGrantError` for a grant the principal may not hold.
 	 */
 	async createDelegatedRoleGrant(
-		input: { principalId: string; roleKey: string; grantedBy: string },
+		input: { principalId: string; roleKey: string; grantedBy: string; expiresAt?: number | null },
 		authority: DelegatedAuthority,
 		audit: (grantId: string) => AuditEventInput,
 	): Promise<GrantRow | null> {
 		await this.refuseWorkload(input.principalId)
 		const guard = this.delegatedGuard(authority, 0)
-		const id = uuidv7()
+		const now = unixNow()
+		// A renewal keeps the expired row's id, so its record names the row it changed.
+		const expired = await this.db
+			.prepare(`SELECT id FROM grants WHERE principal_id = ? AND role_key = ? AND app = ? AND scope_value IS NULL
+				AND expires_at IS NOT NULL AND expires_at <= ?`)
+			.bind(input.principalId, input.roleKey, authority.app, now)
+			.first<{ id: string }>()
+		const id = expired?.id ?? uuidv7()
 		const grant = { ...input, app: authority.app }
-		const conflict = `ON CONFLICT (principal_id, role_key, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NULL DO NOTHING`
-		const change = this.writer.changed([this.grantChange(id, grant, conflict, guard)], audit(id))
+		const conflict = `ON CONFLICT (principal_id, role_key, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NULL
+			DO UPDATE SET expires_at = excluded.expires_at, granted_by = excluded.granted_by, created_at = excluded.created_at
+			WHERE grants.expires_at IS NOT NULL AND grants.expires_at <= ?`
+		const insert = this.grantChange(id, grant, conflict, guard)
+		const change = this.writer.changed([{ sql: insert.sql, binds: [...insert.binds, now] }], audit(id))
 		const locks = [...this.administratorLock(authority), ...this.revisionLock(authority)]
 		const [created] = change.rows<GrantRow>(await this.db.batch([...locks, ...change.statements]), locks.length)
 		if (created === undefined && !(await this.isEligibleGrant(grant))) {

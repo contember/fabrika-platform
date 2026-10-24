@@ -53,7 +53,7 @@ import { fileReference } from './file-references'
 import { webhookTables } from './framework-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
 import { fencedTransaction, jobLeases } from './job-leases'
-import { linksPredicate, linkValues } from './links'
+import { linksPredicate, type LinkValue, linkValues } from './links'
 import {
 	acknowledgement,
 	acknowledgementNode,
@@ -309,6 +309,76 @@ function linksAbove(model: TableModel, dimension: string): readonly Container[] 
 }
 
 /**
+ * The links of a row that lie inside the `Within`'s own dimension: the object itself for a dimension table, and the
+ * chain links nearer than `dimension`. A grant on one of them admits the row as a single-object read admits it.
+ */
+function linksBelow(model: TableModel, dimension: string): readonly Container[] {
+	const links = model.scope.mode === 'dimension' ? selfLinks(model) : model.chain
+	const below: Container[] = []
+	for (let index = 0; index < links.length; index++) {
+		const link = links[index]
+		if (link === undefined || link.dimension === dimension) {
+			return below
+		}
+		below[below.length] = link
+	}
+	return []
+}
+
+/**
+ * One `<column> in (values)` per contained grant on a link of the row inside the `Within`'s dimension. A grant on a
+ * dimension the table carries no link of admits none of its rows; one on the `Within`'s dimension or above it is refused.
+ */
+function containedTests(model: TableModel, grant: WithinGrant): { readonly column: string; readonly values: readonly string[] }[] {
+	const below = linksBelow(model, grant.dimension)
+	const above = linksAbove(model, grant.dimension)
+	const tests: { readonly column: string; readonly values: readonly string[] }[] = []
+	for (let index = 0; index < grant.contained.length; index++) {
+		const contained = grant.contained[index]
+		if (contained === undefined) {
+			continue
+		}
+		if (contained.dimension === grant.dimension || linkOf(above, contained.dimension) !== undefined) {
+			throw new CapabilityError(
+				'unenforceable',
+				`the Within of ${grant.dimension} carries a grant on ${contained.dimension}, which does not lie inside ${grant.dimension} in ${model.name}`,
+			)
+		}
+		const link = linkOf(below, contained.dimension)
+		if (link !== undefined && contained.values.length > 0) {
+			tests[tests.length] = { column: link.column, values: contained.values }
+		}
+	}
+	return tests
+}
+
+/** The link of `dimension` among `links`, by an index loop: no array method an application could replace. */
+function linkOf(links: readonly Container[], dimension: string): Container | undefined {
+	for (let index = 0; index < links.length; index++) {
+		const link = links[index]
+		if (link !== undefined && link.dimension === dimension) {
+			return link
+		}
+	}
+	return undefined
+}
+
+/** Every scope value a `Within` carries: its own, its containers' and its contained dimensions'. */
+function withinCount(grant: WithinGrant): number {
+	if (grant.values === 'all') {
+		return 0
+	}
+	let count = grant.values.length
+	for (let index = 0; index < grant.containers.length; index++) {
+		count += grant.containers[index]?.values.length ?? 0
+	}
+	for (let index = 0; index < grant.contained.length; index++) {
+		count += grant.contained[index]?.values.length ?? 0
+	}
+	return count
+}
+
+/**
  * `column in (values) or <container column> in (container values) …`, one disjunct per container dimension, so
  * the statement itself judges each row by the chain it carries now. Undefined for an empty `Within`: the caller
  * answers `[]` without a query.
@@ -319,7 +389,7 @@ function withinPredicate(model: TableModel, column: string, grant: WithinGrant):
 	}
 	const above = linksAbove(model, grant.dimension)
 	const predicates: OperationNode[] = []
-	let count = grant.values.length
+	const count = withinCount(grant)
 	if (grant.values.length > 0) {
 		predicates[predicates.length] = inList(model.name, column, grant.values)
 	}
@@ -328,21 +398,22 @@ function withinPredicate(model: TableModel, column: string, grant: WithinGrant):
 		if (container === undefined) {
 			continue
 		}
-		let link: Container | undefined
-		for (let position = 0; position < above.length; position++) {
-			if (above[position]?.dimension === container.dimension) {
-				link = above[position]
-			}
-		}
+		const link = linkOf(above, container.dimension)
 		if (link === undefined) {
 			throw new CapabilityError(
 				'unenforceable',
 				`the Within of ${grant.dimension} reaches through ${container.dimension}, which ${model.name} carries no column for above ${grant.dimension}; the layer cannot enforce it`,
 			)
 		}
-		count += container.values.length
 		if (container.values.length > 0) {
 			predicates[predicates.length] = inList(model.name, link.column, container.values)
+		}
+	}
+	const contained = containedTests(model, grant)
+	for (let index = 0; index < contained.length; index++) {
+		const test = contained[index]
+		if (test !== undefined) {
+			predicates[predicates.length] = inList(model.name, test.column, test.values)
 		}
 	}
 	if (count > MAX_WITHIN_VALUES) {
@@ -354,7 +425,14 @@ function withinPredicate(model: TableModel, column: string, grant: WithinGrant):
 /** The object a Ref of the model's own dimension names, with every link of its chain. */
 export function selfLinks(model: TableModel): readonly Container[] {
 	const scope = dimensionScope(model)
-	return [{ dimension: scope.dimension, column: scope.key }, ...model.chain]
+	const links: Container[] = [{ dimension: scope.dimension, column: scope.key }]
+	for (let index = 0; index < model.chain.length; index++) {
+		const link = model.chain[index]
+		if (link !== undefined) {
+			links[links.length] = link
+		}
+	}
+	return links
 }
 
 /** This object, over the whole chain the Ref carries. */
@@ -524,7 +602,22 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 		if (use === 'read' && !namesAction(model, grant.action)) {
 			throw new CapabilityError('wrong_action', `${model.name} does not name the action ${grant.action}: a Ref reads it with an action it names`)
 		}
-		return [linkValues(model.name, links.slice(start), grant).map(({ link, value }) => ({ column: link.column, value }))]
+		const reached: Container[] = []
+		for (let index = start; index < links.length; index++) {
+			const link = links[index]
+			if (link !== undefined) {
+				reached[reached.length] = link
+			}
+		}
+		const values = linkValues(model.name, reached, grant)
+		const tests: ScopeTest[] = []
+		for (let index = 0; index < values.length; index++) {
+			const entry = values[index]
+			if (entry !== undefined) {
+				tests[tests.length] = { column: entry.link.column, value: entry.value }
+			}
+		}
+		return [tests]
 	}
 	const column = reachColumn(model, grant.dimension)
 	if (column === undefined) {
@@ -544,21 +637,31 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 	}
 	const above = linksAbove(model, grant.dimension)
 	const groups: ScopeTest[][] = []
-	let count = grant.values.length
+	const count = withinCount(grant)
 	if (grant.values.length > 0) {
-		groups.push([{ column, value: grant.values }])
+		groups[groups.length] = [{ column, value: grant.values }]
 	}
-	for (const container of grant.containers) {
-		const link = above.find((candidate) => candidate.dimension === container.dimension)
+	for (let index = 0; index < grant.containers.length; index++) {
+		const container = grant.containers[index]
+		if (container === undefined) {
+			continue
+		}
+		const link = linkOf(above, container.dimension)
 		if (link === undefined) {
 			throw new CapabilityError(
 				'unenforceable',
 				`the Within of ${grant.dimension} reaches through ${container.dimension}, which ${model.name} carries no column for above ${grant.dimension}; the layer cannot enforce it`,
 			)
 		}
-		count += container.values.length
 		if (container.values.length > 0) {
-			groups.push([{ column: link.column, value: container.values }])
+			groups[groups.length] = [{ column: link.column, value: container.values }]
+		}
+	}
+	const contained = containedTests(model, grant)
+	for (let index = 0; index < contained.length; index++) {
+		const test = contained[index]
+		if (test !== undefined) {
+			groups[groups.length] = [{ column: test.column, value: test.values }]
 		}
 	}
 	if (count > MAX_WITHIN_VALUES) {
@@ -1569,9 +1672,7 @@ export function prepareDimensionInsert(context: TableContext, target: unknown, v
 		return { row, destination: undefined, conflict }
 	}
 	stampInsert(context, grant, row, scope.key, uuidv7())
-	for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
-		row.set(link.column, value)
-	}
+	stampChain(row, linkValues(context.model.name, context.model.chain, grant))
 	return { row, destination: grant, conflict }
 }
 
@@ -1591,10 +1692,18 @@ export function prepareChildInsert(context: TableContext, parent: unknown, value
 	const row = readValues(values, context.model.insert, 'insert', context.model)
 	const conflict = onConflictOf(context, options, grant.action, row)
 	stampInsert(context, grant, row, scope.key, uuidv7())
-	for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
-		row.set(link.column, value)
-	}
+	stampChain(row, linkValues(context.model.name, context.model.chain, grant))
 	return { row, destination: grant, conflict }
+}
+
+/** Writes each chain column the destination `Ref` settles into an insert's row. */
+function stampChain(row: Map<string, Primitive | null>, values: readonly LinkValue[]): void {
+	for (let index = 0; index < values.length; index++) {
+		const entry = values[index]
+		if (entry !== undefined) {
+			row.set(entry.link.column, entry.value)
+		}
+	}
 }
 
 /** A prepared insert, with its conflict handling when the caller named one. */
@@ -1700,9 +1809,17 @@ export class DimensionTable<DB, P, T extends string> {
 		const scope = objectPredicate(context, ref, 'delete')
 		const target = refGrant(context, to, container.dimension, 'insert')
 		const values = linkValues(context.model.name, context.model.chain, target)
-		const changes = new Map<string, Primitive | null>(values.map(({ link, value }) => [link.column, value]))
+		const changes = new Map<string, Primitive | null>()
+		stampChain(changes, values)
+		const chain: Record<string, string> = {}
+		for (let index = 0; index < values.length; index++) {
+			const entry = values[index]
+			if (entry !== undefined) {
+				setOwn(chain, entry.link.dimension, entry.value)
+			}
+		}
 		const acknowledged = await updateRow<Acknowledgement<P, T>>(context, storeRunner(context), addressed(scope), changes, undefined, target)
-		return { ...acknowledged, chain: Object.fromEntries(values.map(({ link, value }) => [link.dimension, value])) }
+		return { ...acknowledged, chain }
 	}
 
 	async aggregate<const S extends AggregateSpec<Row<DB, P, T>>>(

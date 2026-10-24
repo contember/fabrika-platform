@@ -6,7 +6,7 @@ import { createClient, RpcError } from '@fabrika/app/client'
 import { defineApp, defineContract, defineVocabulary } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { statusOf, type TestCaller, testKit } from '@fabrika/app/testing'
-import { MAX_ACCESS_TOKEN_BYTES } from '@fabrika/auth-core'
+import { MAX_APPLICATION_TOKEN_BYTES } from '@fabrika/auth-core'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -285,7 +285,7 @@ describe('the browser and the hop stay on the application', () => {
 })
 
 describe('the token size bound', () => {
-	test('a token up to MAX_ACCESS_TOKEN_BYTES is forwarded; one byte-step above it is 403', async () => {
+	test('a token up to MAX_APPLICATION_TOKEN_BYTES is forwarded; one byte-step above it is 403', async () => {
 		const forwarded: number[] = []
 		const kit = testKit(notesApp(seed()), {
 			assets: {
@@ -300,7 +300,7 @@ describe('the token size bound', () => {
 			return (await kit.browser(caller)('/')).status
 		}
 		let fits = 0
-		let tooLarge = MAX_ACCESS_TOKEN_BYTES
+		let tooLarge = MAX_APPLICATION_TOKEN_BYTES
 		expect(await statusWith(fits)).toBe(200)
 		expect(await statusWith(tooLarge)).toBe(403)
 		while (tooLarge - fits > 1) {
@@ -314,8 +314,8 @@ describe('the token size bound', () => {
 		await statusWith(fits)
 		const largest = forwarded.at(-1) ?? 0
 		// One more character of the scope adds one or two characters of base64url to the token.
-		expect(largest).toBeLessThanOrEqual(MAX_ACCESS_TOKEN_BYTES)
-		expect(largest).toBeGreaterThanOrEqual(MAX_ACCESS_TOKEN_BYTES - 1)
+		expect(largest).toBeLessThanOrEqual(MAX_APPLICATION_TOKEN_BYTES)
+		expect(largest).toBeGreaterThanOrEqual(MAX_APPLICATION_TOKEN_BYTES - 1)
 		const refused = await kit.browser(kit.testCaller([{ action: 'notes.read', scope: { type: 'workspace', value: 'w'.repeat(tooLarge) } }]))('/')
 		expect(refused.status).toBe(403)
 		expect(await refused.text()).toBe('forbidden')

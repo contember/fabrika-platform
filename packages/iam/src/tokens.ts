@@ -19,6 +19,7 @@ import {
 	type KeyGrant,
 	type LinkTokenClaims,
 	MAX_ACCESS_TOKEN_BYTES,
+	MAX_APPLICATION_TOKEN_BYTES,
 	type MintFromKeyResult,
 	type MintTokenInput,
 	type MintTokenResult,
@@ -30,9 +31,10 @@ import {
 import { sessionUsable } from './auth'
 import type { CredentialGrantRow, CredentialRow, PrincipalRow, SessionTerminal } from './db'
 import { principalStatus, sessionTerminal } from './db'
+import { issuerAuthority, issuerCoverage } from './delegation'
 import type { Env } from './env'
 import { narrowPermissions } from './narrow-permissions'
-import { reachesCrossAppAuthority, resolvePermissionsAt } from './resolve'
+import { authorityDeadline, reachesCrossAppAuthority, resolveAuthorityAt, type ResolvedAuthority } from './resolve'
 import { hashToken } from './secret'
 import type { Services } from './services'
 import { getSigner } from './signing'
@@ -97,18 +99,26 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 	}
 
 	// Resolve permissions for the requesting app. Sessions are a USER credential (OIDC login).
-	const personal = await resolvePermissionsAt(services, principal, input.app)
+	const authority = await resolveAuthorityAt(services, principal, input.app)
 	const onTerminal = terminal === null ? null : await terminalAuthority(services, terminal, input.app)
 	if (terminal !== null && onTerminal === null) {
 		return refused('invalid_session', principal.id)
 	}
-	const permissions = onTerminal === null ? personal : withinTerminal(personal, onTerminal)
+	const permissions = onTerminal === null ? authority.permissions : withinTerminal(authority.permissions, onTerminal)
 
 	const now = Math.floor(Date.now() / 1000)
 	// Clamped to the session, exactly as `mintFromKey` clamps to the credential's expiry: a token
 	// minted a minute before the session ends must not outlive it, or logging out (or an expiry) would
-	// leave a valid token in the app's hands for the rest of its TTL (SEC-27).
-	const expiresAt = Math.min(now + DEFAULT_TOKEN_TTL_SECONDS, session.expires_at)
+	// leave a valid token in the app's hands for the rest of its TTL (SEC-27). Nor may it outlive a grant it carries.
+	// In a grant's last 30 s (the proxy's TOKEN_REFRESH_SKEW_SECONDS) the proxy re-mints per request; cache.test.ts pins it.
+	const expiresAt = Math.min(
+		now + DEFAULT_TOKEN_TTL_SECONDS,
+		session.expires_at,
+		authorityDeadline(authority, onTerminal === null ? permissions : narrowPermissions(authority.permissions, onTerminal.ceiling), now)
+			?? Number.POSITIVE_INFINITY,
+		// A terminal's own entries are its principal's grants, and end with them.
+		(onTerminal === null ? null : authorityDeadline(onTerminal.authority, onTerminal.additions, now)) ?? Number.POSITIVE_INFINITY,
+	)
 	const token = await boundedToken(
 		signAccessToken(services, env, {
 			app: input.app,
@@ -122,7 +132,7 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 			issuedAt: now,
 			expiresAt,
 		}),
-		{ app: input.app, subject: principal.id },
+		{ app: input.app, subject: principal.id, bytes: await proxyMintedBound(services, input.app) },
 	)
 	if (token === null) {
 		return refused('token_too_large', principal.id)
@@ -136,6 +146,8 @@ interface TerminalAuthority {
 	label: string
 	ceiling: KeyGrant[]
 	additions: PermissionEntry[]
+	/** The terminal principal's own authority, which `additions` come from. */
+	authority: ResolvedAuthority
 }
 
 /**
@@ -161,28 +173,33 @@ async function terminalAuthority(services: Services, terminal: SessionTerminal, 
 	if (principal === null || principalStatus(principal) === 'disabled') {
 		return null
 	}
-	const granted = await resolvePermissionsAt(services, principal, app)
+	const granted = await resolveAuthorityAt(services, principal, app)
 	return {
 		id: row.principal_id,
 		label: row.label,
 		ceiling: asserter.ceiling.map((action): KeyGrant => ({ action })),
-		additions: granted.map((entry): PermissionEntry => ({ ...entry, source: 'terminal' })),
+		additions: granted.permissions.map((entry): PermissionEntry => ({ ...entry, source: 'terminal' })),
+		authority: granted,
 	}
 }
 
 /**
- * A person's live permissions at `app` on the terminal `terminalId` that asserted them there (ADR-0067 §4), the set a
- * mint would sign now; null when the terminal could no longer mint for `app`. What a terminal session's token is
- * re-resolved against.
+ * A person's live authority at `app` on the terminal `terminalId` that asserted them there (ADR-0067 §4): the set a
+ * mint would sign now, and the grants behind it, the terminal principal's included; null when the terminal could no
+ * longer mint for `app`. What a terminal session's token is re-resolved against.
  */
-export async function permissionsOnTerminal(
+export async function authorityOnTerminal(
 	services: Services,
 	principal: PrincipalRow,
 	terminalId: string,
 	app: string,
-): Promise<PermissionEntry[] | null> {
+): Promise<ResolvedAuthority | null> {
 	const terminal = await terminalAuthority(services, { terminalId, assertedBy: app }, app)
-	return terminal === null ? null : withinTerminal(await resolvePermissionsAt(services, principal, app), terminal)
+	if (terminal === null) {
+		return null
+	}
+	const personal = await resolveAuthorityAt(services, principal, app)
+	return { permissions: withinTerminal(personal.permissions, terminal), supports: [...personal.supports, ...terminal.authority.supports] }
 }
 
 /**
@@ -220,13 +237,17 @@ export async function mintFromKey(
 	const effective = await resolveCredential(services, cred, input.app)
 	if (!effective.ok) {
 		// `wrong_app` is reported as `invalid_key`: a caller holding a credential for another app must
-		// not learn that it exists, and there is nothing it can do differently here.
-		const reason = effective.reason === 'wrong_app' ? 'invalid_key' : effective.reason
+		// not learn that it exists, and there is nothing it can do differently here. Nor whose authority it rested on.
+		const reason = effective.reason === 'wrong_app' || effective.reason === 'issuer_unauthorized' ? 'invalid_key' : effective.reason
 		return { result: { ok: false, reason }, principalId: cred.principal_id, credentialId: cred.id }
 	}
 
 	const now = Math.floor(Date.now() / 1000)
-	const expiresAt = Math.min(now + DEFAULT_TOKEN_TTL_SECONDS, cred.expires_at ?? Number.POSITIVE_INFINITY)
+	const expiresAt = Math.min(
+		now + DEFAULT_TOKEN_TTL_SECONDS,
+		cred.expires_at ?? Number.POSITIVE_INFINITY,
+		effective.expiresAt ?? Number.POSITIVE_INFINITY,
+	)
 	const token = await boundedToken(
 		signAccessToken(services, env, {
 			app: input.app,
@@ -240,7 +261,7 @@ export async function mintFromKey(
 			issuedAt: now,
 			expiresAt,
 		}),
-		{ app: input.app, subject: effective.subject },
+		{ app: input.app, subject: effective.subject, bytes: await proxyMintedBound(services, input.app) },
 	)
 	if (token === null) {
 		return { result: { ok: false, reason: 'token_too_large' }, principalId: cred.principal_id, credentialId: cred.id }
@@ -305,9 +326,11 @@ export type ResolvedCredential =
 		/** A user principal's mailbox. */
 		email?: string
 		permissions: PermissionEntry[]
+		/** When the earliest carried permission loses its last supporting grant; `null` when none expires. */
+		expiresAt: number | null
 		link?: LinkTokenClaims
 	}
-	| { ok: false; reason: 'unknown_principal' | 'disabled' | 'wrong_app' }
+	| { ok: false; reason: 'unknown_principal' | 'disabled' | 'wrong_app' | 'issuer_unauthorized' }
 
 /**
  * Resolve a credential's effective permissions FOR ONE APP.
@@ -335,16 +358,33 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 	const inline = (await services.repositories.credentials.getCredentialGrants(cred.id)).map(credentialGrantToEntry)
 
 	if (cred.principal_id === null) {
-		// Anonymous: the frozen inline grants ARE the permission set (delegation-checked at issue).
+		// Anonymous: the frozen inline grants ARE the permission set, delegated by the issuer, who must still hold them.
 		if (cred.link_mount === null) {
-			return { ok: true, subject: cred.id, label: cred.label, permissions: inline }
+			const issuer = await issuerAuthority(services, cred.issued_by, app, null, inline.map((entry) => ({ action: entry.action, on: [entry.scope] })))
+			if (!issuer.ok) return issuer
+			return { ok: true, subject: cred.id, label: cred.label, permissions: inline, expiresAt: issuer.expiresAt }
 		}
 		// A share link's token names its mount and chain, which the framework re-checks per request.
 		const chain = cred.link_chain === null ? null : parseStoredChain(cred.link_chain)
 		if (chain === null) {
 			return { ok: false, reason: 'wrong_app' }
 		}
-		return { ok: true, subject: cred.id, label: cred.label, permissions: inline, link: { mount: cred.link_mount, chain } }
+		const mount = await services.repositories.appSchema.getLinkMount(app, cred.link_mount)
+		if (mount === null || mount.dimension !== cred.link_dimension) {
+			return { ok: false, reason: 'issuer_unauthorized' }
+		}
+		// As `issueLink` checked: the mount's `issuedBy` and every frozen action, each held on some link of the chain.
+		const required = [mount.issued_by, ...inline.map((entry) => entry.action)].map((action) => ({ action, on: chain }))
+		const issuer = await issuerAuthority(services, cred.issued_by, app, cred.link_mount, required)
+		if (!issuer.ok) return issuer
+		return {
+			ok: true,
+			subject: cred.id,
+			label: cred.label,
+			permissions: inline,
+			expiresAt: issuer.expiresAt,
+			link: { mount: cred.link_mount, chain },
+		}
 	}
 
 	const principal = await services.repositories.principals.getPrincipalById(cred.principal_id)
@@ -364,15 +404,48 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 		}
 		const actions = (await services.repositories.workloads.declaredActions(workload.app, workload.kind, workload.name)) ?? []
 		const declared = actions.map((action): PermissionEntry => ({ action, scope: null, source: 'grant' }))
-		return { ok: true, subject: principal.id, type: workload.kind, workload: workload.name, label: principal.label, permissions: declared }
+		return {
+			ok: true,
+			subject: principal.id,
+			type: workload.kind,
+			workload: workload.name,
+			label: principal.label,
+			permissions: declared,
+			expiresAt: null,
+		}
 	}
 
-	const resolved = await resolvePermissionsAt(services, principal, app)
+	const authority = await resolveAuthorityAt(services, principal, app)
+	const resolved = authority.permissions
 
 	// Inline grants on a bound credential are a DOWNSCOPE restriction: keep only what the principal
 	// actually holds (effective = resolve(principal) ∩ inline). No inline → the principal's full set.
-	const permissions = inline.length === 0 ? resolved : inline.filter((e) => permits(resolved, e.action, e.scope ?? undefined))
-	return { ok: true, subject: principal.id, type: principal.type, label: principal.label, ...mailboxClaim(principal), permissions }
+	const held = inline.length === 0 ? resolved : inline.filter((e) => permits(resolved, e.action, e.scope ?? undefined))
+	const heldUntil = authorityDeadline(authority, held, Math.floor(Date.now() / 1000))
+	if (cred.issued_by === null || cred.issued_by === principal.id) {
+		return {
+			ok: true,
+			subject: principal.id,
+			type: principal.type,
+			label: principal.label,
+			...mailboxClaim(principal),
+			permissions: held,
+			expiresAt: heldUntil,
+		}
+	}
+	// A key one principal issued for another (a service or device key) is delegation too: no more than its issuer covers (S8).
+	const issued = await issuerCoverage(services, cred.issued_by, app, held)
+	if (!issued.ok) return issued
+	const expiresAt = heldUntil === null ? issued.expiresAt : issued.expiresAt === null ? heldUntil : Math.min(heldUntil, issued.expiresAt)
+	return {
+		ok: true,
+		subject: principal.id,
+		type: principal.type,
+		label: principal.label,
+		...mailboxClaim(principal),
+		permissions: issued.permissions,
+		expiresAt,
+	}
 }
 
 /**
@@ -390,17 +463,28 @@ function credentialGrantToEntry(row: CredentialGrantRow): PermissionEntry {
 }
 
 /**
- * The signed token, or null — with a warning naming the subject and the size — when it is above
- * `MAX_ACCESS_TOKEN_BYTES`. Every bearer IAM issues passes here: native tokens and OAuth resource tokens.
+ * The size bound of a token the proxy mints from a session or a `px_` key: `MAX_APPLICATION_TOKEN_BYTES` at a contract
+ * application, whose token only the proxy injects toward the application; `MAX_ACCESS_TOKEN_BYTES` at an installation
+ * service, whose Bun keeps its default header limit.
  */
-export async function boundedToken(signed: Promise<string>, who: { app: string; subject: string }): Promise<string | null> {
+async function proxyMintedBound(services: Services, app: string): Promise<number> {
+	return (await services.repositories.appSchema.isContractApp(app)) ? MAX_APPLICATION_TOKEN_BYTES : MAX_ACCESS_TOKEN_BYTES
+}
+
+/**
+ * The signed token, or null — with a warning naming the subject and the size — when it is above `who.bytes`
+ * (`MAX_ACCESS_TOKEN_BYTES` unless given). Every bearer IAM issues passes here: native tokens and OAuth resource tokens.
+ */
+export async function boundedToken(
+	signed: Promise<string>,
+	who: { app: string; subject: string; bytes?: number },
+): Promise<string | null> {
 	const token = await signed
-	if (token.length <= MAX_ACCESS_TOKEN_BYTES) {
+	const bound = who.bytes ?? MAX_ACCESS_TOKEN_BYTES
+	if (token.length <= bound) {
 		return token
 	}
-	console.warn(
-		`access token for '${who.subject}' at app '${who.app}' is ${token.length} bytes, above the ${MAX_ACCESS_TOKEN_BYTES}-byte bound; refused`,
-	)
+	console.warn(`access token for '${who.subject}' at app '${who.app}' is ${token.length} bytes, above the ${bound}-byte bound; refused`)
 	return null
 }
 

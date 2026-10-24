@@ -78,8 +78,13 @@ describe('access forms', () => {
 		expect(resultOf(global)).toEqual({ items: [{ id: N1, title: 'first' }, { id: N2, title: 'second' }] })
 	})
 
-	test('over: the action held in no value of the dimension is 403', async () => {
-		const elsewhere = await send(app, '/api/notes.list', { token: await token('user', [grant('notes.read', { type: 'note', value: N1 })]), body: {} })
+	test('over: a grant on a note lists that note (S4); the action held in no value of the dimension or inside it is 403', async () => {
+		const inside = await send(app, '/api/notes.list', { token: await token('user', [grant('notes.read', { type: 'note', value: N1 })]), body: {} })
+		expect(resultOf(inside)).toEqual({ items: [{ id: N1, title: 'first' }] })
+		const elsewhere = await send(app, '/api/notes.list', {
+			token: await token('user', [grant('notes.read', { type: 'project', value: 'p1' })]),
+			body: {},
+		})
 		expect(elsewhere.status).toBe(403)
 		const otherAction = await send(app, '/api/notes.list', { token: await token('user', [inW1('notes.write')]), body: {} })
 		expect(otherAction.status).toBe(403)

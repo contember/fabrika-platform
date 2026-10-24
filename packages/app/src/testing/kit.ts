@@ -20,6 +20,7 @@ import {
 	isNormalizedMailbox,
 	type Jwks,
 	MAX_ACCESS_TOKEN_BYTES,
+	MAX_APPLICATION_TOKEN_BYTES,
 	normalizeEmailIdentity,
 	type PermissionEntry,
 	PROXY_TOKEN_HEADER,
@@ -539,7 +540,7 @@ export function bootTestKit<C extends AnyContract>(
 
 	const scope = <D extends DimensionOf<C>>(dimension: D, value: string): TestScope<D> => Object.freeze({ type: dimension, value })
 
-	/** The caller's token, or why IAM signs none: a disabled principal, or a token above `MAX_ACCESS_TOKEN_BYTES`. */
+	/** The caller's token, or why IAM signs none: a disabled principal, or a token above IAM's bound for it. */
 	async function mint(caller: TestCaller): Promise<{ readonly ok: true; readonly token: string; readonly expiresAt: number } | MintRefusal> {
 		if (caller.disabled) return { ok: false, reason: 'disabled' }
 		const now = Math.floor(Date.now() / 1000)
@@ -558,7 +559,8 @@ export function bootTestKit<C extends AnyContract>(
 		})
 		const { privateKey } = await signing
 		const token = await new SignJWT({ ...claims }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey)
-		if (token.length > MAX_ACCESS_TOKEN_BYTES) return { ok: false, reason: 'token_too_large' }
+		// IAM bounds a workload's own token as any installation token, and a token the proxy injects at the application's.
+		if (token.length > (caller.app === null ? MAX_APPLICATION_TOKEN_BYTES : MAX_ACCESS_TOKEN_BYTES)) return { ok: false, reason: 'token_too_large' }
 		byToken.set(token, { caller, expiresAt: claims.exp })
 		return { ok: true, token, expiresAt: claims.exp }
 	}

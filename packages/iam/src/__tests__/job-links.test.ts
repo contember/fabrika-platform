@@ -109,7 +109,7 @@ describe('IAM refuses a workload that may not issue', () => {
 		})
 	})
 
-	test('a job whose declaration was removed issues and revokes nothing, its earlier link intact', async () => {
+	test('a job whose declaration was removed issues and revokes nothing, and its earlier link mints nothing (S8)', async () => {
 		const f = await fixture()
 		const job = await f.workload('job', 'intake')
 		const token = await job.token()
@@ -123,7 +123,11 @@ describe('IAM refuses a workload that may not issue', () => {
 			reason: 'not_allowed',
 		})
 		expect(await revokeLink(f.services, CALLER_ENV, f.ctx, { ...as(token), id: issued.id })).toEqual({ ok: false, reason: 'not_allowed' })
-		expect((await mintFromKey(f.services, TEST_SIGNING_ENV, { app: APP, key: issued.key, requestId: 'r' })).result.ok).toBe(true)
+		// The link's authority was the job's declaration, re-checked at every mint.
+		expect((await mintFromKey(f.services, TEST_SIGNING_ENV, { app: APP, key: issued.key, requestId: 'r' })).result).toEqual({
+			ok: false,
+			reason: 'invalid_key',
+		})
 	})
 
 	test("a job's token or key presented for another app is refused", async () => {

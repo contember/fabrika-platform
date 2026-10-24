@@ -17,7 +17,7 @@ import { clientMetadata } from './oauth-client'
 import type { ManagedOAuthClient, OAuthConfig } from './oauth-config'
 import { pkceChallenge } from './oidc'
 import { unixNow } from './repositories/sql'
-import { resolvePermissionsAt } from './resolve'
+import { authorityDeadline, resolveAuthorityAt } from './resolve'
 import { generateToken, hashToken, timingSafeEqualHex } from './secret'
 import type { Services } from './services'
 import { getSigner, verifyResourceAccessToken } from './signing'
@@ -193,7 +193,7 @@ async function mintForGrant(services: Services, env: SigningEnv, grant: OAuthGra
 	// A replay or a revocation may have landed while authority was resolved; read the grant once more.
 	const current = await services.repositories.oauth.grant(grant.id)
 	if (current === null || current.revoked_at !== null) return null
-	const expiresAt = Math.min(now + DEFAULT_TOKEN_TTL_SECONDS, grant.expires_at)
+	const expiresAt = Math.min(now + DEFAULT_TOKEN_TTL_SECONDS, grant.expires_at, authority.expiresAt ?? Number.POSITIVE_INFINITY)
 	const claims = buildResourceAccessClaims({
 		iss: services.config.issuer,
 		app: grant.app,
@@ -227,7 +227,7 @@ export async function grantAuthority(
 	services: Services,
 	grant: OAuthGrantRow,
 	now: number,
-): Promise<{ principal: PrincipalRow; scopes: string[]; permissions: PermissionEntry[] } | null> {
+): Promise<{ principal: PrincipalRow; scopes: string[]; permissions: PermissionEntry[]; expiresAt: number | null } | null> {
 	const config = services.config.oauth
 	if (config === null || grant.revoked_at !== null || grant.expires_at <= now) return null
 	const resource = config.resources.find((entry) => entry.resource === grant.resource && entry.app === grant.app)
@@ -239,8 +239,9 @@ export async function grantAuthority(
 	if (session === null || session.app !== null || session.principal_id !== grant.principal_id || !sessionUsable(session, services.config)) return null
 	const principal = await services.repositories.principals.getPrincipalById(grant.principal_id)
 	if (principal === null || principal.type !== 'user' || principalStatus(principal) !== 'active') return null
-	const live = await resolvePermissionsAt(services, principal, grant.app)
-	return { principal, scopes, permissions: narrowPermissions(live, ceiling) }
+	const live = await resolveAuthorityAt(services, principal, grant.app)
+	const permissions = narrowPermissions(live.permissions, ceiling)
+	return { principal, scopes, permissions, expiresAt: authorityDeadline(live, permissions, now) }
 }
 
 /** The union of the scopes' grants, or null when a scope is no longer configured. */

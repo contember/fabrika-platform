@@ -70,12 +70,22 @@ export const DEFAULT_TOKEN_TTL_SECONDS = 300
 export const TOKEN_REFRESH_SKEW_SECONDS = 30
 
 /**
- * The largest access token IAM signs, in bytes (a JWT is ASCII). The proxy forwards it as one header,
- * and Bun's server, the application's runtime on Zerops, refuses a request whose headers exceed 16 KiB
- * in total; 8 KiB leaves the rest for the request's own headers and cookies. Caddy (1 MiB) and
- * Cloudflare (128 KiB) allow more.
+ * The largest access token IAM signs, in bytes (a JWT is ASCII), except an application token below. A client sends
+ * such a token itself (an OAuth access token, a console bearer), so it crosses Caddy's `forward_auth` into the proxy's
+ * auth service and reaches installation services, which run on Bun with its default: a request's headers at most
+ * 16 KiB in total. 8 KiB leaves the rest for the request's own headers and cookies.
  */
 export const MAX_ACCESS_TOKEN_BYTES = 8192
+
+/**
+ * The largest token IAM mints for the proxy to inject toward a contract application, in bytes. No client sends it; on
+ * that hop it travels twice (`X-Fabrika-Token`, and `Authorization` on a bearer request), so two copies and 16 KiB of
+ * the request's own headers fit the header limit the platform starts the application's Bun with.
+ */
+export const MAX_APPLICATION_TOKEN_BYTES = 24576
+
+/** The request-header limit the platform starts an application's Bun server with (`--max-http-header-size`). */
+export const APPLICATION_SERVER_MAX_HEADER_BYTES = 65536
 
 // ── Claim shape (one, no discriminator) ────────────────────────────────────────
 
