@@ -1285,7 +1285,7 @@ describe("the deploy service's minimum RAM", () => {
 		expect(recorded.autoscaling.map((autoscaling) => autoscaling.horizontal)).toEqual([{ minContainerCount: 1, maxContainerCount: 1 }])
 		expect(recorded.calls.indexOf('configureCustomAutoscaling')).toBeLessThan(recorded.calls.indexOf('createAppVersion:service-1'))
 		expect(recorded.logs).toContain('  api pinned to one container')
-		expect(recorded.builds[0]?.zeropsYaml).toContain('dev-init.generated.sh')
+		expect(recorded.builds[0]?.zeropsYaml).toContain('dev.generated.json')
 		recorded = fresh()
 		expect((await deploy({ minRam: ZEROPS_START_MIN_RAM_GB, maxContainers: 1 }, devRun())).status).toBe('succeeded')
 		expect(recorded.calls).not.toContain('configureCustomAutoscaling')

@@ -1,10 +1,11 @@
 // The launcher of a dev environment against a stub of Control's source receiver: a handler change serves within a
 // second, a lockfile change or a change of the contract digest is refused with its reason, a boot reconciles before it serves, and (with
-// FABRIKA_TEST_POSTGRES_URL) a migration change migrates and respawns, and a reset starts the schema from scratch.
+// FABRIKA_TEST_POSTGRES_URL) a migration change migrates and respawns, a reset starts the schema from scratch, and a new
+// container over the schema another commit left runs a pending reset first, or reports the failure with its remedy.
 
-import { contractDigest, DEV_LAUNCHER_STATE_FILE, type DevLauncherConfig } from '@fabrika/auth-core'
+import { contractDigest, DEV_LAUNCHER_BOOTED_FILE, DEV_LAUNCHER_STATE_FILE, type DevLauncherConfig } from '@fabrika/auth-core'
 import { dropApplicationDatabase } from '@fabrika/platform-node'
-import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
+import { afterEach, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { cp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -31,6 +32,11 @@ const CLI = join(import.meta.dir, '..', '..', '..', 'cli', 'src', 'index.ts')
 const POSTGRES_URL = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? ''
 
 const sha = (seed: number): string => seed.toString(16).padStart(40, '0')
+const NOTES_MIGRATION = 'db/migrations/20260101000000_notes.sql'
+const NOTES = 'CREATE TABLE notes (id integer PRIMARY KEY);\n'
+const TITLE_MIGRATION = 'db/migrations/20260102000000_title.sql'
+const TITLE = 'ALTER TABLE notes ADD COLUMN title text;\n'
+const SCHEMA_FILE = 'src/db/schema.generated.ts'
 
 /** Control's receiver as the launcher sees it: a linear history of commits, generations, and the reports it got. */
 class StubControl {
@@ -39,6 +45,8 @@ class StubControl {
 	private waiters: (() => void)[] = []
 	private reportWaiters: (() => void)[] = []
 	reset = 0
+	/** The reset generation the last report said its container applied: what a new container is answered first. */
+	resetApplied: number | null = null
 	checks = 0
 	/** The commit of the current bootstrap run: Control refuses a container of any other. */
 	bootstrap: string
@@ -107,6 +115,7 @@ class StubControl {
 			if (!parsed.ok) return new Response('bad report', { status: 400 })
 			if (parsed.value.bootstrap !== this.bootstrap) return new Response('superseded', { status: 409 })
 			this.reports.push(parsed.value)
+			this.resetApplied = parsed.value.reset
 			const waiters = this.reportWaiters
 			this.reportWaiters = []
 			for (const waiter of waiters) waiter()
@@ -129,19 +138,19 @@ class StubControl {
 			})
 		}
 		if (wait.bootstrap !== this.bootstrap) return new Response('superseded', { status: 409 })
-		return Response.json(this.answer(wait.head))
+		return Response.json(this.answer(wait.head, wait.reset === null ? Math.min(this.resetApplied ?? 0, this.reset) : this.reset))
 	}
 
-	private answer(head: string): DevWaitAnswer {
+	private answer(head: string, reset: number): DevWaitAnswer {
 		const index = this.history.findIndex((commit) => commit.sha === head)
-		if (head === this.target || index === -1) return { sync: null, reset: this.reset, checks: this.checks }
+		if (head === this.target || index === -1) return { sync: null, reset, checks: this.checks }
 		const files = new Map<string, string | null>()
 		for (const commit of this.history.slice(index + 1)) {
 			for (const file of commit.files) files.set(file.path, file.content)
 		}
 		return {
 			sync: { from: head, to: this.target, files: [...files].map(([path, content]) => ({ path, content })) },
-			reset: this.reset,
+			reset,
 			checks: this.checks,
 		}
 	}
@@ -238,7 +247,7 @@ async function fixture(options: { controlHead?: string; contractApp?: boolean } 
 		'bun.lock': 'lockfile one',
 		'src/server.ts': SERVER,
 		'src/message.ts': "export const message = 'one'\n",
-		'db/migrations/20260101000000_notes.sql': 'CREATE TABLE notes (id integer PRIMARY KEY);\n',
+		[NOTES_MIGRATION]: NOTES,
 	})
 	const control = new StubControl(options.controlHead ?? sha(1))
 	const value: Fixture = { root, port: await freePort(), control, lines: [], launcher: null }
@@ -442,21 +451,74 @@ describe('the dev launcher', () => {
 	})
 })
 
+/** Run the CLI in `root` against the test database as `appId`; a failure throws with its last line. */
+async function cli(root: string, appId: string, args: readonly string[]): Promise<void> {
+	const child = Bun.spawn(['bun', CLI, ...args], {
+		cwd: root,
+		env: { PATH: process.env['PATH'] ?? '', HOME: process.env['HOME'] ?? '', FABRIKA_APP_ID: appId, FABRIKA_APP_DATABASE_URL: POSTGRES_URL },
+		stdout: 'ignore',
+		stderr: 'pipe',
+	})
+	const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
+	if (code !== 0) throw new Error(`fabrika ${args.join(' ')} failed: ${stderr.trim().split('\n').at(-1)}`)
+}
+
+/** The schema types `fabrika db codegen` writes for `migrations`, generated on a scratch schema: what a commit holds. */
+async function committedSchema(migrations: Record<string, string>): Promise<string> {
+	const root = mkdtempSync(join(tmpdir(), 'fabrika-dev-schema-'))
+	const scratch = `devschema-${crypto.randomUUID().slice(0, 8)}`
+	try {
+		await writeTree(root, migrations)
+		await cli(root, scratch, ['db', 'migrate'])
+		await cli(root, scratch, ['db', 'codegen'])
+		return readFileSync(join(root, SCHEMA_FILE), 'utf8')
+	} finally {
+		await dropApplicationDatabase(POSTGRES_URL, scratch)
+		await rm(root, { recursive: true, force: true })
+	}
+}
+
+async function tableNames(appId: string): Promise<string[]> {
+	const sql = new Bun.SQL(POSTGRES_URL)
+	try {
+		const rows: unknown = await sql`SELECT table_name FROM information_schema.tables WHERE table_schema = ${`app_${appId.replaceAll('-', '_')}`}`
+		return Array.isArray(rows) ? rows.map((row) => String(Reflect.get(row, 'table_name'))).sort() : []
+	} finally {
+		await sql.close()
+	}
+}
+
+const booted = (report: DevReport): boolean => report.status === 'serving' || report.status === 'failed'
+
 describe.skipIf(POSTGRES_URL === '')('the dev launcher with a database', () => {
 	const appId = `devlaunch-${crypto.randomUUID().slice(0, 8)}`
+	let notesSchema = ''
+	let titleSchema = ''
+
+	beforeAll(async () => {
+		notesSchema = await committedSchema({ [NOTES_MIGRATION]: NOTES })
+		titleSchema = await committedSchema({ [NOTES_MIGRATION]: NOTES, [TITLE_MIGRATION]: TITLE })
+	})
 
 	afterEach(async () => {
 		await dropApplicationDatabase(POSTGRES_URL, appId)
 	})
 
-	test('a migration change migrates and respawns; a reset starts the schema from scratch', async () => {
+	/** A fixture that holds the committed schema types of its migrations, as the bootstrap's verification needs. */
+	async function databaseFixture(): Promise<Fixture> {
 		const value = await fixture()
+		await writeTree(value.root, { [SCHEMA_FILE]: notesSchema })
+		return value
+	}
+
+	test('a migration change migrates and respawns; a reset starts the schema from scratch', async () => {
+		const value = await databaseFixture()
 		const database = { appId, url: POSTGRES_URL }
 		await start(value, database).ready
 		expect(JSON.parse(await get(value, '/env'))).toEqual({ provisioning: false, sourceKey: false, runtime: true })
 		expect(await get(value, '/columns')).toBe('["id"]')
 
-		value.control.commit(sha(2), { 'db/migrations/20260102000000_title.sql': 'ALTER TABLE notes ADD COLUMN title text;\n' })
+		value.control.commit(sha(2), { [TITLE_MIGRATION]: TITLE, [SCHEMA_FILE]: titleSchema })
 		await until(() => get(value, '/columns'), '["id","title"]')
 
 		expect(await get(value, '/insert')).toBe('inserted')
@@ -469,13 +531,68 @@ describe.skipIf(POSTGRES_URL === '')('the dev launcher with a database', () => {
 	})
 
 	test('a changed applied migration fails the sync with one line that names reset_dev', async () => {
-		const value = await fixture()
+		const value = await databaseFixture()
 		await start(value, { appId, url: POSTGRES_URL }).ready
 		const failed = value.control.nextReport((report) => report.status === 'failed')
-		value.control.commit(sha(2), { 'db/migrations/20260101000000_notes.sql': 'CREATE TABLE notes (id bigint PRIMARY KEY);\n' })
+		value.control.commit(sha(2), { [NOTES_MIGRATION]: 'CREATE TABLE notes (id bigint PRIMARY KEY);\n' })
 		const report = await failed
 		expect(report.head).toBe(sha(2))
 		expect(report.message).toContain('fabrika db migrate failed')
 		expect(report.message).toContain('reset_dev')
+	})
+
+	test("a new container over another commit's schema runs the pending reset before it migrates and verifies", async () => {
+		const value = await databaseFixture()
+		const workspaceA = 'db/migrations/20260103000000_workspace_a.sql'
+		await writeTree(value.root, { [workspaceA]: 'CREATE TABLE workspace_a (id integer PRIMARY KEY);\n' })
+		await cli(value.root, appId, ['db', 'migrate'])
+		await rm(join(value.root, workspaceA))
+		value.control.resetApplied = 0
+		value.control.reset = 1
+
+		const report = value.control.nextReport(booted)
+		await start(value, { appId, url: POSTGRES_URL }).ready
+		expect(await report).toMatchObject({ status: 'serving', reset: 1, message: null })
+		expect(await tableNames(appId)).not.toContain('workspace_a')
+		expect(existsSync(join(value.root, DEV_LAUNCHER_BOOTED_FILE))).toBe(true)
+	})
+
+	test("a new container over another commit's schema reports the failed check with reset_dev, which recovers it", async () => {
+		const value = await databaseFixture()
+		const workspaceA = 'db/migrations/20260103000000_workspace_a.sql'
+		await writeTree(value.root, { [workspaceA]: 'CREATE TABLE workspace_a (id integer PRIMARY KEY);\n' })
+		await cli(value.root, appId, ['db', 'migrate'])
+		await rm(join(value.root, workspaceA))
+
+		const failed = value.control.nextReport(booted)
+		await start(value, { appId, url: POSTGRES_URL }).ready
+		const report = await failed
+		expect(report.status).toBe('failed')
+		expect(report.message).toContain('fabrika db codegen --verify failed')
+		expect(report.message).toContain('reset_dev')
+		expect(existsSync(join(value.root, DEV_LAUNCHER_BOOTED_FILE))).toBe(true)
+
+		const recovered = value.control.nextReport((next) => next.reset === 1 && booted(next))
+		value.control.advance('reset')
+		expect(await recovered).toMatchObject({ status: 'serving', message: null })
+		expect(await tableNames(appId)).not.toContain('workspace_a')
+	})
+
+	test('a new container whose applied migration its commit edited reports the failure with reset_dev, which recovers it', async () => {
+		const value = await databaseFixture()
+		await cli(value.root, appId, ['db', 'migrate'])
+		const bigint = 'CREATE TABLE notes (id bigint PRIMARY KEY);\n'
+		await writeTree(value.root, { [NOTES_MIGRATION]: bigint, [SCHEMA_FILE]: await committedSchema({ [NOTES_MIGRATION]: bigint }) })
+
+		const failed = value.control.nextReport(booted)
+		await start(value, { appId, url: POSTGRES_URL }).ready
+		const report = await failed
+		expect(report.status).toBe('failed')
+		expect(report.message).toContain('fabrika db migrate failed')
+		expect(report.message).toContain('reset_dev')
+
+		const recovered = value.control.nextReport((next) => next.reset === 1 && booted(next))
+		value.control.advance('reset')
+		expect(await recovered).toMatchObject({ status: 'serving', message: null })
 	})
 })

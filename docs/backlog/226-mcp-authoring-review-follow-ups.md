@@ -20,7 +20,6 @@ blocked-by: []
 6. **Two pieces are duplicated across packages.**
    - `DEV_STATES` in `packages/control/src/api/dev-environments.ts` repeats `DEV_STATUSES` from `@fabrika/app/dev/wire`.
    - `isSourcePath` in `packages/app/src/dev/wire.ts` repeats `isRepositoryPath` from `packages/control/src/api/workspaces.ts`.
-7. **A fresh dev container migrates before its pending reset.** A switch to another workspace that also needs a bootstrap run raises the reset generation. The new container learns the generation that the database's last container applied, so its boot reconcile migrates the new workspace once, on the old schema. Only its next wait asks for the pending reset, which drops that schema and migrates again. The outcome is right, but the first migration can fail and briefly show `failed`.
 
 ## Approach / acceptance
 
@@ -30,7 +29,6 @@ blocked-by: []
 4. When a workspace is abandoned, unbind it from its dev environment in the same use case. Test: after `delete_workspace`, `get_dev_status` of the dev environment reads `unbound`, and a wait gets no sync.
 5. Move both comments onto the declarations they describe.
 6. Import `DEV_STATUSES` from the wire module. Share one repository-path predicate between `@fabrika/app/dev/wire` and Control, or document why the two must differ.
-7. Let the launcher's first answer carry whether a reset is pending, as an additive wire field, so the boot reconcile resets before it migrates. Test: a switching bootstrap reports one migration, after the reset.
 
 ## Touch points
 
@@ -38,7 +36,5 @@ blocked-by: []
 - `packages/control/src/api/dev-environments.ts`
 - `packages/control/src/db/dev-environments.ts`
 - `packages/control/src/db/registry.ts`
-- `packages/control/src/dev/receiver.ts`
 - `packages/github-app/src/repository.ts`
 - `packages/app/src/dev/wire.ts`
-- `packages/app/src/dev/launcher.ts`

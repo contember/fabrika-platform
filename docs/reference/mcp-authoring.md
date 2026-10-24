@@ -146,7 +146,7 @@ environment is promoted.
 | `pending`          | The launcher has not reported the newest commit yet.                                                                                                                                         |
 | `syncing`          | The launcher is applying a commit.                                                                                                                                                           |
 | `serving`          | `head` serves and answers its health endpoint.                                                                                                                                               |
-| `failed`           | `head` does not serve: a migration, the SPA build or the start failed; `message` says which.                                                                                                 |
+| `failed`           | `head` does not serve: a migration, the schema check, the SPA build or the start failed; `message` says which.                                                                               |
 | `needs_bootstrap`  | The commit changes what the build owns, Control cannot relay it, or the launcher is gone (Control cannot read it, or it went silent); `message` says why, and `apply_changes` does not wait. |
 | `resetting`        | `reset_dev` is dropping and migrating the schema.                                                                                                                                            |
 | `checking`         | `run_checks` is running.                                                                                                                                                                     |
@@ -172,7 +172,13 @@ applied, which otherwise fails the sync. `bind_dev`, `run_checks` and `reset_dev
 needs `deploy.read`.
 
 At boot (after an idle stop, a restart or a new container) the launcher reconciles to the recorded head before it
-serves.
+serves. A dev container runs no init command: the launcher migrates and checks the schema types
+(`fabrika db codegen --verify`) itself, after Control's answer, because the database still holds what the previous
+container left. A new container first runs any reset still pending, so binding another workspace resets the previous
+one's schema before it migrates. A migration or check that fails at boot, over another workspace's schema or an applied
+migration the commit edited, is the `failed` state, and its message names `reset_dev`; the readiness check passes once
+the launcher reported its boot, so the bootstrap run completes and `reset_dev` reaches the launcher. The generated
+isolation tests (`fabrika db test-isolation`) run in a stage build, not in a dev container.
 
 ## Failures
 

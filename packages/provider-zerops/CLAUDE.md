@@ -269,9 +269,11 @@ bun test
 - **A `dev` environment changes only `run`, selected by Control's environment kind (ADR-0049, ADR-0043).** The build
   is the ordinary one with every check. `ZeropsDeployRun.dev` makes `run.start` run `@fabrika/app/dev` of the
   application's own release, writes its configuration (`devLauncherConfig`) as base64, so authored SPA commands survive
-  any quoting, and replaces the init commands with `dev-init.generated.sh`: migrate and verify only while the launcher's
-  state file is absent, because after the first sync the files on disk are no longer the bootstrap's. There is no
-  `healthCheck`: the launcher reports health itself, and a platform restart would discard the synced head. The deploy
+  any quoting, and drops the init commands: the database holds what the previous container left, and only the
+  launcher, after Control said whether a reset is pending, may migrate and verify over it, reporting a failure instead
+  of failing the activation. Its readiness check also passes on `DEV_LAUNCHER_BOOTED_FILE`, which the launcher writes
+  once it reported its boot. There is no `healthCheck`: the launcher reports health itself, and a platform restart
+  would discard the synced head. The deploy
   pins the service to one container (`pinOneContainer`); `devEnvironments.stop/start` stop it when idle and start it
   again, and the runtime files survive both (measured for ADR-0049). The app never authors any of this. The
   launcher's `checks` (what `run_checks` runs) are the build's own check commands in the build's order, on the runtime

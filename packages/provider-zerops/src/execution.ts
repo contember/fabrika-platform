@@ -4,9 +4,9 @@
 
 import {
 	type ContractArtifact,
+	DEV_LAUNCHER_BOOTED_FILE,
 	DEV_LAUNCHER_CONFIG_FILE,
 	DEV_LAUNCHER_MODULE,
-	DEV_LAUNCHER_STATE_FILE,
 	type DevLauncherConfig,
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_SOURCE_MAP_UPLOAD,
@@ -262,7 +262,6 @@ const FABRIKA_BIN = './node_modules/.bin/fabrika'
 const MIGRATE_SCRIPT = 'fabrika/migrate.generated.sh'
 const VERIFY_SCRIPT = 'fabrika/verify.generated.sh'
 const START_SCRIPT = 'fabrika/start.generated.sh'
-const DEV_INIT_SCRIPT = 'fabrika/dev-init.generated.sh'
 const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
 
 /**
@@ -318,11 +317,13 @@ const verifyScript = (appId: string): readonly string[] => [
 
 // The readiness check is retried no sooner than every 10 s (the platform's floor), and a server is rarely listening at
 // the first attempt, one second after `run.start`. So one attempt waits for the health endpoint itself, for less than
-// the retry period; it passes only on a 2xx, like the `httpGet` it replaces.
-const readinessCommand = (path: string): string => {
+// the retry period; it passes only on a 2xx, like the `httpGet` it replaces. A dev container also passes once its launcher
+// reported the boot, served or failed: the launcher keeps running and reports a failed migration with its remedy.
+const readinessCommand = (path: string, dev: boolean): string => {
 	if (!READINESS_PATH_PATTERN.test(path)) throw new Error('zerops: a readiness path must be a literal path of unreserved characters')
 	const url = `http://127.0.0.1:${ZEROPS_APPLICATION_PORT}${path}`
-	return `bun -e "const end = Date.now() + 9000; while (Date.now() < end) { try { if ((await fetch('${url}', { signal: AbortSignal.timeout(2000) })).ok) process.exit(0) } catch {} await Bun.sleep(200) } process.exit(1)"`
+	const booted = dev ? `if (await Bun.file('${RUNTIME_ROOT}/${DEV_LAUNCHER_BOOTED_FILE}').exists()) process.exit(0); ` : ''
+	return `bun -e "const end = Date.now() + 9000; while (Date.now() < end) { ${booted}try { if ((await fetch('${url}', { signal: AbortSignal.timeout(2000) })).ok) process.exit(0) } catch {} await Bun.sleep(200) } process.exit(1)"`
 }
 
 const SERVE_ENTRY = 'fabrika/entry.generated.ts'
@@ -336,17 +337,6 @@ const devStartScript: readonly string[] = [
 	'set -eu',
 	`cd ${RUNTIME_ROOT}`,
 	`exec bun -e "await import(\\"${DEV_LAUNCHER_MODULE}\\").then((dev) => dev.runDevLauncher(process.env))"`,
-]
-
-// The init commands of a dev container migrate and verify only what the bootstrap run built. A container that restarts
-// after a stop keeps the files the launcher synced since, and its state file: the launcher reconciles that one itself.
-const devInitScript: readonly string[] = [
-	'#!/bin/sh',
-	'set -eu',
-	`cd ${RUNTIME_ROOT}`,
-	`if [ -f ${DEV_LAUNCHER_STATE_FILE} ]; then exit 0; fi`,
-	`sh ${RUNTIME_ROOT}/${MIGRATE_SCRIPT}`,
-	`sh ${RUNTIME_ROOT}/${VERIFY_SCRIPT}`,
 ]
 
 /** One command writing `content` to `path` through base64: the content may hold quotes and expansions, the command none. */
@@ -383,18 +373,15 @@ export function devLauncherConfig(execution: ZeropsLockedExecution, authoredSpa:
 const devLauncherConfigJson = (execution: ZeropsLockedExecution, authoredSpa: readonly string[]): string =>
 	JSON.stringify(devLauncherConfig(execution, authoredSpa))
 
-/** The scripts the build writes, and the ones every container's init commands run, in this order. */
+/**
+ * The scripts the build writes, which every container's init commands run, in this order. A dev container has none: its
+ * init would run before Control says whether a reset is pending, over the schema the previous container left, so its
+ * launcher migrates and verifies after that answer.
+ */
 const initScripts = (execution: ZeropsLockedExecution): readonly { readonly path: string; readonly lines: readonly string[] }[] =>
-	execution.databaseUrl === null
+	execution.databaseUrl === null || execution.dev !== undefined
 		? []
-		: [
-			{ path: MIGRATE_SCRIPT, lines: migrateScript(execution.appId) },
-			{ path: VERIFY_SCRIPT, lines: verifyScript(execution.appId) },
-			...(execution.dev === undefined ? [] : [{ path: DEV_INIT_SCRIPT, lines: devInitScript }]),
-		]
-
-const initCommandScripts = (execution: ZeropsLockedExecution): readonly string[] =>
-	execution.databaseUrl === null ? [] : execution.dev === undefined ? [MIGRATE_SCRIPT, VERIFY_SCRIPT] : [DEV_INIT_SCRIPT]
+		: [{ path: MIGRATE_SCRIPT, lines: migrateScript(execution.appId) }, { path: VERIFY_SCRIPT, lines: verifyScript(execution.appId) }]
 
 const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
 
@@ -500,7 +487,7 @@ export function generatedInitCommands(execution: ZeropsLockedExecution): string[
 		// A container starts from the prepared image, whose signatures are as old as its build; a failed refresh leaves
 		// them to the daily one, and the scanner refuses signatures older than three days, so the scan fails closed.
 		...(execution.contract.scan === true ? [`${FRESHCLAM} || echo 'fabrika: freshclam did not refresh the malware signatures'`] : []),
-		...initCommandScripts(execution).map((script) => `sh ${RUNTIME_ROOT}/${script}`),
+		...initScripts(execution).map((script) => `sh ${RUNTIME_ROOT}/${script.path}`),
 	]
 }
 
@@ -539,7 +526,11 @@ export function renderLockedSetup(
 			cache: ['node_modules'],
 		},
 		deploy: {
-			readinessCheck: { exec: { command: readinessCommand(contract.readinessPath) }, retryPeriod: '10s', failureTimeout: '180s' },
+			readinessCheck: {
+				exec: { command: readinessCommand(contract.readinessPath, execution.dev !== undefined) },
+				retryPeriod: '10s',
+				failureTimeout: '180s',
+			},
 		},
 		run: {
 			base: ZEROPS_APPLICATION_RUNTIME,

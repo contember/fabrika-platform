@@ -13,6 +13,12 @@ export const DEV_LAUNCHER_MODULE = '@fabrika/app/dev'
 /** Where the launcher records what it holds, so a restart of the same container resumes it. A new container has none. */
 export const DEV_LAUNCHER_STATE_FILE = 'fabrika/dev-state.json'
 
+/**
+ * The launcher writes it once its boot reconcile reported, served or failed. A dev container's readiness check passes on
+ * it too, so a boot that failed still activates, and `reset_dev` can reach the launcher that reports the failure.
+ */
+export const DEV_LAUNCHER_BOOTED_FILE = 'fabrika/dev-booted'
+
 /** One command of the build's check chain, run by the shell in the application root. */
 export interface DevLauncherCheck {
 	readonly name: string
