@@ -148,13 +148,12 @@ Conformant today: allow-only grants; member roles and `assignableBy` with the sa
 clamped to the expiry of the grants that authorize them (`packages/iam/src/membership.ts`); chains read from stored data in the application (`packages/app/src/implement/dispatch.ts`);
 lists derived from the table policy and pinned by the query guard (`packages/db/src/store.ts`, `guard.ts`); writes
 conditioned on the chain with `FOR SHARE` on the destination; not-found for a refused `on` binding; workloads holding
-only their declared actions (`packages/iam/src/tokens.ts`); access tokens capped by the grants they carry
+only their declared actions (`packages/iam/src/tokens.ts`); share links and anonymous keys re-checked against their issuer
+at every mint (`issuerAuthority`); access tokens capped by the grants they carry
 (`authorityDeadline`, `packages/iam/src/resolve.ts`).
 
 Gaps:
 
-- A share link is not re-checked against its issuer at mint (S8). The re-check needs an upgrade note: links whose issuer
-  lost the delegated actions stop working.
 - Wildcard grants and live re-expansion of roles from IAM rows (Layer 1).
 - An `over` list leaves out grants on the listed resource's own dimension (S4).
 - An opaque root such as `in: 'org'` is admitted for any value under an application-wide grant. It conforms once the

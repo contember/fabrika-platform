@@ -38,6 +38,7 @@ describe('issueKey → mintFromKey (standalone, frozen inline grants)', () => {
 		catalog(h, 'opice', 'report.write')
 		const services = h.makeServices({ issuer: ISSUER })
 		const issuerId = seedUser(h.sqlite, { sub: 'iss', email: 'iss@contember.com' })
+		seedInlineGrant(h.sqlite, issuerId, ['report.write'], null, 'opice')
 		const issuer = { id: issuerId, permissions: [perm('report.write')] } // holds it globally → may delegate scoped
 
 		const issued = await issueKey(

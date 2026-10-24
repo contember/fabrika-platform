@@ -164,6 +164,7 @@ describe('mintFromKey', () => {
 	async function shareLink(app: string | null, action = 'report.read') {
 		const h = createHarness()
 		const issuer = seedUser(h.sqlite, { sub: 'g-issuer', email: 'issuer@b.cz' })
+		seedInlineGrant(h.sqlite, issuer, [action], null, app)
 		const key = `px_link-for-${app ?? 'nowhere'}`
 		await h.repositories.credentials.createCredential({
 			tokenHash: await hashToken(key),
@@ -193,6 +194,52 @@ describe('mintFromKey', () => {
 		// whether the credential exists.
 		const elsewhere = await mintFromKey(services, ENV, { app: 'app-b', key, requestId: 'r' })
 		expect(elsewhere.result).toEqual({ ok: false, reason: 'invalid_key' })
+	})
+
+	test('an anonymous key mints only while its issuer is enabled and still holds what it delegated (S8)', async () => {
+		const h = createHarness()
+		const issuer = seedUser(h.sqlite, { sub: 'g-delegator', email: 'delegator@b.cz' })
+		const grant = seedInlineGrant(h.sqlite, issuer, ['report.read'], null, 'app-a')
+		const key = 'px_link-of-a-delegator'
+		await h.repositories.credentials.createCredential({
+			tokenHash: await hashToken(key),
+			issuedBy: issuer,
+			app: 'app-a',
+			grants: [{ action: 'report.read' }],
+		})
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const mint = () => mintFromKey(services, ENV, { app: 'app-a', key, requestId: 'r' })
+
+		// The token ends when the issuer's grant does.
+		const grantEnds = Math.floor(Date.now() / 1000) + 120
+		h.sqlite.run('UPDATE grants SET expires_at = ? WHERE id = ?', [grantEnds, grant])
+		const capped = await mint()
+		if (!capped.result.ok) throw new Error('expected ok')
+		expect(capped.result.expiresAt).toBe(grantEnds)
+
+		h.sqlite.run('UPDATE principals SET disabled_at = ? WHERE id = ?', [Math.floor(Date.now() / 1000), issuer])
+		expect((await mint()).result).toEqual({ ok: false, reason: 'invalid_key' })
+		h.sqlite.run('UPDATE principals SET disabled_at = NULL WHERE id = ?', [issuer])
+		expect((await mint()).result.ok).toBe(true)
+
+		h.sqlite.run('DELETE FROM grants WHERE id = ?', [grant])
+		expect((await mint()).result).toEqual({ ok: false, reason: 'invalid_key' })
+	})
+
+	test('an anonymous key without an issuer mints nothing', async () => {
+		const h = createHarness()
+		const issuer = seedUser(h.sqlite, { sub: 'g-gone', email: 'gone@b.cz' })
+		seedInlineGrant(h.sqlite, issuer, ['report.read'], null, 'app-a')
+		const key = 'px_link-of-nobody'
+		const id = await h.repositories.credentials.createCredential({
+			tokenHash: await hashToken(key),
+			issuedBy: issuer,
+			app: 'app-a',
+			grants: [{ action: 'report.read' }],
+		})
+		h.sqlite.run('UPDATE credentials SET issued_by = NULL WHERE id = ?', [id])
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		expect((await mintFromKey(services, ENV, { app: 'app-a', key, requestId: 'r' })).result).toEqual({ ok: false, reason: 'invalid_key' })
 	})
 
 	test('an anonymous key with NO app is dead everywhere — the hard cutover', async () => {

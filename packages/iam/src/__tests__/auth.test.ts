@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { PROVISIONING_ADMIN_ID, resolveCaller } from '../auth'
 import type { Env } from '../env'
 import { hashToken } from '../secret'
-import { createHarness, seedUser } from './helpers/harness'
+import { createHarness, seedInlineGrant, seedUser } from './helpers/harness'
 
 // `resolveCaller` resolves a presented credential and nothing else: there is no credential-less
 // caller in any environment. Plus the `px_` key resolution path.
@@ -35,6 +35,7 @@ describe('resolveCaller — px_ key resolution', () => {
 		const h = createHarness()
 		const services = h.makeServices({ environment: 'stage' })
 		const issuerId = seedUser(h.sqlite, { sub: 'iss', email: 'iss@contember.com' })
+		seedInlineGrant(h.sqlite, issuerId, ['report.read'], null, 'reports')
 		const key = 'px_share-link'
 		const credId = await h.repositories.credentials.createCredential({
 			tokenHash: await hashToken(key),

@@ -873,6 +873,19 @@ describe('share links', () => {
 		expect(claims?.perms).toEqual([{ action: 'notes.read', scope: { type: 'note', value: 'n1' }, source: 'grant' }])
 	})
 
+	test('a link mints only while its issuer still holds the delegated actions on the chain (S8)', async () => {
+		const { f, owner, scope, chain } = await linkFixture()
+		const issued = await issueLink(f.services, CALLER_ENV, f.ctx, { ...(await caller(owner)), mount: 'shared', chain, days: 7 })
+		if (!issued.ok) throw new Error(`expected a link: ${issued.reason}`)
+		const mint = () => mintFromKey(f.services, TEST_SIGNING_ENV, { app: APP, key: issued.key, requestId: 'req-link' })
+		expect((await mint()).result.ok).toBe(true)
+		// A second owner keeps the workspace; the issuer leaves it and with it the authority the link rested on.
+		const other = await f.person('other-owner')
+		expect(await assign(f, owner, scope, 'owner', { principalId: other.id })).toMatchObject({ ok: true })
+		expect(await revoke(f, other, scope, { principalId: owner.id })).toEqual({ ok: true })
+		expect((await mint()).result).toEqual({ ok: false, reason: 'invalid_key' })
+	})
+
 	test('a link requires an expiry of at most the mount maxDays', async () => {
 		const { f, owner, chain } = await linkFixture()
 		for (const days of [0, 31, 1.5]) {

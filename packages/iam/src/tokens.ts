@@ -27,7 +27,7 @@ import {
 	type Scope,
 	type TokenPrincipalType,
 } from '@fabrika/auth-core'
-import { sessionUsable } from './auth'
+import { PROVISIONING_ADMIN_ID, sessionUsable } from './auth'
 import type { CredentialGrantRow, CredentialRow, PrincipalRow, SessionTerminal } from './db'
 import { principalStatus, sessionTerminal } from './db'
 import type { Env } from './env'
@@ -234,8 +234,8 @@ export async function mintFromKey(
 	const effective = await resolveCredential(services, cred, input.app)
 	if (!effective.ok) {
 		// `wrong_app` is reported as `invalid_key`: a caller holding a credential for another app must
-		// not learn that it exists, and there is nothing it can do differently here.
-		const reason = effective.reason === 'wrong_app' ? 'invalid_key' : effective.reason
+		// not learn that it exists, and there is nothing it can do differently here. Nor whose authority it rested on.
+		const reason = effective.reason === 'wrong_app' || effective.reason === 'issuer_unauthorized' ? 'invalid_key' : effective.reason
 		return { result: { ok: false, reason }, principalId: cred.principal_id, credentialId: cred.id }
 	}
 
@@ -327,7 +327,7 @@ export type ResolvedCredential =
 		expiresAt: number | null
 		link?: LinkTokenClaims
 	}
-	| { ok: false; reason: 'unknown_principal' | 'disabled' | 'wrong_app' }
+	| { ok: false; reason: 'unknown_principal' | 'disabled' | 'wrong_app' | 'issuer_unauthorized' }
 
 /**
  * Resolve a credential's effective permissions FOR ONE APP.
@@ -355,16 +355,33 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 	const inline = (await services.repositories.credentials.getCredentialGrants(cred.id)).map(credentialGrantToEntry)
 
 	if (cred.principal_id === null) {
-		// Anonymous: the frozen inline grants ARE the permission set (delegation-checked at issue).
+		// Anonymous: the frozen inline grants ARE the permission set, delegated by the issuer, who must still hold them.
 		if (cred.link_mount === null) {
-			return { ok: true, subject: cred.id, label: cred.label, permissions: inline, expiresAt: null }
+			const issuer = await issuerAuthority(services, cred.issued_by, app, null, inline.map((entry) => ({ action: entry.action, on: [entry.scope] })))
+			if (!issuer.ok) return issuer
+			return { ok: true, subject: cred.id, label: cred.label, permissions: inline, expiresAt: issuer.expiresAt }
 		}
 		// A share link's token names its mount and chain, which the framework re-checks per request.
 		const chain = cred.link_chain === null ? null : parseStoredChain(cred.link_chain)
 		if (chain === null) {
 			return { ok: false, reason: 'wrong_app' }
 		}
-		return { ok: true, subject: cred.id, label: cred.label, permissions: inline, expiresAt: null, link: { mount: cred.link_mount, chain } }
+		const mount = await services.repositories.appSchema.getLinkMount(app, cred.link_mount)
+		if (mount === null || mount.dimension !== cred.link_dimension) {
+			return { ok: false, reason: 'issuer_unauthorized' }
+		}
+		// As `issueLink` checked: the mount's `issuedBy` and every frozen action, each held on some link of the chain.
+		const required = [mount.issued_by, ...inline.map((entry) => entry.action)].map((action) => ({ action, on: chain }))
+		const issuer = await issuerAuthority(services, cred.issued_by, app, cred.link_mount, required)
+		if (!issuer.ok) return issuer
+		return {
+			ok: true,
+			subject: cred.id,
+			label: cred.label,
+			permissions: inline,
+			expiresAt: issuer.expiresAt,
+			link: { mount: cred.link_mount, chain },
+		}
 	}
 
 	const principal = await services.repositories.principals.getPrincipalById(cred.principal_id)
@@ -403,6 +420,65 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 	const permissions = inline.length === 0 ? resolved : inline.filter((e) => permits(resolved, e.action, e.scope ?? undefined))
 	const expiresAt = authorityDeadline(authority, permissions, Math.floor(Date.now() / 1000))
 	return { ok: true, subject: principal.id, type: principal.type, label: principal.label, ...mailboxClaim(principal), permissions, expiresAt }
+}
+
+/** An action the issuer must still hold on at least one of `on` (`null` is application-wide). */
+interface DelegatedAction {
+	action: string
+	on: readonly (Scope | null)[]
+}
+
+/**
+ * S8 at every mint of an anonymous credential: its issuer exists, is enabled and still holds each delegated action, and
+ * the token ends when the first of them loses its support. A job issuer holds its current declaration, app-wide, and
+ * only for the mount it is declared to issue; the provisioning administrator is the installation's named exception. A credential without an issuer, or whose issuer lost any of it, mints
+ * nothing (`issuer_unauthorized`, reported as `invalid_key`).
+ */
+async function issuerAuthority(
+	services: Services,
+	issuerId: string | null,
+	app: string,
+	mount: string | null,
+	required: readonly DelegatedAction[],
+): Promise<{ ok: true; expiresAt: number | null } | { ok: false; reason: 'issuer_unauthorized' }> {
+	const refused: { ok: false; reason: 'issuer_unauthorized' } = { ok: false, reason: 'issuer_unauthorized' }
+	const issuer = issuerId === null ? null : await services.repositories.principals.getPrincipalById(issuerId)
+	if (issuer === null || principalStatus(issuer) === 'disabled') {
+		return refused
+	}
+	if (issuer.id === PROVISIONING_ADMIN_ID) {
+		// The named exception: the seeded installation administrator holds every action, and its issuance was audited.
+		return { ok: true, expiresAt: null }
+	}
+	const workload = await services.repositories.workloads.getByPrincipal(issuer.id)
+	if (workload !== null) {
+		const declaration = workload.kind === 'job' && workload.app === app
+			? await services.repositories.workloads.declaration(app, 'job', workload.name)
+			: null
+		if (declaration === null || mount === null || declaration.issues !== mount) {
+			return refused
+		}
+		return required.every(({ action }) => declaration.actions.includes(action)) ? { ok: true, expiresAt: null } : refused
+	}
+	const authority = await resolveAuthorityAt(services, issuer, app)
+	const now = Math.floor(Date.now() / 1000)
+	let expiresAt: number | null = null
+	for (const { action, on } of required) {
+		// Per action the latest support among the chain links it is held on, then the earliest across actions.
+		let latest: number | null | undefined
+		for (const scope of on) {
+			if (!permits(authority.permissions, action, scope ?? undefined)) continue
+			const until = authorityDeadline(authority, [{ action, scope, source: 'grant' }], now)
+			latest = latest === undefined ? until : latest === null || until === null ? null : Math.max(latest, until)
+		}
+		if (latest === undefined) {
+			return refused
+		}
+		if (latest !== null && (expiresAt === null || latest < expiresAt)) {
+			expiresAt = latest
+		}
+	}
+	return { ok: true, expiresAt }
 }
 
 /**

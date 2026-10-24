@@ -432,7 +432,11 @@ fails if that stops being true — it is the guard, not documentation of one.
   mount row and inserts only while the schema still declares exactly what was checked (`CheckedLinkDeclaration`: the
   mount's dimension, grants, `issuedBy` and `maxDays`, the chain's containment, and an issuing job's actions and
   `issues`), so a reconcile in between either makes the write insert nothing (`not_allowed`) or comes after the
-  committed key, which it revokes if it removes or moves the mount. The issuer or a holder of
+  committed key, which it revokes if it removes or moves the mount. Every mint checks the issuer again
+  (`issuerAuthority`, `src/tokens.ts`; S8): it exists, is enabled and still holds the mount's `issuedBy` and every
+  frozen action on some link of the chain (a job: its current declaration, `issues` naming the mount), and the token
+  ends with the issuer's supporting grants. A standalone anonymous key is checked the same way for its frozen grants.
+  A missing issuer, or one that lost any of it, is `invalid_key`; `provisioning-admin` is the named exception. The issuer or a holder of
   `members.manage` on a value of the chain revokes it (a job only as its issuer); a reconcile that removes the mount, or moves it
   to another dimension, revokes its keys in the same batch.
 - **The admin router percent-decodes its path segments** (`decodedSegments`): an application id
