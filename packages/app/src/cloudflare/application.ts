@@ -247,7 +247,8 @@ export class FabrikaApplication {
 	readonly #ops: OpsAccess | null
 	/** The instance's last failed boot, kept in memory for the ops view. */
 	#bootFailure: OpsBootFailureContent | null = null
-	#outcome: Promise<Outcome>
+	/** The instance's boot, `null` until the first event that needs the application: an ops request never starts it. */
+	#outcome: Promise<Outcome> | null = null
 	#failedBoots = 0
 	/** When an event may boot again after a failed boot; until then every request answers the failure. */
 	#retryAt = 0
@@ -259,7 +260,6 @@ export class FabrikaApplication {
 		const secret = env[FABRIKA_PROXY_SECRET]
 		this.#secret = typeof secret === 'string' && secret !== '' ? proxySecretDigest(secret) : null
 		this.#ops = opsAccess(env)
-		this.#outcome = this.#boot()
 	}
 
 	async fetch(request: Request): Promise<Response> {
@@ -268,9 +268,14 @@ export class FabrikaApplication {
 			return new Response(null, { status: 404 })
 		}
 		if (new URL(request.url).pathname.startsWith(OPS_PREFIX)) {
-			// Served from storage alone, also after a failed boot: it waits for the boot under way and starts no retry.
-			await this.#outcome
-			return await serveOps(request, this.#ops, { storage: this.#state.storage, bootFailure: this.#bootFailure })
+			// Served from storage alone: it never starts a boot or a retry, and waits for one under way only once authenticated.
+			return await serveOps(request, this.#ops, {
+				storage: this.#state.storage,
+				bootFailure: async () => {
+					await this.#outcome
+					return this.#bootFailure
+				},
+			})
 		}
 		const outcome = await this.#current()
 		if ('failure' in outcome) {
@@ -292,8 +297,14 @@ export class FabrikaApplication {
 		)
 	}
 
-	/** The instance's boot, booted again once a failed boot's backoff has passed; concurrent events share one retry. */
+	/**
+	 * The instance's boot, started by the first event that needs it and booted again once a failed boot's backoff has
+	 * passed; concurrent events share one boot and one retry.
+	 */
 	async #current(): Promise<Outcome> {
+		if (this.#outcome === null) {
+			this.#outcome = this.#boot()
+		}
 		const pending = this.#outcome
 		const outcome = await pending
 		if (!('failure' in outcome) || Date.now() < this.#retryAt) {

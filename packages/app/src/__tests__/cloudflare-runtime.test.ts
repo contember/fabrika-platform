@@ -262,7 +262,8 @@ describe("Control's ops channel", () => {
 			const target = await deploy({ vars: OBJECTS })
 			expect((await call(target, 'create', { workspaceId: 'w1', title: 'in primary' })).status).toBe(200)
 			expect(await notesRows(target, 'primary')).toBe(1)
-			expect(await notesRows(target, 'clone')).toBe(0)
+			// The clone serves no ordinary traffic, so it never booted and has no application table.
+			expect(await notesRows(target, 'clone')).toBeUndefined()
 		})
 	})
 

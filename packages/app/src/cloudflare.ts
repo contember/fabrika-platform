@@ -14,7 +14,7 @@ import {
 import { type ContractWorkerOptions, type ImplementationLoader, registerApplication, TICK_HEADER } from './cloudflare/application.js'
 import { method } from './cloudflare/bindings.js'
 import { CLOUDFLARE_APPLICATION_BINDING } from './cloudflare/names.js'
-import { jsonBody, objectNamed } from './cloudflare/ops.js'
+import { jsonBody, objectNamed, opsAccess, opsAuthenticated } from './cloudflare/ops.js'
 import type { FetchService, RequestExecutionContext } from './fetch.js'
 
 export { markProductionProcess } from '@fabrika/db/production'
@@ -119,13 +119,19 @@ function applicationObject(env: Readonly<Record<string, unknown>>, name: string)
 }
 
 /**
- * An ops request reaches the object its body names, when the environment lists it (ADR-0069 §1). The object
- * authenticates the request; every refusal here is the same answer the object gives.
+ * An ops request reaches the object its body names, when the environment lists it (ADR-0069 §1). Every refusal here
+ * is the same answer the object gives, and the object checks everything again.
  */
-async function forwardOps(request: Request, env: Readonly<Record<string, unknown>>, objects: ApplicationObjects): Promise<Response> {
+async function forwardOps(request: Request, env: Readonly<Record<string, unknown>>): Promise<Response> {
+	const access = opsAccess(env)
+	// Receiver authentication of Control's key, as the object runs it; no enforcement decision. It runs before the body is
+	// read or any object looked up, so an unauthenticated caller wakes no object and learns nothing of the names.
+	if (access === null || !opsAuthenticated(request, access)) {
+		return opsRefusal()
+	}
 	const operation = parseOpsOperation(new URL(request.url).pathname)
 	const object = operation === null ? null : objectNamed(operation, await jsonBody(request.clone()))
-	if (object === null || !objects.objects.includes(object)) {
+	if (object === null || !access.objects.objects.includes(object)) {
 		return opsRefusal()
 	}
 	return await applicationObject(env, object)(request)
@@ -151,11 +157,10 @@ export function createContractWorker(load: ImplementationLoader, options: Contra
 			headers.delete(TICK_HEADER)
 			headers.set(PROXY_SECRET_HEADER, proxySecretOf(env))
 			const forwarded = new Request(request, { headers })
-			const objects = applicationObjects(env)
 			if (new URL(request.url).pathname.startsWith(OPS_PREFIX)) {
-				return await forwardOps(forwarded, env, objects)
+				return await forwardOps(forwarded, env)
 			}
-			return await applicationObject(env, objects.object)(forwarded)
+			return await applicationObject(env, applicationObjects(env).object)(forwarded)
 		},
 		async scheduled(controller, env) {
 			const tick = new Request('https://application.invalid/', {

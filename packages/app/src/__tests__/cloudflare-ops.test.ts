@@ -23,8 +23,16 @@ import { join } from 'node:path'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
 import appPackage from '../../package.json' with { type: 'json' }
 import { applicationMigrations } from '../build'
-import { type ApplicationState, type ApplicationStorage, createContractWorker, FabrikaApplication, type ImplementationLoader } from '../cloudflare'
-import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
+import {
+	type ApplicationState,
+	type ApplicationStorage,
+	type ContractWorker,
+	createContractWorker,
+	FabrikaApplication,
+	type ImplementationLoader,
+} from '../cloudflare'
+import { TICK_HEADER } from '../cloudflare/application'
+import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import { notesApp } from './cloudflare-fixture/src/app'
 import { frameworkEnvFor, keepingProcessEnvironment, keySource, ORIGIN, PROXY_SECRET, workloadTokensFor } from './fixtures/implement/harness'
 
@@ -85,20 +93,37 @@ function observedStorage(alarm: number | null = null): Observed {
 
 interface Started extends Observed {
 	readonly object: FabrikaApplication
+	/** How often the application module was imported. */
+	readonly loads: { count: number }
+	readonly worker: ContractWorker
+	readonly env: Readonly<Record<string, unknown>>
 }
 
-async function start(
-	options: { readonly load?: ImplementationLoader; readonly digests?: readonly [string] | readonly [string, string]; readonly alarm?: number } = {},
-): Promise<Started> {
+interface StartOptions {
+	readonly load?: ImplementationLoader
+	readonly digests?: readonly [string] | readonly [string, string]
+	readonly alarm?: number
+	/** Written straight into the database before the object exists, past the write counters. */
+	readonly seed?: (database: BunDatabase) => void
+}
+
+/** A table SQLite allows and the wire's view does not name. */
+const MIXED_CASE_TABLE = (database: BunDatabase) => database.run('CREATE TABLE "MixedCase" (id TEXT)')
+
+async function start(options: StartOptions = {}): Promise<Started> {
 	const served = notesApp({ runs: [] })
-	createContractWorker(options.load ?? (() => Promise.resolve({ default: served.implementation })), {
-		migrations: await applicationMigrations(FIXTURE_ROOT),
-	})
+	const loads = { count: 0 }
+	const load = options.load ?? (() => Promise.resolve({ default: served.implementation }))
+	const worker = createContractWorker(() => {
+		loads.count++
+		return load()
+	}, { migrations: await applicationMigrations(FIXTURE_ROOT) })
 	const observed = observedStorage(options.alarm ?? null)
+	options.seed?.(observed.database)
 	const tokens = workloadTokensFor(served.implementation)
 	const unused = () => Promise.reject(new Error('not called'))
 	const state: ApplicationState = { storage: observed.storage, blockConcurrencyWhile: (callback) => callback(), waitUntil: () => {} }
-	const object = new FabrikaApplication(state, {
+	const env = {
 		...frameworkEnvFor(served.implementation),
 		...served.variables,
 		FABRIKA_PROXY_SECRET: PROXY_SECRET,
@@ -107,9 +132,11 @@ async function start(
 		[FABRIKA_OPS_KEY_DIGESTS]: formatOpsKeyDigests(options.digests ?? [opsKeyDigest(OPS_KEY)]),
 		[FABRIKA_APPLICATION_OBJECT]: 'application',
 		[FABRIKA_APPLICATION_OBJECTS]: 'application,clone',
-	})
-	return { ...observed, object }
+	}
+	return { ...observed, object: new FabrikaApplication(state, env), loads, worker, env }
 }
+
+const health = () => new Request(`${ORIGIN}/healthz`, { headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET } })
 
 interface OpsInit {
 	readonly key?: string | null
@@ -187,9 +214,9 @@ describe('the ops channel at the environment object', () => {
 	test("inspect serves the projection of the object's storage, and writes nothing", async () => {
 		await keepingProcessEnvironment(async () => {
 			const alarm = Date.UTC(2026, 9, 24, 12, 0, 0)
-			const { object, writes } = await start({ alarm })
+			const { object, writes } = await start({ alarm, seed: MIXED_CASE_TABLE })
 			// Boots the application, which migrates the object's SQLite.
-			expect((await object.fetch(new Request(`${ORIGIN}/healthz`, { headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET } }))).status).toBe(200)
+			expect((await object.fetch(health())).status).toBe(200)
 			const before = { ...writes }
 			const view = parseOpsView(await inspected(object))
 			expect(writes).toEqual(before)
@@ -199,6 +226,7 @@ describe('the ops channel at the environment object', () => {
 			expect(view?.database.sizeBytes).toBeGreaterThan(0)
 			expect(view?.database.tables).toContainEqual({ name: 'notes', rows: 0 })
 			expect(view?.database.tables.some((table) => table.name.startsWith('sqlite_') || table.name.startsWith('_cf_'))).toBe(false)
+			expect(view?.database.tables.some((table) => table.name === 'MixedCase')).toBe(false)
 			expect(view?.migrations.map((migration) => `${migration.bundle}/${migration.name}`)).toContain('app/20261022120000_notes.sql')
 			expect(view?.scheduler).toEqual({ alarm: new Date(alarm).toISOString() })
 			expect(view?.bootFailure).toBeNull()
@@ -207,10 +235,8 @@ describe('the ops channel at the environment object', () => {
 
 	test('a broken boot is still inspectable; only the content view carries its message and stack', async () => {
 		await keepingProcessEnvironment(async () => {
-			const { object, writes } = await start({ load: () => Promise.reject(new Error('the module exploded while loading')) })
-			await expect(object.fetch(new Request(`${ORIGIN}/healthz`, { headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET } }))).rejects.toThrow(
-				'the module exploded while loading',
-			)
+			const { object, writes } = await start({ load: () => Promise.reject(new Error('the module exploded while loading')), seed: MIXED_CASE_TABLE })
+			await expect(object.fetch(health())).rejects.toThrow('the module exploded while loading')
 			const before = { ...writes }
 			const projection = await inspected(object)
 			const view = parseOpsView(projection)
@@ -230,7 +256,7 @@ describe('the ops channel at the environment object', () => {
 	test("a boot failure's text is scrubbed of the environment's secrets", async () => {
 		await keepingProcessEnvironment(async () => {
 			const { object } = await start({ load: () => Promise.reject(new Error(`could not use ${PROXY_SECRET}`)) })
-			await expect(object.fetch(new Request(`${ORIGIN}/healthz`, { headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET } }))).rejects.toThrow()
+			await expect(object.fetch(health())).rejects.toThrow()
 			const content = JSON.stringify(await inspected(object, true))
 			expect(content).not.toContain(PROXY_SECRET)
 			expect(parseOpsContentView(JSON.parse(content))?.bootFailure?.message).toBe('could not use [redacted]')
@@ -268,6 +294,130 @@ describe('the ops channel at the environment object', () => {
 				FABRIKA_PROXY_SECRET: PROXY_SECRET,
 			})
 			expect(await observable(await object.fetch(opsRequest('inspect', INSPECT)))).toEqual(await observable(opsRefusal()))
+		})
+	})
+})
+
+describe('an ops request never boots the application', () => {
+	test('a cold instance refuses a wrong key without loading the application or writing', async () => {
+		await keepingProcessEnvironment(async () => {
+			const { object, loads, writes } = await start()
+			const response = await object.fetch(opsRequest('inspect', INSPECT, { key: 'not-the-ops-key-0123456789abcdef' }))
+			expect(await observable(response)).toEqual(await observable(opsRefusal()))
+			expect(loads.count).toBe(0)
+			expect(writes).toEqual({ rows: 0, transactions: 0 })
+		})
+	})
+
+	test('a cold instance serves the view from storage alone, without loading the application or writing', async () => {
+		await keepingProcessEnvironment(async () => {
+			const { object, loads, writes } = await start({ seed: MIXED_CASE_TABLE })
+			const view = parseOpsView(await inspected(object))
+			expect(view?.database.tables).toEqual([])
+			expect(view?.migrations).toEqual([])
+			expect(view?.bootFailure).toBeNull()
+			expect(loads.count).toBe(0)
+			expect(writes).toEqual({ rows: 0, transactions: 0 })
+		})
+	})
+
+	test('inspect waits for a boot under way and starts no retry after it fails', async () => {
+		await keepingProcessEnvironment(async () => {
+			const loading = Promise.withResolvers<void>()
+			const { object, loads } = await start({
+				load: async () => {
+					await loading.promise
+					throw new Error('the module failed late')
+				},
+			})
+			const ordinary = object.fetch(health())
+			const inspection = object.fetch(opsRequest('inspect', INSPECT))
+			let answered = false
+			void inspection.then(() => {
+				answered = true
+			})
+			await Bun.sleep(20)
+			expect(answered).toBe(false)
+			loading.resolve()
+			await expect(ordinary).rejects.toThrow('the module failed late')
+			const view = parseOpsView(await (await inspection).json())
+			expect(view?.bootFailure).toEqual({ at: expect.stringMatching(/^\d{4}-/) })
+			expect(parseOpsView(await inspected(object))?.bootFailure).not.toBeNull()
+			expect(loads.count).toBe(1)
+		})
+	})
+
+	test('ordinary traffic boots the application once, however many requests arrive together', async () => {
+		await keepingProcessEnvironment(async () => {
+			const { object, loads } = await start()
+			const answers = await Promise.all([object.fetch(health()), object.fetch(health()), object.fetch(health())])
+			expect(answers.map((answer) => answer.status)).toEqual([200, 200, 200])
+			expect((await object.fetch(health())).status).toBe(200)
+			expect(loads.count).toBe(1)
+		})
+	})
+
+	test('the minute tick boots a cold instance', async () => {
+		await keepingProcessEnvironment(async () => {
+			const { object, loads } = await start()
+			const tick = new Request(`${ORIGIN}/`, {
+				method: 'POST',
+				headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET, [TICK_HEADER]: String(Date.UTC(2026, 9, 24, 12, 7)) },
+			})
+			expect((await object.fetch(tick)).status).toBe(204)
+			expect(loads.count).toBe(1)
+		})
+	})
+})
+
+describe('the Worker authenticates an ops request before it selects an object', () => {
+	/** The environment's object namespace, recording every name it is asked for. */
+	function countingNamespace() {
+		const lookups: string[] = []
+		const namespace = {
+			idFromName(name: string) {
+				lookups.push(name)
+				return name
+			},
+			get: (id: unknown) => ({ fetch: () => Promise.resolve(new Response(`object ${String(id)}`)) }),
+		}
+		return { lookups, namespace }
+	}
+
+	/** What the proxy Worker sends: no proxy secret, which the application's Worker adds itself. */
+	function fromProxy(operation: string, body: unknown, init: OpsInit = {}): Request {
+		const request = opsRequest(operation, body, init)
+		const headers = new Headers(request.headers)
+		headers.delete(PROXY_SECRET_HEADER)
+		return new Request(request, { headers })
+	}
+
+	const exec = { waitUntil: () => {}, passThroughOnException: () => {} }
+
+	test('a missing or wrong credential looks no object up, whether the name is listed or not', async () => {
+		await keepingProcessEnvironment(async () => {
+			const { worker, env } = await start()
+			const { lookups, namespace } = countingNamespace()
+			const workerEnv = { ...env, [CLOUDFLARE_APPLICATION_BINDING]: namespace }
+			const refusal = await observable(opsRefusal())
+			for (const object of ['application', 'elsewhere']) {
+				for (
+					const init of [
+						{ key: null },
+						{ key: 'not-the-ops-key-0123456789abcdef' },
+						{ endpoint: null },
+						{ endpoint: formatEndpointHeader(OPS_ROW_ID, opsKeyDigest('another row')) },
+						{ method: 'PUT' },
+					]
+				) {
+					const response = await worker.fetch(fromProxy('inspect', { object, content: false }, init), workerEnv, exec)
+					expect(await observable(response)).toEqual(refusal)
+				}
+			}
+			expect(lookups).toEqual([])
+			const admitted = await worker.fetch(fromProxy('inspect', { object: 'clone', content: false }), workerEnv, exec)
+			expect(await admitted.text()).toBe('object clone')
+			expect(lookups).toEqual(['clone'])
 		})
 	})
 })

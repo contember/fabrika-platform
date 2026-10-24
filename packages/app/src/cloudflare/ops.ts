@@ -9,11 +9,8 @@ import {
 	FABRIKA_APPLICATION_OBJECTS,
 	FABRIKA_OPS_KEY_DIGESTS,
 	formatEndpointHeader,
-	OPS_CONTENT_TYPE,
 	OPS_METHOD,
 	OPS_ROW_COUNT_CAP,
-	OPS_ROW_ID,
-	OPS_ROW_PATH,
 	type OpsBootFailureContent,
 	type OpsContentView,
 	opsKeyDigest,
@@ -28,10 +25,10 @@ import {
 	parseOpsOperation,
 	parseOpsStateRequest,
 	parseOpsView,
-	requirementDigest,
 } from '@fabrika/auth-core'
 import { FILES_TABLE, JOB_LEASES_TABLE, WEBHOOK_BINDINGS_TABLE, WEBHOOK_DELIVERIES_TABLE } from '@fabrika/db/migrations'
 import type { SqliteCursor, SqliteValue } from '@fabrika/db/sqlite'
+import { opsProxyRow } from '@fabrika/proxy-core/manifest'
 import { timingSafeEqual } from 'node:crypto'
 import appPackage from '../../package.json' with { type: 'json' }
 import { jsonResponse } from '../errors.js'
@@ -47,26 +44,22 @@ export interface OpsStorage {
 	getAlarm?(): Promise<number | null>
 }
 
-/**
- * The largest ops request body the composed row admits. Not yet an `@fabrika/auth-core` constant: the row's builder in
- * `@fabrika/proxy-core` and this copy must agree, or no ops request names the row the object checks.
- */
-const OPS_MAX_BYTES = 64 * 1024
+const OPS_ROW = opsProxyRow()
 
 /** `X-Fabrika-Endpoint` of the composed ops row, the only value an ops request may carry (ADR-0022 rule 3). */
-export const OPS_ENDPOINT = formatEndpointHeader(
-	OPS_ROW_ID,
-	requirementDigest({
-		kind: 'protocol',
-		method: OPS_METHOD,
-		path: OPS_ROW_PATH,
-		callers: [],
-		requirement: null,
-		admission: { contentTypes: [OPS_CONTENT_TYPE], maxBytes: OPS_MAX_BYTES },
-		oauth: null,
-		delegation: null,
-	}),
-)
+export const OPS_ENDPOINT = formatEndpointHeader(OPS_ROW.id, OPS_ROW.digest)
+
+/** A view with no data but one table, through which `admittedTableName` asks the wire's own parser about a name. */
+const ONE_TABLE_VIEW = {
+	release: '0.0.0',
+	maintenance: { mode: 'open', generation: null, published: false },
+	migrations: [],
+	scheduler: { alarm: null },
+	jobs: [],
+	files: [],
+	webhooks: [],
+	bootFailure: null,
+}
 
 /** The migration ledger `@fabrika/db/sqlite-migrate` keeps in the object's SQLite. */
 const MIGRATION_LEDGER = 'fabrika_migrations'
@@ -90,8 +83,11 @@ export function opsAccess(env: Readonly<Record<string, unknown>>): OpsAccess | n
 /** What an ops request reads of the object it reached. */
 export interface OpsTarget {
 	readonly storage: OpsStorage
-	/** The instance's last failed boot, the application's error text included. */
-	readonly bootFailure: OpsBootFailureContent | null
+	/**
+	 * The instance's last failed boot, the application's error text included. Asked only after authentication: it
+	 * waits for a boot under way and never starts one.
+	 */
+	bootFailure(): Promise<OpsBootFailureContent | null>
 }
 
 /**
@@ -99,7 +95,7 @@ export interface OpsTarget {
  * runs first; an unknown operation, a malformed body and an object name the list lacks are refused after it.
  */
 export async function serveOps(request: Request, access: OpsAccess | null, target: OpsTarget): Promise<Response> {
-	if (access === null || request.method !== OPS_METHOD || !authenticated(request, access)) {
+	if (access === null || !opsAuthenticated(request, access)) {
 		return opsRefusal()
 	}
 	const operation = parseOpsOperation(new URL(request.url).pathname)
@@ -143,9 +139,12 @@ export async function jsonBody(request: Request): Promise<unknown> {
 	}
 }
 
-/** The endpoint header names the composed row, and the key's digest is one the platform wrote, compared in constant time. */
-function authenticated(request: Request, access: OpsAccess): boolean {
-	if (request.headers.get(ENDPOINT_HEADER) !== OPS_ENDPOINT) {
+/**
+ * Control's credentials on an ops request: the row's method, its endpoint header, and a key whose digest is one the
+ * platform wrote, compared in constant time. The Worker and the object both run it; it reads nothing the body names.
+ */
+export function opsAuthenticated(request: Request, access: OpsAccess): boolean {
+	if (request.method !== OPS_METHOD || request.headers.get(ENDPOINT_HEADER) !== OPS_ENDPOINT) {
 		return false
 	}
 	const authorization = request.headers.get('Authorization') ?? ''
@@ -169,7 +168,8 @@ function authenticated(request: Request, access: OpsAccess): boolean {
  * failed before its migrations) reads as empty. What the storage holds is parsed by the wire's own parser.
  */
 async function inspectView(target: OpsTarget, content: boolean): Promise<OpsView | OpsContentView> {
-	const { storage, bootFailure } = target
+	const { storage } = target
+	const bootFailure = await target.bootFailure()
 	const tables = tableNames(storage)
 	const has = (name: string) => tables.includes(name)
 	const alarm = storage.getAlarm === undefined ? missing('getAlarm') : await storage.getAlarm()
@@ -178,7 +178,7 @@ async function inspectView(target: OpsTarget, content: boolean): Promise<OpsView
 		maintenance: { mode: 'open', generation: null, published: false },
 		database: {
 			sizeBytes: storage.sql.databaseSize ?? missing('sql.databaseSize'),
-			tables: tables.map((name) => ({ name, rows: cappedCount(storage, name) })),
+			tables: tables.filter(admittedTableName).map((name) => ({ name, rows: cappedCount(storage, name) })),
 		},
 		migrations: has(MIGRATION_LEDGER)
 			? rows(storage, `select bundle, name, checksum, applied_at as appliedAt from ${MIGRATION_LEDGER} order by bundle, name`)
@@ -217,6 +217,14 @@ function tableNames(storage: OpsStorage): string[] {
 		`select name from sqlite_schema where type = 'table' and name not like '\\_cf\\_%' escape '\\' and name not like 'sqlite\\_%' escape '\\'
 		order by name`,
 	).toArray().flatMap((row) => typeof row['name'] === 'string' ? [row['name']] : [])
+}
+
+/**
+ * Whether the view admits `name`. A table SQLite allows but the wire does not (`"MixedCase"`, from a raw migration) is
+ * left out, so one such table never takes the whole view down with it.
+ */
+function admittedTableName(name: string): boolean {
+	return parseOpsView({ ...ONE_TABLE_VIEW, database: { sizeBytes: 0, tables: [{ name, rows: 0 }] } }) !== null
 }
 
 /** At most `OPS_ROW_COUNT_CAP`: a full count bills every row read. */
