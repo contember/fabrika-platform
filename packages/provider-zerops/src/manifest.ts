@@ -1,3 +1,4 @@
+import { CONTRACT_JOB_NAME_PATTERN, CRON_SCHEDULE_PATTERN } from '@fabrika/app/build'
 import { appSchemaSchema } from '@fabrika/auth'
 import { type AppSchema, type ContractArtifact, contractDigest, isDigest } from '@fabrika/auth-core'
 import type { OperationsSourceMapBuildUpload } from '@fabrika/operations-contract/releases'
@@ -312,13 +313,11 @@ export type FabrikaManifestImportDocument = z.infer<typeof importDocumentSchema>
 
 /** A literal path of unreserved characters: it is written into the generated probes unquoted by any shell. */
 const READINESS_PATH = /^(?:\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$/
-const JOB_NAME = /^[A-Za-z][A-Za-z0-9_]*$/
-const CRON_SCHEDULE = /^[0-9*/,-]+(?: [0-9*/,-]+){4}$/
 
 const contractRunSchema = z.object({
 	digest: z.string().regex(CONTRACT_DIGEST_PATTERN),
 	readinessPath: z.string().regex(READINESS_PATH),
-	jobs: z.array(z.object({ name: z.string().regex(JOB_NAME), schedule: z.string().regex(CRON_SCHEDULE) }).strict()),
+	jobs: z.array(z.object({ name: z.string().regex(CONTRACT_JOB_NAME_PATTERN), schedule: z.string().regex(CRON_SCHEDULE_PATTERN) }).strict()),
 	files: z.literal(true).optional(),
 	scan: z.literal(true).optional(),
 }).strict()

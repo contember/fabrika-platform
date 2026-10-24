@@ -2,6 +2,7 @@
 // runs. Of the authored setup only `build.base`, `build.os` and the SPA's `build.buildCommands` survive; the rest of
 // the build, the deploy gate and the whole `run` section are generated here. PURE — no network, no filesystem.
 
+import { type ContractRecipe, contractRecipe } from '@fabrika/app/build'
 import {
 	type ContractArtifact,
 	FABRIKA_CONTRACT_DIGEST,
@@ -9,9 +10,8 @@ import {
 	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
 	type FrameworkVariableName,
 } from '@fabrika/auth-core'
-import { APPLICATION_SERVER_MAX_HEADER_BYTES } from '@fabrika/auth-core'
 import type { OperationsAssetRoot, OperationsSourceMapBuildUpload } from '@fabrika/operations-contract/releases'
-import { FRAMEWORK_RELEASE_PATTERN, type JsonValue } from '@fabrika/provider-contract'
+import type { JsonValue } from '@fabrika/provider-contract'
 import packageManifest from '../package.json'
 import { renderYaml } from './compile'
 import { parseZeropsDescriptor, type PreparedZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
@@ -30,8 +30,7 @@ export const ZEROPS_APPLICATION_RUNTIME = 'alpine/bun@1.3'
  */
 export const FABRIKA_CHECK_VERSION: string = packageManifest.version
 
-/** The compiler the platform type-checks with. It is fetched by version, never taken from the application's lockfile. */
-export const PLATFORM_TYPESCRIPT_VERSION = '5.9.3'
+export { PLATFORM_TYPESCRIPT_VERSION } from '@fabrika/app/build'
 
 /** System packages an application may add to its runtime image, installed by the generated `run.prepareCommands`. */
 export const ZEROPS_RUNTIME_PACKAGES = ['ffmpeg', 'ghostscript', 'imagemagick', 'poppler-utils', 'vips'] as const
@@ -42,12 +41,6 @@ export interface ZeropsContractJob {
 	readonly name: string
 	readonly schedule: string
 }
-
-/** The framework's file scan job (`@fabrika/app`'s `FILE_SCAN_JOB`), run every minute when a collection scans. */
-export const ZEROPS_FILE_SCAN_JOB = 'fabrika-file-scan'
-/** The framework's file sweep job (`@fabrika/app`'s `FILE_SWEEP_JOB` and its schedule), run when the contract has files. */
-export const ZEROPS_FILE_SWEEP_JOB = 'fabrika-file-sweep'
-const FILE_SWEEP_SCHEDULE = '41 * * * *'
 
 /**
  * The RAM in GB a container of a scanning application starts with: one `clamscan` over a batch peaks at about 1 GB
@@ -111,7 +104,7 @@ export interface ZeropsLockedExecution {
 }
 
 /** The application ids the generated scripts may name: the contract's own id rule, so a script needs no quoting. */
-export const LOCKED_APP_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/
+export { CONTRACT_APP_ID_PATTERN as LOCKED_APP_ID_PATTERN } from '@fabrika/app/build'
 
 export const CONTRACT_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/
 
@@ -242,31 +235,6 @@ export function lockedAuthoredBuild(entry: { readonly [key: string]: JsonValue }
 
 const SOURCE_ROOT = '/build/source'
 const RUNTIME_ROOT = '/var/www'
-const FABRIKA_BIN = './node_modules/.bin/fabrika'
-const MIGRATE_SCRIPT = 'fabrika/migrate.generated.sh'
-const VERIFY_SCRIPT = 'fabrika/verify.generated.sh'
-const START_SCRIPT = 'fabrika/start.generated.sh'
-const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
-
-/** The compiler options of the platform's type check; the application's own `tsconfig.json` and its `paths` are not read. */
-const PLATFORM_TSCONFIG_CONTENTS = JSON.stringify({
-	compilerOptions: {
-		target: 'ES2022',
-		module: 'ESNext',
-		moduleResolution: 'bundler',
-		lib: ['ES2022', 'DOM', 'DOM.Iterable'],
-		types: ['bun'],
-		strict: true,
-		noUncheckedIndexedAccess: true,
-		noImplicitOverride: true,
-		forceConsistentCasingInFileNames: true,
-		skipLibCheck: true,
-		resolveJsonModule: true,
-		isolatedModules: true,
-		noEmit: true,
-	},
-	include: ['../fabrika.contract.ts', '../src', 'entry.generated.ts'],
-})
 
 /** One `printf` writing `lines` to `path`. Each line is single-quoted, so it may hold neither `'` nor an expansion. */
 const writeFileCommand = (path: string, lines: readonly string[]): string => {
@@ -275,44 +243,6 @@ const writeFileCommand = (path: string, lines: readonly string[]): string => {
 	}
 	return `printf '%s\\n' ${lines.map((line) => `'${line}'`).join(' ')} > ${path}`
 }
-
-const migrateScript = (appId: string): readonly string[] => [
-	'#!/bin/sh',
-	'set -eu',
-	`cd ${RUNTIME_ROOT}`,
-	`FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db migrate`,
-]
-
-// The committed schema types must match the migrated schema and every generated isolation test must pass on a throwaway
-// schema. The build has no database, so they run at container start, after the migrations, as init commands: a failed
-// init command stops the activation, and the readiness window opens only with `run.start`, after the init commands (both
-// verified live), so a run as long as the CRM's ~3 minutes of generated cases does not race it.
-const verifyScript = (appId: string): readonly string[] => [
-	'#!/bin/sh',
-	'set -eu',
-	`cd ${RUNTIME_ROOT}`,
-	`FABRIKA_APP_ID=${appId} ${FABRIKA_BIN} db codegen --verify`,
-	`FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db test-isolation`,
-]
-
-const startScript: readonly string[] = [
-	'#!/bin/sh',
-	'set -eu',
-	`cd ${RUNTIME_ROOT}`,
-	`exec bun --max-http-header-size=${APPLICATION_SERVER_MAX_HEADER_BYTES} fabrika/entry.generated.ts`,
-]
-
-/** The scripts the build writes and every container's init commands run, in this order. */
-const initScripts = (execution: ZeropsLockedExecution): readonly { readonly path: string; readonly lines: readonly string[] }[] =>
-	execution.databaseUrl === null
-		? []
-		: [{ path: MIGRATE_SCRIPT, lines: migrateScript(execution.appId) }, { path: VERIFY_SCRIPT, lines: verifyScript(execution.appId) }]
-
-const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
-
-// After every check: a map is uploaded only for a build that can deploy. A failed upload never fails the build; the
-// provider reads the state from the report line.
-const sourceMapUpload = (release: string): string => `cd /tmp && bun x --bun -p @fabrika/check@${release} fabrika-source-maps ${SOURCE_ROOT} || true`
 
 /**
  * The upload's build variables: the destination and asset roots as a literal, and the bearer lifted from the service
@@ -325,26 +255,25 @@ const sourceMapBuildVariables = (upload: OperationsSourceMapBuildUpload): Record
 	return { [FABRIKA_SOURCE_MAP_UPLOAD]: value, [FABRIKA_SOURCE_MAP_UPLOAD_KEY]: `\${RUNTIME_${FABRIKA_SOURCE_MAP_UPLOAD_KEY}}` }
 }
 
-/**
- * The generated build commands, in order; the authored SPA commands run before all of them. The application's tests
- * run first: they are authored code, so everything after them is reinstalled, regenerated or checked again. They run
- * `--isolate`, as the application skill runs them: a test file's DOM globals otherwise leak into the next file.
- */
+/** `@fabrika/app/build`'s recipe at this installation's paths. */
+const recipeOf = (execution: ZeropsLockedExecution): ContractRecipe =>
+	contractRecipe({
+		appId: execution.appId,
+		checkRelease: execution.checkRelease,
+		sourceRoot: SOURCE_ROOT,
+		runtimeRoot: RUNTIME_ROOT,
+		// The build has no database; a container's init commands run the migrations and schema checks, and the readiness
+		// window opens only with `run.start`, after them (both verified live), so the CRM's ~3 minutes does not race it.
+		database: execution.databaseUrl !== null,
+		sourceMaps: execution.sourceMaps !== null,
+		jobs: execution.contract.jobs,
+		files: execution.contract.files === true,
+		scan: execution.contract.scan === true,
+	})
+
+/** The generated build commands, in order; the authored SPA commands run before all of them. */
 export function generatedBuildCommands(execution: ZeropsLockedExecution): readonly string[] {
-	if (!LOCKED_APP_ID_PATTERN.test(execution.appId)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
-	if (!FRAMEWORK_RELEASE_PATTERN.test(execution.checkRelease)) throw new Error('zerops: the checker release must be a release version')
-	return [
-		INSTALL,
-		'bun test --isolate --pass-with-no-tests',
-		`rm -rf node_modules && ${INSTALL}`,
-		`bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"`,
-		`cd /tmp && bun x --bun -p @fabrika/check@${execution.checkRelease} fabrika-check ${SOURCE_ROOT}`,
-		writeFileCommand(PLATFORM_TSCONFIG, [PLATFORM_TSCONFIG_CONTENTS]),
-		`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${SOURCE_ROOT}/${PLATFORM_TSCONFIG}`,
-		...initScripts(execution).map((script) => writeFileCommand(script.path, script.lines)),
-		writeFileCommand(START_SCRIPT, startScript),
-		...(execution.sourceMaps === null ? [] : [sourceMapUpload(execution.checkRelease)]),
-	]
+	return recipeOf(execution).build.map((step) => 'run' in step ? step.run : writeFileCommand(step.write, step.lines))
 }
 
 const sortedUnique = (values: readonly string[]): string[] => [...new Set(values)].sort()
@@ -360,16 +289,11 @@ const storageVariables = (hostname: string): Record<StorageVariable, string> => 
 })
 
 /** The crontab lines that run a job of the contract or of the framework, each on one container. */
-const jobCrontab = (contract: ZeropsContractRun): { readonly timing: string; readonly command: string; readonly allContainers: boolean }[] => [
-	...contract.jobs.map((job) => ({ timing: job.schedule, command: `${FABRIKA_BIN} job run ${job.name}`, allContainers: false })),
-	...(contract.files === true
-		? [{ timing: FILE_SWEEP_SCHEDULE, command: `${FABRIKA_BIN} job run ${ZEROPS_FILE_SWEEP_JOB}`, allContainers: false }]
-		: []),
-	...(contract.scan === true ? [{ timing: '* * * * *', command: `${FABRIKA_BIN} job run ${ZEROPS_FILE_SCAN_JOB}`, allContainers: false }] : []),
-]
+const jobCrontab = (execution: ZeropsLockedExecution): { readonly timing: string; readonly command: string; readonly allContainers: boolean }[] =>
+	recipeOf(execution).jobs.map((job) => ({ timing: job.schedule, command: job.command, allContainers: false }))
 
 /** How many job processes the crontab may run at once, each opening the application's database. */
-export const zeropsJobProcesses = (contract: ZeropsContractRun): number => jobCrontab(contract).length
+export const zeropsJobProcesses = (execution: ZeropsLockedExecution): number => jobCrontab(execution).length
 
 /** The commands every container runs before `run.start`, in order; any failure stops the activation. */
 export function generatedInitCommands(execution: ZeropsLockedExecution): string[] {
@@ -377,7 +301,7 @@ export function generatedInitCommands(execution: ZeropsLockedExecution): string[
 		// A container starts from the prepared image, whose signatures are as old as its build; a failed refresh leaves
 		// them to the daily one, and the scanner refuses signatures older than three days, so the scan fails closed.
 		...(execution.contract.scan === true ? [`${FRESHCLAM} || echo 'fabrika: freshclam did not refresh the malware signatures'`] : []),
-		...initScripts(execution).map((script) => `sh ${RUNTIME_ROOT}/${script.path}`),
+		...recipeOf(execution).init.map((path) => `sh ${RUNTIME_ROOT}/${path}`),
 	]
 }
 
@@ -402,7 +326,7 @@ export function renderLockedSetup(
 	const scan = contract.scan === true
 	const packages = sortedUnique([...execution.runtimePackages, ...(scan ? [SCANNER_PACKAGE] : [])])
 	// Every container keeps its own signatures; one scan pass at a time holds the job's lease.
-	const crontab = [...jobCrontab(contract), ...(scan ? [{ timing: FRESHCLAM_SCHEDULE, command: FRESHCLAM, allContainers: true }] : [])]
+	const crontab = [...jobCrontab(execution), ...(scan ? [{ timing: FRESHCLAM_SCHEDULE, command: FRESHCLAM, allContainers: true }] : [])]
 	const initCommands = generatedInitCommands(execution)
 	const prepareCommands = packages.length === 0 ? [] : [`sudo apk add --no-cache ${packages.join(' ')}`, ...(scan ? [FRESHCLAM] : [])]
 	return {
@@ -422,7 +346,7 @@ export function renderLockedSetup(
 			base: ZEROPS_APPLICATION_RUNTIME,
 			...(prepareCommands.length === 0 ? {} : { prepareCommands }),
 			...(initCommands.length === 0 ? {} : { initCommands }),
-			start: `sh ${RUNTIME_ROOT}/${START_SCRIPT}`,
+			start: `sh ${RUNTIME_ROOT}/${recipeOf(execution).start}`,
 			ports: [{ port: ZEROPS_APPLICATION_PORT, httpSupport: true }],
 			healthCheck: { httpGet: probe, execPeriod: '10s', disconnectTimeout: '30s', recoveryTimeout: '10s', failureTimeout: '120s' },
 			...(crontab.length === 0 ? {} : { crontab }),

@@ -18,6 +18,8 @@ import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { MAX_CSP_ORIGINS } from '../headers'
 import {
+	type ContractEntryPlacement,
+	contractProxyEntry,
 	contractProxyTable,
 	encodeProxyManifestJson,
 	type InstallationProxyApp,
@@ -616,5 +618,43 @@ describe('serviceProxyTable — the manifest form of a service contract', () => 
 		const parsed = parseProxyManifest({ apps: [{ ...placement, ...table, oauthResources: [OAUTH_RESOURCE] }] })
 		const entry = parsed?.apps[0]
 		expect(entry !== undefined && !isApplicationEntry(entry)).toBe(true)
+	})
+})
+
+describe('contractProxyEntry', () => {
+	const placement: ContractEntryPlacement = {
+		id: 'notes@prod',
+		hosts: ['notes.example.com'],
+		upstream: 'notes:3000',
+		scheme: 'https',
+		table: contractProxyTable(notesArtifact),
+	}
+
+	test('builds the entry the manifest parser reads back, and omits an absent origin and an empty list', () => {
+		const entry = contractProxyEntry({ ...placement, operationsOrigin: 'https://ingest.example.com', crossOrigins: ['https://partner.example.org'] })
+		expect(entry).toMatchObject({ id: 'notes@prod', operationsOrigin: 'https://ingest.example.com', crossOrigins: ['https://partner.example.org'] })
+		expect(parseProxyManifest({ apps: [entry] })).toEqual({ apps: [entry] })
+		const bare = contractProxyEntry({ ...placement, crossOrigins: [] })
+		expect(bare).not.toHaveProperty('operationsOrigin')
+		expect(bare).not.toHaveProperty('crossOrigins')
+	})
+
+	test('refuses what the parser refuses, naming the field and never its value', () => {
+		const refusal = (extra: { readonly operationsOrigin?: string; readonly crossOrigins?: readonly string[] }): string => {
+			try {
+				contractProxyEntry({ ...placement, ...extra })
+			} catch (error) {
+				return error instanceof Error ? error.message : ''
+			}
+			return 'accepted'
+		}
+		const keyed = refusal({ operationsOrigin: 'https://ingest-key@ingest.example.com' })
+		expect(keyed).toBe('proxy entry `notes@prod` is one the proxy manifest refuses (operationsOrigin)')
+		expect(keyed).not.toContain('ingest-key')
+		const keyedCross = refusal({ crossOrigins: ['https://partner-key@partner.example.org'] })
+		expect(keyedCross).toContain('is one the proxy manifest refuses')
+		expect(keyedCross).not.toContain('partner-key')
+		expect(refusal({ crossOrigins: ['https://notes.example.com'] })).toContain('is one the proxy manifest refuses')
+		expect(refusal({ crossOrigins: ['https://partner.example.org', 'https://partner.example.org'] })).toContain('is one the proxy manifest refuses')
 	})
 })

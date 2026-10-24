@@ -131,6 +131,8 @@ bun test
   `contract.digest`, from `contractDigest`), and an endpoint table without the contract is refused. A deploy writes
   `FABRIKA_CONTRACT_DIGEST` and the namespace proxy's `snapshot` from `ProviderApprovedAccess.contractDigest`, never
   from the approved contract: Control may have upcast it from an older release's artifact.
+  The steps are `@fabrika/app/build`'s `contractRecipe`; `src/execution.ts` renders them at Zerops' paths (`printf`
+  file writes, init commands, the crontab, ClamAV) and keeps the guards a shell needs.
   `renderLockedExecutionDescriptor` sends ONLY the generated setup: the SPA commands, the frozen install, the
   application's tests, then — because the tests are authored code — a reinstall, the regenerated entrypoint,
   the checker fetched at the release of the reader that read the application (`ZeropsLockedExecution.checkRelease`,
@@ -230,11 +232,12 @@ bun test
   (`FABRIKA_PROXY_SECRET`), and hands none to a dry run; the deployer writes what it was handed. Never log either value.
 - **A contract member's manifest entry carries `operationsOrigin`** when Control handed the member one (the origin
   of its active ingest DSN, never the DSN): the proxy's header policy admits it in `connect-src`, as the framework
-  does (ADR-0022 "Response headers"). `compileNamespaceProxyManifest` refuses one that is not an exact http(s) origin.
+  does (ADR-0022 "Response headers"). The entry is `contractProxyEntry`'s (`@fabrika/proxy-core/manifest`), which
+  refuses one that is not an exact http(s) origin.
 - **A contract member's manifest entry lists `crossOrigins`** when Control handed the member a non-empty list (the
   environment's registry row, ADR-0022 "Cross-origin endpoints"), and omits the field otherwise.
-  `compileNamespaceProxyManifest` refuses a list the manifest parser would: an origin that fails `isCrossOrigin`, a
-  duplicate, the member's own host, more than `MAX_CROSS_ORIGINS`. Control republishes the namespace when the list changes.
+  `contractProxyEntry` refuses a list the manifest parser would: an origin that fails `isCrossOrigin`, a duplicate, the
+  member's own host, more than `MAX_CROSS_ORIGINS`. Control republishes the namespace when the list changes.
 - **A deploy whose rows or CSP the namespace's pinned proxy cannot read is refused.** A namespace proxy's manifest parser
   is strict, so an approved contract with a row that no older release's proxy parses (a `public` row, a `cache`, a
   file-response profile, a `capabilities` requirement, a webhook's `authorization: 'forward'`, and any later form), or

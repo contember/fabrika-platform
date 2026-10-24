@@ -19,7 +19,7 @@ import {
 	type TokenCache,
 } from '@fabrika/proxy-core'
 import { applyCrossOriginHeaders, crossOriginHeaders } from '@fabrika/proxy-core/headers'
-import { contractProxyTable } from '@fabrika/proxy-core/manifest'
+import { contractProxyEntry, contractProxyTable } from '@fabrika/proxy-core/manifest'
 
 /** What the proxy did with a request: answered it itself, or forwarded it with what only the proxy may set. */
 export type ProxyOutcome =
@@ -66,14 +66,14 @@ const ASSERTED_HEADERS = [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, ENDPOINT_HEADER
 export function endpointProxy(options: EndpointProxyOptions): TestProxy {
 	const verify = createVerifyService({
 		manifest: {
-			apps: [{
+			apps: [contractProxyEntry({
 				id: options.appId,
 				hosts: [options.host],
 				upstream: 'app',
 				scheme: 'https',
-				...contractProxyTable(options.artifact),
-				...(options.crossOrigins === undefined || options.crossOrigins.length === 0 ? {} : { crossOrigins: [...options.crossOrigins] }),
-			}],
+				table: contractProxyTable(options.artifact),
+				...(options.crossOrigins === undefined ? {} : { crossOrigins: options.crossOrigins }),
+			})],
 		},
 		iam: options.iam,
 		issuer: options.issuer,

@@ -29,13 +29,7 @@ import { bytesAreOfType, SNIFF_BYTES, SNIFFABLE_TYPES } from './sniff'
 import { cleanName, digesting, isNamed, readExactly, readHead } from './streams'
 import { FileDownload } from './treatment'
 
-/**
- * The framework's sweep job: hourly, it deletes the files no declared column references and the pending ones past the
- * grace, so none waits for the next request. A reserved name with `-`, which no `c.cron` name can take;
- * `@fabrika/provider-zerops` writes it into the crontab on this schedule (`ZEROPS_FILE_SWEEP_JOB`).
- */
-export const FILE_SWEEP_JOB = 'fabrika-file-sweep'
-export const FILE_SWEEP_SCHEDULE = '41 * * * *'
+export { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE } from './job-names'
 export const FILE_SWEEP_TIMEOUT_MS = 10 * 60_000
 /** How long a staged file waits for its first reference before the sweep may delete it. */
 export const FILE_PENDING_GRACE_MS = 60 * 60 * 1000

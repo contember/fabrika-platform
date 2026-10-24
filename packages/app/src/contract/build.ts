@@ -64,6 +64,7 @@ import {
 } from '@fabrika/auth-core'
 import { isPolicyOrigin, MAX_CSP_ORIGINS, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
+import { CONTRACT_APP_ID_PATTERN as APP_ID } from './app-id'
 import { contractArtifactSchema } from './artifact-schema'
 import {
 	type AccessDeclaration,
@@ -121,7 +122,6 @@ import { ContractError, Problems } from './problems'
 import { TOKEN_MAX_DAYS } from './token'
 import { hmacSchemeSchema, WEBHOOK_SCHEME_ALLOWED, webhookSchemeSchema } from './webhook-scheme'
 
-const APP_ID = /^[a-z0-9][a-z0-9-]*$/
 const NAME = /^[A-Za-z][A-Za-z0-9_]*$/
 const DIMENSION = /^[a-z][A-Za-z0-9_]*$/
 const ACTION = /^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/
