@@ -37,6 +37,7 @@ const OPERATION: DataOperationDto = {
 	recoversOperationId: null,
 	resolution: null,
 }
+const STUCK_ID = '0192c4a0-0000-7000-8000-0000000000aa'
 const OPERATION_LINE = `${OPERATION.id}\tmaintenance\trunning\trestrict\tread-only\t8\t-\t2025-10-24T12:00:00.000Z`
 
 interface Captured {
@@ -243,9 +244,30 @@ describe('env maintenance', () => {
 		)
 	})
 
-	test('refuses an operation that does not parse', async () => {
-		fakeControl({ result: { ...OPERATION, state: 'paused' } })
-		await expect(runEnvCli('maintenance', ['notes', 'prod', 'closed'], CONTROL_ENV)).rejects.toThrow('Control returned an unreadable data operation')
+	test('refuses an operation that does not parse, and one of another environment', async () => {
+		const refused: unknown[] = [
+			{ ...OPERATION, state: 'paused' },
+			{ ...OPERATION, id: `${OPERATION.id}\x1b]52;c;cGF5bG9hZA==\x07` },
+			{ ...OPERATION, errorCode: 'Object Unreachable' },
+			{ ...OPERATION, recoversOperationId: 'stuck-1' },
+			{ ...OPERATION, appId: 'other' },
+			{ ...OPERATION, env: 'staging' },
+		]
+		for (const result of refused) {
+			fakeControl({ result })
+			const { out } = await captureOutput(async () => {
+				await expect(runEnvCli('maintenance', ['notes', 'prod', 'closed'], CONTROL_ENV)).rejects.toThrow(
+					'Control returned an unreadable data operation',
+				)
+			})
+			expect(out).toBe('')
+		}
+	})
+
+	test('prints the known fields only: a field Control adds is dropped from --json', async () => {
+		fakeControl({ result: { ...OPERATION, note: 'added by a newer Control' } })
+		const { out } = await captureOutput(() => runEnvCli('maintenance', ['notes', 'prod', 'closed', '--json'], CONTROL_ENV))
+		expect(JSON.parse(out)).toEqual(OPERATION)
 	})
 })
 
@@ -270,6 +292,11 @@ describe('env operations', () => {
 		expect(JSON.parse(out)).toEqual({ items: [], nextCursor: null })
 	})
 
+	test('refuses a page holding an operation of another environment', async () => {
+		fakeControl({ result: { items: [OPERATION, { ...OPERATION, env: 'staging' }], nextCursor: null } })
+		await expect(runEnvCli('operations', ['notes', 'prod'], CONTROL_ENV)).rejects.toThrow('Control returned an unreadable list of data operations')
+	})
+
 	test('says on stderr when older operations exist beyond the page', async () => {
 		fakeControl({ result: { items: [OPERATION], nextCursor: OPERATION.id } })
 		const { err } = await captureOutput(() => runEnvCli('operations', ['notes', 'prod'], CONTROL_ENV))
@@ -280,12 +307,12 @@ describe('env operations', () => {
 describe('env recover', () => {
 	test('recovers a stuck operation with the resolution given and prints the recovery', async () => {
 		for (const resolution of ['resume', 'open'] as const) {
-			const recovery = { ...OPERATION, kind: 'recovery', step: 'reconcile', targetMode: 'closed', recoversOperationId: 'stuck-1', resolution }
+			const recovery = { ...OPERATION, kind: 'recovery', step: 'reconcile', targetMode: 'closed', recoversOperationId: STUCK_ID, resolution }
 			const control = fakeControl({ result: recovery })
-			const { out } = await captureOutput(() => runEnvCli('recover', ['notes', 'prod', 'stuck-1', resolution], CONTROL_ENV))
+			const { out } = await captureOutput(() => runEnvCli('recover', ['notes', 'prod', STUCK_ID, resolution], CONTROL_ENV))
 			expect(control.calls[0]?.body).toEqual({
 				method: 'data.recover',
-				input: { appId: 'notes', env: 'prod', operationId: 'stuck-1', resolution },
+				input: { appId: 'notes', env: 'prod', operationId: STUCK_ID, resolution },
 			})
 			expect(out).toBe(`${OPERATION.id}\trecovery\trunning\treconcile\tclosed\t8\t-\t2025-10-24T12:00:00.000Z`)
 		}
@@ -293,14 +320,63 @@ describe('env recover', () => {
 
 	test('refuses a resolution other than resume or open before anything is sent', async () => {
 		const control = fakeControl({ result: OPERATION })
-		await expect(runEnvCli('recover', ['notes', 'prod', 'stuck-1', 'close'], CONTROL_ENV)).rejects.toThrow('The resolution is resume or open')
+		await expect(runEnvCli('recover', ['notes', 'prod', STUCK_ID, 'close'], CONTROL_ENV)).rejects.toThrow('The resolution is resume or open')
 		expect(control.calls).toEqual([])
 	})
 
 	test('a 501 says the release does not offer it and that retrying will not help', async () => {
 		fakeControl({ error: { type: 'internal', message: 'data operations are not available in this release' } }, 501)
-		await expect(runEnvCli('recover', ['notes', 'prod', 'stuck-1', 'open'], CONTROL_ENV)).rejects.toThrow(
+		await expect(runEnvCli('recover', ['notes', 'prod', STUCK_ID, 'open'], CONTROL_ENV)).rejects.toThrow(
 			'`env recover` is not available in this release of the control plane; retrying will not change that',
 		)
+	})
+})
+
+describe('env output safety', () => {
+	test('refuses an origin that would expose the key, before anything is sent', async () => {
+		const control = fakeControl({ result: VIEW })
+		for (
+			const origin of [
+				'http://control.example',
+				'https://operator:secret@control.example',
+				'https://control.example/api',
+				'https://control.example/?a=1',
+			]
+		) {
+			await expect(runEnvCli('inspect', ['notes', 'prod', `--url=${origin}`], CONTROL_ENV)).rejects.toThrow('--url or FABRIKA_CONTROL_URL')
+		}
+		expect(control.calls).toEqual([])
+	})
+
+	test('a Control that echoes the key puts it on no output and into no error: human, --json, refusal', async () => {
+		const echoed = { result: { ...CONTENT_VIEW, bootFailure: { at: AT, message: 'token px_test leaked', stack: null } } }
+		const cases: [string, number, string[]][] = [
+			[JSON.stringify(echoed), 200, ['--content']],
+			// Behind a JSON escape, which a plain search of the body would miss.
+			[JSON.stringify(echoed).replace('px_test', '\\u0070x_test'), 200, ['--content', '--json']],
+			[JSON.stringify({ error: { type: 'not_found', message: 'no env for Bearer px_test' } }), 404, []],
+		]
+		for (const [body, status, flags] of cases) {
+			globalThis.fetch = asFetch(async () => new Response(body, { status, headers: { 'content-type': 'application/json' } }))
+			let message = ''
+			const output = await captureOutput(async () => {
+				message = await runEnvCli('inspect', ['notes', 'prod', ...flags], CONTROL_ENV).then(() => '', (error: unknown) => String(error))
+			})
+			expect(output).toEqual({ out: '', err: '' })
+			expect(message).toBe("Error: transport: Control's answer carried [FABRIKA_CONTROL_KEY]; it was dropped")
+		}
+	})
+
+	test('a diagnostic that would quote the key has it cut out', async () => {
+		fakeControl({ result: VIEW })
+		await expect(runEnvCli('inspect', ['notes', 'prod', '--px_test'], CONTROL_ENV)).rejects.toThrow('Unknown option: --[FABRIKA_CONTROL_KEY]')
+	})
+
+	test('diagnostics carry no control character', async () => {
+		fakeControl({ error: { type: 'not_found', message: 'app env \x1b]52;c;cGF5bG9hZA==\x07not found' } }, 404)
+		const refusal = await runEnvCli('inspect', ['notes', 'prod'], CONTROL_ENV).then(() => '', (error: unknown) => String(error))
+		expect(refusal).toBe('Error: not_found: app env ]52;c;cGF5bG9hZA==not found')
+		const usage = await runEnvCli('inspect', ['notes', 'prod', '--x\x1b[2J'], CONTROL_ENV).then(() => '', (error: unknown) => String(error))
+		expect(usage).toBe('Error: Unknown option: --x[2J')
 	})
 })

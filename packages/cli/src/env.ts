@@ -1,11 +1,11 @@
 // The `fabrika env` command area: an application environment's data as Control serves it (ADR-0068). Every command is
-// one `data.*` procedure of `ControlRpcContract`, reached as `fabrika control` reaches Control: the same typed client,
-// the origin from `--url` or FABRIKA_CONTROL_URL, the key from FABRIKA_CONTROL_KEY in the environment only.
+// one `data.*` procedure of `ControlRpcContract`, reached through the client `fabrika control` uses (`connectControl`).
 
-import { createRpcClient, type InferRpcClient, RpcError } from '@fabrika/app'
+import { RpcError } from '@fabrika/app'
 import { OPS_ROW_COUNT_CAP, type OpsContentView, type OpsView, parseOpsContentView, parseOpsView } from '@fabrika/auth-core'
-import type { ControlRpcContract, DataOperationDto } from '@fabrika/control-contract'
+import type { DataOperationDto } from '@fabrika/control-contract'
 import { z } from 'zod'
+import { connectControl, type ControlClient, withoutControlKey } from './control.js'
 
 const USAGE = `fabrika env — an application environment's data, through the control plane
 
@@ -84,32 +84,14 @@ const words = (command: string, args: EnvArgs, count: number): readonly string[]
 	return args.positional
 }
 
-type ControlClient = InferRpcClient<ControlRpcContract>
+const controlClient = (args: EnvArgs, env: Environment): ControlClient => connectControl(args.url, env)
 
-const controlClient = (args: EnvArgs, env: Environment): ControlClient => {
-	const origin = args.url ?? env['FABRIKA_CONTROL_URL']
-	if (origin === undefined || origin.trim() === '') {
-		throw new Error('Control origin is required. Pass --url=<origin> or set FABRIKA_CONTROL_URL.')
-	}
-	const key = env['FABRIKA_CONTROL_KEY']
-	if (key === undefined || key.trim() === '') {
-		throw new Error('FABRIKA_CONTROL_KEY is required (environment only — it has no flag).')
-	}
-	const bearer = `Bearer ${key.trim()}`
-	return createRpcClient<ControlRpcContract>({
-		baseUrl: `${origin.trim().replace(/\/+$/, '')}/api/rpc`,
-		fetch: (input, init) => {
-			const headers = new Headers(init?.headers)
-			headers.set('authorization', bearer)
-			// A redirect would carry the bearer to wherever it points.
-			return fetch(input, { ...init, headers, redirect: 'manual' })
-		},
-	})
-}
+/** Control's own rule for an operation's error code (`db/data-operations.ts`). */
+const ERROR_CODE = /^[a-z][a-z0-9_]{0,63}$/
 
-// Passthrough on purpose: `--json` shows the operator a field a newer Control adds to the record.
+/** The known fields of an operation, validated; a field a newer Control adds is dropped, never printed. */
 const dataOperationSchema: z.ZodType<DataOperationDto> = z.object({
-	id: z.string(),
+	id: z.string().uuid(),
 	appId: z.string(),
 	env: z.string(),
 	kind: z.enum(['maintenance', 'backup', 'migrate', 'recovery', 'restore']),
@@ -117,20 +99,36 @@ const dataOperationSchema: z.ZodType<DataOperationDto> = z.object({
 	targetMode: z.enum(['open', 'read-only', 'closed', 'inspect']),
 	generation: z.number().int().nonnegative(),
 	state: z.enum(['running', 'succeeded', 'failed']),
-	errorCode: z.string().nullable(),
+	errorCode: z.string().regex(ERROR_CODE).nullable(),
 	actor: z.string(),
 	createdAt: z.number().int().nonnegative(),
 	updatedAt: z.number().int().nonnegative(),
 	finishedAt: z.number().int().nonnegative().nullable(),
-	recoversOperationId: z.string().nullable(),
+	recoversOperationId: z.string().uuid().nullable(),
 	resolution: z.enum(['resume', 'open']).nullable(),
-}).passthrough()
+})
 
-const dataOperationPageSchema = z.object({ items: z.array(dataOperationSchema), nextCursor: z.string().nullable() })
+interface Target {
+	readonly appId: string
+	readonly env: string
+}
 
-const parseOperation = (value: unknown): DataOperationDto => {
+/** An operation of the environment asked about, and of no other. */
+const ofTarget = (operation: DataOperationDto, target: Target): boolean => operation.appId === target.appId && operation.env === target.env
+
+const parseOperation = (value: unknown, target: Target): DataOperationDto => {
 	const parsed = dataOperationSchema.safeParse(value)
-	if (!parsed.success) throw new Error('Control returned an unreadable data operation')
+	if (!parsed.success || !ofTarget(parsed.data, target)) throw new Error('Control returned an unreadable data operation')
+	return parsed.data
+}
+
+const dataOperationPageSchema = z.object({ items: z.array(dataOperationSchema), nextCursor: z.string().uuid().nullable() })
+
+const parseOperationPage = (value: unknown, target: Target): { items: DataOperationDto[]; nextCursor: string | null } => {
+	const parsed = dataOperationPageSchema.safeParse(value)
+	if (!parsed.success || !parsed.data.items.every((operation) => ofTarget(operation, target))) {
+		throw new Error('Control returned an unreadable list of data operations')
+	}
 	return parsed.data
 }
 
@@ -154,7 +152,7 @@ const operationLine = (operation: DataOperationDto): string =>
 		isoSeconds(operation.createdAt),
 	].join('\t')
 
-/** Every control character but tab and line feed: the application's text must not drive the operator's terminal. */
+/** Every control character but tab and line feed: an answer must not drive the operator's terminal. */
 const printable = (text: string): string => text.replace(/[^\P{Cc}\t\n]/gu, '')
 
 const viewLines = (view: OpsView | OpsContentView): string[] => [
@@ -177,18 +175,23 @@ const viewLines = (view: OpsView | OpsContentView): string[] => [
 const contentLines = (view: OpsContentView): string[] => {
 	const failure = view.bootFailure
 	if (failure === null) return viewLines(view)
-	return [...viewLines(view), '', printable(failure.message), ...(failure.stack === null ? [] : [printable(failure.stack)])]
+	return [...viewLines(view), '', failure.message, ...(failure.stack === null ? [] : [failure.stack])]
 }
 
+/** Human output and every note pass `printable`; `--json` escapes what JSON must. */
 const emit = (args: EnvArgs, result: unknown, render: () => string): void => {
-	console.info(args.json ? JSON.stringify(result, null, 2) : render())
+	console.info(args.json ? JSON.stringify(result, null, 2) : printable(render()))
+}
+
+const note = (text: string): void => {
+	console.warn(printable(text))
 }
 
 /** An operation is an answer whatever its state; stderr names what follows it. */
 const emitOperation = (args: EnvArgs, operation: DataOperationDto): void => {
 	const coordinates = `${operation.appId} ${operation.env}`
-	if (operation.state === 'running') console.warn(`follow it: fabrika env operations ${coordinates}`)
-	if (operation.state === 'failed') console.warn(`open the environment past it: fabrika env recover ${coordinates} ${operation.id} open`)
+	if (operation.state === 'running') note(`follow it: fabrika env operations ${coordinates}`)
+	if (operation.state === 'failed') note(`open the environment past it: fabrika env recover ${coordinates} ${operation.id} open`)
 	emit(args, operation, () => operationLine(operation))
 }
 
@@ -211,17 +214,15 @@ const runMaintenance = async (args: EnvArgs, env: Environment): Promise<void> =>
 	const mode = oneOf(requested, MAINTENANCE_MODES)
 	if (mode === undefined) throw new Error(`The mode is one of ${MAINTENANCE_MODES.join(', ')}, not "${requested}"`)
 	const result = await controlClient(args, env).data.start({ appId, env: environment, kind: 'maintenance', mode })
-	emitOperation(args, parseOperation(result))
+	emitOperation(args, parseOperation(result, { appId, env: environment }))
 }
 
 const runOperations = async (args: EnvArgs, env: Environment): Promise<void> => {
 	const [appId = '', environment = ''] = words('operations', args, 2)
-	const parsed = dataOperationPageSchema.safeParse(await controlClient(args, env).data.operations.list({ appId, env: environment }))
-	if (!parsed.success) throw new Error('Control returned an unreadable list of data operations')
-	const page = parsed.data
-	if (page.nextCursor !== null) console.warn(`showing the newest ${page.items.length} operations; older ones exist`)
+	const page = parseOperationPage(await controlClient(args, env).data.operations.list({ appId, env: environment }), { appId, env: environment })
+	if (page.nextCursor !== null) note(`showing the newest ${page.items.length} operations; older ones exist`)
 	if (!args.json && page.items.length === 0) {
-		console.warn(`${appId} ${environment} has no data operations`)
+		note(`${appId} ${environment} has no data operations`)
 		return
 	}
 	emit(args, page, () => page.items.map(operationLine).join('\n'))
@@ -232,7 +233,7 @@ const runRecover = async (args: EnvArgs, env: Environment): Promise<void> => {
 	const resolution = oneOf(requested, RESOLUTIONS)
 	if (resolution === undefined) throw new Error(`The resolution is resume or open, not "${requested}"`)
 	const result = await controlClient(args, env).data.recover({ appId, env: environment, operationId, resolution })
-	emitOperation(args, parseOperation(result))
+	emitOperation(args, parseOperation(result, { appId, env: environment }))
 }
 
 const commandRun = (command: string): ((args: EnvArgs, env: Environment) => Promise<void>) | undefined => {
@@ -250,25 +251,27 @@ const commandRun = (command: string): ((args: EnvArgs, env: Environment) => Prom
 	}
 }
 
+const diagnostic = (command: string, error: unknown): string => {
+	if (!(error instanceof RpcError)) return error instanceof Error ? error.message : String(error)
+	// Not offered by this release: a definite answer, unlike an outage, so nothing suggests trying again.
+	if (error.httpStatus === 501) return `\`env ${command}\` is not available in this release of the control plane; retrying will not change that`
+	// A refusal is an answer, not a transport fault: its type tells "Control said no" from "Control was unreachable".
+	return `${error.type}: ${error.message}`
+}
+
 export const runEnvCli = async (command: string | undefined, argv: readonly string[], env: Environment = process.env): Promise<void> => {
 	if (command === undefined) {
 		console.info(USAGE)
 		return
 	}
-	const run = commandRun(command)
-	if (run === undefined) throw new Error(`Unknown env command: ${command}\n\n${USAGE}`)
-	const args = parseEnvArgs(argv)
-	if (args.content && command !== 'inspect') throw new Error('--content applies to `env inspect` only')
 	try {
+		const run = commandRun(command)
+		if (run === undefined) throw new Error(`Unknown env command: ${command}\n\n${USAGE}`)
+		const args = parseEnvArgs(argv)
+		if (args.content && command !== 'inspect') throw new Error('--content applies to `env inspect` only')
 		await run(args, env)
 	} catch (error) {
-		if (!(error instanceof RpcError)) throw error
-		// Not offered by this release: a definite answer, unlike an outage, so nothing suggests trying again.
-		if (error.httpStatus === 501) {
-			throw new Error(`\`env ${command}\` is not available in this release of the control plane; retrying will not change that`)
-		}
-		// A refusal is an answer, not a transport fault: its type tells "Control said no" from "Control was unreachable".
-		throw new Error(`${error.type}: ${error.message}`)
+		throw new Error(printable(withoutControlKey(diagnostic(command, error), env)))
 	}
 }
 

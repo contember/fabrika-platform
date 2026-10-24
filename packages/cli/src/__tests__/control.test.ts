@@ -107,6 +107,88 @@ describe('control credential handling', () => {
 	})
 })
 
+describe('control origin', () => {
+	test('refuses an origin that is not https, or more than an origin, before any request', async () => {
+		const captured = captureFetch({ result: { items: [] } })
+		const refused = [
+			'http://control.example',
+			'ftp://control.example',
+			'control.example',
+			'https://operator:secret@control.example',
+			'https://control.example/api',
+			'https://control.example//',
+			'https://control.example/?a=1',
+			'https://control.example/?',
+			'https://control.example/#top',
+			'http://localhost.example.com',
+			'http://128.0.0.1',
+			'http://localhost.evil.example',
+		]
+		for (const origin of refused) {
+			const failure = await runControlCli('apps', ['list'], undefined, { ...CONTROL_ENV, FABRIKA_CONTROL_URL: origin }).then(
+				() => '',
+				(error: unknown) => String(error),
+			)
+			expect({ origin, failure: failure.includes('--url or FABRIKA_CONTROL_URL') }).toEqual({ origin, failure: true })
+			expect(failure).not.toContain('secret')
+		}
+		expect(captured.calls).toEqual([])
+	})
+
+	test('takes plain http to a loopback host, for local development', async () => {
+		for (
+			const [origin, url] of [
+				['http://localhost:3000', 'http://localhost:3000/api/rpc'],
+				['http://127.0.0.1:3000/', 'http://127.0.0.1:3000/api/rpc'],
+				['http://127.8.9.10', 'http://127.8.9.10/api/rpc'],
+				['http://[::1]:3000', 'http://[::1]:3000/api/rpc'],
+				// The local stack's public Control origin.
+				['http://control.fabrika.localhost:18080', 'http://control.fabrika.localhost:18080/api/rpc'],
+			] as const
+		) {
+			const captured = captureFetch({ result: { items: [] } })
+			await captureStdout(() => runControlCli('apps', ['list'], undefined, { ...CONTROL_ENV, FABRIKA_CONTROL_URL: origin }))
+			expect(captured.calls.map((call) => call.url)).toEqual([url])
+		}
+	})
+
+	test('--url wins over the environment and follows no redirect', async () => {
+		const redirects: (RequestRedirect | undefined)[] = []
+		const urls: string[] = []
+		globalThis.fetch = asFetch(async (input, init) => {
+			urls.push(String(input))
+			redirects.push(init?.redirect)
+			return new Response(JSON.stringify({ result: { items: [] } }), { status: 200, headers: { 'content-type': 'application/json' } })
+		})
+		await captureStdout(() => runControlCli('apps', ['list', '--url=https://other.example'], undefined, CONTROL_ENV))
+		expect({ urls, redirects }).toEqual({ urls: ['https://other.example/api/rpc'], redirects: ['manual'] })
+	})
+})
+
+describe('control key redaction', () => {
+	test('an answer that carries the key is dropped: no stdout, and an error without it', async () => {
+		for (
+			const [envelope, status] of [
+				[{ result: { items: [{ id: 'px_test', repoUrl: 'https://github.com/acme/notes', defaultBranch: 'main' }] } }, 200],
+				[{ error: { type: 'forbidden', message: 'Bearer px_test may not list apps' } }, 403],
+			] as const
+		) {
+			globalThis.fetch = asFetch(async () => new Response(JSON.stringify(envelope), { status, headers: { 'content-type': 'application/json' } }))
+			let failure = ''
+			const out = await captureStdout(async () => {
+				failure = await runControlCli('apps', ['list', '--json'], undefined, CONTROL_ENV).then(() => '', (error: unknown) => String(error))
+			})
+			expect({ out, failure }).toEqual({ out: '', failure: "Error: transport: Control's answer carried [FABRIKA_CONTROL_KEY]; it was dropped" })
+		}
+	})
+
+	test('a diagnostic that quotes the key has it cut out', async () => {
+		await expect(runControlCli('apps', ['list', '--px_test'], undefined, CONTROL_ENV)).rejects.toThrow(
+			'Option --[FABRIKA_CONTROL_KEY] needs a value',
+		)
+	})
+})
+
 describe('control output contract', () => {
 	test('--json prints the procedure result verbatim', async () => {
 		captureFetch({ result: { items: [{ id: 'notes', repoUrl: 'https://github.com/acme/notes', defaultBranch: 'main' }] } })
