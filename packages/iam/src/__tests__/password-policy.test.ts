@@ -1,12 +1,13 @@
 import { PASSWORD_DEFAULT_MIN_LENGTH, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH_FLOOR } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
+import { catalogFor } from '../catalog'
 import { BUN_PBKDF2_COST, WORKERS_PBKDF2_COST } from '../password-crypto'
 import { minLengthProblem, passwordMinLengthFloor, storedMinLength } from '../password-minimum'
 import { PASSWORD_MAX_CODE_POINTS, validatePassword } from '../password-policy'
 
 describe('password policy', () => {
 	test('normalizes NFC and accepts a long passphrase without composition rules', () => {
-		const result = validatePassword(`Café is a long phrase`, PASSWORD_DEFAULT_MIN_LENGTH)
+		const result = validatePassword(`Cafe\u0301 is a long phrase`, PASSWORD_DEFAULT_MIN_LENGTH)
 		expect(result).toEqual({ ok: true, password: 'Café is a long phrase' })
 	})
 
@@ -57,5 +58,15 @@ describe('the minimum an installation may set', () => {
 		expect(storedMinLength({ id: 1, min_length: 6, updated_at: 1 }, PASSWORD_MIN_LENGTH_FLOOR)).toBe(6)
 		expect(storedMinLength({ id: 1, min_length: 6, updated_at: 1 }, PASSWORD_DEFAULT_MIN_LENGTH)).toBe(PASSWORD_DEFAULT_MIN_LENGTH)
 		expect(storedMinLength({ id: 1, min_length: 20, updated_at: 1 }, PASSWORD_DEFAULT_MIN_LENGTH)).toBe(20)
+	})
+})
+
+describe('the refusal of a short password', () => {
+	test('names the minimum in a grammatical Czech form at every length an installation may set', () => {
+		const problem = catalogFor('cs').pages.setPassword.problem
+		expect(problem('too_short', 4, 256)).toBe('Použijte alespoň 4 znaky.')
+		expect(problem('too_short', 5, 256)).toBe('Použijte alespoň 5 znaků.')
+		expect(problem('too_short', 15, 256)).toBe('Použijte alespoň 15 znaků.')
+		expect(catalogFor('en').pages.setPassword.problem('too_short', 4, 256)).toBe('Use at least 4 characters.')
 	})
 })

@@ -126,7 +126,7 @@ Passwords in the console, audited as `iam.password_policy.update`); it applies t
 every principal at the next enrollment, reset or invitation enrollment and never
 to a stored password. It may go down to 4 on the Bun target and to 15 on a
 Cloudflare Worker, whose verifiers are cheaper (backlog 201). A stored value
-outside that range, or one IAM cannot read, applies 15. IAM rejects the 10 000
+outside that range applies 15; a read that fails answers 500 and stores nothing. IAM rejects the 10 000
 most common passwords (SecLists), a few Czech and long common ones, and exact
 account-context values, whatever the minimum. It does not require character
 classes. Stored verifiers

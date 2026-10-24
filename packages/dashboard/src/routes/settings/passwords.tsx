@@ -107,7 +107,7 @@ export function PasswordPolicyEditor({ current, onSaved }: { current: PasswordPo
 						Saved. The next password anyone chooses needs at least {saved} characters.
 					</p>
 				)}
-				{current.updatedAt !== null && <p className="hint">Changed {fmtDate(current.updatedAt)}.</p>}
+				{current.updatedAt !== null && !changed && <p className="hint">Changed {fmtDate(current.updatedAt)}.</p>}
 			</section>
 		</>
 	)

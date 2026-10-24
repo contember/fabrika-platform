@@ -1,5 +1,4 @@
 import { PASSWORD_DEFAULT_MIN_LENGTH, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH_FLOOR } from '@fabrika/iam-contract'
-import { logWarn } from './log'
 import { PBKDF2_SHA256_ITERATIONS, type Pbkdf2Cost } from './password-crypto'
 import type { PasswordPolicyRow } from './repositories/password-policy'
 import type { Services } from './services'
@@ -36,14 +35,10 @@ export function storedMinLength(row: PasswordPolicyRow | null, floor: number): n
 }
 
 /**
- * The minimum every new password meets, read once per request. A read that fails applies the default and logs the
- * failure's message: the person may be asked for a longer password than the installation requires, never a shorter one.
+ * The minimum every new password meets, read once per request. A read that fails throws, like every other read of the
+ * request it serves: falling back to the default would accept a shorter password than an installation that raised the
+ * minimum requires.
  */
 export async function passwordMinLength(services: Services): Promise<number> {
-	try {
-		return storedMinLength(await services.repositories.passwordPolicy.get(), services.config.authentication.password.minLengthFloor)
-	} catch (err) {
-		logWarn('password policy could not be read, the default minimum applies', err)
-		return PASSWORD_DEFAULT_MIN_LENGTH
-	}
+	return storedMinLength(await services.repositories.passwordPolicy.get(), services.config.authentication.password.minLengthFloor)
 }

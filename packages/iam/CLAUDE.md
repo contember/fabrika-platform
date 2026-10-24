@@ -506,7 +506,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   `passwordMinLengthFloor`) and writes `iam.password_policy.update` only when the value changes. `validatePassword` takes
   the minimum as a required argument, so no call site falls back to a constant: the set-password and invitation-password
   forms read `passwordMinLength` once per request, render the rule with it and check the submission against it. No row,
-  a row outside the runtime's range, or a read that fails applies the default 15, never less. The whole-password
+  or a row outside the runtime's range, applies the default 15. A read that fails fails the request (500): a fallback
+  would accept a password shorter than an installation that raised the minimum requires. The whole-password
   blocklist (`common-passwords.ts`, SecLists' 10k list, MIT, with its notice) applies at every minimum.
 - **AN APPLICATION'S E-MAIL TEMPLATE IS PLAIN TEXT, OR HTML OF A CLOSED SUBSET IAM RENDERS FROM TOKENS; IAM PUTS IN THE
   LINK** (`app_mail_templates`, `src/messages.ts`). The contract's `mail` is a subject, a text and optionally an `html`

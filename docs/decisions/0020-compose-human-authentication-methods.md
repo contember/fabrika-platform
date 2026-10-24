@@ -36,8 +36,8 @@ so raising it asks nobody to change a password and lowering it weakens none. The
 depends on how expensive a verifier is to crack: 4 where IAM hashes with OWASP's PBKDF2 cost (the Bun process), 15
 where it hashes below it (a Cloudflare Worker, [backlog 201](../backlog/201-cloudflare-passwords-are-hashed-below-the-owasp-work-factor.md)).
 Whatever the minimum, the whole-password blocklist refuses the 10 000 most common passwords (SecLists) and a few Czech
-ones, so a short minimum does not admit `12345` or `heslo`. A row IAM cannot read, or one outside the runtime's range,
-applies 15.
+ones, so a short minimum does not admit `12345` or `heslo`. A row outside the runtime's range applies 15; a read that
+fails fails the request, because a fallback would let through a password shorter than a raised minimum.
 
 Principal activation becomes independent of OIDC linkage. Sessions record their authentication method. Replacing or disabling a password revokes password-origin sessions while preserving valid OIDC-origin sessions in a hybrid installation.
 

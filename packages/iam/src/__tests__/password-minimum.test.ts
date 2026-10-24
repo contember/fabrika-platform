@@ -11,6 +11,7 @@ import { createPostgresIamRepositories, type IamRepositories, PasswordPolicyRepo
 import { prop } from '../json'
 import { type PasswordHasher, type StoredPasswordHash, WORKERS_PBKDF2_COST } from '../password-crypto'
 import { issuePasswordAction } from '../password-service'
+import { hashToken } from '../secret'
 import { consoleRpc, errorType, result } from './helpers/app-people'
 import { createHarness, TestSqlDatabase } from './helpers/harness'
 import { CALLER_ENV, type MembershipFixture, membershipFixture, ORIGIN, PendingWork } from './helpers/membership'
@@ -188,7 +189,7 @@ describe('the minimum on a runtime with cheaper verifiers', () => {
 })
 
 describe('a minimum that cannot be read', () => {
-	test('applies the default instead of failing the page or accepting a shorter password', async () => {
+	test('fails the request instead of applying a default: no password is stored and the link stays unspent', async () => {
 		const h = createHarness()
 		class Unreadable extends PasswordPolicyRepository {
 			override get(): Promise<PasswordPolicyRow | null> {
@@ -197,9 +198,11 @@ describe('a minimum that cannot be read', () => {
 		}
 		const repositories = { ...h.repositories, passwordPolicy: new Unreadable(new TestSqlDatabase(h.sqlite)) }
 		const f = await membershipFixture(repositories, { services: SERVICES, adminEnv: ADMIN_ENV })
-		const response = await send(f, new Request(`${ORIGIN}/auth/password/enroll`))
-		expect(response.status).toBe(200)
-		expect(await response.text()).toContain('Use 15–256 characters.')
+		const { principalId, token } = await pendingAction(f, 'enrollment')
+		// An installation that raised the minimum to 20 must not get a 15-character password because one read failed.
+		await expect(send(f, post('/auth/password/enroll', { token, password: 'tulip-42xy-tulip' }))).rejects.toThrow('injected fault')
+		expect((await repositories.passwords.getAccount(principalId))?.state).not.toBe('enabled')
+		expect(await repositories.passwords.inspectActionToken(await hashToken(token), 'enrollment')).not.toBeNull()
 	})
 })
 

@@ -45,7 +45,7 @@ export const cs: Catalog = {
 			problem: (problem, min, max) => {
 				switch (problem) {
 					case 'too_short':
-						return `Použijte alespoň ${min} znaků.`
+						return `Použijte alespoň ${min} ${min >= 2 && min <= 4 ? 'znaky' : 'znaků'}.`
 					case 'too_long':
 						return `Použijte nejvýše ${max} znaků.`
 					case 'guessable':
