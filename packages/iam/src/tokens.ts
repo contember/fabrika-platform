@@ -32,7 +32,7 @@ import type { CredentialGrantRow, CredentialRow, PrincipalRow, SessionTerminal }
 import { principalStatus, sessionTerminal } from './db'
 import type { Env } from './env'
 import { narrowPermissions } from './narrow-permissions'
-import { reachesCrossAppAuthority, resolvePermissionsAt } from './resolve'
+import { authorityDeadline, reachesCrossAppAuthority, resolveAuthorityAt, type ResolvedAuthority, resolvePermissionsAt } from './resolve'
 import { hashToken } from './secret'
 import type { Services } from './services'
 import { getSigner } from './signing'
@@ -97,18 +97,25 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 	}
 
 	// Resolve permissions for the requesting app. Sessions are a USER credential (OIDC login).
-	const personal = await resolvePermissionsAt(services, principal, input.app)
+	const authority = await resolveAuthorityAt(services, principal, input.app)
 	const onTerminal = terminal === null ? null : await terminalAuthority(services, terminal, input.app)
 	if (terminal !== null && onTerminal === null) {
 		return refused('invalid_session', principal.id)
 	}
-	const permissions = onTerminal === null ? personal : withinTerminal(personal, onTerminal)
+	const permissions = onTerminal === null ? authority.permissions : withinTerminal(authority.permissions, onTerminal)
 
 	const now = Math.floor(Date.now() / 1000)
 	// Clamped to the session, exactly as `mintFromKey` clamps to the credential's expiry: a token
 	// minted a minute before the session ends must not outlive it, or logging out (or an expiry) would
-	// leave a valid token in the app's hands for the rest of its TTL (SEC-27).
-	const expiresAt = Math.min(now + DEFAULT_TOKEN_TTL_SECONDS, session.expires_at)
+	// leave a valid token in the app's hands for the rest of its TTL (SEC-27). Nor may it outlive a grant it carries.
+	const expiresAt = Math.min(
+		now + DEFAULT_TOKEN_TTL_SECONDS,
+		session.expires_at,
+		authorityDeadline(authority, onTerminal === null ? permissions : narrowPermissions(authority.permissions, onTerminal.ceiling), now)
+			?? Number.POSITIVE_INFINITY,
+		// A terminal's own entries are its principal's grants, and end with them.
+		(onTerminal === null ? null : authorityDeadline(onTerminal.authority, onTerminal.additions, now)) ?? Number.POSITIVE_INFINITY,
+	)
 	const token = await boundedToken(
 		signAccessToken(services, env, {
 			app: input.app,
@@ -136,6 +143,8 @@ interface TerminalAuthority {
 	label: string
 	ceiling: KeyGrant[]
 	additions: PermissionEntry[]
+	/** The terminal principal's own authority, which `additions` come from. */
+	authority: ResolvedAuthority
 }
 
 /**
@@ -161,12 +170,13 @@ async function terminalAuthority(services: Services, terminal: SessionTerminal, 
 	if (principal === null || principalStatus(principal) === 'disabled') {
 		return null
 	}
-	const granted = await resolvePermissionsAt(services, principal, app)
+	const granted = await resolveAuthorityAt(services, principal, app)
 	return {
 		id: row.principal_id,
 		label: row.label,
 		ceiling: asserter.ceiling.map((action): KeyGrant => ({ action })),
-		additions: granted.map((entry): PermissionEntry => ({ ...entry, source: 'terminal' })),
+		additions: granted.permissions.map((entry): PermissionEntry => ({ ...entry, source: 'terminal' })),
+		authority: granted,
 	}
 }
 
@@ -226,7 +236,11 @@ export async function mintFromKey(
 	}
 
 	const now = Math.floor(Date.now() / 1000)
-	const expiresAt = Math.min(now + DEFAULT_TOKEN_TTL_SECONDS, cred.expires_at ?? Number.POSITIVE_INFINITY)
+	const expiresAt = Math.min(
+		now + DEFAULT_TOKEN_TTL_SECONDS,
+		cred.expires_at ?? Number.POSITIVE_INFINITY,
+		effective.expiresAt ?? Number.POSITIVE_INFINITY,
+	)
 	const token = await boundedToken(
 		signAccessToken(services, env, {
 			app: input.app,
@@ -305,6 +319,8 @@ export type ResolvedCredential =
 		/** A user principal's mailbox. */
 		email?: string
 		permissions: PermissionEntry[]
+		/** When the earliest carried permission loses its last supporting grant; `null` when none expires. */
+		expiresAt: number | null
 		link?: LinkTokenClaims
 	}
 	| { ok: false; reason: 'unknown_principal' | 'disabled' | 'wrong_app' }
@@ -337,14 +353,14 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 	if (cred.principal_id === null) {
 		// Anonymous: the frozen inline grants ARE the permission set (delegation-checked at issue).
 		if (cred.link_mount === null) {
-			return { ok: true, subject: cred.id, label: cred.label, permissions: inline }
+			return { ok: true, subject: cred.id, label: cred.label, permissions: inline, expiresAt: null }
 		}
 		// A share link's token names its mount and chain, which the framework re-checks per request.
 		const chain = cred.link_chain === null ? null : parseStoredChain(cred.link_chain)
 		if (chain === null) {
 			return { ok: false, reason: 'wrong_app' }
 		}
-		return { ok: true, subject: cred.id, label: cred.label, permissions: inline, link: { mount: cred.link_mount, chain } }
+		return { ok: true, subject: cred.id, label: cred.label, permissions: inline, expiresAt: null, link: { mount: cred.link_mount, chain } }
 	}
 
 	const principal = await services.repositories.principals.getPrincipalById(cred.principal_id)
@@ -364,15 +380,25 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 		}
 		const actions = (await services.repositories.workloads.declaredActions(workload.app, workload.kind, workload.name)) ?? []
 		const declared = actions.map((action): PermissionEntry => ({ action, scope: null, source: 'grant' }))
-		return { ok: true, subject: principal.id, type: workload.kind, workload: workload.name, label: principal.label, permissions: declared }
+		return {
+			ok: true,
+			subject: principal.id,
+			type: workload.kind,
+			workload: workload.name,
+			label: principal.label,
+			permissions: declared,
+			expiresAt: null,
+		}
 	}
 
-	const resolved = await resolvePermissionsAt(services, principal, app)
+	const authority = await resolveAuthorityAt(services, principal, app)
+	const resolved = authority.permissions
 
 	// Inline grants on a bound credential are a DOWNSCOPE restriction: keep only what the principal
 	// actually holds (effective = resolve(principal) ∩ inline). No inline → the principal's full set.
 	const permissions = inline.length === 0 ? resolved : inline.filter((e) => permits(resolved, e.action, e.scope ?? undefined))
-	return { ok: true, subject: principal.id, type: principal.type, label: principal.label, ...mailboxClaim(principal), permissions }
+	const expiresAt = authorityDeadline(authority, permissions, Math.floor(Date.now() / 1000))
+	return { ok: true, subject: principal.id, type: principal.type, label: principal.label, ...mailboxClaim(principal), permissions, expiresAt }
 }
 
 /**

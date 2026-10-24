@@ -440,6 +440,11 @@ fails if that stops being true — it is the guard, not documentation of one.
   16 KiB of headers per request. Every bearer passes `boundedToken`: both mint fronts answer
   `token_too_large`, a decided refusal the proxy turns into a 403 — never a login bounce, because a
   new login mints the same token — and the OAuth code exchange and refresh answer `invalid_grant`.
+- **AN ACCESS TOKEN NEVER OUTLIVES THE GRANTS IT CARRIES** (`authorityDeadline`, `src/resolve.ts`). Every mint front
+  (`mintToken`, `mintFromKey`, the OAuth exchange and refresh) caps `exp` at the earliest time some carried entry loses
+  its last supporting grant: per entry the latest expiry among the grants that cover it (`NULL` is no deadline), then the
+  earliest across entries, beside the session's or the key's own expiry. A grant in its last
+  `TOKEN_REFRESH_SKEW_SECONDS` therefore costs the proxy a mint per request until it expires.
 - **`revokeKey` ACTS ONLY ON A CREDENTIAL OF THE CALLER'S VERIFIED APP.** Any other credential,
   including a cross-app (`app IS NULL`) one, is `not_found` — the answer for an unknown id — so one
   app can neither end nor probe another app's keys.

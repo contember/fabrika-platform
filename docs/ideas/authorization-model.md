@@ -148,11 +148,11 @@ Conformant today: allow-only grants; member roles and `assignableBy` with the sa
 (`packages/iam/src/membership.ts`); chains read from stored data in the application (`packages/app/src/implement/dispatch.ts`);
 lists derived from the table policy and pinned by the query guard (`packages/db/src/store.ts`, `guard.ts`); writes
 conditioned on the chain with `FOR SHARE` on the destination; not-found for a refused `on` binding; workloads holding
-only their declared actions (`packages/iam/src/tokens.ts`).
+only their declared actions (`packages/iam/src/tokens.ts`); access tokens capped by the grants they carry
+(`authorityDeadline`, `packages/iam/src/resolve.ts`).
 
 Gaps:
 
-- An access token is capped by the session or key expiry, not by grant expiry (`tokens.ts`).
 - Membership and delegated grants are written without expiry, and self-assignment is not judged (S8).
 - A share link is not re-checked against its issuer at mint (S8). The re-check needs an upgrade note: links whose issuer
   lost the delegated actions stop working.

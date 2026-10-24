@@ -701,7 +701,8 @@ still refuses any `Authorization` header, as authorization.
   into a 403, never a login bounce. Bun, the application runtime on Zerops, refuses more than
   16 KiB of request headers; Caddy and Cloudflare allow more.
 - **Revocation takes effect within the token lifetime of 300 s.** This holds for sessions and for keys,
-  share links included. Membership operations are checked live at IAM.
+  share links included. Membership operations are checked live at IAM. An expiring grant is a hard deadline: a token
+  expires no later than the earliest time at which an entry it carries loses its last supporting grant.
 
 Work units B5 and A12 built rule 6 at IAM, and B2 built the proxy side of delegation grants: a row
 marked `members` or `creates` gets a fresh grant from IAM's `requestDelegation` for every request,

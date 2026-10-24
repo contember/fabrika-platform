@@ -100,6 +100,37 @@ describe('mintToken', () => {
 		expect(long.result.expiresAt).toBe(Math.floor(Date.now() / 1000) + DEFAULT_TOKEN_TTL_SECONDS)
 	})
 
+	test('the token never outlives the grants it carries', async () => {
+		const h = createHarness()
+		const principalId = seedUser(h.sqlite, { sub: 'g-grant-clamp', email: 'grant-clamp@b.cz' })
+		const grantEnds = Math.floor(Date.now() / 1000) + 60
+		const grant = seedInlineGrant(h.sqlite, principalId, ['project.read'], null, 'a')
+		h.sqlite.run('UPDATE grants SET expires_at = ? WHERE id = ?', [grantEnds, grant])
+		const sessionToken = 'grant-bound-session'
+		await h.repositories.sessions.createSession({
+			tokenHash: await hashToken(sessionToken),
+			principalId,
+			idpSub: 'g-grant-clamp',
+			email: 'grant-clamp@b.cz',
+			expiresAt: FUTURE,
+		})
+		const fromSession = await mintToken(h.makeServices(), ENV, { app: 'a', session: sessionToken, requestId: 'r' })
+		if (!fromSession.result.ok) throw new Error('expected ok')
+		expect(fromSession.result.expiresAt).toBe(grantEnds)
+
+		const key = 'px_grant-bound-personal-key'
+		await h.repositories.credentials.createCredential({ tokenHash: await hashToken(key), principalId, issuedBy: principalId, app: 'a', grants: [] })
+		const fromKey = await mintFromKey(h.makeServices(), ENV, { app: 'a', key, requestId: 'r' })
+		if (!fromKey.result.ok) throw new Error('expected ok')
+		expect(fromKey.result.expiresAt).toBe(grantEnds)
+
+		// A second grant of the same action without expiry keeps the action held: the latest support counts.
+		seedInlineGrant(h.sqlite, principalId, ['project.read'], null, 'a')
+		const renewed = await mintToken(h.makeServices(), ENV, { app: 'a', session: sessionToken, requestId: 'r' })
+		if (!renewed.result.ok) throw new Error('expected ok')
+		expect(renewed.result.expiresAt).toBe(Math.floor(Date.now() / 1000) + DEFAULT_TOKEN_TTL_SECONDS)
+	})
+
 	test('no session → no_session', async () => {
 		const h = createHarness()
 		const { result } = await mintToken(h.makeServices(), ENV, { app: 'a', session: null, requestId: 'r' })
