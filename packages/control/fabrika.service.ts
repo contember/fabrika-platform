@@ -44,6 +44,7 @@ export function controlServiceContract(options: ControlServiceOptions) {
 			'builder-connect': s.protocol('*', '/builder/connect'),
 			'github-webhook': s.protocol('POST', '/webhooks/github/:connectionId'),
 			'mail-relay': s.protocol('POST', '/platform/mail/*'),
+			'dev-source': s.protocol('POST', '/platform/source/*'),
 			'webhooks-root': s.service('*', '/webhooks', { callers: ['human'] }),
 			'github-manifest': s.service('GET', '/api/source/github/manifest/:connectionId', { callers: ['human'] }),
 			'github-callback': s.service('GET', '/api/source/github/callback', { callers: ['human'] }),

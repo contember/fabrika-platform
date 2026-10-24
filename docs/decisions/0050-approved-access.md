@@ -330,6 +330,11 @@ environment, Control classifies it again against that environment's active snaps
 
 Staging must not hold production data. This is a rule for operators; the platform does not enforce it.
 
+A `dev` environment ([ADR-0049](0049-author-applications-through-mcp-in-control.md)) is never protected and cannot be
+marked protected: `apps.environments.protect` refuses it (409), and an environment that was protected before it was
+deleted cannot come back as one. Its widenings apply at once, like staging's, and the same operator rule on production
+data binds it.
+
 ### 5. A human user approves, with `access.approve`
 
 A run whose change waits enters the state `awaiting_approval`. Control serves `approvals.list`,

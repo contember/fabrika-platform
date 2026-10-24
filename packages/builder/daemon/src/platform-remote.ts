@@ -1,5 +1,6 @@
 import { createRpcClient, type RpcFetch } from '@fabrika/app'
 import {
+	APP_ENV_KINDS,
 	type AppEnvDto,
 	type ControlRpcContract,
 	type JsonValue,
@@ -46,6 +47,8 @@ const environmentsSchema = z.object({
 	items: z.array(z.object({
 		appId: storedTextSchema,
 		env: storedTextSchema,
+		// A Control older than the field has standard environments only.
+		kind: z.enum(APP_ENV_KINDS).default('standard'),
 		domain: storedTextSchema.nullable(),
 		publicOrigin: storedTextSchema.nullable(),
 		// A Control older than the field lists none.

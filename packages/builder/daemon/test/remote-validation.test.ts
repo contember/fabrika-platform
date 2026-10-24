@@ -22,6 +22,7 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 		publicOrigin: null,
 		crossOrigins: ['https://partner.example.org'],
 		triggerRef: '',
+		kind: 'standard' as const,
 		authoring: false,
 		protected: false,
 		publishedRunId: null,
@@ -36,7 +37,7 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 	expect(() => parseEnvironments({ items: [environment] })).toThrow(PlatformError)
 	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, ignored: true }], cursor: 'next' }))
 		.toEqual([{ ...environment, triggerRef: null }])
-	const { deviationSubjects: _, crossOrigins: __, surface: ___, ...fromOlderControl } = { ...environment, triggerRef: null }
+	const { deviationSubjects: _, crossOrigins: __, surface: ___, kind: ____, ...fromOlderControl } = { ...environment, triggerRef: null }
 	expect(parseEnvironments({ items: [fromOlderControl] })).toEqual([
 		{ ...environment, triggerRef: null, deviationSubjects: [], crossOrigins: [], surface: [] },
 	])

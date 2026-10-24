@@ -165,6 +165,8 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		configureAutoscaling: () => Promise.reject(new Error('an application deploy must not change a profile')),
 		getBackupConfig: () => Promise.reject(new Error('an application deploy must not read a backup schedule')),
 		configureBackup: () => Promise.reject(new Error('an application deploy must not change a backup schedule')),
+		startService: () => Promise.reject(new Error('an application deploy never starts a service')),
+		stopService: () => Promise.reject(new Error('an application deploy never stops a service')),
 		configureCustomAutoscaling: ({ serviceId, autoscaling: sent }) => {
 			rec.minRams.push([serviceId, sent.vertical.minResource.memoryGBytes])
 			minRams.set(serviceId, sent.vertical.minResource.memoryGBytes)
@@ -354,7 +356,13 @@ const assertSubmittedDescriptor = (recorded: Recorded): void => {
 		zerops: [{
 			setup: NOTES_SERVICE,
 			build: { base: 'alpine/bun@1.3' },
-			deploy: { readinessCheck: { httpGet: { port: 3000, path: '/healthz' }, retryPeriod: '10s', failureTimeout: '180s' } },
+			deploy: {
+				readinessCheck: {
+					exec: { command: expect.stringContaining("fetch('http://127.0.0.1:3000/healthz'") },
+					retryPeriod: '10s',
+					failureTimeout: '180s',
+				},
+			},
 			run: {
 				start: 'sh /var/www/fabrika/start.generated.sh',
 				healthCheck: { httpGet: { port: 3000, path: '/healthz' } },

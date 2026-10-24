@@ -4,6 +4,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { type ControlEndpointId, controlServiceContract } from '../fabrika.service'
 import { builderPublicResponse } from './builder-bootstrap'
 import { controlRpcRouter } from './control-rpc'
+import { handleDevSource } from './dev/receiver'
 import type { Env } from './env'
 import { SourceConnectionWorkflowError } from './github/connections/errors'
 import { installationSetup } from './github/connections/installation'
@@ -59,6 +60,7 @@ export function createControlApp(mcp: McpRoute | null): FetchService<ControlAppE
 		'builder-connect': builder,
 		'github-webhook': serve((ctx, params) => webhook(ctx, params['connectionId'] ?? '')),
 		'mail-relay': serve(handleMailRelay),
+		'dev-source': serve(handleDevSource),
 		'webhooks-root': notFound,
 		'github-manifest': authenticated((ctx, params) => sourceConnectionBrowserCall(ctx, (deps) => manifestHandoff(deps, params['connectionId'] ?? ''))),
 		'github-callback': authenticated((ctx) => sourceConnectionBrowserCall(ctx, manifestCallback)),

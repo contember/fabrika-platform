@@ -7,7 +7,7 @@ provides: [platform, private-services, managed-deploy]
 requires: [bun, postgres]
 recommends: []
 conflicts: [cloudflare]
-npm: ["@fabrika/provider-zerops@0.8.2", "@fabrika/app@0.8.2", "@fabrika/cli@0.8.2"]
+npm: ["@fabrika/provider-zerops@0.9.0-dev.4", "@fabrika/app@0.9.0-dev.4", "@fabrika/cli@0.9.0-dev.4"]
 status: wip
 sources:
   - where: "examples/zerops-app/fabrika.config.ts + zerops.yaml in fabrika-platform"
@@ -43,12 +43,13 @@ truth: stable `id`, `schema`, `pipeline` and `target` with `platform: 'zerops'`.
   `zerops.yaml` keeps only `setup`, `build.base`, `build.os` and the SPA's
   `build.buildCommands`; every other key is refused. The platform generates the
   rest: a frozen install, the application's `bun test`, a reinstall, the
-  generated entrypoint, `fabrika-check`, `tsc`, the deploy gate on the contract's
+  generated entrypoint, `tsc` (with `web/`), `fabrika-check`, the deploy gate on the contract's
   health path, and the `run` section. Its init commands run `fabrika db migrate`,
   `fabrika db codegen --verify` and `fabrika db test-isolation`, then its
   start script runs `fabrika/entry.generated.ts`; each `c.cron` job becomes a crontab entry
   `fabrika job run <name>`. The build has no database, so the database tests skip
-  there and run at container start.
+  there; only the generated isolation tests run again, at container start. Run
+  the rest against a test database before you push.
 - Commit the Bun lockfile at the app repository root, and commit what
   `fabrika db codegen` and `fabrika db test-scaffold` write. Never edit a
   generated file (`fabrika/entry.generated.ts`, `src/db/schema.generated.ts`, the

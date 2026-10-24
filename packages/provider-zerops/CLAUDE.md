@@ -132,10 +132,14 @@ bun test
   from the approved contract: Control may have upcast it from an older release's artifact.
   `renderLockedExecutionDescriptor` sends ONLY the generated setup: the SPA commands, the frozen install, the
   application's tests, then — because the tests are authored code — a reinstall, the regenerated entrypoint,
-  the checker fetched at the release of the reader that read the application (`ZeropsLockedExecution.checkRelease`,
-  from `ProviderApprovedAccess.checker`: the newest patch of the minor its `bun.lock` pins; ADR-0062), `tsc` with
-  the platform tsconfig and
-  the scripts. Keep the tests before every step that produces or checks what deploys. The init commands run
+  `tsc` with the platform tsconfig (the contract, `src/` and the SPA under `web/`), the checker fetched at the release
+  of the reader that read the application (`ZeropsLockedExecution.checkRelease`, from `ProviderApprovedAccess.checker`:
+  the newest patch of the minor its `bun.lock` pins; ADR-0062) and the scripts. Keep the tests before every step that
+  produces or checks what deploys, and `tsc` before the checker, as the application skill's loop runs them: the checker
+  refuses the cast or `any` that silences a type error, so it has the last word. The tests command counts the files
+  `@fabrika/db/testing` skipped (its skip line has the same text in every release) and prints `fabrika-tests: N
+  Postgres-backed test files did not run …`: the build has no database. Of those files only the generated ones run
+  again, at container start. The init commands run
   `fabrika db migrate`, then `fabrika db codegen --verify` and `fabrika db test-isolation` (the generated tests on
   a throwaway schema), and the start script only `exec`s the server, so a failed migration, a stale
   `schema.generated.ts` or a generated case that did not pass fails an init command, which stops the activation
@@ -214,7 +218,10 @@ bun test
   `wait: 'started'` a running build of the same manifest is answer enough. A fresh attempt writes the IAM
   variables, records the version untriggered, uploads the archive, records `triggered`, then sends the build on
   a signal that only a lost lease aborts. A cancelled deploy never cancels the proxy build; it stays recorded for
-  `reconcile`.
+  `reconcile`. A deploy's or a registry change's republish (`reuseActive`) builds nothing when the recorded
+  `proxyDeployment` names the same pin and `manifestSha256` (which covers the IAM issuer, the IAM key and every proxy
+  secret) and its version still reads `ACTIVE` on the proxy service; any doubt rebuilds. Provisioning and `reconcile`
+  always rebuild.
 - **The proxy manifest is the build archive's one data file, never a variable (ADR-0045).** The manifest (compiled
   from the members core passes, `src/namespace/manifest.ts`) rides as `proxy.manifest.json` beside the exact commit,
   and the upload must report its sha256 or the attempt fails. `zeropsProxyManifestCarrier` reads the PINNED
@@ -259,6 +266,16 @@ bun test
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).
   Commands are not variables: `start: echo ${FABRIKA_RELEASE}` reads the service's own environment.
   `secrets.put` refuses the same references.
+- **A `dev` environment changes only `run`, selected by Control's environment kind (ADR-0049, ADR-0043).** The build
+  is the ordinary one with every check. `ZeropsDeployRun.dev` makes `run.start` run `@fabrika/app/dev` of the
+  application's own release, writes its configuration (`devLauncherConfig`) as base64, so authored SPA commands survive
+  any quoting, and replaces the init commands with `dev-init.generated.sh`: migrate and verify only while the launcher's
+  state file is absent, because after the first sync the files on disk are no longer the bootstrap's. There is no
+  `healthCheck`: the launcher reports health itself, and a platform restart would discard the synced head. The deploy
+  pins the service to one container (`pinOneContainer`); `devEnvironments.stop/start` stop it when idle and start it
+  again, and the runtime files survive both (measured for ADR-0049). The app never authors any of this. The
+  launcher's `checks` (what `run_checks` runs) are the build's own check commands in the build's order, on the runtime
+  root; change them together.
 
 ## Platform installation (`./installation`, `src/installation/`)
 

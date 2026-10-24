@@ -67,10 +67,18 @@ export interface ProviderApprovedAccess {
 	readonly checker: string
 }
 
+/**
+ * `dev`: the environment follows a workspace through a platform-owned launcher, which its provider starts instead of the
+ * serving entry (ADR-0043). The kind is Control's registry, never the application's.
+ */
+export type ProviderEnvironmentKind = 'standard' | 'dev'
+
 /** Persisted deploy data for one app environment. */
 export interface ProviderEnvironment {
 	readonly appId: string
 	readonly env: string
+	/** Absent means `standard`. */
+	readonly kind?: ProviderEnvironmentKind
 	readonly domain?: string
 	/** Canonical externally reachable HTTP(S) origin; independent of provider domain routing. */
 	readonly publicOrigin?: string
@@ -468,6 +476,19 @@ export interface ProviderNamespaceOperator {
 	present(namespace: ProviderDeploymentNamespace): ProviderNamespacePresentation
 }
 
+/** The app-owned claims of one namespace whose resources Control is asked to confirm gone. */
+export interface ProviderClaimedResourcesInput {
+	readonly namespace: ProviderDeploymentNamespace
+	readonly resourceKeys: readonly string[]
+	readonly signal: AbortSignal
+}
+
+/** What the provider observed for one claimed resource. */
+export interface ProviderClaimedResource {
+	readonly resourceKey: string
+	readonly exists: boolean
+}
+
 /** Optional placement lifecycle owned by providers that use deployment namespaces. */
 export interface ProviderNamespaceCapabilities {
 	normalize(namespace: ProviderDeploymentNamespace): ProviderDeploymentNamespace
@@ -484,9 +505,29 @@ export interface ProviderNamespaceCapabilities {
 	reconcile(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
 	/** Absent means the namespace has no entry point that follows its members. */
 	republish?(input: ProviderNamespaceRepublishInput): Promise<ProviderNamespaceRepublishResult>
+	/**
+	 * Read-only: whether each claimed resource still exists, one answer per key. Throws when it cannot tell, so Control
+	 * releases a claim only over a resource the provider confirmed gone. Absent means no claim can be released.
+	 */
+	claimedResources?(input: ProviderClaimedResourcesInput): Promise<readonly ProviderClaimedResource[]>
 	/** Absent means the provider changes no namespace in place. */
 	readonly updates?: ProviderNamespaceUpdates
 	readonly operator?: ProviderNamespaceOperator
+}
+
+/** One call on the service of a `dev` environment, between its bootstrap runs. */
+export interface ProviderDevEnvironmentInput {
+	readonly environment: ProviderEnvironment
+	readonly signal: AbortSignal
+}
+
+/**
+ * The service of a `dev` environment outside a run (ADR-0049): Control stops it after an idle period and starts it on
+ * the next commit. Files the launcher wrote survive both.
+ */
+export interface ProviderDevEnvironments {
+	stop(input: ProviderDevEnvironmentInput): Promise<void>
+	start(input: ProviderDevEnvironmentInput): Promise<void>
 }
 
 /**
@@ -516,6 +557,8 @@ export interface ControlProvider {
 	 * namespace proxy's environments get one.
 	 */
 	readonly applicationHopSecret?: true
+	/** Absent means the provider runs no `dev` environment, and Control refuses one. */
+	readonly devEnvironments?: ProviderDevEnvironments
 	/** Absent means the provider deploys public sources only. */
 	readonly source?: ProviderSourceCapabilities
 	/**

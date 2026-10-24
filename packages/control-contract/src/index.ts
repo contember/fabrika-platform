@@ -207,9 +207,18 @@ export interface UpdateAppRequest extends AppOptionalFields {
 	repoUrl?: string
 }
 
+/**
+ * `dev` follows the workspace bound to it through its launcher, without a run (ADR-0049); at most one per application,
+ * never protected and never production. Every other environment is `standard`.
+ */
+export const APP_ENV_KINDS = ['standard', 'dev'] as const
+
+export type AppEnvKind = (typeof APP_ENV_KINDS)[number]
+
 export interface AppEnvDto {
 	appId: string
 	env: string
+	kind: AppEnvKind
 	domain: string | null
 	publicOrigin: string | null
 	/** The exact origins whose pages may call this environment's cross-origin endpoints (ADR-0022); empty lists none. */
@@ -272,6 +281,8 @@ export interface PutAppEnvRequest {
 	triggerRef?: string | null
 	/** Omitted keeps the stored value. Only a Zerops environment of an app with a GitHub connection qualifies. */
 	authoring?: boolean
+	/** Set when the environment is created, `standard` when omitted; it never changes afterwards. */
+	kind?: AppEnvKind
 	namespaceId?: string | null
 	target: ProviderEnvelopeDto
 	artifact: ProviderEnvelopeDto
@@ -388,6 +399,11 @@ export interface RemoveDeploymentNamespaceResponse {
 /** The namespaces whose proxy rebuild `namespaces.republishAll` submitted. */
 export interface RepublishAllNamespacesResponse {
 	readonly namespaceIds: readonly string[]
+}
+
+/** The resource keys released; each was confirmed gone at the provider in the same call. */
+export interface ReleaseNamespaceClaimsResponse {
+	readonly released: readonly string[]
 }
 
 export interface PlanDeploymentNamespaceRequest {
@@ -572,6 +588,7 @@ export type {
 	PutAppEnvironmentInput,
 	PutAppSecretInput,
 	PutAppVarInput,
+	ReleaseNamespaceClaimsInput,
 	RotateTokenKeyResponse,
 	RunIdInput,
 	RunListInput,

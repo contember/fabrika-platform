@@ -17,7 +17,7 @@ import {
 	type ZeropsService,
 } from '../api'
 import { defaultSleep } from '../collaborators'
-import { namespaceResourceClaims, registrationResourceClaims } from './claims'
+import { claimedResources, namespaceResourceClaims, projectExists, registrationResourceClaims, ZEROPS_PROJECT_NOT_FOUND } from './claims'
 import { checkpoint, decodeEnvelope, normalizedNamespace, normalizeTarget } from './codec'
 import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME, ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE } from './constants'
 import { asNamespaceError, namespaceError, ZEROPS_NAMESPACE_CANCELLED, ZEROPS_SUBDOMAIN_NOT_PUBLISHED } from './errors'
@@ -230,6 +230,7 @@ const deployProxy = async (
 	target: NormalizedZeropsNamespaceTarget,
 	options: ZeropsNamespaceOptions,
 	wait: ProviderNamespaceRepublishInput['wait'],
+	reuseActive: boolean,
 ): Promise<{ namespace: ProviderDeploymentNamespace; target: NormalizedZeropsNamespaceTarget }> => {
 	let currentNamespace = namespace
 	const manifest = compileNamespaceProxyManifest(namespace.id, input.members)
@@ -245,6 +246,7 @@ const deployProxy = async (
 		iamKey: options.iamKey,
 		signal: input.signal,
 		wait,
+		reuseActive,
 		sleep: options.sleep ?? defaultSleep,
 		boundary: () => input.events.boundary(),
 		checkpoint: async next => {
@@ -264,7 +266,7 @@ const republishNamespace = async (
 	if (target.proxyServiceId === undefined || (target.proxyBuild === undefined && !target.ready)) {
 		throw new Error(`Namespace ${namespace.id} is not ready`)
 	}
-	const deployed = await deployProxy(input, namespace, target, options, input.wait)
+	const deployed = await deployProxy(input, namespace, target, options, input.wait, true)
 	return { namespace: deployed.namespace, settled: deployed.target.proxyBuild === undefined && deployed.target.ready }
 }
 
@@ -367,6 +369,14 @@ const runNamespaceMutation = async (
 		} catch {
 			input.signal.throwIfAborted()
 			await checkpoint(input, namespace, { ...target, ready: false })
+			// A deleted project never resolves the version: retrying would hold the namespace `provisioning`, unremovable.
+			if (target.projectId !== undefined && !(await projectExists(options.api, target.projectId, input.signal))) {
+				throw namespaceError(
+					ZEROPS_PROJECT_NOT_FOUND,
+					`Zerops project ${target.projectId} of namespace \`${namespace.id}\` no longer exists; remove the namespace`,
+					false,
+				)
+			}
 			throw namespaceError('proxyAttemptUnresolved', `Proxy version ${target.proxyDeployment.appVersionId} remains unresolved`, true)
 		}
 	}
@@ -442,7 +452,7 @@ const runNamespaceMutation = async (
 	}
 	namespace = await checkpoint(input, namespace, target)
 
-	const deployed = await deployProxy(input, namespace, target, options, 'active')
+	const deployed = await deployProxy(input, namespace, target, options, 'active', false)
 	namespace = deployed.namespace
 	target = { ...deployed.target, proxyConfigured: true }
 	// After the deploy, because the platform refuses a service with no HTTP port — and never before `ready`
@@ -479,6 +489,7 @@ export const createZeropsNamespaceCapabilities = (options: ZeropsNamespaceOption
 		provision: (input) => mutateNamespace(input, options, 'provision'),
 		reconcile: (input) => mutateNamespace(input, options, 'reconcile'),
 		republish: (input) => republishNamespace(input, options),
+		claimedResources: (input) => claimedResources(options.api, input),
 		updates: createZeropsNamespaceUpdates(options),
 		operator: createZeropsNamespaceOperator({ proxySource: options.proxySource }),
 	}

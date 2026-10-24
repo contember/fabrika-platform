@@ -170,8 +170,19 @@ included. The framework reads these variables and removes them from `process.env
 
 The generated `run` section depends on two platform facts ([platform facts](../reference/zerops-platform.md)).
 A failed `initCommands` entry stops activation, and the readiness window opens with `run.start`, after the init
-commands (a 240 s init command behind a 60 s window activates). Both are verified live. Its readiness check is an `httpGet` of the contract's health endpoint, which is
-verified to gate a deploy.
+commands (a 240 s init command behind a 60 s window activates). Both are verified live. Its readiness check is an `exec` that requests the contract's health endpoint
+until a 2xx answers, for at most 9 s of each attempt; an `exec` check is verified to gate a deploy. An `httpGet` check
+would pass only at the second attempt, 10 s later, because the server rarely listens one second after `run.start`.
+
+**A `dev` environment changes only `run`** ([ADR-0049](0049-author-applications-through-mcp-in-control.md)). Control's
+environment kind selects the variant; an application never authors it and cannot select it. The build is the ordinary
+one with every check. `run.start` runs the generated dev launcher of the application's own `@fabrika/app` release
+instead of the serving entry, with its configuration (the bootstrap head, the authored SPA commands, the check chain)
+written by the build. The init commands migrate and verify only while the launcher's state file is absent: after the
+first sync the files on disk are no longer the bootstrap's, and the launcher migrates on every sync itself. The variant
+has no `healthCheck`, because the launcher reports health to Control and a platform restart would discard the synced
+head, and the deploy pins the service to one container, because the synced files live in one. The exposure refusals
+below, `startWithoutCode` included, apply unchanged: a `dev` environment is bootstrapped by an ordinary run.
 
 ### Exposure is refused, with no approval path
 
@@ -232,7 +243,9 @@ preserves that distinction: the source descriptor's bytes and digest stay the id
 execution document carries the generated `run` and `build`.
 
 - An application cannot start outside the generated entrypoint, skip its migrations or skip the
-  checks. A repository that tries is refused at compile time, with one actionable line.
+  checks, except in a `dev` environment, which starts through the generated dev launcher, migrates on every
+  sync, and runs the checks only on request (`run_checks`). A repository that tries is refused at compile time,
+  with one actionable line.
 - The authored SPA commands run before the checks, inside the same build. An authored SPA command that
   deliberately sabotages the toolchain is not stopped. A separate build for the SPA is the next step.
 - The build is slower: every deploy installs, type-checks, checks the contract and runs migrations and

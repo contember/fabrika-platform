@@ -12,10 +12,12 @@ import {
 	FABRIKA_CHECK_VERSION,
 	LOCKED_APP_ID_PATTERN,
 	lockedAuthoredBuild,
+	READINESS_PATH_PATTERN,
 	ZEROPS_RUNTIME_PACKAGES,
 	zeropsAssetRoots,
 	type ZeropsContractRun,
 	zeropsContractRun,
+	type ZeropsDevExecution,
 	type ZeropsLockedExecution,
 	type ZeropsRuntimePackage,
 } from './execution'
@@ -310,14 +312,12 @@ const importDocumentSchema = z.object({ project: importProjectSchema.optional(),
 /** The import document a manifest carries: every service already holds the ADR-0004 invariants. */
 export type FabrikaManifestImportDocument = z.infer<typeof importDocumentSchema>
 
-/** A literal path of unreserved characters: it is written into the generated probes unquoted by any shell. */
-const READINESS_PATH = /^(?:\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$/
 const JOB_NAME = /^[A-Za-z][A-Za-z0-9_]*$/
 const CRON_SCHEDULE = /^[0-9*/,-]+(?: [0-9*/,-]+){4}$/
 
 const contractRunSchema = z.object({
 	digest: z.string().regex(CONTRACT_DIGEST_PATTERN),
-	readinessPath: z.string().regex(READINESS_PATH),
+	readinessPath: z.string().regex(READINESS_PATH_PATTERN),
 	jobs: z.array(z.object({ name: z.string().regex(JOB_NAME), schedule: z.string().regex(CRON_SCHEDULE) }).strict()),
 	files: z.literal(true).optional(),
 	scan: z.literal(true).optional(),
@@ -476,8 +476,11 @@ export const lockedExecutionOf = (manifest: FabrikaManifest): ZeropsLockedExecut
 	}
 }
 
-/** What Control lets a provider publish for one environment (`ProviderEnvironment.access`). */
-export type ZeropsAccess = Pick<ProviderEnvironment, 'access'>
+/**
+ * What Control lets a provider publish for one environment (`ProviderEnvironment.access`), and, for an environment of
+ * kind `dev`, the commit its bootstrap builds.
+ */
+export type ZeropsAccess = Pick<ProviderEnvironment, 'access'> & { readonly dev?: ZeropsDevExecution }
 
 /**
  * The execution descriptor's lock-down at deploy (ADR-0050): Control's approved contract decides it, not the artifact,
@@ -506,6 +509,7 @@ export function lockedExecutionFor(
 		storageHostname: applicationStorageHostname(manifest.target.importDocument.services),
 		runtimePackages: manifest.target.runtimePackages ?? [],
 		sourceMaps: artifactUpload === undefined ? null : sourceMapUpload(artifactUpload, access.contract),
+		...(granted.dev === undefined ? {} : { dev: granted.dev }),
 	}
 }
 

@@ -1,3 +1,4 @@
+import type { AppEnvKind } from '@fabrika/control-contract'
 import { z } from 'zod'
 
 // ── Row shapes (snake_case, as migrations/0001_init.sql defines) ───────────────
@@ -17,6 +18,8 @@ export interface AppRow {
 export interface AppEnvRow {
 	app_id: string
 	env: string
+	/** `dev` or `standard`; set at creation and never changed (`0016_dev_environments.sql` checks it). */
+	kind: AppEnvKind
 	domain: string | null
 	public_origin: string | null
 	/**
@@ -100,6 +103,8 @@ export interface AppEnvInput {
 	triggerRef?: string | null
 	/** Omitted keeps the stored flag; a new environment starts as not an authoring target. */
 	authoring?: boolean
+	/** Applied when the write creates the environment, `standard` when omitted; an update never changes it. */
+	kind?: AppEnvKind
 	namespaceId: string | null
 	provider: string
 	providerTargetJson: string

@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/canvas-kernel",
-	"version": "0.8.2",
+	"version": "0.9.0-dev.4",
 	"type": "module",
 	"description": "Canvas JSX compiler, session/revision store, renderer and interactive component library.",
 	"license": "MIT",

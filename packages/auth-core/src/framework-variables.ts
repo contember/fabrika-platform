@@ -159,8 +159,11 @@ export function frameworkVariableReference(text: string): string | null {
 	return null
 }
 
-/** The platform's receivers an application reaches over the platform transport. */
-export const PLATFORM_RECEIVERS = ['mail'] as const
+/**
+ * The platform's receivers an application reaches over the platform transport: `mail`, the relay of its jobs' mail, and
+ * `source`, which hands the launcher of a `dev` environment the files of the workspace bound to it (ADR-0064).
+ */
+export const PLATFORM_RECEIVERS = ['mail', 'source'] as const
 
 export type PlatformReceiver = (typeof PLATFORM_RECEIVERS)[number]
 

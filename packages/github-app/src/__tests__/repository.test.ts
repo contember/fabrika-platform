@@ -84,6 +84,9 @@ const blob = (blobSha: string, bytes: Uint8Array) => ({
 	content: btoa(String.fromCharCode(...bytes)),
 })
 
+/** A tree as the client reads it: `<commit>:<directory>` at the head. */
+const at = (directory: string): string => `/git/trees/${encodeURIComponent(`${HEAD}:${directory}`)}`
+
 const HEAD_COMMIT_ROUTE = on('GET', `/git/commits/${HEAD}`, json(commit(HEAD, ROOT_TREE, [OTHER])))
 
 async function open(routes: Route[]): Promise<{ repository: GitHubRepositoryClient; requests: Recorded[] }> {
@@ -113,7 +116,18 @@ describe('GitHubAppClient.openRepository', () => {
 		expect(requests[1]?.authorization).toBe(`Bearer ${SECRET_TOKEN}`)
 		expect(JSON.stringify(repository)).not.toContain(SECRET_TOKEN)
 		const reachable = Object.getOwnPropertyNames(Object.getPrototypeOf(repository)).sort()
-		expect(reachable).toEqual(['commitFiles', 'constructor', 'createBranch', 'openPullRequest', 'readFiles', 'readRef', 'readTree'])
+		expect(reachable).toEqual([
+			'commitFiles',
+			'compareCommits',
+			'constructor',
+			'createBranch',
+			'deleteBranch',
+			'openPullRequest',
+			'readBlobTexts',
+			'readFiles',
+			'readRef',
+			'readTree',
+		])
 		expect(Object.keys(repository)).toEqual([])
 	})
 
@@ -126,11 +140,9 @@ describe('GitHubAppClient.openRepository', () => {
 describe('readTree', () => {
 	test('lists a directory recursively with repository-relative paths', async () => {
 		const { repository, requests } = await open([
-			HEAD_COMMIT_ROUTE,
-			on('GET', `/git/trees/${ROOT_TREE}`, json({ sha: ROOT_TREE, truncated: false, tree: [treeEntry('src', SRC_TREE)] })),
 			on(
 				'GET',
-				`/git/trees/${SRC_TREE}?recursive=1`,
+				`${at('src')}?recursive=1`,
 				json({ sha: SRC_TREE, truncated: false, tree: [blobEntry('index.ts', BLOB_TEXT, 5), treeEntry('lib', NEW_TREE)] }),
 			),
 		])
@@ -145,14 +157,15 @@ describe('readTree', () => {
 			}],
 			truncated: false,
 		})
-		expect(repositoryRequests(requests).map((request) => request.method)).toEqual(['GET', 'GET', 'GET'])
+		// One request: GitHub resolves `<commit>:<directory>` itself.
+		expect(repositoryRequests(requests).map((request) => request.method)).toEqual(['GET'])
 	})
 
 	test('caps the listing and reports truncation, including GitHub-side truncation', async () => {
 		const many = Array.from({ length: 5001 }, (_, index) => blobEntry(`f${index}`, BLOB_TEXT, 1))
 		const capped = await open([
 			HEAD_COMMIT_ROUTE,
-			on('GET', `/git/trees/${ROOT_TREE}?recursive=1`, json({ sha: ROOT_TREE, truncated: false, tree: many })),
+			on('GET', `${at('')}?recursive=1`, json({ sha: ROOT_TREE, truncated: false, tree: many })),
 		])
 		const listing = await capped.repository.readTree(HEAD)
 		expect(listing.entries).toHaveLength(5000)
@@ -160,7 +173,7 @@ describe('readTree', () => {
 
 		const upstream = await open([
 			HEAD_COMMIT_ROUTE,
-			on('GET', `/git/trees/${ROOT_TREE}?recursive=1`, json({ sha: ROOT_TREE, truncated: true, tree: [blobEntry('a', BLOB_TEXT, 1)] })),
+			on('GET', `${at('')}?recursive=1`, json({ sha: ROOT_TREE, truncated: true, tree: [blobEntry('a', BLOB_TEXT, 1)] })),
 		])
 		expect((await upstream.repository.readTree(HEAD)).truncated).toBe(true)
 	})
@@ -172,7 +185,7 @@ describe('readFiles', () => {
 		HEAD_COMMIT_ROUTE,
 		on(
 			'GET',
-			`/git/trees/${ROOT_TREE}`,
+			at(''),
 			json({
 				sha: ROOT_TREE,
 				truncated: false,
@@ -184,21 +197,48 @@ describe('readFiles', () => {
 				],
 			}),
 		),
-		on('GET', `/git/trees/${SRC_TREE}`, json({ sha: SRC_TREE, truncated: false, tree: [blobEntry('index.ts', BLOB_TEXT, 6)] })),
+		on('GET', at('src'), json({ sha: SRC_TREE, truncated: false, tree: [blobEntry('index.ts', BLOB_TEXT, 6)] })),
 		on('GET', `/git/blobs/${BLOB_TEXT}`, json(blob(BLOB_TEXT, new TextEncoder().encode('héllo')))),
 		on('GET', `/git/blobs/${BLOB_BINARY}`, json(blob(BLOB_BINARY, new Uint8Array([0xff, 0xfe])))),
 	]
 
-	test('returns UTF-8 regular files and reports missing, binary, oversized, and non-regular paths as missing', async () => {
+	test('returns UTF-8 regular files and says why each other path was not read', async () => {
 		const { repository, requests } = await open(routes())
-		const read = await repository.readFiles(HEAD, ['src/index.ts', 'src/absent.ts', 'image.png', 'large.txt', 'link', 'src/index.ts/x'])
+		const read = await repository.readFiles(HEAD, ['src/index.ts', 'src/absent.ts', 'image.png', 'large.txt', 'link', 'src/index.ts/x', 'src'])
 		expect(read).toEqual({
 			commitSha: HEAD,
 			files: [{ path: 'src/index.ts', content: 'héllo' }],
-			missingPaths: ['src/absent.ts', 'image.png', 'large.txt', 'link', 'src/index.ts/x'],
+			unreadable: [
+				{ path: 'src/absent.ts', reason: 'missing' },
+				{ path: 'image.png', reason: 'binary' },
+				{ path: 'large.txt', reason: 'too_large' },
+				{ path: 'link', reason: 'not_a_file' },
+				{ path: 'src/index.ts/x', reason: 'missing' },
+				{ path: 'src', reason: 'not_a_file' },
+			],
 		})
 		expect(requests.some((request) => request.url.endsWith(`/git/blobs/${BLOB_LARGE}`))).toBe(false)
 		expect(requests.some((request) => request.url.endsWith(`/git/blobs/${BLOB_LINK}`))).toBe(false)
+	})
+
+	test('a file past the total read budget is reported as such and never fetched', async () => {
+		const size = 512 * 1024
+		const names = ['a', 'b', 'c', 'd', 'e']
+		const blobSha = (index: number) => sha(String(index + 5))
+		const content = new Uint8Array(size).fill(0x61)
+		const { repository, requests } = await open([
+			HEAD_COMMIT_ROUTE,
+			on(
+				'GET',
+				at(''),
+				json({ sha: ROOT_TREE, truncated: false, tree: names.map((name, index) => blobEntry(name, blobSha(index), size)) }),
+			),
+			...names.map((_, index) => on('GET', `/git/blobs/${blobSha(index)}`, json(blob(blobSha(index), content)))),
+		])
+		const read = await repository.readFiles(HEAD, names)
+		expect(read.files.map((file) => file.path)).toEqual(['a', 'b', 'c', 'd'])
+		expect(read.unreadable).toEqual([{ path: 'e', reason: 'budget' }])
+		expect(requests.some((request) => request.url.endsWith(`/git/blobs/${blobSha(4)}`))).toBe(false)
 	})
 
 	test('refuses unbounded or invalid path lists before any repository request', async () => {
@@ -209,6 +249,117 @@ describe('readFiles', () => {
 			await expect(repository.readFiles(HEAD, paths)).rejects.toThrow('GitHub App configuration is invalid')
 		}
 		expect(repositoryRequests(requests)).toHaveLength(0)
+	})
+})
+
+describe('readBlobTexts', () => {
+	const routes = (): Route[] => [
+		on('GET', `/git/blobs/${BLOB_TEXT}`, json(blob(BLOB_TEXT, new TextEncoder().encode('héllo')))),
+		on('GET', `/git/blobs/${BLOB_BINARY}`, json(blob(BLOB_BINARY, new Uint8Array([0xff, 0xfe])))),
+	]
+
+	test('reads listed blobs without a tree walk and says why each other blob was not read', async () => {
+		const size = 512 * 1024
+		const { repository, requests } = await open([
+			...routes(),
+			on('GET', `/git/blobs/${BLOB_LARGE}`, json(blob(BLOB_LARGE, new Uint8Array(size).fill(0x61)))),
+		])
+		const full = ['a', 'b', 'c'].map((path) => ({ path, sha: BLOB_LARGE, size }))
+		const read = await repository.readBlobTexts([
+			{ path: 'src/index.ts', sha: BLOB_TEXT, size: 6 },
+			{ path: 'large.txt', sha: BLOB_LINK, size: size + 1 },
+			{ path: 'image.png', sha: BLOB_BINARY, size: 2 },
+			...full,
+			{ path: 'last.txt', sha: BLOB_LINK, size },
+		])
+		expect(read.files.map((file) => file.path)).toEqual(['src/index.ts', 'a', 'b', 'c'])
+		expect(read.files[0]).toEqual({ path: 'src/index.ts', content: 'héllo' })
+		expect(read.unreadable).toEqual([
+			{ path: 'large.txt', reason: 'too_large' },
+			{ path: 'image.png', reason: 'binary' },
+			{ path: 'last.txt', reason: 'budget' },
+		])
+		const fetched = repositoryRequests(requests).map((request) => request.url.slice(REPO.length))
+		expect(fetched).toHaveLength(5)
+		expect(fetched.some((url) => url.endsWith(BLOB_LINK))).toBe(false)
+	})
+
+	test('refuses an unbounded or invalid blob list before any repository request', async () => {
+		const { repository, requests } = await open(routes())
+		const many = Array.from({ length: 101 }, (_, index) => ({ path: `f${index}`, sha: BLOB_TEXT, size: 1 }))
+		for (
+			const blobs of [
+				[],
+				many,
+				[{ path: 'a', sha: BLOB_TEXT, size: 1 }, { path: 'a', sha: BLOB_BINARY, size: 1 }],
+				[{ path: '../a', sha: BLOB_TEXT, size: 1 }],
+				[{ path: 'a', sha: 'not-a-sha', size: 1 }],
+				[{ path: 'a', sha: BLOB_TEXT, size: -1 }],
+			]
+		) {
+			await expect(repository.readBlobTexts(blobs)).rejects.toThrow('GitHub App configuration is invalid')
+		}
+		expect(repositoryRequests(requests)).toHaveLength(0)
+	})
+})
+
+describe('compareCommits', () => {
+	test('reads the changed files from the merge base on one page of commits', async () => {
+		const { repository, requests } = await open([
+			on(
+				'GET',
+				`/compare/${OTHER}...${HEAD}?per_page=1`,
+				json({
+					ahead_by: 2,
+					behind_by: 0,
+					merge_base_commit: { sha: OTHER },
+					commits: [{ sha: HEAD }],
+					files: [
+						{ filename: 'src/a.ts', status: 'modified', additions: 1, deletions: 1, patch: '@@ -1 +1 @@\n-a\n+b' },
+						{ filename: 'src/c.ts', previous_filename: 'src/b.ts', status: 'renamed', additions: 0, deletions: 0 },
+					],
+				}),
+			),
+		])
+		expect(await repository.compareCommits(OTHER, HEAD)).toEqual({
+			baseSha: OTHER,
+			headSha: HEAD,
+			aheadBy: 2,
+			behindBy: 0,
+			files: [
+				{ path: 'src/a.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, patch: '@@ -1 +1 @@\n-a\n+b' },
+				{ path: 'src/c.ts', previousPath: 'src/b.ts', status: 'renamed', additions: 0, deletions: 0, patch: null },
+			],
+			filesCapped: false,
+		})
+		expect(repositoryRequests(requests)).toHaveLength(1)
+	})
+
+	test('an unknown commit is not found, and an invalid sha is refused before any request', async () => {
+		const { repository, requests } = await open([])
+		await expect(repository.compareCommits(OTHER, HEAD)).rejects.toBeInstanceOf(GitHubNotFoundError)
+		await expect(repository.compareCommits('main', HEAD)).rejects.toThrow('GitHub App configuration is invalid')
+		expect(repositoryRequests(requests)).toHaveLength(1)
+	})
+})
+
+describe('deleteBranch', () => {
+	test('deletes a branch, and reads an absent one as already deleted', async () => {
+		const deleted = await open([on('DELETE', '/git/refs/heads/fabrika/w1', () => new Response(null, { status: 204 }))])
+		expect(await deleted.repository.deleteBranch('fabrika/w1')).toEqual({ deleted: true })
+		const absent = await open([on('DELETE', '/git/refs/heads/fabrika/w1', json({ message: 'Reference does not exist' }, 422))])
+		expect(await absent.repository.deleteBranch('fabrika/w1')).toEqual({ deleted: false })
+		expect(absent.requests.map((request) => request.method).slice(-2)).toEqual(['DELETE', 'GET'])
+	})
+
+	test('a refusal of a branch that still exists fails, and an invalid branch is refused before any request', async () => {
+		const { repository, requests } = await open([
+			on('DELETE', '/git/refs/heads/main', json({ message: 'protected' }, 422)),
+			on('GET', '/git/ref/heads/main', json(ref('main', HEAD))),
+		])
+		await expect(repository.deleteBranch('main')).rejects.toThrow('GitHub App request failed with status 422')
+		await expect(repository.deleteBranch('a..b')).rejects.toThrow('GitHub App configuration is invalid')
+		expect(repositoryRequests(requests)).toHaveLength(2)
 	})
 })
 
@@ -273,14 +424,14 @@ describe('commitFiles', () => {
 		HEAD_COMMIT_ROUTE,
 		on(
 			'GET',
-			`/git/trees/${ROOT_TREE}`,
+			at(''),
 			json({
 				sha: ROOT_TREE,
 				truncated: false,
 				tree: [treeEntry('src', SRC_TREE), blobEntry('run.sh', BLOB_LINK, 4, '100755'), blobEntry('old.txt', BLOB_TEXT, 6)],
 			}),
 		),
-		on('GET', `/git/trees/${SRC_TREE}`, json({ sha: SRC_TREE, truncated: false, tree: [blobEntry('index.ts', BLOB_TEXT, 6)] })),
+		on('GET', at('src'), json({ sha: SRC_TREE, truncated: false, tree: [blobEntry('index.ts', BLOB_TEXT, 6)] })),
 		on('POST', '/git/trees', json({ sha: NEW_TREE, truncated: false, tree: [] }, 201)),
 		on('POST', '/git/commits', json(commit(NEW_COMMIT, NEW_TREE, [HEAD]), 201)),
 	]
@@ -317,6 +468,18 @@ describe('commitFiles', () => {
 				{ path: 'new.sh', mode: '100644', type: 'blob', content: 'echo\n' },
 			],
 		})
+	})
+
+	test('reads the head commit and the directory of each path once when the same client read files there first', async () => {
+		const routes = [
+			...writeRoutes(json(ref('work/one', NEW_COMMIT))),
+			on('GET', `/git/blobs/${BLOB_TEXT}`, json(blob(BLOB_TEXT, new TextEncoder().encode('index\n')))),
+		]
+		const { repository, requests } = await open(routes)
+		await repository.readFiles(HEAD, ['src/index.ts'])
+		await repository.commitFiles(input)
+		const objectReads = requests.filter((request) => request.method === 'GET' && /\/git\/(commits|trees)\//.test(request.url))
+		expect(objectReads.map((request) => request.url.slice(REPO.length))).toEqual([at('src'), `/git/commits/${HEAD}`, at('')])
 	})
 
 	test('refuses a stale head before writing anything', async () => {
@@ -417,7 +580,8 @@ describe('unknown shas', () => {
 			HEAD_COMMIT_ROUTE,
 		])
 		await expect(repository.readTree(OTHER)).rejects.toBeInstanceOf(GitHubNotFoundError)
-		await expect(repository.readFiles(HEAD, ['a'])).rejects.toBeInstanceOf(GitHubNotFoundError)
+		await expect(repository.readFiles(OTHER, ['a'])).rejects.toBeInstanceOf(GitHubNotFoundError)
+		expect(await repository.readFiles(HEAD, ['a'])).toEqual({ commitSha: HEAD, files: [], unreadable: [{ path: 'a', reason: 'missing' }] })
 		await expect(repository.commitFiles({
 			branch: 'work/one',
 			expectedHeadSha: OTHER,

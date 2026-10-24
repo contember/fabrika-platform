@@ -153,6 +153,10 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0011_public_workload_credentials.sql' },
 			{ bundle: 'control', name: '0012_token_keys.sql' },
 			{ bundle: 'control', name: '0013_mail_relay.sql' },
+			{ bundle: 'control', name: '0014_workspace_pull_requests.sql' },
+			{ bundle: 'control', name: '0015_workspace_abandon.sql' },
+			{ bundle: 'control', name: '0016_dev_environments.sql' },
+			{ bundle: 'control', name: '0017_dev_launcher_contact.sql' },
 		])
 	})
 
@@ -166,6 +170,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			const table of [
 				'apps',
 				'app_envs',
+				'dev_environments',
 				'deployment_namespaces',
 				'namespace_resource_claims',
 				'app_secrets',

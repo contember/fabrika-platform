@@ -37,9 +37,9 @@ export function isUnconfirmedNamespaceUpdate(row: Pick<DeploymentNamespaceRow, '
  */
 const APP_ENV_INSERT_SQL = `INSERT INTO app_envs (
 		app_id, env, domain, public_origin, cross_origins_json, trigger_ref, namespace_id, provider,
-		provider_target_json, provider_artifact_json, authoring, protected, generation, protection_revision
+		provider_target_json, provider_artifact_json, authoring, kind, protected, generation, protection_revision
 	)
-	SELECT ?, ?, ?, ?, COALESCE(?, '[]'), ?, ?, ?, ?, ?, COALESCE(?, 0),
+	SELECT ?, ?, ?, ?, COALESCE(?, '[]'), ?, ?, ?, ?, ?, COALESCE(?, 0), ?,
 		COALESCE(kept.protected, ?), COALESCE(kept.generation, 0), COALESCE(kept.protection_revision, 0)
 	FROM (SELECT 1 AS one) AS fresh
 	LEFT JOIN app_env_protection AS kept ON kept.app_id = ? AND kept.env = ?
@@ -57,6 +57,7 @@ const appEnvInsertValues = (input: AppEnvInput): (string | number | null)[] => [
 	input.providerTargetJson,
 	input.providerArtifactJson,
 	authoringFlag(input.authoring),
+	input.kind ?? 'standard',
 	defaultProtected(input.env),
 	input.appId,
 	input.env,
@@ -539,6 +540,18 @@ export class ControlRegistryRepository {
 			.run()
 	}
 
+	/** Release exactly these keys of one owner and answer the ones released: a key claimed meanwhile by another owner stays. */
+	async releaseNamespaceResourceClaims(namespaceId: string, ownerAppId: string, ownerEnv: string, resourceKeys: readonly string[]): Promise<string[]> {
+		if (resourceKeys.length === 0) return []
+		const { results } = await this.d1
+			.prepare(`DELETE FROM namespace_resource_claims
+				WHERE namespace_id = ? AND owner_app_id = ? AND owner_env = ? AND resource_key IN (${resourceKeys.map(() => '?').join(', ')})
+				RETURNING resource_key`)
+			.bind(namespaceId, ownerAppId, ownerEnv, ...resourceKeys)
+			.all<{ resource_key: string }>()
+		return results.map((row) => row.resource_key).sort()
+	}
+
 	// ── App environments ──────────────────────────────────────────────────────
 
 	async listAppEnvs(appId: string): Promise<AppEnvRow[]> {
@@ -586,6 +599,14 @@ export class ControlRegistryRepository {
 	}
 
 	/** Every environment an operator marked as an MCP authoring target. */
+	/** The `protected` flag a deleted environment of these coordinates left (ADR-0050), or null when none was deleted. */
+	async getKeptProtection(appId: string, env: string): Promise<number | null> {
+		const row = await this.d1.prepare('SELECT protected FROM app_env_protection WHERE app_id = ? AND env = ?').bind(appId, env).first<
+			{ protected: number }
+		>()
+		return row?.protected ?? null
+	}
+
 	async listAuthoringAppEnvs(): Promise<AppEnvRow[]> {
 		const { results } = await this.d1
 			.prepare('SELECT * FROM app_envs WHERE authoring = 1 ORDER BY app_id, env')

@@ -34,15 +34,16 @@ describe('the reader of a framework release', () => {
 		expect(readerFor('0.7.9', WINDOW).checker).toBe('0.7.4')
 	})
 
-	test("is this platform's own for its own release, and the bundled newest patch for 0.7, 0.6, 0.5 and 0.4", () => {
+	test("is this platform's own for its own release, and the bundled newest patch for 0.8, 0.7, 0.6, 0.5 and 0.4", () => {
 		expect(readerFor(CHECKER_VERSION).checker).toBe(CHECKER_VERSION)
+		expect(readerFor('0.8.0').checker).toBe('0.8.1')
 		expect(readerFor('0.7.0').checker).toBe('0.7.0')
 		expect(readerFor('0.6.0').checker).toBe('0.6.0')
 		expect(readerFor('0.5.1').checker).toBe('0.5.5')
 		expect(readerFor('0.4.1').checker).toBe('0.4.8')
 	})
 
-	test('this platform refuses 0.3, below its window of 0.4, 0.5, 0.6, 0.7 and its own minor', () => {
+	test('this platform refuses 0.3, below its window of 0.4, 0.5, 0.6, 0.7, 0.8 and its own minor', () => {
 		expect(refusal('0.3.9')).toContain('the oldest release it deploys is 0.4.0')
 	})
 

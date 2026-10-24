@@ -103,7 +103,12 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [216](216-cloudflare-application-runtime-follow-ups.md): Smaller gaps of the Cloudflare application runtime.
 - [217](217-postmark-managed-unsubscribes-never-reach-the-application.md): An unsubscribe through Postmark's own link or footer reaches only Postmark; the application's consent records drift.
 - [218](218-the-skill-names-no-working-one-click-unsubscribe-target.md): The skill's unsubscribe procedure is POST JSON, which refuses a mailbox's RFC 8058 one-click POST.
+- [219](219-a-zerops-platform-deploy-rebuilds-every-service.md): A Zerops platform deploy rebuilds all four services every time, and a bring-up compiles Caddy for 5 min.
+- [220](220-operator-traps-of-an-mcp-authoring-bring-up.md): MCP authoring bring-up traps: `put` loses bucket provenance, no `authoring` flag, a bare `forbidden`, `admin` offered for a contract app.
+- [221](221-the-platform-build-runs-no-postgres-backed-test.md): The Zerops build skips every Postgres-backed application test; a throwaway Postgres in the build container would run them.
+- [222](222-platform-services-share-postgres-server-sessions.md): On Zerops one Postgres server session serves IAM, Operations and Control in turn; find the pooler, check what leaks between services, and decide whether to connect directly.
 - [223](223-terminal-authority-outlives-the-terminal-in-a-share-link.md): A share link issued on a terminal keeps the terminal's grants after sign-out, release or revoke.
 - [224](224-terminal-follow-ups.md): Smaller gaps of terminals: sign-out without `Sec-Fetch-Site`, re-enrolment, sign-out of a personal login.
 - [225](225-password-minimum-follow-ups.md): Smaller gaps of the installation's minimum password length: audit, an upper cap, the console page.
+- [226](226-mcp-authoring-review-follow-ups.md): Review follow-ups of MCP authoring and dev environments: one failing repository fails `list_workspaces`, a long `run_checks` reads as a gone launcher, a crash loop never idles, an abandoned workspace stays bound.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

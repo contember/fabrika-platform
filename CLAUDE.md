@@ -13,7 +13,8 @@ facts settled against a real account, several of which contradict Zerops' publis
 ## Tech Stack
 
 - **Bun** — runtime + workspaces, at the exact release in `.bun-version` (bumping it: `docs/reference/release-process.md`).
-  Libraries run TypeScript directly (`exports.bun` → `src`); no build step.
+  Libraries run TypeScript directly (`exports.bun` → `src`); no build step in the workspace. `release:pack` emits
+  `.d.ts` declarations for the published `types` condition only (ADR-0068).
 - **TypeScript** strict, ESM (`"type": "module"`) everywhere.
 - **Cloudflare Workers** — Worker + Durable Objects + Containers + D1 + Queues + R2. **Zerops** is the
   second target: it uses its platform API directly and has no runner (ADR-0003). Each installation

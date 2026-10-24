@@ -14,7 +14,7 @@ const options = (overrides: Partial<RunStepsOptions> & { logs?: string[] } = {})
 })
 
 describe('runSteps', () => {
-	test('runs every step in order and logs the plan, then each step', async () => {
+	test('runs every step in order and logs the plan, then each step and its outcome', async () => {
 		const executed: string[] = []
 		const logs: string[] = []
 
@@ -25,13 +25,16 @@ describe('runSteps', () => {
 		expect(executed).toEqual(['build', 'release'])
 		expect(result.status).toBe('succeeded')
 		expect(result.steps.map((step) => step.status)).toEqual(['succeeded', 'succeeded'])
-		expect(logs).toEqual([
+		expect(logs.slice(0, 4)).toEqual([
 			'Deploy api → production (dry-run) — 2 step(s):',
 			'  • build — Run build',
 			'  • release — Run release',
 			'→ build',
-			'→ release',
 		])
+		expect(logs[4]).toMatch(/^✓ build \(\d+\.\ds\)$/)
+		expect(logs[5]).toBe('→ release')
+		expect(logs[6]).toMatch(/^✓ release \(\d+\.\ds\)$/)
+		expect(logs).toHaveLength(7)
 	})
 
 	test('stops after the first failure and marks later steps skipped', async () => {
@@ -50,7 +53,7 @@ describe('runSteps', () => {
 		expect(result.steps.map((step) => step.status)).toEqual(['succeeded', 'failed', 'skipped'])
 		expect(result.steps[1]?.error).toBe('release rejected')
 		expect(logs[0]).toBe('Deploy api → production — 3 step(s):')
-		expect(logs.slice(4)).toEqual(['→ build', '→ release', '✗ release: release rejected'])
+		expect(logs.slice(4)).toEqual(['→ build', expect.stringMatching(/^✓ build /), '→ release', '✗ release: release rejected'])
 	})
 
 	test('skips every step of a run cancelled before it started', async () => {

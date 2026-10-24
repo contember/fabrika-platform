@@ -11,6 +11,10 @@ export interface WorkspaceRow {
 	base_sha: string
 	title: string
 	created_at: number
+	pull_request_number: number | null
+	pull_request_url: string | null
+	/** Unix seconds; set once, by `markAbandoned`. */
+	abandoned_at: number | null
 }
 
 export interface WorkspaceInput {
@@ -26,7 +30,10 @@ export interface WorkspaceInput {
 const LIST_LIMIT = 100
 
 export class WorkspaceRepository {
-	constructor(private readonly d1: SqlDatabase) {}
+	constructor(
+		private readonly d1: SqlDatabase,
+		private readonly now: () => number = () => Math.floor(Date.now() / 1000),
+	) {}
 
 	async createWorkspace(input: WorkspaceInput): Promise<WorkspaceRow> {
 		return firstRow<WorkspaceRow>(
@@ -45,9 +52,21 @@ export class WorkspaceRepository {
 		return this.d1.prepare('SELECT * FROM workspaces WHERE branch = ?').bind(branch).first<WorkspaceRow>()
 	}
 
-	/** The newest workspaces of one owner, optionally narrowed to an app and an environment. */
+	/** Remember the pull request opened or found for the workspace; the newest one wins. */
+	async recordPullRequest(id: string, pullRequest: { number: number; url: string }): Promise<void> {
+		await this.d1.prepare('UPDATE workspaces SET pull_request_number = ?, pull_request_url = ? WHERE id = ?')
+			.bind(pullRequest.number, pullRequest.url, id)
+			.run()
+	}
+
+	/** Mark the workspace abandoned; a second call keeps the first stamp. */
+	async markAbandoned(id: string): Promise<void> {
+		await this.d1.prepare('UPDATE workspaces SET abandoned_at = ? WHERE id = ? AND abandoned_at IS NULL').bind(this.now(), id).run()
+	}
+
+	/** The newest workspaces of one owner that are not abandoned, optionally narrowed to an app and an environment. */
 	async listWorkspaces(filter: { ownerId: string; appId?: string; env?: string }): Promise<WorkspaceRow[]> {
-		const where = ['owner_id = ?']
+		const where = ['owner_id = ?', 'abandoned_at IS NULL']
 		const binds: string[] = [filter.ownerId]
 		if (filter.appId !== undefined) {
 			where.push('app_id = ?')
