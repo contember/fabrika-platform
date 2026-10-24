@@ -72,7 +72,7 @@ async function writeInvocation(id: string): Promise<void> {
 	await invocation.enclose(async () => {
 		await insertItem(await invocation.session(), id)
 		await invocation.commit()
-	})
+	}, { site: 'test', held: () => {} })
 }
 
 const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -90,7 +90,7 @@ describe('a read-only invocation on SQLite is not enclosed', () => {
 			const after = await readIds(await invocation.session())
 			await invocation.commit()
 			return { before, after }
-		})
+		}, { site: 'test', held: () => {} })
 		// The write starts outside the read's async context, as another request's event does.
 		await between.promise
 		const write = writeInvocation('a').then(() => written.resolve())
@@ -106,7 +106,7 @@ describe('a read-only invocation on SQLite is not enclosed', () => {
 			await tick(5)
 			await readIds(await invocation.session())
 			await invocation.commit()
-		})
+		}, { site: 'test', held: () => {} })
 		expect(transactions).toBe(0)
 		expect(syncTransactions).toBe(2)
 		expect(invocation.ended).toBe(true)
@@ -119,7 +119,7 @@ describe('a read-only invocation on SQLite is not enclosed', () => {
 			const insert = insertNode('items', new Map(Object.entries({ id: 'a', org: 'o1', title: 'a' })), acknowledgement('items', 'id', undefined))
 			await expect((await invocation.session()).run(insert, insertContext)).rejects.toMatchObject({ reason: 'read_only' })
 			await invocation.rollback()
-		})
+		}, { site: 'test', held: () => {} })
 		expect(storedIds()).toEqual([])
 	})
 
@@ -131,7 +131,7 @@ describe('a read-only invocation on SQLite is not enclosed', () => {
 			await expect(write).rejects.toMatchObject({ sqlState: '25006' })
 			expect(storedIds()).toEqual([])
 			await invocation.commit()
-		})).rejects.toThrow(QueryRefusedError)
+		}, { site: 'test', held: () => {} })).rejects.toThrow(QueryRefusedError)
 		expect(storedIds()).toEqual([])
 	})
 })
@@ -144,7 +144,7 @@ describe('a write invocation on SQLite keeps its enclosure', () => {
 			await tick(5)
 			await insertItem(await invocation.session(), 'b')
 			throw new Error('handler failed')
-		})).rejects.toThrow('handler failed')
+		}, { site: 'test', held: () => {} })).rejects.toThrow('handler failed')
 		expect(storedIds()).toEqual([])
 		expect(transactions).toBe(1)
 	})

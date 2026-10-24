@@ -556,7 +556,7 @@ export class ContractRuntime {
 			// The handler's time starts after the last body byte, so a slow upload does not eat it.
 			budget = handlerSignal(request, admission.timeoutMs)
 			const { signal } = budget
-			const answer = await enclosedAnswer(invocation, async () => {
+			const answer = await enclosedAnswer(invocation, this.#hold(served.row.id, exec), async () => {
 				let result: unknown
 				try {
 					result = await runInRequest(frame, async () => {
@@ -695,6 +695,11 @@ export class ContractRuntime {
 			throw new ServerFault('facility_unbound', 'a site reaches data through ctx.db, and boot bound no @fabrika/db layer')
 		}
 		return data
+	}
+
+	/** Where an invocation of `site` reports a long hold of its transaction: `FailureReports`, its delivery kept alive like a failure's. */
+	#hold(site: string, exec: RequestExecutionContext | undefined): Hold {
+		return { site, held: (heldMs) => exec?.waitUntil(this.#parts.failures.held(site, heldMs)) }
 	}
 
 	/** The caller's authority at IAM for this request, when the endpoint's access form names a dimension and an action. */
@@ -1041,7 +1046,7 @@ export class ContractRuntime {
 			// The handler's time starts after the last body byte, so a slow upload does not eat it.
 			budget = handlerSignal(request, served.admission.timeoutMs)
 			const { signal } = budget
-			const answer = await enclosedAnswer(invocation, async () => {
+			const answer = await enclosedAnswer(invocation, this.#hold(served.row.id, exec), async () => {
 				let result: unknown
 				try {
 					result = await runInRequest(frame, async () => {
@@ -1178,7 +1183,7 @@ export class ContractRuntime {
 		const { signal } = budget
 		let committing = false
 		try {
-			await enclosed(invocation, async () => {
+			await enclosed(invocation, this.#hold(served.row.id, exec), async () => {
 				try {
 					await runInRequest(frame, async () => {
 						const subject = webhookSubject(binding.id)
@@ -1675,19 +1680,25 @@ async function openMultipart(
 	}
 }
 
+/** The site an invocation's long hold is logged under, and where it is reported. */
+interface Hold {
+	readonly site: string
+	readonly held: (heldMs: number) => void
+}
+
 /** Runs `work` in the invocation's transaction (`Invocation.enclose`), or as is without one. */
-function enclosed<T>(invocation: Invocation | null, work: () => Promise<T>): Promise<T> {
-	return invocation === null ? work() : invocation.enclose(work)
+function enclosed<T>(invocation: Invocation | null, hold: Hold, work: () => Promise<T>): Promise<T> {
+	return invocation === null ? work() : invocation.enclose(work, hold.site, hold.held)
 }
 
 /**
  * An answer's work, from the handler to its commit, in the invocation's transaction. Where the transaction encloses
  * the work (SQLite) its COMMIT runs after `commitAnswer`, so a failed one cancels a file's object stream here.
  */
-async function enclosedAnswer<A extends Response | FileDownload>(invocation: Invocation | null, work: () => Promise<A>): Promise<A> {
+async function enclosedAnswer<A extends Response | FileDownload>(invocation: Invocation | null, hold: Hold, work: () => Promise<A>): Promise<A> {
 	let answer: A | undefined
 	try {
-		return await enclosed(invocation, async () => {
+		return await enclosed(invocation, hold, async () => {
 			answer = await work()
 			return answer
 		})

@@ -409,7 +409,7 @@ export class InvocationTransaction {
 	 * Only the SQLite enclosure is measured for `watch`, from entering the transaction until it settled: it holds the
 	 * whole object, where a Postgres transaction holds one pooled connection and other requests go on.
 	 */
-	async enclose<T>(work: () => Promise<T>, watch?: HoldWatch): Promise<T> {
+	async enclose<T>(work: () => Promise<T>, watch: HoldWatch): Promise<T> {
 		const engine = engineOf(this.#database)
 		if (engine.dialect !== 'sqlite' || this.#readOnly) {
 			return work()
@@ -447,7 +447,7 @@ export class InvocationTransaction {
 		} finally {
 			this.#ended = true
 			this.#isReleased = true
-			if (entered !== undefined && watch !== undefined) {
+			if (entered !== undefined) {
 				reportHold(watch, Math.round(this.#now() - entered))
 			}
 		}

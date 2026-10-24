@@ -296,7 +296,7 @@ describe('an invocation encloses its work in the transaction on SQLite', () => {
 			await insertItem(await invocation.session(), 'b')
 			await invocation.commit()
 			return 'answered'
-		})
+		}, { site: 'test', held: () => {} })
 		expect(answer).toBe('answered')
 		expect(ids()).toEqual(['a', 'b'])
 		expect(invocation.ended).toBe(true)
@@ -311,7 +311,7 @@ describe('an invocation encloses its work in the transaction on SQLite', () => {
 			await insertItem(await invocation.session(), 'a')
 			await invocation.rollback()
 			return 'refused'
-		})
+		}, { site: 'test', held: () => {} })
 		expect(answer).toBe('refused')
 		expect(ids()).toEqual([])
 	})
@@ -321,11 +321,11 @@ describe('an invocation encloses its work in the transaction on SQLite', () => {
 		await expect(thrown.enclose(async () => {
 			await insertItem(await thrown.session(), 'a')
 			throw new Error('handler failed')
-		})).rejects.toThrow('handler failed')
+		}, { site: 'test', held: () => {} })).rejects.toThrow('handler failed')
 		const undecided = new InvocationTransaction(database, false)
 		await undecided.enclose(async () => {
 			await insertItem(await undecided.session(), 'b')
-		})
+		}, { site: 'test', held: () => {} })
 		expect(ids()).toEqual([])
 	})
 
@@ -336,7 +336,7 @@ describe('an invocation encloses its work in the transaction on SQLite', () => {
 			await insertItem(own, 'a')
 			await insertItem(own, 'a').catch(() => undefined)
 			await invocation.commit()
-		})).rejects.toThrow(QueryRefusedError)
+		}, { site: 'test', held: () => {} })).rejects.toThrow(QueryRefusedError)
 		expect(ids()).toEqual([])
 	})
 
@@ -352,7 +352,7 @@ describe('an invocation encloses its work in the transaction on SQLite', () => {
 			).rejects.toThrow('nested failed')
 			expect(ids()).toEqual(['a'])
 			await invocation.rollback()
-		})
+		}, { site: 'test', held: () => {} })
 		expect(ids()).toEqual([])
 	})
 
@@ -362,7 +362,7 @@ describe('an invocation encloses its work in the transaction on SQLite', () => {
 			const session = await invocation.session()
 			await invocation.commit()
 			return session
-		})
+		}, { site: 'test', held: () => {} })
 		await expect(insertItem(own, 'late')).rejects.toThrow(QueryRefusedError)
 		await expect(invocation.session()).rejects.toThrow(QueryRefusedError)
 	})
