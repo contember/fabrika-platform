@@ -14,7 +14,7 @@
 // deploys, not a re-spelling of it. The URL is a credential and is never logged, not on failure.
 
 import { PostgresDatabase } from '@fabrika/platform-node'
-import { applyMigrations } from '../../zerops/migrate'
+import { applyMigrations } from '../../bun/migrate'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 
@@ -40,7 +40,7 @@ export interface PostgresFixture {
  * Stand up an isolated schema, apply the shipped Postgres migrations into it with the shipped runner,
  * and hand back a `PostgresDatabase` bound to it.
  *
- * `max: 1` mirrors how `zerops/migrate.ts` runs in production — the advisory lock it takes is
+ * `max: 1` mirrors how `bun/migrate.ts` runs in production — the advisory lock it takes is
  * session-scoped, so the runner is only correct on a single-connection pool.
  */
 export async function createPostgres(namePrefix: string): Promise<PostgresFixture> {

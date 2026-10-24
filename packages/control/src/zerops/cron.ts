@@ -1,44 +1,6 @@
-// The cron command — the process-side equivalent of the Worker's `scheduled` handler.
-//
-// On Cloudflare `triggers.crons` wakes the Worker and calls `scheduled()`. There is no such trigger for
-// a plain container, so the platform cron (`zerops.yaml` → `run.crontab`) runs THIS file, which calls
-// the same `runMaintenance` the Worker's handler calls. Nothing about the poll or the sweep lives here.
-//
-// It is a one-shot process, not a timer inside the server: a timer fires once per container (so it
-// multiplies with horizontal scale) and its schedule silently resets on every redeploy. `allContainers:
-// false` in the crontab entry keeps a horizontally-scaled service polling once.
-//
-// Run it: `bun src/zerops/cron.ts`.
+// The Zerops installation's maintenance pass: `zerops.yaml` → `run.crontab` runs `bun packages/control/src/zerops/cron.ts`.
 
-import { runMaintenance } from '../cron'
-import { reconcileProviderRuns } from '../provider-reconcile'
-import { iamSchemaDeps, locks, operationsReleaseDeps, platformTransportDeps, repositories } from '../services'
+import { runMaintenanceProcess } from '../bun/cron'
 import { createRuntime } from './runtime'
 
-async function main(): Promise<void> {
-	const runtime = createRuntime()
-	try {
-		await runMaintenance(runtime.env, {
-			reconcile: () =>
-				reconcileProviderRuns({
-					repositories: repositories(runtime.env),
-					provider: runtime.provider,
-					runLogs: runtime.env.RUN_LOGS,
-					lock: locks(runtime.env),
-					operations: operationsReleaseDeps(runtime.env),
-					...platformTransportDeps(runtime.env),
-					...iamSchemaDeps(runtime.env),
-				}),
-		})
-	} finally {
-		await runtime.shutdown()
-	}
-}
-
-if (import.meta.main) {
-	// Never log the error object: it can carry a feed URL or a connection string.
-	main().catch((err: unknown) => {
-		console.error('maintenance failed:', err instanceof Error ? err.message : 'unknown error')
-		process.exit(1)
-	})
-}
+if (import.meta.main) runMaintenanceProcess(createRuntime)

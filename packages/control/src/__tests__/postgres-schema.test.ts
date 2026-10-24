@@ -17,6 +17,8 @@ import { type OperationsReleaseReconcileRequest, parseOperationsReleaseRequest }
 import { type BlobStore, type SqlDatabase, SqlDeployLocks, type SqlQueryResult, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { PostgresDatabase, PostgresJobQueue } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { applyMigrations } from '../bun/migrate'
+import { createFetchHandler } from '../bun/server'
 import { runDeployJob } from '../consumer'
 import { runMaintenance } from '../cron'
 import { AppEnvChangedError, type AppEnvInput, type ControlRepositories, createControlRepositories } from '../db'
@@ -27,8 +29,6 @@ import { GitHubConnectionStore } from '../github/connections/store'
 import { CATALOG_LEASE_KEY, LEASE_TTL_MS } from '../lease'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { Vault } from '../vault'
-import { applyMigrations } from '../zerops/migrate'
-import { createFetchHandler } from '../zerops/server'
 import { fixtureProtect, fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 import { interleaving } from './helpers/postgres-interleave'
@@ -1215,7 +1215,7 @@ function decode(payload: unknown): DeployJobMessage {
 }
 
 /**
- * The `Env` `zerops/runtime.ts` would assemble from `process.env`, built by hand so it binds the
+ * The `Env` `bun/runtime.ts` would assemble from `process.env`, built by hand so it binds the
  * SCHEMA-SCOPED pool this fixture owns instead of opening a second one. Everything else — the routing,
  * the consumer, the maintenance pass — is exactly what runs in production.
  *

@@ -4,25 +4,10 @@
 // publication while the namespace's proxy source is not this control plane's own.
 
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
-import type { CspOrigins } from '@fabrika/proxy-core/headers'
-import { contractProxyTable, type ProxyEndpointRow } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, type OlderProxyReaders } from '@fabrika/proxy-core/manifest'
 import type { ZeropsNamespaceProxySource } from './types'
 
-/**
- * What the namespace proxy of one older platform release parses of an application's manifest entry: a row, and the
- * entry's CSP directives, each by that release's own parser; and whether it serves the sign-out (ADR-0067 §5).
- */
-export interface OlderProxyReader {
-	readonly row: (row: ProxyEndpointRow) => boolean
-	readonly csp: (csp: CspOrigins) => boolean
-	readonly signsOut: boolean
-}
-
-/**
- * The namespace proxies of the older releases a pin may run whose parsers Control holds (ADR-0062). A pin's release is not
- * recorded, so what any of them reads is what the pin may read.
- */
-export type OlderProxyReaders = readonly [OlderProxyReader, ...OlderProxyReader[]]
+export type { OlderProxyReader, OlderProxyReaders } from '@fabrika/proxy-core/manifest'
 
 /**
  * What of the approved contract's manifest entry no older release's proxy parses, as the namespace publishes it: each

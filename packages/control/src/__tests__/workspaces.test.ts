@@ -124,7 +124,7 @@ for (const backend of backends) {
 				expect((await putAppEnvUseCase(registry, 'shop', 'prod', { ...zeropsEnvelopes(), authoring: true })).authoring).toBe(true)
 			})
 
-			test('refuses a provider other than Zerops', async () => {
+			test('refuses a provider that does not support authoring', async () => {
 				const w = await world()
 				await expect(
 					putAppEnvUseCase(registryContext(w.repositories, fakeControlProvider), 'shop', 'prod', { ...zeropsEnvelopes(), authoring: true }),
@@ -257,13 +257,17 @@ for (const backend of backends) {
 					})).rejects.toMatchObject({ httpStatus: 403 })
 				}
 				expect(w.source.kinds()).toEqual(['read-branch', 'create-branch'])
-				expect(isProtectedPath('fabrika.contract.ts')).toBe(false)
-				expect(isProtectedPath('Fabrika.Contract.ts')).toBe(true)
-				expect(isProtectedPath('src/db/tables.ts')).toBe(false)
-				expect(isProtectedPath('db/migrations/20260101000000_init.sql')).toBe(false)
-				expect(isProtectedPath('docs/zerops.yaml.md')).toBe(false)
-				expect(isProtectedPath('.github/dependabot.yml')).toBe(true)
-				expect(isProtectedPath('docs/.github/notes.md')).toBe(false)
+				const deployFiles = ['zerops.yaml', 'zerops.yml']
+				expect(isProtectedPath('fabrika.contract.ts', deployFiles)).toBe(false)
+				expect(isProtectedPath('Fabrika.Contract.ts', deployFiles)).toBe(true)
+				expect(isProtectedPath('src/db/tables.ts', deployFiles)).toBe(false)
+				expect(isProtectedPath('db/migrations/20260101000000_init.sql', deployFiles)).toBe(false)
+				expect(isProtectedPath('docs/zerops.yaml.md', deployFiles)).toBe(false)
+				expect(isProtectedPath('.github/dependabot.yml', deployFiles)).toBe(true)
+				expect(isProtectedPath('docs/.github/notes.md', deployFiles)).toBe(false)
+				// The deploy files are the provider's: a provider that names none protects only fabrika.* and CI.
+				expect(isProtectedPath('zerops.yaml', [])).toBe(false)
+				expect(isProtectedPath('fabrika.config.ts', [])).toBe(true)
 			})
 
 			test('a message that would exceed the commit-message bound with its trailers is refused before GitHub', async () => {

@@ -263,6 +263,13 @@ bun test
   Commands are not variables: `start: echo ${FABRIKA_RELEASE}` reads the service's own environment.
   `secrets.put` refuses the same references.
 
+## Application CLI (`./cli`, `src/cli.ts`)
+
+`appCli` (`@fabrika/provider-contract/app-cli`) is what `fabrika app build`, `app register` and `fabrika namespace`
+run: the Bun entry runtime, `build` (writes `fabrika.manifest.json`), `registrationManifest` (the same text, written
+nowhere) and `namespaces` (`src/namespace-cli.ts`: the provider options and the plan; the `fabrika` command calls
+Control and prints).
+
 ## Platform installation (`./installation`, `src/installation/`)
 
 The Zerops implementation of `@fabrika/provider-contract/installation` plus the typed platform topology

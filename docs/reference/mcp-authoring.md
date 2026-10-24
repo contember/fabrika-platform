@@ -94,7 +94,8 @@ make something pass; ask when a file is protected).
    owner of each installation (the organization owner) to accept the new permissions, and the App keeps its
    old ones until they do.
 3. **Mark one non-production environment as the authoring target** through `apps.environments.put`
-   with `authoring: true`. Only a Zerops environment of an app with a GitHub connection is accepted.
+   with `authoring: true`. Only an environment of an app with a GitHub connection, on a provider that declares
+   `authoring` (Zerops today), is accepted.
    Control refuses a second authoring environment for the same app (`409`); clear the flag on the
    first one before moving it. Never mark production: `deploy_stage` deploys unreviewed workspace
    heads to the authoring environment.
@@ -112,8 +113,9 @@ IAM still fetches each client's CIMD document over HTTPS, and a hosted client ca
 
 ## Protected paths
 
-`apply_changes` refuses `zerops.yaml` and `zerops.yml` at any depth, every `fabrika.*` file except
-`fabrika.contract.ts`, and everything under `.github/`. The operator changes them through normal review.
+`apply_changes` refuses the provider's deploy files (`ControlProvider.authoring.protectedFiles`: Zerops'
+`zerops.yaml` and `zerops.yml`) at any depth, every `fabrika.*` file except `fabrika.contract.ts`, and everything
+under `.github/`. The operator changes them through normal review.
 
 The contract, its schema modules, `src/db/tables.ts` and `db/migrations/` are editable: Control classifies
 their change at deploy time ([ADR-0050](../decisions/0050-approved-access.md)). The authoring target is

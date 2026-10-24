@@ -1,5 +1,5 @@
 import type { AppEnvDto, ListResponse, OkResponse, PutAppEnvRequest, RotateTokenKeyResponse } from '@fabrika/control-contract'
-import type { ProviderApp, ProviderRegistration } from '@fabrika/provider-contract'
+import type { ControlProvider, ProviderApp, ProviderRegistration } from '@fabrika/provider-contract'
 import { requireHumanForProtectedDelete } from '../../approval/human'
 import {
 	AppEnvChangedError,
@@ -38,7 +38,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	// Omitted keeps the stored list, which the new domain may now collide with, so the list in effect is what is judged.
 	assertCrossOrigins(input.crossOrigins ?? (existing === null ? [] : appEnvCrossOrigins(existing)), input.domain ?? null)
 	if (input.authoring === true) {
-		assertAuthoringTarget(c.provider.id, app)
+		assertAuthoringTarget(c.provider, app)
 		// ADR-0049: one stage environment per app.
 		const other = (await c.repositories.registry.listAppEnvs(appId)).find((row) => row.authoring === 1 && row.env !== env)
 		if (other !== undefined) fail(409, `app ${appId} already authors environment ${other.env}; clear its authoring flag first`)
@@ -176,10 +176,11 @@ export async function rotateTokenKeyUseCase(c: RegistryUseCaseContext, appId: st
 	return { requested }
 }
 
-/** ADR-0049: authoring is Zerops-only, and Source can reach the repository only through the app's GitHub connection. */
-function assertAuthoringTarget(provider: string, app: AppRow): void {
-	if (provider !== 'zerops' || app.github_connection_id === null || app.github_installation_id === null) {
-		fail(409, 'only a Zerops environment of an app with a GitHub connection can be an authoring target')
+/** ADR-0049: only a provider that declares authoring, and Source reaches the repository only through the app's GitHub connection. */
+function assertAuthoringTarget(provider: ControlProvider, app: AppRow): void {
+	if (provider.authoring === undefined) fail(409, `a ${provider.id} environment cannot be an authoring target`)
+	if (app.github_connection_id === null || app.github_installation_id === null) {
+		fail(409, 'only an environment of an app with a GitHub connection can be an authoring target')
 	}
 }
 

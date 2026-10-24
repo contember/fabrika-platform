@@ -21,9 +21,12 @@ export const sha = (character: string): string => character.repeat(40)
 export const CONNECTION_ID = 'conn-acme'
 export const INSTALLATION_ID = 45
 
-/** A Zerops provider double: the authoring flag is Zerops-only, so the id is the real one. */
+const ZEROPS_DEPLOY_FILES = ['zerops.yaml', 'zerops.yml']
+
+/** A Zerops provider double: it supports authoring and protects the deploy files the real one does. */
 export const zeropsProvider: ControlProvider = {
 	id: 'zerops',
+	authoring: { protectedFiles: ZEROPS_DEPLOY_FILES },
 	normalizeRegistration: (input) => input,
 	deploy: () => Promise.resolve({ state: 'succeeded' }),
 }
@@ -168,6 +171,7 @@ export async function seedWorkspaceWorld(repositories: ControlRepositories, db: 
 			repositories,
 			source,
 			consoleOrigin: 'https://console.example.test',
+			protectedFiles: ZEROPS_DEPLOY_FILES,
 			queue: {
 				send(message) {
 					queued.push(message)

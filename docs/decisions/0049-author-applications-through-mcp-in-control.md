@@ -50,7 +50,8 @@ contract and classify what it changed instead.
    also hold `source.workspace.*` grants at its coordinates. One stage environment per app; deploying a
    workspace creates an ordinary run for the exact head SHA in that environment.
 6. **Repository configuration is protected; the contract files are classified.** Control refuses edits
-   to `zerops.yaml` / `zerops.yml` at any depth, `fabrika.*` files and everything under `.github/`; the
+   to the provider's deploy files at any depth (`ControlProvider.authoring.protectedFiles`: `zerops.yaml` /
+   `zerops.yml` on Zerops; a provider without `authoring` has no authoring target), `fabrika.*` files and everything under `.github/`; the
    operator changes them through normal review. The only exceptions are `fabrika.contract.ts`, the
    schema modules it imports, `src/db/tables.ts` and the files under `migrations/`. A workspace may
    edit them, and Control classifies those changes at deploy time instead of refusing them (ADR-0050).
