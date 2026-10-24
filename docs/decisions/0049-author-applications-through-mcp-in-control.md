@@ -106,6 +106,14 @@ survive a service stop, start and restart (a deploy replaces the container and l
       restores the files and refuses the commit. The digest decides, not the paths: an edit of a handler in a module
       the contract imports syncs, and the proxy table and the approval, which follow the digest, stay true. At boot the
       launcher reconciles to the recorded head before it serves.
+    - A dev container has no init command. The database still holds what the previous container left (another
+      workspace's migrations, or one its commit edited), and an init command runs before Control can say whether a
+      reset is pending: a migration or schema check that failed there would fail every bootstrap, with no launcher
+      left for `reset_dev` to reach. So a new container's launcher asks Control twice at boot, first for the reset
+      generation the previous container applied, then for any reset still pending; it runs that reset, then
+      `fabrika db migrate`, then `fabrika db codegen --verify` (again after every reset). A failure is the reported
+      `failed` state, whose message names `reset_dev`. The readiness check of a dev container passes on the health
+      endpoint or once the launcher reported its boot, so a boot that failed still activates.
     - `run_checks` is refused while the container holds another commit than the workspace's newest, and its results
       name the commit they checked.
     - `apply_changes` on a bound workspace waits up to 10 s for that report and returns

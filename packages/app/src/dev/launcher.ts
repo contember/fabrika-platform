@@ -3,8 +3,11 @@
 // runtime credential only. It holds a long poll on Control's source receiver (ADR-0064); a new head brings the changed
 // files, which it writes, then it migrates when `db/migrations/` changed, runs the SPA commands when a web source
 // changed, and respawns the application. A change the build owns is refused with one line: it needs a bootstrap run.
+// A new container migrates and verifies its schema here, not in an init command: only after Control said whether a reset
+// is pending, since the database still holds what the previous container left.
 
 import {
+	DEV_LAUNCHER_BOOTED_FILE,
 	DEV_LAUNCHER_CONFIG_FILE,
 	DEV_LAUNCHER_STATE_FILE,
 	type DevLauncherConfig,
@@ -90,6 +93,13 @@ async function readState(root: string, config: DevLauncherConfig): Promise<Launc
 	const parsed = text === null ? null : stateSchema.safeParse(JSON.parse(text))
 	return parsed?.success === true ? parsed.data : { head: config.head, reset: null, checks: null }
 }
+
+/**
+ * `fabrika db codegen --verify` of the CLI that runs the configured `fabrika db migrate`. The configuration names no
+ * command for it, and a key of its own would fail the strict reader of every earlier 0.9 launcher.
+ */
+const verifyCommand = (migrate: readonly string[]): readonly string[] | null =>
+	migrate.at(-2) === 'db' && migrate.at(-1) === 'migrate' ? [...migrate.slice(0, -1), 'codegen', '--verify'] : null
 
 export interface DevSourceTransport {
 	readonly url: string
@@ -188,6 +198,8 @@ class Launcher {
 	private reportFailing = false
 	/** A newer bootstrap run replaced this container: it keeps serving until the platform stops it, and asks nothing. */
 	private superseded = false
+	/** A new container checks the schema types at boot, as a bootstrap does; a restarted one holds synced files instead. */
+	private verifyAtBoot = false
 
 	constructor(private readonly options: DevLauncherOptions) {
 		this.root = options.root
@@ -207,9 +219,25 @@ class Launcher {
 	}
 
 	async start(): Promise<void> {
+		const booted = join(this.root, DEV_LAUNCHER_BOOTED_FILE)
+		await rm(booted, { force: true })
 		this.state = await readState(this.root, this.config)
-		const answer = await this.firstAnswer()
-		await this.enqueue(() => this.apply(answer ?? { sync: null, reset: this.state.reset ?? 0, checks: this.state.checks ?? 0 }, true))
+		const fresh = this.state.reset === null
+		this.verifyAtBoot = fresh
+		let answer = await this.firstAnswer()
+		// A new container's first answer carries the reset generation the previous container applied; the second, any
+		// reset still pending, which the boot then runs before it migrates over the previous container's schema.
+		if (fresh && answer !== null && !this.superseded) {
+			this.state = { ...this.state, reset: answer.reset, checks: answer.checks }
+			answer = (await this.firstAnswer()) ?? answer
+		}
+		const boot = answer ?? { sync: null, reset: this.state.reset ?? 0, checks: this.state.checks ?? 0 }
+		try {
+			await this.enqueue(() => this.apply(boot, true))
+		} finally {
+			await mkdir(dirname(booted), { recursive: true })
+			await writeFile(booted, '')
+		}
 		void this.follow()
 	}
 
@@ -350,12 +378,16 @@ class Launcher {
 				spaFailure = outcome.spaFailure
 			}
 		}
-		if (changed || reset) await this.converge({ migrate: migrate || reset, reset, spaFailure, resetTo: answer.reset })
+		if (changed || reset) {
+			await this.converge({ migrate: migrate || reset, verify: (boot && this.verifyAtBoot) || reset, reset, spaFailure, resetTo: answer.reset })
+		}
 		if (answer.checks > (this.state.checks ?? answer.checks)) await this.check(answer.checks)
 	}
 
 	/** Bring the database, the SPA and the running application to the files on disk, then report. */
-	private async converge(steps: { migrate: boolean; reset: boolean; spaFailure: string | null; resetTo: number }): Promise<void> {
+	private async converge(
+		steps: { migrate: boolean; verify: boolean; reset: boolean; spaFailure: string | null; resetTo: number },
+	): Promise<void> {
 		this.status = steps.reset ? 'resetting' : 'syncing'
 		void this.report()
 		let failure: string | null = null
@@ -366,6 +398,7 @@ class Launcher {
 			this.state = { ...this.state, reset: steps.resetTo }
 		}
 		if (failure === null && steps.migrate) failure = await this.timed('the migration', () => this.migrate())
+		if (failure === null && steps.verify) failure = await this.timed('the schema check', () => this.verifySchema())
 		if (failure === null) failure = steps.spaFailure
 		const served = await this.timed('the restart until healthy', () => this.restartApplication())
 		failure ??= served
@@ -472,6 +505,19 @@ class Launcher {
 		})
 		if (result.exitCode === 0) return null
 		return `fabrika db migrate failed: ${lastLine(result)}; if an applied migration changed, call reset_dev`
+	}
+
+	/** The committed schema types against the migrated schema, as a bootstrap verifies them: at a new container's boot and after a reset. */
+	private async verifySchema(): Promise<string | null> {
+		const command = verifyCommand(this.config.migrate)
+		if (this.provisioningUrl === null || command === null) return null
+		const result = await this.run(command, {
+			...this.commandEnvironment,
+			FABRIKA_APP_ID: this.config.appId,
+			[PROVISIONING_DATABASE_URL]: this.provisioningUrl,
+		})
+		if (result.exitCode === 0) return null
+		return `fabrika db codegen --verify failed: ${lastLine(result)}; if the database holds another commit's schema, call reset_dev`
 	}
 
 	private async resetDatabase(): Promise<string | null> {
