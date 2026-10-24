@@ -1412,6 +1412,7 @@ describe('a dev environment', () => {
 	test('a framework release without the dev launcher fails the run and publishes nothing', async () => {
 		const w = world()
 		await seedDev(w)
+		w.files['bun.lock'] = frameworkLockfile('0.8.1')
 		const quiet = spyOn(console, 'error').mockImplementation(() => {})
 		try {
 			const result = await executeDeploy({ ...deps(w), controlOrigin: 'https://control.example.test' }, { runId: await createdRun(w, 'dev') })
@@ -1422,7 +1423,7 @@ describe('a dev environment', () => {
 		expect(w.deploys).toEqual([])
 		const log = [...w.logs.values()].join('\n')
 		expect(log).toContain(
-			`access: a dev environment starts the dev launcher of @fabrika/app 0.9.0 or newer, and the application pins ${CHECKER_VERSION}`,
+			'access: a dev environment starts the dev launcher of @fabrika/app 0.9.0 or newer, and the application pins 0.8.1',
 		)
 		expect(log).not.toContain('access: published')
 		expect((await w.db.registry.getAppEnv('notes', 'dev'))?.generation).toBe(0)
