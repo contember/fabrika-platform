@@ -15,8 +15,8 @@ model in any direction, but only narrowing is free.
 - **Optional vocabulary:** several parents per dimension, optional parents, column actions, attribute conditions. A
   system may support a subset. A boundary refuses a declaration the other side does not support; it never
   approximates it.
-- **Not shared,** because the deployment models differ: tenant partitioning (an installation is one organization; a
-  runtime may partition tenants with row-level security), where enforcement runs (the proxy and the application here,
+- **Not shared,** because the deployment models differ: the mechanics of a partition (row-level security, a schema or
+  a database per tenant; the concept is shared, see Layer 1), where enforcement runs (the proxy and the application here,
   in process elsewhere), credential transport and lifetime, the installation administrator path, and the mechanics of
   declared off-road steps.
 
@@ -28,6 +28,7 @@ model in any direction, but only narrowing is free.
 | role              | A named set of actions in the application's catalog.                                                                                 |
 | member role       | A role that may be held only at nodes of one declared dimension.                                                                     |
 | dimension         | A declared kind of container, with containment edges to its parent dimensions.                                                       |
+| partition         | A root dimension declared as one: every resource lies in exactly one of its nodes, for good. A tenant is a partition.                |
 | node              | One `(dimension, id)`. "Scope" is a local name in each system, not a model term.                                                     |
 | resource          | A protected object of the application; it lies at a node and in that node's containers.                                              |
 | principal         | An identity the identity system stores: a user or a service.                                                                         |
@@ -64,9 +65,13 @@ Enforcement, authorization and admission keep their meaning from [the overview](
   reaches an application only through an explicit grant at that application, shown in the approval. A bootstrap or
   cross-application grant never reaches an application credential.
 - **Authority envelope.** Before a grant is interpreted, its issuer, application and environment audience and subject are
-  verified. A runtime that partitions tenants maps every grant to a tenant only through an explicit installation-to-tenant
-  binding; a missing or conflicting binding refuses the conversion. Application-wide then means tenant-wide, never
-  cross-tenant.
+  verified.
+- **Tenancy is a partition.** A tenant is not a separate concept: it is a root dimension declared as a `partition`. Its
+  node is required on every resource and immutable, so no move crosses partitions. A partition carries an isolation
+  guardrail, which only subtracts: no operation reads or writes across two partitions. A grant at a partition node
+  reaches that partition only. An application-wide grant that would reach every partition is refused unless it is
+  declared as a platform grant. An application with no partition dimension has one implicit partition, so
+  application-wide means the whole application.
 - **Credentials are projections.** A credential carries what its enforcement point needs. The rest, such as the list of
   nodes, may be fetched by the application from the identity system within the same freshness bound.
 - **Freshness.** Each system declares T: a revoked, narrowed or expired grant stops admitting within T. A grant's expiry
