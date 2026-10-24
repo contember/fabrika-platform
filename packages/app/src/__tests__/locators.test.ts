@@ -179,10 +179,20 @@ describe.skipIf(!hasPostgres)('locators generated from the table policies', () =
 		}
 	})
 
-	test('over: an organization without workspaces lists nothing; a grant in no workspace or organization is 403', async () => {
+	test('over: an organization without workspaces lists nothing; a grant on no organization, workspace or note is 403', async () => {
 		expect(await list(await editorIn(scope('organization', 'oEmpty')))).toEqual([])
-		const sent = await send(app, '/api/notes.list', { token: await editorIn(scope('note', Bun.randomUUIDv7())), body: {} })
+		const sent = await send(app, '/api/notes.list', { token: await token('user', [grant('notes.write', scope('note', Bun.randomUUIDv7()))]), body: {} })
 		expect(sent.status).toBe(403)
+	})
+
+	test('over: a grant on a note lists exactly that note, as a single-note read admits it (S4)', async () => {
+		const granted = await seedNote('wa1', 'oA', 'granted note')
+		const sibling = await seedNote('wa1', 'oA', 'sibling note')
+		const holder = await editorIn(scope('note', granted))
+		expect(resultOf(await where(holder, granted))).toEqual({ id: granted, workspace: 'wa1', organization: 'oA' })
+		expect((await where(holder, sibling)).status).toBe(404)
+		expect(await list(holder)).toEqual([granted])
+		expect(await list(await editorIn(scope('note', Bun.randomUUIDv7())))).toEqual([])
 	})
 
 	test('in: a grant on the organization creates in its workspace, and the Ref carries the organization', async () => {

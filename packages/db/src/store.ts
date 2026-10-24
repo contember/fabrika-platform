@@ -309,6 +309,64 @@ function linksAbove(model: TableModel, dimension: string): readonly Container[] 
 }
 
 /**
+ * The links of a row that lie inside the `Within`'s own dimension: the object itself for a dimension table, and the
+ * chain links nearer than `dimension`. A grant on one of them admits the row as a single-object read admits it.
+ */
+function linksBelow(model: TableModel, dimension: string): readonly Container[] {
+	const links = model.scope.mode === 'dimension' ? selfLinks(model) : model.chain
+	const below: Container[] = []
+	for (let index = 0; index < links.length; index++) {
+		const link = links[index]
+		if (link === undefined || link.dimension === dimension) {
+			return below
+		}
+		below[below.length] = link
+	}
+	return []
+}
+
+/**
+ * One `<column> in (values)` per contained grant on a link of the row inside the `Within`'s dimension. A grant on a
+ * dimension the table carries no link of admits none of its rows; one on the `Within`'s dimension or above it is refused.
+ */
+function containedTests(model: TableModel, grant: WithinGrant): { readonly column: string; readonly values: readonly string[] }[] {
+	const below = linksBelow(model, grant.dimension)
+	const above = linksAbove(model, grant.dimension)
+	const tests: { readonly column: string; readonly values: readonly string[] }[] = []
+	for (let index = 0; index < grant.contained.length; index++) {
+		const contained = grant.contained[index]
+		if (contained === undefined) {
+			continue
+		}
+		if (contained.dimension === grant.dimension || above.some((link) => link.dimension === contained.dimension)) {
+			throw new CapabilityError(
+				'unenforceable',
+				`the Within of ${grant.dimension} carries a grant on ${contained.dimension}, which does not lie inside ${grant.dimension} in ${model.name}`,
+			)
+		}
+		const link = below.find((candidate) => candidate.dimension === contained.dimension)
+		if (link !== undefined && contained.values.length > 0) {
+			tests[tests.length] = { column: link.column, values: contained.values }
+		}
+	}
+	return tests
+}
+
+/** Every scope value a `Within` carries: its own, its containers' and its contained dimensions'. */
+function withinCount(grant: WithinGrant): number {
+	if (grant.values === 'all') {
+		return 0
+	}
+	let count = grant.values.length
+	for (const group of [grant.containers, grant.contained]) {
+		for (let index = 0; index < group.length; index++) {
+			count += group[index]?.values.length ?? 0
+		}
+	}
+	return count
+}
+
+/**
  * `column in (values) or <container column> in (container values) …`, one disjunct per container dimension, so
  * the statement itself judges each row by the chain it carries now. Undefined for an empty `Within`: the caller
  * answers `[]` without a query.
@@ -319,7 +377,7 @@ function withinPredicate(model: TableModel, column: string, grant: WithinGrant):
 	}
 	const above = linksAbove(model, grant.dimension)
 	const predicates: OperationNode[] = []
-	let count = grant.values.length
+	const count = withinCount(grant)
 	if (grant.values.length > 0) {
 		predicates[predicates.length] = inList(model.name, column, grant.values)
 	}
@@ -340,10 +398,12 @@ function withinPredicate(model: TableModel, column: string, grant: WithinGrant):
 				`the Within of ${grant.dimension} reaches through ${container.dimension}, which ${model.name} carries no column for above ${grant.dimension}; the layer cannot enforce it`,
 			)
 		}
-		count += container.values.length
 		if (container.values.length > 0) {
 			predicates[predicates.length] = inList(model.name, link.column, container.values)
 		}
+	}
+	for (const test of containedTests(model, grant)) {
+		predicates[predicates.length] = inList(model.name, test.column, test.values)
 	}
 	if (count > MAX_WITHIN_VALUES) {
 		throw new CapabilityError('within_size', `a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)
@@ -544,7 +604,7 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 	}
 	const above = linksAbove(model, grant.dimension)
 	const groups: ScopeTest[][] = []
-	let count = grant.values.length
+	const count = withinCount(grant)
 	if (grant.values.length > 0) {
 		groups.push([{ column, value: grant.values }])
 	}
@@ -556,10 +616,12 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 				`the Within of ${grant.dimension} reaches through ${container.dimension}, which ${model.name} carries no column for above ${grant.dimension}; the layer cannot enforce it`,
 			)
 		}
-		count += container.values.length
 		if (container.values.length > 0) {
 			groups.push([{ column: link.column, value: container.values }])
 		}
+	}
+	for (const test of containedTests(model, grant)) {
+		groups.push([{ column: test.column, value: test.values }])
 	}
 	if (count > MAX_WITHIN_VALUES) {
 		throw new CapabilityError('within_size', `a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)

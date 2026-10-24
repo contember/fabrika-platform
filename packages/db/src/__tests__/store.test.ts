@@ -179,6 +179,25 @@ describe('every statement carries its scope predicate', () => {
 		refused(await layer.attempt(() => layer.stores.organizations.list(organizations)), CapabilityError, 'reaches through organization')
 	})
 
+	test('a grant inside the Within is a disjunct over the row’s own key or chain column, and admits no row that does not lie in it', async () => {
+		const layer = recordingLayer()
+		const notes = [{ dimension: 'note', values: ['n1', 'n2'] }]
+		const onlyNotes = layer.capabilities.within('workspace', 'notes.read', [], [], notes)
+		const searched = await layer.attempt(() => layer.stores.notes.search(onlyNotes, 'x'))
+		expect(searched.statements[0]?.sql).toContain('and "notes"."id" in ($3, $4) order by')
+		expect(searched.statements[0]?.parameters).toEqual(['%x%', '%x%', 'n1', 'n2', 50])
+		const comments = await layer.attempt(() => layer.stores.comments.countPerNote(onlyNotes))
+		expect(comments.statements[0]?.sql).toContain('where "note_comments"."note_id" in ($1, $2)')
+		const workspaces = layer.capabilities.within('organization', 'notes.read', ['o1'], [], [{ dimension: 'note', values: ['n1'] }])
+		const listed = await layer.attempt(() => layer.stores.organizations.list(workspaces))
+		expect(listed.error).toBeUndefined()
+		expect(listed.statements[0]?.parameters).not.toContain('n1')
+		for (const dimension of ['workspace', 'organization']) {
+			const wrong = layer.capabilities.within('workspace', 'notes.read', ['w1'], [], [{ dimension, values: ['x'] }])
+			refused(await layer.attempt(() => layer.stores.notes.all(wrong)), CapabilityError, `does not lie inside workspace`)
+		}
+	})
+
 	test(`a Within carries at most ${MAX_WITHIN_VALUES} scope values, its own and its containers' together`, async () => {
 		const layer = recordingLayer()
 		const values = (count: number, prefix: string) => Array.from({ length: count }, (_, index) => `${prefix}${index}`)

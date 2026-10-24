@@ -45,7 +45,8 @@ export function notesStore(capabilities: CapabilityAuthority, rows: Map<string, 
 		list: (within: Within<'workspace', 'notes.read'>): NoteRow[] => {
 			const grant = grantOf(capabilities, within, 'within', 'workspace', 'notes.read')
 			const values = grant.kind === 'within' ? grant.values : []
-			return [...rows.values()].filter((row) => values === 'all' || values.includes(row.workspaceId))
+			const notes = grant.kind === 'within' ? grant.contained.flatMap((held) => held.dimension === 'note' ? held.values : []) : []
+			return [...rows.values()].filter((row) => values === 'all' || values.includes(row.workspaceId) || notes.includes(row.id))
 		},
 		get: (note: Ref<'note', 'notes.read'>): NoteRow => {
 			const grant = grantOf(capabilities, note, 'ref', 'note', 'notes.read')

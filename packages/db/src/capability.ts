@@ -62,6 +62,11 @@ export interface WithinGrant {
 	 * every statement judges a row by the chain columns it carries now: a scope moved out of a container is out.
 	 */
 	readonly containers: readonly ContainerGrant[]
+	/**
+	 * The dimensions inside `dimension` (the listed object's own and the containers between) in which the caller holds
+	 * the action: a row that lies in one of their values is listed, as a single-object read of it is allowed.
+	 */
+	readonly contained: readonly ContainerGrant[]
 }
 
 /** An `app` endpoint's grant: the action everywhere in the application, which the proxy checked was held globally. */

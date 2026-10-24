@@ -269,14 +269,18 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 		principal: string,
 		values: readonly string[] | 'all',
 		containers: readonly ContainerGrant[],
+		contained: readonly ContainerGrant[],
 	) {
 		if (token !== MINT) {
 			throw new CapabilityRefusedError('not_minted', 'a Within is minted by the framework only; declare the access form in fabrika.contract.ts')
 		}
 		const held = values === 'all' ? freeze([]) : containerGrantsOf(containers)
+		const inside = values === 'all' ? freeze([]) : containerGrantsOf(contained)
 		let count = values === 'all' ? 0 : values.length
-		for (let index = 0; index < held.length; index++) {
-			count += held[index]?.values.length ?? 0
+		for (const group of [held, inside]) {
+			for (let index = 0; index < group.length; index++) {
+				count += group[index]?.values.length ?? 0
+			}
 		}
 		if (count > MAX_WITHIN_VALUES) {
 			throw new CapabilityLimitError(
@@ -292,6 +296,7 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 			principal,
 			values: values === 'all' ? 'all' : copyOf(values),
 			containers: held,
+			contained: inside,
 		})
 		this.#frame = frame
 		this.#issuer = issuer
@@ -313,6 +318,11 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 	/** The containers in which the caller also holds the action: `organization → [o1]` for a workspace list. */
 	get containers(): readonly ContainerGrant[] {
 		return this.#grant.containers
+	}
+
+	/** The dimensions inside this one in which the caller holds the action: `note → [n1]` for a workspace list. */
+	get contained(): readonly ContainerGrant[] {
+		return this.#grant.contained
 	}
 
 	static {
@@ -434,6 +444,7 @@ export interface CapabilityMint {
 		principal: string,
 		values: readonly string[] | 'all',
 		containers?: readonly ContainerGrant[],
+		contained?: readonly ContainerGrant[],
 	): Within<D, A>
 	app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A>
 }
@@ -469,8 +480,9 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 			principal: string,
 			values: readonly string[] | 'all',
 			containers: readonly ContainerGrant[] = [],
+			contained: readonly ContainerGrant[] = [],
 		): Within<D, A> {
-			return new Within(MINT, issuer, frame, dimension, action, principal, values, containers)
+			return new Within(MINT, issuer, frame, dimension, action, principal, values, containers, contained)
 		},
 		app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A> {
 			return new AppCapability(MINT, issuer, frame, action, principal)
