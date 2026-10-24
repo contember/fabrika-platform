@@ -187,6 +187,18 @@ describe('a terminal session mints (person ∩ ceiling) ∪ terminal', () => {
 		expect((await mintedClaims(s, session)).perms.map((entry) => entry.action)).toEqual(['report.export', 'attendance.record'])
 	})
 
+	test("the token ends with the grants it carries, the terminal principal's own included (S8)", async () => {
+		const s = await scenario(['attendance.*'])
+		const session = await applicationSession(s)
+		expect((await mintedClaims(s, session)).exp).toBeGreaterThan(now() + 200)
+		const until = now() + 60
+		s.h.sqlite.run('UPDATE grants SET expires_at = ? WHERE principal_id = ?', [until, s.terminalId])
+		expect((await mintedClaims(s, session)).exp).toBe(until)
+		s.h.sqlite.run('UPDATE grants SET expires_at = NULL WHERE principal_id = ?', [s.terminalId])
+		s.h.sqlite.run('UPDATE grants SET expires_at = ? WHERE principal_id = ?', [until, s.person])
+		expect((await mintedClaims(s, session)).exp).toBe(until)
+	})
+
 	test("a personal session is unchanged: the person's own set, no terminal claims", async () => {
 		const s = await scenario([])
 		const session = await s.h.signSession(s.person, { email: 'ann@example.com' })
