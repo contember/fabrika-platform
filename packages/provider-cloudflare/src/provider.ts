@@ -332,10 +332,7 @@ const platformProxied = (authored: Worker, served: ServedContract, run: Cloudfla
 
 /** The origin of the environment's Operations ingest, which the proxy's `connect-src` admits, as the framework's does. */
 const operationsOrigin = (run: CloudflareDeployRun): { readonly operationsOrigin?: string } => {
-	if (run.operationsOrigin !== undefined) {
-		if (!isPolicyOrigin(run.operationsOrigin, ['https:', 'http:'])) throw new Error('cloudflare: the Operations origin is not an http(s) origin')
-		return { operationsOrigin: run.operationsOrigin }
-	}
+	if (run.operationsOrigin !== undefined) return { operationsOrigin: run.operationsOrigin }
 	// A job from an older Control names no origin; derive it from the DSN until no release in the window omits it.
 	const dsn = managedValue(run.managedEnvironment, 'FABRIKA_OPERATIONS_DSN')
 	if (dsn === null) return {}

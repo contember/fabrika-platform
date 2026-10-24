@@ -173,3 +173,6 @@ WU5, WU6, WU7 and WU9 are independent of each other. WU8 follows WU7.
   semantics differ by design (Zerops leaves a reserved version to `cancel()`, Cloudflare stops its job), so the suite
   does not fix them. The negative control is `src/__tests__/fixtures/cancelling-provider.ts`, run in a child process;
   a Zerops wait that cancels on lease loss fails the sweep (checked by hand).
+- **WU6.** `contractProxyEntry` (`packages/proxy-core/src/manifest.ts`) checks the entry with the proxy's own
+  `contractProxyAppSchema` instead of a copy of its rules, so Zerops' hand-written origin and cross-origin checks went.
+  Cloudflare's proxy Worker and `@fabrika/app/testing`'s `endpointProxy` build through it too. The wire form is unchanged.

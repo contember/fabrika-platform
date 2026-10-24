@@ -104,7 +104,7 @@ describe('namespace proxy manifest', () => {
 		})
 		expect(parseProxyManifest(manifest)).toEqual(manifest)
 		expect(() => compileNamespaceProxyManifest('apps-prod', [{ ...notes, operationsOrigin: 'https://key@operations.example.com' }])).toThrow(
-			'has an Operations ingest origin that is not an http(s) origin',
+			'proxy entry `notes@prod` is one the proxy manifest refuses (operationsOrigin)',
 		)
 	})
 
@@ -135,7 +135,7 @@ describe('namespace proxy manifest', () => {
 		]
 		for (const crossOrigins of refused) {
 			expect(() => compileNamespaceProxyManifest('apps-prod', [{ ...notes, crossOrigins }])).toThrow(
-				'has a cross-origin list the proxy manifest refuses',
+				'proxy entry `notes@prod` is one the proxy manifest refuses',
 			)
 		}
 	})

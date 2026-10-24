@@ -1,7 +1,6 @@
 import { appEnvironmentId } from '@fabrika/auth-core'
 import { decodeEnvelope, type ProviderNamespaceMember } from '@fabrika/provider-contract'
-import { isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy-core/headers'
-import { contractProxyTable, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { contractProxyEntry, contractProxyTable, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { assertFabrikaManifestCoordinates, zeropsArtifactCodec } from '../manifest'
 
 /** Compile every public member of one deployment namespace into its strict proxy manifest. */
@@ -28,29 +27,17 @@ export function compileNamespaceProxyManifest(namespaceId: string, members: read
 		if (hosts.has(host)) throw new Error(`duplicate proxy host \`${host}\` in deployment namespace ${namespaceId}`)
 		ids.add(id)
 		hosts.add(host)
-		const operationsOrigin = member.operationsOrigin
-		if (operationsOrigin !== undefined && !isPolicyOrigin(operationsOrigin, ['https:', 'http:'])) {
-			throw new Error(`Zerops proxy target ${member.appId}/${member.env} has an Operations ingest origin that is not an http(s) origin`)
-		}
-		const crossOrigins = member.crossOrigins ?? []
-		if (
-			crossOrigins.length > MAX_CROSS_ORIGINS
-			|| new Set(crossOrigins).size !== crossOrigins.length
-			|| crossOrigins.some((origin) => !isCrossOrigin(origin) || new URL(origin).hostname === host)
-		) {
-			throw new Error(`Zerops proxy target ${member.appId}/${member.env} has a cross-origin list the proxy manifest refuses`)
-		}
-		apps.push({
+		apps.push(contractProxyEntry({
 			id,
 			hosts: [host],
 			upstream: proxy.upstream,
 			// A Zerops public domain is always served over the project's TLS-terminating L7 balancer, so the
 			// browser speaks https even though the proxy itself is reached over plain HTTP (ADR-0022).
 			scheme: 'https',
-			...contractProxyTable(access.contract, access.contractDigest),
-			...(operationsOrigin === undefined ? {} : { operationsOrigin }),
-			...(crossOrigins.length === 0 ? {} : { crossOrigins: [...crossOrigins] }),
-		})
+			table: contractProxyTable(access.contract, access.contractDigest),
+			...(member.operationsOrigin === undefined ? {} : { operationsOrigin: member.operationsOrigin }),
+			...(member.crossOrigins === undefined ? {} : { crossOrigins: member.crossOrigins }),
+		}))
 	}
 	return { apps }
 }

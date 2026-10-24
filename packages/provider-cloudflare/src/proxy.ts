@@ -1,4 +1,5 @@
 import {
+	contractProxyEntry,
 	type ContractProxyTable,
 	encodeProxyManifestJson,
 	type InstallationProxyTable,
@@ -147,16 +148,10 @@ function proxyApp(placement: Pick<ProxyApp, 'id' | 'hosts' | 'upstream' | 'schem
 		const { installation, endpoints, reservedPrefixes } = options.installation
 		return { ...placement, installation, endpoints, reservedPrefixes }
 	}
-	const { endpoints, reservedPrefixes, snapshot, csp } = options.endpoints
-	const operationsOrigin = options.operationsOrigin
-	const crossOrigins = options.crossOrigins ?? []
-	return {
+	return contractProxyEntry({
 		...placement,
-		endpoints,
-		reservedPrefixes,
-		snapshot,
-		csp,
-		...(operationsOrigin === undefined ? {} : { operationsOrigin }),
-		...(crossOrigins.length === 0 ? {} : { crossOrigins: [...crossOrigins] }),
-	}
+		table: options.endpoints,
+		...(options.operationsOrigin === undefined ? {} : { operationsOrigin: options.operationsOrigin }),
+		...(options.crossOrigins === undefined ? {} : { crossOrigins: options.crossOrigins }),
+	})
 }
