@@ -398,7 +398,9 @@ Modes:
 
 **A transition, `POST /__fabrika/ops/state {mode, generation}`:**
 
-1. Refuse a generation at or below the current one.
+1. Refuse a generation below the current one. An equal generation with the same mode is a retry: it skips to the
+   drain and answers its result, so a lost response is replayed safely. An equal generation with another mode is
+   refused.
 2. Synchronously, before any await, switch the in-memory mode. From that instant no new invocation of the forbidden
    class is admitted.
 3. Conditionally put R2. If the put fails, the restrictive mode stays in memory and the call fails, so Control
@@ -407,8 +409,9 @@ Modes:
    uploading, `dispatch.ts:517`), webhooks, kicks, job runs and framework jobs. The stop controller, which today covers
    kicks only (`runner.ts:330,364`), is extended to every run. The object awaits the handlers' settlement, not just the
    end of their frames (`runner.ts:713`), within a bound: 25 s for handlers, plus the job abort grace.
-5. Acknowledge with the count of anything still running past the bound. The external effects of such work are
-   reported, not guaranteed stopped.
+5. Acknowledge only after the drain, with the count of anything still running past the bound. The external effects of
+   such work are reported, not guaranteed stopped. Control records the transition as complete only on this
+   acknowledgement; reading the R2 copy proves publication, not a finished drain.
 
 **The write fence.** Every invocation captures the generation when it is admitted. Each of these checks the mode and
 generation **inside its own transaction**:
