@@ -652,6 +652,10 @@ refused while the site runs (`capability_refused: undeclared_egress`). A public,
 none. The checker's `cross-app-fetch` accepts an absolute URL only under an origin some site declares. The approver
 sees every origin. The guard stops mistakes; it is no sandbox.
 
+On Cloudflare a procedure waits for its outside call inside the object's transaction, so the whole environment waits
+with it (`SKILL.md`). A mutation records a row and kicks a job, which declares the `egress` and calls outside
+`ctx.transaction` (`references/jobs.md`).
+
 ## Links to your own procedures: `ctx.url`
 
 `ctx.url('<endpoint id>', { input?, query? })` builds an absolute URL of one of the application's own procedures, on
