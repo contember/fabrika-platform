@@ -22,7 +22,7 @@ app-facing SDK still does. Effort S.
   `X-Forwarded-For`, `CF-Connecting-IP`). A caller's `cf-ray` reaches the app. The proxy's own
   `X-Request-Id`, which it does inject, is ignored by the SDK.
 - Control and Operations take their audit correlation id from this SDK too (`createIam` in
-  `packages/control/src/iam.ts`, `packages/control/src/zerops/mcp.ts` and
+  `packages/control/src/iam.ts`, `packages/control/src/bun/mcp.ts` and
   `packages/operations/src/auth.ts`); neither reads a correlation header of its own.
 - `IamRpc` replaces a malformed `requestId` (`packages/iam/src/rpc.ts`, `acceptRequestId`), so the
   stored value is bounded. A well-formed forged id is still accepted.

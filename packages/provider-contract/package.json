@@ -25,6 +25,11 @@
 			"types": "./src/installation.ts",
 			"default": "./src/installation.ts"
 		},
+		"./app-cli": {
+			"bun": "./src/app-cli.ts",
+			"types": "./src/app-cli.ts",
+			"default": "./src/app-cli.ts"
+		},
 		"./conformance": {
 			"bun": "./src/conformance.ts",
 			"types": "./src/conformance.ts",

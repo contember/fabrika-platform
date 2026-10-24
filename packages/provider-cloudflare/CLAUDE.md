@@ -205,6 +205,12 @@ this one import.
 - **Never log credentials or secret values** — including an error object from a failed `wrangler`
   invocation, whose output can quote a clone URL with an embedded token.
 
+## Application CLI (`./cli`, `src/cli.ts`)
+
+`appCli` (`@fabrika/provider-contract/app-cli`) is what `fabrika app build` and `app deploy` run: the Cloudflare entry
+runtime, `build` (nothing beyond the generated entry, and refused without a contract) and `deploy`. `runCloudflareCli`
+stays the runner container's `fabrika-cloudflare-executor`.
+
 ## Platform installation (`./installation`, `src/installation/`)
 
 The Cloudflare implementation of `@fabrika/provider-contract/installation`; `@fabrika/cli` loads it.
