@@ -64,8 +64,8 @@ make something pass; ask when a file is protected).
    ```
 
    `metadataUrl` is optional; IAM fetches the client id when it is absent. The deploy refuses a
-   malformed list, more than 16 clients, or `--scheme=http`, before it writes anything. With the
-   list, the deploy:
+   malformed list, more than 16 clients, or `--scheme=http`, before it writes anything. Register
+   [Claude and ChatGPT](#registering-claude-and-chatgpt) as below. With the list, the deploy:
    - publishes the console's MCP table, whose `/mcp` row admits OAuth bearers, and registers the
      resource in the proxy manifest;
    - writes `FABRIKA_SERVICE_TABLE_DIGEST` on `control`: the digest of that table. Control serves
@@ -102,6 +102,61 @@ make something pass; ask when a file is protected).
 4. **Grant the users** `source.workspace.read`, `source.workspace.write`,
    `source.pull-request.create`, `deploy.trigger` and `deploy.read`, scoped to the app. The token
    carries the intersection of these grants and the scope grant above.
+
+## Registering Claude and ChatGPT
+
+Each entry names one client id and its exact redirect URIs. IAM fetches the client's metadata document at
+the client id, and a document that names any other redirect URI is refused.
+
+| Client             | `clientId`                                            | `redirectUris`                                          |
+| ------------------ | ----------------------------------------------------- | ------------------------------------------------------- |
+| Claude             | `https://claude.ai/oauth/mcp-oauth-client-metadata`   | `https://claude.ai/api/mcp/auth_callback`               |
+| ChatGPT (stable)   | `https://chatgpt.com/oauth/client.json`               | `https://chatgpt.com/connector_platform_oauth_redirect` |
+| ChatGPT (fallback) | `https://chatgpt.com/oauth/<callback id>/client.json` | `https://chatgpt.com/connector/oauth/<callback id>`     |
+
+```json
+[
+	{
+		"provider": "claude",
+		"clientId": "https://claude.ai/oauth/mcp-oauth-client-metadata",
+		"redirectUris": ["https://claude.ai/api/mcp/auth_callback"]
+	},
+	{
+		"provider": "chatgpt",
+		"clientId": "https://chatgpt.com/oauth/client.json",
+		"redirectUris": ["https://chatgpt.com/connector_platform_oauth_redirect"]
+	}
+]
+```
+
+- **ChatGPT uses the stable client id** because IAM supports RFC 9207: it advertises
+  `authorization_response_iss_parameter_supported` and puts `iss` on every authorization response. Register the
+  stable entry; no per-connector step is needed.
+- **The fallback client id** belongs to one connector. ChatGPT uses it only against an authorization server
+  without RFC 9207. The `<callback id>` appears in the connector's settings after it is created. Add one entry
+  per connector:
+
+  ```json
+  {
+  	"provider": "chatgpt",
+  	"clientId": "https://chatgpt.com/oauth/<callback id>/client.json",
+  	"redirectUris": ["https://chatgpt.com/connector/oauth/<callback id>"]
+  }
+  ```
+
+**Client authentication follows the document.** Claude's document declares `token_endpoint_auth_method: none`:
+a public client with PKCE. ChatGPT's declares `private_key_jwt`: at the token and revocation endpoints it sends a
+JWT client assertion (RFC 7523) signed with a key from the document's `jwks_uri`. IAM then requires the
+assertion and never accepts a request without one from that client. IAM verifies:
+
+- the key set URL is HTTPS on the client id's own origin, or the document is refused;
+- the signature, with the document's `token_endpoint_auth_signing_alg` (`RS256` is the one IAM supports);
+- `iss` = `sub` = the client id;
+- `aud` is the token endpoint URL or IAM's issuer identifier; at `/oauth/revoke` also the revocation endpoint URL;
+- `exp` is present, not passed, and at most one hour ahead;
+- `jti` is present and was not presented before (`oauth_client_assertions`, kept until `exp`).
+
+IAM caches a key set for five minutes. An assertion with an unknown `kid` refetches it, at most once per 30 s.
 
 ## Locally
 
