@@ -188,7 +188,10 @@ async function answer(
 	signal: AbortSignal,
 ): Promise<DevWaitAnswer> {
 	if (row === null) return { sync: null, reset: 0, checks: 0 }
-	const generations = { reset: row.reset_generation, checks: row.checks_generation }
+	// A container without a state file adopts the answer's generation as applied. Its database is the previous
+	// container's, so it learns the generation that one applied, and the next answer asks for any reset still pending.
+	const reset = request.reset === null ? Math.min(row.reset_applied ?? 0, row.reset_generation) : row.reset_generation
+	const generations = { reset, checks: row.checks_generation }
 	if (!needsSync(row, request.head)) return { sync: null, ...generations }
 	const handedOff = deps.signals.take(devTargetKey(appId, env), request.head, row.target_sha)
 	const relayed = handedOff === null ? null : relayableSync(handedOff)
