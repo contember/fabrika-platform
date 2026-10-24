@@ -1,0 +1,80 @@
+---
+id: 228
+title: Application object review follow-ups
+blocked-by: []
+---
+
+# 228 — Application object review follow-ups
+
+**Summary.** The P2s and open decisions the reviews of the application object sprint's waves 0–1 left. None blocks
+a release; each is small.
+
+## Problem
+
+**Checker (`packages/check`).**
+
+1. `cloudflare-current-timestamp` skips exactly one parenthesis: `DEFAULT ((CURRENT_TIMESTAMP))` passes
+   (`src/rules/migrations.ts:60`).
+2. The refusal tokenizes SQLite with the shared Postgres lexer. A bracket or backtick identifier gives a false
+   positive, and a non-nested `/* */` comment gives a false negative (`migrations.ts:57`). It needs a SQLite mode in
+   the tokenizer (shared with [214](214-raw-sql-on-sqlite.md)).
+
+**Timers.**
+
+3. `packages/auth/src/rpc-http.ts:386` and `packages/email/src/http.ts:27` still use `AbortSignal.timeout` in the
+   Cloudflare bundle. An uncancelled timer keeps the object resident. They are allow-listed as `UNCLEARED` in
+   `packages/provider-cloudflare/src/__tests__/cloudflare-bundle.test.ts`.
+4. The timer witnesses of a webhook delivery and of a public procedure need Postgres, and have not run.
+
+**SQLite migration ledger (`packages/db/src/sqlite-migrate.ts`).**
+
+5. The bundle digest hides a ledger edited out of band: a checksum changed, or a row deleted, while
+   `fabrika_migration_bundles` still matches. On the full path, a bundle whose digest matches is skipped even when
+   one of its ledger rows is missing (`:202`, `:208`).
+   - Possible fix: triggers on the ledger that invalidate the bundle's digest.
+   - Possible fix: derive pending migrations from the ledger for every bundle on the full path.
+
+**Read-only invocations on SQLite (`packages/db/src/sqlite.ts`).**
+
+Only framework SQL reaches the read path ([214](214-raw-sql-on-sqlite.md) refuses `ctx.sql` on SQLite), so these
+gaps are defence in depth.
+
+6. On workerd, a multi-statement string reports only the last statement's `rowsWritten`, so `INSERT …; SELECT 1`
+   escapes the backstop (`:141-144`). Refuse more than one statement on the read path.
+7. A writable PRAGMA (`PRAGMA ignore_check_constraints = ON`) on the read path is neither counted nor rolled back.
+   Refuse state-changing PRAGMAs there.
+8. The bun:sqlite double diverges from workerd's gates in two ways:
+   - it lets an unrelated reader see another invocation's uncommitted write, because the read path skips the
+     async transaction queue;
+   - its `rowsWritten`, taken from `total_changes()`, misses schema writes.
+
+**Generated entry (`packages/provider-cloudflare`).**
+
+9. The pin compares paths as text, so a symlinked `workerDir` or Worker `dir` can make wrangler bundle a different
+   `fabrika/entry.generated.ts` than the one the bound checked (`src/bounds.ts`). It is not a security boundary,
+   because the author owns the Worker. Possible fix: realpath the config and the entry just before the gated
+   wrangler spawn.
+10. `pipeline.build` inherits the executor environment minus three names, including application and managed
+    secrets, and a failed command's output reaches `commandError()` (`src/provider.ts`). The entry build already
+    gets only `PATH`, `HOME` and `TMPDIR`. Decide which secrets an authored build may see.
+11. The entry build looks for the CLI no higher than the executor's working directory. If a `workerDir` below a
+    workspace root keeps the CLI at the root, the build fails. The runner would need to pass the checkout root.
+12. **Decision:** a local deploy (no release named) is not pinned. Pinning it moves the runner smoke fixture
+    (`packages/runner-container/docker/smoke/fabrika.config.ts`) to the generated entry.
+13. **Decision:** queue consumers are not refused under the pinned entry, which exports no `queue()`. A gated
+    application's consumer would deploy and never consume. Refuse it until the sprint's queue phase generates a
+    consumer.
+14. The test "the object's migration keeps tag v0001 when the application binds an object of its own" was deleted
+    because both gates are 0.9. If D0 moves `PINNED_ENTRY_SINCE`, restore it with a release between the two gates.
+
+## Approach / acceptance
+
+Each item lands with a witness that fails before it. Items 12 and 13 need a decision first. Item 14 follows D0 in
+the sprint.
+
+## Touch points
+
+`packages/check`, `packages/auth`, `packages/email`, `packages/db` (`sqlite-migrate.ts`, `sqlite.ts`,
+`sqlite-bun.ts`), `packages/provider-cloudflare` (`bounds.ts`, `provider.ts`), `packages/runner-container`.
+
+<!-- Origin: ../sprints/sprint-2026-10-24-application-object.md, run log of waves 0–1. -->

@@ -40,7 +40,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `sql.ts`               | `ctx.sql`: `classifySql` (the template's static text over `@fabrika/platform-node/sql`), the value binding, the row parse, `sqlTag`.                                                                                                                      |
 | `store.ts`             | `scoped(tables)` → `ScopedDatabase`; the stores (`defineStore`, framework tests only); the generated locator; every check.                                                                                                                                |
 | `registry.ts`          | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.                                                                                                                                                  |
-| `framework.ts`         | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `isScopedDatabase`, `frameworkTablesOf`, `dataAccessOf`; browser-safe.                                                                                                            |
+| `framework.ts`         | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `bindScopedDatabaseProvisionally` (released when a boot fails), `isScopedDatabase`, `frameworkTablesOf`, `dataAccessOf`; browser-safe.                                            |
 | `links.ts`             | A `Ref`'s predicate over a table's containment links, shared by the stores and the handles.                                                                                                                                                               |
 | `framework-tables.ts`  | The webhook bindings (guarded trees) and the delivery claims (fixed statements: claim under a lease, complete in the handler's transaction, give back).                                                                                                   |
 | `job-leases.ts`        | `fabrika_job_leases` and `fabrika_job_kicks`: a job run's lease, its generations and deadlines, a kick's pending run, the last run; `fencedTransaction`; `DialectTexts`, `SQLITE_NOW`, `sqliteNowPlus`.                                                   |
@@ -222,9 +222,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   `src/db/tables.ts` through `readTables`, so a policy the runtime refuses is refused from source too.
 - **Only the framework binds a layer, once, and only one `scoped` created.** The object `scoped` returns has no
   `connect` and no locator; `registry.ts` keeps its framework side in a module-private `WeakMap`, so a structural copy
-  or a wrapper is no layer and gets no connection. `bindScopedDatabase` is the only path to the connection and answers
+  or a wrapper is no layer and gets no connection. `bindScopedDatabase` (or `bindScopedDatabaseProvisionally`, which a failed boot releases) is the only path to the connection and answers
   the locator, which reads existence without a capability and so stays with the framework's access check. A second
-  bind throws. Until then every store throws. The checker refuses an application import of `@fabrika/db/framework`.
+  bind throws while one is live. Until then every store throws. The checker refuses an application import of `@fabrika/db/framework`.
   Never add another way to set the runtime of a `scoped` result, nor an application-facing locator.
 - **The table probe is a store without the types, never without a check.** `tableProbe` reaches the registry's
   `probe`, which calls the same internals as `DimensionTable` and `ChildTable` (`insertIntoDimension`,

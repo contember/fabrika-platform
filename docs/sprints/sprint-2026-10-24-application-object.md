@@ -201,3 +201,7 @@ ADRs: rewrite ADR-0065 §5; amend ADR-0060. Rollout as §6 Phase 5.
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("→ ADR-0022"). -->
+
+- 2026-10-24: D0 is still open. The gate constants are provisional at 0.9 (`OBJECT_RUNTIME_SINCE`, `PINNED_ENTRY_SINCE`), and every new SQLite table is self-created, so the code is valid under either answer.
+- 2026-10-24: 5.1 (the wakes store) moved from wave 1 to wave 5, next to its driver, so that no framework table ships unused.
+- 2026-10-24: Waves 0–1 shipped: S1, S2, 1.1, 1.3, 1.4, 1.5, 1.6 and 2.1. Review P2s and two open decisions (pinning a local deploy, refusing queue consumers) → [backlog 228](../backlog/228-application-object-review-follow-ups.md).
