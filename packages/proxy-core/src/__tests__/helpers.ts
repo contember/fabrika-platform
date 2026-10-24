@@ -36,6 +36,7 @@ import type { IamGateway } from '../iam'
 import type { LogFields, ProxyLogger } from '../log'
 import type {
 	ContractProxyApp,
+	DeclaredProxyEndpointRow,
 	InstallationProxyApp,
 	InstallationProxyEndpointRow,
 	OAuthProtectedResource,
@@ -225,20 +226,20 @@ export class FakeIam implements IamGateway {
 
 // ── Manifest + request construction ────────────────────────────────────────────
 
-type CredentialedRow = Extract<ProxyEndpointRow, { requirement: EndpointRequirement }>
-type AnonymousRow = Extract<ProxyEndpointRow, { requirement: null }>
+type CredentialedRow = Extract<DeclaredProxyEndpointRow, { requirement: EndpointRequirement }>
+type AnonymousRow = Extract<DeclaredProxyEndpointRow, { requirement: null }>
 
 /** A credentialed manifest row with its true digest; `delegation` defaults to none. */
 export function endpointRow(
 	fields: Omit<CredentialedRow, 'digest' | 'delegation'>,
 	delegation: CredentialedRow['delegation'] = null,
-): ProxyEndpointRow {
+): DeclaredProxyEndpointRow {
 	const rules = { ...fields, delegation }
 	return { ...rules, digest: requirementDigest(rules) }
 }
 
 /** An anonymous manifest row (health, form, webhook, link shell) with its true digest. */
-export function anonymousRow(fields: Omit<AnonymousRow, 'digest' | 'delegation' | 'callers' | 'requirement'>): ProxyEndpointRow {
+export function anonymousRow(fields: Omit<AnonymousRow, 'digest' | 'delegation' | 'callers' | 'requirement'>): DeclaredProxyEndpointRow {
 	const callers: [] = []
 	const rules = { ...fields, callers, requirement: null, delegation: null }
 	return { ...rules, digest: requirementDigest(rules) }

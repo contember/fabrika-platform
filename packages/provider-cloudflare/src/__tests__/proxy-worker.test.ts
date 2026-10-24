@@ -18,6 +18,7 @@ import {
 	type InstallationProxyEndpointRow,
 	isApplicationEntry,
 	type OAuthProtectedResource,
+	opsProxyRow,
 	parseProxyManifestJson,
 } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
@@ -941,6 +942,68 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		const response = await createCloudflareProxyHandler(contractEnvironment(new FakeIam(), seen))(new Request(`https://${HOST}/api/unknown`))
 		expect(response.status).toBe(403)
 		expect(seen).toEqual([])
+	})
+})
+
+describe('Cloudflare proxy Worker — the ops row of a contract app (ADR-0069)', () => {
+	const ops = opsProxyRow()
+	const environment = (iam: FakeIam, seen: Request[], composed: boolean): CloudflareProxyEnv => ({
+		IAM: iam,
+		FABRIKA_IAM_ISSUER: ISSUER,
+		FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson({
+			apps: [contractAppWith([], [], { upstream: 'APP', ...contractProxyTable(notesArtifact, undefined, { ops: composed }) })],
+		}),
+		APP: {
+			fetch: (request: Request) => {
+				seen.push(request)
+				return Promise.resolve(new Response('{}', { headers: { 'Content-Type': 'application/json' } }))
+			},
+		},
+	})
+	const opsRequest = (path: string, headers: Record<string, string> = {}) =>
+		new Request(`https://${HOST}${path}`, {
+			method: 'POST',
+			body: '{"object":"application","content":false}',
+			headers: { Authorization: 'Bearer ops-key', 'Content-Type': 'application/json', ...headers },
+		})
+
+	test('reaches the application Worker without a token, with Authorization kept and the endpoint header of the ops row', async () => {
+		const seen: Request[] = []
+		const iam = new FakeIam()
+		const response = await createCloudflareProxyHandler(environment(iam, seen, true))(
+			opsRequest('/__fabrika/ops/inspect', { 'X-Fabrika-Token': 'forged', [ENDPOINT_HEADER]: 'forged', [DELEGATION_HEADER]: 'forged' }),
+		)
+		expect(response.status).toBe(200)
+		expect(seen).toHaveLength(1)
+		expect(seen[0]?.method).toBe('POST')
+		expect(new URL(seen[0]?.url ?? '').pathname).toBe('/__fabrika/ops/inspect')
+		expect(await seen[0]?.text()).toBe('{"object":"application","content":false}')
+		expect(seen[0]?.headers.get('Authorization')).toBe('Bearer ops-key')
+		expect(seen[0]?.headers.get(ENDPOINT_HEADER)).toBe(formatEndpointHeader(ops.id, ops.digest))
+		expect(seen[0]?.headers.get('X-Fabrika-Token')).toBeNull()
+		expect(seen[0]?.headers.get(DELEGATION_HEADER)).toBeNull()
+		expect(seen[0]?.headers.get(FORWARD_AUTHORIZATION_HEADER)).toBeNull()
+		// A protocol row reads no credential: IAM never sees the ops key.
+		expect(iam.mintFromKeyCalls).toBe(0)
+	})
+
+	test('admits only its method and media type', async () => {
+		const seen: Request[] = []
+		const handler = createCloudflareProxyHandler(environment(new FakeIam(), seen, true))
+		expect((await handler(opsRequest('/__fabrika/ops/state', { 'Content-Type': 'text/plain' }))).status).toBe(400)
+		expect(seen).toEqual([])
+	})
+
+	test('other paths are unchanged: an anonymous row still loses Authorization, and without the row the prefix reaches nothing', async () => {
+		const seen: Request[] = []
+		const composed = await createCloudflareProxyHandler(environment(new FakeIam(), seen, true))(
+			new Request(`https://${HOST}/healthz`, { headers: { Authorization: 'Bearer ops-key' } }),
+		)
+		expect(composed.status).toBe(200)
+		expect(seen[0]?.headers.get('Authorization')).toBeNull()
+		const plain = await createCloudflareProxyHandler(environment(new FakeIam(), seen, false))(opsRequest('/__fabrika/ops/inspect'))
+		expect(plain.status).toBe(403)
+		expect(seen).toHaveLength(1)
 	})
 })
 

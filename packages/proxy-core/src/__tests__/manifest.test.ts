@@ -12,6 +12,10 @@ import {
 	type InstallationCredentialedEndpoint,
 	type InstallationEndpointRow,
 	isDigest,
+	OPS_CONTENT_TYPE,
+	OPS_METHOD,
+	OPS_ROW_ID,
+	OPS_ROW_PATH,
 	requirementDigest,
 } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
@@ -25,6 +29,8 @@ import {
 	type InstallationProxyApp,
 	isApplicationEntry,
 	isProxyHost,
+	OPS_ROW_MAX_BYTES,
+	opsProxyRow,
 	parseProxyManifest,
 	parseProxyManifestJson,
 	serviceProxyTable,
@@ -656,5 +662,98 @@ describe('contractProxyEntry', () => {
 		expect(keyedCross).not.toContain('partner-key')
 		expect(refusal({ crossOrigins: ['https://notes.example.com'] })).toContain('is one the proxy manifest refuses')
 		expect(refusal({ crossOrigins: ['https://partner.example.org', 'https://partner.example.org'] })).toContain('is one the proxy manifest refuses')
+	})
+})
+
+describe('the ops row — composed by the platform, never declared (ADR-0022 rule 3, ADR-0069)', () => {
+	const application = { id: 'notes@prod', hosts: ['notes.example.com'], upstream: 'notes:3000' }
+	const parses = (endpoints: unknown[]): boolean =>
+		parseProxyManifest({ apps: [{ ...application, ...contractProxyTable(notesArtifact), endpoints }] }) !== null
+	const declared = contractProxyTable(notesArtifact).endpoints
+	const ops = opsProxyRow()
+	const opsRules: InstallationAnonymousEndpoint = { ...ops, oauth: null }
+	/** A row of `rules` under its true digest, without the `oauth` field, so a refusal is for the form and not the digest. */
+	const digested = (rules: InstallationEndpointRow) => {
+		const { oauth: _oauth, ...row } = rules
+		return { ...row, delegation: null, digest: requirementDigest({ ...rules, delegation: null }) }
+	}
+
+	test('is the fixed row of the wire constants, with a stable digest', () => {
+		expect(ops).toEqual({
+			id: OPS_ROW_ID,
+			kind: 'protocol',
+			method: OPS_METHOD,
+			path: OPS_ROW_PATH,
+			callers: [],
+			requirement: null,
+			admission: { contentTypes: [OPS_CONTENT_TYPE], maxBytes: OPS_ROW_MAX_BYTES },
+			delegation: null,
+			digest: requirementDigest({ ...opsRules, delegation: null }),
+		})
+		expect(ops.path).toBe('/__fabrika/ops/*')
+		expect(OPS_ROW_MAX_BYTES).toBe(65_536)
+		// Pinned: the framework compares X-Fabrika-Endpoint with it, so a change here is a protocol change (ADR-0062).
+		expect(ops.digest).toBe('sha256:73fd93b3d4842780469c7162157ff92385fe9a67b52e4d3d09f180437dfa0464')
+		expect(opsProxyRow()).toEqual(ops)
+	})
+
+	test('contractProxyTable adds it only behind the option, and changes nothing else', () => {
+		const plain = contractProxyTable(notesArtifact)
+		const composed = contractProxyTable(notesArtifact, contractDigest(notesArtifact), { ops: true })
+		expect(plain.endpoints.some((row) => row.id === OPS_ROW_ID)).toBe(false)
+		expect(contractProxyTable(notesArtifact, contractDigest(notesArtifact), { ops: false })).toEqual(plain)
+		expect(composed).toEqual({ ...plain, endpoints: [...plain.endpoints, ops] })
+	})
+
+	test('an application table parses with it in its composed form', () => {
+		const table = contractProxyTable(notesArtifact, contractDigest(notesArtifact), { ops: true })
+		const entry = contractProxyEntry({ ...application, scheme: 'https', table })
+		expect(parseProxyManifest({ apps: [entry] })).toEqual({ apps: [entry] })
+		expect(parses([...declared, ops])).toBe(true)
+	})
+
+	test.each<[string, InstallationEndpointRow]>([
+		['another id', { ...opsRules, id: 'ops' }],
+		['another kind, which would make it an application row at a platform path', { ...opsRules, kind: 'health' }],
+		['another method', { ...opsRules, method: 'GET' }],
+		['every method', { ...opsRules, method: '*' }],
+		['another path', { ...opsRules, path: '/__fabrika/ops/inspect' }],
+		['a path outside the prefix', { ...opsRules, path: '/ops/*' }],
+		['no admission', { ...opsRules, admission: null }],
+		['another content type', { ...opsRules, admission: { contentTypes: ['text/plain'], maxBytes: OPS_ROW_MAX_BYTES } }],
+		['a second content type', { ...opsRules, admission: { contentTypes: [OPS_CONTENT_TYPE, 'text/plain'], maxBytes: OPS_ROW_MAX_BYTES } }],
+		['another body limit', { ...opsRules, admission: { contentTypes: [OPS_CONTENT_TYPE], maxBytes: 1_048_576 } }],
+		['no body limit', { ...opsRules, admission: { contentTypes: [OPS_CONTENT_TYPE], maxBytes: null } }],
+	])('is refused with %s, under its true digest', (_name, rules) => {
+		expect(parses([...declared, digested(rules)])).toBe(false)
+	})
+
+	// No digest describes these forms on a protocol row, so each keeps the canonical one; the strict row refuses the field.
+	test.each<[string, Record<string, unknown>]>([
+		['a caller', { callers: ['machine'] }],
+		['a requirement', { requirement: { kind: 'member' } }],
+		['a delegation', { delegation: 'members' }],
+		['a cross-origin form', { crossOrigin: 'environment' }],
+		["the forwarding of a webhook's Authorization", { authorization: 'forward' }],
+		['a file answer', { response: 'file' }],
+		['an oauth field', { oauth: null }],
+	])('is refused with %s', (_name, fields) => {
+		expect(parses([...declared, { ...ops, ...fields }])).toBe(false)
+	})
+
+	test('is refused with a digest that does not describe it, or without one', () => {
+		expect(parses([...declared, { ...ops, digest: `sha256:${'0'.repeat(64)}` }])).toBe(false)
+		const { digest: _digest, ...undigested } = ops
+		expect(parses([...declared, undigested])).toBe(false)
+	})
+
+	test('any other protocol row on an application table stays refused', () => {
+		const hook: InstallationAnonymousEndpoint = { ...opsRules, id: 'hook', path: '/hook' }
+		expect(parses([...declared, digested(hook)])).toBe(false)
+		expect(parses([...declared, digested({ ...hook, admission: null })])).toBe(false)
+	})
+
+	test('is served once: a second copy makes the table ambiguous', () => {
+		expect(parses([...declared, ops, ops])).toBe(false)
 	})
 })

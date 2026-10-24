@@ -118,9 +118,12 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   `headers.ts` on every answer) and a public `GET` row's `cache` join the digest only when present. So every 0.4/0.5/0.6
   row keeps its digest, and an older proxy's strict parser refuses the new forms instead of serving them without their
   rule (ADR-0022).
-- **The installation-only forms exist in installation entries alone.** The parser refuses `protocol`,
+- **The installation-only forms exist in installation entries alone, but for the ops row.** The parser refuses `protocol`,
   `service`, method `*`, caller `oauth`, requirement `authenticated` and an `oauth` row field in an
-  application row; and an installation entry whose id holds `@`, that carries `snapshot`, `csp` or
+  application row, except the canonical ops row (ADR-0069): `opsProxyRow()`, equal field for field, digest included,
+  which only `contractProxyTable(…, { ops: true })` adds and `proxyEndpointRowSchema` never admits; no other row lies
+  under `OPS_PREFIX`. Like every `protocol` row it reads no credential, mints no token and keeps `Authorization`
+  (`forwardsAuthorization`); and an installation entry whose id holds `@`, that carries `snapshot`, `csp` or
   `operationsOrigin`, or whose `oauth` row has no registered resource on its path (`oauthResourceOfRow`)
   or asks for an unsupported scope. On a row that admits `oauth`, a bearer that is not a `px_` key (or
   no bearer, when `human` is not a caller) takes the RFC 6750 path (`verifyOAuthBearer`): local verification for the row's resource, every row scope, the challenge on

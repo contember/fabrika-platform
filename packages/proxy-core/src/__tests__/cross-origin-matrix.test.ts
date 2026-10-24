@@ -14,7 +14,7 @@ import {
 import { describe, expect, test } from 'bun:test'
 import { MemoryTokenCache } from '../cache'
 import { PREFLIGHT_HEADER, PROXY_TOKEN_HEADER } from '../constants'
-import { parseProxyManifest, type ProxyEndpointRow } from '../manifest'
+import { type DeclaredProxyEndpointRow, parseProxyManifest, type ProxyEndpointRow } from '../manifest'
 import { createVerifyService, type VerifyService } from '../service'
 import {
 	anonymousRow,
@@ -462,7 +462,7 @@ describe('the manifest holds both halves apart', () => {
 		expect(parseProxyManifest({ apps: [{ ...entry, endpoints: [row] }] })).toBeNull()
 	})
 
-	test.each<[string, ProxyEndpointRow, 'environment' | 'any']>([
+	test.each<[string, DeclaredProxyEndpointRow, 'environment' | 'any']>([
 		['an SPA', SPA, 'environment'],
 		['a download', DOWNLOAD, 'environment'],
 		['an upload', UPLOAD, 'environment'],
