@@ -20,6 +20,8 @@ blocked-by: []
 6. **Two pieces are duplicated across packages.**
    - `DEV_STATES` in `packages/control/src/api/dev-environments.ts` repeats `DEV_STATUSES` from `@fabrika/app/dev/wire`.
    - `isSourcePath` in `packages/app/src/dev/wire.ts` repeats `isRepositoryPath` from `packages/control/src/api/workspaces.ts`.
+7. **A committed launcher state file passes for a restarted container.** `fabrika/dev-state.json` (`DEV_LAUNCHER_STATE_FILE`) is not a protected path (`isProtectedPath` in `packages/control/src/api/workspaces.ts`), and the build does not remove it. A copy committed to the workspace reaches a new container as if that container had already run: the launcher skips the schema check at boot and starts from the committed head instead of the bootstrap's.
+8. **A private_key_jwt client's revocation passes without an assertion while its metadata is unreachable.** `authenticateRevokingClient` (`packages/iam/src/oauth-client-auth.ts`) refuses an assertion-less request only when the client's metadata document is known and declares `private_key_jwt`. This is deliberate: an unreachable document never keeps a token alive, and the token's own client binding still holds. It is recorded so the trade is revisited if a confidential client's revocation must always authenticate.
 
 ## Approach / acceptance
 
@@ -29,6 +31,8 @@ blocked-by: []
 4. When a workspace is abandoned, unbind it from its dev environment in the same use case. Test: after `delete_workspace`, `get_dev_status` of the dev environment reads `unbound`, and a wait gets no sync.
 5. Move both comments onto the declarations they describe.
 6. Import `DEV_STATUSES` from the wire module. Share one repository-path predicate between `@fabrika/app/dev/wire` and Control, or document why the two must differ.
+7. Remove the state file in the build (`rm -f fabrika/dev-state.json` before the generated files are written), or protect it in `isProtectedPath`. Test: a commit that holds the file is refused, or a bootstrap of it boots as a new container.
+8. Decide whether a client registered as `private_key_jwt` must always present an assertion to revoke. If so, refuse an assertion-less request when the metadata is unreachable, and document that such a token outlives the outage. Test: either way, a test pins the chosen behaviour with an unreachable metadata document.
 
 ## Touch points
 
@@ -37,4 +41,6 @@ blocked-by: []
 - `packages/control/src/db/dev-environments.ts`
 - `packages/control/src/db/registry.ts`
 - `packages/github-app/src/repository.ts`
+- `packages/provider-zerops/src/execution.ts`
+- `packages/iam/src/oauth-client-auth.ts`
 - `packages/app/src/dev/wire.ts`
