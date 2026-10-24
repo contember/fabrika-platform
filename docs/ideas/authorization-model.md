@@ -150,15 +150,14 @@ lists derived from the table policy and pinned by the query guard (`packages/db/
 conditioned on the chain with `FOR SHARE` on the destination; not-found for a refused `on` binding; workloads holding
 only their declared actions (`packages/iam/src/tokens.ts`); share links and anonymous keys re-checked against their issuer
 at every mint (`issuerAuthority`); exact actions only at a contract application (`exactActions`, `packages/iam/src/resolve.ts`,
-preflighted by migration 0027); access tokens capped by the grants they carry
+preflighted by migration 0027); an opaque root (a root dimension no table owns) named in the approval diff and on the
+surface as admitting any value unchecked, derived by Control from the artifact every reader already emits
+(`opaqueRoots`, `packages/control/src/approval/diff.ts`); access tokens capped by the grants they carry
 (`authorityDeadline`, `packages/iam/src/resolve.ts`).
 
 Gaps:
 
 - An `over` list leaves out grants on the listed resource's own dimension (S4).
-- An opaque root such as `in: 'org'` is admitted for any value under an application-wide grant. It conforms once the
-  framework marks a root dimension with no owning table as unchecked in the artifact and the approval diff shows it,
-  with no change to the application.
 - A failed or pending IAM reconcile after a deploy leaves a narrowing unapplied while the new version serves. Refusing
   requires the proxy to compare IAM's schema revision, carried as an additive token claim, with the revision the
   deployment expects.
