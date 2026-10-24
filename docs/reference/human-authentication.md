@@ -119,9 +119,17 @@ response. They do not reveal whether the address exists, is disabled, has a
 password, or is ambiguous. Self-service recovery is shown only when email is
 available. Without email, an administrator issues a manual reset link.
 
-Passwords are normalized to Unicode NFC. New passwords must contain 15–256
-Unicode code points. IAM rejects a small whole-password common list and exact
-account-context values. It does not require character classes. Stored verifiers
+Passwords are normalized to Unicode NFC. A new password must contain from the
+installation's minimum to 256 Unicode code points. The minimum is 15 until an
+installation administrator sets another (`passwordPolicy.set`, Settings →
+Passwords in the console, audited as `iam.password_policy.update`); it applies to
+every principal at the next enrollment, reset or invitation enrollment and never
+to a stored password. It may go down to 4 on the Bun target and to 15 on a
+Cloudflare Worker, whose verifiers are cheaper (backlog 201). A stored value
+outside that range, or one IAM cannot read, applies 15. IAM rejects the 10 000
+most common passwords (SecLists), a few Czech and long common ones, and exact
+account-context values, whatever the minimum. It does not require character
+classes. Stored verifiers
 use versioned PBKDF2-HMAC-SHA256 parameters, a random per-password salt, and no
 reversible password value.
 
