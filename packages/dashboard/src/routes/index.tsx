@@ -67,6 +67,8 @@ export function Overview({ data, refresh }: { data: OverviewData; refresh: () =>
 						aria-label="Refresh overview"
 						disabled={refreshing}
 						onClick={() => {
+							// A timer's flag still unspent (its reload merged into one in flight) must not make this one stale.
+							timedRefresh = false
 							setRefreshing(true)
 							void refresh()
 						}}
