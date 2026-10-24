@@ -111,4 +111,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [228](228-application-object-review-follow-ups.md): The P2s and open decisions of the application object waves 0–1 reviews: checker lexer, timers, ledger digest, read path, entry pin.
 - [219](219-the-cloudflare-executor-s-managed-environment-parse-is-untested.md): No test shows the Cloudflare executor refuses a managed value Control would not hand.
 - [220](220-the-provider-conformance-suite-checks-no-checkpoint-size.md): The provider conformance suite checks no checkpoint size, and Zerops' harness hands no upload bearer.
+- [229](229-provider-neutral-core-review-follow-ups.md): The provider-neutral core reviews' gaps; P2: a late cancel leaves a Cloudflare version without its IAM schema.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

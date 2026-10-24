@@ -1202,7 +1202,7 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		expect(app !== undefined && isApplicationEntry(app) ? app.operationsOrigin : null).toBe('https://ingest.example.com')
 		await expect(
 			deploy(rec, config({ schema: CONTRACT_SCHEMA }), { contract: notesArtifact, operationsOrigin: 'https://ingest.example.com/1' }),
-		).rejects.toThrow('cloudflare: the Operations origin is not an http(s) origin')
+		).rejects.toThrow('proxy entry `demo@stage` is one the proxy manifest refuses (operationsOrigin)')
 	})
 
 	test("the platform's proxy entry lists the environment's cross origins, and none when it lists none", async () => {

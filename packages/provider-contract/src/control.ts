@@ -45,8 +45,7 @@ export interface ProviderDeploymentNamespace {
 	readonly target: ProviderEnvelope
 }
 
-/** A framework release as npm publishes it; the only form one may take before it reaches a generated build command. */
-export const FRAMEWORK_RELEASE_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+export { FRAMEWORK_RELEASE_PATTERN } from '@fabrika/auth-core'
 
 /**
  * The access Control approved for one application environment (ADR-0050): the contract the proxy enforces and the

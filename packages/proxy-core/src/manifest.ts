@@ -414,6 +414,45 @@ export function contractProxyTable(artifact: ContractArtifact, digest: string = 
 	}
 }
 
+/** Where and how a producer serves one contract application. */
+export interface ContractEntryPlacement {
+	readonly id: string
+	readonly hosts: readonly string[]
+	readonly upstream: string
+	readonly scheme: 'http' | 'https'
+	/** The approved contract's table, from `contractProxyTable`. */
+	readonly table: ContractProxyTable
+	readonly operationsOrigin?: string
+	/** The environment's list from Control's registry; an empty one is omitted. */
+	readonly crossOrigins?: readonly string[]
+}
+
+/**
+ * A contract application's manifest entry: the one form every producer builds. Refused when the proxy's own parser
+ * would refuse it, naming the fields and never their values, because an origin with userinfo may carry a key.
+ */
+export function contractProxyEntry(placement: ContractEntryPlacement): ContractProxyApp {
+	const { table, operationsOrigin, crossOrigins = [] } = placement
+	const entry: ContractProxyApp = {
+		id: placement.id,
+		hosts: [...placement.hosts],
+		upstream: placement.upstream,
+		scheme: placement.scheme,
+		endpoints: table.endpoints,
+		reservedPrefixes: table.reservedPrefixes,
+		snapshot: table.snapshot,
+		csp: table.csp,
+		...(operationsOrigin === undefined ? {} : { operationsOrigin }),
+		...(crossOrigins.length === 0 ? {} : { crossOrigins: [...crossOrigins] }),
+	}
+	const parsed = contractProxyAppSchema.safeParse(entry)
+	if (!parsed.success) {
+		const fields = new Set(parsed.error.issues.map((issue) => issue.path.length === 0 ? issue.message : issue.path.join('.')))
+		throw new Error(`proxy entry \`${placement.id}\` is one the proxy manifest refuses (${[...fields].join('; ')})`)
+	}
+	return entry
+}
+
 /** What a producer adds to an installation service's placement: the output of `serviceProxyTable`. */
 export type InstallationProxyTable = Pick<InstallationProxyApp, 'installation' | 'endpoints' | 'reservedPrefixes'>
 

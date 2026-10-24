@@ -92,6 +92,9 @@ src/
     serve.ts          serveService: the dispatcher over planEndpoint
   build.ts            @fabrika/app/build — the generated entrypoint fabrika app build writes; on Cloudflare also
                       fabrika/migrations.generated.ts (db/migrations as a module: a Worker reads no file system)
+  build-recipe.ts     contractRecipe: a contract application's build, init, start and jobs in a Bun container, as
+                      data a provider renders (re-exported by @fabrika/app/build). PLATFORM PROTOCOL: the
+                      platform renders its own copy for older applications, so change it only additively
   errors.ts           structural HTTP error mapping
   rpc/                procedure builder, types, and dispatcher
   client/             @fabrika/app/client — browser-safe
@@ -846,7 +849,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   other (`wrong_capability`). A query creates no file. Never read a file by its id alone.
 - **The sweep job is a framework job** (`FILE_SWEEP_JOB`, hourly, `StoredFileKinds.sweep(signal)`): it deletes the
   files no declared column references once past the grace, row and deletion record first, object after, in bounded
-  batches. `@fabrika/provider-zerops` mirrors its name and schedule (`ZEROPS_FILE_SWEEP_JOB`); change both together.
+  batches. Its name and schedule are in `files/job-names.ts`, which `contractRecipe` schedules: platform protocol, so change them only additively (ADR-0062).
   `serveContract` opens the object storage from `FABRIKA_APP_STORAGE_*` (all or none). Never return a storage URL or
   presign one.
 - **Only a completed clean verdict promotes a file** (`scan.ts`). A file of a `scan: true` kind is

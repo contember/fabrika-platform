@@ -2,6 +2,7 @@
 // signatures, refreshes them when a container starts and daily, and runs the framework's scan job every minute; the
 // deploy service must start with the RAM one scan needs.
 
+import { FILE_SCAN_JOB, FILE_SWEEP_JOB } from '@fabrika/app/build'
 import { type ContractArtifact, contractDigest } from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
@@ -11,8 +12,6 @@ import { parseZeropsDescriptor } from '../descriptor'
 import {
 	FABRIKA_CHECK_VERSION,
 	renderLockedExecutionDescriptor,
-	ZEROPS_FILE_SCAN_JOB,
-	ZEROPS_FILE_SWEEP_JOB,
 	ZEROPS_SCAN_MIN_RAM_GB,
 	ZEROPS_START_MIN_RAM_GB,
 	zeropsContractRun,
@@ -77,8 +76,8 @@ describe('a scanning contract on Zerops', () => {
 		])
 		expect(generated['crontab']).toEqual([
 			{ timing: '0 3 * * *', command: './node_modules/.bin/fabrika job run purgeDeleted', allContainers: false },
-			{ timing: '41 * * * *', command: `./node_modules/.bin/fabrika job run ${ZEROPS_FILE_SWEEP_JOB}`, allContainers: false },
-			{ timing: '* * * * *', command: `./node_modules/.bin/fabrika job run ${ZEROPS_FILE_SCAN_JOB}`, allContainers: false },
+			{ timing: '41 * * * *', command: `./node_modules/.bin/fabrika job run ${FILE_SWEEP_JOB}`, allContainers: false },
+			{ timing: '* * * * *', command: `./node_modules/.bin/fabrika job run ${FILE_SCAN_JOB}`, allContainers: false },
 			{ timing: '17 4 * * *', command: 'sudo freshclam --stdout --quiet', allContainers: true },
 		])
 	})
@@ -89,14 +88,14 @@ describe('a scanning contract on Zerops', () => {
 		const generated = run(manifest)
 		expect(generated['prepareCommands']).toBeUndefined()
 		expect(generated['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh', 'sh /var/www/fabrika/verify.generated.sh'])
-		expect(JSON.stringify(generated['crontab'])).not.toContain(ZEROPS_FILE_SCAN_JOB)
-		expect(JSON.stringify(generated['crontab'])).toContain(ZEROPS_FILE_SWEEP_JOB)
+		expect(JSON.stringify(generated['crontab'])).not.toContain(FILE_SCAN_JOB)
+		expect(JSON.stringify(generated['crontab'])).toContain(FILE_SWEEP_JOB)
 	})
 
 	test('a contract without a file collection runs no sweep', async () => {
 		const manifest = await compile(app({ ...notesArtifact, files: {} }, null))
 		expect(Object.keys(manifest.target.contract ?? {})).not.toContain('files')
-		expect(JSON.stringify(run(manifest)['crontab'])).not.toContain(ZEROPS_FILE_SWEEP_JOB)
+		expect(JSON.stringify(run(manifest)['crontab'])).not.toContain(FILE_SWEEP_JOB)
 	})
 
 	test('the deploy service must start with the RAM a scan needs, at build and at a deploy of an approved scanning contract', async () => {
