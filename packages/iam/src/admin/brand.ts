@@ -9,7 +9,7 @@ import { type AdminContext, adminEvent, fail } from './context'
 
 export async function getInstallationBrandUseCase(c: AdminContext): Promise<InstallationBrandDto> {
 	requireInstallationAdmin(c)
-	return brandDto(c, await c.services.repositories.brand.get())
+	return brandDto(await c.services.repositories.brand.get())
 }
 
 /**
@@ -27,14 +27,14 @@ export async function setInstallationBrandUseCase(c: AdminContext, input: SetIns
 		brandImages(brand),
 		brandEvent(c, { light: brand.light.type, dark: brand.dark?.type ?? null }),
 	)
-	return brandDto(c, row)
+	return brandDto(row)
 }
 
 /** Clear the brand, so every page draws the fabrika mark again. Clearing an absent brand changes and records nothing. */
 export async function clearInstallationBrandUseCase(c: AdminContext): Promise<InstallationBrandDto> {
 	requireInstallationAdmin(c)
 	const cleared = await c.services.repositories.brand.clear(brandEvent(c, { light: null, dark: null }))
-	return brandDto(c, cleared ?? await c.services.repositories.brand.get())
+	return brandDto(cleared ?? await c.services.repositories.brand.get())
 }
 
 function brandEvent(c: AdminContext, images: { light: string | null; dark: string | null }): AuditEventInput {
@@ -42,8 +42,8 @@ function brandEvent(c: AdminContext, images: { light: string | null; dark: strin
 }
 
 /** The brand as the pages draw it: a stored row the check now refuses answers null, like no brand. */
-function brandDto(c: AdminContext, row: InstallationBrandRow | null): InstallationBrandDto {
-	return { brand: storedBrand(c.services.repositories.brand, row), updatedAt: row?.updated_at ?? null }
+function brandDto(row: InstallationBrandRow | null): InstallationBrandDto {
+	return { brand: storedBrand(row), updatedAt: row?.updated_at ?? null }
 }
 
 /** `.require(iam.admin)` gates these procedures already; a direct caller of a use case meets the same rule. */

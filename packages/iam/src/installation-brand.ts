@@ -1,6 +1,6 @@
 import { type InstallationBrand, installationBrandSchema } from '@fabrika/proxy-core/brand'
 import { logWarn } from './log'
-import type { InstallationBrandImages, InstallationBrandRepository, InstallationBrandRow } from './repositories/brand'
+import type { InstallationBrandImages, InstallationBrandRow } from './repositories/brand'
 import type { Services } from './services'
 
 type StoredImages = Pick<InstallationBrandRow, 'light_type' | 'light_base64' | 'dark_type' | 'dark_base64'>
@@ -12,14 +12,18 @@ interface CheckedImages {
 	readonly warnedAt: number
 }
 
-/** One entry per repository, so two IAM compositions in one process neither evict nor silence each other. */
-const lastChecked = new WeakMap<InstallationBrandRepository, CheckedImages>()
+/**
+ * One entry for the process (the isolate, on Cloudflare). Not one per repository: the Worker builds its repositories
+ * for every request (`iamEnv`), so an entry kept on one would never be read again. Two IAM compositions in one process,
+ * which only tests run, share it: one's images then replace the other's, which costs a check and never a wrong answer.
+ */
+let lastChecked: CheckedImages | null = null
 
 /** How often a stored logo the check refuses is logged again, so the reason the pages lost it stays in the logs. */
 export const REFUSED_BRAND_WARN_INTERVAL_MS = 60 * 60 * 1000
 
 /**
- * The brand a stored row of `repository` holds, checked again as every reader of a brand checks it (`@fabrika/proxy-core/brand`), or
+ * The brand a stored row holds, checked again as every reader of a brand checks it (`@fabrika/proxy-core/brand`), or
  * null: for no row, for a cleared one, and for one the check now refuses, which then draws the fabrika mark.
  *
  * Every page reads the row, and it changes only with `brand.set` and `brand.clear`, so the check of the images last
@@ -27,22 +31,18 @@ export const REFUSED_BRAND_WARN_INTERVAL_MS = 60 * 60 * 1000
  * decoding them again. The key is the images themselves, never a time, so a change is checked whichever instance made it.
  * A refused logo is logged when it is checked and again every `REFUSED_BRAND_WARN_INTERVAL_MS` while pages read it.
  */
-export function storedBrand(
-	repository: InstallationBrandRepository,
-	row: InstallationBrandRow | null,
-	now: number = Date.now(),
-): InstallationBrand | null {
+export function storedBrand(row: InstallationBrandRow | null, now: number = Date.now()): InstallationBrand | null {
 	if (row === null || row.light_type === null || row.light_base64 === null) {
-		lastChecked.delete(repository)
+		lastChecked = null
 		return null
 	}
-	const checked = lastChecked.get(repository)
-	if (checked !== undefined && sameImages(checked.row, row)) {
+	const checked = lastChecked
+	if (checked !== null && sameImages(checked.row, row)) {
 		// A clock stepped back would otherwise hold the next line off until it passes the last one again.
 		const elapsed = now - checked.warnedAt
 		if (checked.brand === null && (elapsed >= REFUSED_BRAND_WARN_INTERVAL_MS || elapsed < 0)) {
 			warnRefused()
-			lastChecked.set(repository, { ...checked, warnedAt: now })
+			lastChecked = { ...checked, warnedAt: now }
 		}
 		return checked.brand
 	}
@@ -51,7 +51,7 @@ export function storedBrand(
 	const parsed = installationBrandSchema.safeParse({ light, ...dark })
 	if (!parsed.success) warnRefused()
 	const brand = parsed.success ? parsed.data : null
-	lastChecked.set(repository, { row, brand, warnedAt: now })
+	lastChecked = { row, brand, warnedAt: now }
 	return brand
 }
 
@@ -74,7 +74,7 @@ export function brandImages(brand: InstallationBrand): InstallationBrandImages {
  */
 export async function installationBrand(services: Services): Promise<InstallationBrand | null> {
 	try {
-		return storedBrand(services.repositories.brand, await services.repositories.brand.get())
+		return storedBrand(await services.repositories.brand.get())
 	} catch (err) {
 		logWarn('installation brand could not be read, the page draws the fabrika mark', err)
 		return null
