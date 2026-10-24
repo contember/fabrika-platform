@@ -12,10 +12,11 @@ import { RecentChanges } from '../components/overview/Activity'
 import { Applications } from '../components/overview/Applications'
 import type { ConsoleCaller } from '../lib/console-access'
 import { healthCheckState, healthLamp, needsMonitoringAttention, runtimeHealth } from '../lib/health'
-import { deployHistory, environmentSources, expiringKey, loadOverview, OVERVIEW_ACCESS_REFRESH_MS } from '../lib/overview'
+import { deployHistory, environmentSources, expiringKey, loadOverview, OVERVIEW_ACCESS_REFRESH_MS, OVERVIEW_APP_LIMIT } from '../lib/overview'
 import { DEFAULT_ISSUE_FILTERS, ErrorsView } from '../operations/views/Errors'
 import auditPage from '../routes/access/audit'
 import appPage from '../routes/apps/detail'
+import appsPage from '../routes/apps/index'
 import errorPage from '../routes/operations/errors/detail'
 import errorsPage from '../routes/operations/errors/index'
 import healthPage from '../routes/operations/health/index'
@@ -25,6 +26,7 @@ import runsPage from '../routes/runs/index'
 // Read the real paths without depending on codegen having run before the test suite.
 const pageRegistry = {
 	'access/audit': auditPage.route,
+	apps: appsPage.route,
 	'apps/detail': appPage.route,
 	'operations/errors': errorsPage.route,
 	'operations/errors/detail': errorPage.route,
@@ -112,6 +114,16 @@ const GRANT: GrantDto = {
 	expiresAt: null,
 	createdAt: 1,
 	dangling: false,
+}
+
+/** The applications table as a page renders it, `filter` its environment filter's initial value. */
+function renderTable(data: Awaited<ReturnType<typeof loadOverview>>, filter: 'all' | 'production' = 'all'): string {
+	const router = new Router({
+		routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
+		adapter: createMemoryNavigationAdapter(),
+		pageRegistry,
+	})
+	return renderToStaticMarkup(createElement(BuzolaProvider, { router }, createElement(Applications, { data, initialFilter: filter })))
 }
 
 function fetchOverview(overrides: Record<string, unknown> = {}, calls: string[] = [], refuse: string[] = []): RpcFetch {
@@ -223,6 +235,35 @@ describe('overview data boundaries', () => {
 		))
 		expect(errors).toContain('source:CRM')
 		expect(errors).not.toContain('window:24h')
+	})
+
+	test('an environment with several sources shows its error count without a link that would list every error', async () => {
+		const data = await loadOverview(caller, fetchOverview())
+		const worker = { ...source, source: { ...source.source, id: 'worker', serviceKey: 'worker' }, telemetryState: 'healthy' as const }
+		data.health = { data: { sources: [{ ...source, telemetryState: 'healthy' }, worker] }, problem: null }
+		data.issues = {
+			data: { items: [], nextCursor: null, summary: { total: 0, open: 0, resolved: 0, ignored: 0 } },
+			problem: null,
+		}
+		const table = renderTable(data)
+		expect(table).toContain('0 open')
+		expect(table).not.toContain('operations/errors')
+	})
+
+	test('the table reads the environments of the first applications only, and links to the rest', async () => {
+		const apps = Array.from({ length: OVERVIEW_APP_LIMIT + 2 }, (_, index) => ({ ...app, id: `app-${index}` }))
+		const calls: string[] = []
+		const data = await loadOverview(caller, fetchOverview({ '/api/rpc:apps.list': { items: apps } }, calls))
+		expect(calls.filter((call) => call === '/api/rpc:apps.environments.list')).toHaveLength(OVERVIEW_APP_LIMIT)
+		const table = renderTable(data)
+		expect(table).toContain(`All ${apps.length} applications`)
+		expect(table).not.toContain('app-9')
+	})
+
+	test('Production leaves out an application with no environment to show', async () => {
+		const data = await loadOverview(caller, fetchOverview({ '/api/rpc:apps.environments.list': { items: [] } }))
+		expect(renderTable(data)).toContain('No environments configured')
+		expect(renderTable(data, 'production')).not.toContain('No environments configured')
 	})
 
 	test('a load given the last Access reads keeps them while they are young, and asks IAM again once they are not', async () => {
@@ -400,7 +441,11 @@ describe('overview signal semantics', () => {
 	test('deploy charts use completion dates and disclose a truncated creation-ordered window', () => {
 		const chart = deployHistory({ items: [run], nextCursor: 'older' }, NOW)
 		expect(chart.days.reduce((sum, day) => sum + day.ok, 0)).toBe(1)
-		expect(chart.limited).toBe(true)
+		// A sample reaching three weeks before the window holds every run that finished in it, more runs or not.
+		expect(deployHistory({ items: [{ ...run, createdAt: NOW / 1000 - 35 * 86_400 }], nextCursor: 'older' }, NOW).limited).toBe(false)
+		// One whose oldest run is from inside the window may miss older runs that finished in it.
+		expect(deployHistory({ items: [{ ...run, createdAt: NOW / 1000 - 3 * 86_400 }], nextCursor: 'older' }, NOW).limited).toBe(true)
+		expect(chart.days.length).toBe(14)
 		expect(
 			deployHistory({ items: [{ ...run, status: 'running', finishedAt: null }], nextCursor: null }, NOW).days.every((day) =>
 				day.ok === 0 && day.failed === 0

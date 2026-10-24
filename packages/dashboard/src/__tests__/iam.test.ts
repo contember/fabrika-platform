@@ -1,6 +1,6 @@
 import type { RpcFetch } from '@fabrika/app'
 import { describe, expect, test } from 'bun:test'
-import { findPeople, iamPrincipals, recentAuditChangePage, recentAuditChanges } from '../lib/iam'
+import { findPeople, recentAuditChangePage, recentAuditChanges } from '../lib/iam'
 
 function iamFetch(methods: string[], bodies: string[] = []): RpcFetch {
 	return async (_input, init) => {
@@ -19,37 +19,6 @@ function iamFetch(methods: string[], bodies: string[] = []): RpcFetch {
 		}
 	}
 }
-
-describe('IAM principals for the overview', () => {
-	test('reads the people and nothing else, since every admin read is audited', async () => {
-		const methods: string[] = []
-		const bodies: string[] = []
-		const principals = await iamPrincipals(iamFetch(methods, bodies))
-
-		expect(methods).toEqual(['principals.list'])
-		expect(bodies[0]).toContain('"type":"user"')
-		expect(principals).toEqual([{ id: 'user-1' }])
-	})
-
-	test('stays quiet on auth errors instead of starting a login bounce', async () => {
-		const principals = await iamPrincipals(async () =>
-			Response.json(
-				{ error: { type: 'auth', message: 'IAM admin denied', loginUrl: 'https://iam.example/login' } },
-				{ status: 401 },
-			)
-		)
-
-		expect(principals).toBeNull()
-	})
-
-	test('stays quiet when IAM is unreachable', async () => {
-		const principals = await iamPrincipals(async () => {
-			throw new Error('offline')
-		})
-
-		expect(principals).toBeNull()
-	})
-})
 
 describe('IAM people for the command palette', () => {
 	test('asks IAM to search the people, so it is not limited to a first page', async () => {

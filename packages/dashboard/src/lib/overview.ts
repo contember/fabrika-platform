@@ -27,6 +27,11 @@ export const OVERVIEW_ISSUE_LIMIT = 100
 export const OVERVIEW_KEY_LIMIT = 25
 export const OVERVIEW_CHANGE_LIMIT = 6
 /**
+ * Applications whose environments the table reads; past this it links to the full list. Control answers one
+ * application's environments per call (docs/backlog/190), and each published run outside the run window is one more.
+ */
+export const OVERVIEW_APP_LIMIT = 8
+/**
  * IAM audits every admin read, the console's own included, so a timed refresh reads Access again only after this
  * long; navigating to the page or pressing refresh reads it at once.
  */
@@ -62,15 +67,19 @@ export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fe
 	const readsOperations = mayOpen(caller, 'operations')
 	const readsAccess = mayOpen(caller, 'access')
 	const readsMail = caller.access === null || holdsGlobally(caller.access, CONTROL_ACTIONS.MAIL_READ)
+	// The installation-wide run lists need `deploy.read` held globally, which the page itself requires.
+	const readsRuns = caller.access === null || holdsGlobally(caller.access, CONTROL_ACTIONS.DEPLOY_READ)
 	const accessPromise = previous !== null && Date.now() - previous.readAt < OVERVIEW_ACCESS_REFRESH_MS
 		? Promise.resolve(previous)
 		: readAccess(readsAccess, fetcher)
 	const appsPromise = overviewRead(mayOpen(caller, 'apps'), () => control.apps.list())
 	const environmentsPromise = appsPromise.then(async (apps) => {
 		const environments = new Map<string, OverviewRead<Awaited<ReturnType<typeof control.apps.environments.list>>>>()
-		await Promise.all((apps.data?.items ?? []).map(async (app) => {
-			environments.set(app.id, await overviewRead(true, () => control.apps.environments.list({ appId: app.id })))
-		}))
+		await Promise.all(
+			(apps.data?.items ?? []).slice(0, OVERVIEW_APP_LIMIT).map(async (app) => {
+				environments.set(app.id, await overviewRead(true, () => control.apps.environments.list({ appId: app.id })))
+			}),
+		)
 		return environments
 	})
 	const [apps, environments, namespaces, runs, activeRuns, failures, approvals, health, issues, mailHeld, mailFailed, access] = await Promise.all(
@@ -78,9 +87,9 @@ export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fe
 			appsPromise,
 			environmentsPromise,
 			overviewRead(mayOpen(caller, 'namespaces'), () => control.namespaces.list()),
-			overviewRead(mayOpen(caller, 'runs'), () => control.runs.list({ limit: OVERVIEW_RUN_LIMIT })),
-			overviewRead(mayOpen(caller, 'runs'), () => control.runs.list({ statuses: ['pending', 'running'], limit: OVERVIEW_RUN_LIMIT })),
-			overviewRead(mayOpen(caller, 'runs'), () => control.runs.latestFailures()),
+			overviewRead(readsRuns, () => control.runs.list({ limit: OVERVIEW_RUN_LIMIT })),
+			overviewRead(readsRuns, () => control.runs.list({ statuses: ['pending', 'running'], limit: OVERVIEW_RUN_LIMIT })),
+			overviewRead(readsRuns, () => control.runs.latestFailures()),
 			overviewRead(mayOpen(caller, 'approvals'), () => control.approvals.list()),
 			overviewRead(readsOperations, () => operations.health()),
 			overviewRead(readsOperations, () => operations.issues({ status: 'open', window: 'all', sort: 'recent', limit: OVERVIEW_ISSUE_LIMIT })),
@@ -167,6 +176,9 @@ export function expiringKey(key: ApiKeyDetail, now: number) {
 	return grantExpiry === undefined ? null : { expiresAt: grantExpiry, kind: 'Key permission' }
 }
 
+/** How long before the chart's window a run may have been created and still finish inside it, waiting for an approval. */
+const DEPLOY_HISTORY_MARGIN = 7 * 86_400
+
 /** Finished runs are bucketed by completion, on local calendar days (including DST changes). */
 export function deployHistory(data: NonNullable<OverviewData['runs']['data']>, now: number) {
 	const today = new Date(now)
@@ -183,6 +195,10 @@ export function deployHistory(data: NonNullable<OverviewData['runs']['data']>, n
 		if (run.status === 'succeeded') day.ok++
 		else day.failed++
 	}
-	// The API orders by creation, so even a run created before this window may have finished inside it.
-	return { days, limited: data.nextCursor !== null }
+	// The API orders by creation: a sample whose oldest run predates the window by the margin holds every run that
+	// finished inside it, except one that waited longer than the margin.
+	const oldest = data.items.at(-1)
+	const windowStart = days[0]?.start ?? now / 1000
+	const limited = data.nextCursor !== null && (oldest === undefined || oldest.createdAt > windowStart - DEPLOY_HISTORY_MARGIN)
+	return { days, limited }
 }

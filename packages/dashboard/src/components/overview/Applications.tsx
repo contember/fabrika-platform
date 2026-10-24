@@ -5,14 +5,15 @@ import type { AppEnvDto } from '../../lib/api'
 import { mayDo, mayOpen } from '../../lib/console-access'
 import { fmtAgo, shortSha } from '../../lib/format'
 import { runtimeHealth, unhealthyTelemetry } from '../../lib/health'
-import { boundedCount, environmentSources, isProduction, type OverviewData } from '../../lib/overview'
+import { boundedCount, environmentSources, isProduction, OVERVIEW_APP_LIMIT, type OverviewData } from '../../lib/overview'
 import { FilterGroup } from '../FilterGroup'
 import { Chip, Status } from '../Status'
 import { Panel } from './Panel'
 
-export function Applications({ data }: { data: OverviewData }) {
-	const [productionOnly, setProductionOnly] = useState(false)
-	const apps = data.apps.data?.items ?? []
+export function Applications({ data, initialFilter = 'all' }: { data: OverviewData; initialFilter?: 'all' | 'production' }) {
+	const [productionOnly, setProductionOnly] = useState(initialFilter === 'production')
+	const allApps = data.apps.data?.items ?? []
+	const apps = allApps.slice(0, OVERVIEW_APP_LIMIT)
 	const allEnvs = [...data.environments.values()].flatMap((read) => read.data?.items ?? [])
 	const envCount = allEnvs.length
 	const monitored = allEnvs.filter((env) => runtimeHealth(environmentSources(data, env.appId, env.env), data.loadedAt).monitored).length
@@ -20,7 +21,11 @@ export function Applications({ data }: { data: OverviewData }) {
 	return (
 		<Panel
 			title="Applications & environments"
-			meta={<span className="ov-section-note">{apps.length} applications · {boundedCount(envCount, failedReads)} environments</span>}
+			meta={
+				<span className="ov-section-note">
+					{allApps.length} applications · {boundedCount(envCount, failedReads || allApps.length > apps.length)} environments
+				</span>
+			}
 			aside={
 				<FilterGroup
 					label="Environment filter"
@@ -44,6 +49,8 @@ export function Applications({ data }: { data: OverviewData }) {
 						{apps.map((app) => {
 							const read = data.environments.get(app.id)
 							if (read?.data == null || read.data.items.length === 0) {
+								// No environment to show is not a production one either.
+								if (productionOnly) return null
 								return (
 									<tr key={app.id}>
 										<td>
@@ -71,6 +78,7 @@ export function Applications({ data }: { data: OverviewData }) {
 					{data.health.data === null ? 'Monitoring coverage is unknown' : `HTTP checks cover ${monitored} of ${envCount} visible environments`}
 					{failedReads ? ' · Some environments are unreadable' : ''}
 				</span>
+				{allApps.length > apps.length && <Link to="apps">All {allApps.length} applications →</Link>}
 				{mayOpen(data.caller, 'operations/health') && <Link to="operations/health">View monitoring →</Link>}
 			</div>
 		</Panel>
@@ -84,7 +92,9 @@ function Environment({ env, data }: { env: AppEnvDto; data: OverviewData }) {
 	const readable = mayDo(data.caller.access, OPERATIONS_ACTIONS.READ, { app: env.appId, env: env.env })
 	const issues = data.issues.data?.items.filter((issue) => issue.source.appId === env.appId && issue.source.environment === env.env) ?? []
 	const regressions = issues.filter((issue) => issue.regressedAt !== null).length
-	const errorFilter = { window: 'all', ...(sources?.length === 1 && sources[0] !== undefined ? { source: sources[0].source.id } : {}) }
+	// The Errors page narrows to one source; an environment with several has no page of its own errors, so its count is
+	// no link (an unfiltered one would list every application's errors).
+	const errorFilter = sources?.length === 1 && sources[0] !== undefined ? { window: 'all', source: sources[0].source.id } : null
 	const published = env.publishedRunId === null ? null : data.publishedRuns.get(env.publishedRunId)?.data
 	return (
 		<tr>
@@ -116,14 +126,18 @@ function Environment({ env, data }: { env: AppEnvDto; data: OverviewData }) {
 							<span className="muted">Unknown</span>
 							{readable && issues.length > 0 && (
 								<small className="ov-cell-note">
-									<Link to="operations/errors" params={errorFilter}>{issues.length} recorded open</Link>
+									{errorFilter === null
+										? `${issues.length} recorded open`
+										: <Link to="operations/errors" params={errorFilter}>{issues.length} recorded open</Link>}
 								</small>
 							)}
 						</>
 					)
 					: (
 						<>
-							<Link to="operations/errors" params={errorFilter}>{boundedCount(issues.length, data.issues.data.nextCursor !== null)} open</Link>
+							{errorFilter === null
+								? <span>{boundedCount(issues.length, data.issues.data.nextCursor !== null)} open</span>
+								: <Link to="operations/errors" params={errorFilter}>{boundedCount(issues.length, data.issues.data.nextCursor !== null)} open</Link>}
 							{regressions > 0 && <small className="ov-cell-note">{regressions} {regressions === 1 ? 'regression' : 'regressions'}</small>}
 						</>
 					)}

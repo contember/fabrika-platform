@@ -73,7 +73,8 @@ export function Overview({ data, refresh }: { data: OverviewData; refresh: () =>
 					>
 						<Icon name="refresh" />
 					</button>
-					{data.apps.data?.items.length !== 0 && (
+					{/* An empty installation gets the welcome's own step; a refused or failed list shows none. */}
+					{(data.apps.data?.items.length ?? 0) > 0 && (
 						<Link to="apps/new" className="btn primary">
 							<Icon name="plus" size={15} />New application
 						</Link>

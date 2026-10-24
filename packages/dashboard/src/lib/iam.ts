@@ -56,19 +56,6 @@ export async function recentAuditChangePage(wanted: number, fetcher: RpcFetch = 
 }
 
 /**
- * The installation's people, for the overview's count; `null` when IAM refuses or cannot be reached. Only
- * what the page shows is read: IAM audits every admin read (`iam.admin.access`), so a read the page throws away is
- * also a row that pushes the real changes further down the log.
- */
-export async function iamPrincipals(fetcher: RpcFetch = fetch): Promise<IamPrincipalDto[] | null> {
-	try {
-		return (await quietIamClient(fetcher).principals.list({ type: 'user' })).items
-	} catch {
-		return null
-	}
-}
-
-/**
  * The people whose name, email or external id holds `query`, as IAM searches them (`principals.list` with `q`), for the
  * command palette. Asked of IAM rather than filtered from a first page, so the person past the first fifty is found.
  * `null` when IAM refuses or cannot be reached.
