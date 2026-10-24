@@ -264,8 +264,9 @@ export interface ApiKeyDto {
 }
 
 /**
- * One API key with its live credential. Its permissions are its grants, edited with `grants.create` and
- * `grants.delete` by an installation administrator and read again at every token exchange.
+ * One API key with its live credential, as `apiKeys.get` and each row of `apiKeys.list` answer it. Its permissions are
+ * its grants, edited with `grants.create` and `grants.delete` by an installation administrator and read again at every
+ * token exchange. An IAM older than the list's credential answers list rows without `credential`.
  */
 export interface ApiKeyDetail extends ApiKeyDto {
 	/** The key's live credential, or null when none is live (a revoked key). */
@@ -720,7 +721,7 @@ export interface IamAdminRpcContract {
 		delete: RpcProcedure<PolicyIdInput, OkResponse>
 	}
 	apiKeys: {
-		list: RpcProcedure<ListApiKeysInput, CursorList<ApiKeyDto>>
+		list: RpcProcedure<ListApiKeysInput, CursorList<ApiKeyDetail>>
 		get: RpcProcedure<ApiKeyIdInput, ApiKeyDetail>
 		provision: RpcProcedure<ProvisionApiKeyRequest, ProvisionApiKeyResponse>
 		rotate: RpcProcedure<RotateApiKeyInput, RotateApiKeyResponse>

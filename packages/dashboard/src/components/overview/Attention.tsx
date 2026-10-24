@@ -159,14 +159,14 @@ function attentionItems(data: OverviewData): AttentionItem[] {
 		const expiry = expiringKey(key, data.loadedAt / 1000)
 		if (expiry === null) continue
 		items.push({
-			id: `key:${key.key.principalId}`,
+			id: `key:${key.principalId}`,
 			kind: 'access',
 			lamp: 'run',
 			title: `${expiry.kind} ${expiry.expiresAt <= data.loadedAt / 1000 ? 'has expired' : 'expires within 7 days'}`,
-			context: `${key.key.label} · ${fmtDate(expiry.expiresAt)}`,
+			context: `${key.label} · ${fmtDate(expiry.expiresAt)}`,
 			time: null,
 			action: 'View key',
-			target: { to: 'access/credentials/keys/detail', params: { id: key.key.principalId } },
+			target: { to: 'access/credentials/keys/detail', params: { id: key.principalId } },
 			priority: 3,
 		})
 	}
@@ -233,7 +233,6 @@ export function Attention({ data }: { data: OverviewData }) {
 					Expiry checks cover the latest {OVERVIEW_KEY_LIMIT} API keys. <Link to="access/credentials">View all credentials</Link>
 				</p>
 			)}
-			{data.keys.data?.items.some((item) => item.detail.problem !== null) && <p className="ov-section-note">Some key expiry dates could not be read.</p>}
 		</Panel>
 	)
 }

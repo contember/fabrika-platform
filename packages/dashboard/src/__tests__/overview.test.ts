@@ -2,7 +2,7 @@ import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/r
 import { BuzolaProvider } from '@buzola/router/react'
 import type { RpcFetch } from '@fabrika/app'
 import type { AppDto, AppEnvDto, RunDto } from '@fabrika/control-contract'
-import type { AuditEventDto, PrincipalListItem } from '@fabrika/iam-contract'
+import type { ApiKeyDetail, AuditEventDto, GrantDto, PrincipalListItem } from '@fabrika/iam-contract'
 import type { OperationsHealthCheckDto, OperationsSourceHealthDto } from '@fabrika/operations-contract/operator-api'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
@@ -12,7 +12,7 @@ import { RecentChanges } from '../components/overview/Activity'
 import { Applications } from '../components/overview/Applications'
 import type { ConsoleCaller } from '../lib/console-access'
 import { healthCheckState, healthLamp, needsMonitoringAttention, runtimeHealth } from '../lib/health'
-import { deployHistory, environmentSources, expiringKey, loadOverview, type OverviewData } from '../lib/overview'
+import { deployHistory, environmentSources, expiringKey, loadOverview } from '../lib/overview'
 import { DEFAULT_ISSUE_FILTERS, ErrorsView } from '../operations/views/Errors'
 import auditPage from '../routes/access/audit'
 import appPage from '../routes/apps/detail'
@@ -99,6 +99,20 @@ const run: RunDto = {
 	finishedAt: NOW / 1000 - 10,
 }
 const requestBody = z.object({ method: z.string(), input: z.unknown().optional() })
+
+const GRANT: GrantDto = {
+	id: 'grant-1',
+	principalId: 'integration',
+	roleKey: null,
+	permissions: ['report.write'],
+	scopeType: null,
+	scopeValue: null,
+	app: 'crm@prod',
+	grantedBy: null,
+	expiresAt: null,
+	createdAt: 1,
+	dangling: false,
+}
 
 function fetchOverview(overrides: Record<string, unknown> = {}, calls: string[] = [], refuse: string[] = []): RpcFetch {
 	return async (url, init) => {
@@ -343,12 +357,28 @@ describe('overview signal semantics', () => {
 	})
 
 	test('credential expiry is read from the key itself even when its grants never expire', () => {
-		const key = { principalId: 'integration', label: 'Export', status: 'active', grants: [], createdAt: 1 } satisfies NonNullable<
-			OverviewData['keys']['data']
-		>['items'][number]['key']
-		expect(expiringKey({ key, detail: { data: { ...key, credential: { app: null, expiresAt: NOW / 1000 + 86_400 } }, problem: null } }, NOW / 1000))
-			.toEqual({ kind: 'Key', expiresAt: NOW / 1000 + 86_400 })
-		expect(expiringKey({ key, detail: { data: null, problem: 'unavailable' } }, NOW / 1000)).toBeNull()
+		const now = NOW / 1000
+		const key: ApiKeyDetail = { principalId: 'integration', label: 'Export', status: 'active', grants: [], createdAt: 1, credential: null }
+		expect(expiringKey({ ...key, credential: { app: null, expiresAt: now + 86_400 } }, now)).toEqual({ kind: 'Key', expiresAt: now + 86_400 })
+		expect(expiringKey({ ...key, credential: { app: null, expiresAt: now - 30 * 86_400 } }, now)).toEqual({ kind: 'Key', expiresAt: now - 30 * 86_400 })
+		expect(expiringKey(key, now)).toBeNull()
+	})
+
+	test('a grant that lapsed this week is reported as expired, and one that lapsed earlier is history', () => {
+		const now = NOW / 1000
+		const grant = (expiresAt: number | null) => ({ ...GRANT, expiresAt })
+		const key = (expiresAt: number | null): ApiKeyDetail => ({
+			principalId: 'integration',
+			label: 'Export',
+			status: 'active',
+			grants: [grant(expiresAt)],
+			createdAt: 1,
+			credential: { app: null, expiresAt: null },
+		})
+		expect(expiringKey(key(now - 86_400), now)).toEqual({ kind: 'Key permission', expiresAt: now - 86_400 })
+		expect(expiringKey(key(now + 86_400), now)).toEqual({ kind: 'Key permission', expiresAt: now + 86_400 })
+		expect(expiringKey(key(now - 8 * 86_400), now)).toBeNull()
+		expect(expiringKey(key(null), now)).toBeNull()
 	})
 
 	test('deploy charts use completion dates and disclose a truncated creation-ordered window', () => {

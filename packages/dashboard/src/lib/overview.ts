@@ -1,6 +1,6 @@
 import { createRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
 import { CONTROL_ACTIONS, type ControlRpcContract, type RunDto } from '@fabrika/control-contract'
-import type { IamAdminRpcContract } from '@fabrika/iam-contract'
+import type { ApiKeyDetail, IamAdminRpcContract } from '@fabrika/iam-contract'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import type { OperationsSourceHealthDto } from '@fabrika/operations-contract/operator-api'
 import type { OperationsRpcContract } from '@fabrika/operations-contract/rpc'
@@ -60,15 +60,9 @@ export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fe
 				overviewRead(readsMail, () => control.mail.messages.list({ state: 'held' })),
 				overviewRead(readsMail, () => control.mail.messages.list({ state: 'failed' })),
 				overviewRead(readsAccess, async () => {
+					// Each row carries its live credential, so expiry costs no read per key: every IAM read is an audited one.
 					const page = await iam.apiKeys.list({ limit: OVERVIEW_KEY_LIMIT })
-					// Expiry belongs to the credential, not just its grants. The list exposes grants only.
-					const items = await Promise.all(
-						page.items.filter((key) => key.status === 'active').map(async (key) => ({
-							key,
-							detail: await overviewRead(true, () => iam.apiKeys.get({ principalId: key.principalId })),
-						})),
-					)
-					return { items, limited: page.nextCursor !== null }
+					return { items: page.items.filter((key) => key.status === 'active'), limited: page.nextCursor !== null }
 				}),
 				auditPromise,
 				actorsPromise,
@@ -135,12 +129,19 @@ export function boundedCount(count: number, limited: boolean): string {
 	return `${count}${limited ? '+' : ''}`
 }
 
-export function expiringKey(key: NonNullable<OverviewData['keys']['data']>['items'][number], now: number) {
-	const credential = key.detail.data?.credential
-	const expiry = credential?.expiresAt
-	if (expiry !== undefined && expiry !== null && expiry <= now + 7 * 86_400) return { expiresAt: expiry, kind: 'Key' }
-	const grantExpiry = key.key.grants.map((grant) => grant.expiresAt)
-		.filter((value): value is number => value !== null && value > now && value <= now + 7 * 86_400).sort((a, b) => a - b)[0]
+const KEY_EXPIRY_WINDOW = 7 * 86_400
+
+/**
+ * The key's own expiry when it falls within a week or has passed (the key no longer works), else the nearest grant
+ * expiry within a week either side: a lapsed grant stays a week, then it is history rather than something to act on.
+ * An IAM whose list rows carry no `credential` yet answers grants only.
+ */
+export function expiringKey(key: ApiKeyDetail, now: number) {
+	const expiry = key.credential?.expiresAt
+	if (expiry !== undefined && expiry !== null && expiry <= now + KEY_EXPIRY_WINDOW) return { expiresAt: expiry, kind: 'Key' }
+	const grantExpiry = key.grants.map((grant) => grant.expiresAt)
+		.filter((value): value is number => value !== null && value > now - KEY_EXPIRY_WINDOW && value <= now + KEY_EXPIRY_WINDOW)
+		.sort((a, b) => a - b)[0]
 	return grantExpiry === undefined ? null : { expiresAt: grantExpiry, kind: 'Key permission' }
 }
 

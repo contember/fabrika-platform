@@ -252,6 +252,31 @@ describe("an issued key's grants are edited in place", () => {
 		}
 	})
 
+	test('apiKeys.list answers each key with its live credential, as apiKeys.get does', async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		// `provision` registers the app and its action, which the expiring key below is granted too.
+		const revoked = await provision(h, token)
+		const expiresAt = Math.floor(Date.now() / 1000) + 3 * 24 * 60 * 60
+		const expiring: ProvisionApiKeyResponse = await (await run(
+			h,
+			req('/admin/api-keys', 'POST', token, { label: 'expiring', type: 'service', permissions: ['report.write'], app: 'opice', expiresAt }),
+		)).json()
+		const later = expiresAt + 3600
+		// The rotated secret's expiry is the live one: the revoked row before it is never listed.
+		await rotated(h, token, expiring.principalId, later)
+		expect((await run(h, req(`/admin/api-keys/${revoked.principalId}`, 'DELETE', token))).status).toBe(200)
+
+		const listed = prop((await adminRpc(h, token, 'apiKeys.list', {})).result, 'items')
+		if (!Array.isArray(listed)) throw new Error('expected a page of keys')
+		const credentialOf = (principalId: string) => prop(listed.find((item) => prop(item, 'principalId') === principalId), 'credential')
+		expect(credentialOf(expiring.principalId)).toEqual({ app: 'opice', expiresAt: later })
+		expect(credentialOf(revoked.principalId)).toBeNull()
+		for (const principalId of [expiring.principalId, revoked.principalId]) {
+			expect(credentialOf(principalId)).toEqual(prop((await adminRpc(h, token, 'apiKeys.get', { principalId })).result, 'credential'))
+		}
+	})
+
 	test('a revoked key has no live credential and no grant', async () => {
 		const h = createHarness()
 		const token = await asAdmin(h)
