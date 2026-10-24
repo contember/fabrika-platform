@@ -22,7 +22,7 @@ const FABRIKA_BIN = './node_modules/.bin/fabrika'
 const MIGRATE_SCRIPT = 'fabrika/migrate.generated.sh'
 const VERIFY_SCRIPT = 'fabrika/verify.generated.sh'
 const START_SCRIPT = 'fabrika/start.generated.sh'
-const SERVE_ENTRY = 'fabrika/entry.generated.ts'
+const SERVE: readonly string[] = ['bun', `--max-http-header-size=${APPLICATION_SERVER_MAX_HEADER_BYTES}`, 'fabrika/entry.generated.ts']
 const MIGRATE: readonly string[] = [FABRIKA_BIN, 'db', 'migrate']
 const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
 
@@ -126,8 +126,8 @@ export interface ContractRecipe {
 	readonly init: readonly string[]
 	/** The generated script that starts the server, which only `exec`s it. */
 	readonly start: string
-	/** The generated entrypoint the start script serves, relative to the runtime root. */
-	readonly entry: string
+	/** The command the start script `exec`s, run from the runtime root. */
+	readonly serve: readonly string[]
 	/** The command that migrates the application's database, run from the runtime root. */
 	readonly migrate: readonly string[]
 	/** The jobs to schedule, each on one container; a command runs from the runtime root. */
@@ -162,8 +162,14 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 		]
 		: []
 	const tests: ContractCheck = { name: 'tests', command: TESTS_COMMAND }
-	const tsc: ContractCheck = { name: 'tsc', command: `cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${sourceRoot}/${PLATFORM_TSCONFIG}` }
-	const check: ContractCheck = { name: 'fabrika-check', command: `cd /tmp && bun x --bun -p @fabrika/check@${checkRelease} fabrika-check ${sourceRoot}` }
+	const tsc: ContractCheck = {
+		name: 'tsc',
+		command: `cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${sourceRoot}/${PLATFORM_TSCONFIG}`,
+	}
+	const check: ContractCheck = {
+		name: 'fabrika-check',
+		command: `cd /tmp && bun x --bun -p @fabrika/check@${checkRelease} fabrika-check ${sourceRoot}`,
+	}
 	return {
 		build: [
 			{ run: INSTALL },
@@ -174,14 +180,14 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 			{ run: tsc.command },
 			{ run: check.command },
 			...init.map((generated) => ({ write: generated.path, lines: generated.lines })),
-			{ write: START_SCRIPT, lines: script([`exec bun --max-http-header-size=${APPLICATION_SERVER_MAX_HEADER_BYTES} ${SERVE_ENTRY}`]) },
+			{ write: START_SCRIPT, lines: script([`exec ${SERVE.join(' ')}`]) },
 			// After every check, so a map is uploaded only for a build that can deploy; the report line says how it went.
 			...(input.sourceMaps ? [{ run: `cd /tmp && bun x --bun -p @fabrika/check@${checkRelease} fabrika-source-maps ${sourceRoot} || true` }] : []),
 		],
 		checks: [tests, tsc, check],
 		init: init.map((generated) => generated.path),
 		start: START_SCRIPT,
-		entry: SERVE_ENTRY,
+		serve: SERVE,
 		migrate: MIGRATE,
 		jobs: [
 			...input.jobs.map((job) => ({ schedule: job.schedule, command: `${FABRIKA_BIN} job run ${job.name}` })),

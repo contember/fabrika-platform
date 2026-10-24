@@ -3,7 +3,7 @@
 // a readiness check that also passes once the launcher reported its boot, and no health check that would restart a
 // container whose launcher keeps running. The generated files are written by a real shell.
 
-import { DEV_LAUNCHER_BOOTED_FILE, DEV_LAUNCHER_CONFIG_FILE, type DevLauncherConfig } from '@fabrika/auth-core'
+import { APPLICATION_SERVER_MAX_HEADER_BYTES, DEV_LAUNCHER_BOOTED_FILE, DEV_LAUNCHER_CONFIG_FILE, type DevLauncherConfig } from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { SQL } from 'bun'
 import { afterAll, afterEach, describe, expect, test } from 'bun:test'
@@ -99,7 +99,7 @@ describe('the run variant of a dev environment', () => {
 				head: HEAD,
 				port: 3000,
 				healthPath: '/healthz',
-				serve: ['bun', 'fabrika/entry.generated.ts'],
+				serve: ['bun', `--max-http-header-size=${APPLICATION_SERVER_MAX_HEADER_BYTES}`, 'fabrika/entry.generated.ts'],
 				migrate: ['./node_modules/.bin/fabrika', 'db', 'migrate'],
 				spaBuild: SPA,
 				checks: [],

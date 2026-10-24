@@ -328,7 +328,7 @@ export function devLauncherConfig(execution: ZeropsLockedExecution, authoredSpa:
 		head: dev.head,
 		port: ZEROPS_APPLICATION_PORT,
 		healthPath: execution.contract.readinessPath,
-		serve: ['bun', recipe.entry],
+		serve: recipe.serve,
 		migrate: recipe.migrate,
 		spaBuild: authoredSpa,
 		// The build's check chain, in its order, on what the container holds.
