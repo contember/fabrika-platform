@@ -53,6 +53,7 @@ import { fileReference } from './file-references'
 import { webhookTables } from './framework-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
 import { fencedTransaction, jobLeases } from './job-leases'
+import { jobWakes } from './job-wakes'
 import { linksPredicate, type LinkValue, linkValues } from './links'
 import {
 	acknowledgement,
@@ -2172,6 +2173,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 	}
 
 	const database: ScopedDatabase<DB, P> = Object.freeze({ tables: tablePolicies(tables) })
+	const wakes = jobWakes(() => runtimeOf(connection))
 	register(database, {
 		tableContext: contextFor,
 		probe(table: string): TableProbe {
@@ -2201,7 +2203,8 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 		},
 		framework: freeze({
 			webhooks: webhookTables(() => runtimeOf(connection)),
-			jobs: jobLeases(() => runtimeOf(connection)),
+			jobs: jobLeases(() => runtimeOf(connection), wakes.follow),
+			wakes,
 			admissions: admissions(() => runtimeOf(connection)),
 			files: storedFiles(() => runtimeOf(connection)),
 		}),

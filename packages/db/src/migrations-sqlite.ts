@@ -17,6 +17,7 @@ import {
 	type FrameworkMigration,
 	JOB_KICKS_TABLE,
 	JOB_LEASES_TABLE,
+	JOB_WAKES_TABLE,
 	WEBHOOK_BINDINGS_TABLE,
 	WEBHOOK_DELIVERIES_TABLE,
 } from './migrations'
@@ -127,6 +128,22 @@ CREATE TABLE ${FILE_DELETIONS_TABLE} (
 	object_key TEXT PRIMARY KEY,
 	recorded_at TEXT NOT NULL
 ) STRICT;
+`,
+	}),
+	Object.freeze({
+		name: '0002_job_wakes.sql',
+		sql: `-- A job's pending work, one row per due unit: its next scheduled run, a kick, a claim's re-arm, a durable retry. due_at
+-- is epoch milliseconds. A row leaves only with the fenced, successful finish of a run that started at or after it.
+CREATE TABLE ${JOB_WAKES_TABLE} (
+	id TEXT PRIMARY KEY,
+	job TEXT NOT NULL,
+	due_at INTEGER NOT NULL,
+	reason TEXT NOT NULL CONSTRAINT ${JOB_WAKES_TABLE}_reason CHECK (reason IN ('cron', 'kick', 'claim', 'retry')),
+	attempt INTEGER NOT NULL DEFAULT 0,
+	dedupe TEXT
+) STRICT;
+CREATE INDEX ${JOB_WAKES_TABLE}_due ON ${JOB_WAKES_TABLE} (due_at);
+CREATE UNIQUE INDEX ${JOB_WAKES_TABLE}_dedupe ON ${JOB_WAKES_TABLE} (dedupe) WHERE dedupe IS NOT NULL;
 `,
 	}),
 	Object.freeze({

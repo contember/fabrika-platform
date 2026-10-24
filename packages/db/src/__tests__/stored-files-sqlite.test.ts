@@ -171,7 +171,7 @@ describe('a stored file on SQLite', () => {
 		})
 		expect(due?.dueSince.getTime()).toBeLessThanOrEqual(before.getTime() + 5)
 		expect(await files.quarantined(['catalog'], 10, new Date())).toEqual([])
-		const jobs = jobLeases(() => ({ database: db.database, capabilities: authority }))
+		const jobs = jobLeases(() => ({ database: db.database, capabilities: authority }), async () => {})
 		authority.lease = await jobs.acquire('scan', 'scan-1', HOUR, HOUR)
 		const later = new Date(Date.now() + 60_000)
 		expect(await files.deferScan(id, 1, later)).toBe(true)

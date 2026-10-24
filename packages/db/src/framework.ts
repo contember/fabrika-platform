@@ -21,7 +21,8 @@ export {
 export type { FileBinding } from './file-columns'
 export { type FileHolding, fileHoldingOf, type FileReference, fileReference, holdsFile } from './file-references'
 export type { DeliveryClaim, NewWebhookBinding, WebhookBinding, WebhookTables } from './framework-tables'
-export type { JobLeases, JobLeaseState, JobOutcome, OverdueClaim } from './job-leases'
+export type { JobLeases, JobLeaseState, JobOutcome, LeaseChange, LeaseProjection, OverdueClaim } from './job-leases'
+export type { JobWakes, NewWake, Wake, WakeReason } from './job-wakes'
 export type { DataAccess, DataHandles, DataSite } from './orm'
 export type { FrameworkTables, Locator, ProvisionalBinding } from './registry'
 export type { SqlMode, SqlSite, SqlTag, SqlValue } from './sql'
@@ -53,8 +54,8 @@ export function bindScopedDatabaseProvisionally(value: unknown, runtime: DataLay
 }
 
 /**
- * The framework's own writes over the layer `scoped(tables)` created: the webhook tables, the job leases and the
- * admission counters. Each operation needs the layer bound first. Throws for any other value.
+ * The framework's own writes over the layer `scoped(tables)` created: the webhook tables, the job leases and wakes, and
+ * the admission counters. Each operation needs the layer bound first. Throws for any other value.
  */
 export function frameworkTablesOf(value: unknown): FrameworkTables {
 	const side = frameworkSideOf(value)
