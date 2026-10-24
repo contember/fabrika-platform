@@ -21,7 +21,7 @@ import type {
 	ProviderRegistrationInput,
 	ProviderSourceBinding,
 } from '@fabrika/provider-contract'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { type CloudflareRunnerJob, createCloudflareControlProvider } from '../../../provider-cloudflare/src/control'
 import { readProviderEnvelope } from '../api/provider-envelope'
 import { getRunLogUseCase } from '../api/runs'
@@ -33,7 +33,7 @@ import { opsKeyPurpose, VaultOpsKeys } from '../ops-key'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
 import { appSecretPurpose, type SecretResolver, VaultSecretResolver } from '../secret-resolver'
-import { buildRunDeps } from '../services'
+import { buildControlRpcDeps, buildRunDeps } from '../services'
 import { contractCommits } from './helpers/commits'
 import { createHarness, queryRows } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
@@ -1060,6 +1060,20 @@ describe('provider-neutral run lifecycle', () => {
 		expect(queryRows(harness.sqlite, 'SELECT label FROM vault WHERE id = ?', (issued?.value_ref ?? '').replace(/^vault:/, ''))).toEqual([
 			{ label: opsKeyPurpose('app', 'prod', issued?.key_id ?? '').label },
 		])
+
+		// The composed RPC deps present that same key to the environment's domain.
+		const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 404 }))
+		let sent: { url: string; authorization: string | null }[] = []
+		try {
+			const transport = buildControlRpcDeps(env, makeProvider(inputs, { state: 'succeeded' }), allowAllAuth()).opsTransport
+			const answer = await transport?.inspect({ appId: 'app', env: 'prod' }, { object: 'application', content: false }, new AbortController().signal)
+			expect(answer).toEqual({ kind: 'unavailable', reason: 'unreachable' })
+			sent = fetchSpy.mock.calls.map(([input, init]) => ({ url: String(input), authorization: new Headers(init?.headers).get('authorization') }))
+		} finally {
+			fetchSpy.mockRestore()
+		}
+		expect(sent.map(({ url }) => url)).toEqual(['https://app.example.com/__fabrika/ops/inspect'])
+		expect(opsKeyDigest((sent[0]?.authorization ?? '').replace(/^Bearer /, ''))).toBe(issued?.digest ?? '')
 	})
 
 	test('refuses a gated deploy when Control can keep no ops key, and a dry run needs none', async () => {

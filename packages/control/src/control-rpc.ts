@@ -255,12 +255,11 @@ const setMailRuleInput = z.object({
 const dataOperationId = z.object({ operationId: nonEmpty }).strict()
 const dataEnvironment = appEnvironment.strict()
 
-/** The composition's deps; without an ops transport the `data.*` procedures that call an object answer 503. */
-type ControlRpcDepsBuilder = (...args: Parameters<typeof buildControlRpcDeps>) => ControlRpcDeps & { readonly opsTransport?: OpsTransport }
-
 export const controlRpcRouter = createControlRpcRouter(buildControlRpcDeps)
 
-export function createControlRpcRouter(buildDeps: ControlRpcDepsBuilder): RpcRouterFor<ControlRpcContext, ControlRpcContract> {
+export function createControlRpcRouter(
+	buildDeps: (...args: Parameters<typeof buildControlRpcDeps>) => ControlRpcDeps,
+): RpcRouterFor<ControlRpcContext, ControlRpcContract> {
 	return rpc.router({
 		installation: rpc.procedure.query(({ ctx }) => ({ provider: ctx.provider.id })),
 		consoleAccess: rpc.procedure.query(({ ctx }) => consoleAccess(ctx.auth)),

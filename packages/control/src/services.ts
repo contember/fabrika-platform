@@ -4,6 +4,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import type { BuilderPairingIam } from './api/builder-pairing'
 import { type NamespaceProxyChanged, republishNamespace } from './api/namespaces'
 import type { DeployQueue, LogReader } from './api/runs'
+import { httpOpsTransport, type OpsTransport } from './data-operations'
 import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
 import { GitHubConnectionWebhookSecretProvider } from './github/connections/webhook-secret'
@@ -132,6 +133,12 @@ export function opsKeyDeps(env: Env): { opsKeys?: OpsKeysPort } {
 	return env.FABRIKA_CONTROL_VAULT_KEY === undefined ? {} : { opsKeys: new VaultOpsKeys(repositories(env).opsKeys, () => vault(env)) }
 }
 
+function opsTransportDeps(env: Env): { opsTransport?: OpsTransport } {
+	const { opsKeys } = opsKeyDeps(env)
+	if (opsKeys === undefined) return {}
+	return { opsTransport: httpOpsTransport({ registry: repositories(env).registry, opsKeysFor: (appId, name) => opsKeys.opsKeysFor(appId, name) }) }
+}
+
 /**
  * The membership transport keys are issued by IAM with the provisioning key and sealed in the vault, like the workload
  * keys; an installation without all three issues none, and a contract that needs one does not deploy behind a
@@ -218,6 +225,8 @@ export interface ControlRpcDeps {
 	 * has no dispatcher.
 	 */
 	mailRelay?: Pick<MailRelay, 'queue' | 'sender'>
+	/** The ops channel to an environment's object; absent without a vault, and the `data.*` calls to an object answer 503. */
+	opsTransport?: OpsTransport
 }
 
 /** Assemble RPC use-case dependencies around the installation's provider. Vault creation stays lazy. */
@@ -235,6 +244,7 @@ export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: A
 		...(env.COMMITS === undefined ? {} : { commits: env.COMMITS }),
 		...(env.MAIL_RELAY === undefined ? {} : { mailRelay: env.MAIL_RELAY }),
 		...installationBrandDeps(env),
+		...opsTransportDeps(env),
 		...(provider.namespaces?.republish === undefined
 			? {}
 			: {
