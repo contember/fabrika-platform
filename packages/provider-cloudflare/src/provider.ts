@@ -110,7 +110,7 @@ const withManagedEnvironment = (
 	const configured = new Worker({
 		...application.options,
 		vars: {
-			...(application.options.vars ?? {}),
+			...application.options.vars,
 			...vars,
 		},
 	})
@@ -153,7 +153,7 @@ const withApplicationRuntime = (authored: Worker, run: CloudflareDeployRun, runt
 		...application.options,
 		bindings: {
 			[CLOUDFLARE_APPLICATION_BINDING]: new DurableObject({ name: `${run.appId}-application`, className: CLOUDFLARE_APPLICATION_CLASS }),
-			...(application.options.bindings ?? {}),
+			...application.options.bindings,
 			[CLOUDFLARE_FILES_BINDING]: new R2Bucket({ name: filesBucketName(run.appId) }),
 		},
 		// Always written: wrangler leaves a Worker's schedules alone when `triggers` is absent, and clears them on `[]`.
@@ -196,7 +196,7 @@ const withConnectorBindings = (authored: Worker, bindings: Readonly<Record<strin
 	const configured = new Worker({
 		...application.options,
 		bindings: {
-			...(application.options.bindings ?? {}),
+			...application.options.bindings,
 			...Object.fromEntries(Object.entries(bindings).map(([binding, worker]) => [binding, new ServiceReference(worker)])),
 		},
 	})
@@ -287,7 +287,7 @@ const replaceApplicationWorker = (worker: Worker, replacement: Worker): Worker =
 	return new Worker({
 		...worker.options,
 		bindings: {
-			...(worker.options.bindings ?? {}),
+			...worker.options.bindings,
 			APP: replaceApplicationWorker(child, replacement),
 		},
 	})

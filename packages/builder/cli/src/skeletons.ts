@@ -15,7 +15,7 @@ export function readSkeletons(testsBrowserDir: string): Skeleton[] {
 	if (!existsSync(testsBrowserDir) || !statSync(testsBrowserDir).isDirectory()) return []
 	const out: Skeleton[] = []
 	for (const entry of readdirSync(testsBrowserDir).sort()) {
-		if (!/\.test\.ts$/.test(entry)) continue
+		if (!entry.endsWith('.test.ts')) continue
 		const file = join(testsBrowserDir, entry)
 		if (!statSync(file).isFile() || statSync(file).size === 0) continue
 		out.push(...parseSkeletons(file))
@@ -51,7 +51,7 @@ export function parseSkeletons(file: string): Skeleton[] {
 }
 
 function strField(meta: string, key: string): string | undefined {
-	const re = new RegExp(`\\b${key}\\s*:\\s*([\`'\"])([\\s\\S]*?)\\1`)
+	const re = new RegExp(`\\b${key}\\s*:\\s*([\`'"])([\\s\\S]*?)\\1`)
 	const m = meta.match(re)
 	return m ? m[2] : undefined
 }
