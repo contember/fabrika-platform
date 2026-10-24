@@ -266,3 +266,16 @@ describe('authorityDeadline — a credential never outlives the grants it carrie
 		expect(authorityDeadline(authority, [{ action: 'project.read', scope: null, source: 'grant' }], NOW)).toBe(NOW)
 	})
 })
+
+describe('computePermissions — a contract application holds exact actions only', () => {
+	test('a pattern, inline or through a role, contributes nothing; exact actions stay', () => {
+		const grants = [roleGrant('editor', null), roleGrant('viewer', null), inlineGrant(['report.*', 'report.export'], null)]
+		const entries = computePermissions({ ...base, grants, exactActions: true }, roles)
+		expect(entries.map((entry) => entry.action).sort()).toEqual(['project.read', 'report.export', 'report.read'])
+	})
+
+	test('the built-in admin grants nothing there', () => {
+		expect(computePermissions({ ...base, grants: [roleGrant('admin', null)], exactActions: true }, roles)).toEqual([])
+		expect(computePermissions({ ...base, grants: [roleGrant('admin', null)] }, roles)).toHaveLength(1)
+	})
+})

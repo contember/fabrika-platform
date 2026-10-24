@@ -692,7 +692,10 @@ still refuses any `Authorization` header, as authorization.
   carries a company label and a personal message as plain text, and a resend rotates its link and restarts its 7 days;
   each is one membership write under the same delegation.
 - **Exact actions on every write path.** For a contract application, IAM refuses a wildcard action on
-  every write path. In every IAM schema, an installation service's included, IAM refuses a
+  every write path, and resolves none: a pattern stored before the rule, the built-in `admin` included, contributes
+  nothing to its token, so no grant tracks the catalog beyond the approved revision. **Rollout:** IAM's migration 0027
+  refuses while a contract application holds such a row, so the deploy stops with the old release serving until an
+  administrator gives the row exact actions; it changes no row. In every IAM schema, an installation service's included, IAM refuses a
   global grant of a role declared with `member.scope`, and such a grant resolves to no permission.
 - **Eligible grants.** An external principal ([ADR-0051](0051-external-principals.md)) holds only grants of a
   role its application declares `external`, a membership role. IAM refuses every other grant for it on every write

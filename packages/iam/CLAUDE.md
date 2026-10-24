@@ -647,7 +647,10 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **Permission resolution is fail-closed and pure.** `computePermissions` (`src/resolve.ts`) takes
   already-fetched rows, so it is unit-testable without a database. Unparseable inline grant JSON and
   an unresolvable role key both contribute ZERO permissions. Wildcards stay as patterns — `permits()`
-  in `@fabrika/auth-core` matches them; never pre-expand.
+  in `@fabrika/auth-core` matches them; never pre-expand. At a CONTRACT application a pattern contributes nothing
+  (`exactActions`), the built-in `admin` included, so no grant tracks the catalog beyond its approved revision; only a
+  platform audience still resolves one. Migration `0027_application_exact_actions.sql` is the preflight: it refuses
+  while a contract application holds a pattern in a grant, a role or a key, or a grant of `admin`.
 - **Both migration sets must land the same OUTCOME.** `migrations/` (SQLite/D1) and
   `migrations-postgres/` state the same schema; `src/db.ts` runs against both with one dialect switch (how a guarded
   change writes its record, above), and

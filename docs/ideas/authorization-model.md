@@ -149,12 +149,12 @@ clamped to the expiry of the grants that authorize them (`packages/iam/src/membe
 lists derived from the table policy and pinned by the query guard (`packages/db/src/store.ts`, `guard.ts`); writes
 conditioned on the chain with `FOR SHARE` on the destination; not-found for a refused `on` binding; workloads holding
 only their declared actions (`packages/iam/src/tokens.ts`); share links and anonymous keys re-checked against their issuer
-at every mint (`issuerAuthority`); access tokens capped by the grants they carry
+at every mint (`issuerAuthority`); exact actions only at a contract application (`exactActions`, `packages/iam/src/resolve.ts`,
+preflighted by migration 0027); access tokens capped by the grants they carry
 (`authorityDeadline`, `packages/iam/src/resolve.ts`).
 
 Gaps:
 
-- Wildcard grants and live re-expansion of roles from IAM rows (Layer 1).
 - An `over` list leaves out grants on the listed resource's own dimension (S4).
 - An opaque root such as `in: 'org'` is admitted for any value under an application-wide grant. It conforms once the
   framework marks a root dimension with no owning table as unchecked in the artifact and the approval diff shows it,

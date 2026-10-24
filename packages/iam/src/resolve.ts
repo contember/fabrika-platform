@@ -33,6 +33,11 @@ export interface ResolutionInputs {
 	 * cross-app or built-in grant, and no bootstrap `admin`.
 	 */
 	affiliation: PrincipalAffiliation
+	/**
+	 * A contract application holds exact actions of its approved catalog: a pattern (a stored `*` or `prefix.*`, the
+	 * built-in `admin` included) contributes nothing there, so nothing tracks the catalog beyond its approved revision.
+	 */
+	exactActions?: boolean
 }
 
 /**
@@ -84,6 +89,9 @@ export function computeAuthority(inputs: ResolutionInputs, roles: RoleSource): R
 	const supports = new Map<string, HeldEntry>()
 
 	const add = (action: string, scope: Scope | null, source: PermissionSource, until: number | null): void => {
+		if (inputs.exactActions === true && action.includes('*')) {
+			return
+		}
 		const scopeKey = scope === null ? '' : `${scope.type}:${scope.value}`
 		const held = supports.get(`${action} ${scopeKey}`)
 		if (held === undefined) {
@@ -361,5 +369,6 @@ export async function resolveAuthorityAt(
 	const isBootstrapAdmin = crossApp && principal.type === 'user' && principal.affiliation === 'internal' && principal.email !== null
 		&& services.config.bootstrapAdmins.has(normalizeEmailIdentity(principal.email))
 	const roles = await loadRoleSource(services.repositories, app)
-	return computeAuthority({ app, grants, isBootstrapAdmin, affiliation: principal.affiliation }, roles)
+	const exactActions = await services.repositories.appSchema.isContractApp(app)
+	return computeAuthority({ app, grants, isBootstrapAdmin, affiliation: principal.affiliation, exactActions }, roles)
 }

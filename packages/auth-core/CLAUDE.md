@@ -109,7 +109,8 @@ bun test               # app-environment · canonical-path · contract-canonical
   agreement.
 - **Wildcards stay patterns and are never pre-expanded.** `matchAction` and `permits` compare a
   pattern to an action at request time, so a grant written today covers an app registered tomorrow.
-  Any code that expands `project.*` into a list has broken that property and is also now stale.
+  Any code that expands `project.*` into a list has broken that property and is also now stale. Only a platform
+  audience resolves a pattern: IAM gives a contract application's token exact actions only.
 - **`permits` semantics are exact and load-bearing.** `scope === undefined` means scope-less and is
   satisfied only by entries with `scope === null`; a concrete scope is satisfied by a global entry
   or by one matching the same `(type, value)` pair. `can()` in the SDK is this function; do not
