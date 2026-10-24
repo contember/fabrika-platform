@@ -7,6 +7,7 @@ import { isScopedDatabase } from '@fabrika/db/framework'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
 import { openSqlite, type SqliteStorage } from '@fabrika/db/sqlite'
 import { migrateSqlite } from '@fabrika/db/sqlite-migrate'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { timingSafeEqual } from 'node:crypto'
 import { compileContract } from '../contract/compile.js'
 import type { RequestExecutionContext } from '../fetch.js'
@@ -49,9 +50,7 @@ export const APPLICATION_OBJECT_NAME = 'application'
 export const TICK_HEADER = 'X-Fabrika-Tick'
 
 /** What the object needs of its `ctx.storage`; a Durable Object's `DurableObjectStorage` fits it. */
-export interface ApplicationStorage extends SqliteStorage {
-	transactionSync<T>(fn: () => T): T
-}
+export type ApplicationStorage = SqliteStorage
 
 /** What the object needs of its `DurableObjectState`. */
 export interface ApplicationState {
@@ -68,12 +67,15 @@ interface DueJob {
 	readonly schedule: CronSchedule
 }
 
-/** The application this isolate booted, once: its module is loaded once, and its `scoped(tables)` layer binds once. */
+/**
+ * The application this isolate booted, once: its module is loaded once, and its `scoped(tables)` layer binds once, to
+ * the storage of the object whose event runs (`objectStorage`), never to one database.
+ */
 interface Booted {
 	readonly app: ContractApp
 	readonly jobs: readonly DueJob[]
-	/** The storage of the object instance now serving; `null` for an application without a data layer. */
-	readonly storage: { current: ApplicationStorage } | null
+	/** Whether the application has a data layer, which every object instance migrates in its own storage. */
+	readonly migrates: boolean
 }
 
 interface ApplicationSetup {
@@ -85,6 +87,17 @@ interface ApplicationSetup {
 }
 
 let registered: ApplicationSetup | null = null
+
+/** The storage of the object whose event runs; the work an event hands to `waitUntil` keeps it. */
+const objectStorage = new AsyncLocalStorage<ApplicationStorage>()
+
+function eventStorage(): ApplicationStorage {
+	const storage = objectStorage.getStore()
+	if (storage === undefined) {
+		throw new Error('a statement ran outside any event of an application object: the framework runs every event in its object scope')
+	}
+	return storage
+}
 
 /** What the object classes of this isolate boot: the generated entrypoint's `createContractWorker` registers it. */
 export function registerApplication(load: ImplementationLoader, options: ContractWorkerOptions): void {
@@ -128,15 +141,17 @@ async function bootApplication(setup: ApplicationSetup, state: ApplicationState,
 	let booted: Booted
 	try {
 		const { default: implementation } = await setup.load()
-		const storage = isScopedDatabase(implementation.database) ? { current: state.storage } : null
-		if (storage !== null) {
+		const migrates = isScopedDatabase(implementation.database)
+		if (migrates) {
 			await migrate(state.storage, setup.options.migrations ?? [])
 		}
-		// Every later object instance of this isolate swaps its own storage in: the layer is bound to this one database.
-		const database = storage === null ? undefined : openSqlite({
-			sql: { exec: (query, ...bindings) => storage.current.sql.exec(query, ...bindings) },
-			transaction: (closure) => storage.current.transaction(closure),
-		})
+		const database = migrates
+			? openSqlite({
+				sql: { exec: (query, ...bindings) => eventStorage().sql.exec(query, ...bindings) },
+				transaction: (closure) => eventStorage().transaction(closure),
+				transactionSync: (closure) => eventStorage().transactionSync(closure),
+			})
+			: undefined
 		const app = boot(implementation, {
 			environment,
 			iam: bindingKeySource(env['IAM']),
@@ -153,7 +168,7 @@ async function bootApplication(setup: ApplicationSetup, state: ApplicationState,
 			clientAddress: 'vouched',
 			...(setup.options.operationsFetch === undefined ? {} : { operationsFetch: setup.options.operationsFetch }),
 		})
-		booted = { app, jobs: dueJobsOf(implementation), storage }
+		booted = { app, jobs: dueJobsOf(implementation), migrates }
 	} catch (error) {
 		if (crashes !== null && !setup.bootFailureReported) {
 			setup.bootFailureReported = true
@@ -168,7 +183,7 @@ async function bootApplication(setup: ApplicationSetup, state: ApplicationState,
 	return booted
 }
 
-/** The isolate's booted application with this instance's storage migrated and swapped in, or the first boot. */
+/** The isolate's booted application with this instance's storage migrated, or the first boot. */
 async function attach(setup: ApplicationSetup | null, state: ApplicationState, env: Readonly<Record<string, unknown>>): Promise<Booted> {
 	if (setup === null) {
 		throw new Error('no contract application is registered: the generated entrypoint calls createContractWorker before an object starts')
@@ -183,9 +198,8 @@ async function attach(setup: ApplicationSetup | null, state: ApplicationState, e
 		return await booting
 	}
 	const booted = await setup.booted
-	if (booted.storage !== null && booted.storage.current !== state.storage) {
+	if (booted.migrates) {
 		await migrate(state.storage, setup.options.migrations ?? [])
-		booted.storage.current = state.storage
 	}
 	return booted
 }
@@ -228,12 +242,16 @@ export class FabrikaApplication {
 		if ('failure' in outcome) {
 			throw outcome.failure
 		}
+		return await objectStorage.run(this.#state.storage, () => this.#serve(outcome.booted, request))
+	}
+
+	#serve(booted: Booted, request: Request): Promise<Response> {
 		const tick = request.headers.get(TICK_HEADER)
 		if (tick !== null) {
-			return this.#tick(outcome.booted, tick)
+			return Promise.resolve(this.#tick(booted, tick))
 		}
 		const exec: RequestExecutionContext = { waitUntil: (promise) => this.#state.waitUntil(promise) }
-		return await outcome.booted.app.fetch(request, exec)
+		return booted.app.fetch(request, exec)
 	}
 
 	/** The fixed-size digests are compared in constant time, so neither the length nor a prefix of the secret leaks. */

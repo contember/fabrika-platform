@@ -1,15 +1,22 @@
 // What the environment object boots with besides its database: the IAM binding (keys and membership), the SPA's
-// assets and the crash reports of its isolate. Each object is constructed directly, as workerd constructs it.
+// assets and the crash reports of its isolate; and that two objects of one isolate each keep their own database. Each
+// object is constructed directly, as workerd constructs it.
 
 import { defineContract } from '@fabrika/app/contract'
 import { PROXY_SECRET_HEADER } from '@fabrika/auth-core'
 import { describe, expect, spyOn, test } from 'bun:test'
+import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
-import { type ApplicationState, type ContractWorkerOptions, createContractWorker, FabrikaApplication } from '../cloudflare'
+import { applicationMigrations } from '../build'
+import { type ApplicationState, type ApplicationStorage, type ContractWorkerOptions, createContractWorker, FabrikaApplication } from '../cloudflare'
+import { TICK_HEADER } from '../cloudflare/application'
+import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import type { CrashEvents, ProcessCrashKind } from '../implement/crashes'
 import type { ContractImplementation } from '../implement/implement'
 import { implement } from '../implement/implement'
+import { notesApp as sqliteNotesApp } from './cloudflare-fixture/src/app'
+import type { NotesWorld } from './cloudflare-fixture/src/world'
 import { notesApp } from './fixtures/implement/app'
 import {
 	endpointHeaderFor,
@@ -20,8 +27,10 @@ import {
 	ORIGIN,
 	PROXY_SECRET,
 	token,
+	workloadTokensFor,
 } from './fixtures/implement/harness'
 
+const FIXTURE_ROOT = join(import.meta.dir, 'cloudflare-fixture')
 const DSN = 'https://0123456789abcdef0123456789abcdef@operations.test/42'
 
 interface Started {
@@ -100,6 +109,79 @@ const startingApp = implement(starting, {
 	database: null,
 	deps: () => null,
 	handlers: () => ({ api: { start: ({ ctx }) => ({ workspace: ctx.created.value }) } }),
+})
+
+describe('two environment objects in one isolate', () => {
+	const WORKSPACE = { type: 'workspace', value: 'w1' }
+	const unused = () => Promise.reject(new Error('not called'))
+
+	test('each reads and writes only its own database, its waitUntil work included', async () => {
+		await keepingProcessEnvironment(async () => {
+			const world: NotesWorld = { runs: [] }
+			const served = sqliteNotesApp(world)
+			createContractWorker(() => Promise.resolve({ default: served.implementation }), { migrations: await applicationMigrations(FIXTURE_ROOT) })
+			const tokens = workloadTokensFor(served.implementation)
+			// While held, a job waits for its workload token, so A's job finishes after B's request.
+			let held: Promise<void> = Promise.resolve()
+			const hold = () => {
+				const gate = Promise.withResolvers<void>()
+				held = gate.promise
+				return gate.resolve
+			}
+			const env = {
+				...frameworkEnvFor(served.implementation),
+				...served.variables,
+				FABRIKA_PROXY_SECRET: PROXY_SECRET,
+				IAM: {
+					getJwks: () => keySource.getJwks(),
+					mintFromKey: async (input: { app: string; key: string }) => {
+						await held
+						return await tokens.exchange(input)
+					},
+				},
+				[CLOUDFLARE_FILES_BINDING]: { head: unused, get: unused, put: unused, delete: unused },
+			}
+			const objectOver = (storage: ApplicationStorage) => {
+				const pending: Promise<unknown>[] = []
+				const state: ApplicationState = { storage, blockConcurrencyWhile: (callback) => callback(), waitUntil: (promise) => void pending.push(promise) }
+				return { object: new FabrikaApplication(state, env), pending }
+			}
+			const a = objectOver(bunSqliteStorage())
+			const b = objectOver(bunSqliteStorage())
+			const call = async (object: FabrikaApplication, procedure: string, input: unknown): Promise<unknown> => {
+				const path = `/api/notes.${procedure}`
+				const response = await object.fetch(forwarded(path, {
+					method: 'POST',
+					headers: {
+						'X-Fabrika-Token': await token('user', [grant('notes.read', WORKSPACE), grant('notes.write', WORKSPACE)]),
+						'X-Fabrika-Endpoint': endpointHeaderFor(served.implementation, 'POST', path) ?? '',
+						'Content-Type': 'application/json',
+						'Sec-Fetch-Site': 'same-origin',
+					},
+					body: JSON.stringify(input),
+				}))
+				expect(response.status).toBe(200)
+				return await response.json()
+			}
+
+			await call(a.object, 'create', { workspaceId: 'w1', title: 'a-first' })
+			await call(b.object, 'create', { workspaceId: 'w1', title: 'b-first' })
+			expect(await call(a.object, 'titles', { workspaceId: 'w1' })).toEqual({ result: { titles: ['a-first'] } })
+			await call(b.object, 'create', { workspaceId: 'w1', title: 'b-second' })
+			expect(await call(b.object, 'titles', { workspaceId: 'w1' })).toEqual({ result: { titles: ['b-first', 'b-second'] } })
+
+			const release = hold()
+			const tick = await a.object.fetch(forwarded('/', { method: 'POST', headers: { [TICK_HEADER]: String(Date.UTC(2026, 9, 22, 3, 0, 0)) } }))
+			expect(tick.status).toBe(204)
+			await call(b.object, 'create', { workspaceId: 'w1', title: 'b-third' })
+			expect(await call(b.object, 'titles', { workspaceId: 'w1' })).toEqual({ result: { titles: ['b-first', 'b-second', 'b-third'] } })
+			expect(world.runs).toEqual([])
+			release()
+			await Promise.all(a.pending)
+			expect(world.runs).toEqual([{ job: 'nightly', notes: 1 }])
+			expect(await call(a.object, 'titles', { workspaceId: 'w1' })).toEqual({ result: { titles: ['a-first'] } })
+		})
+	})
 })
 
 describe('the environment object: IAM membership on the IAM binding', () => {

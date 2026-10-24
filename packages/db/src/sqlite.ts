@@ -36,6 +36,8 @@ export interface SqliteStorage {
 	}
 	/** Commits when `closure` resolves, rolls back when it rejects; the object serves no other event meanwhile. */
 	transaction<T>(closure: () => Promise<T>): Promise<T>
+	/** Runs `closure` in one transaction of its own, nested in a savepoint inside an open one; rolls back when it throws. */
+	transactionSync<T>(closure: () => T): T
 }
 
 const LIKE_OPERATORS: ReadonlyMap<string, string> = new Map([
