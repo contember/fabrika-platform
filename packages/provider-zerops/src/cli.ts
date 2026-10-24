@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import type { AppCli } from '@fabrika/provider-contract/app-cli'
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -12,6 +13,7 @@ import {
 	manifestServiceHostnames,
 	ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES,
 } from './manifest'
+import { zeropsNamespaceCli } from './namespace-cli'
 import type { ZeropsAppConfig } from './types'
 
 const USAGE = `Zerops app tools
@@ -104,6 +106,15 @@ export const runZeropsCli = async (argv: readonly string[]): Promise<void> => {
 	const output = resolve(process.cwd(), args.output)
 	await Bun.write(output, serializeManifest(manifest))
 	console.info(`wrote ${output} (${manifestServiceHostnames(manifest).length} service(s))`)
+}
+
+/** What `fabrika app build`, `app register` and `fabrika namespace` run for an application on Zerops. */
+export const appCli: AppCli = {
+	provider: 'zerops',
+	entryRuntime: 'bun',
+	build: (argv) => runZeropsCli(['build', ...argv]),
+	registrationManifest: buildZeropsManifestText,
+	namespaces: zeropsNamespaceCli,
 }
 
 if (import.meta.main) {

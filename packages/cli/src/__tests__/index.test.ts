@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { appCliRunnerFromModule, parseCliArgs, providerFromConfig, runCli } from '..'
+import { parseCliArgs, providerFromConfig, runCli } from '..'
 
 const zeropsConfig = resolve(import.meta.dir, '../../../../examples/zerops-app/fabrika.config.ts')
 
@@ -57,9 +57,9 @@ describe('provider inference', () => {
 		expect(await providerFromConfig([`--config=${zeropsConfig}`])).toBe('zerops')
 	})
 
-	test('dispatches by the inferred provider before loading provider tooling', async () => {
+	test("dispatches by the inferred provider, and the provider's own CLI module answers what it does not offer", async () => {
 		await expect(runCli(['app', 'deploy', `--config=${zeropsConfig}`])).rejects.toThrow(
-			'Zerops app tooling does not support `app deploy`',
+			'zerops app tooling does not support `app deploy`',
 		)
 	})
 
@@ -103,22 +103,31 @@ describe('app build for a contract application', () => {
 	})
 })
 
-describe('runtime module validation', () => {
-	test('accepts only the named async CLI runner export', async () => {
-		const calls: string[][] = []
-		const run = async (argv: readonly string[]): Promise<void> => {
-			calls.push([...argv])
-		}
-		const loaded = appCliRunnerFromModule({ run }, '@vendor/provider/cli', 'run')
-		await loaded(['build'])
-		expect(calls).toEqual([['build']])
+describe('provider CLI modules', () => {
+	test('a provider without namespaces answers that it has none, from its own module', async () => {
+		await expect(runCli(['namespace', 'plan', '--provider=cloudflare'])).rejects.toThrow('Provider cloudflare does not expose deployment namespaces')
 	})
 
-	test('rejects missing and non-function exports', () => {
-		expect(() => appCliRunnerFromModule({}, '@vendor/provider/cli', 'run')).toThrow('must export `run`')
-		expect(() => appCliRunnerFromModule({ run: 'no' }, '@vendor/provider/cli', 'run')).toThrow(
-			'must export `run` as a function',
+	test('app and namespace commands take a provider id, never a module specifier', async () => {
+		await expect(runCli(['namespace', 'plan', '--provider=@vendor/provider/cli'])).rejects.toThrow('takes a provider id')
+	})
+
+	test('names the package to add when the provider CLI package is not installed', async () => {
+		await expect(runCli(['namespace', 'plan', '--provider=nonexistent'])).rejects.toThrow(
+			'`fabrika namespace` needs @fabrika/provider-nonexistent, which is not installed.',
 		)
+	})
+
+	test("`namespace --help` with a provider shows the provider's commands", async () => {
+		const lines: string[] = []
+		const info = console.info
+		console.info = (message?: unknown): void => void lines.push(String(message))
+		try {
+			await runCli(['namespace', '--provider=zerops', '--help'])
+		} finally {
+			console.info = info
+		}
+		expect(lines.join('\n')).toContain('--preset=<cheap|mid|full>')
 	})
 })
 

@@ -2,6 +2,7 @@
 
 import { CONTRACT_FILE, type EntryRuntime, writeGeneratedEntry } from '@fabrika/app/build'
 import { authoredAppProvider } from '@fabrika/provider-contract'
+import { type AppCli, appCliFromModule, type NamespaceCli } from '@fabrika/provider-contract/app-cli'
 import { installationCliFromModule, isInstallationCommand, supportsInstallationCommand } from '@fabrika/provider-contract/installation'
 import { dirname, join, relative, resolve } from 'node:path'
 import { CONTROL_USAGE, registerCompiledManifest, runControlCli } from './control.js'
@@ -152,41 +153,33 @@ const requireInstalled = (specifier: string, command: string): void => {
 	}
 }
 
+/** A provider id names its package, `@fabrika/provider-<id>`; anything else is a module specifier of its own. */
+const PROVIDER_ID = /^[a-z][a-z0-9-]*$/
+
+const installationSpecifier = (provider: string): string => PROVIDER_ID.test(provider) ? `@fabrika/provider-${provider}/installation` : provider
+
 const installationModule = async (provider: string, command: string): Promise<unknown> => {
-	const specifier = provider === 'cloudflare'
-		? '@fabrika/provider-cloudflare/installation'
-		: provider === 'zerops'
-		? '@fabrika/provider-zerops/installation'
-		: provider
+	const specifier = installationSpecifier(provider)
 	requireInstalled(specifier, command)
 	return import(specifier)
 }
 
-export type AppCliRunner = (argv: readonly string[]) => Promise<void>
-
-export const appCliRunnerFromModule = (loaded: unknown, packageName: string, exportName: string): AppCliRunner => {
-	if (typeof loaded !== 'object' || loaded === null || !(exportName in loaded)) {
-		throw new Error(`${packageName} must export \`${exportName}\``)
-	}
-	const runner = Reflect.get(loaded, exportName)
-	if (typeof runner !== 'function') {
-		throw new Error(`${packageName} must export \`${exportName}\` as a function`)
-	}
-	return runner
+/** App and namespace commands take a provider id only: the module's `appCli` must name the same one. */
+const providerAppCli = async (provider: string, command: string): Promise<AppCli> => {
+	if (!PROVIDER_ID.test(provider)) throw new Error(`\`${command}\` takes a provider id ([a-z][a-z0-9-]*), not "${provider}"`)
+	const specifier = `@fabrika/provider-${provider}/cli`
+	requireInstalled(specifier, command)
+	return appCliFromModule(await import(specifier), provider, specifier)
 }
 
-const appCliRunner = async (packageName: string, exportName: string, command: string): Promise<AppCliRunner> => {
-	requireInstalled(packageName, command)
-	const loaded: unknown = await import(packageName)
-	return appCliRunnerFromModule(loaded, packageName, exportName)
-}
+const unsupported = (provider: string, command: string): Error => new Error(`${provider} app tooling does not support \`${command}\``)
 
 const runPlatform = async (parsed: ParsedCommand): Promise<void> => {
 	if (!isInstallationCommand(parsed.command)) {
 		throw new Error(`Unknown platform command: ${parsed.command ?? '(missing)'}`)
 	}
 	const provider = requireExplicitProvider(parsed)
-	const expectedProvider = provider === 'cloudflare' || provider === 'zerops' ? provider : undefined
+	const expectedProvider = PROVIDER_ID.test(provider) ? provider : undefined
 	const installation = installationCliFromModule(
 		await installationModule(provider, `fabrika platform ${parsed.command} --provider=${provider}`),
 		expectedProvider,
@@ -202,16 +195,11 @@ const runAppRegister = async (parsed: ParsedCommand): Promise<void> => {
 	const config = configPath(parsed.rest)
 	await registerCompiledManifest(parsed.rest, async (env) => {
 		const provider = await selectedAppProvider(parsed)
-		if (provider !== 'zerops') {
-			throw new Error(`${provider} app tooling does not support \`app register\``)
-		}
-		requireInstalled('@fabrika/provider-zerops/cli', 'fabrika app register')
-		const { buildZeropsManifestText } = await import('@fabrika/provider-zerops/cli')
-		return { provider, text: await buildZeropsManifestText({ config, env }) }
+		const cli = await providerAppCli(provider, 'fabrika app register')
+		if (cli.registrationManifest === undefined) throw unsupported(provider, 'app register')
+		return { provider, text: await cli.registrationManifest({ config, env }) }
 	})
 }
-
-const ENTRY_RUNTIMES: Readonly<Record<string, EntryRuntime>> = { cloudflare: 'cloudflare', zerops: 'bun' }
 
 /** A contract application gets its generated entrypoint before the provider builds it. False when it is none. */
 const writeContractEntry = async (argv: readonly string[], runtime: EntryRuntime): Promise<boolean> => {
@@ -235,41 +223,37 @@ const runApp = async (parsed: ParsedCommand): Promise<void> => {
 		return
 	}
 	const provider = await selectedAppProvider(parsed)
-	const runtime = ENTRY_RUNTIMES[provider]
-	const contract = parsed.command === 'build' && runtime !== undefined && (await writeContractEntry(parsed.rest, runtime))
-	if (provider === 'cloudflare') {
-		if (contract) {
-			return
-		}
-		if (parsed.command !== 'deploy') {
-			throw new Error(`Cloudflare app tooling does not support \`app ${parsed.command ?? '(missing)'}\``)
-		}
-		const runCloudflareCli = await appCliRunner('@fabrika/provider-cloudflare/cli', 'runCloudflareCli', 'fabrika app deploy')
-		await runCloudflareCli(['deploy', ...parsed.rest])
+	const command = `app ${parsed.command ?? '(missing)'}`
+	const cli = await providerAppCli(provider, `fabrika ${command}`)
+	if (parsed.command === 'build' && cli.build !== undefined) {
+		await cli.build(parsed.rest, { contract: await writeContractEntry(parsed.rest, cli.entryRuntime) })
 		return
 	}
-	if (provider === 'zerops') {
-		if (parsed.command !== 'build') {
-			throw new Error(`Zerops app tooling does not support \`app ${parsed.command ?? '(missing)'}\``)
-		}
-		const runZeropsCli = await appCliRunner('@fabrika/provider-zerops/cli', 'runZeropsCli', 'fabrika app build')
-		await runZeropsCli(['build', ...parsed.rest])
+	if (parsed.command === 'deploy' && cli.deploy !== undefined) {
+		await cli.deploy(parsed.rest)
 		return
 	}
-	throw new Error(`Provider ${provider} does not expose app CLI commands`)
+	throw unsupported(provider, command)
+}
+
+const namespaceCli = async (provider: string): Promise<NamespaceCli> => {
+	const cli = await providerAppCli(provider, 'fabrika namespace')
+	if (cli.namespaces === undefined) throw new Error(`Provider ${provider} does not expose deployment namespaces`)
+	return cli.namespaces
 }
 
 const runNamespace = async (parsed: ParsedCommand): Promise<void> => {
 	const provider = requireExplicitProvider(parsed)
-	if (provider !== 'zerops') {
-		throw new Error(`Provider ${provider} does not expose deployment namespaces`)
-	}
+	const cli = await namespaceCli(provider)
 	if (parsed.command === undefined) {
 		throw new Error('Namespace command is required')
 	}
-	requireInstalled('@fabrika/provider-zerops', 'fabrika namespace')
-	const { runZeropsNamespaceCli } = await import('./namespace.js')
-	await runZeropsNamespaceCli(parsed.command, parsed.rest)
+	const { runNamespaceCommand } = await import('./namespace.js')
+	await runNamespaceCommand(cli, parsed.command, parsed.rest, {
+		source: process.env,
+		fetch: globalThis.fetch,
+		write: (value) => console.info(value.trimEnd()),
+	})
 }
 
 export const runCli = async (argv: readonly string[]): Promise<void> => {
@@ -285,7 +269,10 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 		return
 	}
 	if (parsed.help && parsed.area === 'namespace') {
-		requireInstalled('@fabrika/provider-zerops', 'fabrika namespace')
+		if (parsed.provider !== undefined && parsed.provider !== '') {
+			console.info((await namespaceCli(parsed.provider)).usage)
+			return
+		}
 		const { NAMESPACE_USAGE } = await import('./namespace.js')
 		console.info(NAMESPACE_USAGE)
 		return
