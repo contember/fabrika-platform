@@ -363,6 +363,26 @@ for (const backend of backends) {
 			expect({ state: status.state, head: status.head }).toEqual({ state: 'serving', head: sha('e') })
 		})
 
+		test("a switch that bootstraps still resets the schema the previous workspace's container left", async () => {
+			const w = await world()
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
+			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
+			await report(w, { head: sha('b'), status: 'serving', reset: 0 })
+
+			const other = await createWorkspaceUseCase(w.dev(), { appId: 'shop', env: 'stage', title: 'Deps' })
+			w.source.branches.set(`fabrika/${other.id}`, sha('e'))
+			await w.repositories.devEnvironments.recordRefusal('shop', 'dev', sha('b'), 'bun.lock changed')
+			const switched = await bindDevUseCase(w.dev(), { workspaceId: other.id })
+			await succeedRun(dbOf(opened), switched.bootstrapRun?.id ?? '')
+			expect((await w.repositories.devEnvironments.get('shop', 'dev'))?.reset_generation).toBe(1)
+
+			// The new container has no state file: it learns the generation the database holds, then the one to reach.
+			const first = await wait(w, { bootstrap: sha('e'), head: sha('e'), reset: null, checks: null, hold: false })
+			expect(first.answer?.reset).toBe(0)
+			const next = await wait(w, { bootstrap: sha('e'), head: sha('e'), reset: 0, checks: 0, hold: false })
+			expect(next.answer?.reset).toBe(1)
+		})
+
 		test("a launcher's refusal is recorded, and get_dev_status reads its log window", async () => {
 			const w = await world()
 			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
