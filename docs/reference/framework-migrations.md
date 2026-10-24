@@ -57,6 +57,9 @@ environment. The object's database starts empty. An application that stays on 0.
 names the release it read the application with, and the deployer gives that Worker no object, bucket, tick or proxy
 secret, and refuses its jobs, webhooks, public procedures, installation mail and token purposes as before.
 
+0.9 also adds the dev launcher (`@fabrika/app/dev`), which a `dev` environment starts
+([MCP authoring](mcp-authoring.md#the-dev-environment)); an application needs 0.9 only for a `dev` environment.
+
 ## 0.7 → 0.8
 
 0.8 changed no 0.7 form: it added the ALTCHA challenge provider. Raise the pin; nothing else changes. To move a public
@@ -735,9 +738,9 @@ moves in one release:
 ## 0.5 → 0.6
 
 0.6.0 changed nothing in the framework API: its framework sources are those of 0.5.5. Raise the pin; nothing else
-changes. An application on 0.5 goes 0.5 → 0.6 → 0.7, or raises its pin straight to 0.8 and follows "0.6 → 0.7".
+changes. An application on 0.5 goes 0.5 → 0.6 → 0.7, or raises its pin straight to 0.9 and follows "0.6 → 0.7".
 
 ## 0.4 → 0.5
 
-0.5 changed no 0.4 form: it added `then` and the job's `mailer`. An application on 0.4 raises its pin straight to 0.8
+0.5 changed no 0.4 form: it added `then` and the job's `mailer`. An application on 0.4 raises its pin straight to 0.9
 and follows "0.6 → 0.7"; it has no `then` to replace.

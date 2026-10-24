@@ -6,8 +6,9 @@ import * as reader04 from '@fabrika/check-0.4/contract'
 import * as reader05 from '@fabrika/check-0.5/contract'
 import * as reader06 from '@fabrika/check-0.6/contract'
 import * as reader07 from '@fabrika/check-0.7/contract'
+import * as reader08 from '@fabrika/check-0.8/contract'
 import { CHECKER_VERSION, ContractError, contractReaderInputs, ContractSourceError, readContractSource } from '@fabrika/check/contract'
-import { from04, from06, from07, fromOlder, type SnapshotContract } from './formats'
+import { from04, from06, from07, from08, fromOlder, type SnapshotContract } from './formats'
 
 /** The package whose locked version is the application's framework release: every contract imports it. */
 export const FRAMEWORK_PACKAGE = '@fabrika/app'
@@ -41,6 +42,20 @@ const currentReader: ContractReader = {
 		} catch (error) {
 			if (error instanceof ContractSourceError) return { ok: false, problems: error.findings.length }
 			if (error instanceof ContractError) return { ok: false, problems: error.problems.length }
+			throw error
+		}
+	},
+}
+
+const reader08Release: ContractReader = {
+	checker: reader08.CHECKER_VERSION,
+	inputs: reader08.contractReaderInputs,
+	read(files) {
+		try {
+			return { ok: true, contract: from08(reader08.readContractSource(files)) }
+		} catch (error) {
+			if (error instanceof reader08.ContractSourceError) return { ok: false, problems: error.findings.length }
+			if (error instanceof reader08.ContractError) return { ok: false, problems: error.problems.length }
 			throw error
 		}
 	},
@@ -134,7 +149,7 @@ export interface ReaderWindow {
 /** This platform's window: its own minor and every older one it bundles a reader for. */
 export const PLATFORM_WINDOW: ReaderWindow = {
 	platform: CHECKER_VERSION,
-	readers: [currentReader, reader07Release, reader06Release, reader05Release, reader04Release],
+	readers: [currentReader, reader08Release, reader07Release, reader06Release, reader05Release, reader04Release],
 }
 
 /** The application pins a framework release this platform does not deploy, or pins none it can read. One line. */
