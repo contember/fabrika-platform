@@ -109,4 +109,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [226](226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md): A narrowing is not in force while the IAM write after a deploy fails; decided: narrowings before the manifest is published, widenings after.
 - [227](227-authorization-model-follow-ups.md): Smaller gaps of the authorization model's fixes: the workload token bound, a stale doc line, an early terminal re-mint.
 - [228](228-application-object-review-follow-ups.md): The P2s and open decisions of the application object waves 0–1 reviews: checker lexer, timers, ledger digest, read path, entry pin.
+- [219](219-the-cloudflare-executor-s-managed-environment-parse-is-untested.md): No test shows the Cloudflare executor refuses a managed value Control would not hand.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
