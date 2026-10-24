@@ -64,7 +64,8 @@ rules.
 Every entry of a proxy manifest is an endpoint table, in exactly one of two forms:
 
 - An **application table** protects a contract application. Producers compile it from the approved
-  contract with `contractProxyTable` (`ContractProxyApp`).
+  contract with `contractProxyTable` (`ContractProxyApp`). On Cloudflare platform composition adds one row the
+  contract cannot declare, the canonical ops row (rule 3, "The ops row").
 - An **installation entry** protects one of the installation's own services. Producers compile it from
   the service contract with `serviceProxyTable` (`InstallationProxyApp`, `installation: true`). Only
   trusted platform composition writes one, and it may use five forms no application may declare
@@ -275,8 +276,8 @@ endpoint:
 **Anonymous kinds.** An endpoint of an anonymous kind (`c.health`, `app.webhook`, the shell of a link SPA, a public
 SPA, `c.spa` with `access: { public: true }`, a public procedure, and a 0.4/0.5/0.6 `c.form`) has no callers. The proxy
 skips steps 3 to 5, mints no token and forwards the request. It does not forward a `px_` key or a session that arrives
-on such a request; only an installation entry's `protocol` row keeps the `Authorization` header (below), and a webhook
-row that declares `authorization: 'forward'` keeps the sender's own. Admission
+on such a request; only a `protocol` row (an installation entry's, or the composed ops row) keeps the `Authorization`
+header (below), and a webhook row that declares `authorization: 'forward'` keeps the sender's own. Admission
 still applies: the row admits only its content types, and a body a browser sends without a preflight is refused from
 an origin the row does not admit (the browser admission matrix below). The body limit is the framework's, because
 `forward_auth` hands the proxy the headers and never the body. A webhook's signature is verified by the framework,
@@ -460,9 +461,24 @@ digest. An application row's digest is unchanged by the field, byte for byte. Th
 Three layers refuse the five forms for an application: the contract build and the artifact schema of
 `@fabrika/app/contract`, the static reader (which reads only `defineContract`), and the manifest parser.
 The parser reads an entry without `installation: true` as an application table, whose rows admit none of
-the forms. It refuses an installation entry whose id holds `@`, that carries `snapshot`, `csp`,
+the forms, with the one exception of the canonical ops row below. It refuses an installation entry whose id holds `@`, that carries `snapshot`, `csp`,
 `operationsOrigin` or `crossOrigins`, or whose `oauth` row has no registered resource on its path or asks for a scope the
 resource does not support.
+
+**The ops row.** One installation-only form may appear on a contract application's table: the canonical ops row,
+through which Control reaches an environment's object on Cloudflare
+([ADR-0069](0069-control-reaches-an-application-environments-object.md)). It is exactly one row, with a fixed id, the
+path `/__fabrika/ops/*`, kind `protocol`, method `POST`, no callers, no requirement, no delegation, `application/json`
+admission and the digest those fix, all constants of `@fabrika/auth-core`. Only platform composition adds it, for a
+framework release that serves it. The parser admits it on an application table only when it equals that row field for
+field; any other `protocol` row there, and every other installation-only form, stays refused. The contract cannot
+declare it, because the contract build refuses an authored path under `/__fabrika`. The proxy serves it without a
+token, as every `protocol` row: the caller is Control, not a principal of the application, and the object verifies
+Control's ops key itself before it boots, so the read works while the application cannot. Framework code checks the
+row's `X-Fabrika-Endpoint` against its fixed id and digest instead of the application's planner, and never dispatches
+the request to a contract handler, so the forwarded `Authorization` reaches no application code. An older proxy's
+strict parser refuses the row; on Cloudflare the deploy that composes it also deploys the proxy Worker. The root
+`CLAUDE.md` states the rule on installation-only forms with the same exception.
 
 **The hop of an installation entry.** The proxy keeps `Authorization` on the upstream hop, sets no proxy
 secret and sets no response policy; its own denials carry the base policy. It copies
@@ -746,7 +762,8 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
 - **The proxy decides from one shape.** Every manifest entry is an endpoint table, and the strict parser
   refuses any other form, so a manifest cannot carry a rule the decision does not read.
 - **Installation-only forms widen what an installation entry can say, never what an application can.**
-  The marker comes from platform composition, and three layers refuse the forms in an application.
+  The marker comes from platform composition, and three layers refuse the forms in an application. The one composed
+  ops row is the platform's, fixed field for field, and no contract can produce or change it.
 - **The proxy checks what an agent can loosen inside the application:** the caller kind, the
   requirement and admission. A loosened handler or a skipped framework check no longer opens an
   endpoint the contract does not open.
