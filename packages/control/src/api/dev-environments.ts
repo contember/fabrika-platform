@@ -95,8 +95,11 @@ export interface DevEnvironmentDto {
 /** What `apply_changes` adds when the workspace is bound to the dev environment. */
 export interface DevApplyDto {
 	head: string | null
-	/** `unavailable`: Control could not read or wake the environment after the commit, which persisted. */
-	state: DevStateDto | 'unavailable'
+	/**
+	 * `unavailable`: Control could not read or wake the environment after the commit, which persisted. `not_followed`:
+	 * the caller may read the environment but not trigger its deploys, so it was neither advanced nor started.
+	 */
+	state: DevStateDto | 'unavailable' | 'not_followed'
 	summary: string
 	url: string | null
 	log: DevLogLine[]
@@ -252,6 +255,7 @@ export async function resetDevUseCase(c: DevUseCaseContext, input: { workspaceId
 /**
  * After a commit to a workspace: when it is bound to the dev environment, record the new head, wake the launcher and
  * wait a short while for it to serve. Null when the workspace is not bound, or the caller may not read the environment.
+ * Advancing or starting the environment needs `deploy.trigger`, as `bind_dev` does; without it the answer says so.
  */
 export async function followDevCommit(
 	c: DevUseCaseContext,
@@ -263,6 +267,16 @@ export async function followDevCommit(
 	if (bound === null || !canAtCoordinates(c.auth, CONTROL_ACTIONS.DEPLOY_READ, bound.app_id, bound.env)) return null
 	const appEnv = await c.repositories.registry.getAppEnv(bound.app_id, bound.env)
 	if (appEnv === null || appEnv.kind !== 'dev') return null
+	if (!canAtCoordinates(c.auth, CONTROL_ACTIONS.DEPLOY_TRIGGER, bound.app_id, bound.env)) {
+		return {
+			head: bound.head_sha,
+			state: 'not_followed',
+			summary: `The commit persisted, but the dev environment ${bound.env} still follows ${bound.target_sha ?? 'no commit'}: `
+				+ 'advancing it needs deploy.trigger on that environment, which you do not hold.',
+			url: null,
+			log: [],
+		}
+	}
 	const row = await c.repositories.devEnvironments.advanceTarget(bound.app_id, bound.env, input.workspaceId, input.commitSha)
 	if (row === null) return null
 	await dev.start(row, c.signal)

@@ -302,7 +302,8 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 			+ 'src/db/tables.ts or db/migrations/ is classified at deploy time; on a protected environment a widening waits for '
 			+ 'a person to approve it. A file may hold at most 512 KiB. When the workspace is bound to its dev environment (bind_dev), '
 			+ 'the answer also carries dev: the head it serves, its state, its URL and the newest log lines, after waiting up to 10 s '
-			+ 'for the commit to serve; state pending means get_dev_status reads the rest.',
+			+ 'for the commit to serve; state pending means get_dev_status reads the rest, and state not_followed means you may not '
+			+ 'trigger deploys of the dev environment, so it kept its head.',
 		inputSchema: toolInput(toolInputs.applyChanges),
 		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 	}, (input) =>
