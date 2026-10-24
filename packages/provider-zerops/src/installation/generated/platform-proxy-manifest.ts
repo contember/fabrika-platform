@@ -16,7 +16,7 @@
 // `table` and registers the resource only on an installation that enables MCP authoring, and its
 // `tableWithoutOAuth` otherwise.
 
-import type { PlatformProxyManifestTemplate } from '../proxy-manifest'
+import type { PlatformProxyManifestTemplate } from '@fabrika/installation-init'
 
 export const PLATFORM_PROXY_MANIFEST_TEMPLATE: PlatformProxyManifestTemplate = {
 	apps: [

@@ -1,11 +1,17 @@
-import type { InstallationEmail } from '@fabrika/installation-init'
+import {
+	INSTALLATION_SECRET_VARIABLES,
+	type InstallationEmail,
+	type InstallationSecrets,
+	installationServiceEnvironment,
+	type PlatformHosts,
+	platformOrigin,
+	type PlatformStorage,
+} from '@fabrika/installation-init'
 import { encodeProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import type { ZeropsNamespaceProxySource } from '../index'
 import type { PlatformDeployService, ResolvedService } from './deploy'
-import { type PlatformHosts, platformOrigin } from './hosts'
 import { assertRunning, type InstallCollaborators } from './install-collaborators'
 import { FABRIKA_ZEROPS_PROXY_SOURCE_JSON, serializeNamespaceProxySource } from './installation-source'
-import type { InstallationSecrets } from './secrets'
 import type { PlatformTier } from './topology/topology'
 
 /** The private address the proxy dials IAM at inside the project, and pass 1's placeholder issuer. */
@@ -16,14 +22,7 @@ const PRIVATE_IAM_URL = `http://${PRIVATE_IAM_UPSTREAM}`
 const postgresUrl = (service: string): string => `\${${service}_connectionTlsString}/\${${service}_dbName}?sslmode=require`
 
 /** An object-storage service's coordinates, as the platform's own `${service_variable}` references. */
-interface StorageReferences {
-	readonly bucket: string
-	readonly accessKeyId: string
-	readonly secretAccessKey: string
-	readonly endpoint: string
-}
-
-const storageOf = (service: string): StorageReferences => ({
+const storageOf = (service: string): PlatformStorage => ({
 	bucket: `\${${service}_bucketName}`,
 	accessKeyId: `\${${service}_accessKeyId}`,
 	secretAccessKey: `\${${service}_secretAccessKey}`,
@@ -72,51 +71,40 @@ export interface InstallationEnvInput {
 }
 
 /**
- * EVERY variable this command places, per service.
+ * EVERY variable this command places, per service: fabrika's (`installationServiceEnvironment`) over this
+ * project's own references, and control's Zerops variables after them.
  *
  * Pure, and exported, because the matrix is the thing most worth pinning: a name that is right on
- * Cloudflare and wrong on Bun is a silent no-op rather than a failure. Two spelling rules run through
- * it, both verified against the runtimes rather than assumed:
- *
- *   • IAM's Bun runtime reads `ISSUER` and `ENVIRONMENT` UNPREFIXED and everything else with the
- *     `FABRIKA_IAM_` prefix (`packages/iam/src/node/runtime.ts`). The prefixed spellings below are the
- *     ones that file actually reads; the unprefixed ones are the ones it actually reads too.
- *   • No key any service declares in its own `zerops.yaml` appears here — `PORT`,
- *     `FABRIKA_IAM_RPC_URL`, `FABRIKA_OPERATIONS_URL`, `FABRIKA_CONTROL_ASSETS_DIR`,
- *     `FABRIKA_CONTROL_URL`, `FABRIKA_PROXY_MANIFEST`, `FABRIKA_PROXY_PORT`. The env API refuses those
- *     (`provider-zerops/src/api.ts`), because the conflict cannot be resolved to a record id.
- *
- * The proxy manifest is deliberately absent: pass 1 writes an empty one and `deployPlatform` owns the
- * real one, in the same run as the code it describes (ADR-0027).
+ * Cloudflare and wrong on Bun is a silent no-op rather than a failure. No key any service declares in its
+ * own `zerops.yaml` appears here — `PORT`, `FABRIKA_IAM_RPC_URL`, `FABRIKA_OPERATIONS_URL`,
+ * `FABRIKA_CONTROL_ASSETS_DIR`, `FABRIKA_CONTROL_URL`, `FABRIKA_PROXY_MANIFEST`, `FABRIKA_PROXY_PORT`. The env
+ * API refuses those (`provider-zerops/src/api.ts`), because the conflict cannot be resolved to a record id.
  */
 export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap<PlatformDeployService, ReadonlyMap<string, string>> => {
 	const { secrets } = input
-	const iamOrigin = platformOrigin(input.scheme, input.hosts.iam)
-	const operationsOrigin = platformOrigin(input.scheme, input.hosts.operations)
-	const platformDatabase = postgresUrl('db')
-	const runLogs = storageOf('storage')
 	const operationsData = OPERATIONS_DATA[input.tier]
-	const operationsBlobs = storageOf(operationsData.storage)
+	const fabrika = installationServiceEnvironment({
+		environment: input.environment,
+		scheme: input.scheme,
+		hosts: input.hosts,
+		iamUpstream: PRIVATE_IAM_UPSTREAM,
+		secrets,
+		email: input.email,
+		data: {
+			iamDatabase: postgresUrl('db'),
+			controlDatabase: postgresUrl('db'),
+			operationsDatabase: postgresUrl(operationsData.database),
+			runLogs: storageOf('storage'),
+			operationsBlobs: storageOf(operationsData.storage),
+		},
+	})
 	const control = new Map([
-		['FABRIKA_CONTROL_DATABASE_URL', platformDatabase],
-		['ENVIRONMENT', input.environment],
-		// A bare HOST, not an origin: `controlPublicOrigin` accepts either.
-		['FABRIKA_CONTROL_DOMAIN', input.hosts.control],
-		['FABRIKA_IAM_ISSUER', iamOrigin],
-		['OPERATIONS_ARTIFACT_ORIGIN', operationsOrigin],
-		['FABRIKA_CONTROL_RUN_LOGS_BUCKET', runLogs.bucket],
-		['FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID', runLogs.accessKeyId],
-		['FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY', runLogs.secretAccessKey],
-		['FABRIKA_CONTROL_RUN_LOGS_ENDPOINT', runLogs.endpoint],
-		['FABRIKA_IAM_RPC_KEY', secrets.rpcKey],
-		['OPERATIONS_SYNC_KEY', secrets.operationsSyncKey],
-		['FABRIKA_CONTROL_VAULT_KEY', secrets.vaultKey],
-		['FABRIKA_IAM_PROVISIONING_KEY', secrets.provisioningKey],
+		...fabrika.control,
 		['FABRIKA_ZEROPS_CLIENT_ID', input.clientId],
 		[FABRIKA_ZEROPS_PROXY_SOURCE_JSON, serializeNamespaceProxySource(input.proxySource)],
 		// The PUBLIC IAM origin an application project's proxy reaches: there is no private network
 		// between Zerops projects (ADR-0006).
-		['FABRIKA_ZEROPS_PROXY_IAM_URL', iamOrigin],
+		['FABRIKA_ZEROPS_PROXY_IAM_URL', platformOrigin(input.scheme, input.hosts.iam)],
 		['FABRIKA_ZEROPS_PROXY_IAM_KEY', secrets.proxyKey],
 		['FABRIKA_ZEROPS_ACCESS_TOKEN', input.zeropsAccessToken],
 		['FABRIKA_ZEROPS_PLATFORM_PROJECT_ID', input.projectId],
@@ -126,79 +114,27 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 		// the CLI reads `FABRIKA_ZEROPS_API_URL`; they are different processes reading different sources.
 		control.set('FABRIKA_ZEROPS_API_BASE_URL', input.apiBaseUrl)
 	}
-	const email = input.email.kind === 'none' ? [] : [...input.email.variables]
-	for (const [key, value] of email) control.set(key, value)
 	return new Map<PlatformDeployService, ReadonlyMap<string, string>>([
-		[
-			'iam',
-			new Map([
-				['FABRIKA_IAM_DATABASE_URL', platformDatabase],
-				['ENVIRONMENT', input.environment],
-				['ISSUER', iamOrigin],
-				// Password only, by decision: OIDC needs an identity provider the operator has not been
-				// asked for. Both are STATED because IAM's own defaults are the other way round — OIDC on,
-				// password off — and it refuses to boot with neither.
-				['FABRIKA_IAM_OIDC_ENABLED', 'false'],
-				['FABRIKA_IAM_PASSWORD_ENABLED', 'true'],
-				['FABRIKA_IAM_SIGNING_KEYS', secrets.signingKeys],
-				['FABRIKA_IAM_RPC_KEY', secrets.rpcKey],
-				['FABRIKA_IAM_PROXY_KEY', secrets.proxyKey],
-				['FABRIKA_IAM_PROVISIONING_KEY', secrets.provisioningKey],
-				...email,
-			]),
-		],
-		[
-			'operations',
-			new Map([
-				['FABRIKA_OPERATIONS_DATABASE_URL', postgresUrl(operationsData.database)],
-				['FABRIKA_OPERATIONS_BLOB_BUCKET', operationsBlobs.bucket],
-				['FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID', operationsBlobs.accessKeyId],
-				['FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY', operationsBlobs.secretAccessKey],
-				['FABRIKA_OPERATIONS_BLOB_ENDPOINT', operationsBlobs.endpoint],
-				['FABRIKA_OPERATIONS_PUBLIC_HOST', input.hosts.operations],
-				['ENVIRONMENT', input.environment],
-				['FABRIKA_IAM_ISSUER', iamOrigin],
-				['OPERATIONS_SYNC_KEY', secrets.operationsSyncKey],
-				['FABRIKA_IAM_RPC_KEY', secrets.rpcKey],
-			]),
-		],
+		['iam', fabrika.iam],
+		['operations', fabrika.operations],
 		['control', control],
-		[
-			'proxy',
-			new Map([
-				['ENVIRONMENT', input.environment],
-				// Compared byte-for-byte against a token's `iss`, so this is the PUBLIC issuer and not the
-				// private `iam:3000` pass 1 wrote.
-				['FABRIKA_IAM_ISSUER', iamOrigin],
-				['FABRIKA_IAM_KEY', secrets.proxyKey],
-				['FABRIKA_PROXY_SESSION_OWNER_JSON', JSON.stringify({ issuer: iamOrigin, upstream: PRIVATE_IAM_UPSTREAM })],
-			]),
-		],
+		['proxy', fabrika.proxy],
 	])
 }
 
 /**
- * The keys whose VALUE this command generates, per service.
+ * The keys whose VALUE this command generates, per service: fabrika's, and the two Zerops names on control
+ * that carry the proxy key and the minted token.
  *
  * Their presence on a live service is what "this project already holds an installation" means, and it is
  * checked by KEY only — a value is never read back for comparison. `__tests__/install.test.ts` pins this
  * against the matrix above, so a new generated secret cannot be added without appearing here.
  */
 export const GENERATED_SECRET_KEYS: ReadonlyMap<PlatformDeployService, readonly string[]> = new Map<PlatformDeployService, readonly string[]>([
-	['iam', ['FABRIKA_IAM_SIGNING_KEYS', 'FABRIKA_IAM_RPC_KEY', 'FABRIKA_IAM_PROXY_KEY', 'FABRIKA_IAM_PROVISIONING_KEY']],
-	['operations', ['OPERATIONS_SYNC_KEY', 'FABRIKA_IAM_RPC_KEY']],
-	[
-		'control',
-		[
-			'FABRIKA_IAM_RPC_KEY',
-			'OPERATIONS_SYNC_KEY',
-			'FABRIKA_CONTROL_VAULT_KEY',
-			'FABRIKA_IAM_PROVISIONING_KEY',
-			'FABRIKA_ZEROPS_PROXY_IAM_KEY',
-			'FABRIKA_ZEROPS_ACCESS_TOKEN',
-		],
-	],
-	['proxy', ['FABRIKA_IAM_KEY']],
+	['iam', INSTALLATION_SECRET_VARIABLES.iam],
+	['operations', INSTALLATION_SECRET_VARIABLES.operations],
+	['control', [...INSTALLATION_SECRET_VARIABLES.control, 'FABRIKA_ZEROPS_PROXY_IAM_KEY', 'FABRIKA_ZEROPS_ACCESS_TOKEN']],
+	['proxy', INSTALLATION_SECRET_VARIABLES.proxy],
 ])
 
 /**

@@ -3,9 +3,9 @@
 // Its most load-bearing property is negative: there is NO flag that carries a credential, so an
 // unknown flag has to be an error rather than something the parser ignores.
 
+import type { McpClient } from '@fabrika/installation-init'
 import { describe, expect, test } from 'bun:test'
 import { parsePlatformDeployArgs as parseArgs } from '../deploy-options'
-import type { McpClient } from '../mcp'
 
 const parsePlatformDeployArgs: typeof parseArgs = (argv, env) => parseArgs(['--source-dir=.', ...argv], env)
 

@@ -18,11 +18,12 @@
  */
 
 import { controlServiceContract } from '@fabrika/control/service'
+import type { PlatformProxyComposition } from '@fabrika/installation-init'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
 import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
 import { proxyManifestJson } from '@fabrika/provider-cloudflare'
-import { PLATFORM_PROXY_MANIFEST_TEMPLATE, type PlatformProxyComposition } from '@fabrika/provider-zerops/installation'
+import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '@fabrika/provider-zerops/installation'
 import {
 	encodeProxyManifestJson,
 	isApplicationEntry,

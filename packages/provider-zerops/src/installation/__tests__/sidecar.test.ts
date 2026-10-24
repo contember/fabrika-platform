@@ -5,7 +5,6 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { installationCli } from '..'
 import {
-	assertPinnedTag,
 	defaultSidecarRepo,
 	materializeSidecarScaffold,
 	readPinnedTag,
@@ -154,12 +153,6 @@ describe('the generated Zerops sidecar repository', () => {
 		await withTempDir(async (dir) => {
 			await materializeSidecarScaffold(dir, VALUES)
 			expect(await workflowOf(dir)).toContain('fabrika.ref must pin a published tag')
-
-			expect(() => assertPinnedTag('main')).toThrow('is not a published tag')
-			expect(() => assertPinnedTag('feature/x')).toThrow('never a branch')
-			expect(() => assertPinnedTag('')).toThrow('a published fabrika tag is required')
-			expect(assertPinnedTag(' v1.2.3 ')).toBe('v1.2.3')
-			expect(assertPinnedTag('v0.0.1-rc.1')).toBe('v0.0.1-rc.1')
 		})
 	})
 

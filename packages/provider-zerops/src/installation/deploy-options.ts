@@ -12,8 +12,7 @@
 // The command is unattended by construction: nothing here prompts, and a missing required value is an
 // error naming both the flag and the variable that would supply it.
 
-import { describeArgument, readEnv, requiredSetting, setting } from '@fabrika/installation-init'
-import { type McpClient, parseMcpClientsJson } from './mcp'
+import { describeArgument, type McpClient, parseMcpClientsJson, readEnv, requiredSetting, setting } from '@fabrika/installation-init'
 import { parsePlatformHosts, parsePlatformScheme } from './placement-options'
 import { readInstallationSourceDir } from './source-options'
 

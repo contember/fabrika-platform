@@ -21,17 +21,20 @@ import {
 	confirmations,
 	detail,
 	type EnvironmentConfig,
+	generateSigningKeys,
+	generateVaultKey,
 	ghRepoExists,
 	info,
 	type InstallationEmail,
 	ok,
 	type ProtectionOutcome,
+	randomPxKey,
+	randomSecret,
 	step,
 	triggerPlatformWorkflow,
 	url,
 	warn,
 } from '@fabrika/installation-init'
-import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto'
 import { type CfAccount, type CfZone, findZone, listAccounts, selectAccount, verifyToken } from './cloudflare'
 import { envPath, fromEnv, openEnvFile, persistEnv } from './envfile'
 import { type InitInput, parseInitAccount, parseInitArgs, PLACEHOLDER_OIDC_CLIENT_ID, rerunCommand } from './init-options'
@@ -356,7 +359,7 @@ interface VaultKeyDependencies {
 const vaultKeyDependencies: VaultKeyDependencies = {
 	source: ENVIRONMENT_SOURCE,
 	persist: persistEnv,
-	generate: () => randomBytes(32).toString('base64'),
+	generate: generateVaultKey,
 	created: action,
 }
 
@@ -381,8 +384,8 @@ export async function ensureVaultKey(dependencies: VaultKeyDependencies = vaultK
  * Generate the operator-side provisioning key (the "seeded key"): a single opaque `px_` bearer, stored
  * once. IAM Stage 1 SEEDS it (the `FABRIKA_IAM_PROVISIONING_KEY` secret — `resolveCaller` admits a
  * bearer matching it as a synthetic admin) and fabrika Stage 2 USES it to authenticate schema reconciles.
- * Shaped like an IAM-native key (`px_` + 160 bits base64url). An operator who already has one can
- * pre-set `FABRIKA_IAM_PROVISIONING_KEY` in env and init reuses it.
+ * The same `px_` key a Zerops installation generates (`randomPxKey`, 256 bits). An operator who already has
+ * one can pre-set `FABRIKA_IAM_PROVISIONING_KEY` in env and init reuses it.
  */
 async function ensureProvisioningKey(): Promise<string> {
 	step('Provisioning key (FABRIKA_IAM_PROVISIONING_KEY)')
@@ -392,7 +395,7 @@ async function ensureProvisioningKey(): Promise<string> {
 		ok('Reusing the provisioning key from the installer env file (resume).')
 		return existing
 	}
-	const key = `px_${randomBytes(20).toString('base64url')}`
+	const key = randomPxKey()
 	await persistEnv('FABRIKA_IAM_PROVISIONING_KEY', key)
 	ok('Provisioning key generated + saved to the installer env file.')
 	detail('IAM Stage 1 seeds this as an admin credential; the control plane reconciles with it in Stage 2.')
@@ -407,7 +410,7 @@ async function ensureOperationsSyncKey(): Promise<string> {
 		ok('Reusing OPERATIONS_SYNC_KEY from the installer env file (resume).')
 		return existing
 	}
-	const key = randomBytes(32).toString('base64url')
+	const key = randomSecret()
 	await persistEnv('OPERATIONS_SYNC_KEY', key)
 	ok('Operations catalog key generated + saved to the installer env file.')
 	return key
@@ -426,21 +429,11 @@ export async function ensureRunnerKey(): Promise<string> {
 		ok('Reusing FABRIKA_RUNNER_KEY from the installer env file (resume).')
 		return existing
 	}
-	const key = randomBytes(32).toString('base64url')
+	const key = randomSecret()
 	await persistEnv('FABRIKA_RUNNER_KEY', key)
 	ok('Runner key generated + saved to the installer env file.')
 	detail('The pipeline pushes it to the control plane and the deploy runner as a Worker secret.')
 	return key
-}
-
-/** One ES256 (EC P-256) private JWK with an RFC 7638 thumbprint `kid`, shaped exactly as IAM's
- * `Signer.fromPrivateJwks` loads it (index 0 = the active signer). */
-function generateEs256Jwk(): JsonWebKey & { kid: string } {
-	const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
-	const jwk = privateKey.export({ format: 'jwk' })
-	// RFC 7638 thumbprint over the canonical EC members, lexicographic order (crv, kty, x, y).
-	const thumbprint = createHash('sha256').update(JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x, y: jwk.y })).digest('base64url')
-	return { ...jwk, kid: thumbprint, alg: 'ES256', use: 'sig' }
 }
 
 /**
@@ -457,7 +450,7 @@ async function ensureSigningKeys(): Promise<string> {
 		ok('Reusing FABRIKA_IAM_SIGNING_KEYS from the installer env file (resume).')
 		return existing
 	}
-	const keys = JSON.stringify([generateEs256Jwk()])
+	const keys = generateSigningKeys()
 	await persistEnv('FABRIKA_IAM_SIGNING_KEYS', keys)
 	ok('IAM signing key generated (1 × ES256) + saved to the installer env file.')
 	return keys

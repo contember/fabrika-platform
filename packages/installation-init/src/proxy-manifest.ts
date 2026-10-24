@@ -11,9 +11,10 @@
 // ── The split ────────────────────────────────────────────────────────────────────────────────────
 //
 //   template   which apps exist, their ids, the private service each is dialed at, the public listener
-//              each answers on, and their service table. True of every installation, so it is GENERATED into
-//              `src/generated/` and reviewed in a diff.
-//   placement  the hostnames and the browser-facing scheme. `proxy-292c-8080.prg1.zerops.app` names one
+//              each answers on, and their service table. True of every installation of one provider, so the
+//              provider ships it GENERATED (Zerops: `provider-zerops/src/installation/generated/`) and reviewed in
+//              a diff.
+//   placement  the hostnames and the browser-facing scheme. A generated cloud hostname names one
 //              account's project, and a production installation binds custom domains instead, so
 //              whoever is deploying supplies these.
 //
@@ -32,6 +33,12 @@ import {
 
 /** The platform services an installation's proxy fronts. Each name is a service hostname in the topology. */
 export type PlatformProxyService = 'iam' | 'control' | 'operations'
+
+/** The public hostname of each platform service, without a scheme and without a port. */
+export type PlatformHosts = Readonly<Record<PlatformProxyService, string>>
+
+/** `https://<host>` — the origin a browser, a token's `iss` and a return-origin registry all use. */
+export const platformOrigin = (scheme: 'http' | 'https', host: string): string => `${scheme}://${host}`
 
 /** What one OAuth scope lets a token do: the owning app's actions, resolved by IAM at the token endpoint. */
 export interface PlatformOAuthScopeGrant {

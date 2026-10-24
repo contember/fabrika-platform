@@ -28,8 +28,10 @@
 	"dependencies": {
 		"zod": "^3.25.76",
 		"@fabrika/app": "workspace:*",
+		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/email": "workspace:*",
-		"@fabrika/iam-contract": "workspace:*"
+		"@fabrika/iam-contract": "workspace:*",
+		"@fabrika/proxy-core": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.4.3"

@@ -44,6 +44,7 @@
 		"@fabrika/platform-node": "workspace:*",
 		"@fabrika/email": "workspace:*",
 		"@fabrika/iam": "workspace:*",
+		"@fabrika/installation-init": "workspace:*",
 		"@fabrika/iam-contract": "workspace:*"
 	},
 	"devDependencies": {

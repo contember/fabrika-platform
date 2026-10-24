@@ -201,3 +201,18 @@ WU5, WU6, WU7 and WU9 are independent of each other. WU8 follows WU7.
   checker depends on or how the build runs it — a decision. App and namespace commands take a provider id only, and the
   Control token stays out of the provider's environment. Reviewed by an independent agent: its P1 (a test that did not
   typecheck), its P2 (a module specifier on `/cli`) and the cheap P3s fixed.
+- **WU9 (first slice).** `@fabrika/installation-init` now holds the generated secrets (`secrets.ts`), fabrika's half of
+  the service environment for a bring-up and for a deploy, the IAM proxy secret's derivation
+  (`service-environment.ts`), the secrets file (`secrets-file.ts`), the manifest template type with
+  `resolvePlatformProxyManifest` (`proxy-manifest.ts`), MCP/OAuth (`mcp.ts`) and the tag rule (`pin.ts`). Zerops supplies
+  its `${db_…}`/`${storage_…}` references, `iam:3000` and control's `FABRIKA_ZEROPS_*` variables. Every value and
+  name is unchanged (a before/after dump of the bring-up matrix, the deploy's writes, the served manifest and the
+  secrets file differs only in the order control's variables are PUT: the `FABRIKA_ZEROPS_*` ones now follow
+  fabrika's, and the mail variables precede them). One provisioning-key length: Cloudflare generated `px_` + 20 bytes,
+  Zerops `px_` + 32 bytes with the leading `-`/`_` re-roll; both now use `randomPxKey` (32). No existing installation
+  sees it: Cloudflare resumes its key from the env file, Zerops never regenerates one, and IAM checks no length. The
+  Cloudflare Operations sync and runner keys gain the same re-roll. Not done: `upgrade` (Zerops only; Cloudflare has no
+  roll command), moving the generated template and console schema out of `provider-zerops` (their ports and upstreams
+  are Zerops topology, so the template first needs splitting into tables and placement), and a Cloudflare use of the
+  service environment (its per-component environment lives in the scaffolded workflow and each `fabrika.config.ts`,
+  which an upgrade must not change).

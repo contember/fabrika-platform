@@ -9,8 +9,6 @@ import {
 	proxySecretVariable,
 } from '@fabrika/auth-core'
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
-import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
-import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
 import {
 	type McpClient,
 	parseMcpClientsJson,
@@ -18,7 +16,9 @@ import {
 	type PlatformProxyComposition,
 	type PlatformProxyManifest,
 	platformServiceTableDigest,
-} from '@fabrika/provider-zerops/installation'
+} from '@fabrika/installation-init'
+import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
+import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
 import { buildCaddyConfig } from '@fabrika/proxy'
 import { type ContractProxyTable, contractProxyTable, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { NOTES_APP_ID, notesContract } from 'fabrika-example-zerops/fabrika.config'
