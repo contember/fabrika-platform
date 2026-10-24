@@ -85,7 +85,9 @@ SQLite database. The Worker only forwards each request to it.**
   An application that needs more is not served by this road.
 - An environment's data lives in one location, chosen when the object is first created; moving it is an export and an
   import.
-- Operators read an environment's data in the dashboard's Data Studio; there is no bulk export of an object's SQLite.
+- Operators read an environment's data in the dashboard's Data Studio. Control exports, backs up and imports an
+  object's SQLite over the ops channel
+  ([ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md)).
 - Local runs and tests need Lopata 0.30 or newer, which implements an object's `storage.transaction` over
   `bun:sqlite` and nests it as workerd does.
 - The object runs from framework 0.9. An application on an older release keeps its stateless Worker: Control names the

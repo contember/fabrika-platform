@@ -91,3 +91,4 @@ a commit message suffices.
 | [0067](0067-a-terminal-signs-a-person-in-on-an-application-s-word.md)                   | A terminal signs a person in on an application's word                                                     |
 | [0068](0068-public-packages-ship-declarations-beside-their-sources.md)                  | Public packages ship declarations beside their TypeScript sources; Bun runs the sources                   |
 | [0069](0069-control-reaches-an-application-environments-object.md)                      | Control reaches an application environment's object over a composed ops row, and freezes it by generation |
+| [0070](0070-data-protection-of-an-application-environment-on-cloudflare.md)             | Back up an environment's object daily, verify each backup by importing it, and restore into a clone       |

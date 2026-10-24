@@ -22,12 +22,16 @@ import {
 	type OpsView,
 	parseApplicationObjects,
 	parseOpsContentView,
+	parseOpsExportRequest,
+	parseOpsImportRequest,
 	parseOpsInspectRequest,
 	parseOpsKeyDigests,
 	parseOpsMigrateAck,
 	parseOpsMigrateRequest,
 	parseOpsOperation,
+	parseOpsRestoreRequest,
 	parseOpsStateRequest,
+	parseOpsTimersRequest,
 	parseOpsView,
 } from '@fabrika/auth-core'
 import { FILES_TABLE, JOB_LEASES_TABLE, WEBHOOK_BINDINGS_TABLE, WEBHOOK_DELIVERIES_TABLE } from '@fabrika/db/migrations'
@@ -136,6 +140,11 @@ export async function serveOps(request: Request, access: OpsAccess | null, targe
 			const migration = parseOpsMigrateRequest(body)
 			return migration === null ? opsRefusal() : await migrateAnswer(target, barrier, migration.generation)
 		}
+		case 'export':
+		case 'import':
+		case 'restore':
+		case 'timers':
+			return jsonResponse({ refused: 'not_implemented' }, 501)
 	}
 }
 
@@ -182,6 +191,14 @@ export function objectNamed(operation: OpsOperation, body: unknown): string | nu
 			return parseOpsStateRequest(body)?.object ?? null
 		case 'migrate':
 			return parseOpsMigrateRequest(body)?.object ?? null
+		case 'export':
+			return parseOpsExportRequest(body)?.object ?? null
+		case 'import':
+			return parseOpsImportRequest(body)?.object ?? null
+		case 'restore':
+			return parseOpsRestoreRequest(body)?.object ?? null
+		case 'timers':
+			return parseOpsTimersRequest(body)?.object ?? null
 	}
 }
 
