@@ -75,11 +75,12 @@ const APP_MEMBER_GRANT = `g.app = ? AND (g.expires_at IS NULL OR g.expires_at > 
 /**
  * The conflict clause of every membership-role grant write. An ACTIVE grant of the role in the value is
  * kept as it is, which makes a repeated assignment answer the same result; an EXPIRED one is renewed in
- * the same statement, so it never reads as held while it grants nothing. Memberships do not expire.
+ * the same statement, so it never reads as held while it grants nothing. A renewal takes the new grant's expiry, which
+ * the use case clamped to the authority that gave it (S8).
  */
 const RENEW_EXPIRED_MEMBERSHIP = `ON CONFLICT (principal_id, role_key, scope_type, scope_value, COALESCE(app, '*'))
 	WHERE role_key IS NOT NULL AND scope_value IS NOT NULL
-	DO UPDATE SET expires_at = NULL, granted_by = excluded.granted_by, created_at = excluded.created_at
+	DO UPDATE SET expires_at = excluded.expires_at, granted_by = excluded.granted_by, created_at = excluded.created_at
 	WHERE grants.expires_at IS NOT NULL AND grants.expires_at <= ?`
 
 /**
@@ -115,6 +116,8 @@ export interface InviterCheck {
 	readonly assigners: readonly string[]
 	readonly revision: number
 	readonly grantRevision: number
+	/** The expiry of the grant the acceptance writes: the earliest expiry among the inviter's grants behind it (S8). */
+	readonly expiresAt: number | null
 }
 
 /** The records of an acceptance that creates its principal, each written exactly when its change was. */
@@ -184,7 +187,10 @@ export class MembershipRepository {
 	 * Record a value IAM generated, grant its creator the creator role, and write `audit`, in one transaction. Both writes
 	 * carry the eligibility condition (ADR-0051), so a creator who may not hold the role writes nothing: answers false.
 	 */
-	async createScope(input: { app: string; scope: Scope; createdBy: string; roleKey: string }, audit?: AuditEventInput): Promise<boolean> {
+	async createScope(
+		input: { app: string; scope: Scope; createdBy: string; roleKey: string; expiresAt?: number | null },
+		audit?: AuditEventInput,
+	): Promise<boolean> {
 		const now = unixNow()
 		const eligible = eligibleGrantBinds({ principalId: input.createdBy, app: input.app, roleKey: input.roleKey })
 		const created = this.writer.changed([
@@ -195,8 +201,19 @@ export class MembershipRepository {
 			},
 			{
 				sql: `INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-					SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ? WHERE ${this.#eligible} RETURNING id`,
-				binds: [uuidv7(), input.createdBy, input.app, input.roleKey, input.scope.type, input.scope.value, input.createdBy, now, ...eligible],
+					SELECT ?, ?, ?, ?, NULL, ?, ?, ?, ?, ? WHERE ${this.#eligible} RETURNING id`,
+				binds: [
+					uuidv7(),
+					input.createdBy,
+					input.app,
+					input.roleKey,
+					input.scope.type,
+					input.scope.value,
+					input.createdBy,
+					input.expiresAt ?? null,
+					now,
+					...eligible,
+				],
 			},
 		], audit)
 		return created.rows(await this.db.batch(created.statements)).length > 0
@@ -295,13 +312,13 @@ export class MembershipRepository {
 	 * the principal may not hold it (ADR-0051: the insert carries the condition); `audit` is written exactly then.
 	 */
 	async grantMembershipRole(
-		input: { app: string; principalId: string; roleKey: string; scope: Scope; grantedBy: string },
+		input: { app: string; principalId: string; roleKey: string; scope: Scope; grantedBy: string; expiresAt?: number | null },
 		audit?: AuditEventInput,
 	): Promise<GrantRow | null> {
 		const now = unixNow()
 		const grant: SqlChange = {
 			sql: `INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-				SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ? WHERE ${this.#eligible} ${RENEW_EXPIRED_MEMBERSHIP} RETURNING *`,
+				SELECT ?, ?, ?, ?, NULL, ?, ?, ?, ?, ? WHERE ${this.#eligible} ${RENEW_EXPIRED_MEMBERSHIP} RETURNING *`,
 			binds: [
 				uuidv7(),
 				input.principalId,
@@ -310,6 +327,7 @@ export class MembershipRepository {
 				input.scope.type,
 				input.scope.value,
 				input.grantedBy,
+				input.expiresAt ?? null,
 				now,
 				...eligibleGrantBinds(input),
 				now,
@@ -559,7 +577,7 @@ export class MembershipRepository {
 			...accept.statements,
 			this.db
 				.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-					SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?
+					SELECT ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?
 					WHERE EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND acceptance_id = ?) AND ${this.#eligible}
 					${RENEW_EXPIRED_MEMBERSHIP}`)
 				.bind(
@@ -570,6 +588,7 @@ export class MembershipRepository {
 					invitation.scope_type,
 					invitation.scope_value,
 					invitation.invited_by,
+					inviter.expiresAt,
 					now,
 					invitation.id,
 					acceptanceId,
@@ -682,7 +701,7 @@ export class MembershipRepository {
 		}], recorded.acceptance)
 		const grant = this.db
 			.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-				SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ? WHERE ${accepted} AND ${this.#eligible}`)
+				SELECT ?, ?, ?, ?, NULL, ?, ?, ?, ?, ? WHERE ${accepted} AND ${this.#eligible}`)
 			.bind(
 				uuidv7(),
 				principalId,
@@ -691,6 +710,7 @@ export class MembershipRepository {
 				invitation.scope_type,
 				invitation.scope_value,
 				invitation.invited_by,
+				input.inviter.expiresAt,
 				now,
 				invitation.id,
 				acceptanceId,

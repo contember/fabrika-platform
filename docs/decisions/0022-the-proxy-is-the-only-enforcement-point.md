@@ -654,7 +654,9 @@ still refuses any `Authorization` header, as authorization.
   the dimension's `members.manage` there, every action of that role there, and a role that the role's `assignableBy`
   names. `assignableBy` names membership roles of the same dimension, held in that value, or application-wide roles
   (roles with no `member`), held in that value or globally. So a staff member with a global role invites into any
-  value. IAM checks the inviter again when an invitation is accepted, and the write that consumes it requires what
+  value. The grant expires no later than the earliest expiry among the grants that authorize it (the assigning role,
+  `members.manage` and every action of the role), whoever the target is, the assigner itself included; a scope's
+  creator role ends with the creating action, and an application administrator's grant (below) with its own grants. IAM checks the inviter again when an invitation is accepted, and the write that consumes it requires what
   that check relied on: the inviter still enabled, still holding the assigning role, the application's schema at
   the revision the check read, and the inviter's grants at the revision the check read (every removal of a grant
   moves the principal's revision on, in its own transaction), so a reconcile, a disable or the removal of any grant of

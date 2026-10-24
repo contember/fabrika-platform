@@ -181,18 +181,22 @@ async function terminalAuthority(services: Services, terminal: SessionTerminal, 
 }
 
 /**
- * A person's live permissions at `app` on the terminal `terminalId` that asserted them there (ADR-0067 §4), the set a
- * mint would sign now; null when the terminal could no longer mint for `app`. What a terminal session's token is
- * re-resolved against.
+ * A person's live authority at `app` on the terminal `terminalId` that asserted them there (ADR-0067 §4): the set a
+ * mint would sign now, and the grants behind it, the terminal principal's included; null when the terminal could no
+ * longer mint for `app`. What a terminal session's token is re-resolved against.
  */
-export async function permissionsOnTerminal(
+export async function authorityOnTerminal(
 	services: Services,
 	principal: PrincipalRow,
 	terminalId: string,
 	app: string,
-): Promise<PermissionEntry[] | null> {
+): Promise<ResolvedAuthority | null> {
 	const terminal = await terminalAuthority(services, { terminalId, assertedBy: app }, app)
-	return terminal === null ? null : withinTerminal(await resolvePermissionsAt(services, principal, app), terminal)
+	if (terminal === null) {
+		return null
+	}
+	const personal = await resolveAuthorityAt(services, principal, app)
+	return { permissions: withinTerminal(personal.permissions, terminal), supports: [...personal.supports, ...terminal.authority.supports] }
 }
 
 /**

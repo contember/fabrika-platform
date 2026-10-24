@@ -70,13 +70,13 @@ import { EMAIL_SEND_DEADLINE_MS, renderEmail } from './messages'
 import { randomToken } from './oidc'
 import type { StoredPasswordHash } from './password-crypto'
 import { unixNow } from './repositories/sql'
-import { resolvePermissionsAt } from './resolve'
+import { authorityDeadline, type HeldEntry, resolveAuthorityAt } from './resolve'
 import { BUILTIN_ROLES } from './roles'
 import { generateToken, hashToken } from './secret'
 import type { Services } from './services'
 import { parseStoredChain } from './stored-chain'
 import { parseStoredPermissions } from './stored-permissions'
-import { permissionsOnTerminal } from './tokens'
+import { authorityOnTerminal } from './tokens'
 
 /** How long an invitation may wait for its addressee. */
 export const INVITATION_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -100,6 +100,8 @@ function invalid(message: string): MembershipFailure {
 interface MemberCaller {
 	readonly principal: PrincipalRow
 	readonly permissions: PermissionEntry[]
+	/** What the principal holds live and until when: what a grant it gives may not outlive (S8). */
+	readonly supports: readonly HeldEntry[]
 	readonly app: string
 }
 
@@ -131,19 +133,18 @@ async function memberCallerOf(services: Services, input: MembershipCaller, resol
 	if (principalStatus(principal) === 'disabled') {
 		return { ok: false, reason: 'disabled' }
 	}
+	const live = await resolveAuthorityAt(services, principal, verifiedApp)
 	if (input.credential?.startsWith(API_KEY_PREFIX) === true) {
-		return { ok: true, caller: { principal, permissions: caller.permissions, app: verifiedApp } }
+		return { ok: true, caller: { principal, permissions: caller.permissions, supports: live.supports, app: verifiedApp } }
 	}
 	// A token is a ceiling too: one minted from a downscoped key carries only that key's grants. A person's token from a
 	// terminal is held to what that terminal brings now: the ceiling-narrowed person and the terminal's own grants.
-	const live = caller.terminal === undefined
-		? await resolvePermissionsAt(services, principal, verifiedApp)
-		: await permissionsOnTerminal(services, principal, caller.terminal, verifiedApp)
-	if (live === null) {
+	const held = caller.terminal === undefined ? live : await authorityOnTerminal(services, principal, caller.terminal, verifiedApp)
+	if (held === null) {
 		return { ok: false, reason: 'invalid_token' }
 	}
-	const permissions = caller.permissions.filter((entry) => permits(live, entry.action, entry.scope ?? undefined))
-	return { ok: true, caller: { principal, permissions, app: verifiedApp } }
+	const permissions = caller.permissions.filter((entry) => permits(held.permissions, entry.action, entry.scope ?? undefined))
+	return { ok: true, caller: { principal, permissions, supports: held.supports, app: verifiedApp } }
 }
 
 /**
@@ -194,7 +195,7 @@ async function resolveLinkOperationCaller(services: Services, env: CallerEnv, in
 	const permissions = caller.permissions.filter((entry) => entry.scope === null && declaration.actions.includes(entry.action))
 	return {
 		ok: true,
-		caller: { principal, permissions, app: verifiedApp },
+		caller: { principal, permissions, supports: permissions.map((entry) => ({ action: entry.action, scope: null, until: null })), app: verifiedApp },
 		job: { name: workload.name, issues: declaration.issues, actions: declaration.actions },
 	}
 }
@@ -227,7 +228,7 @@ async function manageAuthority(
 	services: Services,
 	actor: { app: string; permissions: PermissionEntry[] },
 	scope: Scope,
-): Promise<{ ok: true; dimension: AppScopeRow } | MembershipFailure> {
+): Promise<{ ok: true; dimension: AppScopeRow; manage: string } | MembershipFailure> {
 	const dimension = await services.repositories.appSchema.getScope(actor.app, scope.type)
 	if (dimension === null || dimension.members_manage === null) {
 		return invalid(`scope '${scope.type}' declares no members`)
@@ -235,7 +236,7 @@ async function manageAuthority(
 	if (!permits(actor.permissions, dimension.members_manage, scope)) {
 		return NOT_ALLOWED
 	}
-	return { ok: true, dimension }
+	return { ok: true, dimension, manage: dimension.members_manage }
 }
 
 /**
@@ -267,6 +268,34 @@ async function roleAuthorityProblem(
 		scopeType: scope.type,
 	})
 	return contract === null ? null : invalid(contract)
+}
+
+/**
+ * The latest expiry a grant of `role` in `scope` given by `actor` may carry (S8): no later than the earliest expiry
+ * among the grants that authorize it — the assigning role held there or globally, the dimension's `manage` action and
+ * every action of the role there. `null` is no expiry. Asked only after `roleAuthorityProblem` admitted the actor.
+ */
+async function delegationDeadline(
+	services: Services,
+	actor: { app: string; principalId: string; supports: readonly HeldEntry[] },
+	scope: Scope,
+	role: RoleRow,
+	manage: string,
+): Promise<number | null> {
+	const assigners = role.assignable_by === null ? [] : parseJsonStringArray(role.assignable_by)
+	const assigning = (await services.repositories.membership.listAssigningGrants(actor.app, actor.principalId, scope))
+		.filter((grant) => grant.role_key !== null && assigners.includes(grant.role_key))
+	const now = unixNow()
+	const assignerUntil = assigning.some((grant) => grant.expires_at === null)
+		? null
+		: Math.max(now, ...assigning.map((grant) => grant.expires_at ?? now))
+	const carried = [manage, ...parseStoredPermissions(role.permissions)].map((action): PermissionEntry => ({ action, scope, source: 'grant' }))
+	return earliest(assignerUntil, authorityDeadline(actor, carried, now))
+}
+
+/** The earlier of two deadlines, where `null` is none. */
+function earliest(a: number | null, b: number | null): number | null {
+	return a === null ? b : b === null ? a : Math.min(a, b)
 }
 
 /** The record of a change the caller made. The repository writes it in the change's own transaction. */
@@ -346,8 +375,10 @@ export async function createScope(services: Services, env: CallerEnv, ctx: Reque
 	const external = await externalGrantProblem(services.repositories.appSchema, caller.principal, caller.app, { roleKey: role.role_key })
 	if (external !== null) return invalid(external)
 	const scope: Scope = { type: input.dimension, value: uuidv7() }
+	// The creator gives itself the role on the strength of the creating action, so the grant ends when that action does.
+	const expiresAt = authorityDeadline(caller, [{ action: spent.endpoint.action, scope: null, source: 'grant' }], unixNow())
 	const created = await services.repositories.membership.createScope(
-		{ app: caller.app, scope, createdBy: caller.principal.id, roleKey: role.role_key },
+		{ app: caller.app, scope, createdBy: caller.principal.id, roleKey: role.role_key, expiresAt },
 		memberEvent(caller, input.requestId, {
 			action: 'iam.scope.create',
 			resourceType: 'scope',
@@ -395,8 +426,10 @@ export async function assignMember(services: Services, env: CallerEnv, ctx: Requ
 		}
 		const external = await externalGrantProblem(services.repositories.appSchema, target, caller.app, { roleKey: role.role_key })
 		if (external !== null) return invalid(external)
+		// The same rule whoever the target is, the caller itself included: the grant ends with the authority behind it.
+		const expiresAt = await delegationDeadline(services, { ...caller, principalId: caller.principal.id }, input.scope, role, manage.manage)
 		const granted = await services.repositories.membership.grantMembershipRole(
-			{ app: caller.app, principalId: target.id, roleKey: role.role_key, scope: input.scope, grantedBy: caller.principal.id },
+			{ app: caller.app, principalId: target.id, roleKey: role.role_key, scope: input.scope, grantedBy: caller.principal.id, expiresAt },
 			memberEvent(caller, input.requestId, {
 				action: 'iam.member.assign',
 				resourceType: 'scope',
@@ -882,7 +915,8 @@ async function inviterAssigners(services: Services, invitation: InvitationRow): 
 		return null
 	}
 	const scope: Scope = { type: invitation.scope_type, value: invitation.scope_value }
-	const actor = { app: invitation.app, principalId: inviter.id, permissions: await resolvePermissionsAt(services, inviter, invitation.app) }
+	const live = await resolveAuthorityAt(services, inviter, invitation.app)
+	const actor = { app: invitation.app, principalId: inviter.id, permissions: live.permissions, supports: live.supports }
 	const manage = await manageAuthority(services, actor, scope)
 	if (!manage.ok || (await roleAuthorityProblem(services, actor, scope, role)) !== null) {
 		return null
@@ -891,6 +925,7 @@ async function inviterAssigners(services: Services, invitation: InvitationRow): 
 		assigners: role.assignable_by === null ? [] : parseJsonStringArray(role.assignable_by),
 		revision,
 		grantRevision: inviter.grant_revision,
+		expiresAt: await delegationDeadline(services, actor, scope, role, manage.manage),
 	}
 }
 

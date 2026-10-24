@@ -176,6 +176,18 @@ describe("the application's administrator grants and revokes its global roles in
 		expect(prop(result(listed.body), 'members')).toContainEqual(expect.objectContaining({ principalId: newcomer.id, email: 'newcomer@example.test' }))
 	})
 
+	test('a grant ends no later than the administrator grants behind it (S8)', async () => {
+		const f = await people()
+		const administrator = await f.person('administrator')
+		const until = Math.floor(Date.now() / 1000) + 3600
+		await f.repositories.grants.createRoleGrantUnlessHeld({ principalId: administrator.id, app: APP, roleKey: 'administrator', expiresAt: until })
+		const newcomer = await f.person('newcomer')
+		const granted = await consoleRpc(f, administrator.id, 'appPeople.grant', { app: APP, role: 'staff', email: 'newcomer@example.test' })
+		expect(granted.status).toBe(200)
+		const grants = (await f.repositories.grants.listGrants(newcomer.id)).filter((grant) => grant.role_key === 'staff')
+		expect(grants.map((grant) => grant.expires_at)).toEqual([until])
+	})
+
 	test('a revoke removes the global grant with its audit row; repeating it answers the same', async () => {
 		const f = await people()
 		const administrator = await holding(f, 'administrator', 'administrator')

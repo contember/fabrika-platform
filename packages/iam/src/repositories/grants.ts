@@ -243,7 +243,7 @@ export class GrantRepository {
 	 * `ExternalGrantError` for a grant the principal may not hold.
 	 */
 	async createDelegatedRoleGrant(
-		input: { principalId: string; roleKey: string; grantedBy: string },
+		input: { principalId: string; roleKey: string; grantedBy: string; expiresAt?: number | null },
 		authority: DelegatedAuthority,
 		audit: (grantId: string) => AuditEventInput,
 	): Promise<GrantRow | null> {

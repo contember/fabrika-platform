@@ -304,7 +304,12 @@ export async function inviterCheck(
 ): Promise<InviterCheck> {
 	const inviter = await repositories.principals.getPrincipalById(invitation.invited_by)
 	if (inviter === null) throw new Error('the invitation names no inviter')
-	return { assigners, revision: await repositories.appSchema.getSchemaRevision(invitation.app), grantRevision: inviter.grant_revision }
+	return {
+		assigners,
+		revision: await repositories.appSchema.getSchemaRevision(invitation.app),
+		grantRevision: inviter.grant_revision,
+		expiresAt: null,
+	}
 }
 
 /**

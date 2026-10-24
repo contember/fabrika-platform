@@ -1169,3 +1169,61 @@ describe('review round 1', () => {
 		expect(await rolesOf(f, invitee, scope)).toEqual(['editor'])
 	})
 })
+
+describe('S8: a grant given through delegation ends no later than the authority behind it', () => {
+	const T = () => unixNow() + 3600
+
+	async function expiryOf(f: MembershipFixture, person: Person, scope: Scope, role: string): Promise<number | null | undefined> {
+		return (await f.repositories.membership.listRoleGrantsAt(APP, person.id, scope)).find((grant) => grant.role_key === role)?.expires_at
+	}
+
+	async function expiringStaff(f: MembershipFixture, until: number): Promise<Person> {
+		const staff = await f.person('staff')
+		await f.repositories.grants.createRoleGrantUnlessHeld({ principalId: staff.id, app: APP, roleKey: 'staff', expiresAt: until })
+		return staff
+	}
+
+	test('an assignment by id, to another principal or to the assigner itself, carries the assigner expiry', async () => {
+		const f = await fixture()
+		const scope = await workspaceOf(f, await f.person('owner'))
+		const until = T()
+		const staff = await expiringStaff(f, until)
+		const target = await f.person('target')
+		expect(await assign(f, staff, scope, 'editor', { principalId: target.id })).toMatchObject({ ok: true })
+		expect(await expiryOf(f, target, scope, 'editor')).toBe(until)
+		expect(await assign(f, staff, scope, 'editor', { principalId: staff.id })).toMatchObject({ ok: true })
+		expect(await expiryOf(f, staff, scope, 'editor')).toBe(until)
+	})
+
+	test('an assigner whose grants never expire gives a grant that never expires', async () => {
+		const f = await fixture()
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		const target = await f.person('target')
+		expect(await assign(f, owner, scope, 'editor', { principalId: target.id })).toMatchObject({ ok: true })
+		expect(await expiryOf(f, target, scope, 'editor')).toBeNull()
+	})
+
+	test('an accepted invitation carries the inviter expiry at acceptance', async () => {
+		const email = new CapturingEmail()
+		const f = await fixture(email)
+		const scope = await workspaceOf(f, await f.person('owner'))
+		const until = T()
+		const staff = await expiringStaff(f, until)
+		expect(await assign(f, staff, scope, 'editor', { email: 'invitee@example.test' })).toMatchObject({ ok: true, invited: {} })
+		const invitee = await f.repositories.principals.getPrincipalById((await f.person('invitee')).id)
+		if (invitee === null) throw new Error('fixture')
+		expect(await acceptInvitation(f.services, invitee, email.lastToken(), 'accept-req')).toMatchObject({ ok: true })
+		expect((await f.repositories.membership.listRoleGrantsAt(APP, invitee.id, scope)).map((grant) => grant.expires_at)).toEqual([until])
+	})
+
+	test('a creator holding the creating action until T holds the creator role until T', async () => {
+		const f = await fixture()
+		const owner = await f.person('owner')
+		const until = T()
+		await f.repositories.grants.createRoleGrantUnlessHeld({ principalId: owner.id, app: APP, roleKey: 'starter', expiresAt: until })
+		const result = await createScope(f.services, CALLER_ENV, f.ctx, { ...(await delegated(f, owner, CREATE_ENDPOINT)), dimension: 'workspace' })
+		if (!result.ok) throw new Error(`no workspace: ${result.reason}`)
+		expect(await expiryOf(f, owner, result.scope, result.role)).toBe(until)
+	})
+})
