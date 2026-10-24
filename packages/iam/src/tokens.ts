@@ -109,6 +109,7 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 	// Clamped to the session, exactly as `mintFromKey` clamps to the credential's expiry: a token
 	// minted a minute before the session ends must not outlive it, or logging out (or an expiry) would
 	// leave a valid token in the app's hands for the rest of its TTL (SEC-27). Nor may it outlive a grant it carries.
+	// In a grant's last 30 s (the proxy's TOKEN_REFRESH_SKEW_SECONDS) the proxy re-mints per request; cache.test.ts pins it.
 	const expiresAt = Math.min(
 		now + DEFAULT_TOKEN_TTL_SECONDS,
 		session.expires_at,
