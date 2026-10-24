@@ -206,6 +206,10 @@ async function attach(setup: ApplicationSetup | null, state: ApplicationState, e
 
 type Outcome = { readonly booted: Booted } | { readonly failure: unknown }
 
+/** The wait after an instance's first failed boot before an event boots again; it doubles with each failure, to the cap. */
+const BOOT_RETRY_MS = 1_000
+const BOOT_RETRY_CAP_MS = 60_000
+
 /** A job run handed to `waitUntil`; the runner logs and reports its own failures. */
 async function runQuietly(app: ContractApp, name: string): Promise<void> {
 	try {
@@ -218,19 +222,22 @@ async function runQuietly(app: ContractApp, name: string): Promise<void> {
 /** The application environment's one object. The Worker's generated entrypoint exports it as `FabrikaApplication`. */
 export class FabrikaApplication {
 	readonly #state: ApplicationState
+	readonly #env: Readonly<Record<string, unknown>>
+	readonly #setup: ApplicationSetup | null
 	/** `proxySecretDigest` of the environment's proxy secret; `null` refuses every request. */
 	readonly #secret: Uint8Array | null
-	readonly #outcome: Promise<Outcome>
+	#outcome: Promise<Outcome>
+	#failedBoots = 0
+	/** When an event may boot again after a failed boot; until then every request answers the failure. */
+	#retryAt = 0
 
 	constructor(state: ApplicationState, env: Readonly<Record<string, unknown>>) {
 		this.#state = state
+		this.#env = env
+		this.#setup = registered
 		const secret = env[FABRIKA_PROXY_SECRET]
 		this.#secret = typeof secret === 'string' && secret !== '' ? proxySecretDigest(secret) : null
-		const setup = registered
-		// Settles either way: a callback that rejects would reset the object, and every request answers the failure instead.
-		this.#outcome = state.blockConcurrencyWhile(() =>
-			attach(setup, state, env).then((booted): Outcome => ({ booted }), (failure: unknown): Outcome => ({ failure }))
-		)
+		this.#outcome = this.#boot()
 	}
 
 	async fetch(request: Request): Promise<Response> {
@@ -238,11 +245,35 @@ export class FabrikaApplication {
 		if (!this.#fromWorker(request)) {
 			return new Response(null, { status: 404 })
 		}
-		const outcome = await this.#outcome
+		const outcome = await this.#current()
 		if ('failure' in outcome) {
 			throw outcome.failure
 		}
 		return await objectStorage.run(this.#state.storage, () => this.#serve(outcome.booted, request))
+	}
+
+	/** Settles either way: a callback that rejects would reset the object, and every request answers the failure instead. */
+	#boot(): Promise<Outcome> {
+		return this.#state.blockConcurrencyWhile(() =>
+			attach(this.#setup, this.#state, this.#env).then((booted): Outcome => ({ booted }), (failure: unknown): Outcome => {
+				this.#failedBoots++
+				this.#retryAt = Date.now() + Math.min(BOOT_RETRY_MS * 2 ** (this.#failedBoots - 1), BOOT_RETRY_CAP_MS)
+				return { failure }
+			})
+		)
+	}
+
+	/** The instance's boot, booted again once a failed boot's backoff has passed; concurrent events share one retry. */
+	async #current(): Promise<Outcome> {
+		const pending = this.#outcome
+		const outcome = await pending
+		if (!('failure' in outcome) || Date.now() < this.#retryAt) {
+			return outcome
+		}
+		if (this.#outcome === pending) {
+			this.#outcome = this.#boot()
+		}
+		return await this.#outcome
 	}
 
 	#serve(booted: Booted, request: Request): Promise<Response> {

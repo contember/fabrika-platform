@@ -4,7 +4,8 @@
 
 import { defineContract } from '@fabrika/app/contract'
 import { PROXY_SECRET_HEADER } from '@fabrika/auth-core'
-import { describe, expect, spyOn, test } from 'bun:test'
+import { Database as BunDatabase } from 'bun:sqlite'
+import { describe, expect, setSystemTime, spyOn, test } from 'bun:test'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
@@ -12,6 +13,7 @@ import { applicationMigrations } from '../build'
 import { type ApplicationState, type ApplicationStorage, type ContractWorkerOptions, createContractWorker, FabrikaApplication } from '../cloudflare'
 import { TICK_HEADER } from '../cloudflare/application'
 import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
+import { FILE_SWEEP_JOB } from '../files/kinds'
 import type { CrashEvents, ProcessCrashKind } from '../implement/crashes'
 import type { ContractImplementation } from '../implement/implement'
 import { implement } from '../implement/implement'
@@ -184,6 +186,44 @@ describe('two environment objects in one isolate', () => {
 	})
 })
 
+describe('the minute tick of the environment object', () => {
+	test('runs the due ones of exactly the jobs boot bound, the file sweep of a file kind included', async () => {
+		await keepingProcessEnvironment(async () => {
+			const served = sqliteNotesApp({ runs: [] })
+			createContractWorker(() => Promise.resolve({ default: served.implementation }), { migrations: await applicationMigrations(FIXTURE_ROOT) })
+			const tokens = workloadTokensFor(served.implementation)
+			const unused = () => Promise.reject(new Error('not called'))
+			const database = new BunDatabase(':memory:')
+			const pending: Promise<unknown>[] = []
+			const state: ApplicationState = {
+				storage: bunSqliteStorage(database),
+				blockConcurrencyWhile: (callback) => callback(),
+				waitUntil: (promise) => void pending.push(promise),
+			}
+			const object = new FabrikaApplication(state, {
+				...frameworkEnvFor(served.implementation),
+				...served.variables,
+				FABRIKA_PROXY_SECRET: PROXY_SECRET,
+				IAM: { getJwks: () => keySource.getJwks(), mintFromKey: (input: { app: string; key: string }) => tokens.exchange(input) },
+				[CLOUDFLARE_FILES_BINDING]: { head: unused, get: unused, put: unused, delete: unused },
+			})
+			const tickAt = async (time: number) => {
+				const response = await object.fetch(forwarded('/', { method: 'POST', headers: { [TICK_HEADER]: String(time) } }))
+				expect(response.status).toBe(204)
+				await Promise.all(pending.splice(0))
+			}
+			const leases = () =>
+				database.query<{ job: string; last_started_at: string | null }, []>('select job, last_started_at from fabrika_job_leases order by job').all()
+
+			await tickAt(Date.UTC(2026, 9, 22, 3, 41, 0))
+			expect(leases().map((row) => row.job)).toEqual(['fabrika-file-sweep', 'halfPast', 'nightly', 'putThenFail'].sort())
+			expect(leases().filter((row) => row.last_started_at !== null).map((row) => row.job)).toEqual([FILE_SWEEP_JOB])
+			await tickAt(Date.UTC(2026, 9, 22, 4, 30, 0))
+			expect(leases().filter((row) => row.last_started_at !== null).map((row) => row.job).sort()).toEqual([FILE_SWEEP_JOB, 'halfPast'].sort())
+		})
+	})
+})
+
 describe('the environment object: IAM membership on the IAM binding', () => {
 	const unused = () => Promise.reject(new Error('not called'))
 	const binding = (createScope: (input: unknown) => Promise<unknown>) => ({
@@ -311,6 +351,51 @@ describe('the crash reports of the environment object', () => {
 			}
 			expect(envelopes).toHaveLength(2)
 			expect(tagsOf(envelopes[1])).toEqual({ crash: 'unhandled_rejection' })
+		})
+	})
+
+	test('a failed boot is tried again on a later event, after a backoff that doubles, and reported once', async () => {
+		await keepingProcessEnvironment(async () => {
+			const { envelopes, fetch } = capturingFetch()
+			const app = notesApp(new Map())
+			let loads = 0
+			createContractWorker(() => {
+				loads++
+				return loads <= 2 ? Promise.reject(new Error(`transient ${loads}`)) : Promise.resolve({ default: app })
+			}, { rejections: fakeEvents().events, operationsFetch: fetch })
+			const pending: Promise<unknown>[] = []
+			const state: ApplicationState = {
+				storage: bunSqliteStorage(),
+				blockConcurrencyWhile: (callback) => callback(),
+				waitUntil: (promise) => void pending.push(promise),
+			}
+			const start = Date.UTC(2026, 9, 22, 3, 0, 0)
+			setSystemTime(new Date(start))
+			try {
+				const object = new FabrikaApplication(state, {
+					...frameworkEnvFor(app),
+					FABRIKA_PROXY_SECRET: PROXY_SECRET,
+					FABRIKA_OPERATIONS_DSN: DSN,
+					IAM: keySource,
+					ASSETS: { fetch: () => Promise.resolve(new Response('asset')) },
+				})
+				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('transient 1')
+				setSystemTime(new Date(start + 999))
+				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('transient 1')
+				expect(loads).toBe(1)
+				setSystemTime(new Date(start + 1000))
+				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('transient 2')
+				setSystemTime(new Date(start + 2999))
+				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('transient 2')
+				expect(loads).toBe(2)
+				setSystemTime(new Date(start + 3000))
+				expect((await object.fetch(forwarded('/healthz'))).status).toBe(200)
+				expect(loads).toBe(3)
+			} finally {
+				setSystemTime()
+			}
+			await Promise.all(pending)
+			expect(envelopes.map(tagsOf)).toEqual([{ crash: 'boot_failed' }])
 		})
 	})
 })

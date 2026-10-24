@@ -1,5 +1,7 @@
+import type { ContractArtifact } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
-import { pinsGeneratedEntry, releaseAtLeast, runsInObject } from '../contract-support'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { needsMinuteTick, pinsGeneratedEntry, releaseAtLeast, runsInObject } from '../contract-support'
 
 describe('releaseAtLeast', () => {
 	const since = { major: 0, minor: 9 }
@@ -43,4 +45,19 @@ describe('the release gates', () => {
 			expect(pinsGeneratedEntry(release)).toBe(expected)
 		})
 	}
+})
+
+describe('needsMinuteTick', () => {
+	const collectionsOnly: ContractArtifact = { ...notesArtifact, jobs: {}, fileKinds: {} }
+
+	test('legacy file collections alone get no tick: the object schedules no sweep of theirs', () => {
+		expect(Object.keys(collectionsOnly.files).length).toBeGreaterThan(0)
+		expect(needsMinuteTick(collectionsOnly)).toBe(false)
+	})
+
+	test('a job or a file kind gets the tick', () => {
+		expect(Object.keys(notesArtifact.jobs).length).toBeGreaterThan(0)
+		expect(needsMinuteTick({ ...collectionsOnly, jobs: notesArtifact.jobs })).toBe(true)
+		expect(needsMinuteTick({ ...collectionsOnly, fileKinds: { photo: { types: ['image/png'], maxBytes: 1024 } } })).toBe(true)
+	})
 })

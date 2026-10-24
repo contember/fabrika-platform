@@ -51,9 +51,12 @@ export const assertCloudflareContract = (contract: ContractArtifact): void => {
 	}
 }
 
-/** The object runs due jobs and the file sweep, a framework job, on the Worker's minute tick (ADR-0065 §5). */
+/**
+ * The object runs due jobs and the file sweep of file kinds, a framework job, on the Worker's minute tick (ADR-0065 §5).
+ * Legacy `files` collections do not count: the object schedules no sweep of theirs.
+ */
 export const needsMinuteTick = (contract: ContractArtifact): boolean =>
-	Object.keys(contract.jobs).length > 0 || Object.keys(contract.files).length > 0 || Object.keys(contract.fileKinds ?? {}).length > 0
+	Object.keys(contract.jobs).length > 0 || Object.keys(contract.fileKinds ?? {}).length > 0
 
 /**
  * Whether framework release `release` is at least `since`. A prerelease counts as its `major.minor`; a release that
