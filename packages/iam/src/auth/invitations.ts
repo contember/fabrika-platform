@@ -4,6 +4,7 @@ import { actionLandingOrigin, type AppPresentation, landingUrl, presentationFor 
 import { type InvitationRow, principalStatus } from '../db'
 import { type RequestContext } from '../env'
 import { acceptCreatingPrincipal, acceptInvitation, INVITATION_ACCEPT_PATH, invitationOffer } from '../membership'
+import { passwordMinLength } from '../password-minimum'
 import { authFailurePage, invitationOutcomePage, invitationPage, invitationPasswordPage } from '../password-pages'
 import { validatePassword } from '../password-policy'
 import type { Services } from '../services'
@@ -70,6 +71,7 @@ export async function handleInvitation(request: Request, services: Services, ctx
 			landingOrigin: await actionLandingOrigin(services, presentation),
 			token: token.data,
 			address: offer.invitation.email,
+			minLength: await passwordMinLength(services),
 		})
 	}
 	const session = await currentSession(request, services)
@@ -136,13 +138,15 @@ async function createAndAccept(
 ): Promise<Response> {
 	const { invitation } = input
 	const presentation = await presentationFor(services, invitation.app, input.brand)
-	const policy = validatePassword(input.password, { email: invitation.email, label: invitation.email })
+	const minLength = await passwordMinLength(services)
+	const policy = validatePassword(input.password, minLength, { email: invitation.email, label: invitation.email })
 	if (!policy.ok) {
 		return invitationPasswordPage({
 			presentation,
 			landingOrigin: await actionLandingOrigin(services, presentation),
 			token: input.token,
 			address: invitation.email,
+			minLength,
 			problem: policy.problem,
 		})
 	}

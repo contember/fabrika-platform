@@ -10,6 +10,7 @@ import { HandoffRepository } from './repositories/handoff'
 import { MembershipRepository } from './repositories/membership'
 import { MembershipTransportKeyRepository } from './repositories/membership-transport'
 import { OAuthRepository } from './repositories/oauth'
+import { PasswordPolicyRepository } from './repositories/password-policy'
 import { PrincipalRepository } from './repositories/principals'
 import { SessionRepository } from './repositories/sessions'
 import { WorkloadRepository } from './repositories/workloads'
@@ -56,6 +57,7 @@ export {
 } from './repositories/membership'
 export { MembershipTransportKeyRepository, type MembershipTransportKeyRow } from './repositories/membership-transport'
 export { type OAuthCodeRow, type OAuthGrantRow, type OAuthRefreshTokenRow, OAuthRepository } from './repositories/oauth'
+export { PasswordPolicyRepository, type PasswordPolicyRow } from './repositories/password-policy'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
 export { type AuthenticationMethod, SessionRepository, type SessionRow } from './repositories/sessions'
 export { type AppWorkloadRow, type WorkloadPrincipalRow, WorkloadRepository } from './repositories/workloads'
@@ -76,6 +78,7 @@ export interface IamRepositories {
 	workloads: WorkloadRepository
 	membershipTransport: MembershipTransportKeyRepository
 	brand: InstallationBrandRepository
+	passwordPolicy: PasswordPolicyRepository
 }
 
 /**
@@ -103,6 +106,7 @@ export function createIamRepositories(
 		workloads: replacements.workloads ?? new WorkloadRepository(db),
 		membershipTransport: replacements.membershipTransport ?? new MembershipTransportKeyRepository(db),
 		brand: replacements.brand ?? new InstallationBrandRepository(db, writer),
+		passwordPolicy: replacements.passwordPolicy ?? new PasswordPolicyRepository(db, writer),
 	}
 }
 

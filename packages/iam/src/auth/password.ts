@@ -6,6 +6,7 @@ import { normalizeEmailIdentity } from '../email-identity'
 
 import { type RequestContext } from '../env'
 import { type PasswordActionPurpose } from '../password-db'
+import { passwordMinLength } from '../password-minimum'
 import { authFailurePage, forgotPasswordPage, invalidActionPage, loginPage, setPasswordPage } from '../password-pages'
 import { PASSWORD_MAX_CODE_POINTS, validatePassword } from '../password-policy'
 import { deliverPasswordAction, issuePasswordAction } from '../password-service'
@@ -319,7 +320,10 @@ export async function handlePasswordAction(
 	// The link's `?app=` is a hint for the page's words and its `form-action`; the stored action decides where it lands.
 	const linked = await presentationFor(services, new URL(request.url).searchParams.get('app'))
 	if (!services.config.authentication.password.enabled) return authFailurePage(linked, { kind: 'password_disabled' }, 404)
-	if (request.method === 'GET') return setPasswordPage({ presentation: linked, landingOrigin: await actionLandingOrigin(services, linked), purpose })
+	const minLength = await passwordMinLength(services)
+	if (request.method === 'GET') {
+		return setPasswordPage({ presentation: linked, landingOrigin: await actionLandingOrigin(services, linked), purpose, minLength })
+	}
 	if (request.method !== 'POST') return methodNotAllowed()
 	if (!sameOrigin(request, services.config)) return authFailurePage(linked, { kind: 'cross_origin' }, 403)
 	const form = await readForm(request)
@@ -333,13 +337,14 @@ export async function handlePasswordAction(
 	const presentation = await presentationFor(services, action.app, linked.brand)
 	const principal = await services.repositories.principals.getPrincipalById(action.principal_id)
 	if (principal === null || principal.disabled_at !== null) return invalidActionPage(presentation)
-	const policy = validatePassword(password, { email: principal.email, label: principal.label })
+	const policy = validatePassword(password, minLength, { email: principal.email, label: principal.label })
 	if (!policy.ok) {
 		return setPasswordPage({
 			presentation,
 			landingOrigin: await actionLandingOrigin(services, presentation),
 			token: submittedToken,
 			purpose,
+			minLength,
 			problem: policy.problem,
 		})
 	}

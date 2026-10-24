@@ -5,7 +5,8 @@ import { normalizeEmailIdentity } from './email-identity'
 import type { Env } from './env'
 import { type OAuthConfig, parseOAuthConfig } from './oauth-config'
 import { OidcClient } from './oidc'
-import { type PasswordHasher, WebCryptoPasswordHasher } from './password-crypto'
+import { BUN_PBKDF2_COST, type PasswordHasher, WebCryptoPasswordHasher } from './password-crypto'
+import { passwordMinLengthFloor } from './password-minimum'
 import { parseRetention, type Retention } from './retention'
 
 /**
@@ -49,7 +50,11 @@ export interface Config {
 	readonly localDevLogin: boolean
 	readonly authentication: {
 		readonly oidc: { readonly enabled: boolean }
-		readonly password: { readonly enabled: boolean }
+		readonly password: {
+			readonly enabled: boolean
+			/** The lowest minimum length an administrator may set here (`passwordMinLengthFloor` of the hasher's cost). */
+			readonly minLengthFloor: number
+		}
 	}
 	/** The OAuth authorization server for MCP clients; null = off. */
 	readonly oauth: OAuthConfig | null
@@ -116,10 +121,11 @@ export function buildServices(env: Env): Services {
 	}
 	const oidc = oidcEnabled ? buildOidc(env) : null
 	const adminAudiences = parseAdminAudiences(env.ADMIN_AUDIENCES)
+	const passwordCost = env.PASSWORD_COST ?? BUN_PBKDF2_COST
 	return {
 		repositories: env.REPOSITORIES,
 		oidc,
-		passwordHasher: new WebCryptoPasswordHasher(env.PASSWORD_COST),
+		passwordHasher: new WebCryptoPasswordHasher(passwordCost),
 		email: buildEmailSender(env, environment),
 		config: {
 			human: {
@@ -133,7 +139,7 @@ export function buildServices(env: Env): Services {
 			localDevLogin: environment === LOCAL_ENVIRONMENT && env.LOCAL_DEV_LOGIN === 'true',
 			authentication: {
 				oidc: { enabled: oidcEnabled },
-				password: { enabled: passwordEnabled },
+				password: { enabled: passwordEnabled, minLengthFloor: passwordMinLengthFloor(passwordCost) },
 			},
 			oauth: parseOAuthConfig(env.OAUTH_CONFIG),
 			retention: parseRetention({ authLogDays: env.AUTH_LOG_RETENTION_DAYS, auditDays: env.AUDIT_RETENTION_DAYS }),

@@ -134,6 +134,8 @@ const INPUTS: Record<string, unknown> = {
 	'brand.get': null,
 	'brand.set': { brand: TEST_BRAND },
 	'brand.clear': null,
+	'passwordPolicy.get': null,
+	'passwordPolicy.set': { minLength: 12 },
 }
 
 /** The input `INPUTS` names for `method`, or `{}`. */

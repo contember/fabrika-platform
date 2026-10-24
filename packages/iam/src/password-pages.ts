@@ -6,7 +6,7 @@ import type { AuthFailure } from './auth/failure'
 import type { Handoff } from './auth/handoff'
 import { catalogFor, type PageText } from './catalog'
 import { escapeHtml } from './html'
-import { PASSWORD_MAX_CODE_POINTS, PASSWORD_MIN_CODE_POINTS, type PasswordProblem } from './password-policy'
+import { PASSWORD_MAX_CODE_POINTS, type PasswordProblem } from './password-policy'
 
 export function loginPage(input: {
 	readonly presentation: AppPresentation
@@ -136,19 +136,21 @@ export function setPasswordPage(input: {
 	readonly landingOrigin: string | null
 	readonly token?: string
 	readonly purpose: 'enrollment' | 'reset'
+	/** The installation's minimum (`passwordMinLength`), which the rule and a refusal state. */
+	readonly minLength: number
 	readonly problem?: PasswordProblem
 }): Response {
 	const { presentation } = input
 	const text = catalogFor(presentation.locale).pages
 	const title = text.setPassword.title(input.purpose)
 	const path = input.purpose === 'enrollment' ? '/auth/password/enroll' : '/auth/password/reset'
-	const problem = input.problem === undefined ? undefined : text.setPassword.problem(input.problem, PASSWORD_MIN_CODE_POINTS, PASSWORD_MAX_CODE_POINTS)
+	const problem = input.problem === undefined ? undefined : text.setPassword.problem(input.problem, input.minLength, PASSWORD_MAX_CODE_POINTS)
 	return htmlPage({
 		locale: presentation.locale,
 		brand: presentation.brand,
 		title,
 		content: `<h1>${escapeHtml(title)}</h1>${message(problem)}<p>${
-			escapeHtml(text.setPassword.rule(PASSWORD_MIN_CODE_POINTS, PASSWORD_MAX_CODE_POINTS))
+			escapeHtml(text.setPassword.rule(input.minLength, PASSWORD_MAX_CODE_POINTS))
 		}</p><p>${escapeHtml(text.setPassword.shared(presentation.displayName))}</p>
 		<form method="post" action="${escapeHtml(`${path}${appQuery(presentation)}`)}">
 			<input id="action-token" type="hidden" name="token" value="${escapeHtml(input.token ?? '')}">
@@ -244,17 +246,19 @@ export function invitationPasswordPage(input: {
 	readonly token: string
 	/** The invited mailbox, which the new account signs in with. */
 	readonly address: string
+	/** The installation's minimum (`passwordMinLength`), which the rule and a refusal state. */
+	readonly minLength: number
 	readonly problem?: PasswordProblem
 }): Response {
 	const { presentation } = input
 	const text = catalogFor(presentation.locale).pages
-	const problem = input.problem === undefined ? undefined : text.setPassword.problem(input.problem, PASSWORD_MIN_CODE_POINTS, PASSWORD_MAX_CODE_POINTS)
+	const problem = input.problem === undefined ? undefined : text.setPassword.problem(input.problem, input.minLength, PASSWORD_MAX_CODE_POINTS)
 	return htmlPage({
 		locale: presentation.locale,
 		brand: presentation.brand,
 		title: text.invitation.createTitle,
 		content: `<h1>${escapeHtml(text.invitation.createTitle)}</h1>${message(problem)}<p>${escapeHtml(text.invitation.createText(input.address))}</p><p>${
-			escapeHtml(text.setPassword.rule(PASSWORD_MIN_CODE_POINTS, PASSWORD_MAX_CODE_POINTS))
+			escapeHtml(text.setPassword.rule(input.minLength, PASSWORD_MAX_CODE_POINTS))
 		}</p><p>${escapeHtml(text.setPassword.shared(presentation.displayName))}</p>
 		<form method="post" action="${escapeHtml(`/auth/invitations/accept${appQuery(presentation)}`)}">
 			<input id="action-token" type="hidden" name="token" value="${escapeHtml(input.token)}">

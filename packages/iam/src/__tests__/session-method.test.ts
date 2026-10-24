@@ -10,6 +10,7 @@
 // The Postgres half skips (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset — helpers/postgres.ts.
 
 import { AUTH_CALLBACK_PATH, AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM, SESSION_COOKIE } from '@fabrika/auth-core'
+import { PASSWORD_MIN_LENGTH_FLOOR } from '@fabrika/iam-contract'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { LOCAL_DEV_ADMIN_ID, sessionUsable } from '../auth'
 import { handleAuth } from '../auth/routes'
@@ -59,7 +60,7 @@ async function handoffStatus(services: Services, session: string): Promise<numbe
 
 describe('sessionUsable', () => {
 	const config = (oidc: boolean, password: boolean, localDevLogin: boolean) => ({
-		authentication: { oidc: { enabled: oidc }, password: { enabled: password } },
+		authentication: { oidc: { enabled: oidc }, password: { enabled: password, minLengthFloor: PASSWORD_MIN_LENGTH_FLOOR } },
 		localDevLogin,
 	})
 

@@ -13,6 +13,7 @@ import { type AdminContext } from './context'
 import { createGrantUseCase, deleteGrantUseCase, updateGrantUseCase } from './grants'
 import { json, readJson } from './http'
 import { issueMembershipKeyUseCase } from './membership-keys'
+import { getPasswordPolicyUseCase, setPasswordPolicyUseCase } from './password-policy'
 import { disablePasswordUseCase, issuePasswordEnrollmentUseCase, issuePasswordResetUseCase } from './passwords'
 import { createPolicyUseCase, deletePolicyUseCase, listPoliciesUseCase, updatePolicyUseCase } from './policies'
 import { getPrincipalUseCase, invitePrincipalUseCase, listPrincipalsUseCase, me, promotePrincipalUseCase, updatePrincipalUseCase } from './principals'
@@ -89,6 +90,8 @@ export const adminUseCases = {
 	getInstallationBrand: getInstallationBrandUseCase,
 	setInstallationBrand: setInstallationBrandUseCase,
 	clearInstallationBrand: clearInstallationBrandUseCase,
+	getPasswordPolicy: getPasswordPolicyUseCase,
+	setPasswordPolicy: setPasswordPolicyUseCase,
 }
 
 export { putAppSchema } from './app-schema'
