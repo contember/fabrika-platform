@@ -7,16 +7,16 @@ import { isScopedDatabase } from '@fabrika/db/framework'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
 import { openSqlite, type SqliteStorage } from '@fabrika/db/sqlite'
 import { migrateSqlite } from '@fabrika/db/sqlite-migrate'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { timingSafeEqual } from 'node:crypto'
-import { compileContract } from '../contract/compile.js'
 import type { RequestExecutionContext } from '../fetch.js'
-import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE } from '../files/kinds.js'
 import { boot, type ContractApp } from '../implement/boot.js'
 import { type CrashEvents, environmentCrashReporter, reportSurvivedCrashes } from '../implement/crashes.js'
 import { proxySecretDigest } from '../implement/dispatch.js'
-import { captureEnvironment } from '../implement/environment.js'
+import { type CapturedEnvironment, captureEnvironment } from '../implement/environment.js'
 import type { ContractImplementation } from '../implement/implement.js'
-import { type CronSchedule, isDueAt, parseCron } from '../jobs/schedule.js'
+import type { CrashReporter } from '../jobs/report.js'
+import { isDueAt } from '../jobs/schedule.js'
 import { bindingAssets, bindingKeySource, bindingMembership, bindingTerminals, bindingWorkloadTokens, connectBindings } from './bindings.js'
 import { CLOUDFLARE_FILES_BINDING } from './names.js'
 import { r2FileObjectStore } from './r2-files.js'
@@ -49,9 +49,7 @@ export const APPLICATION_OBJECT_NAME = 'application'
 export const TICK_HEADER = 'X-Fabrika-Tick'
 
 /** What the object needs of its `ctx.storage`; a Durable Object's `DurableObjectStorage` fits it. */
-export interface ApplicationStorage extends SqliteStorage {
-	transactionSync<T>(fn: () => T): T
-}
+export type ApplicationStorage = SqliteStorage
 
 /** What the object needs of its `DurableObjectState`. */
 export interface ApplicationState {
@@ -63,32 +61,41 @@ export interface ApplicationState {
 /** The framework's bindings: IAM's application entrypoint and the Workers Assets of the SPA. No handler sees them. */
 const FRAMEWORK_BINDINGS: ReadonlySet<string> = new Set(['IAM', 'ASSETS'])
 
-interface DueJob {
-	readonly name: string
-	readonly schedule: CronSchedule
-}
-
-/** The application this isolate booted, once: its module is loaded once, and its `scoped(tables)` layer binds once. */
+/**
+ * The application this isolate booted, once: its module is loaded once, and its `scoped(tables)` layer binds once, to
+ * the storage of the object whose event runs (`objectStorage`), never to one database.
+ */
 interface Booted {
 	readonly app: ContractApp
-	readonly jobs: readonly DueJob[]
-	/** The storage of the object instance now serving; `null` for an application without a data layer. */
-	readonly storage: { current: ApplicationStorage } | null
+	/** Whether the application has a data layer, which every object instance migrates in its own storage. */
+	readonly migrates: boolean
 }
 
 interface ApplicationSetup {
 	readonly load: ImplementationLoader
 	readonly options: ContractWorkerOptions
 	booted: Promise<Booted> | null
-	bootFailureReported: boolean
+	/** Whether the current streak of failed attachments was reported; an attachment that succeeds ends the streak. */
+	failureReported: boolean
 	watchingRejections: boolean
 }
 
 let registered: ApplicationSetup | null = null
 
+/** The storage of the object whose event runs; the work an event hands to `waitUntil` keeps it. */
+const objectStorage = new AsyncLocalStorage<ApplicationStorage>()
+
+function eventStorage(): ApplicationStorage {
+	const storage = objectStorage.getStore()
+	if (storage === undefined) {
+		throw new Error('a statement ran outside any event of an application object: the framework runs every event in its object scope')
+	}
+	return storage
+}
+
 /** What the object classes of this isolate boot: the generated entrypoint's `createContractWorker` registers it. */
 export function registerApplication(load: ImplementationLoader, options: ContractWorkerOptions): void {
-	registered = { load, options, booted: null, bootFailureReported: false, watchingRejections: false }
+	registered = { load, options, booted: null, failureReported: false, watchingRejections: false }
 }
 
 /** The isolate's `unhandledrejection` event. Listening leaves the runtime's own handling, its log line, in place. */
@@ -110,57 +117,42 @@ async function migrate(storage: ApplicationStorage, migrations: readonly Applica
 	])
 }
 
-/** Every contract job, and the framework jobs `boot` binds for file kinds (a scanning kind does not boot on SQLite). */
-function dueJobsOf(app: ContractImplementation): readonly DueJob[] {
-	const artifact = compileContract(app.contract, app.database?.tables ?? {})
-	const declared = Object.entries(artifact.jobs).map(([name, job]) => ({ name, schedule: job.schedule }))
-	const framework = Object.keys(artifact.fileKinds ?? {}).length > 0 ? [{ name: FILE_SWEEP_JOB, schedule: FILE_SWEEP_SCHEDULE }] : []
-	return [...declared, ...framework].flatMap(({ name, schedule }) => {
-		const parsed = parseCron(schedule)
-		return parsed === null ? [] : [{ name, schedule: parsed }]
-	})
-}
-
-async function bootApplication(setup: ApplicationSetup, state: ApplicationState, env: Readonly<Record<string, unknown>>): Promise<Booted> {
-	const variables = Object.fromEntries(Object.entries(env).filter(([name]) => !FRAMEWORK_BINDINGS.has(name)))
-	const environment = captureEnvironment(variables)
-	const crashes = environmentCrashReporter(environment, setup.options.operationsFetch)
-	let booted: Booted
-	try {
-		const { default: implementation } = await setup.load()
-		const storage = isScopedDatabase(implementation.database) ? { current: state.storage } : null
-		if (storage !== null) {
-			await migrate(state.storage, setup.options.migrations ?? [])
-		}
-		// Every later object instance of this isolate swaps its own storage in: the layer is bound to this one database.
-		const database = storage === null ? undefined : openSqlite({
-			sql: { exec: (query, ...bindings) => storage.current.sql.exec(query, ...bindings) },
-			transaction: (closure) => storage.current.transaction(closure),
-		})
-		const app = boot(implementation, {
-			environment,
-			iam: bindingKeySource(env['IAM']),
-			assets: bindingAssets(env['ASSETS']),
-			membership: bindingMembership(env['IAM']),
-			terminals: bindingTerminals(env['IAM']),
-			workloadTokens: bindingWorkloadTokens(env['IAM']),
-			connectBindings: connectBindings(env),
-			database,
-			files: r2FileObjectStore(env[CLOUDFLARE_FILES_BINDING]),
-			// The Worker forwards only with the proxy secret, which the object checked; `boot` checks it again.
-			requireProxySecret: true,
-			// The proxy Worker sets `X-Fabrika-Client-Ip` from `CF-Connecting-IP`, the visitor Cloudflare saw.
-			clientAddress: 'vouched',
-			...(setup.options.operationsFetch === undefined ? {} : { operationsFetch: setup.options.operationsFetch }),
-		})
-		booted = { app, jobs: dueJobsOf(implementation), storage }
-	} catch (error) {
-		if (crashes !== null && !setup.bootFailureReported) {
-			setup.bootFailureReported = true
-			state.waitUntil(crashes.report('boot_failed', error))
-		}
-		throw error
+async function bootApplication(
+	setup: ApplicationSetup,
+	state: ApplicationState,
+	env: Readonly<Record<string, unknown>>,
+	environment: CapturedEnvironment,
+	crashes: CrashReporter | null,
+): Promise<Booted> {
+	const { default: implementation } = await setup.load()
+	const migrates = isScopedDatabase(implementation.database)
+	if (migrates) {
+		await migrate(state.storage, setup.options.migrations ?? [])
 	}
+	const database = migrates
+		? openSqlite({
+			sql: { exec: (query, ...bindings) => eventStorage().sql.exec(query, ...bindings) },
+			transaction: (closure) => eventStorage().transaction(closure),
+			transactionSync: (closure) => eventStorage().transactionSync(closure),
+		})
+		: undefined
+	const app = boot(implementation, {
+		environment,
+		iam: bindingKeySource(env['IAM']),
+		assets: bindingAssets(env['ASSETS']),
+		membership: bindingMembership(env['IAM']),
+		terminals: bindingTerminals(env['IAM']),
+		workloadTokens: bindingWorkloadTokens(env['IAM']),
+		connectBindings: connectBindings(env),
+		database,
+		files: r2FileObjectStore(env[CLOUDFLARE_FILES_BINDING]),
+		// The Worker forwards only with the proxy secret, which the object checked; `boot` checks it again.
+		requireProxySecret: true,
+		// The proxy Worker sets `X-Fabrika-Client-Ip` from `CF-Connecting-IP`, the visitor Cloudflare saw.
+		clientAddress: 'vouched',
+		...(setup.options.operationsFetch === undefined ? {} : { operationsFetch: setup.options.operationsFetch }),
+	})
+	const booted: Booted = { app, migrates }
 	if (crashes !== null && !setup.watchingRejections) {
 		setup.watchingRejections = true
 		reportSurvivedCrashes(setup.options.rejections ?? globalRejectionEvents(), crashes)
@@ -168,13 +160,38 @@ async function bootApplication(setup: ApplicationSetup, state: ApplicationState,
 	return booted
 }
 
-/** The isolate's booted application with this instance's storage migrated and swapped in, or the first boot. */
+/**
+ * The isolate's booted application with this instance's storage migrated, or the first boot. Reports the first failure
+ * of a streak as `boot_failed`, whichever instance or step it comes from; an attachment that succeeds ends the streak.
+ */
 async function attach(setup: ApplicationSetup | null, state: ApplicationState, env: Readonly<Record<string, unknown>>): Promise<Booted> {
 	if (setup === null) {
 		throw new Error('no contract application is registered: the generated entrypoint calls createContractWorker before an object starts')
 	}
+	const environment = captureEnvironment(Object.fromEntries(Object.entries(env).filter(([name]) => !FRAMEWORK_BINDINGS.has(name))))
+	const crashes = environmentCrashReporter(environment, setup.options.operationsFetch)
+	try {
+		const booted = await attachOnce(setup, state, env, environment, crashes)
+		setup.failureReported = false
+		return booted
+	} catch (error) {
+		if (crashes !== null && !setup.failureReported) {
+			setup.failureReported = true
+			state.waitUntil(crashes.report('boot_failed', error))
+		}
+		throw error
+	}
+}
+
+async function attachOnce(
+	setup: ApplicationSetup,
+	state: ApplicationState,
+	env: Readonly<Record<string, unknown>>,
+	environment: CapturedEnvironment,
+	crashes: CrashReporter | null,
+): Promise<Booted> {
 	if (setup.booted === null) {
-		const booting = bootApplication(setup, state, env)
+		const booting = bootApplication(setup, state, env, environment, crashes)
 		setup.booted = booting
 		// A failed boot is not kept: the next object instance boots again and fails with the same problems.
 		booting.catch(() => {
@@ -183,14 +200,17 @@ async function attach(setup: ApplicationSetup | null, state: ApplicationState, e
 		return await booting
 	}
 	const booted = await setup.booted
-	if (booted.storage !== null && booted.storage.current !== state.storage) {
+	if (booted.migrates) {
 		await migrate(state.storage, setup.options.migrations ?? [])
-		booted.storage.current = state.storage
 	}
 	return booted
 }
 
 type Outcome = { readonly booted: Booted } | { readonly failure: unknown }
+
+/** The wait after an instance's first failed boot before an event boots again; it doubles with each failure, to the cap. */
+const BOOT_RETRY_MS = 1_000
+const BOOT_RETRY_CAP_MS = 60_000
 
 /** A job run handed to `waitUntil`; the runner logs and reports its own failures. */
 async function runQuietly(app: ContractApp, name: string): Promise<void> {
@@ -204,19 +224,22 @@ async function runQuietly(app: ContractApp, name: string): Promise<void> {
 /** The application environment's one object. The Worker's generated entrypoint exports it as `FabrikaApplication`. */
 export class FabrikaApplication {
 	readonly #state: ApplicationState
+	readonly #env: Readonly<Record<string, unknown>>
+	readonly #setup: ApplicationSetup | null
 	/** `proxySecretDigest` of the environment's proxy secret; `null` refuses every request. */
 	readonly #secret: Uint8Array | null
-	readonly #outcome: Promise<Outcome>
+	#outcome: Promise<Outcome>
+	#failedBoots = 0
+	/** When an event may boot again after a failed boot; until then every request answers the failure. */
+	#retryAt = 0
 
 	constructor(state: ApplicationState, env: Readonly<Record<string, unknown>>) {
 		this.#state = state
+		this.#env = env
+		this.#setup = registered
 		const secret = env[FABRIKA_PROXY_SECRET]
 		this.#secret = typeof secret === 'string' && secret !== '' ? proxySecretDigest(secret) : null
-		const setup = registered
-		// Settles either way: a callback that rejects would reset the object, and every request answers the failure instead.
-		this.#outcome = state.blockConcurrencyWhile(() =>
-			attach(setup, state, env).then((booted): Outcome => ({ booted }), (failure: unknown): Outcome => ({ failure }))
-		)
+		this.#outcome = this.#boot()
 	}
 
 	async fetch(request: Request): Promise<Response> {
@@ -224,16 +247,44 @@ export class FabrikaApplication {
 		if (!this.#fromWorker(request)) {
 			return new Response(null, { status: 404 })
 		}
-		const outcome = await this.#outcome
+		const outcome = await this.#current()
 		if ('failure' in outcome) {
 			throw outcome.failure
 		}
+		return await objectStorage.run(this.#state.storage, () => this.#serve(outcome.booted, request))
+	}
+
+	/** Settles either way: a callback that rejects would reset the object, and every request answers the failure instead. */
+	#boot(): Promise<Outcome> {
+		return this.#state.blockConcurrencyWhile(() =>
+			attach(this.#setup, this.#state, this.#env).then((booted): Outcome => ({ booted }), (failure: unknown): Outcome => {
+				this.#failedBoots++
+				this.#retryAt = Date.now() + Math.min(BOOT_RETRY_MS * 2 ** (this.#failedBoots - 1), BOOT_RETRY_CAP_MS)
+				return { failure }
+			})
+		)
+	}
+
+	/** The instance's boot, booted again once a failed boot's backoff has passed; concurrent events share one retry. */
+	async #current(): Promise<Outcome> {
+		const pending = this.#outcome
+		const outcome = await pending
+		if (!('failure' in outcome) || Date.now() < this.#retryAt) {
+			return outcome
+		}
+		if (this.#outcome === pending) {
+			this.#outcome = this.#boot()
+		}
+		return await this.#outcome
+	}
+
+	#serve(booted: Booted, request: Request): Promise<Response> {
 		const tick = request.headers.get(TICK_HEADER)
 		if (tick !== null) {
-			return this.#tick(outcome.booted, tick)
+			return Promise.resolve(this.#tick(booted, tick))
 		}
 		const exec: RequestExecutionContext = { waitUntil: (promise) => this.#state.waitUntil(promise) }
-		return await outcome.booted.app.fetch(request, exec)
+		return booted.app.fetch(request, exec)
 	}
 
 	/** The fixed-size digests are compared in constant time, so neither the length nor a prefix of the secret leaks. */
@@ -249,12 +300,13 @@ export class FabrikaApplication {
 			return new Response(null, { status: 400 })
 		}
 		const at = new Date(time)
-		for (const job of booted.jobs) {
+		const jobs = booted.app.jobs.scheduled
+		for (const job of jobs) {
 			if (isDueAt(job.schedule, at)) {
 				this.#state.waitUntil(runQuietly(booted.app, job.name))
 			}
 		}
-		if (booted.jobs.length > 0) {
+		if (jobs.length > 0) {
 			this.#state.waitUntil(booted.app.jobs.check())
 		}
 		return new Response(null, { status: 204 })

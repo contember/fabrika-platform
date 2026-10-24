@@ -48,6 +48,7 @@ function recording(inner: BunSqliteStorage): SqliteStorage {
 			},
 		},
 		transaction: (closure) => inner.transaction(closure),
+		transactionSync: (closure) => inner.transactionSync(closure),
 	}
 }
 

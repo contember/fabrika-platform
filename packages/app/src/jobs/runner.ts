@@ -118,6 +118,8 @@ export interface FrameworkJob {
 export interface ContractJobs {
 	/** The contract's `c.cron` jobs; `run` also takes the name of a framework job the contract needs. */
 	readonly names: readonly string[]
+	/** Every job bound to run, the framework's included, with its schedule: what a minute tick runs when due. */
+	readonly scheduled: readonly { readonly name: string; readonly schedule: CronSchedule }[]
 	run(name: string, options?: JobRunOptions): Promise<JobRunResult>
 	/**
 	 * Registers every job (its first-seen time), reports a run that crashed and a job that has not succeeded within
@@ -329,6 +331,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 	})
 	const jobs: ContractJobs = Object.freeze({
 		names,
+		scheduled: Object.freeze([...bound.values(), ...frameworkJobs.values()].map(({ name, schedule }) => ({ name, schedule }))),
 		run(name: string, options: JobRunOptions = {}): Promise<JobRunResult> {
 			const own = frameworkJobs.get(name)
 			if (own !== undefined && framework !== null) {

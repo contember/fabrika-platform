@@ -1,4 +1,4 @@
-import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING } from '@fabrika/app/build'
+import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING, GENERATED_ENTRY_FILE } from '@fabrika/app/build'
 import {
 	type AppEnvironment,
 	appEnvironmentId,
@@ -13,7 +13,8 @@ import {
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type SchemaReconciler } from '@fabrika/provider-contract'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
-import { dirname, resolve } from 'node:path'
+import { stat } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { DurableObject, type GeneratedConfig, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import { assertLiteralAssets } from './assets'
 import type { CloudflareAppConfig } from './authoring'
@@ -29,7 +30,7 @@ import {
 import { runnerWorkerGraph } from './checkout'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
 import { configSchema } from './config-schema'
-import { assertCloudflareContract, needsMinuteTick, runsInObject } from './contract-support'
+import { assertCloudflareContract, needsMinuteTick, pinsGeneratedEntry, runsInObject } from './contract-support'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE } from './proxy'
@@ -137,10 +138,78 @@ const filesBucketRemote = (run: CloudflareDeployRun): string => {
 const MINUTE_TICK = '* * * * *'
 
 /** What the platform gives a contract application's Worker; the deployer writes exactly this and the bounds check it. */
-const applicationRuntime = (run: CloudflareDeployRun, contract: ContractArtifact): ApplicationRuntime => ({
+const applicationRuntime = (run: CloudflareDeployRun, contract: ContractArtifact, entry: string | null): ApplicationRuntime => ({
 	filesBucket: filesBucketRemote(run),
 	crons: needsMinuteTick(contract) ? [MINUTE_TICK] : [],
+	entry,
 })
+
+/** Where `fabrika app build` runs: the application directory, beside its config and contract, and the config it reads. */
+interface EntryBuild {
+	readonly cwd: string
+	readonly config: string
+	/** The directory the runner installed the checkout's dependencies in; the CLI is looked for no higher. */
+	readonly root: string
+}
+
+/** The application's own CLI, where the checkout's `bun install` links it, as the Zerops build runs it. */
+const APPLICATION_CLI = ['node_modules', '.bin', 'fabrika']
+
+const ENTRY_BUILD_ARGS = ['app', 'build', '--provider=cloudflare']
+
+/** All the CLI gets of the executor's environment: what Bun needs to run, as the generated tests of `fabrika db` get. */
+const ENTRY_BUILD_VARIABLES: readonly string[] = ['PATH', 'HOME', 'TMPDIR']
+
+const isFile = async (path: string): Promise<boolean> => {
+	try {
+		return (await stat(path)).isFile()
+	} catch {
+		return false
+	}
+}
+
+/** The first `node_modules/.bin/fabrika` from the application directory up to `root`: a workspace links it at its root. */
+const applicationCli = async ({ cwd, root }: EntryBuild): Promise<string> => {
+	for (let dir = cwd; isWithin(root, dir); dir = dirname(dir)) {
+		const candidate = resolve(dir, ...APPLICATION_CLI)
+		if (await isFile(candidate)) return candidate
+		if (dir === root) break
+	}
+	throw new Error(
+		`fabrika app build: no \`${APPLICATION_CLI.join('/')}\` from \`${cwd}\` up to \`${root}\`; the application installs \`@fabrika/cli\``,
+	)
+}
+
+const isWithin = (root: string, dir: string): boolean => {
+	const path = relative(root, dir)
+	return path === '' || (!path.startsWith('..') && !isAbsolute(path))
+}
+
+/**
+ * The executor's environment carries the application's and the managed secrets, and the CLI is checkout code whose
+ * failed output reaches the log: it inherits nothing and gets only `ENTRY_BUILD_VARIABLES`.
+ */
+const entryBuildEnvironment = (): { readonly env: Record<string, string>; readonly omitEnv: readonly string[] } => {
+	const env: Record<string, string> = {}
+	for (const name of ENTRY_BUILD_VARIABLES) {
+		const value = process.env[name]
+		if (value !== undefined) env[name] = value
+	}
+	return { env, omitEnv: Object.keys(process.env) }
+}
+
+/** Regenerate the entry and the inlined migrations from the checkout, with the application's own release of the CLI. */
+const buildEntry = async (build: EntryBuild, run: CloudflareDeployRun, cf: CloudflareCollaborators): Promise<void> => {
+	const args = [...ENTRY_BUILD_ARGS, `--config=${build.config}`]
+	if (run.dryRun) {
+		run.log(`  [dry-run] would run: fabrika ${args.join(' ')} in ${build.cwd}`)
+		return
+	}
+	assertRunning(run.signal)
+	const command = await applicationCli(build)
+	const result = await cf.runCommand({ command, args, cwd: build.cwd, ...entryBuildEnvironment(), signal: run.signal })
+	if (result.exitCode !== 0) throw commandError('fabrika app build', result)
+}
 
 /**
  * Bind the application's Durable Object, which runs the application over its SQLite, the environment's files bucket,
@@ -326,6 +395,8 @@ interface StepEnv {
 	readonly bounds: DeploymentBounds
 	/** The managed credentials the application Worker's version is uploaded with, as Worker secrets. */
 	readonly managedSecrets: Readonly<Record<string, string>>
+	/** Where the build step regenerates the entry, after `pipeline.build`; null for a release that keeps its authored `main`. */
+	readonly entryBuild: EntryBuild | null
 	generatedConfigs: readonly GeneratedConfig[]
 }
 
@@ -387,14 +458,14 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 	switch (spec.kind) {
 		case 'build': {
 			const build = config.pipeline?.build
-			if (build === undefined) return
-			if (dryRun) {
+			if (build !== undefined && dryRun) {
 				run.log(`  [dry-run] would run build: \`${build}\` in ${dir}`)
-				return
+			} else if (build !== undefined) {
+				assertRunning(signal)
+				const result = await cf.runCommand({ command: 'sh', args: ['-c', build], cwd: dir, omitEnv: PLATFORM_CREDENTIAL_NAMES, signal })
+				if (result.exitCode !== 0) throw commandError(`build (\`${build}\`)`, result)
 			}
-			assertRunning(signal)
-			const result = await cf.runCommand({ command: 'sh', args: ['-c', build], cwd: dir, omitEnv: PLATFORM_CREDENTIAL_NAMES, signal })
-			if (result.exitCode !== 0) throw commandError(`build (\`${build}\`)`, result)
+			if (env.entryBuild !== null) await buildEntry(env.entryBuild, run, cf)
 			return
 		}
 		case 'provision-resources': {
@@ -606,7 +677,10 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	const connectors = platformResources === 'refuse' ? connectorBindings(contract) : {}
 	// An older release's entry exports no object, and a Control older than the runner names no release (ADR-0062).
 	const objectRuntime = run.approved === undefined || (run.approved.framework !== undefined && runsInObject(run.approved.framework))
-	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract) : null
+	// Only a release Control named pins the entry; a local deploy names none and keeps its authored `main`.
+	const release = run.approved?.framework
+	const entry = release !== undefined && pinsGeneratedEntry(release) ? resolve(loaded.cwd, GENERATED_ENTRY_FILE) : null
+	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract, entry) : null
 	const managed = withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served))
 	const identified = platformResources === 'refuse' ? withIamIdentity(managed.worker, appEnvironmentId(run.appId, run.env)) : managed.worker
 	const connected = withConnectorBindings(identified, connectors)
@@ -643,8 +717,11 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		reconcileSchema: options.reconcileSchema ?? defaultReconcileSchema,
 		bounds,
 		managedSecrets: managed.secrets,
+		entryBuild: runtime !== null && runtime.entry !== null
+			? { cwd: loaded.cwd, config: basename(resolve(run.cwd, run.configPath)), root: resolve(run.cwd) }
+			: null,
 		generatedConfigs: [],
 	}
-	const result = await runSteps(buildPlan(loaded.config, worker), run, (step) => runStep(step, env))
+	const result = await runSteps(buildPlan(loaded.config, worker, env.entryBuild !== null), run, (step) => runStep(step, env))
 	return { appId: run.appId, env: run.env, ...result }
 }

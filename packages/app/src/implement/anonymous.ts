@@ -4,7 +4,7 @@
 
 import { LINK_BOOTSTRAP_FILE, SHARE_KEY_GLOBAL } from '../contract/defaults'
 import { HttpError } from '../errors'
-import { readBoundedBytes } from './bounded'
+import { deadline, readBoundedBytes } from './bounded'
 
 /** The slowest body a procedure waits for, in bytes per second: its deadline is `maxBytes` at this rate, 30 s at least. */
 export const BODY_RATE_FLOOR = 16 * 1024
@@ -34,6 +34,16 @@ export async function readBoundedBody(request: Request, maxBytes: number, deadli
 		throw new HttpError(413, 'too_large', `The body is larger than ${maxBytes} bytes`)
 	}
 	return body
+}
+
+/** `readBoundedBody` within the deadline `maxBytes` derives; the deadline ends with the read. */
+export async function readBodyInTime(request: Request, maxBytes: number): Promise<Uint8Array<ArrayBuffer>> {
+	const timer = deadline(bodyDeadlineMs(maxBytes))
+	try {
+		return await readBoundedBody(request, maxBytes, timer.signal)
+	} finally {
+		timer.clear()
+	}
 }
 
 /** What a request answers whose body did not arrive whole: nobody reads it, and no failure is reported. */

@@ -44,6 +44,15 @@ const ARCHITECTURE_APPLICATION: Readonly<Record<string, string>> = Object.fromEn
 	readTree(join(import.meta.dir, 'fixtures', 'architecture-app'), ['.fixture', '.sql']),
 )
 
+/** The two-slice application's `deals.create` mutation, declaring an outside origin. */
+const DEALS_ENDPOINTS = 'src/deals/endpoints.ts'
+const DEALS_CREATE_EGRESS: Readonly<Record<string, string>> = {
+	[DEALS_ENDPOINTS]: (ARCHITECTURE_APPLICATION[DEALS_ENDPOINTS] ?? '').replace(
+		"access: { action: 'deals.write', in: 'company', from: 'companyId' } })",
+		"access: { action: 'deals.write', in: 'company', from: 'companyId' }, egress: ['https://api.example.com'] })",
+	),
+}
+
 /** The clean application on Cloudflare: its config, a file kind, and the generated tests on the SQLite kit. */
 const cloudflareApplication = async (fileKind: string): Promise<Readonly<Record<string, string>>> => {
 	const sources = Object.fromEntries(Object.entries(CLEAN_APPLICATION).filter(([path]) => !CLEAN_GENERATED_TESTS.has(path)))
@@ -679,6 +688,25 @@ const cases: readonly RuleCase[] = [
 		bad: await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024, scan: true })"),
 		expected: ['fabrika.contract.ts:1:1'],
 		good: await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
+	},
+	{
+		rule: 'cloudflare-held-call',
+		bad: { ...ARCHITECTURE_APPLICATION, ...DEALS_CREATE_EGRESS, 'fabrika.config.ts': CLOUDFLARE_CONFIG },
+		expected: ['fabrika.contract.ts:1:1'],
+		good: { ...ARCHITECTURE_APPLICATION, ...DEALS_CREATE_EGRESS },
+	},
+	{
+		rule: 'cloudflare-current-timestamp',
+		bad: {
+			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			'db/migrations/20261024120000_audit.sql': 'CREATE TABLE audit (\n\tid TEXT PRIMARY KEY,\n\tat TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\n',
+		},
+		expected: ['db/migrations/20261024120000_audit.sql:3:1'],
+		good: {
+			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			'db/migrations/20261024120000_audit.sql':
+				"CREATE TABLE audit (\n\tid TEXT PRIMARY KEY,\n\tat TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\n);\n",
+		},
 	},
 	{
 		rule: 'crontab',

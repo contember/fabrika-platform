@@ -26,9 +26,15 @@ export interface FrameworkTables {
 	readonly files: StoredFiles
 }
 
+/** A connection of the layer and its locator. Only its holder can `release` it, which lets the layer be bound again. */
+export interface ProvisionalBinding {
+	readonly locate: Locator
+	release(): void
+}
+
 export interface FrameworkSide {
-	/** Connects the layer once and answers its locator; a second call throws. */
-	bind(runtime: DataLayerRuntime): Locator
+	/** Connects the layer once and answers its binding; a call while one is connected throws. */
+	bind(runtime: DataLayerRuntime): ProvisionalBinding
 	readonly framework: FrameworkTables
 	/** The untyped handle over one table that `@fabrika/db/testing` hands the isolation tests. */
 	probe(table: string): TableProbe

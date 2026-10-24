@@ -1005,8 +1005,9 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
 - **It boots once per isolate.** The constructor runs the boot in `blockConcurrencyWhile` and settles either way: a
   failed boot answers every request with its failure, is reported once, and is not kept, so the next instance boots
   again. For an application with a data layer, before the boot and for every later instance of the isolate, it applies `SQLITE_FRAMEWORK_MIGRATIONS` and the
-  application's bundle through `migrateSqlite`, then binds the layer to `openSqlite` over a storage it swaps per
-  instance (the layer binds once). It captures the environment without `IAM` and `ASSETS`, and boots with
+  application's bundle through `migrateSqlite`, then binds the layer to `openSqlite` over a storage it resolves
+  per event from the object's `AsyncLocalStorage` scope (the layer binds once; a statement outside any event throws),
+  so two objects in one isolate never share a database. It captures the environment without `IAM` and `ASSETS`, and boots with
   `requireProxySecret`, `clientAddress: 'vouched'` (the proxy Worker sets the client address from `CF-Connecting-IP`),
   the R2 file store (`r2-files.ts`) and IAM's binding for keys, membership and workload tokens (`bindings.ts`).
 - **Jobs run on the minute tick.** The object runs every contract job whose schedule `isDueAt` the tick's UTC minute,

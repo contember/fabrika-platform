@@ -24,7 +24,14 @@ import {
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
-import { bindScopedDatabase, type DataAccess, dataAccessOf, type FrameworkTables, frameworkTablesOf, isScopedDatabase } from '@fabrika/db/framework'
+import {
+	bindScopedDatabaseProvisionally,
+	type DataAccess,
+	dataAccessOf,
+	type FrameworkTables,
+	frameworkTablesOf,
+	isScopedDatabase,
+} from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { EmailProviderRegistry } from '@fabrika/email'
 import { builtinEmailProviders } from '@fabrika/email/providers'
@@ -373,6 +380,8 @@ interface BoundDatabase {
 	readonly framework: FrameworkTables | null
 	/** The mini-ORM behind a staged-kit site's `ctx.db`; only a `scoped(tables)` layer has it. */
 	readonly data: DataAccess | null
+	/** Disconnects a `scoped(tables)` layer this boot bound; `null` for any other database. */
+	readonly release: (() => void) | null
 }
 
 /**
@@ -390,7 +399,7 @@ function contractDatabase(
 	}
 	if (!isScopedDatabase(database)) {
 		if ('locate' in database) {
-			return { database, framework: null, data: null }
+			return { database, framework: null, data: null, release: null }
 		}
 		problems.push('serve(contract, { database }) takes the scoped(tables) result of @fabrika/db itself, not a copy or a wrapper of it')
 		return null
@@ -400,8 +409,8 @@ function contractDatabase(
 		return null
 	}
 	try {
-		const locate = bindScopedDatabase(database, { database: connection, capabilities, readOnly: requestIsReadOnly })
-		return { database: { tables: database.tables, locate }, framework: frameworkTablesOf(database), data: dataAccessOf(database) }
+		const { locate, release } = bindScopedDatabaseProvisionally(database, { database: connection, capabilities, readOnly: requestIsReadOnly })
+		return { database: { tables: database.tables, locate }, framework: frameworkTablesOf(database), data: dataAccessOf(database), release }
 	} catch {
 		problems.push('the data layer was bound before boot; only the framework binds it, so remove @fabrika/db/framework from the application')
 		return null
@@ -674,6 +683,22 @@ function runtimePurposes(contract: AnyContract, artifact: ContractArtifact): Rea
 }
 
 export function boot(app: ContractImplementation, options: BootOptions): ContractApp {
+	const binding: Binding = { release: null }
+	try {
+		return bootOnce(app, options, binding)
+	} catch (error) {
+		// A failed boot releases the data layer it bound, so a later boot of the same application binds it again.
+		binding.release?.()
+		throw error
+	}
+}
+
+/** What `bootOnce` bound: released when the boot fails, kept when it succeeds. */
+interface Binding {
+	release: (() => void) | null
+}
+
+function bootOnce(app: ContractImplementation, options: BootOptions, binding: Binding): ContractApp {
 	const problems: string[] = []
 	installEgressGuard()
 	// What a handler reaches through these is the platform's own request, which no site's egress covers.
@@ -702,6 +727,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	const issuer = createCapabilityIssuer()
 	const fileKinds = storedFileKinds(artifact, app.database, objects, problems)
 	const bound = contractDatabase(app.database, options.database, issuer.authority, problems)
+	binding.release = bound?.release ?? null
 	const framework = bound?.framework ?? null
 	frameworkProblems(artifact, framework, problems)
 	const database = bound?.database ?? null

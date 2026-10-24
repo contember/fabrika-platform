@@ -33,7 +33,14 @@ import { checkClientIdentity } from './rules/identity'
 import { checkGeneratedTests } from './rules/isolation'
 import { checkJsonStrings } from './rules/json'
 import { checkLiteralGraph } from './rules/literal'
-import { checkConflictIndexes, checkFileColumnMigrations, checkMigrationNames, type ConflictInsert, type FileColumn } from './rules/migrations'
+import {
+	checkConflictIndexes,
+	checkCurrentTimestampDefaults,
+	checkFileColumnMigrations,
+	checkMigrationNames,
+	type ConflictInsert,
+	type FileColumn,
+} from './rules/migrations'
 import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
 import { checkRuntimeNode, crossAppFetchMessage, rawSqlBindings } from './rules/runtime'
@@ -261,7 +268,10 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const declaredTables = tables !== undefined && literal.length === 0 ? readTablesValue(graph, tables, new ReaderProblems()) : null
 	const artifact = read?.ok === true ? compiledArtifact(read.contract, declaredTables) : null
 	findings.push(...contractDependentFindings(dependent, artifact === null ? null : compiledReach(artifact)))
-	if (artifact !== null && applicationDialect(tree.files) === 'sqlite') findings.push(...checkCloudflareContract(artifact))
+	if (applicationDialect(tree.files) === 'sqlite') {
+		if (artifact !== null) findings.push(...checkCloudflareContract(artifact))
+		findings.push(...checkCurrentTimestampDefaults(tree.files))
+	}
 	if (declaredTables !== null) {
 		const policies = tablePolicies(declaredTables)
 		findings.push(...checkFileColumnMigrations(tree.files, fileColumns(policies)))

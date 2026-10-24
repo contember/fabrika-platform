@@ -413,10 +413,15 @@ Worker's `fetch` (`createContractWorker`, `packages/app/src/cloudflare.ts`) remo
   data layer is `openSqlite` (`@fabrika/db/sqlite`) over `ctx.storage`; the file store is the R2 bucket `FABRIKA_FILES`
   (`cloudflare/r2-files.ts`). An object instance whose boot failed throws that failure on every request; the failed boot is
   not kept, so the next instance boots again.
-- **The invocation transaction is `ctx.storage.transaction`.** A request, a public procedure and a webhook delivery run
-  from the handler to the commit inside its callback (`Invocation.enclose`), because while it is open the input gate
-  also holds back the answers to the object's own I/O made outside it. The object serves no other event meanwhile, so
-  the SQLite compiler drops every row lock (`FOR UPDATE`, `FOR SHARE`, `SKIP LOCKED`). Timestamps are UTC ISO text,
+- **A writing invocation's transaction is `ctx.storage.transaction`.** A request that may write (a mutation, a public
+  procedure) and a webhook delivery run from the handler to the commit inside its callback (`Invocation.enclose`),
+  because while it is open the input gate also holds back the answers to the object's own I/O made outside it. The
+  object serves no other event meanwhile, so the SQLite compiler drops every row lock (`FOR UPDATE`, `FOR SHARE`,
+  `SKIP LOCKED`). A read-only
+  invocation (a query, an export) is not enclosed: each of its statements runs in a `storage.transactionSync` of its
+  own, which holds nothing across an await and rolls back a statement whose cursor reports `rowsWritten`
+  (`DatabaseError` `25006`). The object serves other events while a query awaits, so two of its reads may see different
+  committed states, as under Postgres's READ COMMITTED, and none sees uncommitted data. Timestamps are UTC ISO text,
   booleans 0 or 1, and the scoped layer answers the same values as on Postgres.
 - **The minute tick** starts every job due in its UTC minute, the file sweep among them, and the jobs' check, each past
   the 204 answer. A tick without an integer time is 400.
@@ -549,7 +554,8 @@ calls no outside service: it records an outbox row in its transaction and a job 
 tests boot without the application's variables and a call does not roll back. A call that is the request's whole
 purpose lives in a `{ member: true }` endpoint, which they do not cover, and takes `ctx.signal`. No endpoint sends
 e-mail: it has no `ctx.mail`, so it records the message and kicks the job that sends it ([Kicks](#kicks)). A query
-and an export run in a `READ ONLY` transaction and refuse every write and lock before anything is sent. IAM (a
+and an export refuse every write and lock before anything is sent, and read in a `READ ONLY` transaction on Postgres; on
+a Durable Object's SQLite each statement runs in a transaction of its own, which rolls back one that wrote. IAM (a
 created scope, a membership change, a share link), object storage and a connector call never roll back: do the data
 work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs in the same transaction.
 

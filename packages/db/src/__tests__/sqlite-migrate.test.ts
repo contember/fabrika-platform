@@ -2,7 +2,7 @@
 // cannot see: the object's own `sql.exec` with multi-statement text and its `transactionSync` (checked on Lopata).
 
 import { Database } from 'bun:sqlite'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '../migrations-sqlite'
 import { migrateSqlite, type SqliteMigrationBundle, SqliteMigrationError, type SqliteMigrationTarget } from '../sqlite-migrate'
 
@@ -50,6 +50,34 @@ function ledger(db: Database): { bundle: string; name: string; checksum: string;
 			'SELECT bundle, name, checksum, applied_at FROM fabrika_migrations ORDER BY bundle, name',
 		)
 		.all()
+}
+
+function digests(db: Database): Map<string, string> {
+	const rows = db.query<{ bundle: string; digest: string }, []>('SELECT bundle, digest FROM fabrika_migration_bundles ORDER BY bundle').all()
+	return new Map(rows.map((row) => [row.bundle, row.digest]))
+}
+
+/** The statements and transactions a run issues, and the SHA-256 digests it computes, while `run` is pending. */
+async function observe(db: Database, run: (observed: SqliteMigrationTarget) => Promise<unknown>) {
+	const inner = target(db)
+	const queries: string[] = []
+	let transactions = 0
+	const hashes = spyOn(crypto.subtle, 'digest')
+	try {
+		await run({
+			exec(query, ...bindings) {
+				queries.push(query)
+				return inner.exec(query, ...bindings)
+			},
+			transactionSync(fn) {
+				transactions++
+				return inner.transactionSync(fn)
+			},
+		})
+		return { queries, transactions, hashes: hashes.mock.calls.length }
+	} finally {
+		hashes.mockRestore()
+	}
 }
 
 async function rejection(promise: Promise<unknown>): Promise<unknown> {
@@ -143,5 +171,92 @@ describe('migrateSqlite', () => {
 			expect(await rejection(migrateSqlite(target(db), bundles))).toBeInstanceOf(SqliteMigrationError)
 		}
 		expect(tables(db)).toEqual([])
+	})
+
+	describe('bundle digests', () => {
+		test('a second run over unchanged bundles reads one digest row per bundle, hashes nothing and applies nothing', async () => {
+			const db = open()
+			const bundles = [framework, app([notes, tags])]
+			await migrateSqlite(target(db), bundles)
+			expect([...digests(db).keys()]).toEqual(['app', 'fabrika'])
+			const second = await observe(db, (observed) => migrateSqlite(observed, bundles))
+			expect(second.hashes).toBe(0)
+			expect(second.transactions).toBe(0)
+			expect(second.queries.filter((query) => query.includes('fabrika_migration_bundles WHERE bundle = ?'))).toHaveLength(bundles.length)
+			expect(second.queries.filter((query) => query.includes('fabrika_migrations'))).toEqual([])
+			expect(second.queries).toHaveLength(bundles.length + 1)
+		})
+
+		test('an edited applied file is still refused when its bundle has a recorded digest', async () => {
+			const db = open()
+			await migrateSqlite(target(db), [app([notes])])
+			const before = digests(db)
+			const error = await rejection(migrateSqlite(target(db), [app([{ ...notes, sql: `${notes.sql}\n-- edited` }])]))
+			expect(error).toBeInstanceOf(SqliteMigrationError)
+			expect(String(error)).toContain(`app/${NOTES} changed after it was applied`)
+			expect(digests(db)).toEqual(before)
+		})
+
+		test('an appended file is applied and moves the digest; a failing one leaves the digest where it was', async () => {
+			const db = open()
+			await migrateSqlite(target(db), [framework, app([notes])])
+			const first = digests(db)
+			expect(first.get('app')).toEqual(expect.any(String))
+			const broken = { name: TAGS, sql: "INSERT INTO notes (id) VALUES ('missing title');" }
+			expect(await rejection(migrateSqlite(target(db), [framework, app([notes, broken])]))).toBeInstanceOf(SqliteMigrationError)
+			expect(digests(db)).toEqual(first)
+			const appended = [framework, app([notes, tags])]
+			expect((await migrateSqlite(target(db), appended)).applied).toEqual([`app/${TAGS}`])
+			const second = digests(db)
+			expect(second.get('app')).not.toBe(first.get('app'))
+			expect(second.get('fabrika')).toBe(first.get('fabrika'))
+			const third = await observe(db, (observed) => migrateSqlite(observed, appended))
+			expect(third.transactions).toBe(0)
+			expect(third.queries).toHaveLength(appended.length + 1)
+		})
+
+		test('a database migrated before the digests existed converges: a full check, then the digests are recorded', async () => {
+			const db = open()
+			const bundles = [framework, app([notes, tags])]
+			await migrateSqlite(target(db), bundles)
+			const recorded = digests(db)
+			db.run('DROP TABLE fabrika_migration_bundles')
+			expect((await migrateSqlite(target(db), bundles)).applied).toEqual([])
+			expect(digests(db)).toEqual(recorded)
+			expect(db.query(`SELECT strict FROM pragma_table_list WHERE name = 'fabrika_migration_bundles'`).get()).toEqual({ strict: 1 })
+			const next = await observe(db, (observed) => migrateSqlite(observed, bundles))
+			expect(next.transactions).toBe(0)
+			expect(next.queries).toHaveLength(bundles.length + 1)
+		})
+
+		test('a file appended to an array already hashed is applied', async () => {
+			const db = open()
+			const files = [notes]
+			await migrateSqlite(target(db), [app(files)])
+			files.push(tags)
+			expect((await migrateSqlite(target(db), [app(files)])).applied).toEqual([`app/${TAGS}`])
+			expect(tables(db)).toContain('tags')
+		})
+
+		test('an applied file replaced in an array already hashed is refused', async () => {
+			const db = open()
+			const files = [notes]
+			await migrateSqlite(target(db), [app(files)])
+			files[0] = { ...notes, sql: `${notes.sql}\n-- edited` }
+			const error = await rejection(migrateSqlite(target(db), [app(files)]))
+			expect(error).toBeInstanceOf(SqliteMigrationError)
+			expect(String(error)).toContain(`app/${NOTES} changed after it was applied`)
+		})
+
+		test('an applied file whose text is edited in place in an array already hashed is refused', async () => {
+			const db = open()
+			const file = { name: NOTES, sql: notes.sql }
+			const files = [file]
+			await migrateSqlite(target(db), [app(files)])
+			file.sql = `${notes.sql}\n-- edited`
+			const error = await rejection(migrateSqlite(target(db), [app(files)]))
+			expect(error).toBeInstanceOf(SqliteMigrationError)
+			expect(String(error)).toContain(`app/${NOTES} changed after it was applied`)
+		})
 	})
 })

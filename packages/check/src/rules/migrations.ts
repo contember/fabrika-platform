@@ -43,6 +43,37 @@ export const checkMigrationNames = (paths: readonly string[]): Finding[] => {
 	return findings
 }
 
+/** The default a SQLite timestamp column takes: the UTC ISO text every read of the table parses. */
+const SQLITE_NOW_DEFAULT = "DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+
+/**
+ * On SQLite `DEFAULT CURRENT_TIMESTAMP` stores `YYYY-MM-DD HH:MM:SS`, which every read of the table refuses as
+ * `unexpected_row` (backlog 216 item 13). Refused with or without parentheses, at the line of `CURRENT_TIMESTAMP`.
+ */
+export const checkCurrentTimestampDefaults = (files: ReadonlyMap<string, string>): Finding[] => {
+	const findings: Finding[] = []
+	for (const [path, sql] of files) {
+		if (!path.startsWith(MIGRATIONS_DIR) || !path.endsWith('.sql')) continue
+		for (const { tokens } of topLevelStatements(sql)) {
+			tokens.forEach((token, index) => {
+				if (upperWord(token) !== 'DEFAULT') return
+				const value = isPunct(tokens[index + 1], '(') ? tokens[index + 2] : tokens[index + 1]
+				if (value === undefined || upperWord(value) !== 'CURRENT_TIMESTAMP') return
+				findings.push({
+					file: path,
+					line: value.line,
+					column: 1,
+					severity: 'refusal',
+					rule: 'cloudflare-current-timestamp',
+					message: 'DEFAULT CURRENT_TIMESTAMP stores YYYY-MM-DD HH:MM:SS on SQLite, which every read of the table refuses as unexpected_row',
+					allowed: SQLITE_NOW_DEFAULT,
+				})
+			})
+		}
+	}
+	return findings
+}
+
 /** A declared file column: `table.column` holds files of `kind`. */
 export interface FileColumn {
 	readonly table: string

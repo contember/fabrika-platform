@@ -50,7 +50,11 @@ SQLite database. The Worker only forwards each request to it.**
    awaiting I/O outside the callback would wait for its own transaction to end. A transaction opened inside the callback
    nests as a savepoint (workerd's `ActorSqlite::ExplicitTxn`) and commits only with the enclosing one. A transaction
    longer than the platform's limit resets the object, so a handler keeps slow I/O out of its transaction, as it does
-   on Postgres.
+   on Postgres. A read-only invocation (a query, an export) is not enclosed: each of its statements runs in a
+   `storage.transactionSync` of its own, which holds nothing across an await and rolls back a statement whose cursor
+   reports `rowsWritten`, below the data layer's refusal of every write. The object serves other events while a query
+   awaits, so two of its reads may see different committed states, as under Postgres's READ COMMITTED; a writing
+   transaction excludes every other event, so a read never sees uncommitted data.
 3. **The application's migrations are SQLite and run in the object.** An application on Cloudflare writes its
    migrations in SQLite; the object applies the framework bundle `fabrika` (`@fabrika/db/migrations-sqlite`) and then
    the application's bundle when it boots, in a ledger of its own, before it serves a request. Timestamps are UTC ISO

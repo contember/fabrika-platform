@@ -68,9 +68,9 @@ import {
 import type { RequestExecutionContext } from '../fetch'
 import { FileWork, type StoredFileKinds, storedFilesHandle } from '../files/kinds'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
-import { abortedBody, bodyDeadlineMs, bootstrapPath, bootstrapResponse, readBoundedBody, withBootstrap } from './anonymous'
+import { abortedBody, bodyDeadlineMs, bootstrapPath, bootstrapResponse, readBodyInTime, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
-import { boundedStream, handlerSignal, readBoundedBytes } from './bounded'
+import { boundedStream, type Deadline, deadline, handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
 import {
 	type AppCapability,
@@ -522,6 +522,22 @@ export class ContractRuntime {
 		const admission = served.admission ?? DEFAULT_ADMISSION
 		await this.#admit(served.row, admission, request, caller.subject)
 		const body = await procedureBody(served, request, this.#parts.fileKinds)
+		try {
+			return await this.#procedureInvocation(served, request, exec, caller, admission, body)
+		} finally {
+			// Whatever refuses the request once the body is open, a multipart body's stream and deadline end here.
+			await body.multipart?.close()
+		}
+	}
+
+	async #procedureInvocation(
+		served: Extract<ServedEndpoint, { kind: 'procedure' }>,
+		request: Request,
+		exec: RequestExecutionContext | undefined,
+		caller: Caller,
+		admission: ProcedureAdmission,
+		body: Awaited<ReturnType<typeof procedureBody>>,
+	): Promise<Response | FileDownload> {
 		// Signed tokens are verified as the input is parsed; the texts they carry are what the request may redirect to.
 		const carried = new Set<string>()
 		const fields = this.#parts.tokens.verifyFields(served.row.input, body.multipart === null ? body.input : body.multipart.json, carried)
@@ -532,12 +548,14 @@ export class ContractRuntime {
 		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), site.kind === 'query' || served.readOnly === true)
 		const kicks = kickRecorder(`'${served.row.id}'`, site?.declaration.kicks ?? [])
 		let outcome: 'open' | 'committing' = 'open'
+		let budget: Deadline | null = null
 		try {
 			const input = body.multipart === null
 				? fields
 				: this.#parts.tokens.verifyFields(served.row.input, await this.#fileInput(served, body.multipart, work), carried)
 			// The handler's time starts after the last body byte, so a slow upload does not eat it.
-			const signal = handlerSignal(request, admission.timeoutMs)
+			budget = handlerSignal(request, admission.timeoutMs)
+			const { signal } = budget
 			const answer = await enclosedAnswer(invocation, async () => {
 				let result: unknown
 				try {
@@ -586,8 +604,8 @@ export class ContractRuntime {
 			this.#kickAll(kicks.kicked(), exec)
 			return answer
 		} finally {
+			budget?.clear()
 			await invocation?.rollback()
-			await body.multipart?.close()
 			// Only a known rollback deletes what the request staged; after a commit that may have happened, the sweep decides.
 			if (outcome === 'open') {
 				await this.#parts.fileKinds?.release(work)
@@ -1014,13 +1032,15 @@ export class ContractRuntime {
 			return this.#parts.mint.app(frame, action, subject)
 		}
 		let outcome: 'open' | 'committing' = 'open'
+		let budget: Deadline | null = null
 		try {
 			// The file parts come after the challenge, so a refused visitor stores nothing.
 			const input = body.multipart === null
 				? fields
 				: this.#parts.tokens.verifyFields(served.row.input, await this.#fileInput(served, body.multipart, work), carried)
 			// The handler's time starts after the last body byte, so a slow upload does not eat it.
-			const signal = handlerSignal(request, served.admission.timeoutMs)
+			budget = handlerSignal(request, served.admission.timeoutMs)
+			const { signal } = budget
 			const answer = await enclosedAnswer(invocation, async () => {
 				let result: unknown
 				try {
@@ -1067,6 +1087,7 @@ export class ContractRuntime {
 			this.#kickAll(kicks.kicked(), exec)
 			return answer
 		} finally {
+			budget?.clear()
 			await invocation.rollback()
 			if (outcome === 'open') {
 				await this.#parts.fileKinds?.release(work)
@@ -1089,7 +1110,7 @@ export class ContractRuntime {
 	): Promise<Response> {
 		admitContentType(served.row, request)
 		const limit = maxBytesOf(served.row)
-		const body = await readBoundedBody(request, limit, AbortSignal.timeout(bodyDeadlineMs(limit)))
+		const body = await readBodyInTime(request, limit)
 		const tables = this.#framework().webhooks
 		const bindingId = params[WEBHOOK_BINDING_PARAMETER] ?? ''
 		const binding = BINDING_ID.test(bindingId) ? await tables.binding(served.webhook, bindingId) : null
@@ -1153,7 +1174,8 @@ export class ContractRuntime {
 		// The claim stays outside the delivery's transaction, and its completion commits inside it, with the work.
 		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), false)
 		const kicks = kickRecorder(`webhook '${served.webhook}'`, site?.kicks ?? [])
-		const signal = handlerSignal(request, budgetMs)
+		const budget = handlerSignal(request, budgetMs)
+		const { signal } = budget
 		let committing = false
 		try {
 			await enclosed(invocation, async () => {
@@ -1221,6 +1243,8 @@ export class ContractRuntime {
 			console.error(`fabrika: ${served.row.id}: delivery_failed; the provider's redelivery runs it again`)
 			await tables.releaseDelivery(claim)
 			throw error
+		} finally {
+			budget.clear()
 		}
 		return jsonResponse({ result: { received: true } }, 200)
 	}
@@ -1508,7 +1532,7 @@ async function readInput(
 		const limit = served.row.admission?.maxBytes ?? null
 		const text = limit === null
 			? await request.text()
-			: new TextDecoder().decode(await readBoundedBody(request, limit, AbortSignal.timeout(bodyDeadlineMs(limit))))
+			: new TextDecoder().decode(await readBodyInTime(request, limit))
 		if (mediaType(request.headers.get('Content-Type')) === FORM_URLENCODED_TYPE) {
 			body = paramsObject(new URLSearchParams(text), served.row.input)
 		} else if (text.trim() !== '') {
@@ -1580,16 +1604,17 @@ async function openMultipart(
 	if (Number.isFinite(declared) && declared > bodyBytes) {
 		throw tooLarge()
 	}
-	const deadline = AbortSignal.any([request.signal, AbortSignal.timeout(bodyDeadlineMs(maxBytes))])
+	const timer = deadline(bodyDeadlineMs(maxBytes), request.signal)
 	const body = boundedStream(request.body ?? new Blob([]).stream(), bodyBytes)
 	const parts = multipartParts(body.stream, boundary, { maxHeaderBytes: PROCEDURE_LIMITS.maxPartHeaderBytes })
-	const failure = (error: unknown) => (body.exceeded() ? tooLarge() : multipartFailure(error, parts, deadline, request))
+	const failure = (error: unknown) => (body.exceeded() ? tooLarge() : multipartFailure(error, parts, timer.signal, request))
 	const stop = () => {
 		parts.cancel().catch(() => {})
 	}
-	deadline.addEventListener('abort', stop, { once: true })
+	timer.signal.addEventListener('abort', stop, { once: true })
 	const close = async () => {
-		deadline.removeEventListener('abort', stop)
+		timer.signal.removeEventListener('abort', stop)
+		timer.clear()
 		await parts.cancel()
 	}
 	let json: Readonly<Record<string, unknown>>

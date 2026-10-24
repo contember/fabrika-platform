@@ -65,6 +65,17 @@ this one import.
   class, a `script_name` on it, a migration history that does not open with that `v0001` or names the class again
   (a committed `wrangler.jsonc` with a history of its own), another `FABRIKA_FILES` bucket, and triggers the platform
   did not write.
+- **From `pinsGeneratedEntry` the application Worker runs only the entry the deploy regenerates** (`src/contract-support.ts`).
+  For a release Control names at or above that gate, `assertGeneratedEntry` (`src/bounds.ts`) requires the Worker's
+  `main` to resolve to `fabrika/entry.generated.ts` beside the config, and refuses `workflows`, `containers` and any
+  Durable Object binding but `FABRIKA_APPLICATION`: the generated entry exports none of them. The plan then always has
+  `build`: `pipeline.build` first, if any, then the application's own `fabrika app build --provider=cloudflare` in the
+  config's directory, so the entry and the inlined migrations come from the pinned commit, not the committed copies.
+  The CLI is the first `node_modules/.bin/fabrika` from the config's directory up to the executor's working directory
+  (where the runner installed), never above. It is checkout code whose failed output is logged, so it inherits nothing
+  of the executor's environment, which carries the application's and the managed secrets: it gets `PATH`, `HOME` and
+  `TMPDIR` only. An older release, a Control that
+  names no release, and a local deploy keep their authored `main` and the old plan (ADR-0062).
 - **Every managed credential is a Worker secret, uploaded with the version** (`src/managed-secrets.ts`): token keys,
   workload keys, mail, the platform transport, the Operations DSN, the IAM RPC key and the proxy secret. Only the names
   in `PUBLIC_MANAGED_VARIABLES` (the release, the digest, the issuer and audience, the app id, the environment, the IAM
@@ -149,7 +160,8 @@ this one import.
 - **This package is one of the four that relax two strict flags for oblaka** — see the root
   CLAUDE.md. Keep our own code strict; never work around oblaka with a cast.
 - **The plan is ordered step kinds**, not free-form work: `build` → `provision-resources` →
-  `migrate` → `deploy-worker` → `reconcile-schema` → `sync-secrets`. `runSteps` executes them in the
+  `migrate` → `deploy-worker` → `reconcile-schema` → `sync-secrets`. `build` is present when the config sets
+  `pipeline.build` or the release pins the generated entry. `runSteps` executes them in the
   order supplied and never interprets a step's `kind`.
 - **The proxy topology is: public Worker owns the route, private application Worker is bound to it.**
   IAM remains a global service binding, at its application entrypoint. See ADR-0022.

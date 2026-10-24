@@ -42,16 +42,18 @@ export const REFUSAL_RULE_IDS = [
 	'shared-import',
 	'cloudflare-sql',
 	'cloudflare-scan',
+	'cloudflare-current-timestamp',
 ] as const
 
 /** Rules that report a step out of the application architecture. */
 export const STRUCTURE_HINT_RULE_IDS = ['logic-data-access', 'cross-slice-queries', 'handler-location', 'data-access-location'] as const
 
 /**
- * Rules whose findings never fail the check: the architecture's, a `ctx.sql` its site does not declare, and a
- * `{ member: true }` endpoint of a contract whose external role admits people from outside the organization.
+ * Rules whose findings never fail the check: the architecture's, a `ctx.sql` its site does not declare, a
+ * `{ member: true }` endpoint of a contract whose external role admits people from outside the organization, and a
+ * Cloudflare mutation that waits for an outside call inside the object's transaction.
  */
-export const HINT_RULE_IDS = [...STRUCTURE_HINT_RULE_IDS, 'sql-undeclared', 'member-admits-external'] as const
+export const HINT_RULE_IDS = [...STRUCTURE_HINT_RULE_IDS, 'sql-undeclared', 'member-admits-external', 'cloudflare-held-call'] as const
 
 export const RULE_IDS = [...REFUSAL_RULE_IDS, ...HINT_RULE_IDS] as const
 

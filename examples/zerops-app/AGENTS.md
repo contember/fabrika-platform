@@ -294,6 +294,15 @@ The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory
 object's transaction, so its `limits.timeoutMs` is at most 25 s. No `sql` (`ctx.sql`) and no `scan: true`: the
 checker, the deploy and the boot refuse both.
 
+The object runs one transaction at a time, so every `await` in a handler that may write holds the whole environment:
+IAM, R2, a `fetch`, a `ctx.connect` call, a binding. One 2 s call caps the environment at half a request a second. A
+query holds no transaction: each of its statements runs on its own, so two of its reads may see different committed
+states. Inside a
+mutation keep I/O to the framework's own: IAM, and the file it writes. A slow outside call goes into a row, the
+mutation calls `ctx.kick('<job>')`, and the job makes the call outside `ctx.transaction` (`references/jobs.md`). The
+checker hints on a mutation that declares `egress` or `connect` (`cloudflare-held-call`), and refuses
+`DEFAULT CURRENT_TIMESTAMP` in a migration (`cloudflare-current-timestamp`).
+
 ```bash
 bunx fabrika db new <slug>                                  # a new SQLite migration file
 bunx fabrika db codegen                                     # applies the migrations in memory; writes src/db/schema.generated.ts
@@ -1504,6 +1513,10 @@ refused while the site runs (`capability_refused: undeclared_egress`). A public,
 none. The checker's `cross-app-fetch` accepts an absolute URL only under an origin some site declares. The approver
 sees every origin. The guard stops mistakes; it is no sandbox.
 
+On Cloudflare a procedure waits for its outside call inside the object's transaction, so the whole environment waits
+with it (`SKILL.md`). A mutation records a row and kicks a job, which declares the `egress` and calls outside
+`ctx.transaction` (`references/jobs.md`).
+
 ## Links to your own procedures: `ctx.url`
 
 `ctx.url('<endpoint id>', { input?, query? })` builds an absolute URL of one of the application's own procedures, on
@@ -1650,41 +1663,43 @@ architecture, and a refusal's allowed form is the one fix that passes. There is 
 
 The refusals agents meet most, and their fix:
 
-| Rule                    | Means                                                                                                                                                            | Fix                                                                                       |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `literal`               | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                                                                         | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)`    |
-| `contract`              | the contract does not compile (a reserved role, an unknown action, a wrong field)                                                                                | the message names the field                                                               |
-| `package-replacement`   | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                                                                | another name; a registry range such as `^0.0.4`                                           |
-| `generated-test-hash`   | a generated test is missing, edited or stale                                                                                                                     | `bunx fabrika db test-scaffold`, and commit what it writes                                |
-| `endpoint-fixture`      | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member, invitation or link field no endpoint that reads, cancels or revokes one | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)          |
-| `raw-sql`               | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                                                                       | the handles, or `sql: 'read'` and `ctx.sql`                                               |
-| `forbidden-import`      | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                                                                     | the handles, a file column with `ctx.files`, a connector                                  |
-| `forbidden-global`      | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` in a server module                                                        | the handles; state lives in a table, not in a global; `crypto.randomUUID()` for an id     |
-| `env-read`              | `process.env`, `Bun.env`                                                                                                                                         | `defineDeps(build)`, which receives the application's variables                           |
-| `client-identity`       | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                                                                       | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy                |
-| `type-assertion`        | `as T` (other than `as const`), `<T>x`                                                                                                                           | fix the type; `fromRow` parses a row into a schema's type                                 |
-| `sensitive-log`         | a log of an error object, a request, headers or the environment                                                                                                  | log a short fixed message                                                                 |
-| `migration-name`        | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                                                            | `bunx fabrika db new <slug>`                                                              |
-| `test-only-import`      | `@fabrika/app/testing`, `@fabrika/app/react/testing`, `@fabrika/db/testing` or `@fabrika/db/testing-sqlite` outside a test file                                  | import them only from `*.test.ts` or `__tests__/`                                         |
-| `spa-server-import`     | the SPA loads a server module                                                                                                                                    | the SPA imports `@fabrika/app/client`, the contract, `src/schemas.ts` and `src/shared/`   |
-| `shared-import`         | a module under `src/shared/` loads a slice, `src/db/`, `@fabrika/*` or a builtin                                                                                 | a shared module imports `zod/v4` and other shared modules only                            |
-| `skipped-test`          | `.skip`, `.only`, `.todo`                                                                                                                                        | run the test                                                                              |
-| `file-column-migration` | a file column without `REFERENCES fabrika_files (id)` or without an index it leads                                                                               | both, in a new migration (`references/table-and-migration.md`)                            |
-| `on-conflict-index`     | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                                 | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns |
-| `cross-app-fetch`       | a `fetch` of an absolute URL under no origin a site declares in `egress`                                                                                         | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)              |
-| `url-endpoint`          | `ctx.url('<id>')` names no procedure of the contract                                                                                                             | the endpoint id `<mount>.<group>.<procedure>`                                             |
-| `cloudflare-sql`        | on Cloudflare, a site that declares `sql`                                                                                                                        | the handles (`ctx.db`), without `sql`                                                     |
-| `cloudflare-scan`       | on Cloudflare, a file kind with `scan: true`                                                                                                                     | the kind without `scan`, and no public procedure that takes its files                     |
+| Rule                           | Means                                                                                                                                                            | Fix                                                                                       |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `literal`                      | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                                                                         | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)`    |
+| `contract`                     | the contract does not compile (a reserved role, an unknown action, a wrong field)                                                                                | the message names the field                                                               |
+| `package-replacement`          | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                                                                | another name; a registry range such as `^0.0.4`                                           |
+| `generated-test-hash`          | a generated test is missing, edited or stale                                                                                                                     | `bunx fabrika db test-scaffold`, and commit what it writes                                |
+| `endpoint-fixture`             | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member, invitation or link field no endpoint that reads, cancels or revokes one | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)          |
+| `raw-sql`                      | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                                                                       | the handles, or `sql: 'read'` and `ctx.sql`                                               |
+| `forbidden-import`             | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                                                                     | the handles, a file column with `ctx.files`, a connector                                  |
+| `forbidden-global`             | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` in a server module                                                        | the handles; state lives in a table, not in a global; `crypto.randomUUID()` for an id     |
+| `env-read`                     | `process.env`, `Bun.env`                                                                                                                                         | `defineDeps(build)`, which receives the application's variables                           |
+| `client-identity`              | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                                                                       | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy                |
+| `type-assertion`               | `as T` (other than `as const`), `<T>x`                                                                                                                           | fix the type; `fromRow` parses a row into a schema's type                                 |
+| `sensitive-log`                | a log of an error object, a request, headers or the environment                                                                                                  | log a short fixed message                                                                 |
+| `migration-name`               | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                                                            | `bunx fabrika db new <slug>`                                                              |
+| `test-only-import`             | `@fabrika/app/testing`, `@fabrika/app/react/testing`, `@fabrika/db/testing` or `@fabrika/db/testing-sqlite` outside a test file                                  | import them only from `*.test.ts` or `__tests__/`                                         |
+| `spa-server-import`            | the SPA loads a server module                                                                                                                                    | the SPA imports `@fabrika/app/client`, the contract, `src/schemas.ts` and `src/shared/`   |
+| `shared-import`                | a module under `src/shared/` loads a slice, `src/db/`, `@fabrika/*` or a builtin                                                                                 | a shared module imports `zod/v4` and other shared modules only                            |
+| `skipped-test`                 | `.skip`, `.only`, `.todo`                                                                                                                                        | run the test                                                                              |
+| `file-column-migration`        | a file column without `REFERENCES fabrika_files (id)` or without an index it leads                                                                               | both, in a new migration (`references/table-and-migration.md`)                            |
+| `on-conflict-index`            | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                                 | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns |
+| `cross-app-fetch`              | a `fetch` of an absolute URL under no origin a site declares in `egress`                                                                                         | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)              |
+| `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                                             | the endpoint id `<mount>.<group>.<procedure>`                                             |
+| `cloudflare-sql`               | on Cloudflare, a site that declares `sql`                                                                                                                        | the handles (`ctx.db`), without `sql`                                                     |
+| `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                                     | the kind without `scan`, and no public procedure that takes its files                     |
+| `cloudflare-current-timestamp` | on Cloudflare, `DEFAULT CURRENT_TIMESTAMP` in a migration: SQLite stores `YYYY-MM-DD HH:MM:SS`, which every read of the table refuses                            | `DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, in a new migration                     |
 
 The hints:
 
-| Hint                   | Means                                                         | Fix                                                         |
-| ---------------------- | ------------------------------------------------------------- | ----------------------------------------------------------- |
-| `handler-location`     | a `.handle(…)` outside a slice's `endpoints.ts`               | move the endpoint into `src/<slice>/endpoints.ts`           |
-| `data-access-location` | `ctx.db` or `ctx.sql` outside `endpoints.ts` and `queries.ts` | pass the handle into a function of the slice's `queries.ts` |
-| `logic-data-access`    | `logic.ts` reaches data                                       | keep `logic.ts` pure; pass it plain values                  |
-| `cross-slice-queries`  | a slice loads another slice's `queries.ts`                    | move the function, or call that slice's endpoint            |
-| `sql-undeclared`       | `ctx.sql` in a handler whose endpoint declares no `sql`       | add `sql: 'read'` (or `'write'`) to that endpoint           |
+| Hint                   | Means                                                                                                    | Fix                                                                                    |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `handler-location`     | a `.handle(…)` outside a slice's `endpoints.ts`                                                          | move the endpoint into `src/<slice>/endpoints.ts`                                      |
+| `data-access-location` | `ctx.db` or `ctx.sql` outside `endpoints.ts` and `queries.ts`                                            | pass the handle into a function of the slice's `queries.ts`                            |
+| `logic-data-access`    | `logic.ts` reaches data                                                                                  | keep `logic.ts` pure; pass it plain values                                             |
+| `cross-slice-queries`  | a slice loads another slice's `queries.ts`                                                               | move the function, or call that slice's endpoint                                       |
+| `sql-undeclared`       | `ctx.sql` in a handler whose endpoint declares no `sql`                                                  | add `sql: 'read'` (or `'write'`) to that endpoint                                      |
+| `cloudflare-held-call` | on Cloudflare, a mutation that declares `egress` or `connect` holds the whole environment while it waits | record a row and `ctx.kick('<job>')`; the job makes the call outside `ctx.transaction` |
 
 The first run may report only the contract's refusals: the generated-test findings appear once the contract compiles.
 
