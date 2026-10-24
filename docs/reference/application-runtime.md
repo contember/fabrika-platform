@@ -1703,7 +1703,7 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   what a page of the application sends: `Sec-Fetch-Site: same-origin` and, unless the
   request's credentials are `omit`, the caller's session cookie. Both refuse a host
   other than the application's.
-- A caller whose token would exceed `MAX_ACCESS_TOKEN_BYTES` (8 KiB) is refused with
+- A caller whose token would exceed `MAX_ACCESS_TOKEN_BYTES` (32 KiB) is refused with
   403, as IAM refuses to sign it.
 - Only test files may import the kit: `@fabrika/check` reports `test-only-import`
   for `@fabrika/app/testing` (and its subpaths), `@fabrika/db/testing`, or a test

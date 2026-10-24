@@ -704,9 +704,10 @@ still refuses any `Authorization` header, as authorization.
   it; and resolves such a grant to no permission. Neither a cross-app grant nor the bootstrap `admin` reaches an
   external principal, at any audience, and it issues only a key bound to itself.
 - **A bound on token size**, so that a person in many workspaces cannot exceed the proxy's header
-  limit. IAM signs no access token above 8 KiB and answers `token_too_large`, which the proxy turns
+  limit. IAM signs no access token above 32 KiB and answers `token_too_large`, which the proxy turns
   into a 403, never a login bounce. Bun, the application runtime on Zerops, refuses more than
-  16 KiB of request headers; Caddy and Cloudflare allow more.
+  16 KiB of request headers by default; the platform starts an application with 64 KiB. Caddy (1 MiB) and
+  Cloudflare (128 KiB) allow more.
 - **Revocation takes effect within the token lifetime of 300 s.** This holds for sessions and for keys,
   share links included. Membership operations are checked live at IAM. An expiring grant is a hard deadline: a token
   expires no later than the earliest time at which an entry it carries loses its last supporting grant.

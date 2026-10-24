@@ -76,7 +76,7 @@ const generatedApplication = async (execution: ZeropsLockedExecution): Promise<s
 		const text = readFileSync(join(root, script), 'utf8')
 			.replaceAll('/var/www', root)
 			.replaceAll('./node_modules/.bin/fabrika', `bun ${CLI}`)
-			.replace('exec bun fabrika/entry.generated.ts', `echo '${STARTED}'`)
+			.replace('exec bun --max-http-header-size=65536 fabrika/entry.generated.ts', `echo '${STARTED}'`)
 		writeFileSync(join(root, script), text)
 	}
 	mkdirSync(join(root, 'db', 'migrations'), { recursive: true })

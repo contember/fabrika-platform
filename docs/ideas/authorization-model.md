@@ -167,10 +167,10 @@ Gaps:
   ([backlog 226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md), after the provider-neutral-core
   sprint).
 - One parent per dimension (optional vocabulary).
-- Expanded `perms` overflow the token ([backlog 100](../backlog/100-a-principal-in-many-scopes-gets-no-token.md)). Under this model the token is a projection: the actions
-  held application-wide or somewhere, with nodes fetched by the application. It is additive under ADR-0062: `perms`
-  stays for releases in the support window, Control emits new manifest rows only once it records which proxy release
-  each namespace runs, and the plan states when IAM mints the new shape.
+- Expanded `perms` overflow the token for a principal in hundreds of nodes. Decided: raise the bound, not project the
+  token. IAM now signs up to 32 KiB (about 200 entries) and the platform starts an application's Bun server with a
+  64 KiB header limit. A compact, additive claim shape and the 1000-value `Within` cap remain
+  ([backlog 100](../backlog/100-a-principal-in-many-scopes-gets-no-token.md)).
 
 ## Migrating the application in production
 
@@ -204,6 +204,5 @@ reachable whatever grants remain on their org.
 
 ## Open questions
 
-- The token projection for backlog 100: the claim shape and how the application fetches nodes.
 - Whether a node registry in IAM should replace opaque roots.
 - Attribute claims beyond `email`: which ones, issued how, and their freshness.

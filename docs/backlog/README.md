@@ -45,7 +45,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [97](97-the-generated-tests-have-no-move-case.md) — The generated tests have no `move` case, though `capabilities` now hands an endpoint the two `Ref`s a move needs.
 - [98](98-application-migrations-have-no-destructive-change-rules.md) — The checker accepts a dropped column, a rename or a `GRANT` in an application migration; the expand-only rules are not built (the runner already refuses the `GRANT`).
 - [99](99-no-check-builds-the-runner-image.md) — No CI job builds or smoke-tests the runner image, and its `bun install` runs without a lockfile.
-- [100](100-a-principal-in-many-scopes-gets-no-token.md) — One permission entry per action and scope meets the 8 KiB token bound at a few dozen workspaces; the 1000-value `Within` cap sits behind it.
+- [100](100-a-principal-in-many-scopes-gets-no-token.md) — One permission entry per action and scope meets the 32 KiB token bound at about 200 entries; a compact claim shape and the 1000-value `Within` cap remain.
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
 - [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md) — New roles on an HA service's direct port, ClamAV on a real service, and the pre-WU12 Notes schema need one live sitting.
 - [117](117-an-application-test-cannot-inject-a-database-fault.md) — The checker refuses Bun's SQL and `process.env` in tests too; only the job clock can fail an attempt.

@@ -101,7 +101,7 @@ describe('the generated execution descriptor of a contract application', () => {
 					`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p /build/source/fabrika/tsconfig.platform.json`,
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db migrate' > fabrika/migrate.generated.sh",
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes ./node_modules/.bin/fabrika db codegen --verify' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db test-isolation' > fabrika/verify.generated.sh",
-					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'exec bun fabrika/entry.generated.ts' > fabrika/start.generated.sh",
+					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'exec bun --max-http-header-size=65536 fabrika/entry.generated.ts' > fabrika/start.generated.sh",
 				],
 				deployFiles: ['./'],
 				cache: ['node_modules'],

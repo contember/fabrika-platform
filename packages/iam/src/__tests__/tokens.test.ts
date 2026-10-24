@@ -278,10 +278,10 @@ describe('mintFromKey', () => {
 
 describe('the access token size bound', () => {
 	/** A user in enough workspaces that the token would not fit in one proxy header. */
-	async function memberOfManyWorkspaces() {
+	async function memberOfManyWorkspaces(count = 400) {
 		const h = createHarness()
 		const principalId = seedUser(h.sqlite, { sub: 'g-wide', email: 'wide@b.cz' })
-		for (let index = 0; index < 200; index++) {
+		for (let index = 0; index < count; index++) {
 			seedInlineGrant(h.sqlite, principalId, ['note.read', 'note.write'], { type: 'workspace', value: `workspace-${index}` }, 'example-app')
 		}
 		return { h, principalId }
@@ -308,6 +308,23 @@ describe('the access token size bound', () => {
 		const services = h.makeServices({ issuer: 'https://propustka.test' })
 		const { result } = await mintFromKey(services, ENV, { app: 'example-app', key, requestId: 'wide-key' })
 		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
+	})
+
+	test('a token between 8 KiB and the bound is signed, and verifies with every entry', async () => {
+		const { h, principalId } = await memberOfManyWorkspaces(80)
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const session = await h.signSession(principalId)
+		const { result } = await mintToken(services, ENV, { app: 'example-app', session, requestId: 'wide-fits' })
+		if (!result.ok) throw new Error(`expected a token: ${result.reason}`)
+		expect(result.token.length).toBeGreaterThan(8192)
+		expect(result.token.length).toBeLessThanOrEqual(MAX_ACCESS_TOKEN_BYTES)
+		const { payload } = await jwtVerify(result.token, createLocalJWKSet((await getSigner(ENV)).jwks()), {
+			issuer: 'https://propustka.test',
+			audience: 'example-app',
+		})
+		const perms = parseAccessClaims(payload)?.perms ?? []
+		expect(perms).toHaveLength(160)
+		expect(permits(perms, 'note.write', { type: 'workspace', value: 'workspace-79' })).toBe(true)
 	})
 
 	test('a token at the bound still mints', async () => {
