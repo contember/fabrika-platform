@@ -1,10 +1,11 @@
 import { createRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
-import { CONTROL_ACTIONS, type ControlRpcContract, type RunDto } from '@fabrika/control-contract'
+import { CONTROL_ACTIONS, type RunDto } from '@fabrika/control-contract'
 import type { ApiKeyDetail, IamAdminRpcContract } from '@fabrika/iam-contract'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import type { OperationsSourceHealthDto } from '@fabrika/operations-contract/operator-api'
-import type { OperationsRpcContract } from '@fabrika/operations-contract/rpc'
 import { actorIdsToResolve, resolveActors } from '../access/lib/audit-actors'
+import { createOperationsClient } from '../operations/client'
+import { createControlClient } from './api'
 import { type ConsoleCaller, holdsGlobally, mayDo, mayOpen } from './console-access'
 import { runtimeHealth } from './health'
 import { recentAuditChangePage } from './iam'
@@ -25,18 +26,45 @@ export const OVERVIEW_RUN_LIMIT = 200
 export const OVERVIEW_ISSUE_LIMIT = 100
 export const OVERVIEW_KEY_LIMIT = 25
 export const OVERVIEW_CHANGE_LIMIT = 6
+/**
+ * IAM audits every admin read, the console's own included, so a timed refresh reads Access again only after this
+ * long; navigating to the page or pressing refresh reads it at once.
+ */
+export const OVERVIEW_ACCESS_REFRESH_MS = 10 * 60_000
 
-export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fetch) {
-	const control = createRpcClient<ControlRpcContract>({ baseUrl: '/api/rpc', fetch: fetcher, bounceOnAuth: false })
-	const operations = createRpcClient<OperationsRpcContract>({ baseUrl: '/operations/api/rpc', fetch: fetcher, bounceOnAuth: false })
+/** The Access half of the overview: everything it reads from IAM, and when. */
+async function readAccess(allowed: boolean, fetcher: RpcFetch) {
+	// IAM's 401 starts no sign-in: Control and Operations answer the same expired session, and their clients do.
 	const iam = createRpcClient<IamAdminRpcContract>({ baseUrl: '/iam/admin/rpc', fetch: fetcher, bounceOnAuth: false })
+	const auditPromise = overviewRead(allowed, () => recentAuditChangePage(OVERVIEW_CHANGE_LIMIT, fetcher))
+	const [keys, audit, auditActors] = await Promise.all([
+		overviewRead(allowed, async () => {
+			// Each row carries its live credential, so expiry costs no read per key: every IAM read is an audited one.
+			const page = await iam.apiKeys.list({ limit: OVERVIEW_KEY_LIMIT })
+			return { items: page.items.filter((key) => key.status === 'active'), limited: page.nextCursor !== null }
+		}),
+		auditPromise,
+		auditPromise.then((read) => resolveActors(actorIdsToResolve(read.data?.items ?? []), (principalId) => iam.principals.get({ principalId }))),
+	])
+	return { keys, audit, auditActors, readAt: Date.now() }
+}
+
+export type OverviewAccess = Awaited<ReturnType<typeof readAccess>>
+
+/**
+ * Every plane's reads for the overview. `previous` is the Access half of the last load, which a timed refresh passes:
+ * it is kept while younger than `OVERVIEW_ACCESS_REFRESH_MS`.
+ */
+export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fetch, previous: OverviewAccess | null = null) {
+	// The shared clients: a session that expired while the page stayed open signs in again rather than reading as an outage.
+	const control = createControlClient(fetcher)
+	const operations = createOperationsClient(fetcher)
 	const readsOperations = mayOpen(caller, 'operations')
 	const readsAccess = mayOpen(caller, 'access')
 	const readsMail = caller.access === null || holdsGlobally(caller.access, CONTROL_ACTIONS.MAIL_READ)
-	const auditPromise = overviewRead(readsAccess, () => recentAuditChangePage(OVERVIEW_CHANGE_LIMIT, fetcher))
-	const actorsPromise = auditPromise.then((audit) =>
-		resolveActors(actorIdsToResolve(audit.data?.items ?? []), (principalId) => iam.principals.get({ principalId }))
-	)
+	const accessPromise = previous !== null && Date.now() - previous.readAt < OVERVIEW_ACCESS_REFRESH_MS
+		? Promise.resolve(previous)
+		: readAccess(readsAccess, fetcher)
 	const appsPromise = overviewRead(mayOpen(caller, 'apps'), () => control.apps.list())
 	const environmentsPromise = appsPromise.then(async (apps) => {
 		const environments = new Map<string, OverviewRead<Awaited<ReturnType<typeof control.apps.environments.list>>>>()
@@ -45,29 +73,22 @@ export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fe
 		}))
 		return environments
 	})
-	const [apps, environments, namespaces, runs, activeRuns, failures, approvals, health, issues, mailHeld, mailFailed, keys, audit, auditActors] =
-		await Promise.all(
-			[
-				appsPromise,
-				environmentsPromise,
-				overviewRead(mayOpen(caller, 'namespaces'), () => control.namespaces.list()),
-				overviewRead(mayOpen(caller, 'runs'), () => control.runs.list({ limit: OVERVIEW_RUN_LIMIT })),
-				overviewRead(mayOpen(caller, 'runs'), () => control.runs.list({ statuses: ['pending', 'running'], limit: OVERVIEW_RUN_LIMIT })),
-				overviewRead(mayOpen(caller, 'runs'), () => control.runs.latestFailures()),
-				overviewRead(mayOpen(caller, 'approvals'), () => control.approvals.list()),
-				overviewRead(readsOperations, () => operations.health()),
-				overviewRead(readsOperations, () => operations.issues({ status: 'open', window: 'all', sort: 'recent', limit: OVERVIEW_ISSUE_LIMIT })),
-				overviewRead(readsMail, () => control.mail.messages.list({ state: 'held' })),
-				overviewRead(readsMail, () => control.mail.messages.list({ state: 'failed' })),
-				overviewRead(readsAccess, async () => {
-					// Each row carries its live credential, so expiry costs no read per key: every IAM read is an audited one.
-					const page = await iam.apiKeys.list({ limit: OVERVIEW_KEY_LIMIT })
-					return { items: page.items.filter((key) => key.status === 'active'), limited: page.nextCursor !== null }
-				}),
-				auditPromise,
-				actorsPromise,
-			],
-		)
+	const [apps, environments, namespaces, runs, activeRuns, failures, approvals, health, issues, mailHeld, mailFailed, access] = await Promise.all(
+		[
+			appsPromise,
+			environmentsPromise,
+			overviewRead(mayOpen(caller, 'namespaces'), () => control.namespaces.list()),
+			overviewRead(mayOpen(caller, 'runs'), () => control.runs.list({ limit: OVERVIEW_RUN_LIMIT })),
+			overviewRead(mayOpen(caller, 'runs'), () => control.runs.list({ statuses: ['pending', 'running'], limit: OVERVIEW_RUN_LIMIT })),
+			overviewRead(mayOpen(caller, 'runs'), () => control.runs.latestFailures()),
+			overviewRead(mayOpen(caller, 'approvals'), () => control.approvals.list()),
+			overviewRead(readsOperations, () => operations.health()),
+			overviewRead(readsOperations, () => operations.issues({ status: 'open', window: 'all', sort: 'recent', limit: OVERVIEW_ISSUE_LIMIT })),
+			overviewRead(readsMail, () => control.mail.messages.list({ state: 'held' })),
+			overviewRead(readsMail, () => control.mail.messages.list({ state: 'failed' })),
+			accessPromise,
+		],
+	)
 	const publishedRuns = new Map<string, OverviewRead<RunDto>>()
 	const publicationIds = new Set(
 		[...environments.values()].flatMap((read) => read.data?.items.flatMap((env) => env.publishedRunId === null ? [] : [env.publishedRunId]) ?? []),
@@ -90,9 +111,10 @@ export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fe
 		issues,
 		mailHeld,
 		mailFailed,
-		keys,
-		audit,
-		auditActors,
+		keys: access.keys,
+		audit: access.audit,
+		auditActors: access.auditActors,
+		access,
 		loadedAt: Date.now(),
 	}
 }

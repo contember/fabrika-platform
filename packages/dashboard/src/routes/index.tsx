@@ -9,11 +9,32 @@ import { Welcome } from '../components/overview/Welcome'
 import { Reading } from '../components/Reading'
 import { Status } from '../components/Status'
 import { mayOpen } from '../lib/console-access'
-import { boundedCount, loadOverview, type OverviewData, type OverviewRead, productionHealth } from '../lib/overview'
+import {
+	boundedCount,
+	loadOverview,
+	OVERVIEW_ACCESS_REFRESH_MS,
+	type OverviewAccess,
+	type OverviewData,
+	type OverviewRead,
+	productionHealth,
+} from '../lib/overview'
 import { consoleSession } from '../lib/session'
 
+/**
+ * Set by the minute timer just before it reloads, so that load keeps the Access half of the last one (`loadOverview`'s
+ * `previous`); every other load, a navigation or the refresh button, reads IAM again.
+ */
+let timedRefresh = false
+let lastAccess: OverviewAccess | null = null
+
 export default createPage()
-	.loader(async () => loadOverview(await consoleSession()))
+	.loader(async () => {
+		const previous = timedRefresh ? lastAccess : null
+		timedRefresh = false
+		const data = await loadOverview(await consoleSession(), fetch, previous)
+		lastAccess = data.access
+		return data
+	})
 	.route('/')
 	.render(({ data, invalidate }) => <Overview data={data} refresh={invalidate} />)
 
@@ -22,7 +43,9 @@ export function Overview({ data, refresh }: { data: OverviewData; refresh: () =>
 	useEffect(() => {
 		setRefreshing(false)
 		const timer = window.setInterval(() => {
-			if (document.visibilityState === 'visible') void refresh()
+			if (document.visibilityState !== 'visible') return
+			timedRefresh = true
+			void refresh()
 		}, 60_000)
 		return () => window.clearInterval(timer)
 	}, [data.loadedAt, refresh])
@@ -74,7 +97,9 @@ export function Overview({ data, refresh }: { data: OverviewData; refresh: () =>
 							data.namespaces.data.items.filter((namespace) => namespace.state === 'ready').length
 						} of ${data.namespaces.data.items.length} namespaces ready`}
 				</Link>
-				<span>Refreshes every minute while visible · Times are local</span>
+				<span>
+					Refreshes every minute while visible, access every {OVERVIEW_ACCESS_REFRESH_MS / 60_000} minutes · Times are local
+				</span>
 			</footer>
 		</div>
 	)

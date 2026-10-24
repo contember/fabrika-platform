@@ -12,7 +12,7 @@ import { RecentChanges } from '../components/overview/Activity'
 import { Applications } from '../components/overview/Applications'
 import type { ConsoleCaller } from '../lib/console-access'
 import { healthCheckState, healthLamp, needsMonitoringAttention, runtimeHealth } from '../lib/health'
-import { deployHistory, environmentSources, expiringKey, loadOverview } from '../lib/overview'
+import { deployHistory, environmentSources, expiringKey, loadOverview, OVERVIEW_ACCESS_REFRESH_MS } from '../lib/overview'
 import { DEFAULT_ISSUE_FILTERS, ErrorsView } from '../operations/views/Errors'
 import auditPage from '../routes/access/audit'
 import appPage from '../routes/apps/detail'
@@ -223,6 +223,22 @@ describe('overview data boundaries', () => {
 		))
 		expect(errors).toContain('source:CRM')
 		expect(errors).not.toContain('window:24h')
+	})
+
+	test('a load given the last Access reads keeps them while they are young, and asks IAM again once they are not', async () => {
+		const first: string[] = []
+		const data = await loadOverview(caller, fetchOverview({}, first))
+		expect(first.filter((call) => call.startsWith('/iam/'))).not.toEqual([])
+
+		const timed: string[] = []
+		const again = await loadOverview(caller, fetchOverview({}, timed), data.access)
+		expect(timed.filter((call) => call.startsWith('/iam/'))).toEqual([])
+		expect(timed.filter((call) => call.startsWith('/api/'))).not.toEqual([])
+		expect(again.keys).toBe(data.keys)
+
+		const stale: string[] = []
+		await loadOverview(caller, fetchOverview({}, stale), { ...data.access, readAt: Date.now() - OVERVIEW_ACCESS_REFRESH_MS })
+		expect(stale.filter((call) => call.startsWith('/iam/'))).not.toEqual([])
 	})
 
 	test('an audit page of reads, from an IAM older than changesOnly, is marked incomplete', async () => {

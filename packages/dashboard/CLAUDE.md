@@ -63,11 +63,14 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
 - **One copy of each shared piece.** `components/` (`Icon`, `Modal`, `Table`, `ConfirmDialog`, `Status`,
   `RouteError`, `Reading`, `FilterGroup`) and `lib/format.ts` serve all three planes. Formatters take epoch **seconds**;
   Operations timestamps are milliseconds, so divide by 1000 at the call site.
-- The console Overview reads independent planes through `lib/overview.ts`, without an auth bounce. A refusal,
-  an outage and an empty answer stay distinct. Runtime health comes from enabled HTTP checks; publication comes
+- The console Overview reads independent planes through `lib/overview.ts`. Control and Operations use their shared
+  clients, so an expired session signs in again; IAM's reads stay without a bounce. A refusal, an outage and an empty
+  answer stay distinct. Runtime health comes from enabled HTTP checks; publication comes
   from the environment's `publishedRunId`, never a recent-run guess. Active runs use the server-side status filter.
   Bounded histories disclose their limits. The error chart covers received occurrences of visible open errors over
-  24 hours, the series Operations actually returns. Refresh runs once a minute while the page is visible.
+  24 hours, the series Operations actually returns. Refresh runs once a minute while the page is visible; IAM audits every admin read,
+  so the timed refresh reads Access again only every `OVERVIEW_ACCESS_REFRESH_MS` (navigation and the refresh button
+  always do), asks for changes only (`changesOnly`) and lists keys with their credentials, never one read per key.
 - **The Operations layout keeps its own outage screen** ("Operations is unavailable" / "Retry
   connection"), not `RouteError`: an Operations outage must read as bounded to its plane
   (`tests/browser/operations-outage-isolation.test.ts`).
