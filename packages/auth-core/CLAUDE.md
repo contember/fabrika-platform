@@ -9,7 +9,7 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # app-environment · canonical-path · contract-canonical · device · endpoint-digest · endpoints · environment · framework-variables · json · locale · managed-environment · permissions · requirement · resource-token · sha256 · token · wire · workloads
+bun test               # app-environment · canonical-path · contract-canonical · device · endpoint-digest · endpoints · environment · framework-variables · json · locale · managed-environment · ops · permissions · requirement · resource-token · sha256 · token · wire · workloads
 ```
 
 | Module                     | What it owns                                                                                                                                                                                                              |
@@ -31,6 +31,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `rpc.ts`                   | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                                                                                                                                        |
 | `device.ts`                | The device-authorization inputs, results and their parsers (ADR-0042).                                                                                                                                                    |
 | `oauth.ts`                 | The OAuth 2.1 primitives IAM, the proxy and resource servers share: resource URIs, CIMD client ids, scopes.                                                                                                               |
+| `ops.ts`                   | The ops wire (ADR-0069): the composed `/__fabrika/ops/*` row's constants, the uniform refusal, `FABRIKA_OPS_KEY_DIGESTS`' format, and the strict request and answer parsers.                                              |
 | `membership.ts`            | `IamMembershipRpc` — delegation grants, scope creation, membership and share links — and its input/result types; `endpointMembers`, `endpointDirectory` and `endpointAppDirectory` (what `ctx.members` an endpoint gets). |
 | `types.ts`                 | `AppSchema`, `Scope`, `PermissionEntry`, `PrincipalType`, `WorkloadKind`.                                                                                                                                                 |
 | `workloads.ts`             | `contractWorkloads` — a contract's jobs, webhooks and public procedures with their actions — and the workload name rules.                                                                                                 |

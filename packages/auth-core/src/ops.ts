@@ -1,0 +1,406 @@
+// The ops wire (ADR-0069): the one platform-composed row through which Control reaches an application environment's
+// object on Cloudflare, the requests it sends there and the answers the object gives. Control and the framework both
+// import it, so the two sides parse one shape. Every parser is strict: an unknown key, a missing field or a wrong type
+// refuses the whole value.
+
+import { isDigest } from './endpoint-digest'
+import { FRAMEWORK_RELEASE_PATTERN } from './framework-release'
+import { prop } from './json'
+import { sha256Hex } from './sha256'
+
+/** Every ops request's path lies under this prefix, on the environment's own domain. */
+export const OPS_PREFIX = '/__fabrika/ops/'
+
+/**
+ * The fixed id of the composed row. An authored endpoint id starts with a letter, so no contract can take it. The row's
+ * digest is not a constant: proxy-core computes it where every row is digested, from these fields.
+ */
+export const OPS_ROW_ID = '__fabrika.ops'
+
+/** The composed row's path. */
+export const OPS_ROW_PATH = `${OPS_PREFIX}*`
+
+/** The composed row's method. */
+export const OPS_METHOD = 'POST'
+
+/** The one content type the composed row admits. */
+export const OPS_CONTENT_TYPE = 'application/json'
+
+/** The operations the object serves, each at `opsPath(operation)`. */
+export const OPS_OPERATIONS = ['inspect', 'state', 'migrate'] as const
+
+export type OpsOperation = (typeof OPS_OPERATIONS)[number]
+
+export function opsPath(operation: OpsOperation): string {
+	return `${OPS_PREFIX}${operation}`
+}
+
+/** The operation a request path names, or `null` for any other path, which gets `opsRefusal()`. */
+export function parseOpsOperation(path: string): OpsOperation | null {
+	return OPS_OPERATIONS.find((operation) => opsPath(operation) === path) ?? null
+}
+
+/**
+ * The one answer inside the prefix to a missing or wrong key, a wrong endpoint header, an unknown operation and a
+ * refused object name: the same status, no body and no headers, so none of them tells the caller which it was.
+ */
+export const OPS_REFUSAL_STATUS = 404
+
+export function opsRefusal(): Response {
+	return new Response(null, { status: OPS_REFUSAL_STATUS })
+}
+
+/** Ops key digests: `sha256:<64 hex>` of each key, joined by `,`; one, or two while a rotation reconciles. */
+export type OpsKeyDigests = readonly [string] | readonly [string, string]
+
+/** The digest of an ops key, the only form the object holds (`FABRIKA_OPS_KEY_DIGESTS`). */
+export function opsKeyDigest(key: string): string {
+	return `sha256:${sha256Hex(key)}`
+}
+
+/** The value of `FABRIKA_OPS_KEY_DIGESTS`, or `null` unless it holds one or two distinct digests. */
+export function parseOpsKeyDigests(value: string): OpsKeyDigests | null {
+	const [first, second, ...rest] = value.split(',')
+	if (first === undefined || !isDigest(first) || rest.length > 0) return null
+	if (second === undefined) return [first]
+	return isDigest(second) && second !== first ? [first, second] : null
+}
+
+/** The value Control writes into `FABRIKA_OPS_KEY_DIGESTS`; throws on a list `parseOpsKeyDigests` would refuse. */
+export function formatOpsKeyDigests(digests: OpsKeyDigests): string {
+	const value = digests.join(',')
+	if (parseOpsKeyDigests(value) === null) throw new Error('ops key digests must be one or two distinct sha256 digests')
+	return value
+}
+
+/** The maintenance modes, from the most permissive. */
+export const OPS_MODES = ['open', 'read-only', 'closed', 'inspect'] as const
+
+export type OpsMode = (typeof OPS_MODES)[number]
+
+/** A table's row count is capped here: a full count bills every row read. A count at the cap means at least the cap. */
+export const OPS_ROW_COUNT_CAP = 100_000
+
+/** `POST /__fabrika/ops/inspect`: the projection, or with `content` the content-bearing view (`data.content.read`). */
+export interface OpsInspectRequest {
+	readonly content: boolean
+}
+
+/** `POST /__fabrika/ops/state`: a maintenance transition under a generation Control allocated. */
+export interface OpsStateRequest {
+	readonly generation: number
+	readonly mode: OpsMode
+}
+
+/** Sent once the state is published and the drain is over; `stillRunning` counts what ran past the drain's bound. */
+export interface OpsStateAck {
+	readonly generation: number
+	readonly mode: OpsMode
+	readonly stillRunning: number
+}
+
+/** `POST /__fabrika/ops/migrate`: run the pending migrations under the published generation. */
+export interface OpsMigrateRequest {
+	readonly generation: number
+}
+
+/** One row of the object's migration ledger. */
+export interface OpsMigration {
+	readonly bundle: string
+	readonly name: string
+	readonly checksum: string
+	readonly appliedAt: string
+}
+
+/** Sent once the migrations ran and the application booted, with the new ledger. */
+export interface OpsMigrateAck {
+	readonly generation: number
+	readonly migrations: readonly OpsMigration[]
+}
+
+export interface OpsMaintenance {
+	readonly mode: OpsMode
+	/** `null` while no transition was ever published: the object is `open`. */
+	readonly generation: number | null
+	/** Whether R2 holds this state; `false` while its put is pending. */
+	readonly published: boolean
+}
+
+export interface OpsTableCount {
+	readonly name: string
+	/** At most `OPS_ROW_COUNT_CAP`. */
+	readonly rows: number
+}
+
+export interface OpsDatabase {
+	readonly sizeBytes: number
+	readonly tables: readonly OpsTableCount[]
+}
+
+export interface OpsScheduler {
+	/** The current alarm, or `null` when none is set. */
+	readonly alarm: string | null
+}
+
+/** A job's last run and its outcome. */
+export interface OpsJob {
+	readonly job: string
+	readonly lastStatus: 'succeeded' | 'failed' | null
+	readonly lastStartedAt: string | null
+	readonly lastFinishedAt: string | null
+	readonly lastDurationMs: number | null
+}
+
+export type OpsFileStatus = 'pending' | 'quarantined' | 'live' | 'rejected'
+
+export interface OpsFileCount {
+	readonly kind: string
+	readonly status: OpsFileStatus
+	readonly count: number
+}
+
+/** A delivery is `claimed` while it holds a lease, `completed` once its handler's transaction cleared it. */
+export interface OpsWebhookCount {
+	readonly webhook: string
+	readonly state: 'claimed' | 'completed'
+	readonly count: number
+}
+
+export interface OpsBootFailure {
+	readonly at: string
+}
+
+/** The boot failure with the application's error text, which is content. */
+export interface OpsBootFailureContent extends OpsBootFailure {
+	readonly message: string
+	readonly stack: string | null
+}
+
+/**
+ * The allowlisted projection (`data.read`): counts, sizes, timestamps, the identifiers the platform or the contract
+ * names, and status codes. Every timestamp is ISO 8601 in UTC with milliseconds.
+ */
+export interface OpsView {
+	readonly release: string
+	readonly maintenance: OpsMaintenance
+	readonly database: OpsDatabase
+	readonly migrations: readonly OpsMigration[]
+	readonly scheduler: OpsScheduler
+	readonly jobs: readonly OpsJob[]
+	readonly files: readonly OpsFileCount[]
+	readonly webhooks: readonly OpsWebhookCount[]
+	readonly bootFailure: OpsBootFailure | null
+}
+
+/** The view a `data.content.read` caller gets: the projection, with the application's error text. */
+export interface OpsContentView extends Omit<OpsView, 'bootFailure'> {
+	readonly bootFailure: OpsBootFailureContent | null
+}
+
+export function parseOpsInspectRequest(body: unknown): OpsInspectRequest | null {
+	const content = prop(body, 'content')
+	return exactKeys(body, ['content']) && typeof content === 'boolean' ? { content } : null
+}
+
+export function parseOpsStateRequest(body: unknown): OpsStateRequest | null {
+	if (!exactKeys(body, ['generation', 'mode'])) return null
+	const generation = readGeneration(prop(body, 'generation'))
+	const mode = readMode(prop(body, 'mode'))
+	return generation === null || mode === null ? null : { generation, mode }
+}
+
+export function parseOpsStateAck(body: unknown): OpsStateAck | null {
+	if (!exactKeys(body, ['generation', 'mode', 'stillRunning'])) return null
+	const generation = readGeneration(prop(body, 'generation'))
+	const mode = readMode(prop(body, 'mode'))
+	const stillRunning = readCount(prop(body, 'stillRunning'))
+	return generation === null || mode === null || stillRunning === null ? null : { generation, mode, stillRunning }
+}
+
+export function parseOpsMigrateRequest(body: unknown): OpsMigrateRequest | null {
+	const generation = readGeneration(prop(body, 'generation'))
+	return exactKeys(body, ['generation']) && generation !== null ? { generation } : null
+}
+
+export function parseOpsMigrateAck(body: unknown): OpsMigrateAck | null {
+	if (!exactKeys(body, ['generation', 'migrations'])) return null
+	const generation = readGeneration(prop(body, 'generation'))
+	const migrations = readList(prop(body, 'migrations'), readMigration)
+	return generation === null || migrations === null ? null : { generation, migrations }
+}
+
+export function parseOpsView(body: unknown): OpsView | null {
+	const failure = prop(body, 'bootFailure')
+	const bootFailure = failure === null ? null : readBootFailure(failure)
+	if (bootFailure === undefined) return null
+	const view = readViewFields(body)
+	return view === null ? null : { ...view, bootFailure }
+}
+
+export function parseOpsContentView(body: unknown): OpsContentView | null {
+	const failure = prop(body, 'bootFailure')
+	const bootFailure = failure === null ? null : readBootFailureContent(failure)
+	if (bootFailure === undefined) return null
+	const view = readViewFields(body)
+	return view === null ? null : { ...view, bootFailure }
+}
+
+const VIEW_KEYS = ['release', 'maintenance', 'database', 'migrations', 'scheduler', 'jobs', 'files', 'webhooks', 'bootFailure']
+const FILE_STATUSES: readonly OpsFileStatus[] = ['pending', 'quarantined', 'live', 'rejected']
+const WEBHOOK_STATES = ['claimed', 'completed'] as const
+const JOB_STATUSES = ['succeeded', 'failed'] as const
+/** The form `Date.prototype.toISOString` and SQLite's `%Y-%m-%dT%H:%M:%fZ` both write. */
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+
+/** Every field of the view but the boot failure, whose form differs between the two views. */
+function readViewFields(body: unknown): Omit<OpsView, 'bootFailure'> | null {
+	if (!exactKeys(body, VIEW_KEYS)) return null
+	const release = prop(body, 'release')
+	const maintenance = readMaintenance(prop(body, 'maintenance'))
+	const database = readDatabase(prop(body, 'database'))
+	const migrations = readList(prop(body, 'migrations'), readMigration)
+	const scheduler = readScheduler(prop(body, 'scheduler'))
+	const jobs = readList(prop(body, 'jobs'), readJob)
+	const files = readList(prop(body, 'files'), readFileCount)
+	const webhooks = readList(prop(body, 'webhooks'), readWebhookCount)
+	if (
+		typeof release !== 'string' || !FRAMEWORK_RELEASE_PATTERN.test(release) || maintenance === null || database === null || migrations === null
+		|| scheduler === null || jobs === null || files === null || webhooks === null
+	) {
+		return null
+	}
+	return { release, maintenance, database, migrations, scheduler, jobs, files, webhooks }
+}
+
+function readMaintenance(value: unknown): OpsMaintenance | null {
+	if (!exactKeys(value, ['mode', 'generation', 'published'])) return null
+	const mode = readMode(prop(value, 'mode'))
+	const rawGeneration = prop(value, 'generation')
+	const generation = rawGeneration === null ? null : readGeneration(rawGeneration)
+	const published = prop(value, 'published')
+	if (mode === null || (rawGeneration !== null && generation === null) || typeof published !== 'boolean') return null
+	return { mode, generation, published }
+}
+
+function readDatabase(value: unknown): OpsDatabase | null {
+	if (!exactKeys(value, ['sizeBytes', 'tables'])) return null
+	const sizeBytes = readCount(prop(value, 'sizeBytes'))
+	const tables = readList(prop(value, 'tables'), readTableCount)
+	return sizeBytes === null || tables === null ? null : { sizeBytes, tables }
+}
+
+function readTableCount(value: unknown): OpsTableCount | null {
+	if (!exactKeys(value, ['name', 'rows'])) return null
+	const name = readName(prop(value, 'name'))
+	const rows = readCount(prop(value, 'rows'))
+	return name === null || rows === null || rows > OPS_ROW_COUNT_CAP ? null : { name, rows }
+}
+
+function readMigration(value: unknown): OpsMigration | null {
+	if (!exactKeys(value, ['bundle', 'name', 'checksum', 'appliedAt'])) return null
+	const bundle = readName(prop(value, 'bundle'))
+	const name = readName(prop(value, 'name'))
+	const checksum = readName(prop(value, 'checksum'))
+	const appliedAt = readTimestamp(prop(value, 'appliedAt'))
+	return bundle === null || name === null || checksum === null || appliedAt === null ? null : { bundle, name, checksum, appliedAt }
+}
+
+function readScheduler(value: unknown): OpsScheduler | null {
+	if (!exactKeys(value, ['alarm'])) return null
+	const raw = prop(value, 'alarm')
+	const alarm = raw === null ? null : readTimestamp(raw)
+	return raw !== null && alarm === null ? null : { alarm }
+}
+
+function readJob(value: unknown): OpsJob | null {
+	if (!exactKeys(value, ['job', 'lastStatus', 'lastStartedAt', 'lastFinishedAt', 'lastDurationMs'])) return null
+	const job = readName(prop(value, 'job'))
+	const lastStatus = readNullable(prop(value, 'lastStatus'), (status) => readEnum(status, JOB_STATUSES))
+	const lastStartedAt = readNullable(prop(value, 'lastStartedAt'), readTimestamp)
+	const lastFinishedAt = readNullable(prop(value, 'lastFinishedAt'), readTimestamp)
+	const lastDurationMs = readNullable(prop(value, 'lastDurationMs'), readCount)
+	if (job === null || lastStatus === undefined || lastStartedAt === undefined || lastFinishedAt === undefined || lastDurationMs === undefined) {
+		return null
+	}
+	return { job, lastStatus, lastStartedAt, lastFinishedAt, lastDurationMs }
+}
+
+function readFileCount(value: unknown): OpsFileCount | null {
+	if (!exactKeys(value, ['kind', 'status', 'count'])) return null
+	const kind = readName(prop(value, 'kind'))
+	const status = readEnum(prop(value, 'status'), FILE_STATUSES)
+	const count = readCount(prop(value, 'count'))
+	return kind === null || status === null || count === null ? null : { kind, status, count }
+}
+
+function readWebhookCount(value: unknown): OpsWebhookCount | null {
+	if (!exactKeys(value, ['webhook', 'state', 'count'])) return null
+	const webhook = readName(prop(value, 'webhook'))
+	const state = readEnum(prop(value, 'state'), WEBHOOK_STATES)
+	const count = readCount(prop(value, 'count'))
+	return webhook === null || state === null || count === null ? null : { webhook, state, count }
+}
+
+/** `undefined` for a value that is no boot failure; the caller reads `null` as none before calling. */
+function readBootFailure(value: unknown): OpsBootFailure | undefined {
+	const at = readTimestamp(prop(value, 'at'))
+	return exactKeys(value, ['at']) && at !== null ? { at } : undefined
+}
+
+function readBootFailureContent(value: unknown): OpsBootFailureContent | undefined {
+	if (!exactKeys(value, ['at', 'message', 'stack'])) return undefined
+	const at = readTimestamp(prop(value, 'at'))
+	const message = prop(value, 'message')
+	const stack = prop(value, 'stack')
+	if (at === null || typeof message !== 'string' || (stack !== null && typeof stack !== 'string')) return undefined
+	return { at, message, stack }
+}
+
+/** Whether `value` is a plain object holding exactly `keys`: no key missing, none unknown. */
+function exactKeys(value: unknown, keys: readonly string[]): boolean {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+	const own = Object.keys(value)
+	return own.length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+}
+
+function readList<T>(value: unknown, read: (item: unknown) => T | null): readonly T[] | null {
+	if (!Array.isArray(value)) return null
+	const items: T[] = []
+	for (const item of value) {
+		const parsed = read(item)
+		if (parsed === null) return null
+		items.push(parsed)
+	}
+	return items
+}
+
+/** `null` stays `null`; anything else is read, and `undefined` marks a value `read` refused. */
+function readNullable<T>(value: unknown, read: (value: unknown) => T | null): T | null | undefined {
+	if (value === null) return null
+	return read(value) ?? undefined
+}
+
+function readEnum<T extends string>(value: unknown, members: readonly T[]): T | null {
+	return members.find((member) => member === value) ?? null
+}
+
+function readMode(value: unknown): OpsMode | null {
+	return readEnum(value, OPS_MODES)
+}
+
+/** A generation Control allocated: a positive safe integer. */
+function readGeneration(value: unknown): number | null {
+	return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
+}
+
+function readCount(value: unknown): number | null {
+	return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+}
+
+function readName(value: unknown): string | null {
+	return typeof value === 'string' && value !== '' ? value : null
+}
+
+function readTimestamp(value: unknown): string | null {
+	return typeof value === 'string' && TIMESTAMP.test(value) && !Number.isNaN(Date.parse(value)) ? value : null
+}
