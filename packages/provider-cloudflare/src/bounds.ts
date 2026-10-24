@@ -1,7 +1,7 @@
-import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING } from '@fabrika/app/build'
+import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING, GENERATED_ENTRY_FILE } from '@fabrika/app/build'
 import { type AppEnvironment, appEnvironmentId, FRAMEWORK_VARIABLE_NAMES, isFrameworkVariableName, parseAppEnvironmentId } from '@fabrika/auth-core'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import type { GeneratedConfig, Worker } from 'oblaka-iac'
 import { CloudflareClient } from 'oblaka-iac/src/client'
 import { ResourceProcessor } from 'oblaka-iac/src/commands/resource-processor'
@@ -51,6 +51,11 @@ export interface ApplicationRuntime {
 	readonly filesBucket: string
 	/** The cron triggers the Worker carries: the minute tick when the contract has a job or a file kind, else an empty list. */
 	readonly crons: readonly string[]
+	/**
+	 * The absolute path of the entry the deploy regenerates, which the Worker's `main` must name (`pinsGeneratedEntry`), or
+	 * null for a release whose Worker keeps its authored `main`.
+	 */
+	readonly entry: string | null
 }
 
 /**
@@ -438,6 +443,37 @@ const assertApplicationRuntime = (worker: string, config: WranglerConfig, runtim
 	}
 }
 
+/**
+ * A pinned release's Worker runs the entry the deploy regenerates, and nothing that entry does not export: a hand-written
+ * `main` would skip the contract digest check, the hop secret and the framework's scheduling.
+ */
+const assertGeneratedEntry = (worker: string, generated: GeneratedConfig, cwd: string, entry: string): void => {
+	const config = generated.config
+	const main: unknown = config.main
+	if (typeof main !== 'string' || resolve(dirname(resolve(cwd, generated.path)), main) !== entry) {
+		throw new Error(
+			`cloudflare: application Worker \`${worker}\` runs \`${
+				typeof main === 'string' ? main : '(not a string)'
+			}\`; on its framework release it runs \`${GENERATED_ENTRY_FILE}\` beside its config, which the deploy regenerates`,
+		)
+	}
+	for (const key of ['workflows', 'containers'] as const) {
+		if (entries(config[key], worker, key).length > 0) {
+			throw new Error(`cloudflare: application Worker \`${worker}\` declares \`${key}\`, which the generated entry does not export`)
+		}
+	}
+	const object = entries(config.durable_objects?.bindings, worker, 'durable_objects.bindings').find((binding) =>
+		field(binding, 'name') !== CLOUDFLARE_APPLICATION_BINDING
+	)
+	if (object !== undefined) {
+		throw new Error(
+			`cloudflare: application Worker \`${worker}\` binds the Durable Object \`${
+				String(field(object, 'name'))
+			}\`; the generated entry exports only \`${CLOUDFLARE_APPLICATION_CLASS}\``,
+		)
+	}
+}
+
 const isPlatformProxy = (generated: GeneratedConfig, bounds: DeploymentBounds): boolean =>
 	bounds.proxy !== null && generated.config.name === bounds.proxy && resolve(bounds.cwd, generated.path) === PROXY_CONFIG_PATH
 
@@ -484,7 +520,9 @@ export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], boun
 		}
 		assertUnexposed(worker, config)
 		assertFrameworkVariables(worker, config.vars, bounds.frameworkVariables.application)
-		if (bounds.application !== null) assertApplicationRuntime(worker, config, bounds.application)
+		if (bounds.application === null) continue
+		assertApplicationRuntime(worker, config, bounds.application)
+		if (bounds.application.entry !== null) assertGeneratedEntry(worker, generated, bounds.cwd, bounds.application.entry)
 	}
 }
 

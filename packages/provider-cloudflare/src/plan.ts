@@ -68,11 +68,19 @@ export const PLATFORM_RESOURCE_NAMES: ReadonlySet<string> = new Set([
 	'operations-ingest-dlq',
 ])
 
-export const buildPlan = (config: CloudflareAppConfig, worker: Worker): readonly CloudflareStep[] => {
+const ENTRY_BUILD = '`fabrika app build --provider=cloudflare`'
+
+/** `regeneratesEntry`: the release pins the generated entry, so the build step always runs, after `pipeline.build`. */
+export const buildPlan = (config: CloudflareAppConfig, worker: Worker, regeneratesEntry: boolean): readonly CloudflareStep[] => {
 	const steps: CloudflareStep[] = []
 
-	if (config.pipeline?.build !== undefined) {
-		steps.push({ id: 'build', kind: 'build', description: `Build the Worker (\`${config.pipeline.build}\`)` })
+	const build = config.pipeline?.build
+	if (build !== undefined && regeneratesEntry) {
+		steps.push({ id: 'build', kind: 'build', description: `Build the Worker (\`${build}\`), then regenerate its entry (${ENTRY_BUILD})` })
+	} else if (build !== undefined) {
+		steps.push({ id: 'build', kind: 'build', description: `Build the Worker (\`${build}\`)` })
+	} else if (regeneratesEntry) {
+		steps.push({ id: 'build', kind: 'build', description: `Regenerate the Worker's entry (${ENTRY_BUILD})` })
 	}
 
 	steps.push({ id: 'provision-resources', kind: 'provision-resources', description: 'Provision Cloudflare resources via oblaka' })
