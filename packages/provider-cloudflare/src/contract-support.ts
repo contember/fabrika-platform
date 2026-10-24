@@ -1,3 +1,4 @@
+import { CLOUDFLARE_MAX_JOB_SEGMENT_MS } from '@fabrika/app/contract'
 import {
 	type ContractArtifact,
 	FABRIKA_TOKEN_KEYS,
@@ -18,9 +19,11 @@ export const CLOUDFLARE_MAX_HANDLER_MS = 25_000
 
 /**
  * Refuse what a contract declares that an application on Cloudflare cannot run yet (ADR-0065): a file kind that scans
- * its uploads, raw SQL (`ctx.sql`), and a handler allowed to outlive the object's transaction limit.
+ * its uploads, raw SQL (`ctx.sql`), a handler allowed to outlive the object's transaction limit, and, from the release
+ * that caps job segments on, a job longer than one segment (`capsSegments`, which each caller decides from the release
+ * it runs the contract as).
  */
-export const assertCloudflareContract = (contract: ContractArtifact): void => {
+export const assertCloudflareContract = (contract: ContractArtifact, capsSegments: boolean): void => {
 	const handlers: [string, number][] = [
 		...Object.entries(contract.procedures ?? {}).map(([id, procedure]): [string, number] => [`procedure \`${id}\``, procedure.timeoutMs]),
 		...Object.entries(contract.mounts).flatMap(([name, mount]): [string, number][] =>
@@ -32,6 +35,15 @@ export const assertCloudflareContract = (contract: ContractArtifact): void => {
 			throw new Error(
 				`cloudflare: ${subject} runs up to ${timeoutMs} ms, and a handler on Cloudflare runs at most ${CLOUDFLARE_MAX_HANDLER_MS} ms: it holds its Durable Object's transaction`,
 			)
+		}
+	}
+	if (capsSegments) {
+		for (const [name, job] of Object.entries(contract.jobs)) {
+			if (job.timeoutMs > CLOUDFLARE_MAX_JOB_SEGMENT_MS) {
+				throw new Error(
+					`cloudflare: job \`${name}\` runs up to ${job.timeoutMs} ms, and a job segment on Cloudflare runs at most ${CLOUDFLARE_MAX_JOB_SEGMENT_MS} ms: claim a bounded batch per run and let the next run take the rest; a Workflow for one longer run is planned (backlog 230)`,
+				)
+			}
 		}
 	}
 	for (const [name, kind] of Object.entries(contract.fileKinds ?? {})) {
@@ -91,6 +103,15 @@ const SERVES_OPS_SINCE = { major: 0, minor: 9 }
 
 /** Whether an environment on release `release` gets the ops row, the ops key digests and the object variables. */
 export const servesOps = (release: string): boolean => releaseAtLeast(release, SERVES_OPS_SINCE)
+
+/** The first framework minor whose Cloudflare deploy refuses a job longer than one segment. */
+const CAPS_JOB_SEGMENTS_SINCE = { major: 0, minor: 9 }
+
+/**
+ * Whether the Cloudflare deploy of release `release` refuses a job whose `timeoutMs` exceeds one segment
+ * (`CLOUDFLARE_MAX_JOB_SEGMENT_MS`). An older release deploys as it did (ADR-0062).
+ */
+export const capsJobSegments = (release: string): boolean => releaseAtLeast(release, CAPS_JOB_SEGMENTS_SINCE)
 
 /**
  * Refuse what a stateless Worker of an older release cannot run: a job, a webhook, a public procedure, installation

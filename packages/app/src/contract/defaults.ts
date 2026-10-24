@@ -57,9 +57,18 @@ export const WEBHOOK_LIMITS = {
 	timeoutMs: PROCEDURE_LIMITS.timeoutMs,
 } as const
 
-/** A job attempt's time limit (`limits.timeoutMs`) and its ceiling, which keeps a lease and a timer within a day. */
+/**
+ * The longest job segment on Cloudflare: setup, one attempt and its finish. A framework policy inside the 15 minutes
+ * `waitUntil` keeps an object alive, not a platform guarantee; longer work chunks through claims.
+ */
+export const CLOUDFLARE_MAX_JOB_SEGMENT_MS = 14 * 60_000
+
+/**
+ * A job attempt's time limit (`limits.timeoutMs`) and its ceiling, which keeps a lease and a timer within a day. The
+ * default is one Cloudflare segment, so a job that declares no limit deploys on either provider.
+ */
 export const JOB_LIMITS = {
-	timeoutMs: 15 * 60_000,
+	timeoutMs: CLOUDFLARE_MAX_JOB_SEGMENT_MS,
 	maxTimeoutMs: 24 * 60 * 60_000,
 } as const
 

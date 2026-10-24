@@ -1293,7 +1293,7 @@ process first — and runs one job:
    A run clears the `fabrika_job_kicks.pending` flag a kick leaves when it starts,
    and runs once more when the flag is set again by the time it succeeded.
 2. Each attempt holds one generation of the lease and a deadline (its `limits.timeoutMs`,
-   15 minutes by default, at most 24 hours). Every insert, update and delete of the data layer checks the
+   14 minutes by default, at most 24 hours). Every insert, update and delete of the data layer checks the
    generation and the deadline inside its own transaction, before the write and again
    just before `COMMIT`, with `statement_timeout` set to the time left. When an attempt
    ends, the runner cancels the statements it still has running. An attempt that timed

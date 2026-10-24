@@ -35,7 +35,7 @@ import {
 import { runnerWorkerGraph } from './checkout'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
 import { configSchema } from './config-schema'
-import { assertCloudflareContract, needsMinuteTick, pinsGeneratedEntry, runsInObject, servesOps } from './contract-support'
+import { assertCloudflareContract, capsJobSegments, needsMinuteTick, pinsGeneratedEntry, runsInObject, servesOps } from './contract-support'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE } from './proxy'
@@ -681,7 +681,9 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	if (platformResources === 'refuse' && served === null) {
 		throw new Error('cloudflare: the checkout has no `fabrika.contract.ts`; Fabrika deploys an application only with a contract')
 	}
-	if (platformResources === 'refuse' && contract !== null) assertCloudflareContract(contract)
+	// A local deploy reads the contract with this release and runs it in the object, so it is capped as this release is.
+	const capsSegments = run.approved === undefined || (run.approved.framework !== undefined && capsJobSegments(run.approved.framework))
+	if (platformResources === 'refuse' && contract !== null) assertCloudflareContract(contract, capsSegments)
 	// Read once, before `resources()` runs the checkout's code again: nothing below reads the config's schema.
 	const schema = configSchema(loaded.config)
 	assertContractSchema(schema, contract)

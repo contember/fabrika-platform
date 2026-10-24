@@ -20,7 +20,7 @@ import { isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
-import { assertCloudflareContract, assertStatelessEnvironment, runsInObject, servesOps } from './contract-support'
+import { assertCloudflareContract, assertStatelessEnvironment, capsJobSegments, runsInObject, servesOps } from './contract-support'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
 // cannot typecheck (they do not relax the two strict flags the raw TS needs).
 import { type RunnerApprovedAccess, runnerApprovedAccessSchema, type RunnerIamReconcile } from './runner-protocol'
@@ -285,9 +285,9 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		throw new Error('Cloudflare deploy requires a canonical 40-character commit SHA')
 	}
 	const approvedAccess = runnerApprovedAccess(input.environment)
-	// The deployer refuses it again from the contract it serves; this fails before the clone.
-	if (approvedAccess !== undefined) assertCloudflareContract(approvedAccess.contract)
 	const release = input.environment.access?.checker
+	// The deployer refuses it again from the contract it serves; this fails before the clone.
+	if (approvedAccess !== undefined) assertCloudflareContract(approvedAccess.contract, release !== undefined && capsJobSegments(release))
 	const stateless = release !== undefined && !runsInObject(release)
 	if (stateless) assertStatelessEnvironment(input.managedEnvironment, release)
 	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal, input.sourceBinding))

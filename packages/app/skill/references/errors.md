@@ -33,6 +33,7 @@ The refusals agents meet most, and their fix:
 | `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                                             | the endpoint id `<mount>.<group>.<procedure>`                                             |
 | `cloudflare-sql`               | on Cloudflare, a site that declares `sql`                                                                                                                        | the handles (`ctx.db`), without `sql`                                                     |
 | `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                                     | the kind without `scan`, and no public procedure that takes its files                     |
+| `cloudflare-job-segment`       | on Cloudflare, a job whose `limits.timeoutMs` exceeds one 14-minute segment                                                                                      | at most 14 minutes: claim a bounded batch per run, and the next run takes the rest        |
 | `cloudflare-current-timestamp` | on Cloudflare, `DEFAULT CURRENT_TIMESTAMP` in a migration: SQLite stores `YYYY-MM-DD HH:MM:SS`, which every read of the table refuses                            | `DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, in a new migration                     |
 
 The hints:

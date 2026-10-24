@@ -1645,6 +1645,30 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		)
 		expect(rec.provisions).toEqual([])
 	})
+
+	test('a job longer than one 14-minute segment is refused before anything runs, only at a release that caps segments (ADR-0062)', async () => {
+		const purge = notesArtifact.jobs['purgeDeleted']
+		if (purge === undefined) throw new Error('the fixture has a job')
+		const lasting = (timeoutMs: number): ContractArtifact => ({ ...notesArtifact, jobs: { purgeDeleted: { ...purge, timeoutMs } } })
+		await expect(deploy(rec, config(), { contract: lasting(14 * 60_000 + 1), framework: '0.9.0' })).rejects.toThrow(
+			'cloudflare: job `purgeDeleted` runs up to 840001 ms, and a job segment on Cloudflare runs at most 840000 ms',
+		)
+		expect(rec.provisions).toEqual([])
+		expect((await deploy(rec, config(), { contract: lasting(14 * 60_000), framework: '0.9.0' })).status).toBe('succeeded')
+		for (const framework of ['0.8.2', null]) {
+			expect((await deploy(rec, config(), { contract: lasting(14 * 60_000 + 1), framework })).status).toBe('succeeded')
+		}
+	})
+
+	test('a local deploy runs the contract in the object, so it refuses a job longer than one segment too', async () => {
+		const purge = notesArtifact.jobs['purgeDeleted']
+		if (purge === undefined) throw new Error('the fixture has a job')
+		const lasting: ContractArtifact = { ...notesArtifact, jobs: { purgeDeleted: { ...purge, timeoutMs: 14 * 60_000 + 1 } } }
+		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: lasting })).rejects.toThrow(
+			'cloudflare: job `purgeDeleted` runs up to 840001 ms, and a job segment on Cloudflare runs at most 840000 ms',
+		)
+		expect(rec.provisions).toEqual([])
+	})
 })
 
 /** The application's own CLI, as the checkout's `bun install` puts it in the application directory. */

@@ -54,7 +54,9 @@ this one import.
   before the clone, and in the deployer from the contract it serves. A file kind or collection with `scan: true` (no
   scanner runs there), a site that declares `sql` (`ctx.sql`, which SQLite does not serve), and a procedure's or a
   webhook's `timeoutMs` above `CLOUDFLARE_MAX_HANDLER_MS` (25 s): the handler holds the object's transaction, and
-  workerd resets an object whose transaction runs about 30 s.
+  workerd resets an object whose transaction runs about 30 s. From `capsJobSegments`, a job's `timeoutMs` above
+  `CLOUDFLARE_MAX_JOB_SEGMENT_MS` (14 min) too; a local deploy runs the object, so it is capped as well, while an older
+  pin and a Control that names no release are not (ADR-0062).
 - **The platform writes the application Worker's runtime** (`withApplicationRuntime` in `src/provider.ts`, from 0.9):
   `FABRIKA_APPLICATION` bound first to its own `FabrikaApplication` (`new_sqlite_classes`, so oblaka numbers its one
   migration `v0001` whatever else the application binds, and the tag never moves), `FABRIKA_FILES` to the environment's

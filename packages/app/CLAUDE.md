@@ -1102,7 +1102,7 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   handles) reads each statement on its own and refuses every write; `ctx.transaction((tx) => …)` is one transaction
   fenced by the attempt's lease (`DataAccess.transaction`), refused outside the attempt, whose `tx.db` writes and whose
   handles refuse once it returned.
-- An attempt is cancelled after its `limits.timeoutMs` (`JOB_LIMITS`: 15 min by default, at most a day), which the artifact
+- An attempt is cancelled after its `limits.timeoutMs` (`JOB_LIMITS`: 14 min by default, one Cloudflare segment, `CLOUDFLARE_MAX_JOB_SEGMENT_MS`; at most a day), which the artifact
   records as the job's `timeoutMs`; the lease lasts the timeout
   plus `LEASE_GRACE_MS`. Retries back off exponentially from one second, capped at five minutes, half jittered.
 - The type witnesses live in `src/__tests__/job-mistakes/`, compiled by `job-types.test.ts`.

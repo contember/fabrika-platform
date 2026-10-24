@@ -299,8 +299,9 @@ bunx fabrika-check .                                        # once, after tsc; r
 one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
 object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
 The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
-object's transaction, so its `limits.timeoutMs` is at most 25 s. No `sql` (`ctx.sql`) and no `scan: true`: the
-checker, the deploy and the boot refuse both.
+object's transaction, so its `limits.timeoutMs` is at most 25 s. A job's is at most 14 minutes, its default: longer
+work claims a bounded batch per run, and the next run takes the rest (`references/jobs.md`). No `sql` (`ctx.sql`) and
+no `scan: true`: the checker, the deploy and the boot refuse both.
 
 The object runs one transaction at a time, so every `await` in a handler that may write holds the whole environment:
 IAM, R2, a `fetch`, a `ctx.connect` call, a binding. One 2 s call caps the environment at half a request a second. A

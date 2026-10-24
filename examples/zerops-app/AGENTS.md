@@ -291,8 +291,9 @@ bunx fabrika-check .                                        # once, after tsc; r
 one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
 object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
 The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
-object's transaction, so its `limits.timeoutMs` is at most 25 s. No `sql` (`ctx.sql`) and no `scan: true`: the
-checker, the deploy and the boot refuse both.
+object's transaction, so its `limits.timeoutMs` is at most 25 s. A job's is at most 14 minutes, its default: longer
+work claims a bounded batch per run, and the next run takes the rest (`references/jobs.md`). No `sql` (`ctx.sql`) and
+no `scan: true`: the checker, the deploy and the boot refuse both.
 
 The object runs one transaction at a time, so every `await` in a handler that may write holds the whole environment:
 IAM, R2, a `fetch`, a `ctx.connect` call, a binding. One 2 s call caps the environment at half a request a second. A
@@ -1687,6 +1688,7 @@ The refusals agents meet most, and their fix:
 | `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                                             | the endpoint id `<mount>.<group>.<procedure>`                                             |
 | `cloudflare-sql`               | on Cloudflare, a site that declares `sql`                                                                                                                        | the handles (`ctx.db`), without `sql`                                                     |
 | `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                                     | the kind without `scan`, and no public procedure that takes its files                     |
+| `cloudflare-job-segment`       | on Cloudflare, a job whose `limits.timeoutMs` exceeds one 14-minute segment                                                                                      | at most 14 minutes: claim a bounded batch per run, and the next run takes the rest        |
 | `cloudflare-current-timestamp` | on Cloudflare, `DEFAULT CURRENT_TIMESTAMP` in a migration: SQLite stores `YYYY-MM-DD HH:MM:SS`, which every read of the table refuses                            | `DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, in a new migration                     |
 
 The hints:
@@ -2322,7 +2324,7 @@ export const contract = app.contract((c) => ({
   one, since no zone is a day further ahead.
 - **Reads run outside the transaction; every write runs inside `ctx.transaction((tx) => …)`**, through `tx.db`, fenced
   by the attempt's lease. A write outside it is a type error that names `tx.db`.
-- An attempt that fails or outlives `limits.timeoutMs` (default 15 minutes, at most a day) is retried up to `retries` times, so every write is
+- An attempt that fails or outlives `limits.timeoutMs` (default 14 minutes, at most a day; at most 14 minutes on Cloudflare) is retried up to `retries` times, so every write is
   idempotent. **Re-read each row under its lock before you write it:** `tx.db.on(ref).getForUpdate()` inside the
   transaction, decide again on what it answers with the list's whole filter (`isOverdue`), and write with its
   `version`. The listed row is already old: someone

@@ -53,21 +53,27 @@ const DEALS_CREATE_EGRESS: Readonly<Record<string, string>> = {
 	),
 }
 
-/** The clean application on Cloudflare: its config, a file kind, and the generated tests on the SQLite kit. */
-const cloudflareApplication = async (fileKind: string): Promise<Readonly<Record<string, string>>> => {
+/** The clean application on Cloudflare: its config, a file kind, `edit` applied to its contract, and the generated tests on the SQLite kit. */
+const cloudflareApplication = async (
+	fileKind: string,
+	edit: (contract: string) => string = (contract) => contract,
+): Promise<Readonly<Record<string, string>>> => {
 	const sources = Object.fromEntries(Object.entries(CLEAN_APPLICATION).filter(([path]) => !CLEAN_GENERATED_TESTS.has(path)))
 	const files = new Map(Object.entries({
 		...sources,
 		'fabrika.config.ts': CLOUDFLARE_CONFIG,
-		'fabrika.contract.ts': CLEAN_CONTRACT.replace(
+		'fabrika.contract.ts': edit(CLEAN_CONTRACT.replace(
 			"\thealth: c.health('/healthz'),\n",
 			`\tfiles: { pictures: ${fileKind} },\n\thealth: c.health('/healthz'),\n`,
-		),
+		)),
 	}))
 	const inputs = scaffoldInputs(files)
 	for (const [path, test] of await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures, inputs.dialect)) files.set(path, test.text)
 	return Object.fromEntries(files)
 }
+
+/** The clean contract's one job, before its options close: where a case adds `limits`. */
+const JOB_ACTIONS = "c.cron('0 3 * * *', { actions: ['notes.write']"
 
 const NOTES_TABLE = 'CREATE TABLE notes (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL, picture UUID'
 
@@ -688,6 +694,18 @@ const cases: readonly RuleCase[] = [
 		bad: await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024, scan: true })"),
 		expected: ['fabrika.contract.ts:1:1'],
 		good: await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
+	},
+	{
+		rule: 'cloudflare-job-segment',
+		bad: await cloudflareApplication(
+			"c.files({ types: ['image/png'], maxBytes: 1024 })",
+			(contract) => contract.replace(JOB_ACTIONS, `${JOB_ACTIONS}, limits: { timeoutMs: 840001 }`),
+		),
+		expected: ['fabrika.contract.ts:1:1'],
+		good: await cloudflareApplication(
+			"c.files({ types: ['image/png'], maxBytes: 1024 })",
+			(contract) => contract.replace(JOB_ACTIONS, `${JOB_ACTIONS}, limits: { timeoutMs: 840000 }`),
+		),
 	},
 	{
 		rule: 'cloudflare-held-call',

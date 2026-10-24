@@ -118,7 +118,7 @@ export const contract = app.contract((c) => ({
   one, since no zone is a day further ahead.
 - **Reads run outside the transaction; every write runs inside `ctx.transaction((tx) => …)`**, through `tx.db`, fenced
   by the attempt's lease. A write outside it is a type error that names `tx.db`.
-- An attempt that fails or outlives `limits.timeoutMs` (default 15 minutes, at most a day) is retried up to `retries` times, so every write is
+- An attempt that fails or outlives `limits.timeoutMs` (default 14 minutes, at most a day; at most 14 minutes on Cloudflare) is retried up to `retries` times, so every write is
   idempotent. **Re-read each row under its lock before you write it:** `tx.db.on(ref).getForUpdate()` inside the
   transaction, decide again on what it answers with the list's whole filter (`isOverdue`), and write with its
   `version`. The listed row is already old: someone
