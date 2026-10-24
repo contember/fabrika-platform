@@ -10,9 +10,10 @@ import type { MintFromKeyResult } from '@fabrika/auth-core'
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import { controlMcpResource, controlMcpResourceMetadata, controlServiceContract, controlServiceDigest } from '@fabrika/control/service'
 import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
+import { platformServiceTableDigest } from '@fabrika/installation-init'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
-import { PLATFORM_PROXY_MANIFEST_TEMPLATE, platformServiceTableDigest } from '@fabrika/provider-zerops/installation'
+import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '@fabrika/provider-zerops/installation'
 import {
 	compileTopology,
 	fabrikaZeropsYaml,

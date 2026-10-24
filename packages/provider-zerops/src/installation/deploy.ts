@@ -37,11 +37,21 @@
 // what "deploy" means, and the platform keeps the previous version serving whenever the new one fails its
 // readiness gate.
 
-import { FABRIKA_SERVICE_TABLE_DIGEST, IAM_PROXY_SECRET_VARIABLE, readEnvironmentName } from '@fabrika/auth-core'
+import { IAM_PROXY_SECRET_VARIABLE, readEnvironmentName } from '@fabrika/auth-core'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
+import {
+	deployedServiceEnvironment,
+	IAM_OAUTH_CONFIG_VARIABLE,
+	type IamOAuthConfig,
+	platformIamOAuthConfig,
+	platformOrigin,
+	platformProxyAppFor,
+	type PlatformProxyComposition,
+	platformServiceTableDigest,
+	resolvePlatformProxyManifest,
+} from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
-import { createHmac } from 'node:crypto'
 import { assertServiceEnvValueFits } from '../api'
 import {
 	enableSubdomainAccessWhenHttp,
@@ -64,7 +74,7 @@ import { assertCheckerPublished, type CheckerPublication } from './checker-relea
 import type { PlatformDeployInput } from './deploy-options'
 import { PLATFORM_CONSOLE_APP_SCHEMA } from './generated/platform-console-schema'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-manifest'
-import { derivePlatformHosts, platformOrigin, type PlatformPlacement, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
+import { derivePlatformHosts, type PlatformPlacement, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
 import { PRIVATE_IAM_UPSTREAM } from './install-environment'
 import {
 	FABRIKA_ZEROPS_PROXY_SOURCE_JSON,
@@ -74,11 +84,9 @@ import {
 	validateInstallationSetups,
 } from './installation-source'
 import type { DeployLog } from './log'
-import { type IamOAuthConfig, platformIamOAuthConfig } from './mcp'
 import { archiveWithDataFile } from './platform-archive'
 import type { PreparedPlatformSource } from './platform-source'
 import { type PlatformUploadFetch, uploadPlatformArchive } from './platform-upload'
-import { platformProxyAppFor, type PlatformProxyComposition, platformServiceTableDigest, resolvePlatformProxyManifest } from './proxy-manifest'
 
 /**
  * The four services this command touches, in the order it RESOLVES and WRITES them.
@@ -323,25 +331,14 @@ const resolvePlacement = (input: PlatformDeployInput, proxyEnv: LiveServiceEnv):
 	return { hosts: derivePlatformHosts(subdomains, listeners), scheme: input.scheme, zeropsSubdomain: true }
 }
 
-const IAM_OAUTH_CONFIG = 'FABRIKA_IAM_OAUTH_CONFIG'
-
-/**
- * The secret the platform proxy sends IAM's route, so IAM honours the client address and request id only from the proxy.
- * Derived from the IAM admin key, which every deploy holds, so each deploy writes the same value and nothing stores or
- * reads one back. Never from the proxy key: namespace proxies hold that one.
- */
-const deriveIamProxySecret = (iamAdminKey: string): string =>
-	createHmac('sha256', iamAdminKey).update('fabrika-installation-proxy-secret:iam').digest('hex')
-
 /** The credentials this command writes. Sensitive, so they cannot be compared and are rewritten on every deploy. */
 const SENSITIVE_DEPLOY_KEYS: ReadonlySet<string> = new Set([IAM_PROXY_SECRET_VARIABLE])
 
 /**
- * The per-installation configuration each service needs, derived from the resolved hosts.
+ * The per-installation configuration each service needs, derived from the resolved hosts: fabrika's
+ * (`deployedServiceEnvironment`), and control's Zerops variables after it.
  *
  * The namespace source default comes from the verified snapshot. Values are compared but never logged.
- * IAM's OAuth configuration is written only when MCP authoring is enabled; without it the variable is
- * left as it is, and the manifest — whose `/mcp` row then admits no OAuth token — is what turns MCP off.
  */
 const desiredServiceEnv = (
 	environment: string,
@@ -350,63 +347,32 @@ const desiredServiceEnv = (
 	proxySource: ZeropsNamespaceProxySource,
 	oauthConfig: IamOAuthConfig | undefined,
 	controlTableDigest: string,
-	iamProxySecret: string,
+	iamAdminKey: string,
 ): ReadonlyMap<PlatformDeployService, ReadonlyMap<string, string>> => {
-	const iamOrigin = platformOrigin(placement.scheme, placement.hosts.iam)
-	const operationsOrigin = platformOrigin(placement.scheme, placement.hosts.operations)
-	const iam = new Map([
-		['ENVIRONMENT', environment],
-		// The `iss` of every minted token AND the OIDC redirect base, so it must be the address
-		// routed to the proxy in front of this service.
-		['ISSUER', iamOrigin],
-		[IAM_PROXY_SECRET_VARIABLE, iamProxySecret],
+	const fabrika = deployedServiceEnvironment({
+		environment,
+		scheme: placement.scheme,
+		hosts: placement.hosts,
+		iamUpstream: PRIVATE_IAM_UPSTREAM,
+		provisioningKey: iamAdminKey,
+		controlTableDigest,
+		...(oauthConfig === undefined ? {} : { oauthConfig }),
+	})
+	const control = new Map([
+		...fabrika.control,
+		[FABRIKA_ZEROPS_PROXY_SOURCE_JSON, serializeNamespaceProxySource(proxySource)],
+		// The public IAM origin an APPLICATION project's proxy reaches — there is no private
+		// network between projects (ADR-0006).
+		['FABRIKA_ZEROPS_PROXY_IAM_URL', platformOrigin(placement.scheme, placement.hosts.iam)],
+		// The installation's own project, which no deployment namespace may adopt: its proxy is the
+		// platform's enforcement point, and a namespace reconcile would rebuild it with only app members.
+		['FABRIKA_ZEROPS_PLATFORM_PROJECT_ID', projectId],
 	])
-	if (oauthConfig !== undefined) {
-		iam.set(IAM_OAUTH_CONFIG, JSON.stringify(oauthConfig))
-	}
 	return new Map<PlatformDeployService, ReadonlyMap<string, string>>([
-		['iam', iam],
-		[
-			'operations',
-			new Map([
-				['ENVIRONMENT', environment],
-				['FABRIKA_IAM_ISSUER', iamOrigin],
-				['FABRIKA_OPERATIONS_PUBLIC_HOST', placement.hosts.operations],
-			]),
-		],
-		[
-			'proxy',
-			new Map([
-				['ENVIRONMENT', environment],
-				// Compared byte-for-byte against a token's `iss`, so this is the PUBLIC issuer and not the
-				// private `iam:3000` the manifest dials — `readProxyEnv` canonicalizes it to an origin.
-				['FABRIKA_IAM_ISSUER', iamOrigin],
-				['FABRIKA_PROXY_SESSION_OWNER_JSON', JSON.stringify({ issuer: iamOrigin, upstream: PRIVATE_IAM_UPSTREAM })],
-				// Caddy sends it on the session owner's route. Until the proxy deploys, IAM keys every request on one shared
-				// bucket, which is what the balancer's address already does on Zerops.
-				[IAM_PROXY_SECRET_VARIABLE, iamProxySecret],
-			]),
-		],
-		[
-			'control',
-			new Map([
-				[FABRIKA_ZEROPS_PROXY_SOURCE_JSON, serializeNamespaceProxySource(proxySource)],
-				['ENVIRONMENT', environment],
-				['FABRIKA_IAM_ISSUER', iamOrigin],
-				// A bare host: `controlPublicOrigin` accepts either spelling.
-				['FABRIKA_CONTROL_DOMAIN', placement.hosts.control],
-				// The digest of the console table the proxy above publishes: Control picks its own table, MCP or not,
-				// by it, and refuses to start under another, so the two cannot disagree at runtime.
-				[FABRIKA_SERVICE_TABLE_DIGEST, controlTableDigest],
-				['OPERATIONS_ARTIFACT_ORIGIN', operationsOrigin],
-				// The public IAM origin an APPLICATION project's proxy reaches — there is no private
-				// network between projects (ADR-0006).
-				['FABRIKA_ZEROPS_PROXY_IAM_URL', iamOrigin],
-				// The installation's own project, which no deployment namespace may adopt: its proxy is the
-				// platform's enforcement point, and a namespace reconcile would rebuild it with only app members.
-				['FABRIKA_ZEROPS_PLATFORM_PROJECT_ID', projectId],
-			]),
-		],
+		['iam', fabrika.iam],
+		['operations', fabrika.operations],
+		['proxy', fabrika.proxy],
+		['control', control],
 	])
 }
 
@@ -836,16 +802,16 @@ export const deployPreparedPlatform = async (
 		proxySource,
 		oauthConfig,
 		controlTableDigest,
-		deriveIamProxySecret(input.iamAdminKey),
+		input.iamAdminKey,
 	)
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
 		const service = serviceOf(services, hostname)
 		const live = hostname === PLATFORM_PROXY_SERVICE ? proxyEnv : await readServiceEnv(service.id, collaborators)
 		const keys = desired.get(hostname) ?? new Map<string, string>()
-		const liveOAuthConfig = live.get(IAM_OAUTH_CONFIG)
+		const liveOAuthConfig = live.get(IAM_OAUTH_CONFIG_VARIABLE)
 		const oauthStillSet = liveOAuthConfig !== undefined && (liveOAuthConfig.sensitive || liveOAuthConfig.content.trim() !== '')
 		if (hostname === 'iam' && oauthConfig === undefined && oauthStillSet) {
-			log.warn(`iam: MCP authoring is off but ${IAM_OAUTH_CONFIG} is still set; IAM keeps issuing MCP tokens until it is removed`)
+			log.warn(`iam: MCP authoring is off but ${IAM_OAUTH_CONFIG_VARIABLE} is still set; IAM keeps issuing MCP tokens until it is removed`)
 		}
 		const written = await applyServiceEnv(service, keys, live, input, collaborators)
 		log.info(

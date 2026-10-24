@@ -9,24 +9,23 @@
 // `public` for two days while the console's declaration said otherwise, and nothing reported it.
 //
 // DEV-TIME ONLY: it imports the service contracts from the PRIVATE service packages, which is why it
-// lives in this private package. What `@fabrika/provider-zerops/installation` ships instead is its
-// `src/installation/proxy-manifest.ts` (the types and `resolvePlatformProxyManifest`) plus
-// `src/installation/generated/platform-proxy-manifest.ts` (the tables, as data) — a deploy command reads those two and
-// never reaches this file.
+// lives in this private package. What a deploy command reads instead is `@fabrika/installation-init`'s
+// `proxy-manifest.ts` (the types and `resolvePlatformProxyManifest`) plus `@fabrika/provider-zerops/installation`'s
+// `src/installation/generated/platform-proxy-manifest.ts` (the tables, as data) — it never reaches this file.
 
 import type { BodyAdmission, InstallationEndpointRow, InstallationEndpointTable } from '@fabrika/auth-core'
 import { CONTROL_ACTIONS, CONTROL_APP_ID } from '@fabrika/control-contract'
 import { controlSchema } from '@fabrika/control/schema'
 import { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, controlServiceContract } from '@fabrika/control/service'
 import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
-import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
-import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
 import {
 	type PlatformOAuthResourceTemplate,
 	type PlatformProxyApp,
 	type PlatformProxyManifestTemplate,
 	resolvePlatformProxyManifest,
-} from '@fabrika/provider-zerops/installation'
+} from '@fabrika/installation-init'
+import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
+import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
 import type { Artifact } from '@fabrika/provider-zerops/installation/topology'
 
 export {
@@ -36,7 +35,7 @@ export {
 	type PlatformProxyPlacement,
 	type PlatformProxyService,
 	resolvePlatformProxyManifest,
-} from '@fabrika/provider-zerops/installation'
+} from '@fabrika/installation-init'
 
 /**
  * IAM's own app id.
@@ -222,7 +221,7 @@ export const platformProxyManifestArtifact = (): Artifact => {
 	assertDeclaredActions(template)
 	const content = [
 		HEADER,
-		"import type { PlatformProxyManifestTemplate } from '../proxy-manifest'",
+		"import type { PlatformProxyManifestTemplate } from '@fabrika/installation-init'",
 		'',
 		'export const PLATFORM_PROXY_MANIFEST_TEMPLATE: PlatformProxyManifestTemplate = {',
 		'\tapps: [',

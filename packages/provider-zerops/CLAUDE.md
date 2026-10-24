@@ -297,12 +297,14 @@ Layout (under `src/installation/`):
 - `deploy.ts` + `deploy-options.ts` — the ordered deploy sequence and its flags.
 - `install.ts` — the two passes, prompts and stable exports. `install-environment.ts` — the environment
   matrix and writes. `install-project.ts` — project creation. `install-provisioning.ts` — service
-  provisioning. `install-collaborators.ts`, `install-options.ts`, `secrets.ts` (the six generated values).
+  provisioning. `install-collaborators.ts`, `install-options.ts`, `install-secrets.ts` (what the secrets file records).
+  The six generated values, fabrika's half of the service environment, the secrets file's mechanics, the manifest
+  template type with `resolvePlatformProxyManifest`, MCP/OAuth and the tag rule are `@fabrika/installation-init`'s;
+  `install-environment.ts` and `deploy.ts` add this project's references (`${db_…}`, `${storage_…}`), `iam:3000` and
+  control's `FABRIKA_ZEROPS_*` variables to them.
 - `init.ts` — the sidecar-repository flow. `sidecar.ts` + `templates/` — what the sidecar contains + the tag rule.
 - `admin.ts` + `admin-options.ts` — the first administrator. `machine-key.ts` — the block `admin` and `init` end with.
-- `hosts.ts` — where an installation answers. `log.ts` — progress, with no secret-taking helper.
-  `proxy-manifest.ts` — the manifest TEMPLATE type and `resolvePlatformProxyManifest`.
-- `mcp.ts` — the operator's MCP client list and IAM's `FABRIKA_IAM_OAUTH_CONFIG` built from it.
+- `hosts.ts` — the Zerops subdomain placement. `log.ts` — progress, with no secret-taking helper.
 - `checker-release.ts` — the npm lookup of `@fabrika/check` at this checkout's version.
 - `topology/` — `setups.ts` (typed setups), `topology.ts` + `invariants.ts`, `artifacts.ts` (every
   generated artifact, as values), `installation-schemas.ts` + `validate.ts` (static schemas).
@@ -354,10 +356,10 @@ Invariants:
 - **MCP authoring is opt-in, and ONE input turns on both halves** (ADR-0049,
   [`mcp-authoring.md`](../../docs/reference/mcp-authoring.md)). `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` /
   `--mcp-clients` makes `resolvePlatformProxyManifest` publish the console's MCP table with its `oauth` row
-  and register its `oauthResource`, and `desiredServiceEnv` write `FABRIKA_IAM_OAUTH_CONFIG` for the SAME
+  and register its `oauthResource`, and `deployedServiceEnvironment` write `FABRIKA_IAM_OAUTH_CONFIG` for the SAME
   resource URI. Without it the manifest carries the console's `tableWithoutOAuth` and the IAM variable is left
   untouched — never cleared, because an empty write on Zerops is unverified. Control's half is
-  `FABRIKA_SERVICE_TABLE_DIGEST`, which `desiredServiceEnv` writes from the resolved manifest
+  `FABRIKA_SERVICE_TABLE_DIGEST`, which `deployedServiceEnvironment` writes from the resolved manifest
   (`platformServiceTableDigest`); Control refuses to start when it names neither table. The template's
   `oauthResource` is generated from `CONTROL_MCP_PATH` / `CONTROL_MCP_SCOPE`; `platform-artifacts`'
   `proxy-manifest.test.ts` pins the resolved tables to `controlServiceContract({ mcp })`.

@@ -6,6 +6,7 @@
 // so a pipeline or an agent drives init end to end. Its confirmations stay, answered by `--yes`.
 
 import {
+	assertPinnedTag,
 	CHECKOUT_FLAG,
 	type CommandEnv,
 	describeArgument,
@@ -17,7 +18,7 @@ import {
 	UNATTENDED_FLAG,
 } from '@fabrika/installation-init'
 import { parsePlatformHosts } from './placement-options'
-import { assertPinnedTag, defaultCheckoutName, defaultSidecarRepo } from './sidecar'
+import { defaultCheckoutName, defaultSidecarRepo } from './sidecar'
 
 /** The name every bypass in this platform is gated on, and therefore the one name an installation cannot take. */
 const LOCAL_ENVIRONMENT = 'local'
