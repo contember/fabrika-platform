@@ -131,7 +131,7 @@ export function objectNamed(operation: OpsOperation, body: unknown): string | nu
 }
 
 /** The request's body as JSON, or `undefined` when it is none: every parser refuses `undefined`. */
-export async function jsonBody(request: Request): Promise<unknown> {
+export async function jsonBody(request: { text(): Promise<string> }): Promise<unknown> {
 	try {
 		return JSON.parse(await request.text())
 	} catch {
