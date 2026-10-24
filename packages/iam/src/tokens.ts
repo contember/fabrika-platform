@@ -27,9 +27,10 @@ import {
 	type Scope,
 	type TokenPrincipalType,
 } from '@fabrika/auth-core'
-import { PROVISIONING_ADMIN_ID, sessionUsable } from './auth'
+import { sessionUsable } from './auth'
 import type { CredentialGrantRow, CredentialRow, PrincipalRow, SessionTerminal } from './db'
 import { principalStatus, sessionTerminal } from './db'
+import { issuerAuthority, issuerCoverage } from './delegation'
 import type { Env } from './env'
 import { narrowPermissions } from './narrow-permissions'
 import { authorityDeadline, reachesCrossAppAuthority, resolveAuthorityAt, type ResolvedAuthority, resolvePermissionsAt } from './resolve'
@@ -417,68 +418,32 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 
 	// Inline grants on a bound credential are a DOWNSCOPE restriction: keep only what the principal
 	// actually holds (effective = resolve(principal) ∩ inline). No inline → the principal's full set.
-	const permissions = inline.length === 0 ? resolved : inline.filter((e) => permits(resolved, e.action, e.scope ?? undefined))
-	const expiresAt = authorityDeadline(authority, permissions, Math.floor(Date.now() / 1000))
-	return { ok: true, subject: principal.id, type: principal.type, label: principal.label, ...mailboxClaim(principal), permissions, expiresAt }
-}
-
-/** An action the issuer must still hold on at least one of `on` (`null` is application-wide). */
-interface DelegatedAction {
-	action: string
-	on: readonly (Scope | null)[]
-}
-
-/**
- * S8 at every mint of an anonymous credential: its issuer exists, is enabled and still holds each delegated action, and
- * the token ends when the first of them loses its support. A job issuer holds its current declaration, app-wide, and
- * only for the mount it is declared to issue; the provisioning administrator is the installation's named exception. A credential without an issuer, or whose issuer lost any of it, mints
- * nothing (`issuer_unauthorized`, reported as `invalid_key`).
- */
-async function issuerAuthority(
-	services: Services,
-	issuerId: string | null,
-	app: string,
-	mount: string | null,
-	required: readonly DelegatedAction[],
-): Promise<{ ok: true; expiresAt: number | null } | { ok: false; reason: 'issuer_unauthorized' }> {
-	const refused: { ok: false; reason: 'issuer_unauthorized' } = { ok: false, reason: 'issuer_unauthorized' }
-	const issuer = issuerId === null ? null : await services.repositories.principals.getPrincipalById(issuerId)
-	if (issuer === null || principalStatus(issuer) === 'disabled') {
-		return refused
-	}
-	if (issuer.id === PROVISIONING_ADMIN_ID) {
-		// The named exception: the seeded installation administrator holds every action, and its issuance was audited.
-		return { ok: true, expiresAt: null }
-	}
-	const workload = await services.repositories.workloads.getByPrincipal(issuer.id)
-	if (workload !== null) {
-		const declaration = workload.kind === 'job' && workload.app === app
-			? await services.repositories.workloads.declaration(app, 'job', workload.name)
-			: null
-		if (declaration === null || mount === null || declaration.issues !== mount) {
-			return refused
-		}
-		return required.every(({ action }) => declaration.actions.includes(action)) ? { ok: true, expiresAt: null } : refused
-	}
-	const authority = await resolveAuthorityAt(services, issuer, app)
-	const now = Math.floor(Date.now() / 1000)
-	let expiresAt: number | null = null
-	for (const { action, on } of required) {
-		// Per action the latest support among the chain links it is held on, then the earliest across actions.
-		let latest: number | null | undefined
-		for (const scope of on) {
-			if (!permits(authority.permissions, action, scope ?? undefined)) continue
-			const until = authorityDeadline(authority, [{ action, scope, source: 'grant' }], now)
-			latest = latest === undefined ? until : latest === null || until === null ? null : Math.max(latest, until)
-		}
-		if (latest === undefined) {
-			return refused
-		}
-		if (latest !== null && (expiresAt === null || latest < expiresAt)) {
-			expiresAt = latest
+	const held = inline.length === 0 ? resolved : inline.filter((e) => permits(resolved, e.action, e.scope ?? undefined))
+	const heldUntil = authorityDeadline(authority, held, Math.floor(Date.now() / 1000))
+	if (cred.issued_by === null || cred.issued_by === principal.id) {
+		return {
+			ok: true,
+			subject: principal.id,
+			type: principal.type,
+			label: principal.label,
+			...mailboxClaim(principal),
+			permissions: held,
+			expiresAt: heldUntil,
 		}
 	}
-	return { ok: true, expiresAt }
+	// A key one principal issued for another (a service or device key) is delegation too: no more than its issuer covers (S8).
+	const issued = await issuerCoverage(services, cred.issued_by, app, held)
+	if (!issued.ok) return issued
+	const expiresAt = heldUntil === null ? issued.expiresAt : issued.expiresAt === null ? heldUntil : Math.min(heldUntil, issued.expiresAt)
+	return {
+		ok: true,
+		subject: principal.id,
+		type: principal.type,
+		label: principal.label,
+		...mailboxClaim(principal),
+		permissions: issued.permissions,
+		expiresAt,
+	}
 }
 
 /**

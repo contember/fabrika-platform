@@ -21,6 +21,7 @@ import {
 } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
 import type { AuditEventInput, CredentialGrantRow } from './db'
+import { issuerAuthority } from './delegation'
 import { unixNow } from './repositories/sql'
 import { generateToken, hashToken } from './secret'
 import type { Services } from './services'
@@ -62,6 +63,20 @@ export function findUncoveredGrant(issuerPermissions: PermissionEntry[], grants:
 		}
 	}
 	return null
+}
+
+/**
+ * The expiry of a key that delegates `grants`: the requested one, or earlier when the issuer's grants behind them end
+ * first (S8). Null when the issuer no longer holds them live, or they end now.
+ */
+async function delegatedExpiry(services: Services, issuer: Issuer, app: string, grants: KeyGrant[], requested: number): Promise<number | null> {
+	const required = grants.map((grant) => ({ action: grant.action, on: [grant.scope ?? null] }))
+	const authority = await issuerAuthority(services, issuer.id, app, null, required)
+	if (!authority.ok) {
+		return null
+	}
+	const expiresAt = authority.expiresAt === null ? requested : Math.min(requested, authority.expiresAt)
+	return expiresAt > unixNow() ? expiresAt : null
 }
 
 /** Why `expiresAt` is not an acceptable key expiry at `now` (both unix seconds), or null when it is. */
@@ -131,6 +146,10 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 		if (findUncoveredGrant(issuer.permissions, grants) !== null) {
 			return NOT_ALLOWED
 		}
+		const expiresAt = await delegatedExpiry(services, issuer, app, grants, input.expiresAt)
+		if (expiresAt === null) {
+			return NOT_ALLOWED
+		}
 		const token = `${API_KEY_PREFIX}${generateToken()}`
 		const principalId = uuidv7()
 		const id = uuidv7()
@@ -145,7 +164,7 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 				scopeType: svc.scope?.type ?? null,
 				scopeValue: svc.scope?.value ?? null,
 				grantedBy: issuer.id,
-				expiresAt: input.expiresAt,
+				expiresAt,
 			}),
 			...credentials.credentialStatements(id, {
 				tokenHash: await hashToken(token),
@@ -153,7 +172,7 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 				principalId,
 				app,
 				issuedBy: issuer.id,
-				expiresAt: input.expiresAt,
+				expiresAt,
 				grants: [],
 			}),
 			...(record === undefined ? [] : [audit.eventStatement(record({ credentialId: id, principalId }))]),
@@ -178,6 +197,11 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 	if (findUncoveredGrant(issuer.permissions, grants) !== null) {
 		return NOT_ALLOWED
 	}
+	// A self-bound key resolves its principal live at every mint; an anonymous one freezes what the issuer delegates.
+	const expiresAt = input.principalId === undefined ? await delegatedExpiry(services, issuer, app, grants, input.expiresAt) : input.expiresAt
+	if (expiresAt === null) {
+		return NOT_ALLOWED
+	}
 
 	const token = `${API_KEY_PREFIX}${generateToken()}`
 	const id = await services.repositories.credentials.createCredential({
@@ -186,7 +210,7 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 		principalId: input.principalId ?? null,
 		app,
 		issuedBy: issuer.id,
-		expiresAt: input.expiresAt,
+		expiresAt,
 		grants: grants.map((g) => ({ action: g.action, scopeType: g.scope?.type ?? null, scopeValue: g.scope?.value ?? null })),
 	}, record === undefined ? undefined : (credentialId) => record({ credentialId, principalId: input.principalId }))
 	return { result: { ok: true, token, id, principalId: input.principalId }, auditLabel: input.label }

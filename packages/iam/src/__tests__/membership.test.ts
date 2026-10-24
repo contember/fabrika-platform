@@ -1239,4 +1239,19 @@ describe('S8: a grant given through delegation ends no later than the authority 
 		if (!result.ok) throw new Error(`no workspace: ${result.reason}`)
 		expect(await expiryOf(f, owner, result.scope, result.role)).toBe(until)
 	})
+	test('a share link ends no later than the issuer authority over every delegated action', async () => {
+		const f = await fixture()
+		const scope = await workspaceOf(f, await f.person('owner'))
+		const until = T()
+		const staff = await expiringStaff(f, until)
+		expect(await assign(f, staff, scope, 'editor', { principalId: staff.id })).toMatchObject({ ok: true })
+		const issued = await issueLink(f.services, CALLER_ENV, f.ctx, {
+			...(await caller(staff)),
+			mount: 'shared',
+			chain: [{ type: 'note', value: 'n1' }, scope],
+			days: 7,
+		})
+		if (!issued.ok) throw new Error(`expected a link: ${issued.reason}`)
+		expect(issued.expiresAt).toBe(until)
+	})
 })

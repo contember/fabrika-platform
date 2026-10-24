@@ -187,6 +187,7 @@ describe('issueKey service mode (folded service token)', () => {
 		catalog(h, 'opice', 'report.write')
 		const services = h.makeServices({ issuer: ISSUER })
 		const issuerId = seedUser(h.sqlite, { sub: 'iss-svc', email: 'iss@contember.com' })
+		seedInlineGrant(h.sqlite, issuerId, ['report.write'], null, 'opice')
 
 		const issued = await issueKey(
 			services,
@@ -287,6 +288,7 @@ async function issueIn(mode: IssueMode, options: { expiresAt: number; action?: s
 	const services = h.makeServices({ issuer: ISSUER })
 	const issuerId = seedUser(h.sqlite, { sub: `iss-${mode}`, email: `${mode}@contember.com` })
 	const action = options.action ?? 'report.read'
+	seedInlineGrant(h.sqlite, issuerId, [action], null, 'a')
 	const base = { app: 'a', credential: null, requestId: 'r', expiresAt: options.expiresAt }
 	const input = mode === 'service'
 		? { ...base, service: { label: 'svc', permissions: [action] } }
@@ -362,6 +364,7 @@ describe("issueKey: only exact actions of the app's catalog", () => {
 describe('revokeKey: only a credential of the caller app', () => {
 	async function issuedFor(h: Harness, app: string, issuerId: string): Promise<string> {
 		catalog(h, app, 'report.read')
+		seedInlineGrant(h.sqlite, issuerId, ['report.read'], null, app)
 		const outcome = await issueKey(
 			h.makeServices({ issuer: ISSUER }),
 			{ app, credential: null, requestId: 'r', expiresAt: inOneHour(), permissions: [{ action: 'report.read' }] },
@@ -403,5 +406,60 @@ describe('revokeKey: only a credential of the caller app', () => {
 		})
 		expect(await revokeKey(services, { app: 'reports', credential: null, requestId: 'r', id }, { id: issuerId, permissions: [] }, 'reports'))
 			.toEqual({ ok: false, reason: 'not_found' })
+	})
+})
+
+describe('S8: a key one principal issues for another ends with, and carries no more than, its issuer authority', () => {
+	async function issuing(mode: 'service' | 'standalone', grantEnds: number | null) {
+		const h = createHarness()
+		catalog(h, 'opice', 'report.read')
+		const services = h.makeServices({ issuer: ISSUER })
+		const issuerId = seedUser(h.sqlite, { sub: `iss-s8-${mode}`, email: `s8-${mode}@contember.com` })
+		const grant = seedInlineGrant(h.sqlite, issuerId, ['report.read'], null, 'opice')
+		h.sqlite.run('UPDATE grants SET expires_at = ? WHERE id = ?', [grantEnds, grant])
+		const base = { app: 'opice', credential: null, requestId: 'r', expiresAt: inOneHour() }
+		const input = mode === 'service'
+			? { ...base, service: { label: 'svc', permissions: ['report.read'] } }
+			: { ...base, permissions: [{ action: 'report.read' }] }
+		const outcome = await issueKey(services, input, { id: issuerId, permissions: [perm('report.read')] }, 'opice')
+		if (!outcome.result.ok) throw new Error('expected the key to be issued')
+		return { h, services, issuerId, grant, issued: outcome.result }
+	}
+
+	const modes: ('service' | 'standalone')[] = ['service', 'standalone']
+	for (const mode of modes) {
+		test(`a ${mode} key is stored with the issuer's earlier expiry`, async () => {
+			const grantEnds = Math.floor(Date.now() / 1000) + 120
+			const { services, issued } = await issuing(mode, grantEnds)
+			expect((await services.repositories.credentials.getCredentialById(issued.id))?.expires_at).toBe(grantEnds)
+			if (mode === 'service' && issued.principalId !== undefined) {
+				expect((await services.repositories.grants.listGrants(issued.principalId)).map((row) => row.expires_at)).toEqual([grantEnds])
+			}
+		})
+	}
+
+	test('a service key carries only what its issuer still covers, and nothing once the issuer is disabled', async () => {
+		const { h, services, issuerId, grant, issued } = await issuing('service', null)
+		const mint = async () => (await mintFromKey(services, ENV, { app: 'opice', key: issued.token, requestId: 'r' })).result
+		const before = await mint()
+		if (!before.ok) throw new Error('expected ok')
+		expect(permits((await verify(before.token, 'opice'))?.perms ?? [], 'report.read')).toBe(true)
+
+		h.sqlite.run('DELETE FROM grants WHERE id = ?', [grant])
+		const narrowed = await mint()
+		if (!narrowed.ok) throw new Error('expected ok')
+		expect((await verify(narrowed.token, 'opice'))?.perms).toEqual([])
+
+		h.sqlite.run('UPDATE principals SET disabled_at = ? WHERE id = ?', [Math.floor(Date.now() / 1000), issuerId])
+		expect(await mint()).toEqual({ ok: false, reason: 'invalid_key' })
+	})
+
+	test('an issuer holding iam.admin is the named exception: its key keeps the grants it was given', async () => {
+		const { h, services, issuerId, grant, issued } = await issuing('service', null)
+		seedInlineGrant(h.sqlite, issuerId, ['iam.admin'], null, 'propustka')
+		h.sqlite.run('DELETE FROM grants WHERE id = ?', [grant])
+		const minted = (await mintFromKey(services, ENV, { app: 'opice', key: issued.token, requestId: 'r' })).result
+		if (!minted.ok) throw new Error('expected ok')
+		expect(permits((await verify(minted.token, 'opice'))?.perms ?? [], 'report.read')).toBe(true)
 	})
 })

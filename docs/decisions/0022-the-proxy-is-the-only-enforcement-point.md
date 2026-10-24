@@ -603,7 +603,8 @@ decision, and the proxy's decision never replaces them.
 **Invariant: an application issues no credentials.** `@fabrika/auth` issues and redeems nothing.
 IAM issues every `px_` credential: share links on an application's request, checked against its
 caller's live permissions or, for a job, its approved declaration ([ADR-0012](0012-fabrika-app-runtime.md)), and
-checked again at every mint, so a link whose issuer is disabled or no longer holds what it delegated mints nothing, share links and API keys from
+checked again at every mint, so a link whose issuer is disabled or no longer holds what it delegated mints nothing (an API key one principal
+issued for another is narrowed to what its issuer still covers, and each ends no later than its issuer's grants), share links and API keys from
 its admin surface, machine keys through `fabrika control key issue`, a job's and a webhook's key and an application
 environment's membership transport key through Control's reconcile, builder credentials through device authorization
 ([ADR-0042](0042-connect-local-builders-through-human-consent.md)). IAM signs an access token only from a session (`mintToken`)

@@ -63,6 +63,7 @@ import {
 	principalStatus,
 	type RoleRow,
 } from './db'
+import { issuerAuthority } from './delegation'
 import type { Env, RequestContext } from './env'
 import { organizationMailbox } from './human-admission'
 import { logError } from './log'
@@ -1089,8 +1090,19 @@ export async function issueLink(services: Services, env: CallerEnv, ctx: Request
 	}
 	const [object] = input.chain
 	if (object === undefined) return invalid('a link chain names its object first')
+	// S8: the link ends no later than the issuer's grants behind it, so a lapse cannot revive with a later grant.
+	const backing = await issuerAuthority(
+		services,
+		caller.principal.id,
+		caller.app,
+		mount.mount,
+		[mount.issued_by, ...grants].map((action) => ({ action, on: input.chain })),
+	)
+	if (!backing.ok) return NOT_ALLOWED
+	const requested = unixNow() + input.days * DAY_SECONDS
+	const expiresAt = backing.expiresAt === null ? requested : Math.min(requested, backing.expiresAt)
+	if (expiresAt <= unixNow()) return NOT_ALLOWED
 	const key = `${API_KEY_PREFIX}${generateToken()}`
-	const expiresAt = unixNow() + input.days * DAY_SECONDS
 	const id = await services.repositories.credentials.createLinkCredential({
 		tokenHash: await hashToken(key),
 		label: `link:${mount.mount}`,

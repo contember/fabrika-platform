@@ -211,6 +211,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   installation administrator's only (`requireGrantablePrincipal`), under the rules provisioning applies; the secret
   stays. A token minted before the change keeps its `perms` until it expires (`DEFAULT_TOKEN_TTL_SECONDS`, the
   proxy's cache included). A grant at an app other than the credential's binding never reaches the key's token.
+  A key whose issuer is not its principal is delegation (S8): `issueKey` stores the grant and the key ending no later
+  than the issuer's supporting grants, and every mint narrows the key to what its issuer still covers at the app
+  (`issuerCoverage`, `src/delegation.ts`); a disabled or missing issuer is `invalid_key`. An issuer holding `iam.admin`
+  covers everything, and `provisioning-admin` is a named exception.
 - **EVERY KEY `issueKey` WRITES EXPIRES, AT MOST 30 DAYS OUT** (`MAX_KEY_LIFETIME_SECONDS`,
   `@fabrika/auth-core`), in all three modes — service, standalone, self-bound. A self-bound key
   carries the issuer's live permissions, so without a bound a 300-second access token could mint a
@@ -426,14 +430,15 @@ fails if that stops being true — it is the guard, not documentation of one.
   external role for a mailbox `organizationMailbox` names is `internal_mailbox` before anything is written.
 - **A SHARE LINK IS BOUND TO ITS MOUNT AND ITS CHAIN** (`credentials.link_mount`, `link_dimension`,
   `link_chain`). `issueLink` checks the chain against the schema's containment, requires an expiry of
-  at most the mount's `maxDays`, and requires the issuer to hold `issuedBy` and every granted action on
+  at most the mount's `maxDays`, stores the earlier of that and the issuer's authority deadline over every delegated
+  action (a standalone anonymous key likewise), and requires the issuer to hold `issuedBy` and every granted action on
   some link of the chain; the grants are frozen on the object. Its token carries `link: { mount, chain }`
   and no `ptype`, and the framework re-checks the chain per request. `createLinkCredential` locks the
   mount row and inserts only while the schema still declares exactly what was checked (`CheckedLinkDeclaration`: the
   mount's dimension, grants, `issuedBy` and `maxDays`, the chain's containment, and an issuing job's actions and
   `issues`), so a reconcile in between either makes the write insert nothing (`not_allowed`) or comes after the
   committed key, which it revokes if it removes or moves the mount. Every mint checks the issuer again
-  (`issuerAuthority`, `src/tokens.ts`; S8): it exists, is enabled and still holds the mount's `issuedBy` and every
+  (`issuerAuthority`, `src/delegation.ts`; S8): it exists, is enabled and still holds the mount's `issuedBy` and every
   frozen action on some link of the chain (a job: its current declaration, `issues` naming the mount), and the token
   ends with the issuer's supporting grants. A standalone anonymous key is checked the same way for its frozen grants.
   A missing issuer, or one that lost any of it, is `invalid_key`; `provisioning-admin` is the named exception. The issuer or a holder of
