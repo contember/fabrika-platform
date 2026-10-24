@@ -29,7 +29,7 @@ when a third container provider would touch no shared package except to add its 
   text says "one client on Zerops" (`packages/control/src/approval/diff.ts:277`).
 - ✔ `packages/control/src/zerops/{server,runtime}.ts` are the Bun composition root; only `zerops/provider.ts` is Zerops.
 - ✔ The provisioning key is 20 random bytes on Cloudflare (`packages/provider-cloudflare/src/installation/init.ts:395`)
-  and 32 on Zerops (`packages/provider-zerops/src/installation/secrets.ts:31`).
+  and 32 on Zerops (`packages/provider-zerops/src/installation/secrets.ts:31`, before WU9 moved it).
 
 ## Work units
 
@@ -195,4 +195,5 @@ WU5, WU6, WU7 and WU9 are independent of each other. WU8 follows WU7.
   roll command), moving the generated template and console schema out of `provider-zerops` (their ports and upstreams
   are Zerops topology, so the template first needs splitting into tables and placement), and a Cloudflare use of the
   service environment (its per-component environment lives in the scaffolded workflow and each `fabrika.config.ts`,
-  which an upgrade must not change).
+  which an upgrade must not change). Reviewed by an independent agent: no P1; its P2s fixed (`bun.lock` keeps the
+  wrangler it had, and `service-environment.test.ts` pins every service's variable names), with the stale references.

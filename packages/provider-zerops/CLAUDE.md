@@ -302,7 +302,8 @@ Layout (under `src/installation/`):
   template type with `resolvePlatformProxyManifest`, MCP/OAuth and the tag rule are `@fabrika/installation-init`'s;
   `install-environment.ts` and `deploy.ts` add this project's references (`${db_…}`, `${storage_…}`), `iam:3000` and
   control's `FABRIKA_ZEROPS_*` variables to them.
-- `init.ts` — the sidecar-repository flow. `sidecar.ts` + `templates/` — what the sidecar contains + the tag rule.
+- `init.ts` — the sidecar-repository flow. `sidecar.ts` + `templates/` — what the sidecar contains + the workflow's
+  run-time tag check; the pin's published-tag rule is `@fabrika/installation-init`'s `assertPinnedTag`.
 - `admin.ts` + `admin-options.ts` — the first administrator. `machine-key.ts` — the block `admin` and `init` end with.
 - `hosts.ts` — the Zerops subdomain placement. `log.ts` — progress, with no secret-taking helper.
 - `checker-release.ts` — the npm lookup of `@fabrika/check` at this checkout's version.
