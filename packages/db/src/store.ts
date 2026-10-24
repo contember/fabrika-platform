@@ -338,18 +338,29 @@ function containedTests(model: TableModel, grant: WithinGrant): { readonly colum
 		if (contained === undefined) {
 			continue
 		}
-		if (contained.dimension === grant.dimension || above.some((link) => link.dimension === contained.dimension)) {
+		if (contained.dimension === grant.dimension || linkOf(above, contained.dimension) !== undefined) {
 			throw new CapabilityError(
 				'unenforceable',
 				`the Within of ${grant.dimension} carries a grant on ${contained.dimension}, which does not lie inside ${grant.dimension} in ${model.name}`,
 			)
 		}
-		const link = below.find((candidate) => candidate.dimension === contained.dimension)
+		const link = linkOf(below, contained.dimension)
 		if (link !== undefined && contained.values.length > 0) {
 			tests[tests.length] = { column: link.column, values: contained.values }
 		}
 	}
 	return tests
+}
+
+/** The link of `dimension` among `links`, by an index loop: no array method an application could replace. */
+function linkOf(links: readonly Container[], dimension: string): Container | undefined {
+	for (let index = 0; index < links.length; index++) {
+		const link = links[index]
+		if (link !== undefined && link.dimension === dimension) {
+			return link
+		}
+	}
+	return undefined
 }
 
 /** Every scope value a `Within` carries: its own, its containers' and its contained dimensions'. */
@@ -358,10 +369,11 @@ function withinCount(grant: WithinGrant): number {
 		return 0
 	}
 	let count = grant.values.length
-	for (const group of [grant.containers, grant.contained]) {
-		for (let index = 0; index < group.length; index++) {
-			count += group[index]?.values.length ?? 0
-		}
+	for (let index = 0; index < grant.containers.length; index++) {
+		count += grant.containers[index]?.values.length ?? 0
+	}
+	for (let index = 0; index < grant.contained.length; index++) {
+		count += grant.contained[index]?.values.length ?? 0
 	}
 	return count
 }
@@ -402,8 +414,12 @@ function withinPredicate(model: TableModel, column: string, grant: WithinGrant):
 			predicates[predicates.length] = inList(model.name, link.column, container.values)
 		}
 	}
-	for (const test of containedTests(model, grant)) {
-		predicates[predicates.length] = inList(model.name, test.column, test.values)
+	const contained = containedTests(model, grant)
+	for (let index = 0; index < contained.length; index++) {
+		const test = contained[index]
+		if (test !== undefined) {
+			predicates[predicates.length] = inList(model.name, test.column, test.values)
+		}
 	}
 	if (count > MAX_WITHIN_VALUES) {
 		throw new CapabilityError('within_size', `a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)
@@ -620,8 +636,12 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 			groups.push([{ column: link.column, value: container.values }])
 		}
 	}
-	for (const test of containedTests(model, grant)) {
-		groups.push([{ column: test.column, value: test.values }])
+	const contained = containedTests(model, grant)
+	for (let index = 0; index < contained.length; index++) {
+		const test = contained[index]
+		if (test !== undefined) {
+			groups[groups.length] = [{ column: test.column, value: test.values }]
+		}
 	}
 	if (count > MAX_WITHIN_VALUES) {
 		throw new CapabilityError('within_size', `a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)

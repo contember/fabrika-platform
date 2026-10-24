@@ -52,6 +52,17 @@ describe('the connection factory cannot be replaced by an application module', (
 })
 
 describe('patched built-ins do not disable the guard', () => {
+	test('with Array.find and Array.some patched, a grant inside the Within still filters on the row’s own key', async () => {
+		const layer = recordingLayer()
+		const onlyNotes = layer.capabilities.within('workspace', 'notes.read', [], [], [{ dimension: 'note', values: ['n1'] }])
+		const outcome = await patchedChecks(
+			{ find: { dimension: 'note', column: 'workspace_id' }, some: false },
+			() => layer.attempt(() => layer.stores.notes.search(onlyNotes, 'x')),
+		)
+		expect(outcome.statements[0]?.sql).toContain('and "notes"."id" in ($3) order by')
+		expect(outcome.statements[0]?.sql).not.toContain('"notes"."workspace_id" in')
+	})
+
 	test('with Set.has, Array.find, Object.hasOwn, Object.keys and Object.getOwnPropertyDescriptor patched, an injected operator is still refused', async () => {
 		const layer = recordingLayer()
 		const injected = '= $1) or true or ("notes"."title" ='
