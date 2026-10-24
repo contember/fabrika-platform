@@ -12,6 +12,7 @@ export type NavPage =
 	| 'mail'
 	| 'settings/source'
 	| 'settings/branding'
+	| 'settings/passwords'
 	| 'access'
 	| 'access/users'
 	| 'access/credentials'
@@ -92,6 +93,8 @@ export function mayOpen(caller: ConsoleCaller, page: NavPage): boolean {
 			return control(caller, (access) => holdsGlobally(access, SOURCE_CONNECTION_MANAGE))
 		// IAM keeps the logo and lets only an installation administrator change it (ADR-0066).
 		case 'settings/branding':
+		// IAM keeps the minimum password length too, under the same rule (ADR-0020).
+		case 'settings/passwords':
 			return caller.iam === null || (caller.iam !== false && caller.iam.kind === 'installation')
 		case 'access/users':
 			return caller.iam !== false

@@ -1,6 +1,6 @@
 import { type AuthContext, ForbiddenError, initRpc, type RpcRouterFor, toErrorResponse, UnauthorizedError } from '@fabrika/app'
 import { permits, scopedValues, WORKLOAD_KINDS } from '@fabrika/auth-core'
-import type { IamAdminRpcContract } from '@fabrika/iam-contract'
+import { type IamAdminRpcContract, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH_FLOOR } from '@fabrika/iam-contract'
 import { installationBrandSchema } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
 import type { IamAppContext } from '../app'
@@ -225,6 +225,14 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.setInstallationBrand(context(ctx), input)),
 		clear: t.procedure.require(ADMIN_ACTION).mutation(({ ctx }) => adminUseCases.clearInstallationBrand(context(ctx))),
+	}),
+	// The installation's own setting too: `iam.admin` only, also to read it. The use case holds it to the runtime's floor.
+	passwordPolicy: t.router({
+		get: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => adminUseCases.getPasswordPolicy(context(ctx))),
+		set: t.procedure
+			.input(z.object({ minLength: z.number().int().min(PASSWORD_MIN_LENGTH_FLOOR).max(PASSWORD_MAX_LENGTH) }).strict())
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.setPasswordPolicy(context(ctx), input)),
 	}),
 })
 

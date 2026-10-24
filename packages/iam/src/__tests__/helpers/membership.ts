@@ -16,7 +16,7 @@ import {
 	type NewPrincipalEvents,
 	type PrincipalRow,
 } from '../../db'
-import type { RequestContext } from '../../env'
+import type { Env, RequestContext } from '../../env'
 import type { StoredPasswordHash } from '../../password-crypto'
 import type { InvitationAcceptance } from '../../repositories/membership'
 import { resolvePermissionsAt } from '../../resolve'
@@ -168,7 +168,12 @@ export interface MembershipFixture {
 
 export async function membershipFixture(
 	repositories: IamRepositories,
-	options: { email?: EmailSender | null; services?: Omit<MakeServicesOptions, 'environment' | 'issuer' | 'email'> } = {},
+	options: {
+		email?: EmailSender | null
+		services?: Omit<MakeServicesOptions, 'environment' | 'issuer' | 'email'>
+		/** Variables `adminRpc`'s IAM is built from besides the defaults below, which build their own `Services`. */
+		adminEnv?: Partial<Env>
+	} = {},
 ): Promise<MembershipFixture> {
 	const services = makeServicesFor(repositories, { ...options.services, environment: 'stage', issuer: ORIGIN, email: options.email ?? null })
 	const ctx = new PendingWork()
@@ -227,6 +232,7 @@ export async function membershipFixture(
 					OIDC_CLIENT_SECRET: 'secret',
 					OIDC_SCOPES: '',
 					OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
+					...options.adminEnv,
 				},
 				ctx,
 			),

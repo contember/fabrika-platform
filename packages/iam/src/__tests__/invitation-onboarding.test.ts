@@ -173,6 +173,23 @@ describe('an invitation that creates its principal', () => {
 		expect(await o.f.repositories.principals.getUserByEmail(NEWCOMER)).toBeNull()
 	})
 
+	test("the form states the installation's minimum, and a password of that length creates the account", async () => {
+		const o = await onboarding()
+		expect((await o.f.adminRpc('passwordPolicy.set', { minLength: 10 })).status).toBe(200)
+		await o.invite(NEWCOMER)
+		const token = o.email.lastToken()
+		expect(await (await o.send(accept({ token }))).text()).toContain('Use 10–256 characters.')
+
+		const nine = await o.send(accept({ token, password: 'tulip-42x' }))
+		expect(nine.status).toBe(400)
+		expect(await nine.text()).toContain('Use at least 10 characters.')
+		expect(await o.f.repositories.principals.getUserByEmail(NEWCOMER)).toBeNull()
+
+		const ten = await o.send(accept({ token, password: 'tulip-42xy' }))
+		expect(ten.status).toBe(302)
+		expect(await o.f.repositories.principals.getUserByEmail(NEWCOMER)).not.toBeNull()
+	})
+
 	test('a resent link invalidates the old one and restarts the seven days; a plain repeat sends nothing', async () => {
 		const o = await onboarding()
 		const first = await o.invite(NEWCOMER)

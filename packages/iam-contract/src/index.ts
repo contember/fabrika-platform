@@ -25,6 +25,7 @@ import type {
 	WorkloadKind,
 } from '@fabrika/auth-core'
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
+import type { PasswordPolicyDto, SetPasswordPolicyRequest } from './password-policy'
 
 // ── Common wrappers ───────────────────────────────────────────────────────────
 
@@ -763,6 +764,15 @@ export interface IamAdminRpcContract {
 		set: RpcProcedure<SetInstallationBrandRequest, InstallationBrandDto>
 		clear: RpcProcedure<void, InstallationBrandDto>
 	}
+	/**
+	 * The installation's minimum password length (ADR-0020), an installation administrator's (`iam.admin`) to read and to
+	 * change. A change writes `iam.password_policy.update` in its own transaction and applies to the next password set,
+	 * reset or chosen at an invitation; stored passwords stay as they are.
+	 */
+	passwordPolicy: {
+		get: RpcProcedure<void, PasswordPolicyDto>
+		set: RpcProcedure<SetPasswordPolicyRequest, PasswordPolicyDto>
+	}
 }
 
 export interface UserConnectionDto {
@@ -779,3 +789,4 @@ export interface UserConnectionDto {
 export type { AppActionDef, AppMemberItem, AppSchema, AppScopeDef, PermissionEntry, PermissionSource, PrincipalAffiliation, PrincipalType, RoleDef }
 export * from './access'
 export * from './oauth'
+export * from './password-policy'

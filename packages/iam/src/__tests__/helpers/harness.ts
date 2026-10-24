@@ -1,5 +1,6 @@
 import { buildAccessClaims, isWorkloadKind, TOKEN_ALG } from '@fabrika/auth-core'
 import type { EmailSender } from '@fabrika/email'
+import { PASSWORD_MIN_LENGTH_FLOOR } from '@fabrika/iam-contract'
 import type { SqlDatabase, SqlQueryResult, SqlRunResult, SqlStatement } from '@fabrika/platform'
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
 import { exportJWK, generateKeyPair } from 'jose'
@@ -185,6 +186,8 @@ export interface MakeServicesOptions {
 	/** Independent auth method switches. Defaults to the legacy OIDC-only mode. */
 	authentication?: { oidc: boolean; password: boolean }
 	passwordHasher?: PasswordHasher
+	/** The lowest minimum password length an administrator may set. Defaults to the Bun runtime's. */
+	passwordMinLengthFloor?: number
 	email?: EmailSender | null
 	/** propustka's own origin (token `iss` + OIDC redirect base). */
 	issuer?: string
@@ -215,7 +218,7 @@ export function makeServicesFor(repositories: IamRepositories, options: MakeServ
 		localDevLogin: environment === 'local' && options.localDevLogin === true,
 		authentication: {
 			oidc: { enabled: options.authentication?.oidc ?? true },
-			password: { enabled: options.authentication?.password ?? false },
+			password: { enabled: options.authentication?.password ?? false, minLengthFloor: options.passwordMinLengthFloor ?? PASSWORD_MIN_LENGTH_FLOOR },
 		},
 		oauth: options.oauth ?? null,
 		retention: options.retention ?? { authLogDays: DEFAULT_AUTH_LOG_RETENTION_DAYS, auditDays: null },

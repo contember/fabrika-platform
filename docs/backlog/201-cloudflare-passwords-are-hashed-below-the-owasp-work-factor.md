@@ -34,6 +34,11 @@ decide first:
 - The rehash wave on Zerops: every PBKDF2 verifier is replaced at its next login, which revokes that principal's
   older password sessions (the comment at `password.ts:154`). Decide whether a rehash keeps sessions instead.
 
+Until this lands, a Worker keeps 15 as the lowest minimum password length an administrator may set
+(`passwordMinLengthFloor`, ADR-0020), because a short password behind a cheap verifier falls fast to an offline attack.
+Once the Worker hashes with Argon2id, its floor follows the Bun target's; the function then keys on the algorithm,
+not only on the PBKDF2 count.
+
 Rollout on an existing installation: no migration and no environment variable. Existing verifiers keep verifying and
 move to Argon2id on their next successful login; a principal who never logs in keeps a PBKDF2 verifier.
 

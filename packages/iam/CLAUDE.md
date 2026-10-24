@@ -499,6 +499,16 @@ fails if that stops being true — it is the guard, not documentation of one.
   fails draws the fabrika mark, never a failed page. The page CSP adds `img-src data:` and nothing else: the logo is an
   `<img>` of a `data:` URI, an image runs no script and a `data:` URI loads nothing. Never widen `default-src` or
   `script-src` for it, and never render a logo as markup.
+- **THE MINIMUM PASSWORD LENGTH IS AN INSTALLATION ADMINISTRATOR'S, AND EVERY PASSWORD FORM READS IT PER REQUEST**
+  (ADR-0020, `password_policy`, `src/password-minimum.ts`). One row, key 1: `passwordPolicy.get` and `.set` of
+  `/admin/rpc` require `iam.admin`, never a user administrator; `set` holds the value to
+  `Config.authentication.password.minLengthFloor` (4 where the hasher derives with OWASP's PBKDF2 cost, 15 on a Worker,
+  `passwordMinLengthFloor`) and writes `iam.password_policy.update` only when the value changes. `validatePassword` takes
+  the minimum as a required argument, so no call site falls back to a constant: the set-password and invitation-password
+  forms read `passwordMinLength` once per request, render the rule with it and check the submission against it. No row,
+  or a row outside the runtime's range, applies the default 15. A read that fails fails the request (500): a fallback
+  would accept a password shorter than an installation that raised the minimum requires. The whole-password
+  blocklist (`common-passwords.ts`, SecLists' 10k list, MIT, with its notice) applies at every minimum.
 - **AN APPLICATION'S E-MAIL TEMPLATE IS PLAIN TEXT, OR HTML OF A CLOSED SUBSET IAM RENDERS FROM TOKENS; IAM PUTS IN THE
   LINK** (`app_mail_templates`, `src/messages.ts`). The contract's `mail` is a subject, a text and optionally an `html`
   per message and language, with placeholders from the closed set `MAIL_PLACEHOLDERS` (`@fabrika/auth-core`);

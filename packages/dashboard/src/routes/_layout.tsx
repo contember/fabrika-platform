@@ -61,6 +61,13 @@ const NAV: NavSection[] = [
 				icon: 'medal',
 				match: '/settings/branding',
 			},
+			{
+				to: 'settings/passwords',
+				label: 'Passwords',
+				description: 'The minimum length of every password',
+				icon: 'key',
+				match: '/settings/passwords',
+			},
 		],
 	},
 	{

@@ -1,6 +1,9 @@
-export const PASSWORD_MIN_CODE_POINTS = 15
-export const PASSWORD_MAX_CODE_POINTS = 256
+import { PASSWORD_MAX_LENGTH } from '@fabrika/iam-contract'
+import { COMMON_PASSWORD_LIST } from './common-passwords'
 
+export const PASSWORD_MAX_CODE_POINTS = PASSWORD_MAX_LENGTH
+
+/** Long ones the list does not hold, and the Czech ones a short minimum lets through: "heslo" is "password". */
 const COMMON_PASSWORDS = new Set([
 	'123456789012345',
 	'correcthorsebatterystaple',
@@ -8,6 +11,21 @@ const COMMON_PASSWORDS = new Set([
 	'passwordpassword',
 	'qwertyuiopqwerty',
 	'welcome123456789',
+	'heslo',
+	'heslo1',
+	'heslo12',
+	'heslo123',
+	'heslo1234',
+	'hesloheslo',
+	'ahoj',
+	'ahoj123',
+	'ahojahoj',
+	'qwertz',
+	'qwertzu',
+	'qwertzui',
+	'qwertzuiop',
+	'asdfgh',
+	'yxcvbnm',
 ])
 
 export interface PasswordPolicyContext {
@@ -22,11 +40,14 @@ export type PasswordPolicyResult =
 	| { readonly ok: true; readonly password: string }
 	| { readonly ok: false; readonly problem: PasswordProblem }
 
-/** Validate only length and whole-password blocklists; do not impose composition rules. */
-export function validatePassword(raw: string, context: PasswordPolicyContext = {}): PasswordPolicyResult {
+/**
+ * Validate only length and whole-password blocklists; do not impose composition rules. `minLength` is the installation's
+ * (`passwordMinLength`), which every caller reads for the request: there is no default to fall back on by forgetting it.
+ */
+export function validatePassword(raw: string, minLength: number, context: PasswordPolicyContext = {}): PasswordPolicyResult {
 	const password = raw.normalize('NFC')
 	const length = Array.from(password).length
-	if (length < PASSWORD_MIN_CODE_POINTS) {
+	if (length < minLength) {
 		return { ok: false, problem: 'too_short' }
 	}
 	if (length > PASSWORD_MAX_CODE_POINTS) {
@@ -34,7 +55,7 @@ export function validatePassword(raw: string, context: PasswordPolicyContext = {
 	}
 
 	const comparable = password.toLocaleLowerCase('en-US')
-	if (COMMON_PASSWORDS.has(comparable) || contextPasswords(context).has(comparable)) {
+	if (COMMON_PASSWORDS.has(comparable) || COMMON_PASSWORD_LIST.has(comparable) || contextPasswords(context).has(comparable)) {
 		return { ok: false, problem: 'guessable' }
 	}
 	return { ok: true, password }

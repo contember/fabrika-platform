@@ -28,6 +28,17 @@ Each user has an explicit password state: disabled, pending enrollment, or enabl
 
 Only hashes of action tokens are stored. Fetching an action page does not consume its token because mail scanners may follow links; the state-changing form submission consumes it. Login and recovery responses do not disclose whether an email or password credential exists. Password attempts are rate-limited and password selection applies length and common/context password checks without composition rules.
 
+**One minimum password length per installation.** It is 15 code points unless an installation administrator
+(`iam.admin`) sets another through IAM's `passwordPolicy.set`; the value is one row in IAM (`password_policy`), every
+change is audited as `iam.password_policy.update`, and the console sets it under Settings → Passwords. It applies to
+every principal alike, at the next enrollment, reset or invitation enrollment; a stored verifier is never judged again,
+so raising it asks nobody to change a password and lowering it weakens none. The value may go down to a floor that
+depends on how expensive a verifier is to crack: 4 where IAM hashes with OWASP's PBKDF2 cost (the Bun process), 15
+where it hashes below it (a Cloudflare Worker, [backlog 201](../backlog/201-cloudflare-passwords-are-hashed-below-the-owasp-work-factor.md)).
+Whatever the minimum, the whole-password blocklist refuses the 10 000 most common passwords (SecLists) and a few Czech
+ones, so a short minimum does not admit `12345` or `heslo`. A row outside the runtime's range applies 15; a read that
+fails fails the request, because a fallback would let through a password shorter than a raised minimum.
+
 Principal activation becomes independent of OIDC linkage. Sessions record their authentication method. Replacing or disabling a password revokes password-origin sessions while preserving valid OIDC-origin sessions in a hybrid installation.
 
 An external principal ([ADR-0051](0051-external-principals.md)), a person from outside the organization, authenticates by password only. OIDC never claims an external principal's row and never creates one: an IdP that presents its mailbox is refused with the fixed reason `oidc_external_principal`, and the human-admission allowlist's bypass for an already-known principal admits only an internal one. Only an installation administrator's audited promotion makes it internal, after which OIDC may claim it; the promotion ends every session and pending password action issued while it was external. Hybrid linking of an internal principal is unchanged.
@@ -60,8 +71,31 @@ The existing bootstrap-admin email list grants authorization only after identity
 - Password enrollment and reset share one security path, which reduces special cases but makes action-token correctness and throttling load-bearing.
 - Manual delivery remains operationally weaker than email delivery because the administrator must choose another secure channel, but it does not weaken token or password storage.
 - Adding another human method extends the capability set rather than multiplying combined modes.
+- An installation that lowers the minimum below 15, and especially below 8, accepts a weaker credential: IAM has no second
+  factor, and NIST SP 800-63B asks for 15 when a password is the only one and never fewer than 8. The throttles bound
+  online guessing per account, the blocklist removes the guesses that come first, and the console warns below 15 and
+  more loudly below 8; nothing protects short verifiers in a leaked database. That is the installation's choice, recorded
+  in its audit log. A client whose people sign in rarely (partners, candidates) asked for it, and the alternative was
+  passwords written down.
 
 ## Alternatives considered
+
+### Set the minimum through an environment variable
+
+Rejected because it would record no actor and no time, need a redeploy (and on Cloudflare a change of the generated
+workflow) to answer a client's request, and could not be shown or changed in the console. The installation's other
+presentation of IAM, its logo ([ADR-0066](0066-the-installation-shows-its-clients-logo.md)), is kept the same way.
+
+### A minimum per application or per kind of principal
+
+Rejected because a password belongs to the principal, which spans applications: one person would meet different rules
+for the same credential. A lower minimum for external principals only was considered and left out; the installation
+asked for one rule for everybody.
+
+### A hard floor of 8
+
+Rejected for the same client: 8 is NIST's minimum only beside a second factor, which IAM does not have either, so it
+draws no line the installation's own risk decision does not. The floor of 4 keeps a password from becoming a PIN.
 
 ### Use `authMode: 'oidc' | 'password' | 'hybrid'`
 
