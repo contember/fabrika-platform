@@ -13,5 +13,7 @@ decided work or status.
   observability, alerting, and response beyond the initial Errors capability.
 - [A foreign runtime behind the platform](foreign-runtime.md) — another framework keeps its own data layer; the
   platform reads only its surface and access, and delivers, fronts and authenticates it.
+- [One authorization model](authorization-model.md) — concepts and twelve guarantees the platform and any runtime
+  behind it share: serializable grants, declarative rules, and code that narrows freely but widens only when declared.
 - [A compact installation](compact-installation.md) — applications beside the platform on one HA database; reviewed,
   gated by two live-account facts, and only worth it if platform data must also be HA.

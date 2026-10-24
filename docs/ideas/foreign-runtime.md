@@ -40,7 +40,8 @@ Everything below is the platform protocol of ADR-0062; none of it is the framewo
    fails when the generated file drifts from the registry.
 2. **Token verification.** It verifies `X-Fabrika-Token` with `@fabrika/jwks` against `FABRIKA_IAM_ISSUER`, checks
    `aud` against `FABRIKA_IAM_APP_ID`, and turns `perms` into its own principal. Its own authorization checks stay
-   where they are: in the platform's vocabulary they are authorization, not enforcement (ADR-0022).
+   where they are: in the platform's vocabulary they are authorization, not enforcement (ADR-0022). Both sides give
+   the guarantees of [one authorization model](authorization-model.md), so the conversion is mechanical.
 3. **The proxy hop.** It serves only the endpoint named in `X-Fabrika-Endpoint`, answers 503 on a digest mismatch, and
    on Zerops refuses a request without the right `X-Fabrika-Proxy-Secret`.
 4. **The digest check at startup** against `FABRIKA_CONTRACT_DIGEST`.
@@ -81,7 +82,9 @@ Everything below is the platform protocol of ADR-0062; none of it is the framewo
 2. **End customers.** A storefront-style application issues its own customer identity on public routes. That needs
    public procedures ([ADR-0063](../decisions/0063-a-public-procedure-runs-as-its-own-workload.md)) and signed tokens,
    and a check that the application's own customer session is authorization, not a second enforcement point.
-3. **Tenancy.** Whether the framework's tenancy maps onto IAM dimensions and scopes one to one.
+3. **Tenancy.** [One authorization model](authorization-model.md) treats a tenant as a partition, not a dimension:
+   every grant maps to a tenant only through an explicit installation-to-tenant binding. What remains open is how
+   that binding is configured.
 4. **The digest.** The foreign runtime must compute the same digest as the platform. The function that computes it
    would become a published part of the protocol.
 5. **The wire shape of an endpoint.** Whether the proxy assumes the framework's procedure encoding anywhere, or
