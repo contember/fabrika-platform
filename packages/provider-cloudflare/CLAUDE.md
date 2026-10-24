@@ -38,7 +38,7 @@ this one import.
   `resources()` runs the checkout's code (parsed with `appSchemaSchema`, deep-frozen); never read `config.schema`
   after it. `createCloudflareProxyWorker` takes an endpoint table or an installation table, and refuses `gates`.
 - **The job carries Control's approved access** (`CloudflareRunnerJob.approvedAccess`: the contract and its
-  digest). `buildJob` refuses a non-dry deploy without it, and `cloudflareRunnerJobSchema` parses the contract and
+  digest). Control refuses a non-dry deploy without it, the job schema refuses one too, and it parses the contract and
   checks its digest. The runner writes it to `<workspace>/<runId>.access.json` beside the checkout and names it in
   `FABRIKA_APPROVED_ACCESS_FILE`, set after every job-supplied name; the executor reads it (`readApprovedAccess`)
   before the config runs. Unset outside a runner (a local deploy).
@@ -176,7 +176,9 @@ this one import.
   wrangler's `define` (`PROXY_MANIFEST_DEFINE`, read by `proxy-worker.ts` as `__FABRIKA_PROXY_MANIFEST__`), not a
   Worker variable, which Cloudflare caps at 5,120 bytes; the wire format is unchanged. An IAM schema whose `contract: true` disagrees with the
   contract is refused. The manifest entry carries the contract's CSP origins and the origin of the run's
-  `FABRIKA_OPERATIONS_DSN` (`operationsOrigin`, never the key), and the Worker replaces every header of the policy on
+  Operations ingest (`operationsOrigin`, never the key): Control names it (`ProviderEnvironment.operationsOrigin`, the
+  job's `operationsOrigin`, `FABRIKA_OPERATIONS_ORIGIN` set last by the runner); a job from an older Control names none,
+  and the executor derives it from `FABRIKA_OPERATIONS_DSN`. The Worker replaces every header of the policy on
   the application's answer, or applies the file treatment for a download endpoint or a `response: 'file'` row, sets a cacheable row's lifetime
   on its 200 (`applyAnswerCache`), deletes the reporting
   headers, and answers a throwing `APP` binding with a fixed 502 and a missing one with a 503 under the same

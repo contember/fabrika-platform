@@ -244,11 +244,11 @@ other environment, before the provider prepares anything, and the write maps a r
   members, or a deploy's `FABRIKA_PROXY_SECRET`), seals it in the vault under
   `proxySecretPurpose(app, env)`, and records only the ref in `app_env_proxy_secrets`; a lost insert race
   deletes its own vault row and answers the recorded one. Every follow goes through
-  `getSecretForPurpose`, like an app secret. Without a vault no secret is handed out and the provider
-  refuses a contract application. There is no rotation verb; `FABRIKA_PROXY_SECRET` is a reserved name.
-- **A namespace member carries `operationsOrigin`, the origin of its active ingest DSN** (`namespaceMembers` in
-  `src/api/namespaces.ts`), so a Zerops proxy's header policy admits the same Operations origin the framework
-  does. The DSN carries the ingest key; only its origin leaves Control this way.
+  `getSecretForPurpose`, like an app secret. Without a vault no secret is handed out, and `executeDeploy` refuses a
+  non-dry deploy behind a namespace proxy or on a provider that declares `applicationHopSecret`. There is no rotation verb; `FABRIKA_PROXY_SECRET` is a reserved name.
+- **A namespace member and a deploy's environment carry `operationsOrigin`, the origin of the active ingest DSN**
+  (`ingestOrigin`, `src/operations-catalog.ts`; `namespaceMembers` and `executeDeploy`), so a proxy's header policy
+  admits the same Operations origin the framework does. The DSN carries the ingest key; only its origin leaves Control this way.
 - **`app_envs.cross_origins_json` is the environment's cross-origin list (ADR-0022 "Cross-origin endpoints")**, set by
   whoever holds `app.manage` (the builder key included) beside `domain`, applied at once without approval (it grants no
   authority: its requests are bearer-only), and read through `appEnvCrossOrigins` / `crossOriginsField` (`src/db/registry-types.ts`).

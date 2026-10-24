@@ -8,7 +8,7 @@
 // runs. Recovery never resumes a deploy (ADR-0044): a version reserved but never triggered is deleted, and
 // one whose build may have been requested is settled only by polling it.
 
-import { FABRIKA_PROXY_SECRET, FABRIKA_SOURCE_MAP_UPLOAD_KEY, managedValue, staleManagedVariables } from '@fabrika/auth-core'
+import { FABRIKA_SOURCE_MAP_UPLOAD_KEY, managedValue, staleManagedVariables } from '@fabrika/auth-core'
 import { type OperationsSourceMapUploadState, readSourceMapUploadReport } from '@fabrika/operations-contract/releases'
 import {
 	type DeployStepResult,
@@ -319,7 +319,7 @@ interface StepEnv {
 	signal: AbortSignal
 	dryRun: boolean
 	attempt: Attempt
-	/** What Control handed, with the proxy secret removed from an application without a contract. */
+	/** What Control handed (`parseManagedEnvironment`). */
 	managed: ProviderManagedEnvironment
 	/** `await-version` gives up at this instant. */
 	deadlineMs: number
@@ -987,16 +987,6 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 		throw new Error(`zerops: artifact environment drift: expected \`${run.env}\`, got \`${run.artifact.app.env}\``)
 	}
 	assertAuthoredManagedInputs({ variableNames: Object.keys(run.vars), secretNames: Object.keys(run.secrets) })
-	// The proxy serves an endpoint table exactly when Control approved a contract, whatever the artifact says.
-	const contractProxy = run.access !== undefined
-	// Only a contract application checks the secret; any other would merely hold a credential its own code can print.
-	const managed: ProviderManagedEnvironment = contractProxy
-		? run.managedEnvironment
-		: { ...run.managedEnvironment, [FABRIKA_PROXY_SECRET]: { value: null, credential: true } }
-	if (!run.dryRun && contractProxy && managedValue(managed, FABRIKA_PROXY_SECRET) === null) {
-		// The application would refuse every request its proxy sends (ADR-0022 rule 5).
-		throw new Error('zerops: a contract application needs its proxy secret, and Control supplied none')
-	}
 	const hostnames = manifestServiceHostnames(run.artifact)
 	const document = interpolateManifest(run.artifact.target.importDocument, run.artifact.app.pipeline.vars, run.vars, hostnames)
 	const compiled = { yaml: renderYaml(document), hostnames }
@@ -1010,7 +1000,7 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 		signal: run.signal,
 		dryRun: run.dryRun,
 		attempt: { triggered: false },
-		managed,
+		managed: run.managedEnvironment,
 		deadlineMs: Date.now() + ZEROPS_VERSION_DEADLINE_MS,
 	}
 	const steps = buildZeropsPlan(run.artifact)

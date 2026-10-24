@@ -16,7 +16,7 @@ import type {
 	ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
 import { abortableWait, decodeEnvelope, isLeaseLoss, ProviderInvocationAbort } from '@fabrika/provider-contract'
-import { isCrossOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy-core/headers'
+import { isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy-core/headers'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
@@ -60,6 +60,8 @@ export interface CloudflareRunnerJob {
 	readonly domain?: string
 	/** The environment's cross-origin list from Control's registry (ADR-0022); the proxy Worker's manifest entry lists it. */
 	readonly crossOrigins?: readonly string[]
+	/** The origin of the environment's Operations ingest, from Control; the proxy Worker's `connect-src` admits it. */
+	readonly operationsOrigin?: string
 	/** `<app>@<env>` of every Cloudflare deployment in Control's registry; the deploy refuses another application's names. */
 	readonly installationApps?: readonly string[]
 	/** What the deployed proxy enforces and the application starts as; every run but a dry one carries it. */
@@ -148,6 +150,7 @@ export const cloudflareRunnerJobSchema = z.object({
 	stateNamespace: z.string().min(1).optional(),
 	domain: z.string().refine((value) => isProxyHost(value.toLowerCase())).optional(),
 	crossOrigins: z.array(z.string().refine(isCrossOrigin)).max(MAX_CROSS_ORIGINS).optional(),
+	operationsOrigin: z.string().refine((origin) => isPolicyOrigin(origin, ['https:', 'http:'])).optional(),
 	installationApps: z.array(z.string().refine((id) => !hasUnsafeChars(id) && parseAppEnvironmentId(id) !== null)).optional(),
 	approvedAccess: runnerApprovedAccessSchema.optional(),
 	dryRun: z.boolean().optional(),
@@ -281,9 +284,6 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		throw new Error('Cloudflare deploy requires a canonical 40-character commit SHA')
 	}
 	const approvedAccess = runnerApprovedAccess(input.environment)
-	if (!input.dryRun && approvedAccess === undefined) {
-		throw new Error('Cloudflare deploy requires the access Control approved for this environment')
-	}
 	// The deployer refuses it again from the contract it serves; this fails before the clone.
 	if (approvedAccess !== undefined) assertCloudflareContract(approvedAccess.contract)
 	const release = input.environment.access?.checker
@@ -318,6 +318,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		...(input.environment.crossOrigins === undefined || input.environment.crossOrigins.length === 0
 			? {}
 			: { crossOrigins: input.environment.crossOrigins }),
+		...(input.environment.operationsOrigin === undefined ? {} : { operationsOrigin: input.environment.operationsOrigin }),
 		...(installationApps === undefined ? {} : { installationApps }),
 		...(approvedAccess === undefined ? {} : { approvedAccess }),
 		...(input.dryRun ? { dryRun: true } : {}),

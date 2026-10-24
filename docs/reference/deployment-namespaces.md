@@ -302,9 +302,9 @@ every service of a namespace shares one private network (ADR-0022 rule 5). Contr
 generates it once per application environment, the first time it hands the
 environment to its namespace, seals it in the vault, and records only the vault ref
 (`app_env_proxy_secrets`). Caddy sends it as `X-Fabrika-Proxy-Secret` through an
-`{env.…}` placeholder, so it is in no generated file. Without a vault Control hands no
-secret, and the provider refuses a contract application rather than deploy one that
-would refuse every request. There is no rotation verb yet.
+`{env.…}` placeholder, so it is in no generated file. Without a vault Control refuses a
+non-dry deploy behind a namespace proxy rather than deploy an application that would
+refuse every request. There is no rotation verb yet.
 
 Custom domains are bound to the namespace's `proxy` service manually in Zerops.
 App services do not receive public domains. Zerops subdomain access is available

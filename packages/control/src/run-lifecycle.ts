@@ -61,6 +61,7 @@ import {
 	relaysInstallationMail,
 } from './mail-transport'
 import { type MembershipTransportPort, needsMembershipTransport } from './membership-transport'
+import { ingestOrigin } from './operations-catalog'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import type { PlatformTransportPort } from './platform-transport'
 import type { ProxySecrets } from './proxy-secret'
@@ -603,6 +604,10 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			approvedRow = await currentAppEnv(deps.repositories, appEnv)
 			registration = { ...registration, environment: withAccess(registration.environment, approvedProviderAccess(approvedRow)) }
 		}
+		// A provider deploys only the contract Control approved (ADR-0050), and publishes it only from a resolved commit.
+		if (!dryRun && registration.environment.access === undefined) {
+			throw new Error('a deploy needs the access Control approved for this environment')
+		}
 		const releaseContext = deps.operations === undefined
 			? null
 			: await projectOperationsRun(deps.operations, startedRun, {
@@ -625,15 +630,21 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		for (const key of OPERATIONS_MANAGED_ENVIRONMENT_KEYS) managedEnvironment[key] = null
 		// Behind a namespace proxy the hop to the application and to IAM is no service binding.
 		const namespaceProxy = appEnv.namespace_id !== null && deps.provider.namespaces?.republish !== undefined
-		// A namespace proxy, or the provider's own hop to the application, authenticates itself with a secret; a dry run generates none.
-		const hopSecret = namespaceProxy || deps.provider.applicationHopSecret === true
-		managedEnvironment[FABRIKA_PROXY_SECRET] = !dryRun && hopSecret ? (await deps.proxySecrets?.forAppEnv(app.id, appEnv.env)) ?? null : null
+		// A namespace proxy, or the provider's own hop to the application, authenticates itself with a secret; a dry run
+		// generates none.
+		const hopSecret = !dryRun && (namespaceProxy || deps.provider.applicationHopSecret === true)
+		const proxySecret = hopSecret ? (await deps.proxySecrets?.forAppEnv(app.id, appEnv.env)) ?? null : null
+		// The application would refuse every request its proxy sends (ADR-0022 rule 5).
+		if (hopSecret && proxySecret === null) throw new Error('a contract application needs its proxy secret, and none is configured')
+		managedEnvironment[FABRIKA_PROXY_SECRET] = proxySecret
 		// `null` means REMOVE, so an installation that cannot name its own issuer strips a stale one
 		// instead of deploying an app that verifies against the previous installation's tokens.
 		if (deps.iamIssuer !== undefined && deps.iamIssuer.trim() !== '') {
 			managedEnvironment[FABRIKA_IAM_ISSUER] = deps.iamIssuer.trim()
 		}
 		const ingest = await deps.repositories.operationsCatalog.getActiveIngestConfig(app.id, appEnv.env)
+		const operationsOrigin = ingestOrigin(ingest)
+		if (operationsOrigin !== undefined) registration = { ...registration, environment: { ...registration.environment, operationsOrigin } }
 		let ingestGap: string | null = null
 		if (ingest?.dsn !== null && ingest?.dsn !== undefined) {
 			Object.assign(

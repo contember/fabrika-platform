@@ -325,14 +325,19 @@ const platformProxied = (authored: Worker, served: ServedContract, run: Cloudfla
 		...(run.domain === undefined ? {} : { domain: run.domain }),
 		...(run.crossOrigins === undefined ? {} : { crossOrigins: run.crossOrigins }),
 		endpoints: contractProxyTable(served.contract, served.digest),
-		...operationsOrigin(run.managedEnvironment),
+		...operationsOrigin(run),
 		iamUrl: managedValue(run.managedEnvironment, FABRIKA_IAM_ISSUER) ?? '',
 	})
 }
 
-/** The ingest origin of the application's Operations DSN: the proxy's `connect-src` admits it, as the framework's does. */
-const operationsOrigin = (managed: ProviderManagedEnvironment): { readonly operationsOrigin?: string } => {
-	const dsn = managedValue(managed, 'FABRIKA_OPERATIONS_DSN')
+/** The origin of the environment's Operations ingest, which the proxy's `connect-src` admits, as the framework's does. */
+const operationsOrigin = (run: CloudflareDeployRun): { readonly operationsOrigin?: string } => {
+	if (run.operationsOrigin !== undefined) {
+		if (!isPolicyOrigin(run.operationsOrigin, ['https:', 'http:'])) throw new Error('cloudflare: the Operations origin is not an http(s) origin')
+		return { operationsOrigin: run.operationsOrigin }
+	}
+	// A job from an older Control names no origin; derive it from the DSN until no release in the window omits it.
+	const dsn = managedValue(run.managedEnvironment, 'FABRIKA_OPERATIONS_DSN')
 	if (dsn === null) return {}
 	let origin: string
 	try {
@@ -615,6 +620,8 @@ export interface CloudflareDeployRun {
 	readonly domain?: string
 	/** The environment's cross-origin list from Control's registry (ADR-0022); the proxy Worker's manifest entry lists it. */
 	readonly crossOrigins?: readonly string[]
+	/** The origin of the environment's Operations ingest, from Control; the proxy Worker's `connect-src` admits it. */
+	readonly operationsOrigin?: string
 	/** Every origin IAM may hand this environment a session at, registered under `<app>@<env>`. */
 	readonly returnOrigins?: readonly string[]
 	readonly cwd: string

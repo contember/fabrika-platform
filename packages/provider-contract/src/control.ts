@@ -83,12 +83,18 @@ export interface ProviderEnvironment {
 	 * application's proxy manifest entry as `crossOrigins`.
 	 */
 	readonly crossOrigins?: readonly string[]
+	/**
+	 * The origin of the environment's active Operations ingest DSN, never the DSN: a contract application's proxy admits
+	 * it in `connect-src`. Control sets it on a deploy; absent while the environment has no active ingest.
+	 */
+	readonly operationsOrigin?: string
 	readonly namespace?: ProviderDeploymentNamespace
 	readonly target: ProviderEnvelope
 	readonly artifact: ProviderEnvelope
 	/**
 	 * The environment's approved contract, from Control's `approvedSnapshot`. Absent when nothing is approved: then a
 	 * provider publishes no endpoint table and reconciles no IAM schema, whatever the artifact claims (ADR-0050).
+	 * Control refuses a non-dry deploy without it.
 	 */
 	readonly access?: ProviderApprovedAccess
 }

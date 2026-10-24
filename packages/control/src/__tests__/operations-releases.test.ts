@@ -102,6 +102,8 @@ function provider(inputs: ProviderDeployInput[]): ControlProvider {
 		normalizeRegistration(input: ProviderRegistrationInput) {
 			return input
 		},
+		// The commit is pinned, so a non-dry deploy publishes the contract and hands over its approved access.
+		resolveSource: async () => ({ commitSha: COMMIT }),
 		async deploy(input) {
 			inputs.push(input)
 			await input.events.externalId('provider-operation')
@@ -364,6 +366,7 @@ describe('Control release projection', () => {
 		const echoing: ControlProvider = {
 			id: 'memory',
 			normalizeRegistration: (input: ProviderRegistrationInput) => input,
+			resolveSource: async () => ({ commitSha: COMMIT }),
 			async deploy(input) {
 				input.events.log(`build: uploading with ${input.artifactUpload?.bearer ?? 'no bearer'}`)
 				return { state: 'succeeded', exitCode: 0 }

@@ -24,6 +24,7 @@ import { VaultSecretResolver } from '../secret-resolver'
 import { contractCommits, memoryCommits } from './helpers/commits'
 import { createHarness, type Harness } from './helpers/harness'
 import { fixtureProtect, makeFakeLock } from './helpers/lock'
+import { fixedProxySecrets } from './helpers/vault'
 
 const REPO_URL = 'https://github.com/acme/source-identity'
 const REQUESTED_REF = 'refs/heads/main'
@@ -245,6 +246,7 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 		const result = await executeDeploy({
 			repositories: db,
 			provider,
+			proxySecrets: fixedProxySecrets,
 			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(db),
 			logs: { put: async () => {} },

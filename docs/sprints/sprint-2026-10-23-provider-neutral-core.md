@@ -160,3 +160,8 @@ WU5, WU6, WU7 and WU9 are independent of each other. WU8 follows WU7.
   secret of its own. Control refuses a run whose environment lacks one of the twelve names, which the Zerops schema
   used to refuse. Cloudflare's
   check that a handed `FABRIKA_CONTRACT_DIGEST` matches the served contract went: the parser refuses the name.
+- **WU3.** Every non-dry deploy now publishes a contract first (`ContractMissing` refuses a commit without one), so
+  "a contract application" and "a non-dry deploy" are the same set: Control refuses a non-dry deploy without approved
+  access, and hands the proxy secret to every non-dry deploy behind a namespace proxy or on a provider with
+  `applicationHopSecret`. `operationsOrigin` reaches Cloudflare as a new optional job field; the executor still derives
+  the origin from the DSN for a job from an older Control, and an older runner strips the field.

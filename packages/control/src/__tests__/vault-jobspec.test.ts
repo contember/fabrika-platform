@@ -5,8 +5,9 @@ import type { ControlRepositories } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import { Vault } from '../vault'
+import { contractCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
-import { makeFakeLock } from './helpers/lock'
+import { fixtureProtect, makeFakeLock } from './helpers/lock'
 
 function testKey(): string {
 	const raw = new Uint8Array(32).fill(11)
@@ -24,6 +25,7 @@ const envelope = (payload: string): ProviderEnvelope => ({
 const provider = (inputs: ProviderDeployInput[]): ControlProvider => ({
 	id: 'memory',
 	normalizeRegistration: (input) => input,
+	resolveSource: () => Promise.resolve({ commitSha: 'c'.repeat(40) }),
 	deploy: async (input) => {
 		inputs.push(input)
 		return { state: 'succeeded', exitCode: 0 }
@@ -40,6 +42,8 @@ async function seed(db: ControlRepositories, valueRef: string): Promise<string> 
 		providerTargetJson: JSON.stringify(envelope('target')),
 		providerArtifactJson: JSON.stringify(envelope('artifact')),
 	})
+	// Unprotected, so the first contract publishes without an approval (ADR-0050).
+	await fixtureProtect(db.registry, makeFakeLock(db), { appId: 'app', env: 'prod' }, false)
 	await db.registry.upsertAppSecret({ appId: 'app', env: null, name: 'API_KEY', valueRef })
 	const runId = uuidv7()
 	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
@@ -52,6 +56,7 @@ const deps = (db: ControlRepositories, vault: Vault, inputs: ProviderDeployInput
 	secrets: new VaultSecretResolver({ vault }),
 	lock: makeFakeLock(db),
 	logs: { put: () => Promise.resolve() },
+	commits: contractCommits('app'),
 })
 
 describe('provider deploy through the vault', () => {

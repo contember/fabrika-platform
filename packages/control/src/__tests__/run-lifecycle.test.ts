@@ -26,7 +26,7 @@ import { contractCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 import { fixtureCatalogApplied, fixtureProtect, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
-import { createTestVault } from './helpers/vault'
+import { createTestVault, fixedProxySecrets } from './helpers/vault'
 
 const vault = await createTestVault()
 const vaultSecrets = new VaultSecretResolver({ vault })
@@ -167,6 +167,8 @@ function makeProvider(
 		id,
 		normalizeRegistration: (input) => normalize(id, input),
 		source: { binding: 'connection' },
+		// The commit is pinned, so a non-dry deploy publishes the contract and hands over its approved access.
+		resolveSource: () => Promise.resolve({ commitSha: 'a'.repeat(40) }),
 		deploy: async (input) => {
 			inputs.push(input)
 			await input.events.externalId(`${id}-run-1`)
@@ -197,15 +199,9 @@ function makeDeps(
 	return { repositories: db, provider, secrets, lock, logs: { put: () => Promise.resolve() }, commits: contractCommits('app') }
 }
 
-/** A provider that pins the commit, so a non-dry deploy publishes the contract and hands over its approved access. */
-const publishing = (provider: ControlProvider): ControlProvider => ({
-	...provider,
-	resolveSource: () => Promise.resolve({ commitSha: 'a'.repeat(40) }),
-})
-
 /** A provider that accepts a deploy and leaves it in flight, for a later settlement to finish. */
 function inFlight(): ControlProvider {
-	const provider = publishing(makeProvider([], { state: 'succeeded' }))
+	const provider = makeProvider([], { state: 'succeeded' })
 	provider.deploy = async (input) => {
 		await input.events.externalId('memory-run-1')
 		return { state: 'running' }
@@ -390,7 +386,12 @@ describe('provider-neutral run lifecycle', () => {
 		})
 		try {
 			// The Cloudflare provider reads the snapshot at the app's `workerDir`.
-			const deps = { ...makeDeps(db, provider), commits: contractCommits('app', 'worker'), operations: { repository: releases } }
+			const deps = {
+				...makeDeps(db, provider),
+				proxySecrets: fixedProxySecrets,
+				commits: contractCommits('app', 'worker'),
+				operations: { repository: releases },
+			}
 			expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
 			expect(phases).toEqual(['started', 'provider_accepted', 'terminal'])
 			expect(persistedAtProjection).toEqual([commitSha, commitSha, commitSha])
@@ -786,6 +787,11 @@ describe('provider-neutral run lifecycle', () => {
 		const response = await getRunLogUseCase({ repositories: db, logs: stored.logs, auth: allowAllAuth() }, runId)
 		expect(response.status).toBe('succeeded')
 		expect(response.lines.map(({ stream, text }) => ({ stream, text }))).toEqual([
+			{
+				stream: 'meta',
+				text: 'access: access widens (3 changes, 3 widening, 0 narrowing, 0 unchanged, 0 needing closer review; against nothing published)',
+			},
+			{ stream: 'meta', text: 'access: published as generation 2 of `prod`' },
 			{ stream: 'meta', text: 'checking source' },
 			{ stream: 'meta', text: 'deploy complete' },
 		])
@@ -802,7 +808,8 @@ describe('provider-neutral run lifecycle', () => {
 		const deps = makeDeps(db, makeProvider([], { state: 'succeeded' }))
 		deps.logs = stored.logs
 
-		expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
+		// A dry run publishes nothing, so Control has no line of its own to write.
+		expect((await executeDeploy(deps, { runId, dryRun: true })).status).toBe('succeeded')
 		expect(stored.puts).toEqual([])
 		expect(stored.objects.get(key)).toBe(runnerContents)
 	})
@@ -858,7 +865,8 @@ describe('provider-neutral run lifecycle', () => {
 		} finally {
 			console.error = originalError
 		}
-		expect(errors).toEqual([`deploy run ${runId}: failed to persist log output`])
+		// Each refused flush says so once, in the same words.
+		expect(new Set(errors)).toEqual(new Set([`deploy run ${runId}: failed to persist log output`]))
 		expect(errors.join('\n')).not.toContain('credential-must-not-leak')
 	})
 
@@ -883,6 +891,7 @@ describe('provider-neutral run lifecycle', () => {
 			FABRIKA_APP_ORIGIN: 'https://public.example.com',
 			FABRIKA_TOKEN_KEYS: null,
 		})
+		expect(pendingInputs[0]?.environment.operationsOrigin).toBeUndefined()
 
 		const secondRunId = uuidv7()
 		await db.runs.createRun({
@@ -913,6 +922,23 @@ describe('provider-neutral run lifecycle', () => {
 			FABRIKA_APP_ORIGIN: 'https://public.example.com',
 			FABRIKA_TOKEN_KEYS: null,
 		})
+		// The origin a proxy's `connect-src` admits, stated by Control so no provider parses the DSN for it.
+		expect(activeInputs[0]?.environment.operationsOrigin).toBe(new URL(dsn).origin)
+	})
+
+	test('refuses a deploy without the access Control approved before the provider is asked', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const inputs: ProviderDeployInput[] = []
+		// A provider that resolves no source publishes no contract, so nothing is approved for its deploy.
+		const { resolveSource: _resolve, ...unpinned } = makeProvider(inputs, { state: 'succeeded' })
+		const stored = memoryLogs()
+		const deps = { ...makeDeps(db, unpinned), logs: stored.logs }
+		expect((await executeDeploy(deps, { runId })).status).toBe('failed')
+		expect(inputs).toEqual([])
+		expect(stored.objects.get(`runs/${runId}/logs.ndjson`)).toContain('a deploy needs the access Control approved for this environment')
+		// A dry run deploys nothing, so it needs no approval.
+		expect((await executeDeploy(deps, { runId: await createNextRun(db), dryRun: true })).status).toBe('succeeded')
 	})
 
 	test('delivers the proxy secret without a namespace proxy only to a provider whose own hop carries it', async () => {
@@ -926,6 +952,19 @@ describe('provider-neutral run lifecycle', () => {
 			expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
 			expect(inputs[0]?.managedEnvironment[FABRIKA_PROXY_SECRET]?.value).toBe(expected)
 		}
+	})
+
+	test('refuses a deploy whose own hop needs a proxy secret when none is configured, and a dry run needs none', async () => {
+		const { db } = createHarness()
+		const inputs: ProviderDeployInput[] = []
+		const stored = memoryLogs()
+		const deps: RunDeps = { ...makeDeps(db, { ...makeProvider(inputs, { state: 'succeeded' }), applicationHopSecret: true }), logs: stored.logs }
+		const runId = await seedRun(db)
+		expect((await executeDeploy(deps, { runId })).status).toBe('failed')
+		expect(inputs).toEqual([])
+		expect(stored.objects.get(`runs/${runId}/logs.ndjson`)).toContain('needs its proxy secret')
+		expect((await executeDeploy(deps, { runId: await createNextRun(db), dryRun: true })).status).toBe('succeeded')
+		expect(inputs[0]?.managedEnvironment[FABRIKA_PROXY_SECRET]?.value).toBeNull()
 	})
 
 	test('delivers the IAM application id of the deploying environment, <app>@<env>', async () => {
@@ -1062,7 +1101,7 @@ describe('provider-neutral run lifecycle', () => {
 			expect(input.signal.aborted).toBe(false)
 		})
 
-		expect((await executeDeploy({ ...makeDeps(db, publishing(makeProvider(inputs, { state: 'succeeded' }))), iamSchema }, { runId })).status).toBe(
+		expect((await executeDeploy({ ...makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), iamSchema }, { runId })).status).toBe(
 			'succeeded',
 		)
 		expect(applied).toHaveLength(1)
@@ -1087,7 +1126,7 @@ describe('provider-neutral run lifecycle', () => {
 		const secondRunId = await createNextRun(db)
 		const moved: IamApply[] = []
 		expect(
-			(await executeDeploy({ ...makeDeps(db, publishing(makeProvider([], { state: 'succeeded' }))), iamSchema: recordingIam(moved) }, {
+			(await executeDeploy({ ...makeDeps(db, makeProvider([], { state: 'succeeded' })), iamSchema: recordingIam(moved) }, {
 				runId: secondRunId,
 			}))
 				.status,
@@ -1112,7 +1151,7 @@ describe('provider-neutral run lifecycle', () => {
 		const applied: IamApply[] = []
 
 		expect(
-			(await executeDeploy({ ...makeDeps(db, publishing(makeProvider(inputs, { state: 'succeeded' }))), iamSchema: recordingIam(applied) }, { runId }))
+			(await executeDeploy({ ...makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), iamSchema: recordingIam(applied) }, { runId }))
 				.status,
 		).toBe('succeeded')
 		// Absent, not empty: an empty set is a caller error at the admin API and would read as "clear it".
@@ -1127,7 +1166,7 @@ describe('provider-neutral run lifecycle', () => {
 			const runId = await seedRun(db)
 			const stored = memoryLogs()
 			const deps: RunDeps = {
-				...makeDeps(db, publishing(makeProvider([], { state: 'succeeded' }))),
+				...makeDeps(db, makeProvider([], { state: 'succeeded' })),
 				logs: stored.logs,
 				iamSchema: recordingIam([], () => Promise.reject(failure)),
 			}
@@ -1144,11 +1183,11 @@ describe('provider-neutral run lifecycle', () => {
 	test('a dry run writes no schema and says what it would write', async () => {
 		const { db } = createHarness()
 		const published = await seedRun(db)
-		expect((await executeDeploy(makeDeps(db, publishing(makeProvider([], { state: 'succeeded' }))), { runId: published })).status).toBe('succeeded')
+		expect((await executeDeploy(makeDeps(db, makeProvider([], { state: 'succeeded' })), { runId: published })).status).toBe('succeeded')
 		const runId = await createNextRun(db)
 		const applied: IamApply[] = []
 		const stored = memoryLogs()
-		const deps: RunDeps = { ...makeDeps(db, publishing(makeProvider([], { state: 'succeeded' }))), logs: stored.logs, iamSchema: recordingIam(applied) }
+		const deps: RunDeps = { ...makeDeps(db, makeProvider([], { state: 'succeeded' })), logs: stored.logs, iamSchema: recordingIam(applied) }
 
 		expect(await executeDeploy(deps, { runId, dryRun: true })).toEqual({ runId, status: 'succeeded' })
 		expect(applied).toEqual([])
@@ -1162,7 +1201,7 @@ describe('provider-neutral run lifecycle', () => {
 		const runId = await seedInFlightRun(db)
 		const stored = memoryLogs()
 
-		const provider = publishing(makeProvider([], { state: 'succeeded' }))
+		const provider = makeProvider([], { state: 'succeeded' })
 		provider.reconcile = () => Promise.resolve({ state: 'succeeded', exitCode: 0 })
 		const applied: IamApply[] = []
 		const statuses: string[] = []
@@ -1189,7 +1228,7 @@ describe('provider-neutral run lifecycle', () => {
 		const { db } = createHarness()
 		const runId = await seedInFlightRun(db)
 
-		const provider = publishing(makeProvider([], { state: 'succeeded' }))
+		const provider = makeProvider([], { state: 'succeeded' })
 		provider.reconcile = () => Promise.resolve({ state: 'succeeded', exitCode: 0 })
 		const iamSchema = recordingIam([], () => Promise.reject(new ReconcileSchemaError('unknown action notes.write', 400)))
 
@@ -1203,11 +1242,11 @@ describe('provider-neutral run lifecycle', () => {
 	test('a dry run that settles on reconcile writes no schema', async () => {
 		const { db } = createHarness()
 		const published = await seedRun(db)
-		expect((await executeDeploy(makeDeps(db, publishing(makeProvider([], { state: 'succeeded' }))), { runId: published })).status).toBe('succeeded')
+		expect((await executeDeploy(makeDeps(db, makeProvider([], { state: 'succeeded' })), { runId: published })).status).toBe('succeeded')
 		const runId = await createNextRun(db)
 		expect(await executeDeploy(makeDeps(db, inFlight()), { runId, dryRun: true })).toEqual({ runId, status: 'running' })
 
-		const provider = publishing(makeProvider([], { state: 'succeeded' }))
+		const provider = makeProvider([], { state: 'succeeded' })
 		provider.reconcile = () => Promise.resolve({ state: 'succeeded', exitCode: 0, dryRun: true })
 		const applied: IamApply[] = []
 
@@ -1222,7 +1261,7 @@ describe('provider-neutral run lifecycle', () => {
 		const { db } = createHarness()
 		const runId = await seedInFlightRun(db)
 
-		const provider = publishing(makeProvider([], { state: 'succeeded' }))
+		const provider = makeProvider([], { state: 'succeeded' })
 		provider.cancel = () => Promise.resolve({ state: 'settled', outcome: 'succeeded' })
 		const applied: IamApply[] = []
 		let available = false
@@ -1286,6 +1325,8 @@ describe('provider-neutral run lifecycle', () => {
 			providerTargetJson: JSON.stringify(envelope('memory', 'target')),
 			providerArtifactJson: JSON.stringify(envelope('memory', 'artifact')),
 		}, ['service:app'])
+		// Unprotected, so the first contract publishes without an approval (ADR-0050).
+		await fixtureProtect(db.registry, makeFakeLock(db), { appId: 'app', env: 'prod' }, false)
 		const inputs: ProviderDeployInput[] = []
 		const provider: ControlProvider = {
 			...makeProvider(inputs, { state: 'succeeded' }),

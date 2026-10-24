@@ -17,6 +17,7 @@ import { memoryCommits } from './helpers/commits'
 import { BASE } from './helpers/contracts'
 import { createHarness } from './helpers/harness'
 import { fixtureProtect, fixtureRuns, makeFakeLock } from './helpers/lock'
+import { fixedProxySecrets } from './helpers/vault'
 
 // Control is the only writer of a Cloudflare run's row (ADR-0044). The runner persists its terminal
 // status, and Control applies the approved contract's IAM schema once (ADR-0011), either on the awaited
@@ -97,6 +98,7 @@ function deps(
 		repositories: db,
 		provider,
 		iamSchema,
+		proxySecrets: fixedProxySecrets,
 		secrets: new VaultSecretResolver({}),
 		lock: makeFakeLock(db),
 		logs: { put: () => Promise.resolve() },

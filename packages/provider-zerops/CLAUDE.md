@@ -206,9 +206,9 @@ bun test
   `src/namespace/manifest.ts` builds a member's endpoint table from `member.access`
   (`contractProxyTable(access.contract)`, the upstream from the artifact); a member without approved access is
   not routed and its artifact is not decoded, so a legacy `proxy.gates` artifact cannot stop a republish. `lockedExecutionFor` locks the descriptor down whenever `environment.access` is present — a config
-  that drops `target.contract` cannot drop it — and refuses a non-dry deploy without it. The deploy has no IAM step:
-  once a version is ACTIVE, Control writes `access.schema` itself (ADR-0011). Control refuses a commit
-  without `fabrika.contract.ts` before it calls the provider.
+  that drops `target.contract` cannot drop it. Control refuses a non-dry deploy without approved access, and a commit
+  without `fabrika.contract.ts`, before it calls the provider. The deploy has no IAM step: once a version is ACTIVE,
+  Control writes `access.schema` itself (ADR-0011).
 - **The namespace proxy attempt follows the same rule** (`republishProxy`, `src/namespace/proxy-attempt.ts`).
   `proxyBuild` on the namespace target is `{ appVersionId, triggered, manifestSha256? }` and the codec
   refuses any other shape. An inherited untriggered attempt is deleted; a triggered one is polled, and with
@@ -226,9 +226,8 @@ bun test
   `namespaceProxySecrets` (`src/namespace/proxy-secrets.ts`) maps each contract member of the manifest to
   `proxySecretVariable(id)` and refuses a member Control handed no `proxySecret`; the attempt writes each
   one to the proxy service, without read-back, before the version is reserved, and the attempt identity
-  covers their digest. The deployer refuses a non-dry-run contract deploy whose managed
-  `FABRIKA_PROXY_SECRET` is null, and writes none to any other application: only a contract application
-  checks it, so another would merely hold a credential its own code can print. Never log either value.
+  covers their digest. Control refuses a non-dry deploy behind a namespace proxy when it has no proxy secret to hand
+  (`FABRIKA_PROXY_SECRET`), and hands none to a dry run; the deployer writes what it was handed. Never log either value.
 - **A contract member's manifest entry carries `operationsOrigin`** when Control handed the member one (the origin
   of its active ingest DSN, never the DSN): the proxy's header policy admits it in `connect-src`, as the framework
   does (ADR-0022 "Response headers"). `compileNamespaceProxyManifest` refuses one that is not an exact http(s) origin.

@@ -786,6 +786,10 @@ describe('Cloudflare control provider', () => {
 		) {
 			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, domain: 'API.example.com', crossOrigins }).success).toBe(false)
 		}
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, operationsOrigin: 'https://ingest.example.com' }).success).toBe(true)
+		for (const operationsOrigin of ['https://ingest.example.com/1', 'https://key@ingest.example.com', 'ftp://ingest.example.com', '']) {
+			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, operationsOrigin }).success).toBe(false)
+		}
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, installationApps: ['notes@prod', 'api@production'] }).success).toBe(true)
 		for (const id of ['notes', 'notes@prod@eu', '@prod', 'notes@', 'notes @prod']) {
 			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, installationApps: [id] }).success).toBe(false)
@@ -861,34 +865,6 @@ describe('Cloudflare control provider', () => {
 			framework: access.checker,
 		})
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
-	})
-
-	test('a deploy Control approved no access for is refused before the runner hears of it', async () => {
-		const started: CloudflareRunnerJob[] = []
-		const accepted: string[] = []
-		const provider = createCloudflareControlProvider({
-			accountId: 'account-1',
-			apiToken: 'token-1',
-			runnerKey: 'test-runner-key',
-			...sourceOptions,
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			startRun: async (job) => {
-				started.push(job)
-				return { state: 'succeeded' }
-			},
-			cancelRun: async () => {},
-		})
-		const { environment: { access: _approved, ...environment }, ...input } = deployInput()
-		await expect(
-			provider.deploy({
-				...input,
-				dryRun: false,
-				environment,
-				events: { ...input.events, externalId: async (id) => void accepted.push(id) },
-			}),
-		).rejects.toThrow('Cloudflare deploy requires the access Control approved for this environment')
-		expect(started).toEqual([])
-		expect(accepted).toEqual([])
 	})
 
 	test('the runner boundary refuses a non-dry job without approved access, without a contract, or without a digest', () => {
@@ -1028,5 +1004,9 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 		await provider.deploy(input)
 		expect(jobs[1]).not.toHaveProperty('crossOrigins')
+		expect(jobs[1]).not.toHaveProperty('operationsOrigin')
+		await provider.deploy({ ...input, environment: { ...input.environment, operationsOrigin: 'https://ingest.example.com' } })
+		expect(jobs[2]?.operationsOrigin).toBe('https://ingest.example.com')
+		expect(cloudflareRunnerJobSchema.safeParse(jobs[2]).success).toBe(true)
 	})
 })

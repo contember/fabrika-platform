@@ -8,6 +8,7 @@ import {
 	APPROVED_ACCESS_FILE_ENV,
 	CROSS_ORIGINS_ENV,
 	INSTALLATION_APPS_ENV,
+	OPERATIONS_ORIGIN_ENV,
 	type RunnerApprovedAccess,
 	runnerApprovedAccessSchema,
 } from './runner-protocol'
@@ -155,11 +156,13 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 	const returnOrigins = parseReturnOrigins(environmentValue('FABRIKA_IAM_RETURN_ORIGINS'))
 	const installationApps = parseInstallationApps(environmentValue(INSTALLATION_APPS_ENV))
 	const crossOrigins = parseCrossOrigins(environmentValue(CROSS_ORIGINS_ENV))
+	const operationsOrigin = environmentValue(OPERATIONS_ORIGIN_ENV)
 	return deploy({
 		appId: loaded.config.id,
 		env: options.env,
 		...(domain === undefined ? {} : { domain }),
 		...(crossOrigins === undefined ? {} : { crossOrigins }),
+		...(operationsOrigin === undefined ? {} : { operationsOrigin }),
 		...(returnOrigins === undefined ? {} : { returnOrigins }),
 		...(installationApps === undefined ? {} : { installationApps }),
 		...approved,

@@ -13,6 +13,16 @@ import type { OperationsCatalogRepository } from './db'
 import { acquireLease, CATALOG_LEASE_KEY, type Lease, type LeaseClock } from './lease'
 import { canonicalPublicOrigin, PublicOriginValidationError } from './public-origin'
 
+/** The origin of an environment's Operations DSN, which its proxy's `connect-src` admits; never the key. */
+export function ingestOrigin(ingest: { readonly dsn: string | null } | null): string | undefined {
+	if (ingest?.dsn === null || ingest?.dsn === undefined) return undefined
+	try {
+		return new URL(ingest.dsn).origin
+	} catch {
+		return undefined
+	}
+}
+
 const CATALOG_ENDPOINT = 'https://operations.internal/private/catalog/reconcile'
 const CATALOG_REQUEST_TIMEOUT_MS = 15_000
 const MIN_SYNC_KEY_LENGTH = 32

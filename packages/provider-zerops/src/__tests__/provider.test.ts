@@ -705,34 +705,6 @@ describe('Zerops provider', () => {
 		expect(recorded.logs.join('\n')).not.toContain('private-')
 	})
 
-	test('refuses a contract application without its proxy secret, before any platform call', async () => {
-		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
-		const config: ZeropsAppConfig = {
-			...app([API]),
-			id: 'notes',
-			target: { ...app([API]).target, contract: notesArtifact, proxy: { upstream: 'api:3000', ...contractProxyTable(notesArtifact) } },
-		}
-		const artifact = compileFabrikaManifest(config, 'prod', await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: api\n'))
-		const { access: _approved, ...base } = deployRun(recorded)
-		const access = {
-			contract: notesArtifact,
-			contractDigest: contractDigest(notesArtifact),
-			schema: schemaFromContract(notesArtifact),
-			checker: FABRIKA_CHECK_VERSION,
-		}
-		const run = {
-			...base,
-			appId: 'notes',
-			artifact,
-			access,
-			managedEnvironment: parseManagedEnvironment({ ...MANAGED_DEFAULTS, FABRIKA_PROXY_SECRET: null }),
-		}
-		await expect(provider(run)).rejects.toThrow('a contract application needs its proxy secret')
-		expect(recorded.timeline).toEqual([])
-		// A dry run writes nothing, so it needs no secret.
-		expect((await provider({ ...run, dryRun: true })).status).not.toBe('failed')
-	})
-
 	test('omits FABRIKA_RELEASE from the execution descriptor when there is no release', async () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
 		await execute(deployRun(recorded), provider)

@@ -167,9 +167,10 @@ The policy:
   img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' <operations ingest>;
   form-action 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`. `<operations ingest>`
   is the installation's Operations ingest origin; the framework takes it from `FABRIKA_OPERATIONS_DSN`,
-  and the proxy from its manifest entry's `operationsOrigin`, the origin of the same DSN: the Cloudflare
-  provider reads it from the run's managed environment, and on Zerops Control hands it to each namespace
-  member (`ProviderNamespaceMember.operationsOrigin`). The DSN's key never reaches a manifest. The
+  and the proxy from its manifest entry's `operationsOrigin`, the origin of the same DSN, which Control names:
+  to a deploy (`ProviderEnvironment.operationsOrigin`; Cloudflare's runner job carries it, and its executor
+  derives it from the DSN only for a job from an older Control) and to each namespace member
+  (`ProviderNamespaceMember.operationsOrigin`). The DSN's key never reaches a manifest. The
   contract may extend `connect-src`, `img-src`, `frame-ancestors`, `script-src`, `frame-src`, `style-src`
   and `font-src` with named origins (a hosted typeface names its stylesheet and its font origin) — exact `https://` origins with a literal host, never a pattern, at most 16 per directive
   (`MAX_CSP_ORIGINS`, checked by the contract build and the manifest parser); such an extension is

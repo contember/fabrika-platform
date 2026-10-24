@@ -47,6 +47,7 @@ import { kitFiles } from './helpers/kit-contract'
 import { makeFakeLock } from './helpers/lock'
 import { protectionRaceScenario } from './helpers/protection-race'
 import { refusedClaimScenario } from './helpers/refused-claims'
+import { fixedProxySecrets } from './helpers/vault'
 
 const COMMIT = 'c'.repeat(40)
 
@@ -118,6 +119,7 @@ function deps(w: World): RunDeps {
 	return {
 		repositories: w.db,
 		provider: provider(w),
+		proxySecrets: fixedProxySecrets,
 		secrets: new VaultSecretResolver({}),
 		lock: makeFakeLock(w.db),
 		queue: { send: (message) => Promise.resolve(void w.queued.push(message)) },

@@ -6,6 +6,7 @@ import {
 	parseOperationsReleaseRequest,
 } from '@fabrika/operations-contract/releases'
 import { type SqlDatabase, SqlDeployLocks, type SqlQueryResult, type SqlRunResult, type SqlStatement } from '@fabrika/platform'
+import type { ControlProvider } from '@fabrika/provider-contract'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { type ControlRepositories, createControlRepositories, OperationsReleaseRepository } from '../db'
 import { TERMINAL_RELEASE_REPAIR_DIAGNOSTIC } from '../db/operations-releases'
@@ -14,14 +15,17 @@ import { type OperationsReleaseProjectionDeps, replayOperationsReleases } from '
 import { reconcileProviderRuns, sweepStaleRuns } from '../provider-reconcile'
 import { cancelDeploy, executeDeploy } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
+import { contractCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
-import { fixtureRuns } from './helpers/lock'
+import { fixtureProtect, fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, skipReason } from './helpers/postgres'
 import { fakeControlProvider, providerEnvironment } from './helpers/provider'
 
 const NOW_S = 1_700_000_000
 const NOW_MS = NOW_S * 1_000
 const COMMIT = 'a'.repeat(40)
+/** The commit is pinned, so a deploy publishes the contract and hands over its approved access. */
+const publishingProvider: ControlProvider = { ...fakeControlProvider, resolveSource: async () => ({ commitSha: COMMIT }) }
 const SYNC_KEY = 'terminal-release-sync-key-with-32-bytes'
 
 class QueryBudgetStatement implements SqlStatement {
@@ -145,6 +149,8 @@ for (const backend of ['sqlite', 'postgres']) {
 			}
 			await repositories.registry.createApp({ id: 'notes', repoUrl: 'github.com/acme/notes' })
 			await repositories.registry.upsertAppEnv(providerEnvironment('notes', 'prod'))
+			// Unprotected, so the first contract publishes without an approval (ADR-0050).
+			await fixtureProtect(repositories.registry, lock, { appId: 'notes', env: 'prod' }, false)
 		})
 
 		afterEach(async () => close())
@@ -305,8 +311,9 @@ for (const backend of ['sqlite', 'postgres']) {
 					logs: { put: async () => {} },
 					secrets: new VaultSecretResolver({}),
 					operations,
+					commits: contractCommits('notes'),
 					provider: {
-						...fakeControlProvider,
+						...publishingProvider,
 						deploy: async (input) => {
 							await input.events.externalId('runner-operation')
 							await database.prepare(`UPDATE runs SET status = 'succeeded', exit_code = 0, finished_at = ?
@@ -344,7 +351,8 @@ for (const backend of ['sqlite', 'postgres']) {
 					lock,
 					logs: { put: async () => {} },
 					secrets: new VaultSecretResolver({}),
-					provider: fakeControlProvider,
+					provider: publishingProvider,
+					commits: contractCommits('notes'),
 					operations: { repository: new RejectTerminalProjection(database), now: () => NOW_MS + 10_000 },
 				}, { runId: 'lost-write' })).status,
 			).toBe('succeeded')
