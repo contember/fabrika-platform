@@ -6,6 +6,7 @@ import {
 	DEFAULT_APPLICATION_OBJECT,
 	OPS_CONTENT_TYPE,
 	OPS_METHOD,
+	OPS_REFUSAL_STATUS,
 	OPS_STALE_STATUS,
 	type OpsContentView,
 	type OpsInspectRequest,
@@ -44,9 +45,9 @@ export interface OpsTarget {
 }
 
 /**
- * Why the object gave no answer to act on: the environment has no channel (no domain, or no ops key yet), the channel
- * refused the request (the uniform 404), the object could not be reached or answered 5xx, or its answer did not parse.
- * Only `unreachable` is worth repeating at once.
+ * Why the object gave no answer to act on: the environment has no channel (no domain), a 404 other than the uniform
+ * refusal came back, the object could not be reached, answered 5xx or refused every key Control holds, or its answer did
+ * not parse. Only `unreachable` is worth repeating at once.
  */
 export type OpsUnavailable = 'no_channel' | 'channel_refused' | 'unreachable' | 'invalid_answer'
 
@@ -72,8 +73,11 @@ export interface DataOperationDeps {
 	ops: OpsTransport
 }
 
-/** Why an operation was not started: one is still running, the recovery target cannot be recovered, or the channel. */
-export type DataOperationRefusal = 'operation_running' | 'not_recoverable' | OpsUnavailable
+/**
+ * Why an operation was not started or advanced: one is still running, the recovery target cannot be recovered, the
+ * operation is no longer the environment's newest running one, or the channel.
+ */
+export type DataOperationRefusal = 'operation_running' | 'not_recoverable' | 'superseded' | OpsUnavailable
 
 /**
  * `interrupted`: the object gave no answer to act on, so the record keeps running at its step and the environment stays
@@ -161,12 +165,19 @@ export async function startRecovery(deps: DataOperationDeps, input: StartRecover
 
 /**
  * Continue a running operation after its holder died (a Control restart): take the lease, fence the object at a
- * generation above every reserved one in the mode the record requires, then carry on from the recorded step.
+ * generation above every reserved one in the mode the record requires, then carry on from the recorded step. Only the
+ * environment's newest operation, still running, advances here; an older one resumes only through its recovery.
  */
 export async function advanceDataOperation(deps: DataOperationDeps, operationId: string): Promise<DataOperationOutcome | null> {
 	const row = await deps.repositories.dataOperations.get(operationId)
 	if (row === null) return null
-	return await underLease(deps, { appId: row.app_id, env: row.env }, (driver) => driver.run(row.id, true))
+	const target = { appId: row.app_id, env: row.env }
+	return await underLease(deps, target, async (driver) => {
+		const current = await driver.read(row.id)
+		const latest = await latestOperation(deps, target)
+		if (current?.state !== 'running' || latest?.id !== row.id) return { kind: 'refused', reason: 'superseded' }
+		return await driver.run(row.id, true)
+	})
 }
 
 /**
@@ -338,8 +349,7 @@ class OperationDriver {
 			case 'open': {
 				const published = await this.publish(row, 'open')
 				if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
-				const interrupted = await this.require(interruptedId)
-				if (interrupted.state === 'running') await this.fail(interrupted, 'recovered_open')
+				await this.retireChain(row, 'recovered_open')
 				await this.finish(published.row)
 				return { kind: 'done', result: 'succeeded' }
 			}
@@ -353,6 +363,7 @@ class OperationDriver {
 				// The recovery is now the newest record, so it carries the mode the resumed operation left the object in.
 				const interrupted = await this.require(interruptedId)
 				const settled = await this.advance(row, { step: 'resume', targetMode: interrupted.target_mode })
+				await this.retireChain(row, 'superseded')
 				await this.finish(settled)
 				return { kind: 'done', result: 'succeeded' }
 			}
@@ -395,6 +406,22 @@ class OperationDriver {
 		return { kind: 'interrupted' }
 	}
 
+	/**
+	 * Retire every operation still running in the chain `recovery` recovers, through each recovery it names, so no older
+	 * operation can later publish over the mode this recovery leaves. Each write is fenced on this holder's lease, and the
+	 * recovery finishes only after them, so a successor that finds it unfinished retires the rest.
+	 */
+	private async retireChain(recovery: DataOperationRow, code: string): Promise<void> {
+		const seen = new Set<string>([recovery.id])
+		let next = recovery.recovers_operation_id
+		while (next !== null && !seen.has(next)) {
+			seen.add(next)
+			const operation = await this.require(next)
+			if (operation.state === 'running') await this.fail(operation, code)
+			next = operation.recovers_operation_id
+		}
+	}
+
 	private async require(id: string): Promise<DataOperationRow> {
 		const row = await this.read(id)
 		if (row === null) throw new Error('a data operation vanished')
@@ -423,8 +450,8 @@ class OperationDriver {
 
 export interface HttpOpsTransportDeps {
 	registry: Pick<ControlRegistryRepository, 'getAppEnv'>
-	/** The plaintext ops key the running version accepts; `null` while none is issued. Never logged. */
-	opsKeyFor(appId: string, env: string): Promise<string | null>
+	/** The plaintext ops keys to try, newest first, at most two; empty while none is issued. Never logged. */
+	opsKeysFor(appId: string, env: string): Promise<readonly string[]>
 	fetch?: (input: string, init: RequestInit) => Promise<Response>
 }
 
@@ -441,8 +468,21 @@ export function httpOpsTransport(deps: HttpOpsTransportDeps): OpsTransport {
 		const row = await deps.registry.getAppEnv(target.appId, target.env)
 		const origin = row === null ? null : channelOrigin(row.domain)
 		if (origin === null) return 'no_channel'
-		const key = await deps.opsKeyFor(target.appId, target.env)
-		if (key === null) return 'no_channel'
+		// While a rotation reconciles the running version accepts either key; its uniform refusal moves on to the next.
+		for (const key of await deps.opsKeysFor(target.appId, target.env)) {
+			const answer = await attempt(origin, operation, body, key, signal)
+			if (answer !== 'refused') return answer
+		}
+		return 'unreachable'
+	}
+
+	async function attempt(
+		origin: string,
+		operation: OpsOperation,
+		body: OpsInspectRequest | OpsStateRequest | OpsMigrateRequest,
+		key: string,
+		signal: AbortSignal,
+	): Promise<{ readonly status: number; readonly body: unknown } | OpsUnavailable | 'refused'> {
 		const bounded = AbortSignal.any([signal, AbortSignal.timeout(OPS_REQUEST_TIMEOUT_MS)])
 		try {
 			// No redirect is followed: the key goes to the environment's own domain and nowhere else.
@@ -453,16 +493,17 @@ export function httpOpsTransport(deps: HttpOpsTransportDeps): OpsTransport {
 				redirect: 'manual',
 				signal: bounded,
 			})
-			if (response.status === 404) return 'channel_refused'
+			const text = await response.text()
+			if (response.status === OPS_REFUSAL_STATUS) return text === '' ? 'refused' : 'channel_refused'
 			if (response.status >= 500) return 'unreachable'
 			if (response.status !== 200 && response.status !== OPS_STALE_STATUS) return 'invalid_answer'
-			const text = await response.text()
 			try {
 				return { status: response.status, body: JSON.parse(text) }
 			} catch {
 				return 'invalid_answer'
 			}
 		} catch {
+			// The error is dropped whole: nothing that may carry the request, and so the key, leaves here.
 			signal.throwIfAborted()
 			return 'unreachable'
 		}

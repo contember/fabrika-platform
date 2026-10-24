@@ -244,6 +244,70 @@ for (const backend of backends) {
 			expect(await recordedMaintenance(b, TARGET)).toBe('open')
 		})
 
+		test('an opening recovery of an interrupted recovery retires the whole chain, so the oldest operation cannot close the object', async () => {
+			const { b, object, deps } = await open()
+			const lines: string[] = []
+			const maintenance = await stuckReadOnly(deps(), object)
+			// The first recovery fences in closed, then loses the object while it resumes the maintenance.
+			object.behaviour = (request) => request.mode === 'read-only' ? 'down' : 'answer'
+			const first = await startRecovery(deps(), { ...TARGET, operationId: maintenance, resolution: 'resume', actor: 'user:ops' })
+			if (first.kind !== 'driven') throw new Error('the recovery was not recorded')
+			expect(first).toMatchObject({ result: 'interrupted', operation: { state: 'running', step: 'resume' } })
+			object.behaviour = () => 'answer'
+			const second = await startRecovery(deps(), { ...TARGET, operationId: first.operation.id, resolution: 'open', actor: 'user:ops' })
+			expect(second).toMatchObject({ result: 'succeeded', operation: { state: 'succeeded', target_mode: 'open' } })
+			expect(await b.repositories.dataOperations.get(first.operation.id)).toMatchObject({ state: 'failed', error_code: 'recovered_open' })
+			expect(await b.repositories.dataOperations.get(maintenance)).toMatchObject({ state: 'failed', error_code: 'recovered_open' })
+			const published = object.published
+			object.sent.length = 0
+			expect(await advanceDataOperation(deps(), maintenance)).toEqual({ kind: 'refused', reason: 'superseded' })
+			expect(object.sent).toEqual([])
+			expect(object.published).toEqual(published)
+			expect(object.published?.mode).toBe('open')
+			expect(await recordedMaintenance(b, TARGET)).toBe('open')
+			// The record and the object agree, so a deploy runs.
+			const run = uuidv7()
+			await b.repositories.runs.createRun({ id: run, appId: APP, env: ENV, ref: 'main', trigger: 'manual', actor: 'user:test' })
+			const runDeps: RunDeps = {
+				repositories: b.repositories,
+				lock: new SqlDeployLocks(b.db),
+				secrets: new VaultSecretResolver({}),
+				provider: fakeControlProvider,
+				logs: {
+					put: (_key, contents) => {
+						if (typeof contents === 'string') lines.push(contents)
+						return Promise.resolve()
+					},
+				},
+			}
+			expect(await executeDeploy(runDeps, { runId: run, dryRun: true })).toEqual({ runId: run, status: 'succeeded' })
+		})
+
+		test('advancing an operation a newer one superseded is refused without calling the object', async () => {
+			const { b, object, deps } = await open()
+			const clock = new ManualClock()
+			const operationDeps = deps(clock)
+			// An older operation left running by a dead holder, and a newer one recorded after it.
+			const holder = await acquireLease(operationDeps.lock, KEY, clock)
+			if (holder === null) throw new Error('lease missing')
+			const record = async (targetMode: 'read-only' | 'closed') => {
+				const id = uuidv7()
+				const generation = await b.repositories.dataOperations.allocateGeneration(APP, ENV)
+				const fields = { id, appId: APP, env: ENV, step: 'restrict', targetMode, generation, actor: 'user:test' } as const
+				expect(await b.repositories.dataOperations.create({ ...fields, kind: 'maintenance' }, holder.fence())).not.toBeNull()
+				return id
+			}
+			const older = await record('read-only')
+			const newer = await record('closed')
+			await clock.advance(LEASE_TTL_MS + 1)
+			expect(await advanceDataOperation(operationDeps, older)).toEqual({ kind: 'refused', reason: 'superseded' })
+			expect(object.sent).toEqual([])
+			expect(await b.repositories.dataOperations.get(older)).toMatchObject({ state: 'running', generation: 1 })
+			expect(await advanceDataOperation(operationDeps, newer)).toMatchObject({ result: 'succeeded', operation: { generation: 3 } })
+			expect(object.transitions()).toEqual([{ generation: 3, mode: 'closed' }])
+			await holder.release()
+		})
+
 		test('after a restart an operation resumes from its recorded step, not from the start', async () => {
 			const { b, object, deps } = await open()
 			const stuck = await stuckReadOnly(deps(), object)
@@ -416,7 +480,8 @@ describe('the HTTP ops transport', () => {
 		body: unknown
 	}
 
-	async function transport(answer: Response, options: { domain?: string | null; key?: string | null } = {}) {
+	/** `answer` builds each response afresh, from the key the request carried. */
+	async function transport(answer: (key: string) => Response, options: { domain?: string | null; keys?: readonly string[] } = {}) {
 		const repositories = createHarness().repositories
 		await repositories.registry.createApp({ id: APP, repoUrl: 'github.com/acme/crm' })
 		await repositories.registry.upsertAppEnv(
@@ -425,11 +490,12 @@ describe('the HTTP ops transport', () => {
 		const sent: Sent[] = []
 		const ops = httpOpsTransport({
 			registry: repositories.registry,
-			opsKeyFor: () => Promise.resolve(options.key === undefined ? 'ops-key' : options.key),
+			opsKeysFor: () => Promise.resolve(options.keys ?? ['ops-key']),
 			fetch: (url, init) => {
 				const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-				sent.push({ url, authorization: new Headers(init.headers).get('authorization'), redirect: init.redirect, body })
-				return Promise.resolve(answer)
+				const authorization = new Headers(init.headers).get('authorization')
+				sent.push({ url, authorization, redirect: init.redirect, body })
+				return Promise.resolve(answer(authorization?.replace(/^Bearer /, '') ?? ''))
 			},
 		})
 		return { ops, sent }
@@ -437,9 +503,11 @@ describe('the HTTP ops transport', () => {
 
 	const signal = new AbortController().signal
 	const transition = { object: 'application', generation: 4, mode: 'read-only' } as const
+	const ack = () => Response.json({ generation: 4, mode: 'read-only', stillRunning: 1 })
+	const refusal = () => new Response(null, { status: 404 })
 
 	test("calls the environment's own domain with the ops key, follows no redirect, and parses the acknowledgement", async () => {
-		const { ops, sent } = await transport(Response.json({ generation: 4, mode: 'read-only', stillRunning: 1 }))
+		const { ops, sent } = await transport(ack)
 		expect(await ops.state(TARGET, transition, signal)).toEqual({ kind: 'ok', value: { generation: 4, mode: 'read-only', stillRunning: 1 } })
 		expect(sent).toEqual([{
 			url: 'https://crm.example.com/__fabrika/ops/state',
@@ -449,34 +517,47 @@ describe('the HTTP ops transport', () => {
 		}])
 	})
 
-	test('a 409 is the stale refusal, a 404 the channel refusing, and a 5xx a request worth repeating', async () => {
-		const stale = await transport(Response.json({ refused: 'stale_generation', published: { generation: 6, mode: 'closed' } }, { status: 409 }))
-		expect(await stale.ops.state(TARGET, transition, signal)).toEqual({ kind: 'stale', published: { generation: 6, mode: 'closed' } })
-		expect(await (await transport(new Response(null, { status: 404 }))).ops.state(TARGET, transition, signal)).toEqual({
-			kind: 'unavailable',
-			reason: 'channel_refused',
-		})
-		expect(await (await transport(new Response(null, { status: 503 }))).ops.state(TARGET, transition, signal)).toEqual({
-			kind: 'unavailable',
-			reason: 'unreachable',
-		})
-		expect(await (await transport(new Response(null, { status: 302 }))).ops.state(TARGET, transition, signal)).toEqual({
-			kind: 'unavailable',
-			reason: 'invalid_answer',
-		})
+	test('a key the object refuses uniformly moves on to the next candidate, newest first', async () => {
+		const { ops, sent } = await transport((key) => key === 'previous-key' ? ack() : refusal(), { keys: ['newest-key', 'previous-key'] })
+		expect(await ops.state(TARGET, transition, signal)).toMatchObject({ kind: 'ok' })
+		expect(sent.map((request) => request.authorization)).toEqual(['Bearer newest-key', 'Bearer previous-key'])
+	})
+
+	test('every candidate refused, or none at all, fails as an unreachable object would', async () => {
+		const refused = await transport(refusal, { keys: ['newest-key', 'previous-key'] })
+		expect(await refused.ops.state(TARGET, transition, signal)).toEqual({ kind: 'unavailable', reason: 'unreachable' })
+		expect(refused.sent).toHaveLength(2)
+		const none = await transport(ack, { keys: [] })
+		expect(await none.ops.state(TARGET, transition, signal)).toEqual({ kind: 'unavailable', reason: 'unreachable' })
+		expect(none.sent).toEqual([])
+	})
+
+	test('any answer but the uniform refusal is final: no other key is tried', async () => {
+		const answers: [() => Response, OpsFencedAnswer<OpsStateAck>][] = [
+			[() => Response.json({ refused: 'stale_generation', published: { generation: 6, mode: 'closed' } }, { status: 409 }), {
+				kind: 'stale',
+				published: { generation: 6, mode: 'closed' },
+			}],
+			[() => new Response('not found', { status: 404 }), { kind: 'unavailable', reason: 'channel_refused' }],
+			[() => new Response(null, { status: 503 }), { kind: 'unavailable', reason: 'unreachable' }],
+			[() => new Response(null, { status: 302 }), { kind: 'unavailable', reason: 'invalid_answer' }],
+		]
+		for (const [answer, expected] of answers) {
+			const { ops, sent } = await transport(answer, { keys: ['newest-key', 'previous-key'] })
+			expect(await ops.state(TARGET, transition, signal)).toEqual(expected)
+			expect(sent).toHaveLength(1)
+		}
 	})
 
 	test('a metadata request refuses an answer that carries content', async () => {
-		const { ops } = await transport(Response.json(contentView({ mode: 'open', generation: null, published: false })))
+		const { ops } = await transport(() => Response.json(contentView({ mode: 'open', generation: null, published: false })))
 		expect(await ops.inspect(TARGET, { object: 'application', content: false }, signal)).toEqual({ kind: 'unavailable', reason: 'invalid_answer' })
 	})
 
-	test('an environment without a domain or an ops key has no channel, and nothing is sent', async () => {
-		for (const options of [{ domain: null }, { key: null }]) {
-			const { ops, sent } = await transport(Response.json({}), options)
-			expect(await ops.state(TARGET, transition, signal)).toEqual({ kind: 'unavailable', reason: 'no_channel' })
-			expect(sent).toEqual([])
-		}
+	test('an environment without a domain has no channel, and nothing is sent', async () => {
+		const { ops, sent } = await transport(ack, { domain: null })
+		expect(await ops.state(TARGET, transition, signal)).toEqual({ kind: 'unavailable', reason: 'no_channel' })
+		expect(sent).toEqual([])
 	})
 })
 
@@ -513,9 +594,10 @@ describe('data RPC', () => {
 		await f.seed()
 		const owner = authWithPermissions([appGrant('data.read'), appGrant('data.content.read'), appGrant('data.manage')])
 		const refused = await f.call(owner, 'data.content', TARGET)
-		expect([403, 404]).toContain(refused.status)
-		expect(f.object.sent).toEqual([])
 		const operator = authWithActions(['data.content.read'])
+		expect(refused).toEqual(await f.call(operator, 'data.content', { ...TARGET, env: 'missing' }))
+		expect(refused.status).toBe(404)
+		expect(f.object.sent).toEqual([])
 		const content = await f.call(operator, 'data.content', TARGET)
 		expect(content.status).toBe(200)
 		expect(content.body).toMatchObject({ bootFailure: { message: 'tenant 7 broke the boot' } })

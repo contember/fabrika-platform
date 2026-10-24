@@ -464,9 +464,7 @@ export function createControlRpcRouter(buildDeps: ControlRpcDepsBuilder): RpcRou
 				),
 			}),
 			view: rpc.procedure.input(dataEnvironment).query(({ ctx, input }) => controlCall(() => readDataViewUseCase(dataContext(ctx), input))),
-			content: rpc.procedure.input(dataEnvironment).require(CONTROL_ACTIONS.DATA_CONTENT_READ).query(({ ctx, input }) =>
-				controlCall(() => readDataContentUseCase(dataContext(ctx), input))
-			),
+			content: rpc.procedure.input(dataEnvironment).query(({ ctx, input }) => controlCall(() => readDataContentUseCase(dataContext(ctx), input))),
 			start: rpc.procedure.input(startDataOperationInputSchema).mutation(({ ctx, input }) =>
 				controlCall(() => startDataOperationUseCase(dataContext(ctx), input))
 			),
@@ -725,8 +723,11 @@ async function readDataViewUseCase(c: DataUseCaseContext, input: { appId: string
 	return inspection.view
 }
 
+/** A global `data.content.read` only: any narrower grant gets the same 404 as an environment that does not exist. */
 async function readDataContentUseCase(c: DataUseCaseContext, input: { appId: string; env: string }): Promise<OpsContentView> {
-	if ((await c.repositories.registry.getAppEnv(input.appId, input.env)) === null) fail(404, 'app env not found')
+	if (!c.auth.can(CONTROL_ACTIONS.DATA_CONTENT_READ) || (await c.repositories.registry.getAppEnv(input.appId, input.env)) === null) {
+		fail(404, 'app env not found')
+	}
 	const inspection = await inspectData(c, input, true)
 	if (!inspection.content) fail(502, 'the environment answered a content request without content')
 	return inspection.view
@@ -762,6 +763,7 @@ function dataOperationResult(outcome: DataOperationOutcome): DataOperationDto {
 	if (outcome.kind === 'driven') return toDataOperationDto(outcome.operation)
 	if (outcome.reason === 'operation_running') fail(409, 'an operation of this environment is still running: recover it first')
 	if (outcome.reason === 'not_recoverable') fail(409, 'that operation is not one this environment can recover')
+	if (outcome.reason === 'superseded') fail(409, 'a newer operation of this environment supersedes that one')
 	failUnavailable(outcome.reason)
 }
 

@@ -384,15 +384,17 @@ other environment, before the provider prepares anything, and the write maps a r
   reconcile the run start (`startedAtMs`, from `started_at ?? created_at`) so a provider can bound its polling.
 - **A data operation drives an environment's object under its `<app>:<env>` deploy lease (`src/data-operations.ts`,
   ADR-0069).** Control allocates every generation, records each step fenced on the lease, and calls the object only
-  through the injected `OpsTransport` (`httpOpsTransport`: the environment's domain, the ops key as a bearer, no
-  redirect followed). A lost answer repeats the same generation and mode. A successor (`advanceDataOperation`, or a
-  recovery's resumed operation) first publishes a generation above every reserved one in the recorded mode. A 409
-  naming a higher generation is adopted once, behind a fenced write; any other 409 fails the operation
-  `stale_generation`. A lost lease stops it with no further write or request. `executeDeploy` refuses an environment
-  whose recorded mode (`recordedMaintenance`) is not `open`; the only deploy of such an environment is
-  `executeDeployUnderLease`, which runs under the operation's live lease and never releases it. `data.read` and
-  `data.manage` are checked at the coordinates and hidden as 404; `data.content.read` is a global grant only, and
-  `data.view` refuses an answer that carries content.
+  through the injected `OpsTransport` (`httpOpsTransport`: the environment's domain, each ops key the running version
+  accepts as a bearer, newest first, the next one only after the uniform refusal; no redirect followed). A lost answer
+  repeats the same generation and mode. A successor (`advanceDataOperation`, or a recovery's resumed operation) first
+  publishes a generation above every reserved one in the recorded mode. `advanceDataOperation` drives only the
+  environment's newest running operation, and a succeeding recovery retires every operation still running in the chain
+  it recovers, so the newest record is the object's mode. A 409 naming a higher generation is adopted once, behind a
+  fenced write; any other 409 fails the operation `stale_generation`. A lost lease stops it with no further write or
+  request. `executeDeploy` refuses an environment whose recorded mode (`recordedMaintenance`) is not `open`; the only
+  deploy of such an environment is `executeDeployUnderLease`, which runs under the operation's live lease and never
+  releases it. `data.read` and `data.manage` are checked at the coordinates, `data.content.read` as a global grant only,
+  and every denial is the 404 of an absent environment; `data.view` refuses an answer that carries content.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.
