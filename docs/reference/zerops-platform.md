@@ -431,8 +431,15 @@ Measured by the platform-facts table's live suite (`live: 'build'`, `FABRIKA_LIV
 
 The generated run section of a contract application
 ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)) depends on the second row: its
-migrations, its schema check and its generated isolation tests are init commands. Its readiness check is the `httpGet`
-above, against the contract's health endpoint.
+migrations, its schema check and its generated isolation tests are init commands. Its readiness check is an `exec`
+against the contract's health endpoint (below).
+
+#### Verified live (2026-10-21, a throwaway `alpine/bun@1.3` service): one `exec` readiness attempt may wait for the server
+
+The first readiness attempt runs about one second after `run.start`, and the next one `retryPeriod` (at least 10 s)
+later. A server that listened 4 s after start, behind an `exec` check whose command polled its health path every 200 ms
+for up to 9 s, logged `ready after 1 attempts (took 5s)`. With an `httpGet` check the Notes example logged a refused first
+attempt and `ready after 2 attempts (took 10s)`. Activation followed readiness by about 21 s in both cases.
 
 #### Verified live (2026-10-21, account Contember, project `fabrika-live`): the readiness window opens with `run.start`, after the init commands
 
@@ -919,6 +926,30 @@ which is why `putServiceEnv`, `createServiceEnv` and `deleteServiceEnv` now poll
 before returning. And an endpoint whose error CODE is dropped is undiagnosable: `build-and-deploy`
 keeps its code from now on, because nothing in that request or response is a secret.
 
+**Concurrent user-data writes, 2026-10-23 (account `prg1`, a throwaway variable set on a stopped runtime).** Eight
+`POST /service-stack/{id}/user-data` sent at once (half `sensitive`), then eight `PUT /user-data/{id}` at once, then
+eight `DELETE` at once: every process `FINISHED` without an error, and the variable list matched after each round.
+Each round took 5.5–6.6 s in all, where eight sequential writes take about 20 s. No rate limit was met. The
+`userDataSyncRunning` conflict stays a deploy's: `write-service-env` therefore writes up to six variables at a time
+and returns only after every started write's sync has finished.
+
+### Verified live (2026-10-23, account `prg1`) — reading back a deleted project
+
+Measured when a throwaway dev namespace's project was deleted (`DELETE /project/{id}`, `project.delete`
+`FINISHED` in 28 s), with the installation's own token and through fabrika's API client.
+
+| Behaviour                                                                         | Result                                                           |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `GET /project/{id}` of the deleted project                                        | **`400 projectNotFound`**                                        |
+| `GET /project/{id}/service-stack` of the deleted project                          | **`400 projectNotFound`**                                        |
+| `GET /service-stack-by-name/{projectId}/{name}` of the deleted project            | **`400 serviceStackNotFound`**, the answer for a missing service |
+| `GET /service-stack/{id}` of a service the deletion removed                       | **`400 serviceStackNotFound`**                                   |
+| `GET /project/{id}` and the by-name read on a project the token holds no grant on | **`403 insufficientPermissions`**, never `projectNotFound`       |
+| `GET /service-stack-by-name/{projectId}/{name}` with an id no project ever had    | **`400 projectNotFound`**                                        |
+
+A claim release reads the project first: `projectNotFound` makes every claimed service gone, and a `403`
+fails the check rather than reading an unreachable project as empty.
+
 **Fresh creation provenance witness, 2026-10-02.** A collision-rejecting codeless import created
 disposable service `9YWl1QygSmGeGnmKvYISDw`. The response's `serviceStacks` entry identified its
 name and ID, and associated both processes with that same `serviceStackId`: creation
@@ -1141,6 +1172,20 @@ version's `build.pipelineStart` (`getAppVersion` / `activeAppVersion.build` carr
 the outgoing container keeps logging past the new `pipelineStart`, so its own later lines still pass.
 A build longer than `limit` needs no `desc` — each poll re-reads the newest window and the caller
 dedupes. Consumed by `ZeropsApi.readBuildLog`.
+
+### Verified live (2026-10-21, a namespace project of a test installation, a throwaway `ubuntu/bun@1.3` service) — what a `dev` environment relies on
+
+[ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md)'s `dev` environment rests on these facts:
+
+| Fact                                                                                                    | Result                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Control from inside a namespace (`control:3000`, `control.zerops:3000`, `iam:3000`, the container name) | **Unreachable**: projects share no private network. The namespace's own `postgres:5432` and services connect in 1–19 ms. |
+| Control's public origin from a namespace container                                                      | 200 in 15–68 ms                                                                                                          |
+| Files written at runtime, across `service stop`/`start` and `service restart`                           | **Survive**. A deploy replaces the container and loses them.                                                             |
+| Stopped → `service start` → serving                                                                     | 8.9 s (1 run)                                                                                                            |
+| `service restart`                                                                                       | 17–19 s (4 runs)                                                                                                         |
+| `zops deploy` of a prebuilt artefact; `zops push` with a one-line build                                 | 21–43 s; 51–53 s: the floor of a pipeline, which creates a build container and a new runtime container on every run      |
+| `sudo -n true` as the application user (uid `zerops`)                                                   | Exits 0: passwordless. The runtime environment also carries `ZEROPS_CertKey` and `ZEROPS_CertCrt`.                       |
 
 ## Fabrika placement mapping
 

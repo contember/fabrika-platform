@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/app",
-	"version": "0.8.2",
+	"version": "0.9.0-dev.4",
 	"type": "module",
 	"license": "MIT",
 	"repository": {
@@ -81,6 +81,21 @@
 			"bun": "./src/testing/preload.ts",
 			"types": "./src/testing/preload.ts",
 			"default": "./src/testing/preload.ts"
+		},
+		"./dev": {
+			"bun": "./src/dev/index.ts",
+			"types": "./src/dev/index.ts",
+			"default": "./src/dev/index.ts"
+		},
+		"./dev/wire": {
+			"bun": "./src/dev/wire.ts",
+			"types": "./src/dev/wire.ts",
+			"default": "./src/dev/wire.ts"
+		},
+		"./dev/changes": {
+			"bun": "./src/dev/changes.ts",
+			"types": "./src/dev/changes.ts",
+			"default": "./src/dev/changes.ts"
 		},
 		"./agent-skill": {
 			"bun": "./src/agent-skill.ts",

@@ -9,6 +9,7 @@
 
 import { enqueueUnsettledNamespaces } from './api/namespaces'
 import type { ControlRegistryRepository } from './db'
+import type { DevIdleSummary } from './dev/service'
 import type { Env } from './env'
 import { type FetchFn, pollPublicRepos, type PollSummary } from './github/triggers/poll'
 import { type MailMaintenanceSummary, runMailMaintenance } from './mail-relay/maintenance'
@@ -31,6 +32,8 @@ export interface MaintenanceSummary {
 	releases: OperationsReleaseProjectionSummary
 	/** Relayed mail: queued messages re-enqueued, final messages whose content was forgotten. */
 	mail: MailMaintenanceSummary
+	/** `dev` environments stopped after their idle period, and stops that failed. */
+	dev: DevIdleSummary
 }
 
 /** Seams a test drives. Production passes neither and gets the real clock + the global `fetch`. */
@@ -45,6 +48,8 @@ export interface MaintenanceOptions {
 	operations?: () => Promise<OperationsCatalogSyncSummary>
 	/** Test seam for the deploy-release maintenance replay. */
 	releases?: () => Promise<OperationsReleaseProjectionSummary>
+	/** A composition root whose provider runs `dev` environments injects their idle stop. */
+	devIdle?: () => Promise<DevIdleSummary>
 }
 
 /**
@@ -94,7 +99,9 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 		now: now(),
 	})
 	if (mail.requeued > 0 || mail.purged > 0) console.info(`mail maintenance: requeued=${mail.requeued} purged=${mail.purged}`)
-	return { poll, reconcile, swept, operations, releases, mail }
+	const dev = options.devIdle === undefined ? { stopped: 0, failed: 0 } : await options.devIdle()
+	if (dev.stopped > 0 || dev.failed > 0) console.info(`dev environments: stopped=${dev.stopped} failed=${dev.failed}`)
+	return { poll, reconcile, swept, operations, releases, mail, dev }
 }
 
 /**

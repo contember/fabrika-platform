@@ -330,6 +330,8 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 	configureCustomAutoscaling: () => Promise.reject(new Error('a namespace never sets custom autoscaling')),
 	getBackupConfig: () => Promise.reject(new Error('a namespace never reads a backup schedule')),
 	configureBackup: () => Promise.reject(new Error('a namespace never changes a backup schedule')),
+	startService: () => Promise.reject(new Error('a namespace never starts a service')),
+	stopService: () => Promise.reject(new Error('a namespace never stops a service')),
 	getService: async ({ serviceId }) => {
 		for (const services of state.services.values()) {
 			const service = services.find((candidate) => candidate.id === serviceId)
@@ -782,6 +784,29 @@ describe('namespace deployed source evidence and settlement', () => {
 			expect(zeropsNamespaceTargetCodec.decode(checkpoints.at(-1)?.target.payload ?? {}).ready).toBe(false)
 		})
 	}
+
+	test('a namespace whose project was deleted fails for good instead of retrying an unresolved proxy version', async () => {
+		const state = freshState()
+		const base = options(state)
+		const initial = await run(createZeropsNamespaceCapabilities(base), namespace({}), [])
+		const capabilities = createZeropsNamespaceCapabilities({
+			...base,
+			api: {
+				...base.api,
+				getAppVersion: async () => {
+					throw new ZeropsApiError('zerops: get app version failed (400) — appVersionNotFound', 400, 'appVersionNotFound')
+				},
+				getProject: async () => {
+					throw new ZeropsApiError('zerops: get project failed (400) — projectNotFound', 400, 'projectNotFound')
+				},
+			},
+		})
+		const failure = await run(capabilities, initial, [], 'reconcile').then(() => null, (error: unknown) => error)
+		expect(failure).toBeInstanceOf(ProviderNamespaceError)
+		if (!(failure instanceof ProviderNamespaceError)) throw failure
+		expect({ code: failure.code, retryable: failure.retryable }).toEqual({ code: 'projectNotFound', retryable: false })
+		expect(failure.message).toContain('no longer exists; remove the namespace')
+	})
 
 	test('an adopted exclusive namespace retains adoption after a transient readiness failure', async () => {
 		const state = freshState()

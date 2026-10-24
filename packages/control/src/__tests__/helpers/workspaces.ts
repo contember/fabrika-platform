@@ -7,12 +7,21 @@ import type { WorkspaceUseCaseContext } from '../../api/workspaces'
 import type { ControlRepositories } from '../../db'
 import type { ControlJobMessage } from '../../run-lifecycle'
 import {
+	WORKSPACE_READ_MAX_PATHS,
+	type WorkspaceChangedFile,
 	type WorkspaceCommit,
+	type WorkspaceComparison,
+	type WorkspaceFile,
 	type WorkspacePullRequestInput,
+	type WorkspaceScan,
+	type WorkspaceScanInput,
 	WorkspaceSourceError,
 	type WorkspaceSourcePort,
+	type WorkspaceSourceSession,
 	type WorkspaceSourceTarget,
 	type WorkspaceTree,
+	type WorkspaceTreeEntry,
+	type WorkspaceUnreadableReason,
 } from '../../workspace-source-port'
 import { allowAllAuth, authWithPermissions } from './iam'
 
@@ -39,9 +48,13 @@ export const zeropsEnvelopes = () => ({
 /** Every repository call, in order, by operation. */
 export type SourceCall =
 	| { kind: 'read-branch'; branch: string }
+	| { kind: 'read-branches'; branches: readonly string[] }
 	| { kind: 'create-branch'; branch: string; fromSha: string }
+	| { kind: 'delete-branch'; branch: string }
 	| { kind: 'list-tree'; commitSha: string; directory?: string }
 	| { kind: 'read-files'; commitSha: string; paths: readonly string[] }
+	| { kind: 'scan-files'; commitSha: string; directory?: string; maxFiles: number }
+	| { kind: 'compare'; baseSha: string; headSha: string }
 	| { kind: 'commit'; commit: WorkspaceCommit }
 	| { kind: 'pull-request'; pullRequest: WorkspacePullRequestInput }
 
@@ -52,11 +65,22 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 	readonly branches = new Map<string, string>([['main', sha('a')]])
 	/** The content `readFiles` answers for a path; any other path reads as `content of <path>`. */
 	readonly contents = new Map<string, string>()
+	/** Paths `readFiles` answers as not read, with the reason. */
+	readonly unreadable = new Map<string, WorkspaceUnreadableReason>()
+	/** Thrown by the next call, then cleared. */
+	failure: Error | undefined
+	/** The files `compare` answers as changed. */
+	changedFiles: WorkspaceChangedFile[] = []
 	private commits = 0
 
 	readBranch(input: { target: WorkspaceSourceTarget; branch: string }): Promise<string | null> {
 		this.record(input.target, { kind: 'read-branch', branch: input.branch })
 		return Promise.resolve(this.branches.get(input.branch) ?? null)
+	}
+
+	readBranches(input: { target: WorkspaceSourceTarget; branches: readonly string[] }): Promise<(string | null)[]> {
+		this.record(input.target, { kind: 'read-branches', branches: input.branches })
+		return Promise.resolve(input.branches.map((branch) => this.branches.get(branch) ?? null))
 	}
 
 	createBranch(input: { target: WorkspaceSourceTarget; branch: string; fromSha: string }): Promise<string> {
@@ -66,20 +90,65 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 		return Promise.resolve(input.fromSha)
 	}
 
+	deleteBranch(input: { target: WorkspaceSourceTarget; branch: string }): Promise<boolean> {
+		this.record(input.target, { kind: 'delete-branch', branch: input.branch })
+		return Promise.resolve(this.branches.delete(input.branch))
+	}
+
 	listTree(input: { target: WorkspaceSourceTarget; commitSha: string; directory?: string }): Promise<WorkspaceTree> {
 		this.record(input.target, {
 			kind: 'list-tree',
 			commitSha: input.commitSha,
 			...(input.directory === undefined ? {} : { directory: input.directory }),
 		})
-		return Promise.resolve({ commitSha: input.commitSha, entries: [{ path: 'src', kind: 'directory' }], truncated: false })
+		const prefix = input.directory === undefined ? '' : `${input.directory}/`
+		const files = [...this.contents.keys()].sort().filter((path) => path.startsWith(prefix))
+			.map((path): WorkspaceTreeEntry => ({ path, kind: 'file', size: 1 }))
+		const directories: WorkspaceTreeEntry[] = input.directory === undefined ? [{ path: 'src', kind: 'directory' }] : []
+		return Promise.resolve({ commitSha: input.commitSha, entries: [...directories, ...files], truncated: false })
 	}
 
 	readFiles(input: { target: WorkspaceSourceTarget; commitSha: string; paths: readonly string[] }) {
 		this.record(input.target, { kind: 'read-files', commitSha: input.commitSha, paths: input.paths })
+		// GitHub's client refuses a larger read as a configuration error.
+		if (input.paths.length > WORKSPACE_READ_MAX_PATHS) return Promise.reject(new Error(`read of ${input.paths.length} paths`))
 		return Promise.resolve({
 			commitSha: input.commitSha,
-			files: input.paths.map((path) => ({ path, content: this.contents.get(path) ?? `content of ${path}` })),
+			files: input.paths.map((path): WorkspaceFile => {
+				const reason = this.unreadable.get(path)
+				if (reason !== undefined) return { path, content: null, reason }
+				return { path, content: this.contents.get(path) ?? `content of ${path}` }
+			}),
+		})
+	}
+
+	/** Scans the paths of `contents` and `unreadable` as the tree, in path order. */
+	scanFiles(input: WorkspaceScanInput & { target: WorkspaceSourceTarget }): Promise<WorkspaceScan> {
+		this.record(input.target, {
+			kind: 'scan-files',
+			commitSha: input.commitSha,
+			...(input.directory === undefined ? {} : { directory: input.directory }),
+			maxFiles: input.maxFiles,
+		})
+		const prefix = input.directory === undefined ? '' : `${input.directory}/`
+		const admitted = [...new Set([...this.contents.keys(), ...this.unreadable.keys()])].sort()
+			.filter((path) => path.startsWith(prefix) && input.include(path))
+		const files = admitted.slice(0, input.maxFiles).map((path): WorkspaceFile => {
+			const reason = this.unreadable.get(path)
+			return reason === undefined ? { path, content: this.contents.get(path) ?? '' } : { path, content: null, reason }
+		})
+		return Promise.resolve({ commitSha: input.commitSha, files, candidates: admitted.length, treeTruncated: false })
+	}
+
+	compare(input: { target: WorkspaceSourceTarget; baseSha: string; headSha: string }): Promise<WorkspaceComparison> {
+		this.record(input.target, { kind: 'compare', baseSha: input.baseSha, headSha: input.headSha })
+		return Promise.resolve({
+			baseSha: input.baseSha,
+			headSha: input.headSha,
+			aheadBy: this.changedFiles.length === 0 ? 0 : 1,
+			behindBy: 0,
+			files: this.changedFiles,
+			filesCapped: false,
 		})
 	}
 
@@ -99,6 +168,19 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 		return Promise.resolve({ number: 7, url: 'https://github.com/acme/shop/pull/7', created: true })
 	}
 
+	/** The sessions opened; their calls are recorded as the port's own. */
+	sessions = 0
+
+	session<T>(input: { target: WorkspaceSourceTarget; signal: AbortSignal }, use: (session: WorkspaceSourceSession) => Promise<T>): Promise<T> {
+		this.sessions += 1
+		const { target, signal } = input
+		return use({
+			readFiles: ({ commitSha, paths }) => this.readFiles({ target, commitSha, paths }),
+			compare: ({ baseSha, headSha }) => this.compare({ target, baseSha, headSha }),
+			commit: (commit) => this.commit({ ...commit, target, signal }),
+		})
+	}
+
 	kinds(): string[] {
 		return this.calls.map((call) => call.kind)
 	}
@@ -106,6 +188,9 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 	private record(target: WorkspaceSourceTarget, call: SourceCall): void {
 		this.targets.push(target)
 		this.calls.push(call)
+		const failure = this.failure
+		this.failure = undefined
+		if (failure !== undefined) throw failure
 	}
 }
 

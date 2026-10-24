@@ -1,7 +1,10 @@
 import { configurationError, GitHubBranchConflictError, GitHubNotFoundError, GitHubStaleHeadError, requestStatusError, responseError } from './errors'
 import type {
+	GitHubBlobRead,
+	GitHubBlobRef,
 	GitHubCommit,
 	GitHubCommitFilesInput,
+	GitHubComparison,
 	GitHubCreateBranchInput,
 	GitHubFileRead,
 	GitHubOpenPullRequestInput,
@@ -11,21 +14,26 @@ import type {
 	GitHubTextFile,
 	GitHubTreeEntry,
 	GitHubTreeListing,
+	GitHubUnreadablePath,
+	GitHubUnreadableReason,
 } from './repository-types'
 import {
 	decodeCommit,
+	decodeComparison,
 	decodeCreatedTreeSha,
+	type DecodedTree,
 	decodePullRequest,
 	decodePullRequestList,
 	decodeRef,
 	decodeTextBlob,
-	decodeTree,
+	decodeTreeListing,
 	encodeBranch,
 	MAX_BLOB_RESPONSE_BYTES,
 	MAX_CHANGED_BYTES,
 	MAX_CHANGED_FILES,
 	MAX_COMMIT_MESSAGE_BYTES,
 	MAX_COMMIT_RESPONSE_BYTES,
+	MAX_COMPARE_RESPONSE_BYTES,
 	MAX_FILE_BYTES,
 	MAX_PULL_REQUEST_BODY_BYTES,
 	MAX_PULL_REQUEST_RESPONSE_BYTES,
@@ -54,10 +62,13 @@ export interface RepositoryClientConfig {
 	readonly timeoutMs: number
 }
 
+/** Blob reads in flight at once; enough to hide latency, few enough to stay clear of GitHub's secondary rate limits. */
+const BLOB_READ_CONCURRENCY = 6
+
 type RequestResult = { readonly ok: true; readonly body: unknown } | { readonly ok: false; readonly status: number }
 
 interface RequestOptions {
-	readonly method?: 'GET' | 'POST' | 'PATCH'
+	readonly method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
 	readonly body?: unknown
 	readonly signal?: AbortSignal | undefined
 	readonly maxResponseBytes?: number
@@ -79,6 +90,8 @@ export function createRepositoryClient(config: RepositoryClientConfig): GitHubRe
 
 class RepositoryClient implements GitHubRepositoryClient {
 	readonly #config: RepositoryClientConfig
+	/** Commits and trees this client read, by request path: a sha names immutable content, so one client reads each once. */
+	readonly #objects = new Map<string, Promise<unknown>>()
 
 	constructor(config: RepositoryClientConfig) {
 		this.#config = config
@@ -93,44 +106,88 @@ class RepositoryClient implements GitHubRepositoryClient {
 	async readTree(commitSha: string, directory = '', signal?: AbortSignal): Promise<GitHubTreeListing> {
 		validateSha(commitSha)
 		if (directory !== '') validatePath(directory)
-		const rootSha = (await this.#readCommit(commitSha, signal)).treeSha
-		let treeSha = rootSha
-		if (directory !== '') {
-			const entry = await this.#treeWalker(rootSha, signal).find(directory)
-			if (entry?.type !== 'tree') return { commitSha, directory, entries: [], truncated: false }
-			treeSha = entry.sha
-		}
-		const tree = decodeTree(await this.#readGitObject(`/git/trees/${treeSha}?recursive=1`, signal, MAX_TREE_RESPONSE_BYTES), treeSha)
+		const listing = await this.#readTreeAt(commitSha, directory, '?recursive=1', signal)
+		if (listing === null) return { commitSha, directory, entries: [], truncated: false }
 		const prefix = directory === '' ? '' : `${directory}/`
-		const entries = tree.entries.slice(0, MAX_TREE_ENTRIES).map((entry) => ({ ...entry, path: `${prefix}${entry.path}` }))
-		return { commitSha, directory, entries, truncated: tree.truncated || tree.entries.length > MAX_TREE_ENTRIES }
+		const entries = listing.entries.slice(0, MAX_TREE_ENTRIES).map((entry) => ({ ...entry, path: `${prefix}${entry.path}` }))
+		return { commitSha, directory, entries, truncated: listing.truncated || listing.entries.length > MAX_TREE_ENTRIES }
 	}
 
 	async readFiles(commitSha: string, paths: readonly string[], signal?: AbortSignal): Promise<GitHubFileRead> {
 		validateSha(commitSha)
 		if (paths.length === 0 || paths.length > MAX_READ_PATHS || new Set(paths).size !== paths.length) throw configurationError()
 		for (const path of paths) validatePath(path)
-		const directories = this.#treeWalker((await this.#readCommit(commitSha, signal)).treeSha, signal)
-		const files: GitHubTextFile[] = []
-		const missingPaths: string[] = []
-		let remainingBytes = MAX_READ_BYTES
-		for (const path of paths) {
-			const entry = await directories.find(path)
-			// Oversized files, and files past the total read budget, are reported missing like other unreadable paths.
-			if (entry?.type !== 'blob' || entry.mode === '120000' || entry.size > MAX_FILE_BYTES || entry.size > remainingBytes) {
-				missingPaths.push(path)
-				continue
-			}
-			const body = await this.#readGitObject(`/git/blobs/${entry.sha}`, signal, MAX_BLOB_RESPONSE_BYTES)
-			const content = decodeTextBlob(body, entry.sha, entry.size)
-			if (content === null) {
-				missingPaths.push(path)
-				continue
-			}
-			remainingBytes -= entry.size
-			files.push({ path, content })
+		const entries = await Promise.all(paths.map((path) => this.#find(commitSha, path, signal)))
+		const blobs: GitHubBlobRef[] = []
+		const notFiles = new Map<string, GitHubUnreadableReason>()
+		for (const [index, path] of paths.entries()) {
+			const entry = entries[index] ?? null
+			if (entry === null) notFiles.set(path, 'missing')
+			else if (entry.type !== 'blob' || entry.mode === '120000') notFiles.set(path, 'not_a_file')
+			else blobs.push({ path, sha: entry.sha, size: entry.size })
 		}
-		return { commitSha, files, missingPaths }
+		const read = blobs.length === 0 ? { files: [], unreadable: [] } : await this.readBlobTexts(blobs, signal)
+		const reasons = new Map([...notFiles, ...read.unreadable.map((entry): [string, GitHubUnreadableReason] => [entry.path, entry.reason])])
+		const contents = new Map(read.files.map((file) => [file.path, file.content]))
+		const files: GitHubTextFile[] = []
+		const unreadable: GitHubUnreadablePath[] = []
+		for (const path of paths) {
+			const content = contents.get(path)
+			const reason = reasons.get(path)
+			if (content !== undefined) files.push({ path, content })
+			else if (reason !== undefined) unreadable.push({ path, reason })
+		}
+		return { commitSha, files, unreadable }
+	}
+
+	async readBlobTexts(blobs: readonly GitHubBlobRef[], signal?: AbortSignal): Promise<GitHubBlobRead> {
+		if (blobs.length === 0 || blobs.length > MAX_READ_PATHS || new Set(blobs.map((blob) => blob.path)).size !== blobs.length) {
+			throw configurationError()
+		}
+		for (const blob of blobs) {
+			validatePath(blob.path)
+			validateSha(blob.sha)
+			if (!Number.isSafeInteger(blob.size) || blob.size < 0) throw configurationError()
+		}
+		const unreadable = new Map<string, GitHubUnreadableReason>()
+		const selected: GitHubBlobRef[] = []
+		let remainingBytes = MAX_READ_BYTES
+		for (const blob of blobs) {
+			if (blob.size > MAX_FILE_BYTES) unreadable.set(blob.path, 'too_large')
+			else if (blob.size > remainingBytes) unreadable.set(blob.path, 'budget')
+			else {
+				remainingBytes -= blob.size
+				selected.push(blob)
+			}
+		}
+		const contents = new Map<string, string>()
+		for (let start = 0; start < selected.length; start += BLOB_READ_CONCURRENCY) {
+			await Promise.all(
+				selected.slice(start, start + BLOB_READ_CONCURRENCY).map(async (blob) => {
+					const body = await this.#readGitObject(`/git/blobs/${blob.sha}`, signal, MAX_BLOB_RESPONSE_BYTES)
+					const content = decodeTextBlob(body, blob.sha, blob.size)
+					if (content === null) unreadable.set(blob.path, 'binary')
+					else contents.set(blob.path, content)
+				}),
+			)
+		}
+		const files: GitHubTextFile[] = []
+		const unread: GitHubUnreadablePath[] = []
+		for (const blob of blobs) {
+			const content = contents.get(blob.path)
+			const reason = unreadable.get(blob.path)
+			if (content !== undefined) files.push({ path: blob.path, content })
+			else if (reason !== undefined) unread.push({ path: blob.path, reason })
+		}
+		return { files, unreadable: unread }
+	}
+
+	async compareCommits(baseSha: string, headSha: string, signal?: AbortSignal): Promise<GitHubComparison> {
+		validateSha(baseSha)
+		validateSha(headSha)
+		// The changed files ride only on the first page of commits, so one commit per page keeps the rest of the body small.
+		const body = await this.#readGitObject(`/compare/${baseSha}...${headSha}?per_page=1`, signal, MAX_COMPARE_RESPONSE_BYTES)
+		return decodeComparison(body, headSha)
 	}
 
 	async createBranch(input: GitHubCreateBranchInput): Promise<GitHubRef> {
@@ -152,6 +209,15 @@ class RepositoryClient implements GitHubRepositoryClient {
 		return requireBranchAt(raced, input.fromSha)
 	}
 
+	async deleteBranch(branch: string, signal?: AbortSignal): Promise<{ readonly deleted: boolean }> {
+		validateBranch(branch)
+		const result = await this.#request(`/git/refs/heads/${encodeBranch(branch)}`, { method: 'DELETE', signal, expectedFailures: [422] })
+		if (result.ok) return { deleted: true }
+		// 422 is "Reference does not exist" among other refusals; only an absent branch counts as already deleted.
+		if (await this.readRef(branch, signal) !== null) throw requestStatusError(result.status)
+		return { deleted: false }
+	}
+
 	async commitFiles(input: GitHubCommitFilesInput): Promise<GitHubCommit> {
 		validateBranch(input.branch)
 		validateSha(input.expectedHeadSha)
@@ -162,10 +228,12 @@ class RepositoryClient implements GitHubRepositoryClient {
 		const changes = treeChanges(input.changes)
 
 		// Known limit: REST has no compare-and-swap, so a concurrent reset to an ancestor still lets the non-force PATCH fast-forward.
+		const parentRead = this.#readCommit(input.expectedHeadSha, input.signal)
+		parentRead.catch(() => undefined)
 		const head = await this.readRef(input.branch, input.signal)
 		if (head?.sha !== input.expectedHeadSha) throw new GitHubStaleHeadError()
-		const parent = await this.#readCommit(input.expectedHeadSha, input.signal)
-		const tree = await this.#resolveModes(changes, parent.treeSha, input.signal)
+		const parent = await parentRead
+		const tree = await this.#resolveModes(changes, parent.sha, input.signal)
 
 		const createdTree = await this.#request('/git/trees', {
 			method: 'POST',
@@ -227,20 +295,40 @@ class RepositoryClient implements GitHubRepositoryClient {
 	}
 
 	/** Keeps an edited executable's mode, and refuses to delete anything but an existing file. */
-	async #resolveModes(changes: readonly TreeChange[], rootSha: string, signal: AbortSignal | undefined): Promise<TreeChange[]> {
-		const head = this.#treeWalker(rootSha, signal)
-		const result: TreeChange[] = []
-		for (const change of changes) {
-			const existing = await head.find(change.path)
-			const isFile = existing?.type === 'blob'
+	async #resolveModes(changes: readonly TreeChange[], commitSha: string, signal: AbortSignal | undefined): Promise<TreeChange[]> {
+		const existing = await Promise.all(changes.map((change) => this.#find(commitSha, change.path, signal)))
+		return changes.map((change, index) => {
+			const entry = existing[index] ?? null
+			const isFile = entry?.type === 'blob'
 			if (change.content === undefined && !isFile) throw configurationError()
-			result.push(isFile && existing.mode === '100755' ? { ...change, mode: '100755' } : change)
-		}
-		return result
+			return isFile && entry.mode === '100755' ? { ...change, mode: '100755' } : change
+		})
 	}
 
-	#treeWalker(rootSha: string, signal: AbortSignal | undefined): TreeWalker {
-		return new TreeWalker(rootSha, (treeSha) => this.#readGitObject(`/git/trees/${treeSha}`, signal, MAX_TREE_RESPONSE_BYTES))
+	/** The entry at `path` in `commitSha`, or null. One listing of its directory, which this client reads once. */
+	async #find(commitSha: string, path: string, signal: AbortSignal | undefined): Promise<GitHubTreeEntry | null> {
+		const slash = path.lastIndexOf('/')
+		const listing = await this.#readTreeAt(commitSha, slash === -1 ? '' : path.slice(0, slash), '', signal)
+		if (listing?.truncated === true) throw responseError()
+		return listing?.entries.find((entry) => entry.path === path.slice(slash + 1)) ?? null
+	}
+
+	/**
+	 * The tree of `directory` ('' for the root) at `commitSha`, in one request: GitHub resolves `<commit>:<path>`. Null
+	 * when the commit holds no such directory; an unknown commit is not found.
+	 */
+	async #readTreeAt(commitSha: string, directory: string, query: '' | '?recursive=1', signal: AbortSignal | undefined): Promise<DecodedTree | null> {
+		const path = `/git/trees/${encodeURIComponent(`${commitSha}:${directory}`)}${query}`
+		let body: unknown
+		try {
+			body = await this.#readGitObject(path, signal, MAX_TREE_RESPONSE_BYTES)
+		} catch (error) {
+			if (!(error instanceof GitHubNotFoundError)) throw error
+			// GitHub answers the same for a missing directory and an unknown commit; only the commit read tells them apart.
+			await this.#readCommit(commitSha, signal)
+			return null
+		}
+		return decodeTreeListing(body)
 	}
 
 	async #readCommit(sha: string, signal: AbortSignal | undefined): Promise<GitHubCommit> {
@@ -250,7 +338,17 @@ class RepositoryClient implements GitHubRepositoryClient {
 	}
 
 	/** Reads a commit, tree or blob by sha; GitHub answers 404 or 422 for an unknown one. */
-	async #readGitObject(path: string, signal: AbortSignal | undefined, maxResponseBytes?: number): Promise<unknown> {
+	#readGitObject(path: string, signal: AbortSignal | undefined, maxResponseBytes?: number): Promise<unknown> {
+		if (path.startsWith('/git/blobs/')) return this.#fetchGitObject(path, signal, maxResponseBytes)
+		const cached = this.#objects.get(path)
+		if (cached !== undefined) return cached
+		const read = this.#fetchGitObject(path, signal, maxResponseBytes)
+		this.#objects.set(path, read)
+		read.catch(() => this.#objects.delete(path))
+		return read
+	}
+
+	async #fetchGitObject(path: string, signal: AbortSignal | undefined, maxResponseBytes?: number): Promise<unknown> {
 		const result = await this.#request(path, { signal, maxResponseBytes, expectedFailures: [404, 422] })
 		if (!result.ok) throw new GitHubNotFoundError()
 		return result.body
@@ -288,6 +386,7 @@ class RepositoryClient implements GitHubRepositoryClient {
 				if (options.expectedFailures?.includes(response.status) === true) return { ok: false, status: response.status }
 				throw requestStatusError(response.status)
 			}
+			if (response.status === 204) return { ok: true, body: null }
 			return { ok: true, body: await readBoundedJson(response, cancellation, options.maxResponseBytes) }
 		} finally {
 			cancellation.dispose()
@@ -296,44 +395,6 @@ class RepositoryClient implements GitHubRepositoryClient {
 }
 
 /** Resolves repository paths through non-recursive tree reads, caching each directory once. */
-class TreeWalker {
-	readonly #directories = new Map<string, Promise<ReadonlyMap<string, GitHubTreeEntry>>>()
-
-	constructor(
-		private readonly rootSha: string,
-		private readonly fetchTree: (treeSha: string) => Promise<unknown>,
-	) {}
-
-	async find(path: string): Promise<GitHubTreeEntry | null> {
-		let treeSha = this.rootSha
-		const parts = path.split('/')
-		for (const [index, part] of parts.entries()) {
-			const entry = (await this.#read(treeSha)).get(part)
-			if (entry === undefined) return null
-			if (index === parts.length - 1) return entry
-			if (entry.type !== 'tree') return null
-			treeSha = entry.sha
-		}
-		return null
-	}
-
-	#read(treeSha: string): Promise<ReadonlyMap<string, GitHubTreeEntry>> {
-		let directory = this.#directories.get(treeSha)
-		if (directory === undefined) {
-			directory = this.#load(treeSha)
-			this.#directories.set(treeSha, directory)
-		}
-		return directory
-	}
-
-	async #load(treeSha: string): Promise<ReadonlyMap<string, GitHubTreeEntry>> {
-		const tree = decodeTree(await this.fetchTree(treeSha), treeSha)
-		// A truncated directory listing cannot prove a path is absent.
-		if (tree.truncated) throw responseError()
-		return new Map(tree.entries.map((entry) => [entry.path, entry]))
-	}
-}
-
 function requireBranchAt(ref: GitHubRef, sha: string): GitHubRef {
 	if (ref.sha !== sha) throw new GitHubBranchConflictError()
 	return ref

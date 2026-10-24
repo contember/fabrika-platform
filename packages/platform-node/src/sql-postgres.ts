@@ -26,8 +26,11 @@
 //    already coerce `undefined` → null, so this matches what the services are tested against.
 //  * SQLite-only SQL still fails, obviously: `unixepoch()` does not exist in Postgres. Several
 //    statements in `@fabrika/control` and `@fabrika/iam` use it today.
-//  * Prepared statements are cached per connection by default. Behind a transaction-mode pooler
-//    (pgbouncer) construct the client with `{ prepare: false }`.
+//  * NO NAMED PREPARED STATEMENTS. A Zerops PostgreSQL service hands one server session to the IAM, Control and
+//    Operations processes in turn, so a statement prepared before a migration's ADD COLUMN outlives the
+//    process that prepared it, and `SELECT *` then fails with `cached plan must not change result type`
+//    (0A000). The same happens to one client that runs a migration between two reads. `connect` therefore
+//    defaults to `{ prepare: false }`: every statement is parsed where it runs.
 
 import type { SqlDatabase, SqlQueryResult, SqlRunResult, SqlStatement } from '@fabrika/platform'
 import { rewritePlaceholders, type RewrittenSql } from './placeholders'
@@ -36,7 +39,7 @@ import { rewritePlaceholders, type RewrittenSql } from './placeholders'
 const MUTATING_COMMANDS = new Set(['INSERT', 'UPDATE', 'DELETE', 'MERGE'])
 
 /** What a bound value may be. Anything else is a programming error and throws at bind time, as D1 does. */
-export type SqlBindValue = string | number | bigint | boolean | Date | Uint8Array | null
+export type SqlBindValue = string | number | bigint | boolean | Uint8Array | null
 
 /**
  * One prepared statement. IMMUTABLE: `bind()` returns a NEW statement carrying the values and leaves
@@ -99,11 +102,11 @@ export class PostgresDatabase implements SqlDatabase {
 	constructor(private readonly sql: Bun.SQL) {}
 
 	/**
-	 * Open a pooled client. The URL is a CREDENTIAL — it is never logged, and never included in an
-	 * error message raised here.
+	 * Open a pooled client that prepares no named statement (see the header). The URL is a CREDENTIAL — it is
+	 * never logged, and never included in an error message raised here.
 	 */
-	static connect(url: string, options: Omit<Bun.SQL.PostgresOrMySQLOptions, 'url' | 'adapter'> = {}): PostgresDatabase {
-		return new PostgresDatabase(new Bun.SQL({ ...options, url, adapter: 'postgres' }))
+	static connect(url: string, options: Omit<Bun.SQL.PostgresOrMySQLOptions, 'url' | 'adapter' | 'prepare'> = {}): PostgresDatabase {
+		return new PostgresDatabase(new Bun.SQL({ ...options, prepare: false, url, adapter: 'postgres' }))
 	}
 
 	prepare(sql: string): SqlStatement {
@@ -198,10 +201,13 @@ function toBindValue(value: unknown): SqlBindValue {
 		|| typeof value === 'number'
 		|| typeof value === 'bigint'
 		|| typeof value === 'boolean'
-		|| value instanceof Date
 		|| value instanceof Uint8Array
 	) {
 		return value
+	}
+	// Without a prepared statement Bun sends a parameter as text, and a Date as `Date#toString()`, which Postgres refuses.
+	if (value instanceof Date) {
+		return value.toISOString()
 	}
 	if (value instanceof ArrayBuffer) {
 		return new Uint8Array(value)

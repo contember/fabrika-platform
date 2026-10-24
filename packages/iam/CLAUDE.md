@@ -687,6 +687,12 @@ fails if that stops being true — it is the guard, not documentation of one.
   principal. A grant expires with the session it was given under and cascades with its row. One code
   per grant, so the grant IS the refresh-token family: a replayed code or a reused rotated refresh
   token revokes it. Resource tokens are signed with `typ: at+jwt` (`Signer.signResourceToken`).
+- **THE CLIENT'S DOCUMENT, NEVER THE REQUEST, PICKS HOW THE CLIENT AUTHENTICATES** (`oauth-client-auth.ts`).
+  A `none` document is a public client and is refused if it sends an assertion; a `private_key_jwt` document
+  (ChatGPT) must send a JWT assertion at `/oauth/token` and `/oauth/revoke`, verified against the `jwks_uri`
+  the contract parser confined to the client id's origin. Authenticate before spending a code or refresh
+  token. A `jti` is single-use per client (`oauth_client_assertions`), kept until `exp` plus the clock
+  tolerance, because the verifier still accepts the assertion that long.
 - **REVOCATION STOPS REFRESH, NOT AN ISSUED ACCESS TOKEN.** Revoking an OAuth grant or ending its
   session refuses the next code exchange or refresh; an access token already minted stays valid until
   its `exp`, at most `DEFAULT_TOKEN_TTL_SECONDS`. `verifyAccessToken` (every native caller) refuses a

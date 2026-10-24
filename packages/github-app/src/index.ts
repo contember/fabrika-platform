@@ -1,9 +1,14 @@
 export { GitHubAppClient } from './client'
-export { GitHubBranchConflictError, GitHubNotFoundError, GitHubStaleHeadError } from './errors'
+export { GitHubBranchConflictError, GitHubNotFoundError, GitHubRequestError, GitHubStaleHeadError } from './errors'
 export { buildGitHubAppManifest, exchangeGitHubAppManifestCode } from './manifest'
 export type {
+	GitHubBlobRead,
+	GitHubBlobRef,
+	GitHubChangedFile,
+	GitHubChangedFileStatus,
 	GitHubCommit,
 	GitHubCommitFilesInput,
+	GitHubComparison,
 	GitHubCreateBranchInput,
 	GitHubFileChange,
 	GitHubFileRead,
@@ -15,6 +20,8 @@ export type {
 	GitHubTextFile,
 	GitHubTreeEntry,
 	GitHubTreeListing,
+	GitHubUnreadablePath,
+	GitHubUnreadableReason,
 } from './repository-types'
 export { pemToPkcs8 } from './signing'
 export type {

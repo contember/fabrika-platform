@@ -1,5 +1,5 @@
 import { buildAccessClaims, matchesTokenAudience, parseAccessClaims, RESOURCE_ACCESS_TOKEN_TYP, TOKEN_ALG } from '@fabrika/auth-core'
-import { afterEach, describe, expect, jest, spyOn, test } from 'bun:test'
+import { afterEach, describe, expect, jest, setSystemTime, spyOn, test } from 'bun:test'
 import { decodeJwt, decodeProtectedHeader } from 'jose'
 import { resolveAdmin } from '../admin/router'
 import { resolveCaller } from '../auth'
@@ -7,6 +7,7 @@ import { narrowPermissions } from '../narrow-permissions'
 import { clientMetadata } from '../oauth-client'
 import { parseOAuthConfig } from '../oauth-config'
 import { handleOAuth } from '../oauth-http'
+import { hashToken } from '../secret'
 import { getSigner, verifyAccessToken, verifyResourceAccessToken } from '../signing'
 import { createHarness } from './helpers/harness'
 import { ISSUER, oauthFixture, REDIRECT_URI, RESOURCE, SIGNING_ENV, tokenBody } from './helpers/oauth'
@@ -31,7 +32,7 @@ function locationOf(response: Response): URL {
 }
 
 describe('authorization server metadata', () => {
-	test('advertises the endpoints, PKCE S256, public clients and CIMD', async () => {
+	test('advertises the endpoints, PKCE S256, public and private_key_jwt clients, RFC 9207 and CIMD', async () => {
 		const f = await fixture()
 		const response = await f.call(new Request(`${ISSUER}/.well-known/oauth-authorization-server`))
 		expect(response.status).toBe(200)
@@ -45,7 +46,11 @@ describe('authorization server metadata', () => {
 			response_types_supported: ['code'],
 			grant_types_supported: ['authorization_code', 'refresh_token'],
 			code_challenge_methods_supported: ['S256'],
-			token_endpoint_auth_methods_supported: ['none'],
+			token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+			token_endpoint_auth_signing_alg_values_supported: ['RS256'],
+			revocation_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+			revocation_endpoint_auth_signing_alg_values_supported: ['RS256'],
+			authorization_response_iss_parameter_supported: true,
 			client_id_metadata_document_supported: true,
 		})
 	})
@@ -84,6 +89,7 @@ describe('authorization code flow', () => {
 		const callback = locationOf(approved)
 		expect(callback.origin + callback.pathname).toBe(REDIRECT_URI)
 		expect(callback.searchParams.get('state')).toBe('opaque-state')
+		expect(callback.searchParams.get('iss')).toBe(ISSUER)
 		const code = callback.searchParams.get('code') ?? ''
 
 		const exchanged = await f.exchange(code)
@@ -126,6 +132,7 @@ describe('authorization code flow', () => {
 		const callback = locationOf(await f.decide('deny'))
 		expect(callback.searchParams.get('error')).toBe('access_denied')
 		expect(callback.searchParams.get('state')).toBe('opaque-state')
+		expect(callback.searchParams.get('iss')).toBe(ISSUER)
 		expect(callback.searchParams.get('code')).toBeNull()
 	})
 
@@ -179,6 +186,23 @@ describe('authorization request validation', () => {
 		expect(f.fetched).toHaveLength(1)
 	})
 
+	test("Claude's document, which lists a grant IAM does not serve, is accepted for the grants IAM serves", async () => {
+		// Claude's live document (fetched 2026-10-21) under the fixture's client id and redirect URI.
+		const f = await fixture({
+			document: (clientId) => ({
+				client_id: clientId,
+				client_name: 'Claude',
+				client_uri: 'https://claude.ai',
+				redirect_uris: [REDIRECT_URI],
+				grant_types: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:jwt-bearer'],
+				response_types: ['code'],
+				token_endpoint_auth_method: 'none',
+			}),
+		})
+		const first = await tokenBody(await f.exchange(await f.approve()))
+		expect((await f.refresh(first.refresh_token ?? '')).status).toBe(200)
+	})
+
 	test('a document without grant_types gets no refresh token', async () => {
 		const f = await fixture({
 			document: (clientId) => ({ client_id: clientId, redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none' }),
@@ -187,10 +211,40 @@ describe('authorization request validation', () => {
 		expect(body.refresh_token).toBeUndefined()
 	})
 
+	test('a document listing a grant this server does not offer is accepted with the grants it does', async () => {
+		const f = await fixture({
+			document: (clientId) => ({
+				client_id: clientId,
+				redirect_uris: [REDIRECT_URI],
+				grant_types: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:jwt-bearer'],
+				token_endpoint_auth_method: 'none',
+			}),
+		})
+		const body = await tokenBody(await f.exchange(await f.approve()))
+		expect(typeof body.refresh_token).toBe('string')
+	})
+
+	test('a document whose grants omit authorization_code is refused', async () => {
+		const f = await fixture({
+			document: (clientId) => ({
+				client_id: clientId,
+				redirect_uris: [REDIRECT_URI],
+				grant_types: ['refresh_token', 'urn:ietf:params:oauth:grant-type:jwt-bearer'],
+				token_endpoint_auth_method: 'none',
+			}),
+		})
+		const response = await f.authorize()
+		expect(response.status).toBe(400)
+	})
+
 	test('an unknown scope redirects with invalid_scope, an unknown resource with invalid_target', async () => {
 		const f = await fixture()
-		expect(locationOf(await f.authorize({ scope: 'everything' })).searchParams.get('error')).toBe('invalid_scope')
-		expect(locationOf(await f.authorize({ resource: 'https://other.example.test/mcp' })).searchParams.get('error')).toBe('invalid_target')
+		const scope = locationOf(await f.authorize({ scope: 'everything' }))
+		expect(scope.searchParams.get('error')).toBe('invalid_scope')
+		expect(scope.searchParams.get('iss')).toBe(ISSUER)
+		const target = locationOf(await f.authorize({ resource: 'https://other.example.test/mcp' }))
+		expect(target.searchParams.get('error')).toBe('invalid_target')
+		expect(target.searchParams.get('iss')).toBe(ISSUER)
 	})
 
 	test('a repeated parameter is a malformed request', async () => {
@@ -273,6 +327,25 @@ describe('token endpoint', () => {
 		const revoked = await f.post('/oauth/revoke', { client_id: f.clientId, token: first.refresh_token ?? '' })
 		expect(revoked.status).toBe(200)
 		expect((await f.refresh(first.refresh_token ?? '')).status).toBe(400)
+	})
+
+	test("a public client's revocation does not depend on fetching its metadata document", async () => {
+		const f = await fixture()
+		const first = await tokenBody(await f.exchange(await f.approve()))
+		// The cached document has expired, and its host is down.
+		setSystemTime(new Date(Date.now() + 10 * 60_000))
+		const down = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(
+			() => Promise.resolve(new Response('unavailable', { status: 503 })),
+			{ preconnect: globalThis.fetch.preconnect },
+		))
+		try {
+			expect((await f.post('/oauth/revoke', { client_id: f.clientId, token: first.refresh_token ?? '' })).status).toBe(200)
+		} finally {
+			down.mockRestore()
+			setSystemTime()
+		}
+		const refresh = await f.services.repositories.oauth.refreshToken(await hashToken(first.refresh_token ?? ''))
+		expect((await f.services.repositories.oauth.grant(refresh?.grant_id ?? ''))?.revoked_at).not.toBeNull()
 	})
 
 	test('revoking the access token revokes its grant', async () => {

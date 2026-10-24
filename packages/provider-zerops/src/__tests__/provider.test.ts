@@ -101,6 +101,8 @@ interface Overrides {
 	serviceEnv?: StoredServiceEnv[]
 	/** A write of this key fails, the way issue #3's oversized value answered 500. */
 	envWriteFailure?: string
+	/** Awaited by every variable write before it lands, so a test can hold writes in flight. */
+	envWriteGate?: (key: string) => Promise<void>
 	/** What `findService` answers per hostname; every service reads `subdomainAccess: false` by default. */
 	services?: Record<string, Partial<ZeropsService> | null>
 	/** The services the import reports, replacing the default one for `api`. */
@@ -165,7 +167,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 	const records = overrides.serviceEnv ?? []
 	let customMinRam = overrides.minRam === undefined ? ZEROPS_START_MIN_RAM_GB : overrides.minRam
 	let databaseMinRam = overrides.databaseMinRam ?? 1
-	const maxContainers = overrides.maxContainers === undefined ? 4 : overrides.maxContainers
+	let maxContainers = overrides.maxContainers === undefined ? 4 : overrides.maxContainers
 	const database = (): ZeropsService => ({
 		id: DATABASE_SERVICE_ID,
 		name: 'db',
@@ -240,6 +242,8 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		configureAutoscaling: () => Promise.reject(new Error('the deploy driver must not change a profile')),
 		getBackupConfig: () => Promise.reject(new Error('the deploy driver must not read a backup schedule')),
 		configureBackup: () => Promise.reject(new Error('the deploy driver must not change a backup schedule')),
+		startService: () => Promise.reject(new Error('the deploy driver never starts a service')),
+		stopService: () => Promise.reject(new Error('the deploy driver never stops a service')),
 		configureCustomAutoscaling: async ({ serviceId, autoscaling }) => {
 			if (serviceId === DATABASE_SERVICE_ID) {
 				recorded.calls.push('configureCustomAutoscaling:db')
@@ -250,7 +254,10 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 			recorded.calls.push('configureCustomAutoscaling')
 			if (overrides.autoscalingError !== undefined) throw overrides.autoscalingError
 			recorded.autoscaling.push(autoscaling)
-			if (overrides.autoscalingIgnored !== true) customMinRam = autoscaling.vertical.minResource.memoryGBytes
+			if (overrides.autoscalingIgnored !== true) {
+				customMinRam = autoscaling.vertical.minResource.memoryGBytes
+				maxContainers = autoscaling.horizontal.maxContainerCount
+			}
 			return { id: AUTOSCALING_PROCESS }
 		},
 		getService: async ({ serviceId }) =>
@@ -284,6 +291,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		putServiceEnv: async ({ key, value, sensitive }) => {
 			recorded.calls.push(`putServiceEnv:${key}`)
 			recorded.timeline.push(`put:${key}`)
+			await overrides.envWriteGate?.(key)
 			if (key === overrides.envWriteFailure) throw new ZeropsApiError('zerops: create service env failed (500)', 500, '')
 			recorded.envWrites.push({ key, value, sensitive })
 			const index = records.findIndex((record) => record.key === key)
@@ -595,6 +603,48 @@ describe('Zerops provider', () => {
 		expect(log).not.toContain('FABRIKA_RELEASE')
 		expect(log).not.toContain('private-')
 		expect(JSON.stringify([recorded.externalStates, recorded.checkpoints])).not.toContain('private-')
+	})
+
+	test('writes service variables a few at a time and lets every started write finish before the step ends', async () => {
+		const jobs = Object.fromEntries(Array.from({ length: 10 }, (_, index) => [`FABRIKA_JOB_J${index}_KEY`, `px_private-${index}`]))
+		let inFlight = 0
+		let most = 0
+		const gate = async (): Promise<void> => {
+			inFlight++
+			most = Math.max(most, inFlight)
+			await Bun.sleep(5)
+			inFlight--
+			recorded.timeline.push('written')
+		}
+		await execute(
+			{ ...deployRun(recorded), managedEnvironment: parseManagedEnvironment({ ...MANAGED_DEFAULTS, FABRIKA_RELEASE: RELEASE, ...jobs }) },
+			createZeropsDeployer(() => makeCollaborators(recorded, { envWriteGate: gate })),
+		)
+		expect(recorded.envWrites.map((write) => write.key)).toEqual(expect.arrayContaining(Object.keys(jobs)))
+		expect(most).toBeGreaterThan(1)
+		expect(most).toBeLessThanOrEqual(6)
+		const created = recorded.timeline.indexOf('create')
+		expect(recorded.timeline.lastIndexOf('written')).toBeLessThan(created)
+		const lines = recorded.logs.filter((line) => line.includes('_KEY: updated'))
+		expect(lines).toEqual(Object.keys(jobs).map((key) => `  ${key}: updated`))
+	})
+
+	test('a failed variable write starts no further write, waits for the ones in flight, and fails the step', async () => {
+		const jobs = Object.fromEntries(Array.from({ length: 10 }, (_, index) => [`FABRIKA_JOB_J${index}_KEY`, `px_private-${index}`]))
+		let inFlight = 0
+		const gate = async (): Promise<void> => {
+			inFlight++
+			await Bun.sleep(5)
+			inFlight--
+		}
+		const result = await createZeropsDeployer(() => makeCollaborators(recorded, { envWriteGate: gate, envWriteFailure: 'FABRIKA_JOB_J0_KEY' }))({
+			...deployRun(recorded),
+			managedEnvironment: parseManagedEnvironment({ ...MANAGED_DEFAULTS, FABRIKA_RELEASE: RELEASE, ...jobs }),
+		})
+		expect(stepError(result, 'write-service-env')).toContain('500')
+		expect(inFlight).toBe(0)
+		expect(recorded.calls.filter((call) => call.startsWith('putServiceEnv:FABRIKA_JOB_')).length).toBeLessThan(Object.keys(jobs).length)
+		expect(recorded.calls).not.toContain('createAppVersion:service-1')
 	})
 
 	test('writes each workload key as a service variable and removes the key of a workload that is gone', async () => {
@@ -1131,6 +1181,19 @@ describe("the deploy service's minimum RAM", () => {
 		expect((await deploy({ minRam: null }, deployRun(recorded, target(), true))).status).toBe('succeeded')
 		expect(recorded.calls).not.toContain('configureCustomAutoscaling')
 		expect(recorded.logs).toContain(`  [dry-run] would raise the minimum RAM of api to ${ZEROPS_START_MIN_RAM_GB} GB where it is lower`)
+	})
+
+	test('a dev deploy pins the service to one container before the version is reserved, and starts the launcher', async () => {
+		const devRun = (): ZeropsDeployRun => ({ ...deployRun(recorded), dev: { head: 'd'.repeat(40) } })
+		expect((await deploy({ minRam: ZEROPS_START_MIN_RAM_GB, maxContainers: 4 }, devRun())).status).toBe('succeeded')
+		expect(recorded.autoscaling.map((autoscaling) => autoscaling.horizontal)).toEqual([{ minContainerCount: 1, maxContainerCount: 1 }])
+		expect(recorded.calls.indexOf('configureCustomAutoscaling')).toBeLessThan(recorded.calls.indexOf('createAppVersion:service-1'))
+		expect(recorded.logs).toContain('  api pinned to one container')
+		expect(recorded.builds[0]?.zeropsYaml).toContain('dev.generated.json')
+		recorded = fresh()
+		expect((await deploy({ minRam: ZEROPS_START_MIN_RAM_GB, maxContainers: 1 }, devRun())).status).toBe('succeeded')
+		expect(recorded.calls).not.toContain('configureCustomAutoscaling')
+		expect(recorded.logs).toContain('  api runs on one container, unchanged')
 	})
 
 	test('the deploy stops before reserving a version when the RAM cannot be raised', async () => {

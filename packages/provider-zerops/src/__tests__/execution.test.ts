@@ -1,7 +1,10 @@
 import { canonicalArtifactJson, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import checkManifest from '../../../check/package.json'
 import { useSharedPostgres } from '../authoring'
@@ -24,6 +27,10 @@ import {
 } from '../manifest'
 import type { ZeropsAppConfig, ZeropsServiceSpec } from '../types'
 import { LOCKED_REPOSITORIES } from './fixtures/locked-repositories'
+
+/** The generated readiness attempt: it waits for a 2xx of the health endpoint for less than the 10 s retry period. */
+const READINESS_HEALTHZ =
+	`bun -e "const end = Date.now() + 9000; while (Date.now() < end) { try { if ((await fetch('http://127.0.0.1:3000/healthz', { signal: AbortSignal.timeout(2000) })).ok) process.exit(0) } catch {} await Bun.sleep(200) } process.exit(1)"`
 
 const SPA_DESCRIPTOR = 'zerops:\n  - setup: notesapi\n    build:\n      buildCommands: ["bun run build:spa"]\n'
 
@@ -93,12 +100,12 @@ describe('the generated execution descriptor of a contract application', () => {
 				buildCommands: [
 					'bun run build:spa',
 					'bun install --frozen-lockfile --ignore-scripts',
-					'bun test --isolate --pass-with-no-tests',
+					expect.stringMatching(/^bun -e ".*\[process\.execPath, 'test', '--isolate', '--pass-with-no-tests'\].*"$/),
 					'rm -rf node_modules && bun install --frozen-lockfile --ignore-scripts',
 					`bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"`,
-					`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check /build/source`,
 					expect.stringMatching(/^printf '%s\\n' '\{"compilerOptions":.*' > fabrika\/tsconfig\.platform\.json$/),
 					`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p /build/source/fabrika/tsconfig.platform.json`,
+					`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check /build/source`,
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db migrate' > fabrika/migrate.generated.sh",
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes ./node_modules/.bin/fabrika db codegen --verify' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db test-isolation' > fabrika/verify.generated.sh",
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'exec bun --max-http-header-size=65536 fabrika/entry.generated.ts' > fabrika/start.generated.sh",
@@ -106,7 +113,7 @@ describe('the generated execution descriptor of a contract application', () => {
 				deployFiles: ['./'],
 				cache: ['node_modules'],
 			},
-			deploy: { readinessCheck: { httpGet: { port: 3000, path: '/healthz' }, retryPeriod: '10s', failureTimeout: '180s' } },
+			deploy: { readinessCheck: { exec: { command: READINESS_HEALTHZ }, retryPeriod: '10s', failureTimeout: '180s' } },
 			run: {
 				base: 'alpine/bun@1.3',
 				prepareCommands: ['sudo apk add --no-cache ffmpeg vips'],
@@ -150,10 +157,17 @@ describe('the generated execution descriptor of a contract application', () => {
 		const commands = mapping(render(await compile(contractApp()))['build'])['buildCommands']
 		if (!Array.isArray(commands)) throw new Error('expected build commands')
 		const position = (needle: string): number => commands.findIndex((command) => String(command).includes(needle))
-		expect(position('bun test')).toBeLessThan(position('rm -rf node_modules'))
+		expect(position("'test', '--isolate'")).toBeLessThan(position('rm -rf node_modules'))
 		expect(position('rm -rf node_modules')).toBeLessThan(position('writeGeneratedEntry'))
-		expect(position('writeGeneratedEntry')).toBeLessThan(position('fabrika-check'))
-		expect(position('fabrika-check')).toBeLessThan(position(' tsc '))
+		expect(position('writeGeneratedEntry')).toBeLessThan(position(' tsc '))
+		expect(position(' tsc ')).toBeLessThan(position('fabrika-check'))
+	})
+
+	test("the type check reads the SPA under web/ beside the server's sources", async () => {
+		const commands = mapping(render(await compile(contractApp()))['build'])['buildCommands']
+		const tsconfig = Array.isArray(commands) ? String(commands.find((command) => String(command).endsWith('> fabrika/tsconfig.platform.json'))) : ''
+		expect(tsconfig).toContain('"jsx":"react-jsx"')
+		expect(tsconfig).toContain('"include":["../fabrika.contract.ts","../src","../web","entry.generated.ts"]')
 	})
 
 	test('an application without a database runs no migration', async () => {
@@ -350,5 +364,49 @@ describe('a contract application is refused at compile time', () => {
 		expect(() => zeropsArtifactCodec.decode(withTarget(encoded, { runtimePackages: ['curl'] }))).toThrow('invalid fabrika manifest runtime packages')
 		const withoutContract = compile({ id: 'legacy', target: { platform: 'zerops', services: () => [API], runtimePackages: ['vips'] } })
 		await expect(withoutContract).rejects.toThrow('contract application only')
+	})
+})
+
+describe("the build's tests command", () => {
+	const directories: string[] = []
+	afterEach(async () => {
+		await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
+	})
+
+	/** Runs the generated tests command in a directory holding `files`, as the build's shell runs it. */
+	const runTests = async (files: Readonly<Record<string, string>>): Promise<{ readonly code: number; readonly stderr: string }> => {
+		const directory = await mkdtemp(join(tmpdir(), 'fabrika-build-tests-'))
+		directories.push(directory)
+		for (const [name, text] of Object.entries(files)) await writeFile(join(directory, name), text)
+		const commands = mapping(render(await compile(contractApp()))['build'])['buildCommands']
+		const command = Array.isArray(commands) ? String(commands.find((entry) => String(entry).includes("'test', '--isolate'"))) : ''
+		const child = Bun.spawn(['sh', '-c', command], { cwd: directory, env: { PATH: process.env['PATH'] ?? '' }, stdout: 'ignore', stderr: 'pipe' })
+		const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited])
+		return { code, stderr }
+	}
+
+	const PASSING = "import { expect, test } from 'bun:test'\ntest('passes', () => expect(1).toBe(1))\n"
+	const skipping = (label: string): string =>
+		`console.warn('${label} skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests')\n${PASSING}`
+
+	test('says how many Postgres-backed test files did not run, and still passes', async () => {
+		const result = await runTests({ 'a.test.ts': skipping('a.test.ts'), 'b.test.ts': skipping('b.test.ts'), 'c.test.ts': PASSING })
+		expect(result.code).toBe(0)
+		expect(result.stderr).toContain('3 pass')
+		expect(result.stderr).toMatch(
+			/fabrika-tests: 2 Postgres-backed test files did not run, because the build has no database: (a\.test\.ts, b\.test\.ts|b\.test\.ts, a\.test\.ts)\n/,
+		)
+	})
+
+	test('says that none was skipped when every file ran', async () => {
+		const result = await runTests({ 'c.test.ts': PASSING })
+		expect(result.code).toBe(0)
+		expect(result.stderr).toContain('fabrika-tests: no Postgres-backed test file skipped')
+	})
+
+	test('fails the build when a test fails', async () => {
+		const result = await runTests({ 'd.test.ts': "import { expect, test } from 'bun:test'\ntest('fails', () => expect(1).toBe(2))\n" })
+		expect(result.code).not.toBe(0)
+		expect(result.stderr).toContain('1 fail')
 	})
 })

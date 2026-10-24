@@ -1,3 +1,4 @@
+import type { AppEnvKind } from '@fabrika/control-contract'
 import type { SqlDatabase } from '@fabrika/platform'
 import { type AppEnvRow, type AppRow } from './registry-types'
 import { firstRow } from './returning'
@@ -36,7 +37,7 @@ export class RepoPollingRepository {
 					a.created_at AS a_created_at,
 						e.app_id AS e_app_id, e.env AS e_env, e.domain AS e_domain, e.public_origin AS e_public_origin,
 						e.cross_origins_json AS e_cross_origins_json, e.trigger_ref AS e_trigger_ref,
-						e.authoring AS e_authoring,
+						e.authoring AS e_authoring, e.kind AS e_kind,
 						e.published_run_id AS e_published_run_id, e.generation AS e_generation, e.protected AS e_protected,
 						e.protection_revision AS e_protection_revision, e.published_snapshot_json AS e_published_snapshot_json,
 						e.namespace_id AS e_namespace_id,
@@ -68,6 +69,7 @@ export class RepoPollingRepository {
 				cross_origins_json: r.e_cross_origins_json,
 				trigger_ref: r.e_trigger_ref,
 				authoring: r.e_authoring,
+				kind: r.e_kind,
 				published_run_id: r.e_published_run_id,
 				generation: r.e_generation,
 				protected: r.e_protected,
@@ -135,6 +137,7 @@ interface PollEligibleJoinRow {
 	e_cross_origins_json: string
 	e_trigger_ref: string | null
 	e_authoring: number
+	e_kind: AppEnvKind
 	e_published_run_id: string | null
 	e_generation: number
 	e_protected: number

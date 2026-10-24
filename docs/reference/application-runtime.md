@@ -1755,7 +1755,9 @@ database with `@fabrika/db/testing`'s `testDatabase`: a fresh schema `app_test_<
 that the real migration runner fills with the framework's tables and then `db/migrations/`, as
 `fabrika db migrate` does. Without
 `FABRIKA_TEST_POSTGRES_URL` it prints the standard skip message and the file registers no
-test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
+test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure. The Zerops build has no
+database: it counts those skip lines and reports `fabrika-tests: N Postgres-backed test files did
+not run`. Of them only the generated isolation tests run again, at container start.
 
 - **Throwaway schemas.** A schema is held by a session-level advisory lock derived from its
   name, taken before it exists and kept for its whole life. Every test database first drops

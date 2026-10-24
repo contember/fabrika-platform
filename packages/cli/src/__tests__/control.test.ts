@@ -445,6 +445,18 @@ describe('control apps environments', () => {
 		).rejects.toThrow('An empty --cross-origin= clears the list and takes no other --cross-origin')
 	})
 
+	test('--kind names the kind of a new environment, and nothing else', async () => {
+		const manifest = `${import.meta.dir}/fixtures/manifest.json`
+		const captured = captureFetch({ result: { appId: 'notes', env: 'dev', provider: 'zerops' } })
+		await captureStdout(() =>
+			runControlCli('apps', ['environments', 'put', '--app=notes', '--env=dev', `--manifest=${manifest}`, '--kind=dev'], 'zerops', CONTROL_ENV)
+		)
+		expect(captured.calls[0]?.body).toMatchObject({ input: { env: 'dev', environment: { kind: 'dev' } } })
+		await expect(
+			runControlCli('apps', ['environments', 'put', '--app=notes', '--env=dev', `--manifest=${manifest}`, '--kind=preview'], 'zerops', CONTROL_ENV),
+		).rejects.toThrow('--kind must be one of standard, dev')
+	})
+
 	test('list prints the cross origins of each environment, comma-joined, and - for none', () => {
 		const base = { appId: 'notes', env: 'prod', provider: 'zerops', domain: 'notes.example.com' }
 		expect(environmentLine({ ...base, crossOrigins: ['https://a.example', 'https://b.example'] })).toBe(
@@ -809,6 +821,15 @@ describe('control namespaces', () => {
 		expect(out).toBe('notes-prod\tprod\tfailed\t-')
 		// Only the facts the provider marked as live resources; the policy facts are not anyone's cleanup.
 		expect(err).toBe('retained\tProject\tnotes-prod (project-1)')
+	})
+
+	test('release-claims names the owner and prints each released key', async () => {
+		const captured = captureFetch({ result: { released: ['service:notesapi', 'service:notesfiles'] } })
+		const out = await captureStdout(() =>
+			runControlCli('namespaces', ['release-claims', '--namespace=dev', '--app=notes', '--env=dev'], undefined, CONTROL_ENV)
+		)
+		expect(captured.calls[0]?.body).toEqual({ method: 'namespaces.releaseClaims', input: { namespaceId: 'dev', appId: 'notes', env: 'dev' } })
+		expect(out).toBe('released\tservice:notesapi\nreleased\tservice:notesfiles')
 	})
 
 	test('carries an exclusive app through both calls for the full preset', async () => {

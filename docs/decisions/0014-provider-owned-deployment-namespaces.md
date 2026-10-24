@@ -74,8 +74,14 @@ not a closed enum in the provider-neutral contract:
 The namespace owns its proxy and every shared infrastructure service. App
 manifests may reference namespace-owned services but may not declare, mutate, or
 delete them. Each app environment owns claims for its provider resources.
-Claims survive removal from a later manifest; releasing or deleting a resource
-requires an explicit operation. Shared namespaces require deterministic app
+Claims survive removal from a later manifest and the deletion of their owner.
+Releasing one is an explicit operator operation that the provider must verify:
+Control releases an app environment's claims only when the provider's read-only
+`claimedResources` check confirms every claimed resource gone, because a freed
+name over a live service would let the next application adopt it with its old
+secrets. Deleting the resources stays with the operator
+([ADR-0034](0034-the-control-plane-creates-the-projects-it-owns.md)); the
+procedure is in `docs/reference/deployment-namespaces.md`. Shared namespaces require deterministic app
 prefixes so ownership can be validated before any provider mutation.
 
 **Invariant:** a Zerops namespace owns exactly one project and exactly one

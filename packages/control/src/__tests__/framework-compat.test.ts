@@ -8,19 +8,23 @@ import { schemaFromContract as schemaFromContract04 } from '@fabrika/app-0.4/con
 import { schemaFromContract as schemaFromContract05 } from '@fabrika/app-0.5/contract'
 import { schemaFromContract as schemaFromContract06 } from '@fabrika/app-0.6/contract'
 import { schemaFromContract as schemaFromContract07 } from '@fabrika/app-0.7/contract'
+import { schemaFromContract as schemaFromContract08 } from '@fabrika/app-0.8/contract'
 import { CONTRACT_FORMAT } from '@fabrika/auth-core'
 import { contractDigest as contractDigest04 } from '@fabrika/auth-core-0.4'
 import { contractDigest as contractDigest05 } from '@fabrika/auth-core-0.5'
 import { contractDigest as contractDigest06 } from '@fabrika/auth-core-0.6'
 import { contractDigest as contractDigest07 } from '@fabrika/auth-core-0.7'
+import { contractDigest as contractDigest08 } from '@fabrika/auth-core-0.8'
 import { readContractSource as readContractSource04 } from '@fabrika/check-0.4/contract'
 import { readContractSource as readContractSource05 } from '@fabrika/check-0.5/contract'
 import { readContractSource as readContractSource06 } from '@fabrika/check-0.6/contract'
 import { readContractSource as readContractSource07 } from '@fabrika/check-0.7/contract'
+import { readContractSource as readContractSource08 } from '@fabrika/check-0.8/contract'
 import { contractProxyTable as contractProxyTable04 } from '@fabrika/proxy-core-0.4/manifest'
 import { contractProxyTable as contractProxyTable05 } from '@fabrika/proxy-core-0.5/manifest'
 import { contractProxyTable as contractProxyTable06 } from '@fabrika/proxy-core-0.6/manifest'
 import { contractProxyTable as contractProxyTable07 } from '@fabrika/proxy-core-0.7/manifest'
+import { contractProxyTable as contractProxyTable08 } from '@fabrika/proxy-core-0.8/manifest'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
@@ -69,6 +73,11 @@ const view07 = (files: ReadonlyMap<string, string>): ReleaseView => {
 	return { artifact, contractDigest: contractDigest07(artifact), proxyTable: contractProxyTable07(artifact), schema: schemaFromContract07(artifact) }
 }
 
+const view08 = (files: ReadonlyMap<string, string>): ReleaseView => {
+	const artifact = readContractSource08(files)
+	return { artifact, contractDigest: contractDigest08(artifact), proxyTable: contractProxyTable08(artifact), schema: schemaFromContract08(artifact) }
+}
+
 interface Case {
 	readonly name: string
 	readonly fixture: string
@@ -81,7 +90,7 @@ interface Case {
 	readonly startupDigest: string
 	readonly view: (files: ReadonlyMap<string, string>) => ReleaseView
 	/**
-	 * `current`: its artifact is this release's format (0.7's, which 0.8 only extended), kept and read as it is, and its
+	 * `current`: its artifact is this release's format (0.7's, which 0.8 only extended and 0.9 kept), kept and read as it is, and its
 	 * platform recorded the framework release beside the checker. `older`: it carries no format and is upcast.
 	 */
 	readonly format: 'older' | 'current'
@@ -146,6 +155,16 @@ const CASES: readonly Case[] = [
 		checker: '0.7.0',
 		startupDigest: 'sha256:60cc6dd14474d3bb2c38af5861660add9316939b0a8eb5e54d05a3a93a856639',
 		view: view07,
+		format: 'current',
+	},
+	{
+		name: "the CRM at v0.8.1, whose artifact is this release's format",
+		fixture: 'crm-0.8.1.json',
+		app: 'crm',
+		framework: '0.8.1',
+		checker: '0.8.1',
+		startupDigest: 'sha256:60cc6dd14474d3bb2c38af5861660add9316939b0a8eb5e54d05a3a93a856639',
+		view: view08,
 		format: 'current',
 	},
 ]

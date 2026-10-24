@@ -3,10 +3,12 @@
 
 import { readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
+import type { DeployQueue } from '../api/runs'
 import { controlMcpRoute } from '../bun/mcp'
 import { createFetchHandler } from '../bun/server'
+import { DevSignals } from '../dev/signals'
 import type { Env } from '../env'
 import { createHarness, type Harness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
@@ -24,7 +26,10 @@ afterEach(() => {
 	harness = null
 })
 
-async function fixture(): Promise<{ world: WorkspaceWorld; fetch: (request: Request) => Promise<Response> }> {
+async function fixture(
+	queue?: DeployQueue,
+	options: { dev?: boolean } = {},
+): Promise<{ world: WorkspaceWorld; fetch: (request: Request) => Promise<Response> }> {
 	harness = createHarness()
 	const world = await seedWorkspaceWorld(harness.repositories, harness.d1)
 	// The world's queue and log reader stand in for the process ports.
@@ -39,10 +44,11 @@ async function fixture(): Promise<{ world: WorkspaceWorld; fetch: (request: Requ
 			put: () => Promise.reject(new Error('unused')),
 			delete: () => Promise.reject(new Error('unused')),
 		},
-		DEPLOY_QUEUE: context.queue,
+		DEPLOY_QUEUE: queue ?? context.queue,
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'stage',
 		FABRIKA_CONTROL_DOMAIN: ORIGIN,
+		...(options.dev === true ? { DEV_SOURCE: { source: world.source, signals: new DevSignals() } } : {}),
 	}
 	const mcp = controlMcpRoute(env, world.source, zeropsProvider)
 	const served = createFetchHandler(env, zeropsProvider, unusedSourceConnection('zerops'), mcp)
@@ -111,7 +117,7 @@ describe('the MCP endpoint', () => {
 		const skill = readAppAgentSkill()
 		const listed = field(field(await rpc(fetch, token, 'tools/list', {}), 'result'), 'tools')
 		const tool = Array.isArray(listed) ? listed.find((entry) => field(entry, 'name') === 'get_app_rules') : undefined
-		expect(field(tool, 'annotations')).toEqual({ readOnlyHint: true })
+		expect(field(tool, 'annotations')).toEqual({ readOnlyHint: true, openWorldHint: false })
 		const properties = field(field(tool, 'inputSchema'), 'properties')
 		expect(typeof properties === 'object' && properties !== null ? Object.keys(properties).sort() : []).toEqual(['topic', 'workspaceId'])
 
@@ -147,6 +153,41 @@ describe('the MCP endpoint', () => {
 		expect(await rulesFor('^99.0.0')).toContain(`Warning: this workspace pins @fabrika/app ^99.0.0, and these rules describe ${version}.`)
 	})
 
+	test('every tool tells the client whether it only reads, and how a write behaves', async () => {
+		const { fetch } = await fixture()
+		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const tools = field(field(await rpc(fetch, token, 'tools/list', {}), 'result'), 'tools')
+		if (!Array.isArray(tools)) throw new Error('expected a tool list')
+		const annotations = Object.fromEntries(tools.map((tool) => [String(field(tool, 'name')), field(tool, 'annotations')]))
+		const read = { readOnlyHint: true, openWorldHint: false }
+		const write = (destructiveHint: boolean, idempotentHint: boolean) => ({
+			readOnlyHint: false,
+			destructiveHint,
+			idempotentHint,
+			openWorldHint: false,
+		})
+		expect(annotations).toEqual({
+			get_app_rules: read,
+			list_targets: read,
+			create_workspace: write(false, false),
+			list_workspaces: read,
+			get_workspace: read,
+			get_workspace_diff: read,
+			list_files: read,
+			read_files: read,
+			search_files: read,
+			apply_changes: write(true, true),
+			deploy_stage: write(true, false),
+			get_deployment: read,
+			bind_dev: write(true, false),
+			get_dev_status: read,
+			run_checks: write(false, false),
+			reset_dev: write(true, false),
+			create_pull_request: write(false, true),
+			delete_workspace: write(true, true),
+		})
+	})
+
 	test('a resource token lists the tools and calls a read and a write tool', async () => {
 		const { fetch, world } = await fixture()
 		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
@@ -154,27 +195,69 @@ describe('the MCP endpoint', () => {
 		const listed = await rpc(fetch, token, 'tools/list', {})
 		expect(toolNames(listed)).toEqual([
 			'apply_changes',
+			'bind_dev',
 			'create_pull_request',
 			'create_workspace',
+			'delete_workspace',
 			'deploy_stage',
 			'get_app_rules',
 			'get_deployment',
+			'get_dev_status',
 			'get_workspace',
+			'get_workspace_diff',
 			'list_files',
 			'list_targets',
 			'list_workspaces',
 			'read_files',
+			'reset_dev',
+			'run_checks',
+			'search_files',
 		])
 
 		const targets = await rpc(fetch, token, 'tools/call', { name: 'list_targets', arguments: {} })
 		expect(toolJson(targets)).toEqual({
-			items: [{ appId: 'shop', env: 'stage', repository: 'acme/shop', defaultBranch: 'main', publicOrigin: 'https://shop-stage.example.com' }],
+			items: [{
+				appId: 'shop',
+				env: 'stage',
+				kind: 'standard',
+				repository: 'acme/shop',
+				defaultBranch: 'main',
+				publicOrigin: 'https://shop-stage.example.com',
+				deployed: null,
+				dev: null,
+			}],
 		})
 
 		const created = await rpc(fetch, token, 'tools/call', { name: 'create_workspace', arguments: { appId: 'shop', env: 'stage', title: 'Banner' } })
 		const workspace = toolJson(created)
 		expect(workspace).toMatchObject({ appId: 'shop', env: 'stage', headSha: sha('a') })
 		expect(world.source.kinds()).toEqual(['read-branch', 'create-branch'])
+
+		world.source.contents.set('src/app.ts', 'title = "Old"')
+		const edited = await rpc(fetch, token, 'tools/call', {
+			name: 'apply_changes',
+			arguments: {
+				workspaceId: field(workspace, 'id'),
+				expectedHeadSha: sha('a'),
+				message: 'Retitle',
+				changes: [{ path: 'src/app.ts', oldString: '"Old"', newString: '"New"' }],
+			},
+		})
+		expect(toolJson(edited)).toEqual({ commitSha: sha('1') })
+		expect(world.source.calls.at(-1)).toMatchObject({ kind: 'commit', commit: { changes: [{ path: 'src/app.ts', content: 'title = "New"' }] } })
+
+		const deployed = toolJson(await rpc(fetch, token, 'tools/call', { name: 'deploy_stage', arguments: { workspaceId: field(workspace, 'id') } }))
+		expect(field(deployed, 'runId')).toBe(field(deployed, 'id'))
+		const deployment = toolJson(await rpc(fetch, token, 'tools/call', { name: 'get_deployment', arguments: { runId: field(deployed, 'runId') } }))
+		expect(deployment).toMatchObject({ finished: false, summary: 'Queued and not started yet; poll again.', log: { lines: [], total: 0 } })
+
+		const searched = await rpc(fetch, token, 'tools/call', { name: 'search_files', arguments: { workspaceId: field(workspace, 'id'), text: 'Old' } })
+		expect(toolJson(searched)).toEqual({
+			commitSha: sha('1'),
+			paths: [],
+			matches: [{ path: 'src/app.ts', line: 1, text: 'title = "Old"' }],
+			incomplete: [],
+		})
 	})
 
 	test('a refused tool call is a tool error with a short message, and invalid input never reaches Source', async () => {
@@ -196,6 +279,13 @@ describe('the MCP endpoint', () => {
 		})
 		const pinned = await rpc(fetch, token, 'tools/call', { name: 'deploy_stage', arguments: { workspaceId, commitSha: sha('b') } })
 		expect(JSON.stringify(pinned)).toContain('"isError":true')
+		for (const change of [{ path: 'a.ts', oldString: '', newString: 'x' }, { path: 'a.ts', oldString: 'x', content: 'y' }]) {
+			const malformed = await rpc(fetch, token, 'tools/call', {
+				name: 'apply_changes',
+				arguments: { workspaceId, expectedHeadSha: sha('a'), message: 'm', changes: [change] },
+			})
+			expect(JSON.stringify(malformed)).toContain('"isError":true')
+		}
 		const oversized = await rpc(fetch, token, 'tools/call', {
 			name: 'apply_changes',
 			arguments: { workspaceId, expectedHeadSha: sha('a'), message: 'm', changes: [{ path: 'big.txt', content: 'é'.repeat(256 * 1024 + 1) }] },
@@ -203,6 +293,65 @@ describe('the MCP endpoint', () => {
 		expect(JSON.stringify(oversized)).toContain('"isError":true')
 		expect(world.source.kinds()).toEqual(['read-branch', 'create-branch'])
 		expect(world.queued).toEqual([])
+	})
+
+	test('an unclassified failure names no upstream detail but a reference, and a queue failure names the queue', async () => {
+		const { fetch, world } = await fixture({ send: () => Promise.reject(new Error('queue down')) })
+		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const errorLog = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const workspace = toolJson(
+				await rpc(fetch, token, 'tools/call', { name: 'create_workspace', arguments: { appId: 'shop', env: 'stage', title: 'Failing' } }),
+			)
+			world.source.failure = new Error('https://x-access-token:ghs_secret@github.com/acme/shop')
+			const failed = JSON.stringify(
+				await rpc(fetch, token, 'tools/call', { name: 'get_workspace', arguments: { workspaceId: field(workspace, 'id') } }),
+			)
+			expect(failed).toContain('"isError":true')
+			expect(failed).toMatch(
+				/your input did not cause it\. Retry in a minute\. If it keeps failing, tell the operator and quote reference [0-9a-f-]{36}\./,
+			)
+			expect(failed).not.toContain('ghs_')
+			const deploy = JSON.stringify(
+				await rpc(fetch, token, 'tools/call', { name: 'deploy_stage', arguments: { workspaceId: field(workspace, 'id') } }),
+			)
+			expect(deploy).toContain('Control created the run but could not queue it: the deploy queue is unavailable.')
+			expect(JSON.stringify(errorLog.mock.calls)).not.toContain('ghs_')
+		} finally {
+			errorLog.mockRestore()
+		}
+	})
+
+	test('apply_changes answers a persisted commit even when following the dev environment fails', async () => {
+		const { fetch, world } = await fixture(undefined, { dev: true })
+		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const errorLog = spyOn(console, 'error').mockImplementation(() => {})
+		const failing = spyOn(world.repositories.devEnvironments, 'getByWorkspace').mockRejectedValue(new Error('cached plan must not change result type'))
+		try {
+			const workspace = toolJson(
+				await rpc(fetch, token, 'tools/call', { name: 'create_workspace', arguments: { appId: 'shop', env: 'stage', title: 'Banner' } }),
+			)
+			const applied = toolJson(
+				await rpc(fetch, token, 'tools/call', {
+					name: 'apply_changes',
+					arguments: {
+						workspaceId: field(workspace, 'id'),
+						expectedHeadSha: sha('a'),
+						message: 'm',
+						changes: [{ path: 'src/a.ts', content: 'export {}' }],
+					},
+				}),
+			)
+			expect(field(applied, 'commitSha')).toBe(sha('1'))
+			const dev = field(applied, 'dev')
+			expect(field(dev, 'state')).toBe('unavailable')
+			expect(String(field(dev, 'summary'))).toContain(`quote reference ${String(field(dev, 'reference'))}`)
+			expect(JSON.stringify(errorLog.mock.calls)).toContain(`reference ${String(field(dev, 'reference'))}`)
+			expect(JSON.stringify(errorLog.mock.calls)).not.toContain('cached plan')
+		} finally {
+			failing.mockRestore()
+			errorLog.mockRestore()
+		}
 	})
 
 	test('an OAuth resource token is refused on the console RPC surface', async () => {
