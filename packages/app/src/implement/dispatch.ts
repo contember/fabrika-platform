@@ -41,6 +41,7 @@ import type { DataAccess, FileBinding, FrameworkTables } from '@fabrika/db/frame
 import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { applyAnswerCache, withResponseHeaders } from '@fabrika/proxy-core/headers'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
 import { fileFieldsOf } from '../contract/build'
@@ -121,6 +122,63 @@ import {
 	webhookSubject,
 } from './webhook'
 import type { WorkloadCredential } from './workload'
+
+/** The classes of invocation an object's maintenance barrier admits per mode, counts and drains (ADR-0069 §3). */
+export type InvocationKind = 'read' | 'write' | 'webhook' | 'kick' | 'job' | 'framework-job'
+
+/** One admitted invocation, counted until it settles. */
+export interface InvocationAdmission {
+	/** Aborts when a drain stops the invocation. */
+	readonly signal: AbortSignal
+	/** Counts `work` the invocation handed on until it settles, past the invocation's own end. */
+	track(work: Promise<unknown>): void
+	/** Ends the invocation's own count; called once it settled. */
+	release(): void
+}
+
+/** What a Cloudflare object's barrier puts around each of its events; `null` refuses an invocation. */
+export interface InvocationGate {
+	admit(kind: InvocationKind): InvocationAdmission | null
+}
+
+const invocationGate = new AsyncLocalStorage<InvocationGate>()
+
+const UNGATED: InvocationAdmission = Object.freeze({ signal: new AbortController().signal, track: () => {}, release: () => {} })
+
+/** Runs `work` with `gate` admitting every invocation it starts, the background work it hands on included. */
+export function runGated<T>(gate: InvocationGate, work: () => T): T {
+	return invocationGate.run(gate, work)
+}
+
+/** Admits an invocation of `kind` at the current event's gate; outside an object every invocation is admitted, uncounted. */
+export function admitInvocation(kind: InvocationKind): InvocationAdmission | null {
+	const gate = invocationGate.getStore()
+	return gate === undefined ? UNGATED : gate.admit(kind)
+}
+
+/** How long a refused caller waits before it tries again, in seconds. */
+const MAINTENANCE_RETRY_AFTER_S = 30
+
+/** The answer while maintenance refuses an invocation: 503 with `Retry-After`, the fixed body of every 503. */
+export function maintenanceRefusal(): Response {
+	const response = serverError(503)
+	response.headers.set('Retry-After', String(MAINTENANCE_RETRY_AFTER_S))
+	return response
+}
+
+/** The class an endpoint's invocation counts in: a writing endpoint, a webhook, or one that only reads. */
+function invocationKind(served: ServedEndpoint): InvocationKind {
+	switch (served.kind) {
+		case 'webhook':
+			return 'webhook'
+		case 'procedure':
+			return served.site?.kind === 'mutation' && served.readOnly !== true ? 'write' : 'read'
+		case 'public':
+			return served.site.kind === 'mutation' ? 'write' : 'read'
+		default:
+			return 'read'
+	}
+}
 
 /** SHA-256 of a proxy secret: 32 bytes whatever the secret's length, as `timingSafeEqual` needs. */
 export function proxySecretDigest(secret: string): Uint8Array {
@@ -358,34 +416,15 @@ export class ContractRuntime {
 			}
 			where = served.row.id
 			this.#checkEndpoint(served, request)
-			switch (served.kind) {
-				case 'health':
-					return jsonResponse({ status: 'ok' }, 200)
-				case 'spa': {
-					const caller = await this.#authorize(served.row, request)
-					return await this.#spaFile(served, request, caller)
-				}
-				case 'public-spa':
-					return await this.#spaFile(served, request, null)
-				case 'spa-prefix':
-					return new Response(null, { status: 308, headers: { Location: `${served.prefix}/${new URL(request.url).search}` } })
-				case 'link-spa':
-					if (rawRequestTarget(request.url).pathname === bootstrapPath(served.prefix)) {
-						return bootstrapResponse()
-					}
-					return await withBootstrap(await this.#asset(served, request), served.prefix)
-				case 'procedure':
-					return await this.#procedure(served, request, exec)
-				case 'public':
-					return await this.#public(served, request, exec)
-				case 'challenge':
-					return await this.#issueChallenge(served, request)
-				case 'webhook':
-					return await this.#webhook(served, request, plan.params, exec)
-				case 'description':
-					await this.#authorize(served.row, request)
-					await readInput({ row: served.row, input: null }, request)
-					return jsonResponse({ result: served.description }, 200)
+			// Counted from here, while it authorizes and uploads too, until it settled.
+			const admission = admitInvocation(invocationKind(served))
+			if (admission === null) {
+				return maintenanceRefusal()
+			}
+			try {
+				return await this.#served(served, request, plan, exec)
+			} finally {
+				admission.release()
 			}
 		} catch (error) {
 			const response = errorResponse(error, where)
@@ -395,6 +434,43 @@ export class ContractRuntime {
 				exec?.waitUntil(delivery)
 			}
 			return response
+		}
+	}
+
+	async #served(
+		served: ServedEndpoint,
+		request: Request,
+		plan: Extract<EndpointPlan, { outcome: 'endpoint' }>,
+		exec: RequestExecutionContext | undefined,
+	): Promise<Response | FileDownload> {
+		switch (served.kind) {
+			case 'health':
+				return jsonResponse({ status: 'ok' }, 200)
+			case 'spa': {
+				const caller = await this.#authorize(served.row, request)
+				return await this.#spaFile(served, request, caller)
+			}
+			case 'public-spa':
+				return await this.#spaFile(served, request, null)
+			case 'spa-prefix':
+				return new Response(null, { status: 308, headers: { Location: `${served.prefix}/${new URL(request.url).search}` } })
+			case 'link-spa':
+				if (rawRequestTarget(request.url).pathname === bootstrapPath(served.prefix)) {
+					return bootstrapResponse()
+				}
+				return await withBootstrap(await this.#asset(served, request), served.prefix)
+			case 'procedure':
+				return await this.#procedure(served, request, exec)
+			case 'public':
+				return await this.#public(served, request, exec)
+			case 'challenge':
+				return await this.#issueChallenge(served, request)
+			case 'webhook':
+				return await this.#webhook(served, request, plan.params, exec)
+			case 'description':
+				await this.#authorize(served.row, request)
+				await readInput({ row: served.row, input: null }, request)
+				return jsonResponse({ result: served.description }, 200)
 		}
 	}
 

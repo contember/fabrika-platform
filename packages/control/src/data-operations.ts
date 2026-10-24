@@ -46,10 +46,14 @@ export interface OpsTarget {
 
 /**
  * Why the object gave no answer to act on: the environment has no channel (no domain), a 404 other than the uniform
- * refusal came back, the object could not be reached, answered 5xx or refused every key Control holds, or its answer did
- * not parse. Only `unreachable` is worth repeating at once.
+ * refusal came back, the object could not be reached, answered 5xx or refused every key Control holds, its answer did
+ * not parse, or its release does not serve the operation (`not_served`, its 501). Only `unreachable` is worth repeating
+ * at once.
  */
-export type OpsUnavailable = 'no_channel' | 'channel_refused' | 'unreachable' | 'invalid_answer'
+export type OpsUnavailable = 'no_channel' | 'channel_refused' | 'unreachable' | 'invalid_answer' | 'not_served'
+
+/** The error code of an operation the object's release does not serve: it changed nothing, so it never settles a mode. */
+export const NOT_SERVED_CODE = 'not_served'
 
 /** The view `inspect` returned, in the form its request asked for. */
 export type OpsInspection = { readonly content: false; readonly view: OpsView } | { readonly content: true; readonly view: OpsContentView }
@@ -182,13 +186,26 @@ export async function advanceDataOperation(deps: DataOperationDeps, operationId:
 
 /**
  * The mode Control's record leaves the environment in: `open` with no operation, the newest operation's target once it
- * succeeded, and `unsettled` while it runs or after it failed, when the object may hold any mode it was sent.
+ * succeeded, and `unsettled` while it runs or after it failed, when the object may hold any mode it was sent. An
+ * operation the object's release did not serve changed nothing, so the one before it decides.
  */
 export async function recordedMaintenance(deps: Pick<DataOperationDeps, 'repositories'>, target: OpsTarget): Promise<OpsMode | 'unsettled'> {
-	const latest = await latestOperation(deps, target)
-	if (latest === null) return 'open'
-	return latest.state === 'succeeded' ? latest.target_mode : 'unsettled'
+	let before: string | undefined
+	for (;;) {
+		const page = await deps.repositories.dataOperations.listForEnvironment(target.appId, target.env, {
+			...(before === undefined ? {} : { before }),
+			limit: RECORDED_PAGE,
+		})
+		const deciding = page.find((operation) => !(operation.state === 'failed' && operation.error_code === NOT_SERVED_CODE))
+		if (deciding !== undefined) return deciding.state === 'succeeded' ? deciding.target_mode : 'unsettled'
+		const last = page.at(-1)
+		if (last === undefined || page.length < RECORDED_PAGE) return 'open'
+		before = last.id
+	}
 }
+
+/** How many operations `recordedMaintenance` reads at once while it looks past the ones that changed nothing. */
+const RECORDED_PAGE = 20
 
 export async function listDataOperations(
 	deps: Pick<DataOperationDeps, 'repositories'>,
@@ -400,6 +417,11 @@ class OperationDriver {
 				row = await this.advance(row, { step: row.step, generation: await this.allocate() })
 				continue
 			}
+			if (answer.reason === 'not_served') {
+				// The release never applied the transition: a running record would refuse every deploy.
+				await this.fail(row, NOT_SERVED_CODE)
+				return { kind: 'failed' }
+			}
 			if (answer.reason !== 'unreachable') return { kind: 'interrupted' }
 			attempts++
 		}
@@ -495,6 +517,7 @@ export function httpOpsTransport(deps: HttpOpsTransportDeps): OpsTransport {
 			})
 			const text = await response.text()
 			if (response.status === OPS_REFUSAL_STATUS) return text === '' ? 'refused' : 'channel_refused'
+			if (response.status === NOT_IMPLEMENTED_STATUS && notImplemented(text)) return 'not_served'
 			if (response.status >= 500) return 'unreachable'
 			if (response.status !== 200 && response.status !== OPS_STALE_STATUS) return 'invalid_answer'
 			try {
@@ -538,6 +561,18 @@ export function httpOpsTransport(deps: HttpOpsTransportDeps): OpsTransport {
 		},
 		state: (target, request, signal) => fenced(target, 'state', request, signal, parseOpsStateAck),
 		migrate: (target, request, signal) => fenced(target, 'migrate', request, signal, parseOpsMigrateAck),
+	}
+}
+
+/** The status of a release's object that serves the channel but not the operation: `{ refused: 'not_implemented' }`. */
+const NOT_IMPLEMENTED_STATUS = 501
+
+function notImplemented(text: string): boolean {
+	try {
+		const body: unknown = JSON.parse(text)
+		return typeof body === 'object' && body !== null && Object.keys(body).length === 1 && Reflect.get(body, 'refused') === 'not_implemented'
+	} catch {
+		return false
 	}
 }
 

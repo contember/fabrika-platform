@@ -396,8 +396,9 @@ other environment, before the provider prepares anything, and the write maps a r
   deploy of such an environment is `executeDeployUnderLease`, which runs under the operation's live lease and never
   releases it. `data.read` and `data.manage` are checked at the coordinates, `data.content.read` as a global grant only,
   and every denial is the 404 of an absent environment; `data.view` refuses an answer that carries content.
-  `data.start` and `data.recover` answer 501 while no release's object serves `state`: an operation no object
-  acknowledges would stay running, and a running record refuses every deploy.
+  An object whose release does not serve `state` or `migrate` answers 501 `{refused:'not_implemented'}`; the operation
+  fails `not_served` at once instead of staying running, `recordedMaintenance` skips it, and deploys stay open. A backup
+  still answers 501.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.

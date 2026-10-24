@@ -11,16 +11,20 @@ import {
 	formatEndpointHeader,
 	OPS_METHOD,
 	OPS_ROW_COUNT_CAP,
+	OPS_STALE_STATUS,
 	type OpsBootFailureContent,
 	type OpsContentView,
 	opsKeyDigest,
 	type OpsOperation,
+	type OpsPublishedState,
 	opsRefusal,
+	type OpsStaleRefusal,
 	type OpsView,
 	parseApplicationObjects,
 	parseOpsContentView,
 	parseOpsInspectRequest,
 	parseOpsKeyDigests,
+	parseOpsMigrateAck,
 	parseOpsMigrateRequest,
 	parseOpsOperation,
 	parseOpsStateRequest,
@@ -32,6 +36,7 @@ import { opsProxyRow } from '@fabrika/proxy-core/manifest'
 import { timingSafeEqual } from 'node:crypto'
 import appPackage from '../../package.json' with { type: 'json' }
 import { jsonResponse } from '../errors.js'
+import type { MaintenanceBarrier, TransitionResult } from './maintenance.js'
 
 /** What the view reads of the object's storage; workerd's `DurableObjectStorage` has both optional members. */
 export interface OpsStorage {
@@ -88,11 +93,16 @@ export interface OpsTarget {
 	 * waits for a boot under way and never starts one.
 	 */
 	bootFailure(): Promise<OpsBootFailureContent | null>
+	/** The barrier of the object named `object`, read from R2 on a cold start; rejects while R2 cannot be read. */
+	maintenance(object: string): Promise<MaintenanceBarrier>
+	/** Runs the pending migrations and boots the application; `false` when the boot failed. */
+	migrate(): Promise<boolean>
 }
 
 /**
  * Answers an ops request the Worker forwarded with the proxy secret, which the object checked before. Authentication
- * runs first; an unknown operation, a malformed body and an object name the list lacks are refused after it.
+ * runs first; an unknown operation, a malformed body and an object name the list lacks are refused after it. Every
+ * operation needs the barrier, so while R2 cannot be read each answers 503.
  */
 export async function serveOps(request: Request, access: OpsAccess | null, target: OpsTarget): Promise<Response> {
 	if (access === null || !opsAuthenticated(request, access)) {
@@ -103,19 +113,64 @@ export async function serveOps(request: Request, access: OpsAccess | null, targe
 		return opsRefusal()
 	}
 	const body = await jsonBody(request)
-	if (operation === 'inspect') {
-		const inspect = parseOpsInspectRequest(body)
-		if (inspect === null || !access.objects.objects.includes(inspect.object)) {
-			return opsRefusal()
-		}
-		return jsonResponse(await inspectView(target, inspect.content), 200)
-	}
 	const object = objectNamed(operation, body)
 	if (object === null || !access.objects.objects.includes(object)) {
 		return opsRefusal()
 	}
-	// `state` and `migrate` belong to the maintenance barrier (work unit 3.3b).
-	return jsonResponse({ refused: 'not_implemented' }, 501)
+	let barrier: MaintenanceBarrier
+	try {
+		barrier = await target.maintenance(object)
+	} catch {
+		return new Response(null, { status: 503 })
+	}
+	switch (operation) {
+		case 'inspect': {
+			const inspect = parseOpsInspectRequest(body)
+			return inspect === null ? opsRefusal() : jsonResponse(await inspectView(target, barrier, inspect.content), 200)
+		}
+		case 'state': {
+			const transition = parseOpsStateRequest(body)
+			return transition === null ? opsRefusal() : transitionAnswer(await barrier.transition(transition))
+		}
+		case 'migrate': {
+			const migration = parseOpsMigrateRequest(body)
+			return migration === null ? opsRefusal() : await migrateAnswer(target, barrier, migration.generation)
+		}
+	}
+}
+
+/** A transition's answer: the acknowledgement, the 409 naming what is published, or a 503 that Control retries. */
+function transitionAnswer(result: TransitionResult): Response {
+	switch (result.kind) {
+		case 'acknowledged':
+			return jsonResponse(result.ack, 200)
+		case 'stale':
+			return staleRefusal(result.published)
+		case 'failed':
+			return new Response(null, { status: 503 })
+	}
+}
+
+/** Runs the migrations under the published generation and acknowledges with the new ledger; a failed boot is a 500. */
+async function migrateAnswer(target: OpsTarget, barrier: MaintenanceBarrier, generation: number): Promise<Response> {
+	const result = await barrier.migrate(generation, () => target.migrate())
+	if (result.kind === 'stale') {
+		return staleRefusal(result.published)
+	}
+	if (!result.value) {
+		return new Response(null, { status: 500 })
+	}
+	const migrations = tableNames(target.storage).includes(MIGRATION_LEDGER) ? migrationLedger(target.storage) : []
+	const ack = parseOpsMigrateAck({ generation, migrations })
+	if (ack === null) {
+		throw new Error("the object's migration ledger does not parse as the wire's acknowledgement")
+	}
+	return jsonResponse(ack, 200)
+}
+
+function staleRefusal(published: OpsPublishedState | null): Response {
+	const refusal: OpsStaleRefusal = { refused: 'stale_generation', published }
+	return jsonResponse(refusal, OPS_STALE_STATUS)
 }
 
 /** The object an ops request names, read with its operation's strict parser; `null` for a body that does not parse. */
@@ -167,7 +222,7 @@ export function opsAuthenticated(request: Request, access: OpsAccess): boolean {
  * The view of the object's storage, read and never written. A table the framework has not created yet (a boot that
  * failed before its migrations) reads as empty. What the storage holds is parsed by the wire's own parser.
  */
-async function inspectView(target: OpsTarget, content: boolean): Promise<OpsView | OpsContentView> {
+async function inspectView(target: OpsTarget, barrier: MaintenanceBarrier, content: boolean): Promise<OpsView | OpsContentView> {
 	const { storage } = target
 	const bootFailure = await target.bootFailure()
 	const tables = tableNames(storage)
@@ -175,14 +230,12 @@ async function inspectView(target: OpsTarget, content: boolean): Promise<OpsView
 	const alarm = storage.getAlarm === undefined ? missing('getAlarm') : await storage.getAlarm()
 	const view = {
 		release: appPackage.version,
-		maintenance: { mode: 'open', generation: null, published: false },
+		maintenance: barrier.view(),
 		database: {
 			sizeBytes: storage.sql.databaseSize ?? missing('sql.databaseSize'),
 			tables: tables.filter(admittedTableName).map((name) => ({ name, rows: cappedCount(storage, name) })),
 		},
-		migrations: has(MIGRATION_LEDGER)
-			? rows(storage, `select bundle, name, checksum, applied_at as appliedAt from ${MIGRATION_LEDGER} order by bundle, name`)
-			: [],
+		migrations: has(MIGRATION_LEDGER) ? migrationLedger(storage) : [],
 		scheduler: { alarm: alarm === null ? null : new Date(alarm).toISOString() },
 		jobs: has(JOB_LEASES_TABLE)
 			? rows(
@@ -209,6 +262,11 @@ async function inspectView(target: OpsTarget, content: boolean): Promise<OpsView
 		throw new Error("the object's ops view does not parse as the wire's view")
 	}
 	return parsed
+}
+
+/** The ledger `@fabrika/db/sqlite-migrate` keeps, as the wire names its rows; read only once the table exists. */
+function migrationLedger(storage: OpsStorage): Record<string, SqliteValue>[] {
+	return rows(storage, `select bundle, name, checksum, applied_at as appliedAt from ${MIGRATION_LEDGER} order by bundle, name`)
 }
 
 /** Cloudflare's own `_cf_*` tables and SQLite's `sqlite_*` are no table of the application or the framework. */

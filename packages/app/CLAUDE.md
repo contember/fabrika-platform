@@ -88,7 +88,9 @@ src/
     names.ts          the class and binding names the provider shares: FabrikaApplication, FABRIKA_APPLICATION,
                       FABRIKA_FILES (re-exported by @fabrika/app/build)
     ops.ts            Control's ops channel at the object (ADR-0069): authentication, the uniform refusal, the
-                      inspect view read from storage alone
+                      inspect view read from storage alone, `state` and `migrate` over the barrier
+    maintenance.ts    MaintenanceBarrier: the object's mode and generation, published to the environment's bucket
+                      before it is acknowledged, the drain, and the gate every invocation and write passes
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract; the local `directory`
                       mail provider, which boot honours only under a loopback issuer
   disk-assets.ts      diskAssets: the SPA mounts from their build directories, as the Bun deploy and the test kit serve them
@@ -1022,13 +1024,26 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   names, only when `FABRIKA_APPLICATION_OBJECTS` lists it. The object checks the hop secret and `opsAuthenticated` again,
   and only then waits for a boot under way; it never starts one or a retry. Every refusal is `opsRefusal()`. `inspect`
   reads storage only, never writes, skips a table name the wire refuses, and shows the last boot failure's text only in
-  the content view; `state` and `migrate` answer 501 until the barrier lands.
+  the content view; `state` and `migrate` go to the barrier.
+- **The barrier holds the object's mode** (ADR-0069 §3, `cloudflare/maintenance.ts`). The published state is
+  `__fabrika/ops/<object>.json` in `FABRIKA_FILES`, written by a conditional put on the version last read or written; a
+  conflict re-reads it and adopts a higher generation. A transition is acknowledged only after that put succeeds and, for
+  a restriction, after the drain: every invocation the new mode forbids has finished or `DRAIN_BOUND_MS` passed, and
+  every kicked or scheduled run has been aborted through its admission's signal. A request below the published
+  generation is the 409 `stale_generation` naming the published state. A cold start reads the state before anything
+  else: absent is `open`, any other failure answers 503 to every request, ops included, and is retried by the next one.
+  `dispatch.ts`'s `runGated` admits each invocation by kind (`read`, `write`, `webhook`, `kick`, `job`,
+  `framework-job`): `read-only` admits reads only, `closed` and `inspect` nothing, and `inspect` never boots. Every
+  SQLite write of the object goes through the fenced storage adapter, which checks the mode and the generation the event
+  was admitted under after the statement or transaction and before its commit, so a write admitted before a restriction
+  rolls back. Outside `open` the object applies no migration; a boot that finds one pending refuses ordinary traffic
+  until `migrate` runs it under the published generation.
 - **The object answers only its own Worker.** A request without the environment's proxy secret is an empty 404 before
   anything else, the digests compared in constant time, so another Worker that binds the class learns nothing.
 - **It boots once per isolate.** The first request or tick that needs the application starts the boot in
   `blockConcurrencyWhile`, and every later event shares it; the boot settles either way: a
   failed boot answers every request with its failure, is reported once, and is not kept, so the next instance boots
-  again. For an application with a data layer, before the boot and for every later instance of the isolate, it applies `SQLITE_FRAMEWORK_MIGRATIONS` and the
+  again. For an application with a data layer, before the boot and for every later instance of the isolate, it applies (in `open`) `SQLITE_FRAMEWORK_MIGRATIONS` and the
   application's bundle through `migrateSqlite`, then binds the layer to `openSqlite` over a storage it resolves
   per event from the object's `AsyncLocalStorage` scope (the layer binds once; a statement outside any event throws),
   so two objects in one isolate never share a database. It captures the environment without `IAM` and `ASSETS`, and boots with

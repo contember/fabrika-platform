@@ -128,7 +128,13 @@ async function start(options: StartOptions = {}): Promise<Started> {
 		...served.variables,
 		FABRIKA_PROXY_SECRET: PROXY_SECRET,
 		IAM: { getJwks: () => keySource.getJwks(), mintFromKey: (input: { app: string; key: string }) => tokens.exchange(input) },
-		[CLOUDFLARE_FILES_BINDING]: { head: unused, get: unused, put: unused, delete: unused },
+		// No maintenance state, so the object reads `open`; no file call is expected.
+		[CLOUDFLARE_FILES_BINDING]: {
+			head: unused,
+			get: (key: string) => key.startsWith('__fabrika/ops/') ? Promise.resolve(null) : unused(),
+			put: unused,
+			delete: unused,
+		},
 		[FABRIKA_OPS_KEY_DIGESTS]: formatOpsKeyDigests(options.digests ?? [opsKeyDigest(OPS_KEY)]),
 		[FABRIKA_APPLICATION_OBJECT]: 'application',
 		[FABRIKA_APPLICATION_OBJECTS]: 'application,clone',
@@ -263,23 +269,21 @@ describe('the ops channel at the environment object', () => {
 		})
 	})
 
-	test('state and migrate are authenticated, then answered as not implemented', async () => {
+	test('state and migrate are authenticated before the barrier answers them', async () => {
 		await keepingProcessEnvironment(async () => {
 			const { object } = await start()
-			for (
-				const request of [
-					opsRequest('state', { object: 'application', generation: 1, mode: 'read-only' }),
-					opsRequest('migrate', { object: 'application', generation: 1 }),
-				]
-			) {
-				const response = await object.fetch(request)
-				expect(response.status).toBe(501)
-				expect(await response.json()).toEqual({ refused: 'not_implemented' })
-			}
-			const unauthenticated = await object.fetch(
-				opsRequest('state', { object: 'application', generation: 1, mode: 'read-only' }, { key: 'wrong-key-0123456789' }),
+			const transition = { object: 'application', generation: 1, mode: 'read-only' }
+			expect(await observable(await object.fetch(opsRequest('state', transition, { key: 'wrong-key-0123456789' })))).toEqual(
+				await observable(opsRefusal()),
 			)
-			expect(unauthenticated.status).toBe(404)
+			expect(await observable(await object.fetch(opsRequest('migrate', { object: 'application', generation: 1 }, { key: null })))).toEqual(
+				await observable(opsRefusal()),
+			)
+			// This bucket refuses every put: the transition fails, so Control retries it.
+			expect((await object.fetch(opsRequest('state', transition))).status).toBe(503)
+			const migrate = await object.fetch(opsRequest('migrate', { object: 'application', generation: 1 }))
+			expect(migrate.status).toBe(409)
+			expect(await migrate.json()).toEqual({ refused: 'stale_generation', published: null })
 		})
 	})
 

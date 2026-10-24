@@ -22,6 +22,7 @@ import {
 	runInRequest,
 	type Within,
 } from '../implement/capability'
+import { admitInvocation, type InvocationAdmission } from '../implement/dispatch'
 import { runAsSite } from '../implement/egress'
 import { failureCode, type FailureReason, failureReason } from '../implement/failures'
 import { ServerFault } from '../implement/faults'
@@ -76,7 +77,7 @@ export type JobFailureCode =
 	| 'unauthorized'
 	/** IAM could not be asked for the job's token. */
 	| 'iam_unavailable'
-	/** The process stopped a kicked run while shutting down; the schedule runs the job again. */
+	/** The process stopped a kicked run while shutting down, or the object's maintenance stopped a run; the schedule runs it again. */
 	| 'stopped'
 	/** The transport refused a message the handler did not catch; `reason` is the `EmailDeliveryError` code. */
 	| 'mail_failed'
@@ -335,57 +336,101 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		run(name: string, options: JobRunOptions = {}): Promise<JobRunResult> {
 			const own = frameworkJobs.get(name)
 			if (own !== undefined && framework !== null) {
-				return runFrameworkJob(own, contextFor(framework.jobs, options.reporter), options.clock ?? systemClock)
+				return admitted(
+					'framework-job',
+					name,
+					(control) => runFrameworkJob(own, contextFor(framework.jobs, options.reporter), options.clock ?? systemClock, control),
+				)
 			}
 			const job = bound.get(name)
 			if (job === undefined || framework === null) {
 				throw new JobError(`no job '${name}' in the contract (jobs: ${names.length === 0 ? 'none' : names.join(', ')})`)
 			}
-			return runJob(job, contextFor(framework.jobs, options.reporter), options.clock ?? systemClock, 'wait').then((result) => {
-				if (result.status === 'skipped') {
-					console.error(`fabrika: a previous run of job '${name}' still holds its lease; this run does not start`)
-				}
-				return result
-			})
+			return admitted('job', name, (control) => runJob(job, contextFor(framework.jobs, options.reporter), options.clock ?? systemClock, 'wait', control))
+				.then((result) => {
+					if (result.status === 'skipped') {
+						console.error(`fabrika: a previous run of job '${name}' still holds its lease; this run does not start`)
+					}
+					return result
+				})
 		},
 		async check(options: Pick<JobRunOptions, 'reporter'> = {}): Promise<void> {
-			if (framework === null) {
+			const admission = framework === null ? null : admitInvocation('framework-job')
+			if (framework === null || admission === null) {
 				return
 			}
-			const context = contextFor(framework.jobs, options.reporter)
-			for (const job of [...bound.values(), ...frameworkJobs.values()]) {
-				try {
-					await context.leases.register(job.name)
-					await surveil(job, context)
-				} catch {
-					// A driver error may quote the database URL.
-					console.error(`fabrika: the check of job '${job.name}' failed: driver_failed`)
+			try {
+				const context = contextFor(framework.jobs, options.reporter)
+				for (const job of [...bound.values(), ...frameworkJobs.values()]) {
+					try {
+						await context.leases.register(job.name)
+						await surveil(job, context)
+					} catch {
+						// A driver error may quote the database URL.
+						console.error(`fabrika: the check of job '${job.name}' failed: driver_failed`)
+					}
 				}
+			} finally {
+				admission.release()
 			}
 		},
 	})
 	const stopping = new AbortController()
 	const kick = async (name: string): Promise<void> => {
 		const job = bound.get(name)
-		if (job !== undefined && framework !== null) {
-			await kickOnce(job, contextFor(framework.jobs, undefined), stopping.signal)
+		if (job === undefined || framework === null) {
+			return
+		}
+		const admission = admitInvocation('kick')
+		if (admission === null) {
+			// A kick hurries a run; the schedule still runs the job once the object opens.
+			console.error(`fabrika: job '${name}' was not kicked: the object is in maintenance`)
+			return
+		}
+		try {
+			await kickOnce(job, contextFor(framework.jobs, undefined), {
+				signal: AbortSignal.any([admission.signal, stopping.signal]),
+				track: admission.track,
+			})
+		} finally {
+			admission.release()
 		}
 	}
 	return { jobs, declared, kick, stopKicks: () => stopping.abort() }
 }
 
 /**
+ * What stops one run, and where the handler work that outlives its attempt is counted: the run's admission at the
+ * object's barrier, which a drain aborts, and for a kick also the process's stop.
+ */
+type RunControl = Pick<InvocationAdmission, 'signal' | 'track'>
+
+/** A run admitted at the current event's gate, released once it ended; a refused one is `stopped` and starts nothing. */
+async function admitted(kind: 'job' | 'framework-job', name: string, run: (control: RunControl) => Promise<JobRunResult>): Promise<JobRunResult> {
+	const admission = admitInvocation(kind)
+	if (admission === null) {
+		console.error(`fabrika: job '${name}' did not start: the object is in maintenance; its schedule runs it again`)
+		return { status: 'failed', attempts: 0, code: 'stopped' }
+	}
+	try {
+		return await run(admission)
+	} finally {
+		admission.release()
+	}
+}
+
+/**
  * One kick: a run while the lease is free, else the shared pending flag. Neither waits for a lock, so a kick never
  * holds a connection requests share while a run writes. After a failed run the flag stays for the schedule.
  */
-async function kickOnce(job: BoundJob, context: RunnerContext, stop: AbortSignal): Promise<void> {
-	if (stop.aborted) {
+async function kickOnce(job: BoundJob, context: RunnerContext, control: RunControl): Promise<void> {
+	if (control.signal.aborted) {
 		// The flag waits for no lock, and another process that is not stopping runs the job.
 		await markPending(job, context)
 		return
 	}
-	if ((await runJob(job, context, systemClock, 'try', stop)).status === 'skipped') {
-		await handOver(job, context, systemClock, stop)
+	if ((await runJob(job, context, systemClock, 'try', control)).status === 'skipped') {
+		await handOver(job, context, systemClock, control)
 	}
 }
 
@@ -393,11 +438,11 @@ async function kickOnce(job: BoundJob, context: RunnerContext, stop: AbortSignal
  * Leaves the flag to the run holding the lease, which takes it after it succeeded. That run may have finished before
  * the flag was set, so the lease is tried once more; `null` when another run still holds it.
  */
-async function handOver(job: BoundJob, context: RunnerContext, clock: JobClock, stop?: AbortSignal): Promise<JobRunResult | null> {
+async function handOver(job: BoundJob, context: RunnerContext, clock: JobClock, control: RunControl): Promise<JobRunResult | null> {
 	if (!(await markPending(job, context))) {
 		return null
 	}
-	const result = await runJob(job, context, clock, 'try', stop)
+	const result = await runJob(job, context, clock, 'try', control)
 	return result.status === 'skipped' ? null : result
 }
 
@@ -479,19 +524,19 @@ interface Progress {
 type Acquisition = 'wait' | 'try'
 
 /**
- * A run of the job, then one more while a kick arrived after the last one started and it succeeded. Once `stop`
- * aborted, no follow-up run starts: the pending flag stays for the schedule.
+ * A run of the job, then one more while a kick arrived after the last one started and it succeeded. Once the run's
+ * control aborted, no follow-up run starts: the pending flag stays for the schedule.
  */
-async function runJob(job: BoundJob, context: RunnerContext, clock: JobClock, acquisition: Acquisition, stop?: AbortSignal): Promise<JobRunResult> {
-	let result = await runOnce(job, context, clock, acquisition, stop)
-	while (result.status === 'succeeded' && stop?.aborted !== true && (await pendingTaken(job, context))) {
-		const next = await runOnce(job, context, clock, 'try', stop)
+async function runJob(job: BoundJob, context: RunnerContext, clock: JobClock, acquisition: Acquisition, control: RunControl): Promise<JobRunResult> {
+	let result = await runOnce(job, context, clock, acquisition, control)
+	while (result.status === 'succeeded' && !control.signal.aborted && (await pendingTaken(job, context))) {
+		const next = await runOnce(job, context, clock, 'try', control)
 		if (next.status !== 'skipped') {
 			result = next
 			continue
 		}
 		// A newer run holds the lease and may have read before the kick's row: the flag goes back to it.
-		const handed = await handOver(job, context, clock, stop)
+		const handed = await handOver(job, context, clock, control)
 		return handed ?? result
 	}
 	return result
@@ -507,11 +552,16 @@ async function pendingTaken(job: BoundJob, context: RunnerContext): Promise<bool
 	}
 }
 
-async function runOnce(job: BoundJob, context: RunnerContext, clock: JobClock, acquisition: Acquisition, stop?: AbortSignal): Promise<JobRunResult> {
+async function runOnce(job: BoundJob, context: RunnerContext, clock: JobClock, acquisition: Acquisition, control: RunControl): Promise<JobRunResult> {
 	const progress: Progress = { attempts: 0 }
 	try {
-		return await runLeased(job, context, clock, progress, acquisition, stop)
+		return await runLeased(job, context, clock, progress, acquisition, control)
 	} catch {
+		if (control.signal.aborted) {
+			// A stopped run's lease write is refused by the object's write fence; the lease expires and the schedule runs it.
+			console.error(`fabrika: job '${job.name}' stopped before it released its lease; its schedule runs it again`)
+			return { status: 'failed', attempts: progress.attempts, code: 'stopped' }
+		}
 		// Only the lease store throws here: the handler's errors stay inside its attempt. Its message may quote the URL.
 		return failed(job, progress.attempts, failure('driver_failed'), context.reporter)
 	}
@@ -523,12 +573,12 @@ async function runLeased(
 	clock: JobClock,
 	progress: Progress,
 	acquisition: Acquisition,
-	stop?: AbortSignal,
+	control: RunControl,
 ): Promise<JobRunResult> {
 	const { leases } = context
 	await leases.register(job.name)
 	const leaseMs = job.timeoutMs + LEASE_GRACE_MS
-	if (stop?.aborted === true) {
+	if (control.signal.aborted) {
 		return { status: 'skipped' }
 	}
 	let fence: LeaseFence | null
@@ -547,7 +597,7 @@ async function runLeased(
 	progress.attempts = 1
 	// The jobs the succeeding attempt kicked; a failed attempt's kicks are dropped with its writes.
 	const kicked: string[] = []
-	let outcome = await attemptOnce(job, fence, progress.attempts, clock, context, kicked, stop)
+	let outcome = await attemptOnce(job, fence, progress.attempts, clock, context, kicked, control)
 	while (outcome !== null && outcome.code !== 'stopped' && !outcome.final && progress.attempts < attempts) {
 		console.error(`fabrika: job '${job.name}' attempt ${progress.attempts} of ${attempts} failed: ${describeFailure(outcome)}`)
 		const delay = backoffMs(progress.attempts, clock.random())
@@ -557,9 +607,9 @@ async function runLeased(
 			return failed(job, progress.attempts, failure('lease_lost'), context.reporter)
 		}
 		fence = next
-		await clock.wait(delay, stop ?? new AbortController().signal)
+		await clock.wait(delay, control.signal)
 		progress.attempts++
-		outcome = await attemptOnce(job, fence, progress.attempts, clock, context, kicked, stop)
+		outcome = await attemptOnce(job, fence, progress.attempts, clock, context, kicked, control)
 	}
 	if (outcome === null) {
 		if (await leases.finish(fence, 'succeeded')) {
@@ -613,8 +663,11 @@ async function failed(job: { readonly name: string }, attempts: number, outcome:
 
 const TIMED_OUT: unique symbol = Symbol('fabrika.job.timedOut')
 
-/** One run of a framework job: its lease, one attempt in a frame fenced by it, and the outcome reported like a job's. */
-async function runFrameworkJob(bound: BoundFrameworkJob, context: RunnerContext, clock: JobClock): Promise<JobRunResult> {
+/**
+ * One run of a framework job: its lease, one attempt in a frame fenced by it, and the outcome reported like a job's.
+ * A run its control stopped is not a failure: the schedule runs it again.
+ */
+async function runFrameworkJob(bound: BoundFrameworkJob, context: RunnerContext, clock: JobClock, control: RunControl): Promise<JobRunResult> {
 	const { leases } = context
 	let fence: LeaseFence | null
 	try {
@@ -634,8 +687,9 @@ async function runFrameworkJob(bound: BoundFrameworkJob, context: RunnerContext,
 	let outcome: JobFailure | null
 	try {
 		const ran = runInRequest(frame, () => bound.job.run(context.reporter, cancel.signal)).then(() => null, (error: unknown) => failureOf(error, null))
+		control.track(ran)
 		const timeout = clock.wait(bound.job.timeoutMs, timer.signal).then((): typeof TIMED_OUT => TIMED_OUT)
-		const result = await Promise.race([ran, timeout])
+		const result = await Promise.race([ran, timeout, stoppedBy(control, timer.signal)])
 		outcome = result === TIMED_OUT ? failure('timeout') : result
 	} finally {
 		frame.end()
@@ -653,13 +707,31 @@ async function runFrameworkJob(bound: BoundFrameworkJob, context: RunnerContext,
 			return finished ? { status: 'succeeded', attempts: 1 } : failed(bound, 1, failure('lease_lost'), context.reporter)
 		}
 	} catch {
-		return failed(bound, 1, failure('driver_failed'), context.reporter)
+		// A stopped run's lease write is refused by the object's write fence; the lease expires and the schedule runs it.
+		if (!control.signal.aborted) {
+			return failed(bound, 1, failure('driver_failed'), context.reporter)
+		}
+	}
+	// Here a run without a failure of its own is one whose stop refused its lease write.
+	if (outcome === null || outcome.code === 'stopped' || control.signal.aborted) {
+		console.error(`fabrika: job '${bound.name}' stopped: the object entered maintenance; its schedule runs it again`)
+		return { status: 'failed', attempts: 1, code: 'stopped' }
 	}
 	return failed(bound, 1, outcome, context.reporter)
 }
 
 /** Read afresh at each call: the signal may abort while the caller awaits. */
-const isStopped = (stop: AbortSignal | undefined): boolean => stop?.aborted === true
+const isStopped = (control: RunControl): boolean => control.signal.aborted
+
+/** Resolves `stopped` once the run's control aborts; the listener goes when `done` aborts. */
+function stoppedBy(control: RunControl, done: AbortSignal): Promise<JobFailure> {
+	return new Promise<JobFailure>((resolve) => {
+		if (control.signal.aborted) {
+			resolve(failure('stopped'))
+		}
+		control.signal.addEventListener('abort', () => resolve(failure('stopped')), { once: true, signal: done })
+	})
+}
 
 /**
  * `null` when the handler finished, else the attempt's failure code. Either way the attempt's frame ends and the
@@ -672,15 +744,15 @@ async function attemptOnce(
 	clock: JobClock,
 	context: RunnerContext,
 	kicked: string[],
-	stop?: AbortSignal,
+	control: RunControl,
 ): Promise<JobFailure | null> {
 	kicked.length = 0
-	if (isStopped(stop)) {
+	if (isStopped(control)) {
 		return failure('stopped')
 	}
 	// The job's authority is what IAM signs for its key at the start of the attempt; a revoked key stops the next one.
 	const authority = await job.credential.authority()
-	if (isStopped(stop)) {
+	if (isStopped(control)) {
 		return failure('stopped')
 	}
 	if (!authority.ok) {
@@ -689,7 +761,7 @@ async function attemptOnce(
 	const frame = new RequestFrame(fence.holder, { fence })
 	const cancel = new AbortController()
 	const timer = new AbortController()
-	const signal = stop === undefined ? cancel.signal : AbortSignal.any([cancel.signal, stop])
+	const signal = AbortSignal.any([cancel.signal, control.signal])
 	const kicks = kickRecorder(`job '${job.name}'`, job.site?.kicks ?? [])
 	const ctx = { ...jobContext(job, frame, attempt, signal, context, authority.perms), kick: kicks.kick }
 	try {
@@ -706,14 +778,10 @@ async function attemptOnce(
 			if (failed.code === 'handler_failed') context.revealHandlerErrors?.(`job '${job.name}' attempt ${attempt}`, error)
 			return failed
 		})
+		// Its settlement, not only the end of its frame: a drain waits for a handler that outlived the attempt.
+		control.track(ran)
 		const timeout = clock.wait(job.timeoutMs, timer.signal).then((): typeof TIMED_OUT => TIMED_OUT)
-		const stopped = new Promise<JobFailure>((resolve) => {
-			if (stop?.aborted === true) {
-				resolve(failure('stopped'))
-			}
-			stop?.addEventListener('abort', () => resolve(failure('stopped')), { once: true, signal: timer.signal })
-		})
-		const result = await Promise.race([ran, timeout, stopped])
+		const result = await Promise.race([ran, timeout, stoppedBy(control, timer.signal)])
 		return result === TIMED_OUT ? failure('timeout') : result
 	} finally {
 		frame.end()

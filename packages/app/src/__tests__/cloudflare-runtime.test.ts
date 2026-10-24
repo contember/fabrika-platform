@@ -35,6 +35,7 @@ import {
 	writeGeneratedEntry,
 } from '../build'
 import { type ApplicationState, createContractWorker, FabrikaApplication } from '../cloudflare'
+import { r2MaintenanceStore } from '../cloudflare/maintenance'
 import { OPS_ENDPOINT } from '../cloudflare/ops'
 import { R2_PART_BYTES, r2FileObjectStore } from '../cloudflare/r2-files'
 import { type NotesApp, notesApp } from './cloudflare-fixture/src/app'
@@ -474,5 +475,22 @@ describe('boot on SQLite', () => {
 		expect(refusal instanceof BootError ? refusal.problems : []).toContain(
 			"files 'documents' declares scan: true; no malware scanner runs on Cloudflare, so a scanning file kind is not served there",
 		)
+	})
+})
+
+describe("the maintenance state in the environment's bucket", () => {
+	test('reads absent as none, and writes only over the version it names', async () => {
+		const testEnv = await createTestEnv({ bindings: { FILES: 'r2' } })
+		deployed.push(testEnv)
+		const store = r2MaintenanceStore(testEnv.env['FILES'], 'application')
+		expect(await store.read()).toBeNull()
+		const first = await store.put({ generation: 1, mode: 'read-only' }, null)
+		if (first === null) throw new Error('the first put was refused')
+		expect(await store.read()).toEqual({ state: { generation: 1, mode: 'read-only' }, version: first })
+		const second = await store.put({ generation: 2, mode: 'closed' }, first)
+		if (second === null) throw new Error('the put over the version it read was refused')
+		// The version this writer read is gone: its put is refused, and R2 keeps the newer state.
+		expect(await store.put({ generation: 3, mode: 'open' }, first)).toBeNull()
+		expect(await store.read()).toEqual({ state: { generation: 2, mode: 'closed' }, version: second })
 	})
 })

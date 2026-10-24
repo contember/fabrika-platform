@@ -24,7 +24,7 @@ import {
 	startDataOperationInputSchema,
 } from '@fabrika/control-contract'
 import { parsePlatformMailRequest } from '@fabrika/email/platform'
-import { uuidv7 } from '@fabrika/platform'
+import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
@@ -86,7 +86,16 @@ import {
 } from './approval/api'
 import { describeConnector } from './connectors'
 import { consoleAccess } from './console-access'
-import { listDataOperations, type OpsInspection, type OpsTransport, type OpsUnavailable, toDataOperationDto } from './data-operations'
+import {
+	type DataOperationOutcome,
+	listDataOperations,
+	type OpsInspection,
+	type OpsTransport,
+	type OpsUnavailable,
+	startMaintenance,
+	startRecovery,
+	toDataOperationDto,
+} from './data-operations'
 import type { ControlRepositories, MailMessageRow, MailRuleRow } from './db'
 import type { Env } from './env'
 import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from './github/connections/installation'
@@ -469,6 +478,7 @@ export function createControlRpcRouter(
 		return {
 			repositories: deps.repositories,
 			auth: ctx.auth,
+			...(deps.lock === undefined ? {} : { lock: deps.lock }),
 			...(deps.opsTransport === undefined ? {} : { ops: deps.opsTransport }),
 		}
 	}
@@ -677,7 +687,9 @@ async function setMailRule(c: MailUseCaseContext, input: z.infer<typeof setMailR
 interface DataUseCaseContext {
 	readonly repositories: ControlRepositories
 	readonly auth: AuthContext
-	/** The ops channel; absent, the views answer 503. */
+	/** The environment's deploy lease every operation runs under; absent, operations answer 503. */
+	readonly lock?: DeployLocks
+	/** The ops channel; absent, the views and operations answer 503. */
 	readonly ops?: OpsTransport
 }
 
@@ -727,20 +739,36 @@ async function inspectData(c: DataUseCaseContext, target: { appId: string; env: 
 	return answer.value
 }
 
-// No release's object serves `state` yet (sprint unit 3.3b): an operation started now would never be acknowledged, and
-// its running record would refuse every deploy of the environment.
 async function startDataOperationUseCase(c: DataUseCaseContext, input: StartDataOperationInput): Promise<DataOperationDto> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
-	return fail(501, 'data operations are not available in this release')
+	if (input.kind === 'backup') fail(501, 'backups are not available in this release')
+	const outcome = await startMaintenance(operationDeps(c), { appId: input.appId, env: input.env, mode: input.mode, actor: runActor(c.auth) })
+	return dataOperationResult(outcome)
 }
 
 async function recoverDataOperationUseCase(c: DataUseCaseContext, input: RecoverDataOperationInput): Promise<DataOperationDto> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
-	return fail(501, 'data operations are not available in this release')
+	return dataOperationResult(await startRecovery(operationDeps(c), { ...input, actor: runActor(c.auth) }))
+}
+
+function operationDeps(c: DataUseCaseContext): { repositories: ControlRepositories; lock: DeployLocks; ops: OpsTransport } {
+	if (c.lock === undefined || c.ops === undefined) fail(503, 'data operations unavailable')
+	return { repositories: c.repositories, lock: c.lock, ops: c.ops }
+}
+
+/** The record as the operation left it: one the object left unanswered is still `running`, at its step. */
+function dataOperationResult(outcome: DataOperationOutcome): DataOperationDto {
+	if (outcome.kind === 'busy') fail(409, 'a deploy or another data operation holds this environment')
+	if (outcome.kind === 'driven') return toDataOperationDto(outcome.operation)
+	if (outcome.reason === 'operation_running') fail(409, 'an operation of this environment is still running: recover it first')
+	if (outcome.reason === 'not_recoverable') fail(409, 'that operation is not one this environment can recover')
+	if (outcome.reason === 'superseded') fail(409, 'a newer operation of this environment supersedes that one')
+	failUnavailable(outcome.reason)
 }
 
 function failUnavailable(reason: OpsUnavailable): never {
 	if (reason === 'no_channel') fail(409, 'the environment has no ops channel: it needs a domain and a deploy at a release that serves one')
+	if (reason === 'not_served') fail(409, "the environment's release does not serve this operation: deploy it at a release that does")
 	fail(502, reason === 'channel_refused' ? "the environment's ops channel refused Control" : "the environment's object gave no usable answer")
 }
 
