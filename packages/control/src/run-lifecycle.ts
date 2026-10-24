@@ -7,6 +7,8 @@ import {
 	FABRIKA_PROXY_SECRET,
 	FABRIKA_TOKEN_KEYS,
 	isFrameworkVariableName,
+	MANAGED_VARIABLE_NAMES,
+	parseManagedEnvironment,
 } from '@fabrika/auth-core'
 import type { RunLogLine } from '@fabrika/control-contract'
 import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS, operationsManagedEnvironment } from '@fabrika/operations-contract/ingest'
@@ -15,6 +17,7 @@ import type { BlobStore, DeployLocks, JobQueue } from '@fabrika/platform'
 import {
 	type ControlProvider,
 	type ProviderApp,
+	type ProviderApprovedAccess,
 	type ProviderDeployInput,
 	type ProviderDeploymentNamespace,
 	type ProviderDeployOutcome,
@@ -45,6 +48,7 @@ import {
 	serializeProviderJson,
 } from './db'
 import type { CommitSource } from './github/source/commit-files'
+import { type IamSchemaPort, isIamUnavailable } from './iam-schema'
 import type { InstallationBrandSource } from './installation-brand'
 import { acquireLease, type Lease, type LeaseClock, type LeaseFence, namespaceLeaseKey, runLeaseKey } from './lease'
 import {
@@ -57,6 +61,7 @@ import {
 	relaysInstallationMail,
 } from './mail-transport'
 import { type MembershipTransportPort, needsMembershipTransport } from './membership-transport'
+import { ingestOrigin } from './operations-catalog'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import type { PlatformTransportPort } from './platform-transport'
 import type { ProxySecrets } from './proxy-secret'
@@ -91,6 +96,8 @@ export interface RunDeps {
 	 * service rather than left stale, and an app that requires it fails its own boot, loudly.
 	 */
 	iamIssuer?: string
+	/** Where a succeeded run's approved IAM schema is written (ADR-0011); absent when the installation names no IAM issuer. */
+	iamSchema?: IamSchemaPort
 	/** The proxy secret of an environment behind a namespace proxy (ADR-0022 rule 5); absent without a vault. */
 	proxySecrets?: ProxySecrets
 	/** The installation's client logo for the namespace proxy a deploy republishes (ADR-0066); absent, the mark. */
@@ -597,6 +604,10 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			approvedRow = await currentAppEnv(deps.repositories, appEnv)
 			registration = { ...registration, environment: withAccess(registration.environment, approvedProviderAccess(approvedRow)) }
 		}
+		// A provider deploys only the contract Control approved (ADR-0050), and publishes it only from a resolved commit.
+		if (!dryRun && registration.environment.access === undefined) {
+			throw new Error('a deploy needs the access Control approved for this environment')
+		}
 		const releaseContext = deps.operations === undefined
 			? null
 			: await projectOperationsRun(deps.operations, startedRun, {
@@ -619,15 +630,21 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		for (const key of OPERATIONS_MANAGED_ENVIRONMENT_KEYS) managedEnvironment[key] = null
 		// Behind a namespace proxy the hop to the application and to IAM is no service binding.
 		const namespaceProxy = appEnv.namespace_id !== null && deps.provider.namespaces?.republish !== undefined
-		// A namespace proxy, or the provider's own hop to the application, authenticates itself with a secret; a dry run generates none.
-		const hopSecret = namespaceProxy || deps.provider.applicationHopSecret === true
-		managedEnvironment[FABRIKA_PROXY_SECRET] = !dryRun && hopSecret ? (await deps.proxySecrets?.forAppEnv(app.id, appEnv.env)) ?? null : null
+		// A namespace proxy, or the provider's own hop to the application, authenticates itself with a secret; a dry run
+		// generates none.
+		const hopSecret = !dryRun && (namespaceProxy || deps.provider.applicationHopSecret === true)
+		const proxySecret = hopSecret ? (await deps.proxySecrets?.forAppEnv(app.id, appEnv.env)) ?? null : null
+		// The application would refuse every request its proxy sends (ADR-0022 rule 5).
+		if (hopSecret && proxySecret === null) throw new Error('a contract application needs its proxy secret, and none is configured')
+		managedEnvironment[FABRIKA_PROXY_SECRET] = proxySecret
 		// `null` means REMOVE, so an installation that cannot name its own issuer strips a stale one
 		// instead of deploying an app that verifies against the previous installation's tokens.
 		if (deps.iamIssuer !== undefined && deps.iamIssuer.trim() !== '') {
 			managedEnvironment[FABRIKA_IAM_ISSUER] = deps.iamIssuer.trim()
 		}
 		const ingest = await deps.repositories.operationsCatalog.getActiveIngestConfig(app.id, appEnv.env)
+		const operationsOrigin = ingestOrigin(ingest)
+		if (operationsOrigin !== undefined) registration = { ...registration, environment: { ...registration.environment, operationsOrigin } }
 		let ingestGap: string | null = null
 		if (ingest?.dsn !== null && ingest?.dsn !== undefined) {
 			Object.assign(
@@ -671,7 +688,11 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		managedEnvironment[FABRIKA_APP_ORIGIN] = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
 		const tokenKeys = dryRun ? null : await reconcileTokenKeys(deps.tokenKeys, app.id, appEnv.env, approvedContract)
 		managedEnvironment[FABRIKA_TOKEN_KEYS] = tokenKeys
-		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id, appEnv.env)
+		// Parsed once, before any provider effect: a provider writes what it is handed and checks none of it again.
+		const handed = parseManagedEnvironment(managedEnvironment)
+		// A provider removes a managed name it is not handed, so a name missing here would delete the variable.
+		const missing = MANAGED_VARIABLE_NAMES.find((name) => !Object.hasOwn(handed, name))
+		if (missing !== undefined) throw new Error(`managed environment: Control did not name ${missing}`)
 		runLogs.redact([
 			...Object.values(secrets),
 			managedEnvironment[FABRIKA_PROXY_SECRET] ?? '',
@@ -712,8 +733,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 				environment: registration.environment,
 				secrets,
 				vars,
-				managedEnvironment,
-				...(returnOrigins === undefined ? {} : { returnOrigins }),
+				managedEnvironment: handed,
 				dryRun,
 				...(sourceBinding === undefined ? {} : { sourceBinding }),
 				...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
@@ -745,11 +765,30 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		}
 		await invocation.boundary()
 		if (outcome.state === 'running') return { runId, status: 'running' }
-		const state = outcome.state
-		await invocation.write((fence) => runs.markRunFinished(runId, state, outcome.exitCode ?? null, fence))
-		if (state === 'succeeded' && !dryRun) await retirePlatformKeys(deps, approvedRow, runId)
-		await projectTerminalRun(deps, runId, dryRun, state, outcome.artifactState)
-		return { runId, status: state }
+		let state = outcome.state
+		let exitCode = outcome.exitCode ?? null
+		if (state === 'succeeded') {
+			const access = registration.environment.access
+			if (dryRun) {
+				if (access !== undefined && deps.iamSchema !== undefined) {
+					runLogs.log(`[dry-run] would reconcile the authz schema of \`${appEnvironmentId(app.id, appEnv.env)}\` with IAM`)
+				}
+			} else {
+				const schema = await applyApprovedSchema(deps, appEnv, access, invocation.work.signal)
+				if (schema !== null) {
+					runLogs.log(`reconcile-schema failed: ${schema.reason}`)
+					state = 'failed'
+					exitCode = null
+				}
+			}
+			await runLogs.flush()
+			await invocation.boundary()
+		}
+		const finished = state
+		await invocation.write((fence) => runs.markRunFinished(runId, finished, exitCode, fence))
+		if (finished === 'succeeded' && !dryRun) await retirePlatformKeys(deps, approvedRow, runId)
+		await projectTerminalRun(deps, runId, dryRun, finished, outcome.artifactState)
+		return { runId, status: finished }
 	} catch (error) {
 		if (error instanceof RunSettled) return { runId, status: 'skipped' }
 		if (!invocation.lost && !invocation.cancelled) await invocation.boundary().catch(() => {})
@@ -780,6 +819,39 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 function failureReason(error: unknown): string {
 	const message = error instanceof Error ? error.message : ''
 	return redactNamespaceErrorText(message, { cap: false }) || 'unknown error'
+}
+
+/** Why a succeeded run's schema did not reach IAM: `unavailable` is retried by the next settlement, `refused` fails the run. */
+interface SchemaFailure {
+	readonly kind: 'unavailable' | 'refused'
+	readonly reason: string
+}
+
+/**
+ * Write a succeeded run's approved IAM schema and its environment's return origins, before Control marks the run
+ * terminal (ADR-0011, ADR-0050). Null when IAM took them, or when there is nothing to write: no approved access, or an
+ * installation that names no IAM issuer.
+ */
+async function applyApprovedSchema(
+	deps: Pick<RunDeps, 'repositories' | 'iamSchema'>,
+	appEnv: Pick<AppEnvRow, 'app_id' | 'env'>,
+	access: ProviderApprovedAccess | undefined,
+	signal: AbortSignal,
+): Promise<SchemaFailure | null> {
+	if (access === undefined || deps.iamSchema === undefined) return null
+	const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, appEnv.app_id, appEnv.env)
+	try {
+		await deps.iamSchema.apply({
+			app: appEnvironmentId(appEnv.app_id, appEnv.env),
+			schema: access.schema,
+			...(returnOrigins === undefined ? {} : { returnOrigins }),
+			signal,
+		})
+		return null
+	} catch (error) {
+		signal.throwIfAborted()
+		return { kind: isIamUnavailable(error) ? 'unavailable' : 'refused', reason: failureReason(error) }
+	}
 }
 
 /** The environment's approved access as the provider reads it, read again after this run's publication. */
@@ -887,7 +959,7 @@ function withAccess(environment: ProviderEnvironment, access: ProviderAccessFiel
 }
 
 async function settleCancelledInvocation(
-	deps: Pick<RunDeps, 'repositories' | 'provider' | 'platformTransport'>,
+	deps: Pick<RunDeps, 'repositories' | 'provider' | 'platformTransport' | 'iamSchema' | 'runLogs'>,
 	invocation: RunInvocation,
 ): Promise<{ runId: string; status: DeployStatus }> {
 	const settled = await settleRunCancellation(deps, invocation).catch(() => null)
@@ -924,7 +996,7 @@ async function supersedeRun(deps: RunDeps, invocation: RunInvocation, run: RunRo
 	return true
 }
 
-export type RunSettleDeps = Pick<RunDeps, 'repositories' | 'provider' | 'operations' | 'runLogs' | 'platformTransport'> & {
+export type RunSettleDeps = Pick<RunDeps, 'repositories' | 'provider' | 'operations' | 'runLogs' | 'platformTransport' | 'iamSchema'> & {
 	projectTerminal?: typeof projectTerminalRun
 }
 
@@ -986,7 +1058,6 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 		if (reconcile === undefined) return 'untracked'
 		const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
 		if (appEnv === null || appEnv.provider !== deps.provider.id) throw new Error('provider environment disappeared or changed owner')
-		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, run.app_id, run.env)
 		const environment = await providerEnvironment(deps.repositories, appEnv)
 		await invocation.boundary()
 		const outcome = await reconcile({
@@ -996,16 +1067,27 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 			signal: invocation.work.signal,
 			...(run.provider_state_json === null ? {} : { providerState: parseProviderJson(run.provider_state_json, 'provider state') }),
 			startedAtMs: (run.started_at ?? run.created_at) * 1000,
-			...(returnOrigins === undefined ? {} : { returnOrigins }),
 			log: (line) => logSettlement(deps, run, line),
 		})
 		await invocation.boundary()
 		if (outcome.state === 'running') return 'running'
-		const state = outcome.state
-		await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, state, outcome.exitCode ?? null, fence))
-		if (state === 'succeeded' && outcome.dryRun !== true) await retirePlatformKeys(deps, appEnv, run.id)
-		await projectSettled(deps, run.id, state, outcome)
-		return state
+		let state = outcome.state
+		let exitCode = outcome.exitCode ?? null
+		if (state === 'succeeded' && outcome.dryRun !== true) {
+			const schema = await applyApprovedSchema(deps, appEnv, environment.access, invocation.work.signal)
+			if (schema !== null) {
+				await logSettlement(deps, run, `reconcile-schema failed: ${schema.reason}`)
+				if (schema.kind === 'unavailable') return 'running'
+				state = 'failed'
+				exitCode = null
+			}
+			await invocation.boundary()
+		}
+		const finished = state
+		await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, finished, exitCode, fence))
+		if (finished === 'succeeded' && outcome.dryRun !== true) await retirePlatformKeys(deps, appEnv, run.id)
+		await projectSettled(deps, run.id, finished, outcome)
+		return finished
 	} catch (error) {
 		// A cancellation read at a boundary is settled now; a settlement that itself failed waits for the next pass.
 		if (!invocation.lost && invocation.cancelled && !cancelling) return await settleCancellation()
@@ -1044,7 +1126,7 @@ export async function projectTerminalRun(
  * cancellation never implies rollback (ADR-0044).
  */
 export async function settleRunCancellation(
-	deps: Pick<RunDeps, 'repositories' | 'provider' | 'platformTransport'>,
+	deps: Pick<RunDeps, 'repositories' | 'provider' | 'platformTransport' | 'iamSchema' | 'runLogs'>,
 	invocation: RunInvocation,
 ): Promise<'succeeded' | 'failed' | null> {
 	const cancelling = await invocation.read()
@@ -1060,7 +1142,6 @@ export async function settleRunCancellation(
 		if (appEnv.provider !== deps.provider.id) {
 			throw new Error(`provider environment ${cancelling.app_id}/${cancelling.env} changed owner during cancellation`)
 		}
-		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, cancelling.app_id, cancelling.env)
 		const environment = await providerEnvironment(deps.repositories, appEnv)
 		// Only the lease holder may cancel external work, and only while it still holds the lease.
 		invocation.lease.assertHeld()
@@ -1070,14 +1151,23 @@ export async function settleRunCancellation(
 			externalId: cancelling.external_run_id,
 			environment,
 			startedAtMs: (cancelling.started_at ?? cancelling.created_at) * 1000,
-			...(returnOrigins === undefined ? {} : { returnOrigins }),
 			...(cancelling.provider_state_json === null
 				? {}
 				: { providerState: parseProviderJson(cancelling.provider_state_json, `provider state for run ${cancelling.id}`) }),
 		})
 		if (result.state === 'pending') return null
 		outcome = result.outcome ?? 'failed'
-		if (outcome === 'succeeded') activated = appEnv
+		// Cancellation never implies rollback: a version that went live gets its schema like any succeeded run.
+		if (outcome === 'succeeded') {
+			const schema = await applyApprovedSchema(deps, appEnv, environment.access, invocation.lease.signal)
+			if (schema !== null) {
+				await logSettlement(deps, cancelling, `reconcile-schema failed: ${schema.reason}`)
+				if (schema.kind === 'unavailable') return null
+				outcome = 'failed'
+			} else {
+				activated = appEnv
+			}
+		}
 	}
 	await invocation.write((fence) => deps.repositories.runs.markRunCancellationFinished(cancelling.id, outcome, fence))
 	if (activated !== null) await retirePlatformKeys(deps, activated, cancelling.id)
@@ -1085,7 +1175,7 @@ export async function settleRunCancellation(
 }
 
 export async function cancelDeploy(
-	deps: Pick<RunDeps, 'repositories' | 'provider' | 'lock' | 'leaseClock' | 'platformTransport'>,
+	deps: Pick<RunDeps, 'repositories' | 'provider' | 'lock' | 'leaseClock' | 'platformTransport' | 'iamSchema' | 'runLogs'>,
 	run: RunRow,
 ): Promise<void> {
 	const cancelling = await deps.repositories.runs.requestRunCancellation(run.id)

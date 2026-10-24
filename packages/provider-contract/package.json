@@ -24,6 +24,11 @@
 			"bun": "./src/installation.ts",
 			"types": "./src/installation.ts",
 			"default": "./src/installation.ts"
+		},
+		"./conformance": {
+			"bun": "./src/conformance.ts",
+			"types": "./src/conformance.ts",
+			"default": "./src/conformance.ts"
 		}
 	},
 	"scripts": {

@@ -6,7 +6,14 @@
 
 import { compileContract } from '@fabrika/app/contract'
 import { boot } from '@fabrika/app/implement'
-import { type AppEnvironment, type MintFromKeyResult, type MintTokenResult, parseAppEnvironmentId, type PermissionEntry } from '@fabrika/auth-core'
+import {
+	type AppEnvironment,
+	type MintFromKeyResult,
+	type MintTokenResult,
+	parseAppEnvironmentId,
+	parseManagedEnvironment,
+	type PermissionEntry,
+} from '@fabrika/auth-core'
 import { silentLogger } from '@fabrika/proxy-core'
 import { contractProxyTable, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
@@ -79,7 +86,7 @@ async function deployedProxy(): Promise<Worker> {
 		configPath: 'fabrika.config.ts',
 		secrets: {},
 		vars: {},
-		managedEnvironment: { FABRIKA_IAM_ISSUER: ISSUER },
+		managedEnvironment: parseManagedEnvironment({ FABRIKA_IAM_ISSUER: ISSUER }),
 		dryRun: true,
 		signal: new AbortController().signal,
 		log: () => {},

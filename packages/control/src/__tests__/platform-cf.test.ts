@@ -1,13 +1,7 @@
 import { schemaFromContract } from '@fabrika/app/contract'
 import { contractDigest } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
-import {
-	cloudflareArtifact,
-	cloudflareArtifactCodec,
-	type CloudflareRunnerJob,
-	cloudflareStoredTargetCodec,
-	createCloudflareControlProvider,
-} from '@fabrika/provider-cloudflare'
+import { cloudflareArtifact, cloudflareArtifactCodec, type CloudflareRunnerJob, cloudflareStoredTargetCodec } from '@fabrika/provider-cloudflare'
 import { type ProviderDeployInput, type ProviderEnvelope, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import type { RelayResult, RunnerStatus } from '@fabrika/runner-cloudflare'
 import { describe, expect, test } from 'bun:test'
@@ -18,7 +12,6 @@ import {
 	cloudflareControlProvider,
 	cloudflareDeployments,
 	cloudflareGitHubSource,
-	cloudflareIamControlOptions,
 	type CloudflareRunnerService,
 	controlEnv,
 	recoverRunOnRunner,
@@ -62,46 +55,6 @@ const deployInput = (): ProviderDeployInput => ({
 		checkpoint: async () => {},
 		boundary: async () => {},
 	},
-})
-
-/** A whole provider deploy, which a loaded host stretches past the 5 s default. */
-const DEPLOY_TIMEOUT_MS = 30_000
-
-describe('Cloudflare control IAM options', () => {
-	// This test used to assert the OPPOSITE — that the IAM coordinates ride into the job's credentials
-	// under their canonical names. They must not: the container runs the checkout's own code, and
-	// FABRIKA_IAM_PROVISIONING_KEY resolves in IAM to a global admin. The coordinates configure the
-	// PROVIDER, which applies the reconcile itself.
-	test('the IAM coordinates configure the provider and never reach the job', async () => {
-		const env = {
-			FABRIKA_IAM_ISSUER: 'https://iam.example.test',
-			FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning',
-		}
-		expect(cloudflareIamControlOptions(env)).toEqual({
-			propustkaUrl: 'https://iam.example.test',
-			propustkaProvisioningKey: 'px_provisioning',
-		})
-
-		const jobs: CloudflareRunnerJob[] = []
-		const provider = createCloudflareControlProvider({
-			accountId: 'account-1',
-			apiToken: 'token-1',
-			runnerKey: 'test-runner-key',
-			...cloudflareIamControlOptions(env),
-			resolveSource: async () => ({ commitSha: deployInput().app.source.ref }),
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			startRun: async (job) => {
-				jobs.push(job)
-				return { state: 'succeeded' }
-			},
-			cancelRun: async () => {},
-		})
-
-		await provider.deploy(deployInput())
-
-		expect(jobs).toHaveLength(1)
-		expect(Object.keys(jobs[0]?.credentials ?? {})).toEqual(['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN'])
-	}, DEPLOY_TIMEOUT_MS)
 })
 
 function workerBindings(harness: ReturnType<typeof createHarness>): WorkerBindings {

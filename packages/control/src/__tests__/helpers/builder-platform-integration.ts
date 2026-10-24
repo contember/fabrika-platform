@@ -50,6 +50,8 @@ export async function integrationFixture() {
 		mkdirSync(join(root, '.fabrika'), { recursive: true })
 		writeFileSync(join(root, '.fabrika/config.json'), JSON.stringify({ profile: 'app', sessionId: id, createdAt: new Date().toISOString() }))
 		const rpcKey = crypto.randomUUID(), proxyKey = crypto.randomUUID()
+		// Control writes each succeeded run's schema to IAM's admin surface with it (ADR-0011).
+		const provisioningKey = `px_${crypto.randomUUID()}`
 		const iamApp = createIamApp({ rpcKey, proxyKey })
 		// Bound to the IPv4 loopback the URLs below reach: `localhost` binds `::1` first on an IPv6-first
 		// host, where Bun's fetch to `localhost` still connects over IPv4.
@@ -79,7 +81,7 @@ export async function integrationFixture() {
 			ENVIRONMENT: 'local',
 			ISSUER: issuer,
 			FABRIKA_IAM_SIGNING_KEYS: '',
-			FABRIKA_IAM_PROVISIONING_KEY: '',
+			FABRIKA_IAM_PROVISIONING_KEY: provisioningKey,
 			OIDC_ENABLED: 'false',
 			PASSWORD_ENABLED: 'true',
 		}
@@ -167,6 +169,7 @@ export async function integrationFixture() {
 			ENVIRONMENT: 'local',
 			IAM: new HttpIamRpc({ origin: issuer, key: rpcKey }),
 			FABRIKA_IAM_ISSUER: issuer,
+			FABRIKA_IAM_PROVISIONING_KEY: provisioningKey,
 			FABRIKA_CONTROL_DOMAIN: origin,
 		}
 		const options = { stateDir: join(directory, 'state'), credentialDir: join(directory, 'keys'), dataDir: join(directory, 'data') }

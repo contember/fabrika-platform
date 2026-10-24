@@ -186,7 +186,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 
 	return {
 		env,
-		provider: zeropsControlProvider(env, source, github.port),
+		provider: zeropsControlProvider(source, github.port),
 		sourceConnection: createSourceConnections({
 			provider: 'zerops',
 			vault: () => vault(env),

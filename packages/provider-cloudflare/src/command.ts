@@ -1,4 +1,4 @@
-import { type AppEnvironment, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type AppEnvironment, parseAppEnvironmentId, parseManagedEnvironment } from '@fabrika/auth-core'
 import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
 import type { CloudflareAppConfig } from './authoring'
@@ -8,6 +8,7 @@ import {
 	APPROVED_ACCESS_FILE_ENV,
 	CROSS_ORIGINS_ENV,
 	INSTALLATION_APPS_ENV,
+	OPERATIONS_ORIGIN_ENV,
 	type RunnerApprovedAccess,
 	runnerApprovedAccessSchema,
 } from './runner-protocol'
@@ -42,8 +43,8 @@ const requiredValues = (names: readonly string[] | undefined): Record<string, st
 }
 
 /**
- * Decode `FABRIKA_IAM_RETURN_ORIGINS`, the comma-separated set the control plane projects into the
- * deploy environment (ADR-0022). Undefined for an absent or empty value, so a deploy with nothing to
+ * Decode `FABRIKA_IAM_RETURN_ORIGINS`, the comma-separated set the installation's workflow hands the
+ * platform's own deploy (ADR-0022). Undefined for an absent or empty value, so a deploy with nothing to
  * project leaves IAM's registry alone rather than clearing it. Part of the executor's environment
  * contract, exported for the test that pins it; not part of the package's public surface.
  */
@@ -155,11 +156,13 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 	const returnOrigins = parseReturnOrigins(environmentValue('FABRIKA_IAM_RETURN_ORIGINS'))
 	const installationApps = parseInstallationApps(environmentValue(INSTALLATION_APPS_ENV))
 	const crossOrigins = parseCrossOrigins(environmentValue(CROSS_ORIGINS_ENV))
+	const operationsOrigin = environmentValue(OPERATIONS_ORIGIN_ENV)
 	return deploy({
 		appId: loaded.config.id,
 		env: options.env,
 		...(domain === undefined ? {} : { domain }),
 		...(crossOrigins === undefined ? {} : { crossOrigins }),
+		...(operationsOrigin === undefined ? {} : { operationsOrigin }),
 		...(returnOrigins === undefined ? {} : { returnOrigins }),
 		...(installationApps === undefined ? {} : { installationApps }),
 		...approved,
@@ -168,7 +171,8 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
 		secrets: declaredValues(loaded.config.pipeline?.secrets),
 		vars: declaredValues(loaded.config.pipeline?.vars),
-		managedEnvironment: requiredValues(options.managedVarNames),
+		// The runner hands what Control handed its job; parsed here, where it enters the executor.
+		managedEnvironment: parseManagedEnvironment(requiredValues(options.managedVarNames)),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
 		log: options.log ?? ((line) => console.log(line)),

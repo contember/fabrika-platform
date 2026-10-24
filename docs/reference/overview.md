@@ -298,8 +298,8 @@ caller (`snapshotSurface`). A widening on an environment with `protected` set (`
 default) parks the run in `awaiting_approval`; it publishes nothing until a person approves it in the
 console. Otherwise the run publishes its snapshot with a compare-and-swap on `app_envs.generation` and
 `protection_revision`, under the namespace lease. Every provider environment and namespace member then carries
-`approvedSnapshot`'s access, and the providers publish a contract application's endpoint table and reconcile
-its IAM schema from it, never from the artifact. A commit without `fabrika.contract.ts` fails its run before the
+`approvedSnapshot`'s access: the providers publish a contract application's endpoint table from it, and Control
+writes its IAM schema from it once the run succeeds, never from the artifact. A commit without `fabrika.contract.ts` fails its run before the
 provider is called: Fabrika deploys an application only with a contract. Approving needs `access.approve` (authorization) from a human user principal on a
 console request from Control's own origin (admission).
 The same person turns an environment's approvals off or on in the console, under "Access approvals" on the
@@ -332,15 +332,15 @@ for both service claims and the YAML sent to Zerops. The app target envelope
 version 2 stores only the app service id; the assigned deployment namespace
 supplies the Zerops project and proxy coordinates. A queued deploy never imports
 app TypeScript: the Bun control process applies the compiled import, triggers the
-service pipeline, polls its app-version, and reconciles the IAM schema.
+service pipeline and polls its app-version; once the version is ACTIVE, Control writes
+the IAM schema, as it does after a deploy on any provider.
 
 Control delivers the repository itself. Before the Operations release context
 exists, control resolves the requested ref and fails the run when the
 `zerops.yaml` digest at the resolved commit differs from the registered artifact.
 The deploy then runs `apply-import → verify-exposure → write-service-env →
-raise-start-memory → size-database → reserve-version → upload-source → trigger-build → await-version → reconcile-schema`
-(`packages/provider-zerops/src/plan.ts`). `reconcile-schema` runs only when the
-app declares a schema. `raise-start-memory` raises the deploy service's minimum
+raise-start-memory → size-database → reserve-version → upload-source → trigger-build → await-version`
+(`packages/provider-zerops/src/plan.ts`). `raise-start-memory` raises the deploy service's minimum
 RAM to what the generated init commands need. `size-database` sizes each
 process's database connections to the database's limit and raises the
 database's minimum RAM where that leaves too few. `verify-exposure` refuses the run, and raises an

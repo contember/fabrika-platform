@@ -22,7 +22,13 @@ async function fixture() {
 	const row = await db.runs.createRun({ id: 'run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 	const locks = new RecordingLocks(new SqlDeployLocks(d1, { now: clock.now }), clock)
 	const advance = (ms: number) => clock.advance(ms, locks.idle)
-	const provider: ControlProvider = { id: TEST_PROVIDER_ID, normalizeRegistration: (input) => input, deploy: async () => ({ state: 'succeeded' }) }
+	const provider: ControlProvider = {
+		id: TEST_PROVIDER_ID,
+		normalizeRegistration: (input) => input,
+		// The commit is pinned, so a non-dry deploy publishes the contract and hands over its approved access.
+		resolveSource: async () => ({ commitSha: 'c'.repeat(40) }),
+		deploy: async () => ({ state: 'succeeded' }),
+	}
 	const runLogs = new Map<string, string>()
 	const deps: RunDeps = {
 		repositories: db,

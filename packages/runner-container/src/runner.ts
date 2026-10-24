@@ -13,6 +13,7 @@ import {
 	type CloudflareRunnerJob,
 	CROSS_ORIGINS_ENV,
 	INSTALLATION_APPS_ENV,
+	OPERATIONS_ORIGIN_ENV,
 	RUNNER_OUTCOME_FILE_ENV,
 	type RunnerIamReconcile,
 	type RunnerOutcomeFile,
@@ -446,11 +447,6 @@ export class Runner {
 		if (this.job.domain !== undefined) {
 			env['FABRIKA_CONTROL_DOMAIN'] = this.job.domain
 		}
-		// The control plane's projection of where IAM may hand this app a session (ADR-0022). Not a
-		// secret — it is public addressing — but it travels the same env transport as everything else.
-		if (this.job.returnOrigins !== undefined && this.job.returnOrigins.length > 0) {
-			env['FABRIKA_IAM_RETURN_ORIGINS'] = this.job.returnOrigins.join(',')
-		}
 		if (this.job.stateNamespace !== undefined) {
 			env['CLOUDFLARE_STATE_NAMESPACE'] = this.job.stateNamespace
 		}
@@ -472,6 +468,8 @@ export class Runner {
 		else env[INSTALLATION_APPS_ENV] = JSON.stringify(this.job.installationApps)
 		if (this.job.crossOrigins === undefined) delete env[CROSS_ORIGINS_ENV]
 		else env[CROSS_ORIGINS_ENV] = JSON.stringify(this.job.crossOrigins)
+		if (this.job.operationsOrigin === undefined) delete env[OPERATIONS_ORIGIN_ENV]
+		else env[OPERATIONS_ORIGIN_ENV] = this.job.operationsOrigin
 		if (this.job.approvedAccess === undefined) delete env[APPROVED_ACCESS_FILE_ENV]
 		else env[APPROVED_ACCESS_FILE_ENV] = this.approvedAccessFilePath
 		return env

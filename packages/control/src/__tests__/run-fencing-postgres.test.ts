@@ -5,6 +5,8 @@ import { createControlRepositories } from '../db'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
+import { contractCommits } from './helpers/commits'
+import { fixtureProtect } from './helpers/lock'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 import { runFencingContract } from './helpers/run-fencing'
 
@@ -35,6 +37,8 @@ describe.skipIf(!hasPostgres)('run fencing on Postgres', () => {
 			providerTargetJson: envelope,
 			providerArtifactJson: envelope,
 		})
+		// Unprotected, so the first contract publishes without an approval (ADR-0050).
+		await fixtureProtect(repositories.registry, locks, { appId, env: 'prod' }, false)
 		for (const id of ['runtime-first', 'runtime-next']) {
 			await repositories.runs.createRun({ id, appId, env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		}
@@ -43,9 +47,12 @@ describe.skipIf(!hasPostgres)('run fencing on Postgres', () => {
 			lock: locks,
 			secrets: new VaultSecretResolver({}),
 			logs: { put: async () => {} },
+			commits: contractCommits(appId),
 			provider: {
 				id: 'runtime-test',
 				normalizeRegistration: (input) => input,
+				// The commit is pinned, so a non-dry deploy publishes the contract and hands over its approved access.
+				resolveSource: async () => ({ commitSha: 'c'.repeat(40) }),
 				deploy: async (input) => {
 					await input.events.externalId('external', { appVersionId: 'external', triggered: false })
 					await input.events.checkpoint({ appVersionId: 'external', triggered: true })

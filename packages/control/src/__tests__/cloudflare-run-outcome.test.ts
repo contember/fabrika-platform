@@ -8,6 +8,7 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import { ControlApiError } from '../api/domain'
 import { setEnvironmentProtectionUseCase } from '../approval/api'
 import { type ControlRepositories } from '../db'
+import type { IamSchemaPort } from '../iam-schema'
 import { type CloudflareRunnerService, recoverRunOnRunner, startRunOnRunner } from '../platform-cf'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
@@ -16,10 +17,11 @@ import { memoryCommits } from './helpers/commits'
 import { BASE } from './helpers/contracts'
 import { createHarness } from './helpers/harness'
 import { fixtureProtect, fixtureRuns, makeFakeLock } from './helpers/lock'
+import { fixedProxySecrets } from './helpers/vault'
 
 // Control is the only writer of a Cloudflare run's row (ADR-0044). The runner persists its terminal
-// status, and Control applies the approved contract's IAM schema once, either on the awaited `startRun`
-// result or, after a Control restart, from the next provider reconcile.
+// status, and Control applies the approved contract's IAM schema once (ADR-0011), either on the awaited
+// `startRun` result or, after a Control restart, on the next provider reconcile.
 
 const COMMIT = 'abcdef1234567890abcdef1234567890abcdef12'
 const RUNNER_KEY = 'test-runner-key'
@@ -63,17 +65,11 @@ function fakeRunner(options: { callerLost: boolean }): { service: CloudflareRunn
 	return { service, persisted }
 }
 
-function cloudflareProvider(runner: CloudflareRunnerService, iamCalls: string[], afterIam: () => void = () => {}): ControlProvider {
+function cloudflareProvider(runner: CloudflareRunnerService): ControlProvider {
 	return createCloudflareControlProvider({
 		accountId: 'account',
 		apiToken: 'token',
 		runnerKey: RUNNER_KEY,
-		propustkaUrl: 'https://iam.example.com',
-		propustkaProvisioningKey: 'px_admin',
-		reconcileSchema: async (input) => {
-			iamCalls.push(input.app)
-			afterIam()
-		},
 		resolveSource: async () => ({ commitSha: COMMIT }),
 		prepareClone: async (source) => ({ repoUrl: `https://${source.repoUrl}` }),
 		startRun: (job) => startRunOnRunner(runner, job),
@@ -82,10 +78,27 @@ function cloudflareProvider(runner: CloudflareRunnerService, iamCalls: string[],
 	})
 }
 
-function deps(db: ControlRepositories, provider: ControlProvider, files: Record<string, string> = { 'fabrika.contract.ts': BASE }): RunDeps {
+/** Control's IAM port, recording the IAM application id of every schema it applies. */
+function iam(iamCalls: string[], afterIam: () => void = () => {}): IamSchemaPort {
+	return {
+		apply: async (input) => {
+			iamCalls.push(input.app)
+			afterIam()
+		},
+	}
+}
+
+function deps(
+	db: ControlRepositories,
+	provider: ControlProvider,
+	iamSchema: IamSchemaPort,
+	files: Record<string, string> = { 'fabrika.contract.ts': BASE },
+): RunDeps {
 	return {
 		repositories: db,
 		provider,
+		iamSchema,
+		proxySecrets: fixedProxySecrets,
 		secrets: new VaultSecretResolver({}),
 		lock: makeFakeLock(db),
 		logs: { put: () => Promise.resolve() },
@@ -100,7 +113,7 @@ describe('Cloudflare run outcome through Control', () => {
 		const iamCalls: string[] = []
 		const { service, persisted } = fakeRunner({ callerLost: false })
 
-		expect(await executeDeploy(deps(db, cloudflareProvider(service, iamCalls), {}), { runId })).toEqual({ runId, status: 'failed' })
+		expect(await executeDeploy(deps(db, cloudflareProvider(service), iam(iamCalls), {}), { runId })).toEqual({ runId, status: 'failed' })
 		expect(persisted.size).toBe(0)
 		expect(iamCalls).toEqual([])
 		expect(await db.registry.getAppEnv('notes', 'prod')).toMatchObject({ published_run_id: null })
@@ -111,15 +124,15 @@ describe('Cloudflare run outcome through Control', () => {
 		const runId = await seedCloudflareRun(db)
 		const iamCalls: string[] = []
 		const { service } = fakeRunner({ callerLost: false })
-		const provider = cloudflareProvider(service, iamCalls)
+		const provider = cloudflareProvider(service)
 
-		expect(await executeDeploy(deps(db, provider), { runId })).toEqual({ runId, status: 'succeeded' })
+		expect(await executeDeploy(deps(db, provider, iam(iamCalls)), { runId })).toEqual({ runId, status: 'succeeded' })
 		expect(iamCalls).toEqual(['notes@prod'])
 		const finished = await db.runs.getRun(runId)
 		expect(finished?.status).toBe('succeeded')
 
-		expect(await executeDeploy(deps(db, provider), { runId })).toEqual({ runId, status: 'skipped' })
-		expect(await reconcileProviderRuns(deps(db, provider))).toMatchObject({ checked: 0, succeeded: 0 })
+		expect(await executeDeploy(deps(db, provider, iam(iamCalls)), { runId })).toEqual({ runId, status: 'skipped' })
+		expect(await reconcileProviderRuns(deps(db, provider, iam(iamCalls)))).toMatchObject({ checked: 0, succeeded: 0 })
 		expect(iamCalls).toEqual(['notes@prod'])
 		expect(await db.runs.getRun(runId)).toEqual(finished)
 	})
@@ -130,20 +143,20 @@ describe('Cloudflare run outcome through Control', () => {
 		const iamCalls: string[] = []
 		const { service, persisted } = fakeRunner({ callerLost: true })
 
-		expect(await executeDeploy(deps(db, cloudflareProvider(service, iamCalls)), { runId })).toEqual({ runId, status: 'running' })
+		expect(await executeDeploy(deps(db, cloudflareProvider(service), iam(iamCalls)), { runId })).toEqual({ runId, status: 'running' })
 		expect(persisted.get(runId)?.state).toBe('succeeded')
 		expect((await db.runs.getRun(runId))?.status).toBe('running')
 		expect(iamCalls).toEqual([])
 
-		const restarted = cloudflareProvider(service, iamCalls)
-		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 1, succeeded: 1 })
+		const restarted = cloudflareProvider(service)
+		expect(await reconcileProviderRuns(deps(db, restarted, iam(iamCalls)))).toMatchObject({ checked: 1, succeeded: 1 })
 		expect(iamCalls).toEqual(['notes@prod'])
 		const settled = await db.runs.getRun(runId)
 		expect(settled?.status).toBe('succeeded')
 		expect(settled?.exit_code).toBe(0)
 
-		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 0, succeeded: 0 })
-		expect(await executeDeploy(deps(db, restarted), { runId })).toEqual({ runId, status: 'skipped' })
+		expect(await reconcileProviderRuns(deps(db, restarted, iam(iamCalls)))).toMatchObject({ checked: 0, succeeded: 0 })
+		expect(await executeDeploy(deps(db, restarted, iam(iamCalls)), { runId })).toEqual({ runId, status: 'skipped' })
 		expect(iamCalls).toEqual(['notes@prod'])
 		expect(await db.runs.getRun(runId)).toEqual(settled)
 	})
@@ -157,7 +170,7 @@ describe('Cloudflare run outcome through Control', () => {
 		const iamCalls: string[] = []
 		const { service } = fakeRunner({ callerLost: false })
 
-		expect(await reconcileProviderRuns(deps(db, cloudflareProvider(service, iamCalls)))).toMatchObject({ checked: 1, inProgress: 1 })
+		expect(await reconcileProviderRuns(deps(db, cloudflareProvider(service), iam(iamCalls)))).toMatchObject({ checked: 1, inProgress: 1 })
 		expect((await db.runs.getRun(runId))?.status).toBe('running')
 		expect(iamCalls).toEqual([])
 	})
@@ -167,7 +180,7 @@ describe('Cloudflare run outcome through Control', () => {
 		const runId = await seedCloudflareRun(db)
 		const iamCalls: string[] = []
 		const { service } = fakeRunner({ callerLost: true })
-		expect(await executeDeploy(deps(db, cloudflareProvider(service, iamCalls)), { runId })).toEqual({ runId, status: 'running' })
+		expect(await executeDeploy(deps(db, cloudflareProvider(service), iam(iamCalls)), { runId })).toEqual({ runId, status: 'running' })
 
 		let stolen = false
 		const stealLease = (): void => {
@@ -175,10 +188,11 @@ describe('Cloudflare run outcome through Control', () => {
 			stolen = true
 			sqlite.run(`UPDATE deploy_locks SET holder = 'intruder'`)
 		}
-		const restarted = cloudflareProvider(service, iamCalls, stealLease)
+		const restarted = cloudflareProvider(service)
+		const stealing = iam(iamCalls, stealLease)
 		const diagnostic = spyOn(console, 'error').mockImplementation(() => {})
 		try {
-			expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 1, succeeded: 0, inProgress: 1 })
+			expect(await reconcileProviderRuns(deps(db, restarted, stealing))).toMatchObject({ checked: 1, succeeded: 0, inProgress: 1 })
 		} finally {
 			diagnostic.mockRestore()
 		}
@@ -187,11 +201,11 @@ describe('Cloudflare run outcome through Control', () => {
 
 		// The intruder's lease expires.
 		sqlite.run('DELETE FROM deploy_locks')
-		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 1, succeeded: 1 })
+		expect(await reconcileProviderRuns(deps(db, restarted, stealing))).toMatchObject({ checked: 1, succeeded: 1 })
 		expect(iamCalls).toEqual(['notes@prod', 'notes@prod'])
 		const settled = await db.runs.getRun(runId)
 		expect(settled?.status).toBe('succeeded')
-		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 0 })
+		expect(await reconcileProviderRuns(deps(db, restarted, stealing))).toMatchObject({ checked: 0 })
 		expect(iamCalls).toEqual(['notes@prod', 'notes@prod'])
 		expect(await db.runs.getRun(runId)).toEqual(settled)
 	})
@@ -242,7 +256,7 @@ describe('Cloudflare run outcome through Control', () => {
 		})
 		const iamCalls: string[] = []
 
-		expect(await executeDeploy(deps(db, cloudflareProvider(runner(false), iamCalls)), { runId })).toEqual({ runId, status: 'succeeded' })
+		expect(await executeDeploy(deps(db, cloudflareProvider(runner(false)), iam(iamCalls)), { runId })).toEqual({ runId, status: 'succeeded' })
 		expect(during).toEqual([409])
 		expect(iamCalls).toEqual(['notes@prod'])
 		expect(await db.registry.getAppEnv('notes', 'prod')).toMatchObject({ protected: 0, protection_revision: 1 })
@@ -257,12 +271,12 @@ describe('Cloudflare run outcome through Control', () => {
 			actor: 'user:test',
 			commitSha: COMMIT,
 		})
-		expect(await executeDeploy(deps(db, cloudflareProvider(runner(true), iamCalls)), { runId: orphaned })).toEqual({
+		expect(await executeDeploy(deps(db, cloudflareProvider(runner(true)), iam(iamCalls)), { runId: orphaned })).toEqual({
 			runId: orphaned,
 			status: 'running',
 		})
 		expect(await protect()).toBe(409)
-		expect(await reconcileProviderRuns(deps(db, cloudflareProvider(runner(true), iamCalls)))).toMatchObject({ checked: 1, succeeded: 1 })
+		expect(await reconcileProviderRuns(deps(db, cloudflareProvider(runner(true)), iam(iamCalls)))).toMatchObject({ checked: 1, succeeded: 1 })
 		expect(await protect()).toBe(200)
 		expect(await db.registry.getAppEnv('notes', 'prod')).toMatchObject({ protected: 1, protection_revision: 2 })
 	})

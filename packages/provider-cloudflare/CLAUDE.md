@@ -21,10 +21,10 @@ this one import.
   exactly `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`, `cloudflareRunnerJobSchema` refuses any other
   key, and the checkout's own `pipeline.build` child runs with those names removed from its
   environment (`CommandSpec.omitEnv`). IAM's provisioning key never leaves the control plane.
-- **The executor REPORTS, it does not call IAM.** It writes `RunnerOutcomeFile` (`$FABRIKA_RUNNER_OUTCOME_FILE`);
-  the control-side `deploy` and `reconcile` decide what IAM hears, with the control plane's own key and the projected
-  return origins. They apply Control's approved contract's `access.schema` (`environment.access`, ADR-0050),
-  whatever the runner reported. Without approved access, any report fails the run.
+- **Neither the executor nor this provider calls IAM for an application (ADR-0011).** The executor writes
+  `RunnerOutcomeFile` (`$FABRIKA_RUNNER_OUTCOME_FILE`); the control-side `deploy` and `reconcile` only validate its
+  report: a report without Control's approved access, or from a dry run, fails the run. Control writes the approved
+  contract's `access.schema` (ADR-0050) and the return origins itself once the run succeeds, whatever the runner reported.
 - **A platform deploy (`allow`) registers its component's schema with IAM ITSELF** (ADR-0058). The installation's own
   deploy runs fabrika's code and holds IAM's provisioning key, so `reconcile-schema` calls IAM at
   `CloudflareDeployerOptions.platformIam` (`FABRIKA_IAM_ISSUER` + `FABRIKA_IAM_PROVISIONING_KEY`, read by
@@ -38,7 +38,7 @@ this one import.
   `resources()` runs the checkout's code (parsed with `appSchemaSchema`, deep-frozen); never read `config.schema`
   after it. `createCloudflareProxyWorker` takes an endpoint table or an installation table, and refuses `gates`.
 - **The job carries Control's approved access** (`CloudflareRunnerJob.approvedAccess`: the contract and its
-  digest). `buildJob` refuses a non-dry deploy without it, and `cloudflareRunnerJobSchema` parses the contract and
+  digest). Control refuses a non-dry deploy without it, the job schema refuses one too, and it parses the contract and
   checks its digest. The runner writes it to `<workspace>/<runId>.access.json` beside the checkout and names it in
   `FABRIKA_APPROVED_ACCESS_FILE`, set after every job-supplied name; the executor reads it (`readApprovedAccess`)
   before the config runs. Unset outside a runner (a local deploy).
@@ -77,10 +77,10 @@ this one import.
   `TMPDIR` only. An older release, a Control that
   names no release, and a local deploy keep their authored `main` and the old plan (ADR-0062).
 - **Every managed credential is a Worker secret, uploaded with the version** (`src/managed-secrets.ts`): token keys,
-  workload keys, mail, the platform transport, the Operations DSN, the IAM RPC key and the proxy secret. Only the names
-  in `PUBLIC_MANAGED_VARIABLES` (the release, the digest, the issuer and audience, the app id, the environment, the IAM
-  RPC URL, `FABRIKA_APP_ORIGIN`), each import's `_URL` and the platform receivers' URLs are plain vars; any other name
-  is a secret (fail closed). `wrangler deploy --secrets-file` (wrangler 4.74 or newer) reads them from a 0600 file in a
+  workload keys, mail, the platform transport, the Operations DSN, the IAM RPC key and the proxy secret. The executor
+  parses what its job carries with `parseManagedEnvironment` (`@fabrika/auth-core`, in `command.ts`), and an entry is a
+  secret exactly when it is a `credential` (`isManagedCredential`, fail closed); the identities, origins and the release
+  are plain vars. `wrangler deploy --secrets-file` (wrangler 4.74 or newer) reads them from a 0600 file in a
   directory of its own, removed however the deploy ends; never write one into a generated config. After the deploy,
   `deleteStaleSecrets` deletes each framework secret the Worker still holds that this deploy no longer writes.
 - **Control issues a proxy secret per environment** because the provider declares `applicationHopSecret`
@@ -176,7 +176,9 @@ this one import.
   wrangler's `define` (`PROXY_MANIFEST_DEFINE`, read by `proxy-worker.ts` as `__FABRIKA_PROXY_MANIFEST__`), not a
   Worker variable, which Cloudflare caps at 5,120 bytes; the wire format is unchanged. An IAM schema whose `contract: true` disagrees with the
   contract is refused. The manifest entry carries the contract's CSP origins and the origin of the run's
-  `FABRIKA_OPERATIONS_DSN` (`operationsOrigin`, never the key), and the Worker replaces every header of the policy on
+  Operations ingest (`operationsOrigin`, never the key): Control names it (`ProviderEnvironment.operationsOrigin`, the
+  job's `operationsOrigin`, `FABRIKA_OPERATIONS_ORIGIN` set last by the runner); a job from an older Control names none,
+  and the executor derives it from `FABRIKA_OPERATIONS_DSN`. The Worker replaces every header of the policy on
   the application's answer, or applies the file treatment for a download endpoint or a `response: 'file'` row, sets a cacheable row's lifetime
   on its 200 (`applyAnswerCache`), deletes the reporting
   headers, and answers a throwing `APP` binding with a fixed 502 and a missing one with a 503 under the same

@@ -8,7 +8,7 @@ import { createSourceConnections } from './github/connections/port'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
 import { reconcileProviderRuns } from './provider-reconcile'
 import type { ControlJobMessage } from './run-lifecycle'
-import { locks, operationsReleaseDeps, platformTransportDeps, vault } from './services'
+import { iamSchemaDeps, locks, operationsReleaseDeps, platformTransportDeps, vault } from './services'
 
 /**
  * The fabrika control plane — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint`
@@ -71,6 +71,7 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 					lock: locks(env),
 					operations: operationsReleaseDeps(env),
 					...platformTransportDeps(env),
+					...iamSchemaDeps(env),
 				}),
 		})
 	}

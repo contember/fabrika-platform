@@ -102,6 +102,8 @@ function provider(inputs: ProviderDeployInput[]): ControlProvider {
 		normalizeRegistration(input: ProviderRegistrationInput) {
 			return input
 		},
+		// The commit is pinned, so a non-dry deploy publishes the contract and hands over its approved access.
+		resolveSource: async () => ({ commitSha: COMMIT }),
 		async deploy(input) {
 			inputs.push(input)
 			await input.events.externalId('provider-operation')
@@ -285,7 +287,7 @@ describe('Control release projection', () => {
 			deploy: async (input) => {
 				calls.push('deploy')
 				expect(input.app.source.ref).toBe(exactCommit)
-				expect(input.managedEnvironment[FABRIKA_RELEASE]).toContain(exactCommit)
+				expect(input.managedEnvironment[FABRIKA_RELEASE]?.value).toContain(exactCommit)
 				expect(Number((await harness.repositories.operationsReleases.get(runId))?.desired_revision)).toBe(1)
 				await input.events.externalId('provider-operation')
 				const acceptedProjection = await harness.repositories.operationsReleases.get(runId)
@@ -334,7 +336,7 @@ describe('Control release projection', () => {
 
 		expect(await executeDeploy(deps, { runId })).toEqual({ runId, status: 'succeeded' })
 		expect((await harness.repositories.runs.getRun(runId))?.status).toBe('succeeded')
-		const release = inputs[0]?.managedEnvironment?.[FABRIKA_RELEASE]
+		const release = inputs[0]?.managedEnvironment?.[FABRIKA_RELEASE]?.value
 		expect(release).toContain(`/notes/prod/default/${COMMIT}`)
 		const pending = await harness.repositories.operationsReleases.get(runId)
 		expect(Number(pending?.desired_revision)).toBe(3)
@@ -364,6 +366,7 @@ describe('Control release projection', () => {
 		const echoing: ControlProvider = {
 			id: 'memory',
 			normalizeRegistration: (input: ProviderRegistrationInput) => input,
+			resolveSource: async () => ({ commitSha: COMMIT }),
 			async deploy(input) {
 				input.events.log(`build: uploading with ${input.artifactUpload?.bearer ?? 'no bearer'}`)
 				return { state: 'succeeded', exitCode: 0 }
@@ -444,7 +447,7 @@ describe('Control release projection', () => {
 				},
 			}
 			expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
-			expect(inputs[0]?.managedEnvironment?.[FABRIKA_RELEASE]).toContain(COMMIT)
+			expect(inputs[0]?.managedEnvironment?.[FABRIKA_RELEASE]?.value).toContain(COMMIT)
 			expect(inputs[0]?.artifactUpload).toBeUndefined()
 		}
 	})

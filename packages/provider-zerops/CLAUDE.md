@@ -113,15 +113,16 @@ bun test
   `FABRIKA_IAM_RPC_URL` and `FABRIKA_IAM_RPC_KEY` among them) are plain service variables each deploy
   overwrites (null removes), all written before the build request so it never meets `userDataSyncRunning`.
   App vars, secrets and descriptors may not author any name of `FRAMEWORK_VARIABLE_NAMES` (`@fabrika/auth-core`,
-  the one list Control refuses too); `MANAGED_KEYS` is the part of it Control hands every deploy.
+  the one list Control refuses too); `MANAGED_VARIABLE_NAMES` (`@fabrika/auth-core`) is the part of it Control hands every
+  deploy, parsed once by Control (`parseManagedEnvironment`); this provider re-checks none of it.
   `FABRIKA_APP_ORIGIN` is read back and compared; `FABRIKA_TOKEN_KEYS` is sensitive, rewritten every deploy, and
   removed by a null. Beside them Control hands each job's and webhook's key (`FABRIKA_<KIND>_<NAME>_KEY`), each public
   procedure's (`FABRIKA_PROCEDURE_<ID>_<8 hex>_KEY`) and each connector
   import's `FABRIKA_CONNECT_<IMPORT>_KEY` and `_URL`, and the platform transport's `FABRIKA_PLATFORM_<RECEIVER>_KEY`
-  (sensitive) and `_URL` (plain, Control's public origin, http allowed for the local stack's) (`parseManagedEnvironment`: a `px_` key, an origin,
-  or the deploy is refused, and so is any other family name): `write-service-env` writes each and deletes every
-  service variable of those families that this deploy did not hand, so a removed workload's or import's key does
-  not stay readable.
+  (sensitive) and `_URL` (plain, Control's public origin, http allowed for the local stack's). `write-service-env` writes
+  each entry sensitive exactly when Control marked it a `credential`, and deletes what `staleManagedVariables` names (a
+  managed name handed null, or a family member not handed, but never the descriptor's `FABRIKA_RELEASE`), so a removed
+  workload's or import's key does not stay readable.
 - **A contract application's setup is the platform's (ADR-0043, `src/execution.ts`).** A config with
   `target.contract` compiles to a manifest with `target.contract` (digest, health path, jobs) and optional
   `runtimePackages` from `ZEROPS_RUNTIME_PACKAGES`. `lockedAuthoredBuild` refuses every key of the selected
@@ -205,9 +206,9 @@ bun test
   `src/namespace/manifest.ts` builds a member's endpoint table from `member.access`
   (`contractProxyTable(access.contract)`, the upstream from the artifact); a member without approved access is
   not routed and its artifact is not decoded, so a legacy `proxy.gates` artifact cannot stop a republish. `lockedExecutionFor` locks the descriptor down whenever `environment.access` is present — a config
-  that drops `target.contract` cannot drop it — and refuses a non-dry deploy without it. `approvedSchemaOf` gives
-  the IAM schema of deploy, cancel and reconcile: `access.schema`, otherwise none. Control refuses a commit
-  without `fabrika.contract.ts` before it calls the provider.
+  that drops `target.contract` cannot drop it. Control refuses a non-dry deploy without approved access, and a commit
+  without `fabrika.contract.ts`, before it calls the provider. The deploy has no IAM step: once a version is ACTIVE,
+  Control writes `access.schema` itself (ADR-0011).
 - **The namespace proxy attempt follows the same rule** (`republishProxy`, `src/namespace/proxy-attempt.ts`).
   `proxyBuild` on the namespace target is `{ appVersionId, triggered, manifestSha256? }` and the codec
   refuses any other shape. An inherited untriggered attempt is deleted; a triggered one is polled, and with
@@ -225,9 +226,8 @@ bun test
   `namespaceProxySecrets` (`src/namespace/proxy-secrets.ts`) maps each contract member of the manifest to
   `proxySecretVariable(id)` and refuses a member Control handed no `proxySecret`; the attempt writes each
   one to the proxy service, without read-back, before the version is reserved, and the attempt identity
-  covers their digest. The deployer refuses a non-dry-run contract deploy whose managed
-  `FABRIKA_PROXY_SECRET` is null, and writes none to any other application: only a contract application
-  checks it, so another would merely hold a credential its own code can print. Never log either value.
+  covers their digest. Control refuses a non-dry deploy behind a namespace proxy when it has no proxy secret to hand
+  (`FABRIKA_PROXY_SECRET`), and hands none to a dry run; the deployer writes what it was handed. Never log either value.
 - **A contract member's manifest entry carries `operationsOrigin`** when Control handed the member one (the origin
   of its active ingest DSN, never the DSN): the proxy's header policy admits it in `connect-src`, as the framework
   does (ADR-0022 "Response headers"). `compileNamespaceProxyManifest` refuses one that is not an exact http(s) origin.

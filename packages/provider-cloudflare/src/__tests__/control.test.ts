@@ -1,5 +1,4 @@
-import { ReconcileSchemaError } from '@fabrika/auth'
-import { contractDigest } from '@fabrika/auth-core'
+import { contractDigest, parseManagedEnvironment } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	ProviderDeployInput,
@@ -8,6 +7,7 @@ import type {
 	ProviderRegistrationInput,
 } from '@fabrika/provider-contract'
 import { abortableWait, ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { describeControlProviderConformance } from '@fabrika/provider-contract/conformance'
 import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
@@ -71,10 +71,10 @@ const deployInput = (): ProviderDeployInput => ({
 	},
 	secrets: { API_KEY: 'secret' },
 	vars: { FEATURE: 'on' },
-	managedEnvironment: {
+	managedEnvironment: parseManagedEnvironment({
 		FABRIKA_OPERATIONS_DSN: 'https://public@errors.test/1',
 		FABRIKA_RELEASE: null,
-	},
+	}),
 	dryRun: true,
 	artifactUpload: {
 		url: 'https://operations.example.com/api/artifacts/source-maps/',
@@ -514,7 +514,6 @@ describe('Cloudflare control provider', () => {
 			accountId: 'account-1',
 			apiToken: 'token-1',
 			runnerKey: 'test-runner-key',
-			propustkaUrl: 'https://iam.example.com',
 			...sourceOptions,
 			prepareClone: async (source) => ({ repoUrl: `${source.repoUrl}?token=short-lived`, ref: 'different-ignored-ref' }),
 			startRun: async (job) => {
@@ -590,7 +589,7 @@ describe('Cloudflare control provider', () => {
 			FABRIKA_TOKEN_KEYS: 'kid12345:private-secret',
 			FABRIKA_APP_ORIGIN: 'https://demo.example',
 		}
-		await recordingProvider(jobs).deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, ...handed } })
+		await recordingProvider(jobs).deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, ...parseManagedEnvironment(handed) } })
 		expect(jobs[0]?.managedEnvironment).toMatchObject(handed)
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
@@ -603,14 +602,20 @@ describe('Cloudflare control provider', () => {
 		await recordingProvider(jobs).deploy({
 			...input,
 			environment,
-			managedEnvironment: { ...input.managedEnvironment, FABRIKA_PROXY_SECRET: 'p'.repeat(43) },
+			managedEnvironment: { ...input.managedEnvironment, ...parseManagedEnvironment({ FABRIKA_PROXY_SECRET: 'p'.repeat(43) }) },
 		})
 		expect(jobs[0]?.managedEnvironment?.['FABRIKA_PROXY_SECRET']).toBeUndefined()
 		expect(jobs[0]?.approvedAccess?.framework).toBe('0.8.1')
 		for (
 			const [name, value] of [['FABRIKA_JOB_NIGHTLY_KEY', 'px_job'], ['FABRIKA_EMAIL_RESEND_API_KEY', 're_key'], ['FABRIKA_TOKEN_KEYS', 'kid:secret']]
 		) {
-			await expect(recordingProvider(jobs).deploy({ ...input, environment, managedEnvironment: { ...input.managedEnvironment, [name]: value } })).rejects
+			await expect(
+				recordingProvider(jobs).deploy({
+					...input,
+					environment,
+					managedEnvironment: { ...input.managedEnvironment, ...parseManagedEnvironment({ [name]: value }) },
+				}),
+			).rejects
 				.toThrow('framework 0.8.1')
 		}
 		expect(jobs).toHaveLength(1)
@@ -620,14 +625,20 @@ describe('Cloudflare control provider', () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()
 		const secret = 'p'.repeat(43)
-		await recordingProvider(jobs).deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, FABRIKA_PROXY_SECRET: secret } })
+		await recordingProvider(jobs).deploy({
+			...input,
+			managedEnvironment: { ...input.managedEnvironment, ...parseManagedEnvironment({ FABRIKA_PROXY_SECRET: secret }) },
+		})
 		expect(jobs[0]?.managedEnvironment?.['FABRIKA_PROXY_SECRET']).toBe(secret)
 	})
 
 	test('a key the deploy no longer writes is left out of the job, for the deploy to delete', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()
-		await recordingProvider(jobs).deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, FABRIKA_TOKEN_KEYS: null } })
+		await recordingProvider(jobs).deploy({
+			...input,
+			managedEnvironment: { ...input.managedEnvironment, ...parseManagedEnvironment({ FABRIKA_TOKEN_KEYS: null }) },
+		})
 		expect(jobs[0]?.managedEnvironment?.['FABRIKA_TOKEN_KEYS']).toBeUndefined()
 	})
 
@@ -759,10 +770,9 @@ describe('Cloudflare control provider', () => {
 		expect(
 			cloudflareRunnerJobSchema.safeParse({ ...valid, credentials: { ...valid.credentials, FABRIKA_IAM_ISSUER: 'https://iam.example.com' } }).success,
 		).toBe(false)
-		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: ['https://api.example.com'] }).success).toBe(true)
-		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: 'https://api.example.com' }).success).toBe(false)
-		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: [42] }).success).toBe(false)
-		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: [''] }).success).toBe(false)
+		// An earlier release's Control still sends `returnOrigins`; the runner drops it rather than refuse the job.
+		const older = cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: ['https://api.example.com'] })
+		expect(older.success && !('returnOrigins' in older.data)).toBe(true)
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, domain: 'api.example.com', crossOrigins: ['https://partner.example.org'] }).success)
 			.toBe(true)
 		for (
@@ -776,6 +786,10 @@ describe('Cloudflare control provider', () => {
 			]
 		) {
 			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, domain: 'API.example.com', crossOrigins }).success).toBe(false)
+		}
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, operationsOrigin: 'https://ingest.example.com' }).success).toBe(true)
+		for (const operationsOrigin of ['https://ingest.example.com/1', 'https://key@ingest.example.com', 'ftp://ingest.example.com', '']) {
+			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, operationsOrigin }).success).toBe(false)
 		}
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, installationApps: ['notes@prod', 'api@production'] }).success).toBe(true)
 		for (const id of ['notes', 'notes@prod@eu', '@prod', 'notes@', 'notes @prod']) {
@@ -825,92 +839,12 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, repoUrl: 'https://github.com/example/api.git\n--upload-pack=x' }).success).toBe(false)
 	})
 
-	test("applies the approved contract's schema with the control plane's own key, return origins beside it", async () => {
-		const calls: Array<{ url: string; app: string; schema: unknown; returnOrigins?: readonly string[]; adminKey?: string }> = []
-		const provider = createCloudflareControlProvider({
-			accountId: 'account-1',
-			apiToken: 'token-1',
-			runnerKey: 'test-runner-key',
-			propustkaUrl: 'https://iam.example.com',
-			propustkaProvisioningKey: 'px_admin',
-			reconcileSchema: async (input) => {
-				calls.push({
-					url: input.url,
-					app: input.app,
-					schema: input.schema,
-					...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
-					adminKey: input.adminKey,
-				})
-			},
-			...sourceOptions,
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			startRun: async () => ({
-				state: 'succeeded',
-				iamReconcile: reported('{"scopes":[{"type":"team"}],"actions":[{"action":"notes.read"}],"roles":{}}'),
-			}),
-			cancelRun: async () => {},
-		})
-
-		const outcome = await provider.deploy({ ...deployInput(), dryRun: false, returnOrigins: ['https://api.example.com'] })
-
-		expect(outcome).toMatchObject({ state: 'succeeded' })
-		expect(calls).toEqual([{
-			url: 'https://iam.example.com',
-			app: 'api@production',
-			schema: APPROVED.schema,
-			returnOrigins: ['https://api.example.com'],
-			adminKey: 'px_admin',
-		}])
-	})
-
-	const reconcilingProvider = (iamReconcile: RunnerIamReconcile, calls: string[], propustkaUrl = 'https://iam.example.com') =>
-		createCloudflareControlProvider({
-			accountId: 'account-1',
-			apiToken: 'token-1',
-			runnerKey: 'test-runner-key',
-			propustkaUrl,
-			propustkaProvisioningKey: 'px_admin',
-			reconcileSchema: async (input) => {
-				calls.push(input.app)
-			},
-			...sourceOptions,
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			startRun: async () => ({ state: 'succeeded', iamReconcile }),
-			cancelRun: async () => {},
-		})
-
-	test('a run with no return origins calls the reconciler without `returnOrigins`', async () => {
-		const calls: Array<{ app: string; hasReturnOrigins: boolean }> = []
-		const provider = createCloudflareControlProvider({
-			accountId: 'account-1',
-			apiToken: 'token-1',
-			runnerKey: 'test-runner-key',
-			propustkaUrl: 'https://iam.example.com',
-			propustkaProvisioningKey: 'px_admin',
-			reconcileSchema: async (input) => {
-				calls.push({ app: input.app, hasReturnOrigins: input.returnOrigins !== undefined })
-			},
-			...sourceOptions,
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			startRun: async () => ({ state: 'succeeded', iamReconcile: reported('{"scopes":[],"actions":[],"roles":{}}') }),
-			cancelRun: async () => {},
-		})
-
-		await provider.deploy({ ...deployInput(), dryRun: false })
-		expect(calls).toEqual([{ app: 'api@production', hasReturnOrigins: false }])
-	})
-
-	test('an approved contract reconciles its own schema, never the one the runner reports (ADR-0050)', async () => {
-		const schemas: unknown[] = []
+	test('the job carries the approved contract, and a reported schema does not change the outcome (ADR-0050)', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const provider = createCloudflareControlProvider({
 			accountId: 'account-1',
 			apiToken: 'token-1',
 			runnerKey: 'test-runner-key',
-			propustkaUrl: 'https://iam.example.com',
-			reconcileSchema: async (input) => {
-				schemas.push(input.schema)
-			},
 			...sourceOptions,
 			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
 			startRun: async (job) => {
@@ -924,7 +858,6 @@ describe('Cloudflare control provider', () => {
 		const outcome = await provider.deploy({ ...input, dryRun: false, environment: { ...environment, access } })
 
 		expect(outcome).toMatchObject({ state: 'succeeded' })
-		expect(schemas).toEqual([access.schema])
 		// The runner deploys the proxy table and the digest from this, not from the checkout.
 		expect(jobs[0]?.approvedAccess).toEqual({
 			kind: 'contract',
@@ -933,34 +866,6 @@ describe('Cloudflare control provider', () => {
 			framework: access.checker,
 		})
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
-	})
-
-	test('a deploy Control approved no access for is refused before the runner hears of it', async () => {
-		const started: CloudflareRunnerJob[] = []
-		const accepted: string[] = []
-		const provider = createCloudflareControlProvider({
-			accountId: 'account-1',
-			apiToken: 'token-1',
-			runnerKey: 'test-runner-key',
-			...sourceOptions,
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			startRun: async (job) => {
-				started.push(job)
-				return { state: 'succeeded' }
-			},
-			cancelRun: async () => {},
-		})
-		const { environment: { access: _approved, ...environment }, ...input } = deployInput()
-		await expect(
-			provider.deploy({
-				...input,
-				dryRun: false,
-				environment,
-				events: { ...input.events, externalId: async (id) => void accepted.push(id) },
-			}),
-		).rejects.toThrow('Cloudflare deploy requires the access Control approved for this environment')
-		expect(started).toEqual([])
-		expect(accepted).toEqual([])
 	})
 
 	test('the runner boundary refuses a non-dry job without approved access, without a contract, or without a digest', () => {
@@ -994,17 +899,12 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse({ ...job, approvedAccess: { kind: 'artifact', contract: notesArtifact } }).success).toBe(false)
 	})
 
-	test('a reconcile for an environment Control approved nothing for applies no schema the runner reported', async () => {
-		const calls: Array<{ app: string }> = []
+	test('a reconcile fails a run whose runner reported a schema for an environment Control approved nothing for', async () => {
 		const logs: string[] = []
 		const provider = createCloudflareControlProvider({
 			accountId: 'account-1',
 			apiToken: 'token-1',
 			runnerKey: 'test-runner-key',
-			propustkaUrl: 'https://iam.example.com',
-			reconcileSchema: async (input) => {
-				calls.push({ app: input.app })
-			},
 			...sourceOptions,
 			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
 			startRun: async () => ({ state: 'failed' }),
@@ -1021,47 +921,14 @@ describe('Cloudflare control provider', () => {
 			log: async (line: string) => void logs.push(line),
 		})
 		expect(outcome).toEqual({ state: 'failed' })
-		expect(calls).toEqual([])
 		expect(logs).toEqual(['reconcile-schema failed: reported access, but Control approved no access for this environment'])
 	})
 
-	test('never reconciles for a dry run, nor with no IAM configured', async () => {
-		const calls: string[] = []
-		const reconcile = reported('{"scopes":[],"actions":[],"roles":{}}')
-		expect(await reconcilingProvider(reconcile, calls).deploy(deployInput())).toMatchObject({ state: 'succeeded' })
-
-		const provider = createCloudflareControlProvider({
-			accountId: 'account-1',
-			apiToken: 'token-1',
-			runnerKey: 'test-runner-key',
-			reconcileSchema: async (input) => {
-				calls.push(input.app)
-			},
-			...sourceOptions,
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			startRun: async () => ({ state: 'succeeded', iamReconcile: reconcile }),
-			cancelRun: async () => {},
-		})
-		expect(await provider.deploy({ ...deployInput(), dryRun: false })).toMatchObject({ state: 'succeeded' })
-
-		expect(calls).toEqual([])
-	})
-
-	const recoveringProvider = (
-		recovery: CloudflareRunRecovery,
-		calls: Array<{ app: string; returnOrigins?: readonly string[] }>,
-		iamFailure?: Error,
-	) =>
+	const recoveringProvider = (recovery: CloudflareRunRecovery) =>
 		createCloudflareControlProvider({
 			accountId: 'account-1',
 			apiToken: 'token-1',
 			runnerKey: 'test-runner-key',
-			propustkaUrl: 'https://iam.example.com',
-			propustkaProvisioningKey: 'px_admin',
-			reconcileSchema: async (input) => {
-				calls.push({ app: input.app, ...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }) })
-				if (iamFailure !== undefined) throw iamFailure
-			},
 			...sourceOptions,
 			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
 			startRun: async () => {
@@ -1071,7 +938,7 @@ describe('Cloudflare control provider', () => {
 			recoverRun: async () => recovery,
 		})
 
-	const reconcileInput = (returnOrigins?: readonly string[], logs: string[] = []) => ({
+	const reconcileInput = (logs: string[] = []) => ({
 		runId: RUN_ID,
 		externalId: RUN_ID,
 		environment: deployInput().environment,
@@ -1080,63 +947,28 @@ describe('Cloudflare control provider', () => {
 		log: async (line: string) => {
 			logs.push(line)
 		},
-		...(returnOrigins === undefined ? {} : { returnOrigins }),
 	})
 
-	test("a reconcile applies the approved contract's schema once, with return origins, before reporting it terminal", async () => {
-		const calls: Array<{ app: string; returnOrigins?: readonly string[] }> = []
+	test('a reconcile reports the outcome the runner persisted', async () => {
 		const provider = recoveringProvider({
 			state: 'succeeded',
 			exitCode: 0,
 			iamReconcile: reported('{"scopes":[],"actions":[{"action":"notes.read"}],"roles":{}}'),
-		}, calls)
+		})
 		if (provider.reconcile === undefined) throw new Error('missing recovery')
 
-		expect(await provider.reconcile(reconcileInput(['https://api.example.com']))).toEqual({ state: 'succeeded', exitCode: 0 })
-		expect(calls).toEqual([{ app: 'api@production', returnOrigins: ['https://api.example.com'] }])
+		expect(await provider.reconcile(reconcileInput())).toEqual({ state: 'succeeded', exitCode: 0 })
 	})
 
-	test('a reconcile of a run still in flight applies nothing', async () => {
-		const calls: Array<{ app: string }> = []
-		const provider = recoveringProvider({ state: 'running' }, calls)
+	test('a reconcile of a run still in flight leaves it running', async () => {
+		const provider = recoveringProvider({ state: 'running' })
 		if (provider.reconcile === undefined) throw new Error('missing recovery')
 
 		expect(await provider.reconcile(reconcileInput())).toEqual({ state: 'running' })
-		expect(calls).toEqual([])
-	})
-
-	test('an unavailable IAM keeps the run in flight for the next reconcile, and logs the reason', async () => {
-		const calls: Array<{ app: string }> = []
-		const logs: string[] = []
-		const provider = recoveringProvider(
-			{ state: 'succeeded', exitCode: 0, iamReconcile: reported('{"scopes":[],"actions":[],"roles":{}}') },
-			calls,
-			new Error('PUT /admin/apps/api/schema failed (503): unavailable'),
-		)
-		if (provider.reconcile === undefined) throw new Error('missing recovery')
-
-		expect(await provider.reconcile(reconcileInput(undefined, logs))).toEqual({ state: 'running' })
-		expect(calls).toEqual([{ app: 'api@production' }])
-		expect(logs).toEqual(['reconcile-schema failed: PUT /admin/apps/api/schema failed (503): unavailable'])
-	})
-
-	test('an IAM refusal (4xx) fails the run instead of retrying it forever', async () => {
-		const calls: Array<{ app: string }> = []
-		const logs: string[] = []
-		const provider = recoveringProvider(
-			{ state: 'succeeded', exitCode: 0, iamReconcile: reported('{"scopes":[],"actions":[],"roles":{}}') },
-			calls,
-			new ReconcileSchemaError('PUT /admin/apps/api/schema failed (401): unauthorized', 401),
-		)
-		if (provider.reconcile === undefined) throw new Error('missing recovery')
-
-		expect(await provider.reconcile(reconcileInput(undefined, logs))).toEqual({ state: 'failed' })
-		expect(logs).toEqual(['reconcile-schema failed: PUT /admin/apps/api/schema failed (401): unauthorized'])
 	})
 
 	test('a dry status is projected dry with its artifact state, and an IAM report on it is refused', async () => {
-		const calls: Array<{ app: string }> = []
-		const dry = recoveringProvider({ state: 'succeeded', exitCode: 0, artifactState: 'not_applicable', dryRun: true }, calls)
+		const dry = recoveringProvider({ state: 'succeeded', exitCode: 0, artifactState: 'not_applicable', dryRun: true })
 		if (dry.reconcile === undefined) throw new Error('missing recovery')
 		expect(await dry.reconcile(reconcileInput())).toEqual({ state: 'succeeded', exitCode: 0, artifactState: 'not_applicable', dryRun: true })
 
@@ -1146,36 +978,10 @@ describe('Cloudflare control provider', () => {
 			exitCode: 0,
 			dryRun: true,
 			iamReconcile: reported('{"scopes":[],"actions":[],"roles":{}}'),
-		}, calls)
-		if (reporting.reconcile === undefined) throw new Error('missing recovery')
-		expect(await reporting.reconcile(reconcileInput(undefined, logs))).toEqual({ state: 'failed', dryRun: true })
-		expect(calls).toEqual([])
-		expect(logs).toEqual(['reconcile-schema refused: a dry run reported access'])
-	})
-
-	test('carries the control plane return origins to the runner', async () => {
-		const jobs: CloudflareRunnerJob[] = []
-		const provider = createCloudflareControlProvider({
-			accountId: 'account-1',
-			apiToken: 'token-1',
-			runnerKey: 'test-runner-key',
-			...sourceOptions,
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			startRun: async (job) => {
-				jobs.push(job)
-				return { state: 'succeeded' }
-			},
-			cancelRun: async () => {},
 		})
-		const input = deployInput()
-
-		await provider.deploy({ ...input, returnOrigins: ['https://api.example.com', 'https://stage.api.example.com'] })
-		expect(jobs[0]?.returnOrigins).toEqual(['https://api.example.com', 'https://stage.api.example.com'])
-		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
-
-		// No projected set → the field is absent, so the runner never asks IAM to change anything.
-		await provider.deploy(input)
-		expect(jobs[1]).not.toHaveProperty('returnOrigins')
+		if (reporting.reconcile === undefined) throw new Error('missing recovery')
+		expect(await reporting.reconcile(reconcileInput(logs))).toEqual({ state: 'failed', dryRun: true })
+		expect(logs).toEqual(['reconcile-schema refused: a dry run reported access'])
 	})
 
 	test("the job carries the environment's cross origins, and none when it lists none", async () => {
@@ -1199,5 +1005,34 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 		await provider.deploy(input)
 		expect(jobs[1]).not.toHaveProperty('crossOrigins')
+		expect(jobs[1]).not.toHaveProperty('operationsOrigin')
+		await provider.deploy({ ...input, environment: { ...input.environment, operationsOrigin: 'https://ingest.example.com' } })
+		expect(jobs[2]?.operationsOrigin).toBe('https://ingest.example.com')
+		expect(cloudflareRunnerJobSchema.safeParse(jobs[2]).success).toBe(true)
 	})
+})
+
+describeControlProviderConformance('the Cloudflare control provider', {
+	create: (hooks) => {
+		const mutations: string[] = []
+		const stops: string[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			// The runner's preview deploys nothing; any other job deploys the Worker.
+			startRun: async (job) => {
+				if (!job.dryRun) mutations.push(`start:${job.runId}`)
+				hooks.accepted()
+				return { state: 'succeeded' }
+			},
+			cancelRun: async (runId) => {
+				stops.push(`cancel:${runId}`)
+			},
+		})
+		const { dryRun: _dryRun, signal: _signal, events: _events, ...input } = deployInput()
+		return { provider, input, credentials: ['token-1', 'test-runner-key'], mutations: () => mutations, stops: () => stops }
+	},
 })

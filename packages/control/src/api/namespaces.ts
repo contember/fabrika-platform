@@ -44,6 +44,7 @@ import {
 } from '../db'
 import type { InstallationBrandSource } from '../installation-brand'
 import { acquireLease, type Lease, type LeaseClock, namespaceLeaseKey } from '../lease'
+import { ingestOrigin } from '../operations-catalog'
 import type { ProxySecrets } from '../proxy-secret'
 import type { ControlJobMessage, NamespaceJobMessage, NamespaceJobMutation } from '../run-lifecycle'
 import { fail } from './domain'
@@ -416,16 +417,6 @@ async function namespaceMembers(
 		})
 	}
 	return members
-}
-
-/** The origin of the DSN the application environment is handed; the DSN carries the ingest key, so only the origin leaves. */
-function ingestOrigin(ingest: { readonly dsn: string | null } | null): string | undefined {
-	if (ingest?.dsn === null || ingest?.dsn === undefined) return undefined
-	try {
-		return new URL(ingest.dsn).origin
-	} catch {
-		return undefined
-	}
 }
 
 /**

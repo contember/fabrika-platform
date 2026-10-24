@@ -9,6 +9,8 @@ import {
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_ISSUER,
 	isFrameworkVariableName,
+	isManagedCredential,
+	managedValue,
 } from '@fabrika/auth-core'
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type SchemaReconciler } from '@fabrika/provider-contract'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
@@ -278,15 +280,13 @@ interface ServedContract {
 	readonly digest: string
 }
 
-/** A contract application starts only as the contract it was deployed with (ADR-0022 rule 5), so the platform writes its digest. */
+/**
+ * A contract application starts only as the contract it was deployed with (ADR-0022 rule 5), so the platform writes its
+ * digest. Control never hands one: `parseManagedEnvironment` refuses the name.
+ */
 const contractEnvironment = (managed: ProviderManagedEnvironment, served: ServedContract | null): ProviderManagedEnvironment => {
 	if (served === null) return managed
-	const { digest } = served
-	const sent = managed[FABRIKA_CONTRACT_DIGEST]
-	if (sent !== undefined && sent !== null && sent !== digest) {
-		throw new Error(`cloudflare: ${FABRIKA_CONTRACT_DIGEST} is \`${sent}\`, but the contract this deployment serves has digest \`${digest}\``)
-	}
-	return { ...managed, [FABRIKA_CONTRACT_DIGEST]: digest }
+	return { ...managed, [FABRIKA_CONTRACT_DIGEST]: { value: served.digest, credential: isManagedCredential(FABRIKA_CONTRACT_DIGEST) } }
 }
 
 /**
@@ -325,15 +325,20 @@ const platformProxied = (authored: Worker, served: ServedContract, run: Cloudfla
 		...(run.domain === undefined ? {} : { domain: run.domain }),
 		...(run.crossOrigins === undefined ? {} : { crossOrigins: run.crossOrigins }),
 		endpoints: contractProxyTable(served.contract, served.digest),
-		...operationsOrigin(run.managedEnvironment),
-		iamUrl: run.managedEnvironment[FABRIKA_IAM_ISSUER] ?? '',
+		...operationsOrigin(run),
+		iamUrl: managedValue(run.managedEnvironment, FABRIKA_IAM_ISSUER) ?? '',
 	})
 }
 
-/** The ingest origin of the application's Operations DSN: the proxy's `connect-src` admits it, as the framework's does. */
-const operationsOrigin = (managed: ProviderManagedEnvironment): { readonly operationsOrigin?: string } => {
-	const dsn = managed['FABRIKA_OPERATIONS_DSN']
-	if (dsn === undefined || dsn === null) return {}
+/** The origin of the environment's Operations ingest, which the proxy's `connect-src` admits, as the framework's does. */
+const operationsOrigin = (run: CloudflareDeployRun): { readonly operationsOrigin?: string } => {
+	if (run.operationsOrigin !== undefined) {
+		if (!isPolicyOrigin(run.operationsOrigin, ['https:', 'http:'])) throw new Error('cloudflare: the Operations origin is not an http(s) origin')
+		return { operationsOrigin: run.operationsOrigin }
+	}
+	// A job from an older Control names no origin; derive it from the DSN until no release in the window omits it.
+	const dsn = managedValue(run.managedEnvironment, 'FABRIKA_OPERATIONS_DSN')
+	if (dsn === null) return {}
 	let origin: string
 	try {
 		origin = new URL(dsn).origin
@@ -615,6 +620,8 @@ export interface CloudflareDeployRun {
 	readonly domain?: string
 	/** The environment's cross-origin list from Control's registry (ADR-0022); the proxy Worker's manifest entry lists it. */
 	readonly crossOrigins?: readonly string[]
+	/** The origin of the environment's Operations ingest, from Control; the proxy Worker's `connect-src` admits it. */
+	readonly operationsOrigin?: string
 	/** Every origin IAM may hand this environment a session at, registered under `<app>@<env>`. */
 	readonly returnOrigins?: readonly string[]
 	readonly cwd: string

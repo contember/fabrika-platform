@@ -1,14 +1,14 @@
 // The Zerops provider owns its plan and every effect needed to execute it.
 //
 // A Zerops deploy is HTTP and nothing else (ADR-0003) — no container, no shell, no filesystem — so this
-// driver's whole side-effect surface is one REST client plus the portable schema reconciler
-// (`./collaborators.ts`). It never spawns a process and has no `runCommand` to be handed.
+// driver's whole side-effect surface is one REST client (`./collaborators.ts`). It never spawns a process and has
+// no `runCommand` to be handed.
 //
 // The interesting step is `await-version`: fabrika does not RUN the build, it WATCHES one the platform
 // runs. Recovery never resumes a deploy (ADR-0044): a version reserved but never triggered is deleted, and
 // one whose build may have been requested is settled only by polling it.
 
-import { appEnvironmentId, FABRIKA_SOURCE_MAP_UPLOAD_KEY } from '@fabrika/auth-core'
+import { FABRIKA_SOURCE_MAP_UPLOAD_KEY, managedValue, staleManagedVariables } from '@fabrika/auth-core'
 import { type OperationsSourceMapUploadState, readSourceMapUploadReport } from '@fabrika/operations-contract/releases'
 import {
 	type DeployStepResult,
@@ -65,20 +65,9 @@ import {
 	type StorageProvenanceMarker,
 	unprovenBucketReason,
 } from './exposure'
-import {
-	assertAuthoredManagedDocument,
-	assertAuthoredManagedInputs,
-	isFrameworkFamilyVariable,
-	isSensitiveFamilyVariable,
-	type ManagedValues,
-	overlayRelease,
-	parseManagedEnvironment,
-	SENSITIVE_MANAGED_KEYS,
-	SERVICE_MANAGED_KEYS,
-} from './managed-env'
+import { assertAuthoredManagedDocument, assertAuthoredManagedInputs, overlayRelease } from './managed-env'
 import {
 	applicationDatabaseOf,
-	approvedSchemaOf,
 	type FabrikaImportDocument,
 	type FabrikaManifest,
 	lockedExecutionFor,
@@ -96,8 +85,6 @@ export const CANCELLED = 'deploy cancelled'
 export interface ZeropsDeployRun {
 	readonly appId: string
 	readonly env: string
-	/** Every origin IAM may hand this app a session at; app-wide, because IAM's registry is keyed by app id. */
-	readonly returnOrigins?: readonly string[]
 	readonly secrets: Readonly<Record<string, string>>
 	readonly vars: Readonly<Record<string, string>>
 	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
@@ -332,9 +319,8 @@ interface StepEnv {
 	signal: AbortSignal
 	dryRun: boolean
 	attempt: Attempt
-	managedValues: ManagedValues
-	/** The key of each job and webhook of the approved contract, by its variable (ADR-0022 "Principal kinds"). */
-	familyVariables: Readonly<Record<string, string>>
+	/** What Control handed (`parseManagedEnvironment`). */
+	managed: ProviderManagedEnvironment
 	/** `await-version` gives up at this instant. */
 	deadlineMs: number
 }
@@ -577,9 +563,9 @@ const verifyExposure = async (env: StepEnv): Promise<void> => {
 		}
 	}
 	if (findings.length > 0) {
-		const dsn = env.managedValues.FABRIKA_OPERATIONS_DSN
+		const dsn = managedValue(env.managed, 'FABRIKA_OPERATIONS_DSN')
 		if (dsn !== null) {
-			const alert = { appId: run.appId, env: run.env, release: env.managedValues.FABRIKA_RELEASE, findings }
+			const alert = { appId: run.appId, env: run.env, release: managedValue(env.managed, 'FABRIKA_RELEASE'), findings }
 			await zerops.alertExposure({ dsn, alert, signal }).then(
 				() => log('  raised an Operations alert'),
 				() => log('  [warn] the Operations alert could not be sent'),
@@ -595,42 +581,52 @@ const verifyExposure = async (env: StepEnv): Promise<void> => {
 	)
 }
 
-/** Write the eleven service-level managed keys; `FABRIKA_RELEASE` is never a service variable (ADR-0044). */
+/** Write the managed variables Control handed; `FABRIKA_RELEASE` is never a service variable (ADR-0044). */
 const writeServiceEnv = async (env: StepEnv): Promise<void> => {
-	const { zerops, log, signal, managedValues, familyVariables } = env
+	const { zerops, log, signal, managed } = env
 	const serviceId = env.run.target.serviceId
+	const written = Object.entries(managed).flatMap(([key, { value, credential }]) =>
+		key === 'FABRIKA_RELEASE' || value === null ? [] : [{ key, value, credential }]
+	)
+	const writtenKeys = new Set(written.map(({ key }) => key))
 	if (env.dryRun) {
 		const upload = env.run.artifactUpload !== undefined
-		const written = [
-			...SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] !== null),
-			...Object.keys(familyVariables),
-			...(upload ? [FABRIKA_SOURCE_MAP_UPLOAD_KEY] : []),
-		]
-		const removed = [...SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] === null), ...(upload ? [] : [FABRIKA_SOURCE_MAP_UPLOAD_KEY])]
-		log(`  [dry-run] would write service variables on ${serviceId}: ${written.join(', ') || '(none)'}`)
-		log(`  [dry-run] would remove service variables on ${serviceId} if present: ${removed.join(', ') || '(none)'}`)
-		if (Object.keys(familyVariables).length > 0) {
-			log(`  [dry-run] would remove every other job, webhook, connector and mail variable on ${serviceId}`)
-		}
+		const removed = Object.keys(managed).filter((key) => key !== 'FABRIKA_RELEASE' && !writtenKeys.has(key))
+		log(
+			`  [dry-run] would write service variables on ${serviceId}: ${
+				[...writtenKeys, ...(upload ? [FABRIKA_SOURCE_MAP_UPLOAD_KEY] : [])].join(', ') || '(none)'
+			}`,
+		)
+		log(
+			`  [dry-run] would remove service variables on ${serviceId} if present: ${
+				[...removed, ...(upload ? [] : [FABRIKA_SOURCE_MAP_UPLOAD_KEY])].join(', ') || '(none)'
+			}`,
+		)
+		log(`  [dry-run] would remove every other job, webhook, connector, mail and platform variable on ${serviceId}`)
 		return
 	}
 	assertRunning(signal)
 	// One read: every write below waits for its own user-data sync, so the build request never meets `userDataSyncRunning`.
 	const records = await zerops.api.listServiceEnv({ serviceId, signal })
-	for (const key of SERVICE_MANAGED_KEYS) {
-		const value = managedValues[key]
+	// A credential is written sensitive and never read back, so it is written every time.
+	for (const { key, value, credential } of written) {
 		const existing = records.find((record) => record.key === key)
-		const sensitive = SENSITIVE_MANAGED_KEYS.has(key)
 		assertRunning(signal)
-		if (value !== null && (sensitive || readableContent(existing) !== value)) {
-			await zerops.api.putServiceEnv({ serviceId, key, value, sensitive, signal })
+		if (credential || readableContent(existing) !== value) {
+			await zerops.api.putServiceEnv({ serviceId, key, value, sensitive: credential, signal })
 			log(`  ${key}: updated`)
-		} else if (value === null && existing !== undefined) {
-			await zerops.api.deleteServiceEnv({ envId: existing.id, signal })
-			log(`  ${key}: removed`)
 		} else {
 			log(`  ${key}: unchanged`)
 		}
+	}
+	// A variable Control no longer hands is removed, so no stale key stays readable. `/env` also reports the descriptor's
+	// `FABRIKA_RELEASE`, which Zerops refuses to delete.
+	const stale = new Set(staleManagedVariables(records.map((record) => record.key), new Set([...writtenKeys, 'FABRIKA_RELEASE'])))
+	for (const record of records) {
+		if (!stale.has(record.key)) continue
+		assertRunning(signal)
+		await zerops.api.deleteServiceEnv({ envId: record.id, signal })
+		log(`  ${record.key}: removed`)
 	}
 	const provenance = env.attempt.storageProvenance
 	const marker = records.find((record) => record.key === STORAGE_PROVENANCE_KEY)
@@ -643,25 +639,6 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 		assertRunning(signal)
 		await zerops.api.deleteServiceEnv({ envId: marker.id, signal })
 		log(`  ${STORAGE_PROVENANCE_KEY}: removed`)
-	}
-	// A workload key is written like a managed key; one whose workload is gone is removed, so no stale key stays readable.
-	for (const [key, value] of Object.entries(familyVariables)) {
-		const existing = records.find((record) => record.key === key)
-		const sensitive = isSensitiveFamilyVariable(key)
-		assertRunning(signal)
-		if (sensitive || readableContent(existing) !== value) {
-			await zerops.api.putServiceEnv({ serviceId, key, value, sensitive, signal })
-			log(`  ${key}: updated`)
-		} else {
-			log(`  ${key}: unchanged`)
-		}
-	}
-	for (const record of records) {
-		if (isFrameworkFamilyVariable(record.key) && !Object.hasOwn(familyVariables, record.key)) {
-			assertRunning(signal)
-			await zerops.api.deleteServiceEnv({ envId: record.id, signal })
-			log(`  ${record.key}: removed`)
-		}
 	}
 	// The build lifts the upload's bearer from here (`${RUNTIME_…}`), so the descriptor never holds it.
 	const bearer = env.run.artifactUpload?.bearer ?? null
@@ -939,7 +916,7 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 			const appVersionId = requireVersion(env, 'trigger-build')
 			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 			const { contents } = artifact.target.sourceDescriptor
-			const release = env.managedValues.FABRIKA_RELEASE
+			const release = managedValue(env.managed, 'FABRIKA_RELEASE')
 			const descriptor = locked === null
 				? overlayRelease(contents, artifact.target.zeropsSetup, release)
 				: renderLockedExecutionDescriptor(contents, artifact.target.zeropsSetup, release, sizedExecution(locked, attempt))
@@ -989,35 +966,6 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 			await awaitVersion(env, appVersionId, attempt.processId, locked !== null && locked.databaseUrl !== null)
 			return
 		}
-
-		case 'reconcile-schema': {
-			const schema = approvedSchemaOf(run)
-			const propustkaUrl = target.propustkaUrl
-			if (schema === undefined || propustkaUrl === undefined) {
-				return
-			}
-			// Return origins ride this step because `apps.setReturnOrigins` 404s for an app IAM has never
-			// heard of, and the schema reconcile is what registers it. Separate call, same moment.
-			const returnOrigins = run.returnOrigins !== undefined && run.returnOrigins.length > 0 ? run.returnOrigins : undefined
-			const iamApp = appEnvironmentId(artifact.app.id, artifact.app.env)
-			if (dryRun) {
-				log(`  [dry-run] would reconcile schema for \`${iamApp}\` against ${propustkaUrl}`)
-				if (returnOrigins !== undefined) {
-					log(`  [dry-run] would register return origins for \`${iamApp}\`: ${returnOrigins.join(', ')}`)
-				}
-				return
-			}
-			assertRunning(signal)
-			await zerops.reconcileSchema({
-				url: propustkaUrl,
-				app: iamApp,
-				schema,
-				...(returnOrigins === undefined ? {} : { returnOrigins }),
-				adminKey: target.adminKey,
-				signal,
-			})
-			return
-		}
 	}
 }
 
@@ -1039,15 +987,6 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 		throw new Error(`zerops: artifact environment drift: expected \`${run.env}\`, got \`${run.artifact.app.env}\``)
 	}
 	assertAuthoredManagedInputs({ variableNames: Object.keys(run.vars), secretNames: Object.keys(run.secrets) })
-	// The proxy serves an endpoint table exactly when Control approved a contract, whatever the artifact says.
-	const contractProxy = run.access !== undefined
-	const { values: handed, familyVariables } = parseManagedEnvironment(run.managedEnvironment)
-	// Only a contract application checks the secret; any other would merely hold a credential its own code can print.
-	const managedValues: ManagedValues = contractProxy ? handed : { ...handed, FABRIKA_PROXY_SECRET: null }
-	if (!run.dryRun && contractProxy && managedValues.FABRIKA_PROXY_SECRET === null) {
-		// The application would refuse every request its proxy sends (ADR-0022 rule 5).
-		throw new Error('zerops: a contract application needs its proxy secret, and Control supplied none')
-	}
 	const hostnames = manifestServiceHostnames(run.artifact)
 	const document = interpolateManifest(run.artifact.target.importDocument, run.artifact.app.pipeline.vars, run.vars, hostnames)
 	const compiled = { yaml: renderYaml(document), hostnames }
@@ -1061,11 +1000,10 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 		signal: run.signal,
 		dryRun: run.dryRun,
 		attempt: { triggered: false },
-		managedValues,
-		familyVariables,
+		managed: run.managedEnvironment,
 		deadlineMs: Date.now() + ZEROPS_VERSION_DEADLINE_MS,
 	}
-	const steps = buildZeropsPlan(run.artifact, run.target)
+	const steps = buildZeropsPlan(run.artifact)
 	const options = { appId: run.appId, env: run.env, dryRun: run.dryRun, signal: run.signal, log: run.events.log }
 	const result = await runSteps(steps, options, (step) => runStep(step, env))
 	const { appVersionId, triggered } = env.attempt

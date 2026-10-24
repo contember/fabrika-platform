@@ -32,6 +32,7 @@ import { contractCommits } from './helpers/commits'
 import { createHarness, harnessDatabase } from './helpers/harness'
 import { fixtureNamespaceWrite, fixtureProtect, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
 import { rpcRequest, rpcResult } from './helpers/rpc'
+import { fixedProxySecrets } from './helpers/vault'
 
 const target = (phase: string): ProviderEnvelope => ({
 	provider: 'harbor',
@@ -868,7 +869,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 			},
 			async deploy(input) {
 				record.deploys.push(input.runId)
-				record.deploySecrets.push(input.managedEnvironment[FABRIKA_PROXY_SECRET])
+				record.deploySecrets.push(input.managedEnvironment[FABRIKA_PROXY_SECRET]?.value)
 				return { state: 'succeeded' }
 			},
 			namespaces: {
@@ -1168,6 +1169,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		await harness.deps.repositories.runs.createRun({ id: run, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		const runDeps = {
 			...republishDeps(harness),
+			proxySecrets: fixedProxySecrets,
 			secrets: new VaultSecretResolver({}),
 			logs: { put: () => Promise.resolve() },
 			commits: contractCommits('alpha'),
@@ -1208,6 +1210,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		}
 		const result = await executeDeploy({
 			...republishDeps(harness),
+			proxySecrets: fixedProxySecrets,
 			secrets: new VaultSecretResolver({}),
 			logs: { put: () => Promise.resolve() },
 			commits: contractCommits('alpha'),
@@ -1221,6 +1224,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 
 	const runDepsOf = (harness: NamespaceHarness) => ({
 		...republishDeps(harness),
+		proxySecrets: fixedProxySecrets,
 		secrets: new VaultSecretResolver({}),
 		logs: { put: () => Promise.resolve() },
 		commits: contractCommits('alpha'),
@@ -1254,7 +1258,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		const provider: ControlProvider = {
 			...base,
 			async deploy(input) {
-				input.events.log(`COPY=${input.managedEnvironment[FABRIKA_PROXY_SECRET] ?? 'none'}`)
+				input.events.log(`COPY=${input.managedEnvironment[FABRIKA_PROXY_SECRET]?.value ?? 'none'}`)
 				return { state: 'succeeded' }
 			},
 		}
@@ -1281,14 +1285,15 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		expect([...stored, ...printed].join('\n')).not.toContain(secret)
 	})
 
-	test('without a vault no member carries a proxy secret and the application gets none', async () => {
+	test('without a vault a contract application does not deploy: its proxy would send no secret it checks', async () => {
 		const record = republishing()
 		const harness = makeDeps(republishingProvider(record))
 		await seed(harness)
 		await harness.deps.repositories.runs.createRun({ id: 'run-1', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
-		expect(await executeDeploy(runDepsOf(harness), { runId: 'run-1' })).toEqual({ runId: 'run-1', status: 'succeeded' })
-		expect(record.memberSecrets).toEqual([[undefined]])
-		expect(record.deploySecrets).toEqual([null])
+		const { proxySecrets: _vault, ...withoutVault } = runDepsOf(harness)
+		expect(await executeDeploy(withoutVault, { runId: 'run-1' })).toEqual({ runId: 'run-1', status: 'failed' })
+		expect(record.memberSecrets).toEqual([])
+		expect(record.deploySecrets).toEqual([])
 	})
 
 	test('a started rebuild that leaves nothing in flight ends ready without a reconcile job', async () => {

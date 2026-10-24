@@ -150,6 +150,4 @@ export interface ZeropsRuntimeTarget {
 	/** Absent only for dry runs, which perform no source or Zerops mutation. */
 	source?: ZeropsRuntimeSource
 	apiBaseUrl?: string
-	propustkaUrl?: string
-	adminKey?: string
 }

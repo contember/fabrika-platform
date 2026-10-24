@@ -472,7 +472,7 @@ The key an application environment calls the relay with
   or dry run deletes nothing. Deleting the application environment deletes its rows.
 
 On Zerops the URL is a plain service variable and the key a sensitive one
-(`packages/provider-zerops/src/managed-env.ts`). The error-report scrubber keeps the
+(`isManagedCredential`, `packages/auth-core/src/managed-environment.ts`). The error-report scrubber keeps the
 URL and `FABRIKA_EMAIL_PROVIDER` and redacts the key.
 
 ## The relay

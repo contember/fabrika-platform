@@ -37,9 +37,15 @@ default provider, and no closed union of provider ids.
 
 **The provider owns its deploy.** A provider's `deploy()` runs its own steps, in its own
 order, as plain code. No shared engine derives or executes a plan. Control passes the run's
-universal inputs — app, environment, secrets, vars, managed environment, return origins,
-`dryRun`, an `AbortSignal`, and an event sink for logs and the external id. Control does not
-see the provider's steps.
+universal inputs — app, environment, secrets, vars, managed environment, `dryRun`, an
+`AbortSignal`, and an event sink for logs and the external id. Control does not see the
+provider's steps.
+
+**A provider package holds what is true of its cloud, and nothing else.** Behaviour that would be
+the same on every cloud belongs to Control, or to a neutral library a provider calls. Control
+applies an environment's approved IAM schema and return origins once a run succeeds, whichever
+provider ran it; a provider never calls IAM's admin surface for an application. A provider
+library may be shared by two providers; a shared step list may not.
 
 **The provider owns its collaborators and credentials.** The composition root constructs the
 provider with its clients and installation credentials (Cloudflare account and token, Zerops
@@ -60,6 +66,12 @@ collaborators at the same construction point.
 `resolveSource()` and `deploy()` each take an optional source binding. There is one entry
 point per operation, not a bound and an unbound variant.
 
+**What every provider does is tested once.** `@fabrika/provider-contract/conformance` holds the cases
+every `ControlProvider` passes (a dry run changes nothing, a lost lease stops nothing, nothing an event
+carries holds a credential, a registration normalizes to itself). Each provider's own test calls
+`describeControlProviderConformance` once with a harness over its fake cloud, and keeps its own tests of
+how it drives that cloud: the suite sees only what the harness reports.
+
 **Shared Control code never checks a provider name.** Behaviour that differs by cloud is a
 capability the provider declares or omits. The provider id appears only in the two
 composition roots, in envelope validation, and where the console picks a form by it.
@@ -74,14 +86,14 @@ across versions ([ADR-0044](0044-zerops-delivery-ownership-and-recovery.md)).
 
 **Package layout.** Every package uses the `@fabrika/*` scope. The provider packages:
 
-| Package                                 | Visibility | Contents                                                                               |
-| --------------------------------------- | ---------- | -------------------------------------------------------------------------------------- |
-| `@fabrika/provider-contract`            | public     | `.` the provider contract · `/installation` the open platform-installation contract    |
-| `@fabrika/provider-cloudflare`          | public     | `.` authoring and control adapter · `/cli` · `/installation` · `/runner` (runner job)  |
-| `@fabrika/provider-zerops`              | public     | `.` authoring and control adapter · `/cli` · `/installation` (+ `/topology`)           |
-| `@fabrika/installation-init`            | public     | The operator-side `init` mechanics both `provider-<cloud>/installation` subpaths share |
-| `runner-cloudflare`, `runner-container` | private    | The Cloudflare deploy executor Worker and its container image                          |
-| `platform-artifacts`                    | private    | Zerops installation codegen and generated topology output                              |
+| Package                                 | Visibility | Contents                                                                                                            |
+| --------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------- |
+| `@fabrika/provider-contract`            | public     | `.` the provider contract · `/installation` the open platform-installation contract · `/conformance` its test suite |
+| `@fabrika/provider-cloudflare`          | public     | `.` authoring and control adapter · `/cli` · `/installation` · `/runner` (runner job)                               |
+| `@fabrika/provider-zerops`              | public     | `.` authoring and control adapter · `/cli` · `/installation` (+ `/topology`)                                        |
+| `@fabrika/installation-init`            | public     | The operator-side `init` mechanics both `provider-<cloud>/installation` subpaths share                              |
+| `runner-cloudflare`, `runner-container` | private    | The Cloudflare deploy executor Worker and its container image                                                       |
+| `platform-artifacts`                    | private    | Zerops installation codegen and generated topology output                                                           |
 
 The two composition roots stay inside `@fabrika/control` (`src/index.ts` with `src/platform-cf.ts`
 for Cloudflare, `src/zerops/` for Zerops).
@@ -100,6 +112,8 @@ blobs, locks). The composition root binds one runtime implementation set to one 
 
 - Adding a cloud means writing one provider package and one composition root. Shared Control
   code, the contract, and the database schema do not change.
+- What two providers would both implement is moved out of them, not copied. Copies drift: the two
+  providers' IAM reconciles disagreed on when an unavailable IAM fails a run.
 - A provider's deploy log shows only steps that really happen. There are no no-op steps and
   no split of one atomic platform operation into two.
 - Progress, failure, and cancellation semantics are per provider. Each `deploy()` must honour

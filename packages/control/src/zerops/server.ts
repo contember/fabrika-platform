@@ -29,7 +29,7 @@ import { decodeMailDispatchMessage, type MailDispatchMessage } from '../mail-rel
 import { closeCatalogProjection, releaseHeldCatalogLeases } from '../operations-catalog'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import type { ControlJobMessage } from '../run-lifecycle'
-import { locks, operationsReleaseDeps, platformTransportDeps, repositories } from '../services'
+import { iamSchemaDeps, locks, operationsReleaseDeps, platformTransportDeps, repositories } from '../services'
 import { createRuntime, type Runtime } from './runtime'
 
 /** Build the server's fetch handler for an assembled env. Exported so a test can drive it directly. */
@@ -145,6 +145,7 @@ export async function startControlServer(runtime: Runtime): Promise<void> {
 		lock: locks(runtime.env),
 		operations: operationsReleaseDeps(runtime.env),
 		...platformTransportDeps(runtime.env),
+		...iamSchemaDeps(runtime.env),
 	})
 	console.info(
 		`Provider startup reconcile: checked=${reconciliation.checked} succeeded=${reconciliation.succeeded} `

@@ -1,4 +1,4 @@
-import type { AppSchema, ContractArtifact } from '@fabrika/auth-core'
+import type { AppSchema, ContractArtifact, ManagedEnvironment } from '@fabrika/auth-core'
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import type { JsonValue, ProviderEnvelope } from './json'
 
@@ -16,8 +16,11 @@ export interface ProviderRunEvents {
 	boundary(): Promise<void>
 }
 
-/** Complete platform-owned runtime state. A null value removes the key from persistent targets. */
-export type ProviderManagedEnvironment = Readonly<Record<string, string | null>>
+/**
+ * Complete platform-owned runtime state, parsed by Control (`parseManagedEnvironment`). A provider writes each entry as
+ * a secret when it is a `credential`, removes one whose value is null, and removes the stale ones `staleManagedVariables` names.
+ */
+export type ProviderManagedEnvironment = ManagedEnvironment
 
 /** Provider-neutral coordinates for obtaining one app revision. */
 export interface ProviderSource {
@@ -80,12 +83,18 @@ export interface ProviderEnvironment {
 	 * application's proxy manifest entry as `crossOrigins`.
 	 */
 	readonly crossOrigins?: readonly string[]
+	/**
+	 * The origin of the environment's active Operations ingest DSN, never the DSN: a contract application's proxy admits
+	 * it in `connect-src`. Control sets it on a deploy; absent while the environment has no active ingest.
+	 */
+	readonly operationsOrigin?: string
 	readonly namespace?: ProviderDeploymentNamespace
 	readonly target: ProviderEnvelope
 	readonly artifact: ProviderEnvelope
 	/**
 	 * The environment's approved contract, from Control's `approvedSnapshot`. Absent when nothing is approved: then a
 	 * provider publishes no endpoint table and reconciles no IAM schema, whatever the artifact claims (ADR-0050).
+	 * Control refuses a non-dry deploy without it.
 	 */
 	readonly access?: ProviderApprovedAccess
 }
@@ -138,12 +147,6 @@ export interface ProviderDeployInput {
 	readonly vars: Readonly<Record<string, string>>
 	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
 	readonly managedEnvironment: ProviderManagedEnvironment
-	/**
-	 * Every origin IAM may hand this app a session at (ADR-0022). App-wide, not per-environment:
-	 * IAM's registry is keyed by app id, so the set is assembled from every environment of the app.
-	 * Absent when the app has no public origin at all, which leaves IAM's registry untouched.
-	 */
-	readonly returnOrigins?: readonly string[]
 	readonly dryRun: boolean
 	readonly sourceBinding?: ProviderSourceBinding
 	/** Optional short-lived, run-scoped Operations artifact destination. */
@@ -160,7 +163,10 @@ export interface ProviderDeployInput {
 	readonly events: ProviderRunEvents
 }
 
-/** A terminal provider operation result. */
+/**
+ * A terminal provider operation result. `succeeded` means the version is live: Control then writes the environment's
+ * approved IAM schema itself (ADR-0011), so a provider never calls IAM for an application.
+ */
 export interface ProviderTerminalOutcome {
 	readonly state: 'succeeded' | 'failed'
 	readonly exitCode?: number
@@ -223,14 +229,10 @@ export interface ProviderRunReference {
 
 export interface ProviderCancelInput extends ProviderRunReference {
 	readonly signal: AbortSignal
-	/** See `ProviderDeployInput.returnOrigins`; a cancel that settles an activated deploy projects the same set. */
-	readonly returnOrigins?: readonly string[]
 }
 
 export interface ProviderReconcileInput extends ProviderRunReference {
 	readonly signal: AbortSignal
-	/** See `ProviderDeployInput.returnOrigins`; a provider that settles a deploy here projects the same set. */
-	readonly returnOrigins?: readonly string[]
 	/** Append a line to the run's log. */
 	log?(line: string): Promise<void>
 }

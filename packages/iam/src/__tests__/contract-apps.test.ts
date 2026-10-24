@@ -103,6 +103,17 @@ describe('the schema of a contract application', () => {
 		expect(await admin.h.repositories.appSchema.isContractApp(LEGACY)).toBe(false)
 	})
 
+	test('an application that declares no vocabulary is known once reconciled, so its return origins can be registered', async () => {
+		const admin = await asAdmin()
+		const app = appEnvironmentId('status', 'prod')
+		expect((await rpc(admin, 'apps.setReturnOrigins', { app, origins: ['https://status.example.com'] })).status).toBe(404)
+
+		expect((await putSchema(admin, app, { contract: true, scopes: [], actions: [], roles: {} })).status).toBe(200)
+		expect(await admin.h.repositories.appSchema.listKnownApps()).toEqual([app])
+		expect(await rpc(admin, 'apps.setReturnOrigins', { app, origins: ['https://status.example.com'] })).toMatchObject({ status: 200 })
+		expect(await admin.h.repositories.handoff.listReturnOrigins(app)).toEqual(['https://status.example.com'])
+	})
+
 	test('refuses a role that lists a wildcard', async () => {
 		const admin = await asAdmin()
 		const schema = { ...CONTRACT_SCHEMA, roles: { editor: { name: 'Editor', permissions: ['note.*'] } } }

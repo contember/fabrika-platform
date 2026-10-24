@@ -26,6 +26,9 @@ export const INSTALLATION_APPS_ENV = 'FABRIKA_INSTALLATION_APPS'
 /** The executor's copy of `CloudflareRunnerJob.crossOrigins`: a JSON array of the environment's exact origins. */
 export const CROSS_ORIGINS_ENV = 'FABRIKA_CROSS_ORIGINS'
 
+/** The executor's copy of `CloudflareRunnerJob.operationsOrigin`: the origin of the environment's Operations ingest. */
+export const OPERATIONS_ORIGIN_ENV = 'FABRIKA_OPERATIONS_ORIGIN'
+
 /**
  * The access Control approved for a run (ADR-0050): the contract it read at the commit, in this release's model, and
  * the digest the application's own framework release computes for it. The proxy table and `FABRIKA_CONTRACT_DIGEST`

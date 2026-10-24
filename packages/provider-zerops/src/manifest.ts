@@ -522,11 +522,6 @@ const sourceMapUpload = (upload: NonNullable<ProviderDeployInput['artifactUpload
 	assetRoots: zeropsAssetRoots(contract),
 })
 
-/** The IAM schema a deploy, cancel or reconcile applies: the approved contract's. `undefined` reconciles nothing. */
-export function approvedSchemaOf(granted: ZeropsAccess): AppSchema | undefined {
-	return granted.access?.schema
-}
-
 export const manifestServiceHostnames = (manifest: FabrikaManifest): string[] =>
 	manifest.target.importDocument.services.map((service) => service.hostname)
 

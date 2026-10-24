@@ -1,5 +1,5 @@
 import { schemaFromContract } from '@fabrika/app/contract'
-import { type AppActionDef, type AppEnvironment, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
+import { type AppActionDef, type AppEnvironment, type ContractArtifact, contractDigest, parseManagedEnvironment } from '@fabrika/auth-core'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { contractProxyTable, isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -158,6 +158,7 @@ const deploy = (
 		readonly managedEnvironment?: Readonly<Record<string, string | null>>
 		readonly returnOrigins?: readonly string[]
 		readonly crossOrigins?: readonly string[]
+		readonly operationsOrigin?: string
 		readonly domain?: string
 		readonly platformResources?: 'refuse' | 'allow'
 		readonly stateNamespace?: string
@@ -208,12 +209,13 @@ const deploy = (
 		domain: options.domain ?? 'stage.example.com',
 		...(options.returnOrigins === undefined ? {} : { returnOrigins: options.returnOrigins }),
 		...(options.crossOrigins === undefined ? {} : { crossOrigins: options.crossOrigins }),
+		...(options.operationsOrigin === undefined ? {} : { operationsOrigin: options.operationsOrigin }),
 		cwd: options.cwd ?? dirname(options.checkoutDir ?? `${REPO}/app`),
 		configPath: options.configPath ?? 'fabrika.config.ts',
 		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
 		secrets: options.secrets ?? {},
 		vars: {},
-		managedEnvironment: options.managedEnvironment ?? {},
+		managedEnvironment: parseManagedEnvironment(options.managedEnvironment ?? {}),
 		...(contract === undefined
 			? {}
 			: {
@@ -1124,9 +1126,6 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		await expect(deploy(rec, authored, { checkoutContract: notesArtifact })).rejects.toThrow(
 			'application variable `FABRIKA_CONTRACT_DIGEST` is managed by Fabrika',
 		)
-		await expect(
-			deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: notesArtifact, managedEnvironment: { FABRIKA_CONTRACT_DIGEST: 'other' } }),
-		).rejects.toThrow('FABRIKA_CONTRACT_DIGEST is `other`, but the contract this deployment serves has digest')
 		expect(rec.provisions).toHaveLength(0)
 	})
 
@@ -1189,6 +1188,21 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 				managedEnvironment: { FABRIKA_OPERATIONS_DSN: 'ftp://errors.test/1' },
 			}),
 		).rejects.toThrow('FABRIKA_OPERATIONS_DSN is not an http(s) URL with a literal host')
+	})
+
+	test('a contract proxy admits the Operations origin Control names over one derived from the DSN', async () => {
+		const managedEnvironment = { FABRIKA_OPERATIONS_DSN: 'https://operations-public-key@errors.test/1' }
+		await deploy(rec, config({ schema: CONTRACT_SCHEMA }), {
+			contract: notesArtifact,
+			managedEnvironment,
+			operationsOrigin: 'https://ingest.example.com',
+		})
+		const manifest = proxyManifestJson(provisioned().root)
+		const [app] = parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps ?? []
+		expect(app !== undefined && isApplicationEntry(app) ? app.operationsOrigin : null).toBe('https://ingest.example.com')
+		await expect(
+			deploy(rec, config({ schema: CONTRACT_SCHEMA }), { contract: notesArtifact, operationsOrigin: 'https://ingest.example.com/1' }),
+		).rejects.toThrow('cloudflare: the Operations origin is not an http(s) origin')
 	})
 
 	test("the platform's proxy entry lists the environment's cross origins, and none when it lists none", async () => {

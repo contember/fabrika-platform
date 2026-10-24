@@ -9,7 +9,7 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # app-environment · canonical-path · contract-canonical · device · endpoint-digest · endpoints · environment · framework-variables · json · locale · permissions · requirement · resource-token · sha256 · token · wire · workloads
+bun test               # app-environment · canonical-path · contract-canonical · device · endpoint-digest · endpoints · environment · framework-variables · json · locale · managed-environment · permissions · requirement · resource-token · sha256 · token · wire · workloads
 ```
 
 | Module                     | What it owns                                                                                                                                                                                                              |
@@ -37,6 +37,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `wire.ts`                  | The proxy→app header names, `FABRIKA_HOP_HEADERS` (every one, all stripped), the proxy secret and `proxySecretVariable`.                                                                                                  |
 | `environment.ts`           | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.                                                                                                                             |
 | `framework-variables.ts`   | `FRAMEWORK_VARIABLE_NAMES` — the names only the platform writes — and `frameworkVariableReference`, a Zerops reference to one.                                                                                            |
+| `managed-environment.ts`   | `parseManagedEnvironment` — what Control hands a deploy, parsed once — `isManagedCredential`, the one credential rule, and `staleManagedVariables`.                                                                       |
 | `json.ts`                  | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                                                                                                                                             |
 
 ## Invariants

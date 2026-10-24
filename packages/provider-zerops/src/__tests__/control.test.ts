@@ -1,4 +1,4 @@
-import type { AppSchema } from '@fabrika/auth-core'
+import { type AppSchema, parseManagedEnvironment } from '@fabrika/auth-core'
 import type {
 	JsonValue,
 	ProviderApp,
@@ -10,13 +10,13 @@ import type {
 	ProviderSourceBinding,
 } from '@fabrika/provider-contract'
 import { ProviderInvocationAbort, ProviderSecretError } from '@fabrika/provider-contract'
+import { describeControlProviderConformance } from '@fabrika/provider-contract/conformance'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { createZeropsApi, type ZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus, type ZeropsServiceEnv } from '../api'
 import { useSharedPostgres } from '../authoring'
 import { createZeropsControlProvider, type ZeropsControlProviderOptions, zeropsStoredTargetCodec } from '../control'
-import type { ManagedValues } from '../managed-env'
 import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, zeropsArtifactCodec } from '../manifest'
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
 import type { OlderProxyReaders } from '../namespace/proxy-reads'
@@ -58,7 +58,7 @@ const config: ZeropsAppConfig = {
 const SCHEMA: AppSchema = { scopes: [], actions: [], roles: {} }
 const COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
 /** Every managed value removed, but the proxy secret a contract application is never deployed without. */
-const MANAGED_DEFAULTS: ManagedValues = {
+const MANAGED_DEFAULTS: Readonly<Record<string, string | null>> = {
 	FABRIKA_RELEASE: null,
 	FABRIKA_OPERATIONS_DSN: null,
 	FABRIKA_IAM_ISSUER: null,
@@ -132,7 +132,7 @@ const deployInput = (recorded: Recorded): ProviderDeployInput => ({
 	environment: environment(),
 	secrets: {},
 	vars: {},
-	managedEnvironment: MANAGED_DEFAULTS,
+	managedEnvironment: parseManagedEnvironment(MANAGED_DEFAULTS),
 	dryRun: false,
 	signal: new AbortController().signal,
 	events: {
@@ -1146,40 +1146,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
 	})
 
-	test('a cancel that finds the version activated reconciles the schema before settling succeeded', async () => {
-		let schemaFails = true
-		const reconciled: Array<readonly string[] | undefined> = []
-		const control = createTestControlProvider({
-			accessToken: 'token',
-			propustkaUrl: 'https://iam.test',
-			api: makeApi(recorded, () => 'ACTIVE'),
-			reconcileSchema: async ({ returnOrigins }) => {
-				reconciled.push(returnOrigins)
-				if (schemaFails) throw new Error('iam unavailable')
-			},
-		})
-		if (control.cancel === undefined) throw new Error('missing cancellation')
-		const input = {
-			runId: 'run-1',
-			externalId: 'version-1',
-			signal: new AbortController().signal,
-			providerState: checkpointFor(true),
-			returnOrigins: ['https://notes.example.test'],
-			environment: environment({
-				artifact: {
-					provider: 'zerops',
-					version: zeropsArtifactCodec.version,
-					payload: zeropsArtifactCodec.encode(compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod', SOURCE_DESCRIPTOR)),
-				},
-			}),
-		}
-		expect(await control.cancel(input)).toEqual({ state: 'pending' })
-		schemaFails = false
-		expect(await control.cancel(input)).toEqual({ state: 'settled', outcome: 'succeeded' })
-		expect(reconciled).toEqual([['https://notes.example.test'], ['https://notes.example.test']])
-		expect(recorded.calls).not.toContain('cancelBuild:version-1')
-	})
-
 	test('a cancel during deploy that lands after the triggered checkpoint still sends the build, and cancel() then stops it', async () => {
 		const controller = new AbortController()
 		const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded, () => 'BUILDING'), sleep: async () => {} })
@@ -1399,12 +1365,9 @@ describe('Zerops ControlProvider lifecycle', () => {
 
 	test('composes ephemeral credentials and routes run events', async () => {
 		const uploads: unknown[] = []
-		const reconciles: unknown[] = []
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			apiBaseUrl: 'https://api.test',
-			propustkaUrl: 'https://iam.test',
-			adminKey: 'px-secret',
 			api: makeApi(recorded),
 			source: {
 				...makeSource(),
@@ -1412,9 +1375,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 					uploads.push({ repository: input.repository, commitSha: input.commitSha, uploadUrl: input.uploadUrl })
 					return uploaded(input)
 				},
-			},
-			reconcileSchema: async ({ url, app, adminKey }) => {
-				reconciles.push({ url, app, adminKey })
 			},
 		})
 		const withSchema = compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod', SOURCE_DESCRIPTOR)
@@ -1427,7 +1387,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(outcome).toEqual({ state: 'succeeded' })
 		expect(recorded.imports.map((entry) => entry.projectId)).toEqual(['project-1'])
 		expect(uploads).toEqual([{ repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA, uploadUrl: UPLOAD_URL }])
-		expect(reconciles).toEqual([{ url: 'https://iam.test', app: 'notes@prod', adminKey: 'px-secret' }])
 		expect(recorded.externalIds).toEqual(['version-1'])
 		expect(recorded.triggers).toEqual([])
 		expect(recorded.calls).toContain('createAppVersion:service-1')
@@ -1521,7 +1480,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(
 			await control.deploy({
 				...deployInput(recorded),
-				managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_OPERATIONS_DSN: dsn, FABRIKA_RELEASE: release },
+				managedEnvironment: parseManagedEnvironment({ ...MANAGED_DEFAULTS, FABRIKA_OPERATIONS_DSN: dsn, FABRIKA_RELEASE: release }),
 			}),
 		).toEqual({ state: 'succeeded' })
 		expect(recorded.envWrites).toEqual([
@@ -1547,7 +1506,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		await control.deploy({
 			...deployInput(recorded),
 			dryRun: true,
-			managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_OPERATIONS_DSN: dsn },
+			managedEnvironment: parseManagedEnvironment({ ...MANAGED_DEFAULTS, FABRIKA_OPERATIONS_DSN: dsn }),
 		})
 		expect(recorded.envWrites).toEqual([])
 		expect(recorded.calls).toEqual([])
@@ -1609,41 +1568,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 		}])
 	})
 
-	test('carries the control plane return origins through the deploy into the schema reconciler', async () => {
-		const reconciled: Array<{ app: string; returnOrigins?: readonly string[] }> = []
-		const control = createTestControlProvider({
-			accessToken: 'zt-secret',
-			propustkaUrl: 'https://iam.test',
-			api: makeApi(recorded),
-			reconcileSchema: async ({ app, returnOrigins }) => {
-				reconciled.push({ app, ...(returnOrigins === undefined ? {} : { returnOrigins }) })
-			},
-		})
-		const withSchema = environment({
-			artifact: {
-				provider: 'zerops',
-				version: zeropsArtifactCodec.version,
-				payload: zeropsArtifactCodec.encode(compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod', SOURCE_DESCRIPTOR)),
-			},
-		})
-
-		// Every step really runs, so this proves the whole in-process hop chain: deploy input → run →
-		// `reconcile-schema` step → the IAM port. The set is app-wide, not this environment's origin.
-		await control.deploy({
-			...deployInput(recorded),
-			environment: withSchema,
-			returnOrigins: ['https://notes.example.test', 'https://stage.notes.example.test'],
-		})
-		expect(reconciled).toEqual([{
-			app: 'notes@prod',
-			returnOrigins: ['https://notes.example.test', 'https://stage.notes.example.test'],
-		}])
-
-		// Nothing projected → the registry is left alone rather than cleared.
-		await control.deploy({ ...deployInput(recorded), runId: 'run-2', environment: withSchema })
-		expect(reconciled[1]).toEqual({ app: 'notes@prod' })
-	})
-
 	test('fails before proxy or app mutation when namespace placement is not ready', async () => {
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
@@ -1670,19 +1594,11 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls).toEqual([])
 	})
 
-	test('finishes schema reconciliation after an active external run without starting another deploy', async () => {
+	test('settles an active external run without starting another deploy', async () => {
 		let current: ZeropsAppVersionStatus = 'BUILDING'
-		const reconcileSignals: AbortSignal[] = []
-		const reconciledOrigins: Array<readonly string[] | undefined> = []
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
-			propustkaUrl: 'https://iam.test',
 			api: makeApi(recorded, () => current),
-			reconcileSchema: async ({ app, signal, returnOrigins }) => {
-				recorded.calls.push(`reconcileSchema:${app}`)
-				reconcileSignals.push(signal)
-				reconciledOrigins.push(returnOrigins)
-			},
 		})
 		if (control.cancel === undefined || control.reconcile === undefined) {
 			throw new Error('expected Zerops lifecycle capabilities')
@@ -1692,8 +1608,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 			runId: 'run-1',
 			externalId: 'version-1',
 			providerState: checkpointFor(true),
-			// A deploy settled here finishes the same IAM touchpoint, so it projects the same set.
-			returnOrigins: ['https://notes.example.test'],
 			environment: environment({
 				artifact: {
 					provider: 'zerops',
@@ -1706,14 +1620,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls).toEqual(['getAppVersion:version-1'])
 		current = 'ACTIVE'
 		expect(await control.reconcile(reference)).toEqual<ProviderReconcileOutcome>({ state: 'succeeded' })
-		expect(recorded.calls).toEqual([
-			'getAppVersion:version-1',
-			'getAppVersion:version-1',
-			'reconcileSchema:notes@prod',
-		])
-		expect(reconcileSignals).toHaveLength(1)
-		expect(reconcileSignals[0]?.aborted).toBe(false)
-		expect(reconciledOrigins).toEqual([['https://notes.example.test']])
+		expect(recorded.calls).toEqual(['getAppVersion:version-1', 'getAppVersion:version-1'])
 		current = 'BUILD_FAILED'
 		expect(await control.reconcile(reference)).toEqual<ProviderReconcileOutcome>({ state: 'failed' })
 		expect(await control.cancel(reference)).toEqual({ state: 'settled', outcome: 'failed' })
@@ -1968,4 +1875,40 @@ describe('Zerops ControlProvider lifecycle', () => {
 			{ serviceId: 'service-1', key: 'PLAIN', value: 'pa$$word $notes_PORT ${}', sensitive: true },
 		])
 	})
+})
+
+const READ_CALLS = /^(findService|getAppVersion|getProcess|listServiceEnv|resolve)(:|$)/
+
+describeControlProviderConformance('the Zerops control provider', {
+	create: (hooks) => {
+		const cloud = fresh()
+		const sourceCalls: string[] = []
+		const api = makeApi(cloud)
+		const provider = createTestControlProvider({
+			accessToken: 'zt-secret',
+			sleep: async () => {},
+			api: {
+				...api,
+				buildAndDeployAppVersion: async (input) => {
+					const process = await api.buildAndDeployAppVersion(input)
+					hooks.accepted()
+					return process
+				},
+			},
+			source: makeSource(sourceCalls),
+		})
+		const { dryRun: _dryRun, signal: _signal, events: _events, ...input } = deployInput(cloud)
+		const stopped = (call: string): boolean => call.startsWith('cancelBuild:') || call.startsWith('deleteAppVersion:')
+		return {
+			provider,
+			input,
+			credentials: ['zt-secret', UPLOAD_URL],
+			mutations: () => [
+				...[...cloud.calls, ...sourceCalls].filter((call) => !READ_CALLS.test(call) && !stopped(call)),
+				...cloud.envWrites.map((write) => `putServiceEnv:${write.key}`),
+				...cloud.envDeletes.map((id) => `deleteServiceEnv:${id}`),
+			],
+			stops: () => cloud.calls.filter(stopped),
+		}
+	},
 })

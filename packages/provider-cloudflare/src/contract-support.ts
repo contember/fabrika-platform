@@ -4,7 +4,9 @@ import {
 	isEmailTransportVariable,
 	isPlatformTransportVariable,
 	isWorkloadKeyVariable,
+	managedValue,
 } from '@fabrika/auth-core'
+import type { ProviderManagedEnvironment } from '@fabrika/provider-contract'
 
 // Imported by `./control` (the `./runner` entry), so it stays clear of `oblaka-iac`.
 
@@ -88,7 +90,7 @@ export const pinsGeneratedEntry = (release: string): boolean => releaseAtLeast(r
  * Refuse what a stateless Worker of an older release cannot run: a job, a webhook, a public procedure, installation
  * mail and token purposes all need the object's database or a Worker secret it never reads.
  */
-export const assertStatelessEnvironment = (managed: Readonly<Record<string, string | null>>, release: string): void => {
+export const assertStatelessEnvironment = (managed: ProviderManagedEnvironment, release: string): void => {
 	const names = Object.keys(managed)
 	const workloadKey = names.find(isWorkloadKeyVariable)
 	if (workloadKey !== undefined) {
@@ -102,8 +104,7 @@ export const assertStatelessEnvironment = (managed: Readonly<Record<string, stri
 			`cloudflare: the contract declares a job that sends mail through the installation (${mailVariable}), which an application on framework ${release} cannot run on Cloudflare; upgrade its framework`,
 		)
 	}
-	const tokenKeys = managed[FABRIKA_TOKEN_KEYS]
-	if (tokenKeys !== undefined && tokenKeys !== null) {
+	if (managedValue(managed, FABRIKA_TOKEN_KEYS) !== null) {
 		throw new Error(
 			`cloudflare: the contract declares token purposes, which an application on framework ${release} cannot sign on Cloudflare; upgrade its framework`,
 		)

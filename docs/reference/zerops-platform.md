@@ -1199,7 +1199,7 @@ on an older framework release whose approved contract has a job that declares `m
 ([ADR-0064](../decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)). The run checkpoint is `{ appVersionId, triggered }`; recovery polls a triggered
 version and deletes an untriggered one
 ([ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md),
-`packages/provider-zerops/src/managed-env.ts`).
+`packages/auth-core/src/managed-environment.ts`).
 
 A contract application's execution descriptor is generated whole (`packages/provider-zerops/src/execution.ts`):
 only the selected setup, with `FABRIKA_CONTRACT_DIGEST` beside `FABRIKA_RELEASE` as literals, an `httpGet`

@@ -9,8 +9,9 @@ import { describe, expect, test } from 'bun:test'
 import type { ControlRepositories } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
+import { contractCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
-import { fixtureCatalogApplied, makeFakeLock } from './helpers/lock'
+import { fixtureCatalogApplied, fixtureProtect, makeFakeLock } from './helpers/lock'
 
 const PROVIDER_ID = 'memory'
 
@@ -28,6 +29,8 @@ async function seedRun(db: ControlRepositories): Promise<string> {
 		providerTargetJson: JSON.stringify(envelope('target')),
 		providerArtifactJson: JSON.stringify(envelope('artifact')),
 	})
+	// Unprotected, so the first contract publishes without an approval (ADR-0050).
+	await fixtureProtect(db.registry, makeFakeLock(db), { appId: 'app', env: 'prod' }, false)
 	const runId = uuidv7()
 	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
 	return runId
@@ -55,7 +58,9 @@ function memoryLogs(): { logs: BlobStore; lines: () => string[] } {
 					const text = Reflect.get(parsed, 'text')
 					if (typeof text !== 'string') throw new Error('unreadable run log line')
 					return text
-				}),
+				})
+				// The approved contract's publication logs its own lines, which other suites check.
+				.filter((text) => !text.startsWith('access: ')),
 	}
 }
 
@@ -64,12 +69,13 @@ function deps(db: ControlRepositories, logs: BlobStore, inputs: ProviderDeployIn
 		id: PROVIDER_ID,
 		normalizeRegistration: (input) => input,
 		source: { binding: 'connection' },
+		resolveSource: () => Promise.resolve({ commitSha: 'c'.repeat(40) }),
 		deploy: (input) => {
 			inputs.push(input)
 			return Promise.resolve({ state: 'succeeded' })
 		},
 	}
-	return { repositories: db, provider, secrets: new VaultSecretResolver({}), lock: makeFakeLock(db), logs }
+	return { repositories: db, provider, secrets: new VaultSecretResolver({}), lock: makeFakeLock(db), logs, commits: contractCommits('app') }
 }
 
 describe('deploy run log names a missing Operations ingest configuration', () => {
@@ -85,7 +91,7 @@ describe('deploy run log names a missing Operations ingest configuration', () =>
 		expect(stored.lines()).toEqual([
 			'operations ingest not injected: app has no active ingest config (catalog revision 1 pending)',
 		])
-		expect(inputs[0]?.managedEnvironment[FABRIKA_OPERATIONS_DSN]).toBeNull()
+		expect(inputs[0]?.managedEnvironment[FABRIKA_OPERATIONS_DSN]?.value).toBeNull()
 	})
 
 	test('reports that Operations is not wired when no change ever advanced a revision', async () => {
@@ -149,6 +155,7 @@ describe('deploy run log names a missing Operations ingest configuration', () =>
 			id: PROVIDER_ID,
 			normalizeRegistration: (input) => input,
 			source: { binding: 'connection' },
+			resolveSource: () => Promise.resolve({ commitSha: 'c'.repeat(40) }),
 			deploy: () => {
 				writes.push('deploy')
 				return Promise.resolve({ state: 'succeeded' })
@@ -157,11 +164,14 @@ describe('deploy run log names a missing Operations ingest configuration', () =>
 
 		expect(
 			(await executeDeploy(
-				{ repositories: db, provider, secrets: new VaultSecretResolver({}), lock: makeFakeLock(db), logs },
+				{ repositories: db, provider, secrets: new VaultSecretResolver({}), lock: makeFakeLock(db), logs, commits: contractCommits('app') },
 				{ runId },
 			)).status,
 		).toBe('succeeded')
-		expect(writes).toEqual(['put', 'deploy'])
+		// Every write of the run log, the gap line's included, completes before the provider starts.
+		expect(writes.at(-1)).toBe('deploy')
+		expect(writes.slice(0, -1).length).toBeGreaterThan(0)
+		expect(writes.slice(0, -1).every((write) => write === 'put')).toBe(true)
 		expect(objects.get(key)).toContain('operations ingest not injected')
 		expect(objects.get(key)).not.toContain('runner-owned')
 	})
@@ -205,6 +215,6 @@ describe('deploy run log names a missing Operations ingest configuration', () =>
 
 		expect((await executeDeploy(deps(db, stored.logs, inputs), { runId })).status).toBe('succeeded')
 		expect(stored.lines()).toEqual([])
-		expect(inputs[0]?.managedEnvironment[FABRIKA_OPERATIONS_DSN]).toBe(dsn)
+		expect(inputs[0]?.managedEnvironment[FABRIKA_OPERATIONS_DSN]?.value).toBe(dsn)
 	})
 })

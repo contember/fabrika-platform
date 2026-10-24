@@ -99,7 +99,7 @@ describe('reconcileProviderRuns', () => {
 		expect(new Set(released).size).toBe(2)
 	})
 
-	test('a cancellation the provider settles as succeeded finishes the run succeeded, with the run start and return origins handed over', async () => {
+	test('a cancellation the provider settles as succeeded finishes the run succeeded, with the run start handed over', async () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { publicOrigin: 'https://app.example.test' }))
@@ -109,7 +109,6 @@ describe('reconcileProviderRuns', () => {
 		await db.runs.requestRunCancellation('activated')
 		const started = (await db.runs.getRun('activated'))?.started_at
 		const startedAtMs: Array<number | undefined> = []
-		const returnOrigins: Array<readonly string[] | undefined> = []
 
 		expect(
 			await reconcileProviderRuns({
@@ -120,7 +119,6 @@ describe('reconcileProviderRuns', () => {
 					deploy: () => Promise.resolve({ state: 'succeeded' }),
 					cancel: (input) => {
 						startedAtMs.push(input.startedAtMs)
-						returnOrigins.push(input.returnOrigins)
 						return Promise.resolve({ state: 'settled', outcome: 'succeeded' })
 					},
 				},
@@ -129,7 +127,6 @@ describe('reconcileProviderRuns', () => {
 		).toMatchObject({ checked: 1, succeeded: 1, failed: 0 })
 		expect((await db.runs.getRun('activated'))?.status).toBe('succeeded')
 		expect(startedAtMs).toEqual([(started ?? 0) * 1000])
-		expect(returnOrigins).toEqual([['https://app.example.test']])
 	})
 
 	test('hands persisted provider checkpoint state to reconciliation', async () => {
@@ -303,33 +300,6 @@ describe('reconcileProviderRuns', () => {
 		})
 		expect(postWorkAttempts).toBe(2)
 		expect(deploys).toBe(0)
-	})
-
-	test('projects the app return origins into a resumed deploy the same way a fresh one does', async () => {
-		const { db } = createHarness()
-		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
-		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { publicOrigin: 'https://app.example.test' }))
-		await db.registry.upsertAppEnv(providerEnvironment('app', 'stage', { publicOrigin: 'https://stage.app.example.test' }))
-		await db.runs.createRun({ id: 'resumed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
-		await owned(db).start('resumed', 'runs/resumed/logs.ndjson')
-		await owned(db).externalId('resumed', 'operation')
-
-		const projected: Array<readonly string[] | undefined> = []
-		await reconcileProviderRuns({
-			repositories: db,
-			provider: {
-				id: TEST_PROVIDER_ID,
-				normalizeRegistration: (input) => input,
-				deploy: () => Promise.resolve({ state: 'succeeded' }),
-				reconcile: (input) => {
-					projected.push(input.returnOrigins)
-					return Promise.resolve({ state: 'succeeded' })
-				},
-			},
-			lock: makeFakeLock(db),
-		})
-
-		expect(projected).toEqual([['https://app.example.test']])
 	})
 
 	test("projects the provider's artifact state and dry flag, and appends its log lines after the executor's", async () => {

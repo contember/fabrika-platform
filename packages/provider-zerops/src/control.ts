@@ -1,4 +1,3 @@
-import { appEnvironmentId } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -16,7 +15,6 @@ import type {
 	ProviderSourceBinding,
 	ProviderSourceResolution,
 	ProviderSourceResolutionInput,
-	SchemaReconciler,
 } from '@fabrika/provider-contract'
 import { decodeEnvelope, ProviderSecretError } from '@fabrika/provider-contract'
 import { z } from 'zod'
@@ -31,9 +29,8 @@ import {
 } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
 import { createdServices, type ExposureAlerter, isObjectStorageType } from './exposure'
-import { assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoFrameworkReference, parseManagedEnvironment } from './managed-env'
+import { assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoFrameworkReference } from './managed-env'
 import {
-	approvedSchemaOf,
 	assertFabrikaManifestCoordinates,
 	type FabrikaManifest,
 	manifestServiceHostnames,
@@ -90,11 +87,8 @@ const envelope = <T>(codec: ProviderCodec<T>, value: T): ProviderEnvelope => ({
 export interface ZeropsControlProviderOptions {
 	readonly accessToken: string
 	readonly apiBaseUrl?: string
-	readonly propustkaUrl?: string
-	readonly adminKey?: string
 	readonly api?: ZeropsApi
 	readonly source: ZeropsSourcePort
-	readonly reconcileSchema?: SchemaReconciler
 	readonly alertExposure?: ExposureAlerter
 	readonly sleep?: Sleeper
 	readonly namespaces?: {
@@ -228,7 +222,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		return {
 			api,
 			source: options.source,
-			reconcileSchema: options.reconcileSchema ?? defaults.reconcileSchema,
 			alertExposure: options.alertExposure ?? defaults.alertExposure,
 			sleep: options.sleep ?? defaultSleep,
 		}
@@ -260,34 +253,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		if (foreign !== null) {
 			throw new ProviderSecretError(`zerops: secret \`${name}\` references service \`${foreign}\`, which this app does not own`, 'foreignReference')
 		}
-	}
-
-	const reconcileActiveSchema = async (
-		input: { environment: ProviderEnvironment; returnOrigins?: readonly string[] },
-		signal: AbortSignal,
-	): Promise<void> => {
-		const artifact = artifactFor(input.environment)
-		const schema = approvedSchemaOf(input.environment)
-		if (schema === undefined || options.propustkaUrl === undefined) return
-		const placement = resolvedEnvironment(input.environment, { requireReady: false })
-		const runtimeTarget: ZeropsRuntimeTarget = {
-			projectId: placement.projectId,
-			serviceId: placement.target.serviceId,
-			accessToken: options.accessToken,
-			...(options.apiBaseUrl !== undefined ? { apiBaseUrl: options.apiBaseUrl } : {}),
-			propustkaUrl: options.propustkaUrl,
-			...(options.adminKey !== undefined ? { adminKey: options.adminKey } : {}),
-		}
-		const reconcileSchema = options.reconcileSchema ?? defaultZeropsCollaborators(runtimeTarget).reconcileSchema
-		signal.throwIfAborted()
-		await reconcileSchema({
-			url: options.propustkaUrl,
-			app: appEnvironmentId(artifact.app.id, artifact.app.env),
-			schema,
-			...(input.returnOrigins === undefined || input.returnOrigins.length === 0 ? {} : { returnOrigins: input.returnOrigins }),
-			adminKey: options.adminKey,
-			signal,
-		})
 	}
 
 	const assertVersionCoordinates = (environment: ProviderEnvironment, appVersionId: string, version: ZeropsAppVersion): void => {
@@ -349,8 +314,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		deploy: async (input: ProviderDeployInput): Promise<ProviderDeployOutcome> => {
 			input.signal.throwIfAborted()
 			assertAuthoredManagedInputs({ variableNames: Object.keys(input.vars), secretNames: Object.keys(input.secrets) })
-			const handed = parseManagedEnvironment(input.managedEnvironment)
-			const managedEnvironment = { ...handed.values, ...handed.familyVariables }
 			const binding = privateBinding(input.sourceBinding)
 			assertEnvironmentOfApp(input.app, input.environment)
 			const placement = resolvedEnvironment(input.environment, { requireReady: true })
@@ -376,16 +339,13 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				...(placement.target.createdBuckets === undefined ? {} : { createdBuckets: placement.target.createdBuckets }),
 				...(source === undefined ? {} : { source }),
 				...(options.apiBaseUrl !== undefined ? { apiBaseUrl: options.apiBaseUrl } : {}),
-				...(options.propustkaUrl !== undefined ? { propustkaUrl: options.propustkaUrl } : {}),
-				...(options.adminKey !== undefined ? { adminKey: options.adminKey } : {}),
 			}
 			const result = await deployRun({
 				appId: input.app.id,
 				env: input.environment.env,
-				...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
 				secrets: input.secrets,
 				vars: input.vars,
-				managedEnvironment,
+				managedEnvironment: input.managedEnvironment,
 				target: runtimeTarget,
 				artifact,
 				...(input.environment.access === undefined ? {} : { access: input.environment.access }),
@@ -414,17 +374,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			const version = await getVersion({ appVersionId: checkpoint.appVersionId, signal })
 			if (version === null) return { state: 'settled', outcome: 'failed' }
 			assertVersionCoordinates(input.environment, checkpoint.appVersionId, version)
-			// Cancellation never implies rollback: a version that activated first makes the run a success,
-			// which finishes the same IAM touchpoint a deploy does.
-			if (version.status === ZEROPS_ACTIVE) {
-				try {
-					await reconcileActiveSchema(input, signal)
-				} catch {
-					signal.throwIfAborted()
-					return { state: 'pending' }
-				}
-				return { state: 'settled', outcome: 'succeeded' }
-			}
+			// Cancellation never implies rollback: a version that activated first makes the run a success.
+			if (version.status === ZEROPS_ACTIVE) return { state: 'settled', outcome: 'succeeded' }
 			if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) return { state: 'settled', outcome: 'failed' }
 			await cancelBuildQuietly(checkpoint.appVersionId, signal)
 			// A build request that never landed leaves the version UPLOADING for good; the deadline settles it.
@@ -461,10 +412,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			}
 			if (version === null) return { state: 'failed' }
 			assertVersionCoordinates(input.environment, checkpoint.appVersionId, version)
-			if (version.status === ZEROPS_ACTIVE) {
-				await reconcileActiveSchema(input, signal)
-				return { state: 'succeeded' }
-			}
+			if (version.status === ZEROPS_ACTIVE) return { state: 'succeeded' }
 			if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) return { state: 'failed' }
 			if (pastDeadline(input.startedAtMs)) {
 				await cancelBuildQuietly(checkpoint.appVersionId, signal)

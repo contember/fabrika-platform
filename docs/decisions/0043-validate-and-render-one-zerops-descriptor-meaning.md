@@ -164,7 +164,7 @@ proxy-secret, job and connector credentials, the `FABRIKA_EMAIL_` family of the 
 transport ([ADR-0019](0019-portable-outbound-email.md)) and the `FABRIKA_PLATFORM_` family of the platform transport
 ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)), which only Control hands
 an application. Control's
-`assertUnmanagedName` and the provider's `MANAGED_KEYS` both use that list. Both refuse an authored variable or
+`assertUnmanagedName` and `MANAGED_VARIABLE_NAMES` (`@fabrika/auth-core`) both use that list. Both refuse an authored variable or
 a secret under one of those names, and a deploy removes a family variable it no longer hands, one set by hand
 included. The framework reads these variables and removes them from `process.env`.
 

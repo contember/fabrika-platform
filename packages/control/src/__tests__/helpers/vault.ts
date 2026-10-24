@@ -1,3 +1,4 @@
+import type { ProxySecrets } from '../../proxy-secret'
 import { Vault } from '../../vault'
 import { createHarness } from './harness'
 
@@ -10,3 +11,6 @@ export function testVaultKey(): string {
 export function createTestVault(): Promise<Vault> {
 	return Vault.create(createHarness().d1, testVaultKey())
 }
+
+/** One proxy secret for every environment, for a deploy whose test does not look at it. */
+export const fixedProxySecrets: ProxySecrets = { forAppEnv: () => Promise.resolve('p'.repeat(43)) }

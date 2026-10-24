@@ -225,26 +225,30 @@ other environment, before the provider prepares anything, and the write maps a r
   routing.** It is a canonical HTTP(S) origin, remains independent of `domain`,
   and is projected unchanged to Operations. `apps.environments.put` omission preserves the stored
   value; explicit `null` clears it. Never derive it from a provider hostname.
-- **The same column is also what IAM trusts as a return origin (ADR-0022).**
-  `projectedReturnOrigins` (`src/return-origins.ts`) reads it from the DEPLOYING
-  environment only and hands it to the provider on `deploy` and on `reconcile`; the
-  deploy's existing IAM touchpoint (`reconcileSchema`) writes it under the IAM
-  application id `<app>@<env>` (ADR-0022 rule 6). Never collect another environment's
-  origin: registered under `notes@prod`, a `stage` host would be handed production
-  sessions. No origin → the field is ABSENT, not
+- **Control writes a succeeded run's approved IAM schema and return origins, whichever provider ran it (ADR-0011).**
+  `applyApprovedSchema` (`src/run-lifecycle.ts`, over the `IamSchemaPort` of `src/iam-schema.ts`) writes
+  `environment.access.schema` under the IAM application id `<app>@<env>` (ADR-0022 rule 6) before the fenced terminal
+  write, on all three paths that settle a run `succeeded`: `executeDeploy`, `settleUnfinishedRun` and
+  `settleRunCancellation`. A dry run writes nothing and logs what it would. On the awaited deploy any IAM failure fails
+  the run; on a reconcile or a cancellation an IAM that does not answer (no response, 5xx, 408, 429) leaves the run
+  unsettled for the next pass, and a refusal fails it, with the reason appended to the run log. The port exists only
+  when `FABRIKA_IAM_ISSUER` is set (`iamSchemaDeps`, `src/services.ts`); every composition that settles runs spreads it.
+  A provider never calls IAM's admin surface for an application, and nothing else here does per deploy.
+- **The return origin is `app_envs.public_origin` (ADR-0022).** `projectedReturnOrigins` (`src/return-origins.ts`)
+  reads it from the DEPLOYING environment only. Never collect another environment's origin: registered under
+  `notes@prod`, a `stage` host would be handed production sessions. No origin → the field is ABSENT, not
   empty: fabrika leaves an environment it has no address for unregistered rather than guessing,
-  and an empty set would read as "clear the registry". Nothing else here calls IAM's
-  admin surface per deploy; do not add a second lifecycle for this.
+  and an empty set would read as "clear the registry".
 - **A namespace proxy authenticates itself to each application with a proxy secret (ADR-0022 rule 5).**
   `src/proxy-secret.ts` generates it the first time an environment is handed to a namespace (a republish's
   members, or a deploy's `FABRIKA_PROXY_SECRET`), seals it in the vault under
   `proxySecretPurpose(app, env)`, and records only the ref in `app_env_proxy_secrets`; a lost insert race
   deletes its own vault row and answers the recorded one. Every follow goes through
-  `getSecretForPurpose`, like an app secret. Without a vault no secret is handed out and the provider
-  refuses a contract application. There is no rotation verb; `FABRIKA_PROXY_SECRET` is a reserved name.
-- **A namespace member carries `operationsOrigin`, the origin of its active ingest DSN** (`namespaceMembers` in
-  `src/api/namespaces.ts`), so a Zerops proxy's header policy admits the same Operations origin the framework
-  does. The DSN carries the ingest key; only its origin leaves Control this way.
+  `getSecretForPurpose`, like an app secret. Without a vault no secret is handed out, and `executeDeploy` refuses a
+  non-dry deploy behind a namespace proxy or on a provider that declares `applicationHopSecret`. There is no rotation verb; `FABRIKA_PROXY_SECRET` is a reserved name.
+- **A namespace member and a deploy's environment carry `operationsOrigin`, the origin of the active ingest DSN**
+  (`ingestOrigin`, `src/operations-catalog.ts`; `namespaceMembers` and `executeDeploy`), so a proxy's header policy
+  admits the same Operations origin the framework does. The DSN carries the ingest key; only its origin leaves Control this way.
 - **`app_envs.cross_origins_json` is the environment's cross-origin list (ADR-0022 "Cross-origin endpoints")**, set by
   whoever holds `app.manage` (the builder key included) beside `domain`, applied at once without approval (it grants no
   authority: its requests are bearer-only), and read through `appEnvCrossOrigins` / `crossOriginsField` (`src/db/registry-types.ts`).
@@ -321,12 +325,11 @@ other environment, before the provider prepares anything, and the write maps a r
 - **Control is the only writer of a run's row (ADR-0044).** A Cloudflare run settles in exactly two ways,
   both under the run's lease: the awaited `startRun` result (`executeDeploy`), or — after a Control
   restart such as a self-deploy — `reconcileProviderRuns`, where the provider's `reconcile` reads the
-  status vozka-runner persisted in R2 (`recoverRun`, parsed in `platform-cf.ts`). Either way the provider
-  applies the outcome's IAM schema reconcile BEFORE Control marks the run terminal, so a terminal row is
-  never re-opened. An invalid report fails the run; on the reconcile path an IAM failure keeps it
-  `running` for the next cron, with the reason appended to the run log (`runLogs`). IAM replaces the
-  app's whole vocabulary, so a re-application after a lost lease is harmless. A redelivery or a second
-  reconcile finds the row terminal and applies nothing. A dry status is projected dry and applies nothing.
+  status vozka-runner persisted in R2 (`recoverRun`, parsed in `platform-cf.ts`). Either way Control
+  writes the IAM schema BEFORE it marks the run terminal, so a terminal row is never re-opened. An invalid
+  runner report fails the run. IAM replaces the app's whole vocabulary, so a re-application after a lost
+  lease is harmless. A redelivery or a second reconcile finds the row terminal and applies nothing. A dry
+  status is projected dry and applies nothing.
 - **The Cloudflare provider owns the runner boundary.** `CloudflareRunnerJob` and its validator live in
   `@fabrika/provider-cloudflare`; its oblaka-free `./runner` entry also carries the transport schemas, types and
   endpoint constants, `@fabrika/runner-container` owns the Bun process and image, and

@@ -103,14 +103,16 @@ export class AppSchemaRepository {
 
 	/**
 	 * The set of app ids propustka knows about — the distinct `app` across the schema tables
-	 * (`app_actions ∪ app_scopes ∪ roles`). An app registers itself by reconciling its vocabulary
-	 * via `PUT /admin/apps/:app/schema`, so this is the live registry (no static config list).
+	 * (`app_actions ∪ app_scopes ∪ roles ∪ app_schema_revisions`). An app registers itself by reconciling its vocabulary
+	 * via `PUT /admin/apps/:app/schema`, so this is the live registry (no static config list). Every reconcile writes a
+	 * revision, so an app that declares nothing is known too, and its return origins can be registered.
 	 */
 	async listKnownApps(): Promise<string[]> {
 		const { results } = await this.db
 			.prepare(`SELECT app FROM app_actions
 				UNION SELECT app FROM app_scopes
 				UNION SELECT app FROM roles
+				UNION SELECT app FROM app_schema_revisions
 				ORDER BY app`)
 			.all<{ app: string }>()
 		return results.map((r) => r.app)

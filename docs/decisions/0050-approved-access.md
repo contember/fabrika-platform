@@ -118,8 +118,7 @@ reconciles IAM:
 - the deploy;
 - `apps.environments.put` and `delete`, and `apps.delete`;
 - `namespaces.reconcile` and the namespace jobs;
-- the Zerops `reconcile-schema` step, cancel and reconcile;
-- the Cloudflare deploy and reconcile.
+- Control's IAM schema write after a run succeeds: the deploy, a provider reconcile and a cancellation (ADR-0011).
 
 A run publishes with `UPDATE … WHERE generation = ? AND protection_revision = ?`, inside the existing
 namespace lease. A concurrent publication therefore loses. A change of the `protected` flag advances

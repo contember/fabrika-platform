@@ -24,6 +24,8 @@ For raising an application's framework pin to the next minor, see [framework mig
 
 [The application Durable Object](sprints/sprint-2026-10-24-application-object.md) is planned from the idea [`ideas/application-object-runtime-and-operations.md`](ideas/application-object-runtime-and-operations.md): an alarm scheduler, read-only invocations, an ops channel, backups with an importer, and side restore for the Cloudflare application object ([ADR-0065](decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)).
 
+[Provider-neutral core](sprints/sprint-2026-10-23-provider-neutral-core.md) is active: what is the same on every cloud moves out of the provider packages into Control or a neutral library, so a provider package holds only its cloud ([ADR-0011](decisions/0011-static-provider-bundles.md)).
+
 [Platform transport and mail relay](sprints/sprint-2026-10-20-platform-transport-mail-relay.md) is active: applications on framework 0.7 send installation mail to Control over a transport key ([ADR-0064](decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)); Control records, gates and dispatches it, and IAM sends through it ([ADR-0019](decisions/0019-portable-outbound-email.md) §8).
 
 [Terminals](sprints/sprint-2026-10-21-terminals.md) is active: an administrator enrols a shared computer, an application asserts who stands at it, and IAM signs that person in under the terminal's ceiling ([ADR-0067](decisions/0067-a-terminal-signs-a-person-in-on-an-application-s-word.md)).
