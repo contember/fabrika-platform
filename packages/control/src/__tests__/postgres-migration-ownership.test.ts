@@ -1,7 +1,7 @@
 import { PostgresDatabase, type PostgresMigration } from '@fabrika/platform-node'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { applyMigrations as applyIamMigrations, postgresMigrations as iamMigrations } from '../../../iam/src/node/migrate.js'
-import { applyMigrations as applyControlMigrations, postgresMigrations as controlMigrations } from '../zerops/migrate.js'
+import { applyMigrations as applyControlMigrations, postgresMigrations as controlMigrations } from '../bun/migrate.js'
 import { hasPostgres, postgresUrl, skipReason } from './helpers/postgres.js'
 
 if (!hasPostgres) console.warn(`postgres-migration-ownership.test.ts ${skipReason}`)

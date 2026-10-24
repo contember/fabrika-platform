@@ -1,4 +1,3 @@
-import type { OlderProxyReaders } from '@fabrika/provider-zerops'
 import {
 	contractProxyAppSchema as contractProxyAppSchema04,
 	proxyEndpointRowSchema as proxyEndpointRowSchema04,
@@ -11,6 +10,7 @@ import {
 	contractProxyAppSchema as contractProxyAppSchema06,
 	proxyEndpointRowSchema as proxyEndpointRowSchema06,
 } from '@fabrika/proxy-core-0.6/manifest'
+import type { OlderProxyReaders } from '@fabrika/proxy-core/manifest'
 
 /**
  * The strict manifest parsers of the namespace proxies a Zerops namespace pinned to an older release runs (ADR-0062): the

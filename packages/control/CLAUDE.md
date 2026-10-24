@@ -20,7 +20,7 @@ bun run seed                                       # register apps (single-accou
 
 # The Bun/Postgres target (see zerops.yaml)
 bun run migrate:postgres                           # apply migrations-postgres/ (FABRIKA_CONTROL_DATABASE_URL)
-bun run serve                                      # the long-running server (src/zerops/server.ts)
+bun run serve                                      # the long-running server (src/zerops/server.ts → src/bun/server.ts)
 bun run maintenance                                # the cron one-shot: repo poll + stale-run sweep
 ```
 
@@ -32,7 +32,7 @@ Migration commands and the Postgres-backed test setup are in [`DATABASE.md`](./D
 
 |              | Cloudflare                                     | Bun process (Zerops)                                                  |
 | ------------ | ---------------------------------------------- | --------------------------------------------------------------------- |
-| entrypoint   | `src/index.ts` (`cloudflare:workers`)          | `src/zerops/server.ts` (`Bun.serve`)                                  |
+| entrypoint   | `src/index.ts` (`cloudflare:workers`)          | `src/zerops/server.ts` → `src/bun/server.ts` (`Bun.serve`)            |
 | HTTP         | `fetch()` → `controlApp`                       | `@fabrika/app/bun` → `controlApp`                                     |
 | job consumer | `queue()` → `runControlJob`                    | `PostgresJobConsumer` → `runControlJob`                               |
 | cron         | `scheduled()` → `runMaintenance`               | `run.crontab` → `src/zerops/cron.ts` → `runMaintenance`               |
@@ -40,9 +40,11 @@ Migration commands and the Postgres-backed test setup are in [`DATABASE.md`](./D
 | provider     | `@fabrika/provider-cloudflare` + `RUNNER_SVC`  | `@fabrika/provider-zerops`, deploying in-process                      |
 
 The shared layer is `app.ts` · `consumer.ts` · `cron.ts` · `services.ts` and everything they reach.
-It imports only `@fabrika/provider-contract`. `src/index.ts` statically selects Cloudflare;
-`src/zerops/provider.ts` statically selects Zerops. `entrypoint-isolation.test.ts` proves that neither
-entrypoint reaches the other provider or runtime.
+It imports only `@fabrika/provider-contract`. `src/index.ts` statically selects Cloudflare. The Bun host
+(`src/bun/`: server, runtime, cron, migrate, MCP, the IAM and Operations gateways) takes its provider as a
+`BunProviderComposition`; `src/zerops/` holds Zerops' composition (`provider.ts`) and the thin entries
+`zerops.yaml` names. `entrypoint-isolation.test.ts` proves that neither entrypoint reaches the other provider
+or runtime, and that the Bun host names no provider.
 
 ## Architecture
 
@@ -154,7 +156,7 @@ other environment, before the provider prepares anything, and the write maps a r
   IAM-ISSUED SERVICE KEY, which is a real credential the proxy can exchange
   (`docs/reference/human-authentication.md`).
 - **`ENVIRONMENT=local` IS REFUSED WHEN `FABRIKA_CONTROL_DOMAIN` IS NOT A LOOPBACK ORIGIN**
-  (`readEnvironmentName`, `@fabrika/auth-core`; both roots — `zerops/runtime.ts` at boot and
+  (`readEnvironmentName`, `@fabrika/auth-core`; both roots — `bun/runtime.ts` at boot and
   `controlEnv` on the Worker's first request). Control does not branch on the name today, which is
   exactly why it must not drift: on `fabrika-test` it carried `local` while serving a public
   `.zerops.app` host (backlog 59), so the next `=== 'local'` branch would inherit an installation
@@ -442,7 +444,7 @@ other environment, before the provider prepares anything, and the write maps a r
   guarded transaction (claims first — both FKs are `ON DELETE RESTRICT`) and frees the id for reuse, which
   is the id the provider's own marker recovery is keyed to. It deletes NO provider resource (ADR-0034) and
   answers with the row the DELETE returned, so the operator is told what is now unowned.
-- **MCP authoring is a Bun-only protocol adapter (ADR-0049).** `src/zerops/server.ts` routes
+- **MCP authoring is a Bun-only protocol adapter (ADR-0049).** `src/bun/server.ts` routes
   `POST|GET|DELETE /mcp` to `src/mcp/handler.ts`; everything else reaches `controlApp`. The Worker graph
   never imports the MCP SDK (`entrypoint-isolation.test.ts`). `/mcp` verifies the injected token for the
   resource profile `controlMcpResource(controlPublicOrigin)` only, requires `AuthContext.oauth` and a
@@ -451,13 +453,13 @@ other environment, before the provider prepares anything, and the write maps a r
   App with its key read from the vault per operation. A workspace is the branch `fabrika/<id>` owned by one
   principal; every use case re-checks `app_envs.authoring`, the action at the coordinates and ownership, and
   answers 404 otherwise. Paths are repository-relative (`isRepositoryPath`, at the MCP boundary), and
-  protected paths (`zerops.y[a]ml`, every `fabrika.*` but the exact `fabrika.contract.ts`, everything under
+  protected paths (the provider's `authoring.protectedFiles`, every `fabrika.*` but the exact `fabrika.contract.ts`, everything under
   `.github/`) are refused before GitHub is called. `get_deployment` reaches only runs of the caller's own
   workspace branches, and reports a parked run with its approval link and every run's `deviations` (its lines that
   need closer review). `get_app_rules`
   answers the body of `@fabrika/app`'s `skill/SKILL.md`; the server `instructions` stay under 2,000
   characters (some clients cut them at 2 KB) and point to it. Never restate the rules beyond those three lines.
-  One authoring environment per app: `apps.environments.put` answers 409 while another env holds the flag.
+  One authoring environment per app, on a provider that declares `authoring`: `apps.environments.put` answers 409 while another env holds the flag.
 - **Published access comes ONLY from `approvedSnapshot(app, env)` (ADR-0050, `src/approval/`).** Right after the
   commit is pinned, `executeDeploy` reads the run's snapshot (`readAccessSnapshot` over `env.COMMITS`;
   `contractReaderInputs` names the files: on Zerops one archive pass keeps the files `snapshotReads(root)` wants,

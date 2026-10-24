@@ -490,6 +490,11 @@ export interface ProviderNamespaceCapabilities {
 	readonly operator?: ProviderNamespaceOperator
 }
 
+export interface ProviderAuthoring {
+	/** The file NAMES (no `/`) that configure the provider's deploy; a workspace changes none of them, at any depth. */
+	readonly protectedFiles: readonly string[]
+}
+
 /**
  * The control-plane capability bundle selected statically by one composition root.
  *
@@ -511,6 +516,8 @@ export interface ControlProvider {
 	reconcile?(input: ProviderReconcileInput): Promise<ProviderReconcileOutcome>
 	readonly secrets?: ProviderManagedSecrets
 	readonly namespaces?: ProviderNamespaceCapabilities
+	/** MCP authoring (ADR-0049): an environment of this provider can be an authoring target. Absent means none can. */
+	readonly authoring?: ProviderAuthoring
 	/**
 	 * Every application environment gets `FABRIKA_PROXY_SECRET`, with or without a namespace proxy: the provider's own
 	 * hop to the application carries it (Cloudflare's Worker to its Durable Object, ADR-0065). Absent means only a

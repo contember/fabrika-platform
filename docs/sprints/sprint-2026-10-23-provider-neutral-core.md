@@ -181,3 +181,13 @@ WU5, WU6, WU7 and WU9 are independent of each other. WU8 follows WU7.
   The rendered `zerops.yaml` is byte-identical: the exact-output tests in `execution*.test.ts` and
   `released-manifest.test.ts` pass unchanged. The file jobs' names moved to a leaf module (`files/job-names.ts`), so the
   recipe loads without the file stack. Not done: running the recipe on the Cloudflare runner, which is a decision.
+- **WU7.** The Bun host is `packages/control/src/bun/`: `createRuntime(composition, …)` takes a
+  `BunProviderComposition` (the provider and its commit source), and `runControlServer`, `runMaintenanceProcess` and
+  `runMigrationProcess` replace the `import.meta.main` blocks. `src/zerops/` keeps `provider.ts` (`zeropsComposition`)
+  and thin entries at the old paths, so `zerops.yaml`, the package exports `./zerops/runtime` and `./zerops/server`,
+  and the local stack run unchanged. `ControlProvider.authoring` (`{ protectedFiles }`) replaces the `zerops` id check
+  of an authoring target and the hardcoded `zerops.y[a]ml` of `isProtectedPath` and the `apply_changes` description.
+  `OlderProxyReaders` lives in `@fabrika/proxy-core/manifest`; `provider-zerops` re-exports it. The Zerops-specific
+  `zerops/older-proxies.ts` stays in Zerops' composition. `controlMcpRoute` takes the provider and refuses to start
+  when it declares no `authoring`, so MCP never runs with an empty protected list. Reviewed by an independent agent:
+  no P1; both P2s (that default, and no test of the runtime's wiring) and the stale paths fixed.

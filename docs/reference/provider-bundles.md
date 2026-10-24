@@ -170,8 +170,8 @@ The detached runner/image precedes Control in an operator-owned rollout; see
 
 ### Zerops composition
 
-The Zerops installation starts at `packages/control/src/zerops/server.ts`.
-`zerops/provider.ts` composes `@fabrika/provider-zerops` with the Zerops access
+The Zerops installation starts at `packages/control/src/zerops/server.ts`, which runs the
+provider-neutral Bun host (`src/bun/`) with `zeropsComposition`. `zerops/provider.ts` composes `@fabrika/provider-zerops` with the Zerops access
 token, control's in-process GitHub source (`packages/control/src/github/source/`, App
 keys from the vault), and the namespace inputs. Deploy execution stays in the
 Bun process. Recorded app-version ids are reconciled through the provider

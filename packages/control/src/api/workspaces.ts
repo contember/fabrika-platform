@@ -31,6 +31,8 @@ export interface WorkspaceUseCaseContext {
 	readonly signal: AbortSignal
 	/** The console's public origin, for the approval link of a parked run; absent leaves the link out. */
 	readonly consoleOrigin?: string
+	/** The files that configure the provider's deploy (`ControlProvider.authoring`), protected at any depth. */
+	readonly protectedFiles: readonly string[]
 }
 
 export interface AuthoringTargetDto {
@@ -199,7 +201,7 @@ export async function applyChangesUseCase(
 	input: { workspaceId: string; expectedHeadSha: string; message: string; changes: readonly WorkspaceFileChange[] },
 ): Promise<{ commitSha: string }> {
 	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_WRITE)
-	const protectedPaths = input.changes.map((change) => change.path).filter(isProtectedPath)
+	const protectedPaths = input.changes.map((change) => change.path).filter((path) => isProtectedPath(path, c.protectedFiles))
 	if (protectedPaths.length > 0) {
 		fail(403, `protected paths cannot be changed through a workspace: ${protectedPaths.join(', ')}`)
 	}
@@ -303,14 +305,14 @@ export function isRepositoryPath(path: string): boolean {
 }
 
 /**
- * ADR-0049 D6: deployment configuration and CI are changed through normal review only — `zerops.yaml`
- * / `zerops.yml` at any depth, every `fabrika.*` file but the contract, and anything under `.github/`.
+ * ADR-0049 D6: deployment configuration and CI are changed through normal review only — the provider's deploy files
+ * at any depth, every `fabrika.*` file but the contract, and anything under `.github/`.
  * `fabrika.contract.ts` is editable because Control classifies its changes at deploy time (ADR-0050).
  */
-export function isProtectedPath(path: string): boolean {
+export function isProtectedPath(path: string, protectedFiles: readonly string[]): boolean {
 	const lower = path.toLowerCase()
 	const name = lower.split('/').at(-1) ?? lower
-	if (name === 'zerops.yaml' || name === 'zerops.yml' || lower.startsWith('.github/')) return true
+	if (protectedFiles.some((file) => file.toLowerCase() === name) || lower.startsWith('.github/')) return true
 	// Exact case only: a case-insensitive file system could otherwise check out `Fabrika.Contract.ts` as something else.
 	return name.startsWith('fabrika.') && path.split('/').at(-1) !== CONTRACT_FILE
 }

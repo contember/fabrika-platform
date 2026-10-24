@@ -428,6 +428,22 @@ export interface ContractEntryPlacement {
 }
 
 /**
+ * What the proxy of one older platform release parses of an application's manifest entry: a row, and the entry's CSP
+ * directives, each by that release's own parser (ADR-0062); and whether it serves the sign-out (ADR-0067 §5).
+ */
+export interface OlderProxyReader {
+	readonly row: (row: ProxyEndpointRow) => boolean
+	readonly csp: (csp: CspOrigins) => boolean
+	readonly signsOut: boolean
+}
+
+/**
+ * The proxies of the older releases a pin may run whose parsers Control holds. A pin's release is not recorded, so what
+ * any of them reads is what the pin may read.
+ */
+export type OlderProxyReaders = readonly [OlderProxyReader, ...OlderProxyReader[]]
+
+/**
  * A contract application's manifest entry: the one form every producer builds. Refused when the proxy's own parser
  * would refuse it, naming the fields and never their values, because an origin with userinfo may carry a key.
  */

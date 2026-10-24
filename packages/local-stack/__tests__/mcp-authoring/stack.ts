@@ -32,13 +32,13 @@ import { createHarness as createControlHarness } from '../../../control/src/__te
 import { allowAllAuth } from '../../../control/src/__tests__/helpers/iam'
 import { unusedSourceConnection } from '../../../control/src/__tests__/helpers/source-connection'
 import { CONNECTION_ID, seedWorkspaceWorld, type WorkspaceWorld, zeropsProvider } from '../../../control/src/__tests__/helpers/workspaces'
+import { controlMcpRoute } from '../../../control/src/bun/mcp'
+import { createFetchHandler } from '../../../control/src/bun/server'
 import type { Env as ControlEnv } from '../../../control/src/env'
 import { encodeGitHubAppCredential } from '../../../control/src/github/connections/credentials'
 import { githubAppCredentialSecretLabel } from '../../../control/src/github/connections/secrets'
 import { githubWorkspaceSource } from '../../../control/src/github/workspace'
 import { Vault } from '../../../control/src/vault'
-import { controlMcpRoute } from '../../../control/src/zerops/mcp'
-import { createFetchHandler } from '../../../control/src/zerops/server'
 import { createHarness as createIamHarness, type Harness as IamHarness, seedInlineGrant, seedUser } from '../../../iam/src/__tests__/helpers/harness'
 import { createIamApp } from '../../../iam/src/app'
 import type { Env as IamEnv } from '../../../iam/src/env'
@@ -155,7 +155,7 @@ export async function createMcpStack(): Promise<McpStack> {
 		controlEnv,
 		zeropsProvider,
 		unusedSourceConnection('zerops'),
-		mcp ? controlMcpRoute(controlEnv, workspaceSource) : null,
+		mcp ? controlMcpRoute(controlEnv, workspaceSource, zeropsProvider) : null,
 	)
 
 	const manifest = parseProxyManifest({
