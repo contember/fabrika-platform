@@ -8,9 +8,28 @@
  */
 export const REQUEST_BUDGET_MS = 10_000
 
+/** A signal that aborts once its time passed, and a `clear` its work calls when it settles. */
+export interface Deadline {
+	readonly signal: AbortSignal
+	clear(): void
+}
+
+/**
+ * Aborts like `AbortSignal.timeout(ms)`, or when `parent` aborts. Its timer is cleared by `clear`, which every caller
+ * runs in `finally`: workerd counts a pending timer as work, so an uncleared one keeps a Durable Object awake.
+ */
+export function deadline(ms: number, parent?: AbortSignal): Deadline {
+	const controller = new AbortController()
+	const timer = setTimeout(() => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')), ms)
+	return {
+		signal: parent === undefined ? controller.signal : AbortSignal.any([parent, controller.signal]),
+		clear: () => clearTimeout(timer),
+	}
+}
+
 /** A handler's `ctx.signal`: aborted when the client leaves (`request.signal`) or once `budgetMs` passed. */
-export function handlerSignal(request: Request, budgetMs: number = REQUEST_BUDGET_MS): AbortSignal {
-	return AbortSignal.any([request.signal, AbortSignal.timeout(budgetMs)])
+export function handlerSignal(request: Request, budgetMs: number = REQUEST_BUDGET_MS): Deadline {
+	return deadline(budgetMs, request.signal)
 }
 
 export interface BoundedRead {

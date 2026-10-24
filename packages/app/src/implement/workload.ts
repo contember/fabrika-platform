@@ -16,6 +16,7 @@ import {
 } from '@fabrika/auth-core'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { z } from 'zod/v4'
+import { deadline } from './bounded'
 
 export type WorkloadKindOf = OwnWorkloadKind
 
@@ -39,20 +40,30 @@ export function issuerWorkloadTokens(
 ): WorkloadTokenSource {
 	return {
 		async exchange(input) {
-			const response = await fetcher(
-				new Request(new URL(WORKLOAD_TOKEN_PATH, issuer), {
-					method: 'POST',
-					headers: { authorization: `Bearer ${input.key}`, 'content-type': 'application/json' },
-					body: JSON.stringify({ app: input.app }),
-					redirect: 'manual',
-					signal: AbortSignal.timeout(EXCHANGE_TIMEOUT_MS),
-				}),
-			)
-			const parsed = response.status === 200 ? mintResultSchema.safeParse(await response.json()) : null
-			if (parsed === null || !parsed.success) {
-				throw new Error(`IAM answered the workload token exchange with ${response.status}`)
+			const timer = deadline(EXCHANGE_TIMEOUT_MS)
+			try {
+				const response = await fetcher(
+					new Request(new URL(WORKLOAD_TOKEN_PATH, issuer), {
+						method: 'POST',
+						headers: { authorization: `Bearer ${input.key}`, 'content-type': 'application/json' },
+						body: JSON.stringify({ app: input.app }),
+						redirect: 'manual',
+						signal: timer.signal,
+					}),
+				)
+				if (response.status !== 200) {
+					// Nothing reads a refusal's body, and once the deadline is cleared nothing else would end its stream.
+					await response.body?.cancel().catch(() => {})
+					throw new Error(`IAM answered the workload token exchange with ${response.status}`)
+				}
+				const parsed = mintResultSchema.safeParse(await response.json())
+				if (!parsed.success) {
+					throw new Error(`IAM answered the workload token exchange with ${response.status}`)
+				}
+				return parsed.data
+			} finally {
+				timer.clear()
 			}
-			return parsed.data
 		},
 	}
 }

@@ -3,6 +3,7 @@
 // groups a framework report by its fingerprint and raises its new-issue and regression alerts, so each kind of
 // failure becomes one issue. What was thrown travels scrubbed as the report's cause chain (ADR-0059).
 
+import { deadline } from '../implement/bounded'
 import { exceptionChain, type ReportedException } from './exception'
 import type { Scrubber } from './scrub'
 
@@ -136,6 +137,7 @@ export function crashEnvelope(kind: CrashKind, error: unknown, options: Envelope
 
 async function deliver(options: OperationsReporterOptions, body: string): Promise<void> {
 	const send = options.fetch ?? ((request: Request) => fetch(request))
+	const timer = deadline(DELIVERY_TIMEOUT_MS)
 	const request = new Request(options.target.envelopeUrl, {
 		method: 'POST',
 		headers: {
@@ -143,7 +145,7 @@ async function deliver(options: OperationsReporterOptions, body: string): Promis
 			'x-sentry-auth': `Sentry sentry_version=7, sentry_key=${options.target.publicKey}`,
 		},
 		body,
-		signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+		signal: timer.signal,
 	})
 	try {
 		const response = await send(request)
@@ -154,6 +156,8 @@ async function deliver(options: OperationsReporterOptions, body: string): Promis
 	} catch {
 		// The error may quote the ingest URL with its key.
 		console.error('fabrika: a report to Operations could not be delivered')
+	} finally {
+		timer.clear()
 	}
 }
 
