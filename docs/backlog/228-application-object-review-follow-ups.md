@@ -67,10 +67,20 @@ gaps are defence in depth.
 14. The test "the object's migration keeps tag v0001 when the application binds an object of its own" was deleted
     because both gates are 0.9. If D0 moves `PINNED_ENTRY_SINCE`, restore it with a release between the two gates.
 
+**Prereleases (from the merge review of PR #56).**
+
+15. `cloudflare-current-timestamp` scans every migration file, applied ones included (`packages/check/src/rules/migrations.ts`),
+    and the ledger refuses an edited applied file. A 0.9.0-dev application with an applied `DEFAULT CURRENT_TIMESTAMP`
+    migration fails the checker, and editing the file stops its object from booting. Refuse only files the ledger does
+    not hold yet, or document the reset for prerelease applications.
+16. The 0.9 gate of `assertGeneratedEntry` (`packages/provider-cloudflare/src/bounds.ts`) also catches the published
+    `0.9.0-dev.*` prereleases: a dev application with a hand-written `main`, its own Durable Object, a workflow or a
+    container is refused on its next deploy. State it in the release notes, or settle D0 before tagging.
+
 ## Approach / acceptance
 
 Each item lands with a witness that fails before it. Items 12 and 13 need a decision first. Item 14 follows D0 in
-the sprint.
+the sprint, and item 16 is settled with it.
 
 ## Touch points
 
