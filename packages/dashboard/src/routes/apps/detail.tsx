@@ -1,4 +1,5 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { ApprovalsSection } from '../../components/app-detail/ApprovalsSection'
 import { BuildConfigSection } from '../../components/app-detail/BuildConfigSection'
@@ -10,7 +11,10 @@ import { SurfaceSection } from '../../components/app-detail/SurfaceSection'
 import { VariablesSection } from '../../components/app-detail/VariablesSection'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
-import { api } from '../../lib/api'
+import { Chip } from '../../components/Status'
+import { api, type AppEnvDto } from '../../lib/api'
+import { mayDo } from '../../lib/console-access'
+import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate } from '../../lib/format'
 
 // App detail: the per-app registry + operations view: its meta, its environments (each with a
@@ -81,6 +85,7 @@ export default createPage()
 				</section>
 				<BuildConfigSection app={app} onDone={invalidate} />
 				<EnvironmentsSection appId={app.id} envs={envs} namespaces={namespaces} providerId={providerId} onDone={invalidate} />
+				<DataLinks appId={app.id} envs={envs} />
 				<ApprovalsSection appId={app.id} envs={envs} onDone={invalidate} />
 				<SurfaceSection envs={envs} />
 				<DeviationsSection envs={envs} />
@@ -119,3 +124,24 @@ export default createPage()
 			</>
 		)
 	})
+
+function DataLinks({ appId, envs }: { appId: string; envs: AppEnvDto[] }) {
+	const access = useConsoleAccess()
+	const readable = envs.filter((env) => mayDo(access, CONTROL_ACTIONS.DATA_READ, { app: appId, env: env.env }))
+	if (readable.length === 0) return null
+	return (
+		<section>
+			<div className="section-head">
+				<h2>Data</h2>
+			</div>
+			<p className="section-note">Each environment's database, jobs, files and maintenance state, as its application object reports them.</p>
+			<div className="toolbar">
+				{readable.map((env) => (
+					<Link key={env.env} to="apps/data" params={{ id: appId, env: env.env }}>
+						<Chip>{env.env}</Chip>
+					</Link>
+				))}
+			</div>
+		</section>
+	)
+}
