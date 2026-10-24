@@ -24,10 +24,7 @@
 // never been deployed publishes none, so the variable names nothing and this refuses rather than
 // guessing at a hostname.
 
-import type { PlatformProxyService } from './proxy-manifest'
-
-/** The public hostname of each platform service, without a scheme and without a port. */
-export type PlatformHosts = Readonly<Record<PlatformProxyService, string>>
+import type { PlatformHosts, PlatformProxyService } from '@fabrika/installation-init'
 
 /** Everything the deploy needs to know about where this installation answers. */
 export interface PlatformPlacement {
@@ -112,6 +109,3 @@ export const derivePlatformHosts = (subdomains: string, listeners: readonly Plat
 	}
 	return { iam, control, operations }
 }
-
-/** `https://<host>` — the origin a browser, a token's `iss` and a return-origin registry all use. */
-export const platformOrigin = (scheme: 'http' | 'https', host: string): string => `${scheme}://${host}`

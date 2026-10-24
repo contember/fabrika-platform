@@ -10,6 +10,7 @@
 
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import {
+	checkedSecretsFilePath,
 	describeArgument,
 	EMAIL_FLAGS,
 	type InstallationEmail,
@@ -17,10 +18,11 @@ import {
 	readFlag,
 	readInstallationEmail,
 	requiredSetting,
+	SECRETS_FILE_FLAG,
+	SECRETS_FILE_VARIABLE,
 	setting,
 	UNATTENDED_FLAG,
 } from '@fabrika/installation-init'
-import { checkedSecretsFilePath, SECRETS_FILE_FLAG, SECRETS_FILE_VARIABLE } from './install-secrets'
 import { parsePlatformScheme } from './placement-options'
 import { readInstallationSourceDir } from './source-options'
 import type { PlatformTier } from './topology/topology'

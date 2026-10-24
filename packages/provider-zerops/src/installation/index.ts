@@ -31,19 +31,6 @@ import { parsePlatformUpgradeArgs, UPGRADE_DRY_RUN_FLAG } from './upgrade-option
 export { PLATFORM_CONCURRENT_DEPLOY, PLATFORM_DEPLOY_ORDER, PLATFORM_PROXY_SERVICE, PLATFORM_SEQUENTIAL_DEPLOY } from './deploy'
 export { PLATFORM_CONSOLE_APP_SCHEMA } from './generated/platform-console-schema'
 export { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-manifest'
-export { type IamOAuthConfig, type McpClient, parseMcpClientsJson, platformIamOAuthConfig } from './mcp'
-export {
-	type PlatformOAuthResourceTemplate,
-	type PlatformProxyApp,
-	platformProxyAppFor,
-	type PlatformProxyComposition,
-	type PlatformProxyManifest,
-	type PlatformProxyManifestTemplate,
-	type PlatformProxyPlacement,
-	type PlatformProxyService,
-	platformServiceTableDigest,
-	resolvePlatformProxyManifest,
-} from './proxy-manifest'
 
 const EMAIL_PROVIDERS = Object.keys(builtinEmailProviders).join(', ')
 /** One line per provider: its variables, each marked secret or optional where it is. */

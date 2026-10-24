@@ -64,7 +64,7 @@ Its shape is decided by three [platform facts](zerops-platform.md):
 
 It places six generated values — IAM's ES256 signing keys, the IAM RPC key, the proxy key, the
 provisioning key, the Operations sync key and the control vault KEK
-(`packages/provider-zerops/src/installation/secrets.ts`) — plus one minted on the account: a Zerops
+(`packages/installation-init/src/secrets.ts`) — plus one minted on the account: a Zerops
 INTEGRATION token (`POST /client/{id}/integration-token`, client role `NO_ACCESS`, `ADMIN` on this
 project only), so the installation never holds the personal token the operator authenticated with.
 No value is printed. Before the first one is placed, all of them and the integration token are written to
@@ -150,7 +150,7 @@ the committed `packages/provider-zerops/src/installation/generated/platform-prox
 @fabrika/platform-artifacts gen`; CI's `gen:check` fails when it drifts from `controlServiceContract`,
 `OPERATIONS_PUBLIC_SERVICE` or IAM's service table. A table entry is resolved into an installation entry (ADR-0022 "Installation
 entries") with `serviceProxyTable`. The hosts and the browser-facing scheme belong to one installation and are
-bound at deploy time by `resolvePlatformProxyManifest` (`packages/provider-zerops/src/installation/proxy-manifest.ts`).
+bound at deploy time by `resolvePlatformProxyManifest` (`packages/installation-init/src/proxy-manifest.ts`).
 `localPlatformProxyManifest` (`@fabrika/local-stack`) is a CALLER of the same generator with the local
 hosts, so the two compositions can no longer disagree; `compileNamespaceProxyManifest`
 (`republishProxy` in `packages/provider-zerops/src/namespace/proxy-attempt.ts`) remains separate — it builds an APP namespace's manifest

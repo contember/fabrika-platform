@@ -15,10 +15,10 @@ import {
 	ensureFirstAdministrator,
 	type FirstAdministratorApi,
 	type FirstAdministratorResult,
+	platformOrigin,
 } from '@fabrika/installation-init'
 import type { PlatformAdminInput } from './admin-options'
 import { REISSUE_FLAG } from './admin-options'
-import { platformOrigin } from './hosts'
 import { MACHINE_KEY_NEXT_STEP_TITLE, machineKeyNextStepLines } from './machine-key'
 
 /**

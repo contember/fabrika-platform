@@ -10,8 +10,8 @@
 
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import { controlMcpResource, controlServiceContract, controlServiceDigest } from '@fabrika/control/service'
+import { type McpClient, platformServiceTableDigest } from '@fabrika/installation-init'
 import { PLATFORM_PROXY_APPS, type PlatformProxyApp, platformProxyManifestTemplate } from '@fabrika/platform-artifacts/proxy-manifest'
-import { type McpClient, platformServiceTableDigest } from '@fabrika/provider-zerops/installation'
 import { encodeProxyManifestJson, type InstallationProxyApp, parseProxyManifestJson, serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'

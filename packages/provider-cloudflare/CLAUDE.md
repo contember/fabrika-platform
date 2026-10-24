@@ -256,8 +256,9 @@ Invariants:
 - **No GitHub credential in the Environment.** Every GitHub App key lives in Control's vault; the
   Environment and the Worker secrets carry none.
 - **The provisioning key is a SEEDED `px_` key:** the CLI generates one opaque `px_` bearer
-  (`FABRIKA_IAM_PROVISIONING_KEY`); IAM admits a bearer matching it as a synthetic admin (`resolveCaller`),
-  and fabrika reconciles its schema with it. No local IAM mint. Stage 1 deploys IAM from the shared
+  (`FABRIKA_IAM_PROVISIONING_KEY`, `@fabrika/installation-init`'s `randomPxKey`: 256 bits, as on Zerops; a 160-bit key
+  an earlier release generated is resumed unchanged, and IAM checks no length); IAM admits a bearer matching it as a
+  synthetic admin (`resolveCaller`), and fabrika reconciles its schema with it. No local IAM mint. Stage 1 deploys IAM from the shared
   `contember/fabrika-platform` checkout and needs its OIDC and signing config in the Environment.
 - **Operations deploys between IAM and control.** Init records `OPERATIONS_HOSTNAME`, creates
   `OPERATIONS_SYNC_KEY`, and supplies the public IAM issuer. The Operations hostname exposes only ingest
