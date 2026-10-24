@@ -1,5 +1,5 @@
 import type { RpcProcedureContract } from '@fabrika/app'
-import type { ExportDescription } from '@fabrika/auth-core'
+import type { ExportDescription, OpsContentView, OpsView } from '@fabrika/auth-core'
 import { z } from 'zod'
 import type { BuilderConnectionReceiptDto, CreateBuilderConnectionReceiptRequest, GetBuilderConnectionReceiptRequest } from './builder-connections.js'
 import type {
@@ -270,6 +270,21 @@ export interface ControlRpcContract {
 			set: RpcProcedure<SetMailRuleInput, MailRuleDto>
 			remove: RpcProcedure<MailRuleIdInput, OkResponse>
 		}
+	}
+	/**
+	 * An application environment's data (ADR-0069): `data.read` and `data.manage` at the coordinates,
+	 * `data.content.read` as a global grant only; every denial is the 404 of an absent environment.
+	 */
+	data: {
+		operations: {
+			list: RpcProcedure<DataOperationListInput, CursorList<DataOperationDto>>
+			get: RpcProcedure<{ operationId: string }, DataOperationDto>
+		}
+		/** The metadata view; never content. */
+		view: RpcProcedure<AppEnvironmentInput, OpsView>
+		content: RpcProcedure<AppEnvironmentInput, OpsContentView>
+		start: RpcProcedure<StartDataOperationInput, DataOperationDto>
+		recover: RpcProcedure<RecoverDataOperationInput, DataOperationDto>
 	}
 }
 
