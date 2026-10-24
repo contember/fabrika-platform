@@ -164,21 +164,21 @@ for (const backend of ['sqlite', 'postgres']) {
 		}
 
 		/**
-		 * Settled history in one transaction, as `seed` + `owned.finish` leave it. Seeding it run by run costs six commits
-		 * per run, which made the 2500-row case outlast its timeout on a CI database.
+		 * Settled history in one transaction, as `seed(runId, payloadOf(runId), true)` + `owned.finish` leave it. Seeding it
+		 * run by run costs six commits per run, which made the 2500-row case outlast its timeout on a CI database, and the
+		 * 205-row keyset case its 5 s on a slow one.
 		 */
-		async function seedRetainedTerminal(runIds: readonly string[]): Promise<void> {
+		async function seedRetainedTerminal(
+			runIds: readonly string[],
+			payloadOf: (runId: string) => unknown = (runId) => ({ ...frozen(runId), phase: 'terminal', outcome: 'succeeded', artifactState: 'complete' }),
+		): Promise<void> {
 			const run = database.prepare(`INSERT INTO runs (id, app_id, env, ref, commit_sha, trigger, status, actor, exit_code, finished_at)
 				VALUES (?, 'notes', 'prod', 'main', ?, 'manual', 'succeeded', 'user:test', 0, ?)`)
 			const release = database.prepare(`INSERT INTO operations_release_sync
 				(run_id, desired_revision, applied_revision, payload_json, last_success_at) VALUES (?, 1, 1, ?, ?)`)
 			await database.batch(runIds.flatMap((runId) => [
 				run.bind(runId, COMMIT, NOW_S + 10),
-				release.bind(
-					runId,
-					JSON.stringify({ ...frozen(runId), phase: 'terminal', outcome: 'succeeded', artifactState: 'complete' }),
-					NOW_S + 10,
-				),
+				release.bind(runId, JSON.stringify(payloadOf(runId)), NOW_S + 10),
 			]))
 		}
 
@@ -518,16 +518,14 @@ for (const backend of ['sqlite', 'postgres']) {
 		})
 
 		test('finishes the captured keyset range past 100 correct and malformed rows without starving later repair', async () => {
-			for (let index = 0; index < 205; index++) {
-				const runId = `page-${String(index).padStart(3, '0')}`
-				const payload = index < 102
+			// 102 settled matching rows, then 102 malformed ones, all clean; then the one row the pass must still repair.
+			const settled = Array.from({ length: 204 }, (_, index) => `page-${String(index).padStart(3, '0')}`)
+			await seedRetainedTerminal(settled, (runId) =>
+				settled.indexOf(runId) < 102
 					? { ...frozen(runId), phase: 'terminal', outcome: 'succeeded', artifactState: 'complete' }
-					: index < 204
-					? { malformed: true }
-					: frozen(runId)
-				await seed(runId, payload, true)
-				await owned.finish(runId, 'succeeded', 0)
-			}
+					: { malformed: true })
+			await seed('page-204', frozen('page-204'), true)
+			await owned.finish('page-204', 'succeeded', 0)
 			expect(await replayOperationsReleases(deps)).toEqual({ applied: 1, failed: 0, pending: 0 })
 			expect(requests[0]?.runId).toBe('page-204')
 			expect(Number((await repositories.operationsReleases.get('page-204'))?.desired_revision)).toBe(2)
