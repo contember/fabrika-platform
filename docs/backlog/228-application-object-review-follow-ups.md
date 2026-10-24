@@ -6,7 +6,7 @@ blocked-by: []
 
 # 228 — Application object review follow-ups
 
-**Summary.** The P2s and open decisions the reviews of the application object sprint's waves 0–1 left. None blocks
+**Summary.** The P2s and open decisions the reviews of the application object sprint's waves 0–3 left. None blocks
 a release; each is small.
 
 ## Problem
@@ -77,6 +77,27 @@ gaps are defence in depth.
     `0.9.0-dev.*` prereleases: a dev application with a hand-written `main`, its own Durable Object, a workflow or a
     container is refused on its next deploy. State it in the release notes, or settle D0 before tagging.
 
+**Hold metric and ops channel (waves 2–3).**
+
+17. The `transaction_held` report has an end-to-end test only for a mutation; the public procedure and webhook paths
+    have none.
+18. An anonymous `POST /__fabrika/ops/*` still reaches the application Worker, which refuses it before any object
+    lookup. An edge rate budget for the path would keep a flood off the Worker too.
+19. The older-pin test of the provider checks the endpoints and the two object variables, not byte-identical generated
+    configs (`packages/provider-cloudflare/src/__tests__/provider.test.ts`). Pin the full emitted configs for a 0.8.x
+    and a release-absent run (ADR-0062).
+20. `inspect`'s file and webhook delivery summaries scan every row, with grouping temp B-trees, on the object that
+    serves all traffic (`packages/app/src/cloudflare/ops.ts`); table counts are capped, these are not. Counters kept by
+    the framework's mutations, or bounded summaries stated on the S3 wire.
+21. The S3 view cannot say "not booted yet": a cold object reports `bootFailure: null`, as a healthy one does. An
+    additive `boot` state on `OpsView`.
+22. `inspect` skips a table name by asking `parseOpsView` about a one-table view. Export the identifier check from
+    `@fabrika/auth-core` and use it directly.
+23. An ops key insert that throws with an unknown outcome after the row committed deletes the fresh vault row and
+    leaves a dangling record, as the token key code does.
+24. A deploy's write that throws abandons the lease, and so stops the data operation that handed it in. No test covers
+    it.
+
 ## Approach / acceptance
 
 Each item lands with a witness that fails before it. Items 12 and 13 need a decision first. Item 14 follows D0 in
@@ -85,6 +106,8 @@ the sprint, and item 16 is settled with it.
 ## Touch points
 
 `packages/check`, `packages/auth`, `packages/email`, `packages/db` (`sqlite-migrate.ts`, `sqlite.ts`,
-`sqlite-bun.ts`), `packages/provider-cloudflare` (`bounds.ts`, `provider.ts`), `packages/runner-container`.
+`sqlite-bun.ts`), `packages/provider-cloudflare` (`bounds.ts`, `provider.ts`), `packages/runner-container`,
+`packages/app` (`cloudflare/ops.ts`, `cloudflare/invocation.ts`), `packages/auth-core` (`ops.ts`), `packages/control`
+(`ops-key.ts`, `data-operations.ts`).
 
-<!-- Origin: ../sprints/sprint-2026-10-24-application-object.md, run log of waves 0–1. -->
+<!-- Origin: ../sprints/sprint-2026-10-24-application-object.md, run log of waves 0–3. -->
