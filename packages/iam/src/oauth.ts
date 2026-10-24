@@ -86,22 +86,19 @@ export async function grantAuthorization(
 	return code
 }
 
-export type OAuthTokenOutcome = { ok: true; body: OAuthTokenResponse } | { ok: false; error: 'invalid_client' | 'invalid_grant' }
+export type OAuthTokenOutcome = { ok: true; body: OAuthTokenResponse } | { ok: false; error: 'invalid_grant' }
 
+/** Redeem a code or rotate a refresh token for a client `authenticateOAuthClient` established. */
 export async function exchangeOAuthToken(
 	services: Services,
 	env: SigningEnv,
-	config: OAuthConfig,
+	client: EstablishedClient,
 	input: OAuthTokenRequest,
 	requestId: string,
 ): Promise<OAuthTokenOutcome> {
-	const registration = config.clients.find((client) => client.clientId === input.client_id)
-	if (registration === undefined) return { ok: false, error: 'invalid_client' }
-	const metadata = await clientMetadata(registration)
-	if (metadata === null) return { ok: false, error: 'invalid_client' }
 	return input.grant_type === 'authorization_code'
-		? redeemCode(services, env, metadata, input, requestId)
-		: rotateRefreshToken(services, env, metadata, input, requestId)
+		? redeemCode(services, env, client.metadata, input, requestId)
+		: rotateRefreshToken(services, env, client.metadata, input, requestId)
 }
 
 async function redeemCode(

@@ -1,13 +1,17 @@
 import { DEFAULT_LOCALE } from '@fabrika/auth-core'
 import {
+	OAUTH_CLIENT_ASSERTION_ALGORITHMS,
 	type OAuthAuthorizationRequest,
 	type OAuthAuthorizationServerMetadata,
+	type OAuthClientCredential,
 	type OAuthResourceDto,
 	parseOAuthAuthorizationAttempt,
+	parseOAuthClientCredential,
 	parseOAuthRevocationRequest,
 	parseOAuthTokenRequest,
 	resolveOAuthAuthorizationScopes,
 } from '@fabrika/iam-contract'
+import { decodeJwt } from 'jose'
 import { readForm, redirectHeaders, sameOrigin } from './auth/http'
 import { currentSession } from './auth/sessions'
 import { principalStatus } from './db'
@@ -15,6 +19,7 @@ import type { Env } from './env'
 import { escapeHtml } from './html'
 import { installationBrand } from './installation-brand'
 import { establishClient, type EstablishedClient, exchangeOAuthToken, grantAuthorization, revokeOAuthToken, scopeCeiling } from './oauth'
+import { authenticateOAuthClient } from './oauth-client-auth'
 import type { OAuthConfig } from './oauth-config'
 import { normalizeOrigin } from './origin'
 import { htmlPage } from './password-pages'
@@ -58,7 +63,11 @@ function authorizationServerMetadata(issuer: string): Response {
 		response_types_supported: ['code'],
 		grant_types_supported: ['authorization_code', 'refresh_token'],
 		code_challenge_methods_supported: ['S256'],
-		token_endpoint_auth_methods_supported: ['none'],
+		token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+		token_endpoint_auth_signing_alg_values_supported: [...OAUTH_CLIENT_ASSERTION_ALGORITHMS],
+		revocation_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+		revocation_endpoint_auth_signing_alg_values_supported: [...OAUTH_CLIENT_ASSERTION_ALGORITHMS],
+		authorization_response_iss_parameter_supported: true,
 		client_id_metadata_document_supported: true,
 	}
 	return Response.json(metadata, { headers: { 'cache-control': 'public, max-age=300', 'access-control-allow-origin': '*' } })
@@ -73,23 +82,23 @@ type AuthorizationCheck =
  * Validate an authorization request in the order RFC 6749 §4.1.2.1 requires: until the client and its
  * redirect URI are established an error is a page here, never a redirect to an unverified address.
  */
-async function checkAuthorization(config: OAuthConfig, input: Record<string, string> | null): Promise<AuthorizationCheck> {
+async function checkAuthorization(issuer: string, config: OAuthConfig, input: Record<string, string> | null): Promise<AuthorizationCheck> {
 	const attempt = parseOAuthAuthorizationAttempt(input)
 	if (attempt.kind === 'invalid_request') return { kind: 'refused', message: 'The authorization request is malformed.' }
 	const coordinates = attempt.kind === 'valid' ? attempt.request : attempt.coordinates
 	const client = await establishClient(config, coordinates.client_id, coordinates.redirect_uri)
 	if (client === null) return { kind: 'refused', message: 'The client or its redirect URI is not registered.' }
-	if (attempt.kind === 'invalid_scope') return { kind: 'redirect', response: clientRedirect(coordinates, { error: 'invalid_scope' }) }
+	if (attempt.kind === 'invalid_scope') return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_scope' }) }
 	const resource = config.resources.find((entry) => entry.resource === coordinates.resource)
-	if (resource === undefined) return { kind: 'redirect', response: clientRedirect(coordinates, { error: 'invalid_target' }) }
+	if (resource === undefined) return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_target' }) }
 	const scopes = resolveOAuthAuthorizationScopes(attempt.request.scope, resource)
-	if (scopes === null) return { kind: 'redirect', response: clientRedirect(coordinates, { error: 'invalid_scope' }) }
+	if (scopes === null) return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_scope' }) }
 	return { kind: 'valid', request: attempt.request, client, resource, scopes }
 }
 
 async function showConsent(request: Request, services: Services, config: OAuthConfig): Promise<Response> {
 	const url = new URL(request.url)
-	const check = await checkAuthorization(config, singleValued(url.searchParams))
+	const check = await checkAuthorization(services.config.issuer, config, singleValued(url.searchParams))
 	if (check.kind === 'refused') return errorPage(services, check.message, 400)
 	if (check.kind === 'redirect') return check.response
 	const session = await currentSession(request, services)
@@ -109,33 +118,67 @@ async function decideConsent(request: Request, services: Services, config: OAuth
 	const form = await readForm(request)
 	const fields = form === null ? null : singleValued(form)
 	const decision = fields?.['decision']
-	const check = await checkAuthorization(config, fields)
+	const issuer = services.config.issuer
+	const check = await checkAuthorization(issuer, config, fields)
 	if (check.kind === 'refused') return errorPage(services, check.message, 400)
 	if (check.kind === 'redirect') return check.response
-	if (decision === 'deny') return clientRedirect(check.request, { error: 'access_denied' })
+	if (decision === 'deny') return clientRedirect(issuer, check.request, { error: 'access_denied' })
 	if (decision !== 'approve') return errorPage(services, 'The consent decision is missing.', 400)
 	const session = await currentSession(request, services)
 	if (session === null) return errorPage(services, 'Your sign-in has ended. Start the authorization again.', 401)
 	const code = await grantAuthorization(services, { request: check.request, resource: check.resource, scopes: check.scopes, session, requestId })
-	return clientRedirect(check.request, { code })
+	return clientRedirect(issuer, check.request, { code })
 }
 
 async function token(request: Request, services: Services, env: SigningEnv, config: OAuthConfig, requestId: string): Promise<Response> {
 	const form = await readForm(request)
-	const input = parseOAuthTokenRequest(form === null ? null : singleValued(form))
+	const fields = form === null ? null : singleValued(form)
+	const credential = parseOAuthClientCredential(fields)
+	if (credential === null) return protocolError('invalid_client', 401)
+	const input = parseOAuthTokenRequest(withAssertedClientId(fields, credential))
 	if (input === null) return protocolError('invalid_request', 400)
-	const outcome = await exchangeOAuthToken(services, env, config, input, requestId)
-	if (!outcome.ok) return protocolError(outcome.error, outcome.error === 'invalid_client' ? 401 : 400)
+	const issuer = services.config.issuer
+	const client = await authenticateOAuthClient(services, config, {
+		clientId: input.client_id,
+		credential,
+		audiences: [`${issuer}${TOKEN_PATH}`, issuer],
+	})
+	if (client === null) return protocolError('invalid_client', 401)
+	const outcome = await exchangeOAuthToken(services, env, client, input, requestId)
+	if (!outcome.ok) return protocolError(outcome.error, 400)
 	return Response.json(outcome.body, { headers: { 'cache-control': 'no-store', pragma: 'no-cache' } })
 }
 
 async function revoke(request: Request, services: Services, env: SigningEnv, config: OAuthConfig, requestId: string): Promise<Response> {
 	const form = await readForm(request)
-	const input = parseOAuthRevocationRequest(form === null ? null : singleValued(form))
+	const fields = form === null ? null : singleValued(form)
+	const credential = parseOAuthClientCredential(fields)
+	if (credential === null) return protocolError('invalid_client', 401)
+	const input = parseOAuthRevocationRequest(withAssertedClientId(fields, credential))
 	if (input === null) return protocolError('invalid_request', 400)
-	if (!config.clients.some((client) => client.clientId === input.client_id)) return protocolError('invalid_client', 401)
+	const issuer = services.config.issuer
+	const client = await authenticateOAuthClient(services, config, {
+		clientId: input.client_id,
+		credential,
+		audiences: [`${issuer}${REVOKE_PATH}`, `${issuer}${TOKEN_PATH}`, issuer],
+	})
+	if (client === null) return protocolError('invalid_client', 401)
 	await revokeOAuthToken(services, env, input, requestId)
 	return new Response(null, { status: 200, headers: { 'cache-control': 'no-store' } })
+}
+
+/**
+ * RFC 7521 §4.2 lets a client that authenticates with an assertion omit `client_id`; the assertion's
+ * `sub` then names it. Nothing is trusted from it here: verification requires `iss` = `sub` = that id.
+ */
+function withAssertedClientId(fields: Record<string, string> | null, credential: OAuthClientCredential): Record<string, string> | null {
+	if (fields === null || credential.method !== 'private_key_jwt' || Object.hasOwn(fields, 'client_id')) return fields
+	try {
+		const subject = decodeJwt(credential.assertion).sub
+		return subject === undefined ? fields : { ...fields, client_id: subject }
+	} catch {
+		return fields
+	}
 }
 
 async function consentPage(services: Services, check: Extract<AuthorizationCheck, { kind: 'valid' }>, signedInAs: string): Promise<Response> {
@@ -177,10 +220,16 @@ async function consentPage(services: Services, check: Extract<AuthorizationCheck
 	})
 }
 
-function clientRedirect(target: Pick<OAuthAuthorizationRequest, 'redirect_uri' | 'state'>, parameters: Record<string, string>): Response {
+/** Every authorization response names the issuer (RFC 9207), so a client can detect a mix-up of servers. */
+function clientRedirect(
+	issuer: string,
+	target: Pick<OAuthAuthorizationRequest, 'redirect_uri' | 'state'>,
+	parameters: Record<string, string>,
+): Response {
 	const url = new URL(target.redirect_uri)
 	for (const [name, value] of Object.entries(parameters)) url.searchParams.set(name, value)
 	if (target.state !== undefined) url.searchParams.set('state', target.state)
+	url.searchParams.set('iss', issuer)
 	return new Response(null, { status: 302, headers: redirectHeaders(url.href) })
 }
 
