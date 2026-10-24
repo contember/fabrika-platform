@@ -40,7 +40,7 @@ import {
 
 const AT = '2026-10-24T12:00:00.000Z'
 const failure: OpsBootFailureContent = { at: AT, message: 'boot failed', stack: 'Error: boot failed\n    at boot' }
-const migration: OpsMigration = { bundle: 'framework', name: '0001_framework.sql', checksum: 'ab12', appliedAt: AT }
+const migration: OpsMigration = { bundle: 'framework', name: '0001_framework.sql', checksum: 'a'.repeat(64), appliedAt: AT }
 const view: OpsView = {
 	release: '0.9.0',
 	maintenance: { mode: 'read-only', generation: 7, published: true },
@@ -262,6 +262,96 @@ describe('the view', () => {
 		}
 		expect(parseOpsContentView({ ...contentView, extra: 1 })).toBeNull()
 		expect(parseOpsContentView({ ...contentView, maintenance: { ...view.maintenance, mode: 'frozen' } })).toBeNull()
+	})
+})
+
+describe('the view refuses text in an identifier slot', () => {
+	const freeText = [
+		'',
+		' notes',
+		'notes ',
+		'no tes',
+		'notes\n',
+		'invoice.pdf',
+		'customer-invoice.pdf\nprivate payload',
+		'Boot failed: connection refused',
+	]
+
+	test('a table name follows the data layer identifier rule', () => {
+		for (const name of ['notes', '_private', 'fabrika_job_leases', `a${'b'.repeat(62)}`]) {
+			expect(parseOpsView({ ...view, database: { sizeBytes: 1, tables: [{ name, rows: 1 }] } })).not.toBeNull()
+		}
+		for (const name of [...freeText, 'Notes', '1notes', 'note-comments', `a${'b'.repeat(63)}`]) {
+			expect(parseOpsView({ ...view, database: { sizeBytes: 1, tables: [{ name, rows: 1 }] } })).toBeNull()
+		}
+	})
+
+	test('a job, a webhook and a file kind follow the contract name rule', () => {
+		const job = view.jobs[0]
+		const file = view.files[0]
+		const webhook = view.webhooks[0]
+		if (job === undefined || file === undefined || webhook === undefined) throw new Error('fixture')
+		for (const name of ['nightlyDigest', 'Github', 'scan_2']) {
+			expect(parseOpsView({ ...view, jobs: [{ ...job, job: name }], files: [{ ...file, kind: name }], webhooks: [{ ...webhook, webhook: name }] })).not
+				.toBeNull()
+		}
+		for (const name of [...freeText, '_job', '2fa', 'nightly-digest']) {
+			expect(parseOpsView({ ...view, jobs: [{ ...job, job: name }] })).toBeNull()
+			expect(parseOpsView({ ...view, files: [{ ...file, kind: name }] })).toBeNull()
+			expect(parseOpsView({ ...view, webhooks: [{ ...webhook, webhook: name }] })).toBeNull()
+		}
+		expect(parseOpsView({ ...view, jobs: [{ ...job, job: `a${'b'.repeat(64)}` }] })).toBeNull()
+	})
+
+	test("a migration's bundle, filename and checksum follow the ledger's rules", () => {
+		const withMigration = (entry: Record<string, unknown>) => ({ ...view, migrations: [{ ...migration, ...entry }] })
+		for (const entry of [{ bundle: 'app' }, { bundle: 'framework-v2' }, { name: '0002_notes.down.sql' }, { checksum: '0123456789abcdef'.repeat(4) }]) {
+			expect(parseOpsView(withMigration(entry))).not.toBeNull()
+		}
+		for (const text of freeText) {
+			expect(parseOpsView(withMigration({ bundle: text }))).toBeNull()
+			expect(parseOpsView(withMigration({ name: text }))).toBeNull()
+			expect(parseOpsView(withMigration({ checksum: text }))).toBeNull()
+		}
+		for (
+			const entry of [
+				{ bundle: 'App' },
+				{ bundle: '1app' },
+				{ name: '0001_notes' },
+				{ name: '.hidden.sql' },
+				{ name: '0001 notes.sql' },
+				{ checksum: 'a'.repeat(63) },
+				{ checksum: 'A'.repeat(64) },
+				{ checksum: `sha256:${'a'.repeat(64)}` },
+				{ checksum: 'g'.repeat(64) },
+			]
+		) {
+			expect(parseOpsView(withMigration(entry))).toBeNull()
+		}
+	})
+})
+
+describe('timestamps', () => {
+	const at = (alarm: string) => parseOpsView({ ...view, scheduler: { alarm } })
+
+	test('accept a real instant, a leap day included', () => {
+		for (const alarm of ['2028-02-29T00:00:00.000Z', '2000-02-29T23:59:59.999Z', '2026-12-31T23:59:59.999Z']) {
+			expect(at(alarm)?.scheduler.alarm).toBe(alarm)
+		}
+	})
+
+	test('refuse an impossible date that Date would roll over', () => {
+		for (
+			const alarm of [
+				'2026-02-31T12:00:00.000Z',
+				'2026-02-29T12:00:00.000Z',
+				'1900-02-29T12:00:00.000Z',
+				'2026-04-31T00:00:00.000Z',
+				'2026-01-01T24:00:00.000Z',
+			]
+		) {
+			expect(at(alarm)).toBeNull()
+		}
 	})
 })
 

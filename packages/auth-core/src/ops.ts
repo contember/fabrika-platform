@@ -7,6 +7,7 @@ import { isDigest } from './endpoint-digest'
 import { FRAMEWORK_RELEASE_PATTERN } from './framework-release'
 import { prop } from './json'
 import { sha256Hex } from './sha256'
+import { WORKLOAD_NAME } from './workloads'
 
 /** Every ops request's path lies under this prefix, on the environment's own domain. */
 export const OPS_PREFIX = '/__fabrika/ops/'
@@ -329,6 +330,14 @@ const WEBHOOK_STATES = ['claimed', 'completed'] as const
 const JOB_STATUSES = ['succeeded', 'failed'] as const
 /** The form `Date.prototype.toISOString` and SQLite's `%Y-%m-%dT%H:%M:%fZ` both write. */
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+/** `@fabrika/db`'s `isPlainIdentifier`: the only table names the data layer admits. */
+const TABLE_NAME = /^[a-z_][a-z0-9_]{0,62}$/
+/** The contract build's authored-name rule (`@fabrika/app/contract`), which a file kind follows. */
+const CONTRACT_NAME = /^[A-Za-z][A-Za-z0-9_]*$/
+/** `@fabrika/db`'s SQLite migration runner: a bundle name, a migration file name and a file's SHA-256 hex. */
+const MIGRATION_BUNDLE = /^[a-z][a-z0-9-]*$/
+const MIGRATION_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*\.sql$/
+const MIGRATION_CHECKSUM = /^[0-9a-f]{64}$/
 
 /** Every field of the view but the boot failure, whose form differs between the two views. */
 function readViewFields(body: unknown): Omit<OpsView, 'bootFailure'> | null {
@@ -369,16 +378,16 @@ function readDatabase(value: unknown): OpsDatabase | null {
 
 function readTableCount(value: unknown): OpsTableCount | null {
 	if (!exactKeys(value, ['name', 'rows'])) return null
-	const name = readName(prop(value, 'name'))
+	const name = readMatch(prop(value, 'name'), TABLE_NAME)
 	const rows = readCount(prop(value, 'rows'))
 	return name === null || rows === null || rows > OPS_ROW_COUNT_CAP ? null : { name, rows }
 }
 
 function readMigration(value: unknown): OpsMigration | null {
 	if (!exactKeys(value, ['bundle', 'name', 'checksum', 'appliedAt'])) return null
-	const bundle = readName(prop(value, 'bundle'))
-	const name = readName(prop(value, 'name'))
-	const checksum = readName(prop(value, 'checksum'))
+	const bundle = readMatch(prop(value, 'bundle'), MIGRATION_BUNDLE)
+	const name = readMatch(prop(value, 'name'), MIGRATION_NAME)
+	const checksum = readMatch(prop(value, 'checksum'), MIGRATION_CHECKSUM)
 	const appliedAt = readTimestamp(prop(value, 'appliedAt'))
 	return bundle === null || name === null || checksum === null || appliedAt === null ? null : { bundle, name, checksum, appliedAt }
 }
@@ -392,7 +401,7 @@ function readScheduler(value: unknown): OpsScheduler | null {
 
 function readJob(value: unknown): OpsJob | null {
 	if (!exactKeys(value, ['job', 'lastStatus', 'lastStartedAt', 'lastFinishedAt', 'lastDurationMs'])) return null
-	const job = readName(prop(value, 'job'))
+	const job = readMatch(prop(value, 'job'), WORKLOAD_NAME)
 	const lastStatus = readNullable(prop(value, 'lastStatus'), (status) => readEnum(status, JOB_STATUSES))
 	const lastStartedAt = readNullable(prop(value, 'lastStartedAt'), readTimestamp)
 	const lastFinishedAt = readNullable(prop(value, 'lastFinishedAt'), readTimestamp)
@@ -405,7 +414,7 @@ function readJob(value: unknown): OpsJob | null {
 
 function readFileCount(value: unknown): OpsFileCount | null {
 	if (!exactKeys(value, ['kind', 'status', 'count'])) return null
-	const kind = readName(prop(value, 'kind'))
+	const kind = readMatch(prop(value, 'kind'), CONTRACT_NAME)
 	const status = readEnum(prop(value, 'status'), FILE_STATUSES)
 	const count = readCount(prop(value, 'count'))
 	return kind === null || status === null || count === null ? null : { kind, status, count }
@@ -413,7 +422,7 @@ function readFileCount(value: unknown): OpsFileCount | null {
 
 function readWebhookCount(value: unknown): OpsWebhookCount | null {
 	if (!exactKeys(value, ['webhook', 'state', 'count'])) return null
-	const webhook = readName(prop(value, 'webhook'))
+	const webhook = readMatch(prop(value, 'webhook'), WORKLOAD_NAME)
 	const state = readEnum(prop(value, 'state'), WEBHOOK_STATES)
 	const count = readCount(prop(value, 'count'))
 	return webhook === null || state === null || count === null ? null : { webhook, state, count }
@@ -475,10 +484,14 @@ function readCount(value: unknown): number | null {
 	return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
 }
 
-function readName(value: unknown): string | null {
-	return typeof value === 'string' && value !== '' ? value : null
+/** An identifier the platform or the contract names, in its owner's format: free text never fits one. */
+function readMatch(value: unknown, pattern: RegExp): string | null {
+	return typeof value === 'string' && pattern.test(value) ? value : null
 }
 
+/** `Date` rolls an impossible date over (`02-31` to `03-03`), so the instant must print back as the same text. */
 function readTimestamp(value: unknown): string | null {
-	return typeof value === 'string' && TIMESTAMP.test(value) && !Number.isNaN(Date.parse(value)) ? value : null
+	if (typeof value !== 'string' || !TIMESTAMP.test(value)) return null
+	const instant = new Date(value)
+	return !Number.isNaN(instant.getTime()) && instant.toISOString() === value ? value : null
 }
