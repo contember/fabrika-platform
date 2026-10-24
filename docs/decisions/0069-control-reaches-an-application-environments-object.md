@@ -67,9 +67,11 @@ holds a maintenance barrier that Control drives by generations it allocates.**
   refused object name all get one answer: the same status, body and headers. Authentication runs before anything that
   depends on the request's detail. Outside the prefix the proxy answers as before, so the prefix itself is visible; only
   what lies inside it is not.
-- **Object selection.** Ordinary traffic goes only to the object named by `FABRIKA_APPLICATION_OBJECT`. An ops request
-  may name its target, and the Worker accepts only a name listed in `FABRIKA_APPLICATION_OBJECTS`, resolved in its own
-  environment's namespace; a caller never names an object of another environment. Without either variable the object
+- **Object selection.** Ordinary traffic goes only to the object named by `FABRIKA_APPLICATION_OBJECT`. Every ops
+  request names its target in the body field `object`, and the Worker accepts only a name listed in the comma-separated
+  `FABRIKA_APPLICATION_OBJECTS` (1–16 names, the default among them), resolved in its own environment's namespace; a
+  caller never names an object of another environment. A name matches `^[a-z][a-z0-9-]{0,62}$`, so it is safe in the
+  state object's R2 key. Without either variable the object
   is named `application`, as today. A side restore, decided when it is built, moves `FABRIKA_APPLICATION_OBJECT` to a
   clone and lists both names.
 - **The wire.** The prefix, the row's constants, the request and answer shapes and the variable names live in
@@ -153,7 +155,8 @@ until a put succeeds, **published** after.
 **A transition** is `POST /__fabrika/ops/state { mode, generation }`. The object runs one transition at a time; the
 next waits for it.
 
-1. A generation below the current one is refused, and so is an equal generation with another mode. An equal
+1. A generation below the current one is refused, and so is an equal generation with another mode: after
+   authentication the answer is 409 naming the published generation and mode, so Control can reconcile. An equal
    generation with the same mode is a retry: a pending state repeats the put of step 3, then the drain runs again.
 2. A restricting transition switches the in-memory mode before any await, as pending. From that instant the object
    admits no new invocation of a class the mode forbids. An opening transition leaves memory as it is.
