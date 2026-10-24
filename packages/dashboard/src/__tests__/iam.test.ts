@@ -1,6 +1,6 @@
 import type { RpcFetch } from '@fabrika/app'
 import { describe, expect, test } from 'bun:test'
-import { findPeople, iamPrincipals, recentAuditChanges } from '../lib/iam'
+import { findPeople, iamPrincipals, recentAuditChangePage, recentAuditChanges } from '../lib/iam'
 
 function iamFetch(methods: string[], bodies: string[] = []): RpcFetch {
 	return async (_input, init) => {
@@ -70,46 +70,40 @@ describe('IAM people for the command palette', () => {
 	})
 })
 
-/** An audit log served in pages of the `audit.list` shape; records the `before` of every call. */
-function auditPages(pages: Array<Array<{ id: string; action: string }>>, cursors: Array<string | null>): RpcFetch {
+/** One `audit.list` answer; records the input of every call. */
+function auditPage(items: Array<{ id: string; action: string }>, nextCursor: string | null, inputs: unknown[]): RpcFetch {
 	return async (_input, init) => {
 		if (typeof init?.body !== 'string') throw new Error('expected JSON RPC body')
 		const body: unknown = JSON.parse(init.body)
-		if (body === null || typeof body !== 'object' || !('input' in body) || body.input === null || typeof body.input !== 'object') {
-			throw new Error('expected RPC input')
-		}
-		const before = 'before' in body.input && typeof body.input.before === 'string' ? body.input.before : null
-		cursors.push(before)
-		const index = before === null ? 0 : Number(before.slice('page-'.length))
-		const items = pages[index] ?? []
-		const nextCursor = index + 1 < pages.length ? `page-${index + 1}` : null
+		if (body === null || typeof body !== 'object' || !('input' in body)) throw new Error('expected RPC input')
+		inputs.push(body.input)
 		return Response.json({ result: { items, nextCursor } })
 	}
 }
 
 describe('recent audit changes', () => {
-	test('leaves out admin reads and pages back until it has enough changes', async () => {
-		const cursors: Array<string | null> = []
+	test('asks IAM for changes only, in one call', async () => {
+		const inputs: unknown[] = []
 		const changes = await recentAuditChanges(
 			2,
-			auditPages([
-				[{ id: 'a', action: 'iam.admin.access' }, { id: 'b', action: 'app.create' }],
-				[{ id: 'c', action: 'iam.admin.access' }, { id: 'd', action: 'iam.grant.create' }, { id: 'e', action: 'namespace.create' }],
-				[{ id: 'f', action: 'access.approve' }],
-			], cursors),
+			auditPage([{ id: 'b', action: 'app.create' }, { id: 'd', action: 'iam.grant.create' }, { id: 'e', action: 'namespace.create' }], 'e', inputs),
 		)
 
 		expect(changes?.map((event) => event.id)).toEqual(['b', 'd'])
-		expect(cursors).toEqual([null, 'page-1'])
+		expect(inputs).toEqual([{ changesOnly: true, limit: 50 }])
 	})
 
-	test('stops after three pages even when they hold only reads', async () => {
-		const cursors: Array<string | null> = []
-		const reads = [{ id: 'r', action: 'iam.admin.access' }]
-		const changes = await recentAuditChanges(6, auditPages([reads, reads, reads, reads], cursors))
+	test('still leaves out the reads an IAM older than changesOnly returns', async () => {
+		const inputs: unknown[] = []
+		const changes = await recentAuditChangePage(
+			6,
+			auditPage([{ id: 'a', action: 'iam.admin.access' }, { id: 'b', action: 'app.create' }, { id: 'c', action: 'iam.admin.access' }], 'c', inputs),
+		)
 
-		expect(changes).toEqual([])
-		expect(cursors).toEqual([null, 'page-1', 'page-2'])
+		expect(changes.items.map((event) => event.id)).toEqual(['b'])
+		// Fewer changes than wanted while older rows exist: the feed says it may miss some.
+		expect(changes.limited).toBe(true)
+		expect(inputs).toHaveLength(1)
 	})
 
 	test('stays quiet when IAM refuses', async () => {

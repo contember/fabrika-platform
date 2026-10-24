@@ -508,6 +508,11 @@ export interface ListAuditInput {
 	/** The person affected by the change, distinct from `principalId` (the actor). */
 	subjectPrincipalId?: string
 	action?: string
+	/**
+	 * Leave out the admin reads (`iam.admin.access`), which IAM writes for every `/admin/*` request, so a feed of what
+	 * changed reads changes and not the reads that page through it. An IAM older than this field ignores it.
+	 */
+	changesOnly?: boolean
 	requestId?: string
 	before?: string
 	limit?: number

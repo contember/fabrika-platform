@@ -211,7 +211,7 @@ describe('overview data boundaries', () => {
 		expect(errors).not.toContain('window:24h')
 	})
 
-	test('an audit scan full of reads is marked incomplete', async () => {
+	test('an audit page of reads, from an IAM older than changesOnly, is marked incomplete', async () => {
 		const data = await loadOverview(
 			caller,
 			fetchOverview({ '/iam/admin/rpc:audit.list': { items: [{ action: 'iam.admin.access' }], nextCursor: 'older' } }),

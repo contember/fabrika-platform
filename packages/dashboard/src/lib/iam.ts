@@ -27,19 +27,16 @@ function quietIamClient(fetcher: RpcFetch) {
 	return createRpcClient<IamAdminRpcContract>({ baseUrl: RPC_BASE, fetch: fetcher, bounceOnAuth: false })
 }
 
-/** Reads of the admin API are audited too (`iam.admin.access`); on a feed of what changed they are noise. */
+/**
+ * Reads of the admin API are audited too (`iam.admin.access`); on a feed of what changed they are noise. IAM leaves them
+ * out for `changesOnly`; an IAM older than that field ignores it, so the feed drops them here as well.
+ */
 export const AUDIT_READ_ACTIONS: ReadonlySet<string> = new Set(['iam.admin.access'])
 
-/** The most audit rows one call returns, and how many such pages the feed reads looking for changes. */
-const AUDIT_PAGE = 200
-const AUDIT_PAGES = 3
+/** The rows one call asks for: the feed shows a few, and the reads an older IAM still returns come out of these. */
+const AUDIT_PAGE = 50
 
-/**
- * The newest changes in the audit log, reads left out. IAM audits every admin read, the console's own
- * included, so the changes can sit a few hundred rows back; the read stops after `AUDIT_PAGES` pages. IAM cannot
- * leave the reads out itself yet (docs/backlog/191); once it can, this is one call.
- * Null when this operator can't read the log or IAM is unreachable.
- */
+/** The newest changes in the audit log, reads left out. Null when this operator can't read the log or IAM is unreachable. */
 export async function recentAuditChanges(wanted: number, fetcher: RpcFetch = fetch): Promise<IamAuditEventDto[] | null> {
 	try {
 		return (await recentAuditChangePage(wanted, fetcher)).items
@@ -48,18 +45,14 @@ export async function recentAuditChanges(wanted: number, fetcher: RpcFetch = fet
 	}
 }
 
-/** A bounded scan is not an empty history. The overview shows when reads exhausted the scan budget. */
+/**
+ * One page of changes (`changesOnly`). `limited` says the page held fewer changes than wanted while older
+ * rows exist, which only an IAM that still returns its reads leaves: the feed may then miss older changes.
+ */
 export async function recentAuditChangePage(wanted: number, fetcher: RpcFetch = fetch) {
-	const api = quietIamClient(fetcher)
-	const changes: IamAuditEventDto[] = []
-	let before: string | undefined
-	for (let page = 0; page < AUDIT_PAGES; page++) {
-		const list = await api.audit.list({ limit: AUDIT_PAGE, ...(before === undefined ? {} : { before }) })
-		changes.push(...list.items.filter((event) => !AUDIT_READ_ACTIONS.has(event.action)))
-		if (changes.length >= wanted || list.nextCursor === null) return { items: changes.slice(0, wanted), limited: false }
-		before = list.nextCursor
-	}
-	return { items: changes, limited: true }
+	const list = await quietIamClient(fetcher).audit.list({ changesOnly: true, limit: Math.max(wanted, AUDIT_PAGE) })
+	const changes = list.items.filter((event) => !AUDIT_READ_ACTIONS.has(event.action))
+	return { items: changes.slice(0, wanted), limited: changes.length < wanted && list.nextCursor !== null }
 }
 
 /**

@@ -263,6 +263,8 @@ export class AuditRepository {
 		principalId?: string
 		subjectPrincipalId?: string
 		action?: string
+		/** Actions to leave out, before the page is cut, so `limit` counts only the rows that remain. */
+		excludeActions?: readonly string[]
 		requestId?: string
 		before?: string
 		limit: number
@@ -294,6 +296,10 @@ export class AuditRepository {
 		if (filter.action) {
 			where.push('action = ?')
 			binds.push(filter.action)
+		}
+		if (filter.excludeActions !== undefined && filter.excludeActions.length > 0) {
+			where.push(`action NOT IN (${filter.excludeActions.map(() => '?').join(', ')})`)
+			binds.push(...filter.excludeActions)
 		}
 		if (filter.requestId) {
 			where.push('request_id = ?')

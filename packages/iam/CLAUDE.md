@@ -451,7 +451,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   template, a path that names no operation under the fixed `/admin/*`, never the raw path. An administrator is an
   installation admin or a user administrator (`administrationOf`). An RPC caller with neither reaches no procedure but
   `appPeople.*`, and is not recorded; each change it makes there is. A mutation therefore writes two rows: the access and the
-  change.
+  change. `audit.list` with `changesOnly` leaves these rows out before the page is cut, so a feed of changes is one call.
 - **RETENTION IS AN IAM SETTING, IN DAYS** (`src/retention.ts`, `Config.retention`): `AUTH_LOG_RETENTION_DAYS` (deploy
   var `FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS`, default 30) and `AUDIT_RETENTION_DAYS` (`FABRIKA_IAM_AUDIT_RETENTION_DAYS`,
   unset keeps every audit row). Anything but a whole number of days from 1 to 99999 fails the boot, in

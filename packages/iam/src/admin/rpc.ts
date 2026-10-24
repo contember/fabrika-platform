@@ -188,6 +188,7 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 				principalId: z.string().optional(),
 				subjectPrincipalId: z.string().optional(),
 				action: z.string().optional(),
+				changesOnly: z.boolean().optional(),
 				requestId: z.string().optional(),
 				before: z.string().optional(),
 				limit: z.number().finite().optional(),
