@@ -699,7 +699,18 @@ export class ContractRuntime {
 
 	/** Where an invocation of `site` reports a long hold of its transaction: `FailureReports`, its delivery kept alive like a failure's. */
 	#hold(site: string, exec: RequestExecutionContext | undefined): Hold {
-		return { site, held: (heldMs) => exec?.waitUntil(this.#parts.failures.held(site, heldMs)) }
+		return {
+			site,
+			held: (heldMs) => {
+				// The transaction already settled: a report that cannot be made, kept or sent never changes the answer.
+				try {
+					const delivery = this.#parts.failures.held(site, heldMs).catch(() => undefined)
+					exec?.waitUntil(delivery)
+				} catch {
+					// Dropped, like a delivery that fails.
+				}
+			},
+		}
 	}
 
 	/** The caller's authority at IAM for this request, when the endpoint's access form names a dimension and an action. */

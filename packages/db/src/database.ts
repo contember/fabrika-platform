@@ -334,13 +334,24 @@ export interface HoldWatch {
 	readonly held: (heldMs: number) => void
 }
 
-/** The line names the site and the ms only: never a value or a statement. */
+/**
+ * Runs once the transaction settled, so it never throws: a failed log or report must not turn a committed invocation
+ * into a failed one. Each has its own guard; the line names the site and the ms only, never a value or a statement.
+ */
 function reportHold(watch: HoldWatch, heldMs: number): void {
-	if (heldMs > TRANSACTION_HELD_LOG_MS) {
-		console.warn(`fabrika: ${watch.site}: held its object's transaction for ${heldMs} ms`)
+	try {
+		if (heldMs > TRANSACTION_HELD_LOG_MS) {
+			console.warn(`fabrika: ${watch.site}: held its object's transaction for ${heldMs} ms`)
+		}
+	} catch {
+		// The report below still goes out.
 	}
-	if (heldMs > TRANSACTION_HELD_REPORT_MS) {
-		watch.held(heldMs)
+	try {
+		if (heldMs > TRANSACTION_HELD_REPORT_MS) {
+			watch.held(heldMs)
+		}
+	} catch {
+		// The hold was logged; the invocation's own outcome stands.
 	}
 }
 

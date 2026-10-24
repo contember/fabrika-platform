@@ -15,6 +15,7 @@ import {
 } from 'kysely'
 import {
 	type Database,
+	type HoldWatch,
 	InvocationTransaction,
 	runFixedStatement,
 	type Session,
@@ -446,5 +447,56 @@ describe('a writing invocation measures how long it held the object', () => {
 		})
 		expect([decided.held, thrown.held]).toEqual([[TRANSACTION_HELD_REPORT_MS + 2], [TRANSACTION_HELD_REPORT_MS + 3]])
 		expect(ids()).toEqual([])
+	})
+
+	/** A slow invocation that commits, then one that throws: each keeps its own answer, or its own error, and its rows. */
+	async function settlesDespite(watch: HoldWatch): Promise<void> {
+		let clock = 0
+		const committed = new InvocationTransaction(database, false, () => clock)
+		const answer = await committed.enclose(async () => {
+			await insertItem(await committed.session(), 'a')
+			clock += TRANSACTION_HELD_REPORT_MS + 1
+			await committed.commit()
+			return 'answered'
+		}, watch)
+		expect(answer).toBe('answered')
+		const handlerError = new Error('handler failed')
+		const failed = new InvocationTransaction(database, false, () => clock)
+		const outcome = failed.enclose(async () => {
+			await insertItem(await failed.session(), 'b')
+			clock += TRANSACTION_HELD_REPORT_MS + 1
+			throw handlerError
+		}, watch)
+		await expect(outcome).rejects.toBe(handlerError)
+		expect(ids()).toEqual(['a'])
+	}
+
+	test('a watch that throws changes neither the answer, the error, nor what committed', async () => {
+		const original = console.warn
+		console.warn = () => {}
+		try {
+			await settlesDespite({
+				site: 'api.notes.create',
+				held: () => {
+					throw new Error('report failed')
+				},
+			})
+		} finally {
+			console.warn = original
+		}
+	})
+
+	test('a log line that throws changes nothing either, and the hold is still reported', async () => {
+		const held: number[] = []
+		const original = console.warn
+		console.warn = () => {
+			throw new Error('log failed')
+		}
+		try {
+			await settlesDespite({ site: 'api.notes.create', held: (ms) => void held.push(ms) })
+		} finally {
+			console.warn = original
+		}
+		expect(held).toEqual([TRANSACTION_HELD_REPORT_MS + 1, TRANSACTION_HELD_REPORT_MS + 1])
 	})
 })
