@@ -1,6 +1,6 @@
-import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
+import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 
-import { type AuditEventInput, AuditWriter, type AuthLogInput, authLogStatement, type SqlChange } from './audit'
+import { type AuditEventInput, AuditWriter, type AuthLogInput, authLogStatement, guardedInsert, type SqlChange, type SqlGuard } from './audit'
 import { unixNow } from './sql'
 
 /** The logout row of a session: its principal comes from the session itself. */
@@ -9,8 +9,9 @@ export type LogoutLogInput = Pick<AuthLogInput, 'requestId' | 'app' | 'reason'>
 /**
  * How a session's holder proved who they were. `local_dev` is the `LOCAL_DEV_LOGIN` bypass — it has a
  * value of its own so `sessionUsable` can ask whether the method is still enabled with no special case.
+ * `terminal_assertion` is an application's word about who stands at an enrolled terminal (ADR-0067).
  */
-export type AuthenticationMethod = 'oidc' | 'password' | 'local_dev'
+export type AuthenticationMethod = 'oidc' | 'password' | 'local_dev' | 'terminal_assertion'
 
 /** A browser session row (the `sessions` table). Only the cookie's hash is stored, never plaintext. */
 export interface SessionRow {
@@ -27,12 +28,57 @@ export interface SessionRow {
 	app: string | null
 	/** The IAM session this was derived from; revoking that one revokes this. NULL on an IAM session. */
 	parent_session_id: string | null
+	/** The terminal this login was asserted on (ADR-0067); set exactly when the method is `terminal_assertion`. */
+	terminal_id: string | null
+	/** The application that asserted the person on `terminal_id`; set exactly when `terminal_id` is. */
+	asserted_by: string | null
+	/** The terminal's generation the login was asserted in; the session is valid only while it is still the terminal's. */
+	terminal_generation: number | null
 }
 
 export interface ListedSessionRow extends SessionRow {
 	parent_expires_at: number | null
 	parent_revoked_at: number | null
 }
+
+/** The terminal a `terminal_assertion` session was asserted on, and the application that asserted it. */
+export interface SessionTerminal {
+	terminalId: string
+	assertedBy: string
+}
+
+/** A session row's terminal, or null for a session on none. The row CHECK sets both columns or neither. */
+export function sessionTerminal(row: Pick<SessionRow, 'terminal_id' | 'asserted_by'>): SessionTerminal | null {
+	return row.terminal_id === null || row.asserted_by === null ? null : { terminalId: row.terminal_id, assertedBy: row.asserted_by }
+}
+
+/** A session to create. */
+export interface NewSession {
+	tokenHash: string
+	principalId: string
+	idpSub?: string | null
+	email?: string | null
+	authenticationMethod?: AuthenticationMethod
+	expiresAt: number
+	/** Bind this session to ONE app (ADR-0022). Omitted = an IAM session, usable for any app. */
+	app?: string | null
+	/** The IAM session this is derived from. Revoking that one revokes this. */
+	parentSessionId?: string | null
+	/** A `terminal_assertion` session's terminal and asserting application; both or neither. */
+	terminal?: SessionTerminal | null
+	/** The terminal's generation the login was asserted in, which a child copies; required with `terminal`. */
+	terminalGeneration?: number | null
+}
+
+/** Methods with no upstream subject: the row CHECK pairs every other method with an `idp_sub`. */
+const SUBJECTLESS_METHODS: readonly AuthenticationMethod[] = ['password', 'terminal_assertion']
+
+/**
+ * The validity clause over `t`, the terminal of the session or of its parent: a session on no terminal passes, and one
+ * on a terminal passes while that terminal is enrolled and still in the generation the login was asserted in.
+ */
+const TERMINAL_ENROLLED = `AND (COALESCE(s.terminal_id, p.terminal_id) IS NULL
+	OR (t.principal_id IS NOT NULL AND t.revoked_at IS NULL AND t.generation = COALESCE(s.terminal_generation, p.terminal_generation)))`
 
 export class SessionRepository {
 	constructor(
@@ -45,30 +91,33 @@ export class SessionRepository {
 	 * `auth_log` row, written in the same batch: a session nobody logged is never opened. A child session is a sign-in to
 	 * its app, which the batch records as the principal's last one there (`app_sign_ins`).
 	 */
-	async createSession(input: {
-		tokenHash: string
-		principalId: string
-		idpSub?: string | null
-		email?: string | null
-		authenticationMethod?: AuthenticationMethod
-		expiresAt: number
-		/** Bind this session to ONE app (ADR-0022). Omitted = an IAM session, usable for any app. */
-		app?: string | null
-		/** The IAM session this is derived from. Revoking that one revokes this. */
-		parentSessionId?: string | null
-	}, log?: AuthLogInput): Promise<string> {
+	async createSession(input: NewSession, log?: AuthLogInput): Promise<string> {
 		const id = uuidv7()
+		await this.db.batch(this.createSessionStatements(id, input, log))
+		return id
+	}
+
+	/**
+	 * The statements that create session `id` with its `auth_log` row, for a use case that composes them into its own
+	 * batch. With `guard`, they write only when the guard finds its row: after a change earlier in that batch that must
+	 * have happened first.
+	 */
+	createSessionStatements(id: string, input: NewSession, log?: AuthLogInput, guard?: SqlGuard): SqlStatement[] {
 		const authenticationMethod = input.authenticationMethod ?? 'oidc'
-		// `password` is the only method with no upstream subject — the same pairing the row CHECK states.
-		if (authenticationMethod !== 'password' && input.idpSub == null) {
+		if (!SUBJECTLESS_METHODS.includes(authenticationMethod) && input.idpSub == null) {
 			throw new Error(`A ${authenticationMethod} session requires an IdP subject`)
 		}
-		const insert = this.db
-			.prepare(
-				`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, email, authentication_method, expires_at, created_at, app, parent_session_id)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.bind(
+		const terminal = input.terminal ?? null
+		const terminalGeneration = input.terminalGeneration ?? null
+		if ((authenticationMethod === 'terminal_assertion') !== (terminal !== null) || (terminal !== null) !== (terminalGeneration !== null)) {
+			throw new Error('A terminal and its generation are named by exactly the terminal_assertion sessions')
+		}
+		const now = unixNow()
+		const session = guardedInsert(
+			`sessions (id, token_hash, principal_id, idp_sub, email, authentication_method, expires_at, created_at, app, parent_session_id,
+				terminal_id, asserted_by, terminal_generation)`,
+			'?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?',
+			[
 				id,
 				input.tokenHash,
 				input.principalId,
@@ -76,19 +125,29 @@ export class SessionRepository {
 				input.email ?? null,
 				authenticationMethod,
 				input.expiresAt,
-				unixNow(),
+				now,
 				input.app ?? null,
 				input.parentSessionId ?? null,
-			)
-		const now = unixNow()
+				terminal?.terminalId ?? null,
+				terminal?.assertedBy ?? null,
+				terminalGeneration,
+			],
+			guard,
+		)
 		const signIn = input.app == null ? [] : [
 			this.db
 				.prepare(`INSERT INTO app_sign_ins (app, principal_id, signed_in_at) VALUES (?, ?, ?)
 					ON CONFLICT (app, principal_id) DO UPDATE SET signed_in_at = excluded.signed_in_at`)
 				.bind(input.app, input.principalId, now),
 		]
-		await this.db.batch([insert, ...signIn, ...(log === undefined ? [] : [authLogStatement(this.db, log)])])
-		return id
+		if (guard !== undefined && signIn.length > 0) {
+			throw new Error('A guarded session is a login, not a sign-in to an app')
+		}
+		return [
+			this.db.prepare(session.sql).bind(...session.binds),
+			...signIn,
+			...(log === undefined ? [] : [authLogStatement(this.db, log, guard)]),
+		]
 	}
 
 	/**
@@ -99,14 +158,19 @@ export class SessionRepository {
 	 * A CHILD session is valid only while its parent is: the join is what makes "log out of IAM" reach
 	 * app sessions on hosts IAM cannot set a cookie for. `ON DELETE CASCADE` does not cover this —
 	 * revocation writes `revoked_at`, it does not delete the row.
+	 *
+	 * A session on a terminal is valid only while that terminal is enrolled, and so is a child whose parent is on one: a
+	 * revoked terminal ends them at once, with no sweep (ADR-0067).
 	 */
 	async getActiveSessionByHash(tokenHash: string): Promise<SessionRow | null> {
 		const now = unixNow()
 		return this.db
 			.prepare(`SELECT s.* FROM sessions s
 				LEFT JOIN sessions p ON p.id = s.parent_session_id
+				LEFT JOIN terminals t ON t.principal_id = COALESCE(s.terminal_id, p.terminal_id)
 				WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
-					AND (s.parent_session_id IS NULL OR (p.revoked_at IS NULL AND p.expires_at > ?))`)
+					AND (s.parent_session_id IS NULL OR (p.revoked_at IS NULL AND p.expires_at > ?))
+					${TERMINAL_ENROLLED}`)
 			.bind(tokenHash, now, now)
 			.first<SessionRow>()
 	}
@@ -120,8 +184,10 @@ export class SessionRepository {
 		return this.db
 			.prepare(`SELECT s.* FROM sessions s
 				LEFT JOIN sessions p ON p.id = s.parent_session_id
+				LEFT JOIN terminals t ON t.principal_id = COALESCE(s.terminal_id, p.terminal_id)
 				WHERE s.id = ? AND s.revoked_at IS NULL AND s.expires_at > ?
-					AND (s.parent_session_id IS NULL OR (p.revoked_at IS NULL AND p.expires_at > ?))`)
+					AND (s.parent_session_id IS NULL OR (p.revoked_at IS NULL AND p.expires_at > ?))
+					${TERMINAL_ENROLLED}`)
 			.bind(id, now, now)
 			.first<SessionRow>()
 	}
@@ -146,18 +212,18 @@ export class SessionRepository {
 	async revokeSessionByHash(tokenHash: string, log?: LogoutLogInput): Promise<boolean> {
 		const now = unixNow()
 		const revoke: SqlChange = {
-			sql: 'UPDATE sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL RETURNING id, principal_id',
+			sql: 'UPDATE sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL RETURNING id, principal_id, terminal_id, asserted_by',
 			binds: [now, tokenHash],
 		}
 		if (log === undefined) {
 			return (await this.writer.run([revoke], undefined)).length > 0
 		}
 		const values = [log.requestId, log.app, log.reason ?? null, now]
-		const columns = '(request_id, app, kind, principal_id, credential_id, decision, reason, privileged, created_at)'
+		const columns = '(request_id, app, kind, principal_id, credential_id, decision, reason, privileged, created_at, terminal_id, asserted_by)'
 		if (this.writer.dialect === 'postgres') {
 			const { results } = await this.db
 				.prepare(`WITH changed AS (${revoke.sql}), logged AS (
-					INSERT INTO auth_log ${columns} SELECT ?, ?, 'logout', principal_id, NULL, 'allow', ?, 0, ? FROM changed
+					INSERT INTO auth_log ${columns} SELECT ?, ?, 'logout', principal_id, NULL, 'allow', ?, 0, ?, terminal_id, asserted_by FROM changed
 				) SELECT id FROM changed`)
 				.bind(...revoke.binds, ...values)
 				.all()
@@ -167,10 +233,19 @@ export class SessionRepository {
 			this.db.prepare(revoke.sql).bind(...revoke.binds),
 			this.db
 				.prepare(`INSERT INTO auth_log ${columns}
-					SELECT ?, ?, 'logout', principal_id, NULL, 'allow', ?, 0, ? FROM sessions WHERE token_hash = ? AND changes() > 0`)
+					SELECT ?, ?, 'logout', principal_id, NULL, 'allow', ?, 0, ?, terminal_id, asserted_by FROM sessions
+					WHERE token_hash = ? AND changes() > 0`)
 				.bind(...values, tokenHash),
 		])
 		return (revoked?.results.length ?? 0) > 0
+	}
+
+	/**
+	 * A session row by the cookie's hash, VALID OR NOT: only for the audit row of a refused use, which names the session's
+	 * principal and terminal. Nothing may authorize from it; `getActiveSessionByHash` is the read that does.
+	 */
+	async getSessionByHashForAudit(tokenHash: string): Promise<SessionRow | null> {
+		return this.db.prepare('SELECT * FROM sessions WHERE token_hash = ?').bind(tokenHash).first<SessionRow>()
 	}
 
 	/**
@@ -225,6 +300,11 @@ export class SessionRepository {
 	async revokeSessionById(id: string, audit?: AuditEventInput): Promise<boolean> {
 		const revoke: SqlChange = { sql: 'UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL RETURNING id', binds: [unixNow(), id] }
 		return (await this.writer.run([revoke], audit)).length > 0
+	}
+
+	/** The revocation of one session by id, for a use case that composes it into its own batch with the session's log row. */
+	revokeStatement(id: string): SqlStatement {
+		return this.db.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').bind(unixNow(), id)
 	}
 
 	/** How many unrevoked sessions a principal holds — the count an operator's "revoke all" records. */

@@ -3,6 +3,7 @@
 
 import type { Locale } from './locale'
 import type { MailTemplates } from './mail'
+import type { TerminalArtifact } from './terminal'
 
 /**
  * The artifact format this release writes. A release that changes the artifact raises it, and Control upcasts every
@@ -61,6 +62,11 @@ export interface ContractArtifact extends EndpointTable {
 	readonly members?: { readonly manage: string; readonly list: string }
 	/** `labels`: the application's directory shows labels to `members.list` holders. Absent unless declared, so digests stay. */
 	readonly directory?: 'labels'
+	/**
+	 * The page on the application's own origin that identifies a person at an enrolled terminal (ADR-0067): IAM sends a
+	 * terminal's browser there, and only an application that declares it may assert a person. Absent unless declared.
+	 */
+	readonly terminal?: TerminalArtifact
 	/**
 	 * What each procedure of the staged kit admits and how long it runs, by endpoint id, with every default applied: the
 	 * rules the application applies itself, beside the row the proxy applies. Absent for a contract with no such

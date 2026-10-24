@@ -27,6 +27,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `requirement.ts`           | `satisfies` — an endpoint requirement checked against a token's permissions — and `callerOf`, a token's caller kind.                                                                                                      |
 | `sha256.ts`                | `sha256Hex` — synchronous SHA-256, for the digests checked where nothing may await.                                                                                                                                       |
 | `token.ts`                 | The access-token claim shape, cookie/prefix/TTL names, the size bound, `buildAccessClaims`/`parse…`.                                                                                                                      |
+| `terminal.ts`              | `terminalIdentifyProblem` (the identification page rule), `IamTerminalRpc` and its inputs and results (ADR-0067).                                                                                                         |
 | `rpc.ts`                   | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                                                                                                                                        |
 | `device.ts`                | The device-authorization inputs, results and their parsers (ADR-0042).                                                                                                                                                    |
 | `oauth.ts`                 | The OAuth 2.1 primitives IAM, the proxy and resource servers share: resource URIs, CIMD client ids, scopes.                                                                                                               |
@@ -74,6 +75,10 @@ bun test               # app-environment · canonical-path · contract-canonical
   lower-casing is not idempotent, so a second pass would refuse a mailbox IAM stored. The claim is IAM's recorded
   mailbox, not proof of possession. It is optional here; `@fabrika/app` refuses a `human` caller whose token lacks it
   (rollout and rollback order: ADR-0022 rule 6).
+- **A person's session token asserted at a terminal carries `amr: 'terminal_assertion'` and `terminal: { id, label }`,
+  both or neither** (ADR-0067 §6), only beside `ptype: 'user'` and `session`; `parseAccessClaims` refuses the token
+  otherwise. Its `perms` may carry source `terminal`. A parser older than that source refuses such a token whole, so
+  only an application whose framework knows terminals may be an asserter.
 - **A share-link token has no `ptype` and carries `link: { mount, chain }`.** `principalKind` reads the
   kind ADR-0022 rule 3 checks (`user`, `service`, `link`); a plain anonymous token has none, so no
   contract mount admits it. `parseAccessClaims` rejects a link claim next to a `ptype` or OAuth claims.

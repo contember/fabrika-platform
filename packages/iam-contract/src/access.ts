@@ -11,6 +11,8 @@ export const IAM_ACTIONS = Object.freeze({
 	ADMIN: 'iam.admin',
 	/** Manage the people of applications, never of the installation's own apps. Global, or in `app` values. */
 	USERS_MANAGE: 'iam.users.manage',
+	/** Enrol a browser as a terminal (ADR-0067). Global only; its profile and revocation stay `iam.admin`'s. */
+	TERMINALS_MANAGE: 'iam.terminals.manage',
 })
 
 export const IAM_SCOPES = Object.freeze({
@@ -40,6 +42,7 @@ export const IAM_APP_SCHEMA: AppSchema = {
 	actions: [
 		{ action: IAM_ACTIONS.ADMIN, description: 'Administer identity and access for the installation' },
 		{ action: IAM_ACTIONS.USERS_MANAGE, description: 'Manage the people of applications: invite, sign out, reset, grant and revoke' },
+		{ action: IAM_ACTIONS.TERMINALS_MANAGE, description: 'Enrol a shared computer as a terminal' },
 	],
 	roles: {
 		[USER_ADMIN_ROLE]: {

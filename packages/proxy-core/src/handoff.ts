@@ -15,6 +15,14 @@ export async function createHandoffAttempt(): Promise<HandoffAttempt> {
 	return { state, verifier, challenge: await handoffChallenge(verifier) }
 }
 
+/**
+ * A verifier made for no challenge. IAM consumes a code before it compares the verifier, so redeeming a code with this
+ * one only spends the code.
+ */
+export function unmatchedVerifier(): string {
+	return randomToken(32)
+}
+
 /** S256, matching PKCE: the verifier never rides in a URL or reaches IAM through the browser. */
 export async function handoffChallenge(verifier: string): Promise<string> {
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))

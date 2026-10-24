@@ -48,6 +48,7 @@ const notes = access(notesArtifact)
 const refusing = (...kinds: readonly string[]): OlderProxyReader => ({
 	row: (row) => !kinds.includes(row.kind),
 	csp: (csp) => csp.workerSrc === undefined,
+	signsOut: false,
 })
 const WINDOW: OlderProxyReaders = [refusing('public', 'webhook'), refusing('public')]
 const WORKERS = { origin: 'blob:', purpose: 'the workers of the altcha challenge' }
@@ -71,6 +72,24 @@ describe('a namespace proxy pinned to an older source', () => {
 		expect(entriesNeedingCurrentProxy(withWorkers, WINDOW)).toEqual(['csp'])
 		expect(() => assertNamespaceProxyReads('apps-prod', withWorkers, OLDER, { proxySource: CURRENT, olderProxies: WINDOW })).toThrow(/`csp`/)
 		expect(() => assertNamespaceProxyReads('apps-prod', withWorkers, CURRENT, { proxySource: CURRENT, olderProxies: WINDOW })).not.toThrow()
+	})
+
+	test('refuses a contract that declares a terminal: no older release serves its sign-out (ADR-0067)', () => {
+		const withTerminal = access({ ...notesArtifact, terminal: { identify: '/identify' } })
+		expect(entriesNeedingCurrentProxy(withTerminal, WINDOW)).toEqual(['terminal'])
+		// Even where every older release reads every row and the CSP.
+		expect(entriesNeedingCurrentProxy(withTerminal, [refusing()])).toEqual(['terminal'])
+		expect(() => assertNamespaceProxyReads('apps-prod', withTerminal, OLDER, { proxySource: CURRENT, olderProxies: WINDOW })).toThrow(
+			/`terminal`[\s\S]*--proxy-source=current/,
+		)
+		expect(() => assertNamespaceProxyReads('apps-prod', withTerminal, CURRENT, { proxySource: CURRENT, olderProxies: WINDOW })).not.toThrow()
+	})
+
+	test('admits a terminal behind a pin once an older release serves the sign-out', () => {
+		const withTerminal = access({ ...notesArtifact, terminal: { identify: '/identify' } })
+		const signingOut: OlderProxyReaders = [refusing(), { ...refusing(), signsOut: true }]
+		expect(entriesNeedingCurrentProxy(withTerminal, signingOut)).toEqual([])
+		expect(() => assertNamespaceProxyReads('apps-prod', withTerminal, OLDER, { proxySource: CURRENT, olderProxies: signingOut })).not.toThrow()
 	})
 
 	test('deploys anything once the proxy is on this platform source, without namespaces, or with nothing approved', () => {

@@ -41,6 +41,7 @@ bun test src/__tests__/clamscan.test.ts         # the ClamAV scanner: stand-in b
 bun test src/__tests__/archive.test.ts          # the archive check: LZMA, damaged, encrypted, nested, bombs
 bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share links, a webhook bound by binds (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/members-lookup.test.ts   # ctx.members below its dimension: types, the kit, a generated member field (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/terminal.test.ts        # a terminal: the identification page, ctx.principal.terminal, ctx.terminals over a fake IAM
 bun test src/__tests__/public-admission.test.ts # a public procedure's shared buckets and challenge through boot (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/challenge.test.ts        # the client key and the Turnstile verification, no database
 bun test src/__tests__/public-kick.test.ts      # a public procedure's kicks: kicked runs, coalescing on the lease, the cron recovery (needs FABRIKA_TEST_POSTGRES_URL)
@@ -160,6 +161,7 @@ src/
     dispatch.ts       ContractRuntime: the per-request pipeline and the error envelope
     capability.ts     Ref, Within, createCapabilityIssuer (a mint and its CapabilityAuthority)
     membership.ts     creates, ctx.members and ctx.links: requests to IAM through IamMembership
+    terminals.ts      ctx.terminals: the identifications at a terminal (ADR-0067), asked of IAM with the request's credential
     anonymous.ts      the bounded body read, the share bootstrap
     client-address.ts a public procedure's client bucket (`X-Fabrika-Client-Ip` only)
     multipart.ts      the `multipart/form-data` reader of a procedure with file fields: part by part as the body streams, strict

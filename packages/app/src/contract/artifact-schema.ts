@@ -24,6 +24,7 @@ import {
 	type SchemaShape,
 	type StringShape,
 	type TablePolicyArtifact,
+	terminalIdentifyProblem,
 	type TupleShape,
 } from '@fabrika/auth-core'
 import { isPolicyOrigin, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
@@ -425,6 +426,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		.optional(),
 	members: z.strictObject({ manage: action, list: action }).optional(),
 	directory: z.literal('labels').optional(),
+	terminal: z.strictObject({ identify: z.string().refine((path) => terminalIdentifyProblem(path) === null, 'not an identification path') }).optional(),
 	procedures: record(z.strictObject({
 		rate: z.strictObject({
 			perClient: bucket,

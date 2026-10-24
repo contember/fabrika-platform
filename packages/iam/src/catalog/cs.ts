@@ -85,6 +85,12 @@ export const cs: Catalog = {
 						return 'Tento účet se zde nemůže přihlásit.'
 					case 'login_refused':
 						return `Přihlášení bylo odmítnuto (${failure.reason}).`
+					case 'terminal_enrolment_not_allowed':
+						return 'Přihlaste se účtem, který smí registrovat terminály.'
+					case 'terminal_enrolment_unavailable':
+						return 'Registrace teď není k dispozici. Zkuste to později.'
+					case 'terminal_completion_refused':
+						return 'Toto přihlášení vypršelo nebo už bylo použito. Identifikujte se znovu.'
 				}
 			},
 		},
@@ -97,6 +103,16 @@ export const cs: Catalog = {
 			title: 'Odhlášení',
 			text: 'Tím ukončíte přihlášení ve všech aplikacích, do kterých jste přihlášeni.',
 			submit: 'Odhlásit se',
+		},
+		terminal: {
+			enrolTitle: 'Registrovat tento počítač jako terminál',
+			enrolText:
+				'Lidé se na tomto počítači budou přihlašovat přes aplikace, pro které je nastavený. Registrace vás v tomto prohlížeči odhlásí, aby terminál nikdy nezůstal přihlášený pod vaším účtem.',
+			label: 'Název terminálu',
+			labelProblem: (max) => `Použijte 1–${max} znaků.`,
+			submit: 'Registrovat a odhlásit',
+			enrolledTitle: 'Terminál je zaregistrovaný',
+			enrolledText: (label) => `Tento prohlížeč je teď terminál ${label}. Jste odhlášeni. Které aplikace obsluhuje, nastaví administrátor.`,
 		},
 		invitation: {
 			title: 'Přijetí pozvánky',

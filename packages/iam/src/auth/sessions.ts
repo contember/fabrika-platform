@@ -160,7 +160,7 @@ export async function refuseLogin(
 }
 
 /** Whether the principal administers at IAM, the installation or the people of an application — what marks its login privileged. */
-async function administersIam(services: Services, principalId: string): Promise<boolean> {
+export async function administersIam(services: Services, principalId: string): Promise<boolean> {
 	const principal = await services.repositories.principals.getPrincipalById(principalId)
 	if (principal === null) return false
 	return iamAdministrationScope(await resolvePermissionsAt(services, principal, IAM_APP)) !== null

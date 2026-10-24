@@ -16,6 +16,7 @@ import {
 	type AccessTokenClaims,
 	buildAccessClaims,
 	DEFAULT_TOKEN_TTL_SECONDS,
+	type KeyGrant,
 	type LinkTokenClaims,
 	MAX_ACCESS_TOKEN_BYTES,
 	type MintFromKeyResult,
@@ -27,10 +28,11 @@ import {
 	type TokenPrincipalType,
 } from '@fabrika/auth-core'
 import { sessionUsable } from './auth'
-import type { CredentialGrantRow, CredentialRow, PrincipalRow } from './db'
-import { principalStatus } from './db'
+import type { CredentialGrantRow, CredentialRow, PrincipalRow, SessionTerminal } from './db'
+import { principalStatus, sessionTerminal } from './db'
 import type { Env } from './env'
-import { resolvePermissionsAt } from './resolve'
+import { narrowPermissions } from './narrow-permissions'
+import { reachesCrossAppAuthority, resolvePermissionsAt } from './resolve'
 import { hashToken } from './secret'
 import type { Services } from './services'
 import { getSigner } from './signing'
@@ -39,42 +41,68 @@ import { parseStoredChain } from './stored-chain'
 /** The env slice minting needs (the signing keys + environment for `getSigner`). */
 type MintEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
-/** `principalId` (resolved session subject, or null on failure) is surfaced for the auth_log row. */
+/**
+ * `principalId` (resolved session subject, or null on failure) and the session's terminal are surfaced for the
+ * auth_log row.
+ */
 export interface MintOutcome {
 	result: MintTokenResult
 	principalId: string | null
+	terminal: SessionTerminal | null
 }
 
 export async function mintToken(services: Services, env: MintEnv, input: MintTokenInput): Promise<MintOutcome> {
 	if (!input.session) {
-		return { result: { ok: false, reason: 'no_session' }, principalId: null }
+		return { result: { ok: false, reason: 'no_session' }, principalId: null, terminal: null }
 	}
 
-	const session = await services.repositories.sessions.getActiveSessionByHash(await hashToken(input.session))
+	const tokenHash = await hashToken(input.session)
+	const session = await services.repositories.sessions.getActiveSessionByHash(tokenHash)
 	if (!session) {
-		return { result: { ok: false, reason: 'invalid_session' }, principalId: null }
+		// A revoked or expired session still names its principal and terminal in the refusal's `auth_log` row (ADR-0067 §6).
+		const stored = await services.repositories.sessions.getSessionByHashForAudit(tokenHash)
+		return {
+			result: { ok: false, reason: 'invalid_session' },
+			principalId: stored?.principal_id ?? null,
+			terminal: stored === null ? null : sessionTerminal(stored),
+		}
 	}
+	const terminal = sessionTerminal(session)
+	const refused = (reason: Exclude<MintTokenResult, { ok: true }>['reason'], principalId: string | null): MintOutcome => ({
+		result: { ok: false, reason },
+		principalId,
+		terminal,
+	})
 	// An app-bound child session (ADR-0022) mints for its own app and nothing else. The cookie is
 	// host-only so a sibling app cannot read it; this is the second lock, for a value that leaks anyway.
 	if (session.app !== null && session.app !== input.app) {
-		return { result: { ok: false, reason: 'invalid_session' }, principalId: session.principal_id }
+		return refused('invalid_session', session.principal_id)
+	}
+	// A session asserted at a terminal mints only for the application that asserted it (ADR-0067 §4).
+	if (terminal !== null && terminal.assertedBy !== input.app) {
+		return refused('invalid_session', session.principal_id)
 	}
 	// A session outlives the configuration that issued it; refuse it once its method is off.
 	if (!sessionUsable(session, services.config)) {
-		return { result: { ok: false, reason: 'invalid_session' }, principalId: session.principal_id }
+		return refused('invalid_session', session.principal_id)
 	}
 
 	const principal = await services.repositories.principals.getPrincipalById(session.principal_id)
 	if (!principal) {
 		// The session outlived its principal (deleted) — treat as unknown.
-		return { result: { ok: false, reason: 'unknown_principal' }, principalId: null }
+		return refused('unknown_principal', null)
 	}
 	if (principalStatus(principal) === 'disabled') {
-		return { result: { ok: false, reason: 'disabled' }, principalId: principal.id }
+		return refused('disabled', principal.id)
 	}
 
 	// Resolve permissions for the requesting app. Sessions are a USER credential (OIDC login).
-	const permissions = await resolvePermissionsAt(services, principal, input.app)
+	const personal = await resolvePermissionsAt(services, principal, input.app)
+	const onTerminal = terminal === null ? null : await terminalAuthority(services, terminal, input.app)
+	if (terminal !== null && onTerminal === null) {
+		return refused('invalid_session', principal.id)
+	}
+	const permissions = onTerminal === null ? personal : withinTerminal(personal, onTerminal)
 
 	const now = Math.floor(Date.now() / 1000)
 	// Clamped to the session, exactly as `mintFromKey` clamps to the credential's expiry: a token
@@ -89,6 +117,7 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 			label: principal.label,
 			...mailboxClaim(principal),
 			session: true,
+			...(onTerminal === null ? {} : { terminal: { id: onTerminal.id, label: onTerminal.label } }),
 			permissions,
 			issuedAt: now,
 			expiresAt,
@@ -96,9 +125,73 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 		{ app: input.app, subject: principal.id },
 	)
 	if (token === null) {
-		return { result: { ok: false, reason: 'token_too_large' }, principalId: principal.id }
+		return refused('token_too_large', principal.id)
 	}
-	return { result: { ok: true, token, expiresAt }, principalId: principal.id }
+	return { result: { ok: true, token, expiresAt }, principalId: principal.id, terminal }
+}
+
+/** What a terminal brings to a session on it at one application: its ceiling and its own grants there. */
+interface TerminalAuthority {
+	id: string
+	label: string
+	ceiling: KeyGrant[]
+	additions: PermissionEntry[]
+}
+
+/**
+ * The terminal's authority at `app`, or null when the session may no longer mint there: `app` is a platform audience,
+ * whose tokens carry cross-app authority, the terminal is gone or revoked, no longer lists `app` as an asserter, `app`
+ * no longer declares a terminal, or the terminal's principal is disabled. The validity join already refused a revoked terminal; this read is the one the ceiling comes
+ * from, so it checks again.
+ */
+async function terminalAuthority(services: Services, terminal: SessionTerminal, app: string): Promise<TerminalAuthority | null> {
+	if (reachesCrossAppAuthority(services.config, app)) {
+		return null
+	}
+	const row = await services.repositories.terminals.getById(terminal.terminalId)
+	if (row === null || row.revoked_at !== null) {
+		return null
+	}
+	const asserter = await services.repositories.terminals.getAsserter(row.principal_id, app)
+	// An application that no longer declares a terminal is no asserter: its framework may not read a terminal token.
+	if (asserter === null || await services.repositories.appSchema.getTerminalIdentifyPath(app) === null) {
+		return null
+	}
+	const principal = await services.repositories.principals.getPrincipalById(row.principal_id)
+	if (principal === null || principalStatus(principal) === 'disabled') {
+		return null
+	}
+	const granted = await resolvePermissionsAt(services, principal, app)
+	return {
+		id: row.principal_id,
+		label: row.label,
+		ceiling: asserter.ceiling.map((action): KeyGrant => ({ action })),
+		additions: granted.map((entry): PermissionEntry => ({ ...entry, source: 'terminal' })),
+	}
+}
+
+/**
+ * A person's live permissions at `app` on the terminal `terminalId` that asserted them there (ADR-0067 §4), the set a
+ * mint would sign now; null when the terminal could no longer mint for `app`. What a terminal session's token is
+ * re-resolved against.
+ */
+export async function permissionsOnTerminal(
+	services: Services,
+	principal: PrincipalRow,
+	terminalId: string,
+	app: string,
+): Promise<PermissionEntry[] | null> {
+	const terminal = await terminalAuthority(services, { terminalId, assertedBy: app }, app)
+	return terminal === null ? null : withinTerminal(await resolvePermissionsAt(services, principal, app), terminal)
+}
+
+/**
+ * A person's permissions on a terminal (ADR-0067 §4): each of their own entries narrowed by the ceiling patterns it
+ * overlaps, keeping its scope, and then the terminal's own, with the source `terminal`. A person's `*` under a ceiling
+ * `a.read` keeps `a.read`; an empty ceiling keeps none of the person's.
+ */
+function withinTerminal(personal: PermissionEntry[], terminal: TerminalAuthority): PermissionEntry[] {
+	return [...narrowPermissions(personal, terminal.ceiling), ...terminal.additions]
 }
 
 /** `principalId`/`credentialId` are surfaced for the auth_log row. */

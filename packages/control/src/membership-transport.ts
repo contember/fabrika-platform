@@ -1,6 +1,6 @@
 // The membership transport key of one application environment without an IAM service binding (ADR-0022 rule 6). A
 // deploy reconciles it from the APPROVED snapshot: while the contract has an endpoint that spends a delegation grant or
-// reads a member directory (a dimension's or the application's own), or a share-link mount, IAM issues one key for `<app>@<env>`, sealed in the vault and
+// reads a member directory (a dimension's or the application's own), a share-link mount, or a terminal, IAM issues one key for `<app>@<env>`, sealed in the vault and
 // handed to the provider as `FABRIKA_IAM_RPC_KEY`. The key only authenticates the application to IAM's `/membership/*`
 // and pins its application id; the authority of each operation stays the end user's token, plus the proxy's delegation
 // grant for scope creation and membership changes. Never logged, never returned over the API.
@@ -41,9 +41,9 @@ export interface MembershipTransportPort {
 /**
  * Whether the contract calls a membership operation: an endpoint that spends a delegation grant (`creates`, or a
  * dimension's `members.manage`), an endpoint on or in a dimension below a member directory (`ctx.members.get`, and
- * `list` for its `members.list`), an `app` endpoint of the application's own `members.list`, or a share-link mount. IAM
- * keeps the key while the schema they compile to has a delegation, a link mount, a dimension that lists its members or
- * people of its own.
+ * `list` for its `members.list`), an `app` endpoint of the application's own `members.list`, a share-link mount, or a
+ * terminal, whose identifications travel on the same transport (ADR-0067). IAM keeps the key while the schema they
+ * compile to has a delegation, a link mount, a dimension that lists its members, people of its own or a terminal.
  */
 export function needsMembershipTransport(artifact: ContractArtifact | null): boolean {
 	if (artifact === null) {
@@ -53,6 +53,7 @@ export function needsMembershipTransport(artifact: ContractArtifact | null): boo
 		endpointDelegation(artifact, row) !== null || endpointDirectory(artifact, row) !== null || endpointAppDirectory(artifact, row)
 	)
 		|| Object.values(artifact.mounts).some((mount) => mount.kind === 'link')
+		|| artifact.terminal !== undefined
 }
 
 /** The `{ scope, label }` the key is sealed under — the only record of which environment owns its vault row. */

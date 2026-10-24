@@ -11,7 +11,7 @@ import { AppName } from '../../lib/app-names'
 import { SecretModal } from '../SecretModal'
 
 const propagation = 'Previously issued tokens can remain valid for up to five minutes.'
-const methodLabels = { oidc: 'Organization sign-in', password: 'Email and password', local_dev: 'Local development' }
+const methodLabels = { oidc: 'Organization sign-in', password: 'Email and password', local_dev: 'Local development', terminal_assertion: 'Terminal' }
 const sessionReasons = {
 	revoked: 'Signed out',
 	expired: 'Expired',

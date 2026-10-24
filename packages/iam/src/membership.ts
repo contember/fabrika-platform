@@ -76,6 +76,7 @@ import { generateToken, hashToken } from './secret'
 import type { Services } from './services'
 import { parseStoredChain } from './stored-chain'
 import { parseStoredPermissions } from './stored-permissions'
+import { permissionsOnTerminal } from './tokens'
 
 /** How long an invitation may wait for its addressee. */
 export const INVITATION_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -133,8 +134,14 @@ async function memberCallerOf(services: Services, input: MembershipCaller, resol
 	if (input.credential?.startsWith(API_KEY_PREFIX) === true) {
 		return { ok: true, caller: { principal, permissions: caller.permissions, app: verifiedApp } }
 	}
-	// A token is a ceiling too: one minted from a downscoped key carries only that key's grants.
-	const live = await resolvePermissionsAt(services, principal, verifiedApp)
+	// A token is a ceiling too: one minted from a downscoped key carries only that key's grants. A person's token from a
+	// terminal is held to what that terminal brings now: the ceiling-narrowed person and the terminal's own grants.
+	const live = caller.terminal === undefined
+		? await resolvePermissionsAt(services, principal, verifiedApp)
+		: await permissionsOnTerminal(services, principal, caller.terminal, verifiedApp)
+	if (live === null) {
+		return { ok: false, reason: 'invalid_token' }
+	}
 	const permissions = caller.permissions.filter((entry) => permits(live, entry.action, entry.scope ?? undefined))
 	return { ok: true, caller: { principal, permissions, app: verifiedApp } }
 }

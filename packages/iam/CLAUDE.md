@@ -151,6 +151,47 @@ fails if that stops being true — it is the guard, not documentation of one.
   "refuse an `oidc` session when OIDC is off" would have disabled the bypass itself. Anything that
   seeds a session must therefore name a method that composition enables — `src/node/browser-identity.ts`
   seeds `password` for exactly that reason.
+- **A SESSION ASSERTED AT A TERMINAL MINTS `(person ∩ ceiling) ∪ terminal`, ONLY FOR ITS ASSERTER** (ADR-0067 §4,
+  `mintToken`). Each person entry is narrowed by the asserter's ceiling patterns it overlaps (`narrowPermissions`, as an
+  OAuth scope narrows: a `*` under `a.read` keeps `a.read` with the entry's scope), then the terminal principal's own
+  grants at the app follow with source `terminal`. Any other audience,
+  a platform audience even as the asserter, a revoked terminal, an asserter the profile no longer lists and a disabled
+  terminal principal are `invalid_session`. `exchangeAuthCode` copies `terminal_id`/`asserted_by` to the child and
+  refuses a code for another app; `resolveAdmin` refuses a token carrying `terminal`, because it re-resolves the
+  subject's own permissions. Mint and redemption `auth_log` rows take both values from the session row. A membership
+  operation holds a token carrying `terminal` to `permissionsOnTerminal` (the same set, live), not to the person's own
+  permissions, and refuses it (`invalid_token`) once the terminal could no longer mint there.
+- **A TERMINAL IS ENROLLED BY A BROWSER, NEVER OVER `/admin`** (ADR-0067 §1, `auth/terminals.ts`). `/auth/terminals/enroll`
+  needs a current login holding `iam.terminals.manage` at IAM; its same-origin POST writes, in one batch, the `service`
+  principal, the `terminals` row (5-minute TTL, no asserter), the revocation of that login with its `logout` row and
+  `iam.terminal.enrol`, then sets `__Host-px_terminal` (hash stored, 400 days, the browser's cap) and clears the login
+  cookie. `terminals.*` of `/admin/rpc` (list, setProfile, revoke) require `iam.admin`; an asserter is a registered app
+  that is not a platform audience. A terminal is not an API key: `apiKeys.*` neither list nor address one.
+- **ONLY AN APP THAT DECLARES AN IDENTIFICATION PAGE IDENTIFIES PEOPLE AT A TERMINAL** (ADR-0067 §2). The schema
+  reconcile stores the vocabulary's `terminal.identify` in `app_terminals` (`appSchema.getTerminalIdentifyPath(app)`,
+  null when undeclared). Only a framework that knows terminals compiles the field, and only such a framework parses a
+  token whose `perms` carry source `terminal`, so the row is what admits an asserter. The identification operations'
+  wire is `IamTerminalRpc` (`@fabrika/auth-core`'s `terminal.ts`).
+- **ONLY IAM ISSUES A TERMINAL'S CODE, AGAINST THE HANDOFF THE PROXY STARTED** (ADR-0067 §3, `identification.ts`). With no
+  current login, `/auth/login` turns a terminal cookie into an identification (2 minutes, id hashed) holding the whole
+  handoff, and 302s to the app's identify path on the handoff's return origin. Every bounce writes a new
+  identification and its `auth_log` row, unthrottled: only an enrolled terminal's browser reaches it, an open one
+  cannot be reused (IAM keeps only the id's hash) and the prune drops expired rows. The application's
+  `inspectIdentification`/`assertIdentity`/`cancelIdentification` (the membership transport, `PropustkaApplication`)
+  are pinned to the calling application by the transport: the membership key's app over HTTP, the binding's `ctx.props.app`
+  (written by the deployer, `binding-identity.ts`) over `PropustkaApplication`, and the credential must verify for that
+  app; a credential's `aud` alone proves nothing. Every dead id is `not_found`. `assertIdentity` consumes it and writes a login
+  no browser holds (`terminal_assertion`, the terminal's TTL) with its `auth_log` row, in one batch guarded by the
+  consumption (`consumedFor`), and answers IAM's completion URL, never a code. `/auth/terminals/complete` issues the code
+  (`handoffLocation`) only to the browser holding the identification's own terminal cookie, once, within
+  `COMPLETION_TTL_SECONDS`, while the login is valid.
+- **`/auth/terminals/release` AND `/auth/terminals/complete` ARE CROSS-SITE `GET`S THAT CHANGE STATE**, the exceptions to
+  `sameOrigin` below: the application's proxy sends the browser to the release from its sign-out, and the application
+  sends it to the completion after its assertion. The release (`terminals.release`) increments the terminal's
+  `generation`, ends its pending identifications and revokes its sessions in one transaction, and only after the
+  redirect passed the app's return-origin registry. A login carries the generation of its identification and the
+  validity join requires it to be the terminal's, so an assertion racing a release yields an invalid login. The completion completes only an identification its application
+  already asserted, for the terminal whose cookie the browser holds.
 - **WHICH APP'S PROXY TOKEN MAY ADMINISTER IS A REGISTRY.** `ADMIN_AUDIENCES` (deploy
   var `FABRIKA_IAM_ADMIN_AUDIENCES`, comma-separated app ids) is the `aud` allowlist `resolveAdmin`'s
   JWT branch checks; unset means the console gateway's own app id (`vozka`), explicitly empty means
@@ -212,9 +253,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   `assignMember`, `revokeMember`, `listMembers`, `listAppMembers`, `findMember`, `issueLink` and `revokeLink`, never `requestDelegation`: only the
   proxy obtains a grant. The caller is still the token in the body. `membershipKeys.issue` (admin RPC) issues a key
   for an `<app>@<env>` id only, ≤30 days, and deletes every other key of it except `keep`; a reconcile that leaves the
-  app no delegated endpoint, no link mount, no dimension that lists its members and no people of its own
-  (`app_members`) deletes its keys in the same batch (the schema holds no per-endpoint list fact, so a
-  members-declaring dimension keeps the key).
+  app no delegated endpoint, no link mount, no dimension that lists its members, no people of its own
+  (`app_members`) and no terminal (`app_terminals`) deletes its keys in the same batch (the schema holds no
+  per-endpoint list fact, so a members-declaring dimension keeps the key).
 - **`workloads.issueKey` NEVER REVOKES THE KEY THE CALLER NAMES AS ACTIVE.** It creates the principal on first use,
   issues a key of at most 30 days, and revokes every other key of the workload except `keep` (the credential id
   Control has recorded). A key issued by an attempt whose record failed is therefore an orphan the next issuance

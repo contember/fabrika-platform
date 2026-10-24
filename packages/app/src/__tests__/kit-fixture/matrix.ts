@@ -24,6 +24,7 @@ import type {
 	MemberLookup,
 	MemberManagement,
 	Ref,
+	TerminalIdentification,
 	Within,
 } from '@fabrika/app/implement'
 import type { DbIndex, ReadOnlyUnscoped, ScopeTarget, Tables } from '@fabrika/db/tables'
@@ -242,7 +243,14 @@ export type OffRoadFields = [
 	Expect<Equal<OnQuery['connect'], Unavailable<"declare connect: ['<connector>'] on this endpoint to call another application">>>,
 	Expect<Equal<Issues['links'], LinkIssuing<'deal', 'deals.share', 'shared'>>>,
 	Expect<Equal<OnQuery['links'], Unavailable<"declare issues: '<link mount>' on this endpoint to issue its share links">>>,
+	// ctx.terminals exists only where the vocabulary declares a terminal.
+	Expect<Equal<OnQuery['terminals'], Unavailable<"the application declares no terminal: terminal: { identify: '/identify' } in the vocabulary">>>,
+	Expect<Equal<EndpointContext<TerminalKit, 'human', 'query', OnDeal, None>['terminals'], TerminalIdentification>>,
 ]
+
+/** The fixture's kit with a terminal declared: what `defineVocabulary({ …, terminal: { identify } })` computes. */
+type TerminalKit = Omit<K, 'terminal'> & { readonly terminal: true }
+type OnDeal = { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }
 
 /** A capability whose action type was widened holds no single action provably: it reads no column of another action. */
 type Widened = ScopeTarget<K['index'], 'deal', 'crm.read' | 'deals.write', 'query', 'on'>

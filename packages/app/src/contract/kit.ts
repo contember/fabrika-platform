@@ -45,6 +45,7 @@ import {
 	type Schema,
 	type Surface,
 	surfaceKit,
+	terminalOf,
 	type WebhookMount,
 } from './define'
 import type {
@@ -73,13 +74,14 @@ type Owned<K extends string> = { readonly [P in K]?: never }
 
 /** The kit's types, computed once from the vocabulary, the tables' index, the imports and the token purposes. */
 export type KitOf<V, Ix, Imp extends KitImports, Tk extends TokenPurposes = Record<never, never>> = V extends
-	AppVocabulary<infer A, infer D, infer R, infer Dims, infer M> ? {
+	AppVocabulary<infer A, infer D, infer R, infer Dims, infer M, infer T> ? {
 		readonly action: A
 		readonly dimension: D
 		readonly creatable: CreatableDimension<Dims>
 		readonly role: R
 		readonly dimensions: Dims
 		readonly members: M
+		readonly terminal: [T] extends [never] ? false : true
 		readonly index: Ix
 		readonly tables: Ix extends { readonly tables: infer T } ? keyof T & string : never
 		readonly imports: Imp
@@ -555,6 +557,7 @@ function runtimeApp(vocabulary: AnyAppVocabulary, options: KitOptions | undefine
 					roles: vocabulary.roles,
 					...presentationOf(vocabulary),
 					...peopleOf(vocabulary),
+					...terminalOf(vocabulary),
 				},
 				dimensions: vocabulary.dimensions,
 				surface: declared,

@@ -17,7 +17,7 @@ import { proxySecretDigest } from '../implement/dispatch.js'
 import { captureEnvironment } from '../implement/environment.js'
 import type { ContractImplementation } from '../implement/implement.js'
 import { type CronSchedule, isDueAt, parseCron } from '../jobs/schedule.js'
-import { bindingAssets, bindingKeySource, bindingMembership, bindingWorkloadTokens, connectBindings } from './bindings.js'
+import { bindingAssets, bindingKeySource, bindingMembership, bindingTerminals, bindingWorkloadTokens, connectBindings } from './bindings.js'
 import { CLOUDFLARE_FILES_BINDING } from './names.js'
 import { r2FileObjectStore } from './r2-files.js'
 
@@ -142,6 +142,7 @@ async function bootApplication(setup: ApplicationSetup, state: ApplicationState,
 			iam: bindingKeySource(env['IAM']),
 			assets: bindingAssets(env['ASSETS']),
 			membership: bindingMembership(env['IAM']),
+			terminals: bindingTerminals(env['IAM']),
 			workloadTokens: bindingWorkloadTokens(env['IAM']),
 			connectBindings: connectBindings(env),
 			database,

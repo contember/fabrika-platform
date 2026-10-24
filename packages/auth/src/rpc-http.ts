@@ -44,9 +44,13 @@
 import type {
 	ApproveDeviceAuthorizationInput,
 	ApproveDeviceAuthorizationResult,
+	AssertIdentityInput,
+	AssertIdentityResult,
 	AssignMemberInput,
 	AssignMemberResult,
 	AuditInput,
+	CancelIdentificationInput,
+	CancelIdentificationResult,
 	CreateScopeInput,
 	CreateScopeResult,
 	DenyDeviceAuthorizationResult,
@@ -54,8 +58,11 @@ import type {
 	FindMemberResult,
 	IamMembershipRpc,
 	IamRpc,
+	IamTerminalRpc,
 	InspectDeviceAuthorizationInput,
 	InspectDeviceAuthorizationResult,
+	InspectIdentificationInput,
+	InspectIdentificationResult,
 	IssueKeyInput,
 	IssueKeyResult,
 	IssueLinkInput,
@@ -82,6 +89,7 @@ import type {
 	RevokeLinkResult,
 	RevokeMemberInput,
 	RevokeMemberResult,
+	TerminalFailure,
 } from '@fabrika/auth-core'
 import {
 	parseApproveDeviceAuthorizationResult,
@@ -467,6 +475,62 @@ export class HttpIamMembership extends DecodedIamMembership {
 		const endpoint = transportEndpoint(options, '/membership/')
 		super((method, input) => callJson(endpoint, method, input))
 	}
+}
+
+/** The identification operations, by name, as a transport carries them. */
+export type IamTerminalMethod = keyof IamTerminalRpc
+
+const inspectIdentificationSuccessSchema = z.object({
+	...okEnvelope,
+	terminal: z.object({ id: z.string().min(1), label: z.string().min(1) }),
+	expiresAt: z.number().finite(),
+})
+const assertIdentitySuccessSchema = z.object({ ...okEnvelope, completionUrl: z.string().url() })
+
+/**
+ * `IamTerminalRpc` over any transport that answers each call with a JSON-shaped body: `HttpIamTerminals`, or a Workers
+ * binding to IAM's application entrypoint (ADR-0067). A body that breaks the contract is `IamTransportError`.
+ */
+export class DecodedIamTerminals implements IamTerminalRpc {
+	readonly #call: (method: IamTerminalMethod, input: unknown) => Promise<unknown>
+
+	constructor(call: (method: IamTerminalMethod, input: unknown) => Promise<unknown>) {
+		this.#call = call
+	}
+
+	async inspectIdentification(input: InspectIdentificationInput): Promise<InspectIdentificationResult> {
+		const body = await this.#call('inspectIdentification', input)
+		return readTerminalFailure(body) ?? decode(inspectIdentificationSuccessSchema, body, 'inspectIdentification')
+	}
+
+	async assertIdentity(input: AssertIdentityInput): Promise<AssertIdentityResult> {
+		const body = await this.#call('assertIdentity', input)
+		return readTerminalFailure(body) ?? decode(assertIdentitySuccessSchema, body, 'assertIdentity')
+	}
+
+	async cancelIdentification(input: CancelIdentificationInput): Promise<CancelIdentificationResult> {
+		const body = await this.#call('cancelIdentification', input)
+		return readTerminalFailure(body) ?? decode(revokedSuccessSchema, body, 'cancelIdentification')
+	}
+}
+
+/**
+ * `IamTerminalRpc` over IAM's membership transport, `POST {origin}/membership/<method>`, with the application's own
+ * membership transport key, which pins the asserting application.
+ */
+export class HttpIamTerminals extends DecodedIamTerminals {
+	constructor(options: HttpIamRpcOptions) {
+		const endpoint = transportEndpoint(options, '/membership/')
+		super((method, input) => callJson(endpoint, method, input))
+	}
+}
+
+const TERMINAL_REASONS = ['missing_token', 'invalid_token', 'not_allowed', 'not_found', 'invalid_principal'] as const
+
+/** An identification refusal off the wire. An unknown reason degrades to `not_allowed`, never to an allow. */
+function readTerminalFailure(body: unknown): TerminalFailure | null {
+	const reason = readFailure(body)
+	return reason === null ? null : { ok: false, reason: oneOf(reason, TERMINAL_REASONS, 'not_allowed') }
 }
 
 /** The five delegation-path failure reasons `issueKey` / `revokeKey` / `listPrincipals` share. */

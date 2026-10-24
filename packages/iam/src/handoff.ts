@@ -17,7 +17,7 @@
  */
 
 import { AUTH_CODE_TTL_SECONDS, type ExchangeAuthCodeInput, type ExchangeAuthCodeResult } from '@fabrika/auth-core'
-import { principalStatus } from './db'
+import { principalStatus, type SessionTerminal, sessionTerminal } from './db'
 import { pkceChallenge, randomToken } from './oidc'
 import { normalizeOrigin } from './origin'
 import { hashToken } from './secret'
@@ -75,10 +75,11 @@ export async function issueAuthCode(
 	return { code, expiresAt }
 }
 
-/** The child session id is surfaced separately so the caller can write an `auth_log` row for it. */
+/** The principal and the login's terminal are surfaced so the caller can write the `auth_log` row of a refusal. */
 export interface ExchangeOutcome {
 	result: ExchangeAuthCodeResult
 	principalId: string | null
+	terminal: SessionTerminal | null
 }
 
 /**
@@ -98,27 +99,32 @@ export async function exchangeAuthCode(services: Services, input: ExchangeAuthCo
 		// way, and neither answer confirms anything about a code the caller did not already hold.
 		const existing = await services.repositories.handoff.findCode(codeHash)
 		const reason = existing === null ? 'invalid_code' : 'expired_code'
-		return { result: { ok: false, reason }, principalId: null }
+		return { result: { ok: false, reason }, principalId: null, terminal: null }
 	}
 	if (consumed.app !== input.app) {
-		return { result: { ok: false, reason: 'wrong_app' }, principalId: null }
+		return { result: { ok: false, reason: 'wrong_app' }, principalId: null, terminal: null }
 	}
 	const challenge = challengeFromCode(input.code)
 	if (challenge === null || !validVerifier(input.verifier) || await pkceChallenge(input.verifier) !== challenge) {
-		return { result: { ok: false, reason: 'invalid_verifier' }, principalId: null }
+		return { result: { ok: false, reason: 'invalid_verifier' }, principalId: null, terminal: null }
 	}
 
 	// The login must still be usable: a code outliving a logout would resurrect the session it came from.
 	const parent = await services.repositories.sessions.getActiveSessionById(consumed.parent_session_id)
 	if (parent === null) {
-		return { result: { ok: false, reason: 'invalid_code' }, principalId: null }
+		return { result: { ok: false, reason: 'invalid_code' }, principalId: null, terminal: null }
+	}
+	const terminal = sessionTerminal(parent)
+	// A login asserted at a terminal reaches only the application that asserted it (ADR-0067 §4).
+	if (terminal !== null && terminal.assertedBy !== consumed.app) {
+		return { result: { ok: false, reason: 'wrong_app' }, principalId: parent.principal_id, terminal }
 	}
 	const principal = await services.repositories.principals.getPrincipalById(parent.principal_id)
 	if (principal === null) {
-		return { result: { ok: false, reason: 'unknown_principal' }, principalId: null }
+		return { result: { ok: false, reason: 'unknown_principal' }, principalId: null, terminal }
 	}
 	if (principalStatus(principal) === 'disabled') {
-		return { result: { ok: false, reason: 'disabled' }, principalId: principal.id }
+		return { result: { ok: false, reason: 'disabled' }, principalId: principal.id, terminal }
 	}
 
 	const session = randomToken(32)
@@ -132,6 +138,8 @@ export async function exchangeAuthCode(services: Services, input: ExchangeAuthCo
 		expiresAt: parent.expires_at,
 		app: consumed.app,
 		parentSessionId: parent.id,
+		terminal,
+		terminalGeneration: parent.terminal_generation,
 	}, {
 		requestId: input.requestId,
 		app: input.app,
@@ -139,10 +147,12 @@ export async function exchangeAuthCode(services: Services, input: ExchangeAuthCo
 		principalId: principal.id,
 		decision: 'allow',
 		reason: 'handoff',
+		terminal,
 	})
 	return {
 		result: { ok: true, session, returnUrl: consumed.return_url, expiresAt: parent.expires_at },
 		principalId: principal.id,
+		terminal,
 	}
 }
 

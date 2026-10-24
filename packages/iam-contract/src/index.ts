@@ -136,8 +136,11 @@ export interface UpdatePrincipalRequest {
 export interface SessionDto {
 	id: string
 	principalId: string
-	/** How the human proved who they were; `local_dev` is IAM's `LOCAL_DEV_LOGIN` bypass. */
-	authenticationMethod: 'oidc' | 'password' | 'local_dev'
+	/**
+	 * How the human proved who they were; `local_dev` is IAM's `LOCAL_DEV_LOGIN` bypass, `terminal_assertion` an
+	 * application's word about who stands at an enrolled terminal.
+	 */
+	authenticationMethod: 'oidc' | 'password' | 'local_dev' | 'terminal_assertion'
 	/** The app this session is bound to (an ADR-0022 child); null = the IAM session itself. */
 	app: string | null
 	/** The IAM session this was derived from; null on an IAM session. Revoking that one revokes this. */
@@ -226,6 +229,8 @@ export interface AppSchemaDto {
 	members?: { manage: string; list: string }
 	/** `labels` when the app's directory shows labels to `members.list` holders. */
 	directory?: 'labels'
+	/** The app's identification page at a terminal (ADR-0067); absent when the app declares none. */
+	terminal?: { identify: string }
 }
 
 // ── Policies (origin='custom' roles, admin-composed) ──────────────────────────
@@ -600,6 +605,45 @@ export interface IssueMembershipKeyResponse {
 	expiresAt: number
 }
 
+// ── Terminals (ADR-0067) ──────────────────────────────────────────────────────
+
+/** An application that may assert a person on a terminal, with the action patterns of the person that survive there. */
+export interface TerminalAsserterDto {
+	app: string
+	ceiling: string[]
+}
+
+/**
+ * An enrolled browser, as an operator sees it. Its own grants are ordinary grants on `terminalId`, which is its service
+ * principal; the cookie is never shown.
+ */
+export interface TerminalDto {
+	terminalId: string
+	label: string
+	/** The administrator who enrolled it; null once that principal is gone. */
+	enrolledBy: string | null
+	/** Seconds a person's session on it lasts. */
+	sessionTtl: number
+	asserters: TerminalAsserterDto[]
+	status: 'active' | 'revoked'
+	createdAt: number
+	lastSeenAt: number | null
+	revokedAt: number | null
+}
+
+export type ListTerminalsInput = PageInput
+
+export interface TerminalIdInput {
+	terminalId: string
+}
+
+/** Replace a terminal's whole profile. The ceiling is empty by default: the person brings only their identity. */
+export interface SetTerminalProfileRequest extends TerminalIdInput {
+	label: string
+	sessionTtl: number
+	asserters: TerminalAsserterDto[]
+}
+
 // ── An application's own people, administered by its own administrator ───────
 
 /**
@@ -743,6 +787,15 @@ export interface IamAdminRpcContract {
 	audit: {
 		list: RpcProcedure<ListAuditInput, CursorList<AuditEventDto>>
 		listAuthLog: RpcProcedure<ListAuthLogInput, CursorList<AuthLogDto>>
+	}
+	/**
+	 * Enrolled terminals. A browser is enrolled at IAM's `/auth/terminals/enroll`, never here. Revoking a terminal ends
+	 * every session issued on it.
+	 */
+	terminals: {
+		list: RpcProcedure<ListTerminalsInput, CursorList<TerminalDto>>
+		setProfile: RpcProcedure<SetTerminalProfileRequest, TerminalDto>
+		revoke: RpcProcedure<TerminalIdInput, OkResponse>
 	}
 	/**
 	 * An application's own people, administered by whoever holds the application's `members.manage` globally there: no

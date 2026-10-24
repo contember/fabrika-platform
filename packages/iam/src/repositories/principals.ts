@@ -225,6 +225,8 @@ export class PrincipalRepository {
 		limit: number
 		/** Leave out workload principals: a job's or a webhook's key is not an API key. */
 		withoutWorkloads?: boolean
+		/** Leave out terminals (ADR-0067), which hold no key. */
+		withoutTerminals?: boolean
 	}): Promise<PrincipalRow[]> {
 		const where: string[] = []
 		const binds: (string | number)[] = []
@@ -234,6 +236,9 @@ export class PrincipalRepository {
 		}
 		if (filter.withoutWorkloads === true) {
 			where.push('NOT EXISTS (SELECT 1 FROM workload_principals w WHERE w.principal_id = principals.id)')
+		}
+		if (filter.withoutTerminals === true) {
+			where.push('NOT EXISTS (SELECT 1 FROM terminals t WHERE t.principal_id = principals.id)')
 		}
 		if (filter.status === 'disabled') {
 			where.push('disabled_at IS NOT NULL')

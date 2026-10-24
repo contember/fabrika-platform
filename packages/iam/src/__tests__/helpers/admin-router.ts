@@ -127,6 +127,8 @@ const INPUTS: Record<string, unknown> = {
 	'membershipKeys.issue': { app: 'nowhere@prod', expiresAt: 4_102_444_800, keep: null },
 	'shareLinks.issue': { app: 'nowhere', grants: [{ action: 'a' }], expiresAt: 1 },
 	'shareLinks.revoke': { id: 'nobody' },
+	'terminals.setProfile': { terminalId: 'nobody', label: 'l', sessionTtl: 300, asserters: [] },
+	'terminals.revoke': { terminalId: 'nobody' },
 	'appPeople.apps': null,
 	'appPeople.list': { app: 'nowhere@prod' },
 	'appPeople.grant': { app: 'nowhere@prod', role: 'staff', email: 'nobody@example.com' },

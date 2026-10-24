@@ -279,6 +279,53 @@ handoff. This enrollment lives as long as the invitation, 7 days (ADR-0020).
   invitation stays open. Removing another grant of the inviter's that supplied
   one of the role's actions is not serialized with it.
 
+## Terminals
+
+A terminal is a shared computer, an enrolled browser, on which an application identifies a person in its own way (a
+PIN, a key fob) and IAM signs that person in
+([ADR-0067](../decisions/0067-a-terminal-signs-a-person-in-on-an-application-s-word.md)).
+
+- **Enrolment.** A person holding `iam.terminals.manage` opens `/auth/terminals/enroll` on the computer and names it.
+  IAM creates a `service` principal with a `terminals` row and sets `__Host-px_terminal` on IAM's host (random, stored
+  as a hash, `HttpOnly`, `SameSite=Lax`, 400 days). In the same batch it revokes the enrolling login on that browser
+  and writes an audit event. The cookie is not a session: no proxy reads it, and IAM reads it only to open an
+  identification.
+- **Profile.** `terminals.setProfile` on `/admin/rpc` (`iam.admin`) sets the label, `sessionTtl` (1–3600 s, default
+  300) and the asserters: the applications that may assert a person on the terminal, each with its **ceiling**, a list
+  of action patterns. Grants on the terminal's principal (`grants.create`) are what the terminal adds.
+  `terminals.list` lists terminals; `terminals.revoke` ends every session issued on one.
+- **Identification.** The proxy bounces to `/auth/login` as for any sign-in. A personal login on the browser wins.
+  Otherwise, with a valid terminal cookie, the application among its asserters and an identification page declared,
+  IAM opens an identification (single use, two minutes, holding the handoff) and redirects to
+  `<return origin><identify>?identification=<id>`. In every other case IAM shows the normal sign-in.
+- **Assertion.** The application's public procedure calls `inspectIdentification`, `assertIdentity` and
+  `cancelIdentification` over its membership transport, with a token whose `aud` is the application. IAM takes the
+  application from the transport, never from the input: the membership transport key, or on Cloudflare the
+  `props.app` that the deployer writes on the application's `IAM` binding. `assertIdentity` accepts only an active internal user. It
+  consumes the identification, writes a login with `authentication_method = 'terminal_assertion'`, the terminal and
+  the terminal's TTL, and no cookie, and returns IAM's completion URL, `/auth/terminals/complete?identification=<id>`.
+  It carries no code.
+- **Completion.** The application sends the browser to the completion URL. IAM issues the handoff code there, once and
+  within a minute, only to the browser that holds the cookie of the identification's own terminal, and only while the
+  asserted login is still valid. It 302s to the proxy's callback, and the proxy redeems the code with the verifier it
+  set at the bounce. An application never holds a code. A proxy that receives a code without its verifier spends it.
+- **What the session may do.** The token carries the person's `sub`, `amr: 'terminal_assertion'` and
+  `terminal: { id, label }`. Its permissions are the person's own, narrowed by the ceiling (a person's `*` under a
+  ceiling `a.read` keeps `a.read`), plus the terminal principal's, with source `terminal`. An empty ceiling, the
+  default, keeps only the person's identity. The session mints only for the asserting application, never for a
+  platform audience.
+- **Sign-out.** The application sends the browser to its own `/__fabrika/auth/signout?redirect=<path>` (a same-origin
+  `GET`). The proxy clears the session cookie and its cached token and redirects to IAM's
+  `/auth/terminals/release`. IAM checks the return address against the application's return origins, revokes the
+  terminal's active sessions and sends the browser back. The next request bounces and opens a new identification.
+  The session TTL is the backstop when nobody signs out.
+- **Throttling** guesses is the application's duty; `inspectIdentification` names the terminal to key it on. Every
+  `auth_log` row of the flow carries `terminal_id` and `asserted_by`.
+
+An application declares `terminal: { identify: '/path' }` in its vocabulary, a path that a public SPA mount serves.
+Its procedures then get `ctx.terminals`, and a person's `ctx.principal.terminal` names the terminal
+([Application runtime](application-runtime.md#membership-share-links-and-the-anonymous-kinds)).
+
 ## First administrator
 
 `IAM_BOOTSTRAP_ADMINS` authorizes an email only after identity is proven. It is

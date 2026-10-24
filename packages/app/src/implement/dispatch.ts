@@ -16,6 +16,7 @@ import {
 	type EndpointRow,
 	type ExportDescription,
 	FORM_URLENCODED_TYPE,
+	type IamTerminalRpc,
 	isAttachmentShape,
 	isFileShape,
 	isRedirectShape,
@@ -104,6 +105,7 @@ import { paramsObject, urlParams } from './params'
 import { pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
+import { type TerminalIdentification, terminalIdentification } from './terminals'
 import type { SignedTokens } from './tokens'
 import type { AppUrl } from './urls'
 import { githubAccounts, verifyDelivery } from './verifiers'
@@ -241,6 +243,8 @@ export interface RuntimeParts {
 	readonly assets: SpaAssets | null
 	/** IAM's membership operations; `boot` refuses a contract that needs them when the adapter supplies none. */
 	readonly membership: IamMembership | null
+	/** IAM's identification operations, where the contract declares a terminal; `boot` refuses one without them. */
+	readonly terminals: IamTerminalRpc | null
 	/** The framework's own writes (admission buckets, webhook tables); `boot` refuses a webhook or a bucket without them. */
 	readonly framework: FrameworkTables | null
 	/** This runtime's capability mint, which `boot` alone holds, and the authority its stores are bound to. */
@@ -552,6 +556,7 @@ export class ContractRuntime {
 								credential: caller.token,
 								requestId: request.headers.get(REQUEST_ID_HEADER) ?? frame.id,
 							}),
+							...this.#terminals(caller.token, request.headers.get(REQUEST_ID_HEADER) ?? frame.id),
 							...(served.connect === undefined ? {} : { connect: connectContext(served.connect, frame) }),
 							...(site === undefined || invocation === null ? {} : siteContext(served.row, site, invocation, caller.subject, access.context, binding)),
 							// An export's consumer reaches its rows only, never the files of their owners.
@@ -688,6 +693,12 @@ export class ContractRuntime {
 			action: row.requirement.action,
 			capabilities: this.#parts.capabilities,
 		}
+	}
+
+	/** `ctx.terminals`, with the credential IAM takes the request's application from: the caller's, or the workload's. */
+	#terminals(credential: string, requestId: string): { readonly terminals?: TerminalIdentification } {
+		const rpc = this.#parts.terminals
+		return rpc === null ? {} : { terminals: terminalIdentification(rpc, { app: this.#parts.audience, credential, requestId }) }
 	}
 
 	/** `ctx.members` and `ctx.links`, for exactly the endpoints the artifact gives them. */
@@ -911,7 +922,7 @@ export class ContractRuntime {
 					admission.repeatableToken,
 				)
 			}
-			return await this.#publicInvocation(served, request, body, fields, query, carried, authority.perms, exec)
+			return await this.#publicInvocation(served, request, body, fields, query, carried, authority, exec)
 		} finally {
 			await multipart?.close()
 			release()
@@ -977,9 +988,10 @@ export class ContractRuntime {
 		fields: Readonly<Record<string, unknown>>,
 		query: Readonly<Record<string, unknown>> | undefined,
 		carried: Set<string>,
-		perms: readonly PermissionEntry[],
+		authority: { readonly perms: readonly PermissionEntry[]; readonly token: string },
 		exec: RequestExecutionContext | undefined,
 	): Promise<Response | FileDownload> {
+		const { perms } = authority
 		const kicks = kickRecorder(`'${served.row.id}'`, served.site.declaration.kicks)
 		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.site.kind === 'query', endpoint: served.row.id })
 		const work = new FileWork(frame, frame.id)
@@ -1031,6 +1043,7 @@ export class ContractRuntime {
 								check: boundTo(frame, () => false, 'ctx.files'),
 								writes: served.site.kind !== 'query',
 							}),
+							...this.#terminals(authority.token, request.headers.get(REQUEST_ID_HEADER) ?? frame.id),
 							kick: kicks.kick,
 						})
 						const args = { input, ctx, ...(query === undefined ? {} : { query }) }

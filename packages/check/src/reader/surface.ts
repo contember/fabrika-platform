@@ -18,6 +18,7 @@ import {
 	type ExportAccessDeclaration,
 	type FileKind,
 	type ImportDeclaration,
+	isPath,
 	type KitImportDeclaration,
 	kitImportsSection,
 	kitUnknownOptions,
@@ -31,6 +32,7 @@ import {
 	type SpaAccessDeclaration,
 	type Surface,
 	SURFACE_SECTIONS,
+	type TerminalDeclaration,
 	type TokenPurpose,
 	type TokenPurposes,
 	unknownOptions,
@@ -213,6 +215,7 @@ class SurfaceReader {
 			'mail',
 			'members',
 			'directory',
+			'terminal',
 		])
 		const locale = fields.get('locale')
 		const displayName = fields.get('displayName')
@@ -220,6 +223,7 @@ class SurfaceReader {
 		const members = fields.get('members')
 		const memberFields = members === undefined ? undefined : strictFields(members, 'the vocabulary members', ['manage', 'list'], [])
 		const directory = fields.get('directory')
+		const terminal = fields.get('terminal')
 		return {
 			app: text(fields.get('app'), value, 'app'),
 			...(locale === undefined ? {} : { locale: localeOf(locale, value) }),
@@ -229,6 +233,7 @@ class SurfaceReader {
 				? {}
 				: { members: { manage: text(memberFields.get('manage'), value, 'manage'), list: text(memberFields.get('list'), value, 'list') } }),
 			...(directory === undefined ? {} : { directory: directoryOf(directory, value) }),
+			...(terminal === undefined ? {} : { terminal: terminalOf(terminal) }),
 			dimensions: this.#each(entries(fields.get('dimensions'), value, 'dimensions'), (name, dimension) => this.#dimension(name, dimension)),
 			actions: this.#each(entries(fields.get('actions'), value, 'actions'), (_, description) => text(description, description, 'an action description')),
 			roles: this.#each(entries(fields.get('roles'), value, 'roles'), (name, role) => this.#role(name, role)),
@@ -934,6 +939,16 @@ function directoryOf(value: LiteralValue, owner: Owner): 'labels' {
 		throw new Refused(value.at, `directory is '${directory}'`, "directory: 'labels'")
 	}
 	return directory
+}
+
+/** The vocabulary's `terminal: { identify: '/path' }`; `buildArtifact` checks the path itself. */
+function terminalOf(value: LiteralValue): TerminalDeclaration {
+	const identify = strictFields(value, 'the vocabulary terminal', ['identify'], []).get('identify')
+	const path = text(identify, value, 'terminal.identify')
+	if (!isPath(path)) {
+		throw new Refused(identify?.at ?? value.at, `terminal.identify is '${path}'`, "terminal: { identify: '/identify' }")
+	}
+	return { identify: path }
 }
 
 function optionalText(value: LiteralValue | undefined, field: string): string | undefined {

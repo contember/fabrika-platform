@@ -31,8 +31,9 @@ export function isWorkloadKind(value: unknown): value is WorkloadKind {
  *  - 'grant'             — explicit `grants` row
  *  - 'bootstrap'         — IAM_BOOTSTRAP_ADMINS env match (resolution-time only)
  *  - `group:${groupRef}` — IdP group → role mapping (the `<org>/<team>` ref)
+ *  - 'terminal'          — a grant of the terminal a person is signed in on (ADR-0067)
  */
-export type PermissionSource = 'grant' | 'bootstrap' | `group:${string}`
+export type PermissionSource = 'grant' | 'bootstrap' | 'terminal' | `group:${string}`
 
 /**
  * A flat, app-owned scope coordinate — one dimension (`type`) and an opaque value.
@@ -177,6 +178,8 @@ export interface AppSchema {
 	members?: { manage: string; list: string }
 	/** `labels`: a holder of the app's `members.list` also sees each member's label. Absent, labels stay with `members.manage`. */
 	directory?: 'labels'
+	/** The app's identification page for a person at an enrolled terminal (ADR-0067); absent, no terminal lists it. */
+	terminal?: { identify: string }
 }
 
 /**

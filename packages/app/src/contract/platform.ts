@@ -23,8 +23,8 @@ import {
 /**
  * The IAM vocabulary of a contract application, marked `contract` so IAM refuses every wildcard written for it: the
  * dimensions as scopes with their container, creator role and members actions; the actions; the roles, a membership
- * role with its scope and the roles that may assign it; the link mounts; the delegations; the workloads; and the locale,
- * display name and e-mail wording IAM names the application with. Every artifact
+ * role with its scope and the roles that may assign it; the link mounts; the delegations; the workloads; the locale,
+ * display name and e-mail wording IAM names the application with; and its terminal identification page. Every artifact
  * dimension is a scope, a file collection's `file:<name>` included, because access to a file is checked there.
  */
 export function schemaFromContract(artifact: ContractArtifact): AppSchema {
@@ -46,6 +46,7 @@ export function schemaFromContract(artifact: ContractArtifact): AppSchema {
 		...(artifact.mail === undefined ? {} : { mail: artifact.mail }),
 		...(artifact.members === undefined ? {} : { members: { manage: artifact.members.manage, list: artifact.members.list } }),
 		...(artifact.directory === 'labels' ? { directory: 'labels' } : {}),
+		...(artifact.terminal === undefined ? {} : { terminal: { identify: artifact.terminal.identify } }),
 	}
 }
 

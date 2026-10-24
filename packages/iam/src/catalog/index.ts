@@ -63,6 +63,17 @@ export interface PageText {
 		readonly text: string
 		readonly submit: string
 	}
+	/** Enrolling this browser as a shared terminal (ADR-0067): the administrator's form, and the page that ends it. */
+	readonly terminal: {
+		readonly enrolTitle: string
+		/** Enrolling signs the administrator out of this browser. */
+		readonly enrolText: string
+		readonly label: string
+		readonly labelProblem: (max: number) => string
+		readonly submit: string
+		readonly enrolledTitle: string
+		readonly enrolledText: (label: string) => string
+	}
 	readonly invitation: {
 		readonly title: string
 		readonly text: string

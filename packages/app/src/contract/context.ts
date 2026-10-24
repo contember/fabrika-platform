@@ -25,6 +25,7 @@ import type { StoredFilesHandle, StoredFilesReadHandle } from '../files/handle'
 import type { AppCapability, Ref, Within } from '../implement/capability'
 import type { ApplicationDirectory, LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
 import type { AppPrincipal, PrincipalOf, PublicPrincipal, ServicePrincipal } from '../implement/principal'
+import type { TerminalIdentification } from '../implement/terminals'
 import type { CapabilityOf, ConnectCall, RequestContext } from '../implement/types'
 import type { WebhookDelivery, WebhookPrincipal } from '../implement/webhook'
 import type { AppMail, JobContext } from '../jobs/types'
@@ -56,6 +57,8 @@ export interface KitTypes {
 	readonly dimensions: unknown
 	/** The actions of the application's own people, as written; `never` when the vocabulary declares none. */
 	readonly members: { readonly manage: string; readonly list: string }
+	/** Whether the vocabulary declares `terminal: { identify }`, which gives `ctx.terminals`. */
+	readonly terminal: boolean
 	readonly index: AnyDbIndex
 	/** The table names of `src/db/tables.ts`. */
 	readonly tables: string
@@ -357,6 +360,10 @@ type ConnectContext<K extends KitTypes, Cn extends readonly string[]> = [Cn] ext
 	? { readonly connect: Unavailable<"declare connect: ['<connector>'] on this endpoint to call another application"> }
 	: { readonly connect: { readonly [N in Cn[number]]: ConnectorOf<K['imports'][N]> } }
 
+/** `ctx.terminals`, where the vocabulary declares the terminal identification page. */
+type TerminalsContext<K extends KitTypes> = K['terminal'] extends true ? { readonly terminals: TerminalIdentification }
+	: { readonly terminals: Unavailable<"the application declares no terminal: terminal: { identify: '/identify' } in the vocabulary"> }
+
 /** What the handler of an RPC endpoint receives, for mount callers `Caller`, kind `Kind` and its declaration. */
 export type EndpointContext<
 	K extends KitTypes,
@@ -370,6 +377,7 @@ export type EndpointContext<
 	& MembersContext<K, Acc>
 	& LinksContext<Acc, Of<D, 'issues'>>
 	& ConnectContext<K, Of<D, 'connect'>>
+	& TerminalsContext<K>
 	& SqlContext<Of<D, 'sql'>, K['index']>
 	& FilesContext<K['index'], Kind>
 	& { readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, Acc, Of<D, 'unscoped'>>> }
@@ -396,6 +404,7 @@ export type PublicContext<K extends KitTypes, Kind extends DataKind, Acts extend
 		readonly files: Kind extends 'query' ? StoredFilesReadHandle : StoredFilesHandle
 		readonly sql: Unavailable<'a public procedure reaches its actions only: it declares no sql'>
 	}
+	& TerminalsContext<K>
 	& {
 		readonly db: DataOf<
 			K['index'],

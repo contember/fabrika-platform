@@ -643,12 +643,15 @@ function prototypeMembers(entrypoint: object): { methods: string[]; accessors: s
 
 describe('the entrypoint an application binds', () => {
 	const APPLICATION_METHODS = [
+		'assertIdentity',
 		'assignMember',
 		'audit',
+		'cancelIdentification',
 		'createScope',
 		'exchangeAuthCode',
 		'findMember',
 		'getJwks',
+		'inspectIdentification',
 		'issueLink',
 		'listAppMembers',
 		'listMembers',
@@ -687,6 +690,28 @@ describe('the entrypoint an application binds', () => {
 	test('neither entrypoint exposes a getter', () => {
 		expect(prototypeMembers(PropustkaApplication).accessors).toEqual([])
 		expect(prototypeMembers(Propustka).accessors).toEqual([])
+	})
+
+	// ADR-0067 §3: the deployer writes `props.app` on each application's IAM binding; a token's audience proves nothing.
+	test("the identification operations are pinned to the binding's application, whatever the credential names", async () => {
+		const db = freshDb()
+		const env = makeEnv(db)
+		const person = seedUser(db, { sub: 'g-pin', email: 'pin@contember.com' })
+		const tokenForB = await applicationToken(env, person, 'b@stage')
+		const bound = (props: unknown): InstanceType<typeof PropustkaApplication> => {
+			const worker: unknown = Reflect.construct(PropustkaApplication, [{ ...makeCtx(), props }, env])
+			if (!(worker instanceof PropustkaApplication)) throw new Error('failed to construct the mocked Worker entrypoint')
+			return worker
+		}
+		const asB = { app: 'b@stage', credential: tokenForB, requestId: 'r', id: 'some-identification' }
+		for (const props of [{ app: 'a@stage' }, undefined, {}, { app: 7 }]) {
+			const worker = bound(props)
+			expect(await worker.inspectIdentification(asB)).toEqual({ ok: false, reason: 'not_allowed' })
+			expect(await worker.assertIdentity({ ...asB, principalId: person })).toEqual({ ok: false, reason: 'not_allowed' })
+			expect(await worker.cancelIdentification(asB)).toEqual({ ok: false, reason: 'not_allowed' })
+		}
+		// B's own binding reaches IAM, which answers for the identification itself.
+		expect(await bound({ app: 'b@stage' }).inspectIdentification(asB)).toEqual({ ok: false, reason: 'not_found' })
 	})
 
 	test('the narrow class serves a call from its own bindings', async () => {

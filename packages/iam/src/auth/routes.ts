@@ -4,9 +4,10 @@
  */
 import { installationConsole } from '../app-presentation'
 import type { RequestContext } from '../env'
+import { TERMINAL_COMPLETE_PATH } from '../identification'
 import { installationBrand } from '../installation-brand'
 import { INVITATION_ACCEPT_PATH } from '../membership'
-import { ACCOUNT_CHOICE_PATH, logoutPage } from '../password-pages'
+import { ACCOUNT_CHOICE_PATH, logoutPage, TERMINAL_ENROL_PATH } from '../password-pages'
 import { generateRequestId } from '../request-id'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
@@ -17,6 +18,7 @@ import { handleCallback, handleOidcStart } from './oidc'
 import type { AuthEnv } from './oidc-flight'
 import { handleForgotPassword, handlePasswordAction, handlePasswordLogin } from './password'
 import { handleLogout } from './sessions'
+import { handleTerminalCompletion, handleTerminalEnrolment, handleTerminalRelease, TERMINAL_RELEASE_PATH } from './terminals'
 
 /**
  * `clientAddress` is what the composition's ingress observed, or `null` when it cannot see a client
@@ -66,6 +68,15 @@ export async function handleAuth(
 	}
 	if (url.pathname === INVITATION_ACCEPT_PATH) {
 		return handleInvitation(request, services, ctx, requestId)
+	}
+	if (url.pathname === TERMINAL_ENROL_PATH) {
+		return request.method === 'GET' || request.method === 'POST' ? handleTerminalEnrolment(request, services, requestId) : methodNotAllowed()
+	}
+	if (url.pathname === TERMINAL_COMPLETE_PATH) {
+		return request.method === 'GET' ? handleTerminalCompletion(request, services, requestId) : methodNotAllowed()
+	}
+	if (url.pathname === TERMINAL_RELEASE_PATH) {
+		return request.method === 'GET' ? handleTerminalRelease(request, services, requestId) : methodNotAllowed()
 	}
 	if (url.pathname === '/auth/logout') {
 		// Logging out is a state change, so it needs a method that can carry an origin check. A GET

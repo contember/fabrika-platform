@@ -25,6 +25,7 @@ import type {
 	IamHandoffRpc,
 	IamMembershipRpc,
 	IamRpc,
+	IamTerminalRpc,
 	IssueKeyInput,
 	IssueKeyResult,
 	Jwks,
@@ -38,11 +39,13 @@ import type {
 	RevokeKeyInput,
 	RevokeKeyResult,
 } from '@fabrika/auth-core'
+import { IAM_APP } from './admin/router'
 import { resolveCaller, verifiedTokenApp } from './auth'
 import { auditLabelOf } from './db'
 import { approveDeviceAuthorization, denyDeviceAuthorization, inspectDeviceAuthorization, listOwnDeviceAuthorizations } from './device'
 import type { Env, RequestContext } from './env'
 import { exchangeAuthCode } from './handoff'
+import { assertIdentity, cancelIdentification, inspectIdentification } from './identification'
 import { issueKey, revokeKey } from './issue'
 import { logError } from './log'
 import {
@@ -62,7 +65,7 @@ import { getSigner } from './signing'
 import { mintFromKey, mintToken } from './tokens'
 
 /** Build the RPC surface bound to one env + request context. */
-export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoffRpc & IamMembershipRpc {
+export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoffRpc & IamMembershipRpc & IamTerminalRpc {
 	// Built ONCE per RPC surface, not once per call (ARCH-1). It was constructed inside every method
 	// and, in `audit`, OUTSIDE the fail-closed try — so a configuration error there threw to the
 	// caller instead of failing closed. It also allocated an `OidcClient` and an email sender on the
@@ -92,6 +95,49 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		findMember: membership('findMember', findMember),
 		issueLink: membership('issueLink', issueLink),
 		revokeLink: membership('revokeLink', revokeLink),
+		/** The identification operations (ADR-0067 §3) never throw to the application; an unexpected failure is a logged refusal. */
+		async inspectIdentification(raw) {
+			const input = withAcceptedRequestId(raw)
+			try {
+				return await inspectIdentification(services, env, input)
+			} catch (err) {
+				logError(`inspectIdentification failed for request '${input.requestId}'`, err)
+				return { ok: false, reason: 'not_allowed' }
+			}
+		},
+		/** An assertion logged its `allow` row in the login's own batch; a refusal opened nothing and is logged after it. */
+		async assertIdentity(raw) {
+			const input = withAcceptedRequestId(raw)
+			try {
+				const { result, principalId, terminal } = await assertIdentity(services, env, input)
+				if (!result.ok) {
+					ctx.waitUntil(
+						services.repositories.audit.writeAuthLog({
+							requestId: input.requestId,
+							app: IAM_APP,
+							kind: 'authenticate',
+							principalId,
+							decision: 'deny',
+							reason: `terminal_assertion_${result.reason}`,
+							terminal,
+						}),
+					)
+				}
+				return result
+			} catch (err) {
+				logError(`assertIdentity failed for request '${input.requestId}'`, err)
+				return { ok: false, reason: 'not_allowed' }
+			}
+		},
+		async cancelIdentification(raw) {
+			const input = withAcceptedRequestId(raw)
+			try {
+				return await cancelIdentification(services, env, input)
+			} catch (err) {
+				logError(`cancelIdentification failed for request '${input.requestId}'`, err)
+				return { ok: false, reason: 'not_allowed' }
+			}
+		},
 		inspectDeviceAuthorization: (input) => inspectDeviceAuthorization(services, env, input),
 		approveDeviceAuthorization: (input) => approveDeviceAuthorization(services, env, input),
 		denyDeviceAuthorization: (input) => denyDeviceAuthorization(services, env, input),
@@ -104,7 +150,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		async exchangeAuthCode(raw: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
 			const input = withAcceptedRequestId(raw)
 			try {
-				const { result, principalId } = await exchangeAuthCode(services, input)
+				const { result, principalId, terminal } = await exchangeAuthCode(services, input)
 				// A redemption logged its `allow` row in the child session's own batch; a refusal opened nothing.
 				if (!result.ok) {
 					ctx.waitUntil(
@@ -115,6 +161,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 							principalId,
 							decision: 'deny',
 							reason: result.reason,
+							terminal,
 						}),
 					)
 				}
@@ -143,7 +190,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		async mintToken(raw: MintTokenInput): Promise<MintTokenResult> {
 			const input = withAcceptedRequestId(raw)
 			try {
-				const { result, principalId } = await mintToken(services, env, input)
+				const { result, principalId, terminal } = await mintToken(services, env, input)
 				ctx.waitUntil(
 					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
@@ -152,6 +199,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 						principalId,
 						decision: result.ok ? 'allow' : 'deny',
 						reason: result.ok ? 'mint' : result.reason,
+						terminal,
 					}),
 				)
 				return result

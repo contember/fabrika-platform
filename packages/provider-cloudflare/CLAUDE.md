@@ -120,6 +120,10 @@ this one import.
   default export also issues and revokes keys and approves devices, which only platform components
   (`platformResources: 'allow'`) may bind. The entrypoint name is pinned against IAM's exports by
   `packages/iam/src/__tests__/index.test.ts`.
+- **Every IAM binding names its own application in `props`** (ADR-0067 §3). The deployer wraps the application Worker's
+  `IAM` binding in `IamApplicationReference`, which stamps `props: { app: '<app>@<env>' }` on the generated entry, and
+  the proxy Worker's binding carries the same. IAM reads it as `ctx.props.app`, the caller's transport identity, so the
+  bounds refuse an IAM binding under any name whose `props` are not exactly that.
 - **A checkout's Worker graph is rebuilt from this package's `Worker` class** (`runnerWorkerGraph`,
   `src/checkout.ts`). The checkout installs its own `oblaka-iac`, so `instanceof Worker` fails on its objects,
   and oblaka's processor itself recurses only into Workers of its own class. A Worker is recognised by

@@ -19,6 +19,7 @@ import { createPolicyUseCase, deletePolicyUseCase, listPoliciesUseCase, updatePo
 import { getPrincipalUseCase, invitePrincipalUseCase, listPrincipalsUseCase, me, promotePrincipalUseCase, updatePrincipalUseCase } from './principals'
 import { listSessionsUseCase, revokeSessionsForPrincipalUseCase, revokeSessionUseCase } from './sessions'
 import { createShareLinkUseCase, listShareLinksUseCase, revokeShareLinkUseCase } from './share-links'
+import { listTerminalsUseCase, revokeTerminalUseCase, setTerminalProfileUseCase } from './terminals'
 import { issueWorkloadKeyUseCase, revokeWorkloadKeysUseCase } from './workloads'
 
 /** Return the app's scopes, actions, and origin='app' roles (the reconciled vocabulary). */
@@ -92,6 +93,9 @@ export const adminUseCases = {
 	clearInstallationBrand: clearInstallationBrandUseCase,
 	getPasswordPolicy: getPasswordPolicyUseCase,
 	setPasswordPolicy: setPasswordPolicyUseCase,
+	listTerminals: listTerminalsUseCase,
+	setTerminalProfile: setTerminalProfileUseCase,
+	revokeTerminal: revokeTerminalUseCase,
 }
 
 export { putAppSchema } from './app-schema'

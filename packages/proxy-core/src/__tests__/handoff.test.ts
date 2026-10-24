@@ -98,11 +98,23 @@ describe('the handoff callback', () => {
 		expect(iam.exchangeCalls).toBe(0)
 	})
 
-	test('a callback without the browser-held verifier is refused before IAM', async () => {
+	test('a callback without the browser-held verifier spends the code and sets no session', async () => {
+		// IAM consumes a code before it compares the verifier, so a verifier made for no challenge only spends it: whoever
+		// started that sign-in elsewhere cannot redeem the code this browser shows (ADR-0067 §3).
+		const iam = new FakeIam({ exchangeAuthCode: { ok: false, reason: 'invalid_verifier' } })
+		const response = await service(iam)(callback('attacker-code', { verifier: null }))
+		expect(response.status).toBe(403)
+		expect(iam.seenCodes).toEqual(['attacker-code'])
+		expect(iam.seenVerifiers).toHaveLength(1)
+		expect(iam.seenVerifiers[0]).not.toBe(VERIFIER)
+		expect(cookie(response)).toBeNull()
+		expect(cookie(response, `${HANDOFF_COOKIE_PREFIX}${STATE}`)?.attributes).toContain('Max-Age=0')
+	})
+
+	test('a callback without the verifier sets no session even if IAM answered one', async () => {
 		const iam = new FakeIam({ exchangeAuthCode: { ok: true, session: 'wrong', returnUrl: RETURN_URL, expiresAt: nowPlus(60) } })
 		const response = await service(iam)(callback('attacker-code', { verifier: null }))
 		expect(response.status).toBe(403)
-		expect(iam.exchangeCalls).toBe(0)
 		expect(cookie(response)).toBeNull()
 	})
 

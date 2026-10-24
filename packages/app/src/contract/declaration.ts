@@ -26,6 +26,8 @@ export interface ContractDeclaration<S> {
 	readonly members?: { readonly manage: string; readonly list: string }
 	/** `'labels'` only; `buildArtifact` refuses another value, and refuses it without `members`. */
 	readonly directory?: string
+	/** The identification page of a terminal; `buildArtifact` refuses a path a public SPA mount does not serve. */
+	readonly terminal?: { readonly identify: string }
 }
 
 /**

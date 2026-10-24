@@ -41,6 +41,10 @@ export interface AuthLogRow {
 	created_at: number
 	/** 1 when the session's principal held the installation-admin action at login; 0 otherwise. */
 	privileged: number
+	/** The terminal of the session this row is about (ADR-0067), copied from the session row. */
+	terminal_id: string | null
+	/** The application that asserted that session's person on `terminal_id`. */
+	asserted_by: string | null
 }
 
 /** A login attempt (`authenticate`) or the end of a session (`logout`). */
@@ -70,6 +74,8 @@ export interface AuthLogInput {
 	reason?: string | null
 	/** The principal held the installation-admin action when this session was opened. */
 	privileged?: boolean
+	/** The session's `terminal_id` and `asserted_by`, read from its row, never from what an application sent. */
+	terminal?: { terminalId: string; assertedBy: string } | null
 }
 
 /**
@@ -206,15 +212,32 @@ export class AuditWriter {
 }
 
 /**
+ * A one-row SELECT that statements after a guarded change in one batch require: they write only when it finds a row,
+ * so they follow the change exactly when it changed something.
+ */
+export interface SqlGuard {
+	readonly sql: string
+	readonly binds: readonly unknown[]
+}
+
+/** `INSERT INTO <target> SELECT <placeholders>`, guarded by `guard` when there is one. */
+export function guardedInsert(target: string, placeholders: string, values: readonly unknown[], guard?: SqlGuard): { sql: string; binds: unknown[] } {
+	if (guard === undefined) {
+		return { sql: `INSERT INTO ${target} VALUES (${placeholders})`, binds: [...values] }
+	}
+	return { sql: `INSERT INTO ${target} SELECT ${placeholders} WHERE EXISTS (${guard.sql})`, binds: [...values, ...guard.binds] }
+}
+
+/**
  * The INSERT of one `auth_log` row. `id` is deliberately omitted — the column is auto-assigned (SQLite rowid alias /
  * Postgres identity; see the note on `auth_log` in migration 0001). Everything else, `created_at` included, is bound.
+ * With `guard`, the row is written only when the guard finds its row.
  */
-export function authLogStatement(db: SqlDatabase, input: AuthLogInput): SqlStatement {
-	return db
-		.prepare(`INSERT INTO auth_log
-			(request_id, app, kind, principal_id, credential_id, decision, reason, privileged, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-		.bind(
+export function authLogStatement(db: SqlDatabase, input: AuthLogInput, guard?: SqlGuard): SqlStatement {
+	const insert = guardedInsert(
+		'auth_log (request_id, app, kind, principal_id, credential_id, decision, reason, privileged, created_at, terminal_id, asserted_by)',
+		'?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?',
+		[
 			input.requestId,
 			input.app,
 			input.kind,
@@ -224,7 +247,12 @@ export function authLogStatement(db: SqlDatabase, input: AuthLogInput): SqlState
 			input.reason ?? null,
 			input.privileged === true ? 1 : 0,
 			unixNow(),
-		)
+			input.terminal?.terminalId ?? null,
+			input.terminal?.assertedBy ?? null,
+		],
+		guard,
+	)
+	return db.prepare(insert.sql).bind(...insert.binds)
 }
 
 export class AuditRepository {
@@ -248,6 +276,11 @@ export class AuditRepository {
 	 */
 	commit<T = Record<string, unknown>>(statements: SqlStatement[]): Promise<SqlQueryResult<T>[]> {
 		return this.db.batch<T>(statements)
+	}
+
+	/** The statement form of `writeAuthLog`, for a use case that composes a `commit`. */
+	authLogStatement(input: AuthLogInput): SqlStatement {
+		return authLogStatement(this.db, input)
 	}
 
 	/** The statement form of `auditEventStatement`, for a use case that composes a `commit`. */

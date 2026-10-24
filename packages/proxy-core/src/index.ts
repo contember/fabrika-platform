@@ -16,6 +16,7 @@ export { cacheKey, MemoryTokenCache } from './cache'
 export type { CachedToken, TokenCache } from './cache'
 export {
 	APP_QUERY_PARAM,
+	AUTH_SIGNOUT_PATH,
 	CLIENT_ADDRESS_HEADER,
 	DEFAULT_HEALTH_PATH,
 	DEFAULT_IAM_TIMEOUT_MS,
@@ -32,6 +33,7 @@ export {
 	PREFLIGHT_HEADER,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
+	SIGNOUT_RELEASE_PATH,
 	UNTRUSTED_FORWARD_HEADERS,
 } from './constants'
 export { carriesPlatformKey, readBearer, readCookie } from './credentials'

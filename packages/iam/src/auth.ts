@@ -32,6 +32,9 @@ export function sessionUsable(
 			return config.authentication.password.enabled
 		case 'local_dev':
 			return config.localDevLogin
+		// No person can enable this method for themselves; the session lookup already refuses a revoked terminal.
+		case 'terminal_assertion':
+			return true
 	}
 }
 
@@ -56,6 +59,8 @@ export interface ResolvedCaller<T extends TokenPrincipalType = PrincipalType> {
 	type?: T
 	label: string | null
 	permissions: PermissionEntry[]
+	/** The terminal of a person's session token asserted on one (ADR-0067): its `terminal` claim's principal id. */
+	terminal?: string
 }
 
 type CallerRefusal = { ok: false; reason: 'missing_token' | 'invalid_token' | 'unknown_principal' | 'disabled' }
@@ -152,7 +157,13 @@ async function resolveAnyCaller(services: Services, env: CallerEnv, input: Calle
 	}
 	return {
 		ok: true,
-		caller: { id: claims.sub, ...(claims.ptype === undefined ? {} : { type: claims.ptype }), label: claims.label, permissions: claims.perms },
+		caller: {
+			id: claims.sub,
+			...(claims.ptype === undefined ? {} : { type: claims.ptype }),
+			label: claims.label,
+			permissions: claims.perms,
+			...(claims.terminal === undefined ? {} : { terminal: claims.terminal.id }),
+		},
 		verifiedApp: claims.aud,
 	}
 }

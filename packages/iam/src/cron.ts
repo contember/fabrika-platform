@@ -23,7 +23,7 @@ export const INVITATION_RETENTION_SECONDS = 7 * 24 * 60 * 60 // 7 days past expi
 
 /**
  * Prune old auth-log rows, audit rows past an operator's retention, password action tokens, login throttles, spent handoff codes and delegation
- * grants, old invitations, and dead sessions. Registered through `waitUntil` because a Worker scheduled
+ * grants, old invitations, dead sessions and ended terminal identifications. Registered through `waitUntil` because a Worker scheduled
  * handler that returns before its writes settle is cut off; in a process the supervised promise means a
  * failure is logged rather than fatal.
  */
@@ -47,6 +47,8 @@ export function runIamMaintenance(env: Env, ctx: RequestContext, now: number = D
 			// refused at use and the row exists only to be deleted. `pruneSessions` was written, tested
 			// and then never called, so `sessions` grew for the life of every installation (SEC-13).
 			services.repositories.sessions.pruneSessions(nowSeconds),
+			// Identifications live two minutes and are single-use, like handoff codes.
+			services.repositories.terminals.pruneIdentifications(nowSeconds),
 		]).then(() => undefined),
 	)
 }

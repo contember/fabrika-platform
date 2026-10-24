@@ -2,20 +2,35 @@
 // nothing else, so the tables, the kit, the groups and the contract can each be typed by it without a cycle.
 // Browser-safe: plain data.
 
-import { type AppMembers, type DimensionDef, type Presentation, presentationOf, type RoleDefs, type Vocabulary, type WildcardMessage } from './define'
+import {
+	type AppMembers,
+	type DimensionDef,
+	type Presentation,
+	presentationOf,
+	type RoleDefs,
+	type TerminalDeclaration,
+	type Vocabulary,
+	type WildcardMessage,
+} from './define'
 
 /**
- * The vocabulary as `defineVocabulary` returned it, with its literal names, dimension definitions and the actions of its
- * people (`M`, `never` when it declares none).
+ * The vocabulary as `defineVocabulary` returned it, with its literal names, dimension definitions, the actions of its
+ * people (`M`, `never` when it declares none) and its terminal (`T`, `never` when it declares none).
  */
-export interface AppVocabulary<A extends string, D extends string, R extends string, Dims, M extends AppMembers<A> = never>
-	extends Vocabulary<A, D, R>
-{
+export interface AppVocabulary<
+	A extends string,
+	D extends string,
+	R extends string,
+	Dims,
+	M extends AppMembers<A> = never,
+	T extends TerminalDeclaration = never,
+> extends Vocabulary<A, D, R> {
 	readonly dimensions: Dims & { readonly [K in D]: DimensionDef<A, D, R> }
 	readonly members?: M
+	readonly terminal?: T
 }
 
-export type AnyAppVocabulary = AppVocabulary<string, string, string, unknown, AppMembers<string>>
+export type AnyAppVocabulary = AppVocabulary<string, string, string, unknown, AppMembers<string>, TerminalDeclaration>
 
 /**
  * Declares the dimensions, actions and roles, and how IAM names the application (`locale`, `displayName`). `src/vocabulary.ts` exports it; `defineTables`, `defineApp` and the
@@ -27,6 +42,7 @@ export function defineVocabulary<
 	const R extends string,
 	const Dims extends { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> },
 	const M extends AppMembers<NoInfer<A>> = never,
+	const T extends TerminalDeclaration = never,
 >(
 	vocabulary: Presentation & {
 		readonly app: string
@@ -35,8 +51,9 @@ export function defineVocabulary<
 		readonly roles: RoleDefs<NoInfer<A>, NoInfer<D>, R>
 		readonly members?: M
 		readonly directory?: 'labels'
+		readonly terminal?: T
 	},
-): AppVocabulary<A, D, R, Dims, M> {
+): AppVocabulary<A, D, R, Dims, M, T> {
 	const people = vocabulary.members
 	return {
 		app: vocabulary.app,
@@ -46,5 +63,6 @@ export function defineVocabulary<
 		...presentationOf(vocabulary),
 		...(people === undefined ? {} : { members: people }),
 		...(vocabulary.directory === undefined ? {} : { directory: vocabulary.directory }),
+		...(vocabulary.terminal === undefined ? {} : { terminal: vocabulary.terminal }),
 	}
 }

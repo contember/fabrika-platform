@@ -16,12 +16,15 @@
 // absent, unknown or expired key, 404 an unknown method, 400 an undecodable body, 405 not a POST, 503 a key lookup that
 // failed. The key is never logged.
 
-import type { IamMembershipRpc } from '@fabrika/auth-core'
+import type { IamMembershipRpc, IamTerminalRpc } from '@fabrika/auth-core'
 import { logError } from './log'
 import {
+	assertIdentitySchema,
 	assignMemberSchema,
+	cancelIdentificationSchema,
 	createScopeSchema,
 	findMemberSchema,
+	inspectIdentificationSchema,
 	issueLinkSchema,
 	listAppMembersSchema,
 	listMembersSchema,
@@ -35,8 +38,8 @@ import type { Services } from './services'
 /** The path the surface is mounted under: `/membership/<method>`, one segment. */
 export const MEMBERSHIP_TRANSPORT_PREFIX = '/membership/'
 
-/** The operations an application requests on its caller's behalf, and nothing else. */
-export type MembershipTransportRpc = Omit<IamMembershipRpc, 'requestDelegation'>
+/** The operations an application requests on its caller's behalf, and the identifications at its terminals (ADR-0067). */
+export type MembershipTransportRpc = Omit<IamMembershipRpc, 'requestDelegation'> & IamTerminalRpc
 
 type Operation = (rpc: MembershipTransportRpc, body: unknown, app: string) => Promise<unknown>
 
@@ -59,6 +62,9 @@ const OPERATIONS: ReadonlyMap<string, Operation> = new Map<string, Operation>([
 	['findMember', pinned((body) => findMemberSchema.parse(body), (rpc, input) => rpc.findMember(input))],
 	['issueLink', pinned((body) => issueLinkSchema.parse(body), (rpc, input) => rpc.issueLink(input))],
 	['revokeLink', pinned((body) => revokeLinkSchema.parse(body), (rpc, input) => rpc.revokeLink(input))],
+	['inspectIdentification', pinned((body) => inspectIdentificationSchema.parse(body), (rpc, input) => rpc.inspectIdentification(input))],
+	['assertIdentity', pinned((body) => assertIdentitySchema.parse(body), (rpc, input) => rpc.assertIdentity(input))],
+	['cancelIdentification', pinned((body) => cancelIdentificationSchema.parse(body), (rpc, input) => rpc.cancelIdentification(input))],
 ])
 
 /** Serve one membership call of an application. */

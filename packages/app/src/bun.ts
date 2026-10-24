@@ -5,7 +5,7 @@
 // contract application is served through `serveContract`, from the generated
 // entrypoint.
 
-import { HttpIamMembership } from '@fabrika/auth'
+import { HttpIamMembership, HttpIamTerminals } from '@fabrika/auth'
 import type { Database } from '@fabrika/db'
 import { isScopedDatabase } from '@fabrika/db/framework'
 import type { PostgresOptions } from '@fabrika/db/postgres'
@@ -278,12 +278,22 @@ export function openFileStorage(framework: Readonly<Record<string, string>>): Fi
 /**
  * IAM's membership transport, when the platform gives the process `FABRIKA_IAM_RPC_URL` (IAM's public origin) and
  * `FABRIKA_IAM_RPC_KEY` (this environment's membership transport key); without both, there is none, and `boot` refuses
- * a contract that needs one.
+ * a contract that needs one. The identifications at a terminal travel on the same transport.
  */
-function httpMembership(framework: Readonly<Record<string, string>>): HttpIamMembership | undefined {
+function httpIamTransport(framework: Readonly<Record<string, string>>): { readonly origin: string; readonly key: string } | undefined {
 	const origin = framework['FABRIKA_IAM_RPC_URL']?.trim() ?? ''
 	const key = framework['FABRIKA_IAM_RPC_KEY']?.trim() ?? ''
-	return origin === '' || key === '' ? undefined : new HttpIamMembership({ origin, key })
+	return origin === '' || key === '' ? undefined : { origin, key }
+}
+
+function httpMembership(framework: Readonly<Record<string, string>>): HttpIamMembership | undefined {
+	const transport = httpIamTransport(framework)
+	return transport === undefined ? undefined : new HttpIamMembership(transport)
+}
+
+function httpTerminals(framework: Readonly<Record<string, string>>): HttpIamTerminals | undefined {
+	const transport = httpIamTransport(framework)
+	return transport === undefined ? undefined : new HttpIamTerminals(transport)
 }
 
 /** IAM's public token exchange, at the issuer every deploy names; `boot` reports a missing issuer itself. */
@@ -382,6 +392,7 @@ async function startContractServer(
 	const iam = issuerJwks(environment.framework['FABRIKA_IAM_ISSUER'])
 	const database = isScopedDatabase(app.database) ? openApplicationDatabase(data, environment.framework) : undefined
 	const membership = httpMembership(environment.framework)
+	const terminals = httpTerminals(environment.framework)
 	// Zerops is where a Bun application runs, and a namespace there is one private network (ADR-0022 rule 5).
 	const files = openFileStorage(environment.framework)
 	const workloadTokens = workloadTokensOf(environment.framework)
@@ -392,6 +403,7 @@ async function startContractServer(
 		database,
 		files,
 		membership,
+		terminals,
 		workloadTokens,
 		requireProxySecret: true,
 		localEmailProviders: LOCAL_EMAIL_PROVIDERS,
@@ -455,6 +467,7 @@ export async function runContractJob(
 	try {
 		const workloadTokens = workloadTokensOf(environment.framework)
 		const membership = httpMembership(environment.framework)
+		const terminals = httpTerminals(environment.framework)
 		const files = openFileStorage(environment.framework)
 		return await boot(app, {
 			environment,
@@ -463,6 +476,7 @@ export async function runContractJob(
 			database,
 			files,
 			membership,
+			terminals,
 			workloadTokens,
 			requireProxySecret: true,
 			localEmailProviders: LOCAL_EMAIL_PROVIDERS,

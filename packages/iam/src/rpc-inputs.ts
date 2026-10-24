@@ -88,6 +88,9 @@ export const issueLinkSchema = z.object({ ...caller, mount: z.string(), chain: z
 	rejectRpcInput,
 )
 export const revokeLinkSchema = z.object({ ...caller, id: z.string() }).catch(rejectRpcInput)
+export const inspectIdentificationSchema = z.object({ ...caller, id: z.string() }).catch(rejectRpcInput)
+export const assertIdentitySchema = z.object({ ...caller, id: z.string(), principalId: z.string() }).catch(rejectRpcInput)
+export const cancelIdentificationSchema = z.object({ ...caller, id: z.string() }).catch(rejectRpcInput)
 
 export class RpcInputError extends Error {}
 

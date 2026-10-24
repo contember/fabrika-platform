@@ -26,6 +26,11 @@ import type { TokenPurposes } from './token'
 
 export type Path = `/${string}`
 
+/** Whether `value` is written as a `Path`; what `buildArtifact` refuses of one is a separate check. */
+export function isPath(value: string): value is Path {
+	return value.startsWith('/')
+}
+
 /** A job attempt's time limit: 15 minutes by default, at most a day. A job reads no body, so it has no `maxBytes`. */
 export interface JobLimitsOption {
 	readonly timeoutMs?: number
@@ -92,7 +97,7 @@ export interface RoleDef<A extends string, D extends string, R extends string> {
 	readonly external?: true
 }
 
-export interface Vocabulary<A extends string, D extends string, R extends string> extends Presentation, AppPeople<A> {
+export interface Vocabulary<A extends string, D extends string, R extends string> extends Presentation, AppPeople<A>, AppTerminal {
 	readonly app: string
 	readonly dimensions: { readonly [K in D]: DimensionDef<A, D, R> }
 	readonly actions: { readonly [K in A]: string }
@@ -122,6 +127,26 @@ export function peopleOf<A extends string>(vocabulary: AppPeople<A>): AppPeople<
 		...(vocabulary.members === undefined ? {} : { members: { manage: vocabulary.members.manage, list: vocabulary.members.list } }),
 		...(vocabulary.directory === undefined ? {} : { directory: vocabulary.directory }),
 	}
+}
+
+/** The page that identifies a person at an enrolled terminal (ADR-0067). */
+export interface TerminalDeclaration {
+	/** An absolute path on the application's own origin, served by a public SPA mount; IAM appends `?identification=<id>`. */
+	readonly identify: Path
+}
+
+/**
+ * `terminal: { identify: '/identify' }`: the application identifies a person at an enrolled terminal on that page and
+ * asserts who stands there (`ctx.terminals`). IAM sends a terminal's browser there only for an application its
+ * administrator lists on the terminal. A reviewed declaration.
+ */
+export interface AppTerminal {
+	readonly terminal?: TerminalDeclaration
+}
+
+/** A vocabulary's terminal, copied field by field: it exists only when declared. */
+export function terminalOf(vocabulary: AppTerminal): AppTerminal {
+	return vocabulary.terminal === undefined ? {} : { terminal: { identify: vocabulary.terminal.identify } }
 }
 
 /** How IAM names the application to a person: on its sign-in, password and invitation pages, and in its e-mails. */
@@ -535,7 +560,7 @@ export function defineContract<
 	const Dims extends { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> },
 	const S extends Surface,
 >(
-	vocabulary: Presentation & AppPeople<NoInfer<A>> & {
+	vocabulary: Presentation & AppPeople<NoInfer<A>> & AppTerminal & {
 		readonly app: string
 		readonly dimensions: Dims & { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> }
 		readonly actions: { readonly [K in A]: K extends `${string}*${string}` ? WildcardMessage : string }
@@ -551,6 +576,7 @@ export function defineContract<
 			roles: vocabulary.roles,
 			...presentationOf(vocabulary),
 			...peopleOf(vocabulary),
+			...terminalOf(vocabulary),
 		},
 		dimensions: vocabulary.dimensions,
 		surface: surface(surfaceKit()),

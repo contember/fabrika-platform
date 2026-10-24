@@ -132,7 +132,9 @@ covers the forms newer than 0.6:
 - 0.7: a procedure with a file output (the row's `response: 'file'`);
 - 0.7: an endpoint of several capabilities (the requirement kind `capabilities`);
 - 0.7: a webhook that forwards its own `Authorization` (the row's `authorization: 'forward'`);
-- 0.8: an ALTCHA challenge's `blob:` workers (the CSP's `workerSrc`).
+- 0.8: an ALTCHA challenge's `blob:` workers (the CSP's `workerSrc`);
+- 0.9: a contract that declares a terminal (`terminal`, ADR-0067), named as `terminal`: its sessions end at the proxy's
+  `/__fabrika/auth/signout`, which no older release's proxy serves.
 
 A later form is covered without a change here. No parser of a minor newer than 0.6 is a judge, although the window
 serves 0.7: Control does not record a pin's release, so a form only 0.7 reads would reach a namespace pinned to

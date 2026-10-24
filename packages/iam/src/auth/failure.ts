@@ -16,5 +16,10 @@ export type AuthFailure =
 	| { readonly kind: 'oidc_exchange_failed' }
 	| { readonly kind: 'oidc_invalid_id_token' }
 	| { readonly kind: 'not_admitted' }
+	/** The browser holds no login of a principal that may enrol a terminal. */
+	| { readonly kind: 'terminal_enrolment_not_allowed' }
+	| { readonly kind: 'terminal_enrolment_unavailable' }
+	/** A terminal identification completed by another browser, twice, too late, or after its login ended. */
+	| { readonly kind: 'terminal_completion_refused' }
 	/** A refusal of the principal resolution; `reason` is its fixed code, never what the caller sent. */
 	| { readonly kind: 'login_refused'; readonly reason: string }

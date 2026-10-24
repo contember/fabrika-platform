@@ -188,6 +188,44 @@ describe('PUT/GET /admin/apps/:app/schema', () => {
 		expect('locale' in dropped || 'displayName' in dropped).toBe(false)
 	})
 
+	test("the terminal's identification path is reconciled, read back, readable per app, and dropped by a schema without it", async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const kiosk = { ...SCHEMA, terminal: { identify: '/identify' } }
+		expect((await run(h, req('/admin/apps/opice/schema', 'PUT', token, kiosk))).status).toBe(200)
+		const dto: AppSchemaDto = await (await run(h, req('/admin/apps/opice/schema', 'GET', token))).json()
+		expect(dto.terminal).toEqual({ identify: '/identify' })
+		expect(await h.repositories.appSchema.getTerminalIdentifyPath('opice')).toBe('/identify')
+		expect(await h.repositories.appSchema.getTerminalIdentifyPath('vozka')).toBeNull()
+		expect((await run(h, req('/admin/apps/opice/schema', 'PUT', token, SCHEMA))).status).toBe(200)
+		const dropped: AppSchemaDto = await (await run(h, req('/admin/apps/opice/schema', 'GET', token))).json()
+		expect('terminal' in dropped).toBe(false)
+		expect(await h.repositories.appSchema.getTerminalIdentifyPath('opice')).toBeNull()
+	})
+
+	test('an identification path that is not an absolute path on the app origin is refused', async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		for (const identify of ['https://evil.test/identify', '//evil.test', '/identify?x=1', '/__fabrika/x']) {
+			const put = await run(h, req('/admin/apps/opice/schema', 'PUT', token, { ...SCHEMA, terminal: { identify } }))
+			expect(put.status).toBe(400)
+			expect(await put.text()).toContain("the terminal's identification path")
+		}
+		expect((await run(h, req('/admin/apps/opice/schema', 'PUT', token, { ...SCHEMA, terminal: {} }))).status).toBe(400)
+		expect(await h.repositories.appSchema.getTerminalIdentifyPath('opice')).toBeNull()
+	})
+
+	test('an app with a terminal keeps its membership transport key, which its identifications travel on', async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const now = Math.floor(Date.now() / 1000)
+		await h.repositories.membershipTransport.issue({ app: 'opice', keyHash: 'h1', expiresAt: now + 3600, keep: null, now })
+		expect((await run(h, req('/admin/apps/opice/schema', 'PUT', token, { ...SCHEMA, terminal: { identify: '/identify' } }))).status).toBe(200)
+		expect(await h.repositories.membershipTransport.appOfKey('h1', now)).toBe('opice')
+		expect((await run(h, req('/admin/apps/opice/schema', 'PUT', token, SCHEMA))).status).toBe(200)
+		expect(await h.repositories.membershipTransport.appOfKey('h1', now)).toBeNull()
+	})
+
 	test("the app list carries each app display name, null for an app that declares none, and whether it is the installation's own", async () => {
 		const h = createHarness()
 		const token = await asAdmin(h)

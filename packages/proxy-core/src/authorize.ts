@@ -36,9 +36,9 @@ import {
 	type TokenCaller,
 } from '@fabrika/auth-core'
 import { cacheKey, type TokenCache } from './cache'
-import { LOGIN_REDIRECT_PARAM } from './constants'
+import { LOGIN_REDIRECT_PARAM, SIGNOUT_RELEASE_PATH } from './constants'
 import { carriesPlatformKey, readBearer, readCookie } from './credentials'
-import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams } from './handoff'
+import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams, unmatchedVerifier } from './handoff'
 import { type DelegationIssuer, type IamGateway, IamUnavailableError } from './iam'
 import {
 	isApplicationEntry,
@@ -76,8 +76,10 @@ export type DenyReason =
 	| 'caller_kind'
 	/** The token does not satisfy the endpoint's requirement. */
 	| 'insufficient_permission'
-	/** A session request that is not a `GET` did not come from the app's own origin. */
+	/** A session request that is not a `GET`, or a sign-out, did not come from the app's own origin. */
 	| 'cross_site'
+	/** A sign-out's return is absent or not a path on the app's own origin. */
+	| 'bad_redirect'
 	/** The request's `Content-Type` is not one the endpoint admits. */
 	| 'content_type'
 	/**
@@ -144,6 +146,11 @@ export type Decision =
 	 * was going — read from the code server-side, never from the request.
 	 */
 	| { outcome: 'handoff'; status: 302; location: string; session: string; expiresAt: number; handoffState: string }
+	/**
+	 * A same-origin sign-out (ADR-0067 §5): the app session cookie is cleared and the browser goes to IAM's release,
+	 * which returns it to `location`'s own redirect on this app's origin.
+	 */
+	| { outcome: 'signout'; status: 302; location: string }
 
 /** The original request, reconstructed from what `forward_auth` forwarded. */
 export interface ForwardedRequest {
@@ -577,19 +584,54 @@ export class Authorizer {
 		}
 		const cookieName = handoffCookieName(state)
 		const verifier = cookieName === null ? null : readCookie(request.headers.get('Cookie'), cookieName)
-		if (verifier === null) {
-			return { outcome: 'deny', status: 403, reason: 'invalid_session', clearHandoffState: state }
-		}
 		// Through `callIam` like every other IAM call, so an unreachable service is a 503 whatever kind
 		// of error the injected gateway happened to throw. `authorize`'s outer catch maps the rest.
-		const result = await this.callIam(
-			'exchangeAuthCode',
-			() => this.options.iam.exchangeAuthCode({ app: resolved.app.id, code, verifier, requestId: request.requestId }),
-		)
+		const redeem = (presented: string) =>
+			this.callIam(
+				'exchangeAuthCode',
+				() => this.options.iam.exchangeAuthCode({ app: resolved.app.id, code, verifier: presented, requestId: request.requestId }),
+			)
+		if (verifier === null) {
+			// This browser did not start the sign-in the code belongs to. The code is spent, so whoever started it cannot
+			// redeem it from the address this browser shows (ADR-0067 §3).
+			await redeem(unmatchedVerifier())
+			return { outcome: 'deny', status: 403, reason: 'invalid_session', clearHandoffState: state }
+		}
+		const result = await redeem(verifier)
 		if (!result.ok) {
 			return { outcome: 'deny', status: 403, reason: 'invalid_session', clearHandoffState: state }
 		}
 		return { outcome: 'handoff', status: 302, location: result.returnUrl, session: result.session, expiresAt: result.expiresAt, handoffState: state }
+	}
+
+	/**
+	 * Sign the browser out of this host (ADR-0067 §5). Called for the reserved sign-out path only, BEFORE the endpoint
+	 * is planned, for any entry and any session. It drops this session's cached token, so the next request re-mints
+	 * from IAM, which has revoked the session by then or still holds it; the cookie itself is cleared by the response.
+	 *
+	 * Admission is `Sec-Fetch-Site: same-origin`, absent included: the request changes state, and another page must not
+	 * sign a person out, as for a session request that is not a `GET` (ADR-0022 rule 3, step 6).
+	 */
+	signOut(resolved: ResolvedApp, request: ForwardedRequest): Decision {
+		if (request.method !== 'GET') {
+			return { outcome: 'deny', status: 403, reason: 'no_endpoint' }
+		}
+		if (request.headers.get(FETCH_SITE_HEADER) !== 'same-origin') {
+			return { outcome: 'deny', status: 403, reason: 'cross_site' }
+		}
+		const app = resolved.app
+		const target = sameOriginTarget(new URL(`${app.scheme}://${request.url.host}`).origin, request.url.searchParams.get(LOGIN_REDIRECT_PARAM))
+		if (target === null) {
+			return { outcome: 'deny', status: 400, reason: 'bad_redirect' }
+		}
+		const session = readCookie(request.headers.get('Cookie'), SESSION_COOKIE)
+		if (session !== null) {
+			this.cache?.delete(cacheKey(app.id, 'session', session))
+		}
+		const release = new URL(SIGNOUT_RELEASE_PATH, this.options.issuer.replace(/\/+$/, ''))
+		release.searchParams.set('app', app.id)
+		release.searchParams.set(LOGIN_REDIRECT_PARAM, target)
+		return { outcome: 'signout', status: 302, location: release.toString() }
 	}
 
 	private async loginDecision(
@@ -639,6 +681,23 @@ function admittedOrigin(app: ProxyApp, row: ManifestEndpointRow, origin: string)
 		return '*'
 	}
 	return form === 'environment' && isApplicationEntry(app) && (app.crossOrigins ?? []).includes(origin) ? origin : null
+}
+
+/**
+ * The absolute URL of `path` on `origin`, or `null` when `path` is not a path on that origin. A leading `//` or any
+ * `\` would make the browser read a host from it, and a control character or a space is never part of a return path.
+ */
+function sameOriginTarget(origin: string, path: string | null): string | null {
+	if (path === null || !path.startsWith('/') || path.startsWith('//') || path.includes('\\') || [...path].some(isControlOrSpace)) {
+		return null
+	}
+	const target = new URL(path, origin)
+	return target.origin === origin ? target.toString() : null
+}
+
+function isControlOrSpace(character: string): boolean {
+	const code = character.charCodeAt(0)
+	return code <= 0x20 || code === 0x7f
 }
 
 function invalidKey(): Denial {

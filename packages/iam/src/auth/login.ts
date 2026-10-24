@@ -13,6 +13,7 @@ import { readForm, redirectHeaders, sameOrigin, stringValue } from './http'
 import { startOidc } from './oidc'
 import { type AuthEnv } from './oidc-flight'
 import { currentLogin, endLogin, issueSession, refuseLogin, signedOutRedirect } from './sessions'
+import { identificationRedirect } from './terminals'
 
 export async function handleLogin(
 	request: Request,
@@ -54,6 +55,11 @@ export async function handleLogin(
 				handoff,
 				redirectOrigin: (await loginDestinationFields(services, handoff, redirect)).redirectOrigin,
 			})
+		}
+		// No login here, but a terminal: the application identifies the person at it (ADR-0067 §2).
+		const identification = await identificationRedirect(request, services, handoff, presentation, requestId)
+		if (identification !== null) {
+			return identification
 		}
 	}
 
