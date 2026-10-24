@@ -417,7 +417,8 @@ Worker's `fetch` (`createContractWorker`, `packages/app/src/cloudflare.ts`) remo
   procedure) and a webhook delivery run from the handler to the commit inside its callback (`Invocation.enclose`),
   because while it is open the input gate also holds back the answers to the object's own I/O made outside it. The
   object serves no other event meanwhile, so the SQLite compiler drops every row lock (`FOR UPDATE`, `FOR SHARE`,
-  `SKIP LOCKED`). A read-only
+  `SKIP LOCKED`). The enclosure measures how long it held the object: past 1 s it logs the endpoint and the ms, past
+  5 s it also reports a `transaction_held` event (`FailureReports.held`). A read-only
   invocation (a query, an export) is not enclosed: each of its statements runs in a `storage.transactionSync` of its
   own, which holds nothing across an await and rolls back a statement whose cursor reports `rowsWritten`
   (`DatabaseError` `25006`). The object serves other events while a query awaits, so two of its reads may see different

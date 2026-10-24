@@ -13,7 +13,15 @@ import {
 	TableNode,
 	ValueNode,
 } from 'kysely'
-import { type Database, InvocationTransaction, runFixedStatement, type Session, sessionOf } from '../database'
+import {
+	type Database,
+	InvocationTransaction,
+	runFixedStatement,
+	type Session,
+	sessionOf,
+	TRANSACTION_HELD_LOG_MS,
+	TRANSACTION_HELD_REPORT_MS,
+} from '../database'
 import { DatabaseError, QueryRefusedError } from '../errors'
 import type { GuardContext } from '../guard'
 import { acknowledgement, column, containsPattern, equals, insertNode, lockNode, scopedWhere } from '../nodes'
@@ -357,5 +365,86 @@ describe('an invocation encloses its work in the transaction on SQLite', () => {
 		})
 		await expect(insertItem(own, 'late')).rejects.toThrow(QueryRefusedError)
 		await expect(invocation.session()).rejects.toThrow(QueryRefusedError)
+	})
+})
+
+describe('a writing invocation measures how long it held the object', () => {
+	const insertItem = (into: Session, id: string) => runFixedStatement(into, "insert into items (id, org, title) values (?1, 'o1', ?1)", [id])
+
+	interface Watched {
+		readonly logged: string[]
+		readonly held: number[]
+	}
+
+	type Work = (invocation: InvocationTransaction, advance: (ms: number) => void) => Promise<void>
+
+	/** Runs `work` in an enclosure on a clock the work advances, collecting the log lines and the reported holds. */
+	async function watched(readOnly: boolean, work: Work): Promise<Watched> {
+		let clock = 1_000_000
+		const advance = (ms: number) => {
+			clock += ms
+		}
+		const logged: string[] = []
+		const held: number[] = []
+		const invocation = new InvocationTransaction(database, readOnly, () => clock)
+		const original = console.warn
+		console.warn = (...args: unknown[]) => void logged.push(args.map(String).join(' '))
+		try {
+			await invocation.enclose(() => work(invocation, advance), { site: 'api.notes.create', held: (ms) => void held.push(ms) }).catch(() => undefined)
+		} finally {
+			console.warn = original
+		}
+		return { logged, held }
+	}
+
+	test('a hold over a second logs the site and the ms, and reports nothing below the threshold', async () => {
+		const { logged, held } = await watched(false, async (invocation, advance) => {
+			await insertItem(await invocation.session(), 'a')
+			advance(TRANSACTION_HELD_LOG_MS + 500)
+			await invocation.commit()
+		})
+		expect(logged).toEqual([`fabrika: api.notes.create: held its object's transaction for ${TRANSACTION_HELD_LOG_MS + 500} ms`])
+		expect(held).toEqual([])
+		expect(ids()).toEqual(['a'])
+	})
+
+	test('a hold over the threshold also reports its ms', async () => {
+		const { logged, held } = await watched(false, async (invocation, advance) => {
+			advance(TRANSACTION_HELD_REPORT_MS + 1)
+			await invocation.commit()
+		})
+		expect(logged).toHaveLength(1)
+		expect(held).toEqual([TRANSACTION_HELD_REPORT_MS + 1])
+	})
+
+	test('a fast hold logs and reports nothing', async () => {
+		const { logged, held } = await watched(false, async (invocation, advance) => {
+			advance(TRANSACTION_HELD_LOG_MS)
+			await invocation.commit()
+		})
+		expect({ logged, held }).toEqual({ logged: [], held: [] })
+	})
+
+	test('a read-only invocation holds no transaction and is not measured', async () => {
+		const { logged, held } = await watched(true, async (invocation, advance) => {
+			advance(TRANSACTION_HELD_REPORT_MS * 2)
+			await invocation.commit()
+		})
+		expect({ logged, held }).toEqual({ logged: [], held: [] })
+	})
+
+	test('a hold that rolls back is measured too, whether the work decided it or threw', async () => {
+		const decided = await watched(false, async (invocation, advance) => {
+			await insertItem(await invocation.session(), 'a')
+			advance(TRANSACTION_HELD_REPORT_MS + 2)
+			await invocation.rollback()
+		})
+		const thrown = await watched(false, async (invocation, advance) => {
+			await insertItem(await invocation.session(), 'b')
+			advance(TRANSACTION_HELD_REPORT_MS + 3)
+			throw new Error('handler failed')
+		})
+		expect([decided.held, thrown.held]).toEqual([[TRANSACTION_HELD_REPORT_MS + 2], [TRANSACTION_HELD_REPORT_MS + 3]])
+		expect(ids()).toEqual([])
 	})
 })

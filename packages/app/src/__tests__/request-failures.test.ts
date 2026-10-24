@@ -247,4 +247,34 @@ describe('the report budget', () => {
 		})
 		expect(reports.map((report) => report.tags['request'])).toEqual([undefined, undefined])
 	})
+
+	test('a held transaction takes from the same budget', async () => {
+		const { reports, reporter } = recorder()
+		const failures = new FailureReports(reporter, () => 0)
+		await quietly(async () => {
+			for (let index = 0; index < MAX_FAILURE_REPORTS_PER_MINUTE; index++) {
+				await failures.record(failure(null))
+			}
+		})
+		await failures.held('api.notes.create', 6_000)
+		expect(reports).toHaveLength(MAX_FAILURE_REPORTS_PER_MINUTE)
+	})
+})
+
+describe('a transaction held past the threshold', () => {
+	test('becomes one transaction_held event naming the site and the ms', async () => {
+		const reports: OperationsReport[] = []
+		const failures = new FailureReports({ report: (report) => Promise.resolve(void reports.push(report)) })
+		await failures.held('api.notes.create', 6_250)
+		expect(reports).toEqual([{
+			fingerprint: ['fabrika-transaction-held', 'api.notes.create'],
+			type: 'TransactionHeld',
+			message: "endpoint 'api.notes.create' held its object's transaction for 6250 ms",
+			tags: { endpoint: 'api.notes.create', code: 'transaction_held', held_ms: '6250' },
+		}])
+	})
+
+	test('without an Operations DSN it reports nothing and never rejects', async () => {
+		await expect(new FailureReports(null).held('api.notes.create', 6_250)).resolves.toBeUndefined()
+	})
 })
