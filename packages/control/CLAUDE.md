@@ -306,13 +306,17 @@ other environment, before the provider prepares anything, and the write maps a r
   rotate, and a retired key verifies until its retirement plus the largest `maxDays` the contract had while it signed.
   Every deploy writes `FABRIKA_APP_ORIGIN` (the environment's public origin, or `null`, which removes it).
 - **The ops key is Control's, and the object holds only its digests (`src/ops-key.ts`, ADR-0069).** A non-dry deploy
-  hands `FABRIKA_OPS_KEY_DIGESTS` only when the provider's `opsChannel(access)` says the approved release serves the
-  channel (the release gate is the provider's), and `null` otherwise, which removes it after a downgrade. Each key is
-  sealed under `opsKeyPurpose(app, env, keyId)` and recorded with its digest and `handed_by`, the newest run that handed
-  it while no running version accepted it, in `app_env_ops_keys`; that run's success is the acceptance, so a dry run's
-  never counts. A key at least 15 days old rotates: the deploy hands the old digest and the new. The old key goes only
-  at a deploy after one carrying the new key succeeded, so a failed deploy leaves the running version and the key
-  Control holds usable. `opsKeyFor` answers the newest key the running version accepts. Without a vault a gated deploy fails.
+  of an environment with a domain hands `FABRIKA_OPS_KEY_DIGESTS` only when the provider's `opsChannel(access)` says the
+  approved release serves the channel (the release gate is the provider's), and `null` otherwise, which removes it after
+  a downgrade. The digests are a public variable: a SHA-256 of a 256-bit random key forges nothing. Each key is sealed
+  under `opsKeyPurpose(app, env, keyId)` and recorded in `app_env_ops_keys` with its digest and `handed_by`, the newest
+  run that handed it while no running version accepted it; that run's success is the acceptance, so a dry run's never
+  counts. Every record write is fenced on the run's lease in the same batch. A key at least 15 days old rotates: the
+  deploy hands the old digest and the new. The old key goes only at a deploy after one carrying the new key succeeded,
+  its record first, under the lease, and then its vault row; a ref not sealed under the key's own purpose is never
+  deleted and its record stays. `opsKeysFor` answers the keys Control may present, the newest first and at most two (a
+  pending key, then the accepted one), because a version can run although its run failed later; a caller tries each in
+  turn. Without a vault a gated deploy fails.
 - **No authored value may copy a framework-only variable, and no run log keeps a secret Control handed out.**
   `assertNoFrameworkReference` refuses an app variable or secret VALUE that references a
   `FRAMEWORK_VARIABLE_NAMES` name in any Zerops form (`${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, a

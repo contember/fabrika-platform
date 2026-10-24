@@ -17,7 +17,15 @@ describe('the credential rule', () => {
 			expect(isManagedCredential(name)).toBe(false)
 		}
 		for (
-			const name of ['FABRIKA_IAM_RPC_URL', 'FABRIKA_APP_ORIGIN', 'FABRIKA_CONTRACT_DIGEST', 'FABRIKA_CONNECT_CATALOG_URL', 'FABRIKA_PLATFORM_MAIL_URL']
+			const name of [
+				'FABRIKA_IAM_RPC_URL',
+				'FABRIKA_APP_ORIGIN',
+				'FABRIKA_CONTRACT_DIGEST',
+				'FABRIKA_CONNECT_CATALOG_URL',
+				'FABRIKA_PLATFORM_MAIL_URL',
+				// A digest of a random key forges no key.
+				'FABRIKA_OPS_KEY_DIGESTS',
+			]
 		) {
 			expect(isManagedCredential(name)).toBe(false)
 		}

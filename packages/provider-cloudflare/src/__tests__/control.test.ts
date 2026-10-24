@@ -20,7 +20,7 @@ import {
 	createCloudflareControlProvider,
 } from '..'
 import { checkoutRelativeDirectory, cloudflareRunnerJobSchema, type CloudflareRunRecovery } from '../control'
-import { staleManagedSecrets } from '../managed-secrets'
+import { splitManagedEnvironment } from '../managed-secrets'
 import type { RunnerIamReconcile } from '../runner-protocol'
 
 const normalizeRegistration = (provider: ControlProvider, input: ProviderRegistrationInput): ProviderRegistration => {
@@ -121,7 +121,7 @@ describe('Cloudflare control provider', () => {
 		expect(provider.devEnvironments).toBeUndefined()
 	})
 
-	test("serves the ops channel from the release that gets the composed row, and the key digests' removal follows", () => {
+	test('serves the ops channel from the release that gets the composed row, and writes the key digests as a plain var', () => {
 		const provider = createCloudflareControlProvider({
 			accountId: 'account',
 			apiToken: 'token',
@@ -133,9 +133,13 @@ describe('Cloudflare control provider', () => {
 		})
 		expect(provider.opsChannel?.(APPROVED)).toBe(true)
 		expect(provider.opsChannel?.({ ...APPROVED, checker: '0.8.2' })).toBe(false)
-		// A deploy after a downgrade hands no digests, so the Worker's stale secret is deleted.
-		expect(staleManagedSecrets(['FABRIKA_OPS_KEY_DIGESTS', 'API_KEY'], {})).toEqual(['FABRIKA_OPS_KEY_DIGESTS'])
-		expect(staleManagedSecrets(['FABRIKA_OPS_KEY_DIGESTS'], { FABRIKA_OPS_KEY_DIGESTS: 'sha256:x' })).toEqual([])
+		const digests = `sha256:${'a'.repeat(64)}`
+		// A plain var lives in the generated config, so a deploy after a downgrade, which hands `null`, leaves it out.
+		expect(splitManagedEnvironment(parseManagedEnvironment({ FABRIKA_OPS_KEY_DIGESTS: digests }))).toEqual({
+			vars: { FABRIKA_OPS_KEY_DIGESTS: digests },
+			secrets: {},
+		})
+		expect(splitManagedEnvironment(parseManagedEnvironment({ FABRIKA_OPS_KEY_DIGESTS: null }))).toEqual({ vars: {}, secrets: {} })
 	})
 
 	test('exposes immutable resolution with recorded identity and independently validates registration', async () => {

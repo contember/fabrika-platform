@@ -696,11 +696,12 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		managedEnvironment[FABRIKA_APP_ORIGIN] = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
 		const tokenKeys = dryRun ? null : await reconcileTokenKeys(deps.tokenKeys, app.id, appEnv.env, approvedContract)
 		managedEnvironment[FABRIKA_TOKEN_KEYS] = tokenKeys
-		// Only a release the provider serves the ops channel at gets the digests; `null` removes them after a downgrade.
+		// Only an environment with a domain, at a release the provider serves the ops channel at, gets the digests (ADR-0069);
+		// `null` removes them after a downgrade.
 		const approvedAccess = registration.environment.access
-		const opsChannel = !dryRun && approvedAccess !== undefined && deps.provider.opsChannel?.(approvedAccess) === true
-		const opsKeyDigests = opsChannel ? await reconcileOpsKey(deps, app.id, appEnv.env, runId) : null
-		managedEnvironment[FABRIKA_OPS_KEY_DIGESTS] = opsKeyDigests
+		const hasDomain = appEnv.domain !== null && appEnv.domain !== ''
+		const opsChannel = !dryRun && hasDomain && approvedAccess !== undefined && deps.provider.opsChannel?.(approvedAccess) === true
+		managedEnvironment[FABRIKA_OPS_KEY_DIGESTS] = opsChannel ? await reconcileOpsKey(deps, app.id, appEnv.env, runId, invocation) : null
 		// Parsed once, before any provider effect: a provider writes what it is handed and checks none of it again.
 		const handed = parseManagedEnvironment(managedEnvironment)
 		// A provider removes a managed name it is not handed, so a name missing here would delete the variable.
@@ -714,7 +715,6 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			platformMailKey ?? '',
 			platformSourceKey ?? '',
 			tokenKeys ?? '',
-			...(opsKeyDigests?.split(',') ?? []),
 			...installationMailSecrets(deps.mailTransport ?? NO_INSTALLATION_MAIL, mailEnvironment),
 			// A Zerops build holds the source-map bearer, and the provider relays the build's log.
 			releaseContext?.artifactUpload?.bearer ?? '',

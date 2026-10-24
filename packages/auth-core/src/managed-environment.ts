@@ -51,6 +51,8 @@ const PUBLIC_VARIABLES: ReadonlySet<string> = new Set<FrameworkVariableName>([
 	'FABRIKA_ENVIRONMENT',
 	'FABRIKA_IAM_RPC_URL',
 	FABRIKA_APP_ORIGIN,
+	// SHA-256 of 256-bit random keys: a digest neither is a key nor lets anyone forge one.
+	FABRIKA_OPS_KEY_DIGESTS,
 ])
 
 const PLATFORM_URL_VARIABLES: ReadonlySet<string> = new Set(PLATFORM_RECEIVERS.map((receiver) => platformTransportVariables(receiver).url))

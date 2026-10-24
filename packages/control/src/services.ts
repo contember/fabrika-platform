@@ -21,6 +21,7 @@ import {
 	replayOperationsCatalog,
 } from './operations-catalog'
 import type { OperationsReleaseProjectionDeps } from './operations-releases'
+import { type OpsKeysPort, VaultOpsKeys } from './ops-key'
 import { type PlatformTransportPort, VaultPlatformTransport } from './platform-transport'
 import { type ProxySecrets, VaultProxySecrets } from './proxy-secret'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
@@ -109,6 +110,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		...membershipTransportDeps(env),
 		...platformTransportDeps(env),
 		...tokenKeyDeps(env),
+		...opsKeyDeps(env),
 	}
 }
 
@@ -123,6 +125,11 @@ export function iamSchemaDeps(env: Env): { iamSchema?: IamSchemaPort } {
 /** The token keys live in the vault, so an installation without one keeps none, and a contract with a purpose does not deploy. */
 export function tokenKeyDeps(env: Env): { tokenKeys?: TokenKeysPort } {
 	return env.FABRIKA_CONTROL_VAULT_KEY === undefined ? {} : { tokenKeys: new VaultTokenKeys(repositories(env).tokenKeys, () => vault(env)) }
+}
+
+/** The ops keys live in the vault, so an installation without one keeps none, and a deploy at a gated release fails. */
+export function opsKeyDeps(env: Env): { opsKeys?: OpsKeysPort } {
+	return env.FABRIKA_CONTROL_VAULT_KEY === undefined ? {} : { opsKeys: new VaultOpsKeys(repositories(env).opsKeys, () => vault(env)) }
 }
 
 /**

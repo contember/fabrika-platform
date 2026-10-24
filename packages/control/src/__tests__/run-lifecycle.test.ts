@@ -27,16 +27,18 @@ import { readProviderEnvelope } from '../api/provider-envelope'
 import { getRunLogUseCase } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
 import { OperationsReleaseRepository } from '../db'
+import type { Env } from '../env'
 import type { IamSchemaPort } from '../iam-schema'
-import { VaultOpsKeys } from '../ops-key'
+import { opsKeyPurpose, VaultOpsKeys } from '../ops-key'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
 import { appSecretPurpose, type SecretResolver, VaultSecretResolver } from '../secret-resolver'
+import { buildRunDeps } from '../services'
 import { contractCommits } from './helpers/commits'
-import { createHarness } from './helpers/harness'
+import { createHarness, queryRows } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 import { fixtureCatalogApplied, fixtureProtect, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
-import { createTestVault, fixedProxySecrets } from './helpers/vault'
+import { createTestVault, fixedProxySecrets, testVaultKey } from './helpers/vault'
 
 const vault = await createTestVault()
 const vaultSecrets = new VaultSecretResolver({ vault })
@@ -715,7 +717,6 @@ describe('provider-neutral run lifecycle', () => {
 			FABRIKA_SERVICE_KEY,
 			'FABRIKA_IAM_RPC_KEY',
 			'FABRIKA_TOKEN_KEYS',
-			'FABRIKA_OPS_KEY_DIGESTS',
 		].sort())
 		expect(input.dryRun).toBe(true)
 
@@ -985,6 +986,7 @@ describe('provider-neutral run lifecycle', () => {
 		const { db } = createHarness()
 		const opsKeys = new VaultOpsKeys(db.opsKeys, () => Promise.resolve(vault))
 		const asked: string[] = []
+		let handedInput: ProviderDeployInput | undefined
 		const deploy = async (runId: string, serves: boolean | undefined, dryRun = false): Promise<string | null | undefined> => {
 			const inputs: ProviderDeployInput[] = []
 			const provider = makeProvider(inputs, { state: 'succeeded' })
@@ -994,6 +996,7 @@ describe('provider-neutral run lifecycle', () => {
 			}
 			const deps: RunDeps = { ...makeDeps(db, serves === undefined ? provider : { ...provider, opsChannel }), opsKeys }
 			expect((await executeDeploy(deps, dryRun ? { runId, dryRun } : { runId })).status).toBe('succeeded')
+			handedInput = inputs[0]
 			return inputs[0]?.managedEnvironment[FABRIKA_OPS_KEY_DIGESTS]?.value
 		}
 		// A provider without the capability, and a release it does not serve, get no key.
@@ -1009,14 +1012,54 @@ describe('provider-neutral run lifecycle', () => {
 		expect(issued?.handed_by).toBe(gatedRun)
 		expect(digests).toBe(issued?.digest)
 		expect(parseOpsKeyDigests(digests ?? '')).toEqual([issued?.digest ?? ''])
-		// The issuing deploy succeeded, so Control now calls with the key whose digest it handed.
-		expect(opsKeyDigest((await opsKeys.opsKeyFor('app', 'prod')) ?? '')).toBe(issued?.digest)
+		// The issuing deploy succeeded, so Control calls with the key whose digest it handed; a digest is no credential.
+		expect((await opsKeys.opsKeysFor('app', 'prod')).map(opsKeyDigest)).toEqual([issued?.digest])
+		expect(handedInput?.managedEnvironment[FABRIKA_OPS_KEY_DIGESTS]?.credential).toBe(false)
 
 		// A dry run issues nothing and hands nothing.
 		expect(await deploy(await createNextRun(db), true, true)).toBeNull()
 		// A downgrade hands null, which removes the digests; the key stays for a later upgrade.
 		expect(await deploy(await createNextRun(db), false)).toBeNull()
 		expect(await db.opsKeys.list('app', 'prod')).toHaveLength(1)
+	})
+
+	test('an environment without a domain has no ops channel, so its deploy issues no key', async () => {
+		const { db, sqlite } = createHarness()
+		const runId = await seedRun(db)
+		sqlite.query(`UPDATE app_envs SET domain = NULL WHERE app_id = 'app' AND env = 'prod'`).run()
+		const inputs: ProviderDeployInput[] = []
+		const opsKeys = new VaultOpsKeys(db.opsKeys, () => Promise.resolve(vault))
+		const deps: RunDeps = { ...makeDeps(db, { ...makeProvider(inputs, { state: 'succeeded' }), opsChannel: () => true }), opsKeys }
+		expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
+		expect(inputs[0]?.managedEnvironment[FABRIKA_OPS_KEY_DIGESTS]?.value).toBeNull()
+		expect(await db.opsKeys.list('app', 'prod')).toEqual([])
+	})
+
+	test("the composed run dependencies keep the ops key in the installation's vault", async () => {
+		const harness = createHarness()
+		const { db } = harness
+		const runId = await seedRun(db)
+		// `seedRun` seals the app secrets in another vault than the installation's this test composes.
+		harness.sqlite.query('DELETE FROM app_secrets').run()
+		const inputs: ProviderDeployInput[] = []
+		const env: Env = {
+			DB: harness.d1,
+			REPOSITORIES: db,
+			ASSETS: { fetch: () => Promise.reject(new Error('unexpected asset read')) },
+			RUN_LOGS: memoryLogs().logs,
+			COMMITS: contractCommits('app'),
+			DEPLOY_QUEUE: { send: () => Promise.resolve() },
+			WAIT_UNTIL: () => {},
+			ENVIRONMENT: 'test',
+			FABRIKA_CONTROL_VAULT_KEY: testVaultKey(),
+		}
+		const deps = await buildRunDeps(env, { ...makeProvider(inputs, { state: 'succeeded' }), opsChannel: () => true })
+		expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
+		const [issued] = await db.opsKeys.list('app', 'prod')
+		expect(inputs[0]?.managedEnvironment[FABRIKA_OPS_KEY_DIGESTS]?.value).toBe(issued?.digest)
+		expect(queryRows(harness.sqlite, 'SELECT label FROM vault WHERE id = ?', (issued?.value_ref ?? '').replace(/^vault:/, ''))).toEqual([
+			{ label: opsKeyPurpose('app', 'prod', issued?.key_id ?? '').label },
+		])
 	})
 
 	test('refuses a gated deploy when Control can keep no ops key, and a dry run needs none', async () => {
