@@ -1,6 +1,6 @@
 import { APP_CALLER_PREFIX, type ContractArtifact, type EndpointRow, type FormMountArtifact, isFileShape, type SchemaShape } from '@fabrika/auth-core'
 import { SURFACE_REACHES, type SurfaceEndpointDto, type SurfaceReach } from '@fabrika/control-contract'
-import { attachmentName, crossOriginReach, requirementPhrase, storedFileName } from './diff'
+import { attachmentName, crossOriginReach, opaqueRoots, requirementPhrase, storedFileName } from './diff'
 import { type AccessSnapshot, compareText } from './snapshot'
 
 /** Every endpoint a snapshot publishes, grouped by who reaches it, most exposed first, then by path and method. */
@@ -8,11 +8,11 @@ export function snapshotSurface(snapshot: AccessSnapshot): SurfaceEndpointDto[] 
 	const contract = snapshot.contract
 	if (contract === null) return []
 	return contract.endpoints
-		.map((row) => surfaceEndpoint(contract, row))
+		.map((row) => surfaceEndpoint(contract, new Set(opaqueRoots(contract)), row))
 		.sort((a, b) => reachRank(a.reach) - reachRank(b.reach) || compareText(a.path, b.path) || compareText(a.method, b.method))
 }
 
-function surfaceEndpoint(contract: ContractArtifact, row: EndpointRow): SurfaceEndpointDto {
+function surfaceEndpoint(contract: ContractArtifact, roots: ReadonlySet<string>, row: EndpointRow): SurfaceEndpointDto {
 	return {
 		id: row.id,
 		method: row.method,
@@ -21,7 +21,7 @@ function surfaceEndpoint(contract: ContractArtifact, row: EndpointRow): SurfaceE
 		reach: reachOf(row),
 		callers: [...row.callers],
 		requirement: row.requirement === null ? null : requirementPhrase(row.requirement),
-		notes: notesOf(contract, row),
+		notes: notesOf(contract, roots, row),
 	}
 }
 
@@ -32,8 +32,11 @@ function reachOf(row: EndpointRow): SurfaceReach {
 	return row.callers.includes('machine') ? 'machine' : 'human'
 }
 
-function notesOf(contract: ContractArtifact, row: EndpointRow): string[] {
+function notesOf(contract: ContractArtifact, roots: ReadonlySet<string>, row: EndpointRow): string[] {
 	const notes: string[] = []
+	for (const dimension of assertedValues(row)) {
+		if (roots.has(dimension)) notes.push(`takes any \`${dimension}\` value under an application-wide grant: an opaque root, unchecked`)
+	}
 	if (row.crossOrigin !== undefined) notes.push(`callable from ${crossOriginReach(row.crossOrigin)}`)
 	const file = attachmentName(row)
 	if (file !== null) notes.push(`answers ${file}`)
@@ -45,6 +48,15 @@ function notesOf(contract: ContractArtifact, row: EndpointRow): string[] {
 	if (mount?.kind === 'form') notes.push(...formProtection(mount))
 	if (mount?.kind === 'webhook') notes.push(`verifies a ${mount.scheme} signature`)
 	return notes
+}
+
+/** The dimensions whose value the endpoint reads from the request (`in`, or `on` an input field), each once. */
+function assertedValues(row: EndpointRow): string[] {
+	const requirement = row.requirement
+	if (requirement === null || requirement.kind === 'member') return []
+	const forms = requirement.kind === 'action' ? [requirement.access] : Object.values(requirement.capabilities).map((capability) => capability.access)
+	const dimensions = forms.flatMap((access) => (access.form === 'in' || (access.form === 'on' && access.from !== null) ? [access.dimension] : []))
+	return [...new Set(dimensions)].sort()
 }
 
 /** The kinds of an input's file fields: a file, an optional one, or an array of them. */

@@ -17,6 +17,16 @@ const NOTES_TABLE: TablePolicyArtifact = {
 	columns: { secret: { read: 'notes.delete' } },
 }
 
+const WORKSPACES_TABLE: TablePolicyArtifact = {
+	scope: { mode: 'dimension', dimension: 'workspace', key: 'id', container: null },
+	actions: { read: 'notes.read', insert: null, update: null, delete: null },
+	insert: [],
+	update: [],
+	version: null,
+	createdBy: null,
+	columns: {},
+}
+
 function snapshot(
 	contract = BASE,
 	tables: Readonly<Record<string, TablePolicyArtifact>> = { notes: NOTES_TABLE },
@@ -158,6 +168,19 @@ describe('classifyAccess', () => {
 		}])
 		expect(classification.changes.map((change) => change.line)).toContain('The application becomes the contract application `notes`')
 		expect(classification.changes.map((change) => change.line)).toContain('New role `editor` with `notes.read`, `notes.write`')
+	})
+
+	test('a root dimension no table owns is an opaque root, shown when it is introduced and when it ends', () => {
+		const opaque = 'Dimension `workspace` is an opaque root: an application-wide grant admits any value, unchecked'
+		expect(classifyAccess(EMPTY_SNAPSHOT, snapshot()).changes).toContainEqual({ effect: 'widens', line: opaque })
+		const owned = snapshot(BASE, { notes: NOTES_TABLE, workspaces: WORKSPACES_TABLE })
+		expect(lines(EMPTY_SNAPSHOT, owned).filter((line) => line.includes('opaque root'))).toEqual([])
+		expect(classifyAccess(snapshot(), owned).changes).toEqual([
+			{ effect: 'narrows', line: 'Dimension `workspace` is no longer an opaque root: a value is read from its table' },
+			{ effect: 'widens', line: 'New table policy `workspaces` read with `notes.read`' },
+		])
+		expect(lines(owned, snapshot())).toContain(opaque)
+		expect(classifyAccess(snapshot(), snapshot()).outcome).toBe('none')
 	})
 
 	test('dropping the contract widens: the proxy would stop applying an endpoint table', () => {

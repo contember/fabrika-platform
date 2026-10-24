@@ -139,6 +139,13 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 	for (const [name, dimension] of Object.entries(candidate.dimensions)) {
 		if (!Object.hasOwn(baseline.dimensions, name)) changes.add(...directoryChange(name, undefined, dimension.directory))
 	}
+	compareSet(changes, opaqueRoots(baseline), opaqueRoots(candidate), {
+		added: (name) => widening(`Dimension \`${name}\` is an opaque root: an application-wide grant admits any value, unchecked`),
+		removed: (name) =>
+			Object.hasOwn(candidate.dimensions, name)
+				? narrowing(`Dimension \`${name}\` is no longer an opaque root: a value is read from its table`)
+				: narrowing(`Dimension \`${name}\` is no longer an opaque root`),
+	})
 	compareKeyed(changes, record(baseline.actions), record(candidate.actions), {
 		added: (name) => `New action \`${name}\``,
 		removed: (name) => `Action \`${name}\` is removed`,
@@ -1536,6 +1543,18 @@ function terminalChanges(baseline: ContractArtifact, candidate: ContractArtifact
 			`The application identifies people at enrolled terminals on \`${after}\` and asserts who signs in there, within each terminal's ceiling`,
 		),
 	]
+}
+
+/**
+ * The root dimensions no table owns (S3). The application establishes such a value only by the caller's own grant on
+ * it: an application-wide grant admits any well-formed value, which nothing checks to exist. Derived from the artifact
+ * as the runtime derives the dimensions it locates (`boot`), so every reader's artifact states it without a new field.
+ */
+export function opaqueRoots(artifact: ContractArtifact): string[] {
+	const owned = new Set(Object.values(artifact.tables).flatMap((table) => (table.scope.mode === 'dimension' ? [table.scope.dimension] : [])))
+	return Object.entries(artifact.dimensions)
+		.filter(([name, dimension]) => dimension.in === null && !owned.has(name))
+		.map(([name]) => name)
 }
 
 function dimensionChanges(name: string, from: DimensionArtifact, to: DimensionArtifact): AccessChange[] {
