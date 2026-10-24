@@ -4,6 +4,7 @@ import { api } from '../../access/lib/api'
 import { type AppNames, appText, useAppNames } from '../../access/lib/app-names'
 import { fmtExpiry, shareLinkState } from '../../access/lib/format'
 import { Icon } from '../../components/Icon'
+import { Reading } from '../../components/Reading'
 import { Chip, principalLamp, Status, StatusLamp } from '../../components/Status'
 import { EmptyState } from '../../components/Table'
 import { fmtAgo, fmtDate } from '../../lib/format'
@@ -72,53 +73,59 @@ export default createPage()
 
 				<div className="instrument-cluster">
 					<div className="instrument">
-						<div className="instrument-label">Users</div>
-						<div className="instrument-value">
-							{activeUsers.length}
-							<small>/ {users.length}</small>
-						</div>
-						<div className="instrument-note">
-							{users.length === 0
+						<Reading
+							label="Users"
+							value={
+								<>
+									{activeUsers.length}
+									<small>/ {users.length}</small>
+								</>
+							}
+							note={users.length === 0
 								? <Status lamp="idle">nobody invited</Status>
 								: invited.length > 0
 								? <Status lamp="run">{invited.length} awaiting first sign-in</Status>
 								: <Status lamp="ok">{disabled.length > 0 ? `${disabled.length} disabled` : 'all signed in'}</Status>}
-						</div>
+						/>
 					</div>
 					<div className="instrument">
-						<div className="instrument-label">API keys</div>
-						<div className="instrument-value">
-							{activeKeys.length}
-							<small>/ {apiKeys.length}</small>
-						</div>
-						<div className="instrument-note">
-							<Status lamp={apiKeys.length === 0 ? 'idle' : 'ok'}>
-								{apiKeys.length === 0
-									? 'none provisioned'
-									: apiKeys.length - activeKeys.length > 0
-									? `${apiKeys.length - activeKeys.length} revoked`
-									: 'machines with a name'}
-							</Status>
-						</div>
+						<Reading
+							label="API keys"
+							value={
+								<>
+									{activeKeys.length}
+									<small>/ {apiKeys.length}</small>
+								</>
+							}
+							note={
+								<Status lamp={apiKeys.length === 0 ? 'idle' : 'ok'}>
+									{apiKeys.length === 0
+										? 'none provisioned'
+										: apiKeys.length - activeKeys.length > 0
+										? `${apiKeys.length - activeKeys.length} revoked`
+										: 'machines with a name'}
+								</Status>
+							}
+						/>
 					</div>
 					<div className="instrument">
-						<div className="instrument-label">Share links</div>
-						<div className="instrument-value">
-							{liveLinks.length}
-							<small>/ {shareLinks.length}</small>
-						</div>
-						<div className="instrument-note">
-							<Status lamp={liveLinks.length === 0 ? 'idle' : 'ok'}>
-								{liveLinks.length === 0 ? 'none in circulation' : 'anonymous, revocable'}
-							</Status>
-						</div>
+						<Reading
+							label="Share links"
+							value={
+								<>
+									{liveLinks.length}
+									<small>/ {shareLinks.length}</small>
+								</>
+							}
+							note={
+								<Status lamp={liveLinks.length === 0 ? 'idle' : 'ok'}>
+									{liveLinks.length === 0 ? 'none in circulation' : 'anonymous, revocable'}
+								</Status>
+							}
+						/>
 					</div>
 					<div className="instrument">
-						<div className="instrument-label">Changes · 24 h</div>
-						<div className="instrument-value">{changesToday}</div>
-						<div className="instrument-note">
-							<Status lamp={changesToday > 0 ? 'ok' : 'idle'}>audited writes</Status>
-						</div>
+						<Reading label="Changes · 24 h" value={changesToday} note={<Status lamp={changesToday > 0 ? 'ok' : 'idle'}>audited writes</Status>} />
 					</div>
 				</div>
 
