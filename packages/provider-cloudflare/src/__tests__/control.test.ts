@@ -7,6 +7,7 @@ import type {
 	ProviderRegistrationInput,
 } from '@fabrika/provider-contract'
 import { abortableWait, ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { describeControlProviderConformance } from '@fabrika/provider-contract/conformance'
 import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
@@ -1009,4 +1010,29 @@ describe('Cloudflare control provider', () => {
 		expect(jobs[2]?.operationsOrigin).toBe('https://ingest.example.com')
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[2]).success).toBe(true)
 	})
+})
+
+describeControlProviderConformance('the Cloudflare control provider', {
+	create: (hooks) => {
+		const mutations: string[] = []
+		const stops: string[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			// The runner's preview deploys nothing; any other job deploys the Worker.
+			startRun: async (job) => {
+				if (!job.dryRun) mutations.push(`start:${job.runId}`)
+				hooks.accepted()
+				return { state: 'succeeded' }
+			},
+			cancelRun: async (runId) => {
+				stops.push(`cancel:${runId}`)
+			},
+		})
+		const { dryRun: _dryRun, signal: _signal, events: _events, ...input } = deployInput()
+		return { provider, input, credentials: ['token-1', 'test-runner-key'], mutations: () => mutations, stops: () => stops }
+	},
 })

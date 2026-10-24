@@ -165,3 +165,11 @@ WU5, WU6, WU7 and WU9 are independent of each other. WU8 follows WU7.
   access, and hands the proxy secret to every non-dry deploy behind a namespace proxy or on a provider with
   `applicationHopSecret`. `operationsOrigin` reaches Cloudflare as a new optional job field; the executor still derives
   the origin from the DSN for a job from an older Control, and an older runner strips the field.
+- **WU4.** `packages/provider-contract/src/conformance.ts`: six cases over a harness that reports the cloud's
+  mutations, its stops and the provider's own credentials. A lost lease is simulated as Control does it (the signal
+  aborts, every later event rejects): at the first event, at EACH event of a complete deploy in turn (the sweep reaches
+  Zerops' upload and await-version boundaries, which a single hook did not), and when the fake cloud accepts the
+  operation, which then also calls `reconcile` and `cancel` under the same lost signal. Cancel and checkpoint-recovery
+  semantics differ by design (Zerops leaves a reserved version to `cancel()`, Cloudflare stops its job), so the suite
+  does not fix them. The negative control is `src/__tests__/fixtures/cancelling-provider.ts`, run in a child process;
+  a Zerops wait that cancels on lease loss fails the sweep (checked by hand).

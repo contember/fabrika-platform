@@ -66,6 +66,12 @@ collaborators at the same construction point.
 `resolveSource()` and `deploy()` each take an optional source binding. There is one entry
 point per operation, not a bound and an unbound variant.
 
+**What every provider does is tested once.** `@fabrika/provider-contract/conformance` holds the cases
+every `ControlProvider` passes (a dry run changes nothing, a lost lease stops nothing, nothing an event
+carries holds a credential, a registration normalizes to itself). Each provider's own test calls
+`describeControlProviderConformance` once with a harness over its fake cloud, and keeps its own tests of
+how it drives that cloud: the suite sees only what the harness reports.
+
 **Shared Control code never checks a provider name.** Behaviour that differs by cloud is a
 capability the provider declares or omits. The provider id appears only in the two
 composition roots, in envelope validation, and where the console picks a form by it.
@@ -80,14 +86,14 @@ across versions ([ADR-0044](0044-zerops-delivery-ownership-and-recovery.md)).
 
 **Package layout.** Every package uses the `@fabrika/*` scope. The provider packages:
 
-| Package                                 | Visibility | Contents                                                                               |
-| --------------------------------------- | ---------- | -------------------------------------------------------------------------------------- |
-| `@fabrika/provider-contract`            | public     | `.` the provider contract · `/installation` the open platform-installation contract    |
-| `@fabrika/provider-cloudflare`          | public     | `.` authoring and control adapter · `/cli` · `/installation` · `/runner` (runner job)  |
-| `@fabrika/provider-zerops`              | public     | `.` authoring and control adapter · `/cli` · `/installation` (+ `/topology`)           |
-| `@fabrika/installation-init`            | public     | The operator-side `init` mechanics both `provider-<cloud>/installation` subpaths share |
-| `runner-cloudflare`, `runner-container` | private    | The Cloudflare deploy executor Worker and its container image                          |
-| `platform-artifacts`                    | private    | Zerops installation codegen and generated topology output                              |
+| Package                                 | Visibility | Contents                                                                                                            |
+| --------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------- |
+| `@fabrika/provider-contract`            | public     | `.` the provider contract · `/installation` the open platform-installation contract · `/conformance` its test suite |
+| `@fabrika/provider-cloudflare`          | public     | `.` authoring and control adapter · `/cli` · `/installation` · `/runner` (runner job)                               |
+| `@fabrika/provider-zerops`              | public     | `.` authoring and control adapter · `/cli` · `/installation` (+ `/topology`)                                        |
+| `@fabrika/installation-init`            | public     | The operator-side `init` mechanics both `provider-<cloud>/installation` subpaths share                              |
+| `runner-cloudflare`, `runner-container` | private    | The Cloudflare deploy executor Worker and its container image                                                       |
+| `platform-artifacts`                    | private    | Zerops installation codegen and generated topology output                                                           |
 
 The two composition roots stay inside `@fabrika/control` (`src/index.ts` with `src/platform-cf.ts`
 for Cloudflare, `src/zerops/` for Zerops).

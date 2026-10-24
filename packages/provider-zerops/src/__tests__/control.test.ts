@@ -10,6 +10,7 @@ import type {
 	ProviderSourceBinding,
 } from '@fabrika/provider-contract'
 import { ProviderInvocationAbort, ProviderSecretError } from '@fabrika/provider-contract'
+import { describeControlProviderConformance } from '@fabrika/provider-contract/conformance'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
@@ -1874,4 +1875,40 @@ describe('Zerops ControlProvider lifecycle', () => {
 			{ serviceId: 'service-1', key: 'PLAIN', value: 'pa$$word $notes_PORT ${}', sensitive: true },
 		])
 	})
+})
+
+const READ_CALLS = /^(findService|getAppVersion|getProcess|listServiceEnv|resolve)(:|$)/
+
+describeControlProviderConformance('the Zerops control provider', {
+	create: (hooks) => {
+		const cloud = fresh()
+		const sourceCalls: string[] = []
+		const api = makeApi(cloud)
+		const provider = createTestControlProvider({
+			accessToken: 'zt-secret',
+			sleep: async () => {},
+			api: {
+				...api,
+				buildAndDeployAppVersion: async (input) => {
+					const process = await api.buildAndDeployAppVersion(input)
+					hooks.accepted()
+					return process
+				},
+			},
+			source: makeSource(sourceCalls),
+		})
+		const { dryRun: _dryRun, signal: _signal, events: _events, ...input } = deployInput(cloud)
+		const stopped = (call: string): boolean => call.startsWith('cancelBuild:') || call.startsWith('deleteAppVersion:')
+		return {
+			provider,
+			input,
+			credentials: ['zt-secret', UPLOAD_URL],
+			mutations: () => [
+				...[...cloud.calls, ...sourceCalls].filter((call) => !READ_CALLS.test(call) && !stopped(call)),
+				...cloud.envWrites.map((write) => `putServiceEnv:${write.key}`),
+				...cloud.envDeletes.map((id) => `deleteServiceEnv:${id}`),
+			],
+			stops: () => cloud.calls.filter(stopped),
+		}
+	},
 })
