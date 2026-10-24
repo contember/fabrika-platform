@@ -98,6 +98,22 @@ gaps are defence in depth.
 24. A deploy's write that throws abandons the lease, and so stops the data operation that handed it in. No test covers
     it.
 
+**Merge review of the ops channel.**
+
+25. Control sends the ops key to the domain the registry holds now, not the one the key was handed to with
+    (`packages/control/src/data-operations.ts`, `httpOpsTransport`). Between a domain change and the next deploy, a
+    holder of an app-scoped `app.manage` can point the host at a server they run and receive the key. Record the
+    domain with the key, and call only that one.
+26. The ops row forwards any `Authorization`, a person's `px_` platform key included
+    (`packages/proxy-core/src/authorize.ts`); webhook rows exclude those. Refuse `px_` on the ops row.
+27. `app_env_data_operations` references only `apps` (`0018_data_operations.sql`), so a running record of a deleted
+    environment refuses deploys of a recreated one with the same name. Cascade on `app_envs`.
+28. `data.view` on an environment with a domain but no issued key tries zero keys and answers 502 (`unreachable`),
+    not 409 (`no_channel`).
+29. Every `inspect` counts up to 100,000 rows per table synchronously, and a `data.read` holder can call it without a
+    bound. Cache the view or rate-limit the call.
+30. Deleting an environment leaves its ops keys' vault rows behind, as it does for token keys.
+
 ## Approach / acceptance
 
 Each item lands with a witness that fails before it. Items 12 and 13 need a decision first. Item 14 follows D0 in

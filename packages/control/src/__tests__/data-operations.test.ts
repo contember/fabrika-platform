@@ -584,7 +584,7 @@ describe('data RPC', () => {
 			await repositories.registry.createApp({ id: APP, repoUrl: 'github.com/acme/crm' })
 			await repositories.registry.upsertAppEnv(providerEnvironment(APP, ENV, { domain: 'crm.example.com' }))
 		}
-		return { object, call, seed }
+		return { object, call, seed, repositories, lock: new SqlDeployLocks(harness.d1) }
 	}
 
 	const appGrant = (action: string) => ({ action, scope: { type: 'app', value: APP } })
@@ -613,12 +613,16 @@ describe('data RPC', () => {
 		expect(view.body).toMatchObject({ release: '0.9.0', bootFailure: { at: BOOT_FAILED_AT } })
 		expect(JSON.stringify(view.body)).not.toContain('tenant 7')
 		expect(f.object.sent).toEqual([{ op: 'inspect', content: false }])
-		const started = await f.call(reader, 'data.start', { ...TARGET, kind: 'maintenance', mode: 'read-only' })
-		expect(started).toMatchObject({ status: 200, body: { kind: 'maintenance', state: 'succeeded', targetMode: 'read-only', generation: 1 } })
+		const started = await startMaintenance({ repositories: f.repositories, lock: f.lock, ops: f.object }, {
+			...TARGET,
+			mode: 'read-only',
+			actor: 'user:test',
+		})
+		if (started.kind !== 'driven') throw new Error(`maintenance not driven: ${started.kind}`)
+		expect(started.operation).toMatchObject({ kind: 'maintenance', state: 'succeeded', target_mode: 'read-only', generation: 1 })
 		const listed = await f.call(reader, 'data.operations.list', TARGET)
 		expect(listed.status).toBe(200)
-		const id = typeof started.body === 'object' && started.body !== null && 'id' in started.body ? started.body.id : null
-		const got = await f.call(reader, 'data.operations.get', { operationId: id })
+		const got = await f.call(reader, 'data.operations.get', { operationId: started.operation.id })
 		expect(listed.body).toEqual({ items: [got.body], nextCursor: null })
 		expect(typeof got.body === 'object' && got.body !== null ? Object.keys(got.body).sort() : null).toEqual([
 			'actor',
@@ -647,6 +651,26 @@ describe('data RPC', () => {
 		const view = await f.call(authWithActions(['data.read']), 'data.view', TARGET)
 		expect(view.status).toBe(502)
 		expect(JSON.stringify(view.body)).not.toContain('tenant 7')
+	})
+
+	test('data.start and data.recover answer 501 until an object serves state, and leave the environment deployable', async () => {
+		// An operation no object can acknowledge would stay running, and a running record refuses every deploy.
+		const f = fixture()
+		await f.seed()
+		const manager = authWithPermissions([appGrant('data.read'), appGrant('data.manage')])
+		for (
+			const [method, input] of [
+				['data.start', { ...TARGET, kind: 'maintenance', mode: 'read-only' }],
+				['data.start', { ...TARGET, kind: 'maintenance', mode: 'open' }],
+				['data.start', { ...TARGET, kind: 'backup' }],
+				['data.recover', { ...TARGET, operationId: uuidv7(), resolution: 'open' }],
+			] as const
+		) {
+			expect((await f.call(manager, method, input)).status).toBe(501)
+		}
+		expect(f.object.sent).toEqual([])
+		expect(await recordedMaintenance({ repositories: f.repositories }, TARGET)).toBe('open')
+		expect((await f.call(manager, 'data.operations.list', TARGET)).body).toEqual({ items: [], nextCursor: null })
 	})
 
 	test('an environment the caller may not act on is the same 404 as one that does not exist', async () => {
