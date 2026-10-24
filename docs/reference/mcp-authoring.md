@@ -303,6 +303,10 @@ assertion and never accepts a request without one from that client. IAM verifies
 
 IAM caches a key set for five minutes. An assertion with an unknown `kid` refetches it, at most once per 30 s.
 
+A revocation without an assertion needs only a registered client id, as RFC 7009 allows a public client: it revokes
+only a token bound to that client, so it never waits on the document's host. It is refused when the document is
+known to declare `private_key_jwt`.
+
 ## Locally
 
 The local stack runs MCP off. Set `FABRIKA_LOCAL_MCP_CLIENTS_JSON` (same shape) before
