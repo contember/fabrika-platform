@@ -41,20 +41,25 @@ const AUDIT_PAGES = 3
  * Null when this operator can't read the log or IAM is unreachable.
  */
 export async function recentAuditChanges(wanted: number, fetcher: RpcFetch = fetch): Promise<IamAuditEventDto[] | null> {
-	const api = quietIamClient(fetcher)
-	const changes: IamAuditEventDto[] = []
-	let before: string | undefined
 	try {
-		for (let page = 0; page < AUDIT_PAGES && changes.length < wanted; page++) {
-			const list = await api.audit.list(before === undefined ? { limit: AUDIT_PAGE } : { limit: AUDIT_PAGE, before })
-			changes.push(...list.items.filter((event) => !AUDIT_READ_ACTIONS.has(event.action)))
-			if (list.nextCursor === null) break
-			before = list.nextCursor
-		}
-		return changes.slice(0, wanted)
+		return (await recentAuditChangePage(wanted, fetcher)).items
 	} catch {
 		return null
 	}
+}
+
+/** A bounded scan is not an empty history. The overview shows when reads exhausted the scan budget. */
+export async function recentAuditChangePage(wanted: number, fetcher: RpcFetch = fetch) {
+	const api = quietIamClient(fetcher)
+	const changes: IamAuditEventDto[] = []
+	let before: string | undefined
+	for (let page = 0; page < AUDIT_PAGES; page++) {
+		const list = await api.audit.list({ limit: AUDIT_PAGE, ...(before === undefined ? {} : { before }) })
+		changes.push(...list.items.filter((event) => !AUDIT_READ_ACTIONS.has(event.action)))
+		if (changes.length >= wanted || list.nextCursor === null) return { items: changes.slice(0, wanted), limited: false }
+		before = list.nextCursor
+	}
+	return { items: changes, limited: true }
 }
 
 /**

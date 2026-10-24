@@ -4,23 +4,31 @@ import { mayDo } from '../../../lib/console-access'
 import { consoleSession } from '../../../lib/session'
 import { operationsClient } from '../../../operations/client'
 import { PageHead } from '../../../operations/components/PageHead'
-import { ErrorsView } from '../../../operations/views/Errors'
+import { ErrorsView, issueFiltersFromQuery, issueQuery } from '../../../operations/views/Errors'
 
 export default createPage()
-	.loader(async () => {
+	.params({ window: '?string', source: '?string' })
+	.loader(async ({ params }) => {
+		const filters = issueFiltersFromQuery(
+			{ status: 'open', window: params.window ?? '24h', ...(params.source ? { source: params.source } : {}) },
+			'',
+			[],
+		)
 		const [issues, sources, { access }] = await Promise.all([
-			operationsClient.issues({ status: 'open', window: '24h', assignee: 'all', sort: 'recent', limit: 50 }),
+			operationsClient.issues(issueQuery(filters)),
 			operationsClient.sources(),
 			consoleSession(),
 		])
-		return { issues, sources: sources.items, triages: mayDo(access, OPERATIONS_ACTIONS.TRIAGE) }
+		return { issues, filters, sources: sources.items, triages: mayDo(access, OPERATIONS_ACTIONS.TRIAGE) }
 	})
 	.route('/operations/errors')
 	.render(({ data, invalidate }) => (
 		<>
 			<PageHead title="Errors" description="Grouped failures ordered by recency and operator attention." />
 			<ErrorsView
+				key={`${data.filters.sourceId}:${data.filters.window}`}
 				initialPage={data.issues}
+				initialFilters={data.filters}
 				sources={data.sources}
 				onQuery={(query) => operationsClient.issues(query)}
 				{...(data.triages

@@ -34,9 +34,9 @@ export const PAGE_STYLE = `
 	--control-rule: rgba(14, 20, 32, 0.16);
 	--control-hover: #f2f4f7;
 	--ink: #0e1117;
-	--ink-2: #454d5a;
-	--ink-3: #6a7280;
-	--ink-4: #949ba7;
+	--ink-2: #343d4a;
+	--ink-3: #4b5563;
+	--ink-4: #596372;
 	--brand: #2544c2;
 	--brand-hover: #1e389f;
 	--brand-on: #ffffff;

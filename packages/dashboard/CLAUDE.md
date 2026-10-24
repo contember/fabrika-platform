@@ -61,8 +61,13 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   Access-only widgets (pickers, grant grid, JSON view) written in these tokens. Do not put base, shell,
   table, button or badge rules there.
 - **One copy of each shared piece.** `components/` (`Icon`, `Modal`, `Table`, `ConfirmDialog`, `Status`,
-  `RouteError`) and `lib/format.ts` serve all three planes. Formatters take epoch **seconds**;
+  `RouteError`, `Reading`, `FilterGroup`) and `lib/format.ts` serve all three planes. Formatters take epoch **seconds**;
   Operations timestamps are milliseconds, so divide by 1000 at the call site.
+- The console Overview reads independent planes through `lib/overview.ts`, without an auth bounce. A refusal,
+  an outage and an empty answer stay distinct. Runtime health comes from enabled HTTP checks; publication comes
+  from the environment's `publishedRunId`, never a recent-run guess. Active runs use the server-side status filter.
+  Bounded histories disclose their limits. The error chart covers received occurrences of visible open errors over
+  24 hours, the series Operations actually returns. Refresh runs once a minute while the page is visible.
 - **The Operations layout keeps its own outage screen** ("Operations is unavailable" / "Retry
   connection"), not `RouteError`: an Operations outage must read as bounded to its plane
   (`tests/browser/operations-outage-isolation.test.ts`).
