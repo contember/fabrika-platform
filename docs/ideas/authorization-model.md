@@ -146,7 +146,7 @@ declared relation, read from stored data. An operation declares the actor kinds 
 
 Conformant today: allow-only grants; member roles and `assignableBy` with the same-node rule, and delegated grants
 clamped to the expiry of the grants that authorize them (`packages/iam/src/membership.ts`); chains read from stored data in the application (`packages/app/src/implement/dispatch.ts`);
-lists derived from the table policy and pinned by the query guard (`packages/db/src/store.ts`, `guard.ts`); writes
+lists derived from the table policy, including grants on the listed resource's own dimension, and pinned by the query guard (`packages/db/src/store.ts`, `guard.ts`); writes
 conditioned on the chain with `FOR SHARE` on the destination; not-found for a refused `on` binding; workloads holding
 only their declared actions (`packages/iam/src/tokens.ts`); share links and anonymous keys re-checked against their issuer
 at every mint (`issuerAuthority`); exact actions only at a contract application (`exactActions`, `packages/iam/src/resolve.ts`,
@@ -157,7 +157,6 @@ surface as admitting any value unchecked, derived by Control from the artifact e
 
 Gaps:
 
-- An `over` list leaves out grants on the listed resource's own dimension (S4).
 - A failed or pending IAM reconcile after a deploy leaves a narrowing unapplied while the new version serves. Refusing
   requires the proxy to compare IAM's schema revision, carried as an additive token claim, with the revision the
   deployment expects.
