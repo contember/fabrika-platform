@@ -65,7 +65,7 @@ import {
 import { isPolicyOrigin, MAX_CSP_ORIGINS, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
 import { CONTRACT_APP_ID_PATTERN as APP_ID } from './app-id'
-import { contractArtifactSchema } from './artifact-schema'
+import { contractArtifactSchema, RESERVED_FILE_KIND_PREFIX } from './artifact-schema'
 import {
 	type AccessDeclaration,
 	type Builder,
@@ -144,8 +144,6 @@ const TURNSTILE_CHALLENGE_FIELDS = ['provider', 'secret', 'siteKey', 'action']
 const ALTCHA_CHALLENGE_FIELDS = ['provider', 'secret', 'action', 'cost', 'maxAgeMs']
 /** Tables the framework keeps in the application's schema; no site reaches them unscoped. */
 const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
-/** A file's object key starts with its kind: the framework keeps its own objects in the files bucket under this prefix. */
-export const RESERVED_FILE_KIND_PREFIX = '__fabrika'
 /** The most origins one site calls: a site that reaches more is an integration hub, which a connector import serves. */
 const MAX_EGRESS_ORIGINS = 16
 const DECLARED_ALLOWED =

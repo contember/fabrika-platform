@@ -18,7 +18,7 @@ import {
 	type StoredFiles,
 } from '@fabrika/db/framework'
 import { type FileObjectStore, type StoredObject, uuidv7 } from '@fabrika/platform'
-import { RESERVED_FILE_KIND_PREFIX } from '../contract/build'
+import { RESERVED_FILE_KIND_PREFIX } from '../contract/artifact-schema'
 import type { FileRef } from '../contract/file'
 import { HttpError, NotFoundError } from '../errors'
 import { CapabilityRefusedError } from '../implement/capability'
@@ -104,6 +104,8 @@ export class StoredFileKinds {
 	readonly #files: StoredFiles
 	readonly #columns: readonly FileColumnRef[]
 	readonly #retentionMs: number
+	/** Serializes each object deletion of the sweep with a cancel, so no deletion is in flight once a cancel resolves. */
+	#deletions: Promise<void> = Promise.resolve()
 
 	constructor(kinds: readonly Kind[], store: FileObjectStore, files: StoredFiles, columns: readonly FileColumnRef[], retentionMs: number) {
 		this.#kinds = new Map(kinds.map((kind) => [kind.name, kind]))
@@ -325,11 +327,24 @@ export class StoredFileKinds {
 		return new FileDownload({ body: object.body, size: file.size, contentType: file.type, name: file.name })
 	}
 
+	#serialized<T>(work: () => Promise<T>): Promise<T> {
+		const result = this.#deletions.then(work)
+		this.#deletions = result.then(() => undefined, () => undefined)
+		return result
+	}
+
+	/**
+	 * Cancels the tombstones of `objectKeys`, so their objects stay: a restore cancels every key its restored rows
+	 * reference. Once it resolves, no deletion of this sweep is in flight. Answers how many it cancelled.
+	 */
+	cancelDeletions(objectKeys: readonly string[]): Promise<number> {
+		return this.#serialized(() => this.#files.cancelDeletions(objectKeys))
+	}
+
 	/**
 	 * The sweep: it adopts the migrated files a declared column references, then removes, batch by batch, every file past
 	 * the grace that no declared column references: its row and the record of its object in one transaction (the foreign
-	 * key keeps a referenced one). Last it deletes each recorded object past the retention window, then its record; a
-	 * deletion a crash interrupted is finished the same way.
+	 * key keeps a referenced one). Last it claims each recorded object past the retention window, then deletes it.
 	 */
 	async sweep(signal: AbortSignal): Promise<void> {
 		let step = 'rows_read_failed'
@@ -344,14 +359,19 @@ export class StoredFileKinds {
 				}
 				more = batch.length === SWEEP_BATCH
 			}
+			const cutoff = new Date(Date.now() - this.#retentionMs)
 			for (let more = true; more && !signal.aborted;) {
 				step = 'rows_read_failed'
-				const keys = await this.#files.dueDeletions(SWEEP_BATCH, this.#retentionMs)
+				const keys = await this.#files.dueDeletions(SWEEP_BATCH, cutoff)
 				for (const key of keys) {
-					step = 'object_delete_failed'
-					await this.#store.delete(key)
-					step = 'deletion_record_failed'
-					await this.#files.forgetDeletion(key)
+					await this.#serialized(async () => {
+						step = 'deletion_claim_failed'
+						// A crash or a failed delete after the claim leaks this object's bytes; it loses no data.
+						if (await this.#files.claimDeletion(key, cutoff)) {
+							step = 'object_delete_failed'
+							await this.#store.delete(key)
+						}
+					})
 				}
 				more = keys.length === SWEEP_BATCH
 			}

@@ -113,6 +113,15 @@ describe('a reserved file kind', () => {
 		}
 		expect(() => compileContract(named('fabrika'), {})).not.toThrow()
 	})
+
+	test('a current artifact that carries one does not parse', () => {
+		const artifact = compileContract(named('attachments'), {})
+		const { attachments, ...others } = artifact.fileKinds ?? {}
+		expect(() => parseContractArtifact({ ...artifact, fileKinds: { ...others, __fabrika_backups: attachments } })).toThrow(
+			'a file kind name the framework reserves (__fabrika*)',
+		)
+		expect(parseContractArtifact(artifact)).toEqual(artifact)
+	})
 })
 
 describe('compileContract over defineTables output', () => {

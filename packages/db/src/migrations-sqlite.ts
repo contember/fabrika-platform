@@ -129,4 +129,10 @@ CREATE TABLE ${FILE_DELETIONS_TABLE} (
 ) STRICT;
 `,
 	}),
+	Object.freeze({
+		name: '0003_file_deletions_recorded_at.sql',
+		sql: `-- A queued key is a tombstone kept for the retention window: the sweep reads the due ones by age, not the whole queue.
+CREATE INDEX ${FILE_DELETIONS_TABLE}_recorded_at ON ${FILE_DELETIONS_TABLE} (recorded_at, object_key);
+`,
+	}),
 ])
