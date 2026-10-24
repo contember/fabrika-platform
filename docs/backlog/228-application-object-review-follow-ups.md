@@ -113,6 +113,10 @@ gaps are defence in depth.
 29. Every `inspect` counts up to 100,000 rows per table synchronously, and a `data.read` holder can call it without a
     bound. Cache the view or rate-limit the call.
 30. Deleting an environment leaves its ops keys' vault rows behind, as it does for token keys.
+31. `servesOps` counts a prerelease as its minor, so a Cloudflare environment pinned to 0.9.0-dev.0 to 0.9.0-dev.4 gets the
+    ops row, the key digests and a required vault, although those prereleases were published before the object served
+    the ops channel. The ops row then reaches an application that answers no ops request. Gate on the first release
+    that ships the ops handler, prerelease included.
 
 ## Approach / acceptance
 
