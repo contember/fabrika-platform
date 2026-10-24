@@ -1,5 +1,6 @@
 import { Link } from '@buzola/router'
 import { type ReactNode } from 'react'
+import { auditActionLabel } from '../../access/lib/audit-labels'
 import { mayOpen } from '../../lib/console-access'
 import { fmtAgo, fmtDuration, shortRef, shortSha } from '../../lib/format'
 import { boundedCount, type OverviewData } from '../../lib/overview'
@@ -60,23 +61,6 @@ export function InFlight({ data }: { data: OverviewData }) {
 	)
 }
 
-const AUDIT_TITLES: Record<string, string> = {
-	'iam.principal.invite': 'User invited',
-	'iam.principal.create': 'Principal created',
-	'iam.principal.enable': 'User enabled',
-	'iam.principal.disable': 'User disabled',
-	'iam.principal.promote': 'User promoted',
-	'iam.grant.create': 'Role granted',
-	'iam.grant.revoke': 'Role revoked',
-	'iam.apikey.create': 'API key issued',
-	'iam.apikey.rotate': 'API key rotated',
-	'iam.apikey.revoke': 'API key revoked',
-	'iam.member.accept': 'Invitation accepted',
-	'iam.member.assign': 'Member assigned',
-	'iam.member.revoke': 'Member removed',
-	'iam.password.enrollment.complete': 'Password set',
-}
-
 export function RecentChanges({ data }: { data: OverviewData }) {
 	const changes: { id: string; time: number; icon: IconName; title: ReactNode; note: string }[] = []
 	for (const run of data.runs.data?.items ?? []) {
@@ -104,7 +88,7 @@ export function RecentChanges({ data }: { data: OverviewData }) {
 			id: `audit:${event.id}`,
 			time: event.createdAt,
 			icon: 'shield',
-			title: <Link to="access/audit">{AUDIT_TITLES[event.action] ?? event.action}</Link>,
+			title: <Link to="access/audit" title={event.action}>{auditActionLabel(event.action)}</Link>,
 			note: `${event.principalLabel ?? 'Unknown actor'} · ${event.resourceId ?? event.resourceType}`,
 		})
 	}

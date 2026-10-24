@@ -2,6 +2,7 @@ import { createPage, Link } from '@buzola/router'
 import type { ApiKeyDto, AuditEventDto, PrincipalListItem, ShareLinkListItem } from '@fabrika/iam-contract'
 import { api } from '../../access/lib/api'
 import { type AppNames, appText, useAppNames } from '../../access/lib/app-names'
+import { auditActionLabel } from '../../access/lib/audit-labels'
 import { fmtExpiry, shareLinkState } from '../../access/lib/format'
 import { Icon } from '../../components/Icon'
 import { Reading } from '../../components/Reading'
@@ -373,7 +374,7 @@ function AuditRow({ event }: { event: AuditEventDto }) {
 		<Link to="access/audit" params={{ requestId: event.requestId }} className="feed-row">
 			<span className="feed-main">
 				<span className="feed-title">
-					<code className="truncate">{event.action}</code>
+					<span className="truncate" title={event.action}>{auditActionLabel(event.action)}</span>
 				</span>
 				<span className="feed-meta">
 					<span className="truncate">{event.credentialId === null ? event.principalLabel : `credential ${event.credentialId}`}</span>
