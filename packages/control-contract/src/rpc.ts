@@ -293,11 +293,12 @@ export type MaintenanceMode = 'open' | 'read-only' | 'closed' | 'inspect'
 export type DataOperationKind = 'maintenance' | 'backup' | 'migrate' | 'recovery' | 'restore'
 
 /**
- * Where an operation stands: `restrict` publishes a generation in a restricting mode, `backup` and `verify` take and
- * check a consistent backup, `deploy` runs the operation's own deploy, `migrate` runs the pending migrations, and
- * `open` publishes the generation that opens the object.
+ * Where an operation stands: `reconcile` reads the record and the object's published state (a recovery's first step),
+ * `restrict` publishes a generation in a restricting mode, `backup` and `verify` take and check a consistent backup,
+ * `deploy` runs the operation's own deploy, `migrate` runs the pending migrations, `resume` continues the interrupted
+ * operation from its recorded step, and `open` publishes the generation that opens the object.
  */
-export type DataOperationStep = 'restrict' | 'backup' | 'verify' | 'deploy' | 'migrate' | 'open'
+export type DataOperationStep = 'reconcile' | 'restrict' | 'backup' | 'verify' | 'deploy' | 'migrate' | 'resume' | 'open'
 
 export type DataOperationState = 'running' | 'succeeded' | 'failed'
 

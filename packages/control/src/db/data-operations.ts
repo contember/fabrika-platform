@@ -7,8 +7,11 @@ export type MaintenanceMode = 'open' | 'read-only' | 'closed' | 'inspect'
 
 export type DataOperationKind = 'maintenance' | 'backup' | 'migrate' | 'recovery' | 'restore'
 
-/** `restrict` and `open` publish a generation; `backup`, `verify`, `deploy` and `migrate` run between them. */
-export type DataOperationStep = 'restrict' | 'backup' | 'verify' | 'deploy' | 'migrate' | 'open'
+/**
+ * `restrict` and `open` publish a generation; `backup`, `verify`, `deploy` and `migrate` run between them. A recovery
+ * first `reconcile`s the record with the object's published state, and `resume` hands back to the interrupted operation.
+ */
+export type DataOperationStep = 'reconcile' | 'restrict' | 'backup' | 'verify' | 'deploy' | 'migrate' | 'resume' | 'open'
 
 export type DataOperationState = 'running' | 'succeeded' | 'failed'
 

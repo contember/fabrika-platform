@@ -7,7 +7,7 @@ CREATE TABLE app_env_data_operations (
 	app_id      TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
 	env         TEXT NOT NULL,
 	kind        TEXT NOT NULL CHECK (kind IN ('maintenance', 'backup', 'migrate', 'recovery', 'restore')),
-	step        TEXT NOT NULL CHECK (step IN ('restrict', 'backup', 'verify', 'deploy', 'migrate', 'open')),
+	step        TEXT NOT NULL CHECK (step IN ('reconcile', 'restrict', 'backup', 'verify', 'deploy', 'migrate', 'resume', 'open')),
 	target_mode TEXT NOT NULL CHECK (target_mode IN ('open', 'read-only', 'closed', 'inspect')),
 	generation  INTEGER NOT NULL CHECK (generation > 0),
 	state       TEXT NOT NULL CHECK (state IN ('running', 'succeeded', 'failed')),

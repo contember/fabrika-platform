@@ -193,6 +193,16 @@ for (const backend of backends) {
 			expect(await operations.get(created.id)).toMatchObject({ step: 'restrict', target_mode: 'read-only', generation: 2 })
 		})
 
+		test('a recovery reconciles, fences in closed, then resumes', async () => {
+			const { operations, locks } = await open()
+			const fence = await lease(locks)
+			const created = await operations.create(input({ kind: 'recovery', step: 'reconcile', targetMode: 'closed' }), fence)
+			if (created === null) throw new Error('not created')
+			expect(await operations.advance(created.id, { expectedStep: 'reconcile', step: 'restrict', generation: 2 }, fence)).toBe(true)
+			expect(await operations.advance(created.id, { expectedStep: 'restrict', step: 'resume' }, fence)).toBe(true)
+			expect(await operations.get(created.id)).toMatchObject({ kind: 'recovery', step: 'resume', target_mode: 'closed', generation: 2 })
+		})
+
 		test('a recorded generation only rises', async () => {
 			const { operations, locks } = await open()
 			const fence = await lease(locks)
