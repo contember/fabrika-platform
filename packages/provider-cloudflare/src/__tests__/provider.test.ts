@@ -2,7 +2,7 @@ import { schemaFromContract } from '@fabrika/app/contract'
 import { type AppActionDef, type AppEnvironment, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { contractProxyTable, isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, symlinkSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -30,6 +30,22 @@ import {
 import type { PlatformIamTarget } from '../provider'
 import { CLOUDFLARE_PROXY_WORKER_DIR, PROXY_MANIFEST_DEFINE, proxyManifestJson } from '../proxy'
 import type { RunnerOutcomeFile } from '../runner-protocol'
+
+/** Link the application's CLI where the checkout's `bun install` would, under `dir`. */
+const withApplicationCli = async (dir: string): Promise<string> => {
+	const cli = join(dir, 'node_modules', '.bin', 'fabrika')
+	await mkdir(dirname(cli), { recursive: true })
+	await writeFile(cli, '')
+	return cli
+}
+
+/** The checkout on disk the runner installed: the entry build looks for the application's CLI in it. */
+const REPO = await mkdtemp(join(tmpdir(), 'fabrika-checkout-'))
+await withApplicationCli(join(REPO, 'app'))
+
+afterAll(async () => {
+	await rm(REPO, { recursive: true, force: true })
+})
 
 interface Recorded {
 	readonly commands: CommandSpec[]
@@ -91,13 +107,14 @@ const makeCollaborators = (
 	rec: Recorded,
 	appConfig: CloudflareAppConfig,
 	commandResult: (spec: CommandSpec) => CommandResult = succeeded,
-	checkoutDir = '/repo/app',
+	checkoutDir = `${REPO}/app`,
 	runCommand?: CommandRunner,
 	generatedServices?: GeneratedService[],
 	checkoutContract: ContractArtifact | null = null,
+	expectedConfigPath = 'fabrika.config.ts',
 ): CloudflareCollaborators => ({
 	loadConfig: async (_cwd, configPath) => {
-		expect(configPath).toBe('fabrika.config.ts')
+		expect(configPath).toBe(expectedConfigPath)
 		return { config: appConfig, cwd: checkoutDir }
 	},
 	readContract: async (root) => {
@@ -146,6 +163,9 @@ const deploy = (
 		readonly stateNamespace?: string
 		readonly env?: string
 		readonly checkoutDir?: string
+		/** Where the runner installed the checkout: the parent of `checkoutDir` by default. */
+		readonly cwd?: string
+		readonly configPath?: string
 		readonly generatedServices?: GeneratedService[]
 		/** What `fabrika.contract.ts` in the checkout reads as; none by default. */
 		readonly checkoutContract?: ContractArtifact
@@ -175,6 +195,7 @@ const deploy = (
 			options.runCommand,
 			options.generatedServices,
 			options.checkoutContract,
+			options.configPath,
 		),
 		...(options.platformResources === undefined ? {} : { platformResources: options.platformResources }),
 		...(options.platformIam === undefined ? {} : { platformIam: options.platformIam }),
@@ -187,8 +208,8 @@ const deploy = (
 		domain: options.domain ?? 'stage.example.com',
 		...(options.returnOrigins === undefined ? {} : { returnOrigins: options.returnOrigins }),
 		...(options.crossOrigins === undefined ? {} : { crossOrigins: options.crossOrigins }),
-		cwd: '/repo',
-		configPath: 'fabrika.config.ts',
+		cwd: options.cwd ?? dirname(options.checkoutDir ?? `${REPO}/app`),
+		configPath: options.configPath ?? 'fabrika.config.ts',
 		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
 		secrets: options.secrets ?? {},
 		vars: {},
@@ -220,6 +241,7 @@ const fixtures: string[] = []
 const assetsCheckout = async (build: (assets: string) => Promise<void>): Promise<string> => {
 	const root = await mkdtemp(join(tmpdir(), 'fabrika-assets-'))
 	fixtures.push(root)
+	await withApplicationCli(root)
 	await writeFile(join(root, 'secret.txt'), 'not for the public')
 	const assets = join(root, 'public')
 	await mkdir(assets)
@@ -315,14 +337,14 @@ describe('Cloudflare provider', () => {
 			SECRET_LIST,
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
-		expect(rec.commands[0]?.cwd).toBe('/repo/app/worker')
-		expect(rec.commands[1]?.cwd).toBe('/repo/app')
-		expect(rec.commands[2]?.cwd).toBe('/repo/app/worker')
+		expect(rec.commands[0]?.cwd).toBe(`${REPO}/app/worker`)
+		expect(rec.commands[1]?.cwd).toBe(`${REPO}/app`)
+		expect(rec.commands[2]?.cwd).toBe(`${REPO}/app/worker`)
 		// The proxy is deployed from the platform's own copy of this package, the application from the checkout.
 		expect(rec.commands[3]?.cwd).toBe(CLOUDFLARE_PROXY_WORKER_DIR)
-		expect(rec.commands[4]?.cwd).toBe('/repo/app/worker')
-		expect(rec.commands[5]?.cwd).toBe('/repo/app/worker')
-		expect(rec.commands[6]?.cwd).toBe('/repo/app/worker')
+		expect(rec.commands[4]?.cwd).toBe(`${REPO}/app/worker`)
+		expect(rec.commands[5]?.cwd).toBe(`${REPO}/app/worker`)
+		expect(rec.commands[6]?.cwd).toBe(`${REPO}/app/worker`)
 	})
 
 	test('loads the checkout config and preserves the canonical Cloudflare plan', async () => {
@@ -363,7 +385,7 @@ describe('Cloudflare provider', () => {
 		expect(rec.provisions).toHaveLength(1)
 		expect(rec.provisions[0]?.accountId).toBe('acc-1')
 		expect(rec.provisions[0]?.apiToken).toBe('tok-1')
-		expect(rec.provisions[0]?.cwd).toBe('/repo/app/worker')
+		expect(rec.provisions[0]?.cwd).toBe(`${REPO}/app/worker`)
 		expect(rec.provisions[0]?.stateNamespace).toBe('demo-state')
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
 			['sh', '-c', 'bun run build'],
@@ -958,6 +980,7 @@ describe('Cloudflare provider', () => {
 	test('refuses the deploy when the assets directory is itself a symbolic link', async () => {
 		const checkoutDir = await mkdtemp(join(tmpdir(), 'fabrika-assets-'))
 		fixtures.push(checkoutDir)
+		await withApplicationCli(checkoutDir)
 		await symlink('/etc', join(checkoutDir, 'public'))
 		const result = await deploy(rec, assetsApp(), { checkoutDir })
 		expect(stepError(result, 'deploy-worker')).toContain(
@@ -1497,7 +1520,7 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 			['wrangler', 'secret', 'delete', 'FABRIKA_TOKEN_KEYS'],
 		])
 		const deletes = rec.commands.filter((command) => command.args[1] === 'delete')
-		expect(deletes.every((command) => command.stdin === '' && command.cwd === '/repo/app')).toBe(true)
+		expect(deletes.every((command) => command.stdin === '' && command.cwd === `${REPO}/app`)).toBe(true)
 	})
 
 	test('a platform component sweeps no secret: its own carry framework names', async () => {
@@ -1604,7 +1627,7 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 })
 
 /** The application's own CLI, as the checkout's `bun install` puts it in the application directory. */
-const APP_CLI = '/repo/app/node_modules/.bin/fabrika'
+const APP_CLI = `${REPO}/app/node_modules/.bin/fabrika`
 
 const APP_BUILD = [APP_CLI, 'app', 'build', '--provider=cloudflare', '--config=fabrika.config.ts']
 
@@ -1645,13 +1668,66 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 		expect(rec.provisions).toEqual([])
 	})
 
-	test("the build step runs the authored pipeline, then the application's own `fabrika app build`, without platform credentials", async () => {
+	test("the build step runs the authored pipeline, then the application's own `fabrika app build`", async () => {
 		const result = await deploy(rec, config({ pipeline: { build: 'bun run build' } }))
 		expect(result.status).toBe('succeeded')
 		expect(result.steps.map((step) => step.id)).toEqual(['build', 'provision-resources', 'deploy-worker', 'reconcile-schema'])
 		expect(rec.commands.slice(0, 2).map((command) => [command.command, ...command.args])).toEqual([['sh', '-c', 'bun run build'], APP_BUILD])
-		expect(rec.commands[1]?.cwd).toBe('/repo/app')
-		expect(rec.commands[1]?.omitEnv).toEqual(['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'FABRIKA_IAM_PROVISIONING_KEY'])
+		expect(rec.commands[1]?.cwd).toBe(`${REPO}/app`)
+	})
+
+	test("the application's CLI gets only PATH, HOME and TMPDIR of the executor's environment, and a failed build logs none of the rest", async () => {
+		// What the runner puts into the executor's environment: the account credential, an application secret, a managed one.
+		const executor = { CLOUDFLARE_API_TOKEN: 'tok-sentinel', API_KEY: 'app-secret-sentinel', FABRIKA_PROXY_SECRET: 'proxy-secret-sentinel' }
+		Object.assign(process.env, executor)
+		try {
+			for (const pipeline of [undefined, { build: 'true' }]) {
+				rec.provisions.splice(0)
+				rec.commands.splice(0)
+				// The real command runner, with the CLI swapped for one that prints the environment it got and fails.
+				const result = await deploy(rec, config(pipeline === undefined ? {} : { pipeline }), {
+					secrets: { API_KEY: executor.API_KEY },
+					managedEnvironment: { FABRIKA_PROXY_SECRET: executor.FABRIKA_PROXY_SECRET },
+					runCommand: (spec) =>
+						defaultCloudflareCollaborators.runCommand(spec.command === APP_CLI ? { ...spec, command: 'sh', args: ['-c', 'env >&2; exit 1'] } : spec),
+				})
+				const error = stepError(result, 'build') ?? ''
+				expect(error).toStartWith('fabrika app build failed (exit 1): ')
+				expect(error).toContain('PATH=')
+				for (const value of Object.values(executor)) expect(error).not.toContain(value)
+				expect(rec.provisions).toEqual([])
+				// `env` itself, not a shell, which sets a variable or two of its own.
+				const spec = rec.commands.find((command) => command.command === APP_CLI)
+				if (spec === undefined) throw new Error('the entry build ran no command')
+				const printed = await defaultCloudflareCollaborators.runCommand({ ...spec, command: 'env', args: [] })
+				const names = printed.stdout.trim().split('\n').map((line) => line.slice(0, line.indexOf('=')))
+				expect(names.filter((name) => !['PATH', 'HOME', 'TMPDIR'].includes(name))).toEqual([])
+				expect(names).toContain('PATH')
+			}
+		} finally {
+			for (const name of Object.keys(executor)) delete process.env[name]
+		}
+	})
+
+	test("a nested config finds the application's CLI where the workspace links it, up to the checkout and no higher", async () => {
+		const checkout = await mkdtemp(join(tmpdir(), 'fabrika-workspace-'))
+		fixtures.push(checkout)
+		const cli = await withApplicationCli(checkout)
+		const demo = join(checkout, 'apps', 'demo')
+		await mkdir(demo, { recursive: true })
+		const nested = { checkoutDir: demo, cwd: checkout, configPath: 'apps/demo/fabrika.config.ts' }
+		const result = await deploy(rec, config(), nested)
+		expect(result.status).toBe('succeeded')
+		expect(rec.commands[0]).toMatchObject({ command: cli, args: ['app', 'build', '--provider=cloudflare', '--config=fabrika.config.ts'], cwd: demo })
+		// The runner installed in `apps/`, so a CLI above it is not the application's.
+		rec.commands.splice(0)
+		const above = await deploy(rec, config(), { ...nested, cwd: join(checkout, 'apps'), configPath: 'demo/fabrika.config.ts' })
+		expect(stepError(above, 'build')).toBe(
+			`fabrika app build: no \`node_modules/.bin/fabrika\` from \`${demo}\` up to \`${
+				join(checkout, 'apps')
+			}\`; the application installs \`@fabrika/cli\``,
+		)
+		expect(rec.commands).toEqual([])
 	})
 
 	test("without an authored pipeline the plan still builds, with the application's `fabrika app build` alone", async () => {
@@ -1677,7 +1753,7 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 	test('a dry run names the entry build and runs nothing', async () => {
 		await deploy(rec, config({ pipeline: { build: 'bun run build' } }), { dryRun: true })
 		expect(rec.commands).toEqual([])
-		expect(rec.logs).toContain('  [dry-run] would run: fabrika app build --provider=cloudflare --config=fabrika.config.ts in /repo/app')
+		expect(rec.logs).toContain(`  [dry-run] would run: fabrika app build --provider=cloudflare --config=fabrika.config.ts in ${REPO}/app`)
 	})
 
 	test('an older release, or a Control that names none, deploys as before: its own `main`, its keys, no entry build', async () => {

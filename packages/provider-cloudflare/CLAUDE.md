@@ -69,9 +69,12 @@ this one import.
   For a release Control names at or above that gate, `assertGeneratedEntry` (`src/bounds.ts`) requires the Worker's
   `main` to resolve to `fabrika/entry.generated.ts` beside the config, and refuses `workflows`, `containers` and any
   Durable Object binding but `FABRIKA_APPLICATION`: the generated entry exports none of them. The plan then always has
-  `build`: `pipeline.build` first, if any, then the application's own `node_modules/.bin/fabrika app build
-  --provider=cloudflare` in the config's directory, without the platform credentials (it is checkout code), so the entry
-  and the inlined migrations come from the pinned commit, not the committed copies. An older release, a Control that
+  `build`: `pipeline.build` first, if any, then the application's own `fabrika app build --provider=cloudflare` in the
+  config's directory, so the entry and the inlined migrations come from the pinned commit, not the committed copies.
+  The CLI is the first `node_modules/.bin/fabrika` from the config's directory up to the executor's working directory
+  (where the runner installed), never above. It is checkout code whose failed output is logged, so it inherits nothing
+  of the executor's environment, which carries the application's and the managed secrets: it gets `PATH`, `HOME` and
+  `TMPDIR` only. An older release, a Control that
   names no release, and a local deploy keep their authored `main` and the old plan (ADR-0062).
 - **Every managed credential is a Worker secret, uploaded with the version** (`src/managed-secrets.ts`): token keys,
   workload keys, mail, the platform transport, the Operations DSN, the IAM RPC key and the proxy secret. Only the names

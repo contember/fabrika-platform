@@ -13,7 +13,8 @@ import {
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type SchemaReconciler } from '@fabrika/provider-contract'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
-import { basename, dirname, resolve } from 'node:path'
+import { stat } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { DurableObject, type GeneratedConfig, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import { assertLiteralAssets } from './assets'
 import type { CloudflareAppConfig } from './authoring'
@@ -147,29 +148,66 @@ const applicationRuntime = (run: CloudflareDeployRun, contract: ContractArtifact
 interface EntryBuild {
 	readonly cwd: string
 	readonly config: string
+	/** The directory the runner installed the checkout's dependencies in; the CLI is looked for no higher. */
+	readonly root: string
 }
 
-/** The application's own CLI, installed by the checkout's `bun install`, as the Zerops build runs it. */
+/** The application's own CLI, where the checkout's `bun install` links it, as the Zerops build runs it. */
 const APPLICATION_CLI = ['node_modules', '.bin', 'fabrika']
 
 const ENTRY_BUILD_ARGS = ['app', 'build', '--provider=cloudflare']
 
+/** All the CLI gets of the executor's environment: what Bun needs to run, as the generated tests of `fabrika db` get. */
+const ENTRY_BUILD_VARIABLES: readonly string[] = ['PATH', 'HOME', 'TMPDIR']
+
+const isFile = async (path: string): Promise<boolean> => {
+	try {
+		return (await stat(path)).isFile()
+	} catch {
+		return false
+	}
+}
+
+/** The first `node_modules/.bin/fabrika` from the application directory up to `root`: a workspace links it at its root. */
+const applicationCli = async ({ cwd, root }: EntryBuild): Promise<string> => {
+	for (let dir = cwd; isWithin(root, dir); dir = dirname(dir)) {
+		const candidate = resolve(dir, ...APPLICATION_CLI)
+		if (await isFile(candidate)) return candidate
+		if (dir === root) break
+	}
+	throw new Error(
+		`fabrika app build: no \`${APPLICATION_CLI.join('/')}\` from \`${cwd}\` up to \`${root}\`; the application installs \`@fabrika/cli\``,
+	)
+}
+
+const isWithin = (root: string, dir: string): boolean => {
+	const path = relative(root, dir)
+	return path === '' || (!path.startsWith('..') && !isAbsolute(path))
+}
+
+/**
+ * The executor's environment carries the application's and the managed secrets, and the CLI is checkout code whose
+ * failed output reaches the log: it inherits nothing and gets only `ENTRY_BUILD_VARIABLES`.
+ */
+const entryBuildEnvironment = (): { readonly env: Record<string, string>; readonly omitEnv: readonly string[] } => {
+	const env: Record<string, string> = {}
+	for (const name of ENTRY_BUILD_VARIABLES) {
+		const value = process.env[name]
+		if (value !== undefined) env[name] = value
+	}
+	return { env, omitEnv: Object.keys(process.env) }
+}
+
 /** Regenerate the entry and the inlined migrations from the checkout, with the application's own release of the CLI. */
-const buildEntry = async ({ cwd, config }: EntryBuild, run: CloudflareDeployRun, cf: CloudflareCollaborators): Promise<void> => {
-	const args = [...ENTRY_BUILD_ARGS, `--config=${config}`]
+const buildEntry = async (build: EntryBuild, run: CloudflareDeployRun, cf: CloudflareCollaborators): Promise<void> => {
+	const args = [...ENTRY_BUILD_ARGS, `--config=${build.config}`]
 	if (run.dryRun) {
-		run.log(`  [dry-run] would run: fabrika ${args.join(' ')} in ${cwd}`)
+		run.log(`  [dry-run] would run: fabrika ${args.join(' ')} in ${build.cwd}`)
 		return
 	}
 	assertRunning(run.signal)
-	// The CLI is checkout code, so it runs without the platform's credentials, like `pipeline.build`.
-	const result = await cf.runCommand({
-		command: resolve(cwd, ...APPLICATION_CLI),
-		args,
-		cwd,
-		omitEnv: PLATFORM_CREDENTIAL_NAMES,
-		signal: run.signal,
-	})
+	const command = await applicationCli(build)
+	const result = await cf.runCommand({ command, args, cwd: build.cwd, ...entryBuildEnvironment(), signal: run.signal })
 	if (result.exitCode !== 0) throw commandError('fabrika app build', result)
 }
 
@@ -679,7 +717,9 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		reconcileSchema: options.reconcileSchema ?? defaultReconcileSchema,
 		bounds,
 		managedSecrets: managed.secrets,
-		entryBuild: runtime !== null && runtime.entry !== null ? { cwd: loaded.cwd, config: basename(resolve(run.cwd, run.configPath)) } : null,
+		entryBuild: runtime !== null && runtime.entry !== null
+			? { cwd: loaded.cwd, config: basename(resolve(run.cwd, run.configPath)), root: resolve(run.cwd) }
+			: null,
 		generatedConfigs: [],
 	}
 	const result = await runSteps(buildPlan(loaded.config, worker, env.entryBuild !== null), run, (step) => runStep(step, env))
