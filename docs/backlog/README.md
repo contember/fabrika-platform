@@ -106,4 +106,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [223](223-terminal-authority-outlives-the-terminal-in-a-share-link.md): A share link issued on a terminal keeps the terminal's grants after sign-out, release or revoke.
 - [224](224-terminal-follow-ups.md): Smaller gaps of terminals: sign-out without `Sec-Fetch-Site`, re-enrolment, sign-out of a personal login.
 - [225](225-password-minimum-follow-ups.md): Smaller gaps of the installation's minimum password length: audit, an upper cap, the console page.
+- [226](226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md): A narrowing is not in force while the IAM write after a deploy fails; decided: narrowings before the manifest is published, widenings after.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

@@ -157,9 +157,10 @@ surface as admitting any value unchecked, derived by Control from the artifact e
 
 Gaps:
 
-- A failed or pending IAM reconcile after a deploy leaves a narrowing unapplied while the new version serves. Refusing
-  requires the proxy to compare IAM's schema revision, carried as an additive token claim, with the revision the
-  deployment expects.
+- A failed or pending IAM reconcile after a deploy leaves a narrowing unapplied while the new version serves. Decided:
+  narrowings are written to IAM before the manifest is published, widenings after
+  ([backlog 226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md), after the provider-neutral-core
+  sprint).
 - One parent per dimension (optional vocabulary).
 - Expanded `perms` overflow the token ([backlog 100](../backlog/100-a-principal-in-many-scopes-gets-no-token.md)). Under this model the token is a projection: the actions
   held application-wide or somewhere, with nodes fetched by the application. It is additive under ADR-0062: `perms`
@@ -191,6 +192,10 @@ reachable whatever grants remain on their org.
 - **Wildcards** in application vocabularies: they hide widenings from the approval diff.
 - **Ancestor delegation:** IAM is flat, so the same grant data would mean different things on the two sides.
 - **Deny grants:** guardrails in code cover the need without the explanation cost.
+- **The built-in `admin` role at a contract application.** It keeps resolving to nothing there: an application's
+  administrator is a role of its own catalog, which the approval shows.
+- **Lifting the creator-role clamp.** A scope's creator role keeps ending no later than the grant that let its holder
+  create the scope (S8); creating a value is delegation like any other.
 
 ## Open questions
 
