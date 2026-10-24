@@ -6,6 +6,7 @@
 
 import { FABRIKA_SERVICE_TABLE_DIGEST, IAM_PROXY_SECRET_VARIABLE, installationTableDigest } from '@fabrika/auth-core'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
+import type { McpClient } from '@fabrika/installation-init'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import {
 	contractProxyTable,
@@ -22,7 +23,6 @@ import type { ZeropsApi } from '../../index'
 import { deployPlatform, PLATFORM_CONCURRENT_DEPLOY, PLATFORM_DATABASE_BACKUP_PERIOD, PLATFORM_SEQUENTIAL_DEPLOY } from '../deploy'
 import { parsePlatformDeployArgs, type PlatformDeployInput } from '../deploy-options'
 import { recordingDeployLog } from '../log'
-import type { McpClient } from '../mcp'
 import { fakeSourceCollaborators } from './fake-platform-source'
 import {
 	FAKE_DAILY_BACKUP_PERIOD,

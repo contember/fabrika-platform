@@ -5,13 +5,13 @@ import { join } from 'node:path'
 //
 // Four properties here cannot be observed any other way, and each is why its test exists: the ORDER of
 // a bring-up (nothing may be written before the services exist, and nothing may be deployed before the
-// proxy has published its ports), the SHAPES of six generated secrets (a wrong one boots a service that
-// then refuses every request), which service each SHARED secret reaches (a mismatch is a 401 at 3am),
-// and what never reaches a log line.
+// proxy has published its ports), which service each SHARED secret reaches (a mismatch is a 401 at 3am),
+// and what never reaches a log line. The SHAPES of the six generated secrets are
+// `@fabrika/installation-init`'s `secrets.test.ts`.
 
 import { FABRIKA_SERVICE_TABLE_DIGEST, IAM_PROXY_SECRET_VARIABLE } from '@fabrika/auth-core'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
-import { UNATTENDED_FLAG } from '@fabrika/installation-init'
+import { generateInstallationSecrets, UNATTENDED_FLAG, writeSecretsFile } from '@fabrika/installation-init'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { FABRIKA_PROXY_MANIFEST_JSON, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
@@ -19,9 +19,8 @@ import { deployPlatform, PLATFORM_DATABASE_BACKUP_PERIOD, PLATFORM_DEPLOY_ORDER,
 import { GENERATED_SECRET_KEYS, installationServiceEnv, type InstallCollaborators, installPrompts, runInstall } from '../install'
 import { parsePlatformInstallArgs as parseArgs, type PlatformInstallInput } from '../install-options'
 import { provisioningDocument } from '../install-provisioning'
-import { renderSecretsFile, writeSecretsFile } from '../install-secrets'
+import { renderInstallationSecretsFile } from '../install-secrets'
 import { recordingInitLog } from '../log'
-import { generateInstallationSecrets } from '../secrets'
 import { generatedArtifacts } from '../topology/artifacts'
 import { fakeNamespaceProxySource, fakeSourceCollaborators } from './fake-platform-source'
 import { type FakeServiceSpec, type FakeZerops, fakeZerops, importedLightServices } from './fake-zerops'
@@ -290,55 +289,6 @@ describe('pass 1', () => {
 				storeSecrets: async () => {},
 			}),
 		).rejects.toThrow('publishes no Zerops subdomain')
-	})
-})
-
-describe('the generated secrets', () => {
-	test('each has the shape the service that reads it parses', () => {
-		const secrets = generateInstallationSecrets()
-
-		const signingKeys: unknown = JSON.parse(secrets.signingKeys)
-		expect(Array.isArray(signingKeys)).toBe(true)
-		const active = Array.isArray(signingKeys) ? signingKeys[0] : undefined
-		expect(active).toMatchObject({ kty: 'EC', crv: 'P-256', alg: 'ES256', use: 'sig' })
-		// The private half: without `d` IAM can verify and never sign.
-		expect(typeof (active as { d?: unknown }).d).toBe('string')
-		expect(typeof (active as { kid?: unknown }).kid).toBe('string')
-
-		for (const key of [secrets.rpcKey, secrets.proxyKey, secrets.provisioningKey]) {
-			expect(key).toStartWith('px_')
-			// 32 bytes at base64url is 43 characters; every shared secret must clear 32 or the service
-			// refuses to boot.
-			expect(key.slice(3)).toMatch(/^[A-Za-z0-9_-]{43}$/)
-			expect(key.length).toBeGreaterThanOrEqual(32)
-		}
-		expect(secrets.operationsSyncKey).toMatch(/^[A-Za-z0-9_-]{43}$/)
-		// base64, NOT base64url: the vault imports these bytes as an AES key.
-		expect(secrets.vaultKey).toMatch(/^[A-Za-z0-9+/]{43}=$/)
-		expect(Buffer.from(secrets.vaultKey, 'base64')).toHaveLength(32)
-	})
-
-	test('no base64url value starts with `-` or `_`, which downstream would read as a flag', () => {
-		// One roll in sixteen starts with one of them, so a hundred rolls is the cheap version of a proof.
-		for (let attempt = 0; attempt < 100; attempt += 1) {
-			const secrets = generateInstallationSecrets()
-			for (
-				const value of [
-					secrets.rpcKey.slice(3),
-					secrets.proxyKey.slice(3),
-					secrets.provisioningKey.slice(3),
-					secrets.operationsSyncKey,
-				]
-			) {
-				expect(value.startsWith('-') || value.startsWith('_')).toBe(false)
-			}
-		}
-	})
-
-	test('every value is fresh — nothing is reused between two installations', () => {
-		const first = generateInstallationSecrets()
-		const second = generateInstallationSecrets()
-		expect(Object.values(first)).not.toEqual(Object.values(second))
 	})
 })
 
@@ -1039,7 +989,7 @@ describe('the secrets file', () => {
 	})
 
 	test('is shell-sourceable, under the names the next commands read', () => {
-		const text = renderSecretsFile({
+		const text = renderInstallationSecretsFile({
 			environment: 'stage',
 			projectId: 'proj-1',
 			clientId: CLIENT_ID,

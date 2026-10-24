@@ -475,8 +475,10 @@
       "version": "0.8.2",
       "dependencies": {
         "@fabrika/app": "workspace:*",
+        "@fabrika/auth-core": "workspace:*",
         "@fabrika/email": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
+        "@fabrika/proxy-core": "workspace:*",
         "zod": "^3.25.76",
       },
       "devDependencies": {
@@ -504,6 +506,7 @@
         "@fabrika/github-app": "workspace:*",
         "@fabrika/iam": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
+        "@fabrika/installation-init": "workspace:*",
         "@fabrika/jwks": "workspace:*",
         "@fabrika/operations": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",

@@ -6,13 +6,13 @@
 // `zerops.yaml` declares, because `triggerPipeline` selects the setup by that name.
 
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
+import { platformProxyAppFor } from '@fabrika/installation-init'
 import {
 	PLATFORM_CONCURRENT_DEPLOY,
 	PLATFORM_DEPLOY_ORDER,
 	PLATFORM_PROXY_MANIFEST_TEMPLATE,
 	PLATFORM_PROXY_SERVICE,
 	PLATFORM_SEQUENTIAL_DEPLOY,
-	platformProxyAppFor,
 } from '@fabrika/provider-zerops/installation'
 import { compileTopology, fabrikaZeropsYaml, platformTopology, PROXY_HOSTNAME } from '@fabrika/provider-zerops/installation/topology'
 import { describe, expect, test } from 'bun:test'

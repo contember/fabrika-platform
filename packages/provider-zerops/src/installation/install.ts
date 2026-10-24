@@ -5,10 +5,15 @@
 import {
 	action as consoleAction,
 	confirmations,
+	generateInstallationSecrets,
 	info as consoleInfo,
+	type InstallationSecrets,
 	ok as consoleOk,
+	type PlatformHosts,
+	platformOrigin,
 	step as consoleStep,
 	warn as consoleWarn,
+	writeSecretsFile,
 } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { createZeropsApi, defaultSleep, readableContent, type ZeropsNamespaceProxySource } from '../index'
@@ -24,7 +29,7 @@ import {
 	type ResolvedService,
 } from './deploy'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-manifest'
-import { derivePlatformHosts, type PlatformHosts, platformOrigin, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
+import { derivePlatformHosts, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
 import { checkedEnvironmentName } from './init-options'
 import { assertRunning, type InstallCollaborators, type InstallPrompts } from './install-collaborators'
 import { GENERATED_SECRET_KEYS, installationServiceEnv, PASS_ONE_PROXY_MANIFEST, passOneProxyEnv, writeServiceEnv } from './install-environment'
@@ -39,11 +44,10 @@ import {
 	resolvePlatformServices,
 	serviceOf,
 } from './install-provisioning'
-import { renderSecretsFile, writeSecretsFile } from './install-secrets'
+import { renderInstallationSecretsFile } from './install-secrets'
 import { explainMintFailure } from './install-token'
 import { prepareInstallationSource, prepareNamespaceProxySource, validateInstallationSetups } from './installation-source'
 import type { PreparedPlatformSource } from './platform-source'
-import { generateInstallationSecrets, type InstallationSecrets } from './secrets'
 
 export type { InstallCollaborators, InstallPrompts } from './install-collaborators'
 export { GENERATED_SECRET_KEYS, type InstallationEnvInput, installationServiceEnv } from './install-environment'
@@ -158,7 +162,7 @@ const installPreparedPlatform = async (
 	log.step('Store the credentials locally')
 	// BEFORE the first one is placed: Zerops keeps them sensitive and will not hand them back.
 	await collaborators.storeSecrets(
-		renderSecretsFile({ environment, projectId: project.id, clientId: input.clientId, secrets, zeropsAccessToken: token.token }),
+		renderInstallationSecretsFile({ environment, projectId: project.id, clientId: input.clientId, secrets, zeropsAccessToken: token.token }),
 	)
 	log.ok(`wrote ${input.secretsFile} (mode 0600) — every credential this installation was created with; nothing else holds a readable copy`)
 

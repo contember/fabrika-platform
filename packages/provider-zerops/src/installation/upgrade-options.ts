@@ -8,8 +8,8 @@
 // The pin is checked BEFORE anything leaves this machine: `assertPinnedTag` refuses a branch or a SHA
 // (ADR-0025) without a network call, so `--to=main` fails on the spot rather than after a clone.
 
-import { describeArgument, readFlag } from '@fabrika/installation-init'
-import { assertPinnedTag, defaultCheckoutDir } from './sidecar'
+import { assertPinnedTag, describeArgument, readFlag } from '@fabrika/installation-init'
+import { defaultCheckoutDir } from './sidecar'
 
 /** Where the sidecar repository this command edits is found. */
 export type UpgradeSidecar =

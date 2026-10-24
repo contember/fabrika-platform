@@ -12,9 +12,10 @@
 //
 // `fabrika.ref` names a published tag of `contember/fabrika-platform`, never a branch: a namespace
 // proxy and an installation both build from tags, so a moving ref would make "which version is this
-// installation running" unanswerable. `assertPinnedTag` refuses a branch when init writes the file, and
-// the generated workflow refuses one again at run time — two gates, because the file is operator-owned
-// after creation and the second gate is the only one that sees what the operator later wrote.
+// installation running" unanswerable. `assertPinnedTag` (`@fabrika/installation-init`) refuses a branch
+// when init writes the file, and the generated workflow refuses one again at run time — two gates,
+// because the file is operator-owned after creation and the second gate is the only one that sees what
+// the operator later wrote.
 //
 // ── The templates are not Cloudflare's ────────────────────────────────────────────────────────────
 //
@@ -23,6 +24,7 @@
 // pipeline; this one runs a single step because on Zerops the order is inside the command (ADR-0027).
 // Cloudflare builds a runner image and needs a GitHub App; Zerops has no runner at all (ADR-0003).
 
+import { assertPinnedTag } from '@fabrika/installation-init'
 import { resolve } from 'node:path'
 import { z } from 'zod'
 
@@ -45,29 +47,6 @@ export interface SidecarValues {
 	readonly repo: string
 	/** The published fabrika tag to pin, used only when `fabrika.ref` does not exist yet. */
 	readonly fabrikaRef: string
-}
-
-/**
- * A published release tag: `v` and a semantic version.
- *
- * The same shape `scripts/release.ts` accepts, restated rather than imported — that script is not a
- * package and this check has to hold in a published tarball.
- */
-const TAG_PATTERN = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
-
-/** The pinned ref, or an error naming what was found. A branch is refused, deliberately and loudly. */
-export const assertPinnedTag = (ref: string): string => {
-	const trimmed = ref.trim()
-	if (trimmed === '') {
-		throw new Error('a published fabrika tag is required, for example v0.1.0')
-	}
-	if (!TAG_PATTERN.test(trimmed)) {
-		throw new Error(
-			`\`${trimmed}\` is not a published tag. A sidecar repository pins a TAG such as v0.1.0 and never a branch: `
-				+ 'an installation that tracked a moving ref could not say which version it runs (ADR-0025)',
-		)
-	}
-	return trimmed
 }
 
 /** Substitute every placeholder in a template. */

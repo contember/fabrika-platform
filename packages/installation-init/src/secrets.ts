@@ -1,7 +1,4 @@
-// The six values `fabrika platform install --provider=zerops` GENERATES, and their shapes.
-//
-// Every one of them is written to a Zerops service as a SENSITIVE variable, which Zerops does not hand
-// back, and to the operator's local secrets file (`install-secrets.ts`) before that. None is printed.
+// The credentials a platform installation is seeded with, and their shapes.
 //
 // The shapes are not free choices. Each one is what the consuming code already parses:
 //
@@ -12,9 +9,7 @@
 //   • The vault KEK is 32 RAW BYTES at base64, not base64url: `@fabrika/control` imports it as an
 //     AES key, and base64url is a different alphabet.
 //
-// Nothing here re-reads an existing value. `install` is a bring-up; rotating a live installation's
-// signing keys or vault KEK is not something a bring-up may do by accident, so the command refuses to
-// run against a project that already carries these keys rather than generating over them.
+// Nothing here re-reads an existing value: whether a run generates or reuses one is the provider's flow.
 
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto'
 
@@ -26,7 +21,7 @@ import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto'
  * matter how it is quoted. One rolled password beginning with `-` made `mc alias set` print its usage
  * and loop forever. It costs nothing and removes a bug that appears about one install in sixteen.
  */
-const randomSecret = (): string => {
+export const randomSecret = (): string => {
 	for (;;) {
 		const value = randomBytes(32).toString('base64url')
 		if (!value.startsWith('-') && !value.startsWith('_')) {
@@ -36,7 +31,10 @@ const randomSecret = (): string => {
 }
 
 /** The `px_` prefix IAM's own credentials carry, so a key looks like what it is wherever it turns up. */
-const randomPxKey = (): string => `px_${randomSecret()}`
+export const randomPxKey = (): string => `px_${randomSecret()}`
+
+/** The control plane's vault KEK. base64, NOT base64url: the vault imports these bytes as an AES key. */
+export const generateVaultKey = (): string => randomBytes(32).toString('base64')
 
 /**
  * One ES256 (EC P-256) private JWK with an RFC 7638 thumbprint `kid`, shaped exactly as IAM's
@@ -50,7 +48,10 @@ const generateEs256Jwk = (): JsonWebKey & { kid: string; alg: string; use: strin
 	return { ...jwk, kid: thumbprint, alg: 'ES256', use: 'sig' }
 }
 
-/** Everything one installation is seeded with. Several of these are shared by more than one service. */
+/** IAM's token-signing material: a JSON array with one ES256 private JWK, index 0 the active signer. */
+export const generateSigningKeys = (): string => JSON.stringify([generateEs256Jwk()])
+
+/** Everything a container installation is seeded with. Several of these are shared by more than one service. */
 export interface InstallationSecrets {
 	/** IAM's token-signing material: a JSON array of ES256 private JWKs, index 0 active. */
 	readonly signingKeys: string
@@ -68,11 +69,10 @@ export interface InstallationSecrets {
 
 /** Roll one installation's secrets. Pure entropy in, no I/O, nothing persisted. */
 export const generateInstallationSecrets = (): InstallationSecrets => ({
-	signingKeys: JSON.stringify([generateEs256Jwk()]),
+	signingKeys: generateSigningKeys(),
 	rpcKey: randomPxKey(),
 	proxyKey: randomPxKey(),
 	provisioningKey: randomPxKey(),
 	operationsSyncKey: randomSecret(),
-	// base64, NOT base64url: the vault imports these bytes as an AES key.
-	vaultKey: randomBytes(32).toString('base64'),
+	vaultKey: generateVaultKey(),
 })

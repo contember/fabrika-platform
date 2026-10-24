@@ -2,13 +2,15 @@
 
 The operator-side mechanics a provider's platform commands need, in one place: flag and
 environment reading, the outward-step confirmations, console formatting, child processes, the `gh` CLI, the GitHub Environment
-write, the sidecar-repository scaffold, and the first-administrator sequence over
-IAM's admin RPC.
+write, the sidecar-repository scaffold and its tag rule, and the first-administrator sequence over
+IAM's admin RPC. And the fabrika half of an installation (ADR-0011): the generated secrets, the environment
+IAM, Control, Operations and the proxy read, the secrets file, the platform proxy manifest's template type and
+its resolution, and MCP/OAuth.
 
 It holds **no provider knowledge**. Which files a sidecar repository carries, what
-its Environment holds, and in which order an operator is asked — all of that is
-`@fabrika/provider-{cloudflare,zerops}/installation`'s answer, and the two are deliberately
-not mirror images
+its Environment holds, where a service's data lives, how a variable is written, and in which order an operator is
+asked or a service deployed — all of that is `@fabrika/provider-{cloudflare,zerops}/installation`'s answer, and the
+two are deliberately not mirror images
 ([ADR-0027](../../docs/decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)).
 
 Public because both provider packages are, and
@@ -33,6 +35,18 @@ Public because both provider packages are, and
 - `admin.ts` — the first administrator: a typed `/admin/rpc` client over the provisioning key, and
   `ensureFirstAdministrator` — list-or-invite the mailbox, ensure the CROSS-APP `admin` grant, issue one
   enrollment. It returns the URL and never prints it.
+- `pin.ts` — `assertPinnedTag`: a sidecar pins a published tag, never a branch (ADR-0025).
+- `secrets.ts` — the generators (`randomSecret`, `randomPxKey`, `generateSigningKeys`, `generateVaultKey`) and the six
+  values a container installation is seeded with (`generateInstallationSecrets`). Both providers generate through it.
+- `secrets-file.ts` — `--secrets-file`: refused inside the checkout or when it exists, rendered as single-quoted
+  shell assignments under the provider's header lines, created `0600` with `wx`.
+- `service-environment.ts` — `installationServiceEnvironment` (every fabrika variable a bring-up places) and
+  `deployedServiceEnvironment` (what a deploy derives from the hosts: the issuer, the IAM proxy secret, the console
+  table digest, IAM's OAuth configuration), per service. The provider supplies where the data lives and the proxy's
+  private IAM upstream, adds its own variables and writes them. `INSTALLATION_SECRET_VARIABLES` names the generated ones.
+- `proxy-manifest.ts` — the platform proxy manifest TEMPLATE type, `resolvePlatformProxyManifest` and
+  `platformServiceTableDigest`. The template itself is a provider's generated data (Zerops: `generated/`).
+- `mcp.ts` — the operator's MCP client list and IAM's `FABRIKA_IAM_OAUTH_CONFIG` built from it (ADR-0049).
 
 ## Invariants
 
@@ -50,6 +64,9 @@ Public because both provider packages are, and
   unrecoverable) states it in its own CLAUDE.md.
 - **A thrown error names the command and its exit code, never the child env and
   never the raw error object** — a clone URL can carry an embedded token.
+- **A variable name in `service-environment.ts` is platform protocol.** An existing installation's next deploy
+  writes what it returns, so a rename leaves the old variable behind and needs an upgrade step.
+  `service-environment.test.ts` pins every service's names, for the bring-up and for a deploy.
 - **Scaffold commits skip CI** (`[skip ci]`), so a push cannot deploy before the
   GitHub Environment exists. `init` dispatches the workflow explicitly, afterwards.
 - **A repository this run created is hardened; an existing one is PROBED, never PUT
