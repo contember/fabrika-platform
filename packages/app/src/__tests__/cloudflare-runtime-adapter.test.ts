@@ -4,6 +4,7 @@
 
 import { defineContract } from '@fabrika/app/contract'
 import { PROXY_SECRET_HEADER } from '@fabrika/auth-core'
+import { scoped } from '@fabrika/db'
 import { Database as BunDatabase } from 'bun:sqlite'
 import { describe, expect, setSystemTime, spyOn, test } from 'bun:test'
 import { join } from 'node:path'
@@ -17,7 +18,10 @@ import { FILE_SWEEP_JOB } from '../files/kinds'
 import type { CrashEvents, ProcessCrashKind } from '../implement/crashes'
 import type { ContractImplementation } from '../implement/implement'
 import { implement } from '../implement/implement'
+import { defineDeps, serve } from '../implement/serve'
+import { contract as sqliteContract } from './cloudflare-fixture/fabrika.contract'
 import { notesApp as sqliteNotesApp } from './cloudflare-fixture/src/app'
+import { tables as sqliteTables } from './cloudflare-fixture/src/db/tables'
 import type { NotesWorld } from './cloudflare-fixture/src/world'
 import { notesApp } from './fixtures/implement/app'
 import {
@@ -59,6 +63,22 @@ function forwarded(
 	init: { readonly method?: string; readonly headers?: Record<string, string>; readonly body?: string } = {},
 ): Request {
 	return new Request(`${ORIGIN}${path}`, { ...init, headers: { ...init.headers, [PROXY_SECRET_HEADER]: PROXY_SECRET } })
+}
+
+/** An object of the SQLite fixture's `implementation` over `storage`, with every binding its boot needs. */
+function sqliteObject(implementation: ContractImplementation, storage: ApplicationStorage, env: Readonly<Record<string, unknown>> = {}): Started {
+	const tokens = workloadTokensFor(implementation)
+	const unused = () => Promise.reject(new Error('not called'))
+	const pending: Promise<unknown>[] = []
+	const state: ApplicationState = { storage, blockConcurrencyWhile: (callback) => callback(), waitUntil: (promise) => void pending.push(promise) }
+	const object = new FabrikaApplication(state, {
+		...frameworkEnvFor(implementation),
+		FABRIKA_PROXY_SECRET: PROXY_SECRET,
+		IAM: { getJwks: () => keySource.getJwks(), mintFromKey: (input: { app: string; key: string }) => tokens.exchange(input) },
+		[CLOUDFLARE_FILES_BINDING]: { head: unused, get: unused, put: unused, delete: unused },
+		...env,
+	})
+	return { object, pending }
 }
 
 describe('the environment object', () => {
@@ -354,14 +374,16 @@ describe('the crash reports of the environment object', () => {
 		})
 	})
 
-	test('a failed boot is tried again on a later event, after a backoff that doubles, and reported once', async () => {
+	test('a failed boot is tried again on a later event, after a backoff that doubles to its 60 s cap, and reported once', async () => {
 		await keepingProcessEnvironment(async () => {
 			const { envelopes, fetch } = capturingFetch()
 			const app = notesApp(new Map())
+			// The wait after each failure: doubling from 1 s, held at 60 s from the seventh.
+			const delays = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]
 			let loads = 0
 			createContractWorker(() => {
 				loads++
-				return loads <= 2 ? Promise.reject(new Error(`transient ${loads}`)) : Promise.resolve({ default: app })
+				return loads <= delays.length ? Promise.reject(new Error(`transient ${loads}`)) : Promise.resolve({ default: app })
 			}, { rejections: fakeEvents().events, operationsFetch: fetch })
 			const pending: Promise<unknown>[] = []
 			const state: ApplicationState = {
@@ -369,8 +391,8 @@ describe('the crash reports of the environment object', () => {
 				blockConcurrencyWhile: (callback) => callback(),
 				waitUntil: (promise) => void pending.push(promise),
 			}
-			const start = Date.UTC(2026, 9, 22, 3, 0, 0)
-			setSystemTime(new Date(start))
+			let at = Date.UTC(2026, 9, 22, 3, 0, 0)
+			setSystemTime(new Date(at))
 			try {
 				const object = new FabrikaApplication(state, {
 					...frameworkEnvFor(app),
@@ -380,22 +402,101 @@ describe('the crash reports of the environment object', () => {
 					ASSETS: { fetch: () => Promise.resolve(new Response('asset')) },
 				})
 				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('transient 1')
-				setSystemTime(new Date(start + 999))
-				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('transient 1')
-				expect(loads).toBe(1)
-				setSystemTime(new Date(start + 1000))
-				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('transient 2')
-				setSystemTime(new Date(start + 2999))
-				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('transient 2')
-				expect(loads).toBe(2)
-				setSystemTime(new Date(start + 3000))
+				for (const [index, delay] of delays.entries()) {
+					setSystemTime(new Date(at + delay - 1))
+					await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow(`transient ${index + 1}`)
+					expect(loads).toBe(index + 1)
+					at += delay
+					setSystemTime(new Date(at))
+					if (index + 1 < delays.length) {
+						await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow(`transient ${index + 2}`)
+					}
+				}
 				expect((await object.fetch(forwarded('/healthz'))).status).toBe(200)
-				expect(loads).toBe(3)
+				expect(loads).toBe(delays.length + 1)
 			} finally {
 				setSystemTime()
 			}
 			await Promise.all(pending)
 			expect(envelopes.map(tagsOf)).toEqual([{ crash: 'boot_failed' }])
+		})
+	})
+
+	test('a boot whose dependencies fail once boots on the retry: the failed boot released the data layer it bound', async () => {
+		await keepingProcessEnvironment(async () => {
+			let builds = 0
+			const flaky = serve(sqliteContract, {
+				database: scoped(sqliteTables),
+				deps: defineDeps(() => {
+					builds++
+					if (builds === 1) {
+						throw new Error('transient dependency')
+					}
+					return null
+				}),
+			})
+			createContractWorker(() => Promise.resolve({ default: flaky }), { migrations: await applicationMigrations(FIXTURE_ROOT) })
+			const { object } = sqliteObject(flaky, bunSqliteStorage())
+			const at = Date.UTC(2026, 9, 22, 3, 0, 0)
+			setSystemTime(new Date(at))
+			try {
+				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('transient dependency')
+				setSystemTime(new Date(at + 1_000))
+				expect((await object.fetch(forwarded('/healthz'))).status).toBe(200)
+				expect(builds).toBe(2)
+			} finally {
+				setSystemTime()
+			}
+		})
+	})
+
+	test('a failure after a recovery is a new streak, reported again; a streak is reported once however often it retries', async () => {
+		await keepingProcessEnvironment(async () => {
+			const { envelopes, fetch } = capturingFetch()
+			const served = sqliteNotesApp({ runs: [] })
+			let loads = 0
+			createContractWorker(() => {
+				loads++
+				return loads === 1 ? Promise.reject(new Error('transient load')) : Promise.resolve({ default: served.implementation })
+			}, { migrations: await applicationMigrations(FIXTURE_ROOT), rejections: fakeEvents().events, operationsFetch: fetch })
+			let at = Date.UTC(2026, 9, 22, 3, 0, 0)
+			setSystemTime(new Date(at))
+			try {
+				const first = sqliteObject(served.implementation, bunSqliteStorage(), { ...served.variables, FABRIKA_OPERATIONS_DSN: DSN })
+				await expect(first.object.fetch(forwarded('/healthz'))).rejects.toThrow('transient load')
+				at += 1_000
+				setSystemTime(new Date(at))
+				expect((await first.object.fetch(forwarded('/healthz'))).status).toBe(200)
+
+				// A later instance of the isolate, whose storage fails the migration while `broken`.
+				let broken = true
+				const storage = bunSqliteStorage()
+				const breaking: ApplicationStorage = {
+					sql: {
+						exec: (query, ...bindings) => {
+							if (broken) {
+								throw new Error('transient migration')
+							}
+							return storage.sql.exec(query, ...bindings)
+						},
+					},
+					transaction: (closure) => storage.transaction(closure),
+					transactionSync: (closure) => storage.transactionSync(closure),
+				}
+				const second = sqliteObject(served.implementation, breaking, { ...served.variables, FABRIKA_OPERATIONS_DSN: DSN })
+				await expect(second.object.fetch(forwarded('/healthz'))).rejects.toThrow('transient migration')
+				at += 1_000
+				setSystemTime(new Date(at))
+				await expect(second.object.fetch(forwarded('/healthz'))).rejects.toThrow('transient migration')
+				broken = false
+				at += 2_000
+				setSystemTime(new Date(at))
+				expect((await second.object.fetch(forwarded('/healthz'))).status).toBe(200)
+				await Promise.all([...first.pending, ...second.pending])
+			} finally {
+				setSystemTime()
+			}
+			expect(envelopes.map(tagsOf)).toEqual([{ crash: 'boot_failed' }, { crash: 'boot_failed' }])
 		})
 	})
 })

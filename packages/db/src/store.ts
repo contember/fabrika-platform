@@ -103,7 +103,7 @@ import {
 	type VersionArguments,
 	visibleFor,
 } from './policy'
-import { frameworkSideOf, type Locator, register } from './registry'
+import { frameworkSideOf, type ProvisionalBinding, register } from './registry'
 import type { ScopeTerms, ScopeTest, ScopeUse } from './sql'
 import { storedFiles, storedFilesMetadata } from './stored-files'
 import { type TablePolicies, tablePolicies } from './tables'
@@ -2184,13 +2184,20 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			}
 			return probeOf(contextFor(table, mode))
 		},
-		bind(runtime: DataLayerRuntime): Locator {
+		bind(runtime: DataLayerRuntime): ProvisionalBinding {
 			if (connection.runtime !== undefined) {
 				throw new CapabilityError('layer_unbound', 'the data layer is already connected; only the framework connects it, once, at boot')
 			}
 			const bound: DataLayerRuntime = freeze({ database: runtime.database, capabilities: runtime.capabilities, readOnly: runtime.readOnly })
 			connection.runtime = bound
-			return async (dimension, id, using) => locateObject(models, bound, dimension, id, using)
+			return freeze({
+				locate: async (dimension: string, id: string, using?: Session) => locateObject(models, bound, dimension, id, using),
+				release() {
+					if (connection.runtime === bound) {
+						connection.runtime = undefined
+					}
+				},
+			})
 		},
 		framework: freeze({
 			webhooks: webhookTables(() => runtimeOf(connection)),
