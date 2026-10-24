@@ -34,6 +34,24 @@ export async function authenticateOAuthClient(
 	return accepted ? { registration, metadata } : null
 }
 
+/**
+ * Whether a revocation request comes from its client (RFC 7009 §2.1). A confidential client authenticates as at the
+ * token endpoint. A request without an assertion only names a registered client: the token's own client binding is
+ * enough for a public client, so an unreachable metadata document never keeps a token alive. It is refused only when
+ * the document is known and declares `private_key_jwt`.
+ */
+export async function authenticateRevokingClient(
+	services: Services,
+	config: OAuthConfig,
+	input: { clientId: string; credential: OAuthClientCredential; audiences: string[] },
+): Promise<boolean> {
+	if (input.credential.method !== 'none') return await authenticateOAuthClient(services, config, input) !== null
+	const registration = config.clients.find((client) => client.clientId === input.clientId)
+	if (registration === undefined) return false
+	const metadata = await clientMetadata(registration)
+	return metadata?.token_endpoint_auth_method !== 'private_key_jwt'
+}
+
 /** RFC 7523 §3: signed by a key of the client's JWKS, `iss` = `sub` = client id, an IAM `aud`, a short `exp`, a fresh `jti`. */
 async function verifyClientAssertion(services: Services, client: PrivateKeyJwtClient, assertion: string, audiences: string[]): Promise<boolean> {
 	const cached = await clientJwks(client.jwks_uri, { refetch: false })

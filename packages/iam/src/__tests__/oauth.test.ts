@@ -1,5 +1,5 @@
 import { buildAccessClaims, matchesTokenAudience, parseAccessClaims, RESOURCE_ACCESS_TOKEN_TYP, TOKEN_ALG } from '@fabrika/auth-core'
-import { afterEach, describe, expect, jest, spyOn, test } from 'bun:test'
+import { afterEach, describe, expect, jest, setSystemTime, spyOn, test } from 'bun:test'
 import { decodeJwt, decodeProtectedHeader } from 'jose'
 import { resolveAdmin } from '../admin/router'
 import { resolveCaller } from '../auth'
@@ -7,6 +7,7 @@ import { narrowPermissions } from '../narrow-permissions'
 import { clientMetadata } from '../oauth-client'
 import { parseOAuthConfig } from '../oauth-config'
 import { handleOAuth } from '../oauth-http'
+import { hashToken } from '../secret'
 import { getSigner, verifyAccessToken, verifyResourceAccessToken } from '../signing'
 import { createHarness } from './helpers/harness'
 import { ISSUER, oauthFixture, REDIRECT_URI, RESOURCE, SIGNING_ENV, tokenBody } from './helpers/oauth'
@@ -326,6 +327,25 @@ describe('token endpoint', () => {
 		const revoked = await f.post('/oauth/revoke', { client_id: f.clientId, token: first.refresh_token ?? '' })
 		expect(revoked.status).toBe(200)
 		expect((await f.refresh(first.refresh_token ?? '')).status).toBe(400)
+	})
+
+	test("a public client's revocation does not depend on fetching its metadata document", async () => {
+		const f = await fixture()
+		const first = await tokenBody(await f.exchange(await f.approve()))
+		// The cached document has expired, and its host is down.
+		setSystemTime(new Date(Date.now() + 10 * 60_000))
+		const down = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(
+			() => Promise.resolve(new Response('unavailable', { status: 503 })),
+			{ preconnect: globalThis.fetch.preconnect },
+		))
+		try {
+			expect((await f.post('/oauth/revoke', { client_id: f.clientId, token: first.refresh_token ?? '' })).status).toBe(200)
+		} finally {
+			down.mockRestore()
+			setSystemTime()
+		}
+		const refresh = await f.services.repositories.oauth.refreshToken(await hashToken(first.refresh_token ?? ''))
+		expect((await f.services.repositories.oauth.grant(refresh?.grant_id ?? ''))?.revoked_at).not.toBeNull()
 	})
 
 	test('revoking the access token revokes its grant', async () => {

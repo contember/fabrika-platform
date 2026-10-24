@@ -19,7 +19,7 @@ import type { Env } from './env'
 import { escapeHtml } from './html'
 import { installationBrand } from './installation-brand'
 import { establishClient, type EstablishedClient, exchangeOAuthToken, grantAuthorization, revokeOAuthToken, scopeCeiling } from './oauth'
-import { authenticateOAuthClient } from './oauth-client-auth'
+import { authenticateOAuthClient, authenticateRevokingClient } from './oauth-client-auth'
 import type { OAuthConfig } from './oauth-config'
 import { normalizeOrigin } from './origin'
 import { htmlPage } from './password-pages'
@@ -157,12 +157,12 @@ async function revoke(request: Request, services: Services, env: SigningEnv, con
 	const input = parseOAuthRevocationRequest(withAssertedClientId(fields, credential))
 	if (input === null) return protocolError('invalid_request', 400)
 	const issuer = services.config.issuer
-	const client = await authenticateOAuthClient(services, config, {
+	const authenticated = await authenticateRevokingClient(services, config, {
 		clientId: input.client_id,
 		credential,
 		audiences: [`${issuer}${REVOKE_PATH}`, `${issuer}${TOKEN_PATH}`, issuer],
 	})
-	if (client === null) return protocolError('invalid_client', 401)
+	if (!authenticated) return protocolError('invalid_client', 401)
 	await revokeOAuthToken(services, env, input, requestId)
 	return new Response(null, { status: 200, headers: { 'cache-control': 'no-store' } })
 }
