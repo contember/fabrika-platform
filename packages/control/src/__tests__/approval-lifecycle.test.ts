@@ -831,14 +831,14 @@ describe('workload keys from the approved contract', () => {
 			provider: {
 				...loggingProvider,
 				deploy: (input) => {
-					input.events.log(`key=${input.managedEnvironment['FABRIKA_JOB_NIGHTLY_KEY'] ?? 'none'}`)
+					input.events.log(`key=${input.managedEnvironment['FABRIKA_JOB_NIGHTLY_KEY']?.value ?? 'none'}`)
 					return loggingProvider.deploy(input)
 				},
 			},
 		}, { runId: await createdRun(w, 'stage') })
 		expect(result.status).toBe('succeeded')
 		expect(issued).toEqual(['notes@stage/job:nightly'])
-		const key = w.deploys[0]?.managedEnvironment['FABRIKA_JOB_NIGHTLY_KEY']
+		const key = w.deploys[0]?.managedEnvironment['FABRIKA_JOB_NIGHTLY_KEY']?.value
 		expect(key).toMatch(/^px_k+1$/)
 		const stored = [...w.logs.values()].join('\n')
 		expect(stored).toContain('key=[redacted]')
@@ -934,7 +934,7 @@ export const contract = app.contract((c) => ({
 			provider: {
 				...loggingProvider,
 				deploy: (input) => {
-					input.events.log(`mail=${input.managedEnvironment['FABRIKA_EMAIL_RESEND_API_KEY'] ?? 'none'}`)
+					input.events.log(`mail=${input.managedEnvironment['FABRIKA_EMAIL_RESEND_API_KEY']?.value ?? 'none'}`)
 					return loggingProvider.deploy(input)
 				},
 			},
@@ -942,7 +942,7 @@ export const contract = app.contract((c) => ({
 		expect(result.status).toBe('succeeded')
 		const managed = w.deploys[0]?.managedEnvironment
 		expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_RESEND_API_KEY'])
-		expect(managed?.['FABRIKA_EMAIL_RESEND_API_KEY']).toBe(RESEND_KEY)
+		expect(managed?.['FABRIKA_EMAIL_RESEND_API_KEY']?.value).toBe(RESEND_KEY)
 		const stored = [...w.logs.values()].join('\n')
 		expect(stored).toContain('mail=[redacted]')
 		expect(stored).not.toContain(RESEND_KEY)
@@ -962,7 +962,7 @@ export const contract = app.contract((c) => ({
 			provider: {
 				...loggingProvider,
 				deploy: (input) => {
-					input.events.log(`relay=${input.managedEnvironment['FABRIKA_PLATFORM_MAIL_KEY'] ?? 'none'}`)
+					input.events.log(`relay=${input.managedEnvironment['FABRIKA_PLATFORM_MAIL_KEY']?.value ?? 'none'}`)
 					return loggingProvider.deploy(input)
 				},
 			},
@@ -970,9 +970,9 @@ export const contract = app.contract((c) => ({
 		expect(result.status).toBe('succeeded')
 		const managed = w.deploys[0]?.managedEnvironment
 		expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_PLATFORM_MAIL_KEY', 'FABRIKA_PLATFORM_MAIL_URL'])
-		expect(managed?.['FABRIKA_EMAIL_PROVIDER']).toBe('platform')
-		expect(managed?.['FABRIKA_PLATFORM_MAIL_URL']).toBe(CONTROL_ORIGIN)
-		const key = managed?.['FABRIKA_PLATFORM_MAIL_KEY'] ?? ''
+		expect(managed?.['FABRIKA_EMAIL_PROVIDER']?.value).toBe('platform')
+		expect(managed?.['FABRIKA_PLATFORM_MAIL_URL']?.value).toBe(CONTROL_ORIGIN)
+		const key = managed?.['FABRIKA_PLATFORM_MAIL_KEY']?.value ?? ''
 		expect(key).toMatch(/^px_[A-Za-z0-9_-]{27}$/)
 		expect(await w.db.platformTransportKeys.findValidByHash(await hashPlatformKey(key), Math.floor(Date.now() / 1000))).toMatchObject({
 			app_id: 'notes',
@@ -991,7 +991,7 @@ export const contract = app.contract((c) => ({
 			})).status,
 		)
 			.toBe('succeeded')
-		expect(w.deploys[1]?.managedEnvironment['FABRIKA_PLATFORM_MAIL_KEY']).toBe(key)
+		expect(w.deploys[1]?.managedEnvironment['FABRIKA_PLATFORM_MAIL_KEY']?.value).toBe(key)
 	})
 
 	test("the relay holds what Control cannot send, so a 0.7 application deploys where Control's transport is invalid or absent", async () => {
@@ -1003,7 +1003,7 @@ export const contract = app.contract((c) => ({
 				runId: await createdRun(w, 'stage'),
 			})
 			expect(result.status).toBe('succeeded')
-			expect(w.deploys[0]?.managedEnvironment['FABRIKA_EMAIL_PROVIDER']).toBe('platform')
+			expect(w.deploys[0]?.managedEnvironment['FABRIKA_EMAIL_PROVIDER']?.value).toBe('platform')
 			expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_PLATFORM_MAIL_KEY', 'FABRIKA_PLATFORM_MAIL_URL'])
 		}
 	})
@@ -1097,7 +1097,7 @@ export const contract = app.contract((c) => ({
 		const { workloadCredentials } = await credentialed(w)
 		const relayDeps = { ...deps(w), workloadCredentials, mailTransport, ...(await relayed(w)) }
 		expect((await executeDeploy(relayDeps, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
-		const key = w.deploys[0]?.managedEnvironment['FABRIKA_PLATFORM_MAIL_KEY'] ?? ''
+		const key = w.deploys[0]?.managedEnvironment['FABRIKA_PLATFORM_MAIL_KEY']?.value ?? ''
 		const live = async () => (await w.db.platformTransportKeys.findValidByHash(await hashPlatformKey(key), Math.floor(Date.now() / 1000))) !== null
 		expect(await live()).toBe(true)
 		w.contract = kitFiles()['fabrika.contract.ts'] ?? null
@@ -1163,7 +1163,7 @@ export const contract = app.contract((c) => ({
 		await seed(w)
 		const { workloadCredentials } = await credentialed(w)
 		expect((await executeDeploy({ ...deps(w), workloadCredentials }, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
-		expect(w.deploys[0]?.managedEnvironment['FABRIKA_EMAIL_PROVIDER']).toBe('none')
+		expect(w.deploys[0]?.managedEnvironment['FABRIKA_EMAIL_PROVIDER']?.value).toBe('none')
 		expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_PROVIDER'])
 	})
 
@@ -1266,7 +1266,7 @@ describe('the membership transport key from the approved contract', () => {
 			provider: {
 				...loggingProvider,
 				deploy: (input) => {
-					input.events.log(`key=${input.managedEnvironment['FABRIKA_IAM_RPC_KEY'] ?? 'none'}`)
+					input.events.log(`key=${input.managedEnvironment['FABRIKA_IAM_RPC_KEY']?.value ?? 'none'}`)
 					return loggingProvider.deploy(input)
 				},
 			},
@@ -1274,8 +1274,8 @@ describe('the membership transport key from the approved contract', () => {
 		expect(result.status).toBe('succeeded')
 		expect(issued).toEqual(['notes@stage:none'])
 		const managed = w.deploys[0]?.managedEnvironment
-		expect(managed?.['FABRIKA_IAM_RPC_URL']).toBe('https://iam.example.test')
-		expect(managed?.['FABRIKA_IAM_RPC_KEY']).toBe(`px_${'m'.repeat(26)}1`)
+		expect(managed?.['FABRIKA_IAM_RPC_URL']?.value).toBe('https://iam.example.test')
+		expect(managed?.['FABRIKA_IAM_RPC_KEY']?.value).toBe(`px_${'m'.repeat(26)}1`)
 		const stored = [...w.logs.values()].join('\n')
 		expect(stored).toContain('key=[redacted]')
 		expect(stored).not.toContain(`px_${'m'.repeat(26)}1`)
@@ -1293,8 +1293,8 @@ describe('the membership transport key from the approved contract', () => {
 		w.contract = BASE
 		expect((await executeDeploy(keyedDeps, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
 		expect(issued).toEqual(['notes@stage:none'])
-		expect(w.deploys.map((input) => input.managedEnvironment['FABRIKA_IAM_RPC_KEY'] !== null)).toEqual([false, true, false])
-		expect(w.deploys.map((input) => input.managedEnvironment['FABRIKA_IAM_RPC_URL'] !== null)).toEqual([false, true, false])
+		expect(w.deploys.map((input) => input.managedEnvironment['FABRIKA_IAM_RPC_KEY']?.value !== null)).toEqual([false, true, false])
+		expect(w.deploys.map((input) => input.managedEnvironment['FABRIKA_IAM_RPC_URL']?.value !== null)).toEqual([false, true, false])
 		expect(await w.db.membershipKeys.get('notes', 'stage')).toBeNull()
 	})
 

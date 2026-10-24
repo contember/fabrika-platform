@@ -113,15 +113,16 @@ bun test
   `FABRIKA_IAM_RPC_URL` and `FABRIKA_IAM_RPC_KEY` among them) are plain service variables each deploy
   overwrites (null removes), all written before the build request so it never meets `userDataSyncRunning`.
   App vars, secrets and descriptors may not author any name of `FRAMEWORK_VARIABLE_NAMES` (`@fabrika/auth-core`,
-  the one list Control refuses too); `MANAGED_KEYS` is the part of it Control hands every deploy.
+  the one list Control refuses too); `MANAGED_VARIABLE_NAMES` (`@fabrika/auth-core`) is the part of it Control hands every
+  deploy, parsed once by Control (`parseManagedEnvironment`); this provider re-checks none of it.
   `FABRIKA_APP_ORIGIN` is read back and compared; `FABRIKA_TOKEN_KEYS` is sensitive, rewritten every deploy, and
   removed by a null. Beside them Control hands each job's and webhook's key (`FABRIKA_<KIND>_<NAME>_KEY`), each public
   procedure's (`FABRIKA_PROCEDURE_<ID>_<8 hex>_KEY`) and each connector
   import's `FABRIKA_CONNECT_<IMPORT>_KEY` and `_URL`, and the platform transport's `FABRIKA_PLATFORM_<RECEIVER>_KEY`
-  (sensitive) and `_URL` (plain, Control's public origin, http allowed for the local stack's) (`parseManagedEnvironment`: a `px_` key, an origin,
-  or the deploy is refused, and so is any other family name): `write-service-env` writes each and deletes every
-  service variable of those families that this deploy did not hand, so a removed workload's or import's key does
-  not stay readable.
+  (sensitive) and `_URL` (plain, Control's public origin, http allowed for the local stack's). `write-service-env` writes
+  each entry sensitive exactly when Control marked it a `credential`, and deletes what `staleManagedVariables` names (a
+  managed name handed null, or a family member not handed, but never the descriptor's `FABRIKA_RELEASE`), so a removed
+  workload's or import's key does not stay readable.
 - **A contract application's setup is the platform's (ADR-0043, `src/execution.ts`).** A config with
   `target.contract` compiles to a manifest with `target.contract` (digest, health path, jobs) and optional
   `runtimePackages` from `ZEROPS_RUNTIME_PACKAGES`. `lockedAuthoredBuild` refuses every key of the selected

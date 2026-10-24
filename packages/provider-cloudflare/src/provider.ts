@@ -9,6 +9,8 @@ import {
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_ISSUER,
 	isFrameworkVariableName,
+	isManagedCredential,
+	managedValue,
 } from '@fabrika/auth-core'
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type SchemaReconciler } from '@fabrika/provider-contract'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
@@ -278,15 +280,13 @@ interface ServedContract {
 	readonly digest: string
 }
 
-/** A contract application starts only as the contract it was deployed with (ADR-0022 rule 5), so the platform writes its digest. */
+/**
+ * A contract application starts only as the contract it was deployed with (ADR-0022 rule 5), so the platform writes its
+ * digest. Control never hands one: `parseManagedEnvironment` refuses the name.
+ */
 const contractEnvironment = (managed: ProviderManagedEnvironment, served: ServedContract | null): ProviderManagedEnvironment => {
 	if (served === null) return managed
-	const { digest } = served
-	const sent = managed[FABRIKA_CONTRACT_DIGEST]
-	if (sent !== undefined && sent !== null && sent !== digest) {
-		throw new Error(`cloudflare: ${FABRIKA_CONTRACT_DIGEST} is \`${sent}\`, but the contract this deployment serves has digest \`${digest}\``)
-	}
-	return { ...managed, [FABRIKA_CONTRACT_DIGEST]: digest }
+	return { ...managed, [FABRIKA_CONTRACT_DIGEST]: { value: served.digest, credential: isManagedCredential(FABRIKA_CONTRACT_DIGEST) } }
 }
 
 /**
@@ -326,14 +326,14 @@ const platformProxied = (authored: Worker, served: ServedContract, run: Cloudfla
 		...(run.crossOrigins === undefined ? {} : { crossOrigins: run.crossOrigins }),
 		endpoints: contractProxyTable(served.contract, served.digest),
 		...operationsOrigin(run.managedEnvironment),
-		iamUrl: run.managedEnvironment[FABRIKA_IAM_ISSUER] ?? '',
+		iamUrl: managedValue(run.managedEnvironment, FABRIKA_IAM_ISSUER) ?? '',
 	})
 }
 
 /** The ingest origin of the application's Operations DSN: the proxy's `connect-src` admits it, as the framework's does. */
 const operationsOrigin = (managed: ProviderManagedEnvironment): { readonly operationsOrigin?: string } => {
-	const dsn = managed['FABRIKA_OPERATIONS_DSN']
-	if (dsn === undefined || dsn === null) return {}
+	const dsn = managedValue(managed, 'FABRIKA_OPERATIONS_DSN')
+	if (dsn === null) return {}
 	let origin: string
 	try {
 		origin = new URL(dsn).origin

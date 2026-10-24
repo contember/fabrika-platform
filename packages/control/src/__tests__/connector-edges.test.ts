@@ -193,9 +193,9 @@ describe('a consumer deploy', () => {
 		expect(await deploy(w, 'shop', shopSource(digestOf(CATALOG)))).toBe('succeeded')
 		expect(w.issued).toEqual(['catalog@stage/app:shop'])
 		const managed = w.deploys.at(-1)?.managedEnvironment ?? {}
-		expect(managed['FABRIKA_CONNECT_CATALOG_URL']).toBe('https://stage.catalog.example.test')
-		expect(managed['FABRIKA_CONNECT_CATALOG_KEY']).toMatch(/^px_e+1$/)
-		expect(runLog(w)).not.toContain(String(managed['FABRIKA_CONNECT_CATALOG_KEY']))
+		expect(managed['FABRIKA_CONNECT_CATALOG_URL']?.value).toBe('https://stage.catalog.example.test')
+		expect(managed['FABRIKA_CONNECT_CATALOG_KEY']?.value).toMatch(/^px_e+1$/)
+		expect(runLog(w)).not.toContain(String(managed['FABRIKA_CONNECT_CATALOG_KEY']?.value))
 	})
 
 	test("that drops its last import of an owner revokes the pair's keys at the owner before the provider deploys", async () => {
@@ -244,6 +244,43 @@ describe('a consumer deploy', () => {
 			providerArtifactJson: owner.provider_artifact_json,
 		})
 		expect(await deploy(w, 'shop', shopSource(digestOf(CATALOG)))).toBe('failed')
+		expect(w.deploys.filter((input) => input.app.id === 'shop')).toEqual([])
+	})
+
+	test("hands the owner's origin in lower case, however its domain was typed", async () => {
+		const w = await world()
+		expect(await deploy(w, 'catalog', CATALOG)).toBe('succeeded')
+		const owner = await w.db.registry.getAppEnv('catalog', ENV)
+		if (owner === null) throw new Error('the catalog has a stage environment')
+		await w.db.registry.upsertAppEnv({
+			appId: 'catalog',
+			env: ENV,
+			domain: 'Stage.Catalog.Example.test',
+			namespaceId: null,
+			provider: 'harbor',
+			providerTargetJson: owner.provider_target_json,
+			providerArtifactJson: owner.provider_artifact_json,
+		})
+		expect(await deploy(w, 'shop', shopSource(digestOf(CATALOG)))).toBe('succeeded')
+		expect(w.deploys.at(-1)?.managedEnvironment['FABRIKA_CONNECT_CATALOG_URL']?.value).toBe('https://stage.catalog.example.test')
+	})
+
+	test('fails before the provider is asked when an address Control would hand is no origin', async () => {
+		const w = await world()
+		expect(await deploy(w, 'catalog', CATALOG)).toBe('succeeded')
+		const owner = await w.db.registry.getAppEnv('catalog', ENV)
+		if (owner === null) throw new Error('the catalog has a stage environment')
+		await w.db.registry.upsertAppEnv({
+			appId: 'catalog',
+			env: ENV,
+			domain: 'stage.catalog.example.test/api',
+			namespaceId: null,
+			provider: 'harbor',
+			providerTargetJson: owner.provider_target_json,
+			providerArtifactJson: owner.provider_artifact_json,
+		})
+		expect(await deploy(w, 'shop', shopSource(digestOf(CATALOG)))).toBe('failed')
+		expect(runLog(w)).toContain('managed environment: FABRIKA_CONNECT_CATALOG_URL must be an https origin')
 		expect(w.deploys.filter((input) => input.app.id === 'shop')).toEqual([])
 	})
 })

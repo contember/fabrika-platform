@@ -7,6 +7,8 @@ import {
 	FABRIKA_PROXY_SECRET,
 	FABRIKA_TOKEN_KEYS,
 	isFrameworkVariableName,
+	MANAGED_VARIABLE_NAMES,
+	parseManagedEnvironment,
 } from '@fabrika/auth-core'
 import type { RunLogLine } from '@fabrika/control-contract'
 import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS, operationsManagedEnvironment } from '@fabrika/operations-contract/ingest'
@@ -675,6 +677,11 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		managedEnvironment[FABRIKA_APP_ORIGIN] = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
 		const tokenKeys = dryRun ? null : await reconcileTokenKeys(deps.tokenKeys, app.id, appEnv.env, approvedContract)
 		managedEnvironment[FABRIKA_TOKEN_KEYS] = tokenKeys
+		// Parsed once, before any provider effect: a provider writes what it is handed and checks none of it again.
+		const handed = parseManagedEnvironment(managedEnvironment)
+		// A provider removes a managed name it is not handed, so a name missing here would delete the variable.
+		const missing = MANAGED_VARIABLE_NAMES.find((name) => !Object.hasOwn(handed, name))
+		if (missing !== undefined) throw new Error(`managed environment: Control did not name ${missing}`)
 		runLogs.redact([
 			...Object.values(secrets),
 			managedEnvironment[FABRIKA_PROXY_SECRET] ?? '',
@@ -715,7 +722,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 				environment: registration.environment,
 				secrets,
 				vars,
-				managedEnvironment,
+				managedEnvironment: handed,
 				dryRun,
 				...(sourceBinding === undefined ? {} : { sourceBinding }),
 				...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),

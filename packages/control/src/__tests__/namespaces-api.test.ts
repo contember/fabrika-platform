@@ -868,7 +868,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 			},
 			async deploy(input) {
 				record.deploys.push(input.runId)
-				record.deploySecrets.push(input.managedEnvironment[FABRIKA_PROXY_SECRET])
+				record.deploySecrets.push(input.managedEnvironment[FABRIKA_PROXY_SECRET]?.value)
 				return { state: 'succeeded' }
 			},
 			namespaces: {
@@ -1254,7 +1254,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		const provider: ControlProvider = {
 			...base,
 			async deploy(input) {
-				input.events.log(`COPY=${input.managedEnvironment[FABRIKA_PROXY_SECRET] ?? 'none'}`)
+				input.events.log(`COPY=${input.managedEnvironment[FABRIKA_PROXY_SECRET]?.value ?? 'none'}`)
 				return { state: 'succeeded' }
 			},
 		}

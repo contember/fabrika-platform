@@ -1,4 +1,4 @@
-import { type AppEnvironment, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type AppEnvironment, parseAppEnvironmentId, parseManagedEnvironment } from '@fabrika/auth-core'
 import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
 import type { CloudflareAppConfig } from './authoring'
@@ -168,7 +168,8 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
 		secrets: declaredValues(loaded.config.pipeline?.secrets),
 		vars: declaredValues(loaded.config.pipeline?.vars),
-		managedEnvironment: requiredValues(options.managedVarNames),
+		// The runner hands what Control handed its job; parsed here, where it enters the executor.
+		managedEnvironment: parseManagedEnvironment(requiredValues(options.managedVarNames)),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
 		log: options.log ?? ((line) => console.log(line)),

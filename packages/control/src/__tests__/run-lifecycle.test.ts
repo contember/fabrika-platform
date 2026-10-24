@@ -7,6 +7,7 @@ import type {
 	ControlProvider,
 	ProviderDeployInput,
 	ProviderEnvelope,
+	ProviderManagedEnvironment,
 	ProviderRegistration,
 	ProviderRegistrationInput,
 	ProviderSourceBinding,
@@ -260,6 +261,10 @@ function memoryLogs(
 	}
 	return { logs, objects, puts }
 }
+
+/** What a deploy was handed, without the credential flags. */
+const managedValues = (managed: ProviderManagedEnvironment | undefined): Record<string, string | null> =>
+	Object.fromEntries(Object.entries(managed ?? {}).map(([name, entry]) => [name, entry.value]))
 
 const requireRun = async (db: ControlRepositories, id: string): Promise<RunRow> => {
 	const run = await db.runs.getRun(id)
@@ -676,7 +681,7 @@ describe('provider-neutral run lifecycle', () => {
 		expect(input.environment.crossOrigins).toEqual(['https://partner.example.org'])
 		expect(input.secrets).toEqual({ API_KEY: 'prod' })
 		expect(input.vars).toEqual({ TEAM: 'prod' })
-		expect(input.managedEnvironment).toEqual({
+		expect(managedValues(input.managedEnvironment)).toEqual({
 			[FABRIKA_OPERATIONS_DSN]: null,
 			[FABRIKA_APP_ID]: null,
 			[FABRIKA_ENVIRONMENT]: null,
@@ -691,6 +696,14 @@ describe('provider-neutral run lifecycle', () => {
 			FABRIKA_APP_ORIGIN: 'https://public.example.com',
 			FABRIKA_TOKEN_KEYS: null,
 		})
+		// Control marks each credential once, so a provider writes it as a secret without a rule of its own.
+		expect(Object.keys(input.managedEnvironment).filter((name) => input.managedEnvironment[name]?.credential).sort()).toEqual([
+			FABRIKA_OPERATIONS_DSN,
+			FABRIKA_PROXY_SECRET,
+			FABRIKA_SERVICE_KEY,
+			'FABRIKA_IAM_RPC_KEY',
+			'FABRIKA_TOKEN_KEYS',
+		].sort())
 		expect(input.dryRun).toBe(true)
 
 		const run = await requireRun(db, runId)
@@ -856,7 +869,7 @@ describe('provider-neutral run lifecycle', () => {
 		await db.operationsCatalog.snapshot()
 		const pendingInputs: ProviderDeployInput[] = []
 		expect((await executeDeploy(makeDeps(db, makeProvider(pendingInputs, { state: 'succeeded' })), { runId })).status).toBe('succeeded')
-		expect(pendingInputs[0]?.managedEnvironment).toEqual({
+		expect(managedValues(pendingInputs[0]?.managedEnvironment)).toEqual({
 			[FABRIKA_OPERATIONS_DSN]: null,
 			[FABRIKA_APP_ID]: null,
 			[FABRIKA_ENVIRONMENT]: null,
@@ -886,7 +899,7 @@ describe('provider-neutral run lifecycle', () => {
 			'succeeded',
 		)
 		expect(activeInputs[0]?.vars).toEqual({ TEAM: 'prod' })
-		expect(activeInputs[0]?.managedEnvironment).toEqual({
+		expect(managedValues(activeInputs[0]?.managedEnvironment)).toEqual({
 			[FABRIKA_OPERATIONS_DSN]: dsn,
 			[FABRIKA_APP_ID]: 'app',
 			[FABRIKA_ENVIRONMENT]: 'prod',
@@ -911,7 +924,7 @@ describe('provider-neutral run lifecycle', () => {
 			const provider = makeProvider(inputs, { state: 'succeeded' })
 			const deps: RunDeps = { ...makeDeps(db, hop ? { ...provider, applicationHopSecret: true } : provider), proxySecrets: secrets }
 			expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
-			expect(inputs[0]?.managedEnvironment[FABRIKA_PROXY_SECRET]).toBe(expected)
+			expect(inputs[0]?.managedEnvironment[FABRIKA_PROXY_SECRET]?.value).toBe(expected)
 		}
 	})
 
@@ -921,7 +934,7 @@ describe('provider-neutral run lifecycle', () => {
 		const runId = await seedRun(db)
 		const inputs: ProviderDeployInput[] = []
 		expect((await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId })).status).toBe('succeeded')
-		expect(inputs[0]?.managedEnvironment[FABRIKA_IAM_APP_ID]).toBe('app@prod')
+		expect(inputs[0]?.managedEnvironment[FABRIKA_IAM_APP_ID]?.value).toBe('app@prod')
 	})
 
 	test('delivers the installation issuer and refuses an application that names its own', async () => {
@@ -933,7 +946,7 @@ describe('provider-neutral run lifecycle', () => {
 		const inputs: ProviderDeployInput[] = []
 		const deps = { ...makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), iamIssuer: 'https://iam.example.test' }
 		expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
-		expect(inputs[0]?.managedEnvironment[FABRIKA_IAM_ISSUER]).toBe('https://iam.example.test')
+		expect(inputs[0]?.managedEnvironment[FABRIKA_IAM_ISSUER]?.value).toBe('https://iam.example.test')
 
 		const conflicting = uuidv7()
 		await db.registry.upsertAppVar({ appId: 'app', env: 'prod', name: FABRIKA_IAM_ISSUER, value: 'https://attacker.example' })
@@ -984,7 +997,7 @@ describe('provider-neutral run lifecycle', () => {
 		const runId = await seedRun(db)
 		const inputs: ProviderDeployInput[] = []
 		expect((await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId })).status).toBe('succeeded')
-		expect(inputs[0]?.managedEnvironment[FABRIKA_IAM_ISSUER]).toBeNull()
+		expect(inputs[0]?.managedEnvironment[FABRIKA_IAM_ISSUER]?.value).toBeNull()
 	})
 
 	test('rejects legacy user values under reserved Operations names without logging their value', async () => {

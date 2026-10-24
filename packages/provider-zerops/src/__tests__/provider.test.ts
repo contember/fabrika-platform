@@ -1,4 +1,4 @@
-import { type AppSchema, contractDigest, workloadKeyVariable } from '@fabrika/auth-core'
+import { type AppSchema, contractDigest, parseManagedEnvironment, workloadKeyVariable } from '@fabrika/auth-core'
 import type { JsonValue, ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
@@ -24,7 +24,6 @@ import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } fr
 import { parseZeropsCheckpoint } from '../control'
 import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION, ZEROPS_SCAN_MIN_RAM_GB, ZEROPS_START_MIN_RAM_GB } from '../execution'
 import type { ExposureAlert } from '../exposure'
-import type { ManagedValues } from '../managed-env'
 import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor } from '../manifest'
 import { createZeropsDeployer, type ZeropsDeployResult, type ZeropsDeployRun } from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
@@ -366,7 +365,7 @@ const target = (overrides: Partial<ZeropsRuntimeTarget> = {}): ZeropsRuntimeTarg
 type ZeropsDeployer = ReturnType<typeof createZeropsDeployer>
 
 /** Every managed value removed, but the proxy secret a contract application is never deployed without. */
-const MANAGED_DEFAULTS: ManagedValues = {
+const MANAGED_DEFAULTS: Readonly<Record<string, string | null>> = {
 	FABRIKA_RELEASE: null,
 	FABRIKA_OPERATIONS_DSN: null,
 	FABRIKA_IAM_ISSUER: null,
@@ -397,7 +396,7 @@ const deployRun = (
 	access: approvedContract(),
 	secrets: {},
 	vars: { IMAGE: 'registry.test/demo:v2' },
-	managedEnvironment: MANAGED_DEFAULTS,
+	managedEnvironment: parseManagedEnvironment(MANAGED_DEFAULTS),
 	dryRun,
 	signal,
 	events: {
@@ -535,7 +534,7 @@ describe('Zerops provider', () => {
 		)
 		await execute({
 			...deployRun(recorded),
-			managedEnvironment: {
+			managedEnvironment: parseManagedEnvironment({
 				FABRIKA_RELEASE: RELEASE,
 				FABRIKA_OPERATIONS_DSN: 'private-new-dsn',
 				FABRIKA_IAM_ISSUER: null,
@@ -548,7 +547,7 @@ describe('Zerops provider', () => {
 				FABRIKA_IAM_RPC_KEY: 'px_private-membership-key',
 				FABRIKA_APP_ORIGIN: 'https://demo.example',
 				FABRIKA_TOKEN_KEYS: 'private-token-keys',
-			},
+			}),
 		}, provider)
 
 		expect(recorded.envWrites).toEqual([
@@ -610,12 +609,12 @@ describe('Zerops provider', () => {
 		)
 		await execute({
 			...deployRun(recorded),
-			managedEnvironment: {
+			managedEnvironment: parseManagedEnvironment({
 				...MANAGED_DEFAULTS,
 				FABRIKA_RELEASE: RELEASE,
 				FABRIKA_JOB_NIGHTLY_KEY: 'px_private-new-nightly',
 				FABRIKA_WEBHOOK_GITHUB_KEY: 'px_private-github',
-			},
+			}),
 		}, provider)
 		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_JOB_NIGHTLY_KEY', value: 'px_private-new-nightly', sensitive: true })
 		// A workload key is a credential, so it is never compared and an unchanged one is written again.
@@ -635,17 +634,13 @@ describe('Zerops provider', () => {
 				serviceEnv: [{ id: 'env-gone', key: gone, content: 'px_private-gone', type: 'USER', sensitive: true }],
 			})
 		)
-		await execute({ ...deployRun(recorded), managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_RELEASE: RELEASE, [cta]: 'px_private-cta' } }, provider)
+		await execute({
+			...deployRun(recorded),
+			managedEnvironment: parseManagedEnvironment({ ...MANAGED_DEFAULTS, FABRIKA_RELEASE: RELEASE, [cta]: 'px_private-cta' }),
+		}, provider)
 		expect(recorded.envWrites).toContainEqual({ key: cta, value: 'px_private-cta', sensitive: true })
 		expect(recorded.envDeletes).toEqual(['env-gone'])
 		expect(recorded.logs.join('\n')).not.toContain('private-')
-	})
-
-	test('refuses a workload key that is not a px_ key, before any platform call', async () => {
-		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
-		const run = { ...deployRun(recorded), managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_JOB_NIGHTLY_KEY: 'plain' } }
-		await expect(provider(run)).rejects.toThrow('FABRIKA_JOB_NIGHTLY_KEY must be a px_ key')
-		expect(recorded.timeline).toEqual([])
 	})
 
 	test("writes the installation's mail transport sensitive, and removes a mail variable no longer handed", async () => {
@@ -658,14 +653,14 @@ describe('Zerops provider', () => {
 		)
 		await execute({
 			...deployRun(recorded),
-			managedEnvironment: {
+			managedEnvironment: parseManagedEnvironment({
 				...MANAGED_DEFAULTS,
 				FABRIKA_RELEASE: RELEASE,
 				FABRIKA_EMAIL_PROVIDER: 'smartemailing',
 				FABRIKA_EMAIL_FROM: 'mail@example.com',
 				FABRIKA_EMAIL_SMARTEMAILING_USERNAME: 'private-se-user',
 				FABRIKA_EMAIL_SMARTEMAILING_API_KEY: 'private-se-key',
-			},
+			}),
 		}, provider)
 		// Every mail variable is written sensitive, the provider and the sender too: the family has no readable member.
 		for (
@@ -686,13 +681,6 @@ describe('Zerops provider', () => {
 		expect(recorded.builds[0]?.zeropsYaml ?? '').not.toContain('FABRIKA_EMAIL_')
 	})
 
-	test('refuses an empty mail variable without naming its value, before any platform call', async () => {
-		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
-		const run = { ...deployRun(recorded), managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_EMAIL_FROM: '' } }
-		await expect(provider(run)).rejects.toThrow('zerops: FABRIKA_EMAIL_FROM must not be empty')
-		expect(recorded.timeline).toEqual([])
-	})
-
 	test("writes each connector import's key and owner origin, and removes the variables of an import that is gone", async () => {
 		const provider = createZeropsDeployer(() =>
 			makeCollaborators(recorded, {
@@ -704,29 +692,17 @@ describe('Zerops provider', () => {
 		)
 		await execute({
 			...deployRun(recorded),
-			managedEnvironment: {
+			managedEnvironment: parseManagedEnvironment({
 				...MANAGED_DEFAULTS,
 				FABRIKA_RELEASE: RELEASE,
 				FABRIKA_CONNECT_CATALOG_KEY: 'px_private-catalog',
 				FABRIKA_CONNECT_CATALOG_URL: 'https://catalog.example.com',
-			},
+			}),
 		}, provider)
 		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_CONNECT_CATALOG_KEY', value: 'px_private-catalog', sensitive: true })
 		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_CONNECT_CATALOG_URL', value: 'https://catalog.example.com', sensitive: false })
 		expect(recorded.envDeletes.sort()).toEqual(['env-crm-key', 'env-crm-url'])
 		expect(recorded.logs.join('\n')).not.toContain('private-')
-	})
-
-	test('refuses a connector origin that is not an https origin, and a family name no deploy writes', async () => {
-		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
-		const handed = (extra: Record<string, string>) => ({ ...deployRun(recorded), managedEnvironment: { ...MANAGED_DEFAULTS, ...extra } })
-		await expect(provider(handed({ FABRIKA_CONNECT_CATALOG_URL: 'http://catalog.example.com' }))).rejects.toThrow(
-			'FABRIKA_CONNECT_CATALOG_URL must be an https origin',
-		)
-		await expect(provider(handed({ FABRIKA_CONNECT_CATALOG: 'catalog-proxy' }))).rejects.toThrow(
-			'FABRIKA_CONNECT_CATALOG is not a variable a deploy writes',
-		)
-		expect(recorded.timeline).toEqual([])
 	})
 
 	test('refuses a contract application without its proxy secret, before any platform call', async () => {
@@ -744,7 +720,13 @@ describe('Zerops provider', () => {
 			schema: schemaFromContract(notesArtifact),
 			checker: FABRIKA_CHECK_VERSION,
 		}
-		const run = { ...base, appId: 'notes', artifact, access, managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_PROXY_SECRET: null } }
+		const run = {
+			...base,
+			appId: 'notes',
+			artifact,
+			access,
+			managedEnvironment: parseManagedEnvironment({ ...MANAGED_DEFAULTS, FABRIKA_PROXY_SECRET: null }),
+		}
 		await expect(provider(run)).rejects.toThrow('a contract application needs its proxy secret')
 		expect(recorded.timeline).toEqual([])
 		// A dry run writes nothing, so it needs no secret.
@@ -1100,7 +1082,7 @@ describe('Zerops provider', () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
 		await execute({
 			...deployRun(recorded, target(), true),
-			managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_RELEASE: RELEASE, FABRIKA_SERVICE_KEY: 'private-service-key' },
+			managedEnvironment: parseManagedEnvironment({ ...MANAGED_DEFAULTS, FABRIKA_RELEASE: RELEASE, FABRIKA_SERVICE_KEY: 'private-service-key' }),
 		}, provider)
 		expect(recorded.calls).toEqual([])
 		expect(recorded.externalIds).toEqual([])
@@ -1350,9 +1332,9 @@ describe('Zerops compiler invariants', () => {
 const BUCKET: ZeropsServiceSpec = { hostname: 'files', type: 'object-storage', objectStorageSize: 1 }
 const DSN = 'https://0123456789abcdef0123456789abcdef@operations.example.test/7'
 
-const runOf = (services: ZeropsServiceSpec[], managedEnvironment: ManagedValues = MANAGED_DEFAULTS): ZeropsDeployRun => ({
+const runOf = (services: ZeropsServiceSpec[], managedEnvironment: Readonly<Record<string, string | null>> = MANAGED_DEFAULTS): ZeropsDeployRun => ({
 	...deployRun(recorded),
-	managedEnvironment,
+	managedEnvironment: parseManagedEnvironment(managedEnvironment),
 	artifact: compileFabrikaManifest(app(services), 'prod', SOURCE_DESCRIPTOR),
 })
 
@@ -1573,7 +1555,7 @@ describe('a contract application deploy', () => {
 		return createZeropsDeployer(() => makeCollaborators(recorded, overrides))({
 			...run,
 			appId: 'notes',
-			managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_RELEASE: RELEASE, FABRIKA_PROXY_SECRET: 'private-proxy-secret' },
+			managedEnvironment: parseManagedEnvironment({ ...MANAGED_DEFAULTS, FABRIKA_RELEASE: RELEASE, FABRIKA_PROXY_SECRET: 'private-proxy-secret' }),
 			artifact,
 			...(granted === 'none' ? {} : { access: granted }),
 			...(artifactUpload === undefined ? {} : { artifactUpload }),

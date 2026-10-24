@@ -12,7 +12,7 @@
 //
 // NOT PROVEN: that Zerops accepts any of it. No request in this file leaves the process.
 
-import { contractDigest, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import { contractDigest, parseManagedEnvironment, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import {
 	compileFabrikaManifest,
 	compileImport,
@@ -268,7 +268,7 @@ const makeRun = (
 	access: { contract: notesContract, contractDigest: contractDigest(notesContract), schema: notesSchema, checker: '0.7.0' },
 	secrets: {},
 	vars: {},
-	managedEnvironment: {
+	managedEnvironment: parseManagedEnvironment({
 		FABRIKA_RELEASE: null,
 		FABRIKA_OPERATIONS_DSN: null,
 		FABRIKA_IAM_ISSUER: null,
@@ -283,7 +283,7 @@ const makeRun = (
 		FABRIKA_IAM_RPC_KEY: null,
 		FABRIKA_APP_ORIGIN: null,
 		FABRIKA_TOKEN_KEYS: null,
-	},
+	}),
 	dryRun: false,
 	signal: new AbortController().signal,
 	events: {
@@ -459,6 +459,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 			'[dry-run] would read back subdomain access and bucket provenance of every declared service',
 			`[dry-run] would write service variables on ${TARGET.serviceId}: FABRIKA_PROXY_SECRET`,
 			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_IAM_RPC_URL, FABRIKA_IAM_RPC_KEY, FABRIKA_APP_ORIGIN, FABRIKA_TOKEN_KEYS, FABRIKA_SOURCE_MAP_UPLOAD_KEY`,
+			`[dry-run] would remove every other job, webhook, connector, mail and platform variable on ${TARGET.serviceId}`,
 			`[dry-run] would raise the minimum RAM of ${NOTES_SERVICE} to 0.5 GB where it is lower`,
 			`[dry-run] would size each process of ${NOTES_SERVICE} to the connection limit of ${NOTES_DATABASE_SERVICE}`,
 			`[dry-run] would reserve an app version on service ${TARGET.serviceId}`,

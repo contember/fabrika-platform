@@ -117,7 +117,8 @@ export async function connectorAddresses(
 		if (domain === '') {
 			throw new Error(`import '${name}': ${imported.app}@${env} has no domain, so its proxy cannot be reached`)
 		}
-		addresses[connectVariables(name).url] = `https://${domain}`
+		// The registry keeps the domain as typed; an origin is lower case.
+		addresses[connectVariables(name).url] = `https://${domain.toLowerCase()}`
 	}
 	return addresses
 }

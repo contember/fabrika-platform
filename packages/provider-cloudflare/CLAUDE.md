@@ -77,10 +77,10 @@ this one import.
   `TMPDIR` only. An older release, a Control that
   names no release, and a local deploy keep their authored `main` and the old plan (ADR-0062).
 - **Every managed credential is a Worker secret, uploaded with the version** (`src/managed-secrets.ts`): token keys,
-  workload keys, mail, the platform transport, the Operations DSN, the IAM RPC key and the proxy secret. Only the names
-  in `PUBLIC_MANAGED_VARIABLES` (the release, the digest, the issuer and audience, the app id, the environment, the IAM
-  RPC URL, `FABRIKA_APP_ORIGIN`), each import's `_URL` and the platform receivers' URLs are plain vars; any other name
-  is a secret (fail closed). `wrangler deploy --secrets-file` (wrangler 4.74 or newer) reads them from a 0600 file in a
+  workload keys, mail, the platform transport, the Operations DSN, the IAM RPC key and the proxy secret. The executor
+  parses what its job carries with `parseManagedEnvironment` (`@fabrika/auth-core`, in `command.ts`), and an entry is a
+  secret exactly when it is a `credential` (`isManagedCredential`, fail closed); the identities, origins and the release
+  are plain vars. `wrangler deploy --secrets-file` (wrangler 4.74 or newer) reads them from a 0600 file in a
   directory of its own, removed however the deploy ends; never write one into a generated config. After the deploy,
   `deleteStaleSecrets` deletes each framework secret the Worker still holds that this deploy no longer writes.
 - **Control issues a proxy secret per environment** because the provider declares `applicationHopSecret`

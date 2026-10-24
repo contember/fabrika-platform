@@ -1,4 +1,4 @@
-import type { AppSchema } from '@fabrika/auth-core'
+import { type AppSchema, parseManagedEnvironment } from '@fabrika/auth-core'
 import type {
 	JsonValue,
 	ProviderApp,
@@ -16,7 +16,6 @@ import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-a
 import { createZeropsApi, type ZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus, type ZeropsServiceEnv } from '../api'
 import { useSharedPostgres } from '../authoring'
 import { createZeropsControlProvider, type ZeropsControlProviderOptions, zeropsStoredTargetCodec } from '../control'
-import type { ManagedValues } from '../managed-env'
 import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, zeropsArtifactCodec } from '../manifest'
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
 import type { OlderProxyReaders } from '../namespace/proxy-reads'
@@ -58,7 +57,7 @@ const config: ZeropsAppConfig = {
 const SCHEMA: AppSchema = { scopes: [], actions: [], roles: {} }
 const COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
 /** Every managed value removed, but the proxy secret a contract application is never deployed without. */
-const MANAGED_DEFAULTS: ManagedValues = {
+const MANAGED_DEFAULTS: Readonly<Record<string, string | null>> = {
 	FABRIKA_RELEASE: null,
 	FABRIKA_OPERATIONS_DSN: null,
 	FABRIKA_IAM_ISSUER: null,
@@ -132,7 +131,7 @@ const deployInput = (recorded: Recorded): ProviderDeployInput => ({
 	environment: environment(),
 	secrets: {},
 	vars: {},
-	managedEnvironment: MANAGED_DEFAULTS,
+	managedEnvironment: parseManagedEnvironment(MANAGED_DEFAULTS),
 	dryRun: false,
 	signal: new AbortController().signal,
 	events: {
@@ -1480,7 +1479,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(
 			await control.deploy({
 				...deployInput(recorded),
-				managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_OPERATIONS_DSN: dsn, FABRIKA_RELEASE: release },
+				managedEnvironment: parseManagedEnvironment({ ...MANAGED_DEFAULTS, FABRIKA_OPERATIONS_DSN: dsn, FABRIKA_RELEASE: release }),
 			}),
 		).toEqual({ state: 'succeeded' })
 		expect(recorded.envWrites).toEqual([
@@ -1506,7 +1505,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		await control.deploy({
 			...deployInput(recorded),
 			dryRun: true,
-			managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_OPERATIONS_DSN: dsn },
+			managedEnvironment: parseManagedEnvironment({ ...MANAGED_DEFAULTS, FABRIKA_OPERATIONS_DSN: dsn }),
 		})
 		expect(recorded.envWrites).toEqual([])
 		expect(recorded.calls).toEqual([])

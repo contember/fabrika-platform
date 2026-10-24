@@ -1,4 +1,4 @@
-import type { AppSchema, ContractArtifact } from '@fabrika/auth-core'
+import type { AppSchema, ContractArtifact, ManagedEnvironment } from '@fabrika/auth-core'
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import type { JsonValue, ProviderEnvelope } from './json'
 
@@ -16,8 +16,11 @@ export interface ProviderRunEvents {
 	boundary(): Promise<void>
 }
 
-/** Complete platform-owned runtime state. A null value removes the key from persistent targets. */
-export type ProviderManagedEnvironment = Readonly<Record<string, string | null>>
+/**
+ * Complete platform-owned runtime state, parsed by Control (`parseManagedEnvironment`). A provider writes each entry as
+ * a secret when it is a `credential`, removes one whose value is null, and removes the stale ones `staleManagedVariables` names.
+ */
+export type ProviderManagedEnvironment = ManagedEnvironment
 
 /** Provider-neutral coordinates for obtaining one app revision. */
 export interface ProviderSource {

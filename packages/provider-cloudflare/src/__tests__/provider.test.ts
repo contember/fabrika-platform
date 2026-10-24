@@ -1,5 +1,5 @@
 import { schemaFromContract } from '@fabrika/app/contract'
-import { type AppActionDef, type AppEnvironment, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
+import { type AppActionDef, type AppEnvironment, type ContractArtifact, contractDigest, parseManagedEnvironment } from '@fabrika/auth-core'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { contractProxyTable, isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -213,7 +213,7 @@ const deploy = (
 		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
 		secrets: options.secrets ?? {},
 		vars: {},
-		managedEnvironment: options.managedEnvironment ?? {},
+		managedEnvironment: parseManagedEnvironment(options.managedEnvironment ?? {}),
 		...(contract === undefined
 			? {}
 			: {
@@ -1124,9 +1124,6 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		await expect(deploy(rec, authored, { checkoutContract: notesArtifact })).rejects.toThrow(
 			'application variable `FABRIKA_CONTRACT_DIGEST` is managed by Fabrika',
 		)
-		await expect(
-			deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: notesArtifact, managedEnvironment: { FABRIKA_CONTRACT_DIGEST: 'other' } }),
-		).rejects.toThrow('FABRIKA_CONTRACT_DIGEST is `other`, but the contract this deployment serves has digest')
 		expect(rec.provisions).toHaveLength(0)
 	})
 

@@ -297,7 +297,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 			appEnvironmentId(deployment.app, deployment.env)
 		)
 	const managedEnvironment: Record<string, string> = {}
-	for (const [name, value] of Object.entries(input.managedEnvironment)) {
+	for (const [name, { value }] of Object.entries(input.managedEnvironment)) {
 		// An older release's Worker would demand the hop secret from a proxy Worker that never sends it.
 		if (value !== null && !(stateless && name === FABRIKA_PROXY_SECRET)) managedEnvironment[name] = value
 	}

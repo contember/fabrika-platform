@@ -151,3 +151,12 @@ WU5, WU6, WU7 and WU9 are independent of each other. WU8 follows WU7.
   has no schema to name. The Cloudflare platform path (`platformResources: 'allow'`) still registers its own
   component's schema and reads `FABRIKA_IAM_RETURN_ORIGINS` from the installation workflow; only application deploys
   moved.
+- **WU2.** `packages/auth-core/src/managed-environment.ts`. The job's wire shape is unchanged (a record of strings),
+  so the Cloudflare executor parses it again in `command.ts` and gets the credential flags from the same rule; a runner
+  and a Control of different releases still agree. `staleManagedVariables` names only what Control writes (its twelve
+  names and the families), not every framework name: Zerops writes framework names of its own (the storage
+  provenance, the source-map upload key), and Zerops refuses to delete the descriptor's `FABRIKA_RELEASE`. Cloudflare's
+  secret sweep keeps the wider rule (every framework name it does not write), because its executor writes no framework
+  secret of its own. Control refuses a run whose environment lacks one of the twelve names, which the Zerops schema
+  used to refuse. Cloudflare's
+  check that a handed `FABRIKA_CONTRACT_DIGEST` matches the served contract went: the parser refuses the name.

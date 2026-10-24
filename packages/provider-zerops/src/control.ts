@@ -29,7 +29,7 @@ import {
 } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
 import { createdServices, type ExposureAlerter, isObjectStorageType } from './exposure'
-import { assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoFrameworkReference, parseManagedEnvironment } from './managed-env'
+import { assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoFrameworkReference } from './managed-env'
 import {
 	assertFabrikaManifestCoordinates,
 	type FabrikaManifest,
@@ -314,8 +314,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		deploy: async (input: ProviderDeployInput): Promise<ProviderDeployOutcome> => {
 			input.signal.throwIfAborted()
 			assertAuthoredManagedInputs({ variableNames: Object.keys(input.vars), secretNames: Object.keys(input.secrets) })
-			const handed = parseManagedEnvironment(input.managedEnvironment)
-			const managedEnvironment = { ...handed.values, ...handed.familyVariables }
 			const binding = privateBinding(input.sourceBinding)
 			assertEnvironmentOfApp(input.app, input.environment)
 			const placement = resolvedEnvironment(input.environment, { requireReady: true })
@@ -347,7 +345,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				env: input.environment.env,
 				secrets: input.secrets,
 				vars: input.vars,
-				managedEnvironment,
+				managedEnvironment: input.managedEnvironment,
 				target: runtimeTarget,
 				artifact,
 				...(input.environment.access === undefined ? {} : { access: input.environment.access }),

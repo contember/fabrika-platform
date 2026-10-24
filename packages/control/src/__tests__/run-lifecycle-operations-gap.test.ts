@@ -85,7 +85,7 @@ describe('deploy run log names a missing Operations ingest configuration', () =>
 		expect(stored.lines()).toEqual([
 			'operations ingest not injected: app has no active ingest config (catalog revision 1 pending)',
 		])
-		expect(inputs[0]?.managedEnvironment[FABRIKA_OPERATIONS_DSN]).toBeNull()
+		expect(inputs[0]?.managedEnvironment[FABRIKA_OPERATIONS_DSN]?.value).toBeNull()
 	})
 
 	test('reports that Operations is not wired when no change ever advanced a revision', async () => {
@@ -205,6 +205,6 @@ describe('deploy run log names a missing Operations ingest configuration', () =>
 
 		expect((await executeDeploy(deps(db, stored.logs, inputs), { runId })).status).toBe('succeeded')
 		expect(stored.lines()).toEqual([])
-		expect(inputs[0]?.managedEnvironment[FABRIKA_OPERATIONS_DSN]).toBe(dsn)
+		expect(inputs[0]?.managedEnvironment[FABRIKA_OPERATIONS_DSN]?.value).toBe(dsn)
 	})
 })

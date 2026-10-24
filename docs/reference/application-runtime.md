@@ -1955,9 +1955,11 @@ unless the approved contract declares a token purpose. Each workload of the appr
 `FABRIKA_JOB_<NAME>_KEY`, a webhook `FABRIKA_WEBHOOK_<NAME>_KEY` and a public procedure
 `FABRIKA_PROCEDURE_<ID>_<8 hex>_KEY`.
 
-On Cloudflare the identities, origins and the release (`isPublicManagedVariable`, `provider-cloudflare/src/managed-secrets.ts`)
-are Worker vars, and every other managed value, `FABRIKA_PROXY_SECRET` among them, is a Worker secret uploaded with the
-version (`wrangler deploy --secrets-file`). The deploy then deletes the framework secrets it no longer writes.
+Control parses what it hands a deploy once (`parseManagedEnvironment`, `@fabrika/auth-core/src/managed-environment.ts`)
+and marks each credential (`isManagedCredential`). On Cloudflare the identities, origins and the release are Worker vars,
+and every credential, `FABRIKA_PROXY_SECRET` among them, is a Worker secret uploaded with the version
+(`wrangler deploy --secrets-file`); on Zerops a credential is a sensitive service variable. Each deploy then removes the
+managed variables it no longer writes (`staleManagedVariables`).
 
 A name whose value the installation cannot supply is REMOVED from the service rather than left stale —
 an app verifying against a previous installation's issuer is worse than one that fails to boot.

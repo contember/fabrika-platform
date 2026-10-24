@@ -1,4 +1,4 @@
-import { contractDigest } from '@fabrika/auth-core'
+import { contractDigest, parseManagedEnvironment } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	ProviderDeployInput,
@@ -70,10 +70,10 @@ const deployInput = (): ProviderDeployInput => ({
 	},
 	secrets: { API_KEY: 'secret' },
 	vars: { FEATURE: 'on' },
-	managedEnvironment: {
+	managedEnvironment: parseManagedEnvironment({
 		FABRIKA_OPERATIONS_DSN: 'https://public@errors.test/1',
 		FABRIKA_RELEASE: null,
-	},
+	}),
 	dryRun: true,
 	artifactUpload: {
 		url: 'https://operations.example.com/api/artifacts/source-maps/',
@@ -588,7 +588,7 @@ describe('Cloudflare control provider', () => {
 			FABRIKA_TOKEN_KEYS: 'kid12345:private-secret',
 			FABRIKA_APP_ORIGIN: 'https://demo.example',
 		}
-		await recordingProvider(jobs).deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, ...handed } })
+		await recordingProvider(jobs).deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, ...parseManagedEnvironment(handed) } })
 		expect(jobs[0]?.managedEnvironment).toMatchObject(handed)
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
@@ -601,14 +601,20 @@ describe('Cloudflare control provider', () => {
 		await recordingProvider(jobs).deploy({
 			...input,
 			environment,
-			managedEnvironment: { ...input.managedEnvironment, FABRIKA_PROXY_SECRET: 'p'.repeat(43) },
+			managedEnvironment: { ...input.managedEnvironment, ...parseManagedEnvironment({ FABRIKA_PROXY_SECRET: 'p'.repeat(43) }) },
 		})
 		expect(jobs[0]?.managedEnvironment?.['FABRIKA_PROXY_SECRET']).toBeUndefined()
 		expect(jobs[0]?.approvedAccess?.framework).toBe('0.8.1')
 		for (
 			const [name, value] of [['FABRIKA_JOB_NIGHTLY_KEY', 'px_job'], ['FABRIKA_EMAIL_RESEND_API_KEY', 're_key'], ['FABRIKA_TOKEN_KEYS', 'kid:secret']]
 		) {
-			await expect(recordingProvider(jobs).deploy({ ...input, environment, managedEnvironment: { ...input.managedEnvironment, [name]: value } })).rejects
+			await expect(
+				recordingProvider(jobs).deploy({
+					...input,
+					environment,
+					managedEnvironment: { ...input.managedEnvironment, ...parseManagedEnvironment({ [name]: value }) },
+				}),
+			).rejects
 				.toThrow('framework 0.8.1')
 		}
 		expect(jobs).toHaveLength(1)
@@ -618,14 +624,20 @@ describe('Cloudflare control provider', () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()
 		const secret = 'p'.repeat(43)
-		await recordingProvider(jobs).deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, FABRIKA_PROXY_SECRET: secret } })
+		await recordingProvider(jobs).deploy({
+			...input,
+			managedEnvironment: { ...input.managedEnvironment, ...parseManagedEnvironment({ FABRIKA_PROXY_SECRET: secret }) },
+		})
 		expect(jobs[0]?.managedEnvironment?.['FABRIKA_PROXY_SECRET']).toBe(secret)
 	})
 
 	test('a key the deploy no longer writes is left out of the job, for the deploy to delete', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()
-		await recordingProvider(jobs).deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, FABRIKA_TOKEN_KEYS: null } })
+		await recordingProvider(jobs).deploy({
+			...input,
+			managedEnvironment: { ...input.managedEnvironment, ...parseManagedEnvironment({ FABRIKA_TOKEN_KEYS: null }) },
+		})
 		expect(jobs[0]?.managedEnvironment?.['FABRIKA_TOKEN_KEYS']).toBeUndefined()
 	})
 
