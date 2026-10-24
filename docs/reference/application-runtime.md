@@ -167,6 +167,17 @@ The proxy's endpoint decision and procedure requirements are complementary:
 A `.require()` check does not replace the proxy's decision. The proxy's decision
 cannot replace an object-level check whose scope depends on application data.
 
+The token a contract application receives is at most `MAX_APPLICATION_TOKEN_BYTES` (24 KiB). On a bearer request it
+arrives twice, in `X-Fabrika-Token` and in `Authorization`. On Zerops the platform's start script runs the application's
+Bun with `--max-http-header-size=65536`, which leaves 16 KiB for the request's own headers and cookies. A token any
+client sends itself, and every token at an installation service, stays at `MAX_ACCESS_TOKEN_BYTES` (8 KiB): it crosses
+the proxy's auth service and reaches installation services, which keep Bun's default limit of 16 KiB.
+
+**Rollout.** The start script is generated at each application deploy, so a platform upgrade alone does not change a
+running application. Until a Zerops application is deployed again, its Bun keeps the 16 KiB default, and a user whose
+token is between about 8 and 24 KiB gets a 431 from it instead of the proxy's 403 `token_too_large`. Anyone who got a
+token before the upgrade still gets it. Redeploying the application converges it.
+
 ## Typed RPC
 
 `initRpc<Ctx>()` creates immutable procedure builders and nested routers. A
@@ -1703,7 +1714,7 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   what a page of the application sends: `Sec-Fetch-Site: same-origin` and, unless the
   request's credentials are `omit`, the caller's session cookie. Both refuse a host
   other than the application's.
-- A caller whose token would exceed `MAX_ACCESS_TOKEN_BYTES` (32 KiB) is refused with
+- A caller whose token would exceed `MAX_APPLICATION_TOKEN_BYTES` (24 KiB) is refused with
   403, as IAM refuses to sign it.
 - Only test files may import the kit: `@fabrika/check` reports `test-only-import`
   for `@fabrika/app/testing` (and its subpaths), `@fabrika/db/testing`, or a test

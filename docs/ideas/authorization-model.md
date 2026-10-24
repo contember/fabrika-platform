@@ -168,8 +168,9 @@ Gaps:
   sprint).
 - One parent per dimension (optional vocabulary).
 - Expanded `perms` overflow the token for a principal in hundreds of nodes. Decided: raise the bound, not project the
-  token. IAM now signs up to 32 KiB (about 200 entries) and the platform starts an application's Bun server with a
-  64 KiB header limit. A compact, additive claim shape and the 1000-value `Within` cap remain
+  token. IAM now signs a token the proxy injects toward a contract application up to 24 KiB (about 150 entries; it
+  travels twice on a bearer request), and the platform starts an application's Bun server with a 64 KiB header limit.
+  Client-sent tokens stay at 8 KiB. A compact, additive claim shape and the 1000-value `Within` cap remain
   ([backlog 100](../backlog/100-a-principal-in-many-scopes-gets-no-token.md)).
 
 ## Migrating the application in production

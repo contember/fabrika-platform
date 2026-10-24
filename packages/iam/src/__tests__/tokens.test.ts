@@ -1,4 +1,4 @@
-import { DEFAULT_TOKEN_TTL_SECONDS, MAX_ACCESS_TOKEN_BYTES, parseAccessClaims, permits } from '@fabrika/auth-core'
+import { DEFAULT_TOKEN_TTL_SECONDS, MAX_ACCESS_TOKEN_BYTES, MAX_APPLICATION_TOKEN_BYTES, parseAccessClaims, permits } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, jwtVerify } from 'jose'
 import { hashToken } from '../secret'
@@ -278,8 +278,11 @@ describe('mintFromKey', () => {
 
 describe('the access token size bound', () => {
 	/** A user in enough workspaces that the token would not fit in one proxy header. */
-	async function memberOfManyWorkspaces(count = 400) {
+	async function memberOfManyWorkspaces(count = 400, contract = false) {
 		const h = createHarness()
+		if (contract) {
+			await h.repositories.appSchema.reconcileAppSchema({ app: 'example-app', scopes: [], actions: [], roles: [], contract: true })
+		}
 		const principalId = seedUser(h.sqlite, { sub: 'g-wide', email: 'wide@b.cz' })
 		for (let index = 0; index < count; index++) {
 			seedInlineGrant(h.sqlite, principalId, ['note.read', 'note.write'], { type: 'workspace', value: `workspace-${index}` }, 'example-app')
@@ -310,14 +313,28 @@ describe('the access token size bound', () => {
 		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
 	})
 
-	test('a token between 8 KiB and the bound is signed, and verifies with every entry', async () => {
+	test('at an installation service the bound stays MAX_ACCESS_TOKEN_BYTES', async () => {
 		const { h, principalId } = await memberOfManyWorkspaces(80)
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const { result } = await mintToken(services, ENV, { app: 'example-app', session: await h.signSession(principalId), requestId: 'svc' })
+		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
+	})
+
+	test('at a contract application a token above MAX_APPLICATION_TOKEN_BYTES is refused', async () => {
+		const { h, principalId } = await memberOfManyWorkspaces(400, true)
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const { result } = await mintToken(services, ENV, { app: 'example-app', session: await h.signSession(principalId), requestId: 'app-wide' })
+		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
+	})
+
+	test('at a contract application a token between 8 KiB and MAX_APPLICATION_TOKEN_BYTES is signed, and verifies with every entry', async () => {
+		const { h, principalId } = await memberOfManyWorkspaces(80, true)
 		const services = h.makeServices({ issuer: 'https://propustka.test' })
 		const session = await h.signSession(principalId)
 		const { result } = await mintToken(services, ENV, { app: 'example-app', session, requestId: 'wide-fits' })
 		if (!result.ok) throw new Error(`expected a token: ${result.reason}`)
-		expect(result.token.length).toBeGreaterThan(8192)
-		expect(result.token.length).toBeLessThanOrEqual(MAX_ACCESS_TOKEN_BYTES)
+		expect(result.token.length).toBeGreaterThan(MAX_ACCESS_TOKEN_BYTES)
+		expect(result.token.length).toBeLessThanOrEqual(MAX_APPLICATION_TOKEN_BYTES)
 		const { payload } = await jwtVerify(result.token, createLocalJWKSet((await getSigner(ENV)).jwks()), {
 			issuer: 'https://propustka.test',
 			audience: 'example-app',

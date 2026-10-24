@@ -6,8 +6,8 @@ blocked-by: []
 
 # 100 — A principal in many scopes gets no token
 
-**Summary.** A token carries one permission entry per action and scope. The token bound is now 32 KiB, which fits about
-200 entries: a three-action role in about 65 workspaces. Beyond that a user is still refused everywhere, and a `Within` of 1000 values
+**Summary.** A token carries one permission entry per action and scope. The bound of the token the proxy injects toward a contract
+application is now 24 KiB, which fits about 150 entries: a three-action role in about 50 workspaces. Beyond that a user is still refused everywhere, and a `Within` of 1000 values
 is a second ceiling behind it. What is left needs a compact claim shape and a decision on large lists; medium to large
 effort.
 
@@ -16,11 +16,12 @@ effort.
 - `perms` is a flat `PermissionEntry[]` (`packages/auth-core/src/types.ts`), one `{ action, scope, source }` per
   action per scope value. A contract application lists exact actions, never a wildcard, so a role of three actions
   in one workspace is three entries.
-- IAM signs no token above `MAX_ACCESS_TOKEN_BYTES` (32768, `packages/auth-core/src/token.ts`; `boundedToken`,
-  `packages/iam/src/tokens.ts`), and the proxy turns `token_too_large` into a 403. The bound was raised from 8 KiB:
-  Bun, the application runtime on Zerops, is started with `--max-http-header-size` at twice the bound
-  (`packages/provider-zerops/src/execution.ts`), and Caddy (1 MiB) and Cloudflare (128 KiB) allow more. A token with a
-  UUIDv7 scope value per entry passes 32 KiB at about 200 entries (it passed 8 KiB at about 50).
+- IAM signs no application token above `MAX_APPLICATION_TOKEN_BYTES` (24576, `packages/auth-core/src/token.ts`;
+  `boundedToken`, `packages/iam/src/tokens.ts`), and the proxy turns `token_too_large` into a 403. The bound was
+  raised from 8 KiB: the token travels twice on a bearer request, and Bun, the application runtime on Zerops, is
+  started with a 64 KiB header limit (`packages/provider-zerops/src/execution.ts`). A raise past that needs a larger
+  limit there, and the client-sent kinds stay at 8 KiB for the proxy's auth service and installation services, which
+  keep Bun's 16 KiB. A token with a UUIDv7 scope value per entry passes 24 KiB at about 150 entries (8 KiB at about 50).
 - Behind it, a `Within` carries at most `MAX_WITHIN_VALUES` (1000) scope values, its own, its containers' and its
   contained grants' together (`packages/db/src/capability.ts`). The framework refuses to mint a larger one
   (`packages/app/src/implement/capability.ts`), the layer refuses to use one (`packages/db/src/store.ts`), and the

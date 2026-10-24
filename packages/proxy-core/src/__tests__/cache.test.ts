@@ -112,6 +112,22 @@ describe('cache correctness', () => {
 		expect(cacheKey('a', 'key', 'x')).not.toBe(cacheKey('a', 'session', 'x'))
 	})
 
+	test('MemoryTokenCache keeps its keys and tokens within its byte budget, oldest out first', () => {
+		const cache = new MemoryTokenCache(10_000, 1000)
+		for (let i = 0; i < 10; i++) {
+			cache.set(`k${i}`, { token: 't'.repeat(298), expiresAt: future() })
+		}
+		expect(cache.size).toBe(3)
+		expect(cache.get('k6')).toBeUndefined()
+		expect(cache.get('k9')).toBeDefined()
+		cache.set('huge', { token: 't'.repeat(1001), expiresAt: future() })
+		expect(cache.get('huge')).toBeUndefined()
+		expect(cache.size).toBe(3)
+		cache.delete('k9')
+		cache.set('k10', { token: 't'.repeat(298), expiresAt: future() })
+		expect(cache.size).toBe(3)
+	})
+
 	test('MemoryTokenCache is bounded — a flood of credentials cannot grow it without limit', () => {
 		const cache = new MemoryTokenCache(3)
 		for (let i = 0; i < 100; i++) {

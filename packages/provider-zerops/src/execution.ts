@@ -9,7 +9,7 @@ import {
 	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
 	type FrameworkVariableName,
 } from '@fabrika/auth-core'
-import { MAX_ACCESS_TOKEN_BYTES } from '@fabrika/auth-core'
+import { APPLICATION_SERVER_MAX_HEADER_BYTES } from '@fabrika/auth-core'
 import type { OperationsAssetRoot, OperationsSourceMapBuildUpload } from '@fabrika/operations-contract/releases'
 import { FRAMEWORK_RELEASE_PATTERN, type JsonValue } from '@fabrika/provider-contract'
 import packageManifest from '../package.json'
@@ -295,15 +295,11 @@ const verifyScript = (appId: string): readonly string[] => [
 	`FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db test-isolation`,
 ]
 
-// Bun refuses a request whose headers pass 16 KiB in total by default; the proxy forwards a token of up to
-// MAX_ACCESS_TOKEN_BYTES beside the request's own headers and cookies.
-export const APPLICATION_MAX_HEADER_BYTES = 2 * MAX_ACCESS_TOKEN_BYTES
-
 const startScript: readonly string[] = [
 	'#!/bin/sh',
 	'set -eu',
 	`cd ${RUNTIME_ROOT}`,
-	`exec bun --max-http-header-size=${APPLICATION_MAX_HEADER_BYTES} fabrika/entry.generated.ts`,
+	`exec bun --max-http-header-size=${APPLICATION_SERVER_MAX_HEADER_BYTES} fabrika/entry.generated.ts`,
 ]
 
 /** The scripts the build writes and every container's init commands run, in this order. */

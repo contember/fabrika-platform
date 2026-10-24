@@ -19,6 +19,7 @@ import {
 	type KeyGrant,
 	type LinkTokenClaims,
 	MAX_ACCESS_TOKEN_BYTES,
+	MAX_APPLICATION_TOKEN_BYTES,
 	type MintFromKeyResult,
 	type MintTokenInput,
 	type MintTokenResult,
@@ -131,7 +132,7 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 			issuedAt: now,
 			expiresAt,
 		}),
-		{ app: input.app, subject: principal.id },
+		{ app: input.app, subject: principal.id, bytes: await proxyMintedBound(services, input.app) },
 	)
 	if (token === null) {
 		return refused('token_too_large', principal.id)
@@ -260,7 +261,7 @@ export async function mintFromKey(
 			issuedAt: now,
 			expiresAt,
 		}),
-		{ app: input.app, subject: effective.subject },
+		{ app: input.app, subject: effective.subject, bytes: await proxyMintedBound(services, input.app) },
 	)
 	if (token === null) {
 		return { result: { ok: false, reason: 'token_too_large' }, principalId: cred.principal_id, credentialId: cred.id }
@@ -462,17 +463,28 @@ function credentialGrantToEntry(row: CredentialGrantRow): PermissionEntry {
 }
 
 /**
- * The signed token, or null — with a warning naming the subject and the size — when it is above
- * `MAX_ACCESS_TOKEN_BYTES`. Every bearer IAM issues passes here: native tokens and OAuth resource tokens.
+ * The size bound of a token the proxy mints from a session or a `px_` key: `MAX_APPLICATION_TOKEN_BYTES` at a contract
+ * application, whose token only the proxy injects toward the application; `MAX_ACCESS_TOKEN_BYTES` at an installation
+ * service, whose Bun keeps its default header limit.
  */
-export async function boundedToken(signed: Promise<string>, who: { app: string; subject: string }): Promise<string | null> {
+async function proxyMintedBound(services: Services, app: string): Promise<number> {
+	return (await services.repositories.appSchema.isContractApp(app)) ? MAX_APPLICATION_TOKEN_BYTES : MAX_ACCESS_TOKEN_BYTES
+}
+
+/**
+ * The signed token, or null — with a warning naming the subject and the size — when it is above `who.bytes`
+ * (`MAX_ACCESS_TOKEN_BYTES` unless given). Every bearer IAM issues passes here: native tokens and OAuth resource tokens.
+ */
+export async function boundedToken(
+	signed: Promise<string>,
+	who: { app: string; subject: string; bytes?: number },
+): Promise<string | null> {
 	const token = await signed
-	if (token.length <= MAX_ACCESS_TOKEN_BYTES) {
+	const bound = who.bytes ?? MAX_ACCESS_TOKEN_BYTES
+	if (token.length <= bound) {
 		return token
 	}
-	console.warn(
-		`access token for '${who.subject}' at app '${who.app}' is ${token.length} bytes, above the ${MAX_ACCESS_TOKEN_BYTES}-byte bound; refused`,
-	)
+	console.warn(`access token for '${who.subject}' at app '${who.app}' is ${token.length} bytes, above the ${bound}-byte bound; refused`)
 	return null
 }
 
