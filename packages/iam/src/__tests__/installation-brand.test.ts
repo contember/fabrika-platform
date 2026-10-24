@@ -6,9 +6,16 @@
 import { IAM_APP_ID, IAM_APP_SCHEMA, USER_ADMIN_ROLE } from '@fabrika/iam-contract'
 import type { SqlDatabase } from '@fabrika/platform'
 import { brandMark } from '@fabrika/proxy-core/page-style'
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { handleAuth } from '../auth/routes'
-import { createPostgresIamRepositories, type IamRepositories, InstallationBrandRepository, type InstallationBrandRow } from '../db'
+import {
+	createIamRepositories,
+	createPostgresIamRepositories,
+	type IamRepositories,
+	InstallationBrandRepository,
+	type InstallationBrandRow,
+} from '../db'
+import { REFUSED_BRAND_WARN_INTERVAL_MS, storedBrand } from '../installation-brand'
 import { prop } from '../json'
 import { consoleRpc, errorType, result } from './helpers/app-people'
 import { PNG_BASE64, SVG_BASE64, TEST_BRAND } from './helpers/brand'
@@ -193,6 +200,71 @@ describe('IAM pages and the brand', () => {
 		expect(directives.get('script-src')).toEqual([expect.stringMatching(/^'nonce-[0-9a-f]{32}'$/)])
 		expect(directives.get('style-src')).toEqual([expect.stringMatching(/^'nonce-[0-9a-f]{32}'$/)])
 		expect([...directives.entries()].filter(([name, values]) => name !== 'img-src' && values.includes('data:'))).toEqual([])
+	})
+
+	test('a row read again takes the check of its images, and a row with other images is checked anew', () => {
+		const row = (light_type: string, light_base64: string): InstallationBrandRow => ({
+			id: 1,
+			light_type,
+			light_base64,
+			dark_type: null,
+			dark_base64: null,
+			updated_at: 1_700_000_000,
+		})
+		const cleared: InstallationBrandRow = { ...row('image/png', PNG_BASE64), light_type: null, light_base64: null }
+		const warn = spyOn(console, 'warn').mockImplementation(() => {})
+		try {
+			const first = storedBrand(row('image/png', PNG_BASE64))
+			expect(first).toEqual({ light: TEST_BRAND.light })
+			// A fresh read of the same row is a new object with equal strings: it takes the earlier answer. The Worker
+			// builds its repositories per request, so the answer is the process's, whichever repository read the row.
+			expect(storedBrand(row('image/png', PNG_BASE64))).toBe(first)
+
+			// Other bytes are checked anew: an SVG stored as a PNG is refused, and logged once, not on every read.
+			const now = 1_700_000_000_000
+			expect(storedBrand(row('image/png', SVG_BASE64), now)).toBeNull()
+			expect(storedBrand(row('image/png', SVG_BASE64), now + 1)).toBeNull()
+			expect(warn).toHaveBeenCalledTimes(1)
+			// While the pages keep reading it, the refusal is logged again once the interval has passed.
+			expect(storedBrand(row('image/png', SVG_BASE64), now + REFUSED_BRAND_WARN_INTERVAL_MS)).toBeNull()
+			expect(storedBrand(row('image/png', SVG_BASE64), now + REFUSED_BRAND_WARN_INTERVAL_MS + 1)).toBeNull()
+			expect(warn).toHaveBeenCalledTimes(2)
+			// A clock stepped back does not hold the next line off until it catches up.
+			expect(storedBrand(row('image/png', SVG_BASE64), now)).toBeNull()
+			expect(warn).toHaveBeenCalledTimes(3)
+
+			// A cleared row empties the entry: the same refused images read after it are checked, and logged, again.
+			expect(storedBrand(cleared, now)).toBeNull()
+			expect(storedBrand(row('image/png', SVG_BASE64), now + 1)).toBeNull()
+			expect(warn).toHaveBeenCalledTimes(4)
+
+			// The same bytes under the type they are: the type is part of the key, so they are checked anew and admitted.
+			expect(storedBrand(row('image/svg+xml', SVG_BASE64))).toEqual({ light: { type: 'image/svg+xml', base64: SVG_BASE64 } })
+		} finally {
+			warn.mockRestore()
+		}
+	})
+
+	test('pages served through repositories built per request, as the Worker builds them, check the stored row once', async () => {
+		const h = createHarness()
+		const db = new TestSqlDatabase(h.sqlite)
+		await db
+			.prepare('INSERT INTO installation_brand (id, light_type, light_base64, updated_at) VALUES (1, ?, ?, ?)')
+			.bind('image/png', SVG_BASE64, 1_700_000_000)
+			.run()
+		// Another test may have checked the same images: a row without them empties the entry first.
+		storedBrand(null)
+		const warn = spyOn(console, 'warn').mockImplementation(() => {})
+		try {
+			for (let request = 0; request < 3; request++) {
+				const services = makeServicesFor(createIamRepositories(db), { ...SERVICES, issuer: ORIGIN, environment: 'stage' })
+				const response = await handleAuth(new Request(`${ORIGIN}/auth/login`), services, CALLER_ENV, new PendingWork())
+				expect(await response.text()).toContain(MARK)
+			}
+			expect(warn).toHaveBeenCalledTimes(1)
+		} finally {
+			warn.mockRestore()
+		}
 	})
 
 	test('a brand that cannot be read draws the fabrika mark instead of failing the page', async () => {

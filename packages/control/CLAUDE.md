@@ -415,7 +415,8 @@ other environment, before the provider prepares anything, and the write maps a r
   once with it (one a deploy holds is no failure: `NamespaceProxyBusyError`, the republish queued its reconcile), moves
   one still `provisioning` back to `pending` and queues its reconcile, as `namespaces.reconcile` does, and audits each
   before it reports a failure; the
-  console calls it after a logo change. Control keeps no copy. Control's calls to IAM as itself (the brand, membership
+  console calls it after a logo change. Control keeps no copy, though it costs each mutation one more IAM call: a copy
+  that only `republishAll` refreshes would leave every later deploy publishing an old logo (ADR-0066, alternatives). Control's calls to IAM as itself (the brand, membership
   keys, workload keys) share one client, `iamProvisioningClient` (`src/iam-provisioning.ts`).
 - **`namespaces.update` runs in the request, not behind the queue** (backlog 79). The provider PLANS the
   merged target first (pure; an unknown field → 400; `PROVIDER_NAMESPACE_IMMUTABLE` → 409 naming a new
