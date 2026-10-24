@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
+	DEFAULT_APPLICATION_OBJECT,
 	formatOpsKeyDigests,
+	MAX_APPLICATION_OBJECTS,
 	OPS_CONTENT_TYPE,
 	OPS_METHOD,
 	OPS_MODES,
@@ -9,20 +11,28 @@ import {
 	OPS_ROW_COUNT_CAP,
 	OPS_ROW_ID,
 	OPS_ROW_PATH,
+	OPS_STALE_STATUS,
+	OPS_STATE_KEY,
 	type OpsBootFailureContent,
 	type OpsContentView,
 	opsKeyDigest,
 	type OpsMigration,
 	opsPath,
+	type OpsPublishedState,
 	opsRefusal,
+	type OpsStaleRefusal,
 	type OpsStateAck,
+	opsTransitionRefused,
 	type OpsView,
+	parseApplicationObjectName,
+	parseApplicationObjects,
 	parseOpsContentView,
 	parseOpsInspectRequest,
 	parseOpsKeyDigests,
 	parseOpsMigrateAck,
 	parseOpsMigrateRequest,
 	parseOpsOperation,
+	parseOpsStaleRefusal,
 	parseOpsStateAck,
 	parseOpsStateRequest,
 	parseOpsView,
@@ -133,12 +143,12 @@ describe('FABRIKA_OPS_KEY_DIGESTS', () => {
 
 describe('the inspect request', () => {
 	test('asks for the projection or for content', () => {
-		expect(parseOpsInspectRequest({ content: false })).toEqual({ content: false })
-		expect(parseOpsInspectRequest({ content: true })).toEqual({ content: true })
+		expect(parseOpsInspectRequest({ object: 'application', content: false })).toEqual({ object: 'application', content: false })
+		expect(parseOpsInspectRequest({ object: 'restore-1', content: true })).toEqual({ object: 'restore-1', content: true })
 	})
 
 	test('refuses an unknown key, a wrong type and a missing field', () => {
-		for (const body of [...variants({ content: false }, { content: 'yes' }), null, [], 'content']) {
+		for (const body of [...variants({ object: 'application', content: false }, { object: 'Application', content: 'yes' }), null, [], 'content']) {
 			expect(parseOpsInspectRequest(body)).toBeNull()
 		}
 	})
@@ -148,21 +158,22 @@ describe('the state transition', () => {
 	test('carries a generation and one of the four modes', () => {
 		expect(OPS_MODES).toEqual(['open', 'read-only', 'closed', 'inspect'])
 		for (const mode of OPS_MODES) {
-			expect(parseOpsStateRequest({ generation: 3, mode })).toEqual({ generation: 3, mode })
+			expect(parseOpsStateRequest({ object: 'application', generation: 3, mode })).toEqual({ object: 'application', generation: 3, mode })
 		}
 	})
 
 	test('refuses an unknown mode, an unknown key and a wrong type', () => {
-		for (const body of [...variants({ generation: 3, mode: 'closed' }, { generation: '3', mode: 'frozen' }), { generation: 3, mode: 'Open' }]) {
+		const request = { object: 'application', generation: 3, mode: 'closed' }
+		for (const body of [...variants(request, { object: '../x', generation: '3', mode: 'frozen' }), { ...request, mode: 'Open' }]) {
 			expect(parseOpsStateRequest(body)).toBeNull()
 		}
 	})
 
 	test('refuses a generation that is not a positive safe integer', () => {
 		for (const generation of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN, Number.POSITIVE_INFINITY, null]) {
-			expect(parseOpsStateRequest({ generation, mode: 'closed' })).toBeNull()
+			expect(parseOpsStateRequest({ object: 'application', generation, mode: 'closed' })).toBeNull()
 		}
-		expect(parseOpsStateRequest({ generation: Number.MAX_SAFE_INTEGER, mode: 'closed' })).not.toBeNull()
+		expect(parseOpsStateRequest({ object: 'application', generation: Number.MAX_SAFE_INTEGER, mode: 'closed' })).not.toBeNull()
 	})
 
 	test('is acknowledged with the state and the count still running past the bound', () => {
@@ -177,8 +188,9 @@ describe('the state transition', () => {
 
 describe('the migration request', () => {
 	test('carries the generation it runs under', () => {
-		expect(parseOpsMigrateRequest({ generation: 9 })).toEqual({ generation: 9 })
-		for (const body of [...variants({ generation: 9 }, { generation: '9' }), { generation: 0 }, { generation: 9, mode: 'open' }]) {
+		const request = { object: 'application', generation: 9 }
+		expect(parseOpsMigrateRequest(request)).toEqual(request)
+		for (const body of [...variants(request, { object: '', generation: '9' }), { ...request, generation: 0 }, { ...request, mode: 'open' }]) {
 			expect(parseOpsMigrateRequest(body)).toBeNull()
 		}
 	})
@@ -250,5 +262,80 @@ describe('the view', () => {
 		}
 		expect(parseOpsContentView({ ...contentView, extra: 1 })).toBeNull()
 		expect(parseOpsContentView({ ...contentView, maintenance: { ...view.maintenance, mode: 'frozen' } })).toBeNull()
+	})
+})
+
+describe('object names', () => {
+	test('admit a lowercase name of at most 63 characters, safe as an R2 key segment', () => {
+		for (const name of ['application', 'a', 'restore-2026-10-24', `a${'b'.repeat(62)}`]) {
+			expect(parseApplicationObjectName(name)).toBe(name)
+		}
+		for (const name of ['', 'Application', '1st', '-a', 'a_b', 'a.b', 'a/b', '../a', 'a b', `a${'b'.repeat(63)}`, 7, null, undefined]) {
+			expect(parseApplicationObjectName(name)).toBeNull()
+		}
+	})
+
+	test('default to the one object `application` without either variable', () => {
+		expect(DEFAULT_APPLICATION_OBJECT).toBe('application')
+		expect(parseApplicationObjects(undefined, undefined)).toEqual({ object: 'application', objects: ['application'] })
+	})
+
+	test('list distinct names that hold the object of ordinary traffic', () => {
+		expect(parseApplicationObjects('application', 'application')).toEqual({ object: 'application', objects: ['application'] })
+		expect(parseApplicationObjects('restore-1', 'application,restore-1')).toEqual({ object: 'restore-1', objects: ['application', 'restore-1'] })
+		const sixteen = Array.from({ length: MAX_APPLICATION_OBJECTS }, (_, index) => `o${index}`)
+		expect(parseApplicationObjects('o0', sixteen.join(','))?.objects).toEqual(sixteen)
+	})
+
+	test('refuse a list without the object, a repeated or malformed name, too many names, and only one variable', () => {
+		const seventeen = Array.from({ length: MAX_APPLICATION_OBJECTS + 1 }, (_, index) => `o${index}`).join(',')
+		for (
+			const [object, objects] of [
+				['application', 'restore-1'],
+				['application', 'application,application'],
+				['application', 'application,'],
+				['application', ''],
+				['application', 'application, restore-1'],
+				['application', 'application,Restore'],
+				['Application', 'Application'],
+				['o0', seventeen],
+				['application', undefined],
+				[undefined, 'application'],
+			] as const
+		) {
+			expect(parseApplicationObjects(object, objects)).toBeNull()
+		}
+	})
+
+	test("key each object's maintenance state under __fabrika/ops/ in the bucket", () => {
+		expect(OPS_STATE_KEY('application')).toBe('__fabrika/ops/application.json')
+		expect(() => OPS_STATE_KEY('../application')).toThrow()
+	})
+})
+
+describe('a stale generation', () => {
+	test('is refused with 409 and the published state', () => {
+		expect(OPS_STALE_STATUS).toBe(409)
+		const published: OpsPublishedState = { generation: 8, mode: 'closed' }
+		const refusal: OpsStaleRefusal = { refused: 'stale_generation', published }
+		expect(parseOpsStaleRefusal(refusal)).toEqual(refusal)
+		expect(parseOpsStaleRefusal({ refused: 'stale_generation', published: null })).toEqual({ refused: 'stale_generation', published: null })
+		for (
+			const body of [
+				...variants(refusal, { refused: 'stale', published: 'closed' }),
+				...variants(published, { generation: 0, mode: 'frozen' }).map((published) => ({ ...refusal, published })),
+			]
+		) {
+			expect(parseOpsStaleRefusal(body)).toBeNull()
+		}
+	})
+
+	test('is a lower generation, or the same with another mode; the same generation and mode is a retry', () => {
+		const current = { generation: 8, mode: 'read-only' } as const
+		expect(opsTransitionRefused(current, { generation: 7, mode: 'read-only' })).toBe(true)
+		expect(opsTransitionRefused(current, { generation: 8, mode: 'closed' })).toBe(true)
+		expect(opsTransitionRefused(current, { generation: 8, mode: 'read-only' })).toBe(false)
+		expect(opsTransitionRefused(current, { generation: 9, mode: 'open' })).toBe(false)
+		expect(opsTransitionRefused(null, { generation: 1, mode: 'closed' })).toBe(false)
 	})
 })

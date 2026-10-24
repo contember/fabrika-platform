@@ -20,7 +20,7 @@ export const FABRIKA_APP_ORIGIN = 'FABRIKA_APP_ORIGIN'
 export const FABRIKA_OPS_KEY_DIGESTS = 'FABRIKA_OPS_KEY_DIGESTS'
 /** The name of the object that serves an environment's ordinary traffic on Cloudflare; `application` without it. */
 export const FABRIKA_APPLICATION_OBJECT = 'FABRIKA_APPLICATION_OBJECT'
-/** The object names an ops request may target, all in the environment's own namespace. */
+/** The object names an ops request may target, all in the environment's own namespace (`parseApplicationObjects`). */
 export const FABRIKA_APPLICATION_OBJECTS = 'FABRIKA_APPLICATION_OBJECTS'
 
 /**

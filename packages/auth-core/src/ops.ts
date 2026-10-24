@@ -73,6 +73,43 @@ export function formatOpsKeyDigests(digests: OpsKeyDigests): string {
 	return value
 }
 
+/** The object of ordinary traffic without `FABRIKA_APPLICATION_OBJECT`, and the only one an ops request may name then. */
+export const DEFAULT_APPLICATION_OBJECT = 'application'
+
+/** The most names `FABRIKA_APPLICATION_OBJECTS` holds. */
+export const MAX_APPLICATION_OBJECTS = 16
+
+/** An object name: lowercase, at most 63 characters, safe as one segment of an R2 key. */
+const APPLICATION_OBJECT_NAME = /^[a-z][a-z0-9-]{0,62}$/
+
+export function parseApplicationObjectName(value: unknown): string | null {
+	return typeof value === 'string' && APPLICATION_OBJECT_NAME.test(value) ? value : null
+}
+
+/** The object of ordinary traffic, and the objects an ops request may name, which include it. */
+export interface ApplicationObjects {
+	readonly object: string
+	readonly objects: readonly string[]
+}
+
+/**
+ * `FABRIKA_APPLICATION_OBJECT` and `FABRIKA_APPLICATION_OBJECTS` (distinct names joined by `,`, 1 to 16, holding the
+ * first), or `null`. Without either the object is `application`; a deploy writes both, so one alone is refused.
+ */
+export function parseApplicationObjects(object: string | undefined, objects: string | undefined): ApplicationObjects | null {
+	if (object === undefined && objects === undefined) return { object: DEFAULT_APPLICATION_OBJECT, objects: [DEFAULT_APPLICATION_OBJECT] }
+	if (object === undefined || objects === undefined || parseApplicationObjectName(object) === null) return null
+	const names = objects.split(',')
+	const valid = names.length <= MAX_APPLICATION_OBJECTS && names.every((name) => parseApplicationObjectName(name) !== null)
+	return valid && new Set(names).size === names.length && names.includes(object) ? { object, objects: names } : null
+}
+
+/** The R2 key, in the environment's bucket, of the maintenance state of `object`. */
+export function OPS_STATE_KEY(object: string): string {
+	if (parseApplicationObjectName(object) === null) throw new Error('an ops state key needs a valid object name')
+	return `__fabrika/ops/${object}.json`
+}
+
 /** The maintenance modes, from the most permissive. */
 export const OPS_MODES = ['open', 'read-only', 'closed', 'inspect'] as const
 
@@ -83,11 +120,13 @@ export const OPS_ROW_COUNT_CAP = 100_000
 
 /** `POST /__fabrika/ops/inspect`: the projection, or with `content` the content-bearing view (`data.content.read`). */
 export interface OpsInspectRequest {
+	readonly object: string
 	readonly content: boolean
 }
 
 /** `POST /__fabrika/ops/state`: a maintenance transition under a generation Control allocated. */
 export interface OpsStateRequest {
+	readonly object: string
 	readonly generation: number
 	readonly mode: OpsMode
 }
@@ -101,7 +140,32 @@ export interface OpsStateAck {
 
 /** `POST /__fabrika/ops/migrate`: run the pending migrations under the published generation. */
 export interface OpsMigrateRequest {
+	readonly object: string
 	readonly generation: number
+}
+
+/** The state a transition is judged against: the object's current generation and mode, `null` before the first. */
+export interface OpsPublishedState {
+	readonly generation: number
+	readonly mode: OpsMode
+}
+
+/**
+ * Whether a transition is stale: a lower generation, or the same with another mode. The same generation and mode is a
+ * retry, which the object replays.
+ */
+export function opsTransitionRefused(current: OpsPublishedState | null, request: OpsPublishedState): boolean {
+	if (current === null) return false
+	return request.generation < current.generation || (request.generation === current.generation && request.mode !== current.mode)
+}
+
+/** The status of a stale refusal. It is answered only after authentication, so it may say what is published. */
+export const OPS_STALE_STATUS = 409
+
+/** The body of a stale refusal of a transition or a migration. */
+export interface OpsStaleRefusal {
+	readonly refused: 'stale_generation'
+	readonly published: OpsPublishedState | null
 }
 
 /** One row of the object's migration ledger. */
@@ -197,16 +261,19 @@ export interface OpsContentView extends Omit<OpsView, 'bootFailure'> {
 	readonly bootFailure: OpsBootFailureContent | null
 }
 
+// A request's `object` is only well-formed here; the handler refuses a name its list does not hold with `opsRefusal()`.
 export function parseOpsInspectRequest(body: unknown): OpsInspectRequest | null {
+	const object = parseApplicationObjectName(prop(body, 'object'))
 	const content = prop(body, 'content')
-	return exactKeys(body, ['content']) && typeof content === 'boolean' ? { content } : null
+	return exactKeys(body, ['object', 'content']) && object !== null && typeof content === 'boolean' ? { object, content } : null
 }
 
 export function parseOpsStateRequest(body: unknown): OpsStateRequest | null {
-	if (!exactKeys(body, ['generation', 'mode'])) return null
+	if (!exactKeys(body, ['object', 'generation', 'mode'])) return null
+	const object = parseApplicationObjectName(prop(body, 'object'))
 	const generation = readGeneration(prop(body, 'generation'))
 	const mode = readMode(prop(body, 'mode'))
-	return generation === null || mode === null ? null : { generation, mode }
+	return object === null || generation === null || mode === null ? null : { object, generation, mode }
 }
 
 export function parseOpsStateAck(body: unknown): OpsStateAck | null {
@@ -218,8 +285,19 @@ export function parseOpsStateAck(body: unknown): OpsStateAck | null {
 }
 
 export function parseOpsMigrateRequest(body: unknown): OpsMigrateRequest | null {
+	const object = parseApplicationObjectName(prop(body, 'object'))
 	const generation = readGeneration(prop(body, 'generation'))
-	return exactKeys(body, ['generation']) && generation !== null ? { generation } : null
+	return exactKeys(body, ['object', 'generation']) && object !== null && generation !== null ? { object, generation } : null
+}
+
+export function parseOpsStaleRefusal(body: unknown): OpsStaleRefusal | null {
+	if (!exactKeys(body, ['refused', 'published']) || prop(body, 'refused') !== 'stale_generation') return null
+	const raw = prop(body, 'published')
+	if (raw === null) return { refused: 'stale_generation', published: null }
+	if (!exactKeys(raw, ['generation', 'mode'])) return null
+	const generation = readGeneration(prop(raw, 'generation'))
+	const mode = readMode(prop(raw, 'mode'))
+	return generation === null || mode === null ? null : { refused: 'stale_generation', published: { generation, mode } }
 }
 
 export function parseOpsMigrateAck(body: unknown): OpsMigrateAck | null {
