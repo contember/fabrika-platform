@@ -1,15 +1,16 @@
 // The framework's side of `fabrika_wakes` (`@fabrika/db/migrations`): a job's durable pending work, one row per due
-// unit (its next scheduled run, a kick, a claim's re-arm, a durable retry), and the projection of the scheduler's next
-// wake over it and the leases. Only `@fabrika/app` reaches it, through `frameworkTablesOf`. A wake leaves the table
-// only in the transaction of the fenced, successful finish of a run that started at or after it (`follow`, the lease
-// store's projection), so a crash at any point leaves either the wake or a held lease whose expiry is due.
+// unit (its next scheduled run, a kick, a claim's re-arm, a durable retry), and the scheduler's next wake over it and the
+// leases. Only `@fabrika/app` reaches it, through `frameworkTablesOf`. A wake changes with its run's lease only in the
+// transaction of that run's fenced finish (`leaseProjection`), so a crash at any point leaves either the wake or a held
+// lease whose expiry is due. Every change runs the runtime's `projectWakes` in its own transaction.
 
 import { uuidv7 } from '@fabrika/platform'
 import { freeze } from './builtins'
 import { type FixedParameter, runFixedStatement, type Session, sessionOf } from './database'
 import { QueryRefusedError } from './errors'
-import { type DialectTexts, type LeaseChange, type LeaseProjection, SQLITE_NOW } from './job-leases'
+import type { DialectTexts, JobOutcome, LeaseChange, LeaseProjection } from './job-leases'
 import { JOB_LEASES_TABLE, JOB_WAKES_TABLE } from './migrations'
+import { SQLITE_NOW_FORMAT } from './migrations-sqlite'
 import type { DataLayerRuntime } from './store'
 
 export const WAKE_REASONS = ['cron', 'kick', 'claim', 'retry'] as const
@@ -29,9 +30,21 @@ export interface Wake {
 	readonly job: string
 	readonly reason: WakeReason
 	readonly dueAt: Date
+	/** How many failed runs moved this wake (`retry`). */
 	readonly attempt: number
 	readonly dedupe: string | null
 }
+
+/**
+ * What a run's finish does with the wakes it owned (those due at or before its start), applied in the finish's
+ * transaction and only when the finish still held the lease. Without one, a success is `completed` and a failure
+ * leaves the wakes as they are.
+ */
+export type FinishWakes =
+	/** The run is done with them: they are consumed, then the job's next cron run is scheduled (`cron:<job>:<expression>`). */
+	| { readonly kind: 'completed'; readonly nextCron?: { readonly expression: string; readonly dueAt: Date } }
+	/** The run failed and runs again: they move to `at`, and their attempt counts up. Only with a failed outcome. */
+	| { readonly kind: 'retry'; readonly at: Date }
 
 export interface JobWakes {
 	/**
@@ -47,17 +60,22 @@ export interface JobWakes {
 	 * held lease (its deadman), whichever is earlier; `null` when neither exists. It may be past. Read in `using` when given.
 	 */
 	next(using?: Session): Promise<Date | null>
-	/** The lease store's projection: a successful finish consumes the wakes due at or before its run's start. */
-	readonly follow: LeaseProjection
+	/** Deletes the wakes of every job not in `declared`, the jobs the contract declares; answers how many it deleted. */
+	reconcile(declared: readonly string[]): Promise<number>
 }
 
 const W = JOB_WAKES_TABLE
 const L = JOB_LEASES_TABLE
 const COLUMNS = 'job, due_at, reason, attempt, dedupe'
+const SQLITE_NOW = `strftime('${SQLITE_NOW_FORMAT}', 'now')`
 
 /** A stored timestamp as epoch milliseconds, in each dialect. */
 const PG_EPOCH_MS = (column: string): string => `floor(extract(epoch from ${column}) * 1000)::bigint`
 const SQLITE_EPOCH_MS = (column: string): string => `cast(round((julianday(${column}) - 2440587.5) * 86400000) as integer)`
+
+/** The start of the job's current run, in epoch milliseconds: the cut between the wakes it owns and later ones. */
+const PG_RUN_START = `(select ${PG_EPOCH_MS('last_started_at')} from ${L} where job = $1)`
+const SQLITE_RUN_START = `(select ${SQLITE_EPOCH_MS('last_started_at')} from ${L} where job = ?1)`
 
 const SQL_SCHEDULE: DialectTexts = {
 	// The update applies only to the same job's row, so a key another job holds answers no row.
@@ -74,23 +92,33 @@ const SQL_PENDING: DialectTexts = {
 	sqlite: `select id, ${COLUMNS} from ${W} where job = ?1 order by due_at, id`,
 }
 
+// Two candidates, each one index-ordered or per-job lookup: the earliest wake of a free or expired job walks the due index
+// and stops at the first, and the earliest held expiry reads the lease rows, one per job. Postgres compares by the
+// statement's clock, not the transaction's: `using` may be a transaction that began before a lease expired.
 const SQL_NEXT: DialectTexts = {
-	postgres: `select min(at) as next from (
-		select w.due_at as at from ${W} w left join ${L} l on l.job = w.job where l.holder is null or l.expires_at <= now()
-		union all
-		select ${PG_EPOCH_MS('expires_at')} from ${L} where holder is not null
-	) pending`,
-	sqlite: `select min(at) as next from (
-		select w.due_at as at from ${W} w left join ${L} l on l.job = w.job
-		where l.holder is null or l.expires_at <= ${SQLITE_NOW}
-		union all
-		select ${SQLITE_EPOCH_MS('expires_at')} from ${L} where holder is not null
-	)`,
+	postgres: `select
+		(select w.due_at from ${W} w left join ${L} l on l.job = w.job
+			where l.holder is null or l.expires_at <= clock_timestamp() order by w.due_at limit 1) as wake,
+		(select ${PG_EPOCH_MS('min(expires_at)')} from ${L} where holder is not null) as held`,
+	sqlite: `select
+		(select w.due_at from ${W} w left join ${L} l on l.job = w.job
+			where l.holder is null or l.expires_at <= ${SQLITE_NOW} order by w.due_at limit 1) as wake,
+		(select ${SQLITE_EPOCH_MS('min(expires_at)')} from ${L} where holder is not null) as held`,
 }
 
 const SQL_CONSUME: DialectTexts = {
-	postgres: `delete from ${W} w using ${L} l where w.job = $1 and l.job = $1 and w.due_at <= ${PG_EPOCH_MS('l.last_started_at')}`,
-	sqlite: `delete from ${W} where job = ?1 and due_at <= (select ${SQLITE_EPOCH_MS('last_started_at')} from ${L} where job = ?1)`,
+	postgres: `delete from ${W} where job = $1 and due_at <= ${PG_RUN_START}`,
+	sqlite: `delete from ${W} where job = ?1 and due_at <= ${SQLITE_RUN_START}`,
+}
+
+const SQL_RETRY: DialectTexts = {
+	postgres: `update ${W} set due_at = $2::bigint, attempt = attempt + 1 where job = $1 and due_at <= ${PG_RUN_START}`,
+	sqlite: `update ${W} set due_at = cast(?2 as integer), attempt = attempt + 1 where job = ?1 and due_at <= ${SQLITE_RUN_START}`,
+}
+
+const SQL_RECONCILE: DialectTexts = {
+	postgres: `delete from ${W} where job not in (select jsonb_array_elements_text($1::jsonb)) returning id`,
+	sqlite: `delete from ${W} where job not in (select value from json_each(?1)) returning id`,
 }
 
 function record(row: unknown): Readonly<Record<string, unknown>> {
@@ -132,32 +160,106 @@ function wakeOf(row: Readonly<Record<string, unknown>>): Wake {
 	})
 }
 
-function newWake(wake: NewWake): readonly FixedParameter[] {
-	if (typeof wake.job !== 'string' || wake.job === '') {
-		throw new QueryRefusedError('invalid_argument', 'a wake names the job it wakes')
+function epochOf(value: unknown, what: string): number {
+	const time = value instanceof Date ? value.getTime() : Number.NaN
+	if (!Number.isSafeInteger(time)) {
+		throw new QueryRefusedError('invalid_argument', `${what} is a valid time`)
 	}
+	return time
+}
+
+function nonEmpty(value: unknown, what: string): string {
+	if (typeof value !== 'string' || value === '') {
+		throw new QueryRefusedError('invalid_argument', `${what} is a non-empty string`)
+	}
+	return value
+}
+
+function newWake(wake: NewWake): readonly FixedParameter[] {
+	const job = nonEmpty(wake.job, "a wake's job")
 	if (!WAKE_REASONS.some((reason) => reason === wake.reason)) {
 		throw new QueryRefusedError('invalid_argument', `a wake's reason is one of ${WAKE_REASONS.join(', ')}`)
 	}
-	const due = wake.dueAt instanceof Date ? wake.dueAt.getTime() : Number.NaN
-	if (!Number.isSafeInteger(due)) {
-		throw new QueryRefusedError('invalid_argument', 'a wake is due at a valid time')
+	const due = epochOf(wake.dueAt, "a wake's due time")
+	const dedupe = wake.dedupe === undefined ? null : nonEmpty(wake.dedupe, "a wake's dedupe key")
+	return [uuidv7(), job, String(due), wake.reason, dedupe]
+}
+
+/** Inserts the wake `newWake` checked, in `transaction`; refuses a key another job holds, which rolls it back. */
+async function insert(transaction: Session, parameters: readonly FixedParameter[], job: string): Promise<Wake> {
+	const [row] = await rows(transaction, SQL_SCHEDULE, parameters)
+	if (row === undefined) {
+		throw new QueryRefusedError('invalid_argument', `the dedupe key of this wake of '${job}' is held by another job's wake`)
 	}
-	if (wake.dedupe !== undefined && (typeof wake.dedupe !== 'string' || wake.dedupe === '')) {
-		throw new QueryRefusedError('invalid_argument', "a wake's dedupe key is a non-empty string")
+	return wakeOf(row)
+}
+
+/**
+ * A finish's instruction checked before its statement runs, with the default filled in: `null` leaves the wakes. The
+ * lease store calls it, so a malformed instruction refuses the finish and leaves the lease held.
+ */
+export function finishWakes(outcome: JobOutcome, wakes: FinishWakes | undefined): FinishWakes | null {
+	if (wakes === undefined) {
+		return outcome === 'succeeded' ? freeze({ kind: 'completed' }) : null
 	}
-	return [uuidv7(), wake.job, String(due), wake.reason, wake.dedupe ?? null]
+	if (wakes.kind === 'retry') {
+		if (outcome !== 'failed') {
+			throw new QueryRefusedError('invalid_argument', 'only a failed run retries its wakes')
+		}
+		epochOf(wakes.at, 'a retry')
+		return freeze({ kind: 'retry', at: wakes.at })
+	}
+	if (wakes.kind !== 'completed') {
+		throw new QueryRefusedError('invalid_argument', "a finish's wakes are completed or retried")
+	}
+	if (wakes.nextCron === undefined) {
+		return freeze({ kind: 'completed' })
+	}
+	nonEmpty(wakes.nextCron.expression, "a cron wake's expression")
+	epochOf(wakes.nextCron.dueAt, "a cron wake's due time")
+	return freeze({ kind: 'completed', nextCron: freeze({ expression: wakes.nextCron.expression, dueAt: wakes.nextCron.dueAt }) })
+}
+
+/** The runtime's projection of a change, in its transaction; nothing without one. */
+function projectionOf(runtime: () => DataLayerRuntime): (transaction: Session) => Promise<void> {
+	return async (transaction) => {
+		await runtime().projectWakes?.(transaction)
+	}
+}
+
+/**
+ * The lease store's projection: a fenced finish applies its wake instruction, and every lease change then runs the
+ * runtime's projection, all in the lease statement's transaction.
+ */
+export function leaseProjection(runtime: () => DataLayerRuntime): LeaseProjection {
+	const project = projectionOf(runtime)
+	return async (transaction: Session, job: string, change: LeaseChange): Promise<void> => {
+		if (change.kind === 'finished' && change.wakes !== null) {
+			if (change.wakes.kind === 'retry') {
+				await rows(transaction, SQL_RETRY, [job, String(change.wakes.at.getTime())])
+			} else {
+				await rows(transaction, SQL_CONSUME, [job])
+				const next = change.wakes.nextCron
+				if (next !== undefined) {
+					await insert(transaction, newWake({ job, reason: 'cron', dueAt: next.dueAt, dedupe: `cron:${job}:${next.expression}` }), job)
+				}
+			}
+		}
+		await project(transaction)
+	}
 }
 
 export function jobWakes(runtime: () => DataLayerRuntime): JobWakes {
 	const session = () => sessionOf(runtime())
+	const project = projectionOf(runtime)
 	return freeze({
 		async schedule(wake: NewWake, using?: Session): Promise<Wake> {
-			const [row] = await rows(using ?? session(), SQL_SCHEDULE, newWake(wake))
-			if (row === undefined) {
-				throw new QueryRefusedError('invalid_argument', `the dedupe key of this wake of '${wake.job}' is held by another job's wake`)
-			}
-			return wakeOf(row)
+			const parameters = newWake(wake)
+			return await (using ?? session()).transaction(async (transaction) => {
+				const scheduled = await insert(transaction, parameters, wake.job)
+				await project(transaction)
+				return scheduled
+			})
 		},
 
 		async pending(job: string): Promise<readonly Wake[]> {
@@ -165,14 +267,21 @@ export function jobWakes(runtime: () => DataLayerRuntime): JobWakes {
 		},
 
 		async next(using?: Session): Promise<Date | null> {
-			const [{ next = null } = {}] = await rows(using ?? session(), SQL_NEXT, [])
-			return next === null ? null : new Date(wholeNumber(next, 'the next wake'))
+			const [{ wake = null, held = null } = {}] = await rows(using ?? session(), SQL_NEXT, [])
+			const candidates = [wake, held].filter((value) => value !== null).map((value) => wholeNumber(value, 'the next wake'))
+			return candidates.length === 0 ? null : new Date(Math.min(...candidates))
 		},
 
-		async follow(transaction: Session, job: string, change: LeaseChange): Promise<void> {
-			if (change === 'succeeded') {
-				await rows(transaction, SQL_CONSUME, [job])
+		async reconcile(declared: readonly string[]): Promise<number> {
+			if (!Array.isArray(declared)) {
+				throw new QueryRefusedError('invalid_argument', 'the declared jobs are a list of names')
 			}
+			const names = declared.map((job) => nonEmpty(job, 'a declared job'))
+			return await session().transaction(async (transaction) => {
+				const removed = await rows(transaction, SQL_RECONCILE, [JSON.stringify(names)])
+				await project(transaction)
+				return removed.length
+			})
 		},
 	})
 }

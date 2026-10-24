@@ -8,6 +8,7 @@
 import type { LeaseFence } from './capability'
 import { runFixedStatement, type Session, sessionOf, type SqlDialect } from './database'
 import { DatabaseError, LeaseLostError, QueryRefusedError } from './errors'
+import { type FinishWakes, finishWakes } from './job-wakes'
 import { JOB_KICKS_TABLE, JOB_LEASES_TABLE } from './migrations'
 import { SQLITE_NOW_FORMAT } from './migrations-sqlite'
 import type { DataLayerRuntime } from './store'
@@ -62,8 +63,11 @@ export interface JobLeases {
 	 * now on. `null` when `fence` no longer holds it.
 	 */
 	renew(fence: LeaseFence, holder: string, attemptMs: number, leaseMs: number): Promise<LeaseFence | null>
-	/** Frees the lease and records the run's outcome and duration; `false` when `fence` no longer held it. */
-	finish(fence: LeaseFence, outcome: JobOutcome): Promise<boolean>
+	/**
+	 * Frees the lease and records the run's outcome and duration, and in the same transaction applies `wakes` to the wakes
+	 * the run owned (`job-wakes.ts`). `false` when `fence` no longer held it: then nothing is applied.
+	 */
+	finish(fence: LeaseFence, outcome: JobOutcome, wakes?: FinishWakes): Promise<boolean>
 	/** Records that a kick arrived: the run that started before it runs the job once more. Never waits on the lease. */
 	markPending(job: string): Promise<void>
 	/**
@@ -84,8 +88,13 @@ export interface JobLeases {
 	state(job: string): Promise<JobLeaseState | null>
 }
 
-/** What a lease statement changed: a crashed holder reaped, a lease taken or handed on, a run's outcome recorded. */
-export type LeaseChange = 'reaped' | 'acquired' | 'renewed' | 'succeeded' | 'failed'
+/**
+ * What a lease statement changed: a crashed holder reaped, a lease taken or handed on, or a run finished with what its
+ * wakes become (`null` leaves them).
+ */
+export type LeaseChange =
+	| { readonly kind: 'reaped' | 'acquired' | 'renewed' }
+	| { readonly kind: 'finished'; readonly wakes: FinishWakes | null }
 
 /**
  * Runs in the transaction of every lease statement that changed the lease, so a table that follows the lease (the
@@ -462,11 +471,13 @@ export function jobLeases(runtime: () => DataLayerRuntime, project: LeaseProject
 		},
 
 		async reapCrashed(job: string): Promise<boolean> {
-			return (await changing(SQL_REAP, [job], job, 'reaped')).length > 0
+			return (await changing(SQL_REAP, [job], job, { kind: 'reaped' })).length > 0
 		},
 
 		async acquire(job: string, holder: string, attemptMs: number, leaseMs: number): Promise<LeaseFence | null> {
-			const [row] = await changing(SQL_ACQUIRE, [job, holder, milliseconds(leaseMs, 'a lease'), milliseconds(attemptMs, 'an attempt')], job, 'acquired')
+			const [row] = await changing(SQL_ACQUIRE, [job, holder, milliseconds(leaseMs, 'a lease'), milliseconds(attemptMs, 'an attempt')], job, {
+				kind: 'acquired',
+			})
 			return fenceOf(job, holder, row)
 		},
 
@@ -475,13 +486,14 @@ export function jobLeases(runtime: () => DataLayerRuntime, project: LeaseProject
 				SQL_RENEW,
 				[...params(fence), holder, milliseconds(leaseMs, 'a lease'), milliseconds(attemptMs, 'an attempt')],
 				fence.job,
-				'renewed',
+				{ kind: 'renewed' },
 			)
 			return fenceOf(fence.job, holder, row)
 		},
 
-		async finish(fence: LeaseFence, outcome: JobOutcome): Promise<boolean> {
-			return (await changing(SQL_FINISH, [...params(fence), outcome], fence.job, outcome)).length > 0
+		async finish(fence: LeaseFence, outcome: JobOutcome, wakes?: FinishWakes): Promise<boolean> {
+			const change: LeaseChange = { kind: 'finished', wakes: finishWakes(outcome, wakes) }
+			return (await changing(SQL_FINISH, [...params(fence), outcome], fence.job, change)).length > 0
 		},
 
 		async tryAcquire(job: string, holder: string, attemptMs: number, leaseMs: number): Promise<LeaseFence | null> {
@@ -489,7 +501,7 @@ export function jobLeases(runtime: () => DataLayerRuntime, project: LeaseProject
 				SQL_TRY_ACQUIRE,
 				[job, holder, milliseconds(leaseMs, 'a lease'), milliseconds(attemptMs, 'an attempt')],
 				job,
-				'acquired',
+				{ kind: 'acquired' },
 			)
 			return fenceOf(job, holder, row)
 		},

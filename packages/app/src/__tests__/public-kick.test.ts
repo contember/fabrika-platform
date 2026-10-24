@@ -14,7 +14,7 @@ import { compileContract } from '../contract'
 import type { RequestExecutionContext } from '../fetch'
 import { testKit } from '../testing'
 import { bootApp, environment, frameworkEnvFor, ORIGIN, workloadKey, workloadTokensFor } from './fixtures/implement/harness'
-import { delayedDatabase, type StatementHook } from './fixtures/public-kick/delayed-database'
+import { delayedDatabase, type StatementHooks } from './fixtures/public-kick/delayed-database'
 import { contract } from './fixtures/public-kick/fabrika.contract'
 import { migration } from './fixtures/public-kick/migration'
 import { signupApp } from './fixtures/public-kick/src/app'
@@ -132,13 +132,13 @@ interface Running {
 	kicksEnded(running: number): Promise<void>
 }
 
-/** An instance of the application over the shared schema, on a pool of `max` connections or one that `hook` delays. */
-function start(options: { readonly max?: number; readonly hook?: StatementHook } = {}): Running {
+/** An instance of the application over the shared schema, on a pool of `max` connections or one that `hooks` delay. */
+function start(options: { readonly max?: number; readonly hooks?: StatementHooks } = {}): Running {
 	const world = new World()
 	const { implementation, variables } = signupApp(world)
-	const connection = options.hook === undefined
+	const connection = options.hooks === undefined
 		? openPostgres({ url, schema, max: options.max ?? 4 })
-		: delayedDatabase(url, schema, options.hook)
+		: delayedDatabase(url, schema, options.hooks)
 	opened.push(connection)
 	const exchanged: string[] = []
 	const tokens = workloadTokensFor(implementation)
@@ -388,13 +388,22 @@ describe.skipIf(!hasPostgres)('a public procedure kicks its job', () => {
 
 	test('a run that took a kick after it finished hands it back to a newer run that already read its batch', async () => {
 		const finished = gate()
+		let released = false
 		let held = false
+		// The finish commits with its wakes, so the first run is held at the pending check that follows that commit.
 		const first = start({
-			hook: async (query) => {
-				if (!held && query.sql.startsWith('update fabrika_job_leases set holder = null, last_finished_at')) {
-					held = true
-					await finished.wait()
-				}
+			hooks: {
+				after: async (query) => {
+					if (query.sql.startsWith('update fabrika_job_leases set holder = null, last_finished_at')) {
+						released = true
+					}
+				},
+				before: async (query) => {
+					if (released && !held && query.sql.startsWith('update fabrika_job_kicks set pending = false')) {
+						held = true
+						await finished.wait()
+					}
+				},
 			},
 		})
 		const second = start()
@@ -420,10 +429,12 @@ describe.skipIf(!hasPostgres)('a public procedure kicks its job', () => {
 		const lastCheck = gate()
 		let checks = 0
 		const running = start({
-			hook: async (query) => {
-				if (query.sql.startsWith('update fabrika_job_kicks set pending = false') && ++checks === 2) {
-					await lastCheck.wait()
-				}
+			hooks: {
+				after: async (query) => {
+					if (query.sql.startsWith('update fabrika_job_kicks set pending = false') && ++checks === 2) {
+						await lastCheck.wait()
+					}
+				},
 			},
 		})
 		await running.submit('signup', { email: 'j1@example.test' })

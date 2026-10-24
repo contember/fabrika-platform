@@ -260,7 +260,8 @@ $$;
 	Object.freeze({
 		name: '0009_job_wakes.sql',
 		sql: `-- A job's pending work, one row per due unit: its next scheduled run, a kick, a claim's re-arm, a durable retry. due_at
--- is epoch milliseconds. A row leaves only with the fenced, successful finish of a run that started at or after it.
+-- is epoch milliseconds. Only the fenced finish of a run that started at or after a row changes it: consumed when the run is
+-- done with it, or moved to a retry, which counts in attempt.
 CREATE TABLE ${JOB_WAKES_TABLE} (
 	id UUID PRIMARY KEY,
 	job TEXT NOT NULL,
