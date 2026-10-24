@@ -9,15 +9,13 @@ import { openSqlite, type SqliteStorage } from '@fabrika/db/sqlite'
 import { migrateSqlite } from '@fabrika/db/sqlite-migrate'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { timingSafeEqual } from 'node:crypto'
-import { compileContract } from '../contract/compile.js'
 import type { RequestExecutionContext } from '../fetch.js'
-import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE } from '../files/kinds.js'
 import { boot, type ContractApp } from '../implement/boot.js'
 import { type CrashEvents, environmentCrashReporter, reportSurvivedCrashes } from '../implement/crashes.js'
 import { proxySecretDigest } from '../implement/dispatch.js'
 import { captureEnvironment } from '../implement/environment.js'
 import type { ContractImplementation } from '../implement/implement.js'
-import { type CronSchedule, isDueAt, parseCron } from '../jobs/schedule.js'
+import { isDueAt } from '../jobs/schedule.js'
 import { bindingAssets, bindingKeySource, bindingMembership, bindingTerminals, bindingWorkloadTokens, connectBindings } from './bindings.js'
 import { CLOUDFLARE_FILES_BINDING } from './names.js'
 import { r2FileObjectStore } from './r2-files.js'
@@ -62,18 +60,12 @@ export interface ApplicationState {
 /** The framework's bindings: IAM's application entrypoint and the Workers Assets of the SPA. No handler sees them. */
 const FRAMEWORK_BINDINGS: ReadonlySet<string> = new Set(['IAM', 'ASSETS'])
 
-interface DueJob {
-	readonly name: string
-	readonly schedule: CronSchedule
-}
-
 /**
  * The application this isolate booted, once: its module is loaded once, and its `scoped(tables)` layer binds once, to
  * the storage of the object whose event runs (`objectStorage`), never to one database.
  */
 interface Booted {
 	readonly app: ContractApp
-	readonly jobs: readonly DueJob[]
 	/** Whether the application has a data layer, which every object instance migrates in its own storage. */
 	readonly migrates: boolean
 }
@@ -123,17 +115,6 @@ async function migrate(storage: ApplicationStorage, migrations: readonly Applica
 	])
 }
 
-/** Every contract job, and the framework jobs `boot` binds for file kinds (a scanning kind does not boot on SQLite). */
-function dueJobsOf(app: ContractImplementation): readonly DueJob[] {
-	const artifact = compileContract(app.contract, app.database?.tables ?? {})
-	const declared = Object.entries(artifact.jobs).map(([name, job]) => ({ name, schedule: job.schedule }))
-	const framework = Object.keys(artifact.fileKinds ?? {}).length > 0 ? [{ name: FILE_SWEEP_JOB, schedule: FILE_SWEEP_SCHEDULE }] : []
-	return [...declared, ...framework].flatMap(({ name, schedule }) => {
-		const parsed = parseCron(schedule)
-		return parsed === null ? [] : [{ name, schedule: parsed }]
-	})
-}
-
 async function bootApplication(setup: ApplicationSetup, state: ApplicationState, env: Readonly<Record<string, unknown>>): Promise<Booted> {
 	const variables = Object.fromEntries(Object.entries(env).filter(([name]) => !FRAMEWORK_BINDINGS.has(name)))
 	const environment = captureEnvironment(variables)
@@ -168,7 +149,7 @@ async function bootApplication(setup: ApplicationSetup, state: ApplicationState,
 			clientAddress: 'vouched',
 			...(setup.options.operationsFetch === undefined ? {} : { operationsFetch: setup.options.operationsFetch }),
 		})
-		booted = { app, jobs: dueJobsOf(implementation), migrates }
+		booted = { app, migrates }
 	} catch (error) {
 		if (crashes !== null && !setup.bootFailureReported) {
 			setup.bootFailureReported = true
@@ -298,12 +279,13 @@ export class FabrikaApplication {
 			return new Response(null, { status: 400 })
 		}
 		const at = new Date(time)
-		for (const job of booted.jobs) {
+		const jobs = booted.app.jobs.scheduled
+		for (const job of jobs) {
 			if (isDueAt(job.schedule, at)) {
 				this.#state.waitUntil(runQuietly(booted.app, job.name))
 			}
 		}
-		if (booted.jobs.length > 0) {
+		if (jobs.length > 0) {
 			this.#state.waitUntil(booted.app.jobs.check())
 		}
 		return new Response(null, { status: 204 })
