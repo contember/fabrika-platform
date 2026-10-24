@@ -20,6 +20,7 @@ import {
 	createCloudflareControlProvider,
 } from '..'
 import { checkoutRelativeDirectory, cloudflareRunnerJobSchema, type CloudflareRunRecovery } from '../control'
+import { staleManagedSecrets } from '../managed-secrets'
 import type { RunnerIamReconcile } from '../runner-protocol'
 
 const normalizeRegistration = (provider: ControlProvider, input: ProviderRegistrationInput): ProviderRegistration => {
@@ -118,6 +119,23 @@ describe('Cloudflare control provider', () => {
 		)
 		expect(calls).toEqual([])
 		expect(provider.devEnvironments).toBeUndefined()
+	})
+
+	test("serves the ops channel from the release that gets the composed row, and the key digests' removal follows", () => {
+		const provider = createCloudflareControlProvider({
+			accountId: 'account',
+			apiToken: 'token',
+			runnerKey: 'key',
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async () => ({ state: 'succeeded' }),
+			cancelRun: async () => {},
+		})
+		expect(provider.opsChannel?.(APPROVED)).toBe(true)
+		expect(provider.opsChannel?.({ ...APPROVED, checker: '0.8.2' })).toBe(false)
+		// A deploy after a downgrade hands no digests, so the Worker's stale secret is deleted.
+		expect(staleManagedSecrets(['FABRIKA_OPS_KEY_DIGESTS', 'API_KEY'], {})).toEqual(['FABRIKA_OPS_KEY_DIGESTS'])
+		expect(staleManagedSecrets(['FABRIKA_OPS_KEY_DIGESTS'], { FABRIKA_OPS_KEY_DIGESTS: 'sha256:x' })).toEqual([])
 	})
 
 	test('exposes immutable resolution with recorded identity and independently validates registration', async () => {

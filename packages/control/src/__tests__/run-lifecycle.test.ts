@@ -1,10 +1,19 @@
 import { ReconcileSchemaError } from '@fabrika/auth'
-import { FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, FABRIKA_PROXY_SECRET } from '@fabrika/auth-core'
+import {
+	FABRIKA_IAM_APP_ID,
+	FABRIKA_IAM_ISSUER,
+	FABRIKA_OPS_KEY_DIGESTS,
+	FABRIKA_PROXY_SECRET,
+	opsKeyDigest,
+	parseOpsKeyDigests,
+} from '@fabrika/auth-core'
+import { CHECKER_VERSION } from '@fabrika/check/contract'
 import { FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_OPERATIONS_DSN, FABRIKA_SERVICE_KEY } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE, parseOperationsReleasePayload } from '@fabrika/operations-contract/releases'
 import { type BlobStore, uuidv7 } from '@fabrika/platform'
 import type {
 	ControlProvider,
+	ProviderApprovedAccess,
 	ProviderDeployInput,
 	ProviderEnvelope,
 	ProviderManagedEnvironment,
@@ -19,6 +28,7 @@ import { getRunLogUseCase } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
 import { OperationsReleaseRepository } from '../db'
 import type { IamSchemaPort } from '../iam-schema'
+import { VaultOpsKeys } from '../ops-key'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
 import { appSecretPurpose, type SecretResolver, VaultSecretResolver } from '../secret-resolver'
@@ -696,6 +706,7 @@ describe('provider-neutral run lifecycle', () => {
 			// The environment's public origin is the canonical origin `ctx.url` builds links on.
 			FABRIKA_APP_ORIGIN: 'https://public.example.com',
 			FABRIKA_TOKEN_KEYS: null,
+			FABRIKA_OPS_KEY_DIGESTS: null,
 		})
 		// Control marks each credential once, so a provider writes it as a secret without a rule of its own.
 		expect(Object.keys(input.managedEnvironment).filter((name) => input.managedEnvironment[name]?.credential).sort()).toEqual([
@@ -704,6 +715,7 @@ describe('provider-neutral run lifecycle', () => {
 			FABRIKA_SERVICE_KEY,
 			'FABRIKA_IAM_RPC_KEY',
 			'FABRIKA_TOKEN_KEYS',
+			'FABRIKA_OPS_KEY_DIGESTS',
 		].sort())
 		expect(input.dryRun).toBe(true)
 
@@ -890,6 +902,7 @@ describe('provider-neutral run lifecycle', () => {
 			FABRIKA_IAM_RPC_KEY: null,
 			FABRIKA_APP_ORIGIN: 'https://public.example.com',
 			FABRIKA_TOKEN_KEYS: null,
+			FABRIKA_OPS_KEY_DIGESTS: null,
 		})
 		expect(pendingInputs[0]?.environment.operationsOrigin).toBeUndefined()
 
@@ -921,6 +934,7 @@ describe('provider-neutral run lifecycle', () => {
 			FABRIKA_IAM_RPC_KEY: null,
 			FABRIKA_APP_ORIGIN: 'https://public.example.com',
 			FABRIKA_TOKEN_KEYS: null,
+			FABRIKA_OPS_KEY_DIGESTS: null,
 		})
 		// The origin a proxy's `connect-src` admits, stated by Control so no provider parses the DSN for it.
 		expect(activeInputs[0]?.environment.operationsOrigin).toBe(new URL(dsn).origin)
@@ -965,6 +979,57 @@ describe('provider-neutral run lifecycle', () => {
 		expect(stored.objects.get(`runs/${runId}/logs.ndjson`)).toContain('needs its proxy secret')
 		expect((await executeDeploy(deps, { runId: await createNextRun(db), dryRun: true })).status).toBe('succeeded')
 		expect(inputs[0]?.managedEnvironment[FABRIKA_PROXY_SECRET]?.value).toBeNull()
+	})
+
+	test('hands the ops key digests only at a release the provider serves the ops channel at, and null otherwise', async () => {
+		const { db } = createHarness()
+		const opsKeys = new VaultOpsKeys(db.opsKeys, () => Promise.resolve(vault))
+		const asked: string[] = []
+		const deploy = async (runId: string, serves: boolean | undefined, dryRun = false): Promise<string | null | undefined> => {
+			const inputs: ProviderDeployInput[] = []
+			const provider = makeProvider(inputs, { state: 'succeeded' })
+			const opsChannel = (access: ProviderApprovedAccess): boolean => {
+				asked.push(access.checker)
+				return serves === true
+			}
+			const deps: RunDeps = { ...makeDeps(db, serves === undefined ? provider : { ...provider, opsChannel }), opsKeys }
+			expect((await executeDeploy(deps, dryRun ? { runId, dryRun } : { runId })).status).toBe('succeeded')
+			return inputs[0]?.managedEnvironment[FABRIKA_OPS_KEY_DIGESTS]?.value
+		}
+		// A provider without the capability, and a release it does not serve, get no key.
+		expect(await deploy(await seedRun(db), undefined)).toBeNull()
+		expect(await deploy(await createNextRun(db), false)).toBeNull()
+		expect(await db.opsKeys.list('app', 'prod')).toEqual([])
+		// The provider judges the approved access, whose checker names the application's release.
+		expect(asked).toEqual([CHECKER_VERSION])
+
+		const gatedRun = await createNextRun(db)
+		const digests = await deploy(gatedRun, true)
+		const [issued] = await db.opsKeys.list('app', 'prod')
+		expect(issued?.handed_by).toBe(gatedRun)
+		expect(digests).toBe(issued?.digest)
+		expect(parseOpsKeyDigests(digests ?? '')).toEqual([issued?.digest ?? ''])
+		// The issuing deploy succeeded, so Control now calls with the key whose digest it handed.
+		expect(opsKeyDigest((await opsKeys.opsKeyFor('app', 'prod')) ?? '')).toBe(issued?.digest)
+
+		// A dry run issues nothing and hands nothing.
+		expect(await deploy(await createNextRun(db), true, true)).toBeNull()
+		// A downgrade hands null, which removes the digests; the key stays for a later upgrade.
+		expect(await deploy(await createNextRun(db), false)).toBeNull()
+		expect(await db.opsKeys.list('app', 'prod')).toHaveLength(1)
+	})
+
+	test('refuses a gated deploy when Control can keep no ops key, and a dry run needs none', async () => {
+		const { db } = createHarness()
+		const inputs: ProviderDeployInput[] = []
+		const stored = memoryLogs()
+		const deps: RunDeps = { ...makeDeps(db, { ...makeProvider(inputs, { state: 'succeeded' }), opsChannel: () => true }), logs: stored.logs }
+		const runId = await seedRun(db)
+		expect((await executeDeploy(deps, { runId })).status).toBe('failed')
+		expect(inputs).toEqual([])
+		expect(stored.objects.get(`runs/${runId}/logs.ndjson`)).toContain('FABRIKA_CONTROL_VAULT_KEY')
+		expect((await executeDeploy(deps, { runId: await createNextRun(db), dryRun: true })).status).toBe('succeeded')
+		expect(inputs[0]?.managedEnvironment[FABRIKA_OPS_KEY_DIGESTS]?.value).toBeNull()
 	})
 
 	test('delivers the IAM application id of the deploying environment, <app>@<env>', async () => {

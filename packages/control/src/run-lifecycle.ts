@@ -4,6 +4,7 @@ import {
 	FABRIKA_APP_ORIGIN,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
+	FABRIKA_OPS_KEY_DIGESTS,
 	FABRIKA_PROXY_SECRET,
 	FABRIKA_TOKEN_KEYS,
 	isFrameworkVariableName,
@@ -64,6 +65,7 @@ import {
 import { type MembershipTransportPort, needsMembershipTransport } from './membership-transport'
 import { ingestOrigin } from './operations-catalog'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
+import { type OpsKeysPort, reconcileOpsKey } from './ops-key'
 import type { PlatformTransportPort } from './platform-transport'
 import type { ProxySecrets } from './proxy-secret'
 import { projectedReturnOrigins } from './return-origins'
@@ -118,6 +120,8 @@ export interface RunDeps {
 	 * declares a token purpose does not deploy.
 	 */
 	tokenKeys?: TokenKeysPort
+	/** Each environment's ops key, sealed in the vault (ADR-0069); absent without a vault, and then a gated deploy fails. */
+	opsKeys?: OpsKeysPort
 	/**
 	 * The installation's mail transport; absent means none, and then a job that declares `mailer: 'installation'` gets
 	 * `FABRIKA_EMAIL_PROVIDER=none`. An invalid one refuses only the deploys that need it.
@@ -692,6 +696,11 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		managedEnvironment[FABRIKA_APP_ORIGIN] = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
 		const tokenKeys = dryRun ? null : await reconcileTokenKeys(deps.tokenKeys, app.id, appEnv.env, approvedContract)
 		managedEnvironment[FABRIKA_TOKEN_KEYS] = tokenKeys
+		// Only a release the provider serves the ops channel at gets the digests; `null` removes them after a downgrade.
+		const approvedAccess = registration.environment.access
+		const opsChannel = !dryRun && approvedAccess !== undefined && deps.provider.opsChannel?.(approvedAccess) === true
+		const opsKeyDigests = opsChannel ? await reconcileOpsKey(deps, app.id, appEnv.env, runId) : null
+		managedEnvironment[FABRIKA_OPS_KEY_DIGESTS] = opsKeyDigests
 		// Parsed once, before any provider effect: a provider writes what it is handed and checks none of it again.
 		const handed = parseManagedEnvironment(managedEnvironment)
 		// A provider removes a managed name it is not handed, so a name missing here would delete the variable.
@@ -705,6 +714,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			platformMailKey ?? '',
 			platformSourceKey ?? '',
 			tokenKeys ?? '',
+			...(opsKeyDigests?.split(',') ?? []),
 			...installationMailSecrets(deps.mailTransport ?? NO_INSTALLATION_MAIL, mailEnvironment),
 			// A Zerops build holds the source-map bearer, and the provider relays the build's log.
 			releaseContext?.artifactUpload?.bearer ?? '',

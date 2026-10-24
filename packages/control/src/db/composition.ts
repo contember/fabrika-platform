@@ -8,6 +8,7 @@ import { MailRuleRepository } from './mail-rules'
 import { MembershipKeyRepository } from './membership-keys'
 import { OperationsCatalogRepository } from './operations-catalog'
 import { OperationsReleaseRepository } from './operations-releases'
+import { OpsKeyRepository } from './ops-keys'
 import { PlatformTransportKeyRepository } from './platform-transport-keys'
 import { RepoPollingRepository } from './polling'
 import { ControlRegistryRepository } from './registry'
@@ -30,6 +31,7 @@ export interface ControlRepositories {
 	workloadCredentials: WorkloadCredentialRepository
 	membershipKeys: MembershipKeyRepository
 	tokenKeys: TokenKeyRepository
+	opsKeys: OpsKeyRepository
 	platformTransportKeys: PlatformTransportKeyRepository
 	mailMessages: MailMessageRepository
 	mailRules: MailRuleRepository
@@ -52,6 +54,7 @@ export function createControlRepositories(db: SqlDatabase, options: { now?: () =
 		workloadCredentials: new WorkloadCredentialRepository(db),
 		membershipKeys: new MembershipKeyRepository(db),
 		tokenKeys: new TokenKeyRepository(db),
+		opsKeys: new OpsKeyRepository(db),
 		platformTransportKeys: new PlatformTransportKeyRepository(db),
 		mailMessages: new MailMessageRepository(db),
 		mailRules: new MailRuleRepository(db),

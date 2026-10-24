@@ -3,6 +3,7 @@ import { FABRIKA_CONTRACT_DIGEST } from './endpoint-digest'
 import { FABRIKA_IAM_ISSUER } from './environment'
 import {
 	FABRIKA_APP_ORIGIN,
+	FABRIKA_OPS_KEY_DIGESTS,
 	FABRIKA_TOKEN_KEYS,
 	FRAMEWORK_VARIABLE_PREFIXES,
 	type FrameworkVariableName,
@@ -33,6 +34,7 @@ export const MANAGED_VARIABLE_NAMES = [
 	'FABRIKA_IAM_RPC_KEY',
 	FABRIKA_APP_ORIGIN,
 	FABRIKA_TOKEN_KEYS,
+	FABRIKA_OPS_KEY_DIGESTS,
 ] as const satisfies readonly FrameworkVariableName[]
 
 export type ManagedVariableName = (typeof MANAGED_VARIABLE_NAMES)[number]
