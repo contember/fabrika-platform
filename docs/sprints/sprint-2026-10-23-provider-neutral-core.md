@@ -176,3 +176,8 @@ WU5, WU6, WU7 and WU9 are independent of each other. WU8 follows WU7.
 - **WU6.** `contractProxyEntry` (`packages/proxy-core/src/manifest.ts`) checks the entry with the proxy's own
   `contractProxyAppSchema` instead of a copy of its rules, so Zerops' hand-written origin and cross-origin checks went.
   Cloudflare's proxy Worker and `@fabrika/app/testing`'s `endpointProxy` build through it too. The wire form is unchanged.
+- **WU5.** `contractRecipe` (`packages/app/src/build-recipe.ts`, exported from `@fabrika/app/build`) is the build,
+  init, start and jobs as data; `provider-zerops` now depends on `@fabrika/app`, as `provider-cloudflare` already did.
+  The rendered `zerops.yaml` is byte-identical: the exact-output tests in `execution*.test.ts` and
+  `released-manifest.test.ts` pass unchanged. The file jobs' names moved to a leaf module (`files/job-names.ts`), so the
+  recipe loads without the file stack. Not done: running the recipe on the Cloudflare runner, which is a decision.

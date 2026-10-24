@@ -754,7 +754,7 @@ const sizeDatabase = async (env: StepEnv): Promise<void> => {
 	const deploy = await zerops.api.getService({ serviceId: run.target.serviceId, signal })
 	const demand: ZeropsDatabaseDemand = {
 		maxContainers: deploy.currentAutoscaling?.horizontal.maxContainerCount ?? ZEROPS_MAX_CONTAINERS,
-		jobs: zeropsJobProcesses(locked.contract),
+		jobs: zeropsJobProcesses(locked),
 	}
 	const service = await zerops.api.findService({ projectId: run.target.projectId, hostname: database.hostname, signal })
 	if (service === null) throw new Error(`zerops: the database ${database.hostname} does not exist, so its connections cannot be sized`)

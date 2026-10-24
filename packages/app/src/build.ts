@@ -22,6 +22,8 @@ export const MIGRATIONS_DIRECTORY = 'db/migrations'
 
 export type EntryRuntime = 'bun' | 'cloudflare'
 
+export * from './build-recipe.js'
+
 // In a module of their own, which the Worker imports without this one's file system.
 export { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING } from './cloudflare/names.js'
 

@@ -43,6 +43,7 @@
 	},
 	"dependencies": {
 		"zod": "^3.25.76",
+		"@fabrika/app": "workspace:*",
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/email": "workspace:*",

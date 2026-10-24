@@ -628,6 +628,7 @@
       "name": "@fabrika/provider-zerops",
       "version": "0.8.2",
       "dependencies": {
+        "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/email": "workspace:*",

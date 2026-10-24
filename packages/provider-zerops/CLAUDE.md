@@ -131,6 +131,8 @@ bun test
   `contract.digest`, from `contractDigest`), and an endpoint table without the contract is refused. A deploy writes
   `FABRIKA_CONTRACT_DIGEST` and the namespace proxy's `snapshot` from `ProviderApprovedAccess.contractDigest`, never
   from the approved contract: Control may have upcast it from an older release's artifact.
+  The steps are `@fabrika/app/build`'s `contractRecipe`; `src/execution.ts` renders them at Zerops' paths (`printf`
+  file writes, init commands, the crontab, ClamAV) and keeps the guards a shell needs.
   `renderLockedExecutionDescriptor` sends ONLY the generated setup: the SPA commands, the frozen install, the
   application's tests, then — because the tests are authored code — a reinstall, the regenerated entrypoint,
   the checker fetched at the release of the reader that read the application (`ZeropsLockedExecution.checkRelease`,

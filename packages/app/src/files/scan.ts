@@ -12,9 +12,7 @@ import type { OperationsReporter } from '../jobs/report'
 import { type ArchiveRefusal, checkArchive } from './archive'
 import { ZIP_TYPES } from './sniff'
 
-/** The reserved name of the scan job: a `c.cron` job name cannot contain `-`, so no application job takes it. */
-export const FILE_SCAN_JOB = 'fabrika-file-scan'
-export const FILE_SCAN_SCHEDULE = '* * * * *'
+export { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE } from './job-names'
 
 export const SCAN_LIMITS = {
 	/** One pass scans at most this many files, and at most `batchBytes` of them; the next pass takes the rest. */
