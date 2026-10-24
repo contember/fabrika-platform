@@ -53,7 +53,7 @@ import { fileReference } from './file-references'
 import { webhookTables } from './framework-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
 import { fencedTransaction, jobLeases } from './job-leases'
-import { linksPredicate, linkValues } from './links'
+import { linksPredicate, type LinkValue, linkValues } from './links'
 import {
 	acknowledgement,
 	acknowledgementNode,
@@ -398,12 +398,7 @@ function withinPredicate(model: TableModel, column: string, grant: WithinGrant):
 		if (container === undefined) {
 			continue
 		}
-		let link: Container | undefined
-		for (let position = 0; position < above.length; position++) {
-			if (above[position]?.dimension === container.dimension) {
-				link = above[position]
-			}
-		}
+		const link = linkOf(above, container.dimension)
 		if (link === undefined) {
 			throw new CapabilityError(
 				'unenforceable',
@@ -430,7 +425,14 @@ function withinPredicate(model: TableModel, column: string, grant: WithinGrant):
 /** The object a Ref of the model's own dimension names, with every link of its chain. */
 export function selfLinks(model: TableModel): readonly Container[] {
 	const scope = dimensionScope(model)
-	return [{ dimension: scope.dimension, column: scope.key }, ...model.chain]
+	const links: Container[] = [{ dimension: scope.dimension, column: scope.key }]
+	for (let index = 0; index < model.chain.length; index++) {
+		const link = model.chain[index]
+		if (link !== undefined) {
+			links[links.length] = link
+		}
+	}
+	return links
 }
 
 /** This object, over the whole chain the Ref carries. */
@@ -600,7 +602,22 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 		if (use === 'read' && !namesAction(model, grant.action)) {
 			throw new CapabilityError('wrong_action', `${model.name} does not name the action ${grant.action}: a Ref reads it with an action it names`)
 		}
-		return [linkValues(model.name, links.slice(start), grant).map(({ link, value }) => ({ column: link.column, value }))]
+		const reached: Container[] = []
+		for (let index = start; index < links.length; index++) {
+			const link = links[index]
+			if (link !== undefined) {
+				reached[reached.length] = link
+			}
+		}
+		const values = linkValues(model.name, reached, grant)
+		const tests: ScopeTest[] = []
+		for (let index = 0; index < values.length; index++) {
+			const entry = values[index]
+			if (entry !== undefined) {
+				tests[tests.length] = { column: entry.link.column, value: entry.value }
+			}
+		}
+		return [tests]
 	}
 	const column = reachColumn(model, grant.dimension)
 	if (column === undefined) {
@@ -622,10 +639,14 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 	const groups: ScopeTest[][] = []
 	const count = withinCount(grant)
 	if (grant.values.length > 0) {
-		groups.push([{ column, value: grant.values }])
+		groups[groups.length] = [{ column, value: grant.values }]
 	}
-	for (const container of grant.containers) {
-		const link = above.find((candidate) => candidate.dimension === container.dimension)
+	for (let index = 0; index < grant.containers.length; index++) {
+		const container = grant.containers[index]
+		if (container === undefined) {
+			continue
+		}
+		const link = linkOf(above, container.dimension)
 		if (link === undefined) {
 			throw new CapabilityError(
 				'unenforceable',
@@ -633,7 +654,7 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 			)
 		}
 		if (container.values.length > 0) {
-			groups.push([{ column: link.column, value: container.values }])
+			groups[groups.length] = [{ column: link.column, value: container.values }]
 		}
 	}
 	const contained = containedTests(model, grant)
@@ -1651,9 +1672,7 @@ export function prepareDimensionInsert(context: TableContext, target: unknown, v
 		return { row, destination: undefined, conflict }
 	}
 	stampInsert(context, grant, row, scope.key, uuidv7())
-	for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
-		row.set(link.column, value)
-	}
+	stampChain(row, linkValues(context.model.name, context.model.chain, grant))
 	return { row, destination: grant, conflict }
 }
 
@@ -1673,10 +1692,18 @@ export function prepareChildInsert(context: TableContext, parent: unknown, value
 	const row = readValues(values, context.model.insert, 'insert', context.model)
 	const conflict = onConflictOf(context, options, grant.action, row)
 	stampInsert(context, grant, row, scope.key, uuidv7())
-	for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
-		row.set(link.column, value)
-	}
+	stampChain(row, linkValues(context.model.name, context.model.chain, grant))
 	return { row, destination: grant, conflict }
+}
+
+/** Writes each chain column the destination `Ref` settles into an insert's row. */
+function stampChain(row: Map<string, Primitive | null>, values: readonly LinkValue[]): void {
+	for (let index = 0; index < values.length; index++) {
+		const entry = values[index]
+		if (entry !== undefined) {
+			row.set(entry.link.column, entry.value)
+		}
+	}
 }
 
 /** A prepared insert, with its conflict handling when the caller named one. */
@@ -1782,9 +1809,17 @@ export class DimensionTable<DB, P, T extends string> {
 		const scope = objectPredicate(context, ref, 'delete')
 		const target = refGrant(context, to, container.dimension, 'insert')
 		const values = linkValues(context.model.name, context.model.chain, target)
-		const changes = new Map<string, Primitive | null>(values.map(({ link, value }) => [link.column, value]))
+		const changes = new Map<string, Primitive | null>()
+		stampChain(changes, values)
+		const chain: Record<string, string> = {}
+		for (let index = 0; index < values.length; index++) {
+			const entry = values[index]
+			if (entry !== undefined) {
+				setOwn(chain, entry.link.dimension, entry.value)
+			}
+		}
 		const acknowledged = await updateRow<Acknowledgement<P, T>>(context, storeRunner(context), addressed(scope), changes, undefined, target)
-		return { ...acknowledged, chain: Object.fromEntries(values.map(({ link, value }) => [link.dimension, value])) }
+		return { ...acknowledged, chain }
 	}
 
 	async aggregate<const S extends AggregateSpec<Row<DB, P, T>>>(

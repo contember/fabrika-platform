@@ -57,5 +57,12 @@ export function linkValues(table: string, links: readonly Container[], grant: Re
 }
 
 export function linksPredicate(table: string, values: readonly LinkValue[]): OperationNode {
-	return allOf(values.map(({ link, value }) => equals(table, link.column, value)))
+	const terms: OperationNode[] = []
+	for (let index = 0; index < values.length; index++) {
+		const entry = values[index]
+		if (entry !== undefined) {
+			terms[terms.length] = equals(table, entry.link.column, entry.value)
+		}
+	}
+	return allOf(terms)
 }

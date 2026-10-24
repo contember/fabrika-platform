@@ -4,12 +4,17 @@
 
 import { describe, expect, test } from 'bun:test'
 import { DefaultQueryCompiler, PostgresQueryCompiler } from 'kysely'
+import { z } from 'zod/v4'
 import { Database } from '../database'
 import { CapabilityError, QueryRefusedError } from '../errors'
+import { bindScopedDatabase, dataAccessOf } from '../framework'
 import * as postgres from '../postgres'
-import { defineStore } from '../store'
+import { defineStore, scoped } from '../store'
+import { TestAuthority } from './fixtures/authority'
 import { call, type Outcome, recordingLayer } from './fixtures/harness'
 import { patchedChecks } from './fixtures/patch'
+import { RecordingDialect } from './fixtures/recording-dialect'
+import { tables } from './fixtures/tables'
 
 describe('the compiler cannot be patched after the guard ran', () => {
 	test('its prototypes are frozen once the layer is loaded', () => {
@@ -61,6 +66,25 @@ describe('patched built-ins do not disable the guard', () => {
 		)
 		expect(outcome.statements[0]?.sql).toContain('and "notes"."id" in ($3) order by')
 		expect(outcome.statements[0]?.sql).not.toContain('"notes"."workspace_id" in')
+	})
+
+	test('with Array.find patched, a ctx.sql.scope container grant still binds its own column', async () => {
+		const dialect = new RecordingDialect()
+		const authority = new TestAuthority('user:alice')
+		const layer = scoped(tables)
+		bindScopedDatabase(layer, { database: Database.fromDialect(dialect), capabilities: authority })
+		const access = dataAccessOf(layer)
+		const session = access.direct()
+		const sql = access.sql({ mode: 'read', check() {}, session: async () => session, fail: () => session.fail() })
+		const inOrganization = authority.within('workspace', 'notes.read', [], [{ dimension: 'organization', values: ['o1'] }])
+		await patchedChecks(
+			{ find: { dimension: 'organization', column: 'title' } },
+			() => sql(z.object({}))`select n.id from notes n where ${sql.scope(inOrganization, 'notes', 'n')}`,
+		)
+		const sent = dialect.log.map((statement) => statement.sql)
+		expect(sent).toHaveLength(1)
+		expect(sent[0]).toContain('n.organization_id = any(')
+		expect(sent[0]).not.toContain('n.title')
 	})
 
 	test('with Set.has, Array.find, Object.hasOwn, Object.keys and Object.getOwnPropertyDescriptor patched, an injected operator is still refused', async () => {

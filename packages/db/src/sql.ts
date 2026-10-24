@@ -373,17 +373,21 @@ function scopeFragment(terms: ScopeTerms, alias: string): { readonly parts: read
 	const parts: string[] = []
 	const values: SqlValue[] = []
 	let text = '('
-	terms.forEach((group, groupIndex) => {
+	// Index loops, never a method of the terms or of Array.prototype: this is the scope of the statement.
+	for (let groupIndex = 0; groupIndex < terms.length; groupIndex++) {
+		const group = terms[groupIndex] ?? []
 		text += `${groupIndex === 0 ? '' : ' or '}(`
-		group.forEach((test, testIndex) => {
+		for (let testIndex = 0; testIndex < group.length; testIndex++) {
+			const test = group[testIndex]
+			if (test === undefined) continue
 			text += `${testIndex === 0 ? '' : ' and '}${alias}.${test.column} = ${typeof test.value === 'string' ? '' : 'any('}`
-			parts.push(text)
-			values.push(test.value)
+			parts[parts.length] = text
+			values[values.length] = test.value
 			text = typeof test.value === 'string' ? '' : ')'
-		})
+		}
 		text += ')'
-	})
-	parts.push(`${text})`)
+	}
+	parts[parts.length] = `${text})`
 	return { parts, values }
 }
 
