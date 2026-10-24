@@ -157,6 +157,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0015_workspace_abandon.sql' },
 			{ bundle: 'control', name: '0016_dev_environments.sql' },
 			{ bundle: 'control', name: '0017_dev_launcher_contact.sql' },
+			{ bundle: 'control', name: '0018_data_operations.sql' },
 		])
 	})
 
@@ -187,6 +188,8 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'github_source_setup_attempts',
 				'github_source_connections_keyed',
 				'builder_connection_receipts',
+				'app_env_data_operations',
+				'app_env_data_generations',
 			]
 		) {
 			expect(names).toContain(table)
