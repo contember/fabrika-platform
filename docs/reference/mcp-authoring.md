@@ -131,7 +131,9 @@ environment is promoted.
 4. `apply_changes` waits up to 10 s for that report and answers `dev: { head, state, summary, url, log }` beside
    `commitSha`. On a timeout `state` is `pending`, and `get_dev_status` reads the rest. Once the commit persisted, the
    call never fails: when following the dev environment fails, `state` is `unavailable` with a `reference`, and when the
-   audit entry cannot be written the answer carries a `warning` with a reference.
+   audit entry cannot be written the answer carries a `warning` with a reference. Advancing or starting the environment
+   needs `deploy.trigger` on it, as `bind_dev` does; a caller who holds only `deploy.read` gets `state` `not_followed`,
+   and the environment keeps its head.
 
 `state` is one of:
 

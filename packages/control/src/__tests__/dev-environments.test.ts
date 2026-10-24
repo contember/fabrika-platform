@@ -592,6 +592,20 @@ for (const backend of backends) {
 			expect((await following)?.state).toBe('serving')
 			expect(w.provider.calls).toEqual(['stop shop/dev', 'start shop/dev'])
 		})
+
+		test('a commit by someone who may not trigger deploys does not advance or start the dev environment', async () => {
+			const w = await world()
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
+			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
+			const deps = { repositories: w.repositories, provider: w.provider }
+			expect(await stopIdleDevServices(deps, Math.floor(Date.now() / 1000) + 31 * 60)).toEqual({ stopped: 1, failed: 0 })
+
+			const reader = oauthUser(AUTHOR_ACTIONS.filter((action) => action !== 'deploy.trigger'), 'reader@acme.test')
+			const followed = await followDevCommit(w.dev(reader), { workspaceId: w.workspaceId, commitSha: sha('c'), parentSha: sha('b'), written: [] })
+			expect(followed?.state).toBe('not_followed')
+			expect((await w.repositories.devEnvironments.get('shop', 'dev'))?.target_sha).toBe(sha('b'))
+			expect(w.provider.calls).toEqual(['stop shop/dev'])
+		})
 	})
 }
 
