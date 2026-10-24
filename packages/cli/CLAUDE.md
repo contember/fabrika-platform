@@ -3,9 +3,9 @@
 The single public `fabrika` executable. It parses the top-level `platform`,
 `app`, `namespace`, `control`, `builder`, `db`, `job`, and `connect` command areas, resolves one provider where a
 command has one, then delegates to an installation or provider package. It
-contains no provider implementation. The one exception is `src/namespace.ts`:
-`fabrika namespace` is a Control RPC client over the Zerops namespace planner,
-so it lives here and `provider-zerops` does not depend on `control-contract`.
+contains no provider implementation and never branches on a provider id. `src/namespace.ts` is the Control RPC
+half of `fabrika namespace`: the provider's `NamespaceCli` plans and builds the namespace, this package holds
+Control's origin and credential, calls it and prints, so no provider depends on `control-contract`.
 
 ## The `control` area
 
@@ -197,8 +197,11 @@ arguments and reports.
   provider's `defineApp()`.
 - Platform commands use the same resolver. Pass `--provider` when the working
   directory has no provider-authored app config.
-- `cloudflare` and `zerops` are built-in aliases for `@fabrika/provider-<cloud>/installation`. Any other value is
-  loaded as a package specifier implementing `@fabrika/provider-contract/installation`.
+- A provider id (`[a-z][a-z0-9-]*`) names `@fabrika/provider-<id>`: platform commands load its `/installation`
+  (`@fabrika/provider-contract/installation`), app and namespace commands its `/cli`, whose `appCli`
+  (`@fabrika/provider-contract/app-cli`) declares the entry runtime, `build`, `deploy`, `registrationManifest` and
+  `namespaces`. A command the provider does not declare is refused with its id. Any other `--provider` value of a
+  platform command is loaded as a package specifier.
 
 ## Optional packages
 

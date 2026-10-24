@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import type { DeployStepResult } from '@fabrika/provider-contract'
+import type { AppCli } from '@fabrika/provider-contract/app-cli'
 import { parseCloudflareArgs } from './cli-args'
 import { deployCloudflareConfig } from './command'
 import type { CloudflareDeployResult } from './provider'
@@ -74,6 +75,19 @@ export const runCloudflareCli = async (argv: readonly string[]): Promise<void> =
 			stateNamespace: process.env['CLOUDFLARE_STATE_NAMESPACE'],
 		}),
 	)
+}
+
+/**
+ * What `fabrika app build` and `app deploy` run for an application on Cloudflare. A contract application's build is its
+ * generated Worker entry, which the `fabrika` command writes; there is nothing else to build.
+ */
+export const appCli: AppCli = {
+	provider: 'cloudflare',
+	entryRuntime: 'cloudflare',
+	build: async (_argv, { contract }) => {
+		if (!contract) throw new Error('Cloudflare app tooling does not support `app build` for an application without fabrika.contract.ts')
+	},
+	deploy: (argv) => runCloudflareCli(['deploy', ...argv]),
 }
 
 if (import.meta.main) {
