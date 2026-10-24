@@ -5,7 +5,7 @@ import { type SqlDatabase, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { type ControlRepositories, createControlRepositories } from '../db'
-import { type DataOperationInput, DataOperationRepository, type DataOperationRow } from '../db/data-operations'
+import type { DataOperationFields, DataOperationInput, DataOperationRepository, DataOperationResolution, DataOperationRow } from '../db'
 import { LEASE_TTL_MS, type LeaseFence, runLeaseKey } from '../lease'
 import { createHarness } from './helpers/harness'
 import { createPostgres, hasPostgres, postgresUrl, skipReason } from './helpers/postgres'
@@ -20,12 +20,12 @@ interface Backend {
 	close(): Promise<void>
 }
 
-const backends: { name: string; skip: boolean; open(): Promise<Backend> }[] = [
+const backends: { name: string; skip: boolean; open(now: () => number): Promise<Backend> }[] = [
 	{
 		name: 'sqlite',
 		skip: false,
-		open: () => {
-			const harness = createHarness()
+		open: (now) => {
+			const harness = createHarness(now)
 			return Promise.resolve({
 				repositories: harness.repositories,
 				db: harness.d1,
@@ -40,11 +40,11 @@ const backends: { name: string; skip: boolean; open(): Promise<Backend> }[] = [
 	{
 		name: 'postgres',
 		skip: !hasPostgres,
-		open: async () => {
+		open: async (now) => {
 			const fixture = await createPostgres('vozka_data_ops')
 			const pools: PostgresDatabase[] = []
 			return {
-				repositories: createControlRepositories(fixture.db),
+				repositories: createControlRepositories(fixture.db, { now }),
 				db: fixture.db,
 				concurrent: () => {
 					if (postgresUrl === null) throw new Error('postgres is not configured')
@@ -76,9 +76,9 @@ for (const backend of backends) {
 		})
 
 		async function open(): Promise<{ operations: DataOperationRepository; locks: SqlDeployLocks; backend: Backend }> {
-			opened = await backend.open()
+			opened = await backend.open(() => Math.floor(clockMs / 1000))
 			await opened.repositories.registry.createApp({ id: 'crm', repoUrl: 'github.com/acme/crm' })
-			const operations = new DataOperationRepository(opened.db, () => Math.floor(clockMs / 1000))
+			const operations = opened.repositories.dataOperations
 			const locks = new SqlDeployLocks(opened.db, { now: () => clockMs })
 			return { operations, locks, backend: opened }
 		}
@@ -89,16 +89,21 @@ for (const backend of backends) {
 			return { holder, nowMs: clockMs }
 		}
 
-		const input = (overrides: Partial<DataOperationInput> = {}): DataOperationInput => ({
+		const fields = (overrides: Partial<DataOperationFields> = {}): DataOperationFields => ({
 			id: uuidv7(),
 			appId: 'crm',
 			env: 'prod',
-			kind: 'maintenance',
 			step: 'restrict',
 			targetMode: 'read-only',
 			generation: 1,
 			actor: 'user:ada',
 			...overrides,
+		})
+		const input = (overrides: Partial<DataOperationFields> = {}): DataOperationInput => ({ ...fields(overrides), kind: 'maintenance' })
+		const recovery = (operationId: string, resolution: DataOperationResolution, overrides: Partial<DataOperationFields> = {}): DataOperationInput => ({
+			...fields({ step: 'reconcile', targetMode: 'closed', ...overrides }),
+			kind: 'recovery',
+			recovers: { operationId, resolution },
 		})
 
 		test('an operation is created only under the environment lease', async () => {
@@ -128,19 +133,21 @@ for (const backend of backends) {
 				created_at: T0,
 				updated_at: T0,
 				finished_at: null,
+				recovers_operation_id: null,
+				resolution: null,
 			})
 			expect(await operations.get(refused.id)).toEqual(created)
 		})
 
 		test('generations are strictly increasing under concurrent allocation, per environment', async () => {
 			const { backend: opened } = await open()
-			const concurrent = new DataOperationRepository(opened.concurrent())
+			const concurrent = createControlRepositories(opened.concurrent()).dataOperations
 			const prod = await Promise.all(Array.from({ length: 24 }, () => concurrent.allocateGeneration('crm', 'prod')))
 			const stage = await Promise.all(Array.from({ length: 6 }, () => concurrent.allocateGeneration('crm', 'stage')))
 			expect([...prod].sort((a, b) => a - b)).toEqual(Array.from({ length: 24 }, (_, i) => i + 1))
 			expect([...stage].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6])
 
-			const operations = new DataOperationRepository(opened.db)
+			const operations = opened.repositories.dataOperations
 			expect(await operations.allocateGeneration('crm', 'prod')).toBe(25)
 			expect(await operations.allocateGeneration('crm', 'prod')).toBe(26)
 		})
@@ -193,14 +200,59 @@ for (const backend of backends) {
 			expect(await operations.get(created.id)).toMatchObject({ step: 'restrict', target_mode: 'read-only', generation: 2 })
 		})
 
-		test('a recovery reconciles, fences in closed, then resumes', async () => {
+		for (const resolution of ['resume', 'open'] as const) {
+			test(`a recovery to ${resolution} keeps its intent through the closed fence, for a successor to read`, async () => {
+				const { operations, locks, backend: opened } = await open()
+				const fence = await lease(locks)
+				const stuck = await operations.create(input({ step: 'backup' }), fence)
+				if (stuck === null) throw new Error('not created')
+				const created = await operations.create(recovery(stuck.id, resolution, { generation: 2 }), fence)
+				if (created === null) throw new Error('not created')
+				expect(await operations.advance(created.id, { expectedStep: 'reconcile', step: 'restrict', generation: 3 }, fence)).toBe(true)
+
+				// The recovering instance dies here; a successor composes its own repositories over the same database.
+				const successor: DataOperationRepository = createControlRepositories(opened.db).dataOperations
+				const found = await successor.get(created.id)
+				expect(found).toMatchObject({
+					kind: 'recovery',
+					step: 'restrict',
+					target_mode: 'closed',
+					generation: 3,
+					recovers_operation_id: stuck.id,
+					resolution,
+				})
+				const listed = await successor.listForEnvironment('crm', 'prod', { limit: 10 })
+				expect(listed.map((row) => [row.id, row.recovers_operation_id, row.resolution])).toEqual([
+					[created.id, stuck.id, resolution],
+					[stuck.id, null, null],
+				])
+			})
+		}
+
+		test('a recovery names an operation of its own environment', async () => {
 			const { operations, locks } = await open()
+			const stage = await lease(locks, 'stage')
+			const prod = await lease(locks)
+			const elsewhere = await operations.create(input({ env: 'stage' }), stage)
+			if (elsewhere === null) throw new Error('not created')
+
+			for (const target of [elsewhere.id, uuidv7()]) {
+				const refused = recovery(target, 'open')
+				await expect(operations.create(refused, prod)).rejects.toThrow()
+				expect(await operations.get(refused.id)).toBeNull()
+			}
+		})
+
+		test('deleting the application removes its operations, recoveries included', async () => {
+			const { operations, locks, backend: opened } = await open()
 			const fence = await lease(locks)
-			const created = await operations.create(input({ kind: 'recovery', step: 'reconcile', targetMode: 'closed' }), fence)
+			const stuck = await operations.create(input(), fence)
+			if (stuck === null) throw new Error('not created')
+			const created = await operations.create(recovery(stuck.id, 'resume'), fence)
 			if (created === null) throw new Error('not created')
-			expect(await operations.advance(created.id, { expectedStep: 'reconcile', step: 'restrict', generation: 2 }, fence)).toBe(true)
-			expect(await operations.advance(created.id, { expectedStep: 'restrict', step: 'resume' }, fence)).toBe(true)
-			expect(await operations.get(created.id)).toMatchObject({ kind: 'recovery', step: 'resume', target_mode: 'closed', generation: 2 })
+			expect(await opened.repositories.registry.deleteApp('crm')).toBe(true)
+			expect(await operations.get(stuck.id)).toBeNull()
+			expect(await operations.get(created.id)).toBeNull()
 		})
 
 		test('a recorded generation only rises', async () => {

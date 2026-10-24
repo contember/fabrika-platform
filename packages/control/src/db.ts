@@ -2,6 +2,18 @@ export { BuilderConnectionRepository } from './db/builder-connections'
 export { type ControlRepositories, createControlRepositories } from './db/composition'
 export { type DevBindInput, DevEnvironmentRepository, type DevEnvironmentRow, type DevReportInput } from './db/dev-environments'
 export {
+	type DataOperationAdvance,
+	type DataOperationFields,
+	type DataOperationInput,
+	type DataOperationKind,
+	DataOperationRepository,
+	type DataOperationResolution,
+	type DataOperationRow,
+	type DataOperationState,
+	type DataOperationStep,
+	type MaintenanceMode,
+} from './db/data-operations'
+export {
 	FINAL_MAIL_MESSAGE_STATES,
 	type MailMessageInput,
 	type MailMessageListFilter,

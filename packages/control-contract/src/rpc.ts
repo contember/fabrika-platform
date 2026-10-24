@@ -302,6 +302,9 @@ export type DataOperationStep = 'reconcile' | 'restrict' | 'backup' | 'verify' |
 
 export type DataOperationState = 'running' | 'succeeded' | 'failed'
 
+/** What a recovery does after its closed fence: resume the interrupted operation, or open the object. */
+export type DataOperationResolution = 'resume' | 'open'
+
 /**
  * One operation as `data.read` shows it: an allowlisted projection of Control's record, with identifiers, states,
  * codes and timestamps only. It carries no free text and no content.
@@ -319,10 +322,15 @@ export interface DataOperationDto {
 	readonly state: DataOperationState
 	/** A code once it failed, never an error message. */
 	readonly errorCode: string | null
+	/** An opaque principal id (as `runActor`), never an email or label. */
 	readonly actor: string
 	readonly createdAt: number
 	readonly updatedAt: number
 	readonly finishedAt: number | null
+	/** A recovery's interrupted operation, of the same environment; `null` for every other kind. */
+	readonly recoversOperationId: string | null
+	/** A recovery's choice after its closed fence; `null` for every other kind. */
+	readonly resolution: DataOperationResolution | null
 }
 
 export const DATA_OPERATION_MAX_PAGE_SIZE = 100

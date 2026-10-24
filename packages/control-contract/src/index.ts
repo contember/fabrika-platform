@@ -601,6 +601,7 @@ export type {
 	DataOperationDto,
 	DataOperationKind,
 	DataOperationListInput,
+	DataOperationResolution,
 	DataOperationState,
 	DataOperationStep,
 	MaintenanceMode,

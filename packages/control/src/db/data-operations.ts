@@ -15,6 +15,9 @@ export type DataOperationStep = 'reconcile' | 'restrict' | 'backup' | 'verify' |
 
 export type DataOperationState = 'running' | 'succeeded' | 'failed'
 
+/** What a recovery does after its closed fence: resume the interrupted operation, or open the object. */
+export type DataOperationResolution = 'resume' | 'open'
+
 export interface DataOperationRow {
 	id: string
 	app_id: string
@@ -28,23 +31,35 @@ export interface DataOperationRow {
 	state: DataOperationState
 	/** A code once failed; never free text. */
 	error_code: string | null
+	/** An opaque principal id (as `runActor`), never an email or label. */
 	actor: string
 	created_at: number
 	updated_at: number
 	finished_at: number | null
+	/** A recovery's interrupted operation, of the same environment; `null` for every other kind. */
+	recovers_operation_id: string | null
+	/** A recovery's choice after its closed fence; `null` for every other kind. */
+	resolution: DataOperationResolution | null
 }
 
-export interface DataOperationInput {
+export interface DataOperationFields {
 	id: string
 	appId: string
 	env: string
-	kind: DataOperationKind
 	step: DataOperationStep
 	targetMode: MaintenanceMode
 	/** Allocated by `allocateGeneration` before the operation sends any request under it. */
 	generation: number
+	/** An opaque principal id (as `runActor`), never an email or label. */
 	actor: string
 }
+
+export type DataOperationInput =
+	& DataOperationFields
+	& (
+		| { kind: Exclude<DataOperationKind, 'recovery'> }
+		| { kind: 'recovery'; recovers: { operationId: string; resolution: DataOperationResolution } }
+	)
 
 export interface DataOperationAdvance {
 	/** The step the caller read; another one means it lost a race and nothing changes. */
@@ -69,7 +84,10 @@ const operationLease = `EXISTS (SELECT 1 FROM deploy_locks
 export class DataOperationRepository {
 	constructor(private readonly d1: SqlDatabase, private readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
 
-	/** Records a running operation; `null` when `fence` does not hold the environment's lease. */
+	/**
+	 * Records a running operation; `null` when `fence` does not hold the environment's lease. A recovery of an operation
+	 * that is not of the same environment fails on the foreign key and records nothing.
+	 */
 	async create(input: DataOperationInput, fence: LeaseFence): Promise<DataOperationRow | null> {
 		const key = runLeaseKey(input.appId, input.env)
 		const now = this.now()
@@ -82,8 +100,9 @@ export class DataOperationRepository {
 			),
 			this.d1
 				.prepare(`INSERT INTO app_env_data_operations
-					(id, app_id, env, kind, step, target_mode, generation, state, error_code, actor, created_at, updated_at, finished_at)
-				SELECT ?, ?, ?, ?, ?, ?, ?, 'running', NULL, ?, ?, ?, NULL
+					(id, app_id, env, kind, step, target_mode, generation, state, error_code, actor, created_at, updated_at, finished_at,
+						recovers_operation_id, resolution)
+				SELECT ?, ?, ?, ?, ?, ?, ?, 'running', NULL, ?, ?, ?, NULL, ?, ?
 				WHERE EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
 				RETURNING *`)
 				.bind(
@@ -97,6 +116,8 @@ export class DataOperationRepository {
 					input.actor,
 					now,
 					now,
+					input.kind === 'recovery' ? input.recovers.operationId : null,
+					input.kind === 'recovery' ? input.recovers.resolution : null,
 					key,
 					fence.holder,
 					fence.nowMs,
