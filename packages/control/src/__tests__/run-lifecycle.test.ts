@@ -403,6 +403,8 @@ describe('provider-neutral run lifecycle', () => {
 				proxySecrets: fixedProxySecrets,
 				commits: contractCommits('app', 'worker'),
 				operations: { repository: releases },
+				// The source release serves the ops channel, so the deploy keeps the environment's ops key.
+				opsKeys: new VaultOpsKeys(db.opsKeys, () => Promise.resolve(vault)),
 			}
 			expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
 			expect(phases).toEqual(['started', 'provider_accepted', 'terminal'])
