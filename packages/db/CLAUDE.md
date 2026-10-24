@@ -319,7 +319,7 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   must be a chain link above the Within's own dimension in that table, or the operation is refused. The guard
   admits a scope predicate only as `true`, an AND tree of `column = $n`, a single membership, or a parenthesized
   OR tree of memberships, over the statement's table.
-- **A Within carries at most `MAX_WITHIN_VALUES` (1000) scope values, its own and its containers' together.** Each
+- **A Within carries at most `MAX_WITHIN_VALUES` (1000) scope values, its own, its containers' and its contained grants' together.** Each
   is one bound parameter of every statement it scopes (Postgres binds at most 65535); the framework refuses to
   mint a larger one and the layer refuses to use one.
 - **A Ref's predicate covers every link of its chain, one equality per chain column.** A table carries

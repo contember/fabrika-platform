@@ -32,6 +32,12 @@ runs in one Durable Object over its own SQLite
 and table policies, jobs and kicks, webhooks, public procedures, file kinds (stored in R2), signed tokens and
 installation mail all run there. On 0.8 its Worker was stateless, and the deploy refused each of them.
 
+An `over` list now also returns the rows a grant on a dimension inside the listed one reaches (S4 of the
+authorization model): a holder of `crm.read` on one deal sees that deal in the `over: 'company'` list of deals. Those
+grants count toward `MAX_WITHIN_VALUES` (1000 scope values per `Within`) with the direct and container values. A caller
+whose grants on inner dimensions push one action past 1000 values gets 403 (`CapabilityLimitError`) from a list that
+answered on 0.8; give such a caller a grant on a container instead of per-object grants.
+
 An application on Cloudflare that raises its pin to 0.9:
 
 1. Regenerates its entry with `fabrika app build`. `fabrika/entry.generated.ts` now exports `FabrikaApplication` and
