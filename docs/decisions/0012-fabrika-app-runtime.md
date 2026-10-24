@@ -273,7 +273,10 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   turns a row into an output.
 - **The transaction is the invocation's.** An endpoint request and a webhook delivery each run every statement in
   one transaction, committed after the handler returned and its output passed validation, rolled back on a throw, a
-  refused output, a cancellation or a refused statement. A query and an export run `READ ONLY`. A job reads outside
+  refused output, a cancellation or a refused statement. A query and an export run `READ ONLY`: on Postgres in one
+  `READ ONLY` transaction at READ COMMITTED, on a Durable Object's SQLite each statement in a transaction of its own
+  ([ADR-0065](0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md) §2). Either way two of
+  its reads may see different committed states, and none sees uncommitted data. A job reads outside
   and writes only in its fenced `ctx.transaction((tx) => …)`. IAM, object storage and connector calls never roll
   back, so data work comes first and the external call after.
 - **Raw SQL is legitimate.** `ctx.sql(Row)` is a tagged template whose every value is a bound parameter, run in the

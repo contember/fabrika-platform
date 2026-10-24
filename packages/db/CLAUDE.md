@@ -142,14 +142,20 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   CHAR, UUID are strings; INTEGER, INT, BIGINT, SMALLINT, REAL, DOUBLE, FLOAT numbers; BOOLEAN a boolean in `booleans`;
   TIMESTAMP, TIMESTAMPTZ, DATETIME a `Date` in `timestamps`; DATE a `YYYY-MM-DD` string in `dates`; BLOB a `Uint8Array`.
   Any other declared type, and a virtual table, is refused. It reads every table but `sqlite_*` and `fabrika_*`.
-- **The transaction is the object's** (`openSqlite`'s runner is `storage.transaction(() => body(kysely))`): `sql.exec`
-  refuses `BEGIN`, `COMMIT` and `SAVEPOINT`, and the Kysely driver refuses Kysely's own transactions. `readOnly` and the
-  idle timeout have no SQLite form; a read-only session still refuses every write before compiling.
-- **The invocation's transaction encloses its work on SQLite** (`InvocationTransaction.enclose`). A Durable Object's
-  transaction holds back every other event, the answers to the object's own I/O included, until its callback ends, so the
-  handler runs inside the callback, from its first statement to its commit; `commit()` and `rollback()` only decide, the
-  COMMIT runs once the work returned, and a failed COMMIT rejects with a `DatabaseError`. On Postgres `enclose` only runs
-  the work. Call it before the first statement.
+- **A writing transaction is the object's** (`openSqlite`'s runner is `storage.transaction(() => body(kysely))`): `sql.exec`
+  refuses `BEGIN`, `COMMIT` and `SAVEPOINT`, and the Kysely driver refuses Kysely's own transactions. The idle timeout
+  has no SQLite form.
+- **A read-only transaction on SQLite opens no storage transaction** (`openSqlite` hands its body the `reads` Kysely):
+  each statement runs in a `storage.transactionSync` of its own, which holds nothing across an await, so two reads may
+  see different committed states, as under Postgres's READ COMMITTED. A statement whose cursor reports `rowsWritten`
+  (read after `toArray()`, since workerd counts as the cursor is read) throws `DatabaseError('25006')`, Postgres's
+  read-only refusal, which rolls that statement back: the backstop below `Session.run`'s refusal of every write.
+- **A writing invocation's transaction encloses its work on SQLite** (`InvocationTransaction.enclose`). A Durable
+  Object's transaction holds back every other event, the answers to the object's own I/O included, until its callback
+  ends, so the handler runs inside the callback, from its first statement to its commit; `commit()` and `rollback()` only
+  decide, the COMMIT runs once the work returned, and a failed COMMIT rejects with a `DatabaseError`. A read-only
+  invocation, and every invocation on Postgres, is not enclosed: `enclose` only runs the work. Call it before the first
+  statement.
 - **A SQLite failure is a `DatabaseError` with a SQLSTATE or none** (`sqliteError`): a constraint message maps to
   `23505` (unique, primary key), `23503` (foreign key), `23514` (check) or `23502` (not null), and nothing of the message
   is kept, since it can quote row values. Callers compare SQLSTATEs as on Postgres.
@@ -301,8 +307,8 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   locator's, the stored files', webhook and job-lease tables' — because `sessionOf` takes the runtime, never the bare
   connection: `Session.run` refuses
   any root but a select, and any lock, before compiling, whatever capability the operation carries,
-  and runs each statement in a `READ ONLY` transaction (`transaction()` opens one too; SQLite has none, so there the
-  refusal is the whole of it). Never route a
+  and runs each statement in a `READ ONLY` transaction (`transaction()` opens one too; on SQLite each statement's own
+  `transactionSync` rolls back one that wrote). Never route a
   statement past `Session.run`, or this stops holding.
 - **Every select, update and delete carries its scope predicate as the top-level right conjunct of
   WHERE, by identity.** The caller's conditions sit in a `ParensNode` on the left. The guard checks this
@@ -446,8 +452,8 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   none (`{}`, or only `undefined` values) is no UPDATE: `updateRow` selects its acknowledgement under the same scope,
   conditions and `expectVersion`, so it answers the row's current `{ id, version }`, 404 or 409 and writes nothing.
 - **An invocation's transaction ends once, and never commits after a refused statement.** `InvocationTransaction`
-  opens on its first statement (setting `idle_in_transaction_session_timeout`), or on SQLite before its work, inside
-  `enclose`; a statement the database refused
+  opens on its first statement (setting `idle_in_transaction_session_timeout`), or on SQLite, when it may write, before
+  its work, inside `enclose`; a statement the database refused
   marks it failed: Postgres answers a COMMIT of an aborted transaction with a silent ROLLBACK, so `commit()` rolls back
   and throws instead. Ended (no statement runs in it, a kept `Session` included) and released (its connection is back
   in the pool) are two states: its body is a Kysely `transaction().execute` that waits for the framework's decision,

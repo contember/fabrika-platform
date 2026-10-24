@@ -294,8 +294,10 @@ The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory
 object's transaction, so its `limits.timeoutMs` is at most 25 s. No `sql` (`ctx.sql`) and no `scan: true`: the
 checker, the deploy and the boot refuse both.
 
-The object runs one transaction at a time, so every `await` in a handler holds the whole environment: IAM, R2, a
-`fetch`, a `ctx.connect` call, a binding. One 2 s call caps the environment at half a request a second. Inside a
+The object runs one transaction at a time, so every `await` in a handler that may write holds the whole environment:
+IAM, R2, a `fetch`, a `ctx.connect` call, a binding. One 2 s call caps the environment at half a request a second. A
+query holds no transaction: each of its statements runs on its own, so two of its reads may see different committed
+states. Inside a
 mutation keep I/O to the framework's own: IAM, and the file it writes. A slow outside call goes into a row, the
 mutation calls `ctx.kick('<job>')`, and the job makes the call outside `ctx.transaction` (`references/jobs.md`). The
 checker hints on a mutation that declares `egress` or `connect` (`cloudflare-held-call`), and refuses

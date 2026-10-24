@@ -11,7 +11,10 @@ export type Executor = Pick<Kysely<LooseDB>, 'executeQuery'>
 export type SqlDialect = 'postgres' | 'sqlite'
 
 export interface TransactionOptions {
-	/** A `READ ONLY` transaction where the database has one; a read-only session refuses writes either way. */
+	/**
+	 * A `READ ONLY` transaction on Postgres. SQLite opens none: each statement runs in a transaction of its own, which
+	 * rolls back a statement that wrote. A read-only session refuses writes either way.
+	 */
 	readonly readOnly: boolean
 	/** How long the transaction may sit idle before the database ends it; a database without the setting ignores it. */
 	readonly idleTimeoutMs?: number
@@ -370,14 +373,16 @@ export class InvocationTransaction {
 	}
 
 	/**
-	 * Runs `work`: the invocation from its handler to its `commit()`. On SQLite the transaction encloses `work`, opened
-	 * before it: a Durable Object's transaction holds back every other event, the answers to the object's own I/O
-	 * included, until its callback ends, so the handler runs inside it. There `commit()` and `rollback()` decide, the
-	 * COMMIT runs once `work` returned, and a failed COMMIT rejects with a `DatabaseError`. Elsewhere it runs `work`.
+	 * Runs `work`: the invocation from its handler to its `commit()`. On SQLite a writing invocation's transaction
+	 * encloses `work`, opened before it: a Durable Object's transaction holds back every other event, the answers to the
+	 * object's own I/O included, until its callback ends, so the handler runs inside it. There `commit()` and `rollback()`
+	 * decide, the COMMIT runs once `work` returned, and a failed COMMIT rejects with a `DatabaseError`. A read-only
+	 * invocation, and every invocation elsewhere, runs `work` as is: a read-only one on SQLite holds no storage
+	 * transaction, so the object serves other events while it awaits.
 	 */
 	async enclose<T>(work: () => Promise<T>): Promise<T> {
 		const engine = engineOf(this.#database)
-		if (engine.dialect !== 'sqlite') {
+		if (engine.dialect !== 'sqlite' || this.#readOnly) {
 			return work()
 		}
 		if (this.#opened !== undefined || this.#ended) {

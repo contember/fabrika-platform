@@ -121,18 +121,40 @@ const CONSTRAINT_STATES: readonly (readonly [string, string])[] = Object.freeze(
 
 /** The driver's failure as a `DatabaseError`; its message can quote row values, so none of it is kept. */
 function sqliteError(error: unknown): DatabaseError {
+	if (error instanceof DatabaseError) {
+		return error
+	}
 	const message = error instanceof Error ? error.message : ''
 	const match = CONSTRAINT_STATES.find(([prefix]) => message.startsWith(prefix))
 	return new DatabaseError(match === undefined ? null : match[1])
 }
 
-function connectionOf(storage: SqliteStorage): DatabaseConnection {
+/** Postgres's SQLSTATE for a write in a `READ ONLY` transaction, which the backstop answers too. */
+const READ_ONLY_TRANSACTION = '25006'
+
+/**
+ * A read-only statement's rows, run in a `transactionSync` of its own that holds nothing across an await. A statement
+ * that wrote throws, which rolls back what it wrote: the backstop below the layer's refusal of a write node.
+ */
+function readRows(storage: SqliteStorage, query: string, bindings: SqliteValue[]): Record<string, SqliteValue>[] {
+	return storage.transactionSync(() => {
+		const cursor = storage.sql.exec(query, ...bindings)
+		// workerd counts `rowsWritten` as the cursor is read: only a consumed cursor reports the whole statement.
+		const rows = cursor.toArray()
+		if (cursor.rowsWritten > 0) {
+			throw new DatabaseError(READ_ONLY_TRANSACTION)
+		}
+		return rows
+	})
+}
+
+function connectionOf(storage: SqliteStorage, readOnly: boolean): DatabaseConnection {
 	return {
 		async executeQuery<R>(compiled: CompiledQuery): Promise<QueryResult<R>> {
 			const bindings = compiled.parameters.map(binding)
 			let rows: Record<string, SqliteValue>[]
 			try {
-				rows = storage.sql.exec(compiled.sql, ...bindings).toArray()
+				rows = readOnly ? readRows(storage, compiled.sql, bindings) : storage.sql.exec(compiled.sql, ...bindings).toArray()
 			} catch (error) {
 				throw sqliteError(error)
 			}
@@ -151,9 +173,11 @@ function refuseKyselyTransaction(): Promise<never> {
 
 class SqliteDialect implements Dialect {
 	readonly #storage: SqliteStorage
+	readonly #readOnly: boolean
 
-	constructor(storage: SqliteStorage) {
+	constructor(storage: SqliteStorage, readOnly: boolean) {
 		this.#storage = storage
+		this.#readOnly = readOnly
 	}
 
 	createAdapter(): DialectAdapter {
@@ -161,7 +185,7 @@ class SqliteDialect implements Dialect {
 	}
 
 	createDriver(): Driver {
-		const connection = connectionOf(this.#storage)
+		const connection = connectionOf(this.#storage, this.#readOnly)
 		return {
 			async init() {},
 			async acquireConnection() {
@@ -184,10 +208,16 @@ class SqliteDialect implements Dialect {
 	}
 }
 
-/** The data layer's database over a Durable Object's storage; `readOnly` and the idle timeout have no SQLite form. */
+/**
+ * The data layer's database over a Durable Object's storage. A read-only transaction opens no storage transaction,
+ * which would hold back every other event of the object across the work's awaits: each of its statements runs in one
+ * of its own, so two of them may see different committed states, as under Postgres's READ COMMITTED. The idle timeout
+ * has no SQLite form.
+ */
 export function openSqlite(storage: SqliteStorage): Database {
-	const kysely = new Kysely<LooseDB>({ dialect: new SqliteDialect(storage) })
-	const transaction: TransactionRunner = (_options, body) => storage.transaction(() => body(kysely))
+	const kysely = new Kysely<LooseDB>({ dialect: new SqliteDialect(storage, false) })
+	const reads = new Kysely<LooseDB>({ dialect: new SqliteDialect(storage, true) })
+	const transaction: TransactionRunner = (options, body) => options.readOnly ? body(reads) : storage.transaction(() => body(kysely))
 	return Database.fromEngine({ dialect: 'sqlite', kysely, compiler: sqliteCompiler, transaction })
 }
 // Application modules load after this one: a replaced opener would receive the object's storage.
