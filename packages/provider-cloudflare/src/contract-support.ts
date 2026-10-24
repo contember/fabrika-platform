@@ -55,6 +55,17 @@ export const assertCloudflareContract = (contract: ContractArtifact): void => {
 export const needsMinuteTick = (contract: ContractArtifact): boolean =>
 	Object.keys(contract.jobs).length > 0 || Object.keys(contract.files).length > 0 || Object.keys(contract.fileKinds ?? {}).length > 0
 
+/**
+ * Whether framework release `release` is at least `since`. A prerelease counts as its `major.minor`; a release that
+ * does not start with `<major>.<minor>.` is never at least anything (ADR-0062).
+ */
+export const releaseAtLeast = (release: string, since: { readonly major: number; readonly minor: number }): boolean => {
+	const match = /^(\d+)\.(\d+)\./.exec(release)
+	if (match === null) return false
+	const major = Number(match[1])
+	return major > since.major || (major === since.major && Number(match[2]) >= since.minor)
+}
+
 /** The first framework minor whose Cloudflare entry exports the application's Durable Object (ADR-0065). */
 const OBJECT_RUNTIME_SINCE = { major: 0, minor: 9 }
 
@@ -62,12 +73,13 @@ const OBJECT_RUNTIME_SINCE = { major: 0, minor: 9 }
  * Whether an application on framework release `release` runs in its Durable Object. An older release's entry is a
  * stateless Worker, which the platform keeps deploying in its old shape (ADR-0062).
  */
-export const runsInObject = (release: string): boolean => {
-	const match = /^(\d+)\.(\d+)\./.exec(release)
-	if (match === null) return false
-	const major = Number(match[1])
-	return major > OBJECT_RUNTIME_SINCE.major || (major === OBJECT_RUNTIME_SINCE.major && Number(match[2]) >= OBJECT_RUNTIME_SINCE.minor)
-}
+export const runsInObject = (release: string): boolean => releaseAtLeast(release, OBJECT_RUNTIME_SINCE)
+
+/** The first framework minor whose Cloudflare deploy pins the generated entry; which release gets it is still open. */
+const PINNED_ENTRY_SINCE = { major: 0, minor: 9 }
+
+/** Whether the Cloudflare deploy of release `release` accepts only the generated entry and regenerates it. */
+export const pinsGeneratedEntry = (release: string): boolean => releaseAtLeast(release, PINNED_ENTRY_SINCE)
 
 /**
  * Refuse what a stateless Worker of an older release cannot run: a job, a webhook, a public procedure, installation
