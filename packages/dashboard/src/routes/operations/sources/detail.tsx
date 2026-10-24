@@ -2,8 +2,10 @@ import { createPage, Link } from '@buzola/router'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import type { OperationsHealthCheckUpsertRequestDto } from '@fabrika/operations-contract/operator-api'
 import { useState } from 'react'
+import { Status } from '../../../components/Status'
 import { mayDo } from '../../../lib/console-access'
 import { fmtDate } from '../../../lib/format'
+import { healthCheckState, healthLamp } from '../../../lib/health'
 import { consoleSession } from '../../../lib/session'
 import { operationsClient } from '../../../operations/client'
 
@@ -27,13 +29,14 @@ export default createPage()
 			consoleSession(),
 		])
 		const manages = mayDo(access, OPERATIONS_ACTIONS.MANAGE, { app: source.source.appId, env: source.source.environment })
-		return { source: source.source, health, manages }
+		return { source: source.source, health, manages, loadedAt: Date.now() }
 	})
 	.route('/operations/sources/:sourceId')
 	.render(({ data, invalidate }) => {
 		const [path, setPath] = useState(DEFAULT_CHECK.path)
 		const [busy, setBusy] = useState(false)
 		const [error, setError] = useState<string | null>(null)
+		const telemetry = data.source.enabled ? data.health.telemetryState : 'disabled'
 
 		async function perform(action: () => Promise<unknown>) {
 			setBusy(true)
@@ -71,10 +74,7 @@ export default createPage()
 				<section>
 					<div className="section-head">
 						<h2>HTTP health checks</h2>
-						<span className={`status status-${healthLamp(data.health.telemetryState)}`}>
-							<span className="lamp" aria-hidden="true" />
-							telemetry {data.health.telemetryState}
-						</span>
+						<Status lamp={healthLamp(telemetry)}>telemetry {telemetry}</Status>
 					</div>
 					{error && <p className="error-text" role="alert">{error}</p>}
 					<div className="table-wrap">
@@ -100,64 +100,62 @@ export default createPage()
 											<td colSpan={data.manages ? 6 : 5} className="empty">No HTTP health checks configured.</td>
 										</tr>
 									)
-									: data.health.httpChecks.map((check) => (
-										<tr key={check.id}>
-											<td>
-												<code>{check.path}</code>
-											</td>
-											<td>
-												<span
-													className={`status status-${healthLamp(check.enabled ? (check.current?.state ?? 'unavailable') : 'unavailable')}`}
-												>
-													<span className="lamp" aria-hidden="true" />
-													{check.enabled ? (check.current?.state ?? 'pending') : 'disabled'}
-												</span>
-											</td>
-											<td>{fmtDate(check.current === null ? null : check.current.observedAt / 1000, 'never')}</td>
-											<td>{check.current?.latencyMs === null || check.current === null ? 'none' : `${check.current.latencyMs} ms`}</td>
-											<td>{check.expectedStatus} · {Math.round(check.intervalMs / 1000)}s</td>
-											{data.manages && (
+									: data.health.httpChecks.map((check) => {
+										const state = data.source.enabled ? healthCheckState(check, data.loadedAt) : 'disabled'
+										return (
+											<tr key={check.id}>
 												<td>
-													<div className="row-actions">
-														<button
-															type="button"
-															className="small"
-															disabled={busy}
-															aria-label={`${check.enabled ? 'Disable' : 'Enable'} health check ${check.path}`}
-															onClick={() =>
-																perform(() =>
-																	operationsClient.updateHealthCheck({
-																		sourceId: data.source.id,
-																		checkId: check.id,
-																		input: {
-																			path: check.path,
-																			enabled: !check.enabled,
-																			intervalMs: check.intervalMs,
-																			timeoutMs: check.timeoutMs,
-																			expectedStatus: check.expectedStatus,
-																			failureThreshold: check.failureThreshold,
-																			recoveryThreshold: check.recoveryThreshold,
-																			staleAfterMs: check.staleAfterMs,
-																		},
-																	})
-																)}
-														>
-															{check.enabled ? 'Disable' : 'Enable'}
-														</button>
-														<button
-															type="button"
-															className="danger small"
-															disabled={busy}
-															aria-label={`Delete health check ${check.path}`}
-															onClick={() => perform(() => operationsClient.deleteHealthCheck({ sourceId: data.source.id, checkId: check.id }))}
-														>
-															Delete
-														</button>
-													</div>
+													<code>{check.path}</code>
 												</td>
-											)}
-										</tr>
-									))}
+												<td>
+													<Status lamp={healthLamp(state)}>{state}</Status>
+												</td>
+												<td>{fmtDate(check.current === null ? null : check.current.observedAt / 1000, 'never')}</td>
+												<td>{check.current?.latencyMs === null || check.current === null ? 'none' : `${check.current.latencyMs} ms`}</td>
+												<td>{check.expectedStatus} · {Math.round(check.intervalMs / 1000)}s</td>
+												{data.manages && (
+													<td>
+														<div className="row-actions">
+															<button
+																type="button"
+																className="small"
+																disabled={busy}
+																aria-label={`${check.enabled ? 'Disable' : 'Enable'} health check ${check.path}`}
+																onClick={() =>
+																	perform(() =>
+																		operationsClient.updateHealthCheck({
+																			sourceId: data.source.id,
+																			checkId: check.id,
+																			input: {
+																				path: check.path,
+																				enabled: !check.enabled,
+																				intervalMs: check.intervalMs,
+																				timeoutMs: check.timeoutMs,
+																				expectedStatus: check.expectedStatus,
+																				failureThreshold: check.failureThreshold,
+																				recoveryThreshold: check.recoveryThreshold,
+																				staleAfterMs: check.staleAfterMs,
+																			},
+																		})
+																	)}
+															>
+																{check.enabled ? 'Disable' : 'Enable'}
+															</button>
+															<button
+																type="button"
+																className="danger small"
+																disabled={busy}
+																aria-label={`Delete health check ${check.path}`}
+																onClick={() => perform(() => operationsClient.deleteHealthCheck({ sourceId: data.source.id, checkId: check.id }))}
+															>
+																Delete
+															</button>
+														</div>
+													</td>
+												)}
+											</tr>
+										)
+									})}
 							</tbody>
 						</table>
 					</div>
@@ -190,12 +188,6 @@ export default createPage()
 			</>
 		)
 	})
-
-function healthLamp(state: string): 'ok' | 'stop' | 'idle' {
-	if (state === 'healthy') return 'ok'
-	if (state === 'failed') return 'stop'
-	return 'idle'
-}
 
 function Fact({ label, value }: { label: string; value: string }) {
 	return (

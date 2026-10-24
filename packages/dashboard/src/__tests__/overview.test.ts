@@ -2,16 +2,36 @@ import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/r
 import { BuzolaProvider } from '@buzola/router/react'
 import type { RpcFetch } from '@fabrika/app'
 import type { AppDto, AppEnvDto, RunDto } from '@fabrika/control-contract'
+import type { AuditEventDto, PrincipalListItem } from '@fabrika/iam-contract'
 import type { OperationsHealthCheckDto, OperationsSourceHealthDto } from '@fabrika/operations-contract/operator-api'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { z } from 'zod'
-import { pageRegistry } from '../buzola.gen'
+import { RecentChanges } from '../components/overview/Activity'
 import { Applications } from '../components/overview/Applications'
 import type { ConsoleCaller } from '../lib/console-access'
-import { deployHistory, environmentSources, expiringKey, loadOverview, type OverviewData, runtimeHealth } from '../lib/overview'
+import { healthCheckState, healthLamp, needsMonitoringAttention, runtimeHealth } from '../lib/health'
+import { deployHistory, environmentSources, expiringKey, loadOverview, type OverviewData } from '../lib/overview'
 import { DEFAULT_ISSUE_FILTERS, ErrorsView } from '../operations/views/Errors'
+import auditPage from '../routes/access/audit'
+import appPage from '../routes/apps/detail'
+import errorPage from '../routes/operations/errors/detail'
+import errorsPage from '../routes/operations/errors/index'
+import healthPage from '../routes/operations/health/index'
+import runPage from '../routes/runs/detail'
+import runsPage from '../routes/runs/index'
+
+// Read the real paths without depending on codegen having run before the test suite.
+const pageRegistry = {
+	'access/audit': auditPage.route,
+	'apps/detail': appPage.route,
+	'operations/errors': errorsPage.route,
+	'operations/errors/detail': errorPage.route,
+	'operations/health': healthPage.route,
+	'runs/detail': runPage.route,
+	runs: runsPage.route,
+}
 
 const NOW = Date.UTC(2026, 9, 24, 12)
 const caller: ConsoleCaller = { access: null, iam: { kind: 'installation' }, administersPeople: false }
@@ -198,6 +218,83 @@ describe('overview data boundaries', () => {
 		)
 		expect(data.audit.data).toEqual({ items: [], limited: true })
 	})
+
+	test('recent changes resolve audit actors once and open the exact request', async () => {
+		const event: AuditEventDto = {
+			id: 'event-1',
+			requestId: 'request-1',
+			principalId: 'user-1',
+			principalLabel: 'user-1',
+			credentialId: null,
+			app: 'iam',
+			action: 'iam.principal.disable',
+			resourceType: 'principal',
+			resourceId: 'subject-1',
+			diff: null,
+			metadata: null,
+			createdAt: NOW / 1000,
+		}
+		const principal: PrincipalListItem = {
+			id: 'user-1',
+			type: 'user',
+			label: 'Ada',
+			email: 'ada@example.test',
+			externalId: null,
+			status: 'active',
+			affiliation: 'internal',
+			createdAt: 1,
+		}
+		const calls: string[] = []
+		const data = await loadOverview(
+			caller,
+			fetchOverview({
+				'/iam/admin/rpc:audit.list': { items: [event, { ...event, id: 'event-2', requestId: 'request-2' }], nextCursor: null },
+				'/iam/admin/rpc:principals.get': principal,
+			}, calls),
+		)
+		expect(calls.filter((call) => call === '/iam/admin/rpc:principals.get')).toHaveLength(1)
+		const markup = renderToStaticMarkup(createElement(BuzolaProvider, {
+			router: new Router({
+				routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
+				adapter: createMemoryNavigationAdapter(),
+				pageRegistry,
+			}),
+		}, createElement(RecentChanges, { data })))
+		expect(markup).toContain('Ada · subject-1')
+		expect(markup).not.toContain('user-1')
+		expect(markup).toContain('href="/access/audit?requestId=request-1"')
+		expect(markup).toContain('href="/access/audit?requestId=request-2"')
+	})
+
+	test('a failed actor lookup preserves the audit events and the overview', async () => {
+		const event: AuditEventDto = {
+			id: 'event-1',
+			requestId: 'request-1',
+			principalId: 'user-1',
+			principalLabel: 'user-1',
+			credentialId: null,
+			app: 'iam',
+			action: 'iam.principal.disable',
+			resourceType: 'principal',
+			resourceId: 'subject-1',
+			diff: null,
+			metadata: null,
+			createdAt: NOW / 1000,
+		}
+		const data = await loadOverview(
+			caller,
+			fetchOverview(
+				{
+					'/iam/admin/rpc:audit.list': { items: [event], nextCursor: null },
+				},
+				[],
+				['principals.get'],
+			),
+		)
+		expect(data.audit.data?.items).toEqual([event])
+		expect(data.auditActors.size).toBe(0)
+		expect(data.apps.data?.items).toEqual([app])
+	})
 })
 
 describe('overview signal semantics', () => {
@@ -219,6 +316,30 @@ describe('overview signal semantics', () => {
 			}],
 		}
 		expect(runtimeHealth([source, failed], NOW).label).toBe('Failing')
+	})
+
+	test('stale successes stop being green and need attention on every health view', () => {
+		const healthy = { ...source, telemetryState: 'healthy' } satisfies OperationsSourceHealthDto
+		expect(needsMonitoringAttention(healthy, NOW)).toBe(false)
+		const later = NOW + check.staleAfterMs
+		expect(healthCheckState(check, later)).toBe('stale')
+		expect(healthLamp(healthCheckState(check, later))).toBe('idle')
+		expect(runtimeHealth([healthy], later)).toMatchObject({ state: 'stale', lamp: 'idle', monitored: true })
+		expect(needsMonitoringAttention(healthy, later)).toBe(true)
+	})
+
+	test('disabled sources and checks cannot report availability or monitoring alerts', () => {
+		const disabled = { ...source, source: { ...source.source, enabled: false } }
+		expect(runtimeHealth([disabled], NOW)).toMatchObject({ state: 'unmonitored', lamp: 'idle', monitored: false })
+		expect(needsMonitoringAttention(disabled, NOW)).toBe(false)
+		expect(healthCheckState({ ...check, enabled: false }, NOW)).toBe('disabled')
+		expect(needsMonitoringAttention({ ...source, telemetryState: 'healthy', httpChecks: [{ ...check, enabled: false }] }, NOW)).toBe(false)
+		expect(needsMonitoringAttention({ ...source, telemetryState: 'healthy', httpChecks: [{ ...check, current: null }] }, NOW)).toBe(true)
+	})
+
+	test('missing telemetry asks for attention without changing the HTTP result', () => {
+		expect(runtimeHealth([source], NOW)).toMatchObject({ state: 'healthy', lamp: 'ok' })
+		expect(needsMonitoringAttention(source, NOW)).toBe(true)
 	})
 
 	test('credential expiry is read from the key itself even when its grants never expire', () => {

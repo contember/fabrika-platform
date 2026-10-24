@@ -1,12 +1,15 @@
 import { Link } from '@buzola/router'
 import { type ReactNode } from 'react'
+import { auditActorLabel } from '../../access/lib/audit-actors'
 import { auditActionLabel } from '../../access/lib/audit-labels'
 import { mayOpen } from '../../lib/console-access'
 import { fmtAgo, fmtDuration, shortRef, shortSha } from '../../lib/format'
-import { boundedCount, type OverviewData } from '../../lib/overview'
+import { boundedCount, OVERVIEW_CHANGE_LIMIT, type OverviewData } from '../../lib/overview'
 import { Icon, type IconName } from '../Icon'
 import { Chip, RunStatus } from '../Status'
 import { Panel } from './Panel'
+
+const ACTIVE_RUN_LIMIT = 6
 
 export function InFlight({ data }: { data: OverviewData }) {
 	const runs = data.activeRuns.data?.items ?? []
@@ -21,7 +24,7 @@ export function InFlight({ data }: { data: OverviewData }) {
 			}
 			aside={<Link to="runs">All deploys →</Link>}
 		>
-			{runs.slice(0, 6).map((run) => (
+			{runs.slice(0, ACTIVE_RUN_LIMIT).map((run) => (
 				<div className="ov-deploy" key={run.id}>
 					<div className="ov-deploy-title">
 						<strong>{run.appId}</strong>
@@ -45,9 +48,9 @@ export function InFlight({ data }: { data: OverviewData }) {
 			{runs.length === 0 && (
 				<p className="ov-empty">{data.activeRuns.data === null ? 'Deploys could not be read.' : 'No deploys are running or queued.'}</p>
 			)}
-			{(runs.length > 6 || data.activeRuns.data?.nextCursor != null) && (
+			{(runs.length > ACTIVE_RUN_LIMIT || data.activeRuns.data?.nextCursor != null) && (
 				<p className="ov-section-note">
-					Showing the latest 6 active deploys. <Link to="runs">View all runs</Link>
+					Showing the latest {ACTIVE_RUN_LIMIT} active deploys. <Link to="runs">View all runs</Link>
 				</p>
 			)}
 			{awaiting !== undefined && awaiting > 0 && (
@@ -88,15 +91,15 @@ export function RecentChanges({ data }: { data: OverviewData }) {
 			id: `audit:${event.id}`,
 			time: event.createdAt,
 			icon: 'shield',
-			title: <Link to="access/audit" title={event.action}>{auditActionLabel(event.action)}</Link>,
-			note: `${event.principalLabel ?? 'Unknown actor'} · ${event.resourceId ?? event.resourceType}`,
+			title: <Link to="access/audit" params={{ requestId: event.requestId }} title={event.action}>{auditActionLabel(event.action)}</Link>,
+			note: `${auditActorLabel(event, data.auditActors)} · ${event.resourceId ?? event.resourceType}`,
 		})
 	}
 	changes.sort((a, b) => b.time - a.time)
 	return (
 		<Panel title="Recent changes" aside={<span className="ov-section-note">Deploys, errors & access</span>}>
 			<div>
-				{changes.slice(0, 6).map((change) => (
+				{changes.slice(0, OVERVIEW_CHANGE_LIMIT).map((change) => (
 					<div className="ov-change" key={change.id}>
 						<span className="ov-change-icon">
 							<Icon name={change.icon} size={16} />

@@ -1,7 +1,8 @@
 import { Link } from '@buzola/router'
 import { type ReactNode, useState } from 'react'
 import { fmtAgo, fmtDate } from '../../lib/format'
-import { expiringKey, isProduction, type OverviewData, runtimeHealth, unhealthyTelemetry } from '../../lib/overview'
+import { runtimeHealth, unhealthyTelemetry } from '../../lib/health'
+import { boundedCount, expiringKey, isProduction, OVERVIEW_ISSUE_LIMIT, OVERVIEW_KEY_LIMIT, type OverviewData } from '../../lib/overview'
 import { FilterGroup } from '../FilterGroup'
 import { Icon } from '../Icon'
 import { type Lamp, StatusLamp } from '../Status'
@@ -55,7 +56,7 @@ function attentionItems(data: OverviewData): AttentionItem[] {
 	for (const source of data.health.data?.sources ?? []) {
 		if (!source.source.enabled) continue
 		const health = runtimeHealth([source], data.loadedAt)
-		if (health.lamp === 'stop' || health.lamp === 'run') {
+		if (health.state === 'failed' || health.state === 'degraded') {
 			items.push({
 				id: `health:${source.source.id}`,
 				kind: 'operations',
@@ -68,7 +69,7 @@ function attentionItems(data: OverviewData): AttentionItem[] {
 				priority: isProduction(source.source.environment) ? 0 : 2,
 			})
 		}
-		if (unhealthyTelemetry(source) || (health.monitored && health.label === 'Unknown')) {
+		if (unhealthyTelemetry(source) || health.state === 'stale' || health.state === 'unavailable') {
 			items.push({
 				id: `telemetry:${source.source.id}`,
 				kind: 'operations',
@@ -144,7 +145,7 @@ function attentionItems(data: OverviewData): AttentionItem[] {
 			id: `mail:${state}`,
 			kind: 'mail',
 			lamp: state === 'failed' ? 'stop' : 'run',
-			title: `${page.items.length}${page.nextCursor === null ? '' : '+'} ${page.items.length === 1 && page.nextCursor === null ? 'email' : 'emails'} ${
+			title: `${boundedCount(page.items.length, page.nextCursor !== null)} ${page.items.length === 1 && page.nextCursor === null ? 'email' : 'emails'} ${
 				state === 'held' ? 'held for review' : 'failed to send'
 			}`,
 			context: state === 'held' ? 'Held messages need a decision before sending' : 'Review delivery failures in the mail relay',
@@ -224,12 +225,12 @@ export function Attention({ data }: { data: OverviewData }) {
 			)}
 			{data.issues.data?.nextCursor != null && (
 				<p className="ov-section-note">
-					Showing the 100 most recently seen open errors. <Link to="operations/errors" params={{ window: 'all' }}>View all errors</Link>
+					Showing the {OVERVIEW_ISSUE_LIMIT} most recently seen open errors. <Link to="operations/errors" params={{ window: 'all' }}>View all errors</Link>
 				</p>
 			)}
 			{data.keys.data?.limited && (
 				<p className="ov-section-note">
-					Expiry checks cover the latest 25 API keys. <Link to="access/credentials">View all credentials</Link>
+					Expiry checks cover the latest {OVERVIEW_KEY_LIMIT} API keys. <Link to="access/credentials">View all credentials</Link>
 				</p>
 			)}
 			{data.keys.data?.items.some((item) => item.detail.problem !== null) && <p className="ov-section-note">Some key expiry dates could not be read.</p>}

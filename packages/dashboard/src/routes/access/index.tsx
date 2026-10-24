@@ -2,6 +2,7 @@ import { createPage, Link } from '@buzola/router'
 import type { ApiKeyDto, AuditEventDto, PrincipalListItem, ShareLinkListItem } from '@fabrika/iam-contract'
 import { api } from '../../access/lib/api'
 import { type AppNames, appText, useAppNames } from '../../access/lib/app-names'
+import { actorIdsToResolve, auditActorLabel, resolveActors } from '../../access/lib/audit-actors'
 import { auditActionLabel } from '../../access/lib/audit-labels'
 import { fmtExpiry, shareLinkState } from '../../access/lib/format'
 import { Icon } from '../../components/Icon'
@@ -24,6 +25,7 @@ const WEEK = 7 * DAY
 const STALE_INVITE = 14 * DAY
 /** Enough recent changes to fill the feed and count the last day's. */
 const AUDIT_CHANGES = 100
+const RECENT_CHANGES = 7
 
 export default createPage()
 	.loader(async () => {
@@ -37,7 +39,8 @@ export default createPage()
 		// That read is quiet, made for the console overview where IAM is optional. Here IAM is the page, so a log it did
 		// not answer is the page's error, never an empty log that reads as "nothing changed".
 		if (audit === null) throw new Error('The audit log could not be read.')
-		return { users: users.items, apiKeys: apiKeys.items, shareLinks: shareLinks.items, audit }
+		const actors = await resolveActors(actorIdsToResolve(audit.slice(0, RECENT_CHANGES)), (principalId) => api.principals.get({ principalId }))
+		return { users: users.items, apiKeys: apiKeys.items, shareLinks: shareLinks.items, audit, actors }
 	})
 	.route('/access')
 	.render(({ data }) => {
@@ -152,7 +155,7 @@ export default createPage()
 									)
 									: (
 										<div className="feed">
-											{audit.slice(0, 7).map((event) => <AuditRow key={event.id} event={event} />)}
+											{audit.slice(0, RECENT_CHANGES).map((event) => <AuditRow key={event.id} event={event} actors={data.actors} />)}
 										</div>
 									)}
 							</div>
@@ -369,7 +372,7 @@ function authorizationLabel(key: ApiKeyDto, names: AppNames): string {
 	return key.grants.length === 1 ? `${what} on ${where}` : `${what} on ${where} + ${key.grants.length - 1} more`
 }
 
-function AuditRow({ event }: { event: AuditEventDto }) {
+function AuditRow({ event, actors }: { event: AuditEventDto; actors: ReadonlyMap<string, PrincipalListItem> }) {
 	return (
 		<Link to="access/audit" params={{ requestId: event.requestId }} className="feed-row">
 			<span className="feed-main">
@@ -377,7 +380,7 @@ function AuditRow({ event }: { event: AuditEventDto }) {
 					<span className="truncate" title={event.action}>{auditActionLabel(event.action)}</span>
 				</span>
 				<span className="feed-meta">
-					<span className="truncate">{event.credentialId === null ? event.principalLabel : `credential ${event.credentialId}`}</span>
+					<span className="truncate">{auditActorLabel(event, actors)}</span>
 					<span className="dot-sep">
 						<code>{event.resourceType}</code>
 					</span>

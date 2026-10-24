@@ -1,10 +1,12 @@
 import { createPage, Link } from '@buzola/router'
+import { Status } from '../../../components/Status'
 import { fmtDate } from '../../../lib/format'
+import { healthLamp, runtimeHealth } from '../../../lib/health'
 import { operationsClient } from '../../../operations/client'
 import { PageHead } from '../../../operations/components/PageHead'
 
 export default createPage()
-	.loader(async () => ({ health: await operationsClient.health() }))
+	.loader(async () => ({ health: await operationsClient.health(), loadedAt: Date.now() }))
 	.route('/operations/health')
 	.render(({ data }) => (
 		<>
@@ -16,8 +18,8 @@ export default createPage()
 							<th className="grow">Source</th>
 							<th>Telemetry</th>
 							<th>HTTP checks</th>
-							<th>Latest observation</th>
-							<th>State</th>
+							<th>Latest HTTP observation</th>
+							<th>HTTP health</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -30,13 +32,12 @@ export default createPage()
 								</tr>
 							)
 							: data.health.sources.map((source) => {
+								const enabled = source.httpChecks.filter((check) => source.source.enabled && check.enabled)
 								const latest = source.httpChecks
 									.flatMap((check) => check.current === null ? [] : [check.current])
 									.sort((left, right) => right.observedAt - left.observedAt)[0] ?? null
-								const state = aggregateHealth(
-									source.telemetryState,
-									source.httpChecks.flatMap((check) => check.enabled ? [check.current?.state ?? 'unavailable'] : []),
-								)
+								const health = runtimeHealth([source], data.loadedAt)
+								const telemetry = source.source.enabled ? source.telemetryState : 'disabled'
 								return (
 									<tr key={source.source.id}>
 										<td>
@@ -45,14 +46,13 @@ export default createPage()
 											</Link>
 											<div className="cell-note">{source.source.environment} · {source.source.serviceKey}</div>
 										</td>
-										<td>{source.telemetryState}</td>
-										<td>{source.httpChecks.length}</td>
+										<td>
+											<Status lamp={healthLamp(telemetry)}>{telemetry}</Status>
+										</td>
+										<td>{enabled.length} enabled / {source.httpChecks.length}</td>
 										<td>{fmtDate(latest === null ? null : latest.observedAt / 1000, 'never')}</td>
 										<td>
-											<span className={`status status-${healthLamp(state)}`}>
-												<span className="lamp" aria-hidden="true" />
-												{state}
-											</span>
+											<Status lamp={health.lamp} title={health.note}>{source.source.enabled ? health.label : 'Disabled'}</Status>
 										</td>
 									</tr>
 								)
@@ -62,18 +62,3 @@ export default createPage()
 			</div>
 		</>
 	))
-
-export function aggregateHealth(telemetry: string, checks: readonly string[]): string {
-	const states = [telemetry, ...checks]
-	if (states.includes('failed')) return 'failed'
-	if (states.includes('degraded')) return 'degraded'
-	if (states.includes('stale')) return 'stale'
-	if (states.every((state) => state === 'healthy')) return 'healthy'
-	return 'unavailable'
-}
-
-function healthLamp(state: string): 'ok' | 'stop' | 'idle' {
-	if (state === 'healthy') return 'ok'
-	if (state === 'failed') return 'stop'
-	return 'idle'
-}

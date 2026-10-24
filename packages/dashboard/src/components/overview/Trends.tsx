@@ -1,4 +1,5 @@
-import { deployHistory, type OverviewData, unhealthyTelemetry } from '../../lib/overview'
+import { unhealthyTelemetry } from '../../lib/health'
+import { deployHistory, OVERVIEW_ISSUE_LIMIT, OVERVIEW_RUN_LIMIT, type OverviewData } from '../../lib/overview'
 import { Panel } from './Panel'
 
 const dayLabel = (seconds: number) => new Date(seconds * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
@@ -60,7 +61,7 @@ function DeployChart({ data }: { data: OverviewData }) {
 				<span>{dayLabel(days[0]?.start ?? data.loadedAt / 1000)}</span>
 				<span>Today</span>
 			</div>
-			{limited && <span className="ov-chart-footnote">Partial history: the latest 200 runs, grouped by completion date.</span>}
+			{limited && <span className="ov-chart-footnote">Partial history: the latest {OVERVIEW_RUN_LIMIT} runs, grouped by completion date.</span>}
 		</div>
 	)
 }
@@ -102,7 +103,7 @@ function ErrorChart({ data }: { data: OverviewData }) {
 				<span>Now</span>
 			</div>
 			<span className="ov-chart-footnote">
-				{limited ? 'Latest 100 open errors only. ' : 'Open errors only. '}
+				{limited ? `Latest ${OVERVIEW_ISSUE_LIMIT} open errors only. ` : 'Open errors only. '}
 				{delayed ? 'Telemetry is incomplete or not current.' : 'Resolved and ignored errors are excluded.'}
 			</span>
 		</div>

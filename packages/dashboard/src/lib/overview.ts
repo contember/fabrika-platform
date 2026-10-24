@@ -4,8 +4,9 @@ import type { IamAdminRpcContract } from '@fabrika/iam-contract'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import type { OperationsSourceHealthDto } from '@fabrika/operations-contract/operator-api'
 import type { OperationsRpcContract } from '@fabrika/operations-contract/rpc'
-import type { Lamp } from '../components/Status'
+import { actorIdsToResolve, resolveActors } from '../access/lib/audit-actors'
 import { type ConsoleCaller, holdsGlobally, mayDo, mayOpen } from './console-access'
+import { runtimeHealth } from './health'
 import { recentAuditChangePage } from './iam'
 
 export type OverviewRead<T> = { data: T; problem: null } | { data: null; problem: 'unavailable' | 'forbidden' }
@@ -21,7 +22,9 @@ export async function overviewRead<T>(allowed: boolean, read: () => Promise<T>):
 }
 
 export const OVERVIEW_RUN_LIMIT = 200
-const KEY_LIMIT = 25
+export const OVERVIEW_ISSUE_LIMIT = 100
+export const OVERVIEW_KEY_LIMIT = 25
+export const OVERVIEW_CHANGE_LIMIT = 6
 
 export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fetch) {
 	const control = createRpcClient<ControlRpcContract>({ baseUrl: '/api/rpc', fetch: fetcher, bounceOnAuth: false })
@@ -30,6 +33,10 @@ export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fe
 	const readsOperations = mayOpen(caller, 'operations')
 	const readsAccess = mayOpen(caller, 'access')
 	const readsMail = caller.access === null || holdsGlobally(caller.access, CONTROL_ACTIONS.MAIL_READ)
+	const auditPromise = overviewRead(readsAccess, () => recentAuditChangePage(OVERVIEW_CHANGE_LIMIT, fetcher))
+	const actorsPromise = auditPromise.then((audit) =>
+		resolveActors(actorIdsToResolve(audit.data?.items ?? []), (principalId) => iam.principals.get({ principalId }))
+	)
 	const appsPromise = overviewRead(mayOpen(caller, 'apps'), () => control.apps.list())
 	const environmentsPromise = appsPromise.then(async (apps) => {
 		const environments = new Map<string, OverviewRead<Awaited<ReturnType<typeof control.apps.environments.list>>>>()
@@ -38,33 +45,35 @@ export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fe
 		}))
 		return environments
 	})
-	const [apps, environments, namespaces, runs, activeRuns, failures, approvals, health, issues, mailHeld, mailFailed, keys, audit] = await Promise.all(
-		[
-			appsPromise,
-			environmentsPromise,
-			overviewRead(mayOpen(caller, 'namespaces'), () => control.namespaces.list()),
-			overviewRead(mayOpen(caller, 'runs'), () => control.runs.list({ limit: OVERVIEW_RUN_LIMIT })),
-			overviewRead(mayOpen(caller, 'runs'), () => control.runs.list({ statuses: ['pending', 'running'], limit: OVERVIEW_RUN_LIMIT })),
-			overviewRead(mayOpen(caller, 'runs'), () => control.runs.latestFailures()),
-			overviewRead(mayOpen(caller, 'approvals'), () => control.approvals.list()),
-			overviewRead(readsOperations, () => operations.health()),
-			overviewRead(readsOperations, () => operations.issues({ status: 'open', window: 'all', sort: 'recent', limit: 100 })),
-			overviewRead(readsMail, () => control.mail.messages.list({ state: 'held' })),
-			overviewRead(readsMail, () => control.mail.messages.list({ state: 'failed' })),
-			overviewRead(readsAccess, async () => {
-				const page = await iam.apiKeys.list({ limit: KEY_LIMIT })
-				// Expiry belongs to the credential, not just its grants. The list exposes grants only.
-				const items = await Promise.all(
-					page.items.filter((key) => key.status === 'active').map(async (key) => ({
-						key,
-						detail: await overviewRead(true, () => iam.apiKeys.get({ principalId: key.principalId })),
-					})),
-				)
-				return { items, limited: page.nextCursor !== null }
-			}),
-			overviewRead(readsAccess, () => recentAuditChangePage(6, fetcher)),
-		],
-	)
+	const [apps, environments, namespaces, runs, activeRuns, failures, approvals, health, issues, mailHeld, mailFailed, keys, audit, auditActors] =
+		await Promise.all(
+			[
+				appsPromise,
+				environmentsPromise,
+				overviewRead(mayOpen(caller, 'namespaces'), () => control.namespaces.list()),
+				overviewRead(mayOpen(caller, 'runs'), () => control.runs.list({ limit: OVERVIEW_RUN_LIMIT })),
+				overviewRead(mayOpen(caller, 'runs'), () => control.runs.list({ statuses: ['pending', 'running'], limit: OVERVIEW_RUN_LIMIT })),
+				overviewRead(mayOpen(caller, 'runs'), () => control.runs.latestFailures()),
+				overviewRead(mayOpen(caller, 'approvals'), () => control.approvals.list()),
+				overviewRead(readsOperations, () => operations.health()),
+				overviewRead(readsOperations, () => operations.issues({ status: 'open', window: 'all', sort: 'recent', limit: OVERVIEW_ISSUE_LIMIT })),
+				overviewRead(readsMail, () => control.mail.messages.list({ state: 'held' })),
+				overviewRead(readsMail, () => control.mail.messages.list({ state: 'failed' })),
+				overviewRead(readsAccess, async () => {
+					const page = await iam.apiKeys.list({ limit: OVERVIEW_KEY_LIMIT })
+					// Expiry belongs to the credential, not just its grants. The list exposes grants only.
+					const items = await Promise.all(
+						page.items.filter((key) => key.status === 'active').map(async (key) => ({
+							key,
+							detail: await overviewRead(true, () => iam.apiKeys.get({ principalId: key.principalId })),
+						})),
+					)
+					return { items, limited: page.nextCursor !== null }
+				}),
+				auditPromise,
+				actorsPromise,
+			],
+		)
 	const publishedRuns = new Map<string, OverviewRead<RunDto>>()
 	const publicationIds = new Set(
 		[...environments.values()].flatMap((read) => read.data?.items.flatMap((env) => env.publishedRunId === null ? [] : [env.publishedRunId]) ?? []),
@@ -89,6 +98,7 @@ export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fe
 		mailFailed,
 		keys,
 		audit,
+		auditActors,
 		loadedAt: Date.now(),
 	}
 }
@@ -104,36 +114,6 @@ export function environmentSources(data: OverviewData, app: string, env: string)
 	return data.health.data.sources.filter((source) => source.source.appId === app && source.source.environment === env && source.source.enabled)
 }
 
-export interface RuntimeHealth {
-	lamp: Lamp
-	label: string
-	note: string
-	monitored: boolean
-}
-
-/** HTTP availability and telemetry are different signals. Healthy telemetry never makes an HTTP check healthy. */
-export function runtimeHealth(sources: OperationsSourceHealthDto[] | null, now = Date.now()): RuntimeHealth {
-	if (sources === null) return { lamp: 'idle', label: 'Unknown', note: 'Health is not readable', monitored: false }
-	const checks = sources.flatMap((source) => source.source.enabled ? source.httpChecks.filter((check) => check.enabled) : [])
-	if (checks.length === 0) return { lamp: 'idle', label: 'Not monitored', note: 'No enabled HTTP check', monitored: false }
-	const states = checks.map((check) => {
-		if (check.current === null) return 'unavailable'
-		if (now - check.current.observedAt > check.staleAfterMs) return 'stale'
-		return check.current.state
-	})
-	if (states.includes('failed')) return { lamp: 'stop', label: 'Failing', note: 'HTTP check failed', monitored: true }
-	if (states.includes('degraded')) return { lamp: 'run', label: 'Degraded', note: 'HTTP check is degraded', monitored: true }
-	if (states.includes('stale') || states.includes('unavailable')) {
-		return { lamp: 'idle', label: 'Unknown', note: states.includes('stale') ? 'HTTP checks are stale' : 'Waiting for an HTTP check', monitored: true }
-	}
-	const oldest = Math.min(...checks.map((check) => check.current?.observedAt ?? now))
-	return { lamp: 'ok', label: 'Healthy', note: `Checked ${Math.max(0, Math.floor((now - oldest) / 1000))}s ago`, monitored: true }
-}
-
-export function unhealthyTelemetry(source: OperationsSourceHealthDto): boolean {
-	return source.source.enabled && source.telemetryState !== 'healthy'
-}
-
 export function productionHealth(data: OverviewData) {
 	const environments = new Map<string, OperationsSourceHealthDto[]>()
 	for (const source of data.health.data?.sources ?? []) {
@@ -145,7 +125,7 @@ export function productionHealth(data: OverviewData) {
 	}
 	const states = [...environments.values()].map((sources) => runtimeHealth(sources, data.loadedAt))
 	return {
-		incidents: states.filter((state) => state.lamp === 'stop' || state.lamp === 'run').length,
+		incidents: states.filter((health) => health.state === 'failed' || health.state === 'degraded').length,
 		monitored: states.filter((state) => state.monitored).length,
 	}
 }
