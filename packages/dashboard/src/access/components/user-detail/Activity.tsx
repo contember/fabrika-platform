@@ -5,34 +5,8 @@ import { EmptyState } from '../../../components/Table'
 import { fmtDate } from '../../../lib/format'
 import { AppName } from '../../lib/app-names'
 import { auditActor } from '../../lib/audit-actors'
+import { auditActionLabel } from '../../lib/audit-labels'
 import { JsonView } from '../JsonView'
-
-const eventLabels: Record<string, string> = {
-	'iam.principal.invite': 'Account created by an administrator',
-	'iam.principal.create': 'Account created',
-	'iam.principal.claim': 'Organization identity linked',
-	'iam.principal.refresh': 'Identity updated from the organization',
-	'iam.principal.disable': 'Account disabled',
-	'iam.principal.enable': 'Account enabled',
-	'iam.principal.promote': 'Account made internal',
-	'iam.grant.create': 'Access added',
-	'iam.grant.update': 'Access updated',
-	'iam.grant.revoke': 'Access removed',
-	'iam.member.assign': 'Membership assigned',
-	'iam.member.revoke': 'Membership removed',
-	'iam.member.accept': 'Invitation accepted',
-	'iam.password.enrollment.issue': 'Password setup link issued',
-	'iam.password.enrollment.complete': 'Password set',
-	'iam.password.enrollment.delivery_failed': 'Password setup email failed',
-	'iam.password.reset.issue': 'Password reset link issued',
-	'iam.password.reset.complete': 'Password reset completed',
-	'iam.password.reset.delivery_failed': 'Password reset email failed',
-	'iam.password.disable': 'Password sign-in disabled',
-	'iam.session.revoke': 'Browser session ended',
-	'iam.session.revoke_all': 'All browser sign-ins ended',
-	'iam.oauth.grant.revoke': 'Connected client disconnected',
-	'iam.oauth.grant.create': 'Client authorized',
-}
 
 export function UserActivity({ principal, mode, audit, authLog, actors, before }: {
 	principal: PrincipalDetail
@@ -100,7 +74,7 @@ export function UserActivity({ principal, mode, audit, authLog, actors, before }
 						<li key={event.id}>
 							<time dateTime={new Date(event.createdAt * 1000).toISOString()}>{fmtDate(event.createdAt)}</time>
 							<div>
-								<strong>{eventLabels[event.action] ?? event.action}</strong>
+								<strong>{auditActionLabel(event.action)}</strong>
 								<p className="muted small">
 									{actor.kind === 'principal' && actor.isUser
 										? <Link to="access/users/detail" params={{ id: actor.principalId }}>{actor.label}</Link>

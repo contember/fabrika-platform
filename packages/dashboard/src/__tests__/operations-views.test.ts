@@ -12,7 +12,6 @@ import {
 	sourceNames,
 	trendPoints,
 } from '../operations/views/Errors'
-import { aggregateHealth } from '../routes/operations/health/index'
 
 describe('issue views', () => {
 	test('builds a bounded server-side query from visible filters', () => {
@@ -114,12 +113,5 @@ describe('issue views', () => {
 		)
 		expect(activityPayloadLabel(activity('merged', { into: 'opaque-issue-target' }))).toBe('Merged into opaque-issue-target')
 		expect(activityPayloadLabel(activity('regressed', { secret: 'hidden' }))).toBeNull()
-	})
-
-	test('aggregates the worst visible health state without inventing availability', () => {
-		expect(aggregateHealth('healthy', ['healthy'])).toBe('healthy')
-		expect(aggregateHealth('healthy', ['stale'])).toBe('stale')
-		expect(aggregateHealth('degraded', ['failed'])).toBe('failed')
-		expect(aggregateHealth('unavailable', [])).toBe('unavailable')
 	})
 })

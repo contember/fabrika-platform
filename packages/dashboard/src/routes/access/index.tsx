@@ -2,8 +2,11 @@ import { createPage, Link } from '@buzola/router'
 import type { ApiKeyDto, AuditEventDto, PrincipalListItem, ShareLinkListItem } from '@fabrika/iam-contract'
 import { api } from '../../access/lib/api'
 import { type AppNames, appText, useAppNames } from '../../access/lib/app-names'
+import { actorIdsToResolve, auditActorLabel, resolveActors } from '../../access/lib/audit-actors'
+import { auditActionLabel } from '../../access/lib/audit-labels'
 import { fmtExpiry, shareLinkState } from '../../access/lib/format'
 import { Icon } from '../../components/Icon'
+import { Reading } from '../../components/Reading'
 import { Chip, principalLamp, Status, StatusLamp } from '../../components/Status'
 import { EmptyState } from '../../components/Table'
 import { fmtAgo, fmtDate } from '../../lib/format'
@@ -22,6 +25,7 @@ const WEEK = 7 * DAY
 const STALE_INVITE = 14 * DAY
 /** Enough recent changes to fill the feed and count the last day's. */
 const AUDIT_CHANGES = 100
+const RECENT_CHANGES = 7
 
 export default createPage()
 	.loader(async () => {
@@ -35,7 +39,8 @@ export default createPage()
 		// That read is quiet, made for the console overview where IAM is optional. Here IAM is the page, so a log it did
 		// not answer is the page's error, never an empty log that reads as "nothing changed".
 		if (audit === null) throw new Error('The audit log could not be read.')
-		return { users: users.items, apiKeys: apiKeys.items, shareLinks: shareLinks.items, audit }
+		const actors = await resolveActors(actorIdsToResolve(audit.slice(0, RECENT_CHANGES)), (principalId) => api.principals.get({ principalId }))
+		return { users: users.items, apiKeys: apiKeys.items, shareLinks: shareLinks.items, audit, actors }
 	})
 	.route('/access')
 	.render(({ data }) => {
@@ -72,53 +77,59 @@ export default createPage()
 
 				<div className="instrument-cluster">
 					<div className="instrument">
-						<div className="instrument-label">Users</div>
-						<div className="instrument-value">
-							{activeUsers.length}
-							<small>/ {users.length}</small>
-						</div>
-						<div className="instrument-note">
-							{users.length === 0
+						<Reading
+							label="Users"
+							value={
+								<>
+									{activeUsers.length}
+									<small>/ {users.length}</small>
+								</>
+							}
+							note={users.length === 0
 								? <Status lamp="idle">nobody invited</Status>
 								: invited.length > 0
 								? <Status lamp="run">{invited.length} awaiting first sign-in</Status>
 								: <Status lamp="ok">{disabled.length > 0 ? `${disabled.length} disabled` : 'all signed in'}</Status>}
-						</div>
+						/>
 					</div>
 					<div className="instrument">
-						<div className="instrument-label">API keys</div>
-						<div className="instrument-value">
-							{activeKeys.length}
-							<small>/ {apiKeys.length}</small>
-						</div>
-						<div className="instrument-note">
-							<Status lamp={apiKeys.length === 0 ? 'idle' : 'ok'}>
-								{apiKeys.length === 0
-									? 'none provisioned'
-									: apiKeys.length - activeKeys.length > 0
-									? `${apiKeys.length - activeKeys.length} revoked`
-									: 'machines with a name'}
-							</Status>
-						</div>
+						<Reading
+							label="API keys"
+							value={
+								<>
+									{activeKeys.length}
+									<small>/ {apiKeys.length}</small>
+								</>
+							}
+							note={
+								<Status lamp={apiKeys.length === 0 ? 'idle' : 'ok'}>
+									{apiKeys.length === 0
+										? 'none provisioned'
+										: apiKeys.length - activeKeys.length > 0
+										? `${apiKeys.length - activeKeys.length} revoked`
+										: 'machines with a name'}
+								</Status>
+							}
+						/>
 					</div>
 					<div className="instrument">
-						<div className="instrument-label">Share links</div>
-						<div className="instrument-value">
-							{liveLinks.length}
-							<small>/ {shareLinks.length}</small>
-						</div>
-						<div className="instrument-note">
-							<Status lamp={liveLinks.length === 0 ? 'idle' : 'ok'}>
-								{liveLinks.length === 0 ? 'none in circulation' : 'anonymous, revocable'}
-							</Status>
-						</div>
+						<Reading
+							label="Share links"
+							value={
+								<>
+									{liveLinks.length}
+									<small>/ {shareLinks.length}</small>
+								</>
+							}
+							note={
+								<Status lamp={liveLinks.length === 0 ? 'idle' : 'ok'}>
+									{liveLinks.length === 0 ? 'none in circulation' : 'anonymous, revocable'}
+								</Status>
+							}
+						/>
 					</div>
 					<div className="instrument">
-						<div className="instrument-label">Changes · 24 h</div>
-						<div className="instrument-value">{changesToday}</div>
-						<div className="instrument-note">
-							<Status lamp={changesToday > 0 ? 'ok' : 'idle'}>audited writes</Status>
-						</div>
+						<Reading label="Changes · 24 h" value={changesToday} note={<Status lamp={changesToday > 0 ? 'ok' : 'idle'}>audited writes</Status>} />
 					</div>
 				</div>
 
@@ -144,7 +155,7 @@ export default createPage()
 									)
 									: (
 										<div className="feed">
-											{audit.slice(0, 7).map((event) => <AuditRow key={event.id} event={event} />)}
+											{audit.slice(0, RECENT_CHANGES).map((event) => <AuditRow key={event.id} event={event} actors={data.actors} />)}
 										</div>
 									)}
 							</div>
@@ -361,15 +372,15 @@ function authorizationLabel(key: ApiKeyDto, names: AppNames): string {
 	return key.grants.length === 1 ? `${what} on ${where}` : `${what} on ${where} + ${key.grants.length - 1} more`
 }
 
-function AuditRow({ event }: { event: AuditEventDto }) {
+function AuditRow({ event, actors }: { event: AuditEventDto; actors: ReadonlyMap<string, PrincipalListItem> }) {
 	return (
 		<Link to="access/audit" params={{ requestId: event.requestId }} className="feed-row">
 			<span className="feed-main">
 				<span className="feed-title">
-					<code className="truncate">{event.action}</code>
+					<span className="truncate" title={event.action}>{auditActionLabel(event.action)}</span>
 				</span>
 				<span className="feed-meta">
-					<span className="truncate">{event.credentialId === null ? event.principalLabel : `credential ${event.credentialId}`}</span>
+					<span className="truncate">{auditActorLabel(event, actors)}</span>
 					<span className="dot-sep">
 						<code>{event.resourceType}</code>
 					</span>

@@ -2,6 +2,7 @@ import { type AuditEventDto, type AuthLogDto, type ListAuditInput, type ListAuth
 import { type AuditEventRow, type AuthLogRow } from '../db'
 
 import { parseJsonOrNull } from '../json'
+import { ADMIN_ACCESS_ACTION } from './access'
 
 import { type AdminContext } from './context'
 
@@ -52,6 +53,7 @@ export async function listAuditUseCase(c: AdminContext, input: ListAuditInput): 
 		...(input.principalId ? { principalId: input.principalId } : {}),
 		...(input.subjectPrincipalId ? { subjectPrincipalId: input.subjectPrincipalId } : {}),
 		...(input.action ? { action: input.action } : {}),
+		...(input.changesOnly === true ? { excludeActions: [ADMIN_ACCESS_ACTION] } : {}),
 		...(input.requestId ? { requestId: input.requestId } : {}),
 		...(input.before ? { before: input.before } : {}),
 		limit,

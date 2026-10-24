@@ -30,6 +30,7 @@ export interface IssueFilters {
 
 export interface ErrorsViewProps {
 	initialPage: OperationsIssueListResponseDto
+	initialFilters?: IssueFilters
 	sources: readonly OperationsSourceSummaryDto[]
 	onQuery: (query: OperationsIssueQuery) => Promise<OperationsIssueListResponseDto>
 	onMutate?: (issueId: string, mutation: OperationsIssueMutationRequestDto) => Promise<void>
@@ -141,9 +142,11 @@ export function issueFiltersFromQuery(
 	}
 }
 
-export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStatus, onBulkMerge }: ErrorsViewProps) {
+export function ErrorsView(
+	{ initialPage, initialFilters = DEFAULT_ISSUE_FILTERS, sources, onQuery, onMutate, onBulkStatus, onBulkMerge }: ErrorsViewProps,
+) {
 	const language = useMemo(() => issueQueryLanguage(sources), [sources])
-	const [appliedFilters, setAppliedFilters] = useState<IssueFilters>(DEFAULT_ISSUE_FILTERS)
+	const [appliedFilters, setAppliedFilters] = useState<IssueFilters>(initialFilters)
 	const [page, setPage] = useState(initialPage)
 	const [pending, setPending] = useState<string | null>(null)
 	const [selected, setSelected] = useState<string[]>([])

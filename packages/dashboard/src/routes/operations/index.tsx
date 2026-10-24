@@ -1,4 +1,6 @@
 import { createPage, Link } from '@buzola/router'
+import { Status } from '../../components/Status'
+import { needsMonitoringAttention } from '../../lib/health'
 import { operationsClient } from '../../operations/client'
 import { PageHead } from '../../operations/components/PageHead'
 
@@ -10,14 +12,12 @@ export default createPage()
 			operationsClient.releases({ limit: 1 }),
 			operationsClient.health(),
 		])
-		return { issues, sources, releases, health }
+		return { issues, sources, releases, health, loadedAt: Date.now() }
 	})
 	.route('/operations')
 	.render(({ data }) => {
-		const unhealthy = data.health.sources.filter((source) =>
-			source.telemetryState !== 'healthy'
-			|| source.httpChecks.some((check) => check.enabled && (check.current === null || check.current.state !== 'healthy'))
-		).length
+		const unhealthy = data.health.sources.filter((source) => needsMonitoringAttention(source, data.loadedAt)).length
+		const hasSources = data.health.sources.some((source) => source.source.enabled)
 		return (
 			<>
 				<PageHead
@@ -50,8 +50,8 @@ export default createPage()
 						to="operations/health"
 						title="Health"
 						body="Service signals and telemetry pipeline delivery."
-						state={unhealthy === 0 ? 'All healthy' : `${unhealthy} need attention`}
-						lamp={unhealthy === 0 ? 'ok' : 'stop'}
+						state={!hasSources ? 'No active sources' : unhealthy === 0 ? 'No monitoring alerts' : `${unhealthy} need attention`}
+						lamp={!hasSources ? 'idle' : unhealthy === 0 ? 'ok' : 'stop'}
 					/>
 				</div>
 			</>
@@ -72,10 +72,9 @@ function Capability(
 			<div className="card-head">
 				<h2>{title}</h2>
 				<span className="spacer" />
-				<span className={`status status-${lamp}`} title={state}>
-					<span className="lamp" aria-hidden="true" />
+				<Status lamp={lamp} title={state}>
 					<span className="truncate">{state}</span>
-				</span>
+				</Status>
 			</div>
 			<div className="card-body">
 				<p>{body}</p>

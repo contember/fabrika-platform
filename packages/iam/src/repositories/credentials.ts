@@ -205,6 +205,23 @@ export class CredentialRepository {
 	}
 
 	/**
+	 * The live credential of each of a PAGE of principals, in one statement: an admin list needs each key's expiry, and
+	 * one query per row would cost 1+N round trips (SEC-22). Newest first, like `listCredentialsForPrincipal`; rotation
+	 * revokes every older key, so the first live row of a principal is its live credential.
+	 */
+	async listLiveCredentialsFor(principalIds: readonly string[]): Promise<CredentialRow[]> {
+		if (principalIds.length === 0) {
+			return []
+		}
+		const placeholders = principalIds.map(() => '?').join(', ')
+		const { results } = await this.db
+			.prepare(`SELECT * FROM credentials WHERE principal_id IN (${placeholders}) AND revoked_at IS NULL ORDER BY created_at DESC, id DESC`)
+			.bind(...principalIds)
+			.all<CredentialRow>()
+		return results
+	}
+
+	/**
 	 * Anonymous credentials — the share links (no bound principal). The admin share-links list.
 	 *
 	 * One page at a time, keyset-ordered by the UUIDv7 id like every other admin list, and REVOKED

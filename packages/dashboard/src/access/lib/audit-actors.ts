@@ -40,3 +40,9 @@ export function auditActor(event: AuditEventDto, resolved: ReadonlyMap<string, P
 	if (principal === undefined) return { kind: 'principal', principalId: event.principalId, label: event.principalLabel, isUser: false }
 	return { kind: 'principal', principalId: principal.id, label: principal.label, isUser: principal.type === 'user' }
 }
+
+/** The same actor identity in a compact feed, without a separate link to the person. */
+export function auditActorLabel(event: AuditEventDto, resolved: ReadonlyMap<string, PrincipalListItem>): string {
+	const actor = auditActor(event, resolved)
+	return actor.kind === 'credential' ? `Credential ${actor.credentialId}` : actor.label
+}

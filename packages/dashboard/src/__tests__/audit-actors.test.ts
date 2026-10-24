@@ -4,7 +4,7 @@ import type { AuditEventDto, PrincipalListItem } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { actorIdsToResolve, type AuditActor, auditActor, resolveActors } from '../access/lib/audit-actors'
+import { actorIdsToResolve, type AuditActor, auditActor, auditActorLabel, resolveActors } from '../access/lib/audit-actors'
 import { ActorCell } from '../routes/access/audit'
 
 const USER_ID = '01a13f67-253c-70ea-b4e3-fbb18b79a7fe'
@@ -74,6 +74,13 @@ describe('audit actors', () => {
 			.toEqual({ kind: 'principal', principalId: 'service-1', label: 'deploy-bot', isUser: false })
 		expect(auditActor(event({ credentialId: 'credential-1' }), resolved)).toEqual({ kind: 'credential', credentialId: 'credential-1' })
 		expect(auditActor(event({ principalId: null, principalLabel: 'anonymous' }), resolved)).toEqual({ kind: 'label', label: 'anonymous' })
+	})
+
+	test('compact feeds keep credential identity even when its principal is a resolved person', () => {
+		const resolved = new Map([[USER_ID, principal(USER_ID, 'Ada')]])
+		expect(auditActorLabel(event({}), resolved)).toBe('Ada')
+		expect(auditActorLabel(event({ credentialId: 'credential-1' }), resolved)).toBe('Credential credential-1')
+		expect(auditActorLabel(event({ principalId: null, principalLabel: 'anonymous' }), resolved)).toBe('anonymous')
 	})
 
 	test('a name narrows the log to its principal, as the rest of the row does', () => {

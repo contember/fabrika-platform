@@ -15,18 +15,18 @@ import {
 import { uuidv7 } from '@fabrika/platform'
 import { z } from 'zod'
 import { contractGrantProblem } from '../contract-rules'
-import { type GrantRow, type PrincipalRow, principalStatus } from '../db'
+import { type CredentialRow, type GrantRow, type PrincipalRow, principalStatus } from '../db'
 import { generateToken, hashToken } from '../secret'
 import { type AdminContext, adminEvent, fail } from './context'
 import { appField, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDtos } from './grant-support'
 import { cursorOf, groupBy, normalizeLimit } from './pagination'
 
 /**
- * One page of service principals with their grants. TWO queries per page, whatever the page holds:
- * the roster read, and one grants read for the page's ids. It used to be 1+N over an unbounded
+ * One page of service principals with their grants and live credentials. THREE queries per page, whatever the page
+ * holds: the roster read, then one grants read and one credentials read for the page's ids. It used to be 1+N over an unbounded
  * roster, with no pagination at all (SEC-22).
  */
-export async function listApiKeysUseCase(c: AdminContext, input: ListApiKeysInput): Promise<CursorList<ApiKeyDto>> {
+export async function listApiKeysUseCase(c: AdminContext, input: ListApiKeysInput): Promise<CursorList<ApiKeyDetail>> {
 	const limit = normalizeLimit(input.limit)
 	const principals = await c.services.repositories.principals.listPrincipals({
 		type: 'service',
@@ -34,11 +34,21 @@ export async function listApiKeysUseCase(c: AdminContext, input: ListApiKeysInpu
 		...(input.before ? { before: input.before } : {}),
 		limit,
 	})
-	const grants = groupBy(await c.services.repositories.grants.listGrantsFor(principals.map((p) => p.id)), (row) => row.principal_id)
+	const ids = principals.map((p) => p.id)
+	const [grantRows, credentialRows] = await Promise.all([
+		c.services.repositories.grants.listGrantsFor(ids),
+		c.services.repositories.credentials.listLiveCredentialsFor(ids),
+	])
+	const grants = groupBy(grantRows, (row) => row.principal_id)
+	const live = new Map<string, CredentialRow>()
+	for (const row of credentialRows) {
+		if (row.principal_id !== null && !live.has(row.principal_id)) live.set(row.principal_id, row)
+	}
 	const cache = new RoleKnownCache(c.services)
-	const items: ApiKeyDto[] = []
+	const items: ApiKeyDetail[] = []
 	for (const principal of principals) {
-		items.push(await toApiKeyDto(c, principal, grants.get(principal.id) ?? [], cache))
+		const dto = await toApiKeyDto(c, principal, grants.get(principal.id) ?? [], cache)
+		items.push({ ...dto, credential: credentialDto(live.get(principal.id)) })
 	}
 	return { items, nextCursor: cursorOf(items, limit, (item) => item.principalId) }
 }
@@ -54,7 +64,11 @@ export async function getApiKeyUseCase(c: AdminContext, input: ApiKeyIdInput): P
 	// `listCredentialsForPrincipal` is newest-first and rotation revokes every older key, so this is the live one.
 	const live = (await credentials.listCredentialsForPrincipal(principalId)).find((row) => row.revoked_at === null)
 	const dto = await toApiKeyDto(c, principal, await grants.listGrants(principalId), new RoleKnownCache(c.services))
-	return { ...dto, credential: live === undefined ? null : { app: live.app, expiresAt: live.expires_at } }
+	return { ...dto, credential: credentialDto(live) }
+}
+
+function credentialDto(live: CredentialRow | undefined): ApiKeyDetail['credential'] {
+	return live === undefined ? null : { app: live.app, expiresAt: live.expires_at }
 }
 
 async function toApiKeyDto(c: AdminContext, principal: PrincipalRow, grants: GrantRow[], cache: RoleKnownCache): Promise<ApiKeyDto> {

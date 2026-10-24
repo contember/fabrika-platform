@@ -687,6 +687,8 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		const owned = fixtureRuns(db.runs, new SqlDeployLocks(raw))
 		// pending → running only once: a redelivered queue message must be a no-op.
 		expect(await owned.start(first.id, `runs/${first.id}/logs.ndjson`)).toBe(true)
+		expect((await db.runs.listRuns({ statuses: ['running'], limit: 10 })).map((run) => run.id)).toEqual([first.id])
+		expect((await db.runs.listRuns({ statuses: ['pending'], limit: 10 })).map((run) => run.id)).toEqual([second.id])
 		expect(await owned.start(first.id, `runs/${first.id}/logs.ndjson`)).toBe(false)
 		const running = await db.runs.getRun(first.id)
 		expect(running?.status).toBe('running')

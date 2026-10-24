@@ -41,11 +41,11 @@
 
 	/* ── Ink: four levels of text, used deliberately ───────────────────────── */
 	--ink: light-dark(#0e1117, #f1f3f6);
-	--ink-2: light-dark(#454d5a, #b0b2b8);
-	--ink-3: light-dark(#6a7280, #85878e);
-	--ink-4: light-dark(#949ba7, #5c5e64);
+	--ink-2: light-dark(#343d4a, #b0b2b8);
+	--ink-3: light-dark(#4b5563, #85878e);
+	--ink-4: light-dark(#596372, #5c5e64);
 	/* The engraved label plate: small, letter-spaced, riding on a hairline. */
-	--engrave: light-dark(#6a7280, #8b8d94);
+	--engrave: light-dark(#4b5563, #8b8d94);
 
 	/* ── Blue: the identity's one blue, and only its mixes ──────────────────── */
 	/* The mark's blue from the designer's files. Every other blue in the console is this one mixed with
@@ -80,8 +80,8 @@
 	--rail: light-dark(#f6f7f9, var(--rail-black));
 	--rail-rule: light-dark(rgba(14, 20, 32, 0.08), rgba(255, 255, 255, 0.08));
 	--rail-ink: light-dark(#10151d, #e6e9ee);
-	--rail-ink-2: light-dark(#454d5a, #b4bac4);
-	--rail-ink-3: light-dark(#6a7280, #7a818c);
+	--rail-ink-2: light-dark(#343d4a, #b4bac4);
+	--rail-ink-3: light-dark(#4b5563, #7a818c);
 	--rail-hover: light-dark(rgba(14, 20, 32, 0.045), rgba(255, 255, 255, 0.06));
 	--rail-active: light-dark(rgba(14, 20, 32, 0.075), rgba(255, 255, 255, 0.1));
 	--rail-scrollbar: light-dark(rgba(14, 20, 32, 0.18), rgba(255, 255, 255, 0.16));
@@ -1147,6 +1147,55 @@ button.search-clear:hover:not(:disabled) {
 	color: var(--ink-3);
 }
 
+.filter-group {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+.filter-option {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+	min-height: 32px;
+	padding: 6px 10px;
+	background: transparent;
+	border: 0;
+	border-radius: var(--r-1);
+	font-size: var(--t-xs);
+	color: var(--ink-2);
+}
+
+button.filter-option:hover:not(:disabled) {
+	background: var(--rule-soft);
+	color: var(--ink);
+}
+
+.filter-option-count {
+	font: 10px var(--font-mono);
+	color: inherit;
+}
+
+.filter-option[aria-pressed="true"],
+button.filter-option[aria-pressed="true"]:hover:not(:disabled) {
+	background: var(--rail-active);
+	color: var(--blueprint);
+}
+
+.filter-option:focus-visible {
+	outline-offset: 2px;
+}
+
+@media (max-width: 700px) {
+	.filter-option {
+		min-height: 36px;
+		padding-inline: 8px;
+		font-size: 11px;
+		gap: 4px;
+		white-space: nowrap;
+	}
+}
+
 /* ── Panels & cards ────────────────────────────────────────────────────────── */
 
 .panel {
@@ -1239,7 +1288,6 @@ button.search-clear:hover:not(:disabled) {
 
 .instrument-cluster {
 	display: grid;
-	/* 10rem lets the overview's five readings share one row down to a 1280px window. */
 	grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
 	gap: var(--s-4);
 }
@@ -1323,16 +1371,17 @@ a.instrument:hover .instrument-label {
 	color: inherit;
 }
 
-/* On the overview the readings stand on the floor itself: no plate, no icon, the space between them the only divider.
-   A reading is a small label, a large number and its one line of context, and the label lights up under the pointer. */
+/* Readings use larger numbers and compact columns for the installation summary. */
 .readings {
-	/* Narrower than a plate needs, so the five readings keep one row down to a 1080px window. */
 	grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
 	gap: var(--s-4);
 }
 
 /* A block stands on the surface step: a flat ground, rounded, no border. */
 .overview-panel {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
 	padding: var(--s-4) var(--s-5);
 	border: none;
 	border-radius: var(--r-2);
@@ -1342,6 +1391,592 @@ a.instrument:hover .instrument-label {
 .readings .instrument-value {
 	margin-top: var(--s-3);
 	font-size: 3rem;
+}
+
+/* Overview: one inset for readings, panels and their rows. */
+.overview {
+	--ov-panel-inset: 24px;
+}
+
+.ov-page-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 16px;
+	margin-bottom: 32px;
+}
+
+.ov-page-head h1 {
+	margin-bottom: 8px;
+}
+
+.ov-head-actions {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+}
+
+.ov-updated {
+	font: 10px var(--font-mono);
+	color: var(--ink-3);
+	white-space: nowrap;
+}
+
+.ov-readings {
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	margin-bottom: 16px;
+}
+
+.ov-readings .instrument {
+	padding-inline: var(--ov-panel-inset);
+}
+
+.ov-readings .instrument-value {
+	min-height: 50px;
+}
+
+.ov-readings .instrument-value small {
+	color: var(--ink-3);
+}
+
+.ov-eyebrow {
+	font: 10px var(--font-mono);
+	color: var(--ink-3);
+	text-transform: uppercase;
+	letter-spacing: 0.075em;
+}
+
+.overview .ov-panel {
+	margin: 0 0 16px;
+	padding: 16px var(--ov-panel-inset);
+}
+
+.ov-section-head {
+	min-height: 24px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	margin-bottom: 16px;
+}
+
+.ov-section-head h2 {
+	font-size: var(--t-md);
+	margin: 0;
+	font-weight: 500;
+}
+
+.ov-section-head > a {
+	font-size: var(--t-sm);
+	white-space: nowrap;
+}
+
+.ov-heading-group {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.ov-section-note {
+	font-size: var(--t-xs);
+	color: var(--ink-3);
+}
+
+.ov-filter-row {
+	margin-bottom: 8px;
+}
+
+.ov-attention-row {
+	display: grid;
+	grid-template-columns: 12px minmax(0, 1fr) 72px 140px;
+	gap: 12px;
+	align-items: center;
+	min-height: 72px;
+	padding: 12px 0;
+	border-top: 1px solid var(--rule-soft);
+}
+
+.ov-attention-row:first-child {
+	border-top: 0;
+}
+
+.ov-row-lamp {
+	align-self: start;
+	padding-top: 3px;
+}
+
+.ov-attention-title a {
+	color: var(--ink);
+	font-weight: 500;
+	font-size: var(--t-base);
+}
+
+.ov-row-context {
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+	margin-top: 4px;
+	overflow-wrap: anywhere;
+}
+
+.ov-time {
+	font-size: var(--t-sm);
+	color: var(--ink-3);
+	white-space: nowrap;
+	text-align: right;
+}
+
+.ov-row-action {
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	gap: 8px;
+	font-size: var(--t-sm);
+}
+
+.ov-table-scroll {
+	position: relative;
+	overflow-x: auto;
+}
+
+.ov-app-table {
+	width: 100%;
+	border-collapse: collapse;
+	white-space: nowrap;
+	font-size: var(--t-sm);
+}
+
+.ov-app-table th {
+	padding: 8px 12px;
+	text-align: left;
+	background: none;
+	font: var(--t-xxs) var(--font-mono);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--ink-3);
+	border: none;
+}
+
+.ov-app-table td {
+	padding: 12px;
+	border: 0;
+	border-top: 1px solid var(--rule-soft);
+	vertical-align: middle;
+}
+
+.ov-app-table tbody tr:first-child td {
+	border-top: 0;
+}
+
+.ov-app-table :is(th, td):first-child {
+	padding-left: 0;
+}
+
+.ov-app-table :is(th, td):last-child {
+	padding-right: 0;
+}
+
+.ov-app-table tbody tr:hover {
+	background: var(--rule-soft);
+}
+
+.ov-app-table .grow {
+	width: 42%;
+}
+
+.ov-app-name {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 3px;
+}
+
+.ov-app-name a {
+	font-weight: 500;
+	color: var(--ink);
+	font-size: var(--t-base);
+}
+
+.ov-domain {
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+}
+
+.ov-cell-note {
+	display: block;
+	font-size: var(--t-xs);
+	color: var(--ink-3);
+	margin-top: 4px;
+}
+
+.ov-release-link {
+	color: var(--ink-2);
+}
+
+.ov-panel-foot {
+	padding-top: 16px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	font-size: var(--t-xs);
+	color: var(--ink-3);
+}
+
+.ov-pair {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: 16px;
+	align-items: start;
+}
+
+.ov-count {
+	font: var(--t-xs) var(--font-mono);
+	color: var(--ink-3);
+}
+
+.ov-deploy {
+	border-top: 1px solid var(--rule-soft);
+	padding: 12px 0;
+}
+
+.ov-section-head + .ov-deploy {
+	border-top: 0;
+}
+
+.ov-deploy-title {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	font-size: var(--t-base);
+}
+
+.ov-deploy-title strong {
+	font-weight: 500;
+}
+
+.ov-deploy .spacer {
+	flex: 1;
+}
+
+.ov-deploy-title .status {
+	font-size: var(--t-sm);
+}
+
+.ov-deploy-ref {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	color: var(--ink-3);
+	font: var(--t-xs) var(--font-mono);
+	margin-top: 8px;
+}
+
+.ov-deploy-ref code {
+	margin-left: 8px;
+	font-size: inherit;
+}
+
+.ov-deploy-bottom {
+	display: flex;
+	justify-content: space-between;
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+	gap: 12px;
+	margin-top: 12px;
+}
+
+.ov-approval-foot {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding-top: 16px;
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+}
+
+.ov-approval-foot svg {
+	color: var(--lamp-run);
+}
+
+.ov-approval-foot a {
+	margin-left: auto;
+	white-space: nowrap;
+}
+
+.ov-change {
+	display: grid;
+	grid-template-columns: 16px minmax(0, 1fr) auto;
+	gap: 12px;
+	padding: 12px 0;
+	border-top: 1px solid var(--rule-soft);
+	font-size: var(--t-base);
+}
+
+.ov-change:first-child {
+	border-top: 0;
+}
+
+.ov-change a {
+	color: var(--ink);
+}
+
+.ov-change small {
+	display: block;
+	font-size: var(--t-sm);
+	color: var(--ink-3);
+	margin-top: 4px;
+	overflow-wrap: anywhere;
+}
+
+.ov-change-icon {
+	color: var(--ink-3);
+	padding-top: 2px;
+}
+
+.ov-change time {
+	font-size: var(--t-xs);
+	color: var(--ink-3);
+	padding-top: 2px;
+}
+
+.ov-changes-foot {
+	display: flex;
+	justify-content: space-between;
+	gap: 16px;
+	font-size: var(--t-sm);
+	padding-top: 16px;
+}
+
+.ov-chart-pair {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: 32px;
+}
+
+.ov-chart {
+	padding: 8px 0 0;
+	min-width: 0;
+}
+
+.ov-chart-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.ov-chart-number {
+	font-size: 26px;
+	line-height: 1.5;
+	letter-spacing: -0.03em;
+	margin-top: 4px;
+}
+
+.ov-chart-number > span {
+	font-size: var(--t-sm);
+	letter-spacing: 0;
+	color: var(--ink-3);
+	margin-left: 12px;
+}
+
+.ov-legend {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	color: var(--ink-3);
+	font-size: var(--t-xxs);
+}
+
+.ov-legend span {
+	display: flex;
+	gap: 5px;
+	align-items: center;
+}
+
+.ov-legend i {
+	height: 5px;
+	width: 5px;
+	display: inline-block;
+	border-radius: 1px;
+}
+
+.ov-legend-ok,
+.ov-bar-succeeded {
+	background: color-mix(in srgb, var(--brand) 78%, var(--plate));
+}
+
+.ov-legend-stop,
+.ov-bar-failed {
+	background: var(--lamp-stop);
+}
+
+.ov-bars {
+	display: flex;
+	align-items: flex-end;
+	gap: 6px;
+	height: 112px;
+	margin-top: 16px;
+}
+
+.ov-bar-column {
+	display: flex;
+	align-items: flex-end;
+	flex: 1;
+	height: 100%;
+}
+
+.ov-bar-stack {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	width: 100%;
+	margin-inline: auto;
+	overflow: hidden;
+}
+
+.ov-axis {
+	display: flex;
+	justify-content: space-between;
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+	margin-top: 8px;
+}
+
+.ov-line-chart {
+	height: 112px;
+	margin-top: 16px;
+}
+
+.ov-line-chart svg {
+	width: 100%;
+	height: 100%;
+	overflow: visible;
+}
+
+.ov-chart-area {
+	fill: var(--wash-stop);
+}
+
+.ov-chart-line {
+	fill: none;
+	stroke: var(--lamp-stop);
+	stroke-width: 1.5;
+}
+
+.ov-chart-footnote {
+	display: block;
+	font-size: var(--t-xxs);
+	color: var(--ink-3);
+	margin-top: 12px;
+}
+
+.ov-page-foot {
+	display: flex;
+	justify-content: space-between;
+	gap: 16px;
+	color: var(--ink-3);
+	font-size: 10px;
+}
+
+.ov-empty {
+	padding-block: 16px;
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+}
+
+.ov-read-notices {
+	color: var(--ink-2);
+	margin-bottom: 16px;
+}
+@media (max-width: 1200px) {
+	.overview {
+		--ov-panel-inset: 16px;
+	}
+	.ov-head-actions .ov-updated,
+	.ov-heading-group .ov-section-note {
+		display: none;
+	}
+	.ov-attention-row {
+		grid-template-columns: 10px minmax(0, 1fr) 65px 112px;
+		gap: 10px;
+	}
+}
+
+@media (max-width: 950px) {
+	.ov-pair,
+	.ov-chart-pair {
+		grid-template-columns: 1fr;
+	}
+	.ov-pair {
+		gap: 0;
+	}
+	.ov-readings {
+		grid-template-columns: 1fr 1fr;
+	}
+	.ov-page-head {
+		align-items: flex-start;
+	}
+	.ov-attention-row {
+		grid-template-columns: 8px minmax(0, 1fr) 100px;
+	}
+	.ov-attention-row time {
+		display: none;
+	}
+	.ov-app-table {
+		min-width: 620px;
+	}
+	.ov-page-foot {
+		flex-direction: column;
+		gap: 8px;
+	}
+}
+
+@media (max-width: 700px) {
+	.ov-page-head {
+		flex-wrap: wrap;
+		gap: 16px;
+		margin-bottom: 24px;
+	}
+	.ov-head-actions {
+		width: 100%;
+		justify-content: flex-end;
+	}
+	.ov-head-actions .ov-updated {
+		display: inline;
+		margin-right: auto;
+	}
+	.ov-readings .instrument-label {
+		font-size: 9px;
+	}
+	.ov-readings .instrument-note {
+		font-size: 11px;
+	}
+	.ov-readings .instrument-note .status {
+		white-space: normal;
+	}
+	.ov-section-head {
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.ov-attention-row {
+		grid-template-columns: 8px minmax(0, 1fr);
+		gap: 8px 12px;
+	}
+	.ov-row-context {
+		font-size: 12px;
+		line-height: 1.7;
+	}
+	.ov-row-action {
+		grid-column: 2;
+		justify-content: flex-start;
+		font-size: 12px;
+		margin-top: 4px;
+	}
+	.ov-panel-foot {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 8px;
+	}
 }
 
 /* ── Board: the overview's two-column body ─────────────────────────────────── */
@@ -1365,289 +2000,10 @@ a.instrument:hover .instrument-label {
 	margin: 0;
 }
 
-/* ── Overview ────────────────────────────────────────────────────────────── */
-/* One column of rows, each 16px from the next: the readings, what needs attention (only when something does), how
-   the line has run, what deployed beside what changed, then the applications. Every block is as tall as its content,
-   so an installation with one application makes a compact page. Spacing keeps to 8, 16, 24 and 32. */
-
-.overview-row,
-.overview-panel {
-	margin: var(--s-4) 0 0;
-}
-
-.workspace > .overview-row:nth-child(2) {
-	margin-top: 0;
-}
-
-.overview-panel {
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
-}
-
-/* What deployed and what changed: two feeds side by side, each as tall as its rows. */
-.overview-pair {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: var(--s-4);
-	align-items: start;
-	margin-top: var(--s-4);
-}
-
-.overview-pair > .overview-panel {
-	margin: 0;
-}
-
-/* The chart is a row of its own: the bars across, and the run's three totals at their right. */
-.overview-chart .deploy-chart {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto;
-	grid-template-areas:
-		'bars totals'
-		'axis totals'
-		'note totals';
-	gap: var(--s-2) var(--s-6);
-	align-items: end;
-}
-
-.overview-chart .chart-bars {
-	grid-area: bars;
-	height: 8rem;
-}
-
-.overview-chart .chart-axis {
-	grid-area: axis;
-}
-
-.overview-chart .deploy-chart > .hint {
-	grid-area: note;
-	margin: 0;
-}
-
-.overview-chart .chart-totals {
-	grid-area: totals;
-	grid-template-columns: repeat(3, auto);
-	gap: var(--s-6);
-	align-self: center;
-	padding: 0;
-}
-
-.panel-head {
-	display: flex;
-	align-items: center;
-	min-height: var(--s-5);
-	gap: var(--s-3);
-	margin-bottom: var(--s-2);
-}
-
-.panel-head h2 {
-	margin: 0;
-	font-size: var(--t-md);
-	font-weight: 500;
-	letter-spacing: -0.005em;
-	color: var(--ink);
-}
-
-.panel-head .spacer {
-	flex: 1;
-}
-
-.panel-link {
-	font-size: var(--t-sm);
-	font-weight: 500;
-	white-space: nowrap;
-}
-
-/* Rows sit on hairlines that run the column's width, so the eye keeps its line; the hover tints the row in place. */
-.overview-panel .feed-row {
-	padding: var(--s-2) 0;
-	border-top: 1px solid var(--rule-soft);
-}
-
-.overview-panel .feed-row:first-child {
-	border-top: none;
-}
-
-.overview-panel a.feed-row:hover {
-	background: none;
-}
-
-.overview-panel a.feed-row:hover .feed-title {
-	color: var(--blueprint);
-}
-
-/* The small print reads at the size of body text's small step, not the caption's: there is no plate to hold it. */
-.overview-panel :is(.feed-meta, .feed-meta code, .feed-side, .chart-axis, .chart-totals span) {
-	font-size: var(--t-sm);
-}
-
-/* An empty panel says so in a line of text where its content would start. */
-.overview-panel .empty-state {
-	align-items: flex-start;
-	padding: var(--s-1) 0;
-	text-align: left;
-}
-
-.overview-panel .empty-state .icon {
-	display: none;
-}
-
-.overview-panel .empty-state {
-	padding-block: var(--s-1);
-}
-
-.overview-panel .empty-title {
-	font-weight: 400;
-	color: var(--ink-2);
-}
-
-.overview-panel .chart-bars {
-	height: 7rem;
-	border-bottom: none;
-}
-
-.overview-panel .chart-totals > div {
-	padding-left: 0;
-	border-left: none;
-}
-
-/* Off the plate the headings stand on the floor too; the section head's rule already sits above them. */
-.overview-apps th {
-	background: none;
-}
-
-.overview-apps .panel-head {
-	margin-bottom: var(--s-3);
-}
-
-/* The table's first and last columns line up with the title above it, not with a plate's inset. */
-.overview-apps :is(th, td):first-child {
-	padding-left: 0;
-}
-
-.overview-apps :is(th, td):last-child {
-	padding-right: 0;
-}
-
-.deploy-chart {
-	display: flex;
-	flex-direction: column;
-	gap: var(--s-2);
-	flex: 1;
-}
-
-.chart-bars {
-	display: grid;
-	grid-template-columns: repeat(14, minmax(0, 1fr));
-	align-items: end;
-	gap: 0.3125rem;
-	height: 10rem;
-	padding-top: var(--s-2);
-	border-bottom: 1px solid var(--rule);
-}
-
-.chart-day {
-	display: flex;
-	flex-direction: column;
-	justify-content: flex-end;
-	height: 100%;
-	gap: 2px;
-}
-
-.chart-bar {
-	display: block;
-	min-height: 3px;
-	border-radius: 2px 2px 0 0;
-}
-
-.chart-bar.ok {
-	background: color-mix(in srgb, var(--brand) 78%, var(--plate));
-}
-
-.chart-bar.failed {
-	background: var(--lamp-stop);
-}
-
-.chart-bar.none {
-	height: 3px;
-	background: var(--rule);
-}
-
-.chart-axis {
-	display: flex;
-	justify-content: space-between;
-	font-size: var(--t-xs);
-	color: var(--ink-3);
-}
-
-.chart-totals {
-	display: grid;
-	grid-template-columns: repeat(3, minmax(0, 1fr));
-	margin-top: auto;
-	padding-top: var(--s-4);
-}
-
-.chart-totals > div {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	padding-left: var(--s-3);
-	border-left: 1px solid var(--rule);
-}
-
-.chart-totals > div:first-child {
-	padding-left: 0;
-	border-left: none;
-}
-
-.chart-totals strong {
-	font-size: var(--t-xl);
-	font-weight: 600;
-	letter-spacing: -0.02em;
-	color: var(--ink);
-}
-
-.chart-totals span {
-	font-size: var(--t-xs);
-	color: var(--ink-3);
-}
-
-.activity-icon {
-	display: grid;
-	place-items: center;
-	flex: none;
-	width: 2rem;
-	height: 2rem;
-	border: 1px solid var(--rule);
-	border-radius: 50%;
-	color: var(--ink-2);
-}
-
-.activity-actor {
-	max-width: 10rem;
-}
-
-.app-name {
-	display: inline-flex;
-	align-items: center;
-	gap: var(--s-2);
-}
-
-.app-name .icon {
-	color: var(--ink-3);
-}
-
 .chip-row {
 	display: inline-flex;
 	flex-wrap: wrap;
 	gap: var(--s-1);
-}
-
-td a.last-deploy {
-	display: inline-flex;
-	align-items: center;
-	gap: var(--s-2);
-	font-weight: 400;
 }
 
 td a.external-url {
@@ -3931,23 +4287,6 @@ th.numeric {
 
 /* ── Responsive ────────────────────────────────────────────────────────────── */
 
-/* A narrow window stacks the chart's totals under its bars. */
-@media (max-width: 1080px) {
-	.overview-chart .deploy-chart {
-		grid-template-columns: minmax(0, 1fr);
-		grid-template-areas:
-			'bars'
-			'axis'
-			'note'
-			'totals';
-	}
-
-	.overview-chart .chart-totals {
-		justify-content: start;
-		padding-top: var(--s-2);
-	}
-}
-
 @media (max-width: 1080px) {
 	.board,
 	.welcome,
@@ -3965,10 +4304,6 @@ th.numeric {
 }
 
 @media (max-width: 860px) {
-	.overview-pair {
-		grid-template-columns: minmax(0, 1fr);
-	}
-
 	.app-shell {
 		display: block;
 	}

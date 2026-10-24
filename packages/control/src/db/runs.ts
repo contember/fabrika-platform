@@ -184,7 +184,7 @@ export class RunRepository {
 	 * individual mint — two runs created in the SAME millisecond still order by which was created
 	 * first. That is what makes `before` a sound keyset cursor: no page can skip or repeat a row.
 	 */
-	async listRuns(filter: { appId?: string; env?: string; before?: string; limit: number }): Promise<RunRow[]> {
+	async listRuns(filter: { appId?: string; env?: string; statuses?: RunStatus[]; before?: string; limit: number }): Promise<RunRow[]> {
 		const where: string[] = []
 		const binds: (string | number)[] = []
 		if (filter.appId !== undefined) {
@@ -198,6 +198,11 @@ export class RunRepository {
 		if (filter.before !== undefined) {
 			where.push('id < ?')
 			binds.push(filter.before)
+		}
+		if (filter.statuses !== undefined) {
+			if (filter.statuses.length === 0) return []
+			where.push(`status IN (${filter.statuses.map(() => '?').join(', ')})`)
+			binds.push(...filter.statuses)
 		}
 		const sql = `SELECT * FROM runs${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`
 		binds.push(filter.limit)
