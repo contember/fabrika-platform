@@ -1,4 +1,5 @@
 import {
+	BRAND_IMAGE_TYPES,
 	type BrandImage,
 	brandImageBase64,
 	type BrandImageProblem,
@@ -12,14 +13,16 @@ import {
 /** What a chosen file became: an image of the brand, or why it cannot be one, in words the page shows. */
 export type ChosenImage = { readonly ok: true; readonly image: BrandImage } | { readonly ok: false; readonly message: string }
 
-const EXTENSION_TYPES: Readonly<Record<string, BrandImageType>> = { png: 'image/png', webp: 'image/webp', svg: 'image/svg+xml' }
+/** Keyed by every type the brand admits, so a type added to `BRAND_IMAGE_TYPES` does not compile without its extension. */
+const TYPE_EXTENSIONS: Readonly<Record<BrandImageType, string>> = { 'image/png': 'png', 'image/webp': 'webp', 'image/svg+xml': 'svg' }
 
 /**
  * A file as the brand would store it. The type the browser reports wins; without one (some systems report none for an
  * SVG) the extension names it. The bytes are then held to the same check IAM applies, so the page refuses what IAM would.
  */
 export function chosenImage(bytes: Uint8Array, name: string, reportedType: string): ChosenImage {
-	const type = isBrandImageType(reportedType) ? reportedType : EXTENSION_TYPES[name.split('.').pop()?.toLowerCase() ?? '']
+	const extension = name.split('.').pop()?.toLowerCase()
+	const type = isBrandImageType(reportedType) ? reportedType : BRAND_IMAGE_TYPES.find((known) => TYPE_EXTENSIONS[known] === extension)
 	if (type === undefined) return { ok: false, message: problemMessage('type') }
 	if (bytes.length > MAX_BRAND_IMAGE_BYTES) return { ok: false, message: problemMessage('size') }
 	const image: BrandImage = { type, base64: brandImageBase64(bytes) }

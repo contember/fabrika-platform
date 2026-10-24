@@ -205,23 +205,39 @@ describe('IAM pages and the brand', () => {
 			dark_base64: null,
 			updated_at: 1_700_000_000,
 		})
+		const cleared: InstallationBrandRow = { ...row('image/png', PNG_BASE64), light_type: null, light_base64: null }
+		const repository = createHarness().repositories.brand
+		const other = createHarness().repositories.brand
 		const warn = spyOn(console, 'warn').mockImplementation(() => {})
 		try {
-			const first = storedBrand(row('image/png', PNG_BASE64))
+			const first = storedBrand(repository, row('image/png', PNG_BASE64))
 			expect(first).toEqual({ light: TEST_BRAND.light })
 			// A fresh read of the same row is a new object with equal strings: it takes the earlier answer.
-			expect(storedBrand(row('image/png', PNG_BASE64))).toBe(first)
+			expect(storedBrand(repository, row('image/png', PNG_BASE64))).toBe(first)
+			// Another IAM in the same process keeps its own entry and evicts nothing.
+			expect(storedBrand(other, row('image/svg+xml', SVG_BASE64))).toEqual({ light: { type: 'image/svg+xml', base64: SVG_BASE64 } })
+			expect(storedBrand(repository, row('image/png', PNG_BASE64))).toBe(first)
+
 			// Other bytes are checked anew: an SVG stored as a PNG is refused, and logged once, not on every read.
 			const now = 1_700_000_000_000
-			expect(storedBrand(row('image/png', SVG_BASE64), now)).toBeNull()
-			expect(storedBrand(row('image/png', SVG_BASE64), now + 1)).toBeNull()
+			expect(storedBrand(repository, row('image/png', SVG_BASE64), now)).toBeNull()
+			expect(storedBrand(repository, row('image/png', SVG_BASE64), now + 1)).toBeNull()
 			expect(warn).toHaveBeenCalledTimes(1)
 			// While the pages keep reading it, the refusal is logged again once the interval has passed.
-			expect(storedBrand(row('image/png', SVG_BASE64), now + REFUSED_BRAND_WARN_INTERVAL_MS)).toBeNull()
-			expect(storedBrand(row('image/png', SVG_BASE64), now + REFUSED_BRAND_WARN_INTERVAL_MS + 1)).toBeNull()
+			expect(storedBrand(repository, row('image/png', SVG_BASE64), now + REFUSED_BRAND_WARN_INTERVAL_MS)).toBeNull()
+			expect(storedBrand(repository, row('image/png', SVG_BASE64), now + REFUSED_BRAND_WARN_INTERVAL_MS + 1)).toBeNull()
 			expect(warn).toHaveBeenCalledTimes(2)
+			// A clock stepped back does not hold the next line off until it catches up.
+			expect(storedBrand(repository, row('image/png', SVG_BASE64), now)).toBeNull()
+			expect(warn).toHaveBeenCalledTimes(3)
+
+			// A cleared row empties the entry: the same refused images read after it are checked, and logged, again.
+			expect(storedBrand(repository, cleared, now)).toBeNull()
+			expect(storedBrand(repository, row('image/png', SVG_BASE64), now + 1)).toBeNull()
+			expect(warn).toHaveBeenCalledTimes(4)
+
 			// The same bytes under the type they are: the type is part of the key, so they are checked anew and admitted.
-			expect(storedBrand(row('image/svg+xml', SVG_BASE64))).toEqual({ light: { type: 'image/svg+xml', base64: SVG_BASE64 } })
+			expect(storedBrand(repository, row('image/svg+xml', SVG_BASE64))).toEqual({ light: { type: 'image/svg+xml', base64: SVG_BASE64 } })
 		} finally {
 			warn.mockRestore()
 		}

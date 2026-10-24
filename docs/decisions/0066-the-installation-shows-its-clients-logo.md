@@ -64,7 +64,8 @@ mark. Every page keeps the footer "Runs on fabrika", with no link.**
    mark instead of failing its build. The logo is part of the manifest digest, so a new logo rebuilds the proxy.
 6. **IAM's pages admit `img-src data:` and nothing more.** IAM draws the logo itself on every page it serves, and on
    the OAuth consent and error pages. A failed read, or a stored row that fails the check, draws fabrika's mark and
-   logs the message only, again every hour while the pages read it. Every page reads the row, but the check runs again
+   logs the message only: a failed read on every page, a refused row when it is checked and then once an hour while
+   the pages read it. Every page reads the row, but the check runs again
    only when its images differ from the ones this IAM instance checked last: the key is the images themselves, so a
    change made on another instance is checked when this one first reads it. The installation's own proxy, in front of IAM and the console, keeps fabrika's mark on its
    pages, its 502 among them: its manifest is written at install, and when IAM does not answer nothing can ask it for
