@@ -38,8 +38,10 @@ unless marked, size S.
 10. **A failed boot stays failed** for the object instance (`packages/app/src/cloudflare/application.ts`): a transient
     `load()` failure is retried only after eviction.
 11. **`like` ignores ASCII case on SQLite**, unlike Postgres; scope predicates use `=` and are unaffected.
-12. **No read-only backstop on SQLite.** `openSqlite` ignores `readOnly`, so a fixed framework write in a read-only
-    session is refused only by the classifier, where Postgres's `READ ONLY` transaction refuses it too.
+12. **No read-only backstop on a bare session.** A fixed statement (`runFixedStatement`, `runApplicationStatement`) on
+    a read-only `sessionOf()` session outside any transaction runs on the plain executor, on both dialects: no `READ
+    ONLY` transaction on Postgres, no `rowsWritten` check on SQLite, so only the classifier refuses its write. Inside
+    an invocation, and through `Session.run`, both backstops hold.
 13. **`DEFAULT CURRENT_TIMESTAMP`** in an application migration stores `YYYY-MM-DD HH:MM:SS`, which every read of the
     table refuses as `unexpected_row`; codegen or the checker should refuse it and name the `strftime` default.
 14. **A binding's method cannot be feature-detected.** On workerd an RPC stub answers `in` and `typeof` with a function

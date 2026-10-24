@@ -32,8 +32,9 @@ it to fact without a probe.
   (`src/workerd/api/actor-state.c++`, `DurableObjectStorage::transaction`). Probed live: a read sent 300 ms into a
   1.5 s transaction is answered when the transaction ends; without one, the same read sees the first write at once.
   The object's own outgoing I/O started outside the callback is not even sent until the transaction ends, so a
-  handler that awaits I/O must run inside it — the reason for `InvocationTransaction.enclose`. Probed on local
-  workerd: with a 1.5 s transaction open, a `fetch` started outside the callback reaches its target at 1,504 ms; the
+  writing handler that awaits I/O must run inside it — the reason `InvocationTransaction.enclose` encloses a writing
+  invocation (a read-only one holds no transaction across an await, only a `transactionSync` per statement). Probed
+  on local workerd: with a 1.5 s transaction open, a `fetch` started outside the callback reaches its target at 1,504 ms; the
   same `fetch` inside the callback completes in 201 ms against a 200 ms target, with no deadlock.
 - **A transaction started inside the callback nests in a savepoint** (`ActorSqlite::ExplicitTxn`,
   `src/workerd/io/actor-sqlite.c++`, `SAVEPOINT _cf_savepoint_<depth>`), and a nested one that throws rolls back only
