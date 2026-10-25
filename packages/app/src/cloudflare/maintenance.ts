@@ -272,7 +272,8 @@ export class MaintenanceBarrier {
 			}
 			this.#version = stored?.version ?? null
 			this.#stored = stored?.state ?? null
-			if (stored !== null && stored.state.generation > request.generation) {
+			// A higher generation, or the same one in another mode, is published elsewhere: adopted, never overwritten.
+			if (stored !== null && opsTransitionRefused(stored.state, request)) {
 				this.#mode = stored.state.mode
 				this.#generation = stored.state.generation
 				return { kind: 'stale', published: stored.state }

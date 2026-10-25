@@ -36,6 +36,7 @@ import {
 	sha256Hex,
 	type WebhookScheme,
 } from '@fabrika/auth-core'
+import { DatabaseError } from '@fabrika/db'
 import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
 import type { DataAccess, FileBinding, FrameworkTables } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
@@ -164,6 +165,19 @@ export function maintenanceRefusal(): Response {
 	const response = serverError(503)
 	response.headers.set('Retry-After', String(MAINTENANCE_RETRY_AFTER_S))
 	return response
+}
+
+/**
+ * A write the object's write fence refused: the invocation was admitted before a restrictive transition (ADR-0069 §3).
+ * A `DatabaseError`, so `@fabrika/db` passes it through its normalization of statement and commit failures unchanged;
+ * its fixed text names no statement or value. Dispatch answers it as `maintenanceRefusal()`.
+ */
+export class MaintenanceFenceError extends DatabaseError {
+	override name = 'MaintenanceFenceError'
+
+	constructor() {
+		super(null)
+	}
 }
 
 /** The class an endpoint's invocation counts in: a writing endpoint, a webhook, or one that only reads. */
@@ -427,6 +441,10 @@ export class ContractRuntime {
 				admission.release()
 			}
 		} catch (error) {
+			if (error instanceof MaintenanceFenceError) {
+				// An expected refusal, not a failure: nothing it wrote was kept, and the caller retries.
+				return maintenanceRefusal()
+			}
 			const response = errorResponse(error, where)
 			if (response.status >= 500) {
 				const failure = { endpoint: where, requestId: request.headers.get(REQUEST_ID_HEADER), status: response.status, error }
@@ -680,6 +698,12 @@ export class ContractRuntime {
 			})
 			this.#kickAll(kicks.kicked(), exec)
 			return answer
+		} catch (error) {
+			// The fence refuses inside the transaction, before its COMMIT: a known rollback, so what it staged goes now.
+			if (error instanceof MaintenanceFenceError) {
+				outcome = 'open'
+			}
+			throw error
 		} finally {
 			budget?.clear()
 			await invocation?.rollback()
@@ -1179,6 +1203,12 @@ export class ContractRuntime {
 			})
 			this.#kickAll(kicks.kicked(), exec)
 			return answer
+		} catch (error) {
+			// The fence refuses inside the transaction, before its COMMIT: a known rollback, so what it staged goes now.
+			if (error instanceof MaintenanceFenceError) {
+				outcome = 'open'
+			}
+			throw error
 		} finally {
 			budget?.clear()
 			await invocation.rollback()
@@ -1328,7 +1358,8 @@ export class ContractRuntime {
 		} catch (error) {
 			await invocation?.rollback()
 			// Only a known rollback deletes what the delivery staged; after a commit that may have happened, the sweep decides.
-			if (!committing) {
+			// The fence refuses inside the transaction, before its COMMIT, so its refusal is a known rollback.
+			if (!committing || error instanceof MaintenanceFenceError) {
 				await this.#parts.fileKinds?.release(work)
 			}
 			// The provider redelivers a failed delivery; giving the claim back lets the redelivery run at once. The unsigned

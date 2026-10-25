@@ -849,9 +849,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   handler's transaction. A known rollback deletes what the request staged (`StoredFileKinds.release`), and so does a
   job's `ctx.transaction` the job threw out of (from its `FileWork.mark`); after an uncertain outcome nothing is deleted
   and the sweep decides from the database, past `FILE_PENDING_GRACE_MS`. Never write an object without a row first.
-  On SQLite there is one database, so the pending row is written in the work's own transaction and rolls back with it:
-  the work records each object it wrote (`FileWork.wrote`), and a known rollback deletes an object whose row is gone
-  (`writtenKey`).
+  On SQLite there is one database, so a put inside a handler's enclosure writes its pending row in that transaction and
+  it rolls back with it: the work records each object it wrote (`FileWork.wrote`), and a known rollback deletes an
+  object whose row is gone (`writtenKey`). A commit the maintenance fence refused (`MaintenanceFenceError`) is a known
+  rollback. An incoming file is staged before the enclosure opens, so its pending row commits on its own; such a put's
+  object has no durable intent until its commit, and an eviction before it leaks the bytes.
 - **Every answer of a file output carries the file treatment**, denials and errors included: `ContractRuntime.fetch`
   chooses it by the planned endpoint's row, and a file is a `FileDownload`, never a `Response`, so no handler or store
   can set its headers. Keep the treatment equal to ADR-0022's.
@@ -1027,7 +1029,8 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   the content view; `state` and `migrate` go to the barrier.
 - **The barrier holds the object's mode** (ADR-0069 §3, `cloudflare/maintenance.ts`). The published state is
   `__fabrika/ops/<object>.json` in `FABRIKA_FILES`, written by a conditional put on the version last read or written; a
-  conflict re-reads it and adopts a higher generation. A transition is acknowledged only after that put succeeds and, for
+  conflict re-reads it and adopts what `opsTransitionRefused` refuses (a higher generation, or the same in another mode),
+  answering the 409; it never overwrites it. A transition is acknowledged only after that put succeeds and, for
   a restriction, after the drain: every invocation the new mode forbids has finished or `DRAIN_BOUND_MS` passed, and
   every kicked or scheduled run has been aborted through its admission's signal. A request below the published
   generation is the 409 `stale_generation` naming the published state. A cold start reads the state before anything
@@ -1036,7 +1039,8 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   `framework-job`): `read-only` admits reads only, `closed` and `inspect` nothing, and `inspect` never boots. Every
   SQLite write of the object goes through the fenced storage adapter, which checks the mode and the generation the event
   was admitted under after the statement or transaction and before its commit, so a write admitted before a restriction
-  rolls back. Outside `open` the object applies no migration; a boot that finds one pending refuses ordinary traffic
+  rolls back. The fence throws `MaintenanceFenceError`, a `DatabaseError` `@fabrika/db` passes through unchanged, which
+  dispatch answers as `maintenanceRefusal()` (503 with `Retry-After`) and records as no failure. Outside `open` the object applies no migration; a boot that finds one pending refuses ordinary traffic
   until `migrate` runs it under the published generation.
 - **The object answers only its own Worker.** A request without the environment's proxy secret is an empty 404 before
   anything else, the digests compared in constant time, so another Worker that binds the class learns nothing.

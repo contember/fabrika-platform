@@ -17,12 +17,11 @@ import { openSqlite, type SqliteCursor, type SqliteStorage } from '@fabrika/db/s
 import { migrateSqlite, type SqliteMigrationTarget } from '@fabrika/db/sqlite-migrate'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { timingSafeEqual } from 'node:crypto'
-import { HttpError } from '../errors.js'
 import type { RequestExecutionContext } from '../fetch.js'
 import { FILE_TOMBSTONE_RETENTION_MS } from '../files/kinds.js'
 import { boot, type ContractApp } from '../implement/boot.js'
 import { type CrashEvents, environmentCrashReporter, reportSurvivedCrashes } from '../implement/crashes.js'
-import { maintenanceRefusal, proxySecretDigest, runGated } from '../implement/dispatch.js'
+import { MaintenanceFenceError, maintenanceRefusal, proxySecretDigest, runGated } from '../implement/dispatch.js'
 import { type CapturedEnvironment, captureEnvironment } from '../implement/environment.js'
 import type { ContractImplementation } from '../implement/implement.js'
 import type { CrashReporter } from '../jobs/report.js'
@@ -114,7 +113,7 @@ function eventScope(): ObjectScope {
 /** The write fence (ADR-0069 §3): a write of an invocation admitted before a restrictive transition rolls back. */
 function fence(event: BarrierEvent, cursors: readonly SqliteCursor[]): void {
 	if (cursors.some((cursor) => cursor.rowsWritten > 0) && !event.writable()) {
-		throw new HttpError(503, 'unavailable', 'the object entered maintenance after this invocation was admitted; nothing it wrote is kept')
+		throw new MaintenanceFenceError()
 	}
 }
 
