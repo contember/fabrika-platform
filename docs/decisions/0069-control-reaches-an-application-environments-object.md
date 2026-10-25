@@ -179,10 +179,14 @@ one transaction at a time, so no write slips in between the check and its commit
 the database. Effects outside it can outlive the drain: bytes an upload already wrote to R2, and calls a handler or a
 job made to another system. The acknowledgement reports what still ran; it never claims those effects were undone.
 
-**Upload bytes after a rollback.** The framework keeps its best-effort cleanup when an upload's row rolls back, and
-aborts an unfinished multipart upload. Before the first byte it records a cleanup intent in a transaction of its own,
-so the fence that rolls back the pending row does not roll back the intent. A sweep removes the bytes later, while the
-object is open, and spares every key a row references or a backup within its retention may restore.
+**Upload bytes after a rollback.** A request's multipart files are staged before the handler's transaction opens, so
+each pending row commits on its own before the first byte and is the upload's cleanup intent: the fence that rolls back
+the handler does not roll it back, and the sweep removes the bytes later, while the object is open, sparing every key a
+row references or a backup within its retention may restore. A commit the fence refuses releases the files the
+request staged at once. A `ctx.files.put` inside a writing handler has no such intent on Cloudflare: everything the
+object writes while the handler's transaction is open joins that transaction, so its pending row rolls back with it.
+Its bytes get the best-effort release only, and an eviction in the middle of the handler leaves them unreferenced in
+the bucket, costing storage and exposing nothing ([backlog 236](../backlog/236-an-in-handler-upload-leaves-bytes-after-an-eviction.md)).
 
 **Cold starts.** A cold instance reads its R2 state. An absent object, a definite not-found, means `open`. Any other
 failure is never read as absence: the instance answers 503 to every request, ops requests included, and the next
@@ -226,7 +230,8 @@ new generation.
 | A transition with a lower generation, or equal with another mode       | Refused; the current state stays                                                                      |
 | R2 is unreadable at a cold start                                       | 503 to every request, ops included; the next request retries the read                                 |
 | A write admitted before the switch tries to commit after it            | The fence sees another generation and rolls the transaction back                                      |
-| An upload is in flight at the switch                                   | It counts in the drain; its pending row rolls back; its bytes stay under the cleanup intent           |
+| An upload is in flight at the switch                                   | It counts in the drain; its staged row is the cleanup intent the sweep removes the bytes by           |
+| A handler's `ctx.files.put` is rolled back by the fence                | Its files are released at once; an eviction before that leaves the bytes unreferenced (backlog 236)   |
 | A handler or job runs past the drain bound                             | The acknowledgement counts it; its writes are fenced; its external effects are reported, not undone   |
 | An alarm fires in `read-only` or `closed`                              | It runs nothing and writes nothing                                                                    |
 | A webhook arrives while not `open`                                     | 503; the sender retries                                                                               |
@@ -248,7 +253,8 @@ new generation.
 - Every framework write path carries a fence check, and every invocation is counted. A new write path that skips the
   fence breaks the barrier's invariant. An application migration runs only in `open` or in an operation's migration
   phase.
-- Upload quiescence is acknowledged only once the cleanup intent exists (work unit 3.3b).
+- Upload quiescence covers a request's staged files; a put inside a writing handler relies on the best-effort
+  release, so an eviction mid-handler can leave unreferenced bytes until backlog 236 lands.
 - Maintenance depends on R2's availability at a cold start: an environment whose bucket cannot be read answers 503,
   even to Control, until it can.
 - An environment without a domain cannot be inspected, frozen or backed up.
