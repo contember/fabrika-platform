@@ -7,7 +7,7 @@ blocked-by: []
 # 241 — Verify the Cloudflare email adapter on a live account
 
 **Summary.** The Cloudflare adapter follows Cloudflare's Email Sending REST API documentation (October 2026) and passes
-the conformance kit against a stubbed `fetch` only. Confirm its unverified points on a live account before an
+the conformance kit against a stubbed `fetch`; only its accepted answer has been checked live (2026-10-25). Confirm its unverified points on a live account before an
 installation relies on it. Small; needs an account on Workers Paid with an onboarded sending domain.
 
 ## Problem
@@ -17,16 +17,18 @@ installation relies on it. Small; needs an account on Workers Paid with an onboa
 `confirmation: 'sync'`, `listUnsubscribe` and 3 MiB of attachments. The documentation leaves these open, and the
 adapter guesses:
 
-- whether a 200 always carries `result.message_id`: the API reference lists it, the REST API guide's example omits it.
-  The adapter answers `malformed_response` without it, which over a provider with no idempotency leaves the message to
-  a person, so a missing id would park every message;
+- ~~which shape a 200 has~~: verified live on 2026-10-25. A fresh send to one recipient answered 200 with
+  `result.message_id` (an angle-bracketed RFC 5322 `Message-ID` on the sender's domain) and the recipient in `queued`.
+  The adapter keeps its fallback for a 200 without `message_id` (a delivered or queued recipient accepted under
+  `cloudflare:<idempotency key>`) until more answers confirm the field is always there;
 - the answer for a sender on a domain the account has not onboarded (the REST table has no such code; the Workers
   binding's `E_SENDER_NOT_VERIFIED` suggests one);
 - the answer when the account's daily sending limit is spent (the adapter maps every 429 to `rate_limited` and reads
   no code, so it cannot tell the daily quota from a burst limit);
 - the answer for an account ID the token cannot reach (the adapter maps a 404 to `provider_unauthorized`; Cloudflare
   may answer 403 instead);
-- whether the 5 MiB bound counts the attachments base64 and MIME-wrapped, as the adapter's 3 MiB assumes;
+- whether the 5 MiB bound counts the attachments base64 and MIME-wrapped, as the adapter's 3 MiB assumes, and whether
+  the 2,048-byte header value bound counts the unsubscribe URL's `<…>`, as the adapter's 2,046 bytes assumes;
 - how the recipient sees the display name, `Reply-To`, both unsubscribe headers and an attachment's media type.
 
 ## Approach / acceptance

@@ -98,11 +98,65 @@ describe('CloudflareEmailSender', () => {
 		}
 	})
 
-	test('a 200 without a message ID or with success false is no success', async () => {
-		for (const body of [{ success: true, result: { delivered: ['ada@example.test'] } }, { success: false, result: { message_id: 'cf-5' } }]) {
+	test('a fresh send as a live account answered it: queued, with an angle-bracketed message ID', async () => {
+		const live = capturing(() =>
+			Response.json({
+				success: true,
+				errors: [],
+				messages: [],
+				result: {
+					message_id: '<0a1b2c3d-live@notify.example.test>',
+					delivered: [],
+					queued: ['ada@example.test'],
+					permanent_bounces: [],
+					suppressed_recipients: [],
+				},
+			})
+		)
+		await expect(sender(live.fetch).send(message, signal)).resolves.toEqual({
+			status: 'accepted',
+			provider: 'cloudflare',
+			messageId: '<0a1b2c3d-live@notify.example.test>',
+		})
+	})
+
+	test('a 200 without a message ID counts by the recipient delivered or queued, under an ID derived from the key', async () => {
+		for (const result of [{ delivered: ['ada@example.test'] }, { delivered: [], queued: ['Ada@Example.test'] }]) {
+			const answer = capturing(() => Response.json({ success: true, errors: [], messages: [], result: { permanent_bounces: [], ...result } }))
+			await expect(sender(answer.fetch).send(message, signal)).resolves.toEqual({
+				status: 'accepted',
+				provider: 'cloudflare',
+				messageId: 'cloudflare:welcome/user-1',
+			})
+		}
+		const bounced = capturing(() => Response.json({ success: true, result: { delivered: [], permanent_bounces: ['ada@example.test'] } }))
+		expect((await caught(sender(bounced.fetch).send(message, signal))).code).toBe('provider_rejected')
+	})
+
+	test('a 200 that names neither a message ID nor the recipient, or with success false, is no success', async () => {
+		const bodies = [
+			{ success: true, result: { delivered: [], queued: [], permanent_bounces: [] } },
+			{ success: true, result: { delivered: ['someone-else@example.test'] } },
+			{ success: true, result: { message_id: '' } },
+			{ success: false, result: { message_id: 'cf-5', delivered: ['ada@example.test'] } },
+		]
+		for (const body of bodies) {
 			const odd = capturing(() => Response.json(body))
 			expect((await caught(sender(odd.fetch).send(message, signal))).code).toBe('malformed_response')
 		}
+	})
+
+	test("an unsubscribe URL whose header value passes Cloudflare's 2,048 bytes is refused before the request", async () => {
+		const { fetch, requests } = capturing(() => accepted({ message_id: '<cf-7@example.test>' }))
+		const url = (length: number): string => {
+			const prefix = 'https://app.example.test/u?t='
+			return prefix + 'a'.repeat(length - prefix.length)
+		}
+		const error = await caught(sender(fetch).send({ ...message, unsubscribeUrl: url(2047) }, signal))
+		expect([error.code, error.message]).toEqual(['invalid_message', 'Email unsubscribe URL is invalid'])
+		expect(requests).toHaveLength(0)
+		await sender(fetch).send({ ...message, unsubscribeUrl: url(2046) }, signal)
+		expect(requests).toHaveLength(1)
 	})
 
 	test('a refusal is classified by its status, and its text stays out', async () => {

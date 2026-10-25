@@ -16,11 +16,15 @@ const ACCOUNT_ID_PATTERN = /^[0-9a-fA-F]{32}$/
 const cloudflareSuccessSchema = z.object({
 	success: z.literal(true),
 	result: z.object({
-		message_id: z.string(),
+		message_id: z.string().optional(),
+		delivered: z.array(z.string()).optional(),
+		queued: z.array(z.string()).optional(),
 		permanent_bounces: z.array(z.string()).optional(),
 		suppressed_recipients: z.array(z.string()).optional(),
 	}),
 })
+/** Cloudflare bounds a custom header's value at 2,048 bytes; the URL travels inside `<…>`. */
+const MAX_HEADER_VALUE_BYTES = 2048
 /**
  * Cloudflare counts the whole message, attachments base64 and MIME-wrapped, against 5 MiB; 3 MiB of bytes leaves
  * about a mebibyte for the bodies and the headers.
@@ -60,6 +64,9 @@ export class CloudflareEmailSender extends HttpEmailSender {
 	}
 
 	protected request(message: EmailMessage): HttpEmailRequest {
+		if (message.unsubscribeUrl !== undefined && new TextEncoder().encode(`<${message.unsubscribeUrl}>`).byteLength > MAX_HEADER_VALUE_BYTES) {
+			throw new EmailDeliveryError('Email unsubscribe URL is invalid', { code: 'invalid_message' })
+		}
 		const senderName = message.fromName ?? this.from.name
 		const attachments = message.attachments ?? []
 		return {
@@ -87,15 +94,21 @@ export class CloudflareEmailSender extends HttpEmailSender {
 		}
 	}
 
-	protected messageId(response: ProviderResponse): string | undefined {
+	protected messageId(response: ProviderResponse, message: EmailMessage): string | undefined {
 		const result = cloudflareSuccessSchema.safeParse(response.body).data?.result
 		if (result === undefined) return undefined
+		const listed = (addresses: readonly string[] | undefined): boolean =>
+			(addresses ?? []).some((address) => address.toLowerCase() === message.to.toLowerCase())
 		// A 200 groups the recipients by outcome; the one recipient listed as bounced or suppressed got nothing. The
 		// lists name the address, so they stay out of the refusal.
-		if ((result.permanent_bounces?.length ?? 0) > 0 || (result.suppressed_recipients?.length ?? 0) > 0) {
+		if (listed(result.permanent_bounces) || listed(result.suppressed_recipients)) {
 			throw new EmailDeliveryError(`Cloudflare refused the recipient (${response.status})`, { code: 'provider_rejected', httpStatus: response.status })
 		}
-		return result.message_id
+		if (result.message_id !== undefined && result.message_id !== '') return result.message_id
+		// The REST guide documents a 200 with the recipients' status and no `message_id`. A recipient delivered or queued
+		// was taken, and the message's own key names that send, the same on every retry of it.
+		if (listed(result.delivered) || listed(result.queued)) return `cloudflare:${message.idempotencyKey}`
+		return undefined
 	}
 
 	protected override refusal(response: ProviderResponse): EmailDeliveryError | undefined {
