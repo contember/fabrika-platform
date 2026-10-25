@@ -67,10 +67,14 @@ item 1 needs an oblaka release first.
 
 **Migrations before a deploy.**
 
-17. A `migrate` operation that failed (`deploy_failed`, `migration_failed`) leaves the object restricted, and
+15. A `migrate` operation that failed (`deploy_failed`, `migration_failed`) leaves the object restricted, and
     `data.recover` offers only `open` for a failed operation. No retry keeps the restriction: an operator who wants the
     migration run again before the object opens has nothing to call. Fix idea: a recovery resolution that resumes a
     failed `migrate` operation at its `deploy` or `migrate` step under a fresh fence.
+16. Whether a deploy guards its migrations follows the last succeeded run's `ops_channel`. A run whose provider deploy
+    landed but which failed afterwards (a failed schema reconcile) leaves the record describing the version before it:
+    a channel installed that way lets one migrating deploy run plainly, and a channel removed that way blocks migrating
+    deploys until a run succeeds. Fix idea: record what the provider accepted, not only succeeded runs.
 
 ## Approach / acceptance
 
