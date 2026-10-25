@@ -14,7 +14,7 @@ import {
 import { isScopedDatabase } from '@fabrika/db/framework'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
 import { openSqlite, type SqliteCursor, type SqliteStorage } from '@fabrika/db/sqlite'
-import { migrateSqlite, type SqliteMigrationTarget } from '@fabrika/db/sqlite-migrate'
+import { migrateSqlite, type SqliteMigrationBundle, type SqliteMigrationTarget } from '@fabrika/db/sqlite-migrate'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { timingSafeEqual } from 'node:crypto'
 import type { RequestExecutionContext } from '../fetch.js'
@@ -238,10 +238,15 @@ async function migrate(storage: ApplicationStorage, migrations: readonly Applica
 	const target: SqliteMigrationTarget = policy === 'apply'
 		? { exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) }
 		: refusingTarget(storage)
-	await migrateSqlite(target, [
+	await migrateSqlite(target, migrationBundles(migrations))
+}
+
+/** The bundles the object applies, in order: the framework's tables, then the application's. */
+function migrationBundles(migrations: readonly ApplicationMigration[]): readonly SqliteMigrationBundle[] {
+	return [
 		{ bundle: 'fabrika', migrations: SQLITE_FRAMEWORK_MIGRATIONS },
 		{ bundle: 'app', migrations },
-	])
+	]
 }
 
 async function bootApplication(
@@ -413,6 +418,7 @@ export class FabrikaApplication {
 				storage: this.#state.storage,
 				bucket: this.#env[CLOUDFLARE_FILES_BINDING],
 				recovery: objectRecovery(this.#state),
+				migrations: migrationBundles(this.#setup?.options.migrations ?? []),
 				bootFailure: async () => {
 					await this.#outcome
 					return this.#bootFailure

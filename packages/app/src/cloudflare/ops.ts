@@ -36,6 +36,7 @@ import {
 } from '@fabrika/auth-core'
 import { FILES_TABLE, JOB_LEASES_TABLE, WEBHOOK_BINDINGS_TABLE, WEBHOOK_DELIVERIES_TABLE } from '@fabrika/db/migrations'
 import type { SqliteCursor, SqliteStorage, SqliteValue } from '@fabrika/db/sqlite'
+import type { SqliteMigrationBundle } from '@fabrika/db/sqlite-migrate'
 import { opsProxyRow } from '@fabrika/proxy-core/manifest'
 import { timingSafeEqual } from 'node:crypto'
 import appPackage from '../../package.json' with { type: 'json' }
@@ -55,6 +56,14 @@ export interface OpsStorage {
 	}
 	/** The bun:sqlite test double has no alarm. */
 	getAlarm?(): Promise<number | null>
+	/** The synchronous KV of a SQLite-backed object, in the same database; the bun:sqlite test double has none. */
+	readonly kv?: {
+		get(key: string): unknown
+		put(key: string, value: unknown): void
+		delete(key: string): boolean
+	}
+	/** Wipes the object's database, its KV and its alarm; the bun:sqlite test double has none. */
+	deleteAll?(): Promise<void>
 }
 
 /**
@@ -110,6 +119,8 @@ export interface OpsTarget {
 	/** The environment's bucket (the `FABRIKA_FILES` R2 binding), where dumps and the maintenance state live. */
 	readonly bucket: unknown
 	readonly recovery: OpsRecovery | null
+	/** The release's migration bundles in the order the object applies them: the framework's, then the application's. */
+	readonly migrations: readonly SqliteMigrationBundle[]
 	/**
 	 * The instance's last failed boot, the application's error text included. Asked only after authentication: it
 	 * waits for a boot under way and never starts one.
@@ -164,7 +175,7 @@ export async function serveOps(request: Request, access: OpsAccess | null, targe
 		}
 		case 'import': {
 			const step = parseOpsImportRequest(body)
-			return step === null ? opsRefusal() : await serveImport(target, barrier, step)
+			return step === null ? opsRefusal() : await serveImport(target, barrier, step, access.objects.object)
 		}
 		case 'restore': {
 			const step = parseOpsRestoreRequest(body)

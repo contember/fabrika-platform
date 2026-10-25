@@ -42,8 +42,9 @@ import { migrateSqlite, type SqliteMigrationBundle } from '@fabrika/db/sqlite-mi
 import { Database as BunDatabase } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
-import { describeDumpSchema, IMPORT_MARKER_KEY, importStep, type ImportStorage, type ImportTarget } from '../cloudflare/import'
+import { describeDumpSchema, IMPORT_MARKER_KEY, importStep, type ImportStorage, type ImportTarget, serveImport } from '../cloudflare/import'
 import { MaintenanceBarrier } from '../cloudflare/maintenance'
+import type { OpsTarget } from '../cloudflare/ops'
 
 const SOURCE: OpsDumpSource = { object: 'application', dump: '0193f1c2-7a4b-7c3d-8e9f-0123456789ab' }
 const TARGET = 'clone'
@@ -636,5 +637,40 @@ describe('the schema description', () => {
 		expect(tables.get('checked')?.checked).toBe(true)
 		expect(tables.get('later')?.foreignKeys.map((key) => key.initiallyDeferred)).toEqual([true])
 		expect(planOpsDump(describeDumpSchema(storage))).toEqual({ refused: 'unsupported_schema', table: 'later' })
+	})
+})
+
+describe('the ops seam', () => {
+	function opsTarget(storage: OpsTarget['storage'], bucket: unknown): OpsTarget {
+		return {
+			storage,
+			bucket,
+			recovery: null,
+			migrations: release(),
+			bootFailure: () => Promise.resolve(null),
+			maintenance: () => Promise.reject(new Error('not called')),
+			migrate: () => Promise.reject(new Error('not called')),
+		}
+	}
+
+	test('serves begin through the storage of the object it reaches', async () => {
+		const objects = new Map<string, Uint8Array>()
+		writeDump(objects, (await sourceDatabase()).storage)
+		const { storage } = objectStorage()
+
+		const response = await serveImport(opsTarget(storage, r2(objects)), await barrier(), { ...scope(), step: 'begin' }, SOURCE.object)
+
+		expect(response.status).toBe(200)
+		expect(parseOpsImportBeginAck(await response.json())).toEqual({ step: 'begin', parts: 1 })
+		expect(storage.kv.get(IMPORT_MARKER_KEY)).toBeDefined()
+	})
+
+	test('a storage without the synchronous KV or deleteAll does not serve it', async () => {
+		const storage = bunSqliteStorage(new BunDatabase(':memory:'))
+
+		const response = await serveImport(opsTarget(storage, r2(new Map())), await barrier(), { ...scope(), step: 'begin' }, SOURCE.object)
+
+		expect(response.status).toBe(501)
+		expect(storage.sql.exec('SELECT count(*) AS count FROM sqlite_schema').toArray()).toEqual([{ count: 0 }])
 	})
 })

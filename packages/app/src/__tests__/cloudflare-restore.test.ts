@@ -101,6 +101,7 @@ function harness(options: HarnessOptions = {}): Harness {
 		storage,
 		bucket: null,
 		recovery: options.recovery === false ? null : recovery,
+		migrations: [],
 		bootFailure: () => Promise.resolve(null),
 		maintenance: () => Promise.reject(new Error('not called')),
 		migrate: () => Promise.reject(new Error('not called')),

@@ -55,12 +55,23 @@ import type { MaintenanceBarrier } from './maintenance.js'
 import type { OpsTarget } from './ops.js'
 
 /**
- * One step of loading a dump into a fresh object (ADR-0070). Answers 501 until the ops target carries what
- * `importStep` needs: the storage's synchronous KV and `deleteAll`, the release's migration bundles and the serving
- * object's name.
+ * One step of loading a dump into a fresh object (ADR-0070); `serving` is the object of ordinary traffic. A runtime
+ * whose storage has no synchronous KV or `deleteAll` does not serve the operation.
  */
-export async function serveImport(_target: OpsTarget, _barrier: MaintenanceBarrier, _step: OpsImportRequest): Promise<Response> {
-	return jsonResponse({ refused: 'not_implemented' }, 501)
+export async function serveImport(target: OpsTarget, barrier: MaintenanceBarrier, step: OpsImportRequest, serving: string): Promise<Response> {
+	const { storage } = target
+	const { kv, deleteAll } = storage
+	if (kv === undefined || deleteAll === undefined) {
+		return jsonResponse({ refused: 'not_implemented' }, 501)
+	}
+	const importing: ImportStorage = {
+		sql: storage.sql,
+		transaction: (closure) => storage.transaction(closure),
+		transactionSync: (closure) => storage.transactionSync(closure),
+		kv,
+		deleteAll: () => deleteAll.call(storage),
+	}
+	return await importStep({ storage: importing, bucket: target.bucket, migrations: target.migrations, serving }, barrier, step)
 }
 
 /** workerd's synchronous KV storage of a SQLite-backed object: it lives in the same database, so it commits with a transaction. */
