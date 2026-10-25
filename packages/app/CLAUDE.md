@@ -60,6 +60,12 @@ bun test src/__tests__/connect-hardening.test.ts # captured connect methods, a h
 bun test src/__tests__/export-read-only.test.ts # an export handler cannot write (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/cloudflare-runtime.test.ts          # the environment's Durable Object in Lopata: hop, migrations, ctx.db, tick, R2
 bun test src/__tests__/cloudflare-runtime-adapter.test.ts  # the object's bindings and crash reports, over bun:sqlite
+bun test src/__tests__/cloudflare-ops.test.ts       # the ops channel at the object: authentication, the uniform refusal, inspect
+bun test src/__tests__/cloudflare-maintenance.test.ts  # the barrier: transitions published to R2, the drain, the write fence, cold starts
+bun test src/__tests__/cloudflare-export.test.ts    # the dump producer over bun:sqlite and Lopata's R2: hashes, lossless values, part sizes, refusals
+bun test src/__tests__/cloudflare-import.test.ts    # the importer: each step, retries, refusals, and a round trip through the producer
+bun test src/__tests__/cloudflare-restore.test.ts   # the point-in-time restore steps over a recovery double: sentinel, bookmarks, barrier turn
+bun test src/__tests__/cloudflare-tracker.test.ts   # the isolate's pending-work tracker: timers and waitUntil, scrubbed bounded stacks
 bun test src/__tests__/dev-launcher.test.ts     # the dev launcher against a stub of Control's source receiver: the digest decision, migrate and reset (the last two need FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/dev-changes.test.ts      # what a dev sync's paths mean: a bootstrap, a migration, an SPA build
 ```
@@ -88,9 +94,20 @@ src/
     names.ts          the class and binding names the provider shares: FabrikaApplication, FABRIKA_APPLICATION,
                       FABRIKA_FILES (re-exported by @fabrika/app/build)
     ops.ts            Control's ops channel at the object (ADR-0069): authentication, the uniform refusal, the
-                      inspect view read from storage alone, `state` and `migrate` over the barrier
+                      inspect view read from storage alone, `state` and `migrate` over the barrier; routes `export`,
+                      `import`, `restore` and `timers` (ADR-0070) to their modules
     maintenance.ts    MaintenanceBarrier: the object's mode and generation, published to the environment's bucket
-                      before it is acknowledged, the drain, and the gate every invocation and write passes
+                      before it is acknowledged, the drain, and the gate every invocation and write passes; runs a
+                      data step in its turn (`step`)
+    export.ts         the ops operation `export` (ADR-0070 §2–§4): begin, keyset parts as fixed-size gzip members,
+                      complete with the manifest; reads sqlite_schema and the PRAGMAs, never boots the application
+    import.ts         the ops operation `import` (ADR-0070 §6): a consistent backup loaded into a fresh object step by
+                      step; the import marker in KV commits with each step's rows
+    restore.ts        the original object's point-in-time restore (ADR-0070 §9): prepare keeps the operation's
+                      sentinel and bookmarks under its own KV key, arm arms the restore and resets the object in the
+                      barrier's turn, verify reads the sentinel
+    tracker.ts        the ops operation `timers` (ADR-0070 §10): the isolate's live timers and `waitUntil` promises
+                      with scrubbed, bounded stacks, while switched on
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract; the local `directory`
                       mail provider, which boot honours only under a loopback issuer
   disk-assets.ts      diskAssets: the SPA mounts from their build directories, as the Bun deploy and the test kit serve them
