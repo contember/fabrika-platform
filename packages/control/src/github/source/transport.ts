@@ -158,7 +158,8 @@ export class SourceTransport {
 					method: 'PUT',
 					body: gzipStream(source),
 					duplex: 'half',
-					redirect: 'error',
+					// Workers' fetch rejects `redirect: 'error'`; a 3xx is not `ok` and fails below.
+					redirect: 'manual',
 					signal: combined.signal,
 				})
 			} catch {

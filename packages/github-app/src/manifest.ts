@@ -57,7 +57,8 @@ export async function exchangeGitHubAppManifestCode(
 						'user-agent': GITHUB_MANIFEST_USER_AGENT,
 						'x-github-api-version': GITHUB_API_VERSION,
 					},
-					redirect: 'error',
+					// Workers' fetch rejects `redirect: 'error'`; a 3xx is not `ok` and fails below.
+					redirect: 'manual',
 					signal: cancellation.signal,
 				},
 			)

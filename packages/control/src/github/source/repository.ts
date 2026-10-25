@@ -243,7 +243,8 @@ export class TarballRepositorySource {
 		const archive = await this.request(
 			location,
 			undefined,
-			'error',
+			// Workers' fetch rejects `redirect: 'error'`; a 3xx from codeload is not `ok` and fails below.
+			'manual',
 			signal,
 			callerSignal,
 		)
@@ -259,7 +260,7 @@ export class TarballRepositorySource {
 	private async request(
 		url: string,
 		token: string | undefined,
-		redirect: 'manual' | 'error',
+		redirect: 'manual',
 		signal: AbortSignal,
 		callerSignal: AbortSignal,
 		timeout?: AbortSignal,
