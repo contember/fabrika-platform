@@ -1,6 +1,6 @@
 // One step of a dump of the object's database (ADR-0070 §2): the ops operation `export`, served before the application
-// boots. It reads `sqlite_schema` and the tables directly, so it also dumps a database that cannot boot, and it keeps
-// nothing between steps: Control's operation record holds the upload id, the cursor and the parts.
+// boots. It reads `sqlite_schema` and the tables directly, so it also dumps a database that cannot boot. Control's
+// operation record holds the upload id, the cursor and the parts; the object keeps only a consistent dump's begun state.
 
 import {
 	encodeOpsDumpLine,
@@ -17,11 +17,7 @@ import {
 	type OpsDataRefusal,
 	opsDumpColumnProjection,
 	type OpsDumpCursor,
-	type OpsDumpSchema,
 	type OpsDumpSchemaEntry,
-	type OpsDumpSchemaForeignKey,
-	type OpsDumpSchemaIndex,
-	type OpsDumpSchemaTable,
 	type OpsDumpTable,
 	type OpsDumpTablePlan,
 	type OpsDumpValue,
@@ -31,18 +27,21 @@ import {
 	type OpsExportPart,
 	type OpsExportRequest,
 	type OpsExportScope,
+	type OpsPublishedState,
 	type OpsStaleRefusal,
 	parseOpsExportBeginAck,
 	parseOpsExportCompleteAck,
 	parseOpsExportPartAck,
 	planOpsDump,
 	readOpsDumpValue,
+	sha256Hex,
 } from '@fabrika/auth-core'
 import type { SqliteValue } from '@fabrika/db/sqlite'
 import { crc32, deflateRawSync } from 'node:zlib'
 import appPackage from '../../package.json' with { type: 'json' }
 import { jsonResponse } from '../errors.js'
 import { method } from './bindings.js'
+import { describeDumpSchema } from './import.js'
 import type { MaintenanceBarrier } from './maintenance.js'
 import type { OpsTarget } from './ops.js'
 
@@ -60,17 +59,30 @@ export interface ExportSource extends Pick<OpsTarget, 'storage' | 'bucket' | 're
 type Storage = ExportSource['storage']
 
 /**
- * One step of a dump. A consistent step runs only at the published generation and never while the object is `open`;
- * each step checks that and reads the database before its first await, so no transition falls between the two.
+ * One step of a dump. A diagnostic step runs in any mode. A consistent one runs in the barrier's turn, only at the
+ * published generation and never while the object is `open`, so no transition and no migration falls inside it; past
+ * `begin` it refuses a database whose state is not the one its `begin` saw.
  */
 export async function exportStep(source: ExportSource, barrier: MaintenanceBarrier, step: OpsExportRequest): Promise<Response> {
-	const refused = scopeRefusal(barrier, step)
-	if (refused !== null) {
-		return refused
+	if (!step.consistent) {
+		return await run(source, step)
 	}
+	const { generation } = step
+	if (generation === null) {
+		throw new Error('a consistent export step carries its generation; the wire parser requires it')
+	}
+	const result = await barrier.step(generation, async (mode) => ({
+		value: mode === 'open' ? dataRefusal({ refused: 'wrong_mode', table: null }) : await runConsistent(source, step, generation),
+		holdUntil: null,
+	}))
+	return result.kind === 'ran' ? result.value : staleRefusal(result.published)
+}
+
+/** Runs `step`; `state` is what a consistent dump's `begin` records, `null` for a diagnostic one. */
+async function run(source: ExportSource, step: OpsExportRequest, state: string | null = null): Promise<Response> {
 	switch (step.step) {
 		case 'begin':
-			return await begin(source, step)
+			return await begin(source, step, state)
 		case 'part':
 			return await part(source, step)
 		case 'complete':
@@ -78,29 +90,35 @@ export async function exportStep(source: ExportSource, barrier: MaintenanceBarri
 	}
 }
 
-/** A diagnostic step runs in any mode; a consistent one at the published generation, in a mode that writes nothing. */
-function scopeRefusal(barrier: MaintenanceBarrier, scope: OpsExportScope): Response | null {
-	if (!scope.consistent) {
-		return null
+/**
+ * `begin` records the state it saw beside the dump; every later step compares it first. A migration runs at the published
+ * generation, so the generation alone would not show one between two steps.
+ */
+async function runConsistent(source: ExportSource, step: OpsExportRequest, generation: number): Promise<Response> {
+	const state = dumpState(source.storage, generation)
+	if (step.step !== 'begin' && (await begunState(source.bucket, step)) !== state) {
+		return dataRefusal({ refused: 'ledger_mismatch', table: null })
 	}
-	const view = barrier.view()
-	if (!view.published || view.generation !== scope.generation) {
-		const published = view.published && view.generation !== null ? { generation: view.generation, mode: view.mode } : null
-		const stale: OpsStaleRefusal = { refused: 'stale_generation', published }
-		return jsonResponse(stale, OPS_STALE_STATUS)
-	}
-	return view.mode === 'open' ? dataRefusal({ refused: 'wrong_mode', table: null }) : null
+	return await run(source, step, state)
+}
+
+function staleRefusal(published: OpsPublishedState | null): Response {
+	const stale: OpsStaleRefusal = { refused: 'stale_generation', published }
+	return jsonResponse(stale, OPS_STALE_STATUS)
 }
 
 function dataRefusal(refusal: OpsDataRefusal): Response {
 	return jsonResponse(refusal, OPS_DATA_REFUSED_STATUS)
 }
 
-/** Plans the dump, starts the multipart upload of its data and answers the object's bookmark. */
-async function begin(source: ExportSource, step: OpsExportBegin): Promise<Response> {
-	const plan = planOpsDump(describeSchema(source.storage))
+/** Plans the dump, records a consistent one's `state`, starts the multipart upload of its data and answers the object's bookmark. */
+async function begin(source: ExportSource, step: OpsExportBegin, state: string | null): Promise<Response> {
+	const plan = planOpsDump(describeDumpSchema(source.storage))
 	if ('refused' in plan) {
 		return dataRefusal(plan)
+	}
+	if (state !== null) {
+		await call(source.bucket, 'put')(stateKey(step), state, { httpMetadata: { contentType: 'text/plain' } })
 	}
 	if (source.recovery === null) {
 		throw new Error("the object's storage has no bookmarks; a Durable Object's storage has them")
@@ -113,7 +131,7 @@ async function begin(source: ExportSource, step: OpsExportBegin): Promise<Respon
 
 /** Fills part `n` from its cursor: whole rows while every bound holds, one gzip member padded to the fixed size but the last. */
 async function part(source: ExportSource, step: OpsExportPart): Promise<Response> {
-	const plan = planOpsDump(describeSchema(source.storage))
+	const plan = planOpsDump(describeDumpSchema(source.storage))
 	if ('refused' in plan) {
 		return dataRefusal(plan)
 	}
@@ -137,7 +155,7 @@ async function part(source: ExportSource, step: OpsExportPart): Promise<Response
 /** Completes the upload with the parts Control recorded, writes the manifest beside the data and answers it. */
 async function complete(source: ExportSource, step: OpsExportComplete): Promise<Response> {
 	const { storage } = source
-	const plan = planOpsDump(describeSchema(storage))
+	const plan = planOpsDump(describeDumpSchema(storage))
 	if ('refused' in plan) {
 		return dataRefusal(plan)
 	}
@@ -202,6 +220,25 @@ async function uploadPart(source: ExportSource, step: OpsExportPart, part: Fille
 
 function dataKey(scope: OpsExportScope): string {
 	return OPS_DUMP_KEY(scope, 'data')
+}
+
+/** `begun` in the dump's own prefix, which the bucket's lifecycle expires with the dump. */
+function stateKey(scope: OpsExportScope): string {
+	const manifest = OPS_DUMP_KEY(scope, 'manifest')
+	return `${manifest.slice(0, manifest.lastIndexOf('/'))}/begun`
+}
+
+/** What `begin` recorded for the dump, `null` when it recorded nothing. */
+async function begunState(bucket: unknown, scope: OpsExportScope): Promise<string | null> {
+	const stored: unknown = await call(bucket, 'get')(stateKey(scope))
+	if (stored === null) {
+		return null
+	}
+	const body: unknown = await call(stored, 'text')()
+	if (typeof body !== 'string') {
+		throw new Error("R2 answered a dump's begun state without its text")
+	}
+	return body
 }
 
 function answer<T>(ack: T | null, step: string): Response {
@@ -318,7 +355,7 @@ function rowBounds(storage: Storage, table: OpsDumpTablePlan, after: string | nu
 	})
 	const fixed = `{"table":"${table.name}","row":[]}\n`.length + (table.columns.length + 1) * VALUE_OVERHEAD + SCALAR_BYTES
 	const condition = keysetCondition(table, after)
-	const query = `SELECT ${[String(fixed), ...sizes].join(' + ')} AS bound FROM ${quoted(table.name)} ${condition.sql}
+	const query = `SELECT ${[String(fixed), ...sizes].join(' + ')} AS bound FROM ${source(table)} ${condition.sql}
 		ORDER BY ${quoted(table.keyset)} LIMIT ${OPS_DUMP_PAGE_ROWS}`
 	return storage.sql.exec(query, ...condition.bindings).toArray().map((row) => {
 		const bound = row['bound']
@@ -343,7 +380,7 @@ function readRows(storage: Storage, table: OpsDumpTablePlan, after: string | nul
 	const names = ['k', 'r', ...table.columns.flatMap((_, index) => [`t${index}`, `v${index}`])]
 	const projections = [keyset, `CAST(${keyset} AS TEXT)`, ...table.columns.map(opsDumpColumnProjection)]
 	const condition = keysetCondition(table, after)
-	const query = `WITH page(${names.join(', ')}) AS (SELECT ${projections.join(', ')} FROM ${quoted(table.name)} ${condition.sql}
+	const query = `WITH page(${names.join(', ')}) AS (SELECT ${projections.join(', ')} FROM ${source(table)} ${condition.sql}
 		ORDER BY ${keyset} LIMIT ${limit}) SELECT ${names.slice(1).join(', ')} FROM page ORDER BY k`
 	return storage.sql.exec(query, ...condition.bindings).toArray().map((row) => {
 		const rowid = readOpsDumpValue('integer', row['r'])
@@ -469,7 +506,8 @@ function gzipMember(part: Filled): Uint8Array<ArrayBuffer> {
 	return member
 }
 
-// The schema: what the PRAGMAs and `sqlite_schema` say, for the wire's one schema rule and for the manifest.
+// The schema and the migration ledger: what `sqlite_schema` and the ledger's two tables say, for the manifest and for
+// the state a consistent dump begins at. The wire's schema rule reads the importer's description of the PRAGMAs.
 
 /** SQLite's own tables but `sqlite_sequence`, and Cloudflare's `_cf_` tables, are no table of the dump. */
 function dumped(name: string): boolean {
@@ -485,66 +523,6 @@ function text(value: SqliteValue | undefined): string {
 		throw new Error('the schema answered a value that is not text')
 	}
 	return value
-}
-
-/** Every table of the main schema, as `table_list`, `table_xinfo`, `index_list`, `index_xinfo` and `foreign_key_list` describe it. */
-function describeSchema(storage: Storage): OpsDumpSchema {
-	const tables: OpsDumpSchemaTable[] = []
-	for (const listed of rowsOf(storage, 'PRAGMA main.table_list')) {
-		const name = text(listed['name'])
-		const type = text(listed['type'])
-		if (type === 'view' || !dumped(name)) {
-			continue
-		}
-		const sql = rowsOf(storage, `SELECT sql FROM main.sqlite_schema WHERE type = 'table' AND name = ?`, name)[0]?.['sql']
-		const declared = typeof sql === 'string' ? sql : ''
-		tables.push({
-			name,
-			virtual: type === 'virtual',
-			withoutRowid: listed['wr'] === 1,
-			// No PRAGMA reports a CHECK or an INITIALLY DEFERRED key: either is assumed wherever the SQL might declare it.
-			checked: /\bcheck\s*\(/i.test(declared),
-			columns: rowsOf(storage, `PRAGMA main.table_xinfo(${quoted(name)})`).map((column) => ({
-				name: text(column['name']),
-				type: text(column['type']),
-				notNull: column['notnull'] === 1,
-				primaryKey: typeof column['pk'] === 'number' ? column['pk'] : 0,
-				generated: column['hidden'] === 2 || column['hidden'] === 3,
-			})),
-			indexes: describeIndexes(storage, name),
-			foreignKeys: describeForeignKeys(storage, name, /\binitially\s+deferred\b/i.test(declared)),
-		})
-	}
-	return { tables }
-}
-
-function describeIndexes(storage: Storage, table: string): OpsDumpSchemaIndex[] {
-	return rowsOf(storage, `PRAGMA main.index_list(${quoted(table)})`).map((index) => {
-		const origin = index['origin']
-		return {
-			unique: index['unique'] === 1,
-			origin: origin === 'u' || origin === 'pk' ? origin : 'c',
-			partial: index['partial'] === 1,
-			columns: rowsOf(storage, `PRAGMA main.index_xinfo(${quoted(text(index['name']))})`)
-				.filter((column) => column['key'] === 1)
-				.map((column) => typeof column['name'] === 'string' ? column['name'] : null),
-		}
-	})
-}
-
-/** A key's rows grouped by `id`, which `foreign_key_list` answers in `seq` order. */
-function describeForeignKeys(storage: Storage, table: string, initiallyDeferred: boolean): OpsDumpSchemaForeignKey[] {
-	const keys = new Map<SqliteValue | undefined, { parent: string; columns: string[]; references: (string | null)[] }>()
-	for (const row of rowsOf(storage, `PRAGMA main.foreign_key_list(${quoted(table)})`)) {
-		const key = keys.get(row['id']) ?? { parent: text(row['table']), columns: [], references: [] }
-		keys.set(row['id'], key)
-		key.columns.push(text(row['from']))
-		key.references.push(typeof row['to'] === 'string' ? row['to'] : null)
-	}
-	return [...keys.values()].map((key) => {
-		const references = key.references.flatMap((column) => column === null ? [] : [column])
-		return { parent: key.parent, columns: key.columns, references: references.length === key.columns.length ? references : null, initiallyDeferred }
-	})
 }
 
 const SCHEMA_TYPES: readonly OpsDumpSchemaEntry['type'][] = ['table', 'index', 'trigger', 'view']
@@ -566,8 +544,33 @@ function schemaEntries(storage: Storage): OpsDumpSchemaEntry[] {
 
 /** The ledger `@fabrika/db/sqlite-migrate` keeps for both bundles; none in a database restored to before it existed. */
 function migrationLedger(storage: Storage): Record<string, SqliteValue>[] {
-	const exists = rowsOf(storage, `SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = 'fabrika_migrations'`).length > 0
-	return exists ? rowsOf(storage, 'SELECT bundle, name, checksum, applied_at AS appliedAt FROM fabrika_migrations ORDER BY bundle, name') : []
+	return holdsTable(storage, 'fabrika_migrations')
+		? rowsOf(storage, 'SELECT bundle, name, checksum, applied_at AS appliedAt FROM main.fabrika_migrations ORDER BY bundle, name')
+		: []
+}
+
+/** The digest each bundle's last applied file recorded, which the runner may write without applying a file. */
+function bundleDigests(storage: Storage): Record<string, SqliteValue>[] {
+	return holdsTable(storage, 'fabrika_migration_bundles')
+		? rowsOf(storage, 'SELECT bundle, digest FROM main.fabrika_migration_bundles ORDER BY bundle')
+		: []
+}
+
+function holdsTable(storage: Storage, name: string): boolean {
+	return rowsOf(storage, `SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ?`, name).length > 0
+}
+
+/**
+ * The digest of what a consistent dump's steps must all see: the generation, the DDL and both ledger tables. At one
+ * generation outside `open` a migration is what writes, and the runner records each of its writes in one of them.
+ */
+function dumpState(storage: Storage, generation: number): string {
+	return sha256Hex(JSON.stringify([generation, schemaEntries(storage), migrationLedger(storage), bundleDigests(storage)]))
+}
+
+/** A table as a query reads it: qualified, so no common table expression of the query shadows it. */
+function source(table: OpsDumpTablePlan): string {
+	return `main.${quoted(table.name)}`
 }
 
 function quoted(name: string): string {

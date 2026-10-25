@@ -16,6 +16,7 @@ import {
 	type OpsDumpManifest,
 	type OpsDumpValue,
 	type OpsExportPartAck,
+	type OpsExportRequest,
 	type OpsExportScope,
 	type OpsMode,
 	parseOpsDataRefusal,
@@ -35,6 +36,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
+import { method } from '../cloudflare/bindings'
 import { type ExportSource, exportStep } from '../cloudflare/export'
 import { MaintenanceBarrier } from '../cloudflare/maintenance'
 import { r2FileObjectStore } from '../cloudflare/r2-files'
@@ -55,6 +57,14 @@ CREATE INDEX folders_workspace ON folders (workspace_id);
 CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, payload BLOB);
 CREATE TABLE loose (k TEXT, v);
 `
+
+/** The release's bundles, the application's with `later` migrations after its first. */
+function bundles(...later: { readonly name: string; readonly sql: string }[]) {
+	return [
+		{ bundle: 'fabrika', migrations: SQLITE_FRAMEWORK_MIGRATIONS },
+		{ bundle: 'app', migrations: [{ name: '0001_app.sql', sql: APP_SCHEMA }, ...later] },
+	]
+}
 
 const envs: TestEnv[] = []
 const directories: string[] = []
@@ -83,10 +93,10 @@ async function harness(mode: OpsMode = 'read-only'): Promise<Harness> {
 	const database = new Database(join(directory, 'object.sqlite'))
 	const reader = new Database(join(directory, 'object.sqlite'), { readonly: true, safeIntegers: true })
 	const storage = bunSqliteStorage(database)
-	await migrateSqlite({ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) }, [
-		{ bundle: 'fabrika', migrations: SQLITE_FRAMEWORK_MIGRATIONS },
-		{ bundle: 'app', migrations: [{ name: '0001_app.sql', sql: APP_SCHEMA }] },
-	])
+	await migrateSqlite(
+		{ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) },
+		bundles(),
+	)
 	// A trigger body reads as transaction control to the storage double, so the trigger is created past it.
 	database.run('CREATE TRIGGER folders_touch AFTER UPDATE ON folders BEGIN SELECT 1; END')
 	const testEnv = await createTestEnv({ bindings: { FILES: 'r2' } })
@@ -430,5 +440,193 @@ describe('what the barrier admits', () => {
 		const response = await exportStep(target.source, target.barrier, { ...consistent, step: 'begin' })
 		expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
 		expect(parseOpsDataRefusal(await json(response))).toEqual({ refused: 'unsupported_schema', table: 'keyed' })
+	})
+})
+
+/** Applies `sql` as the application's next migration through the barrier's migrate, at the published generation. */
+async function migrateApp(target: Harness, generation: number, sql: string): Promise<void> {
+	const { storage } = target.source
+	const result = await target.barrier.migrate(generation, () =>
+		migrateSqlite(
+			{ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) },
+			bundles({ name: '0002_app.sql', sql }),
+		))
+	expect(result.kind).toBe('migrated')
+}
+
+function call(target: unknown, name: string): (...args: unknown[]) => unknown {
+	const found = method(target, name)
+	if (found === null) throw new Error(`the bucket has no ${name}`)
+	return found
+}
+
+/** `bucket`, whose uploads signal `reached` when a part is about to be uploaded and upload it once `released` settles. */
+function holdingParts(bucket: unknown, reached: () => void, released: Promise<void>): object {
+	const passed = (name: string) => (...args: unknown[]) => call(bucket, name)(...args)
+	return {
+		get: passed('get'),
+		put: passed('put'),
+		head: passed('head'),
+		createMultipartUpload: passed('createMultipartUpload'),
+		resumeMultipartUpload: (...args: unknown[]) => {
+			const upload = call(bucket, 'resumeMultipartUpload')(...args)
+			return {
+				uploadPart: async (...rest: unknown[]) => {
+					reached()
+					await released
+					return await call(upload, 'uploadPart')(...rest)
+				},
+				complete: (...rest: unknown[]) => call(upload, 'complete')(...rest),
+			}
+		},
+	}
+}
+
+async function refusal(response: Response): Promise<unknown> {
+	expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
+	return parseOpsDataRefusal(await json(response))
+}
+
+describe('a consistent dump holds one state of the database', () => {
+	test('a migration between begin and the first part refuses the part', async () => {
+		const target = await harness()
+		seed(target.database)
+		const uploadId = await begin(target, consistent)
+		await migrateApp(target, 1, `UPDATE workspaces SET name = 'migrated'`)
+
+		const response = await exportStep(target.source, target.barrier, { ...consistent, step: 'part', uploadId, part: 1, cursor: null })
+		expect(await refusal(response)).toEqual({ refused: 'ledger_mismatch', table: null })
+	})
+
+	test('a migration between the last part and complete refuses complete', async () => {
+		const target = await harness()
+		seed(target.database)
+		const uploadId = await begin(target, consistent)
+		const ack = await part(target, consistent, uploadId, 1, null)
+		await migrateApp(target, 1, `UPDATE folders SET title = 'migrated'`)
+
+		const response = await exportStep(target.source, target.barrier, {
+			...consistent,
+			step: 'complete',
+			uploadId,
+			bookmark: BOOKMARK,
+			parts: [ack.uploaded],
+			tables: ack.tables,
+		})
+		expect(await refusal(response)).toEqual({ refused: 'ledger_mismatch', table: null })
+	})
+
+	test('a dump begun under another generation is refused, though no migration ran', async () => {
+		const target = await harness()
+		seed(target.database)
+		const uploadId = await begin(target, consistent)
+		await target.barrier.transition({ generation: 2, mode: 'open' })
+		target.database.run(`UPDATE workspaces SET name = 'written while open'`)
+		await target.barrier.transition({ generation: 3, mode: 'read-only' })
+
+		const response = await exportStep(target.source, target.barrier, { ...consistent, generation: 3, step: 'part', uploadId, part: 1, cursor: null })
+		expect(await refusal(response)).toEqual({ refused: 'ledger_mismatch', table: null })
+	})
+
+	test('a begin retried after a migration starts the dump again at the new state, which completes', async () => {
+		const target = await harness()
+		seed(target.database)
+		await begin(target, consistent)
+		await migrateApp(target, 1, `UPDATE workspaces SET name = 'migrated'`)
+		const { manifest } = await dump(target, consistent)
+		expect(manifest.migrations.map(({ bundle, name }) => `${bundle}/${name}`)).toContain('app/0002_app.sql')
+	})
+})
+
+describe('a consistent step holds the barrier', () => {
+	test('a transition waits for a consistent part under way, which answers at its own generation', async () => {
+		const target = await harness()
+		seed(target.database)
+		const uploadId = await begin(target, consistent)
+		const reached = Promise.withResolvers<void>()
+		const released = Promise.withResolvers<void>()
+		const source: ExportSource = { ...target.source, bucket: holdingParts(target.bucket, reached.resolve, released.promise) }
+		const settled: string[] = []
+
+		const step = exportStep(source, target.barrier, { ...consistent, step: 'part', uploadId, part: 1, cursor: null }).then((response) => {
+			settled.push('part')
+			return response
+		})
+		await reached.promise
+		const transition = target.barrier.transition({ generation: 2, mode: 'open' }).then(() => settled.push('transition'))
+		await new Promise((resolve) => setTimeout(resolve, 0))
+		expect(settled).toEqual([])
+		released.resolve()
+		const response = await step
+		await transition
+
+		expect(settled).toEqual(['part', 'transition'])
+		expect(response.status).toBe(200)
+	})
+
+	test.each(['begin', 'part', 'complete'] as const)(
+		'a consistent %s queued behind a transition answers the published state as stale',
+		async (name) => {
+			const target = await harness()
+			seed(target.database)
+			const uploadId = await begin(target, consistent)
+			const ack = await part(target, consistent, uploadId, 1, null)
+			const requests: Record<typeof name, OpsExportRequest> = {
+				begin: { ...consistent, step: 'begin' },
+				part: { ...consistent, step: 'part', uploadId, part: 1, cursor: null },
+				complete: { ...consistent, step: 'complete', uploadId, bookmark: BOOKMARK, parts: [ack.uploaded], tables: ack.tables },
+			}
+
+			const transition = target.barrier.transition({ generation: 2, mode: 'read-only' })
+			const response = await exportStep(target.source, target.barrier, requests[name])
+			await transition
+
+			expect(response.status).toBe(OPS_STALE_STATUS)
+			expect(parseOpsStaleRefusal(await json(response))).toEqual({ refused: 'stale_generation', published: { generation: 2, mode: 'read-only' } })
+		},
+	)
+})
+
+describe('reading a table', () => {
+	test('a table named page, as the reading query names its own rows, dumps', async () => {
+		const target = await harness()
+		target.database.run(`CREATE TABLE page (id INTEGER PRIMARY KEY, k TEXT, r REAL)`)
+		target.database.run(`INSERT INTO page (k, r) VALUES ('a', 1.5), ('b', NULL)`)
+		const { manifest } = await dump(target, consistent)
+		const rows = directRows(target, 'page')
+		expect(manifest.tables.find((table) => table.name === 'page')).toEqual({
+			name: 'page',
+			rows: 2,
+			hash: foldOpsTableHash(OPS_EMPTY_TABLE_HASH, rows),
+		})
+	})
+})
+
+describe('the schema rule reads clauses as the importer does', () => {
+	test('a CHECK written with a comment before its parenthesis marks the table checked', async () => {
+		const target = await harness()
+		target.database.run('CREATE TABLE tree (id INTEGER PRIMARY KEY, parent INTEGER REFERENCES tree (id), CHECK/*c*/(parent IS NOT NULL OR id = 1))')
+		const response = await exportStep(target.source, target.barrier, { ...consistent, step: 'begin' })
+		expect(await refusal(response)).toEqual({ refused: 'unsupported_schema', table: 'tree' })
+	})
+
+	test('INITIALLY DEFERRED written with a comment between its words is refused', async () => {
+		const target = await harness()
+		target.database.run('CREATE TABLE later (id INTEGER PRIMARY KEY, workspace INTEGER REFERENCES workspaces (id) DEFERRABLE INITIALLY/*c*/DEFERRED)')
+		const response = await exportStep(target.source, target.barrier, { ...consistent, step: 'begin' })
+		expect(await refusal(response)).toEqual({ refused: 'unsupported_schema', table: 'later' })
+	})
+
+	test('the words inside a literal or a comment declare nothing', async () => {
+		const target = await harness()
+		target.database.run(`CREATE TABLE notes (
+			id INTEGER PRIMARY KEY,
+			parent INTEGER REFERENCES notes (id), -- check (parent) is not declared
+			workspace INTEGER REFERENCES workspaces (id),
+			body TEXT DEFAULT 'initially deferred, check (x)'
+		)`)
+		target.database.run(`INSERT INTO notes (id, parent, workspace) VALUES (1, NULL, NULL), (2, 1, NULL)`)
+		const { manifest } = await dump(target, consistent)
+		expect(manifest.tables.find((table) => table.name === 'notes')?.rows).toBe(2)
 	})
 })
