@@ -14,6 +14,8 @@
 // are not among them: each source connection's key lives in the vault (ADR-0029).
 
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
+import { EMAIL_PROVIDER_VARIABLE, NO_EMAIL_PROVIDER, pickEmailEnvironment } from '@fabrika/email'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import {
 	createCloudflareProxyWorker,
 	D1Database,
@@ -27,6 +29,7 @@ import {
 import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { controlSchema } from './fabrika.schema'
 import { controlServiceContract } from './fabrika.service'
+import { type InstallationMail, readInstallationMail } from './src/mail-transport'
 
 /**
  * IAM's origin — the issuer both this Worker and the proxy in front of it verify tokens against.
@@ -36,6 +39,38 @@ import { controlServiceContract } from './fabrika.service'
 const LOCAL_IAM_URL = 'http://localhost:18191'
 
 const resolveIamUrl = (isLocal: boolean): string => process.env['FABRIKA_IAM_ISSUER'] ?? (isLocal ? LOCAL_IAM_URL : '')
+
+type EnvironmentSource = Readonly<Record<string, string | undefined>>
+
+/**
+ * The installation's mail transport, from the same `FABRIKA_EMAIL_*` the workflow hands IAM: Control hands it to the
+ * deploys whose contract has a `mailer: 'installation'` job. An invalid set refuses the deploy, naming the variables;
+ * IAM's stage refuses the same set first.
+ */
+const installationMail = (source: EnvironmentSource): Exclude<InstallationMail, { kind: 'invalid' }> => {
+	const mail = readInstallationMail(pickEmailEnvironment(source), builtinEmailProviders)
+	if (mail.kind === 'invalid') throw new Error(mail.reason)
+	return mail
+}
+
+/**
+ * The transport's plain Worker vars: the provider, the sender and the provider's non-secret variables, or
+ * `FABRIKA_EMAIL_PROVIDER=none`. Locally none: the local Worker hands no transport, and the committed wrangler.jsonc
+ * stays the same whatever the shell holds.
+ */
+export const controlEmailVars = (isLocal: boolean, source: EnvironmentSource = process.env): Record<string, string> => {
+	if (isLocal) return {}
+	const mail = installationMail(source)
+	if (mail.kind === 'none') return { [EMAIL_PROVIDER_VARIABLE]: NO_EMAIL_PROVIDER }
+	const { variables, secretNames } = mail.transport
+	return Object.fromEntries(Object.entries(variables).filter(([name]) => !secretNames.has(name)))
+}
+
+/** The provider's credentials, which the deploy writes as Worker secrets, never into plain vars. */
+export const controlEmailSecrets = (source: EnvironmentSource = process.env): string[] => {
+	const mail = installationMail(source)
+	return mail.kind === 'none' ? [] : [...mail.transport.secretNames].sort()
+}
 
 /**
  * Build fabrika's full Cloudflare resource graph for one environment. This is the SINGLE source of the
@@ -73,6 +108,7 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			not_found_handling: 'single-page-application',
 		},
 		vars: {
+			...controlEmailVars(isLocal),
 			ENVIRONMENT: env,
 			// The public domain this stage serves on (drives absolute URLs); empty when unknown.
 			FABRIKA_CONTROL_DOMAIN: domain ?? '',
@@ -158,6 +194,7 @@ export default defineApp({
 		//                               deploys that reconcile schema. Omit at deploy to run without reconcile.
 		//   - FABRIKA_RUNNER_KEY      — shared with vozka-runner, which refuses any RPC without it (the
 		//                               service binding alone authenticates nobody).
+		//   - the installation mail provider's credentials (`FABRIKA_EMAIL_*`), when the installation has one.
 		// Their VALUES are read from the environment by name at deploy time (never inlined here).
 		secrets: [
 			'FABRIKA_CONTROL_VAULT_KEY',
@@ -165,6 +202,7 @@ export default defineApp({
 			'FABRIKA_IAM_PROVISIONING_KEY',
 			'FABRIKA_RUNNER_KEY',
 			'OPERATIONS_SYNC_KEY',
+			...controlEmailSecrets(),
 		],
 	},
 })
