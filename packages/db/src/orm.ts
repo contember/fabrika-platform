@@ -13,6 +13,7 @@ import { columnOf, type Compare, type Contains, parseCondition, type Primitive, 
 import { CapabilityError, NotFoundError, type QueryRefusal, QueryRefusedError } from './errors'
 import { answerFiles, type FileBinding } from './file-columns'
 import { databaseNow } from './job-leases'
+import { rearmClaim } from './job-wakes'
 import { linksPredicate, linkValues } from './links'
 import {
 	aggregateNode,
@@ -25,6 +26,7 @@ import {
 	everything,
 	inList,
 	lockedSelectNode,
+	nextClaimNode,
 	scopedWhere,
 	selectNode,
 	updateNode,
@@ -706,6 +708,8 @@ function publicApplicationRows(
 const DEFAULT_TICK_MS = 60_000
 /** The longest backoff: past it the doubling stops, so a row with many attempts is still due within a month. */
 const MAX_BACKOFF_MS = 30 * 24 * 60 * 60_000
+/** A claim re-arms its job no sooner than this after it ran, unless it took its full limit. */
+const CLAIM_REARM_MIN_MS = 1_000
 
 /** The backoff after a row's `attempts`-th claim: one tick, doubling with each further claim. */
 function backoffMs(tickMs: number, attempts: number): number {
@@ -714,6 +718,15 @@ function backoffMs(tickMs: number, attempts: number): number {
 		backoff *= 2
 	}
 	return Math.min(backoff, MAX_BACKOFF_MS)
+}
+
+/** A queue row's due time as the layer answers it. */
+function dueOf(row: Readonly<Record<string, unknown>>, table: string, column: string): Date {
+	const due = row[column]
+	if (!(due instanceof Date)) {
+		throw new QueryRefusedError('unexpected_row', `${table}.${column} came back as ${typeof due}; a queue's due column is a timestamp`)
+	}
+	return due
 }
 
 /** `claim`, where the site may lease: a job outside its transaction. Inside one a failure would roll the lease back. */
@@ -766,17 +779,13 @@ async function claimRows(
 	const chain = model.chain.map((link) => link.column)
 	const selected = namesOf(nameSet([...visible, key, version, queue.attempts, ...chain]))
 	const tickMs = site.tickMs ?? DEFAULT_TICK_MS
-	const order = [{ column: queue.due, direction: 'asc' as const }, { column: key, direction: 'asc' as const }]
-	const leased = await parts.fenced(parts.runtime(), async (session) => {
+	const byDue = { column: queue.due, direction: 'asc' as const }
+	const order = [byDue, { column: key, direction: 'asc' as const }]
+	const runtime = parts.runtime()
+	const leased = await parts.fenced(runtime, async (session) => {
 		const now = await databaseNow(session)
-		const node = claimNode(
-			rowState(table, conditions, order, limit),
-			selected,
-			{ due: queue.due, attempts: queue.attempts, now, maxAttempts: queue.maxAttempts },
-			scope,
-			model.dates,
-			dialect,
-		)
+		const waiting = { due: queue.due, attempts: queue.attempts, now, maxAttempts: queue.maxAttempts }
+		const node = claimNode(rowState(table, conditions, order, limit), selected, waiting, scope, model.dates, dialect)
 		const rows = await session.run<Readonly<Record<string, unknown>>>(node, { root: 'SelectQueryNode', table, joins: {}, scope, lock: 'claim' })
 		const byAttempts = new Map<number, string[]>()
 		for (const row of rows) {
@@ -803,6 +812,23 @@ async function claimRows(
 				}
 				claimed.set(id, { version: next, attempts: attempts + 1, due })
 			}
+		}
+		// The job runs again when this claim would next find a row; a claim that found nothing leaves the re-arm as it is.
+		const fence = runtime.capabilities.fence()
+		if (fence !== null && rows.length > 0) {
+			// A full claim left rows behind: due at once.
+			let rearm: Date | null = new Date(now.getTime() + 1)
+			if (rows.length < limit) {
+				const later = nextClaimNode(rowState(table, conditions, [byDue], 1), waiting, scope, model.dates, dialect)
+				const [row] = answerRows(
+					dialect,
+					table,
+					rowColumnsOf(model),
+					await session.run<Readonly<Record<string, unknown>>>(later, { root: 'SelectQueryNode', table, joins: {}, scope }),
+				)
+				rearm = row === undefined ? null : new Date(Math.max(dueOf(row, table, queue.due).getTime(), now.getTime() + CLAIM_REARM_MIN_MS))
+			}
+			await rearmClaim(runtime, session, fence, rearm)
 		}
 		return { rows: await answerFiles(model, site.files, session, answerRows(dialect, table, rowColumnsOf(model), rows), grant.action), claimed }
 	})

@@ -45,11 +45,14 @@ export interface DeploymentBounds {
 	readonly application: ApplicationRuntime | null
 }
 
-/** The Durable Object, files bucket and minute tick of a contract application's Worker; the application authors none of them. */
+/** The Durable Object, files bucket and cron trigger of a contract application's Worker; the application authors none of them. */
 export interface ApplicationRuntime {
 	/** The remote name of the environment's files bucket. */
 	readonly filesBucket: string
-	/** The cron triggers the Worker carries: the minute tick when the contract has a job or a file kind, else an empty list. */
+	/**
+	 * The cron triggers the Worker carries when the contract has a job or a file kind, else an empty list: the hourly repair
+	 * tick of a release that serves alarms, otherwise the minute tick.
+	 */
 	readonly crons: readonly string[]
 	/**
 	 * The absolute path of the entry the deploy regenerates, which the Worker's `main` must name (`pinsGeneratedEntry`), or

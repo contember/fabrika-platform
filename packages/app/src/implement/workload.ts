@@ -102,10 +102,25 @@ export class WorkloadCredential {
 		if (cached !== null && cached.exp - Math.floor(Date.now() / 1000) > TOKEN_REFRESH_SKEW_SECONDS) {
 			return Promise.resolve({ ok: true, perms: cached.perms, token: cached.token })
 		}
-		this.#pending ??= this.#exchange().finally(() => {
-			this.#pending = null
-		})
+		if (this.#pending === null) {
+			const pending: Promise<WorkloadAuthority> = this.#exchange().finally(() => {
+				if (this.#pending === pending) {
+					this.#pending = null
+				}
+			})
+			this.#pending = pending
+		}
 		return this.#pending
+	}
+
+	/**
+	 * The caller stopped waiting for `pending`, an answer of `authority()` (its attempt timed out or was stopped): the
+	 * next call exchanges afresh instead of waiting on an exchange that may never answer.
+	 */
+	abandon(pending: Promise<WorkloadAuthority>): void {
+		if (this.#pending === pending) {
+			this.#pending = null
+		}
 	}
 
 	async #exchange(): Promise<WorkloadAuthority> {

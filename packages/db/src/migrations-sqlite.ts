@@ -17,6 +17,7 @@ import {
 	type FrameworkMigration,
 	JOB_KICKS_TABLE,
 	JOB_LEASES_TABLE,
+	JOB_WAKES_TABLE,
 	WEBHOOK_BINDINGS_TABLE,
 	WEBHOOK_DELIVERIES_TABLE,
 } from './migrations'
@@ -127,6 +128,36 @@ CREATE TABLE ${FILE_DELETIONS_TABLE} (
 	object_key TEXT PRIMARY KEY,
 	recorded_at TEXT NOT NULL
 ) STRICT;
+`,
+	}),
+	Object.freeze({
+		name: '0002_job_wakes.sql',
+		sql: `-- A job's pending work, one row per due unit: its next scheduled run, a kick, a claim's re-arm, a durable retry. due_at
+-- is epoch milliseconds. Only the fenced finish of a run that started at or after a row changes it: consumed when the run is
+-- done with it, or moved to a retry, which counts in attempt.
+CREATE TABLE ${JOB_WAKES_TABLE} (
+	id TEXT PRIMARY KEY,
+	job TEXT NOT NULL,
+	due_at INTEGER NOT NULL,
+	reason TEXT NOT NULL CONSTRAINT ${JOB_WAKES_TABLE}_reason CHECK (reason IN ('cron', 'kick', 'claim', 'retry')),
+	attempt INTEGER NOT NULL DEFAULT 0,
+	dedupe TEXT
+) STRICT;
+CREATE INDEX ${JOB_WAKES_TABLE}_due ON ${JOB_WAKES_TABLE} (due_at);
+CREATE UNIQUE INDEX ${JOB_WAKES_TABLE}_dedupe ON ${JOB_WAKES_TABLE} (dedupe) WHERE dedupe IS NOT NULL;
+`,
+	}),
+	Object.freeze({
+		name: '0003_file_deletions_recorded_at.sql',
+		sql: `-- A queued key is a tombstone kept for the retention window: the sweep reads the due ones by age, not the whole queue.
+CREATE INDEX ${FILE_DELETIONS_TABLE}_recorded_at ON ${FILE_DELETIONS_TABLE} (recorded_at, object_key);
+`,
+	}),
+	Object.freeze({
+		name: '0004_job_wakes_owned.sql',
+		sql: `-- The wakes the run holding the job's lease took when it took the lease: its finish consumes or retries exactly these.
+-- A wake written or merged into afterwards is not taken, though due before the run started: the run may not have read its work.
+ALTER TABLE ${JOB_WAKES_TABLE} ADD COLUMN owned INTEGER NOT NULL DEFAULT 0 CHECK (owned IN (0, 1));
 `,
 	}),
 ])

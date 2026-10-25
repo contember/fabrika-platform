@@ -1,7 +1,18 @@
 import type { ContractArtifact } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import { needsMinuteTick, pinsGeneratedEntry, releaseAtLeast, runsInObject } from '../contract-support'
+import {
+	capsJobSegments,
+	needsMinuteTick,
+	pinsGeneratedEntry,
+	releaseAtLeast,
+	releaseFrom,
+	runsInObject,
+	servesAlarms,
+	servesDataOperations,
+	servesOps,
+} from '../contract-support'
+import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
 describe('releaseAtLeast', () => {
 	const since = { major: 0, minor: 9 }
@@ -31,18 +42,64 @@ describe('releaseAtLeast', () => {
 	})
 })
 
+describe('releaseFrom', () => {
+	const cases: ReadonlyArray<readonly [string, string, boolean]> = [
+		['0.9.0', '0.9.0-dev.5', true],
+		['0.9.0-dev.5', '0.9.0-dev.5', true],
+		['0.9.0-dev.10', '0.9.0-dev.5', true],
+		['0.9.0-dev.4', '0.9.0-dev.5', false],
+		['0.9.0-dev', '0.9.0-dev.5', false],
+		['0.9.0-dev.5.1', '0.9.0-dev.5', true],
+		['0.9.0-local.gabc1234', '0.9.0-dev.5', true],
+		['0.9.0-cloudflare.9', '0.9.0-dev.5', false],
+		['0.9.0-1', '0.9.0-dev.5', false],
+		['0.9.1-alpha.0', '0.9.0-dev.5', true],
+		['0.9.0+build.7', '0.9.0', true],
+		['1.0.0-rc.1', '1.0.0', false],
+		['0.8.9', '0.9.0-dev.5', false],
+		['0.9', '0.9.0-dev.5', false],
+		['v0.9.0', '0.9.0-dev.5', false],
+		['', '0.9.0-dev.5', false],
+	]
+	for (const [release, since, expected] of cases) {
+		test(`${JSON.stringify(release)} is ${expected ? 'from' : 'before'} ${since}`, () => {
+			expect(releaseFrom(release, since)).toBe(expected)
+		})
+	}
+
+	test('a floor that is not a version is a programming error', () => {
+		expect(() => releaseFrom('0.9.0', '0.9')).toThrow('is not a semver version')
+	})
+})
+
 describe('the release gates', () => {
 	const cases: ReadonlyArray<readonly [string, boolean]> = [
 		['0.8.0', false],
 		['0.8.12', false],
 		['0.9.0', true],
-		['0.9.0-dev.1', true],
+		['0.9.0-dev.5', true],
 		['1.0.0', true],
 	]
 	for (const [release, expected] of cases) {
-		test(`${release}: runsInObject and pinsGeneratedEntry are both ${expected}`, () => {
+		test(`${release}: every gate is ${expected}`, () => {
 			expect(runsInObject(release)).toBe(expected)
 			expect(pinsGeneratedEntry(release)).toBe(expected)
+			expect(servesOps(release)).toBe(expected)
+			expect(capsJobSegments(release)).toBe(expected)
+			expect(servesAlarms(release)).toBe(expected)
+			expect(servesDataOperations(release)).toBe(expected)
+		})
+	}
+
+	// Their object runs jobs only from the minute tick, has no alarm and answers `state` and `migrate` 501.
+	for (const release of PUBLISHED_PRERELEASES) {
+		test(`published ${release} runs in the object with the ops channel, and without alarms, the segment cap or the data operations`, () => {
+			expect(runsInObject(release)).toBe(true)
+			expect(pinsGeneratedEntry(release)).toBe(true)
+			expect(servesOps(release)).toBe(true)
+			expect(capsJobSegments(release)).toBe(false)
+			expect(servesAlarms(release)).toBe(false)
+			expect(servesDataOperations(release)).toBe(false)
 		})
 	}
 })

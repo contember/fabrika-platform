@@ -49,6 +49,12 @@ const record = <T extends z.core.$ZodType>(value: T) => z.record(z.string().min(
 /** A contract's actions are exact: IAM treats `*` as a pattern, which would widen every grant naming it. */
 const action = name.refine((value) => !value.includes('*'), 'an action is exact; * is not an action')
 const actions = z.array(action)
+/** A file's object key starts with its kind: the framework keeps its own objects in the files bucket under this prefix. */
+export const RESERVED_FILE_KIND_PREFIX = '__fabrika'
+const fileKindName = name.refine(
+	(kind) => !kind.startsWith(RESERVED_FILE_KIND_PREFIX),
+	`a file kind name the framework reserves (${RESERVED_FILE_KIND_PREFIX}*)`,
+)
 /** IAM's own role keys win over an application role of the same key at resolution. */
 const roleKey = name.refine((key) => !BUILTIN_ROLE_KEYS.includes(key), 'a built-in IAM role key is not a contract role name')
 
@@ -357,7 +363,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		link: z.union([z.boolean(), z.array(name).nonempty()]),
 		scan: z.literal(true).optional(),
 	})),
-	fileKinds: z.record(name, z.strictObject({ types: names, maxBytes: z.int().positive(), scan: z.literal(true).optional() })).optional(),
+	fileKinds: z.record(fileKindName, z.strictObject({ types: names, maxBytes: z.int().positive(), scan: z.literal(true).optional() })).optional(),
 	jobs: record(z.strictObject({
 		schedule: name,
 		actions,

@@ -2,6 +2,7 @@ import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLAR
 import {
 	type AppEnvironment,
 	appEnvironmentId,
+	type ApplicationObjects,
 	type AppSchema,
 	connectVariables,
 	type ContractArtifact,
@@ -14,10 +15,12 @@ import {
 	isFrameworkVariableName,
 	isManagedCredential,
 	managedValue,
+	OPS_REHEARSAL_OBJECT,
 } from '@fabrika/auth-core'
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type SchemaReconciler } from '@fabrika/provider-contract'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
+import { createHash } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { DurableObject, type GeneratedConfig, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
@@ -35,7 +38,15 @@ import {
 import { runnerWorkerGraph } from './checkout'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
 import { configSchema } from './config-schema'
-import { assertCloudflareContract, needsMinuteTick, pinsGeneratedEntry, runsInObject, servesOps } from './contract-support'
+import {
+	assertCloudflareContract,
+	capsJobSegments,
+	needsMinuteTick,
+	pinsGeneratedEntry,
+	runsInObject,
+	servesAlarms,
+	servesOps,
+} from './contract-support'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE } from './proxy'
@@ -142,10 +153,22 @@ const filesBucketRemote = (run: CloudflareDeployRun): string => {
 
 const MINUTE_TICK = '* * * * *'
 
-/** What the platform gives a contract application's Worker; the deployer writes exactly this and the bounds check it. */
-const applicationRuntime = (run: CloudflareDeployRun, contract: ContractArtifact, entry: string | null): ApplicationRuntime => ({
+/**
+ * The hourly repair tick of an environment that serves alarms, at a minute derived from `<env>-<app>`: stable across
+ * deploys, and spread so the fleet's environments do not all wake at once.
+ */
+const repairTick = (run: CloudflareDeployRun): string => {
+	const minute = createHash('sha256').update(`${run.env}-${run.appId}`).digest().readUInt32BE(0) % 60
+	return `${minute} * * * *`
+}
+
+/**
+ * What the platform gives a contract application's Worker; the deployer writes exactly this and the bounds check it.
+ * Only a release Control names serves alarms; a local deploy keeps the minute tick.
+ */
+const applicationRuntime = (run: CloudflareDeployRun, contract: ContractArtifact, entry: string | null, alarms: boolean): ApplicationRuntime => ({
 	filesBucket: filesBucketRemote(run),
-	crons: needsMinuteTick(contract) ? [MINUTE_TICK] : [],
+	crons: needsMinuteTick(contract) ? [alarms ? repairTick(run) : MINUTE_TICK] : [],
 	entry,
 })
 
@@ -216,22 +239,28 @@ const buildEntry = async (build: EntryBuild, run: CloudflareDeployRun, cf: Cloud
 	if (result.exitCode !== 0) throw commandError('fabrika app build', result)
 }
 
-/** The object variables of a release that serves ops (ADR-0069): ordinary traffic and ops requests reach `application`. */
-const OBJECT_VARIABLES: Readonly<Record<string, string>> = {
-	[FABRIKA_APPLICATION_OBJECT]: DEFAULT_APPLICATION_OBJECT,
-	[FABRIKA_APPLICATION_OBJECTS]: DEFAULT_APPLICATION_OBJECT,
-}
+/**
+ * The objects of a release that serves ops (ADR-0069) when Control names none: ordinary traffic reaches `application`,
+ * and ops requests reach it and the object a backup is rehearsed in (ADR-0070).
+ */
+const DEFAULT_OBJECTS: ApplicationObjects = { object: DEFAULT_APPLICATION_OBJECT, objects: [DEFAULT_APPLICATION_OBJECT, OPS_REHEARSAL_OBJECT] }
+
+/** The object variables written from the pointer Control records, so a deploy keeps one a side restore moved (ADR-0070 §9). */
+const objectVariables = (objects: ApplicationObjects): Readonly<Record<string, string>> => ({
+	[FABRIKA_APPLICATION_OBJECT]: objects.object,
+	[FABRIKA_APPLICATION_OBJECTS]: objects.objects.join(','),
+})
 
 /**
  * Bind the application's Durable Object, which runs the application over its SQLite, the environment's files bucket,
- * and the minute tick (ADR-0065), and on a release that serves ops name its objects. The object is bound first, so
+ * and its cron trigger (ADR-0065), and on a release that serves ops name its objects. The object is bound first, so
  * oblaka numbers its migration `v0001` whatever else the application binds, and the tag never moves.
  */
 const withApplicationRuntime = (authored: Worker, run: CloudflareDeployRun, runtime: ApplicationRuntime, ops: boolean): Worker => {
 	const application = applicationWorker(authored)
 	const configured = new Worker({
 		...application.options,
-		...(ops ? { vars: { ...application.options.vars, ...OBJECT_VARIABLES } } : {}),
+		...(ops ? { vars: { ...application.options.vars, ...objectVariables(run.applicationObjects ?? DEFAULT_OBJECTS) } } : {}),
 		bindings: {
 			[CLOUDFLARE_APPLICATION_BINDING]: new DurableObject({ name: `${run.appId}-application`, className: CLOUDFLARE_APPLICATION_CLASS }),
 			...application.options.bindings,
@@ -646,6 +675,8 @@ export interface CloudflareDeployRun {
 	readonly approved?: RunnerApprovedAccess
 	/** Every Cloudflare deployment of the installation in Control's registry; a name of another application is refused. */
 	readonly installationApps?: readonly AppEnvironment[]
+	/** The serving object and the listed objects Control records (ADR-0070 §9); absent, `application` and `rehearsal`. */
+	readonly applicationObjects?: ApplicationObjects
 	readonly dryRun: boolean
 	readonly signal: AbortSignal
 	readonly log: (line: string) => void
@@ -681,7 +712,9 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	if (platformResources === 'refuse' && served === null) {
 		throw new Error('cloudflare: the checkout has no `fabrika.contract.ts`; Fabrika deploys an application only with a contract')
 	}
-	if (platformResources === 'refuse' && contract !== null) assertCloudflareContract(contract)
+	// A local deploy reads the contract with this release and runs it in the object, so it is capped as this release is.
+	const capsSegments = run.approved === undefined || (run.approved.framework !== undefined && capsJobSegments(run.approved.framework))
+	if (platformResources === 'refuse' && contract !== null) assertCloudflareContract(contract, capsSegments)
 	// Read once, before `resources()` runs the checkout's code again: nothing below reads the config's schema.
 	const schema = configSchema(loaded.config)
 	assertContractSchema(schema, contract)
@@ -699,7 +732,8 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	// An older release's entry exports no object, and a Control older than the runner names no release (ADR-0062).
 	const objectRuntime = run.approved === undefined || (run.approved.framework !== undefined && runsInObject(run.approved.framework))
 	const entry = release !== undefined && pinsGeneratedEntry(release) ? resolve(loaded.cwd, GENERATED_ENTRY_FILE) : null
-	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract, entry) : null
+	const alarms = release !== undefined && servesAlarms(release)
+	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract, entry, alarms) : null
 	const managed = withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served))
 	const identified = platformResources === 'refuse' ? withIamIdentity(managed.worker, appEnvironmentId(run.appId, run.env)) : managed.worker
 	const connected = withConnectorBindings(identified, connectors)

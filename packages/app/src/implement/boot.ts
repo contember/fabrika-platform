@@ -31,6 +31,7 @@ import {
 	type FrameworkTables,
 	frameworkTablesOf,
 	isScopedDatabase,
+	type Session,
 } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { EmailProviderRegistry } from '@fabrika/email'
@@ -100,6 +101,11 @@ export interface BootOptions {
 	/** The object storage of the stored files, which the Bun adapter opens. Without it, a contract with file kinds does not boot. */
 	readonly files?: FileObjectStore
 	/**
+	 * How long a removed file's object outlives its row, so a restored backup's rows find their files:
+	 * `FILE_TOMBSTONE_RETENTION_MS` on Cloudflare. Zero when omitted, as on Bun.
+	 */
+	readonly fileRetentionMs?: number
+	/**
 	 * The malware scanner of the scan job of `scan: true` file kinds, which the Bun adapter supplies to a job run
 	 * (`clamscanScanner`). Without it the scan job leaves every quarantined file quarantined and reports.
 	 */
@@ -163,6 +169,11 @@ export interface BootOptions {
 	 * then `null`.
 	 */
 	readonly clientAddress?: 'vouched'
+	/**
+	 * Runs in the transaction of every change of a job's wakes or lease (`DataLayerRuntime.projectWakes`): the Cloudflare
+	 * object arms its alarm there. Bun supplies none.
+	 */
+	readonly projectWakes?: (transaction: Session) => Promise<void>
 }
 
 /** The pool size a runtime adapter that names none is assumed to have: the Bun adapter's default. */
@@ -392,6 +403,7 @@ function contractDatabase(
 	database: ImplementationDatabase | null,
 	connection: Database | undefined,
 	capabilities: CapabilityAuthority,
+	projectWakes: ((transaction: Session) => Promise<void>) | undefined,
 	problems: string[],
 ): BoundDatabase | null {
 	if (database === null) {
@@ -409,7 +421,12 @@ function contractDatabase(
 		return null
 	}
 	try {
-		const { locate, release } = bindScopedDatabaseProvisionally(database, { database: connection, capabilities, readOnly: requestIsReadOnly })
+		const { locate, release } = bindScopedDatabaseProvisionally(database, {
+			database: connection,
+			capabilities,
+			readOnly: requestIsReadOnly,
+			...(projectWakes === undefined ? {} : { projectWakes }),
+		})
 		return { database: { tables: database.tables, locate }, framework: frameworkTablesOf(database), data: dataAccessOf(database), release }
 	} catch {
 		problems.push('the data layer was bound before boot; only the framework binds it, so remove @fabrika/db/framework from the application')
@@ -725,8 +742,8 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 	sqliteProblems(artifact, options.database, problems)
 	// This runtime's own: what another `boot` call mints, application code's included, its stores refuse.
 	const issuer = createCapabilityIssuer()
-	const fileKinds = storedFileKinds(artifact, app.database, objects, problems)
-	const bound = contractDatabase(app.database, options.database, issuer.authority, problems)
+	const fileKinds = storedFileKinds(artifact, app.database, objects, problems, options.fileRetentionMs ?? 0)
+	const bound = contractDatabase(app.database, options.database, issuer.authority, options.projectWakes, problems)
 	binding.release = bound?.release ?? null
 	const framework = bound?.framework ?? null
 	frameworkProblems(artifact, framework, problems)

@@ -1,5 +1,6 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { GitHubConnectionStore } from '../github/connections/store'
+import { BackupRepository } from './backups'
 import { BuilderConnectionRepository } from './builder-connections'
 import { DataOperationRepository } from './data-operations'
 import { DevEnvironmentRepository } from './dev-environments'
@@ -12,6 +13,7 @@ import { OpsKeyRepository } from './ops-keys'
 import { PlatformTransportKeyRepository } from './platform-transport-keys'
 import { RepoPollingRepository } from './polling'
 import { ControlRegistryRepository } from './registry'
+import { ApplicationObjectsRepository, RestoreRepository } from './restores'
 import { RunRepository } from './runs'
 import { TokenKeyRepository } from './token-keys'
 import { WorkloadCredentialRepository } from './workload-credentials'
@@ -36,6 +38,9 @@ export interface ControlRepositories {
 	mailMessages: MailMessageRepository
 	mailRules: MailRuleRepository
 	dataOperations: DataOperationRepository
+	backups: BackupRepository
+	applicationObjects: ApplicationObjectsRepository
+	restores: RestoreRepository
 }
 
 /** The portable repository bundle. */
@@ -59,5 +64,8 @@ export function createControlRepositories(db: SqlDatabase, options: { now?: () =
 		mailMessages: new MailMessageRepository(db),
 		mailRules: new MailRuleRepository(db),
 		dataOperations: new DataOperationRepository(db, now),
+		backups: new BackupRepository(db, now),
+		applicationObjects: new ApplicationObjectsRepository(db, now),
+		restores: new RestoreRepository(db, now),
 	}
 }

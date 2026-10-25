@@ -53,6 +53,7 @@ import { fileReference } from './file-references'
 import { webhookTables } from './framework-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
 import { fencedTransaction, jobLeases } from './job-leases'
+import { jobWakes, leaseProjection } from './job-wakes'
 import { linksPredicate, type LinkValue, linkValues } from './links'
 import {
 	acknowledgement,
@@ -114,6 +115,11 @@ export interface DataLayerRuntime {
 	readonly capabilities: CapabilityAuthority
 	/** Whether the request running now may only read (an export's); its every statement then runs `READ ONLY`. */
 	readonly readOnly?: () => boolean
+	/**
+	 * Runs inside the transaction of every change of a job's wakes or lease, after the change: the Cloudflare driver arms
+	 * the alarm from `wakes.next(transaction)` there, so the alarm commits with the change. A throw rolls the change back.
+	 */
+	readonly projectWakes?: (transaction: Session) => Promise<void>
 }
 
 /** Empty until the framework connects the layer at boot; every table handle of one `scoped` call shares it. */
@@ -2188,7 +2194,12 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			if (connection.runtime !== undefined) {
 				throw new CapabilityError('layer_unbound', 'the data layer is already connected; only the framework connects it, once, at boot')
 			}
-			const bound: DataLayerRuntime = freeze({ database: runtime.database, capabilities: runtime.capabilities, readOnly: runtime.readOnly })
+			const bound: DataLayerRuntime = freeze({
+				database: runtime.database,
+				capabilities: runtime.capabilities,
+				readOnly: runtime.readOnly,
+				projectWakes: runtime.projectWakes,
+			})
 			connection.runtime = bound
 			return freeze({
 				locate: async (dimension: string, id: string, using?: Session) => locateObject(models, bound, dimension, id, using),
@@ -2201,7 +2212,8 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 		},
 		framework: freeze({
 			webhooks: webhookTables(() => runtimeOf(connection)),
-			jobs: jobLeases(() => runtimeOf(connection)),
+			jobs: jobLeases(() => runtimeOf(connection), leaseProjection(() => runtimeOf(connection))),
+			wakes: jobWakes(() => runtimeOf(connection)),
 			admissions: admissions(() => runtimeOf(connection)),
 			files: storedFiles(() => runtimeOf(connection)),
 		}),

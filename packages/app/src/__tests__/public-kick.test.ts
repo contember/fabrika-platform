@@ -1,7 +1,8 @@
 // Public procedures that kick their job through `boot`'s real pipeline, on a REAL Postgres: an accepted call starts a
 // run of the job in the background, under the job's own key, without waiting for cron; kicks coalesce on the job's lease
 // (at most one run and one pending); a kicked run that dies before its commit leaves the row for the next scheduled
-// run; and the answer is the one a procedure without `kicks` gives. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
+// run; a kick whose start never came still has its durable wake, which a wake timer runs; and the answer is the one a
+// procedure without `kicks` gives. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
 
 import type { ContractApp, OperationsReport, WorkloadTokenSource } from '@fabrika/app/implement'
 import { applicationSchema, Database } from '@fabrika/db'
@@ -14,7 +15,7 @@ import { compileContract } from '../contract'
 import type { RequestExecutionContext } from '../fetch'
 import { testKit } from '../testing'
 import { bootApp, environment, frameworkEnvFor, ORIGIN, workloadKey, workloadTokensFor } from './fixtures/implement/harness'
-import { delayedDatabase, type StatementHook } from './fixtures/public-kick/delayed-database'
+import { delayedDatabase, type StatementHooks } from './fixtures/public-kick/delayed-database'
 import { contract } from './fixtures/public-kick/fabrika.contract'
 import { migration } from './fixtures/public-kick/migration'
 import { signupApp } from './fixtures/public-kick/src/app'
@@ -51,7 +52,7 @@ beforeEach(async () => {
 	if (!hasPostgres) return
 	await admin((sql) =>
 		sql.unsafe(
-			`truncate ${schema}.signups, ${schema}.applications, ${schema}.notices; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_job_kicks; delete from ${schema}.fabrika_form_admissions; delete from ${schema}.fabrika_form_challenges`,
+			`truncate ${schema}.signups, ${schema}.applications, ${schema}.notices; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_job_kicks; delete from ${schema}.fabrika_form_admissions; delete from ${schema}.fabrika_form_challenges; delete from ${schema}.fabrika_wakes`,
 		)
 	)
 })
@@ -126,19 +127,21 @@ interface Running {
 	readonly exchanged: string[]
 	readonly reports: OperationsReport[]
 	submit(procedure: 'signup' | 'apply' | 'notify', body: unknown): Promise<Answer>
+	/** The wake timer's step, once: kicks each job whose wake is due; answers the delay to the next wake. */
+	wake(): Promise<number | null>
 	/** Resolves once every kick the submissions started has ended. */
 	settled(): Promise<void>
 	/** Resolves once every kick but the `running` ones a test holds has ended. */
 	kicksEnded(running: number): Promise<void>
 }
 
-/** An instance of the application over the shared schema, on a pool of `max` connections or one that `hook` delays. */
-function start(options: { readonly max?: number; readonly hook?: StatementHook } = {}): Running {
+/** An instance of the application over the shared schema, on a pool of `max` connections or one that `hooks` delay. */
+function start(options: { readonly max?: number; readonly hooks?: StatementHooks } = {}): Running {
 	const world = new World()
 	const { implementation, variables } = signupApp(world)
-	const connection = options.hook === undefined
+	const connection = options.hooks === undefined
 		? openPostgres({ url, schema, max: options.max ?? 4 })
-		: delayedDatabase(url, schema, options.hook)
+		: delayedDatabase(url, schema, options.hooks)
 	opened.push(connection)
 	const exchanged: string[] = []
 	const tokens = workloadTokensFor(implementation)
@@ -178,6 +181,7 @@ function start(options: { readonly max?: number; readonly hook?: StatementHook }
 			const response = await app.fetch(request, exec)
 			return { status: response.status, headers: [...response.headers], body: JSON.parse(await response.text()) }
 		},
+		wake: () => app.jobs.wake((kick) => exec.waitUntil(kick)),
 		kicksEnded: (running) => until(() => started - ended <= running, 2_000),
 		async settled() {
 			while (background.size > 0) {
@@ -244,6 +248,11 @@ async function linesUntil(stream: ReadableStream<Uint8Array>, last: string): Pro
 		if (lines.includes(last)) return lines
 	}
 	return text.split('\n').filter((line) => line !== '')
+}
+
+async function wakeReasons(): Promise<string[]> {
+	const rows: { readonly reason: string }[] = await admin((sql) => sql.unsafe(`select reason from ${schema}.fabrika_wakes where job = 'welcome'`))
+	return rows.map((row) => row.reason)
 }
 
 async function signups(): Promise<string[]> {
@@ -388,13 +397,22 @@ describe.skipIf(!hasPostgres)('a public procedure kicks its job', () => {
 
 	test('a run that took a kick after it finished hands it back to a newer run that already read its batch', async () => {
 		const finished = gate()
+		let released = false
 		let held = false
+		// The finish commits with its wakes, so the first run is held at the pending check that follows that commit.
 		const first = start({
-			hook: async (query) => {
-				if (!held && query.sql.startsWith('update fabrika_job_leases set holder = null, last_finished_at')) {
-					held = true
-					await finished.wait()
-				}
+			hooks: {
+				after: async (query) => {
+					if (query.sql.startsWith('update fabrika_job_leases set holder = null, last_finished_at')) {
+						released = true
+					}
+				},
+				before: async (query) => {
+					if (released && !held && query.sql.startsWith('update fabrika_job_kicks set pending = false')) {
+						held = true
+						await finished.wait()
+					}
+				},
 			},
 		})
 		const second = start()
@@ -420,10 +438,12 @@ describe.skipIf(!hasPostgres)('a public procedure kicks its job', () => {
 		const lastCheck = gate()
 		let checks = 0
 		const running = start({
-			hook: async (query) => {
-				if (query.sql.startsWith('update fabrika_job_kicks set pending = false') && ++checks === 2) {
-					await lastCheck.wait()
-				}
+			hooks: {
+				after: async (query) => {
+					if (query.sql.startsWith('update fabrika_job_kicks set pending = false') && ++checks === 2) {
+						await lastCheck.wait()
+					}
+				},
 			},
 		})
 		await running.submit('signup', { email: 'j1@example.test' })
@@ -451,6 +471,32 @@ describe.skipIf(!hasPostgres)('a public procedure kicks its job', () => {
 		expect(running.reports.map((report) => report.tags['code'])).toEqual(['crashed'])
 		expect(running.world.welcomedEmails).toEqual(['di@example.test'])
 		expect(await signups()).toEqual([])
+	})
+
+	test('a kick whose start never reached the lease leaves its wake, and another instance’s wake timer runs the job', async () => {
+		const frozen = gate()
+		// The process stops right after the commit: the post-commit start never takes the lease.
+		const crashed = start({
+			hooks: {
+				before: async (query) => {
+					if (query.sql.startsWith('insert into fabrika_job_leases')) await frozen.wait()
+				},
+			},
+		})
+		expect((await crashed.submit('signup', { email: 'k1@example.test' })).body).toEqual(RECEIVED)
+		await frozen.reached
+		expect(await wakeReasons()).toEqual(['kick'])
+		expect(await leaseOf()).toBeUndefined()
+		const running = start()
+		expect(await running.wake()).not.toBeNull()
+		await running.settled()
+		expect(running.world.runs.map((run) => run.principal)).toEqual(['job:welcome'])
+		expect(running.world.welcomedEmails).toEqual(['k1@example.test'])
+		expect(await wakeReasons()).toEqual([])
+		expect(await signups()).toEqual([])
+		frozen.open()
+		await crashed.settled()
+		expect(crashed.world.welcomedEmails).toEqual([])
 	})
 
 	test("the test kit's runJob waits for the runs a call kicked, so it never races them", async () => {

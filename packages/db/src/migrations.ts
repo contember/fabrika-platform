@@ -9,6 +9,7 @@ export const WEBHOOK_BINDINGS_TABLE = 'fabrika_webhook_bindings'
 export const WEBHOOK_DELIVERIES_TABLE = 'fabrika_webhook_deliveries'
 export const JOB_LEASES_TABLE = 'fabrika_job_leases'
 export const JOB_KICKS_TABLE = 'fabrika_job_kicks'
+export const JOB_WAKES_TABLE = 'fabrika_wakes'
 export const FORM_ADMISSIONS_TABLE = 'fabrika_form_admissions'
 export const FORM_CHALLENGES_TABLE = 'fabrika_form_challenges'
 export const FORM_FILES_TABLE = 'fabrika_form_files'
@@ -254,6 +255,30 @@ BEGIN
 	DELETE FROM ${FORM_FILES_TABLE} f WHERE status = 'held' AND EXISTS (SELECT 1 FROM ${FILES_TABLE} c WHERE c.id = f.id);
 END
 $$;
+`,
+	}),
+	Object.freeze({
+		name: '0009_job_wakes.sql',
+		sql: `-- A job's pending work, one row per due unit: its next scheduled run, a kick, a claim's re-arm, a durable retry. due_at
+-- is epoch milliseconds. Only the fenced finish of a run that started at or after a row changes it: consumed when the run is
+-- done with it, or moved to a retry, which counts in attempt.
+CREATE TABLE ${JOB_WAKES_TABLE} (
+	id UUID PRIMARY KEY,
+	job TEXT NOT NULL,
+	due_at BIGINT NOT NULL,
+	reason TEXT NOT NULL CONSTRAINT ${JOB_WAKES_TABLE}_reason CHECK (reason IN ('cron', 'kick', 'claim', 'retry')),
+	attempt INTEGER NOT NULL DEFAULT 0,
+	dedupe TEXT
+);
+CREATE INDEX ${JOB_WAKES_TABLE}_due ON ${JOB_WAKES_TABLE} (due_at);
+CREATE UNIQUE INDEX ${JOB_WAKES_TABLE}_dedupe ON ${JOB_WAKES_TABLE} (dedupe) WHERE dedupe IS NOT NULL;
+`,
+	}),
+	Object.freeze({
+		name: '0010_job_wakes_owned.sql',
+		sql: `-- The wakes the run holding the job's lease took when it took the lease: its finish consumes or retries exactly these.
+-- A wake written or merged into afterwards is not taken, though due before the run started: the run may not have read its work.
+ALTER TABLE ${JOB_WAKES_TABLE} ADD COLUMN owned BOOLEAN NOT NULL DEFAULT false;
 `,
 	}),
 ])

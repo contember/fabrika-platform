@@ -22,6 +22,7 @@ import {
 import { checkoutRelativeDirectory, cloudflareRunnerJobSchema, type CloudflareRunRecovery } from '../control'
 import { splitManagedEnvironment } from '../managed-secrets'
 import type { RunnerIamReconcile } from '../runner-protocol'
+import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
 const normalizeRegistration = (provider: ControlProvider, input: ProviderRegistrationInput): ProviderRegistration => {
 	if (provider.normalizeRegistration === undefined) throw new Error('the Cloudflare provider normalizes registrations')
@@ -133,6 +134,13 @@ describe('Cloudflare control provider', () => {
 		})
 		expect(provider.opsChannel?.(APPROVED)).toBe(true)
 		expect(provider.opsChannel?.({ ...APPROVED, checker: '0.8.2' })).toBe(false)
+		expect(provider.dataOperations?.(APPROVED)).toBe(true)
+		expect(provider.dataOperations?.({ ...APPROVED, checker: '0.8.2' })).toBe(false)
+		// A published 0.9.0 prerelease answers `inspect` and refuses `state` and `migrate`: its deploys stay plain.
+		for (const checker of PUBLISHED_PRERELEASES) {
+			expect(provider.opsChannel?.({ ...APPROVED, checker })).toBe(true)
+			expect(provider.dataOperations?.({ ...APPROVED, checker })).toBe(false)
+		}
 		const digests = `sha256:${'a'.repeat(64)}`
 		// A plain var lives in the generated config, so a deploy after a downgrade, which hands `null`, leaves it out.
 		expect(splitManagedEnvironment(parseManagedEnvironment({ FABRIKA_OPS_KEY_DIGESTS: digests }))).toEqual({
@@ -641,6 +649,18 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
 
+	test("hands the runner the pointer Control records, and a job's pointer the application would refuse does not validate (ADR-0070 §9)", async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const applicationObjects = { object: 'application-x', objects: ['application', 'rehearsal', 'application-x'] }
+		await recordingProvider(jobs).deploy({ ...deployInput(), applicationObjects })
+		expect(jobs[0]?.applicationObjects).toEqual(applicationObjects)
+		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
+		await recordingProvider(jobs).deploy(deployInput())
+		expect(jobs[1]).not.toHaveProperty('applicationObjects')
+		const outside = { ...jobs[0], applicationObjects: { object: 'application-x', objects: ['application'] } }
+		expect(cloudflareRunnerJobSchema.safeParse(outside).success).toBe(false)
+	})
+
 	test('an application on a framework before 0.9 keeps the stateless Worker: no hop secret, and what it cannot run is refused (ADR-0062)', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()
@@ -703,6 +723,26 @@ describe('Cloudflare control provider', () => {
 			'cloudflare: procedure `api.slow` runs up to 25001 ms, and a handler on Cloudflare runs at most 25000 ms',
 		)
 		expect(jobs).toEqual([])
+	})
+
+	test('refuses a job longer than one 14-minute segment before any runner call, only at a release that caps segments (ADR-0062)', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const input = deployInput()
+		const purge = notesArtifact.jobs['purgeDeleted']
+		if (purge === undefined) throw new Error('the fixture has a job')
+		const deployWith = (timeoutMs: number, checker: string) => {
+			const contract = { ...notesArtifact, jobs: { purgeDeleted: { ...purge, timeoutMs } } }
+			const access = { ...APPROVED, contract, contractDigest: contractDigest(contract), checker }
+			return recordingProvider(jobs).deploy({ ...input, environment: { ...input.environment, access } })
+		}
+		await expect(deployWith(14 * 60_000 + 1, '0.9.0')).rejects.toThrow(
+			'cloudflare: job `purgeDeleted` runs up to 840001 ms, and a job segment on Cloudflare runs at most 840000 ms',
+		)
+		expect(jobs).toEqual([])
+		await deployWith(14 * 60_000, '0.9.0')
+		await deployWith(14 * 60_000 + 1, '0.8.1')
+		for (const checker of PUBLISHED_PRERELEASES) await deployWith(14 * 60_000 + 1, checker)
+		expect(jobs.map((job) => job.approvedAccess?.framework)).toEqual(['0.9.0', '0.8.1', ...PUBLISHED_PRERELEASES])
 	})
 
 	test('refuses a file kind or a file collection that scans its uploads before any runner call: no scanner runs on Cloudflare', async () => {

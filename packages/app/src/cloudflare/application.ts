@@ -1,27 +1,41 @@
-// The Durable Object an application environment runs in (ADR-0065): it migrates its SQLite, boots the application and
-// serves every request and minute tick its Worker forwards. A plain class, so Bun and Lopata load it without
-// `cloudflare:workers`.
+// The Durable Object an application environment runs in (ADR-0065): it migrates its SQLite, boots the application,
+// serves every request and repair tick its Worker forwards, and runs the jobs from its alarm, which it arms from their
+// durable wakes in the transaction of every change. A plain class, so Bun and Lopata load it without `cloudflare:workers`.
 
-import { FABRIKA_PROXY_SECRET, OPS_PREFIX, type OpsBootFailureContent, PROXY_SECRET_HEADER } from '@fabrika/auth-core'
-import { isScopedDatabase } from '@fabrika/db/framework'
+import {
+	FABRIKA_APPLICATION_OBJECT,
+	FABRIKA_APPLICATION_OBJECTS,
+	FABRIKA_CONTRACT_DIGEST,
+	FABRIKA_PROXY_SECRET,
+	OPS_PREFIX,
+	type OpsBootFailureContent,
+	type OpsMode,
+	parseApplicationObjects,
+	PROXY_SECRET_HEADER,
+} from '@fabrika/auth-core'
+import { isScopedDatabase, type LeaseFence, type Session } from '@fabrika/db/framework'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
-import { openSqlite, type SqliteStorage } from '@fabrika/db/sqlite'
-import { migrateSqlite } from '@fabrika/db/sqlite-migrate'
+import { openSqlite, type SqliteCursor, type SqliteStorage } from '@fabrika/db/sqlite'
+import { migrateSqlite, type SqliteMigrationBundle, type SqliteMigrationTarget } from '@fabrika/db/sqlite-migrate'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { timingSafeEqual } from 'node:crypto'
 import type { RequestExecutionContext } from '../fetch.js'
+import { FILE_TOMBSTONE_RETENTION_MS } from '../files/kinds.js'
 import { boot, type ContractApp } from '../implement/boot.js'
 import { type CrashEvents, environmentCrashReporter, reportSurvivedCrashes } from '../implement/crashes.js'
-import { proxySecretDigest } from '../implement/dispatch.js'
+import { MaintenanceFenceError, maintenanceRefusal, proxySecretDigest, runGated } from '../implement/dispatch.js'
 import { type CapturedEnvironment, captureEnvironment } from '../implement/environment.js'
 import type { ContractImplementation } from '../implement/implement.js'
 import type { CrashReporter } from '../jobs/report.js'
-import { isDueAt } from '../jobs/schedule.js'
+import { type JobClock, type JobScheduler, systemClock } from '../jobs/runner.js'
 import { environmentScrubber, type Scrubber } from '../jobs/scrub.js'
 import { bindingAssets, bindingKeySource, bindingMembership, bindingTerminals, bindingWorkloadTokens, connectBindings } from './bindings.js'
+import { importInProgress } from './import.js'
+import { type BarrierEvent, MaintenanceBarrier, r2MaintenanceStore } from './maintenance.js'
 import { CLOUDFLARE_FILES_BINDING } from './names.js'
-import { type OpsAccess, opsAccess, type OpsStorage, serveOps } from './ops.js'
+import { type OpsAccess, opsAccess, type OpsRecovery, type OpsStorage, serveOps } from './ops.js'
 import { r2FileObjectStore } from './r2-files.js'
+import { trackPending } from './tracker.js'
 
 /** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
 export type ImplementationLoader = () => Promise<{ readonly default: ContractImplementation }>
@@ -39,22 +53,74 @@ export interface ContractWorkerOptions {
 	readonly rejections?: CrashEvents
 	/** What posts a report to Operations' ingest; `fetch` by default. */
 	readonly operationsFetch?: (request: Request) => Promise<Response>
+	/** The jobs' and the alarm's waits and an attempt's deadline; the system clock by default. */
+	readonly clock?: JobClock
 }
 
 /**
- * Marks the Worker's minute tick, with its `scheduledTime`. The Worker's `fetch` removes it from every request it
+ * Marks the Worker's repair tick, with its `scheduledTime`. The Worker's `fetch` removes it from every request it
  * forwards, so only its own `scheduled` handler reaches the tick.
  */
 export const TICK_HEADER = 'X-Fabrika-Tick'
 
-/** What the object needs of its `ctx.storage`; a Durable Object's `DurableObjectStorage` fits it. */
-export type ApplicationStorage = SqliteStorage & OpsStorage
+/** A wake runs at most this early: `Date.now()` is pinned between I/O, so an alarm may start a moment before it (I6). */
+export const ALARM_SLACK_MS = 50
+/** After an internal error the alarm is armed again this far ahead; the repair tick covers a re-arm that failed. */
+export const ALARM_RETRY_MS = 30_000
+/**
+ * The object's KV key that holds the name of the object it is, recorded at its first verified event: an alarm names no
+ * object, and the one ordinary traffic reaches may since have changed. Outside the SQLite, so no dump carries it.
+ */
+export const OBJECT_NAME_KEY = 'fabrika:object'
+/** A repair tick's time: the Worker's `scheduledTime`, digits only. */
+const TICK_TIME = /^\d{1,16}$/
+
+/** The object's alarm. On a SQLite-backed object `setAlarm` and `deleteAlarm` commit with the open transaction. */
+export interface AlarmStorage {
+	setAlarm(scheduledTime: number): Promise<void>
+	deleteAlarm(): Promise<void>
+}
+
+/**
+ * What the object needs of its `ctx.storage`; a Durable Object's `DurableObjectStorage` fits it. A test double without
+ * an alarm arms none.
+ */
+export type ApplicationStorage = SqliteStorage & OpsStorage & Partial<AlarmStorage>
 
 /** What the object needs of its `DurableObjectState`. */
 export interface ApplicationState {
-	readonly storage: ApplicationStorage
+	readonly storage: ApplicationStorage & Partial<Omit<OpsRecovery, 'abort'>>
 	blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>
 	waitUntil(promise: Promise<unknown>): void
+	/** workerd resets the object; the test double has none. */
+	abort?(reason?: string): void
+}
+
+/** `state` with every `waitUntil` promise recorded by the isolate's pending-work tracker (the ops operation `timers`). */
+export function trackedState(state: ApplicationState): ApplicationState {
+	const { abort } = state
+	return {
+		storage: state.storage,
+		blockConcurrencyWhile: (callback) => state.blockConcurrencyWhile(callback),
+		waitUntil: (promise) => state.waitUntil(trackPending(promise)),
+		...(abort === undefined ? {} : { abort: (reason?: string) => abort.call(state, reason) }),
+	}
+}
+
+/** The object's recovery when its storage and state have every member PITR needs (ADR-0070), else `null`. */
+function objectRecovery(state: ApplicationState): OpsRecovery | null {
+	const { storage } = state
+	const { getCurrentBookmark, getBookmarkForTime, onNextSessionRestoreBookmark } = storage
+	const { abort } = state
+	if (getCurrentBookmark === undefined || getBookmarkForTime === undefined || onNextSessionRestoreBookmark === undefined || abort === undefined) {
+		return null
+	}
+	return {
+		getCurrentBookmark: () => getCurrentBookmark.call(storage),
+		getBookmarkForTime: (time) => getBookmarkForTime.call(storage, time),
+		onNextSessionRestoreBookmark: (bookmark) => onNextSessionRestoreBookmark.call(storage, bookmark),
+		abort: (reason) => abort.call(state, reason),
+	}
 }
 
 /** The framework's bindings: IAM's application entrypoint and the Workers Assets of the SPA. No handler sees them. */
@@ -81,15 +147,120 @@ interface ApplicationSetup {
 
 let registered: ApplicationSetup | null = null
 
-/** The storage of the object whose event runs; the work an event hands to `waitUntil` keeps it. */
-const objectStorage = new AsyncLocalStorage<ApplicationStorage>()
+/** The storage of the object whose event runs, and the barrier's view of that event; work it hands to `waitUntil` keeps both. */
+interface ObjectScope {
+	readonly storage: ApplicationStorage
+	readonly event: BarrierEvent
+}
 
-function eventStorage(): ApplicationStorage {
-	const storage = objectStorage.getStore()
-	if (storage === undefined) {
+const objectScope = new AsyncLocalStorage<ObjectScope>()
+
+/** The cursors of the fenced transaction that runs: its commit checks whether any of them wrote. */
+const openTransaction = new AsyncLocalStorage<SqliteCursor[]>()
+
+function eventScope(): ObjectScope {
+	const scope = objectScope.getStore()
+	if (scope === undefined) {
 		throw new Error('a statement ran outside any event of an application object: the framework runs every event in its object scope')
 	}
-	return storage
+	return scope
+}
+
+/** The write fence (ADR-0069 §3): a write of an invocation admitted before a restrictive transition rolls back. */
+function fence(event: BarrierEvent, cursors: readonly SqliteCursor[]): void {
+	if (cursors.some((cursor) => cursor.rowsWritten > 0) && !event.writable()) {
+		throw new MaintenanceFenceError()
+	}
+}
+
+/**
+ * The storage every framework and application write on SQLite reaches, bound to the object whose event runs. The
+ * fence runs inside each transaction before it commits; a statement outside one runs in a transaction of its own.
+ */
+function fencedStorage(): SqliteStorage {
+	return {
+		sql: {
+			exec(query, ...bindings) {
+				const { storage, event } = eventScope()
+				const cursors = openTransaction.getStore()
+				if (cursors !== undefined) {
+					const cursor = storage.sql.exec(query, ...bindings)
+					cursors.push(cursor)
+					return cursor
+				}
+				return storage.transactionSync(() => {
+					const cursor = storage.sql.exec(query, ...bindings)
+					const rows = cursor.toArray()
+					fence(event, [cursor])
+					return { toArray: () => rows, rowsWritten: cursor.rowsWritten }
+				})
+			},
+		},
+		transaction(closure) {
+			const { storage, event } = eventScope()
+			// A nested transaction shares its parent's cursors, so the outer commit checks every write inside it.
+			const cursors = openTransaction.getStore() ?? []
+			return storage.transaction(() =>
+				openTransaction.run(cursors, async () => {
+					const result = await closure()
+					fence(event, cursors)
+					return result
+				})
+			)
+		},
+		transactionSync(closure) {
+			const { storage, event } = eventScope()
+			const cursors = openTransaction.getStore() ?? []
+			return storage.transactionSync(() =>
+				openTransaction.run(cursors, () => {
+					const result = closure()
+					fence(event, cursors)
+					return result
+				})
+			)
+		},
+	}
+}
+
+/** Whether migrations may be applied: in `open` and the migration phase; a restricted cold start only looks. */
+type MigrationPolicy = 'apply' | 'refuse'
+
+/** A restricted cold start found a migration to apply: the application does not boot until the operation's migrate. */
+class MigrationsPending extends Error {
+	override readonly name = 'MigrationsPending'
+}
+
+/** The object holds an import marker (ADR-0070 §6): it neither boots nor migrates until the import completes or is discarded. */
+class ImportInProgress extends Error {
+	override readonly name = 'ImportInProgress'
+}
+
+/** Whether the object holds an import marker; a storage without the synchronous KV (the bun:sqlite double) holds none. */
+function importing(storage: ApplicationStorage): boolean {
+	const { kv } = storage
+	return kv !== undefined && importInProgress({ kv })
+}
+
+function isMigrationsPending(error: unknown): boolean {
+	return error instanceof MigrationsPending || (error instanceof Error && error.cause instanceof MigrationsPending)
+}
+
+/**
+ * The migration runner's target that applies nothing: it answers the runner's reads, and the first write it would make
+ * (the ledger's DDL, a migration, a digest) throws `MigrationsPending` instead.
+ */
+function refusingTarget(storage: ApplicationStorage): SqliteMigrationTarget {
+	return {
+		exec(query, ...bindings) {
+			if (!/^\s*select\b/i.test(query)) {
+				throw new MigrationsPending('a migration is pending')
+			}
+			return storage.sql.exec(query, ...bindings)
+		},
+		transactionSync() {
+			throw new MigrationsPending('a migration is pending')
+		},
+	}
 }
 
 /** What the object classes of this isolate boot: the generated entrypoint's `createContractWorker` registers it. */
@@ -108,12 +279,23 @@ function globalRejectionEvents(): CrashEvents {
 	}
 }
 
-/** The framework's tables, then the application's, each migration once: a booted storage applies nothing. */
-async function migrate(storage: ApplicationStorage, migrations: readonly ApplicationMigration[]): Promise<void> {
-	await migrateSqlite({ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) }, [
+/**
+ * The framework's tables, then the application's, each migration once: a booted storage applies nothing. Under
+ * `refuse` a pending migration throws `MigrationsPending` before anything is written.
+ */
+async function migrate(storage: ApplicationStorage, migrations: readonly ApplicationMigration[], policy: MigrationPolicy): Promise<void> {
+	const target: SqliteMigrationTarget = policy === 'apply'
+		? { exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) }
+		: refusingTarget(storage)
+	await migrateSqlite(target, migrationBundles(migrations))
+}
+
+/** The bundles the object applies, in order: the framework's tables, then the application's. */
+function migrationBundles(migrations: readonly ApplicationMigration[]): readonly SqliteMigrationBundle[] {
+	return [
 		{ bundle: 'fabrika', migrations: SQLITE_FRAMEWORK_MIGRATIONS },
 		{ bundle: 'app', migrations },
-	])
+	]
 }
 
 async function bootApplication(
@@ -122,19 +304,14 @@ async function bootApplication(
 	env: Readonly<Record<string, unknown>>,
 	environment: CapturedEnvironment,
 	crashes: CrashReporter | null,
+	policy: MigrationPolicy,
 ): Promise<Booted> {
 	const { default: implementation } = await setup.load()
 	const migrates = isScopedDatabase(implementation.database)
 	if (migrates) {
-		await migrate(state.storage, setup.options.migrations ?? [])
+		await migrate(state.storage, setup.options.migrations ?? [], policy)
 	}
-	const database = migrates
-		? openSqlite({
-			sql: { exec: (query, ...bindings) => eventStorage().sql.exec(query, ...bindings) },
-			transaction: (closure) => eventStorage().transaction(closure),
-			transactionSync: (closure) => eventStorage().transactionSync(closure),
-		})
-		: undefined
+	const database = migrates ? openSqlite(fencedStorage()) : undefined
 	const app = boot(implementation, {
 		environment,
 		iam: bindingKeySource(env['IAM']),
@@ -145,10 +322,13 @@ async function bootApplication(
 		connectBindings: connectBindings(env),
 		database,
 		files: r2FileObjectStore(env[CLOUDFLARE_FILES_BINDING]),
+		// A removed file's object outlives its row for the window, so a side restore finds its bytes (ADR-0070).
+		fileRetentionMs: FILE_TOMBSTONE_RETENTION_MS,
 		// The Worker forwards only with the proxy secret, which the object checked; `boot` checks it again.
 		requireProxySecret: true,
 		// The proxy Worker sets `X-Fabrika-Client-Ip` from `CF-Connecting-IP`, the visitor Cloudflare saw.
 		clientAddress: 'vouched',
+		projectWakes: (transaction) => projectWakes(setup, transaction),
 		...(setup.options.operationsFetch === undefined ? {} : { operationsFetch: setup.options.operationsFetch }),
 	})
 	const booted: Booted = { app, migrates }
@@ -167,18 +347,26 @@ async function attach(
 	setup: ApplicationSetup | null,
 	state: ApplicationState,
 	env: Readonly<Record<string, unknown>>,
+	policy: MigrationPolicy,
 	failed: (failure: OpsBootFailureContent) => void,
 ): Promise<Booted> {
 	if (setup === null) {
 		throw new Error('no contract application is registered: the generated entrypoint calls createContractWorker before an object starts')
 	}
+	// Before anything loads or migrates, and no boot failure: a half-loaded import never boots.
+	if (importing(state.storage)) {
+		throw new ImportInProgress('import_in_progress')
+	}
 	const environment = captureEnvironment(Object.fromEntries(Object.entries(env).filter(([name]) => !FRAMEWORK_BINDINGS.has(name))))
 	const crashes = environmentCrashReporter(environment, setup.options.operationsFetch)
 	try {
-		const booted = await attachOnce(setup, state, env, environment, crashes)
+		const booted = await attachOnce(setup, state, env, environment, crashes, policy)
 		setup.failureReported = false
 		return booted
 	} catch (error) {
+		if (isMigrationsPending(error)) {
+			throw error
+		}
 		failed(bootFailure(error, environmentScrubber(environment)))
 		if (crashes !== null && !setup.failureReported) {
 			setup.failureReported = true
@@ -194,9 +382,10 @@ async function attachOnce(
 	env: Readonly<Record<string, unknown>>,
 	environment: CapturedEnvironment,
 	crashes: CrashReporter | null,
+	policy: MigrationPolicy,
 ): Promise<Booted> {
 	if (setup.booted === null) {
-		const booting = bootApplication(setup, state, env, environment, crashes)
+		const booting = bootApplication(setup, state, env, environment, crashes, policy)
 		setup.booted = booting
 		// A failed boot is not kept: the next object instance boots again and fails with the same problems.
 		booting.catch(() => {
@@ -206,7 +395,7 @@ async function attachOnce(
 	}
 	const booted = await setup.booted
 	if (booted.migrates) {
-		await migrate(state.storage, setup.options.migrations ?? [])
+		await migrate(state.storage, setup.options.migrations ?? [], policy)
 	}
 	return booted
 }
@@ -221,18 +410,44 @@ function bootFailure(error: unknown, scrubber: Scrubber): OpsBootFailureContent 
 	return { at, message, stack: null }
 }
 
-type Outcome = { readonly booted: Booted } | { readonly failure: unknown }
+/**
+ * `pending`: a restricted cold start found a migration to apply, or the object holds an import marker, so the
+ * application did not boot; that is no failure.
+ */
+type Outcome = { readonly booted: Booted } | { readonly failure: unknown } | { readonly pending: true }
 
 /** The wait after an instance's first failed boot before an event boots again; it doubles with each failure, to the cap. */
 const BOOT_RETRY_MS = 1_000
 const BOOT_RETRY_CAP_MS = 60_000
 
-/** A job run handed to `waitUntil`; the runner logs and reports its own failures. */
-async function runQuietly(app: ContractApp, name: string): Promise<void> {
+/** The alarm armed at `next`, or deleted when nothing is pending; inside a transaction it commits with it. */
+async function armAlarm(storage: ApplicationStorage, next: Date | null): Promise<void> {
+	if (next === null) {
+		await storage.deleteAlarm?.()
+	} else {
+		await storage.setAlarm?.(next.getTime())
+	}
+}
+
+/**
+ * The runtime's projection of the jobs' wakes and leases (ADR-0065 §5, I1): the store runs it in the transaction of
+ * every change, and it arms the alarm of the object whose event runs from `next`. A throw rolls the change back.
+ */
+async function projectWakes(setup: ApplicationSetup, transaction: Session): Promise<void> {
+	// A wake or lease changes only once the application booted.
+	const booted = setup.booted === null ? null : await setup.booted
+	const scheduler = booted?.app.jobs.scheduler ?? null
+	if (scheduler !== null) {
+		await armAlarm(eventScope().storage, await scheduler.next(transaction))
+	}
+}
+
+/** A run the alarm took the lease for, handed to `waitUntil`; the runner logs and reports its own failures. */
+async function runScheduled(scheduler: JobScheduler, job: string, fence: LeaseFence, clock: JobClock): Promise<void> {
 	try {
-		await app.jobs.run(name)
+		await scheduler.run(job, fence, { clock })
 	} catch {
-		console.error(`fabrika: job '${name}' did not start: driver_failed`)
+		console.error(`fabrika: job '${job}' did not start: driver_failed`)
 	}
 }
 
@@ -245,21 +460,41 @@ export class FabrikaApplication {
 	readonly #secret: Uint8Array | null
 	/** What the platform wrote for Control's ops channel; `null` refuses every ops request. */
 	readonly #ops: OpsAccess | null
-	/** The instance's last failed boot, kept in memory for the ops view. */
+	/** The object ordinary traffic reaches, so the one this instance is when such traffic arrives; `null` when malformed. */
+	readonly #object: string | null
+	/** The object this instance is, once a verified event named it or its storage recorded it (`OBJECT_NAME_KEY`). */
+	#name: string | null = null
+	/** The maintenance barrier, read from R2 once per instance; a failed read is not kept, so the next request reads again. */
+	#barrier: Promise<MaintenanceBarrier> | null = null
+	#barrierObject: string | null = null
+	/** The instance's failed boot, kept in memory for the ops view until a boot succeeds. */
 	#bootFailure: OpsBootFailureContent | null = null
 	/** The instance's boot, `null` until the first event that needs the application: an ops request never starts it. */
 	#outcome: Promise<Outcome> | null = null
 	#failedBoots = 0
 	/** When an event may boot again after a failed boot; until then every request answers the failure. */
 	#retryAt = 0
+	/** Whether this instance ran the scheduler's startup repair, which its first open event does. */
+	#repaired = false
+	readonly #clock: JobClock
 
 	constructor(state: ApplicationState, env: Readonly<Record<string, unknown>>) {
-		this.#state = state
+		this.#state = trackedState(state)
 		this.#env = env
 		this.#setup = registered
+		this.#clock = registered?.options.clock ?? systemClock
 		const secret = env[FABRIKA_PROXY_SECRET]
 		this.#secret = typeof secret === 'string' && secret !== '' ? proxySecretDigest(secret) : null
 		this.#ops = opsAccess(env)
+		const object = env[FABRIKA_APPLICATION_OBJECT]
+		const objects = env[FABRIKA_APPLICATION_OBJECTS]
+		this.#object = parseApplicationObjects(typeof object === 'string' ? object : undefined, typeof objects === 'string' ? objects : undefined)
+			?.object ?? null
+	}
+
+	#contractDigest(): string | null {
+		const digest = this.#env[FABRIKA_CONTRACT_DIGEST]
+		return typeof digest === 'string' ? digest : null
 	}
 
 	async fetch(request: Request): Promise<Response> {
@@ -268,28 +503,134 @@ export class FabrikaApplication {
 			return new Response(null, { status: 404 })
 		}
 		if (new URL(request.url).pathname.startsWith(OPS_PREFIX)) {
+			// The mode before the request: a transition that opens the object arms its alarm, which repairs.
+			let before: OpsMode | null = null
 			// Served from storage alone: it never starts a boot or a retry, and waits for one under way only once authenticated.
-			return await serveOps(request, this.#ops, {
+			const response = await serveOps(request, this.#ops, {
 				storage: this.#state.storage,
+				bucket: this.#env[CLOUDFLARE_FILES_BINDING],
+				recovery: objectRecovery(this.#state),
+				contractDigest: this.#contractDigest(),
+				migrations: migrationBundles(this.#setup?.options.migrations ?? []),
 				bootFailure: async () => {
 					await this.#outcome
 					return this.#bootFailure
 				},
+				maintenance: async (object) => {
+					const barrier = await this.#maintenance(object)
+					before ??= barrier.mode
+					return barrier
+				},
+				migrate: () => this.#migrated(),
 			})
+			if (before !== null && before !== 'open') {
+				await this.#reopened()
+			}
+			return response
 		}
-		const outcome = await this.#current()
+		let barrier: MaintenanceBarrier
+		try {
+			barrier = await this.#maintenance(this.#object)
+		} catch {
+			// Fails closed: a state R2 could not give is never read as `open` (ADR-0069 §3, cold starts).
+			return maintenanceRefusal()
+		}
+		if (importing(this.#state.storage)) {
+			// ADR-0070 §6: whatever the mode, a half-loaded import serves nothing; the tick repairs nothing.
+			return request.headers.get(TICK_HEADER) === null ? maintenanceRefusal() : new Response(null, { status: 204 })
+		}
+		if (barrier.mode !== 'open' && request.headers.get(TICK_HEADER) !== null) {
+			// The tick repairs nothing and writes nothing until the object opens.
+			return new Response(null, { status: 204 })
+		}
+		if (barrier.mode === 'closed' || barrier.mode === 'inspect') {
+			return maintenanceRefusal()
+		}
+		const outcome = await this.#current(barrier.mode === 'open' ? 'apply' : 'refuse')
+		if ('pending' in outcome) {
+			return maintenanceRefusal()
+		}
 		if ('failure' in outcome) {
 			throw outcome.failure
 		}
-		return await objectStorage.run(this.#state.storage, () => this.#serve(outcome.booted, request))
+		const event = barrier.event()
+		return await objectScope.run({ storage: this.#state.storage, event }, () => runGated(event, () => this.#serve(outcome.booted, request)))
+	}
+
+	/** The name of the object this instance is: the one its storage recorded, or `null` before a verified event named it. */
+	#recorded(): string | null {
+		if (this.#name === null) {
+			const stored = this.#state.storage.kv?.get(OBJECT_NAME_KEY)
+			if (typeof stored === 'string' && stored !== '') {
+				this.#name = stored
+			}
+		}
+		return this.#name
+	}
+
+	/**
+	 * Whether this instance is the object a verified event names; the first such event records the name, which never
+	 * changes after. A storage without KV (the bun:sqlite double) keeps it in memory only.
+	 */
+	#named(object: string): boolean {
+		const recorded = this.#recorded()
+		if (recorded !== null) {
+			return recorded === object
+		}
+		this.#state.storage.kv?.put(OBJECT_NAME_KEY, object)
+		this.#name = object
+		return true
+	}
+
+	/** The barrier of the object this instance is; every name it is asked under must be the same one. */
+	#maintenance(object: string | null): Promise<MaintenanceBarrier> {
+		if (object === null) {
+			return Promise.reject(new Error(`${FABRIKA_APPLICATION_OBJECT} and ${FABRIKA_APPLICATION_OBJECTS} name no valid set of objects`))
+		}
+		if (!this.#named(object)) {
+			return Promise.reject(new Error('this object is another object than the one the event names'))
+		}
+		if (this.#barrier !== null && this.#barrierObject !== object) {
+			return Promise.reject(new Error('one object instance was asked under two object names'))
+		}
+		if (this.#barrier === null) {
+			const reading = (async () => await MaintenanceBarrier.load(r2MaintenanceStore(this.#env[CLOUDFLARE_FILES_BINDING], object)))()
+			this.#barrier = reading
+			this.#barrierObject = object
+			reading.catch(() => {
+				if (this.#barrier === reading) {
+					this.#barrier = null
+					this.#barrierObject = null
+				}
+			})
+		}
+		return this.#barrier
+	}
+
+	/** The migration phase's boot: applies the pending migrations whatever the mode; `false` when the boot failed. */
+	async #migrated(): Promise<boolean> {
+		const current = this.#outcome === null ? null : await this.#outcome
+		if (current !== null && 'booted' in current) {
+			return true
+		}
+		const outcome = this.#boot('apply')
+		this.#outcome = outcome
+		return 'booted' in this.#settled(outcome, await outcome)
 	}
 
 	/** Settles either way: a callback that rejects would reset the object, and every request answers the failure instead. */
-	#boot(): Promise<Outcome> {
+	#boot(policy: MigrationPolicy): Promise<Outcome> {
 		return this.#state.blockConcurrencyWhile(() =>
-			attach(this.#setup, this.#state, this.#env, (failure) => {
+			attach(this.#setup, this.#state, this.#env, policy, (failure) => {
 				this.#bootFailure = failure
-			}).then((booted): Outcome => ({ booted }), (failure: unknown): Outcome => {
+			}).then((booted): Outcome => {
+				// The view reports the current boot: a failure an earlier attempt left is no longer the object's state.
+				this.#bootFailure = null
+				return { booted }
+			}, (failure: unknown): Outcome => {
+				if (isMigrationsPending(failure) || failure instanceof ImportInProgress) {
+					return { pending: true }
+				}
 				this.#failedBoots++
 				this.#retryAt = Date.now() + Math.min(BOOT_RETRY_MS * 2 ** (this.#failedBoots - 1), BOOT_RETRY_CAP_MS)
 				return { failure }
@@ -299,54 +640,183 @@ export class FabrikaApplication {
 
 	/**
 	 * The instance's boot, started by the first event that needs it and booted again once a failed boot's backoff has
-	 * passed; concurrent events share one boot and one retry.
+	 * passed; concurrent events share one boot and one retry. A boot that found a migration pending is not kept, so the
+	 * next event looks again.
 	 */
-	async #current(): Promise<Outcome> {
+	async #current(policy: MigrationPolicy): Promise<Outcome> {
 		if (this.#outcome === null) {
-			this.#outcome = this.#boot()
+			this.#outcome = this.#boot(policy)
 		}
 		const pending = this.#outcome
 		const outcome = await pending
-		if (!('failure' in outcome) || Date.now() < this.#retryAt) {
-			return outcome
+		if ('failure' in outcome && Date.now() >= this.#retryAt) {
+			if (this.#outcome === pending) {
+				this.#outcome = this.#boot(policy)
+			}
+			return this.#settled(this.#outcome, await this.#outcome)
 		}
-		if (this.#outcome === pending) {
-			this.#outcome = this.#boot()
+		return this.#settled(pending, outcome)
+	}
+
+	/** Forgets a boot that found a migration pending, so the next event boots again. */
+	#settled(boot: Promise<Outcome>, outcome: Outcome): Outcome {
+		if ('pending' in outcome && this.#outcome === boot) {
+			this.#outcome = null
 		}
-		return await this.#outcome
+		return outcome
 	}
 
 	#serve(booted: Booted, request: Request): Promise<Response> {
+		const scheduler = booted.app.jobs.scheduler
 		const tick = request.headers.get(TICK_HEADER)
 		if (tick !== null) {
-			return Promise.resolve(this.#tick(booted, tick))
+			return TICK_TIME.test(tick) && Number.isSafeInteger(Number(tick)) ? this.#tick(scheduler) : Promise.resolve(new Response(null, { status: 400 }))
+		}
+		if (scheduler !== null && !this.#repaired) {
+			this.#state.waitUntil(this.#repairOnce(scheduler))
 		}
 		const exec: RequestExecutionContext = { waitUntil: (promise) => this.#state.waitUntil(promise) }
 		return booted.app.fetch(request, exec)
+	}
+
+	/**
+	 * workerd calls it when the alarm is due (ADR-0065 §5). Only the object ordinary traffic reaches runs jobs, and only
+	 * in `open`; otherwise it runs nothing and arms nothing: the maintenance operation owns the object, reopening arms the
+	 * alarm again, and the repair tick arms the serving object's. It never throws, because after six failures the platform
+	 * stops retrying: an internal error in `open` arms it again in `ALARM_RETRY_MS` and is reported.
+	 */
+	async alarm(): Promise<void> {
+		let scheduler: JobScheduler | null = null
+		let barrier: MaintenanceBarrier | null = null
+		try {
+			const object = this.#recorded()
+			if (object === null || object !== this.#object) {
+				// No verified event named this object yet, or it is not the one ordinary traffic reaches (a rehearsal, a
+				// former serving object after a deploy moved the traffic): it runs no job.
+				return
+			}
+			if (importing(this.#state.storage)) {
+				// A half-loaded import runs no job and arms nothing; the repair tick arms the alarm once the object boots.
+				return
+			}
+			barrier = await this.#maintenance(object)
+			if (barrier.mode !== 'open') {
+				return
+			}
+			const outcome = await this.#current('apply')
+			if (!('booted' in outcome)) {
+				throw new Error('the application did not boot')
+			}
+			const booted = outcome.booted.app.jobs.scheduler
+			scheduler = booted
+			if (booted === null) {
+				return
+			}
+			const event = barrier.event()
+			await objectScope.run({ storage: this.#state.storage, event }, () => runGated(event, () => this.#wake(booted, event)))
+		} catch (error) {
+			if (error instanceof MaintenanceFenceError || barrier === null || barrier.mode !== 'open') {
+				// A transition restricted the object meanwhile, or none was ever read: no failure, and nothing is armed outside open.
+				return
+			}
+			console.error('fabrika: the alarm failed: alarm_failed')
+			try {
+				await this.#state.storage.setAlarm?.(Date.now() + ALARM_RETRY_MS)
+			} catch {
+				console.error('fabrika: the alarm could not be armed again; the repair tick arms it')
+			}
+			if (scheduler !== null) {
+				this.#state.waitUntil(scheduler.failed('alarm', error))
+			}
+		}
+	}
+
+	/**
+	 * One alarm: per job, in one transaction, a crashed holder reaped, the lease taken for a due wake (or the pending flag
+	 * set for the run holding it) and the alarm armed from the projection. The runs go to `waitUntil`: one alarm runs at a
+	 * time, and awaiting a long job would hold back every other wake. No wake is consumed here, only by its run's finish.
+	 */
+	async #wake(scheduler: JobScheduler, event: BarrierEvent): Promise<void> {
+		await this.#repairOnce(scheduler)
+		const early = await scheduler.earlyBy(ALARM_SLACK_MS)
+		if (early > 0) {
+			await this.#clock.wait(early, new AbortController().signal)
+		}
+		const storage = fencedStorage()
+		// A job whose lease is held past its expiry but which the contract no longer declares is reaped too.
+		for (const job of [...scheduler.jobs, ...(await scheduler.orphans())]) {
+			if (!event.writable()) {
+				// A transition restricted the object since the alarm was admitted; reopening arms it again.
+				return
+			}
+			const taken = await storage.transaction(async () => {
+				const taken = await scheduler.take(job)
+				await armAlarm(eventScope().storage, await scheduler.next())
+				return taken
+			})
+			if (taken.reaped) {
+				this.#state.waitUntil(scheduler.crashed(job))
+			}
+			if (taken.fence !== null) {
+				this.#state.waitUntil(runScheduled(scheduler, job, taken.fence, this.#clock))
+			}
+		}
+	}
+
+	/** The startup repair once per instance, at its first open event; a failure is reported and the next event repairs. */
+	async #repairOnce(scheduler: JobScheduler): Promise<void> {
+		if (this.#repaired) {
+			return
+		}
+		try {
+			this.#repaired = await scheduler.repair()
+		} catch (error) {
+			this.#repairFailed(scheduler, error)
+		}
+	}
+
+	/** A repair the write fence refused is no failure: a transition closed the object, and reopening repairs. */
+	#repairFailed(scheduler: JobScheduler, error: unknown): void {
+		if (error instanceof MaintenanceFenceError) {
+			return
+		}
+		console.error("fabrika: the job scheduler's repair failed: repair_failed")
+		this.#state.waitUntil(scheduler.failed('repair', error))
+	}
+
+	/** The repair tick: the startup repair again, which also arms the first alarm of an environment nobody has called. */
+	async #tick(scheduler: JobScheduler | null): Promise<Response> {
+		if (scheduler === null) {
+			return new Response(null, { status: 204 })
+		}
+		try {
+			this.#repaired = (await scheduler.repair()) || this.#repaired
+		} catch (error) {
+			this.#repairFailed(scheduler, error)
+			return new Response(null, { status: error instanceof MaintenanceFenceError ? 503 : 500 })
+		}
+		return new Response(null, { status: 204 })
+	}
+
+	/** After a transition that opened this object, its alarm fires at once and repairs: an alarm outside `open` armed nothing. */
+	async #reopened(): Promise<void> {
+		if (this.#barrier === null || this.#barrierObject !== this.#object) {
+			return
+		}
+		try {
+			if ((await this.#barrier).mode !== 'open') {
+				return
+			}
+			this.#repaired = false
+			await this.#state.storage.setAlarm?.(Date.now())
+		} catch {
+			console.error('fabrika: the alarm could not be armed after the object opened; the repair tick arms it')
+		}
 	}
 
 	/** The fixed-size digests are compared in constant time, so neither the length nor a prefix of the secret leaks. */
 	#fromWorker(request: Request): boolean {
 		const presented = request.headers.get(PROXY_SECRET_HEADER) ?? ''
 		return this.#secret !== null && presented !== '' && timingSafeEqual(proxySecretDigest(presented), this.#secret)
-	}
-
-	/** Runs every job due in the tick's UTC minute and the jobs' check, each past the answer. */
-	#tick(booted: Booted, scheduledTime: string): Response {
-		const time = Number(scheduledTime)
-		if (!Number.isSafeInteger(time)) {
-			return new Response(null, { status: 400 })
-		}
-		const at = new Date(time)
-		const jobs = booted.app.jobs.scheduled
-		for (const job of jobs) {
-			if (isDueAt(job.schedule, at)) {
-				this.#state.waitUntil(runQuietly(booted.app, job.name))
-			}
-		}
-		if (jobs.length > 0) {
-			this.#state.waitUntil(booted.app.jobs.check())
-		}
-		return new Response(null, { status: 204 })
 	}
 }

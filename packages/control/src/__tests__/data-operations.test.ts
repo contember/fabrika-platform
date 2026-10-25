@@ -20,6 +20,7 @@ import {
 	type DataOperationDeps,
 	httpOpsTransport,
 	type OpsAnswer,
+	type OpsDataAnswer,
 	type OpsFencedAnswer,
 	type OpsInspection,
 	type OpsTarget,
@@ -47,8 +48,11 @@ const ENV = 'prod'
 const TARGET: OpsTarget = { appId: APP, env: ENV }
 const KEY = runLeaseKey(APP, ENV)
 
-/** What the fake object does with one transition: answer it, apply it and lose the answer, or never receive it. */
-type Behaviour = 'answer' | 'lose' | 'down'
+/**
+ * What the fake object does with one transition: answer it, apply it and lose the answer, never receive it, or answer
+ * the 501 of a release that does not serve it.
+ */
+type Behaviour = 'answer' | 'lose' | 'down' | 'not_served'
 
 type Sent =
 	| { readonly op: 'inspect'; readonly content: boolean }
@@ -77,6 +81,7 @@ class FakeObject implements OpsTransport {
 		this.sent.push({ op: 'state', generation: request.generation, mode: request.mode })
 		const behaviour = await this.behaviour(request)
 		if (!this.reachable || behaviour === 'down') return { kind: 'unavailable', reason: 'unreachable' }
+		if (behaviour === 'not_served') return { kind: 'unavailable', reason: 'not_served' }
 		if (opsTransitionRefused(this.published, request)) return { kind: 'stale', published: this.published }
 		this.published = { generation: request.generation, mode: request.mode }
 		if (behaviour === 'lose') return { kind: 'unavailable', reason: 'unreachable' }
@@ -84,6 +89,18 @@ class FakeObject implements OpsTransport {
 	}
 
 	migrate(): Promise<OpsFencedAnswer<never>> {
+		return Promise.resolve({ kind: 'unavailable', reason: 'invalid_answer' })
+	}
+
+	export(): Promise<OpsDataAnswer<never>> {
+		return Promise.resolve({ kind: 'unavailable', reason: 'invalid_answer' })
+	}
+
+	import(): Promise<OpsDataAnswer<never>> {
+		return Promise.resolve({ kind: 'unavailable', reason: 'invalid_answer' })
+	}
+
+	restore(): Promise<OpsDataAnswer<never>> {
 		return Promise.resolve({ kind: 'unavailable', reason: 'invalid_answer' })
 	}
 
@@ -427,6 +444,38 @@ for (const backend of backends) {
 				expect(await executeDeploy(runDeps(b, lines), { runId: next, dryRun: true })).toEqual({ runId: next, status: 'succeeded' })
 			})
 
+			test('an object whose release does not serve state fails the operation, so the last settled mode stands and deploys run', async () => {
+				const { b, object, deps } = await open()
+				const lines: string[] = []
+				expect(await startMaintenance(deps(), { ...TARGET, mode: 'read-only', actor: 'user:test' })).toMatchObject({ result: 'succeeded' })
+				expect(await startMaintenance(deps(), { ...TARGET, mode: 'open', actor: 'user:test' })).toMatchObject({ result: 'succeeded' })
+				object.behaviour = () => 'not_served'
+				const outcome = await startMaintenance(deps(), { ...TARGET, mode: 'closed', actor: 'user:test' })
+				expect(outcome).toMatchObject({ kind: 'driven', result: 'failed', operation: { state: 'failed', error_code: 'not_served' } })
+				expect(object.transitions()).toEqual([{ generation: 1, mode: 'read-only' }, { generation: 2, mode: 'open' }, {
+					generation: 3,
+					mode: 'closed',
+				}])
+				expect(await recordedMaintenance(b, TARGET)).toBe('open')
+				const id = await run(b)
+				expect(await executeDeploy(runDeps(b, lines), { runId: id, dryRun: true })).toEqual({ runId: id, status: 'succeeded' })
+				// Nothing is left to recover, and the next operation starts.
+				object.behaviour = () => 'answer'
+				expect(await startMaintenance(deps(), { ...TARGET, mode: 'read-only', actor: 'user:test' })).toMatchObject({ result: 'succeeded' })
+				expect(await recordedMaintenance(b, TARGET)).toBe('read-only')
+			})
+
+			test('with no operation settled before it, an operation the release did not serve leaves the environment open', async () => {
+				const { b, object, deps } = await open()
+				object.behaviour = () => 'not_served'
+				for (const mode of ['read-only', 'closed'] as const) {
+					expect(await startMaintenance(deps(), { ...TARGET, mode, actor: 'user:test' })).toMatchObject({ result: 'failed' })
+				}
+				expect(await recordedMaintenance(b, TARGET)).toBe('open')
+				const id = await run(b)
+				expect(await executeDeploy(runDeps(b, []), { runId: id, dryRun: true })).toEqual({ runId: id, status: 'succeeded' })
+			})
+
 			test('the operation holding the lease deploys under it; an unrelated deploy stays excluded', async () => {
 				const { b } = await open()
 				const lines: string[] = []
@@ -436,8 +485,8 @@ for (const backend of backends) {
 				const holder = lease.fence().holder
 				const generation = await b.repositories.dataOperations.allocateGeneration(APP, ENV)
 				const restricting = { id: uuidv7(), appId: APP, env: ENV, step: 'deploy', targetMode: 'read-only', generation, actor: 'user:test' } as const
-				expect(await b.repositories.dataOperations.create({ ...restricting, kind: 'migrate' }, lease.fence())).not.toBeNull()
 				const own = await run(b)
+				expect(await b.repositories.dataOperations.create({ ...restricting, kind: 'migrate', runId: own }, lease.fence())).toMatchObject({ run_id: own })
 				const unrelated = await run(b)
 				expect(await executeDeploy(deps, { runId: unrelated, dryRun: true })).toEqual({ runId: unrelated, status: 'deferred' })
 				expect(await executeDeployUnderLease(deps, { runId: own, dryRun: true }, lease)).toEqual({ runId: own, status: 'succeeded' })
@@ -540,6 +589,9 @@ describe('the HTTP ops transport', () => {
 			}],
 			[() => new Response('not found', { status: 404 }), { kind: 'unavailable', reason: 'channel_refused' }],
 			[() => new Response(null, { status: 503 }), { kind: 'unavailable', reason: 'unreachable' }],
+			[() => Response.json({ refused: 'not_implemented' }, { status: 501 }), { kind: 'unavailable', reason: 'not_served' }],
+			// A 501 that is not the object's own answer is no proof the release lacks the operation.
+			[() => new Response('Not Implemented', { status: 501 }), { kind: 'unavailable', reason: 'unreachable' }],
 			[() => new Response(null, { status: 302 }), { kind: 'unavailable', reason: 'invalid_answer' }],
 		]
 		for (const [answer, expected] of answers) {
@@ -636,6 +688,7 @@ describe('data RPC', () => {
 			'kind',
 			'recoversOperationId',
 			'resolution',
+			'runId',
 			'state',
 			'step',
 			'targetMode',
@@ -653,24 +706,32 @@ describe('data RPC', () => {
 		expect(JSON.stringify(view.body)).not.toContain('tenant 7')
 	})
 
-	test('data.start and data.recover answer 501 until an object serves state, and leave the environment deployable', async () => {
-		// An operation no object can acknowledge would stay running, and a running record refuses every deploy.
+	test('data.start drives a maintenance operation and data.recover a recovery; a backup still answers 501', async () => {
 		const f = fixture()
 		await f.seed()
 		const manager = authWithPermissions([appGrant('data.read'), appGrant('data.manage')])
-		for (
-			const [method, input] of [
-				['data.start', { ...TARGET, kind: 'maintenance', mode: 'read-only' }],
-				['data.start', { ...TARGET, kind: 'maintenance', mode: 'open' }],
-				['data.start', { ...TARGET, kind: 'backup' }],
-				['data.recover', { ...TARGET, operationId: uuidv7(), resolution: 'open' }],
-			] as const
-		) {
-			expect((await f.call(manager, method, input)).status).toBe(501)
-		}
+		expect((await f.call(manager, 'data.start', { ...TARGET, kind: 'backup' })).status).toBe(501)
 		expect(f.object.sent).toEqual([])
+
+		f.object.behaviour = () => 'down'
+		const stuck = await f.call(manager, 'data.start', { ...TARGET, kind: 'maintenance', mode: 'read-only' })
+		expect(stuck).toMatchObject({ status: 200, body: { kind: 'maintenance', state: 'running', step: 'restrict', generation: 1 } })
+		const stuckId = typeof stuck.body === 'object' && stuck.body !== null ? Reflect.get(stuck.body, 'id') : null
+		f.object.behaviour = () => 'answer'
+		const recovered = await f.call(manager, 'data.recover', { ...TARGET, operationId: stuckId, resolution: 'open' })
+		expect(recovered).toMatchObject({ status: 200, body: { kind: 'recovery', state: 'succeeded', targetMode: 'open' } })
+		expect(f.object.published).toEqual({ generation: 3, mode: 'open' })
 		expect(await recordedMaintenance({ repositories: f.repositories }, TARGET)).toBe('open')
-		expect((await f.call(manager, 'data.operations.list', TARGET)).body).toEqual({ items: [], nextCursor: null })
+	})
+
+	test('data.start on an object whose release does not serve state answers the failed record, and the environment stays open', async () => {
+		const f = fixture()
+		await f.seed()
+		f.object.behaviour = () => 'not_served'
+		const manager = authWithPermissions([appGrant('data.read'), appGrant('data.manage')])
+		const started = await f.call(manager, 'data.start', { ...TARGET, kind: 'maintenance', mode: 'read-only' })
+		expect(started).toMatchObject({ status: 200, body: { state: 'failed', errorCode: 'not_served' } })
+		expect(await recordedMaintenance({ repositories: f.repositories }, TARGET)).toBe('open')
 	})
 
 	test('an environment the caller may not act on is the same 404 as one that does not exist', async () => {

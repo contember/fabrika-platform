@@ -15,6 +15,7 @@ import { type SqliteFramework, sqliteFramework } from './fixtures/sqlite-framewo
 
 const GRACE = 3_600_000
 const HOUR = 3_600_000
+const RETENTION = 30 * 24 * HOUR
 
 const APP = `
 CREATE TABLE deals (id TEXT PRIMARY KEY, org_id TEXT NOT NULL, name TEXT NOT NULL, UNIQUE (id, org_id)) STRICT;
@@ -72,6 +73,31 @@ function backdate(id: string, hours: number): void {
 	db.exec(`update fabrika_files set created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?) where id = ?`, `-${hours} hours`, id)
 }
 
+function backdateDeletion(key: string, days: number): void {
+	db.exec(`update fabrika_file_deletions set recorded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?) where object_key = ?`, `-${days} days`, key)
+}
+
+function recordedAt(key: string, at: Date): void {
+	db.exec(`update fabrika_file_deletions set recorded_at = ? where object_key = ?`, at.toISOString(), key)
+}
+
+/** The keys due under a window of `windowMs` now, as the sweep asks for them. */
+function due(limit: number, windowMs: number): Promise<readonly string[]> {
+	return files.dueDeletions(limit, new Date(Date.now() - windowMs))
+}
+
+/** An unreferenced file past the grace whose row the sweep removed: its key is queued, its object kept. */
+async function removed(objectKey?: string): Promise<string> {
+	const id = Bun.randomUUIDv7()
+	await files.stage({ id, kind: 'attachments', objectKey: objectKey ?? `attachments/${id}`, contentType: 'application/pdf', name: null, request: 'r' })
+	backdate(id, 2)
+	const key = await files.remove(id, GRACE)
+	if (key === null) {
+		throw new Error('the sweep kept an unreferenced file')
+	}
+	return key
+}
+
 describe('a stored file on SQLite', () => {
 	test('a staged file is pending with its size; its first reference claims it live or quarantined and stamps its scope', async () => {
 		const live = await staged('catalog')
@@ -121,7 +147,7 @@ describe('a stored file on SQLite', () => {
 		expect(await files.abandon(id, 'request-2')).toBeNull()
 		expect(await files.abandon(id, 'request-1')).toBe(`catalog/${id}`)
 		expect(fileRow(id)).toBeUndefined()
-		expect(await files.unfinishedDeletions(10)).toEqual([`catalog/${id}`])
+		expect(await due(10, 0)).toEqual([`catalog/${id}`])
 		const claimed = await staged('catalog')
 		await claim(claimed, 'live', null)
 		expect(await files.abandon(claimed, 'request-1')).toBeNull()
@@ -145,7 +171,7 @@ describe('a stored file on SQLite', () => {
 		})
 		expect(due?.dueSince.getTime()).toBeLessThanOrEqual(before.getTime() + 5)
 		expect(await files.quarantined(['catalog'], 10, new Date())).toEqual([])
-		const jobs = jobLeases(() => ({ database: db.database, capabilities: authority }))
+		const jobs = jobLeases(() => ({ database: db.database, capabilities: authority }), async () => {})
 		authority.lease = await jobs.acquire('scan', 'scan-1', HOUR, HOUR)
 		const later = new Date(Date.now() + 60_000)
 		expect(await files.deferScan(id, 1, later)).toBe(true)
@@ -214,11 +240,11 @@ describe('the sweep on SQLite', () => {
 		expect(fileRow(kept)).toMatchObject({ status: 'quarantined' })
 		expect(await files.remove(fresh, GRACE)).toBeNull()
 		expect(await files.remove(legacy, GRACE)).toBeNull()
-		expect(await files.unfinishedDeletions(10)).toEqual([])
+		expect(await due(10, 0)).toEqual([])
 		expect(await files.remove(orphan, GRACE)).toBe(`attachments/${orphan}`)
-		expect(await files.unfinishedDeletions(10)).toEqual([`attachments/${orphan}`])
+		expect(await due(10, 0)).toEqual([`attachments/${orphan}`])
 		await files.forgetDeletion(`attachments/${orphan}`)
-		expect(await files.unfinishedDeletions(10)).toEqual([])
+		expect(await due(10, 0)).toEqual([])
 		expect(fileRow(orphan)).toBeUndefined()
 	})
 
@@ -232,5 +258,69 @@ describe('the sweep on SQLite', () => {
 		expect(fileRow(referenced)?.['legacy']).toBeNull()
 		expect(fileRow(unreferenced)?.['legacy']).toBe('catalog')
 		await expect(files.adoptReferenced([{ table: 'products; drop', column: 'image' }])).rejects.toBeInstanceOf(QueryRefusedError)
+	})
+
+	test('a queued key inside the retention window survives; past it, it is due, oldest first', async () => {
+		const inside = await removed()
+		const past = await removed()
+		const older = await removed()
+		backdateDeletion(inside, 29)
+		backdateDeletion(past, 31)
+		backdateDeletion(older, 40)
+		expect(await due(10, RETENTION)).toEqual([older, past])
+		expect(await due(1, RETENTION)).toEqual([older])
+		await expect(files.dueDeletions(10, new Date(Number.NaN))).rejects.toBeInstanceOf(QueryRefusedError)
+	})
+
+	test('a key is due from exactly the end of its window: not 1 ms before, at it and 1 ms after', async () => {
+		const key = await removed()
+		const recorded = new Date('2026-01-01T00:00:00.000Z')
+		recordedAt(key, recorded)
+		const cutoff = (now: number) => new Date(now - RETENTION)
+		const end = recorded.getTime() + RETENTION
+		expect(await files.dueDeletions(10, cutoff(end - 1))).toEqual([])
+		expect(await files.dueDeletions(10, cutoff(end))).toEqual([key])
+		expect(await files.dueDeletions(10, cutoff(end + 1))).toEqual([key])
+		expect(await files.claimDeletion(key, cutoff(end - 1))).toBe(false)
+		expect(await files.claimDeletion(key, cutoff(end))).toBe(true)
+		expect(await due(10, 0)).toEqual([])
+	})
+
+	test('with a zero window, as on Bun, a key queued now is due at once', async () => {
+		const key = await removed()
+		expect(await due(10, RETENTION)).toEqual([])
+		expect(await due(10, 0)).toEqual([key])
+	})
+
+	test('a cancelled tombstone is never due nor claimed, and the others stay queued', async () => {
+		const cancelled = await removed()
+		const other = await removed()
+		backdateDeletion(cancelled, 31)
+		backdateDeletion(other, 31)
+		expect(await files.cancelDeletions([cancelled, `attachments/${Bun.randomUUIDv7()}`])).toBe(1)
+		expect(await files.cancelDeletions([])).toBe(0)
+		expect(await due(10, RETENTION)).toEqual([other])
+		expect(await files.claimDeletion(cancelled, new Date())).toBe(false)
+		expect(await due(10, 0)).toEqual([other])
+	})
+
+	test('a key queued again does not fail and restarts its window', async () => {
+		const key = await removed()
+		backdateDeletion(key, 31)
+		expect(await removed(key)).toBe(key)
+		expect(await due(10, RETENTION)).toEqual([])
+		expect(await due(10, 0)).toEqual([key])
+	})
+
+	test('the due keys are read through the recorded_at index, in its order', () => {
+		// The statement of `dueDeletions` on SQLite.
+		const plan = db.exec(
+			'explain query plan select object_key from fabrika_file_deletions where recorded_at <= ?2 order by recorded_at limit ?1',
+			10,
+			'',
+		)
+		const details = plan.map((row) => String(row['detail']))
+		expect(details.some((detail) => detail.includes('INDEX fabrika_file_deletions_recorded_at'))).toBe(true)
+		expect(details.some((detail) => detail.includes('TEMP B-TREE'))).toBe(false)
 	})
 })

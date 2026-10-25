@@ -1,5 +1,6 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { controlApp } from './app'
+import { runBackupSchedule } from './backups'
 import { controlJobLogLine, runControlJob } from './consumer'
 import { runMaintenance } from './cron'
 import type { Env } from './env'
@@ -7,8 +8,8 @@ import { gitHubAppClientFactory } from './github/connections/credentials'
 import { createSourceConnections } from './github/connections/port'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
 import { reconcileProviderRuns } from './provider-reconcile'
-import type { ControlJobMessage } from './run-lifecycle'
-import { iamSchemaDeps, locks, operationsReleaseDeps, platformTransportDeps, vault } from './services'
+import { type ControlJobMessage, operationDeploys } from './run-lifecycle'
+import { buildRunDeps, iamSchemaDeps, locks, operationsReleaseDeps, opsTransportDeps, platformTransportDeps, vault } from './services'
 
 /**
  * The fabrika control plane — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint`
@@ -62,7 +63,22 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	/** The cron handler (`triggers.crons`, every 5 min): poll public repos, then sweep orphaned runs. */
 	override async scheduled(_controller: ScheduledController): Promise<void> {
 		const env = this.control
+		const { opsTransport } = opsTransportDeps(env)
 		await runMaintenance(env, {
+			// Without a vault Control holds no ops key, so it reaches no object and drives no data operation.
+			...(opsTransport === undefined ? {} : {
+				backups: async () => {
+					const provider = cloudflareControlProvider(this.env, env)
+					return await runBackupSchedule({
+						repositories: env.REPOSITORIES,
+						lock: locks(env),
+						ops: opsTransport,
+						provider,
+						// A restore's own deploys run in the pass that owns it.
+						deploys: operationDeploys(await buildRunDeps(env, provider)),
+					})
+				},
+			}),
 			reconcile: () =>
 				reconcileProviderRuns({
 					repositories: env.REPOSITORIES,

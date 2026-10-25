@@ -62,6 +62,10 @@ payload: the row it looks at is the only record. A job drains its rows with the 
   whatever the number of kicks and instances. A kick never rejects.
 - The schedule stays the recovery path. A kicked run that dies before its commit leaves its rows to the next scheduled
   run.
+- A kicked run retries inline, sleeping between attempts, on both runtimes. On Cloudflare a run that the object's alarm
+  started retries durably instead: a failed attempt keeps the wakes it owned, moves them to now + backoff and counts
+  the attempt, so no isolate sleeps between attempts; past the job's `retries` the run is reported failed and its cron
+  wake advances ([ADR-0065](0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md) §5).
 
 ### 3. Claim is the drain
 

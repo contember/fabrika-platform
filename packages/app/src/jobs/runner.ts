@@ -3,12 +3,23 @@
 // that timed out, failed or lost the lease never commits (`@fabrika/db`'s fence). A site's `ctx.kick` sends a run in
 // the background after its commit, without waiting for any lock; a kick that finds the lease held leaves the shared pending flag, and the run
 // holding it runs once more after it succeeded. Failures, crashed runs and a job that stopped succeeding are reported
-// to Operations, each under a fixed failure code.
+// to Operations, each under a fixed failure code. On Cloudflare the object's alarm drives the jobs through `scheduler`:
+// a run it starts owns the job's due wakes, and when it fails they move to a durable retry instead of an inline one.
 
 import type { IamMembership } from '@fabrika/auth'
 import { type ContractArtifact, JOB_SITE_PREFIX, type JobArtifact, type JobMailer, type PermissionEntry, permits } from '@fabrika/auth-core'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
-import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError, type Session } from '@fabrika/db/framework'
+import {
+	type DataAccess,
+	type FinishWakes,
+	type FrameworkTables,
+	type JobLeases,
+	type JobWakes,
+	type LeaseFence,
+	LeaseLostError,
+	type Session,
+	type Wake,
+} from '@fabrika/db/framework'
 import { EmailDeliveryError, type EmailSenderCapabilities, mayRetryDelivery } from '@fabrika/email'
 import { uuidv7 } from '@fabrika/platform'
 import { NotFoundError } from '../errors'
@@ -22,6 +33,7 @@ import {
 	runInRequest,
 	type Within,
 } from '../implement/capability'
+import { admitInvocation, type InvocationAdmission } from '../implement/dispatch'
 import { runAsSite } from '../implement/egress'
 import { failureCode, type FailureReason, failureReason } from '../implement/failures'
 import { ServerFault } from '../implement/faults'
@@ -34,6 +46,7 @@ import {
 	jobHandles,
 	jobSql,
 	jobSqlOutsideTransaction,
+	type KickRecorder,
 	kickRecorder,
 	siteData,
 	type SiteDeclaration,
@@ -42,10 +55,10 @@ import {
 import { jobLinkIssuing, type JobLinkMount } from '../implement/membership'
 import type { SignedTokens } from '../implement/tokens'
 import { type AppUrl, appUrl } from '../implement/urls'
-import { type WorkloadCredential, workloadSite } from '../implement/workload'
+import { type WorkloadAuthority, type WorkloadCredential, workloadSite } from '../implement/workload'
 import { jobMail, type MailTransports } from './mail'
 import type { OperationsReporter } from './report'
-import { type CronSchedule, parseCron, periodAt } from './schedule'
+import { type CronSchedule, isDueAt, parseCron, periodAt } from './schedule'
 import type { AppMail, JobContext, JobPrincipal } from './types'
 
 /**
@@ -55,6 +68,11 @@ import type { AppMail, JobContext, JobPrincipal } from './types'
 export const LEASE_GRACE_MS = 60_000
 /** How often the serving process checks every job for a crashed run and for a schedule that stopped. */
 export const JOB_CHECK_INTERVAL_MS = 60_000
+/**
+ * A run the Cloudflare alarm started has one segment (`CLOUDFLARE_MAX_JOB_SEGMENT_MS`): its attempt ends this much
+ * before the segment, at most a tenth of it, so the finish runs inside the segment too.
+ */
+export const SEGMENT_FINISH_RESERVE_MS = 30_000
 const BACKOFF_BASE_MS = 1_000
 const BACKOFF_MAX_MS = 5 * 60_000
 
@@ -76,7 +94,7 @@ export type JobFailureCode =
 	| 'unauthorized'
 	/** IAM could not be asked for the job's token. */
 	| 'iam_unavailable'
-	/** The process stopped a kicked run while shutting down; the schedule runs the job again. */
+	/** The process stopped a kicked run while shutting down, or the object's maintenance stopped a run; the schedule runs it again. */
 	| 'stopped'
 	/** The transport refused a message the handler did not catch; `reason` is the `EmailDeliveryError` code. */
 	| 'mail_failed'
@@ -94,6 +112,8 @@ export interface JobClock {
 	wait(ms: number, signal: AbortSignal): Promise<void>
 	/** In [0, 1): the jitter of a retry's backoff. */
 	random(): number
+	/** Epoch milliseconds: what an attempt's deadline is measured on; `Date.now()` when absent. */
+	now?(): number
 }
 
 export interface JobRunOptions {
@@ -126,6 +146,59 @@ export interface ContractJobs {
 	 * twice its period. The serving process calls it every `JOB_CHECK_INTERVAL_MS`; it never throws.
 	 */
 	check(options?: Pick<JobRunOptions, 'reporter'>): Promise<void>
+	/**
+	 * The serving process's wake timer on Bun, where crontab runs the schedule: reaps a crashed holder of every job and
+	 * kicks each contract job with a due wake through the kick path, handing each kick to `track` until it ended. Answers
+	 * how long until a wake is due next on the database's clock (0 while one still is), `null` when none is pending. The
+	 * first call deletes the wakes of jobs the contract no longer declares.
+	 */
+	wake(track: (kick: Promise<void>) => void): Promise<number | null>
+	/** What the Cloudflare object's alarm drives the jobs through; `null` without `@fabrika/db`. */
+	readonly scheduler: JobScheduler | null
+}
+
+/** What the scheduler's `take` did for one job in the alarm's transaction. */
+export interface TakenLease {
+	/** The lease a run of the job now holds, for `run`; `null` when nothing was due or another run holds it. */
+	readonly fence: LeaseFence | null
+	/** Whether a crashed holder's lease was freed: `crashed` reports it once the transaction committed. */
+	readonly reaped: boolean
+}
+
+/**
+ * The jobs as the Cloudflare object's alarm drives them (ADR-0065 §5): over the wakes and leases of the object's
+ * storage, every time on the database's clock. The object holds the transactions and arms the alarm.
+ */
+export interface JobScheduler {
+	/** Every job bound to run, the framework's included. */
+	readonly jobs: readonly string[]
+	/**
+	 * Startup repair: reaps and reports every crashed run, of a job the contract no longer declares too; registers every
+	 * job and surveils it (as `check`), deletes the wakes of jobs the contract no longer declares and the cron wakes of a
+	 * changed expression, and keeps one cron wake per job at its next fire; an overdue one stays, so missed runs coalesce
+	 * into one. `false` when the object's barrier admits no job.
+	 */
+	repair(options?: Pick<JobRunOptions, 'reporter'>): Promise<boolean>
+	/** The jobs the contract no longer declares whose lease a crashed run still holds: `take` reaps them. */
+	orphans(): Promise<readonly string[]>
+	/** How long until every wake due within `withinMs` of the database's clock is due; 0 when none is early. */
+	earlyBy(withinMs: number): Promise<number>
+	/**
+	 * Reaps a crashed holder of `job`'s lease, then, when one of its wakes is due, takes the lease, or sets the pending
+	 * flag for the run holding it; of a job no longer declared (an orphan), only reaps. Statements only, for the caller's
+	 * one transaction.
+	 */
+	take(job: string): Promise<TakenLease>
+	/** Runs `job` under the lease `take` took. A failed run retries the wakes it owns durably. */
+	run(job: string, fence: LeaseFence, options?: JobRunOptions): Promise<JobRunResult>
+	/** Reports the crashed run `take` reaped. */
+	crashed(job: string, options?: Pick<JobRunOptions, 'reporter'>): Promise<void>
+	/** When the scheduler wakes next: `JobWakes.next`, read in `using` when given. */
+	next(using?: Session): Promise<Date | null>
+	/** How far the next wake is from the database's now, in milliseconds: `JobWakes.untilNext`, read in `using` when given. */
+	untilNext(using?: Session): Promise<number | null>
+	/** Reports a failure of the scheduler itself: the alarm's or the repair's. Never rejects. */
+	failed(step: 'alarm' | 'repair', error: unknown): Promise<void>
 }
 
 /** A run that cannot start: an unknown job. Its message is framework-authored. */
@@ -134,6 +207,7 @@ export class JobError extends Error {
 }
 
 export const systemClock: JobClock = Object.freeze({
+	now: () => Date.now(),
 	wait: (ms: number, signal: AbortSignal) =>
 		new Promise<void>((resolve) => {
 			if (signal.aborted) {
@@ -174,6 +248,8 @@ interface RunnerContext {
 	readonly database: ContractDatabase | null
 	readonly ownedDimensions: ReadonlySet<string>
 	readonly leases: JobLeases
+	/** The jobs' pending wakes, which a run's finish consumes, retries or schedules. */
+	readonly wakes: JobWakes
 	readonly reporter: OperationsReporter
 	readonly mint: CapabilityMint
 	readonly data: DataAccess | null
@@ -310,11 +386,22 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 	}
 	const names = Object.freeze(entries.map(([name]) => name))
 	const framework = input.framework
-	const contextFor = (leases: JobLeases, chosen: OperationsReporter | undefined): RunnerContext => ({
+	const declaredJobs: readonly (Scheduled & { readonly timeoutMs: number })[] = [
+		...[...bound.values()].map((job) => ({ name: job.name, expression: job.artifact.schedule, schedule: job.schedule, timeoutMs: job.timeoutMs })),
+		...[...frameworkJobs.values()].map((own) => ({
+			name: own.name,
+			expression: own.job.schedule,
+			schedule: own.schedule,
+			timeoutMs: own.job.timeoutMs,
+		})),
+	]
+	let reconciled = false
+	const contextFor = (tables: FrameworkTables, chosen: OperationsReporter | undefined): RunnerContext => ({
 		artifact: input.artifact,
 		database: input.database,
 		ownedDimensions: input.ownedDimensions,
-		leases,
+		leases: tables.jobs,
+		wakes: tables.wakes,
 		reporter: chosen ?? input.reporter,
 		mint: input.mint,
 		data: input.data,
@@ -335,57 +422,147 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		run(name: string, options: JobRunOptions = {}): Promise<JobRunResult> {
 			const own = frameworkJobs.get(name)
 			if (own !== undefined && framework !== null) {
-				return runFrameworkJob(own, contextFor(framework.jobs, options.reporter), options.clock ?? systemClock)
+				return admitted(
+					'framework-job',
+					name,
+					(control) => runFrameworkJob(own, contextFor(framework, options.reporter), options.clock ?? systemClock, control, null),
+				)
 			}
 			const job = bound.get(name)
 			if (job === undefined || framework === null) {
 				throw new JobError(`no job '${name}' in the contract (jobs: ${names.length === 0 ? 'none' : names.join(', ')})`)
 			}
-			return runJob(job, contextFor(framework.jobs, options.reporter), options.clock ?? systemClock, 'wait').then((result) => {
-				if (result.status === 'skipped') {
-					console.error(`fabrika: a previous run of job '${name}' still holds its lease; this run does not start`)
-				}
-				return result
-			})
+			return admitted(
+				'job',
+				name,
+				(control) => runJob(job, contextFor(framework, options.reporter), options.clock ?? systemClock, 'wait', control, 'inline'),
+			)
+				.then((result) => {
+					if (result.status === 'skipped') {
+						console.error(`fabrika: a previous run of job '${name}' still holds its lease; this run does not start`)
+					}
+					return result
+				})
 		},
 		async check(options: Pick<JobRunOptions, 'reporter'> = {}): Promise<void> {
-			if (framework === null) {
+			const admission = framework === null ? null : admitInvocation('framework-job')
+			if (framework === null || admission === null) {
 				return
 			}
-			const context = contextFor(framework.jobs, options.reporter)
-			for (const job of [...bound.values(), ...frameworkJobs.values()]) {
-				try {
-					await context.leases.register(job.name)
-					await surveil(job, context)
-				} catch {
-					// A driver error may quote the database URL.
-					console.error(`fabrika: the check of job '${job.name}' failed: driver_failed`)
+			try {
+				const context = contextFor(framework, options.reporter)
+				for (const job of [...bound.values(), ...frameworkJobs.values()]) {
+					try {
+						await context.leases.register(job.name)
+						await surveil(job, context)
+					} catch {
+						// A driver error may quote the database URL.
+						console.error(`fabrika: the check of job '${job.name}' failed: driver_failed`)
+					}
 				}
+			} finally {
+				admission.release()
 			}
 		},
+		async wake(track: (kick: Promise<void>) => void): Promise<number | null> {
+			if (framework === null) {
+				return null
+			}
+			if (!reconciled) {
+				await framework.wakes.reconcile(declaredJobs.map((job) => ({ job: job.name, expression: job.expression })))
+				reconciled = true
+			}
+			// A crashed holder's expiry is a wake too, and a kick never takes a lease over.
+			for (const job of declaredJobs) {
+				if (await framework.jobs.reapCrashed(job.name)) {
+					await reportCrashed(job.name, input.reporter)
+				}
+			}
+			const now = (await framework.jobs.now()).getTime()
+			for (const job of bound.values()) {
+				const due = (await framework.wakes.pending(job.name)).filter((wake) => wake.dueAt.getTime() <= now)
+				if (due.length > 0 && !(await ownedByHolder(job.name, now, framework.jobs, framework.wakes))) {
+					track(kick(job.name))
+				}
+			}
+			const next = await framework.wakes.next()
+			return next === null ? null : Math.max(0, next.getTime() - now)
+		},
+		scheduler: framework === null ? null : jobScheduler({
+			framework,
+			declared: declaredJobs,
+			contextFor: (reporter) => contextFor(framework, reporter),
+			run(name: string, fence: LeaseFence, options: JobRunOptions): Promise<JobRunResult> {
+				const clock = options.clock ?? systemClock
+				const context = contextFor(framework, options.reporter)
+				const own = frameworkJobs.get(name)
+				if (own !== undefined) {
+					return admitted('framework-job', name, (control) => runFrameworkJob(own, context, clock, control, fence))
+				}
+				const job = bound.get(name)
+				if (job === undefined) {
+					throw new JobError(`no job '${name}' in the contract (jobs: ${names.length === 0 ? 'none' : names.join(', ')})`)
+				}
+				return admitted('job', name, (control) => runJob(job, context, clock, { fence }, control, 'durable'))
+			},
+		}),
 	})
 	const stopping = new AbortController()
 	const kick = async (name: string): Promise<void> => {
 		const job = bound.get(name)
-		if (job !== undefined && framework !== null) {
-			await kickOnce(job, contextFor(framework.jobs, undefined), stopping.signal)
+		if (job === undefined || framework === null) {
+			return
+		}
+		const admission = admitInvocation('kick')
+		if (admission === null) {
+			// A kick hurries a run; the schedule still runs the job once the object opens.
+			console.error(`fabrika: job '${name}' was not kicked: the object is in maintenance`)
+			return
+		}
+		try {
+			await kickOnce(job, contextFor(framework, undefined), {
+				signal: AbortSignal.any([admission.signal, stopping.signal]),
+				track: admission.track,
+			})
+		} finally {
+			admission.release()
 		}
 	}
 	return { jobs, declared, kick, stopKicks: () => stopping.abort() }
 }
 
 /**
+ * What stops one run, and where the handler work that outlives its attempt is counted: the run's admission at the
+ * object's barrier, which a drain aborts, and for a kick also the process's stop.
+ */
+type RunControl = Pick<InvocationAdmission, 'signal' | 'track'>
+
+/** A run admitted at the current event's gate, released once it ended; a refused one is `stopped` and starts nothing. */
+async function admitted(kind: 'job' | 'framework-job', name: string, run: (control: RunControl) => Promise<JobRunResult>): Promise<JobRunResult> {
+	const admission = admitInvocation(kind)
+	if (admission === null) {
+		console.error(`fabrika: job '${name}' did not start: the object is in maintenance; its schedule runs it again`)
+		return { status: 'failed', attempts: 0, code: 'stopped' }
+	}
+	try {
+		return await run(admission)
+	} finally {
+		admission.release()
+	}
+}
+
+/**
  * One kick: a run while the lease is free, else the shared pending flag. Neither waits for a lock, so a kick never
  * holds a connection requests share while a run writes. After a failed run the flag stays for the schedule.
  */
-async function kickOnce(job: BoundJob, context: RunnerContext, stop: AbortSignal): Promise<void> {
-	if (stop.aborted) {
+async function kickOnce(job: BoundJob, context: RunnerContext, control: RunControl): Promise<void> {
+	if (control.signal.aborted) {
 		// The flag waits for no lock, and another process that is not stopping runs the job.
 		await markPending(job, context)
 		return
 	}
-	if ((await runJob(job, context, systemClock, 'try', stop)).status === 'skipped') {
-		await handOver(job, context, systemClock, stop)
+	if ((await runJob(job, context, systemClock, 'try', control, 'inline')).status === 'skipped') {
+		await handOver(job, context, systemClock, control, 'inline')
 	}
 }
 
@@ -393,11 +570,11 @@ async function kickOnce(job: BoundJob, context: RunnerContext, stop: AbortSignal
  * Leaves the flag to the run holding the lease, which takes it after it succeeded. That run may have finished before
  * the flag was set, so the lease is tried once more; `null` when another run still holds it.
  */
-async function handOver(job: BoundJob, context: RunnerContext, clock: JobClock, stop?: AbortSignal): Promise<JobRunResult | null> {
+async function handOver(job: BoundJob, context: RunnerContext, clock: JobClock, control: RunControl, retries: Retries): Promise<JobRunResult | null> {
 	if (!(await markPending(job, context))) {
 		return null
 	}
-	const result = await runJob(job, context, clock, 'try', stop)
+	const result = await runJob(job, context, clock, 'try', control, retries)
 	return result.status === 'skipped' ? null : result
 }
 
@@ -444,13 +621,123 @@ function backoffMs(attempt: number, random: number): number {
 	return Math.round(ceiling / 2 + (ceiling / 2) * random)
 }
 
+const nowOf = (clock: JobClock): number => clock.now?.() ?? Date.now()
+
+/** How much of a segment that ends at `deadline` is left, never below zero. */
+const remainingMs = (clock: JobClock, deadline: number): number => Math.max(0, deadline - nowOf(clock))
+
+const finishReserveMs = (timeoutMs: number): number => Math.min(SEGMENT_FINISH_RESERVE_MS, Math.floor(timeoutMs / 10))
+
+const OUT_OF_SEGMENT: unique symbol = Symbol('fabrika.job.outOfSegment')
+
+/**
+ * `step` while the segment that ends at `end` lasts (always, without one). Past its end the run stops waiting for it;
+ * only a step that is safe to abandon goes here: a read, or the refusal of the attempt's writes, never a finish.
+ */
+async function withinSegment<T>(clock: JobClock, end: number | null, step: Promise<T>): Promise<T | typeof OUT_OF_SEGMENT> {
+	if (end === null) {
+		return await step
+	}
+	const timer = new AbortController()
+	// Abandoned past the segment, its rejection is nobody's: the race below still answers it while it is awaited.
+	step.catch(() => undefined)
+	try {
+		return await Promise.race([step, clock.wait(remainingMs(clock, end), timer.signal).then((): typeof OUT_OF_SEGMENT => OUT_OF_SEGMENT)])
+	} finally {
+		timer.abort()
+	}
+}
+
+/** A run whose segment ended before its finish started: its lease expires, the reap reports the crash, and the alarm runs it again. */
+function outOfSegment(job: { readonly name: string }, attempts: number): JobRunResult {
+	console.error(`fabrika: job '${job.name}' reached the end of its segment before its finish; its lease expires and the alarm runs it again`)
+	return { status: 'failed', attempts, code: 'timeout' }
+}
+
+const MINUTE_MS = 60_000
+/** How far ahead a next fire is looked for, as far as `previousDue` looks back. */
+const NEXT_FIRE_DAYS = 366 * 5
+
+/** The first due minute of `schedule` after `after`, or `null` when none falls in the window. */
+function nextFire(schedule: CronSchedule, after: Date): Date | null {
+	const hours = [...schedule.hours].sort((left, right) => left - right)
+	const minutes = [...schedule.minutes].sort((left, right) => left - right)
+	const [firstHour, firstMinute] = [hours[0], minutes[0]]
+	if (firstHour === undefined || firstMinute === undefined) {
+		return null
+	}
+	const today = Date.UTC(after.getUTCFullYear(), after.getUTCMonth(), after.getUTCDate())
+	for (let ahead = 0; ahead <= NEXT_FIRE_DAYS; ahead++) {
+		const day = today + ahead * 24 * 60 * MINUTE_MS
+		// The day's first scheduled minute is due exactly when the day matches.
+		if (!isDueAt(schedule, new Date(day + (firstHour * 60 + firstMinute) * MINUTE_MS))) {
+			continue
+		}
+		for (const hour of hours) {
+			for (const minute of minutes) {
+				const time = day + (hour * 60 + minute) * MINUTE_MS
+				if (time > after.getTime()) {
+					return new Date(time)
+				}
+			}
+		}
+	}
+	return null
+}
+
+/** A cron wake's dedupe key: one pending wake per job and expression. */
+const cronKey = (job: string, expression: string): string => `cron:${job}:${expression}`
+
+/** A job's schedule as the scheduler and a finish read it. */
+interface Scheduled {
+	readonly name: string
+	/** The cron expression as declared: its wake's key. */
+	readonly expression: string
+	readonly schedule: CronSchedule
+}
+
+/**
+ * Whether a run holds `job`'s lease and owns every wake due by `now`, as it took them with the lease: its finish consumes
+ * them, so a kick or a pending run for them would only repeat that run. A post-commit kick's run usually owns its wake.
+ */
+async function ownedByHolder(job: string, now: number, leases: JobLeases, wakes: JobWakes): Promise<boolean> {
+	const state = await leases.state(job)
+	if (state === null || state.holder === null) {
+		return false
+	}
+	return (await wakes.pending(job)).filter((wake) => wake.dueAt.getTime() <= now).every((wake) => wake.owned)
+}
+
+/** The wakes the run holding `job`'s lease owns: those it took with the lease. */
+async function ownedWakes(job: string, context: RunnerContext): Promise<readonly Wake[]> {
+	return (await context.wakes.pending(job)).filter((wake) => wake.owned)
+}
+
+/**
+ * What a finish does with the owned wakes when the run is done with them, succeeded or failed past its retries: they
+ * are consumed, and when the job keeps a cron wake (always, for a run the alarm started) its next fire is scheduled
+ * under its key. On Bun, where crontab runs the schedule, a job keeps none.
+ */
+async function completion(job: Scheduled, context: RunnerContext, durable: boolean): Promise<FinishWakes> {
+	if (!durable && !(await context.wakes.pending(job.name)).some((wake) => wake.reason === 'cron')) {
+		return { kind: 'completed' }
+	}
+	const dueAt = nextFire(job.schedule, await context.leases.now())
+	return dueAt === null ? { kind: 'completed' } : { kind: 'completed', nextCron: { expression: job.expression, dueAt } }
+}
+
+/** A crashed run (its lease expired before it finished): one report. */
+async function reportCrashed(job: string, reporter: OperationsReporter): Promise<void> {
+	const message = `job '${job}' failed: crashed (its run's lease expired before the run finished)`
+	console.error(`fabrika: ${message}`)
+	await reporter.report({ fingerprint: ['fabrika-job-failed', job], type: 'JobFailed', message, tags: { job, code: 'crashed' } })
+}
+
 /** A crashed run (its lease expired before it finished) and a job overdue by twice its period: one report each. */
 async function surveil(job: { readonly name: string; readonly schedule: CronSchedule }, context: RunnerContext): Promise<void> {
 	const tags = { job: job.name }
 	if (await context.leases.reapCrashed(job.name)) {
-		const message = `job '${job.name}' failed: crashed (its run's lease expired before the run finished)`
-		console.error(`fabrika: ${message}`)
-		await context.reporter.report({ fingerprint: ['fabrika-job-failed', job.name], type: 'JobFailed', message, tags: { ...tags, code: 'crashed' } })
+		await reportCrashed(job.name, context.reporter)
 	}
 	const period = periodAt(job.schedule, await context.leases.now())
 	const claim = period === null ? null : await context.leases.claimOverdue(job.name, period)
@@ -468,30 +755,156 @@ async function surveil(job: { readonly name: string; readonly schedule: CronSche
 	})
 }
 
+interface SchedulerInput {
+	readonly framework: FrameworkTables
+	/** Every job bound to run, with the attempt time its lease is taken for. */
+	readonly declared: readonly (Scheduled & { readonly timeoutMs: number })[]
+	readonly contextFor: (reporter: OperationsReporter | undefined) => RunnerContext
+	readonly run: (job: string, fence: LeaseFence, options: JobRunOptions) => Promise<JobRunResult>
+}
+
+function jobScheduler(input: SchedulerInput): JobScheduler {
+	const { framework, declared } = input
+	const byName = new Map(declared.map((job) => [job.name, job]))
+	return Object.freeze({
+		jobs: Object.freeze(declared.map((job) => job.name)),
+		async repair(options: Pick<JobRunOptions, 'reporter'> = {}): Promise<boolean> {
+			const admission = admitInvocation('framework-job')
+			if (admission === null) {
+				return false
+			}
+			try {
+				const context = input.contextFor(options.reporter)
+				for (const job of await framework.wakes.expiredHolders()) {
+					if (await context.leases.reapCrashed(job)) {
+						await reportCrashed(job, context.reporter)
+					}
+				}
+				for (const job of declared) {
+					await context.leases.register(job.name)
+					await surveil(job, context)
+				}
+				await framework.wakes.reconcile(declared.map((job) => ({ job: job.name, expression: job.expression })))
+				const now = await context.leases.now()
+				for (const job of declared) {
+					const dueAt = nextFire(job.schedule, now)
+					if (dueAt !== null) {
+						await framework.wakes.schedule({ job: job.name, reason: 'cron', dueAt, dedupe: cronKey(job.name, job.expression) })
+					}
+				}
+				return true
+			} finally {
+				admission.release()
+			}
+		},
+		async orphans(): Promise<readonly string[]> {
+			return (await framework.wakes.expiredHolders()).filter((job) => !byName.has(job))
+		},
+		async earlyBy(withinMs: number): Promise<number> {
+			const now = (await framework.jobs.now()).getTime()
+			let early = 0
+			for (const job of declared) {
+				for (const wake of await framework.wakes.pending(job.name)) {
+					const ahead = wake.dueAt.getTime() - now
+					if (ahead <= withinMs) {
+						early = Math.max(early, ahead)
+					}
+				}
+			}
+			return early
+		},
+		async take(name: string): Promise<TakenLease> {
+			const job = byName.get(name)
+			const leases = framework.jobs
+			if (job === undefined) {
+				// A removed job runs no more; only a crashed run's lease is freed, so it stops arming the alarm.
+				return { fence: null, reaped: await leases.reapCrashed(name) }
+			}
+			await leases.register(name)
+			const reaped = await leases.reapCrashed(name)
+			const now = (await leases.now()).getTime()
+			const due = (await framework.wakes.pending(name)).filter((wake) => wake.dueAt.getTime() <= now)
+			if (due.length === 0) {
+				return { fence: null, reaped }
+			}
+			const fence = await leases.tryAcquire(name, attemptId(), job.timeoutMs, job.timeoutMs + LEASE_GRACE_MS)
+			if (fence === null && !(await ownedByHolder(name, now, leases, framework.wakes))) {
+				// The run holding the lease runs once more after it succeeded; a wake it did not own stays pending.
+				await leases.markPending(name)
+			}
+			return { fence, reaped }
+		},
+		run(job: string, fence: LeaseFence, options: JobRunOptions = {}): Promise<JobRunResult> {
+			return input.run(job, fence, options)
+		},
+		async crashed(job: string, options: Pick<JobRunOptions, 'reporter'> = {}): Promise<void> {
+			await reportCrashed(job, input.contextFor(options.reporter).reporter)
+		},
+		next(using?: Session): Promise<Date | null> {
+			return framework.wakes.next(using)
+		},
+		untilNext(using?: Session): Promise<number | null> {
+			return framework.wakes.untilNext(using)
+		},
+		async failed(step: 'alarm' | 'repair', error: unknown): Promise<void> {
+			try {
+				await input.contextFor(undefined).reporter.report({
+					fingerprint: ['fabrika-alarm-failed', step],
+					type: 'AlarmFailed',
+					message: `the job scheduler's ${step} failed`,
+					tags: { step },
+					error,
+				})
+			} catch {
+				console.error(`fabrika: the failure of the job scheduler's ${step} could not be reported`)
+			}
+		},
+	})
+}
+
 interface Progress {
 	attempts: number
 }
 
-/**
- * How a run takes the lease: `wait` is `fabrika job run`'s, in a process of its own; `try` is a kick's and a follow-up
- * run's, which never wait for a lock.
- */
-type Acquisition = 'wait' | 'try'
+/** What the attempt that succeeded kicked: `null` until a handler returned. */
+interface Kicked {
+	recorder: KickRecorder | null
+}
 
 /**
- * A run of the job, then one more while a kick arrived after the last one started and it succeeded. Once `stop`
- * aborted, no follow-up run starts: the pending flag stays for the schedule.
+ * How a run takes the lease: `wait` is `fabrika job run`'s, in a process of its own; `try` is a kick's and a follow-up
+ * run's, which never wait for a lock; a fence is one the alarm's scheduler already took.
  */
-async function runJob(job: BoundJob, context: RunnerContext, clock: JobClock, acquisition: Acquisition, stop?: AbortSignal): Promise<JobRunResult> {
-	let result = await runOnce(job, context, clock, acquisition, stop)
-	while (result.status === 'succeeded' && stop?.aborted !== true && (await pendingTaken(job, context))) {
-		const next = await runOnce(job, context, clock, 'try', stop)
+type Acquisition = 'wait' | 'try' | { readonly fence: LeaseFence }
+
+/**
+ * How a failed attempt is retried: `inline` in the same run, after a backoff, under a renewed lease; `durable` (a run the
+ * Cloudflare alarm started) by moving the wakes it owns to a later due time, so the alarm runs it again. A durable run
+ * that owns no wake retries inline: there is nothing to move.
+ */
+type Retries = 'inline' | 'durable'
+
+/**
+ * A run of the job, then one more while a kick arrived after the last one started and it succeeded. Once the run's
+ * control aborted, no follow-up run starts: the pending flag stays for the schedule.
+ */
+async function runJob(
+	job: BoundJob,
+	context: RunnerContext,
+	clock: JobClock,
+	acquisition: Acquisition,
+	control: RunControl,
+	retries: Retries,
+): Promise<JobRunResult> {
+	let result = await runOnce(job, context, clock, acquisition, control, retries)
+	while (result.status === 'succeeded' && !control.signal.aborted && (await pendingTaken(job, context))) {
+		const next = await runOnce(job, context, clock, 'try', control, retries)
 		if (next.status !== 'skipped') {
 			result = next
 			continue
 		}
 		// A newer run holds the lease and may have read before the kick's row: the flag goes back to it.
-		const handed = await handOver(job, context, clock, stop)
+		const handed = await handOver(job, context, clock, control, retries)
 		return handed ?? result
 	}
 	return result
@@ -507,11 +920,23 @@ async function pendingTaken(job: BoundJob, context: RunnerContext): Promise<bool
 	}
 }
 
-async function runOnce(job: BoundJob, context: RunnerContext, clock: JobClock, acquisition: Acquisition, stop?: AbortSignal): Promise<JobRunResult> {
+async function runOnce(
+	job: BoundJob,
+	context: RunnerContext,
+	clock: JobClock,
+	acquisition: Acquisition,
+	control: RunControl,
+	retries: Retries,
+): Promise<JobRunResult> {
 	const progress: Progress = { attempts: 0 }
 	try {
-		return await runLeased(job, context, clock, progress, acquisition, stop)
+		return await runLeased(job, context, clock, progress, acquisition, control, retries)
 	} catch {
+		if (control.signal.aborted) {
+			// A stopped run's lease write is refused by the object's write fence; the lease expires and the schedule runs it.
+			console.error(`fabrika: job '${job.name}' stopped before it released its lease; its schedule runs it again`)
+			return { status: 'failed', attempts: progress.attempts, code: 'stopped' }
+		}
 		// Only the lease store throws here: the handler's errors stay inside its attempt. Its message may quote the URL.
 		return failed(job, progress.attempts, failure('driver_failed'), context.reporter)
 	}
@@ -523,32 +948,47 @@ async function runLeased(
 	clock: JobClock,
 	progress: Progress,
 	acquisition: Acquisition,
-	stop?: AbortSignal,
+	control: RunControl,
+	retries: Retries,
 ): Promise<JobRunResult> {
 	const { leases } = context
-	await leases.register(job.name)
 	const leaseMs = job.timeoutMs + LEASE_GRACE_MS
-	if (stop?.aborted === true) {
-		return { status: 'skipped' }
-	}
 	let fence: LeaseFence | null
-	if (acquisition === 'wait') {
-		await surveil(job, context)
-		fence = await leases.acquire(job.name, attemptId(), job.timeoutMs, leaseMs)
+	if (typeof acquisition === 'object') {
+		fence = acquisition.fence
 	} else {
-		fence = await leases.tryAcquire(job.name, attemptId(), job.timeoutMs, leaseMs)
+		await leases.register(job.name)
+		if (control.signal.aborted) {
+			return { status: 'skipped' }
+		}
+		if (acquisition === 'wait') {
+			await surveil(job, context)
+			fence = await leases.acquire(job.name, attemptId(), job.timeoutMs, leaseMs)
+		} else {
+			fence = await leases.tryAcquire(job.name, attemptId(), job.timeoutMs, leaseMs)
+		}
 	}
 	if (fence === null) {
 		return { status: 'skipped' }
 	}
+	// The segment is measured from the lease, as the database's attempt deadline is. A run the alarm started has one
+	// segment: its attempts end before it by the finish's reserve, and no finish starts past it.
+	const segmentEnd = retries === 'durable' ? nowOf(clock) + job.timeoutMs : null
+	const attemptEnd = (
+		start: number,
+	): number => (segmentEnd === null ? start + job.timeoutMs : Math.min(start + job.timeoutMs, segmentEnd - finishReserveMs(job.timeoutMs)))
+	let deadline = attemptEnd(nowOf(clock))
 	// This run covers every kick before it: their rows committed before it reads.
 	await pendingTaken(job, context)
+	const owned = retries === 'durable' ? await ownedWakes(job.name, context) : []
+	const durable = owned.length > 0
+	const scheduled: Scheduled = { name: job.name, expression: job.artifact.schedule, schedule: job.schedule }
 	const attempts = job.artifact.retries + 1
-	progress.attempts = 1
-	// The jobs the succeeding attempt kicked; a failed attempt's kicks are dropped with its writes.
-	const kicked: string[] = []
-	let outcome = await attemptOnce(job, fence, progress.attempts, clock, context, kicked, stop)
-	while (outcome !== null && outcome.code !== 'stopped' && !outcome.final && progress.attempts < attempts) {
+	progress.attempts = durable ? Math.max(...owned.map((wake) => wake.attempt)) + 1 : 1
+	// The kicks of the succeeding attempt; a failed attempt's kicks are dropped with its writes.
+	const kicked: Kicked = { recorder: null }
+	let outcome = await attemptOnce(job, fence, progress.attempts, deadline, segmentEnd, clock, context, kicked, control)
+	while (!durable && outcome !== null && outcome.code !== 'stopped' && !outcome.final && progress.attempts < attempts) {
 		console.error(`fabrika: job '${job.name}' attempt ${progress.attempts} of ${attempts} failed: ${describeFailure(outcome)}`)
 		const delay = backoffMs(progress.attempts, clock.random())
 		// A new generation at once: nothing the failed attempt still has in flight commits from here on.
@@ -557,23 +997,62 @@ async function runLeased(
 			return failed(job, progress.attempts, failure('lease_lost'), context.reporter)
 		}
 		fence = next
-		await clock.wait(delay, stop ?? new AbortController().signal)
+		deadline = attemptEnd(nowOf(clock) + delay)
+		await clock.wait(delay, control.signal)
 		progress.attempts++
-		outcome = await attemptOnce(job, fence, progress.attempts, clock, context, kicked, stop)
+		outcome = await attemptOnce(job, fence, progress.attempts, deadline, segmentEnd, clock, context, kicked, control)
+	}
+	const held = fence
+	// The finish, unless the segment ended first; a finish once started is awaited, as it may be committing.
+	const finish = async (status: 'succeeded' | 'failed', wakes: Promise<FinishWakes | undefined>): Promise<boolean | typeof OUT_OF_SEGMENT> => {
+		const applied = await withinSegment(clock, segmentEnd, wakes)
+		if (applied === OUT_OF_SEGMENT || (segmentEnd !== null && remainingMs(clock, segmentEnd) === 0)) {
+			return OUT_OF_SEGMENT
+		}
+		return await leases.finish(held, status, applied)
 	}
 	if (outcome === null) {
-		if (await leases.finish(fence, 'succeeded')) {
+		// Before the finish, so a crash between it and a kick's start leaves the kick's wake to the scheduler.
+		const kicks = kicked.recorder
+		for (const wake of kicks?.wakes(await leases.now()) ?? []) {
+			await context.wakes.schedule(wake)
+		}
+		const finished = await finish('succeeded', completion(scheduled, context, durable))
+		if (finished === OUT_OF_SEGMENT) {
+			return outOfSegment(job, progress.attempts)
+		}
+		if (finished) {
 			// After the lease is released, so a job that kicks another never waits on its own lease; a kick never rejects.
-			await Promise.all(kicked.map((name) => context.kick(name)))
+			await Promise.all((kicks?.kicked() ?? []).map((name) => context.kick(name)))
 			return { status: 'succeeded', attempts: progress.attempts }
 		}
 		return failed(job, progress.attempts, failure('lease_lost'), context.reporter)
 	}
-	await leases.finish(fence, 'failed')
 	if (outcome.code === 'stopped') {
-		// Not a failure of the job: the schedule runs it again, so Operations hears nothing.
+		// Its wakes stay, so the alarm or the schedule runs it again. Not a failure of the job: Operations hears nothing.
+		await leases.finish(fence, 'failed')
 		console.error(`fabrika: job '${job.name}' stopped: the process is shutting down; its schedule runs it again`)
 		return { status: 'failed', attempts: progress.attempts, code: 'stopped' }
+	}
+	if (durable && !outcome.final && progress.attempts < attempts) {
+		const at = new Date(nowOf(clock) + backoffMs(progress.attempts, clock.random()))
+		console.error(
+			`fabrika: job '${job.name}' attempt ${progress.attempts} of ${attempts} failed: ${describeFailure(outcome)}; it runs again at ${at.toISOString()}`,
+		)
+		const finished = await finish('failed', Promise.resolve({ kind: 'retry', at }))
+		if (finished === OUT_OF_SEGMENT) {
+			return outOfSegment(job, progress.attempts)
+		}
+		if (!finished) {
+			return failed(job, progress.attempts, failure('lease_lost'), context.reporter)
+		}
+		return outcome.why === null
+			? { status: 'failed', attempts: progress.attempts, code: outcome.code }
+			: { status: 'failed', attempts: progress.attempts, code: outcome.code, reason: outcome.why.reason }
+	}
+	// Past its retries a run is done with its wakes: the next cron fire is scheduled, a kick's wake removed.
+	if ((await finish('failed', completion(scheduled, context, durable))) === OUT_OF_SEGMENT) {
+		return outOfSegment(job, progress.attempts)
 	}
 	return failed(job, progress.attempts, outcome, context.reporter)
 }
@@ -613,14 +1092,27 @@ async function failed(job: { readonly name: string }, attempts: number, outcome:
 
 const TIMED_OUT: unique symbol = Symbol('fabrika.job.timedOut')
 
-/** One run of a framework job: its lease, one attempt in a frame fenced by it, and the outcome reported like a job's. */
-async function runFrameworkJob(bound: BoundFrameworkJob, context: RunnerContext, clock: JobClock): Promise<JobRunResult> {
+/**
+ * One run of a framework job: its lease, one attempt in a frame fenced by it, and the outcome reported like a job's.
+ * A run its control stopped is not a failure: the schedule runs it again. `acquired` is the lease the alarm's scheduler
+ * took: such a run is done with the wakes it owns whether it succeeded or failed, as a framework job has no retries.
+ */
+async function runFrameworkJob(
+	bound: BoundFrameworkJob,
+	context: RunnerContext,
+	clock: JobClock,
+	control: RunControl,
+	acquired: LeaseFence | null,
+): Promise<JobRunResult> {
 	const { leases } = context
-	let fence: LeaseFence | null
+	const scheduled: Scheduled = { name: bound.name, expression: bound.job.schedule, schedule: bound.schedule }
+	let fence: LeaseFence | null = acquired
 	try {
-		await leases.register(bound.name)
-		await surveil(bound, context)
-		fence = await leases.acquire(bound.name, attemptId(), bound.job.timeoutMs, bound.job.timeoutMs + LEASE_GRACE_MS)
+		if (fence === null) {
+			await leases.register(bound.name)
+			await surveil(bound, context)
+			fence = await leases.acquire(bound.name, attemptId(), bound.job.timeoutMs, bound.job.timeoutMs + LEASE_GRACE_MS)
+		}
 	} catch {
 		return failed(bound, 0, failure('driver_failed'), context.reporter)
 	}
@@ -628,14 +1120,18 @@ async function runFrameworkJob(bound: BoundFrameworkJob, context: RunnerContext,
 		console.error(`fabrika: a previous run of job '${bound.name}' still holds its lease; this run does not start`)
 		return { status: 'skipped' }
 	}
+	// A run the alarm took the lease for has one segment, whose end is kept for the finish, as a contract job's.
+	const segmentEnd = acquired === null ? null : nowOf(clock) + bound.job.timeoutMs
 	const frame = new RequestFrame(fence.holder, { fence })
 	const cancel = new AbortController()
 	const timer = new AbortController()
 	let outcome: JobFailure | null
 	try {
 		const ran = runInRequest(frame, () => bound.job.run(context.reporter, cancel.signal)).then(() => null, (error: unknown) => failureOf(error, null))
-		const timeout = clock.wait(bound.job.timeoutMs, timer.signal).then((): typeof TIMED_OUT => TIMED_OUT)
-		const result = await Promise.race([ran, timeout])
+		control.track(ran)
+		const budget = segmentEnd === null ? bound.job.timeoutMs : bound.job.timeoutMs - finishReserveMs(bound.job.timeoutMs)
+		const timeout = clock.wait(budget, timer.signal).then((): typeof TIMED_OUT => TIMED_OUT)
+		const result = await Promise.race([ran, timeout, stoppedBy(control, timer.signal)])
 		outcome = result === TIMED_OUT ? failure('timeout') : result
 	} finally {
 		frame.end()
@@ -644,52 +1140,103 @@ async function runFrameworkJob(bound: BoundFrameworkJob, context: RunnerContext,
 	try {
 		// Writes are refused before the run hears it was stopped: a scanner that answers on abort commits nothing.
 		try {
-			await leases.cancelInFlight(fence)
+			await withinSegment(clock, segmentEnd, leases.cancelInFlight(fence))
 		} finally {
 			cancel.abort()
 		}
-		const finished = await leases.finish(fence, outcome === null ? 'succeeded' : 'failed')
+		// A stopped run keeps its wakes, so the alarm runs it again once the object opens.
+		const done = outcome === null || (acquired !== null && outcome.code !== 'stopped')
+		const wakes = await withinSegment(clock, segmentEnd, done ? completion(scheduled, context, acquired !== null) : Promise.resolve(undefined))
+		if (wakes === OUT_OF_SEGMENT || (segmentEnd !== null && remainingMs(clock, segmentEnd) === 0)) {
+			return outOfSegment(bound, 1)
+		}
+		// Awaited once started: a finish may be committing.
+		const finished = await leases.finish(fence, outcome === null ? 'succeeded' : 'failed', wakes)
 		if (outcome === null) {
 			return finished ? { status: 'succeeded', attempts: 1 } : failed(bound, 1, failure('lease_lost'), context.reporter)
 		}
 	} catch {
-		return failed(bound, 1, failure('driver_failed'), context.reporter)
+		// A stopped run's lease write is refused by the object's write fence; the lease expires and the schedule runs it.
+		if (!control.signal.aborted) {
+			return failed(bound, 1, failure('driver_failed'), context.reporter)
+		}
+	}
+	// Here a run without a failure of its own is one whose stop refused its lease write.
+	if (outcome === null || outcome.code === 'stopped' || control.signal.aborted) {
+		console.error(`fabrika: job '${bound.name}' stopped: the object entered maintenance; its schedule runs it again`)
+		return { status: 'failed', attempts: 1, code: 'stopped' }
 	}
 	return failed(bound, 1, outcome, context.reporter)
 }
 
 /** Read afresh at each call: the signal may abort while the caller awaits. */
-const isStopped = (stop: AbortSignal | undefined): boolean => stop?.aborted === true
+const isStopped = (control: RunControl): boolean => control.signal.aborted
+
+/** Resolves `stopped` once the run's control aborts; the listener goes when `done` aborts. */
+function stoppedBy(control: RunControl, done: AbortSignal): Promise<JobFailure> {
+	return new Promise<JobFailure>((resolve) => {
+		if (control.signal.aborted) {
+			resolve(failure('stopped'))
+		}
+		control.signal.addEventListener('abort', () => resolve(failure('stopped')), { once: true, signal: done })
+	})
+}
 
 /**
- * `null` when the handler finished, else the attempt's failure code. Either way the attempt's frame ends and the
- * statements it still has running are cancelled before the runner touches the lease again.
+ * `null` when the handler finished, else the attempt's failure code. One deadline bounds the attempt: IAM's answer for
+ * the job's key, then the handler with only what is left of it. Either way the attempt's frame ends and the statements
+ * it still has running are cancelled before the runner touches the lease again, waited for only while the segment lasts.
  */
 async function attemptOnce(
 	job: BoundJob,
 	fence: LeaseFence,
 	attempt: number,
+	deadline: number,
+	segmentEnd: number | null,
 	clock: JobClock,
 	context: RunnerContext,
-	kicked: string[],
-	stop?: AbortSignal,
+	kicked: Kicked,
+	control: RunControl,
 ): Promise<JobFailure | null> {
-	kicked.length = 0
-	if (isStopped(stop)) {
+	kicked.recorder = null
+	if (isStopped(control)) {
 		return failure('stopped')
 	}
 	// The job's authority is what IAM signs for its key at the start of the attempt; a revoked key stops the next one.
-	const authority = await job.credential.authority()
-	if (isStopped(stop)) {
+	const setup = new AbortController()
+	const exchange = job.credential.authority()
+	// Its settlement, not only the attempt's: a drain waits for an exchange the attempt stopped waiting for.
+	control.track(exchange)
+	let authority: WorkloadAuthority
+	try {
+		const answered = await Promise.race([
+			exchange,
+			clock.wait(remainingMs(clock, deadline), setup.signal).then((): typeof TIMED_OUT => TIMED_OUT),
+			stoppedBy(control, setup.signal),
+		])
+		if (answered === TIMED_OUT || 'code' in answered) {
+			// The next attempt asks IAM afresh rather than wait on an exchange that outlived this one.
+			job.credential.abandon(exchange)
+			return answered === TIMED_OUT ? failure('timeout') : answered
+		}
+		authority = answered
+	} finally {
+		setup.abort()
+	}
+	if (isStopped(control)) {
 		return failure('stopped')
 	}
 	if (!authority.ok) {
 		return failure(authority.reason === 'unavailable' ? 'iam_unavailable' : 'unauthorized')
 	}
+	const budget = remainingMs(clock, deadline)
+	if (budget === 0) {
+		return failure('timeout')
+	}
 	const frame = new RequestFrame(fence.holder, { fence })
 	const cancel = new AbortController()
 	const timer = new AbortController()
-	const signal = stop === undefined ? cancel.signal : AbortSignal.any([cancel.signal, stop])
+	const signal = AbortSignal.any([cancel.signal, control.signal])
 	const kicks = kickRecorder(`job '${job.name}'`, job.site?.kicks ?? [])
 	const ctx = { ...jobContext(job, frame, attempt, signal, context, authority.perms), kick: kicks.kick }
 	try {
@@ -700,26 +1247,22 @@ async function attemptOnce(
 			} else {
 				await runAsSite(`job '${job.name}'`, site.egress, async () => await job.handler({ ctx }))
 			}
-			kicked.push(...kicks.kicked())
+			kicked.recorder = kicks
 		}).then(() => null, (error: unknown) => {
 			const failed = failureOf(error, job.mailer === null ? null : (context.mail[job.mailer]?.sender.capabilities ?? null))
 			if (failed.code === 'handler_failed') context.revealHandlerErrors?.(`job '${job.name}' attempt ${attempt}`, error)
 			return failed
 		})
-		const timeout = clock.wait(job.timeoutMs, timer.signal).then((): typeof TIMED_OUT => TIMED_OUT)
-		const stopped = new Promise<JobFailure>((resolve) => {
-			if (stop?.aborted === true) {
-				resolve(failure('stopped'))
-			}
-			stop?.addEventListener('abort', () => resolve(failure('stopped')), { once: true, signal: timer.signal })
-		})
-		const result = await Promise.race([ran, timeout, stopped])
+		// Its settlement, not only the end of its frame: a drain waits for a handler that outlived the attempt.
+		control.track(ran)
+		const timeout = clock.wait(budget, timer.signal).then((): typeof TIMED_OUT => TIMED_OUT)
+		const result = await Promise.race([ran, timeout, stoppedBy(control, timer.signal)])
 		return result === TIMED_OUT ? failure('timeout') : result
 	} finally {
 		frame.end()
 		cancel.abort()
 		timer.abort()
-		await context.leases.cancelInFlight(fence)
+		await withinSegment(clock, segmentEnd, context.leases.cancelInFlight(fence))
 	}
 }
 

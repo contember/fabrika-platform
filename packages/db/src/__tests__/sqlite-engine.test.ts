@@ -341,6 +341,47 @@ describe('an invocation encloses its work in the transaction on SQLite', () => {
 		expect(ids()).toEqual([])
 	})
 
+	test('a DatabaseError the storage throws for a statement or at a commit reaches the caller as thrown, with its class', async () => {
+		// What the application object's write fence throws: dispatch answers it by its class, so nothing may rewrap it.
+		class StorageRefusal extends DatabaseError {
+			override name = 'StorageRefusal'
+
+			constructor() {
+				super(null)
+			}
+		}
+		const refusal = new StorageRefusal()
+		let refuseCommit = false
+		const refusing = openSqlite({
+			sql: {
+				exec: (query, ...bindings) => {
+					if (query.includes("'refused'")) {
+						throw refusal
+					}
+					return storage.sql.exec(query, ...bindings)
+				},
+			},
+			transaction: (closure) =>
+				storage.transaction(async () => {
+					const result = await closure()
+					if (refuseCommit) {
+						throw refusal
+					}
+					return result
+				}),
+			transactionSync: (closure) => storage.transactionSync(closure),
+		})
+		await expect(runFixedStatement(sessionOf({ database: refusing }), "select 'refused' as answer", [])).rejects.toBe(refusal)
+		refuseCommit = true
+		const invocation = new InvocationTransaction(refusing, false)
+		await expect(invocation.enclose(async () => {
+			await insertItem(await invocation.session(), 'a')
+			await invocation.commit()
+		}, { site: 'test', held: () => {} })).rejects.toBe(refusal)
+		await expect(sessionOf({ database: refusing }).transaction((nested) => insertItem(nested, 'b'))).rejects.toBe(refusal)
+		expect(ids()).toEqual([])
+	})
+
 	test('a framework transaction inside the work nests in it, and rolls back with it', async () => {
 		const invocation = new InvocationTransaction(database, false)
 		await invocation.enclose(async () => {

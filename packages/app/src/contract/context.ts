@@ -420,12 +420,18 @@ export type PublicContext<K extends KitTypes, Kind extends DataKind, Acts extend
 
 /**
  * `ctx.kick('<job>')` of a site that declares `kicks`: the job runs in the background after the site's transaction
- * committed, once however often it is kicked, and not at all on a rollback.
+ * committed, once however often it is kicked, and not at all on a rollback. `ctx.kick('<job>', { at })` runs it at `at`
+ * instead. Either way the kick is a durable wake written in the site's transaction, and it carries nothing.
  */
 export type KickContext<Ks> = [Ks] extends [never]
 	? { readonly kick: Unavailable<"declare kicks: ['<cron job>'] on this site to kick a job after its commit"> }
-	: Ks extends readonly (infer N extends string)[] ? { kick(job: N): void }
+	: Ks extends readonly (infer N extends string)[] ? { kick(job: N, options?: KickOptions): void }
 	: never
+
+/** When a kicked job runs: at `at`, a `Date`; without options, as soon as the site committed. */
+export interface KickOptions {
+	readonly at: Date
+}
 
 /** `ctx.tokens.sign('<purpose>', claims, { days })` of a site that declares `signs`: a token of one of those purposes. */
 export type TokensContext<K extends KitTypes, Sg> = [Sg] extends [never]

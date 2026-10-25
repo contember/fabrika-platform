@@ -1,6 +1,6 @@
 import { HttpError, initRpc, isStructuralError, type RpcRouterFor } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
-import { DEFAULT_APPLICATION_OBJECT, type OpsContentView, type OpsView, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type OpsContentView, type OpsView, parseAppEnvironmentId } from '@fabrika/auth-core'
 import {
 	APP_ENV_KINDS,
 	BUILDER_APPROVAL_VERIFIER,
@@ -10,6 +10,8 @@ import {
 	type ControlRpcContract,
 	type CursorList,
 	DATA_OPERATION_MAX_PAGE_SIZE,
+	type DataBackupDto,
+	type DataBackupScheduleDto,
 	type DataOperationDto,
 	type DataOperationListInput,
 	dataOperationListInputSchema,
@@ -20,11 +22,12 @@ import {
 	type MailRuleDto,
 	type RecoverDataOperationInput,
 	recoverDataOperationInputSchema,
+	type SetDataBackupScheduleInput,
 	type StartDataOperationInput,
 	startDataOperationInputSchema,
 } from '@fabrika/control-contract'
 import { parsePlatformMailRequest } from '@fabrika/email/platform'
-import { uuidv7 } from '@fabrika/platform'
+import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
@@ -84,9 +87,22 @@ import {
 	listApprovalsUseCase,
 	setEnvironmentProtectionUseCase,
 } from './approval/api'
+import { listBackups, toBackupScheduleDto } from './backups'
 import { describeConnector } from './connectors'
 import { consoleAccess } from './console-access'
-import { listDataOperations, type OpsInspection, type OpsTransport, type OpsUnavailable, toDataOperationDto } from './data-operations'
+import {
+	type DataOperationDeps,
+	type DataOperationOutcome,
+	listDataOperations,
+	type OpsInspection,
+	type OpsTransport,
+	type OpsUnavailable,
+	recordedObjects,
+	startMaintenance,
+	startRecovery,
+	startRestore,
+	toDataOperationDto,
+} from './data-operations'
 import type { ControlRepositories, MailMessageRow, MailRuleRow } from './db'
 import type { Env } from './env'
 import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from './github/connections/installation'
@@ -96,6 +112,7 @@ import { sourceConnectionList } from './github/connections/status'
 import { appScope } from './iam'
 import { jsonValueSchema } from './json-value'
 import { isInstallationSender, type MailRelay, mayRequeueMail, releaseMailMessage, requeueMailMessage } from './mail-relay/queue'
+import { operationDeploys, type RunDeps } from './run-lifecycle'
 import { buildControlRpcDeps, type ControlRpcDeps } from './services'
 
 interface ControlRpcContext {
@@ -245,6 +262,7 @@ const setMailRuleInput = z.object({
 
 const dataOperationId = z.object({ operationId: nonEmpty }).strict()
 const dataEnvironment = appEnvironment.strict()
+const setBackupScheduleInput = appEnvironment.extend({ daily: z.boolean() }).strict()
 
 export const controlRpcRouter = createControlRpcRouter(buildControlRpcDeps)
 
@@ -461,6 +479,13 @@ export function createControlRpcRouter(
 			recover: rpc.procedure.input(recoverDataOperationInputSchema).mutation(({ ctx, input }) =>
 				controlCall(() => recoverDataOperationUseCase(dataContext(ctx), input))
 			),
+			backups: rpc.router({
+				list: rpc.procedure.input(dataOperationListInputSchema).query(({ ctx, input }) => controlCall(() => listBackupsUseCase(dataContext(ctx), input))),
+				schedule: rpc.procedure.input(dataEnvironment).query(({ ctx, input }) => controlCall(() => readBackupScheduleUseCase(dataContext(ctx), input))),
+				setSchedule: rpc.procedure.input(setBackupScheduleInput).mutation(({ ctx, input }) =>
+					controlCall(() => setBackupScheduleUseCase(dataContext(ctx), input))
+				),
+			}),
 		}),
 	})
 
@@ -469,7 +494,9 @@ export function createControlRpcRouter(
 		return {
 			repositories: deps.repositories,
 			auth: ctx.auth,
+			...(deps.lock === undefined ? {} : { lock: deps.lock }),
 			...(deps.opsTransport === undefined ? {} : { ops: deps.opsTransport }),
+			...(deps.runDeps === undefined ? {} : { runDeps: deps.runDeps }),
 		}
 	}
 
@@ -677,8 +704,12 @@ async function setMailRule(c: MailUseCaseContext, input: z.infer<typeof setMailR
 interface DataUseCaseContext {
 	readonly repositories: ControlRepositories
 	readonly auth: AuthContext
-	/** The ops channel; absent, the views answer 503. */
+	/** The environment's deploy lease every operation runs under; absent, operations answer 503. */
+	readonly lock?: DeployLocks
+	/** The ops channel; absent, the views and operations answer 503. */
 	readonly ops?: OpsTransport
+	/** What a restore's own deploys run with; absent, a restore is refused. */
+	readonly runDeps?: () => Promise<RunDeps>
 }
 
 /** An environment the caller may act on with `action`; any other, existing or not, is the same 404. */
@@ -694,6 +725,33 @@ async function listDataOperationsUseCase(c: DataUseCaseContext, input: DataOpera
 	const items = await listDataOperations(c, input, { ...(input.before === undefined ? {} : { before: input.before }), limit })
 	const last = items.at(-1)
 	return { items, nextCursor: items.length === limit && last !== undefined ? last.id : null }
+}
+
+/** Newest first; a dump past its retention is listed as expired. */
+async function listBackupsUseCase(c: DataUseCaseContext, input: DataOperationListInput): Promise<CursorList<DataBackupDto>> {
+	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_READ, input.appId, input.env)
+	const limit = input.limit ?? DATA_OPERATION_MAX_PAGE_SIZE
+	const items = await listBackups(c, input, { ...(input.before === undefined ? {} : { before: input.before }), limit }, nowSeconds())
+	const last = items.at(-1)
+	return { items, nextCursor: items.length === limit && last !== undefined ? last.id : null }
+}
+
+async function readBackupScheduleUseCase(c: DataUseCaseContext, input: { appId: string; env: string }): Promise<DataBackupScheduleDto> {
+	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_READ, input.appId, input.env)
+	return toBackupScheduleDto(input, await c.repositories.backups.getSchedule(input.appId, input.env))
+}
+
+/** Opting out stops the daily backup only; the pre-migration backup always runs (ADR-0070 §8). */
+async function setBackupScheduleUseCase(c: DataUseCaseContext, input: SetDataBackupScheduleInput): Promise<DataBackupScheduleDto> {
+	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
+	const schedule = await c.repositories.backups.setSchedule(input.appId, input.env, input.daily, runActor(c.auth))
+	await c.auth.audit({
+		action: 'data.backups.schedule',
+		resourceType: 'app_env',
+		resourceId: `${input.appId}/${input.env}`,
+		metadata: { appId: input.appId, env: input.env, daily: input.daily },
+	})
+	return toBackupScheduleDto(input, schedule)
 }
 
 async function getDataOperationUseCase(c: DataUseCaseContext, id: string): Promise<DataOperationDto> {
@@ -722,25 +780,61 @@ async function readDataContentUseCase(c: DataUseCaseContext, input: { appId: str
 
 async function inspectData(c: DataUseCaseContext, target: { appId: string; env: string }, content: boolean): Promise<OpsInspection> {
 	if (c.ops === undefined) fail(503, 'data operations unavailable')
-	const answer = await c.ops.inspect(target, { object: DEFAULT_APPLICATION_OBJECT, content }, AbortSignal.timeout(DATA_VIEW_TIMEOUT_MS))
+	const { object } = await recordedObjects(c, target)
+	const answer = await c.ops.inspect(target, { object, content }, AbortSignal.timeout(DATA_VIEW_TIMEOUT_MS))
 	if (answer.kind === 'unavailable') failUnavailable(answer.reason)
 	return answer.value
 }
 
-// No release's object serves `state` yet (sprint unit 3.3b): an operation started now would never be acknowledged, and
-// its running record would refuse every deploy of the environment.
 async function startDataOperationUseCase(c: DataUseCaseContext, input: StartDataOperationInput): Promise<DataOperationDto> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
-	return fail(501, 'data operations are not available in this release')
+	if (input.kind === 'backup') fail(501, 'backups are not available in this release')
+	if (input.kind === 'restore') {
+		const deps = await restoreDeps(c)
+		return dataOperationResult(
+			await startRestore(deps, { appId: input.appId, env: input.env, at: new Date(input.at).toISOString(), actor: runActor(c.auth) }),
+		)
+	}
+	const outcome = await startMaintenance(operationDeps(c), { appId: input.appId, env: input.env, mode: input.mode, actor: runActor(c.auth) })
+	return dataOperationResult(outcome)
 }
 
+/** A recovery may resume a restore, which deploys, so it carries the restore's deploys where the composition has them. */
 async function recoverDataOperationUseCase(c: DataUseCaseContext, input: RecoverDataOperationInput): Promise<DataOperationDto> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
-	return fail(501, 'data operations are not available in this release')
+	const deps = c.runDeps === undefined ? operationDeps(c) : await restoreDeps(c)
+	return dataOperationResult(await startRecovery(deps, { ...input, actor: runActor(c.auth) }))
+}
+
+function operationDeps(c: DataUseCaseContext): { repositories: ControlRepositories; lock: DeployLocks; ops: OpsTransport } {
+	if (c.lock === undefined || c.ops === undefined) fail(503, 'data operations unavailable')
+	return { repositories: c.repositories, lock: c.lock, ops: c.ops }
+}
+
+async function restoreDeps(c: DataUseCaseContext): Promise<DataOperationDeps> {
+	const deps = operationDeps(c)
+	if (c.runDeps === undefined) fail(503, 'restores are unavailable: this composition does not deploy from a data operation')
+	return { ...deps, deploys: operationDeploys(await c.runDeps()) }
+}
+
+/** The record as the operation left it: one the object left unanswered is still `running`, at its step. */
+function dataOperationResult(outcome: DataOperationOutcome): DataOperationDto {
+	if (outcome.kind === 'busy') fail(409, 'a deploy or another data operation holds this environment')
+	if (outcome.kind === 'driven' || outcome.kind === 'started') return toDataOperationDto(outcome.operation)
+	if (outcome.reason === 'operation_running') fail(409, 'an operation of this environment is still running: recover it first')
+	if (outcome.reason === 'not_recoverable') fail(409, 'that operation is not one this environment can recover')
+	if (outcome.reason === 'superseded') fail(409, 'a newer operation of this environment supersedes that one')
+	if (outcome.reason === 'not_open') fail(409, 'the environment is not open: open it first')
+	if (outcome.reason === 'too_many_objects') fail(409, "the environment's object list is full (16 names): no clone can be listed")
+	if (outcome.reason === 'nothing_deployed') fail(409, 'the environment has no succeeded deploy to redeploy')
+	if (outcome.reason === 'no_deploys') fail(503, 'restores are unavailable: this composition does not deploy from a data operation')
+	if (outcome.reason === 'not_past') fail(400, 'the restore time must lie in the past')
+	failUnavailable(outcome.reason)
 }
 
 function failUnavailable(reason: OpsUnavailable): never {
 	if (reason === 'no_channel') fail(409, 'the environment has no ops channel: it needs a domain and a deploy at a release that serves one')
+	if (reason === 'not_served') fail(409, "the environment's release does not serve this operation: deploy it at a release that does")
 	fail(502, reason === 'channel_refused' ? "the environment's ops channel refused Control" : "the environment's object gave no usable answer")
 }
 

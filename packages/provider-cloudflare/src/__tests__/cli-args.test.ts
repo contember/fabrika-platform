@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { parseCloudflareArgs, platformComponents } from '../cli-args'
-import { parseCrossOrigins, parseInstallationApps, parseReturnOrigins, readApprovedAccess } from '../command'
+import { parseApplicationObjectsEnvironment, parseCrossOrigins, parseInstallationApps, parseReturnOrigins, readApprovedAccess } from '../command'
 import type { RunnerApprovedAccess } from '../runner-protocol'
 
 describe('parseCloudflareArgs', () => {
@@ -100,6 +100,31 @@ describe('parseCrossOrigins', () => {
 	test('anything malformed fails the deploy', () => {
 		expect(() => parseCrossOrigins('https://partner.example.org')).toThrow('FABRIKA_CROSS_ORIGINS is not a JSON array')
 		expect(() => parseCrossOrigins('[42]')).toThrow('is not a JSON array of strings')
+	})
+})
+
+describe('parseApplicationObjectsEnvironment', () => {
+	test('decodes the pointer the runner writes; absent or empty leaves the defaults', () => {
+		expect(parseApplicationObjectsEnvironment('{"object":"application-x","objects":["application","rehearsal","application-x"]}')).toEqual({
+			object: 'application-x',
+			objects: ['application', 'rehearsal', 'application-x'],
+		})
+		expect(parseApplicationObjectsEnvironment('')).toBeUndefined()
+		expect(parseApplicationObjectsEnvironment(undefined)).toBeUndefined()
+	})
+
+	test('a pointer the application would refuse fails the deploy rather than move ordinary traffic', () => {
+		expect(() => parseApplicationObjectsEnvironment('application')).toThrow('FABRIKA_RUNNER_APPLICATION_OBJECTS is not JSON')
+		const refused = [
+			{ object: 'application-x', objects: ['application'] },
+			{ object: 'Application', objects: ['Application'] },
+			{ object: 'a', objects: ['a', 'a'] },
+			{ object: 'a', objects: Array.from({ length: 17 }, (_, index) => (index === 0 ? 'a' : `b${index}`)) },
+			{ object: 'a', objects: ['a'], extra: true },
+		]
+		for (const value of refused) {
+			expect(() => parseApplicationObjectsEnvironment(JSON.stringify(value))).toThrow('is not a serving object and its object list')
+		}
 	})
 })
 

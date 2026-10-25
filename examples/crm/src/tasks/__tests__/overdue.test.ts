@@ -39,17 +39,20 @@ if (postgres !== null) {
 	/**
 	 * The first attempt times out as soon as it has committed a task: its clock's deadline fires then, and the runner
 	 * fences off whatever that attempt still has in flight. Later deadlines wait for their attempt; a backoff is instant.
+	 * A deadline wait is the attempt's remaining time, a few milliseconds under `TIMEOUT_MS`; a backoff here is seconds.
+	 * The attempt's setup waits on the same deadline, so only a wait that sees a commit fires.
 	 */
 	const timingOutOnce = () => {
-		let deadlines = 0
+		let fired = false
 		let committedBeforeTimeout = 0
 		const clock = {
 			random: () => 0,
 			wait: async (ms: number, signal: AbortSignal): Promise<void> => {
-				if (ms < TIMEOUT_MS) return
-				deadlines++
-				if (deadlines === 1) {
+				if (ms < TIMEOUT_MS / 2) return
+				if (!fired) {
 					while (!signal.aborted && (committedBeforeTimeout = await overdueCount()) === 0) await Bun.sleep(2)
+					if (signal.aborted) return
+					fired = true
 					return
 				}
 				await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))

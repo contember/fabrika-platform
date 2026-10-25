@@ -88,6 +88,7 @@ export function vault(env: Env): Promise<Vault> {
 
 /** Assemble provider-neutral run dependencies around one statically selected provider. */
 export async function buildRunDeps(env: Env, provider: ControlProvider): Promise<RunDeps> {
+	const { opsTransport } = opsTransportDeps(env)
 	return {
 		repositories: repositories(env),
 		provider,
@@ -112,6 +113,8 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		...platformTransportDeps(env),
 		...tokenKeyDeps(env),
 		...opsKeyDeps(env),
+		// A deploy that brings a migration asks the object first (ADR-0069 §3); without the channel it never deploys.
+		...(opsTransport === undefined ? {} : { ops: opsTransport }),
 	}
 }
 
@@ -133,7 +136,7 @@ export function opsKeyDeps(env: Env): { opsKeys?: OpsKeysPort } {
 	return env.FABRIKA_CONTROL_VAULT_KEY === undefined ? {} : { opsKeys: new VaultOpsKeys(repositories(env).opsKeys, () => vault(env)) }
 }
 
-function opsTransportDeps(env: Env): { opsTransport?: OpsTransport } {
+export function opsTransportDeps(env: Env): { opsTransport?: OpsTransport } {
 	const { opsKeys } = opsKeyDeps(env)
 	if (opsKeys === undefined) return {}
 	return { opsTransport: httpOpsTransport({ registry: repositories(env).registry, opsKeysFor: (appId, name) => opsKeys.opsKeysFor(appId, name) }) }
@@ -227,6 +230,8 @@ export interface ControlRpcDeps {
 	mailRelay?: Pick<MailRelay, 'queue' | 'sender'>
 	/** The ops channel to an environment's object; absent without a vault, and the `data.*` calls to an object answer 503. */
 	opsTransport?: OpsTransport
+	/** The run dependencies a restore's own deploys run with (ADR-0070 §9); absent, a restore does not start. */
+	runDeps?: () => Promise<RunDeps>
 }
 
 /** Assemble RPC use-case dependencies around the installation's provider. Vault creation stays lazy. */
@@ -245,6 +250,7 @@ export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: A
 		...(env.MAIL_RELAY === undefined ? {} : { mailRelay: env.MAIL_RELAY }),
 		...installationBrandDeps(env),
 		...opsTransportDeps(env),
+		runDeps: () => buildRunDeps(env, provider),
 		...(provider.namespaces?.republish === undefined
 			? {}
 			: {

@@ -4,8 +4,8 @@ Background work is a cron job: `app.cron(schedule, { actions })` with its `.hand
 `endpoints.ts` of the slice whose data it works on, mounted under `jobs` in the contract. There are no timers, loops,
 `setInterval` or self-scheduled work, and no `ctx.jobs.enqueue`: work for later is a row that a run picks up, usually
 from a queue table with `claim` (below). A mutation, a webhook or another job that declares `kicks: ['<job>']` and
-calls `ctx.kick('<job>')` starts a run within seconds of its commit (the outbox below); the schedule picks up whatever
-that run leaves.
+calls `ctx.kick('<job>')` starts a run within seconds of its commit (the outbox below), and `ctx.kick('<job>', { at })`
+starts one at `at`; the schedule picks up whatever that run leaves.
 
 ```ts src/overdue/endpoints.ts
 import { app } from '../app-kit'
@@ -118,7 +118,7 @@ export const contract = app.contract((c) => ({
   one, since no zone is a day further ahead.
 - **Reads run outside the transaction; every write runs inside `ctx.transaction((tx) => …)`**, through `tx.db`, fenced
   by the attempt's lease. A write outside it is a type error that names `tx.db`.
-- An attempt that fails or outlives `limits.timeoutMs` (default 15 minutes, at most a day) is retried up to `retries` times, so every write is
+- An attempt that fails or outlives `limits.timeoutMs` (default 14 minutes, at most a day; at most 14 minutes on Cloudflare) is retried up to `retries` times, so every write is
   idempotent. **Re-read each row under its lock before you write it:** `tx.db.on(ref).getForUpdate()` inside the
   transaction, decide again on what it answers with the list's whole filter (`isOverdue`), and write with its
   `version`. The listed row is already old: someone
@@ -229,6 +229,8 @@ for (const row of await ctx.db.app('mail.send').outbox.claim({ limit: 50 })) {
   later.
 - A failure or a crash leaves the row as the claim left it, due again after the backoff; nothing retries at once.
   Attempts count claims, so claim only what the run will reach.
+- A claim that leased rows runs the job again when the same claim would next find one (its `where`, its scope, below
+  `maxAttempts`), no sooner than a second later; a claim that took its full `limit` runs it again at once.
 - A row past `maxAttempts` stays in the table, no longer due, for the application to show or requeue.
 - One recipe covers an outbox, a per-record reminder (`<due>` is the reminder time) and asynchronous work: a mutation
   inserts a request row and kicks; the job claims it, renders, puts the result into a file column with
@@ -244,8 +246,16 @@ row, in its own transaction: a public procedure's row (`registrations`), an outb
 transaction committed, the job runs within seconds, under its own key, and the answer does not wait for it. A thrown
 handler, a refused answer and a failed commit kick nothing. Kicks coalesce: at most one run is active and one pending,
 however many calls arrive. A kick carries nothing; the job reads its rows, and its schedule stays the recovery.
+The kick is written in the site's transaction, so a crash right after the commit still runs the job.
 `kicks` names cron jobs of the contract, as literals (`r.mutation({ …, kicks: ['testMails'] })`); a mutation, a
 webhook and a job declare it, and the kick edges never form a cycle.
+
+**A kick for later.** `ctx.kick('<job>', { at })`, with `at` a `Date`, runs the job at that time instead of after the
+commit: a reminder, a retry the application times itself. Kicks of one job in the same second are one; kicks at
+different times stay apart, and a run takes only those already due. The second argument is the time and nothing else;
+what to do stays in the job's rows (`where <due> <= now()`, or a queue table's `<due>`). On Cloudflare the object's
+alarm runs it within seconds of `at`; on Bun the serving process that wrote it runs it at `at`, and another process
+finds it within a minute.
 
 The rules of the job:
 

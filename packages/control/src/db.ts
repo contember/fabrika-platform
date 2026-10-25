@@ -1,3 +1,17 @@
+export {
+	type BackupCheckpoint,
+	type BackupCompletion,
+	type BackupHistory,
+	type BackupInput,
+	type BackupPartRow,
+	BackupRepository,
+	type BackupRow,
+	type BackupScheduleRow,
+	type BackupState,
+	type RehearsalOutcome,
+	type RehearsalProgress,
+	type RehearsalStep,
+} from './db/backups'
 export { BuilderConnectionRepository } from './db/builder-connections'
 export { type ControlRepositories, createControlRepositories } from './db/composition'
 export {
@@ -55,6 +69,7 @@ export {
 	type NamespaceResourceClaimRow,
 	SourceBindingError,
 } from './db/registry-types'
+export { ApplicationObjectsRepository, type ApplicationObjectsRow, type RestoreDeploy, RestoreRepository, type RestoreRow } from './db/restores'
 export { parseProviderJson, RunRepository, type RunRow, type RunStatus, type RunTrigger, serializeProviderJson } from './db/runs'
 export { TokenKeyRepository, type TokenKeyRow } from './db/token-keys'
 export { WorkloadCredentialRepository, type WorkloadCredentialRow } from './db/workload-credentials'

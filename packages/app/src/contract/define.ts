@@ -31,7 +31,7 @@ export function isPath(value: string): value is Path {
 	return value.startsWith('/')
 }
 
-/** A job attempt's time limit: 15 minutes by default, at most a day. A job reads no body, so it has no `maxBytes`. */
+/** A job attempt's time limit: 14 minutes by default, at most a day. A job reads no body, so it has no `maxBytes`. */
 export interface JobLimitsOption {
 	readonly timeoutMs?: number
 }

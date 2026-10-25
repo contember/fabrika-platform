@@ -42,6 +42,7 @@ export const REFUSAL_RULE_IDS = [
 	'shared-import',
 	'cloudflare-sql',
 	'cloudflare-scan',
+	'cloudflare-job-segment',
 	'cloudflare-current-timestamp',
 ] as const
 

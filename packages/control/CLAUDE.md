@@ -396,8 +396,71 @@ other environment, before the provider prepares anything, and the write maps a r
   deploy of such an environment is `executeDeployUnderLease`, which runs under the operation's live lease and never
   releases it. `data.read` and `data.manage` are checked at the coordinates, `data.content.read` as a global grant only,
   and every denial is the 404 of an absent environment; `data.view` refuses an answer that carries content.
-  `data.start` and `data.recover` answer 501 while no release's object serves `state`: an operation no object
-  acknowledges would stay running, and a running record refuses every deploy.
+  An object whose release does not serve `state` or `migrate` answers 501 `{refused:'not_implemented'}`; the operation
+  fails `not_served` at once instead of staying running, `recordedMaintenance` skips it, and deploys stay open.
+- **A daily backup is a `backup` data operation the maintenance pass starts (`src/backups.ts`, ADR-0070 §7–§8).** Its
+  steps are `restrict` (`read-only`), `backup` (the export's steps), `open` at a new generation, then `verify`, the
+  rehearsal into the object `rehearsal`. Every step and part is recorded fenced on the lease (`app_env_backups`,
+  `app_env_backup_parts`), so a successor resumes where the record stops; a pass is bounded and leaves the rest to the
+  next. Only an environment whose approved release the provider's `dataOperations` serves gets one, and a provider
+  without it (Zerops) drives no data operation. A resumed dump sends `begin` again with its recorded `dump_id`, which the exporter replays while the dump's
+  stretch of modes that write nothing holds (ADR-0070 §2), then continues from the recorded parts. Only that `begin`'s
+  `ledger_mismatch` starts the dump again under a new `dump_id`, its recorded parts dropped and its old upload
+  abandoned. A backup's terminal outcome is written in one lease-fenced batch with its operation's next step or
+  end (`BackupCheckpoint`), and a step that finds the outcome already written sends nothing. A failed export reopens the
+  object; a failed rehearsal fails the backup with the object already open, and `recordedMaintenance` reads both as
+  `open`. A pass starts at most four backups, counting only the ones it created, and an environment waits an hour after
+  its last failed backup ended. An environment opts out in `app_env_backup_schedules` under
+  `data.manage`; `data.read` lists its backups, one older than 30 days as expired. `data.start` with kind `backup` still
+  answers 501.
+- **A deploy that brings a pending application migration is a `migrate` data operation (`startMigration`, driven from
+  `deployUnder`; ADR-0069 §3, ADR-0070 §8).** Every non-dry run records `runs.migration_barrier`: whether the version it
+  deploys installs the maintenance barrier (a domain, at a release the provider's `opsChannel` and `dataOperations` both
+  serve; a release can serve the channel's `inspect` without the barrier's `state` and `migrate`). Once the run published
+  its snapshot, a deploy that installs the barrier, where the environment's last succeeded run recorded it installed too
+  (`deployedMigrationBarrier`; never the published snapshot, which precedes the provider and survives a failed run),
+  compares the candidate's bundled migration files (`.sql` directly in `db/migrations`) with the object's ledger from
+  `inspect` (`pendingMigrations`). Without an installed barrier the deploy is plain and the object migrates on its cold
+  start, as on the first upgrade onto a gated release and on every deploy of a release without the barrier. An
+  installed barrier whose channel does not answer, or an installation without
+  `RunDeps.ops`, fails the run before any provider effect. A pending file makes the run's own invocation drive the
+  operation under the run's lease: `restrict` (`read-only`), `backup` and `verify` at that generation (a backup record
+  with `pre_migration = 1`, rehearsed while the object stays restricted), `deploy` (the run's own deploy; a provider that
+  answers `running` is settled under the same lease with `settleUnfinishedRun`, bounded), `migrate` at the published
+  generation, `open` at a new one. The record keeps `run_id`, and a successor at `deploy` only reads that run's row. A
+  failed dump or rehearsal, or a run no provider accepted, reopens the object (`backup_failed`, `rehearsal_failed`,
+  `deploy_not_started`, read as `open`) and fails the run without a deploy. A run that failed after a provider accepted
+  it (`deploy_failed`) and a refused migration or failed boot (`migration_failed`) fail the operation with the object
+  restricted, for an operator's recovery; no answer leaves it running (interrupted). The run's status is its deploy's
+  (ADR-0044); the operation's outcome is the last line of the run's log. A running migration whose lease is free has
+  lost its driver (the run's invocation holds the lease from its start to its settlement): the maintenance pass resumes
+  it as a successor, and a held lease makes `advanceDataOperation` answer busy, so a live driver is never overtaken.
+- **A side restore is a `restore` data operation (`startRestore`, `data.start` kind `restore` with a past `at`;
+  ADR-0070 §9).** `data.start` only records it, the operation and its `app_env_restores` row in one lease-fenced batch,
+  and returns it at `list`; the maintenance pass (`runBackupSchedule`, both hosts) owns it and drives it under the lease
+  as a successor, bounded per pass. Control records the pointer per environment (`app_env_application_objects`: the
+  serving object and the listed ones, at most 16), and every deploy (`deployUnder` →
+  `ProviderDeployInput.applicationObjects`) writes it; without a row it is `application` / `application,rehearsal`, and
+  `inspect`, `migrate` and the backups follow the recorded serving object. Only a restore's own deploys
+  (`operationDeploys`, redeploying the newest succeeded run under the operation's lease) move it, recorded in the batch
+  that advances the step. A resumed restore first publishes each object's mode at its step (`restoreModes`). Steps:
+  `list` (the listing deploy, then `inspect` of the clone: the channel reaches only a listed object, so a refusal is a
+  runner that did not forward the pointer, `objects_not_deployed`, before anything is frozen), `restrict`/`backup`/
+  `verify` as a backup, `import` into the clone (`inspect`), `promote` (clone `open`, original `inspect`), `point` (the
+  pointer deploy; one no provider accepted reopens the original), `serve` (positive confirmation: `prepare` on the
+  original is refused as `serving_object` while traffic still reaches it, and its bookmarks are recorded before any
+  `arm`; then `migrate` on the clone answers only once it booted while not `inspect`), `rewind` (each `arm` counted
+  before it is sent and sent once, then `verify`; at most three arms), `check` (the original's ledger within the
+  clone's). Only a pointer that did not move goes through `revert` (a deploy pointing back) to `open`, which fences the
+  clone `inspect` and opens the original; every such code reads as `open`. A clone that gives no boot answer leaves
+  `serve` interrupted, never reverted: a boot failure lives in one instance's memory, so nothing proves the clone never
+  served. `bookmark_unavailable`, `rewind_failed` and `unexpected_schema` leave the clone serving and the original
+  `inspect`. A recovery with resolution `open`, also of an interrupted recovery (the chain resolves to the restore),
+  keeps the object that may hold writes, where traffic goes: the clone once a provider accepted the pointer deploy,
+  nothing showed the clone served no request, and `prepare` proves the pointer moved (or `serve` recorded that it did);
+  else the original, pointed back first. It settles with the clone `open` and the original `inspect` without the
+  clone's boot, so a clone that never boots is a broken deploy an ordinary deploy repairs; only the rewind needs
+  `serve`'s boot answer. A restore deploy without an outcome or an unclear answer leaves the recovery interrupted.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.

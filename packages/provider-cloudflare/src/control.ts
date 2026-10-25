@@ -1,4 +1,4 @@
-import { type AppEnvironment, appEnvironmentId, FABRIKA_PROXY_SECRET, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type AppEnvironment, appEnvironmentId, type ApplicationObjects, FABRIKA_PROXY_SECRET, parseAppEnvironmentId } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -20,10 +20,17 @@ import { isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
-import { assertCloudflareContract, assertStatelessEnvironment, runsInObject, servesOps } from './contract-support'
+import {
+	assertCloudflareContract,
+	assertStatelessEnvironment,
+	capsJobSegments,
+	runsInObject,
+	servesDataOperations,
+	servesOps,
+} from './contract-support'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
 // cannot typecheck (they do not relax the two strict flags the raw TS needs).
-import { type RunnerApprovedAccess, runnerApprovedAccessSchema, type RunnerIamReconcile } from './runner-protocol'
+import { applicationObjectsSchema, type RunnerApprovedAccess, runnerApprovedAccessSchema, type RunnerIamReconcile } from './runner-protocol'
 
 export * from './runner-protocol'
 
@@ -66,6 +73,8 @@ export interface CloudflareRunnerJob {
 	readonly installationApps?: readonly string[]
 	/** What the deployed proxy enforces and the application starts as; every run but a dry one carries it. */
 	readonly approvedAccess?: RunnerApprovedAccess
+	/** The serving object and the listed objects Control records (ADR-0070 §9); absent, the deployer's defaults. */
+	readonly applicationObjects?: ApplicationObjects
 	readonly dryRun?: boolean
 	/**
 	 * Shared secret the runner verifies before it touches D1 or the container; the binding alone proves
@@ -153,6 +162,7 @@ export const cloudflareRunnerJobSchema = z.object({
 	operationsOrigin: z.string().refine((origin) => isPolicyOrigin(origin, ['https:', 'http:'])).optional(),
 	installationApps: z.array(z.string().refine((id) => !hasUnsafeChars(id) && parseAppEnvironmentId(id) !== null)).optional(),
 	approvedAccess: runnerApprovedAccessSchema.optional(),
+	applicationObjects: applicationObjectsSchema.optional(),
 	dryRun: z.boolean().optional(),
 	secrets: stringRecordSchema.optional(),
 	vars: stringRecordSchema.optional(),
@@ -285,9 +295,9 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		throw new Error('Cloudflare deploy requires a canonical 40-character commit SHA')
 	}
 	const approvedAccess = runnerApprovedAccess(input.environment)
-	// The deployer refuses it again from the contract it serves; this fails before the clone.
-	if (approvedAccess !== undefined) assertCloudflareContract(approvedAccess.contract)
 	const release = input.environment.access?.checker
+	// The deployer refuses it again from the contract it serves; this fails before the clone.
+	if (approvedAccess !== undefined) assertCloudflareContract(approvedAccess.contract, release !== undefined && capsJobSegments(release))
 	const stateless = release !== undefined && !runsInObject(release)
 	if (stateless) assertStatelessEnvironment(input.managedEnvironment, release)
 	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal, input.sourceBinding))
@@ -322,6 +332,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		...(input.environment.operationsOrigin === undefined ? {} : { operationsOrigin: input.environment.operationsOrigin }),
 		...(installationApps === undefined ? {} : { installationApps }),
 		...(approvedAccess === undefined ? {} : { approvedAccess }),
+		...(input.applicationObjects === undefined ? {} : { applicationObjects: input.applicationObjects }),
 		...(input.dryRun ? { dryRun: true } : {}),
 		...(Object.keys(input.secrets).length === 0 ? {} : { secrets: input.secrets }),
 		...(Object.keys(input.vars).length === 0 ? {} : { vars: input.vars }),
@@ -365,6 +376,8 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 	applicationHopSecret: true,
 	// The environment's object serves Control's ops requests from the release that gets the composed row.
 	opsChannel: (access) => servesOps(access.checker),
+	// From the release whose object holds the barrier; the 0.9.0 prereleases before it serve only `inspect`.
+	dataOperations: (access) => servesOps(access.checker) && servesDataOperations(access.checker),
 	normalizeRegistration,
 	applicationRoot: (source) => checkoutRelativeDirectory(source.workerDir),
 	source: { binding: 'connection' },

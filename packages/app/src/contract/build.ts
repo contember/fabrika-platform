@@ -65,7 +65,7 @@ import {
 import { isPolicyOrigin, MAX_CSP_ORIGINS, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
 import { CONTRACT_APP_ID_PATTERN as APP_ID } from './app-id'
-import { contractArtifactSchema } from './artifact-schema'
+import { contractArtifactSchema, RESERVED_FILE_KIND_PREFIX } from './artifact-schema'
 import {
 	type AccessDeclaration,
 	type Builder,
@@ -1712,6 +1712,10 @@ class ArtifactBuilder {
 		const kinds: Record<string, FileKindArtifact> = {}
 		for (const [name, declared] of Object.entries(this.#contract.files)) {
 			const where = `files '${name}'`
+			if (name.startsWith(RESERVED_FILE_KIND_PREFIX)) {
+				this.#problem(where, `is a file kind name the framework reserves (${RESERVED_FILE_KIND_PREFIX}*)`)
+				continue
+			}
 			if (!this.#name(where, name) || !this.#kind(where, declared, 'file-kind', 'c.files({ types, maxBytes, scan? })')) {
 				continue
 			}

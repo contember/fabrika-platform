@@ -12,6 +12,7 @@ import { isPlainIdentifier } from './identifier'
 import { type DialectTexts, fencedTransaction, SQLITE_NOW, sqliteNowPlus, sqliteTimestamp } from './job-leases'
 import { FILE_DELETIONS_TABLE, FILES_TABLE } from './migrations'
 import type { DataLayerRuntime } from './store'
+import { storedTimestamp } from './temporal'
 
 const F = FILES_TABLE
 const D = FILE_DELETIONS_TABLE
@@ -96,10 +97,14 @@ export interface StoredFiles {
 	promote(id: string, sha256: string, version: string): Promise<boolean>
 	deferScan(id: string, attempts: number, after: Date): Promise<boolean>
 	reject(id: string): Promise<boolean>
-	// The sweep.
-	/** Objects whose rows a sweep deleted and whose own deletion it did not finish. */
-	unfinishedDeletions(limit: number): Promise<readonly string[]>
+	// The sweep. A queued object key is a tombstone: its object outlives its row by the retention window.
+	/** At most `limit` queued object keys recorded at or before `cutoff` (equality is due), oldest first. */
+	dueDeletions(limit: number, cutoff: Date): Promise<readonly string[]>
+	/** Takes a due key out of the queue before its object is deleted; `false` when a cancel or a requeue got there first. */
+	claimDeletion(objectKey: string, cutoff: Date): Promise<boolean>
 	forgetDeletion(objectKey: string): Promise<void>
+	/** Takes `objectKeys` out of the queue, so their objects stay: a restore's rows reference them again. The number taken. */
+	cancelDeletions(objectKeys: readonly string[]): Promise<number>
 	/** Clears the legacy marker of every migrated file that one of `columns` references: it is an ordinary file now. */
 	adoptReferenced(columns: readonly FileColumnRef[]): Promise<number>
 	/** At most `limit` files past the grace that no column of `columns` references (pending ones included), oldest first. */
@@ -185,9 +190,14 @@ const SQL_REJECT: DialectTexts = {
 	sqlite: `update ${F} set status = 'rejected' where id = ?1 and status = 'quarantined' returning id`,
 }
 
-const SQL_UNFINISHED: DialectTexts = {
-	postgres: `select object_key from ${D} order by recorded_at limit $1::int`,
-	sqlite: `select object_key from ${D} order by recorded_at limit ?1`,
+const SQL_DUE: DialectTexts = {
+	postgres: `select object_key from ${D} where recorded_at <= $2::timestamptz order by recorded_at limit $1::int`,
+	sqlite: `select object_key from ${D} where recorded_at <= ?2 order by recorded_at limit ?1`,
+}
+
+const SQL_CLAIM_DELETION: DialectTexts = {
+	postgres: `delete from ${D} where object_key = $1 and recorded_at <= $2::timestamptz returning object_key`,
+	sqlite: `delete from ${D} where object_key = ?1 and recorded_at <= ?2 returning object_key`,
 }
 
 const SQL_FORGET: DialectTexts = {
@@ -195,13 +205,22 @@ const SQL_FORGET: DialectTexts = {
 	sqlite: `delete from ${D} where object_key = ?1`,
 }
 
+// The keys are one parameter, a JSON array.
+const SQL_CANCEL: DialectTexts = {
+	postgres: `delete from ${D} where object_key in (select jsonb_array_elements_text($1::jsonb)) returning object_key`,
+	sqlite: `delete from ${D} where object_key in (select value from json_each(?1)) returning object_key`,
+}
+
 const SQL_REMOVE = `with gone as (
 	delete from ${F} where id = $1::uuid and legacy is null and created_at < now() - $2::bigint * interval '1 millisecond' returning object_key
 )
-insert into ${D} (object_key, recorded_at) select object_key, now() from gone returning object_key`
+insert into ${D} (object_key, recorded_at) select object_key, now() from gone
+on conflict (object_key) do update set recorded_at = excluded.recorded_at returning object_key`
 
 const SQLITE_REMOVE = `delete from ${F} where id = ?1 and legacy is null and created_at < ${sqliteNowPlus('-?2')} returning object_key`
-const SQLITE_RECORD_REMOVED = `insert into ${D} (object_key, recorded_at) values (?1, ${N}) returning object_key`
+// A key queued again restarts its window: the removal is fresh.
+const SQLITE_RECORD_REMOVED =
+	`insert into ${D} (object_key, recorded_at) values (?1, ${N}) on conflict (object_key) do update set recorded_at = excluded.recorded_at returning object_key`
 
 /** The lock a reference write takes: a file being deleted cannot gain a reference, and a referenced one is not deleted. */
 const SQL_LOCK: DialectTexts = {
@@ -452,13 +471,24 @@ export function storedFiles(runtime: () => DataLayerRuntime): StoredFiles {
 
 		reject: (id: string) => fenced(SQL_REJECT, [uuid(id)]),
 
-		async unfinishedDeletions(limit: number): Promise<readonly string[]> {
-			const rows = await run(session(), SQL_UNFINISHED, [positive(limit, 'a sweep batch')])
+		async dueDeletions(limit: number, cutoff: Date): Promise<readonly string[]> {
+			const rows = await run(session(), SQL_DUE, [positive(limit, 'a sweep batch'), storedTimestamp(cutoff, 'a deletion cutoff')])
 			return rows.map((found) => text(record(found), 'object_key'))
+		},
+
+		async claimDeletion(objectKey: string, cutoff: Date): Promise<boolean> {
+			return (await run(session(), SQL_CLAIM_DELETION, [objectKey, storedTimestamp(cutoff, 'a deletion cutoff')])).length === 1
 		},
 
 		async forgetDeletion(objectKey: string): Promise<void> {
 			await run(session(), SQL_FORGET, [objectKey])
+		},
+
+		async cancelDeletions(objectKeys: readonly string[]): Promise<number> {
+			if (objectKeys.length === 0) {
+				return 0
+			}
+			return (await run(session(), SQL_CANCEL, [JSON.stringify(objectKeys)])).length
 		},
 
 		async adoptReferenced(columns: readonly FileColumnRef[]): Promise<number> {

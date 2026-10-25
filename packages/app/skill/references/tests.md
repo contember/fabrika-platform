@@ -301,6 +301,13 @@ if (postgres !== null) {
 - A mutation that kicks (`kicks`, `ctx.kick`) starts its job in the background of the call. `kit.drain()` waits for
   those runs, and `kit.runJob` first waits for them; every generated access case drains before it answers. The kicked
   run may start at once, so arm a fault before the call, never between the call and the run.
+- `await kit.runDueJobs({ within: 3 * 3600000 })` runs every job with a wake due now or within `within` milliseconds
+  (0 by default) once, as the Cloudflare object's alarm runs it: a cron job's next fire, a kick, a failed run's retry.
+  It answers `[{ job, result }]` for the runs it started, and first waits for the kicked runs. Without it the kit fires
+  no wake: a cron job runs only through `runJob` or `runDueJobs`. Only the wakes move, never the clock: a handler's
+  `new Date()` and a queue row's due time stay real, so a row due later is not claimed early. A second call does not run
+  a cron fire the first one ran early. A failed run of a job with `retries` is due again after its backoff, at most a
+  second for the first retry, so `runDueJobs({ within: 2000 })` runs it. It needs the application's data layer.
 - `kit.mail` is the stand-in for every job's mail transport (`MemoryEmailSender` of `@fabrika/app/testing`), so a test
   needs no mail variable. `kit.mail.accepted` is what reached the inbox, once per key, and `kit.mail.handoffs` every
   send with its `answer`. `refuse(code?)`, `unavailable()`, `unreachable()`, `loseAnswers(n)` and `during(hook)`

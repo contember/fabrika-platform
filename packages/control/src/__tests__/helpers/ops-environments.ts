@@ -1,0 +1,441 @@
+// A fake of every environment's application objects as Control sees them over the ops channel: a published state per
+// object judged by the wire's own rule, a database that dumps into a few parts, import targets (`rehearsal` and any
+// clone) that import like the object's importer, a migration ledger the `migrate` request extends, and an original that
+// rewinds like the object's restore steps. Its answers are the wire's shapes, so Control's records of them parse again.
+
+import {
+	OPS_DUMP_PART_SIZE,
+	OPS_EMPTY_TABLE_HASH,
+	type OpsDataRefusalReason,
+	type OpsDumpCursor,
+	type OpsDumpTable,
+	type OpsExportRequest,
+	type OpsImportRequest,
+	type OpsInspectRequest,
+	type OpsMigrateAck,
+	type OpsMigrateRequest,
+	type OpsMigration,
+	type OpsPublishedState,
+	type OpsRestoreRequest,
+	type OpsStateAck,
+	type OpsStateRequest,
+	opsTransitionRefused,
+	type OpsUploadedPart,
+	parseOpsDumpManifest,
+	sha256Hex,
+} from '@fabrika/auth-core'
+import { expect } from 'bun:test'
+import type {
+	OpsAnswer,
+	OpsDataAnswer,
+	OpsExportAck,
+	OpsFencedAnswer,
+	OpsImportAck,
+	OpsInspection,
+	OpsRestoreAck,
+	OpsTarget,
+	OpsTransport,
+} from '../../data-operations'
+
+/** The environment `requests()` lists by default, and the framework release every fake object runs. */
+export const FAKE_ENV = 'prod'
+export const GATED = '0.9.0'
+const ENV = FAKE_ENV
+const BOOT_FAILED_AT = '2027-01-15T08:00:00.000Z'
+
+const digest = (text: string): string => sha256Hex(text)
+
+export type Sent =
+	| { readonly op: 'inspect'; readonly env: string; readonly object: string }
+	| { readonly op: 'state'; readonly env: string; readonly object: string; readonly generation: number; readonly mode: string }
+	| { readonly op: 'export'; readonly env: string; readonly step: string; readonly generation: number | null; readonly part?: number }
+	| {
+		readonly op: 'import'
+		readonly env: string
+		readonly object: string
+		readonly step: string
+		readonly generation: number
+		readonly part?: number
+	}
+	| { readonly op: 'restore'; readonly env: string; readonly object: string; readonly step: string; readonly generation: number | null }
+	| { readonly op: 'migrate'; readonly env: string; readonly object: string; readonly generation: number }
+
+/** What the fake does with one request: answer it, apply it and lose the answer, never receive it, or refuse it. */
+export type Fault = 'down' | 'lose' | 'not_served' | { readonly refused: OpsDataRefusalReason; readonly table?: string }
+
+/** An import target's KV marker: the backup it loads and the parts it holds. */
+interface Marker {
+	readonly dump: string
+	readonly loaded: Set<number>
+}
+
+/** An import target other than `rehearsal`: its marker, whether it holds tables, and the backup it completed. */
+interface ImportTarget {
+	marker: Marker | null
+	tables: boolean
+	completed: string | null
+}
+
+/** What an original's restore steps keep: each operation's sentinel with what its `prepare` answered. */
+interface Rewind {
+	readonly sentinels: Map<string, { readonly current: string; readonly target: string }>
+	/** How many `arm`s it received. */
+	arms: number
+}
+
+/**
+ * Every environment's objects as Control sees them: a published state per object judged by the wire's own rule, a
+ * database that dumps into `parts` parts, and a `rehearsal` target that imports like the object's importer. Its answers
+ * are the wire's shapes, so Control's records of them parse again.
+ */
+export class FakeEnvironments implements OpsTransport {
+	readonly published = new Map<string, OpsPublishedState>()
+	readonly sent: Sent[] = []
+	fault: (sent: Sent) => Fault | undefined | Promise<Fault | undefined> = () => undefined
+	parts = 3
+	/** The parts whose rows have a deferred foreign key, which the link pass sets. */
+	deferred = new Set([2])
+	/** Export `begin`s answered: each starts another upload. */
+	begins = 0
+	/**
+	 * Per object, the generation its current stretch of modes that write nothing began at; `open` ends it (ADR-0070 §2).
+	 */
+	readonly stretches = new Map<string, number>()
+	/** Each dump's recorded `begin`: as the exporter, a retried one replays it and a step outside its stretch is refused. */
+	readonly dumps = new Map<string, { readonly since: number; readonly uploadId: string }>()
+	rehearsal: { marker: Marker | null; tables: boolean } = { marker: null, tables: false }
+	/** The application object's migration ledger, which `inspect` reports and `migrate` extends. */
+	ledger: OpsMigration[] = []
+	/** The application migrations the deployed release bundles: `migrate` applies the ones the ledger lacks. */
+	bundled: string[] = []
+	/** Whether the application fails to boot: `migrate` then answers the 500 a failed boot is, which reads as unreachable. */
+	bootFails = false
+	/** The objects whose view reports a failed boot. */
+	readonly bootFailures = new Set<string>()
+	/** Each object's own migration ledger, where it is not `ledger`. */
+	readonly ledgers = new Map<string, OpsMigration[]>()
+	/** The object the deployed version sends ordinary traffic to; a restore step refuses it as `serving_object`. */
+	serving = 'application'
+	/** Import targets other than `rehearsal`, by object. */
+	readonly imports = new Map<string, ImportTarget>()
+	readonly rewinds = new Map<string, Rewind>()
+	/** Whether an `arm` resets the object, rewinding its KV (so its sentinel) and its ledger to `rewoundLedger`. */
+	resets = true
+	rewoundLedger: OpsMigration[] | null = null
+	/** Whether the target time lies outside the recovery window. */
+	bookmarkUnavailable = false
+	/** The objects the deployed version lists, which the channel alone reaches (the uniform refusal otherwise); `null`: any. */
+	listed: ReadonlySet<string> | null = null
+
+	private unlisted(object: string): boolean {
+		return this.listed !== null && !this.listed.has(object)
+	}
+
+	async inspect(target: OpsTarget, request: OpsInspectRequest): Promise<OpsAnswer<OpsInspection>> {
+		const sent: Sent = { op: 'inspect', env: target.env, object: request.object }
+		this.sent.push(sent)
+		if ((await this.fault(sent)) === 'down') return { kind: 'unavailable', reason: 'unreachable' }
+		if (this.unlisted(request.object)) return { kind: 'unavailable', reason: 'channel_refused' }
+		const published = this.published.get(key(target, request.object))
+		return {
+			kind: 'ok',
+			value: {
+				content: false,
+				view: {
+					release: GATED,
+					maintenance: published === undefined ? { mode: 'open', generation: null, published: false } : { ...published, published: true },
+					database: { sizeBytes: 4096, tables: [] },
+					migrations: this.ledgers.get(request.object) ?? this.ledger,
+					scheduler: { alarm: null },
+					jobs: [],
+					files: [],
+					webhooks: [],
+					bootFailure: this.bootFails || this.bootFailures.has(request.object) ? { at: BOOT_FAILED_AT } : null,
+				},
+			},
+		}
+	}
+
+	async state(target: OpsTarget, request: OpsStateRequest): Promise<OpsFencedAnswer<OpsStateAck>> {
+		const sent: Sent = { op: 'state', env: target.env, object: request.object, generation: request.generation, mode: request.mode }
+		this.sent.push(sent)
+		const fault = await this.fault(sent)
+		if (fault === 'down') return { kind: 'unavailable', reason: 'unreachable' }
+		if (fault === 'not_served') return { kind: 'unavailable', reason: 'not_served' }
+		if (this.unlisted(request.object)) return { kind: 'unavailable', reason: 'channel_refused' }
+		const current = this.published.get(key(target, request.object)) ?? null
+		if (opsTransitionRefused(current, request)) return { kind: 'stale', published: current }
+		this.published.set(key(target, request.object), { generation: request.generation, mode: request.mode })
+		if (request.mode === 'open') this.stretches.delete(key(target, request.object))
+		else if (current === null || current.mode === 'open') this.stretches.set(key(target, request.object), request.generation)
+		if (fault === 'lose') return { kind: 'unavailable', reason: 'unreachable' }
+		return { kind: 'ok', value: { generation: request.generation, mode: request.mode, stillRunning: 0 } }
+	}
+
+	/**
+	 * Boots the object and applies the bundled migrations its ledger lacks, only under the published generation and not
+	 * in `inspect`; a failed boot answers the 500 that reads as unreachable.
+	 */
+	async migrate(target: OpsTarget, request: OpsMigrateRequest): Promise<OpsFencedAnswer<OpsMigrateAck>> {
+		const sent: Sent = { op: 'migrate', env: target.env, object: request.object, generation: request.generation }
+		this.sent.push(sent)
+		const fault = await this.fault(sent)
+		if (fault === 'down' || this.bootFails || this.bootFailures.has(request.object)) return { kind: 'unavailable', reason: 'unreachable' }
+		if (fault === 'not_served') return { kind: 'unavailable', reason: 'not_served' }
+		if (this.unlisted(request.object)) return { kind: 'unavailable', reason: 'channel_refused' }
+		const published = this.published.get(key(target, request.object)) ?? null
+		if (published === null || published.generation !== request.generation || published.mode === 'inspect') return { kind: 'stale', published }
+		const ledger = this.ledgers.get(request.object) ?? this.ledger
+		const applied = new Set(ledger.map((row) => row.name))
+		for (const name of this.bundled) {
+			if (!applied.has(name)) ledger.push({ bundle: 'app', name, checksum: digest(name), appliedAt: BOOT_FAILED_AT })
+		}
+		if (fault === 'lose') return { kind: 'unavailable', reason: 'unreachable' }
+		return { kind: 'ok', value: { generation: request.generation, migrations: [...ledger] } }
+	}
+
+	async export(target: OpsTarget, request: OpsExportRequest): Promise<OpsDataAnswer<OpsExportAck>> {
+		const sent: Sent = {
+			op: 'export',
+			env: target.env,
+			step: request.step,
+			generation: request.generation,
+			...(request.step === 'part' ? { part: request.part } : {}),
+		}
+		this.sent.push(sent)
+		const fault = await this.fault(sent)
+		if (fault === 'down') return { kind: 'unavailable', reason: 'unreachable' }
+		if (fault === 'not_served') return { kind: 'unavailable', reason: 'not_served' }
+		if (typeof fault === 'object') return { kind: 'refused', refusal: { refused: fault.refused, table: fault.table ?? null } }
+		const published = this.published.get(key(target, request.object)) ?? null
+		if (published === null || published.generation !== request.generation) return { kind: 'stale', published }
+		if (published.mode === 'open') return { kind: 'refused', refusal: { refused: 'wrong_mode', table: null } }
+		const since = this.stretches.get(key(target, request.object))
+		const begun = this.dumps.get(request.dump)
+		if (since === undefined) return { kind: 'refused', refusal: { refused: 'wrong_mode', table: null } }
+		if (begun !== undefined && (begun.since !== since || (request.step !== 'begin' && request.uploadId !== begun.uploadId))) {
+			return { kind: 'refused', refusal: { refused: 'ledger_mismatch', table: null } }
+		}
+		if (begun === undefined && request.step !== 'begin') return { kind: 'refused', refusal: { refused: 'ledger_mismatch', table: null } }
+		const answer: OpsDataAnswer<OpsExportAck> = begun !== undefined && request.step === 'begin'
+			? { kind: 'ok', value: { step: 'begin', uploadId: begun.uploadId, bookmark: 'bookmark-0001' } }
+			: this.exportAnswer(request, since)
+		return fault === 'lose' ? { kind: 'unavailable', reason: 'unreachable' } : answer
+	}
+
+	private exportAnswer(request: OpsExportRequest, since: number): OpsDataAnswer<OpsExportAck> {
+		switch (request.step) {
+			case 'begin': {
+				this.begins++
+				const uploadId = `upload-${this.begins}`
+				this.dumps.set(request.dump, { since, uploadId })
+				return { kind: 'ok', value: { step: 'begin', uploadId, bookmark: 'bookmark-0001' } }
+			}
+			case 'part': {
+				expect(request.cursor).toEqual(request.part === 1 ? null : cursorAt(request.part))
+				const next = request.part < this.parts ? cursorAt(request.part + 1) : null
+				return { kind: 'ok', value: { step: 'part', uploaded: uploadedPart(request.part, this.parts), tables: [table(request.part)], next } }
+			}
+			case 'complete': {
+				const parts = Array.from({ length: this.parts }, (_, index) => uploadedPart(index + 1, this.parts))
+				expect(request.parts).toEqual(parts)
+				expect(request.tables).toEqual(parts.map((part) => table(part.part)))
+				const manifest = parseOpsDumpManifest({
+					format: 1,
+					dump: request.dump,
+					object: request.object,
+					consistent: request.consistent,
+					createdAt: '2027-01-15T08:00:00.000Z',
+					bookmark: request.bookmark,
+					release: GATED,
+					contractDigest: `sha256:${digest('contract')}`,
+					ddl: request.tables.map((dumped) => ({ type: 'table', name: dumped.name, table: dumped.name, sql: `CREATE TABLE ${dumped.name} (id)` })),
+					migrations: [],
+					tables: request.tables,
+					parts: request.parts.map(({ part, size, sha256 }) => ({ part, size, sha256 })),
+				})
+				if (manifest === null) throw new Error('the fake wrote a manifest the wire refuses')
+				return { kind: 'ok', value: { step: 'complete', manifest } }
+			}
+		}
+	}
+
+	async import(target: OpsTarget, request: OpsImportRequest): Promise<OpsDataAnswer<OpsImportAck>> {
+		const sent: Sent = {
+			op: 'import',
+			env: target.env,
+			object: request.object,
+			step: request.step,
+			generation: request.generation,
+			...(request.step === 'part' || request.step === 'link' ? { part: request.part } : {}),
+		}
+		this.sent.push(sent)
+		const fault = await this.fault(sent)
+		if (fault === 'down') return { kind: 'unavailable', reason: 'unreachable' }
+		if (typeof fault === 'object') return { kind: 'refused', refusal: { refused: fault.refused, table: fault.table ?? null } }
+		if (this.unlisted(request.object)) return { kind: 'unavailable', reason: 'channel_refused' }
+		const published = this.published.get(key(target, request.object)) ?? null
+		if (published === null || published.generation !== request.generation) return { kind: 'stale', published }
+		if (published.mode !== 'inspect') return refusal('wrong_mode')
+		const answer = this.importAnswer(request)
+		return fault === 'lose' ? { kind: 'unavailable', reason: 'unreachable' } : answer
+	}
+
+	private importAnswer(request: OpsImportRequest): OpsDataAnswer<OpsImportAck> {
+		if (request.object !== 'rehearsal') return this.cloneAnswer(request)
+		const target = this.rehearsal
+		if (request.step === 'discard') {
+			if (target.marker === null) return refusal('no_import')
+			this.rehearsal = { marker: null, tables: false }
+			return { kind: 'ok', value: { step: 'discard' } }
+		}
+		if (request.step === 'begin') {
+			if ((target.marker !== null && target.marker.dump !== request.source.dump) || (target.marker === null && target.tables)) {
+				return refusal('not_fresh')
+			}
+			this.rehearsal = { marker: target.marker ?? { dump: request.source.dump, loaded: new Set() }, tables: true }
+			return { kind: 'ok', value: { step: 'begin', parts: this.parts } }
+		}
+		const marker = target.marker
+		if (marker === null || marker.dump !== request.source.dump) return refusal('no_import')
+		switch (request.step) {
+			case 'part':
+				marker.loaded.add(request.part)
+				return { kind: 'ok', value: { step: 'part', part: request.part, rows: 3, deferred: this.deferred.has(request.part) ? 2 : 0 } }
+			case 'link':
+				if (marker.loaded.size !== this.parts) return refusal('part_mismatch')
+				return { kind: 'ok', value: { step: 'link', part: request.part, rows: 2 } }
+			case 'verify': {
+				// Two steps: every table but the last, then the last.
+				if (request.cursor === null && this.parts > 1) {
+					const verified = Array.from({ length: this.parts - 1 }, (_, index) => table(index + 1))
+					return { kind: 'ok', value: { step: 'verify', tables: verified, next: { ...cursorAt(this.parts), after: '7', rows: 1, hash: digest('x') } } }
+				}
+				return { kind: 'ok', value: { step: 'verify', tables: [table(this.parts)], next: null } }
+			}
+			case 'complete':
+				throw new Error('a rehearsal never completes the import: complete clears the marker discard needs')
+		}
+	}
+
+	/** An import into a clone, which `complete` finishes like the object's importer: the marker goes, a receipt stays. */
+	private cloneAnswer(request: OpsImportRequest): OpsDataAnswer<OpsImportAck> {
+		const target = this.imports.get(request.object) ?? { marker: null, tables: false, completed: null }
+		this.imports.set(request.object, target)
+		if (request.step === 'discard') {
+			if (target.marker === null) return refusal('no_import')
+			this.imports.set(request.object, { marker: null, tables: false, completed: null })
+			return { kind: 'ok', value: { step: 'discard' } }
+		}
+		if (request.step === 'begin') {
+			if ((target.marker !== null && target.marker.dump !== request.source.dump) || (target.marker === null && target.tables)) {
+				return refusal('not_fresh')
+			}
+			target.marker ??= { dump: request.source.dump, loaded: new Set() }
+			target.tables = true
+			return { kind: 'ok', value: { step: 'begin', parts: this.parts } }
+		}
+		const marker = target.marker
+		if (marker === null || marker.dump !== request.source.dump) {
+			if (request.step === 'complete' && target.completed === request.source.dump) {
+				return { kind: 'ok', value: { step: 'complete', source: request.source } }
+			}
+			return refusal('no_import')
+		}
+		switch (request.step) {
+			case 'part':
+				marker.loaded.add(request.part)
+				return { kind: 'ok', value: { step: 'part', part: request.part, rows: 3, deferred: this.deferred.has(request.part) ? 2 : 0 } }
+			case 'link':
+				if (marker.loaded.size !== this.parts) return refusal('part_mismatch')
+				return { kind: 'ok', value: { step: 'link', part: request.part, rows: 2 } }
+			case 'verify':
+				if (request.cursor === null && this.parts > 1) {
+					const verified = Array.from({ length: this.parts - 1 }, (_, index) => table(index + 1))
+					return { kind: 'ok', value: { step: 'verify', tables: verified, next: { ...cursorAt(this.parts), after: '7', rows: 1, hash: digest('x') } } }
+				}
+				return { kind: 'ok', value: { step: 'verify', tables: [table(this.parts)], next: null } }
+			case 'complete':
+				if (marker.loaded.size !== this.parts) return refusal('part_mismatch')
+				this.imports.set(request.object, { marker: null, tables: true, completed: request.source.dump })
+				return { kind: 'ok', value: { step: 'complete', source: request.source } }
+		}
+	}
+
+	/**
+	 * The original's restore steps as `cloudflare/restore.ts` serves them: `prepare` and `arm` under the published
+	 * generation, refused on the serving object and outside `inspect`; `verify` in any mode.
+	 */
+	async restore(target: OpsTarget, request: OpsRestoreRequest): Promise<OpsDataAnswer<OpsRestoreAck>> {
+		const generation = request.step === 'verify' ? null : request.generation
+		const sent: Sent = { op: 'restore', env: target.env, object: request.object, step: request.step, generation }
+		this.sent.push(sent)
+		const fault = await this.fault(sent)
+		if (fault === 'down') return { kind: 'unavailable', reason: 'unreachable' }
+		if (fault === 'not_served') return { kind: 'unavailable', reason: 'not_served' }
+		if (typeof fault === 'object') return { kind: 'refused', refusal: { refused: fault.refused, table: fault.table ?? null } }
+		if (this.unlisted(request.object)) return { kind: 'unavailable', reason: 'channel_refused' }
+		const rewind = this.rewinds.get(request.object) ?? { sentinels: new Map(), arms: 0 }
+		this.rewinds.set(request.object, rewind)
+		if (request.step === 'verify') {
+			const answer: OpsDataAnswer<OpsRestoreAck> = {
+				kind: 'ok',
+				value: { step: 'verify', sentinel: rewind.sentinels.has(request.sentinel) ? 'present' : 'absent', bookmark: 'bookmark-0005' },
+			}
+			return fault === 'lose' ? { kind: 'unavailable', reason: 'unreachable' } : answer
+		}
+		const published = this.published.get(key(target, request.object)) ?? null
+		if (published === null || published.generation !== request.generation) return { kind: 'stale', published }
+		if (request.object === this.serving) return refusal('serving_object')
+		if (published.mode !== 'inspect') return refusal('wrong_mode')
+		if (this.bookmarkUnavailable) return refusal('bookmark_unavailable')
+		let answer: OpsDataAnswer<OpsRestoreAck>
+		if (request.step === 'prepare') {
+			const kept = rewind.sentinels.get(request.sentinel) ?? { current: 'bookmark-0009', target: 'bookmark-0005' }
+			rewind.sentinels.set(request.sentinel, kept)
+			answer = { kind: 'ok', value: { step: 'prepare', ...kept } }
+		} else {
+			rewind.arms++
+			if (this.resets) {
+				// The next session starts at the target, before `prepare` wrote the sentinel.
+				rewind.sentinels.delete(request.sentinel)
+				if (this.rewoundLedger !== null) this.ledgers.set(request.object, this.rewoundLedger)
+			}
+			answer = { kind: 'ok', value: { step: 'arm', undo: 'bookmark-undo' } }
+		}
+		return fault === 'lose' ? { kind: 'unavailable', reason: 'unreachable' } : answer
+	}
+
+	requests(env = ENV): string[] {
+		return this.sent.flatMap((sent) => {
+			if (sent.env !== env) return []
+			if (sent.op === 'inspect') return [sent.object === 'application' ? 'inspect' : `inspect ${sent.object}`]
+			if (sent.op === 'state') return [`state ${sent.object} ${sent.mode} @${sent.generation}`]
+			if (sent.op === 'migrate') return [sent.object === 'application' ? `migrate @${sent.generation}` : `migrate ${sent.object} @${sent.generation}`]
+			if (sent.op === 'restore') return [`restore ${sent.object} ${sent.step}${sent.generation === null ? '' : ` @${sent.generation}`}`]
+			const part = sent.part === undefined ? '' : ` ${sent.part}`
+			const object = sent.op === 'import' && sent.object !== 'rehearsal' ? ` ${sent.object}` : ''
+			return [`${sent.op}${object} ${sent.step}${part} @${sent.generation}`]
+		})
+	}
+}
+
+export function key(target: OpsTarget, object: string): string {
+	return `${target.appId}/${target.env}/${object}`
+}
+
+function refusal(refused: OpsDataRefusalReason): OpsDataAnswer<never> {
+	return { kind: 'refused', refusal: { refused, table: null } }
+}
+
+export function table(part: number): OpsDumpTable {
+	return { name: `t${part}`, rows: 3, hash: digest(`t${part}`) }
+}
+
+export function cursorAt(part: number): OpsDumpCursor {
+	return { table: `t${part}`, after: null, rows: 0, hash: OPS_EMPTY_TABLE_HASH }
+}
+
+function uploadedPart(part: number, parts: number): OpsUploadedPart {
+	return { part, size: part < parts ? OPS_DUMP_PART_SIZE : 4096, sha256: digest(`part ${part}`), etag: `etag-${part}` }
+}

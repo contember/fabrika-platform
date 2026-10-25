@@ -80,3 +80,18 @@ describe('cloudflare-current-timestamp', () => {
 		expect(await findingsOf('cloudflare-current-timestamp', cloudflare)).toEqual([])
 	})
 })
+
+describe('cloudflare-job-segment', () => {
+	test('refuses a job longer than one 14-minute segment, naming the job, its timeout, the cap and the chunking form', () => {
+		const artifact = scaffoldInputs(application(true)).artifact
+		if (artifact === null) throw new Error('the fixture compiles no contract')
+		const job = (timeoutMs: number) => ({ schedule: '0 3 * * *', actions: [], scope: { kind: 'app' as const }, timeoutMs, retries: 0 })
+		const refusals = checkCloudflareContract({ ...artifact, jobs: { nightly: job(14 * 60_000 + 1), hourly: job(14 * 60_000) } })
+			.filter((finding) => finding.rule === 'cloudflare-job-segment')
+		expect(refusals.map((finding) => [finding.severity, finding.message])).toEqual([
+			['refusal', 'the job nightly runs up to 840001 ms, and a job segment on Cloudflare runs at most 840000 ms'],
+		])
+		expect(refusals[0]?.allowed).toContain('claim')
+		expect(refusals[0]?.allowed).toContain('backlog 230')
+	})
+})

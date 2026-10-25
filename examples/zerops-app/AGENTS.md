@@ -225,7 +225,7 @@ the access check. `references/spa.md` shows the stack.
 | an outside HTTPS API           | `egress: ['https://api.example.com']`                   | `fetch` to exactly those origins                   |
 | a signed link (unsubscribe)    | `signs: ['<purpose>']`                                  | `ctx.tokens.sign`                                  |
 | a webhook binding              | `binds: '<webhook>'`                                    | `ctx.webhooks('<webhook>').bind` and `.unbind`     |
-| a job run after the commit     | `kicks: ['<job>']`                                      | `ctx.kick('<job>')`                                |
+| a job run after the commit     | `kicks: ['<job>']`                                      | `ctx.kick('<job>')`, `ctx.kick('<job>', { at })`   |
 | a trigger, function or view    | its migration                                           | —                                                  |
 
 Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
@@ -291,8 +291,9 @@ bunx fabrika-check .                                        # once, after tsc; r
 one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
 object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
 The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
-object's transaction, so its `limits.timeoutMs` is at most 25 s. No `sql` (`ctx.sql`) and no `scan: true`: the
-checker, the deploy and the boot refuse both.
+object's transaction, so its `limits.timeoutMs` is at most 25 s. A job's is at most 14 minutes, its default: longer
+work claims a bounded batch per run, and the next run takes the rest (`references/jobs.md`). No `sql` (`ctx.sql`) and
+no `scan: true`: the checker, the deploy and the boot refuse both.
 
 The object runs one transaction at a time, so every `await` in a handler that may write holds the whole environment:
 IAM, R2, a `fetch`, a `ctx.connect` call, a binding. One 2 s call caps the environment at half a request a second. A
@@ -342,8 +343,8 @@ e-mails them, a link holder's files, HR's review with its history.
 
 - On Cloudflare, where the application runs in one Durable Object over its SQLite and its `db/migrations/*.sql` are
   SQLite, `sql` (`ctx.sql`) and a file kind with `scan: true` are refused. Everything else on the road runs there.
-- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job; it
-  carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
+- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job, now
+  or at `{ at }`; it carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
 - A read across tables (a join, a filter over a related table, an aggregate over several) is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.
@@ -1687,6 +1688,7 @@ The refusals agents meet most, and their fix:
 | `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                                             | the endpoint id `<mount>.<group>.<procedure>`                                             |
 | `cloudflare-sql`               | on Cloudflare, a site that declares `sql`                                                                                                                        | the handles (`ctx.db`), without `sql`                                                     |
 | `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                                     | the kind without `scan`, and no public procedure that takes its files                     |
+| `cloudflare-job-segment`       | on Cloudflare, a job whose `limits.timeoutMs` exceeds one 14-minute segment                                                                                      | at most 14 minutes: claim a bounded batch per run, and the next run takes the rest        |
 | `cloudflare-current-timestamp` | on Cloudflare, `DEFAULT CURRENT_TIMESTAMP` in a migration: SQLite stores `YYYY-MM-DD HH:MM:SS`, which every read of the table refuses                            | `DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, in a new migration                     |
 
 The hints:
@@ -2208,8 +2210,8 @@ Background work is a cron job: `app.cron(schedule, { actions })` with its `.hand
 `endpoints.ts` of the slice whose data it works on, mounted under `jobs` in the contract. There are no timers, loops,
 `setInterval` or self-scheduled work, and no `ctx.jobs.enqueue`: work for later is a row that a run picks up, usually
 from a queue table with `claim` (below). A mutation, a webhook or another job that declares `kicks: ['<job>']` and
-calls `ctx.kick('<job>')` starts a run within seconds of its commit (the outbox below); the schedule picks up whatever
-that run leaves.
+calls `ctx.kick('<job>')` starts a run within seconds of its commit (the outbox below), and `ctx.kick('<job>', { at })`
+starts one at `at`; the schedule picks up whatever that run leaves.
 
 ```ts src/overdue/endpoints.ts
 import { app } from '../app-kit'
@@ -2322,7 +2324,7 @@ export const contract = app.contract((c) => ({
   one, since no zone is a day further ahead.
 - **Reads run outside the transaction; every write runs inside `ctx.transaction((tx) => …)`**, through `tx.db`, fenced
   by the attempt's lease. A write outside it is a type error that names `tx.db`.
-- An attempt that fails or outlives `limits.timeoutMs` (default 15 minutes, at most a day) is retried up to `retries` times, so every write is
+- An attempt that fails or outlives `limits.timeoutMs` (default 14 minutes, at most a day; at most 14 minutes on Cloudflare) is retried up to `retries` times, so every write is
   idempotent. **Re-read each row under its lock before you write it:** `tx.db.on(ref).getForUpdate()` inside the
   transaction, decide again on what it answers with the list's whole filter (`isOverdue`), and write with its
   `version`. The listed row is already old: someone
@@ -2433,6 +2435,8 @@ for (const row of await ctx.db.app('mail.send').outbox.claim({ limit: 50 })) {
   later.
 - A failure or a crash leaves the row as the claim left it, due again after the backoff; nothing retries at once.
   Attempts count claims, so claim only what the run will reach.
+- A claim that leased rows runs the job again when the same claim would next find one (its `where`, its scope, below
+  `maxAttempts`), no sooner than a second later; a claim that took its full `limit` runs it again at once.
 - A row past `maxAttempts` stays in the table, no longer due, for the application to show or requeue.
 - One recipe covers an outbox, a per-record reminder (`<due>` is the reminder time) and asynchronous work: a mutation
   inserts a request row and kicks; the job claims it, renders, puts the result into a file column with
@@ -2448,8 +2452,16 @@ row, in its own transaction: a public procedure's row (`registrations`), an outb
 transaction committed, the job runs within seconds, under its own key, and the answer does not wait for it. A thrown
 handler, a refused answer and a failed commit kick nothing. Kicks coalesce: at most one run is active and one pending,
 however many calls arrive. A kick carries nothing; the job reads its rows, and its schedule stays the recovery.
+The kick is written in the site's transaction, so a crash right after the commit still runs the job.
 `kicks` names cron jobs of the contract, as literals (`r.mutation({ …, kicks: ['testMails'] })`); a mutation, a
 webhook and a job declare it, and the kick edges never form a cycle.
+
+**A kick for later.** `ctx.kick('<job>', { at })`, with `at` a `Date`, runs the job at that time instead of after the
+commit: a reminder, a retry the application times itself. Kicks of one job in the same second are one; kicks at
+different times stay apart, and a run takes only those already due. The second argument is the time and nothing else;
+what to do stays in the job's rows (`where <due> <= now()`, or a queue table's `<due>`). On Cloudflare the object's
+alarm runs it within seconds of `at`; on Bun the serving process that wrote it runs it at `at`, and another process
+finds it within a minute.
 
 The rules of the job:
 
@@ -5979,6 +5991,13 @@ if (postgres !== null) {
 - A mutation that kicks (`kicks`, `ctx.kick`) starts its job in the background of the call. `kit.drain()` waits for
   those runs, and `kit.runJob` first waits for them; every generated access case drains before it answers. The kicked
   run may start at once, so arm a fault before the call, never between the call and the run.
+- `await kit.runDueJobs({ within: 3 * 3600000 })` runs every job with a wake due now or within `within` milliseconds
+  (0 by default) once, as the Cloudflare object's alarm runs it: a cron job's next fire, a kick, a failed run's retry.
+  It answers `[{ job, result }]` for the runs it started, and first waits for the kicked runs. Without it the kit fires
+  no wake: a cron job runs only through `runJob` or `runDueJobs`. Only the wakes move, never the clock: a handler's
+  `new Date()` and a queue row's due time stay real, so a row due later is not claimed early. A second call does not run
+  a cron fire the first one ran early. A failed run of a job with `retries` is due again after its backoff, at most a
+  second for the first retry, so `runDueJobs({ within: 2000 })` runs it. It needs the application's data layer.
 - `kit.mail` is the stand-in for every job's mail transport (`MemoryEmailSender` of `@fabrika/app/testing`), so a test
   needs no mail variable. `kit.mail.accepted` is what reached the inbox, once per key, and `kit.mail.handoffs` every
   send with its `answer`. `refuse(code?)`, `unavailable()`, `unreachable()`, `loseAnswers(n)` and `during(hook)`
