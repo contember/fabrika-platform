@@ -305,8 +305,8 @@ none and answers its row with 404. Its senders reach it over the platform transp
   disabled sending, a text-only body, the format of `tag` and the wording of a daily-limit 429 are not verified.
 - **Cloudflare's limits.** It has no idempotency either, so an unknown outcome over it needs a person. It takes
   transactional mail only, so it has no `broadcast` capability and refuses a broadcast message before any I/O; an
-  installation on it sends no newsletters. Its 5 MiB message bound leaves 3 MiB of attachments. It is checked only
-  against a stubbed `fetch` ([backlog 236](../backlog/236-verify-the-cloudflare-email-adapter-on-a-live-account.md)).
+  installation on it sends no newsletters. Its 5 MiB message bound leaves 3 MiB of attachments. Only its accepted
+  answer is checked live ([backlog 236](../backlog/236-verify-the-cloudflare-email-adapter-on-a-live-account.md)).
 - Every adapter sends one message per call (`maxBatch: 1`); batches are
   [backlog 186](../backlog/186-send-email-in-batches.md).
 - SMTP-only installations need a future adapter or an HTTP mail gateway. SMTP is not emulated through runtime-specific code in IAM.

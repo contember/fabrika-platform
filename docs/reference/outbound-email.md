@@ -124,14 +124,14 @@ What each built-in provider offers, and what it has been checked against. "Live"
 recorded on a real account and the received messages inspected; "stubbed" means only the unit tests and the
 conformance kit against a stubbed `fetch`.
 
-| provider        | idempotent | confirmation | unsubscribe | attachments | broadcast                            | checked against                                                                                  |
-| --------------- | ---------- | ------------ | ----------- | ----------- | ------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | from its Marketing domain, unchecked | live, 2026-10-22                                                                                 |
-| `cloudflare`    | no         | `sync`       | yes         | 3 MiB       | no                                   | stubbed ([backlog 236](../backlog/236-verify-the-cloudflare-email-adapter-on-a-live-account.md)) |
-| `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | its broadcast route, unchecked       | live, 2026-10-22                                                                                 |
-| `postmark`      | no         | `sync`       | yes         | 10 MiB      | its broadcast stream                 | live, 2026-10-22                                                                                 |
-| `resend`        | yes        | `sync`       | yes         | 25 MiB      | tagged `category: broadcast`         | live, 2026-10-22                                                                                 |
-| `smartemailing` | no         | `queued`     | no          | none        | no                                   | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md))    |
+| provider        | idempotent | confirmation | unsubscribe | attachments | broadcast                            | checked against                                                                                                                             |
+| --------------- | ---------- | ------------ | ----------- | ----------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | from its Marketing domain, unchecked | live, 2026-10-22                                                                                                                            |
+| `cloudflare`    | no         | `sync`       | yes         | 3 MiB       | no                                   | accepted answer live, 2026-10-25; refusals stubbed ([backlog 236](../backlog/236-verify-the-cloudflare-email-adapter-on-a-live-account.md)) |
+| `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | its broadcast route, unchecked       | live, 2026-10-22                                                                                                                            |
+| `postmark`      | no         | `sync`       | yes         | 10 MiB      | its broadcast stream                 | live, 2026-10-22                                                                                                                            |
+| `resend`        | yes        | `sync`       | yes         | 25 MiB      | tagged `category: broadcast`         | live, 2026-10-22                                                                                                                            |
+| `smartemailing` | no         | `queued`     | no          | none        | no                                   | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md))                                               |
 
 A provider that is not idempotent leaves a message whose outcome is unknown (a timeout, a lost answer, a 5xx) to a
 person: it is never sent again automatically (`mayRetryDelivery`). When a provider is checked live, update its row and
@@ -270,17 +270,26 @@ IAM's Worker, Control on either cloud and an application read one set of `FABRIK
 `content` (base64), `filename`, `type` and `disposition: attachment`.
 
 Cloudflare has no idempotency key. Capabilities: not idempotent, `sync`, `listUnsubscribe`, and `maxAttachmentBytes`
-of 3 MiB: Cloudflare counts the whole message, attachments included, against 5 MiB. It takes transactional mail only,
-so it has no `broadcast` capability and refuses a broadcast message before any request.
+of 3 MiB: Cloudflare counts the whole message, attachments included, against 5 MiB, and 3 MiB of files become about
+4.1 MiB once base64 and MIME-wrapped, which leaves about 0.9 MiB for the bodies and the headers. A message over the
+bound anyway is a 400, a clean `provider_rejected`. Cloudflare bounds a header value at 2,048 bytes, so an unsubscribe
+URL longer than 2,046 bytes (the value is `<url>`) is `invalid_message` before any request. It takes transactional
+mail only, so it has no `broadcast` capability and refuses a broadcast message before any request.
 
 A 200 groups the recipients into `delivered`, `queued`, `permanent_bounces` and `suppressed_recipients`. A message
-whose recipient is a permanent bounce or suppressed is `provider_rejected`, without the address; otherwise its
-`result.message_id` is the message ID, and a 200 without one is `malformed_response`. A refusal carries numeric codes
+whose recipient is a permanent bounce or suppressed is `provider_rejected`, without the address. Otherwise
+`result.message_id` is the message ID when the answer carries one. Checked live (2026-10-25, one recipient): a fresh
+send answers 200 with `message_id`, an RFC 5322 `Message-ID` in angle brackets on the sender's domain, and the
+recipient in `queued`, not `delivered`. The REST guide's example answers only the recipients' status, so the adapter
+also takes that shape: without `message_id`, a recipient in
+`delivered` or `queued` is accepted under `cloudflare:<idempotency key>`, which names the send and is the same on a
+retry of it. A 200 that names neither a message ID nor the recipient is `malformed_response`. A refusal carries numeric codes
 in `errors`, which the adapter does not read: per the documentation a malformed request, an invalid or oversized
 message is a 400, `provider_rejected`; a bad token a 401, and a token without the permission, an account not entitled
 to Email Sending, or sending disabled or paused a 403, `provider_unauthorized`; a 404 (no such account under the path)
 `provider_unauthorized`; a 429 `rate_limited`; a 500 or 503 `provider_unavailable`. A repeated request is delivered
-again. Not checked live ([backlog 236](../backlog/236-verify-the-cloudflare-email-adapter-on-a-live-account.md)).
+again. Only the accepted answer is checked live; the refusals follow the documentation
+([backlog 236](../backlog/236-verify-the-cloudflare-email-adapter-on-a-live-account.md)).
 
 ## SmartEmailing adapter
 
