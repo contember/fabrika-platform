@@ -18,6 +18,11 @@ export const FABRIKA_TOKEN_KEYS = 'FABRIKA_TOKEN_KEYS'
 export const FABRIKA_APP_ORIGIN = 'FABRIKA_APP_ORIGIN'
 /** The digests of the environment's ops keys, which the object checks Control's key against (`parseOpsKeyDigests`, ADR-0069). */
 export const FABRIKA_OPS_KEY_DIGESTS = 'FABRIKA_OPS_KEY_DIGESTS'
+/**
+ * The installation's own hosts, which a cron job's public egress refuses (ADR-0071): Control's, IAM's, Operations' and
+ * every application environment's domain, normalized and joined by `,`. Written only for a contract with such a job.
+ */
+export const FABRIKA_EGRESS_REFUSED_HOSTS = 'FABRIKA_EGRESS_REFUSED_HOSTS'
 /** The name of the object that serves an environment's ordinary traffic on Cloudflare; `application` without it. */
 export const FABRIKA_APPLICATION_OBJECT = 'FABRIKA_APPLICATION_OBJECT'
 /** The object names an ops request may target, all in the environment's own namespace (`parseApplicationObjects`). */
@@ -54,6 +59,7 @@ export const FRAMEWORK_VARIABLE_NAMES = [
 	FABRIKA_TOKEN_KEYS,
 	FABRIKA_APP_ORIGIN,
 	FABRIKA_OPS_KEY_DIGESTS,
+	FABRIKA_EGRESS_REFUSED_HOSTS,
 	FABRIKA_APPLICATION_OBJECT,
 	FABRIKA_APPLICATION_OBJECTS,
 ] as const

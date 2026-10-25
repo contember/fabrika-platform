@@ -1,5 +1,5 @@
 import { CLOUDFLARE_MAX_JOB_SEGMENT_MS } from '@fabrika/app/contract'
-import type { ContractArtifact } from '@fabrika/auth-core'
+import { type ContractArtifact, type DeclaredEgress, PUBLIC_EGRESS } from '@fabrika/auth-core'
 import type { Finding } from '../finding'
 import { CONTRACT_FILE } from '../layout'
 
@@ -14,8 +14,8 @@ const at = (rule: 'cloudflare-scan' | 'cloudflare-job-segment', message: string,
 })
 
 /** The outside calls a site declares, as the hint names them: its `egress` origins and its `connect` imports. */
-const outsideCalls = (reach: { readonly egress?: readonly string[]; readonly connect: readonly string[] }): string[] => [
-	...(reach.egress ?? []).map((origin) => `egress ${origin}`),
+const outsideCalls = (reach: { readonly egress?: DeclaredEgress; readonly connect: readonly string[] }): string[] => [
+	...(reach.egress === PUBLIC_EGRESS ? [`egress '${PUBLIC_EGRESS}'`] : (reach.egress ?? []).map((origin) => `egress ${origin}`)),
 	...reach.connect.map((name) => `connect ${name}`),
 ]
 

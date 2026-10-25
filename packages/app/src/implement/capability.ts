@@ -35,6 +35,9 @@ export const CAPABILITY_REFUSALS = {
 	undeclared_binding: 'the site named a webhook it does not declare in binds',
 	undeclared_signs: 'the site signed a token of a purpose it does not declare in signs, or for longer than the purpose allows',
 	undeclared_egress: 'the site called an origin it does not declare in egress',
+	refused_egress:
+		"the site's public egress refused the host: an IP address, a local or internal name, a non-default port, a host of this installation, or a name that resolves to a private address",
+	oversized_egress: "a response to the site's public egress was larger than it reads",
 	wrong_binding: 'a webhook binding was handed a capability of another kind or dimension than the webhook is bound to',
 	conditional_binding:
 		'a webhook binding was handed a Ref held through a relation, a member reveal or a secondary path, which a binding would outlive',

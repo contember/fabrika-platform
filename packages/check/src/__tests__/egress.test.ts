@@ -89,6 +89,26 @@ describe('cross-app-fetch', () => {
 			.toHaveLength(1)
 	})
 
+	test("accepts a public host of http(s) where a cron job declares egress: 'public', and refuses what public egress refuses", async () => {
+		const found = await findingsOf('cross-app-fetch', (text) =>
+			text.replace(NEWSLETTER, "egress: 'public',").replace(
+				'const t = ctx.tokens.sign(',
+				[
+					'https://www.example.com/robots.txt',
+					'http://shop.example.org/',
+					'http://localhost/admin',
+					'http://169.254.169.254/latest',
+					'https://crm.acme.workers.dev/x',
+					'ftp://files.example.com/x',
+				].map((url) => `await fetch('${url}')\n\t\t`).join('') + 'await fetch(`https://${ctx.url}/`)\n\t\tconst t = ctx.tokens.sign(',
+			))
+		expect(found).toHaveLength(4)
+		expect(found[0]).toContain("'http://localhost/admin'")
+		expect(found[1]).toContain("'http://169.254.169.254/latest'")
+		expect(found[2]).toContain("'https://crm.acme.workers.dev/x'")
+		expect(found[3]).toContain("'ftp://files.example.com/x'")
+	})
+
 	test('refuses every absolute URL where no site declares egress', async () => {
 		expect(
 			await findingsOf(

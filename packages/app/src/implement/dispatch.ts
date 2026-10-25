@@ -93,7 +93,7 @@ import {
 } from './capability'
 import type { ChallengeIssuer, ChallengeVerifier } from './challenge'
 import { connectContext, type ImportWire } from './connect'
-import { runAsSite } from './egress'
+import { runAsSite, type SiteEgress, siteEgress } from './egress'
 import type { FailureReports } from './failures'
 import { ServerFault } from './faults'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
@@ -256,7 +256,7 @@ export type ServedEndpoint =
 		/** A staged-kit site, which gets `ctx.db`; a handler `implement` bound has none. */
 		readonly site?: ServedSite
 		/** The origins a staged-kit site's `fetch` reaches while its handler runs; absent for a handler `implement` bound. */
-		readonly egress?: readonly string[]
+		readonly egress?: SiteEgress
 		/** Its buckets and time limit; without them (a generated endpoint) no bucket and the request budget. */
 		readonly admission?: ProcedureAdmission
 		/** A POST's `query`, parsed from the URL beside the body: its schema and its shape. */
@@ -1526,7 +1526,7 @@ export class ContractRuntime {
 							kick: kicks.kick,
 						})
 						const args = { input, ctx, ...(query === undefined ? {} : { query }) }
-						return await runAsSite(`'${served.row.id}'`, served.site.declaration.egress, async () => await served.handler(args))
+						return await runAsSite(`'${served.row.id}'`, siteEgress(served.site.declaration.egress, null), async () => await served.handler(args))
 					})
 				} finally {
 					frame.end()
@@ -1680,7 +1680,7 @@ export class ContractRuntime {
 						if (site === undefined) {
 							await served.handler(args)
 						} else {
-							await runAsSite(`webhook '${served.webhook}'`, site.egress, async () => await served.handler(args))
+							await runAsSite(`webhook '${served.webhook}'`, siteEgress(site.egress, null), async () => await served.handler(args))
 						}
 					})
 				} finally {

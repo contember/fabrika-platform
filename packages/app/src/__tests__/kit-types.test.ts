@@ -59,6 +59,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'57-binds-on-a-query.ts': 'a query binds no webhook: declare binds on a mutation',
 	'58-webhooks-without-binds.ts': "declare binds: '<webhook>' on this mutation to create and remove its bindings",
 	'59-input-field-removed-by-capabilities.ts': "Property 'companyId' does not exist on type",
+	'60-public-egress-on-a-mutation.ts': "egress: 'public' is a cron job's only: record a row and kick a job that declares it",
 }
 
 /**

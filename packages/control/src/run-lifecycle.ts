@@ -3,6 +3,7 @@ import {
 	type ApplicationObjects,
 	type ContractArtifact,
 	FABRIKA_APP_ORIGIN,
+	FABRIKA_EGRESS_REFUSED_HOSTS,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
 	FABRIKA_OPS_KEY_DIGESTS,
@@ -80,6 +81,7 @@ import {
 	sandboxHostKey,
 	workspacePublication,
 } from './dev/sandbox-keys'
+import { declaresPublicEgress, installationHosts } from './egress-hosts'
 import type { CommitSource } from './github/source/commit-files'
 import { SourceDescriptorMismatch, type SourceDescriptorMismatchDetail } from './github/source/failure'
 import { type IamSchemaPort, isIamUnavailable } from './iam-schema'
@@ -868,6 +870,13 @@ async function deployUnder(
 			: appEnv.public_origin === null || appEnv.public_origin === ''
 			? null
 			: appEnv.public_origin
+		// The installation's own hosts, which a cron job's public egress refuses (ADR-0071); `null` removes a stale list.
+		managedEnvironment[FABRIKA_EGRESS_REFUSED_HOSTS] = declaresPublicEgress(approvedContract)
+			? installationHosts(
+				[deps.controlOrigin, deps.iamIssuer, operationsOrigin],
+				await deps.repositories.registry.listAppEnvsByProvider(appEnv.provider),
+			)
+			: null
 		const tokenKeys = dryRun ? null : await reconcileTokenKeys(deps.tokenKeys, app.id, appEnv.env, approvedContract)
 		managedEnvironment[FABRIKA_TOKEN_KEYS] = tokenKeys
 		// Only an environment with a domain, at a release the provider serves the ops channel at, gets the digests (ADR-0069);
