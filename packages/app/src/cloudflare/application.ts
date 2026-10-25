@@ -34,6 +34,7 @@ import { type BarrierEvent, MaintenanceBarrier, r2MaintenanceStore } from './mai
 import { CLOUDFLARE_FILES_BINDING } from './names.js'
 import { type OpsAccess, opsAccess, type OpsRecovery, type OpsStorage, serveOps } from './ops.js'
 import { r2FileObjectStore } from './r2-files.js'
+import { trackPending } from './tracker.js'
 
 /** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
 export type ImplementationLoader = () => Promise<{ readonly default: ContractImplementation }>
@@ -85,6 +86,17 @@ export interface ApplicationState {
 	waitUntil(promise: Promise<unknown>): void
 	/** workerd resets the object; the test double has none. */
 	abort?(reason?: string): void
+}
+
+/** `state` with every `waitUntil` promise recorded by the isolate's pending-work tracker (the ops operation `timers`). */
+export function trackedState(state: ApplicationState): ApplicationState {
+	const { abort } = state
+	return {
+		storage: state.storage,
+		blockConcurrencyWhile: (callback) => state.blockConcurrencyWhile(callback),
+		waitUntil: (promise) => state.waitUntil(trackPending(promise)),
+		...(abort === undefined ? {} : { abort: (reason?: string) => abort.call(state, reason) }),
+	}
 }
 
 /** The object's recovery when its storage and state have every member PITR needs (ADR-0070), else `null`. */
@@ -439,7 +451,7 @@ export class FabrikaApplication {
 	readonly #clock: JobClock
 
 	constructor(state: ApplicationState, env: Readonly<Record<string, unknown>>) {
-		this.#state = state
+		this.#state = trackedState(state)
 		this.#env = env
 		this.#setup = registered
 		this.#clock = registered?.options.clock ?? systemClock

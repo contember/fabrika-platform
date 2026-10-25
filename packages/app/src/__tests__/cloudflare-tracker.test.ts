@@ -5,6 +5,7 @@
 import { OPS_TIMER_STACK_MAX_BYTES, OPS_TIMER_STACK_MAX_FRAMES, OPS_TIMERS_CAP, type OpsTimersView, parseOpsTimersView } from '@fabrika/auth-core'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
+import { type ApplicationState, trackedState } from '../cloudflare/application'
 import { serveTimers, type TimerScope, type TimerTracker, timerTracker } from '../cloudflare/tracker'
 import { REDACTED, secretScrubber } from '../jobs/scrub'
 
@@ -326,6 +327,43 @@ describe('the timers operation', () => {
 
 		expect(await served({ object: 'application', track: false })).toEqual({ tracking: false, timers: [], omitted: 0 })
 		expect(globalThis.setTimeout).toBe(original)
+	})
+
+	test("the object's every waitUntil promise reaches the isolate tracker, and the rest of its state is the runtime's", async () => {
+		const handed: Promise<unknown>[] = []
+		const aborted: { readonly receiver: unknown; readonly reason: string | undefined }[] = []
+		const runtime: ApplicationState = {
+			storage: {
+				sql: { exec: () => ({ toArray: () => [], rowsWritten: 0 }) },
+				transaction: (closure) => closure(),
+				transactionSync: (closure) => closure(),
+			},
+			blockConcurrencyWhile: (callback) => callback(),
+			waitUntil: (promise) => {
+				handed.push(promise)
+			},
+			abort(reason) {
+				aborted.push({ receiver: this, reason })
+			},
+		}
+		const state = trackedState(runtime)
+		expect(state.storage).toBe(runtime.storage)
+		expect(await state.blockConcurrencyWhile(() => Promise.resolve(7))).toBe(7)
+		state.abort?.('restore')
+		expect(aborted).toEqual([{ receiver: runtime, reason: 'restore' }])
+
+		await served({ object: 'application', track: true })
+		let settle = () => {}
+		state.waitUntil(
+			new Promise<void>((resolve) => {
+				settle = resolve
+			}),
+		)
+		expect(handed).toHaveLength(1)
+		expect((await served({ object: 'application', track: null }))?.timers.map(({ kind }) => kind)).toEqual(['waitUntil'])
+		settle()
+		await handed[0]
+		expect((await served({ object: 'application', track: false }))?.timers).toEqual([])
 	})
 
 	test("drops a Bun timer cleared by its handle's number, and hands its callback the handle", async () => {
