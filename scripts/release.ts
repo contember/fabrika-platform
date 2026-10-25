@@ -1143,7 +1143,9 @@ export const bumpedDecision = (text: string, version: string): string =>
  * Refuse a bump that would not move the source forward: an older tag would republish a version npm already has.
  * Within one dist-tag the version must grow. A prerelease source may switch to another channel's prerelease of the same
  * release or a later one although SemVer orders it lower: `0.9.0-dev.4` to `0.9.0-cloudflare.1`, where `cloudflare`
- * sorts below `dev`. Each channel's dist-tag then moves only forward, and npm still refuses a version it has.
+ * sorts below `dev`. The bump knows only the source, not the target channel's dist-tag: a switch to a version below
+ * what that dist-tag already names (`0.9.0-cloudflare.2` to `0.9.0-dev.1` after `dev.4`) passes here, and `publish`
+ * refuses it before anything is published. npm also refuses a version it has.
  */
 export const assertBumpForward = (sourceVersion: string, version: string): void => {
 	if (compareVersions(version, sourceVersion, 'bump') > 0) return
