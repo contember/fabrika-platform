@@ -30,7 +30,7 @@ import { environmentScrubber, type Scrubber } from '../jobs/scrub.js'
 import { bindingAssets, bindingKeySource, bindingMembership, bindingTerminals, bindingWorkloadTokens, connectBindings } from './bindings.js'
 import { type BarrierEvent, MaintenanceBarrier, r2MaintenanceStore } from './maintenance.js'
 import { CLOUDFLARE_FILES_BINDING } from './names.js'
-import { type OpsAccess, opsAccess, type OpsStorage, serveOps } from './ops.js'
+import { type OpsAccess, opsAccess, type OpsRecovery, type OpsStorage, serveOps } from './ops.js'
 import { r2FileObjectStore } from './r2-files.js'
 
 /** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
@@ -62,9 +62,27 @@ export type ApplicationStorage = SqliteStorage & OpsStorage
 
 /** What the object needs of its `DurableObjectState`. */
 export interface ApplicationState {
-	readonly storage: ApplicationStorage
+	readonly storage: ApplicationStorage & Partial<Omit<OpsRecovery, 'abort'>>
 	blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>
 	waitUntil(promise: Promise<unknown>): void
+	/** workerd resets the object; the test double has none. */
+	abort?(reason?: string): void
+}
+
+/** The object's recovery when its storage and state have every member PITR needs (ADR-0070), else `null`. */
+function objectRecovery(state: ApplicationState): OpsRecovery | null {
+	const { storage } = state
+	const { getCurrentBookmark, getBookmarkForTime, onNextSessionRestoreBookmark } = storage
+	const { abort } = state
+	if (getCurrentBookmark === undefined || getBookmarkForTime === undefined || onNextSessionRestoreBookmark === undefined || abort === undefined) {
+		return null
+	}
+	return {
+		getCurrentBookmark: () => getCurrentBookmark.call(storage),
+		getBookmarkForTime: (time) => getBookmarkForTime.call(storage, time),
+		onNextSessionRestoreBookmark: (bookmark) => onNextSessionRestoreBookmark.call(storage, bookmark),
+		abort: (reason) => abort.call(state, reason),
+	}
 }
 
 /** The framework's bindings: IAM's application entrypoint and the Workers Assets of the SPA. No handler sees them. */
@@ -393,6 +411,8 @@ export class FabrikaApplication {
 			// Served from storage alone: it never starts a boot or a retry, and waits for one under way only once authenticated.
 			return await serveOps(request, this.#ops, {
 				storage: this.#state.storage,
+				bucket: this.#env[CLOUDFLARE_FILES_BINDING],
+				recovery: objectRecovery(this.#state),
 				bootFailure: async () => {
 					await this.#outcome
 					return this.#bootFailure

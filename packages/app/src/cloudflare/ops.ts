@@ -35,12 +35,16 @@ import {
 	parseOpsView,
 } from '@fabrika/auth-core'
 import { FILES_TABLE, JOB_LEASES_TABLE, WEBHOOK_BINDINGS_TABLE, WEBHOOK_DELIVERIES_TABLE } from '@fabrika/db/migrations'
-import type { SqliteCursor, SqliteValue } from '@fabrika/db/sqlite'
+import type { SqliteCursor, SqliteStorage, SqliteValue } from '@fabrika/db/sqlite'
 import { opsProxyRow } from '@fabrika/proxy-core/manifest'
 import { timingSafeEqual } from 'node:crypto'
 import appPackage from '../../package.json' with { type: 'json' }
 import { jsonResponse } from '../errors.js'
+import { serveExport } from './export.js'
+import { serveImport } from './import.js'
 import type { MaintenanceBarrier, TransitionResult } from './maintenance.js'
+import { serveRestore } from './restore.js'
+import { serveTimers } from './tracker.js'
 
 /** What the view reads of the object's storage; workerd's `DurableObjectStorage` has both optional members. */
 export interface OpsStorage {
@@ -51,6 +55,17 @@ export interface OpsStorage {
 	}
 	/** The bun:sqlite test double has no alarm. */
 	getAlarm?(): Promise<number | null>
+}
+
+/**
+ * The object's point-in-time recovery: workerd's storage bookmarks and the abort that resets the object. `null` where the
+ * storage has none (the bun:sqlite double, a runtime without PITR).
+ */
+export interface OpsRecovery {
+	getCurrentBookmark(): Promise<string>
+	getBookmarkForTime(time: number): Promise<string>
+	onNextSessionRestoreBookmark(bookmark: string): Promise<string>
+	abort(reason: string): void
 }
 
 const OPS_ROW = opsProxyRow()
@@ -91,7 +106,10 @@ export function opsAccess(env: Readonly<Record<string, unknown>>): OpsAccess | n
 
 /** What an ops request reads of the object it reached. */
 export interface OpsTarget {
-	readonly storage: OpsStorage
+	readonly storage: OpsStorage & SqliteStorage
+	/** The environment's bucket (the `FABRIKA_FILES` R2 binding), where dumps and the maintenance state live. */
+	readonly bucket: unknown
+	readonly recovery: OpsRecovery | null
 	/**
 	 * The instance's last failed boot, the application's error text included. Asked only after authentication: it
 	 * waits for a boot under way and never starts one.
@@ -140,11 +158,22 @@ export async function serveOps(request: Request, access: OpsAccess | null, targe
 			const migration = parseOpsMigrateRequest(body)
 			return migration === null ? opsRefusal() : await migrateAnswer(target, barrier, migration.generation)
 		}
-		case 'export':
-		case 'import':
-		case 'restore':
-		case 'timers':
-			return jsonResponse({ refused: 'not_implemented' }, 501)
+		case 'export': {
+			const step = parseOpsExportRequest(body)
+			return step === null ? opsRefusal() : await serveExport(target, barrier, step)
+		}
+		case 'import': {
+			const step = parseOpsImportRequest(body)
+			return step === null ? opsRefusal() : await serveImport(target, barrier, step)
+		}
+		case 'restore': {
+			const step = parseOpsRestoreRequest(body)
+			return step === null ? opsRefusal() : await serveRestore(target, barrier, step)
+		}
+		case 'timers': {
+			const timers = parseOpsTimersRequest(body)
+			return timers === null ? opsRefusal() : serveTimers(timers)
+		}
 	}
 }
 
