@@ -397,8 +397,15 @@ other environment, before the provider prepares anything, and the write maps a r
   releases it. `data.read` and `data.manage` are checked at the coordinates, `data.content.read` as a global grant only,
   and every denial is the 404 of an absent environment; `data.view` refuses an answer that carries content.
   An object whose release does not serve `state` or `migrate` answers 501 `{refused:'not_implemented'}`; the operation
-  fails `not_served` at once instead of staying running, `recordedMaintenance` skips it, and deploys stay open. A backup
-  still answers 501.
+  fails `not_served` at once instead of staying running, `recordedMaintenance` skips it, and deploys stay open.
+- **A daily backup is a `backup` data operation the maintenance pass starts (`src/backups.ts`, ADR-0070 §7–§8).** Its
+  steps are `restrict` (`read-only`), `backup` (the export's steps), `open` at a new generation, then `verify`, the
+  rehearsal into the object `rehearsal`. Every step and part is recorded fenced on the lease (`app_env_backups`,
+  `app_env_backup_parts`), so a successor resumes where the record stops; a pass is bounded and leaves the rest to the
+  next. A failed export reopens the object; a failed rehearsal fails the backup with the object already open, and
+  `recordedMaintenance` reads both as `open`. An environment opts out in `app_env_backup_schedules` under
+  `data.manage`; `data.read` lists its backups, one older than 30 days as expired. `data.start` with kind `backup` still
+  answers 501.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.

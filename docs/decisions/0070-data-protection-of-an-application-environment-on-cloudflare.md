@@ -73,7 +73,10 @@ restore.
    answers the manifest.
 
 Control's operation record holds the upload id, the cursor, the parts and the finished tables. The object keeps nothing
-between steps. A cursor names a table, the last rowid read (as decimal text) and the count and hash folded so far: a
+between steps but one record: `begin` writes `begun` beside the dump, a digest of the generation, the DDL and both
+ledger tables, and every later `part` and `complete` refuses a state whose digest differs as `ledger_mismatch`. A
+migration at the same generation between two parts therefore never yields a dump marked consistent. Each step of a
+consistent dump runs in the barrier's turn (ADR-0069 §3), so no transition is acknowledged while a step reads. A cursor names a table, the last rowid read (as decimal text) and the count and hash folded so far: a
 digest, never a value. The step code reads `sqlite_schema` and the tables directly. It needs neither the application's
 boot nor the framework's tables, so it also dumps a database that cannot boot, or one restored to a time before those
 tables existed. R2's lifecycle aborts an upload that never completes.
@@ -207,11 +210,13 @@ refuses another format.
 
 ### 5. Where dumps live, and for how long
 
-- **Keys.** A consistent backup lies at `__fabrika/backups/<object>/<dump>/data.ndjson.gz` and `manifest.json` in the
-  environment's bucket, a diagnostic export under `__fabrika/exports/<object>/<dump>/`. The dump id is a UUIDv7 that
+- **Keys.** A consistent backup lies at `__fabrika/backups/<object>/<dump>/data.ndjson.gz`, `manifest.json` and
+  `begun` in the environment's bucket, a diagnostic export under `__fabrika/exports/<object>/<dump>/`. The dump id is a UUIDv7 that
   Control generates. `__fabrika/` is reserved in the bucket, and the build refuses a file kind of that name (ADR-0069).
 - **Retention.** A dump is kept 30 days. An R2 lifecycle rule on both prefixes, which the environment's deploy writes,
-  expires it. Control lists only the backups its record holds.
+  expires it. Control lists only the backups its record holds, and never offers one older than 30 days for a restore.
+  The deploy does not write the rule yet: oblaka's bucket resource has no lifecycle option, so until it has, a dump
+  outlives its retention in the bucket (backlog 237).
 - **Backup retention never exceeds the file tombstone window,** which is 30 days too. Removing a file queues its key,
   and the sweep deletes the bytes only once the key is past the window. A restored row keeps its file's original key,
   so the bytes are still there for any backup within its retention, and a restore cancels the queued deletion of every
@@ -221,7 +226,9 @@ refuses another format.
 ### 6. The importer
 
 `POST /__fabrika/ops/import` loads a consistent backup into a fresh object, before boot. Control first publishes the
-target `inspect` under the import operation's generation, and every step carries it.
+target `inspect` under the import operation's generation, and every step carries it. Every step runs in the barrier's
+turn, holding it across its R2 reads, and is refused as `serving_object` on the object of ordinary traffic before it
+reads anything.
 
 1. **`begin`** reads the manifest and refuses it as `invalid_manifest` when it does not parse or is too large, and as
    `fuzzy_dump` when it is not consistent. It refuses a target that holds any table as `not_fresh`. It writes an import
@@ -244,22 +251,27 @@ target `inspect` under the import operation's generation, and every step carries
    clears, or, once `begin` is done, answers again.
 2. **`part`** _n_ reads the part by its byte range and refuses it as `part_mismatch` unless its size and SHA-256 match
    the manifest, and when it decompresses to more than 16 MiB or holds more than 50 000 rows; it stops decompressing
-   at the bound. It inserts the rows with their rowids, by the keyset, in one `transactionSync`, which also records the
-   part in the marker, so a retried part loads nothing twice. It writes every value through §3's bindings, and the
+   at the bound. It inserts the rows with their rowids, by the keyset, in one `transactionSync`, which re-reads the marker
+   and records the part's receipt in it, so a retried or overlapping part loads nothing twice. It writes every value through §3's bindings, and the
    columns of a deferred foreign key as `NULL`. The ledger's tables load like any other, so the restored ledger keeps
    its original times. It answers the rows it loaded and how many have a deferred key to set.
 3. **`link`** _n_, once every part is loaded, sets the deferred keys of part _n_'s rows by their keyset, in one
-   `transactionSync`. Control calls it only for the parts that reported deferred rows.
+   `transactionSync` that records its receipt. Control calls it only for the parts that reported deferred rows.
 4. **`verify`** reads the tables back from a cursor with the producer's projection and fold, and compares each
-   finished table's count and hash with the manifest (`verify_mismatch`, naming the table).
-5. **`complete`** recreates the triggers from the manifest's DDL, compares the whole schema again, and clears the
-   marker. Control may then publish the object `open`.
+   finished table's count and hash with the manifest (`verify_mismatch`, naming the table). It records in the marker
+   the cursor it handed out; a cursor it did not hand out, or a mismatch, clears that progress, and so does any later
+   part or link.
+5. **`complete`** refuses as `part_mismatch` unless every part and every needed link has its receipt, and as
+   `verify_mismatch` unless a verification ran to its end since the last write. It recreates the triggers from the
+   manifest's DDL, compares the whole schema again, clears the marker and keeps a completion receipt that names the
+   backup, so a retried `complete` answers the same. Control may then publish the object `open`.
 
 **`discard`** wipes a target with `deleteAll()`. The object accepts it only in `inspect`, holding an import marker, and
 when it is not the object of ordinary traffic.
 
-**Invariant: an object that holds an import marker never boots and never leaves `inspect`.** A half-loaded clone can
-therefore never serve.
+**Invariant: an object that holds an import marker never boots and never leaves `inspect`.** The barrier refuses a
+transition out of `inspect` as `wrong_mode` while the marker exists, checked in its turn, and the object refuses
+ordinary traffic, a boot and a migration while it holds one. A half-loaded clone can therefore never serve.
 
 **Foreign keys are checked immediately.** A key the load order satisfies is checked as each row goes in. A deferred key
 is written `NULL` and set by the link pass once every row is in, and that update is checked at once too: its parent row
@@ -269,8 +281,9 @@ object. The schema rule refuses an `INITIALLY DEFERRED` key, the one kind SQLite
 
 ### 7. Rehearsal
 
-**A backup is verified by importing it.** Every scheduled backup is imported into the scratch object `rehearsal`,
-verified, and then wiped with `discard`. Every deploy at a gated release lists `rehearsal` in
+**A backup is verified by importing it.** Every scheduled backup is imported into the scratch object `rehearsal`
+(`begin`, the parts, the links, `verify` to its end) and then wiped with `discard`; it sends no `complete`, which would
+clear the marker `discard` requires. Control fences `rehearsal` in `inspect` at the backup operation's generation first. Every deploy at a gated release lists `rehearsal` in
 `FABRIKA_APPLICATION_OBJECTS`, so the ops channel reaches it; ordinary traffic never does. A rehearsal that finds the
 object not fresh, after an earlier one died, discards it first. A backup whose rehearsal fails is recorded as failed.
 The verification of the migration phase (ADR-0069 §3) is this rehearsal.
@@ -280,7 +293,10 @@ The verification of the migration phase (ADR-0069 §3) is this rehearsal.
 - **Daily.** Control's existing `*/5` cron starts a backup for each Cloudflare environment at a gated release that has
   a domain (ADR-0069 §1), has not opted out, and has no successful backup from the last day. The operation publishes
   `read-only`, waits for the acknowledgement, takes the consistent backup, opens the object at a new generation, and
-  then rehearses. The rehearsal reads the stored backup, so it runs after the object reopened.
+  then rehearses. The rehearsal reads the stored backup, so it runs after the object reopened. A pass is bounded in
+  time and in the backups it continues and starts, and a backup that does not finish continues in the next pass. After
+  a failed backup the environment waits an hour before the next attempt. A backup starts only from the schedule and
+  only while Control's record leaves the object `open`.
 - **Before a migration.** A deploy that brings a pending application migration to an environment at a gated release
   runs as one operation under the deploy lease: `read-only`, the backup, its rehearsal, the operation's own deploy, the
   migration request, then `open` at a new generation. A failed backup or rehearsal reopens the object and does not
