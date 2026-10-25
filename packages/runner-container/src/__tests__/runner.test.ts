@@ -500,6 +500,25 @@ describe('Runner pipeline', () => {
 		expect(absent).not.toHaveProperty('FABRIKA_CROSS_ORIGINS')
 	})
 
+	test('the recorded application objects reach the executor as JSON, and no job-supplied name replaces or plants them', async () => {
+		const rec: RecordedSpawn[] = []
+		const spawn = makeSpawner(rec, () => ({ exitCode: 0 }))
+		const executorEnv = async (job: CloudflareRunnerJob) => {
+			rec.length = 0
+			await new Runner(job, makeEnv(spawn)).run()
+			return rec.find((r) => r.spec.command === 'fabrika-cloudflare-executor')?.spec.env
+		}
+		const objects = { object: 'application-op1', objects: ['application', 'rehearsal', 'application-op1'] }
+
+		const sent = await executorEnv(
+			baseJob({ applicationObjects: objects, secrets: { FABRIKA_RUNNER_APPLICATION_OBJECTS: '{"object":"x","objects":["x"]}' } }),
+		)
+		expect(sent?.['FABRIKA_RUNNER_APPLICATION_OBJECTS']).toBe(JSON.stringify(objects))
+
+		const absent = await executorEnv(baseJob({ vars: { FABRIKA_RUNNER_APPLICATION_OBJECTS: '{"object":"x","objects":["x"]}' } }))
+		expect(absent).not.toHaveProperty('FABRIKA_RUNNER_APPLICATION_OBJECTS')
+	})
+
 	test("the environment's Operations origin reaches the executor, and no job-supplied name replaces or plants it", async () => {
 		const rec: RecordedSpawn[] = []
 		const spawn = makeSpawner(rec, () => ({ exitCode: 0 }))

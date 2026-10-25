@@ -72,8 +72,10 @@ this one import.
   did not write.
 - **From `servesOps` the platform composes Control's ops channel** (ADR-0069, `src/provider.ts`): `platformProxied`
   builds the proxy's table with `contractProxyTable(…, { ops: true })`, which adds the canonical ops row, and
-  `withApplicationRuntime` writes `FABRIKA_APPLICATION_OBJECT` (`application`) and `FABRIKA_APPLICATION_OBJECTS`
-  (`application,rehearsal`: the ops channel also reaches the object a backup is rehearsed in, ADR-0070) as plain vars. Only for a release Control names; an environment without a domain gets no row (no Custom Domain carries it). An
+  `withApplicationRuntime` writes `FABRIKA_APPLICATION_OBJECT` and `FABRIKA_APPLICATION_OBJECTS` as plain vars from the
+  pointer Control records (`ProviderDeployInput.applicationObjects`, which the runner forwards as
+  `FABRIKA_RUNNER_APPLICATION_OBJECTS`), by default `application` and `application,rehearsal` (the ops channel also
+  reaches the object a backup is rehearsed in, ADR-0070); a side restore moves it (ADR-0070 §9). Only for a release Control names; an environment without a domain gets no row (no Custom Domain carries it). An
   older pin, a Control that names no release and a local deploy get neither, and a later deploy without them drops
   them with the version's vars. The proxy Worker forwards the row's request to `APP` with `Authorization` and no token,
   as the decision marks every `protocol` row; authored copies of the variables are refused by the framework-variable
