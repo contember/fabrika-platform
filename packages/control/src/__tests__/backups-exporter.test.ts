@@ -1,6 +1,6 @@
 // Control's backup dump against the object's real exporter (ADR-0070 §2): Control's HTTP ops transport, whose requests
-// reach the application's `serveOps` over bun:sqlite and Lopata's R2 as the proxy would forward them. The rehearsal
-// target does not answer, so each backup stops at `verify` once its dump is complete.
+// reach the application's `serveOps` over bun:sqlite and Lopata's R2 as the proxy would forward them, across the passes
+// of one backup. The rehearsal target does not answer, so each backup stops at `verify` once its dump is complete.
 
 import {
 	ENDPOINT_HEADER,
@@ -127,59 +127,82 @@ async function setup() {
 	return { harness, env, ops, deps }
 }
 
-test('a successor cannot continue a dump the exporter bound to an earlier generation: it dumps again under a new dump id', async () => {
-	const { harness, env, ops, deps } = await setup()
+/** The manifest the exporter stored for `dump`, as the wire parses it; `null` when there is none. */
+async function storedManifest(bucket: unknown, dump: string) {
+	const stored = await method(bucket, 'get')?.(OPS_DUMP_KEY({ object: 'application', consistent: true, dump }, 'manifest'))
+	const text = await method(stored, 'text')?.()
+	return typeof text === 'string' ? parseOpsDumpManifest(JSON.parse(text)) : null
+}
+
+/** A backup whose first pass ended after `begin` and the only part, before `complete`. */
+async function pausedBackup(context: Awaited<ReturnType<typeof setup>>) {
+	let budget = 2
+	const paused = await startBackup(context.deps(() => budget-- <= 0), { ...TARGET, actor: 'user:test' })
+	if (paused.kind !== 'driven') throw new Error('the backup did not start')
+	expect(paused).toMatchObject({ result: 'paused', operation: { state: 'running', step: 'backup', generation: 1 } })
+	expect(context.env.sent).toEqual([
+		'inspect application @undefined',
+		'state application @1',
+		'export application begin @1',
+		'export application part @1',
+	])
+	const [backup] = await context.harness.repositories.backups.listForEnvironment(APP, ENV, { limit: 1 })
+	if (backup === undefined) throw new Error('no backup')
+	expect(backup).toMatchObject({ dump_id: backup.id, parts: null })
+	return { operation: paused.operation, backup }
+}
+
+test('a dump continues across a read-only generation published again: the exporter replays its begin, and it completes', async () => {
+	const context = await setup()
+	const { harness, env, deps } = context
 	try {
-		// The first holder's pass ends after `begin` and the only part.
-		let budget = 2
-		const paused = await startBackup(deps(() => budget-- <= 0), { ...TARGET, actor: 'user:test' })
-		if (paused.kind !== 'driven') throw new Error('the backup did not start')
-		expect(paused).toMatchObject({ result: 'paused', operation: { state: 'running', step: 'backup', generation: 1 } })
-		const [first] = await harness.repositories.backups.listForEnvironment(APP, ENV, { limit: 1 })
-		if (first === undefined) throw new Error('no backup')
-		expect(first).toMatchObject({ dump_id: first.id, dump_generation: 1 })
-		expect(env.sent).toEqual(['inspect application @undefined', 'state application @1', 'export application begin @1', 'export application part @1'])
-
-		// What a successor that continued the dump would send: under its own generation the exporter refuses it.
-		const signal = new AbortController().signal
-		expect(await ops.state(TARGET, { object: 'application', generation: 2, mode: 'read-only' }, signal)).toMatchObject({ kind: 'ok' })
-		const continued = await ops.export(
-			TARGET,
-			{
-				step: 'part',
-				object: 'application',
-				generation: 2,
-				consistent: true,
-				dump: first.dump_id,
-				uploadId: first.upload_id ?? '',
-				part: 1,
-				cursor: null,
-			},
-			signal,
-		)
-		expect(continued).toEqual({ kind: 'refused', refusal: { refused: 'ledger_mismatch', table: null } })
-
+		const { operation, backup } = await pausedBackup(context)
 		env.sent.length = 0
-		const resumed = await advanceDataOperation(deps(), paused.operation.id)
+		const resumed = await advanceDataOperation(deps(), operation.id)
+		// The rehearsal target does not answer, so the operation stops once the dump is complete and the object open.
 		expect(resumed).toMatchObject({ result: 'interrupted', operation: { state: 'running', step: 'verify' } })
-		expect(env.sent.slice(0, 5)).toEqual([
+		expect(env.sent.slice(0, 4)).toEqual([
 			'state application @2',
 			'export application begin @2',
-			'export application part @2',
 			'export application complete @2',
 			'state application @3',
 		])
 		const [done] = await harness.repositories.backups.listForEnvironment(APP, ENV, { limit: 1 })
-		if (done === undefined) throw new Error('no backup')
-		expect(done).toMatchObject({ id: first.id, state: 'running', dump_generation: 2, parts: 1 })
-		expect(done.dump_id).not.toBe(first.dump_id)
-		expect((await harness.repositories.backups.parts(done.id)).map((part) => part.part)).toEqual([1])
+		expect(done).toMatchObject({ id: backup.id, dump_id: backup.dump_id, upload_id: backup.upload_id, state: 'running', parts: 1 })
+		expect(await storedManifest(env.bucket, backup.dump_id)).toMatchObject({ dump: backup.dump_id, bookmark: BOOKMARK, consistent: true })
+	} finally {
+		harness.sqlite.close()
+	}
+})
 
-		// The completed dump in the bucket is the new one.
-		const stored = await method(env.bucket, 'get')?.(OPS_DUMP_KEY({ object: 'application', consistent: true, dump: done.dump_id }, 'manifest'))
-		const text = await method(stored, 'text')?.()
-		const manifest = parseOpsDumpManifest(JSON.parse(typeof text === 'string' ? text : 'null'))
-		expect(manifest).toMatchObject({ dump: done.dump_id, bookmark: BOOKMARK, consistent: true, parts: [{ part: 1 }] })
+test('an open between two passes ends the dump: the exporter refuses its begin, and the dump starts again under a new dump id', async () => {
+	const context = await setup()
+	const { harness, env, ops, deps } = context
+	try {
+		const { operation, backup } = await pausedBackup(context)
+		// Something else opened the object in between, at a generation it reserved.
+		const generation = await harness.repositories.dataOperations.allocateGeneration(APP, ENV)
+		expect(await ops.state(TARGET, { object: 'application', generation, mode: 'open' }, new AbortController().signal)).toMatchObject({ kind: 'ok' })
+
+		env.sent.length = 0
+		const resumed = await advanceDataOperation(deps(), operation.id)
+		expect(resumed).toMatchObject({ result: 'interrupted', operation: { state: 'running', step: 'verify' } })
+		expect(env.sent.slice(0, 6)).toEqual([
+			'state application @3',
+			'export application begin @3',
+			'export application begin @3',
+			'export application part @3',
+			'export application complete @3',
+			'state application @4',
+		])
+		const [done] = await harness.repositories.backups.listForEnvironment(APP, ENV, { limit: 1 })
+		if (done === undefined) throw new Error('no backup')
+		expect(done).toMatchObject({ id: backup.id, state: 'running', parts: 1 })
+		expect(done.dump_id).not.toBe(backup.dump_id)
+		expect(done.upload_id).not.toBe(backup.upload_id)
+		expect((await harness.repositories.backups.parts(done.id)).map((part) => part.part)).toEqual([1])
+		expect(await storedManifest(env.bucket, done.dump_id)).toMatchObject({ dump: done.dump_id, bookmark: BOOKMARK, consistent: true })
+		expect(await storedManifest(env.bucket, backup.dump_id)).toBeNull()
 	} finally {
 		harness.sqlite.close()
 	}

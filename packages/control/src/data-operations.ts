@@ -780,24 +780,28 @@ class OperationDriver {
 	/**
 	 * The consistent dump (ADR-0070 §2), from the progress the record holds: `begin` once, each part from the cursor the
 	 * last recorded part answered, then `complete` with the recorded parts and tables, whose manifest must describe them.
-	 * The exporter binds a dump to the generation its `begin` ran at, so a dump begun under another generation starts
-	 * again under a new dump id; its old upload is never completed.
+	 * A resumed dump sends `begin` again, which the exporter replays while the dump's state and stretch hold (§2). Its
+	 * `ledger_mismatch` means the recorded upload can never complete: the dump starts again under a new dump id, and the
+	 * old upload is left to the bucket's lifecycle.
 	 */
 	private async dump(row: DataOperationRow, start: BackupRow): Promise<DataResult<null>> {
 		let backup = start
 		if (backup.parts !== null) return { kind: 'ok', value: null }
-		if (backup.upload_id !== null && backup.dump_generation !== row.generation) {
+		let scope = { object: backup.object, generation: row.generation, consistent: true, dump: backup.dump_id }
+		let begun = await this.exportStep({ ...scope, step: 'begin' })
+		if (begun.kind === 'failed' && begun.code === 'ledger_mismatch') {
 			this.lease.assertWritten(await this.backups.restart(backup.id, uuidv7(), this.lease.fence()))
 			backup = await this.requireBackup(backup.id)
+			scope = { ...scope, dump: backup.dump_id }
+			begun = await this.exportStep({ ...scope, step: 'begin' })
 		}
-		const scope = { object: backup.object, generation: row.generation, consistent: true, dump: backup.dump_id }
+		if (begun.kind !== 'ok') return begun
+		if (begun.value.step !== 'begin') return invalidAnswer()
 		if (backup.upload_id === null || backup.bookmark === null) {
-			const begun = await this.exportStep({ ...scope, step: 'begin' })
-			if (begun.kind !== 'ok') return begun
-			if (begun.value.step !== 'begin') return invalidAnswer()
-			const upload = { uploadId: begun.value.uploadId, bookmark: begun.value.bookmark, generation: row.generation }
-			this.lease.assertWritten(await this.backups.begun(backup.id, upload, this.lease.fence()))
+			this.lease.assertWritten(await this.backups.begun(backup.id, begun.value, this.lease.fence()))
 			backup = await this.requireBackup(backup.id)
+		} else if (begun.value.uploadId !== backup.upload_id || begun.value.bookmark !== backup.bookmark) {
+			return invalidAnswer()
 		}
 		const { upload_id: uploadId, bookmark } = backup
 		if (uploadId === null || bookmark === null) throw new Error('a begun backup lost its upload')

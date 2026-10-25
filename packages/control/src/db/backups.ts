@@ -21,8 +21,6 @@ export interface BackupRow {
 	object: string
 	/** The dump id: a UUIDv7 Control generates, which keys the dump in the environment's bucket; a restarted dump gets a new one. */
 	dump_id: string
-	/** The generation the export's `begin` ran at; `null` before it answered. The exporter binds the dump to it. */
-	dump_generation: number | null
 	/** `succeeded` only once the rehearsal passed. */
 	state: BackupState
 	/** A code once failed; never free text. */
@@ -167,9 +165,9 @@ export class BackupRepository {
 			),
 			this.d1
 				.prepare(`INSERT INTO app_env_backups
-					(id, app_id, env, operation_id, object, dump_id, dump_generation, pre_migration, state, error_code, created_at, finished_at,
-						bookmark, upload_id, size_bytes, parts, tables, rehearsal, rehearsal_code, rehearsal_step, rehearsal_parts, rehearsal_cursor)
-				SELECT ?, ?, ?, ?, ?, ?, NULL, ?, 'running', NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, 'pending', NULL, NULL, NULL, NULL
+					(id, app_id, env, operation_id, object, dump_id, pre_migration, state, error_code, created_at, finished_at, bookmark, upload_id,
+						size_bytes, parts, tables, rehearsal, rehearsal_code, rehearsal_step, rehearsal_parts, rehearsal_cursor)
+				SELECT ?, ?, ?, ?, ?, ?, ?, 'running', NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, 'pending', NULL, NULL, NULL, NULL
 				WHERE EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
 				RETURNING *`)
 				.bind(
@@ -226,19 +224,19 @@ export class BackupRepository {
 		return results
 	}
 
-	/** The export's `begin` answered at `generation`: the upload it started and the object's bookmark. */
-	async begun(id: string, upload: { uploadId: string; bookmark: string; generation: number }, fence: LeaseFence): Promise<boolean> {
-		return await this.mutate(
+	/** The export's `begin` answered: the upload it started and the object's bookmark. */
+	async begun(id: string, upload: { uploadId: string; bookmark: string }, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(id, 'UPDATE app_env_backups SET upload_id = ?, bookmark = ? WHERE id = ? AND state = ? AND upload_id IS NULL', [
+			upload.uploadId,
+			upload.bookmark,
 			id,
-			'UPDATE app_env_backups SET upload_id = ?, bookmark = ?, dump_generation = ? WHERE id = ? AND state = ? AND upload_id IS NULL',
-			[upload.uploadId, upload.bookmark, upload.generation, id, 'running'],
-			fence,
-		)
+			'running',
+		], fence)
 	}
 
 	/**
-	 * Starts the unfinished dump again under `dumpId`: its upload, bookmark, generation and recorded parts are dropped. The
-	 * old upload is abandoned, never completed, so nothing reads it.
+	 * Starts the unfinished dump again under `dumpId`: its upload, bookmark and recorded parts are dropped. The old upload
+	 * is abandoned, never completed, so nothing reads it.
 	 */
 	async restart(id: string, dumpId: string, fence: LeaseFence): Promise<boolean> {
 		const results = await this.d1.batch<{ id: string }>([
@@ -248,7 +246,7 @@ export class BackupRepository {
 					AND EXISTS (SELECT 1 FROM app_env_backups WHERE id = ? AND state = 'running' AND parts IS NULL AND ${backupLease})`)
 				.bind(id, id, fence.holder, fence.nowMs),
 			this.d1
-				.prepare(`UPDATE app_env_backups SET dump_id = ?, upload_id = NULL, bookmark = NULL, dump_generation = NULL
+				.prepare(`UPDATE app_env_backups SET dump_id = ?, upload_id = NULL, bookmark = NULL
 					WHERE id = ? AND state = 'running' AND parts IS NULL AND ${backupLease} RETURNING id`)
 				.bind(dumpId, id, fence.holder, fence.nowMs),
 		])

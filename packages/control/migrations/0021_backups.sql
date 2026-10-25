@@ -1,9 +1,9 @@
 -- One consistent backup of an application environment's object (ADR-0070), taken by the `backup` data operation that
 -- names it, at most one per operation. `dump_id` is a UUIDv7 Control generates, which keys the dump in the
--- environment's bucket; a successor that cannot continue the dump under the generation its `begin` ran at
--- (`dump_generation`) starts a new one under a new dump id and drops the recorded parts. The row keeps the progress a
--- successor resumes from: the upload id and the bookmark from the export's `begin`, every part in
--- `app_env_backup_parts`, and the rehearsal's step, part count and last verify answer.
+-- environment's bucket; a dump whose replayed `begin` the exporter refuses (`ledger_mismatch`) starts again under a new
+-- dump id and drops the recorded parts. The row keeps the progress a successor resumes from: the upload id and the
+-- bookmark from the export's `begin`, every part in `app_env_backup_parts`, and the rehearsal's step, part count and
+-- last verify answer.
 -- `size_bytes`, `parts` and `tables` are set once the upload completed. `state` turns `succeeded` only once the rehearsal
 -- passed. Codes only, never a message, a value or a row's content.
 CREATE TABLE app_env_backups (
@@ -13,7 +13,6 @@ CREATE TABLE app_env_backups (
 	operation_id     TEXT NOT NULL UNIQUE,
 	object           TEXT NOT NULL,
 	dump_id          TEXT NOT NULL UNIQUE,
-	dump_generation  INTEGER,
 	state            TEXT NOT NULL CHECK (state IN ('running', 'succeeded', 'failed')),
 	error_code       TEXT,
 	created_at       INTEGER NOT NULL,

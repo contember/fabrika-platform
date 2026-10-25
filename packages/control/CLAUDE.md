@@ -402,9 +402,10 @@ other environment, before the provider prepares anything, and the write maps a r
   steps are `restrict` (`read-only`), `backup` (the export's steps), `open` at a new generation, then `verify`, the
   rehearsal into the object `rehearsal`. Every step and part is recorded fenced on the lease (`app_env_backups`,
   `app_env_backup_parts`), so a successor resumes where the record stops; a pass is bounded and leaves the rest to the
-  next. The exporter binds a dump to the generation its `begin` ran at, so a dump that a successor or the next pass
-  finds begun under another generation starts again under a new `dump_id`, its recorded parts dropped and its old
-  upload abandoned. A backup's terminal outcome is written in one lease-fenced batch with its operation's next step or
+  next. A resumed dump sends `begin` again with its recorded `dump_id`, which the exporter replays while the dump's
+  stretch of modes that write nothing holds (ADR-0070 §2), then continues from the recorded parts. Only that `begin`'s
+  `ledger_mismatch` starts the dump again under a new `dump_id`, its recorded parts dropped and its old upload
+  abandoned. A backup's terminal outcome is written in one lease-fenced batch with its operation's next step or
   end (`BackupCheckpoint`), and a step that finds the outcome already written sends nothing. A failed export reopens the
   object; a failed rehearsal fails the backup with the object already open, and `recordedMaintenance` reads both as
   `open`. A pass starts at most four backups, counting only the ones it created, and an environment waits an hour after

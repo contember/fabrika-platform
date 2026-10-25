@@ -73,9 +73,12 @@ export class FakeEnvironments implements OpsTransport {
 	deferred = new Set([2])
 	/** Export `begin`s answered: each starts another upload. */
 	begins = 0
-	upload: string | null = null
-	/** The generation each dump's `begin` ran at: as the exporter, a later step under another generation is refused. */
-	readonly dumps = new Map<string, number>()
+	/**
+	 * Per object, the generation its current stretch of modes that write nothing began at; `open` ends it (ADR-0070 §2).
+	 */
+	readonly stretches = new Map<string, number>()
+	/** Each dump's recorded `begin`: as the exporter, a retried one replays it and a step outside its stretch is refused. */
+	readonly dumps = new Map<string, { readonly since: number; readonly uploadId: string }>()
 	rehearsal: { marker: Marker | null; tables: boolean } = { marker: null, tables: false }
 	/** The application object's migration ledger, which `inspect` reports and `migrate` extends. */
 	ledger: OpsMigration[] = []
@@ -117,6 +120,8 @@ export class FakeEnvironments implements OpsTransport {
 		const current = this.published.get(key(target, request.object)) ?? null
 		if (opsTransitionRefused(current, request)) return { kind: 'stale', published: current }
 		this.published.set(key(target, request.object), { generation: request.generation, mode: request.mode })
+		if (request.mode === 'open') this.stretches.delete(key(target, request.object))
+		else if (current === null || current.mode === 'open') this.stretches.set(key(target, request.object), request.generation)
 		if (fault === 'lose') return { kind: 'unavailable', reason: 'unreachable' }
 		return { kind: 'ok', value: { generation: request.generation, mode: request.mode, stillRunning: 0 } }
 	}
@@ -154,28 +159,33 @@ export class FakeEnvironments implements OpsTransport {
 		const published = this.published.get(key(target, request.object)) ?? null
 		if (published === null || published.generation !== request.generation) return { kind: 'stale', published }
 		if (published.mode === 'open') return { kind: 'refused', refusal: { refused: 'wrong_mode', table: null } }
-		if (request.step !== 'begin' && this.dumps.get(request.dump) !== request.generation) {
+		const since = this.stretches.get(key(target, request.object))
+		const begun = this.dumps.get(request.dump)
+		if (since === undefined) return { kind: 'refused', refusal: { refused: 'wrong_mode', table: null } }
+		if (begun !== undefined && (begun.since !== since || (request.step !== 'begin' && request.uploadId !== begun.uploadId))) {
 			return { kind: 'refused', refusal: { refused: 'ledger_mismatch', table: null } }
 		}
-		const answer = this.exportAnswer(request)
+		if (begun === undefined && request.step !== 'begin') return { kind: 'refused', refusal: { refused: 'ledger_mismatch', table: null } }
+		const answer: OpsDataAnswer<OpsExportAck> = begun !== undefined && request.step === 'begin'
+			? { kind: 'ok', value: { step: 'begin', uploadId: begun.uploadId, bookmark: 'bookmark-0001' } }
+			: this.exportAnswer(request, since)
 		return fault === 'lose' ? { kind: 'unavailable', reason: 'unreachable' } : answer
 	}
 
-	private exportAnswer(request: OpsExportRequest): OpsDataAnswer<OpsExportAck> {
+	private exportAnswer(request: OpsExportRequest, since: number): OpsDataAnswer<OpsExportAck> {
 		switch (request.step) {
-			case 'begin':
-				if (request.generation !== null) this.dumps.set(request.dump, request.generation)
+			case 'begin': {
 				this.begins++
-				this.upload = `upload-${this.begins}`
-				return { kind: 'ok', value: { step: 'begin', uploadId: this.upload, bookmark: 'bookmark-0001' } }
+				const uploadId = `upload-${this.begins}`
+				this.dumps.set(request.dump, { since, uploadId })
+				return { kind: 'ok', value: { step: 'begin', uploadId, bookmark: 'bookmark-0001' } }
+			}
 			case 'part': {
-				if (request.uploadId !== this.upload) return { kind: 'unavailable', reason: 'unreachable' }
 				expect(request.cursor).toEqual(request.part === 1 ? null : cursorAt(request.part))
 				const next = request.part < this.parts ? cursorAt(request.part + 1) : null
 				return { kind: 'ok', value: { step: 'part', uploaded: uploadedPart(request.part, this.parts), tables: [table(request.part)], next } }
 			}
 			case 'complete': {
-				if (request.uploadId !== this.upload) return { kind: 'unavailable', reason: 'unreachable' }
 				const parts = Array.from({ length: this.parts }, (_, index) => uploadedPart(index + 1, this.parts))
 				expect(request.parts).toEqual(parts)
 				expect(request.tables).toEqual(parts.map((part) => table(part.part)))
