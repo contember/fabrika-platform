@@ -36,7 +36,7 @@ describe('the reader of a framework release', () => {
 
 	test("is this platform's own for its own release, and the bundled newest patch for 0.8, 0.7, 0.6, 0.5 and 0.4", () => {
 		expect(readerFor(CHECKER_VERSION).checker).toBe(CHECKER_VERSION)
-		expect(readerFor('0.8.0').checker).toBe('0.8.1')
+		expect(readerFor('0.8.0').checker).toBe('0.8.2')
 		expect(readerFor('0.7.0').checker).toBe('0.7.0')
 		expect(readerFor('0.6.0').checker).toBe('0.6.0')
 		expect(readerFor('0.5.1').checker).toBe('0.5.5')
