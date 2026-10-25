@@ -200,7 +200,8 @@ describe('the wakes migration', () => {
 		expect(first).toHaveLength(1)
 		expect((await migrateSqlite(port, [{ bundle: 'fabrika', migrations: first }])).applied).toEqual(['fabrika/0001_framework.sql'])
 		storage.sql.exec(`insert into fabrika_job_kicks (job, pending) values ('kept', 1)`)
-		const result = await migrateSqlite(port, [{ bundle: 'fabrika', migrations: SQLITE_FRAMEWORK_MIGRATIONS }])
+		const throughWakes = SQLITE_FRAMEWORK_MIGRATIONS.filter((migration) => migration.name <= '0002_job_wakes.sql')
+		const result = await migrateSqlite(port, [{ bundle: 'fabrika', migrations: throughWakes }])
 		expect(result.applied).toEqual(['fabrika/0002_job_wakes.sql'])
 		expect(storage.sql.exec('select bundle, name from fabrika_migrations order by name').toArray()).toEqual([
 			{ bundle: 'fabrika', name: '0001_framework.sql' },
