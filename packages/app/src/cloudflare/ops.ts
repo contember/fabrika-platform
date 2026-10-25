@@ -119,6 +119,8 @@ export interface OpsTarget {
 	/** The environment's bucket (the `FABRIKA_FILES` R2 binding), where dumps and the maintenance state live. */
 	readonly bucket: unknown
 	readonly recovery: OpsRecovery | null
+	/** The digest of the contract this release was deployed with (`FABRIKA_CONTRACT_DIGEST`); a dump's manifest records it. */
+	readonly contractDigest: string | null
 	/** The release's migration bundles in the order the object applies them: the framework's, then the application's. */
 	readonly migrations: readonly SqliteMigrationBundle[]
 	/**

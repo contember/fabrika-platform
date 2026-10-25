@@ -398,7 +398,7 @@ export function readOpsDumpValue(type: unknown, value: unknown): OpsDumpValue {
 	if (type === 'null' && value === null) return null
 	if (type === 'integer' && typeof value === 'string' && isInt64Text(value)) return { type, value }
 	if (type === 'real' && typeof value === 'number' && !Number.isNaN(value)) return { type, value }
-	if ((type === 'text' || type === 'blob') && typeof value === 'string' && BLOB_HEX.test(value)) return { type, value }
+	if ((type === 'text' || type === 'blob') && typeof value === 'string' && isBytesHex(value)) return { type, value }
 	throw new Error('a projected dump value does not match its type')
 }
 
@@ -1133,8 +1133,13 @@ const OPAQUE_TOKEN = /^[!-~]{1,1024}$/
 const INT64_TEXT = /^(?:0|-?[1-9][0-9]{0,18})$/
 const INT64_MIN = -(2n ** 63n)
 const INT64_MAX = 2n ** 63n - 1n
-/** `hex(c)` of a blob, and `hex(CAST(c AS BLOB))` of text. */
-const BLOB_HEX = /^(?:[0-9A-F]{2})*$/
+/**
+ * `hex(c)` of a blob, and `hex(CAST(c AS BLOB))` of text. Bun's regex engine answers `false` for `^(?:[0-9A-F]{2})*$`
+ * on a string of a few megabytes, so the pairing is a length check.
+ */
+function isBytesHex(value: string): boolean {
+	return value.length % 2 === 0 && /^[0-9A-F]*$/.test(value)
+}
 const MANIFEST_KEYS = [
 	'format',
 	'dump',
@@ -1332,10 +1337,10 @@ function encodeValue(value: OpsDumpValue): string | null {
 			if (Number.isNaN(value.value)) throw new Error('a dump real must not be NaN')
 			return `r:${realText(value.value)}`
 		case 'text':
-			if (!BLOB_HEX.test(value.value)) throw new Error('dump text must be the upper-case hex of its bytes')
+			if (!isBytesHex(value.value)) throw new Error('dump text must be the upper-case hex of its bytes')
 			return `t:${value.value}`
 		case 'blob':
-			if (!BLOB_HEX.test(value.value)) throw new Error('a dump blob must be upper-case hex')
+			if (!isBytesHex(value.value)) throw new Error('a dump blob must be upper-case hex')
 			return `b:${value.value}`
 	}
 }
@@ -1364,9 +1369,9 @@ function readValue(raw: unknown): OpsDumpValue | undefined {
 			return !Number.isNaN(value) && realText(value) === text ? { type: 'real', value } : undefined
 		}
 		case 't:':
-			return BLOB_HEX.test(text) ? { type: 'text', value: text } : undefined
+			return isBytesHex(text) ? { type: 'text', value: text } : undefined
 		case 'b:':
-			return BLOB_HEX.test(text) ? { type: 'blob', value: text } : undefined
+			return isBytesHex(text) ? { type: 'blob', value: text } : undefined
 		default:
 			return undefined
 	}
@@ -1600,7 +1605,7 @@ function quoteIdentifier(name: string): string {
 }
 
 function hexBytes(hex: string): Uint8Array {
-	if (!BLOB_HEX.test(hex)) throw new Error('dump bytes must be upper-case hex')
+	if (!isBytesHex(hex)) throw new Error('dump bytes must be upper-case hex')
 	const bytes = new Uint8Array(hex.length / 2)
 	for (let index = 0; index < bytes.length; index++) bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16)
 	return bytes

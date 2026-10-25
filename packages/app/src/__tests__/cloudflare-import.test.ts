@@ -647,6 +647,7 @@ describe('the ops seam', () => {
 			bucket,
 			recovery: null,
 			migrations: release(),
+			contractDigest: null,
 			bootFailure: () => Promise.resolve(null),
 			maintenance: () => Promise.reject(new Error('not called')),
 			migrate: () => Promise.reject(new Error('not called')),

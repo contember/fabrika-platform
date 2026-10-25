@@ -5,6 +5,7 @@
 import {
 	FABRIKA_APPLICATION_OBJECT,
 	FABRIKA_APPLICATION_OBJECTS,
+	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_PROXY_SECRET,
 	OPS_PREFIX,
 	type OpsBootFailureContent,
@@ -407,6 +408,11 @@ export class FabrikaApplication {
 			?.object ?? null
 	}
 
+	#contractDigest(): string | null {
+		const digest = this.#env[FABRIKA_CONTRACT_DIGEST]
+		return typeof digest === 'string' ? digest : null
+	}
+
 	async fetch(request: Request): Promise<Response> {
 		// Another Worker on the account that binds this class reaches nothing, not even an answer that the object exists.
 		if (!this.#fromWorker(request)) {
@@ -418,6 +424,7 @@ export class FabrikaApplication {
 				storage: this.#state.storage,
 				bucket: this.#env[CLOUDFLARE_FILES_BINDING],
 				recovery: objectRecovery(this.#state),
+				contractDigest: this.#contractDigest(),
 				migrations: migrationBundles(this.#setup?.options.migrations ?? []),
 				bootFailure: async () => {
 					await this.#outcome

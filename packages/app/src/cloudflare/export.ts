@@ -46,9 +46,9 @@ import { method } from './bindings.js'
 import type { MaintenanceBarrier } from './maintenance.js'
 import type { OpsTarget } from './ops.js'
 
-/** One step of a dump of the object's database (ADR-0070). Answers 501 until the ops target carries the contract digest. */
-export async function serveExport(_target: OpsTarget, _barrier: MaintenanceBarrier, _step: OpsExportRequest): Promise<Response> {
-	return jsonResponse({ refused: 'not_implemented' }, 501)
+/** One step of a dump of the object's database (ADR-0070). */
+export async function serveExport(target: OpsTarget, barrier: MaintenanceBarrier, step: OpsExportRequest): Promise<Response> {
+	return await exportStep(target, barrier, step)
 }
 
 /** What an export step reads: the object's storage, bucket and bookmarks, and the digest of the contract it was deployed with. */
