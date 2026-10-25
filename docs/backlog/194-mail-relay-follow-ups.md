@@ -109,6 +109,10 @@ blocked-by: []
     `runMaintenance`'s mail summary; an application-scoped `mail.content.read` that reads `withheld`; an environment
     grant that reads another environment (403); a non-ASCII key; an error body under 200; an acceptance with an empty
     `messageId`. `mail.test.ts`'s `<script>` check is trivial.
+21. **The sprint's success condition was not run end to end.** Its run log records no local-stack run of a 0.7
+    application's job whose mail the relay holds under a `hold` rule, an operator releases in the console and the
+    `directory` provider receives, beside a 0.5 application on the same Control that still sends with the direct
+    credential. The pieces have unit and integration tests; the whole path has none.
 
 ## Approach / acceptance
 

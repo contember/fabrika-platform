@@ -1,3 +1,21 @@
+> **OUTCOME: shipped 2026-10-20 as framework 0.7.0.** The revision of the contract kinds
+> ([ADR-0012](../decisions/0012-fabrika-app-runtime.md) §9–§16, [ADR-0060](../decisions/0060-a-handler-kicks-a-declared-job-after-its-commit.md),
+> [ADR-0061](../decisions/0061-a-file-is-a-value-in-a-table-column.md), [ADR-0063](../decisions/0063-a-public-procedure-runs-as-its-own-workload.md)),
+> with the platform reading framework 0.4, 0.5, 0.6 and 0.7 ([ADR-0062](../decisions/0062-a-platform-release-serves-older-framework-releases.md)).
+>
+> **Shipped.** WU-0 to WU-13, with WU-2b, WU-5b and WU-7b: a reader per release and the upcast, public procedures with
+> admission and limits, queues and `claim`, files as values, webhook verifiers and `binds`, `egress`, signed tokens,
+> mail attachments, `compatibility` and `http.cache`; the old forms deleted; the docs, the skill and `examples/crm` on
+> the new API; `local:compat` over Notes on v0.4.8, v0.5.5 and v0.6.0. A real 0.5.5 application was upgraded and
+> answers its external page as before.
+>
+> **Commits** on main, merged from `feat/declare-the-surface`: `0c927dfa`…`16591afa`.
+>
+> **Verification.** The Release workflow of tag `v0.7.0`, which runs CI's verify workflow, passed on `931397e1`. Not
+> proven: the build step over an older release's source, and the ClamAV suites of WU-3.
+>
+> **Backlog.** Deleted by WU-8: 157, 171; rescoped: 97, 160, 168. Open: [193](../backlog/193-loose-ends-of-the-declared-surface.md).
+
 # Sprint — declare the surface, not the behavior (2026-10-19)
 
 **Goal.** Build the pre-1.0 revision of the contract kinds, now recorded in [ADR-0012](../decisions/0012-fabrika-app-runtime.md) sections 9–16, [ADR-0060](../decisions/0060-a-handler-kicks-a-declared-job-after-its-commit.md), [ADR-0061](../decisions/0061-a-file-is-a-value-in-a-table-column.md) and [ADR-0063](../decisions/0063-a-public-procedure-runs-as-its-own-workload.md) as one breaking

@@ -1,10 +1,12 @@
 // The surface of a published snapshot (ADR-0050): every endpoint under its most exposed caller, most exposed first, in
 // the approval's words, with what else opens it to the outside.
 
+import type { EndpointRow, ProcedureArtifact } from '@fabrika/auth-core'
 import type { TablePolicyArtifact } from '@fabrika/auth-core-0.5'
 import { readContractSource } from '@fabrika/check/contract'
 import type { SurfaceEndpointDto } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { type AccessSnapshot, EMPTY_SNAPSHOT } from '../approval/snapshot'
 import { snapshotSurface } from '../approval/surface'
 import { edited, snapshot05 } from './helpers/contracts'
@@ -70,6 +72,35 @@ describe('the surface of a published snapshot', () => {
 			'human GET /* · who are members',
 		])
 		expect(surface.find((endpoint) => endpoint.id === 'api.get')?.callers).toEqual(['human', 'machine'])
+	})
+
+	test('a public procedure names its buckets, its challenge, its body limit and time limit, and one with neither guard says so', () => {
+		const cta: EndpointRow = {
+			id: 'api.stats.cta',
+			source: { kind: 'mount', name: 'api' },
+			kind: 'public',
+			method: 'POST',
+			path: '/api/stats.cta',
+			callers: [],
+			requirement: null,
+			admission: { contentTypes: ['application/json'], maxBytes: 1024 },
+			input: { type: 'object', fields: {} },
+			output: { type: 'object', fields: {} },
+		}
+		const notesOf = (rules: ProcedureArtifact) =>
+			snapshotSurface({ version: 1, contract: { ...notesArtifact, endpoints: [cta], procedures: { [cta.id]: rules } }, migrations: [], checker: '' })[0]
+				?.notes
+		const rate = { perClient: 10, perCaller: null, perEndpoint: 100, bytesPerHour: null }
+		expect(notesOf({ rate, challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', action: 'api_stats_cta' }, timeoutMs: 10_000 })).toEqual([
+			'at most 10 calls a minute per client (one client on Zerops)',
+			'at most 100 calls a minute in all',
+			'turnstile challenge',
+			'waits at most 30 s for a body of at most 1024 bytes, then runs at most 10 s',
+		])
+		expect(notesOf({ rate: { ...rate, perClient: null, perEndpoint: null }, challenge: null, timeoutMs: 10_000 })).toEqual([
+			'no rate limit and no challenge',
+			'waits at most 30 s for a body of at most 1024 bytes, then runs at most 10 s',
+		])
 	})
 
 	test('a form with neither a rate limit nor a challenge says so', () => {

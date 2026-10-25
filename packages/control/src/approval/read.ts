@@ -5,7 +5,13 @@
 
 import { sha256Hex } from '@fabrika/auth-core'
 import { CONTRACT_FILE, CONTRACT_LIMITS, lockedRegistryVersion, LOCKFILE, MIGRATIONS_DIR } from '@fabrika/check/contract'
-import { applicationDatabaseSchema, classifyMigrations, type MigrationDeviation, type MigrationSetClassification } from '@fabrika/platform-node/sql'
+import {
+	applicationDatabaseSchema,
+	classifyMigrations,
+	type FileAdoption,
+	type MigrationDeviation,
+	type MigrationSetClassification,
+} from '@fabrika/platform-node/sql'
 import type { CommitFiles } from '../github/source/commit-files'
 import type { SnapshotContract } from './formats'
 import { type ContractReader, FRAMEWORK_PACKAGE, FrameworkReleaseRefused, readerFor, type ReaderOutcome } from './readers'
@@ -129,12 +135,13 @@ export async function readAccessSnapshot(
 	if (read.contract.app !== appId) {
 		throw new SnapshotRefused('contract-app-mismatch')
 	}
-	const databaseCode = readDatabaseCode(migrations, appId, settled)
+	const { databaseCode, fileAdoptions } = readDatabaseCode(migrations, appId, settled)
 	return {
 		version: 1,
 		...read,
 		migrations: migrations.map(({ name, checksum }) => ({ name, checksum })),
 		...(databaseCode.length === 0 ? {} : { databaseCode }),
+		...(fileAdoptions.length === 0 ? {} : { fileAdoptions }),
 		checker: reader.checker,
 		framework,
 	}
@@ -153,12 +160,16 @@ function readContract(reader: ContractReader, files: ReadonlyMap<string, string>
 }
 
 /**
- * The deviations of every migration file, classified as one set against the application's schema, as the runner
- * classifies them before it applies one. A refused statement in a file not yet settled fails the read: the runner
- * would refuse the file.
+ * The deviations and file adoptions of every migration file, classified as one set against the application's schema,
+ * as the runner classifies them before it applies one. A refused statement in a file not yet settled fails the read:
+ * the runner would refuse the file.
  */
-function readDatabaseCode(migrations: readonly ReadMigration[], appId: string, settled: readonly MigrationEntry[]): MigrationDeviation[] {
-	if (migrations.length === 0) return []
+function readDatabaseCode(
+	migrations: readonly ReadMigration[],
+	appId: string,
+	settled: readonly MigrationEntry[],
+): { databaseCode: MigrationDeviation[]; fileAdoptions: FileAdoption[] } {
+	if (migrations.length === 0) return { databaseCode: [], fileAdoptions: [] }
 	let classified: MigrationSetClassification
 	try {
 		classified = classifyMigrations(migrations, applicationDatabaseSchema(appId))
@@ -170,7 +181,7 @@ function readDatabaseCode(migrations: readonly ReadMigration[], appId: string, s
 	const pending = new Set(migrations.filter((migration) => settledChecksums.get(migration.name) !== migration.checksum).map(({ name }) => name))
 	const refused = classified.files.filter((file) => pending.has(file.file)).reduce((count, file) => count + file.refused.length, 0)
 	if (refused > 0) throw new SnapshotRefused('migrations-refused', refused)
-	return classified.files.flatMap((file) => file.deviations)
+	return { databaseCode: classified.files.flatMap((file) => file.deviations), fileAdoptions: classified.files.flatMap((file) => file.adoptions) }
 }
 
 interface ReadMigration extends MigrationEntry {

@@ -3,7 +3,7 @@
 
 import { schemaFromContract } from '@fabrika/app/contract'
 import { canonicalJson, type ContractArtifact, sha256Hex } from '@fabrika/auth-core'
-import type { MigrationDeviation } from '@fabrika/platform-node/sql'
+import type { FileAdoption, MigrationDeviation } from '@fabrika/platform-node/sql'
 import { FRAMEWORK_RELEASE_PATTERN, type ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import type { AppEnvRow } from '../db'
@@ -33,6 +33,11 @@ export interface AccessSnapshot {
 	 * Absent when there is none, so a snapshot without database code keeps the digest it had before the field existed.
 	 */
 	readonly databaseCode?: readonly MigrationDeviation[]
+	/**
+	 * The file collections the migration files adopt into a table and release (ADR-0061), in file order. Absent when
+	 * there is none. Not part of the digest: it follows from the migration files, whose checksums the digest covers.
+	 */
+	readonly fileAdoptions?: readonly FileAdoption[]
 	/** The `@fabrika/check` release of the reader that read it; empty for the empty snapshot. */
 	readonly checker: string
 	/** The `@fabrika/app` release the application's `bun.lock` pins. Absent in a snapshot read before Control recorded it. */
@@ -49,11 +54,24 @@ const deviationSchema = z.object({
 	line: z.number().int().positive(),
 }).strict() satisfies z.ZodType<MigrationDeviation>
 
+const fileAdoptionSchema = z.discriminatedUnion('step', [
+	z.object({
+		step: z.literal('adopt'),
+		collection: z.string().min(1),
+		table: z.string().min(1),
+		file: z.string().min(1),
+		line: z.number().int().positive(),
+	})
+		.strict(),
+	z.object({ step: z.literal('release'), collection: z.string().min(1), file: z.string().min(1), line: z.number().int().positive() }).strict(),
+]) satisfies z.ZodType<FileAdoption>
+
 const snapshotSchema = z.object({
 	version: z.literal(1),
 	contract: z.unknown(),
 	migrations: z.array(z.object({ name: z.string().min(1), checksum: z.string().regex(/^[0-9a-f]{64}$/) }).strict()),
 	databaseCode: z.array(deviationSchema).optional(),
+	fileAdoptions: z.array(fileAdoptionSchema).optional(),
 	checker: z.string(),
 	framework: z.string().regex(FRAMEWORK_RELEASE_PATTERN).optional(),
 	// The gates and IAM schema of an application without a contract, in a snapshot stored before those were refused.
@@ -71,6 +89,7 @@ export function parseSnapshot(raw: string): AccessSnapshot {
 		...(parsed.contract === null ? { contract: null } : parseStoredArtifact(parsed.contract)),
 		migrations: parsed.migrations,
 		...(parsed.databaseCode === undefined || parsed.databaseCode.length === 0 ? {} : { databaseCode: parsed.databaseCode }),
+		...(parsed.fileAdoptions === undefined || parsed.fileAdoptions.length === 0 ? {} : { fileAdoptions: parsed.fileAdoptions }),
 		checker: parsed.checker,
 		...(parsed.framework === undefined ? {} : { framework: parsed.framework }),
 	}
@@ -80,6 +99,16 @@ export function parseSnapshot(raw: string): AccessSnapshot {
 export function serializeSnapshot(snapshot: AccessSnapshot): string {
 	const { older, contract, ...rest } = snapshot
 	return JSON.stringify({ ...rest, contract: older ?? contract })
+}
+
+/**
+ * The stored form of a publication: without the file adoptions, which the diff reads only from a candidate, so that a
+ * Control rolled back below the release that recorded them still reads every environment's publication. Only the run
+ * snapshot of a commit that adopts files stays unreadable to it.
+ */
+export function serializePublished(snapshot: AccessSnapshot): string {
+	const { fileAdoptions: _, ...published } = snapshot
+	return serializeSnapshot(published)
 }
 
 /**

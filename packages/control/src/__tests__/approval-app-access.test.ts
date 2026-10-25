@@ -5,8 +5,8 @@ import { readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import { classifyAccess } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
+import { classifyAccess } from './helpers/access'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'app-wide-fixture')
 const ENDPOINTS = 'src/admin/endpoints.ts'

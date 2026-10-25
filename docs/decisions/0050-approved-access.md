@@ -93,6 +93,10 @@ run stores the result as its **snapshot**:
 - the migration list with checksums;
 - the **database code** the migrations declare (`databaseCode`): each function, procedure, trigger, view, rule,
   policy, `DO` block and expression that calls database code, by file, kind and object;
+- the **file adoptions** the migrations make (`fileAdoptions`, [ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)):
+  each `INSERT … SELECT` that copies a file collection's files into a table, and each release of a collection. They
+  follow from the migration files, so the digest does not cover them beyond the files' checksums. The diff compares
+  only a candidate's, so the run's snapshot keeps them and the environment's publication leaves them out;
 - the checker version;
 - the baseline the candidate was compared with;
 - the approval, when one was needed.
@@ -162,8 +166,9 @@ covers:
   without signing in"), and so does each workload action it gains ("runs as its own workload with `<action>`, for
   anyone who calls it"); a lost action narrows. These actions are no step off the road, so the environment's deviation
   list does not show them ([ADR-0063](0063-a-public-procedure-runs-as-its-own-workload.md));
-- **each procedure's admission and limits, by their effective values**: its buckets, its challenge, its time limit and
-  its body limit, derived ones included, on every new procedure and on every procedure the baseline records no rules
+- **each procedure's admission and limits, by their effective values**: its buckets, its challenge, its body limit,
+  how long it waits for that body (the deadline the runtime derives from the limit) and its time limit, which starts
+  after the last byte, derived ones included, on every new procedure and on every procedure the baseline records no rules
   for (every one, when an application moves from an older framework release). A bucket raised or turned off, a dropped
   challenge, a longer time limit and a larger body limit widen; the reverse narrows. On Zerops the per-client bucket is
   shown as counting one client. A public `GET` query's `http.cache` shows how long its answers are reused, and that
@@ -189,7 +194,10 @@ covers:
 - each public variable a page reads from its browser config (an SPA mount's `browserConfig` list, a challenge's
   `siteKey`): shown by name, and a new one widens, because its value reaches anyone who opens a page;
 - each site's declared reach;
-- migrations: any new or changed file, and the database code they declare.
+- migrations: any new or changed file, and the database code they declare;
+- **file adoptions** in a new or changed migration file: an adoption widens with closer review, because whoever the
+  table's policy lets read a row now reads its file, and a release narrows with closer review, because it drops the
+  collection with every file no column adopted. A file the baseline holds unchanged has run already, and adds no line.
 
 An application on framework 0.4, 0.5 or 0.6 is compared with the same rules after Control upcasts its artifact
 ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)): its forms' admission and files, `then`,
@@ -270,8 +278,10 @@ widens. A dimension that opts its member directory into labels (`directory: 'lab
 holder there reads each member's email-derived label and every endpoint below it the label of a member it looks up,
 widens too. Each of these widening lines carries
 `review: 'closer'`: the approval page marks it "needs closer review",
-because the approver must read the code behind the line, not only the line. A diff that cannot classify a change
-also marks it for closer review. On an unprotected environment the run publishes at once, with the same lines.
+because the approver must read the code behind the line, not only the line. The diff leaves no change unclassified:
+a change it has no finer rule for (`valueChange`, a union, an equivalent rewrite of a schema) widens, so it waits
+like any other widening, without a closer-review mark. A closer-review line names its reason (below), so the mark is the result of a rule
+the approver can read, never a label. On an unprotected environment the run publishes at once, with the same lines.
 
 **An endpoint's input and output are compared by the values they admit.** A change that can only admit
 fewer values narrows: an enum that loses a value, a lowered maximum, a raised minimum, an added pattern, a
@@ -287,6 +297,31 @@ cover them; the snapshot digest and the contract digest do.
 
 The diff is a pure function. It produces plain-language lines for the approver, for example "Role
 `editor` gains `notes.delete`" or "New endpoint `api.notes.export` for editors".
+
+**Each line is a structured fact, and its words are one rendering of it.** Beside its effect and its words, a line
+carries:
+
+- `rule`: a stable code of the comparison that produced it (`endpoint.added`, `endpoint.body-limit`, `procedure.challenge`,
+  `reach.kicks`, `table.read`, `migration.database-code`, …). One comparison, one code; a code never holds an
+  application's identifier.
+- `subject`: what the line is about: an endpoint (its id, method and path), a mount, a dimension, an action, a role, a
+  table, a file collection or kind, a job, an export or import, a token purpose, a CSP directive, a migration file, or
+  the application itself.
+- `audience`, on an endpoint subject: who reaches it, in the surface's terms (section 5): its reach, the link mount of a
+  `link` reach, and its requirement in words. It is read from the candidate's row, or from the baseline's for a removed
+  endpoint. A removal that widens (an endpoint, or a mount, whose paths now reach an endpoint that admits more) takes
+  the audience of the most exposed endpoint that answers them now, so its line stands with whoever gains access; that
+  is the one line about a mount that has an audience.
+- `consequence`, when the line says what a call sets off: the job it starts.
+- `reason`, on a closer-review line: `off-road` (a site's declared reach, database code, a contract that leaves the
+  staged kit), `anyone-calls` (a public procedure, a workload action or a job kick that anyone without signing in
+  sets off), `get-mutation`, `people` (who holds the application's roles, or labels that spell users' email addresses,
+  become visible), or `adoption` (a file collection adopted into a table, or released).
+
+The diff builds each fact where it builds the line, so the words and the fact cannot drift apart, and nothing parses a
+line. A line gets its rule where a comparison composes it and its subject where it is placed, and only a line that has
+both is placed, so a comparison without them does not typecheck. The audience follows from the subject. MCP's
+`deviations` and the CLI keep reading the words.
 
 **The environment's cross-origin list is not part of the change.** Which pages on other origins may call an endpoint
 the contract opens to them (`admission.origins`) is a fact of the environment, not of the contract
@@ -371,6 +406,52 @@ environment's lease, Control fails it with the run-log line `superseded by run <
 redelivered late and a parked run approved after a newer deploy went live: re-running the older commit is a new
 deploy.
 
+### 7. The approval page leads with who gains access
+
+A deploy of an agent-authored change can carry hundreds of lines, most of them harmless. The approver must see in one
+glance who gains access to what, and the few lines that decide it. The page is built from the facts of section 3,
+never from the words of a line:
+
+- **Impact first.** The head counts the changed endpoints per caller group and the migrations the change adds or edits, for
+  example "5 endpoints anyone calls, 2 endpoints a share link of `student` reaches".
+- **Grouped by caller.** The facts of an endpoint fall under its audience, in the order and words of the environment
+  page's surface: anyone, the share links of each link mount, another application, machines, and signed-in people,
+  each endpoint's requirement on its row. A removed endpoint or mount whose paths now reach a more exposed endpoint
+  stands there with every line about it, and the head counts removed endpoints and mounts apart from the endpoints
+  that change. Facts on any other subject form a second part, data and runtime, grouped by
+  subject kind: tables, roles, jobs, migrations, the application. A group is named by the contract's identifiers (a
+  link mount name, a requirement's action); the contract declares no display label for them.
+- **Rank is derived, there is no severity field.** Groups and facts are ordered by effect and review (a widening with
+  closer review, a widening, a narrowing with closer review, a neutral line, a narrowing), then by reach, anyone
+  first. Nothing else enters the rank, so it cannot disagree with the classification.
+- **A warning says why.** A closer-review fact shows one fixed sentence for its reason; `anyone-calls` on a kick, for
+  example, reads "anyone on the internet decides when job `mailing` runs".
+- **Protection is shown, not asked for.** A procedure shows its effective admission from the candidate snapshot
+  beside it, in the words of its diff line: buckets, challenge, body limit, how long it waits for the body and its
+  time limit. A public one without a bucket or a challenge says so. The page never asks the approver to verify
+  something the snapshot states. Whether a bot check holds is read from the endpoint's challenge, never from a browser
+  config variable: a removed `siteKey` variable is a line about what a page reads, and a dropped challenge is its own
+  widening line on the endpoint. The environment's cross-origin list is named as section 3 says, and nothing presents
+  it as protection.
+- **Similar facts fold, widenings stay in view.** Facts of one rule and one effect on three subjects or more fold into
+  one row ("body limit on 40 endpoints"), unless they widen or need closer review: those never fold. A group the page
+  collapses by default holds no widening fact, so every widening is visible without expanding anything.
+- **Grouping decides nothing.** Whether the run waits is `classifyAccess`'s outcome alone. The grouping is a pure
+  function over the facts, beside the DTO in `@fabrika/control-contract`; a test holds that it keeps every fact, and
+  that the widenings it shows by default are exactly the widenings of the classification.
+- **The lines stay.** The three effect sections of section 3, with search and a filter, are one step away. They are
+  the same facts, unordered.
+- **A run says where it stands.** Approval and publication are two steps (section 2): an approved run is
+  queued again and classified once more before it publishes. The page shows which of these holds: approved and waiting
+  to run; published; the approval lapsed, because an older run published another change first and the change still
+  widens against it, so the run waits for a new approval; or superseded, because a newer run published first, and an
+  older run never deploys over it (section 6). A refused or cancelled run says so, and so does a run
+  that published before its cancellation took effect. A run that never waited, because its change does not widen or
+  its environment is not protected, says it published without waiting for approval. Parking a run again
+  keeps the approval it held: it names the digests it approved, so it approves nothing the new classification shows,
+  and `ApprovalDto.approval.holds` says it lapsed. Refusing or cancelling such a run drops the approval, so a decided
+  run never reads as approved for what nobody approved.
+
 ## Consequences
 
 - An agent can no longer widen production access silently. A widening on `prod` waits until a human
@@ -400,7 +481,15 @@ deploy.
   still all widenings.
 - Rolling Control back below the version that wrote three effects breaks reading every run that version classified
   (the older schema is strict and knows only `widens`): the approval page, the approvals list and MCP's
-  `get_deployment` fail for those runs. Before 1.0 that is accepted; no dual format is written.
+  `get_deployment` fail for those runs. Before 1.0 that is accepted; no dual format is written. The same holds for
+  rolling back below the version that writes structured facts (section 3). Rolling back below the version that records
+  file adoptions breaks only the runs whose snapshot holds one (a deploy waiting for approval fails when it resumes);
+  the environment's publication never carries them, so every other deploy and republish still reads it.
+- A run classified before lines carried facts keeps its stored lines without `rule`, `subject` or `audience`. The
+  approval page shows them in their effect sections as unsorted lines and builds no groups for that run; a parked run
+  that is classified again gets facts. No migration rewrites a stored classification.
+- Every comparison in `diff.ts` must emit its rule and subject beside its words. A comparison added without them is a
+  type error, not an unsorted line.
 - The approval proves a signed-in user with `access.approve`, not a physical human. An agent that drives
   the approver's own signed-in browser can approve. The skill forbids it; WebAuthn on
   `approvals.complete` is the next step.
@@ -437,6 +526,16 @@ deploy.
 - **Gate the environment's cross-origin list by approval.** Rejected: the list grants no authority (bearer only, see
   section 3), it is not part of the contract the approval binds, and a registry write has no run to park. The
   approval page names it beside each line that opens an endpoint to it.
+- **Give each line a severity score.** Rejected: a second judgement beside the effect, set by hand per rule, which can
+  disagree with the classification. The page derives its order from effect, review and reach (section 7).
+- **Group the lines in the console by parsing their words.** Rejected: the words are prose and change with wording
+  fixes; the diff knows the structure when it writes the line.
+- **Name caller groups by labels the contract declares ("Staff", "Student").** Deferred: it changes the framework API.
+  Until then a group carries the role or mount identifier.
+- **Collapse the data and runtime part by default.** Rejected: a new table action widens, and a collapsed group would
+  hide it. Only a group without a widening collapses.
+- **Warn when a challenge's site key leaves the browser config.** Rejected: the variable says what a page reads, not
+  what the server checks. A dropped challenge is its own line on the endpoint.
 - **Protect every environment by default.** Rejected: staging and MCP authoring targets must apply at
   once by default, or the authoring loop stalls. A human can still protect any environment.
 - **Let the deploy permission approve.** Rejected: every operator holds `deploy.*`, and the builder key

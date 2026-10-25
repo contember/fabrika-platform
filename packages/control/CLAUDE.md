@@ -332,8 +332,9 @@ other environment, before the provider prepares anything, and the write maps a r
   `RUN_INTERRUPTED_REASON` through `runLogs`; the stale-run sweep appends its own reason. Neither requeues the run
   (ADR-0044): every composition hands `runLogs`, or the reason reaches the console only.
   A pending run older than a run of the same environment that already `succeeded` never starts: `markRunStarted`
-  refuses it, also after `startRun` settled a newer run to succeeded, and then `markRunSuperseded` fails it and its
-  log says `superseded by run <id>` (ADR-0044). Queue order is not run order (a deferred run is enqueued again), and
+  refuses it, also after `startRun` settled a newer run to succeeded, and then `markRunSuperseded` fails it, records
+  that run in `runs.superseded_by` (the approval page's `ApprovalDto.supersededBy`), and its log says
+  `superseded by run <id>` (ADR-0044). Queue order is not run order (a deferred run is enqueued again), and
   an approved parked run is covered the same way. Cloudflare's `resolveSource` resolves a webhook or poll run's BRANCH
   and refuses it (`commit_mismatch`) when the branch moved past the recorded commit (ADR-0048).
 - **Control is the only writer of a run's row (ADR-0044).** A Cloudflare run settles in exactly two ways,

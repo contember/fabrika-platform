@@ -22,6 +22,7 @@ export {
 	type DatabaseObjectKind,
 	declaredFunctions,
 	type DeviationKind,
+	type FileAdoption,
 	type ManifestChange,
 	type MigrationClassification,
 	type MigrationDeviation,

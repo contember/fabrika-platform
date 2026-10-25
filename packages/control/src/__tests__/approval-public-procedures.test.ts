@@ -2,11 +2,13 @@
 // public endpoint widens with closer review, each procedure shows its effective bounds where the baseline records none,
 // and a bound that admits more or runs longer widens.
 
+import { bodyDeadlineMs } from '@fabrika/app/contract'
 import type { ContractArtifact, DeclaredReach, EndpointRow, ProcedureArtifact } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import { classifyAccess } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
+import { classifyAccess } from './helpers/access'
 
 const reach: DeclaredReach = { sql: null, unscoped: {}, connect: [], issues: null }
 
@@ -49,10 +51,46 @@ describe('a public procedure in the approval diff', () => {
 				{
 					effect: 'neutral',
 					line:
-						'`api.stats.cta` admits calls per minute: 10 per client (one client on Zerops) and 100 in all; it runs at most 10 s, with a body of at most 1024 bytes',
+						'`api.stats.cta` admits at most 10 calls a minute per client (one client on Zerops) and at most 100 calls a minute in all; it waits at most 30 s for a body of at most 1024 bytes, then runs at most 10 s',
 				},
 			],
 		})
+	})
+
+	test("a large body's deadline is named before the handler's time limit, which starts after the last byte", () => {
+		const upload: EndpointRow = { ...CTA, admission: { contentTypes: ['multipart/form-data'], maxBytes: 10 * 1024 * 1024 } }
+		expect(classifyAccess(snapshot(null, null), snapshot(DEFAULT_RULES, upload)).changes.at(-1)?.line).toEndWith(
+			'it waits at most 640 s for a body of at most 10485760 bytes, then runs at most 10 s',
+		)
+	})
+
+	test('the body deadline the line names is the one every bundled release that serves procedures applies', async () => {
+		// Procedures, and so the line, start at 0.7: an older contract upcasts without any (`formats.ts`). The diff names the
+		// platform's own deadline, which is right while every release from 0.7 on derives it alike. A bundled release from 0.7
+		// on whose deadline differs, or that does not export it here, needs the diff to read it from that release (ADR-0062):
+		// this fails then. 0.7 and 0.8 are the exceptions: they keep the deadline unexported in `implement/anonymous.ts`, at
+		// the same 16 KiB/s and 30 s floor, so their applications wait as long as the line says.
+		const exportsNoDeadline = new Set(['@fabrika/app-0.7', '@fabrika/app-0.8'])
+		const manifest = z.object({ dependencies: z.record(z.string()) }).parse(await Bun.file(new URL('../../package.json', import.meta.url)).json())
+		const older = Object.keys(manifest.dependencies).filter((name) => /^@fabrika\/app-\d+\.\d+$/.test(name))
+		expect(older.length).toBeGreaterThanOrEqual(3)
+		let compared = 0
+		// The platform's own release is read the same way, so the check is known to reach a release that has one.
+		for (const release of ['@fabrika/app', ...older]) {
+			const contract: unknown = await import(`${release}/contract`)
+			const deadline: unknown = typeof contract === 'object' && contract !== null ? Reflect.get(contract, 'bodyDeadlineMs') : undefined
+			if (typeof deadline !== 'function') {
+				const minor = /^@fabrika\/app-0\.(\d+)$/.exec(release)?.[1]
+				expect([release, (minor !== undefined && Number(minor) < 7) || exportsNoDeadline.has(release)]).toEqual([release, true])
+				continue
+			}
+			for (const maxBytes of [1, 64 * 1024, 1024 * 1024, 10 * 1024 * 1024]) {
+				const theirs: unknown = Reflect.apply(deadline, undefined, [maxBytes])
+				expect([release, theirs]).toEqual([release, bodyDeadlineMs(maxBytes)])
+			}
+			compared++
+		}
+		expect(compared).toBeGreaterThanOrEqual(1)
 	})
 
 	test('a bucket raised or turned off widens, one lowered narrows', () => {

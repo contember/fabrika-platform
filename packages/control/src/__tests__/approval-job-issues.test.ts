@@ -6,8 +6,9 @@ import { describe, expect, test } from 'bun:test'
 import { tables } from '../../../app/src/__tests__/kit-fixture/src/db/tables'
 import { shared } from '../../../app/src/__tests__/kit-fixture/src/shared'
 import { vocabulary } from '../../../app/src/__tests__/kit-fixture/src/vocabulary'
-import { classifyAccess, snapshotDeviations } from '../approval/diff'
+import { snapshotDeviations } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
+import { classifyAccess } from './helpers/access'
 
 const app = defineApp(vocabulary, tables)
 

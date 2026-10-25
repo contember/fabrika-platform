@@ -79,8 +79,9 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [189](189-cross-origin-endpoints-review-follow-ups.md) — Cross-origin endpoints review follow-ups: the `http://` host rule, `Vary: Origin` on every answer, a recorded release for a namespace proxy pin, and the preflight's request headers.
 - [190](190-the-overview-reads-each-applications-environments-separately.md): The console overview calls Control once per application for its environments; one read for many applications.
 - [192](192-a-signed-in-person-cannot-manage-their-own-account.md): No self-service password change or sign-in list; an IAM account page, after rewriting ADR-0020.
-- [193](193-loose-ends-of-the-declared-surface.md): The approval of an upgrade to 0.7, admission buckets and other P2s of the surface revision.
-- [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: a claim before the dispatcher sends (two double-send paths), maintenance and console edges, the sender's error mapping, expired keys' vault values, no final-failure answer to IAM or an application.
+- [193](193-loose-ends-of-the-declared-surface.md): The legacy file marker, admission buckets, the platform rollback and other P2s of the surface revision.
+- [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: maintenance and console edges, the sender's error mapping, expired keys' vault values, no final-failure answer to IAM or an application, and the sprint's end-to-end run.
+- [196](196-mcp-authoring-has-no-live-acceptance.md): MCP authoring was never run with a real client, GitHub App and Zerops build; the sprint's known limits.
 - [197](197-local-compat-has-no-0.7-release.md): `local:compat` deploys no Notes at v0.7.0: its proof needs a release without a file collection.
 - [198](198-an-in-container-env-write-may-reach-another-services-credentials.md): Measure whether `zsc` can write a `${host_KEY}` reference that Zerops resolves; if so, a `cheap` namespace's superuser is reachable by its applications.
 - [199](199-operations-keeps-every-event-forever.md): Operations prunes nothing; a retention window for occurrences, dead events, observations and raw bodies.

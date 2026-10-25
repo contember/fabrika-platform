@@ -1602,9 +1602,9 @@ describe('provider-neutral run lifecycle', () => {
 		await fixtureRuns(db.runs, makeFakeLock(db)).finish(newerId, 'succeeded', 0)
 		const runs = db.runs
 		const original = runs.markRunSuperseded.bind(runs)
-		runs.markRunSuperseded = async (id, fence) => {
+		runs.markRunSuperseded = async (id, by, fence) => {
 			await runs.requestRunCancellation(id)
-			return original(id, fence)
+			return original(id, by, fence)
 		}
 		const inputs: ProviderDeployInput[] = []
 		const { logs, objects } = memoryLogs()
