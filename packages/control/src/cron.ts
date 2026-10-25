@@ -35,7 +35,7 @@ export interface MaintenanceSummary {
 	mail: MailMaintenanceSummary
 	/** `dev` environments stopped after their idle period, and stops that failed. */
 	dev: DevIdleSummary
-	/** Daily backups carried on and started (ADR-0070 §8). */
+	/** Restores and orphaned migrations taken over, daily backups carried on and started (ADR-0070 §8–§9). */
 	backups: BackupScheduleSummary
 }
 
@@ -53,7 +53,7 @@ export interface MaintenanceOptions {
 	releases?: () => Promise<OperationsReleaseProjectionSummary>
 	/** A composition root whose provider runs `dev` environments injects their idle stop. */
 	devIdle?: () => Promise<DevIdleSummary>
-	/** A composition root whose provider serves the ops channel injects the daily backups (`runBackupSchedule`). */
+	/** A composition root whose provider serves the ops channel injects the data operations' pass (`runBackupSchedule`). */
 	backups?: () => Promise<BackupScheduleSummary>
 }
 
@@ -108,12 +108,13 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (dev.stopped > 0 || dev.failed > 0) console.info(`dev environments: stopped=${dev.stopped} failed=${dev.failed}`)
 	// Last: a pass spends at most `BACKUP_PASS_MS` on dump requests, and what it leaves running the next pass continues.
 	const backups = options.backups === undefined
-		? { continued: 0, started: 0, succeeded: 0, failed: 0, unfinished: 0, skipped: 0, errored: 0 }
+		? { resumed: 0, continued: 0, started: 0, succeeded: 0, failed: 0, unfinished: 0, skipped: 0, errored: 0 }
 		: await options.backups()
-	if (backups.continued > 0 || backups.started > 0 || backups.errored > 0) {
+	if (backups.resumed > 0 || backups.continued > 0 || backups.started > 0 || backups.errored > 0) {
 		console.info(
-			`backups: continued=${backups.continued} started=${backups.started} succeeded=${backups.succeeded} failed=${backups.failed} `
-				+ `unfinished=${backups.unfinished} skipped=${backups.skipped} errored=${backups.errored}`,
+			`data operations: resumed=${backups.resumed} continued=${backups.continued} started=${backups.started} `
+				+ `succeeded=${backups.succeeded} failed=${backups.failed} unfinished=${backups.unfinished} skipped=${backups.skipped} `
+				+ `errored=${backups.errored}`,
 		)
 	}
 	return { poll, reconcile, swept, operations, releases, mail, dev, backups }

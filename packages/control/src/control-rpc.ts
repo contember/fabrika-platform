@@ -820,7 +820,7 @@ async function restoreDeps(c: DataUseCaseContext): Promise<DataOperationDeps> {
 /** The record as the operation left it: one the object left unanswered is still `running`, at its step. */
 function dataOperationResult(outcome: DataOperationOutcome): DataOperationDto {
 	if (outcome.kind === 'busy') fail(409, 'a deploy or another data operation holds this environment')
-	if (outcome.kind === 'driven') return toDataOperationDto(outcome.operation)
+	if (outcome.kind === 'driven' || outcome.kind === 'started') return toDataOperationDto(outcome.operation)
 	if (outcome.reason === 'operation_running') fail(409, 'an operation of this environment is still running: recover it first')
 	if (outcome.reason === 'not_recoverable') fail(409, 'that operation is not one this environment can recover')
 	if (outcome.reason === 'superseded') fail(409, 'a newer operation of this environment supersedes that one')

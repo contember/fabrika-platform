@@ -80,36 +80,9 @@ export class ApplicationObjectsRepository {
 	}
 }
 
-export interface RestoreInput {
-	operationId: string
-	appId: string
-	env: string
-	at: string
-	original: string
-	clone: string
-}
-
-/** A restore's record. Every write is fenced on the environment's deploy lease in the same statement, as its operation's are. */
+/** A restore's record, created with its operation (`DataOperationRepository.create`). Every write is fenced on the environment's deploy lease in the same statement, as its operation's are. */
 export class RestoreRepository {
 	constructor(private readonly d1: SqlDatabase, private readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
-
-	/** Records the restore of a running operation; `null` when `fence` does not hold the environment's lease. */
-	async create(input: RestoreInput, fence: LeaseFence): Promise<RestoreRow | null> {
-		const key = runLeaseKey(input.appId, input.env)
-		const results = await this.d1.batch<RestoreRow>([
-			this.d1.prepare('UPDATE deploy_locks SET holder = holder WHERE lock_key = ? AND holder = ? AND expires_at > ?').bind(
-				key,
-				fence.holder,
-				fence.nowMs,
-			),
-			this.d1
-				.prepare(`INSERT INTO app_env_restores (operation_id, app_id, env, at, original, clone, arms, created_at)
-					SELECT ?, ?, ?, ?, ?, ?, 0, ? WHERE EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
-					RETURNING *`)
-				.bind(input.operationId, input.appId, input.env, input.at, input.original, input.clone, this.now(), key, fence.holder, fence.nowMs),
-		])
-		return results[1]?.results[0] ?? null
-	}
 
 	async get(operationId: string): Promise<RestoreRow | null> {
 		return await this.d1.prepare('SELECT * FROM app_env_restores WHERE operation_id = ?').bind(operationId).first<RestoreRow>()

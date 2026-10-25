@@ -6,6 +6,7 @@
 import { type BlobStore, type SqlDatabase, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
 import type { ControlProvider, ProviderDeployOutcome } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
+import { runBackupSchedule } from '../backups'
 import {
 	DEPLOY_FAILED_CODE,
 	MIGRATION_FAILED_CODE,
@@ -308,6 +309,32 @@ for (const backend of backends) {
 			expect(fake.requests().slice(-4)).toEqual(['migrate @1', 'migrate @1', 'migrate @1', 'inspect'])
 			expect(await recordedMaintenance(b, TARGET)).toBe('unsettled')
 			expect(log(second)).toContain(`data operation ${operation?.id} failed at migrate (${MIGRATION_FAILED_CODE})`)
+		})
+
+		test('the maintenance pass takes over a migration its run no longer drives, and leaves one whose lease is held', async () => {
+			const { b, fake, state, deps, run, deployFirst, operations } = await open()
+			await deployFirst()
+			state.migrations = [FIRST, SECOND]
+			fake.fault = (sent) => sent.op === 'migrate' ? 'down' : undefined
+			const second = await run()
+			expect(await executeDeploy(deps(), { runId: second })).toEqual({ runId: second, status: 'succeeded' })
+			const [stuck] = await operations()
+			expect(stuck).toMatchObject({ kind: 'migrate', state: 'running', step: 'migrate', generation: 1 })
+			fake.fault = () => undefined
+			fake.sent.length = 0
+			const locks = new SqlDeployLocks(b.db)
+			const pass = () => runBackupSchedule({ repositories: b.repositories, lock: locks, ops: fake, provider: deps().provider })
+			// The lease's holder is whoever still drives the migration: the pass sends it nothing.
+			expect(await locks.acquire(KEY, 'run-invocation', 60_000)).toBe(true)
+			expect(await pass()).toMatchObject({ resumed: 1, succeeded: 0 })
+			expect(fake.requests()).toEqual([])
+			expect(await operations()).toMatchObject([{ id: stuck?.id, state: 'running', step: 'migrate' }])
+			// A free lease means its holder died: the pass fences above it, migrates and opens.
+			await locks.release(KEY, 'run-invocation')
+			expect(await pass()).toMatchObject({ resumed: 1, succeeded: 1 })
+			expect(fake.requests()).toEqual(['state application read-only @2', 'migrate @2', 'state application open @3'])
+			expect(fake.ledger.map((row) => row.name)).toEqual([FIRST, SECOND])
+			expect(await recordedMaintenance(b, TARGET)).toBe('open')
 		})
 
 		test('a migration left without an answer resumes through a recovery at a fenced generation', async () => {

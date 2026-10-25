@@ -429,20 +429,31 @@ other environment, before the provider prepares anything, and the write maps a r
   `deploy_not_started`, read as `open`) and fails the run without a deploy. A run that failed after a provider accepted
   it (`deploy_failed`) and a refused migration or failed boot (`migration_failed`) fail the operation with the object
   restricted, for an operator's recovery; no answer leaves it running (interrupted). The run's status is its deploy's
-  (ADR-0044); the operation's outcome is the last line of the run's log.
+  (ADR-0044); the operation's outcome is the last line of the run's log. A running migration whose lease is free has
+  lost its driver (the run's invocation holds the lease from its start to its settlement): the maintenance pass resumes
+  it as a successor, and a held lease makes `advanceDataOperation` answer busy, so a live driver is never overtaken.
 - **A side restore is a `restore` data operation (`startRestore`, `data.start` kind `restore` with a past `at`;
-  ADR-0070 §9).** Control records the pointer per environment (`app_env_application_objects`: the serving object and the
-  listed ones, at most 16), and every deploy (`deployUnder` → `ProviderDeployInput.applicationObjects`) writes it;
-  without a row it is `application` / `application,rehearsal`, and `inspect`, `migrate` and the backups follow the
-  recorded serving object. Only a restore moves it, after its own deploy succeeded. The steps, recorded in
-  `app_env_restores` beside the operation: `list` (a deploy listing `application-<op>`, redeploying the newest succeeded
-  run under the operation's lease, `operationDeploys`), `restrict`/`backup`/`verify` as a backup, `import` into the clone
-  (`inspect`), `promote` (clone `open`, original `inspect`), `point` (the pointer deploy), `serve` (the clone's view after
-  a grace period), `rewind` (`prepare` once with both bookmarks recorded before any `arm`; each `arm` counted before it
-  is sent and sent once, then `verify`; at most three arms), `check` (the original's ledger within the clone's). A
-  failure before the clone serves is recorded first, then goes through `revert` (a pointer deploy back, when traffic may
-  have moved) to `open`, which fences the clone `inspect` and opens the original; every such code reads as `open`.
-  `bookmark_unavailable`, `rewind_failed` and `unexpected_schema` leave the clone serving and the original `inspect`.
+  ADR-0070 §9).** `data.start` only records it, the operation and its `app_env_restores` row in one lease-fenced batch,
+  and returns it at `list`; the maintenance pass (`runBackupSchedule`, both hosts) owns it and drives it under the lease
+  as a successor, bounded per pass. Control records the pointer per environment (`app_env_application_objects`: the
+  serving object and the listed ones, at most 16), and every deploy (`deployUnder` →
+  `ProviderDeployInput.applicationObjects`) writes it; without a row it is `application` / `application,rehearsal`, and
+  `inspect`, `migrate` and the backups follow the recorded serving object. Only a restore's own deploys
+  (`operationDeploys`, redeploying the newest succeeded run under the operation's lease) move it, recorded in the batch
+  that advances the step. A resumed restore first publishes each object's mode at its step (`restoreModes`). Steps:
+  `list` (the listing deploy, then `inspect` of the clone: the channel reaches only a listed object, so a refusal is a
+  runner that did not forward the pointer, `objects_not_deployed`, before anything is frozen), `restrict`/`backup`/
+  `verify` as a backup, `import` into the clone (`inspect`), `promote` (clone `open`, original `inspect`), `point` (the
+  pointer deploy; one no provider accepted reopens the original), `serve` (positive confirmation: `migrate` on the clone
+  answers only once it booted while not `inspect`, and `prepare` on the original is refused as `serving_object` while
+  traffic still reaches it; its bookmarks are recorded here, before any `arm`), `rewind` (each `arm` counted before it is
+  sent and sent once, then `verify`; at most three arms), `check` (the original's ledger within the clone's). A clone
+  that does not boot, or a pointer that did not move, goes through `revert` (a deploy pointing back) to `open`, which
+  fences the clone `inspect` and opens the original; every such code reads as `open`. `bookmark_unavailable`,
+  `rewind_failed` and `unexpected_schema` leave the clone serving and the original `inspect`. A recovery with resolution
+  `open` keeps the object that may hold writes: the clone once a provider accepted the pointer deploy and nothing showed
+  the clone served no request, else the original, pointed back first; a restore deploy without an outcome leaves the
+  recovery interrupted.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.

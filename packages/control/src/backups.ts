@@ -1,6 +1,6 @@
 // The daily backup of every Cloudflare environment (ADR-0070 §8) and the backup list `data.read` shows. Control's `*/5`
-// maintenance pass first carries on the backups still running, then starts one for each environment that is due; the
-// `backup` operation itself is driven in `data-operations.ts`.
+// maintenance pass first carries on the restores and the orphaned migrations still running, then the backups, then
+// starts one for each environment that is due; every operation itself is driven in `data-operations.ts`.
 
 import type { DataBackupDto, DataBackupScheduleDto } from '@fabrika/control-contract'
 import type { ControlProvider } from '@fabrika/provider-contract'
@@ -38,6 +38,8 @@ export interface BackupScheduleDeps extends Omit<DataOperationDeps, 'repositorie
 
 /** What one pass did, in counts only. */
 export interface BackupScheduleSummary {
+	/** Running restores and migrations the pass took over: their lease was free, so nothing else drove them. */
+	resumed: number
 	/** Running backups the pass carried on. */
 	continued: number
 	/** Backups the pass started. */
@@ -52,14 +54,27 @@ export interface BackupScheduleSummary {
 	errored: number
 }
 
-/** One maintenance pass of the daily backups. A provider without the ops channel (Zerops) backs up nothing. */
+/**
+ * One maintenance pass of the data operations Control owns: running restores and migrations nobody drives, running
+ * backups, then the daily backups due. A provider without the ops channel (Zerops) drives nothing.
+ */
 export async function runBackupSchedule(deps: BackupScheduleDeps): Promise<BackupScheduleSummary> {
-	const summary: BackupScheduleSummary = { continued: 0, started: 0, succeeded: 0, failed: 0, unfinished: 0, skipped: 0, errored: 0 }
+	const summary: BackupScheduleSummary = { resumed: 0, continued: 0, started: 0, succeeded: 0, failed: 0, unfinished: 0, skipped: 0, errored: 0 }
 	if (deps.provider.opsChannel === undefined) return summary
 	const clock = deps.clock ?? Date.now
 	const deadline = clock() + BACKUP_PASS_MS
 	const passSpent = deps.passSpent ?? (() => clock() >= deadline)
 	const driving: DataOperationDeps = { ...deps, passSpent }
+	// A restore is owned by this pass alone. A migration is driven by its run's invocation, which holds the environment's
+	// lease from its start to its settlement; a free lease means that holder died, and `advanceDataOperation`, which drives
+	// only under the lease it acquires, answers busy for every operation whose driver is alive.
+	for (const kind of ['restore', 'migrate'] as const) {
+		for (const operation of await deps.repositories.dataOperations.listRunning(kind, BACKUP_PASS_CONTINUES)) {
+			if (passSpent()) return summary
+			summary.resumed++
+			await turn(summary, operation, () => advanceDataOperation(driving, operation.id))
+		}
+	}
 	for (const operation of await deps.repositories.dataOperations.listRunning('backup', BACKUP_PASS_CONTINUES)) {
 		if (passSpent()) return summary
 		summary.continued++

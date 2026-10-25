@@ -331,18 +331,24 @@ The verification of the migration phase (ADR-0069 §3) is this rehearsal.
 ### 9. Side restore
 
 The one flow built for "the data as it was at time T". Everything runs as one Control operation `<op>`, under the
-environment's deploy lease and `data.manage`.
+environment's deploy lease and `data.manage`. Starting it only records it, with its target time and original, in one
+write; Control's maintenance pass owns it and drives it a bounded stretch at a time, so no request's lifetime bounds it.
 
 1. **List the clone.** The operation's own deploy adds `application-<op>` to `FABRIKA_APPLICATION_OBJECTS` and leaves
    `FABRIKA_APPLICATION_OBJECT` as it is. The ops channel reaches only a listed object (ADR-0069 §1), and listing it
    before the freeze keeps a deploy out of the read-only window. The operation is refused when the list already holds
-   16 names.
+   16 names. Control then inspects the clone: an answer proves the deployed version lists it, and a refusal, from a
+   runner that does not forward the pointer, fails the operation before anything is frozen.
 2. **Freeze** the serving object: `read-only`, then the acknowledged drain.
 3. **Back up** consistently, and rehearse the backup.
 4. **Import** the backup into `application-<op>`, published `inspect`, and verify it.
 5. **Make the clone authoritative.** Publish the clone `open` and the original `inspect`, so the original never boots
    again. The operation's pointer deploy then writes `FABRIKA_APPLICATION_OBJECT=application-<op>` and keeps both names
-   in `FABRIKA_APPLICATION_OBJECTS`. The clone boots, finds an equal ledger, repairs its scheduler and serves.
+   in `FABRIKA_APPLICATION_OBJECTS`. The clone boots, finds an equal ledger, repairs its scheduler and serves. Before
+   anything is rewound Control confirms it: `migrate` on the clone answers only once it booted, and only while it is
+   published in a mode other than `inspect`; `prepare` on the original is refused as `serving_object` while the
+   deployed version still sends traffic there. A view without a boot failure proves nothing, since `inspect` never
+   boots. A failed confirmation points traffic back, which loses nothing: the clone served no ordinary request.
 6. **Rewind the original**, once the clone serves. `POST /__fabrika/ops/restore` runs three steps:
    - **`prepare`** writes the sentinel, the operation's id, into the original's KV storage, and answers the current
      bookmark and the bookmark of T (`getBookmarkForTime`). Control persists the target bookmark, the pre-restore
@@ -360,19 +366,23 @@ environment's deploy lease and `data.manage`.
 **The pointer lives in Control.** Control records each environment's serving object and object list
 (`app_env_application_objects`), and every deploy of a release that serves the ops channel writes them as
 `FABRIKA_APPLICATION_OBJECT(S)`, so an ordinary deploy after a restore keeps traffic on the clone. Only a restore's own
-deploys move the record. An environment without one gets the defaults, `application` and `application,rehearsal`.
+deploys move the record, in the same write as the operation's next step. An environment without one gets the defaults,
+`application` and `application,rehearsal`. A recovery that opens past a restore keeps the object that may hold writes:
+the clone once a provider accepted the pointer deploy and nothing showed the clone served no request, otherwise the
+original, pointed back first; while a restore's deploy has no outcome the recovery waits for it.
 
 **Invariant: point-in-time recovery never touches the object of ordinary traffic.** The object refuses `prepare` and
 `arm` as `serving_object` while it is `FABRIKA_APPLICATION_OBJECT`, and as `wrong_mode` unless it is `inspect`.
 
 | Failure                                          | Outcome                                                                                                  |
 | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| Control dies mid-operation                       | The environment stays in its published mode; a successor fences and resumes from the recorded step       |
+| Control dies mid-operation                       | The next maintenance pass fences each object at its step's mode and resumes from the recorded step       |
 | The listing deploy fails                         | Nothing is frozen; the operation fails and the environment is as before                                  |
 | The backup or its rehearsal fails                | The original reopens at a new generation; the operation fails                                            |
 | The import into the clone fails                  | The clone is discarded and the original reopens; the operation fails: a retry of that backup would too   |
-| The pointer deploy fails                         | The original is intact: it is published `open` again and the clone `inspect`; the service is back        |
+| The pointer deploy fails                         | Not accepted: the original opens again, the clone `inspect`. Accepted: the confirmation decides          |
 | The clone does not boot after the pointer deploy | The original is not rewound yet: a pointer deploy back to it, published `open`, restores the service     |
+| Traffic did not move after the pointer deploy    | `prepare` is refused as `serving_object`; the same deploy back, and the original opens                   |
 | T lies outside the recovery window               | `prepare` is refused as `bookmark_unavailable`; the clone keeps serving; nothing is lost                 |
 | The answer to `arm` is lost                      | `verify` decides: an absent sentinel is a restore; a present one arms again                              |
 | The object did not reset after `arm`             | `verify` finds the sentinel; the operation arms again, three times at most, then fails; the clone serves |

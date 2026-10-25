@@ -10,16 +10,30 @@
 //
 // An installation's composition root runs it with its provider: `bun src/zerops/cron.ts`.
 
+import { runBackupSchedule } from '../backups'
 import { runMaintenance } from '../cron'
 import { stopIdleDevServices } from '../dev/service'
 import { reconcileProviderRuns } from '../provider-reconcile'
-import { iamSchemaDeps, locks, operationsReleaseDeps, platformTransportDeps, repositories } from '../services'
+import { operationDeploys } from '../run-lifecycle'
+import { buildRunDeps, iamSchemaDeps, locks, operationsReleaseDeps, opsTransportDeps, platformTransportDeps, repositories } from '../services'
 import type { Runtime } from './runtime'
 
 async function main(createRuntime: () => Runtime): Promise<void> {
 	const runtime = createRuntime()
+	const { opsTransport } = opsTransportDeps(runtime.env)
 	try {
 		await runMaintenance(runtime.env, {
+			// The same pass as the Worker's, for a provider that serves the ops channel and a Control that holds ops keys.
+			...(opsTransport === undefined || runtime.provider.opsChannel === undefined ? {} : {
+				backups: async () =>
+					await runBackupSchedule({
+						repositories: repositories(runtime.env),
+						lock: locks(runtime.env),
+						ops: opsTransport,
+						provider: runtime.provider,
+						deploys: operationDeploys(await buildRunDeps(runtime.env, runtime.provider)),
+					}),
+			}),
 			reconcile: () =>
 				reconcileProviderRuns({
 					repositories: repositories(runtime.env),

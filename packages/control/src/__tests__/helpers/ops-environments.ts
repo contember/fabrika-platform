@@ -58,7 +58,7 @@ export type Sent =
 		readonly part?: number
 	}
 	| { readonly op: 'restore'; readonly env: string; readonly object: string; readonly step: string; readonly generation: number | null }
-	| { readonly op: 'migrate'; readonly env: string; readonly generation: number }
+	| { readonly op: 'migrate'; readonly env: string; readonly object: string; readonly generation: number }
 
 /** What the fake does with one request: answer it, apply it and lose the answer, never receive it, or refuse it. */
 export type Fault = 'down' | 'lose' | 'not_served' | { readonly refused: OpsDataRefusalReason; readonly table?: string }
@@ -124,11 +124,18 @@ export class FakeEnvironments implements OpsTransport {
 	rewoundLedger: OpsMigration[] | null = null
 	/** Whether the target time lies outside the recovery window. */
 	bookmarkUnavailable = false
+	/** The objects the deployed version lists, which the channel alone reaches (the uniform refusal otherwise); `null`: any. */
+	listed: ReadonlySet<string> | null = null
+
+	private unlisted(object: string): boolean {
+		return this.listed !== null && !this.listed.has(object)
+	}
 
 	async inspect(target: OpsTarget, request: OpsInspectRequest): Promise<OpsAnswer<OpsInspection>> {
 		const sent: Sent = { op: 'inspect', env: target.env, object: request.object }
 		this.sent.push(sent)
 		if ((await this.fault(sent)) === 'down') return { kind: 'unavailable', reason: 'unreachable' }
+		if (this.unlisted(request.object)) return { kind: 'unavailable', reason: 'channel_refused' }
 		const published = this.published.get(key(target, request.object))
 		return {
 			kind: 'ok',
@@ -155,6 +162,7 @@ export class FakeEnvironments implements OpsTransport {
 		const fault = await this.fault(sent)
 		if (fault === 'down') return { kind: 'unavailable', reason: 'unreachable' }
 		if (fault === 'not_served') return { kind: 'unavailable', reason: 'not_served' }
+		if (this.unlisted(request.object)) return { kind: 'unavailable', reason: 'channel_refused' }
 		const current = this.published.get(key(target, request.object)) ?? null
 		if (opsTransitionRefused(current, request)) return { kind: 'stale', published: current }
 		this.published.set(key(target, request.object), { generation: request.generation, mode: request.mode })
@@ -164,21 +172,26 @@ export class FakeEnvironments implements OpsTransport {
 		return { kind: 'ok', value: { generation: request.generation, mode: request.mode, stillRunning: 0 } }
 	}
 
-	/** Applies the bundled migrations the ledger lacks, only under the published generation. */
+	/**
+	 * Boots the object and applies the bundled migrations its ledger lacks, only under the published generation and not
+	 * in `inspect`; a failed boot answers the 500 that reads as unreachable.
+	 */
 	async migrate(target: OpsTarget, request: OpsMigrateRequest): Promise<OpsFencedAnswer<OpsMigrateAck>> {
-		const sent: Sent = { op: 'migrate', env: target.env, generation: request.generation }
+		const sent: Sent = { op: 'migrate', env: target.env, object: request.object, generation: request.generation }
 		this.sent.push(sent)
 		const fault = await this.fault(sent)
-		if (fault === 'down' || this.bootFails) return { kind: 'unavailable', reason: 'unreachable' }
+		if (fault === 'down' || this.bootFails || this.bootFailures.has(request.object)) return { kind: 'unavailable', reason: 'unreachable' }
 		if (fault === 'not_served') return { kind: 'unavailable', reason: 'not_served' }
+		if (this.unlisted(request.object)) return { kind: 'unavailable', reason: 'channel_refused' }
 		const published = this.published.get(key(target, request.object)) ?? null
-		if (published === null || published.generation !== request.generation) return { kind: 'stale', published }
-		const applied = new Set(this.ledger.map((row) => row.name))
+		if (published === null || published.generation !== request.generation || published.mode === 'inspect') return { kind: 'stale', published }
+		const ledger = this.ledgers.get(request.object) ?? this.ledger
+		const applied = new Set(ledger.map((row) => row.name))
 		for (const name of this.bundled) {
-			if (!applied.has(name)) this.ledger.push({ bundle: 'app', name, checksum: digest(name), appliedAt: BOOT_FAILED_AT })
+			if (!applied.has(name)) ledger.push({ bundle: 'app', name, checksum: digest(name), appliedAt: BOOT_FAILED_AT })
 		}
 		if (fault === 'lose') return { kind: 'unavailable', reason: 'unreachable' }
-		return { kind: 'ok', value: { generation: request.generation, migrations: [...this.ledger] } }
+		return { kind: 'ok', value: { generation: request.generation, migrations: [...ledger] } }
 	}
 
 	async export(target: OpsTarget, request: OpsExportRequest): Promise<OpsDataAnswer<OpsExportAck>> {
@@ -260,6 +273,7 @@ export class FakeEnvironments implements OpsTransport {
 		const fault = await this.fault(sent)
 		if (fault === 'down') return { kind: 'unavailable', reason: 'unreachable' }
 		if (typeof fault === 'object') return { kind: 'refused', refusal: { refused: fault.refused, table: fault.table ?? null } }
+		if (this.unlisted(request.object)) return { kind: 'unavailable', reason: 'channel_refused' }
 		const published = this.published.get(key(target, request.object)) ?? null
 		if (published === null || published.generation !== request.generation) return { kind: 'stale', published }
 		if (published.mode !== 'inspect') return refusal('wrong_mode')
@@ -360,6 +374,7 @@ export class FakeEnvironments implements OpsTransport {
 		if (fault === 'down') return { kind: 'unavailable', reason: 'unreachable' }
 		if (fault === 'not_served') return { kind: 'unavailable', reason: 'not_served' }
 		if (typeof fault === 'object') return { kind: 'refused', refusal: { refused: fault.refused, table: fault.table ?? null } }
+		if (this.unlisted(request.object)) return { kind: 'unavailable', reason: 'channel_refused' }
 		const rewind = this.rewinds.get(request.object) ?? { sentinels: new Map(), arms: 0 }
 		this.rewinds.set(request.object, rewind)
 		if (request.step === 'verify') {
@@ -396,7 +411,7 @@ export class FakeEnvironments implements OpsTransport {
 			if (sent.env !== env) return []
 			if (sent.op === 'inspect') return [sent.object === 'application' ? 'inspect' : `inspect ${sent.object}`]
 			if (sent.op === 'state') return [`state ${sent.object} ${sent.mode} @${sent.generation}`]
-			if (sent.op === 'migrate') return [`migrate @${sent.generation}`]
+			if (sent.op === 'migrate') return [sent.object === 'application' ? `migrate @${sent.generation}` : `migrate ${sent.object} @${sent.generation}`]
 			if (sent.op === 'restore') return [`restore ${sent.object} ${sent.step}${sent.generation === null ? '' : ` @${sent.generation}`}`]
 			const part = sent.part === undefined ? '' : ` ${sent.part}`
 			const object = sent.op === 'import' && sent.object !== 'rehearsal' ? ` ${sent.object}` : ''

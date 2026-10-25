@@ -8,8 +8,8 @@ import { gitHubAppClientFactory } from './github/connections/credentials'
 import { createSourceConnections } from './github/connections/port'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
 import { reconcileProviderRuns } from './provider-reconcile'
-import type { ControlJobMessage } from './run-lifecycle'
-import { iamSchemaDeps, locks, operationsReleaseDeps, opsTransportDeps, platformTransportDeps, vault } from './services'
+import { type ControlJobMessage, operationDeploys } from './run-lifecycle'
+import { buildRunDeps, iamSchemaDeps, locks, operationsReleaseDeps, opsTransportDeps, platformTransportDeps, vault } from './services'
 
 /**
  * The fabrika control plane — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint`
@@ -65,15 +65,19 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 		const env = this.control
 		const { opsTransport } = opsTransportDeps(env)
 		await runMaintenance(env, {
-			// Without a vault Control holds no ops key, so it reaches no object and backs up nothing.
+			// Without a vault Control holds no ops key, so it reaches no object and drives no data operation.
 			...(opsTransport === undefined ? {} : {
-				backups: () =>
-					runBackupSchedule({
+				backups: async () => {
+					const provider = cloudflareControlProvider(this.env, env)
+					return await runBackupSchedule({
 						repositories: env.REPOSITORIES,
 						lock: locks(env),
 						ops: opsTransport,
-						provider: cloudflareControlProvider(this.env, env),
-					}),
+						provider,
+						// A restore's own deploys run in the pass that owns it.
+						deploys: operationDeploys(await buildRunDeps(env, provider)),
+					})
+				},
 			}),
 			reconcile: () =>
 				reconcileProviderRuns({

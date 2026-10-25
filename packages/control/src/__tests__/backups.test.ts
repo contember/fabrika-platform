@@ -429,6 +429,7 @@ for (const backend of backends) {
 		test('a provider that serves no ops channel backs nothing up', async () => {
 			const { b, fake, schedule } = await open()
 			expect(await runBackupSchedule(schedule({ provider: { id: TEST_PROVIDER_ID } }))).toEqual({
+				resumed: 0,
 				continued: 0,
 				started: 0,
 				succeeded: 0,
