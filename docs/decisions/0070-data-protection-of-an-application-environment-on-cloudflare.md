@@ -273,8 +273,8 @@ reads anything.
    `transactionSync` that records its receipt. Control calls it only for the parts that reported deferred rows.
 4. **`verify`** reads the tables back from a cursor with the producer's projection and fold, and compares each
    finished table's count and hash with the manifest (`verify_mismatch`, naming the table). It records in the marker
-   the cursor it handed out; a cursor it did not hand out, or a mismatch, clears that progress, and so does any later
-   part or link.
+   the cursor it handed out, and the last step's cursor with its answer, so a step retried after a lost answer answers
+   the same. Any other cursor, or a mismatch, clears that progress, and so does any later part or link.
 5. **`complete`** refuses as `part_mismatch` unless every part and every needed link has its receipt, and as
    `verify_mismatch` unless a verification ran to its end since the last write. It recreates the triggers from the
    manifest's DDL, compares the whole schema again, clears the marker and keeps a completion receipt that names the
