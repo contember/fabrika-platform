@@ -34,7 +34,7 @@ import {
 	type Within,
 } from '../implement/capability'
 import { admitInvocation, type InvocationAdmission } from '../implement/dispatch'
-import { runAsSite } from '../implement/egress'
+import { type PublicEgressRules, runAsSite, siteEgress } from '../implement/egress'
 import { failureCode, type FailureReason, failureReason } from '../implement/failures'
 import { ServerFault } from '../implement/faults'
 import type { ContractDatabase } from '../implement/implement'
@@ -264,6 +264,8 @@ interface RunnerContext {
 	/** The environment's signed tokens: `ctx.tokens` of a job that declares `signs`. */
 	readonly tokens: SignedTokens | null
 	readonly url: AppUrl
+	/** What a job that declares `egress: 'public'` reaches; such a job reaches nothing without it. */
+	readonly publicEgress: PublicEgressRules | null
 }
 
 /** Where `fabrika app dev` shows what a handler threw, on the developer's own machine; nothing else sets one. */
@@ -303,6 +305,8 @@ export interface JobBindingInput {
 	readonly tokens?: SignedTokens
 	/** `ctx.url`: absolute links to the application's own procedures; without it every link is refused. */
 	readonly url?: AppUrl
+	/** The rules of public egress, which `boot` reads from the environment; without them a public job reaches nothing. */
+	readonly publicEgress?: PublicEgressRules
 }
 
 interface BoundFrameworkJob {
@@ -413,6 +417,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		mail: input.mail,
 		tokens: input.tokens ?? null,
 		url: input.url ?? appUrl(input.artifact, null),
+		publicEgress: input.publicEgress ?? null,
 		// A job's kicks run only after the job is bound, so `kick` below is defined by then.
 		kick: (name: string) => kick(name),
 	})
@@ -1245,7 +1250,7 @@ async function attemptOnce(
 			if (site === null) {
 				await job.handler({ ctx })
 			} else {
-				await runAsSite(`job '${job.name}'`, site.egress, async () => await job.handler({ ctx }))
+				await runAsSite(`job '${job.name}'`, siteEgress(site.egress, context.publicEgress), async () => await job.handler({ ctx }))
 			}
 			kicked.recorder = kicks
 		}).then(() => null, (error: unknown) => {

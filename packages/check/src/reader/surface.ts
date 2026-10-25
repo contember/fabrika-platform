@@ -799,7 +799,7 @@ function plain(value: LiteralValue | undefined): unknown {
 }
 
 const DECLARED_ALLOWED =
-	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>'], egress: ['https://<host>']"
+	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>'], egress: ['https://<host>'] | 'public' (a cron job)"
 
 /** A builder of the kit read as the `defineContract` builder of the same name, which builds the same declaration. */
 const asSurface = (builder: BuilderValue): LiteralValue => ({

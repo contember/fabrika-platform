@@ -14,6 +14,7 @@ import {
 	compileEndpointTable,
 	type ContractArtifact,
 	type CrossOriginForm,
+	type DeclaredEgress,
 	type DeclaredReach,
 	type DimensionArtifact,
 	type EndpointAuthorization,
@@ -42,6 +43,7 @@ import {
 	planEndpoint,
 	type ProcedureArtifact,
 	type ProcedureChallenge,
+	PUBLIC_EGRESS,
 	type RedirectShape,
 	type RoleArtifact,
 	type SchemaShape,
@@ -577,9 +579,13 @@ function compareDeclared(
 
 /**
  * The origins a site's code calls (`egress`): a new one is a place the site's data may go, so it widens with closer
- * review; a dropped one narrows.
+ * review; a dropped one narrows. A job's `'public'` reaches every public origin, so beside it no origin is a change;
+ * `reachSteps` shows the move to or from it.
  */
-function egressChanges(site: string, from: readonly string[], to: readonly string[]): RuledLine[] {
+function egressChanges(site: string, before: DeclaredEgress, after: DeclaredEgress): RuledLine[] {
+	if (before === PUBLIC_EGRESS || after === PUBLIC_EGRESS) return []
+	const from: readonly string[] = before
+	const to: readonly string[] = after
 	const name = siteName(site)
 	return ruled(
 		'reach.egress',
@@ -671,7 +677,20 @@ function reachSteps(from: DeclaredReach, to: DeclaredReach): RuledLine[] {
 		changes.push(...ruled('reach.issues', issues))
 	}
 	changes.push(...ruled('reach.mailer', mailerChange(from.mailer, to.mailer)))
+	changes.push(...ruled('reach.public-egress', publicEgressChange(from.egress, to.egress)))
 	return changes
+}
+
+/**
+ * A job's `egress: 'public'` (ADR-0071): its code may send what it holds to any public host, wherever an operator or a
+ * page it fetched points it, so gaining it widens with closer review; losing it narrows. The guard keeps it off the
+ * installation's own hosts and private addresses, which the line does not repeat.
+ */
+function publicEgressChange(from: DeclaredEgress | undefined, to: DeclaredEgress | undefined): Line[] {
+	if ((from === PUBLIC_EGRESS) === (to === PUBLIC_EGRESS)) return []
+	return to === PUBLIC_EGRESS
+		? [closer('off-road', "calls any public website over HTTPS or HTTP (`egress: 'public'`), wherever its code points it")]
+		: [narrowing('no longer calls any public website')]
 }
 
 /** Undeclared reaches no transport, `own` the application's, and `installation` the installation's credentials. */

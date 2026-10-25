@@ -88,7 +88,7 @@ run stores the result as its **snapshot**:
 
 - the parsed contract and table policies, with each site's **declared reach** (`ContractArtifact.declared`): the
   `sql` mode, the `unscoped` tables and their modes, the `connect` imports, the `issues` mount, the `kicks` jobs, the
-  `binds` webhook, the `signs` purposes, the `egress` origins and a public procedure's workload `actions` of each
+  `binds` webhook, the `signs` purposes, the `egress` origins (or a job's `'public'`) and a public procedure's workload `actions` of each
   endpoint, job and webhook that declares any;
 - the migration list with checksums;
 - the **database code** the migrations declare (`databaseCode`): each function, procedure, trigger, view, rule,
@@ -270,7 +270,8 @@ whole table or a whole column stays a removal.
 **Steps off the paved road widen with closer review.** A site is keyed by its identity — the endpoint id, or the
 job — and each effect of its declaration is compared on its own, so a handler body that moves with the same
 declaration is unchanged. A new `sql` mode, a new `unscoped` table, `read` → `write` in either, a new connector,
-a new link mount to issue (an endpoint's, or a job's `issues`, keyed by the job), a new `egress` origin, a new `binds`
+a new link mount to issue (an endpoint's, or a job's `issues`, keyed by the job), a new `egress` origin, a job's
+`egress: 'public'` ([ADR-0071](0071-a-cron-job-may-reach-the-public-web.md)), a new `binds`
 webhook and a job that starts sending through the installation's mail transport each widen; a removal and `write` → `read` narrow. Database code is keyed by file, kind and
 object: new code widens, code in a file whose text changed widens again (the diff cannot tell what changed in it),
 and removed code narrows. A contract that leaves the staged kit, whose sites' reach is then no longer declared,

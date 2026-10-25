@@ -4,6 +4,7 @@
 
 import type {
 	ContractArtifact,
+	DeclaredEgress,
 	DeclaredReach,
 	EndpointCache,
 	EndpointRow,
@@ -13,6 +14,7 @@ import type {
 } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { snapshotDeviations } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
 import { classifyAccess } from './helpers/access'
 
@@ -52,7 +54,7 @@ describe('signed tokens in the approval diff', () => {
 })
 
 describe('egress in the approval diff', () => {
-	const calling = (egress: readonly string[]): AccessSnapshot => {
+	const calling = (egress: DeclaredEgress): AccessSnapshot => {
 		const contract: ContractArtifact = { ...notesArtifact, declared: { 'job:sync': { ...reach, egress } } }
 		return { version: 1, contract, migrations: [], checker: '0.0.0' }
 	}
@@ -62,6 +64,25 @@ describe('egress in the approval diff', () => {
 			.toEqual([{ effect: 'widens', line: 'Job `sync` calls https://hooks.example.com', review: 'closer' }])
 		expect(classifyAccess(calling(['https://api.example.com', 'https://hooks.example.com']), calling(['https://api.example.com'])).changes)
 			.toEqual([{ effect: 'narrows', line: 'Job `sync` no longer calls https://hooks.example.com' }])
+	})
+
+	test("a job that moves to egress: 'public' widens with closer review, once, and moving back narrows", () => {
+		const anywhere = "Job `sync` calls any public website over HTTPS or HTTP (`egress: 'public'`), wherever its code points it"
+		expect(classifyAccess(calling(['https://api.example.com']), calling('public'))).toEqual({
+			outcome: 'widening',
+			changes: [{ effect: 'widens', line: anywhere, review: 'closer' }],
+		})
+		expect(classifyAccess(calling('public'), calling(['https://api.example.com'])).changes).toEqual([
+			{ effect: 'narrows', line: 'Job `sync` no longer calls any public website' },
+		])
+		expect(classifyAccess(calling('public'), calling('public')).changes).toEqual([])
+	})
+
+	test("the published snapshot lists a job's egress: 'public' among its steps off the paved road", () => {
+		expect(snapshotDeviations(calling('public'))).toEqual([{
+			subject: 'Job `sync`',
+			steps: ["calls any public website over HTTPS or HTTP (`egress: 'public'`), wherever its code points it"],
+		}])
 	})
 })
 

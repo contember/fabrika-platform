@@ -14,12 +14,14 @@ import {
 	FILE_RESPONSE_KINDS,
 	isOwnWorkloadName,
 	JOB_MAILERS,
+	JOB_SITE_PREFIX,
 	LOCALES,
 	mailTemplateProblems,
 	MAX_CACHE_AGE_SECONDS,
 	type MessageKind,
 	type NumberShape,
 	type OutputShape,
+	PUBLIC_EGRESS,
 	type RecordShape,
 	type SchemaShape,
 	type StringShape,
@@ -417,9 +419,12 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		kicks: z.array(name).nonempty().optional(),
 		binds: name.optional(),
 		signs: z.array(name).nonempty().optional(),
-		egress: z.array(z.string().refine((origin) => isPolicyOrigin(origin))).nonempty().optional(),
+		egress: z.union([z.array(z.string().refine((origin) => isPolicyOrigin(origin))).nonempty(), z.literal(PUBLIC_EGRESS)]).optional(),
 	})).superRefine((declared, context) => {
 		for (const [site, reach] of Object.entries(declared)) {
+			if (reach.egress === PUBLIC_EGRESS && !site.startsWith(JOB_SITE_PREFIX)) {
+				context.addIssue({ code: 'custom', path: [site, 'egress'], message: "egress: 'public' belongs to a cron job, keyed by job:<name>" })
+			}
 			if (reach.actions !== undefined && !isOwnWorkloadName('public', site)) {
 				context.addIssue({ code: 'custom', path: [site, 'actions'], message: 'workload actions belong to a public procedure, keyed by its endpoint id' })
 			}

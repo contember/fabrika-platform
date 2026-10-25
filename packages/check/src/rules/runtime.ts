@@ -177,7 +177,8 @@ const propertyValue = (object: AstNode, name: string): AstNode | undefined => {
 /** The finding of a `fetch` of an absolute URL whose origin no site of the contract declares. */
 export const crossAppFetchMessage = (target: string): { readonly message: string; readonly allowed: string } => ({
 	message: `fetch to the absolute origin '${target}' is a hand-written integration`,
-	allowed: "a same-origin path to a declared endpoint, another application through a connector import, or egress: ['<origin>'] on the site",
+	allowed:
+		"a same-origin path to a declared endpoint, another application through a connector import, egress: ['<origin>'] on the site, or a public host of http(s) under a cron job's egress: 'public'",
 })
 
 const checkDynamicCode = (node: AstNode, path: readonly string[], context: SourceContext): void => {
