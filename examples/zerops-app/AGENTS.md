@@ -2395,7 +2395,7 @@ export const contract = app.contract((c) => ({
 - A job that calls the websites its operators enter (a crawler, an auditor) declares `egress: 'public'`:
   `app.cron('*/5 * * * *', { actions: ['sites.read'], egress: 'public' })`. Its `fetch` reaches any public host over
   HTTPS or HTTP on the default port. It is refused (`capability_refused: refused_egress`) for an IP address, a name of
-  one label (`localhost`, an internal service), a name under `.local`, `.internal`, `.workers.dev` and similar, a port,
+  one label (`localhost`, an internal service), a name under `.local`, `.internal`, `.workers.dev`, `.zerops.app` and similar, a port,
   the installation's own hosts (IAM, Control, Operations, every application's domain) and, on Bun (Zerops), a name
   that resolves to a private address. Every redirect is checked again: `redirect: 'manual'` gets the redirect, the default
   follows at most 10. A request has 60 s, a response body at most 16 MiB (`oversized_egress`); pass `ctx.signal`, or

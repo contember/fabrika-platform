@@ -14,7 +14,7 @@ import type {
 } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import { snapshotDeviations } from '../approval/diff'
+import { PUBLIC_EGRESS_LINE, snapshotDeviations } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
 import { classifyAccess } from './helpers/access'
 
@@ -67,13 +67,13 @@ describe('egress in the approval diff', () => {
 	})
 
 	test("a job that moves to egress: 'public' widens with closer review, once, and moving back narrows", () => {
-		const anywhere = "Job `sync` calls any public website over HTTPS or HTTP (`egress: 'public'`), wherever its code points it"
+		const anywhere = `Job \`sync\` ${PUBLIC_EGRESS_LINE}`
 		expect(classifyAccess(calling(['https://api.example.com']), calling('public'))).toEqual({
 			outcome: 'widening',
 			changes: [{ effect: 'widens', line: anywhere, review: 'closer' }],
 		})
 		expect(classifyAccess(calling('public'), calling(['https://api.example.com'])).changes).toEqual([
-			{ effect: 'narrows', line: 'Job `sync` no longer calls any public website' },
+			{ effect: 'narrows', line: 'Job `sync` no longer calls any public website, only https://api.example.com' },
 		])
 		expect(classifyAccess(calling('public'), calling('public')).changes).toEqual([])
 	})
@@ -81,7 +81,7 @@ describe('egress in the approval diff', () => {
 	test("the published snapshot lists a job's egress: 'public' among its steps off the paved road", () => {
 		expect(snapshotDeviations(calling('public'))).toEqual([{
 			subject: 'Job `sync`',
-			steps: ["calls any public website over HTTPS or HTTP (`egress: 'public'`), wherever its code points it"],
+			steps: [PUBLIC_EGRESS_LINE],
 		}])
 	})
 })

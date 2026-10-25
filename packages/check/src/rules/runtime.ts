@@ -36,8 +36,11 @@ export interface SourceContext {
 	readonly conflictInsert: (node: AstNode, table: string, columns: readonly string[]) => void
 }
 
-/** The global objects and `Bun`: a server module reaches the platform through the framework only. */
-const SERVER_REFUSED_GLOBALS = new Set(['globalThis', 'global', 'self', 'window', 'Bun'])
+/**
+ * The global objects, `Bun`, and `WebSocket`, a socket the egress guard on `fetch` does not see: a server module reaches
+ * the platform and the outside through the framework only.
+ */
+const SERVER_REFUSED_GLOBALS = new Set(['globalThis', 'global', 'self', 'window', 'Bun', 'WebSocket'])
 
 /**
  * The local names a module binds to a value named `sql` it loads: `import { sql as q } from 'kysely'` and

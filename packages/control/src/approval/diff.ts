@@ -682,16 +682,20 @@ function reachSteps(from: DeclaredReach, to: DeclaredReach): RuledLine[] {
 }
 
 /**
- * A job's `egress: 'public'` (ADR-0071): its code may send what it holds to any public host, wherever an operator or a
- * page it fetched points it, so gaining it widens with closer review; losing it narrows. The guard keeps it off the
- * installation's own hosts and private addresses, which the line does not repeat.
+ * A job's `egress: 'public'` (ADR-0071): its code may send what it holds to any public host, wherever an operator, a row
+ * or a page it fetched points it, so gaining it widens with closer review. Losing it narrows, and names the origins the
+ * job calls instead. The guard keeps it off private addresses and the installation's own hosts, as listed at the
+ * environment's deploy.
  */
 function publicEgressChange(from: DeclaredEgress | undefined, to: DeclaredEgress | undefined): Line[] {
 	if ((from === PUBLIC_EGRESS) === (to === PUBLIC_EGRESS)) return []
-	return to === PUBLIC_EGRESS
-		? [closer('off-road', "calls any public website over HTTPS or HTTP (`egress: 'public'`), wherever its code points it")]
-		: [narrowing('no longer calls any public website')]
+	if (to === PUBLIC_EGRESS) return [closer('off-road', PUBLIC_EGRESS_LINE)]
+	return [narrowing(to === undefined ? 'no longer calls any public website' : `no longer calls any public website, only ${to.join(', ')}`)]
 }
+
+/** What a job with `egress: 'public'` reaches, as the approver reads it. */
+export const PUBLIC_EGRESS_LINE =
+	"calls any public website over HTTPS or HTTP (`egress: 'public'`): whoever can write the rows it reads, or the pages it fetches, can make it fetch any public URL and read the answer. The installation's hosts are refused as listed at this environment's deploy; a domain added later is refused from its next deploy"
 
 /** Undeclared reaches no transport, `own` the application's, and `installation` the installation's credentials. */
 function mailerChange(from: JobMailer | undefined, to: JobMailer | undefined): Line[] {
