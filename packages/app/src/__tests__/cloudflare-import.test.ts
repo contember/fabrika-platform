@@ -22,10 +22,15 @@ import {
 	type OpsDumpTable,
 	type OpsDumpTablePlan,
 	type OpsDumpValue,
+	type OpsExportPartAck,
+	type OpsExportScope,
 	type OpsImportRequest,
 	type OpsPublishedState,
 	parseOpsDataRefusal,
 	parseOpsDumpManifest,
+	parseOpsExportBeginAck,
+	parseOpsExportCompleteAck,
+	parseOpsExportPartAck,
 	parseOpsImportBeginAck,
 	parseOpsImportCompleteAck,
 	parseOpsImportDiscardAck,
@@ -40,8 +45,10 @@ import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
 import type { SqliteStorage } from '@fabrika/db/sqlite'
 import { migrateSqlite, type SqliteMigrationBundle } from '@fabrika/db/sqlite-migrate'
 import { Database as BunDatabase } from 'bun:sqlite'
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { createTestEnv, type TestEnv } from 'lopata/testing'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
+import { exportStep } from '../cloudflare/export'
 import { describeDumpSchema, IMPORT_MARKER_KEY, importStep, type ImportStorage, type ImportTarget, serveImport } from '../cloudflare/import'
 import { MaintenanceBarrier } from '../cloudflare/maintenance'
 import type { OpsTarget } from '../cloudflare/ops'
@@ -673,5 +680,77 @@ describe('the ops seam', () => {
 
 		expect(response.status).toBe(501)
 		expect(storage.sql.exec('SELECT count(*) AS count FROM sqlite_schema').toArray()).toEqual([{ count: 0 }])
+	})
+})
+
+describe('a dump the producer wrote', () => {
+	const envs: TestEnv[] = []
+	afterEach(() => {
+		for (const env of envs.splice(0)) {
+			env.dispose()
+		}
+	})
+
+	async function answer(response: Response): Promise<unknown> {
+		expect(response.status).toBe(200)
+		return await response.json()
+	}
+
+	/** Every export step as Control drives them, into `bucket`: begin, the parts from cursor to cursor, complete. */
+	async function exportAll(storage: SqliteStorage, bucket: unknown): Promise<OpsDumpManifest> {
+		const scope: OpsExportScope = { object: SOURCE.object, generation: GENERATION, consistent: true, dump: SOURCE.dump }
+		const recovery = {
+			getCurrentBookmark: () => Promise.resolve('bookmark-0001'),
+			getBookmarkForTime: () => Promise.reject(new Error('not called')),
+			onNextSessionRestoreBookmark: () => Promise.reject(new Error('not called')),
+			abort: () => {
+				throw new Error('not called')
+			},
+		}
+		const source = { storage, bucket, recovery, contractDigest: `sha256:${'a'.repeat(64)}` }
+		const gate = await barrier()
+		const begun = parseOpsExportBeginAck(await answer(await exportStep(source, gate, { ...scope, step: 'begin' })))
+		if (begun === null) throw new Error('begin did not answer its acknowledgement')
+		const acks: OpsExportPartAck[] = []
+		let cursor: OpsExportPartAck['next'] = null
+		do {
+			const request = { ...scope, step: 'part' as const, uploadId: begun.uploadId, part: acks.length + 1, cursor }
+			const ack = parseOpsExportPartAck(await answer(await exportStep(source, gate, request)))
+			if (ack === null) throw new Error('part did not answer its acknowledgement')
+			acks.push(ack)
+			cursor = ack.next
+		} while (cursor !== null)
+		const completed = parseOpsExportCompleteAck(
+			await answer(
+				await exportStep(source, gate, {
+					...scope,
+					step: 'complete',
+					uploadId: begun.uploadId,
+					bookmark: begun.bookmark,
+					parts: acks.map((ack) => ack.uploaded),
+					tables: acks.flatMap((ack) => ack.tables),
+				}),
+			),
+		)
+		if (completed === null) throw new Error('complete did not answer its acknowledgement')
+		return completed.manifest
+	}
+
+	test('imports what the export wrote and verifies equal to its source', async () => {
+		const testEnv = await createTestEnv({ bindings: { FILES: 'r2' } })
+		envs.push(testEnv)
+		const bucket = testEnv.env['FILES']
+		const source = await sourceDatabase()
+		const manifest = await exportAll(source.storage, bucket)
+		const target: Target = { ...freshTarget(new Map()), bucket }
+
+		const verified = await importAll(target)
+
+		expect(verified).toEqual([...manifest.tables])
+		expect(tablesOf(target.storage)).toEqual(tablesOf(source.storage))
+		expect(ddlOf(target.storage)).toEqual(ddlOf(source.storage))
+		expect(one(target.storage, `SELECT CAST(big AS TEXT) FROM notes WHERE id = 4`)).toBe(BEYOND_DOUBLE)
+		expect(one(target.storage, `SELECT typeof(body) || hex(body) FROM notes WHERE id = 4`)).toBe('text80')
+		expect(one(target.storage, `SELECT seq FROM sqlite_sequence WHERE name = 'notes'`)).toBe(12)
 	})
 })
