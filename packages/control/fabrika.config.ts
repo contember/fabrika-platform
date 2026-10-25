@@ -28,7 +28,7 @@ import {
 } from '@fabrika/provider-cloudflare'
 import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { controlSchema } from './fabrika.schema'
-import { controlServiceContract } from './fabrika.service'
+import { CONTROL_MCP_PATH, controlServiceContract } from './fabrika.service'
 import { CLOUDFLARE_MAIL_REMEDY, type InstallationMail, readInstallationMail } from './src/mail-transport'
 
 /**
@@ -128,6 +128,10 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			directory: '../dashboard/dist',
 			binding: 'ASSETS',
 			not_found_handling: 'single-page-application',
+			// Workers Assets answers a GET before the Worker runs, and its SPA fallback would hand `index.html` to a
+			// browser navigation to a server path (the GitHub manifest handoff, the callback): the reserved prefixes
+			// of `fabrika.service.ts` always reach the Worker.
+			run_worker_first: ['/api/*', '/iam/admin/*', '/operations/api/*', '/webhooks/*', '/webhooks', `${CONTROL_MCP_PATH}*`],
 		},
 		vars: {
 			...controlEmailVars(isLocal),
