@@ -158,7 +158,7 @@ describe('Cloudflare init arguments', () => {
 			['FABRIKA_EMAIL_RESEND_API_KEY'],
 		])
 		expect(() => parse(required('--email-provider=smtp'))).toThrow(
-			'FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, lettermint, postmark, resend, smartemailing',
+			'FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, cloudflare, lettermint, postmark, resend, smartemailing',
 		)
 		expect(() => parse([...REQUIRED, '--email-from=x@example.com'])).toThrow('--email-from was given, but the email provider is none')
 		expect(() => parse([...REQUIRED, '--email-from-name=Acme'])).toThrow('--email-from-name was given, but the email provider is none')

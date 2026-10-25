@@ -25,6 +25,9 @@ FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN=
 # ahasend: the account ID is no secret, but the provider needs both
 FABRIKA_EMAIL_AHASEND_API_KEY=
 FABRIKA_EMAIL_AHASEND_ACCOUNT_ID=
+# cloudflare: the account ID is no secret, but the provider needs both
+FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN=
+FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID=
 # lettermint
 FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN=
 # smartemailing (the tag is optional)

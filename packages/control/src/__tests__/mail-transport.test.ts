@@ -172,6 +172,25 @@ describe('a provider newer than the application', () => {
 		expect(installationMailEnvironment(directory, needs, '0.5.0')).toEqual({ FABRIKA_EMAIL_PROVIDER: 'directory' })
 	})
 
+	test('Cloudflare is handed from framework 0.9 on, and refused to an older release', () => {
+		const cloudflareVariables = {
+			FABRIKA_EMAIL_PROVIDER: 'cloudflare',
+			FABRIKA_EMAIL_FROM: 'mail@example.test',
+			FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN: 'cf-private-token',
+			FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID: '023e105f4ecef8ad9ca31a8372d0c353',
+		}
+		const cloudflare: InstallationMail = {
+			kind: 'transport',
+			transport: { variables: cloudflareVariables, secretNames: new Set(['FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN']) },
+		}
+		for (const framework of ['0.9.0', '0.9.0-cloudflare.1', '0.9.1', '1.0.0']) {
+			expect(installationMailEnvironment(cloudflare, needs, framework)).toEqual(cloudflareVariables)
+		}
+		const refusal = (): unknown => installationMailEnvironment(cloudflare, needs, '0.8.2')
+		expect(refusal).toThrow("the installation's provider `cloudflare` is unknown to framework 0.8.2, which this version pins: it needs 0.9.0 or newer")
+		expect(refusal).not.toThrow('cf-private-token')
+	})
+
 	test('every built-in provider states its release', () => {
 		expect(Object.keys(builtinEmailProviderSince).sort()).toEqual(Object.keys(builtinEmailProviders).sort())
 	})
