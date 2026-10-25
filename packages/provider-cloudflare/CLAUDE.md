@@ -60,8 +60,11 @@ this one import.
 - **The platform writes the application Worker's runtime** (`withApplicationRuntime` in `src/provider.ts`, from 0.9):
   `FABRIKA_APPLICATION` bound first to its own `FabrikaApplication` (`new_sqlite_classes`, so oblaka numbers its one
   migration `v0001` whatever else the application binds, and the tag never moves), `FABRIKA_FILES` to the environment's
-  bucket `<env>-<app>-files`, and `triggers.crons` always written: `* * * * *` when the contract has a job or a file
-  kind, else `[]`, which clears an older tick (wrangler leaves schedules alone when `triggers` is absent). The names are
+  bucket `<env>-<app>-files`, and `triggers.crons` always written when the contract has a job or a file kind: from
+  `servesAlarms`, for a release Control names, the hourly repair tick `<m> * * * *` at a minute derived from
+  `<env>-<app>` (stable across deploys; the object's alarm runs the jobs); otherwise, for a local deploy, `* * * * *`.
+  Without a job or a file kind it is `[]`, which clears an older tick (wrangler leaves schedules alone when `triggers`
+  is absent). The names are
   `@fabrika/app/build`'s. `assertNoFrameworkVariables` refuses an authored binding of either name and authored
   `triggers` before anything is generated; `assertApplicationRuntime` (`src/bounds.ts`) refuses any other object binding of that name or
   class, a `script_name` on it, a migration history that does not open with that `v0001` or names the class again
@@ -69,8 +72,8 @@ this one import.
   did not write.
 - **From `servesOps` the platform composes Control's ops channel** (ADR-0069, `src/provider.ts`): `platformProxied`
   builds the proxy's table with `contractProxyTable(…, { ops: true })`, which adds the canonical ops row, and
-  `withApplicationRuntime` writes `FABRIKA_APPLICATION_OBJECT` and `FABRIKA_APPLICATION_OBJECTS` (`application`) as plain
-  vars. Only for a release Control names; an environment without a domain gets no row (no Custom Domain carries it). An
+  `withApplicationRuntime` writes `FABRIKA_APPLICATION_OBJECT` (`application`) and `FABRIKA_APPLICATION_OBJECTS`
+  (`application,rehearsal`: the ops channel also reaches the object a backup is rehearsed in, ADR-0070) as plain vars. Only for a release Control names; an environment without a domain gets no row (no Custom Domain carries it). An
   older pin, a Control that names no release and a local deploy get neither, and a later deploy without them drops
   them with the version's vars. The proxy Worker forwards the row's request to `APP` with `Authorization` and no token,
   as the decision marks every `protocol` row; authored copies of the variables are refused by the framework-variable

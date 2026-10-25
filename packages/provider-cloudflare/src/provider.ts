@@ -14,10 +14,12 @@ import {
 	isFrameworkVariableName,
 	isManagedCredential,
 	managedValue,
+	OPS_REHEARSAL_OBJECT,
 } from '@fabrika/auth-core'
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type SchemaReconciler } from '@fabrika/provider-contract'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
+import { createHash } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { DurableObject, type GeneratedConfig, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
@@ -35,7 +37,15 @@ import {
 import { runnerWorkerGraph } from './checkout'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
 import { configSchema } from './config-schema'
-import { assertCloudflareContract, capsJobSegments, needsMinuteTick, pinsGeneratedEntry, runsInObject, servesOps } from './contract-support'
+import {
+	assertCloudflareContract,
+	capsJobSegments,
+	needsMinuteTick,
+	pinsGeneratedEntry,
+	runsInObject,
+	servesAlarms,
+	servesOps,
+} from './contract-support'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE } from './proxy'
@@ -142,10 +152,22 @@ const filesBucketRemote = (run: CloudflareDeployRun): string => {
 
 const MINUTE_TICK = '* * * * *'
 
-/** What the platform gives a contract application's Worker; the deployer writes exactly this and the bounds check it. */
-const applicationRuntime = (run: CloudflareDeployRun, contract: ContractArtifact, entry: string | null): ApplicationRuntime => ({
+/**
+ * The hourly repair tick of an environment that serves alarms, at a minute derived from `<env>-<app>`: stable across
+ * deploys, and spread so the fleet's environments do not all wake at once.
+ */
+const repairTick = (run: CloudflareDeployRun): string => {
+	const minute = createHash('sha256').update(`${run.env}-${run.appId}`).digest().readUInt32BE(0) % 60
+	return `${minute} * * * *`
+}
+
+/**
+ * What the platform gives a contract application's Worker; the deployer writes exactly this and the bounds check it.
+ * Only a release Control names serves alarms; a local deploy keeps the minute tick.
+ */
+const applicationRuntime = (run: CloudflareDeployRun, contract: ContractArtifact, entry: string | null, alarms: boolean): ApplicationRuntime => ({
 	filesBucket: filesBucketRemote(run),
-	crons: needsMinuteTick(contract) ? [MINUTE_TICK] : [],
+	crons: needsMinuteTick(contract) ? [alarms ? repairTick(run) : MINUTE_TICK] : [],
 	entry,
 })
 
@@ -216,15 +238,18 @@ const buildEntry = async (build: EntryBuild, run: CloudflareDeployRun, cf: Cloud
 	if (result.exitCode !== 0) throw commandError('fabrika app build', result)
 }
 
-/** The object variables of a release that serves ops (ADR-0069): ordinary traffic and ops requests reach `application`. */
+/**
+ * The object variables of a release that serves ops (ADR-0069): ordinary traffic reaches `application`, and ops requests
+ * reach it and the object a backup is rehearsed in (ADR-0070).
+ */
 const OBJECT_VARIABLES: Readonly<Record<string, string>> = {
 	[FABRIKA_APPLICATION_OBJECT]: DEFAULT_APPLICATION_OBJECT,
-	[FABRIKA_APPLICATION_OBJECTS]: DEFAULT_APPLICATION_OBJECT,
+	[FABRIKA_APPLICATION_OBJECTS]: [DEFAULT_APPLICATION_OBJECT, OPS_REHEARSAL_OBJECT].join(','),
 }
 
 /**
  * Bind the application's Durable Object, which runs the application over its SQLite, the environment's files bucket,
- * and the minute tick (ADR-0065), and on a release that serves ops name its objects. The object is bound first, so
+ * and its cron trigger (ADR-0065), and on a release that serves ops name its objects. The object is bound first, so
  * oblaka numbers its migration `v0001` whatever else the application binds, and the tag never moves.
  */
 const withApplicationRuntime = (authored: Worker, run: CloudflareDeployRun, runtime: ApplicationRuntime, ops: boolean): Worker => {
@@ -701,7 +726,8 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	// An older release's entry exports no object, and a Control older than the runner names no release (ADR-0062).
 	const objectRuntime = run.approved === undefined || (run.approved.framework !== undefined && runsInObject(run.approved.framework))
 	const entry = release !== undefined && pinsGeneratedEntry(release) ? resolve(loaded.cwd, GENERATED_ENTRY_FILE) : null
-	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract, entry) : null
+	const alarms = release !== undefined && servesAlarms(release)
+	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract, entry, alarms) : null
 	const managed = withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served))
 	const identified = platformResources === 'refuse' ? withIamIdentity(managed.worker, appEnvironmentId(run.appId, run.env)) : managed.worker
 	const connected = withConnectorBindings(identified, connectors)

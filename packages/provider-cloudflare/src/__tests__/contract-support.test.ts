@@ -1,7 +1,7 @@
 import type { ContractArtifact } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import { capsJobSegments, needsMinuteTick, pinsGeneratedEntry, releaseAtLeast, runsInObject } from '../contract-support'
+import { capsJobSegments, needsMinuteTick, pinsGeneratedEntry, releaseAtLeast, runsInObject, servesAlarms } from '../contract-support'
 
 describe('releaseAtLeast', () => {
 	const since = { major: 0, minor: 9 }
@@ -40,10 +40,11 @@ describe('the release gates', () => {
 		['1.0.0', true],
 	]
 	for (const [release, expected] of cases) {
-		test(`${release}: runsInObject, pinsGeneratedEntry and capsJobSegments are all ${expected}`, () => {
+		test(`${release}: runsInObject, pinsGeneratedEntry, capsJobSegments and servesAlarms are all ${expected}`, () => {
 			expect(runsInObject(release)).toBe(expected)
 			expect(pinsGeneratedEntry(release)).toBe(expected)
 			expect(capsJobSegments(release)).toBe(expected)
+			expect(servesAlarms(release)).toBe(expected)
 		})
 	}
 })

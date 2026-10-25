@@ -1,5 +1,13 @@
 import { schemaFromContract } from '@fabrika/app/contract'
-import { type AppActionDef, type AppEnvironment, type ContractArtifact, contractDigest, parseManagedEnvironment } from '@fabrika/auth-core'
+import {
+	type AppActionDef,
+	type AppEnvironment,
+	type ContractArtifact,
+	contractDigest,
+	OPS_REHEARSAL_OBJECT,
+	parseApplicationObjects,
+	parseManagedEnvironment,
+} from '@fabrika/auth-core'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { contractProxyTable, isApplicationEntry, OPS_ROW_MAX_BYTES, opsProxyRow, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -1554,13 +1562,13 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		expect(stepError(result, 'deploy-worker')).toBe('wrangler secret list printed no readable list of secrets')
 	})
 
-	test('the application Worker binds its object under a fixed migration, the files bucket, and the minute tick of a job or a file kind', async () => {
+	test('the application Worker binds its object under a fixed migration, the files bucket, and the repair tick of a job or a file kind', async () => {
 		await deploy(rec, config(), { contract: notesArtifact })
 		const application = await generatedConfig('stage-demo')
 		expect(application.durable_objects).toEqual({ bindings: [{ name: 'FABRIKA_APPLICATION', class_name: 'FabrikaApplication' }] })
 		expect(application.migrations).toEqual([{ tag: 'v0001', new_sqlite_classes: ['FabrikaApplication'] }])
 		expect(application.r2_buckets).toEqual([{ binding: 'FABRIKA_FILES', bucket_name: 'stage-demo-files' }])
-		expect(application.triggers).toEqual({ crons: ['* * * * *'] })
+		expect(application.triggers).toEqual({ crons: [STAGE_DEMO_REPAIR_TICK] })
 		const { resources } = await generateWranglerConfigs(provisioned().root, 'stage')
 		expect(resources.filter((resource) => resource.kind === 'r2_bucket').map((resource) => resource.remote)).toEqual(['stage-demo-files'])
 	})
@@ -1592,7 +1600,7 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		await deploy(rec, config(), { contract: fileKind })
 		expect(rec.provisions).toHaveLength(2)
 		rec.provisions.shift()
-		expect((await generatedConfig('stage-demo')).triggers).toEqual({ crons: ['* * * * *'] })
+		expect((await generatedConfig('stage-demo')).triggers).toEqual({ crons: [STAGE_DEMO_REPAIR_TICK] })
 	})
 
 	test("an application authors none of its object's binding, migration, bucket or cron triggers", async () => {
@@ -1667,6 +1675,76 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: lasting })).rejects.toThrow(
 			'cloudflare: job `purgeDeleted` runs up to 840001 ms, and a job segment on Cloudflare runs at most 840000 ms',
 		)
+		expect(rec.provisions).toEqual([])
+	})
+})
+
+/** The hourly repair tick of `stage-demo` (servesAlarms): its minute is derived from the environment's name and never moves. */
+const STAGE_DEMO_REPAIR_TICK = '18 * * * *'
+
+describe('the cron trigger of a release that serves alarms (servesAlarms)', () => {
+	/** The cron triggers of the application Worker the last deploy provisioned, generated for `env`. */
+	const crons = async (env: string): Promise<unknown> => {
+		const { configs } = await generateWranglerConfigs(provisioned().root, env)
+		const found = configs.find((generated) => generated.config.name === `${env}-demo`)
+		if (found === undefined) throw new Error(`oblaka generated no config for \`${env}-demo\``)
+		return found.config.triggers
+	}
+
+	test("a release that serves alarms gets the hourly repair tick at its environment's minute, the same on every deploy", async () => {
+		await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.0' })
+		expect(await crons('stage')).toEqual({ crons: [STAGE_DEMO_REPAIR_TICK] })
+		rec.provisions.shift()
+		await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.3' })
+		expect(await crons('stage')).toEqual({ crons: [STAGE_DEMO_REPAIR_TICK] })
+		rec.provisions.shift()
+		// Another environment of the same application ticks at its own minute.
+		await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.0', env: 'prod', domain: 'prod.example.com' })
+		expect(await crons('prod')).toEqual({ crons: ['56 * * * *'] })
+	})
+
+	test('a contract with neither a job nor a file kind still gets an empty cron list', async () => {
+		const quiet: ContractArtifact = {
+			...notesArtifact,
+			jobs: {},
+			files: {},
+			endpoints: notesArtifact.endpoints.filter((row) => row.source.kind !== 'files'),
+		}
+		await deploy(rec, config(), { contract: quiet, framework: '0.9.0' })
+		expect(await crons('stage')).toEqual({ crons: [] })
+	})
+
+	test('a local deploy names no release and keeps the minute tick; an older pin keeps its stateless Worker and no trigger (ADR-0062)', async () => {
+		await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: notesArtifact })
+		expect(await crons('stage')).toEqual({ crons: ['* * * * *'] })
+		rec.provisions.shift()
+		for (const framework of ['0.8.2', null]) {
+			await deploy(rec, config(), { contract: notesArtifact, framework })
+			expect(await crons('stage')).toBeUndefined()
+			rec.provisions.shift()
+		}
+	})
+
+	test('a generated config carries only the cron the platform wrote for its release', async () => {
+		const binds = (bindings: Record<string, Bindable>): CloudflareAppConfig =>
+			config({ resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings, main: ENTRY }) })
+		for (const written of [['* * * * *'], ['19 * * * *'], [STAGE_DEMO_REPAIR_TICK, '* * * * *'], []]) {
+			await expect(deploy(rec, binds({ X: emitting({ triggers: { crons: written } }) }), { contract: notesArtifact, framework: '0.9.0' })).rejects
+				.toThrow('sets `triggers` the platform did not write')
+		}
+		const local = config({
+			schema: CONTRACT_SCHEMA,
+			resources: () =>
+				new Worker({
+					dir: '.',
+					...PRIVATE,
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: { X: emitting({ triggers: { crons: [STAGE_DEMO_REPAIR_TICK] } }) },
+					main: ENTRY,
+				}),
+		})
+		await expect(deploy(rec, local, { checkoutContract: notesArtifact })).rejects.toThrow('sets `triggers` the platform did not write')
 		expect(rec.provisions).toEqual([])
 	})
 })
@@ -1824,9 +1902,9 @@ describe('the ops channel of a gated release (servesOps, ADR-0069)', () => {
 		if (entry === undefined || !isApplicationEntry(entry)) throw new Error('the proxy Worker serves no application entry')
 		return entry.endpoints
 	}
-	const OBJECT_VARIABLES = { FABRIKA_APPLICATION_OBJECT: 'application', FABRIKA_APPLICATION_OBJECTS: 'application' }
+	const OBJECT_VARIABLES = { FABRIKA_APPLICATION_OBJECT: 'application', FABRIKA_APPLICATION_OBJECTS: 'application,rehearsal' }
 
-	test('a gated release gets the ops row in its proxy and both object variables in its Worker', async () => {
+	test('a gated release gets the ops row in its proxy and both object variables, which list the rehearsal object, in its Worker', async () => {
 		const result = await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.0' })
 		expect(result.status).toBe('succeeded')
 		expect(proxiedEndpoints()).toEqual(contractProxyTable(notesArtifact, undefined, { ops: true }).endpoints)
@@ -1834,6 +1912,11 @@ describe('the ops channel of a gated release (servesOps, ADR-0069)', () => {
 		expect(opsProxyRow().admission?.maxBytes).toBe(OPS_ROW_MAX_BYTES)
 		const application = await generatedConfig('stage-demo')
 		expect(application.vars).toMatchObject(OBJECT_VARIABLES)
+		// What the application object reads them with: ordinary traffic reaches `application`, the ops channel `rehearsal` too.
+		expect(parseApplicationObjects(OBJECT_VARIABLES.FABRIKA_APPLICATION_OBJECT, OBJECT_VARIABLES.FABRIKA_APPLICATION_OBJECTS)).toEqual({
+			object: 'application',
+			objects: ['application', OPS_REHEARSAL_OBJECT],
+		})
 		// Plain variables: a deploy without them removes them, as every var of a Worker version.
 		expect(rec.commands.some((command) => command.args.includes('FABRIKA_APPLICATION_OBJECT'))).toBe(false)
 	})

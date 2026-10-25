@@ -66,8 +66,9 @@ export const assertCloudflareContract = (contract: ContractArtifact, capsSegment
 }
 
 /**
- * The object runs due jobs and the file sweep of file kinds, a framework job, on the Worker's minute tick (ADR-0065 §5).
- * Legacy `files` collections do not count: the object schedules no sweep of theirs.
+ * The object runs due jobs and the file sweep of file kinds, a framework job, from the Worker's cron trigger: the minute
+ * tick, or from `servesAlarms` its alarm with an hourly repair tick (ADR-0065 §5). Legacy `files` collections do not
+ * count: the object schedules no sweep of theirs.
  */
 export const needsMinuteTick = (contract: ContractArtifact): boolean =>
 	Object.keys(contract.jobs).length > 0 || Object.keys(contract.fileKinds ?? {}).length > 0
@@ -103,6 +104,12 @@ const SERVES_OPS_SINCE = { major: 0, minor: 9 }
 
 /** Whether an environment on release `release` gets the ops row, the ops key digests and the object variables. */
 export const servesOps = (release: string): boolean => releaseAtLeast(release, SERVES_OPS_SINCE)
+
+/** The first framework minor whose application object runs its jobs from its alarm, repaired by an hourly tick. */
+const SERVES_ALARMS_SINCE = { major: 0, minor: 9 }
+
+/** Whether the Worker of release `release` gets the hourly repair tick instead of the minute tick. */
+export const servesAlarms = (release: string): boolean => releaseAtLeast(release, SERVES_ALARMS_SINCE)
 
 /** The first framework minor whose Cloudflare deploy refuses a job longer than one segment. */
 const CAPS_JOB_SEGMENTS_SINCE = { major: 0, minor: 9 }
