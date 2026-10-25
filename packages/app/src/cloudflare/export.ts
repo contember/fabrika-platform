@@ -61,7 +61,7 @@ type Storage = ExportSource['storage']
 /**
  * One step of a dump. A diagnostic step runs in any mode. A consistent one runs in the barrier's turn, only at the
  * published generation, never while the object is `open` or holds an import marker, so no transition and no migration
- * falls inside it; past `begin` it refuses a database whose state is not the one its `begin` saw.
+ * falls inside it; past `begin` it refuses a database whose state or stretch is not the one its `begin` saw.
  */
 export async function exportStep(source: ExportSource, barrier: MaintenanceBarrier, step: OpsExportRequest): Promise<Response> {
 	if (!step.consistent) {
@@ -71,10 +71,13 @@ export async function exportStep(source: ExportSource, barrier: MaintenanceBarri
 	if (generation === null) {
 		throw new Error('a consistent export step carries its generation; the wire parser requires it')
 	}
-	const result = await barrier.step(generation, async (mode) => ({
-		value: mode === 'open' ? dataRefusal({ refused: 'wrong_mode', table: null }) : await runConsistent(source, step, generation),
-		holdUntil: null,
-	}))
+	const result = await barrier.step(generation, async (mode) => {
+		const { frozenSince } = barrier
+		if (mode === 'open' || frozenSince === null) {
+			return { value: dataRefusal({ refused: 'wrong_mode', table: null }), holdUntil: null }
+		}
+		return { value: await runConsistent(source, step, frozenSince), holdUntil: null }
+	})
 	return result.kind === 'ran' ? result.value : staleRefusal(result.published)
 }
 
@@ -92,15 +95,16 @@ async function run(source: ExportSource, step: OpsExportRequest, state: string |
 
 /**
  * The first `begin` of a dump records the state it saw with its upload and bookmark, once; a retried one replays that
- * record, and every later step must carry its upload at that state. A migration runs at the published generation, so
- * the generation alone would not show one between two steps. A storage without the synchronous KV holds no import.
+ * record, and every later step must carry its upload at that state, in the same stretch of modes that write nothing
+ * (`frozenSince`), at whatever generation of it. A migration runs inside a stretch, so the stretch alone would not show
+ * one between two steps. A storage without the synchronous KV holds no import.
  */
-async function runConsistent(source: ExportSource, step: OpsExportRequest, generation: number): Promise<Response> {
+async function runConsistent(source: ExportSource, step: OpsExportRequest, frozenSince: number): Promise<Response> {
 	const { kv } = source.storage
 	if (kv !== undefined && importInProgress({ kv })) {
 		return dataRefusal({ refused: 'wrong_mode', table: null })
 	}
-	const state = dumpState(source.storage, generation)
+	const state = dumpState(source.storage, frozenSince)
 	const begun = await readBegun(source.bucket, step)
 	if (step.step === 'begin') {
 		return begun === null ? await run(source, step, state) : replayed(begun, state)
@@ -619,11 +623,12 @@ function holdsTable(storage: Storage, name: string): boolean {
 }
 
 /**
- * The digest of what a consistent dump's steps must all see: the generation, the DDL and both ledger tables. At one
- * generation outside `open` a migration is what writes, and the runner records each of its writes in one of them.
+ * The digest of what a consistent dump's steps must all see: the stretch of modes that write nothing, the DDL and both
+ * ledger tables. Inside a stretch a migration is what writes unannounced, and the runner records each of its writes in
+ * one of them; an import step or a restore's `arm` starts a new stretch.
  */
-function dumpState(storage: Storage, generation: number): string {
-	return sha256Hex(JSON.stringify([generation, schemaEntries(storage), migrationLedger(storage), bundleDigests(storage)]))
+function dumpState(storage: Storage, frozenSince: number): string {
+	return sha256Hex(JSON.stringify([frozenSince, schemaEntries(storage), migrationLedger(storage), bundleDigests(storage)]))
 }
 
 /** A table as a query reads it: qualified, so no common table expression of the query shadows it. */

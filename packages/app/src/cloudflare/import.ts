@@ -162,6 +162,9 @@ export async function importStep(target: ImportTarget, barrier: MaintenanceBarri
 		if (mode !== 'inspect') {
 			return answered(refused('wrong_mode'))
 		}
+		if (step.step !== 'verify') {
+			await barrier.restrictedWrite()
+		}
 		return answered(await admittedStep(target, step))
 	})
 	if (result.kind === 'ran') {

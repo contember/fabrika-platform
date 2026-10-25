@@ -73,10 +73,24 @@ restore.
    answers the manifest.
 
 Control's operation record holds the upload id, the cursor, the parts and the finished tables. The object keeps nothing
-between steps but one record: `begin` writes `begun` beside the dump, a digest of the generation, the DDL and both
-ledger tables, and every later `part` and `complete` refuses a state whose digest differs as `ledger_mismatch`. A
-migration at the same generation between two parts therefore never yields a dump marked consistent. Each step of a
-consistent dump runs in the barrier's turn (ADR-0069 §3), so no transition is acknowledged while a step reads. A cursor names a table, the last rowid read (as decimal text) and the count and hash folded so far: a
+between steps but one record per dump. The first `begin` writes `begun` beside the dump, once (a conditional create):
+the digest of the object's state, the upload id and the bookmark it answered. A retried `begin` at the same state
+replays that answer and opens no second upload; at another state it is refused as `ledger_mismatch`. Every later
+`part` and `complete` must carry the recorded upload id (and `complete` the recorded bookmark) at the recorded state,
+or it is refused as `ledger_mismatch`.
+
+**The state** is the digest of the stretch, the DDL and both ledger tables. The **stretch** is the generation at which
+the object entered its current uninterrupted run of `read-only`, `closed` and `inspect` (ADR-0069 §3): a transition
+between those modes keeps it, `open` ends it, and a data step that writes while the object is restricted, which is
+every import step but `verify` and a restore's `arm`, starts it again at the current generation before it writes. A
+migration writes inside a stretch, but each of its writes lands in the ledger or the DDL. A dump therefore spans the
+generations of one stretch, as Control's maintenance passes publish `read-only` again, and never yields a consistent
+manifest across an `open`, a data step or a migration. The barrier keeps the stretch in R2 beside its state, at
+`__fabrika/ops/<object>.frozen.json` with the generation it was written at, never in the state object, which an older
+release parses strictly, and never in KV, which point-in-time recovery rewinds. A cold start resumes it only from a
+record written at the published generation; otherwise the stretch starts at the published generation, which costs at
+most one restarted dump. An object that holds an import marker is refused as `wrong_mode`. Each step of a consistent
+dump runs in the barrier's turn (ADR-0069 §3), so no transition is acknowledged while a step reads. A cursor names a table, the last rowid read (as decimal text) and the count and hash folded so far: a
 digest, never a value. The step code reads `sqlite_schema` and the tables directly. It needs neither the application's
 boot nor the framework's tables, so it also dumps a database that cannot boot, or one restored to a time before those
 tables existed. R2's lifecycle aborts an upload that never completes.
@@ -295,9 +309,9 @@ The verification of the migration phase (ADR-0069 §3) is this rehearsal.
   `read-only`, waits for the acknowledgement, takes the consistent backup, opens the object at a new generation, and
   then rehearses. The rehearsal reads the stored backup, so it runs after the object reopened. A pass is bounded in
   time and in the backups it continues and starts, and a backup that does not finish continues in the next pass. The
-  exporter binds a dump to the generation its `begin` ran at, and every pass fences a new one, so a dump the pass finds
-  begun under another generation starts again under a new dump id; the old upload is never completed, and the bucket's
-  lifecycle expires it. Control records a backup's outcome in the same write as its operation's next step. An hour after
+  exporter binds a dump to the stretch of modes that write nothing its `begin` ran in (§2), which a pass that publishes
+  `read-only` again at a new generation does not end, so the next pass continues the dump. A dump whose stretch ended
+  starts again under a new dump id; the old upload is never completed, and the bucket's lifecycle expires it. Control records a backup's outcome in the same write as its operation's next step. An hour after
   a failed backup ended the environment is due again. A backup starts only from the schedule and only while Control's
   record leaves the object `open`.
 - **Before a migration.** A deploy that brings a pending application migration to an environment at a gated release

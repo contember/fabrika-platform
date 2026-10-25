@@ -1,6 +1,7 @@
 // The object's maintenance barrier (ADR-0069 §3): its mode and generation, whether R2 holds them, the transitions
 // Control drives, the drain of what runs, and the write fence every invocation checks. The durable copy is an R2
-// object in the environment's bucket, never SQLite or KV, which point-in-time recovery rewinds.
+// object in the environment's bucket, never SQLite or KV, which point-in-time recovery rewinds; so is the generation
+// since which the object has written nothing (ADR-0070 §2), in an object of its own that no older release reads.
 
 import {
 	OPS_MODES,
@@ -28,17 +29,31 @@ export interface StoredMaintenance {
 	readonly version: string
 }
 
+/**
+ * Since which generation the object has written nothing, as of the published generation `generation`: kept only while
+ * it is `read-only`, `closed` or `inspect`.
+ */
+export interface FrozenRecord {
+	readonly generation: number
+	readonly since: number
+}
+
 /** The object's durable copy of its maintenance state. */
 export interface MaintenanceStore {
 	/** `null` only for a definite not-found; every other failure throws, and is never read as absence. */
 	read(): Promise<StoredMaintenance | null>
 	/** Puts `state` if R2 still holds `version` (`null`: holds nothing); the new version, or `null` when the condition failed. */
 	put(state: OpsPublishedState, version: string | null): Promise<string | null>
+	/** The frozen record, `null` when none is stored. A store without these keeps the record in memory only. */
+	readFrozen?(): Promise<FrozenRecord | null>
+	putFrozen?(record: FrozenRecord): Promise<void>
 }
 
 /** `__fabrika/ops/<object>.json` in the environment's bucket (`bucket`, an R2 binding). */
 export function r2MaintenanceStore(bucket: unknown, object: string): MaintenanceStore {
 	const key = OPS_STATE_KEY(object)
+	// Beside the state, never in it: an older release parses the state strictly and must still load it.
+	const frozenKey = `${key.slice(0, -'.json'.length)}.frozen.json`
 	const call = (name: string): (...args: unknown[]) => unknown => {
 		const found = method(bucket, name)
 		if (found === null) {
@@ -76,7 +91,43 @@ export function r2MaintenanceStore(bucket: unknown, object: string): Maintenance
 			}
 			return etag
 		},
+		async readFrozen() {
+			const answer: unknown = await call('get')(frozenKey)
+			if (answer === null) {
+				return null
+			}
+			const text = method(answer, 'text')
+			const body: unknown = text === null ? null : await text()
+			const record = typeof body === 'string' ? parseFrozenRecord(body) : null
+			if (record === null) {
+				throw new Error('the frozen record in R2 does not parse')
+			}
+			return record
+		},
+		async putFrozen(record) {
+			await call('put')(frozenKey, JSON.stringify(record), { httpMetadata: { contentType: 'application/json' } })
+		},
 	}
+}
+
+/** Exactly two positive generations, the stretch's start not after the generation it was recorded at. */
+function parseFrozenRecord(text: string): FrozenRecord | null {
+	let value: unknown
+	try {
+		value = JSON.parse(text)
+	} catch {
+		return null
+	}
+	if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.keys(value).length !== 2) {
+		return null
+	}
+	const generation: unknown = Reflect.get(value, 'generation')
+	const since: unknown = Reflect.get(value, 'since')
+	return positive(generation) && positive(since) && since <= generation ? { generation, since } : null
+}
+
+function positive(value: unknown): value is number {
+	return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }
 
 /** The stored record, parsed strictly: exactly a positive generation and a mode. */
@@ -150,6 +201,8 @@ export class MaintenanceBarrier {
 	/** What R2 holds as far as this instance knows: as last read, written or adopted. */
 	#stored: OpsPublishedState | null
 	#version: string | null
+	/** The generation since which the object has written nothing, while it is published in a mode that writes nothing. */
+	#frozenSince: number | null
 	readonly #store: MaintenanceStore
 	readonly #drainBoundMs: number
 	/** One transition at a time: each waits for the one before it. */
@@ -158,18 +211,21 @@ export class MaintenanceBarrier {
 	readonly #stops = new Map<AbortController, InvocationKind>()
 	#settled: (() => void)[] = []
 
-	private constructor(store: MaintenanceStore, stored: StoredMaintenance | null, options: BarrierOptions) {
+	private constructor(store: MaintenanceStore, stored: StoredMaintenance | null, frozen: FrozenRecord | null, options: BarrierOptions) {
 		this.#store = store
 		this.#stored = stored?.state ?? null
 		this.#version = stored?.version ?? null
 		this.#mode = stored?.state.mode ?? 'open'
 		this.#generation = stored?.state.generation ?? null
+		this.#frozenSince = stored === null ? null : frozenOnLoad(stored.state, frozen)
 		this.#drainBoundMs = options.drainBoundMs ?? DRAIN_BOUND_MS
 	}
 
 	/** The cold start: an absent state is `open`; a failed read rejects, and the caller retries on its next request. */
 	static async load(store: MaintenanceStore, options: BarrierOptions = {}): Promise<MaintenanceBarrier> {
-		return new MaintenanceBarrier(store, await store.read(), options)
+		const stored = await store.read()
+		const frozen = stored === null || stored.state.mode === 'open' ? null : ((await store.readFrozen?.()) ?? null)
+		return new MaintenanceBarrier(store, stored, frozen, options)
 	}
 
 	get mode(): OpsMode {
@@ -183,6 +239,26 @@ export class MaintenanceBarrier {
 	/** What R2 holds as far as this instance knows, `null` before the first publication: what a stale refusal names. */
 	get published(): OpsPublishedState | null {
 		return this.#stored
+	}
+
+	/**
+	 * The generation at which the object entered its current stretch of `read-only`, `closed` and `inspect`, or at which a
+	 * data step last wrote within it; `null` outside such a stretch. A consistent dump is one state while it holds.
+	 */
+	get frozenSince(): number | null {
+		return this.#frozenSince
+	}
+
+	/**
+	 * Called in a data step's turn before the step writes while the object writes nothing else (an import step, a
+	 * restore's `arm`): the stretch starts again at the current generation, durably before the write. A failed put rejects.
+	 */
+	async restrictedWrite(): Promise<void> {
+		if (this.#mode === 'open' || this.#generation === null || this.#frozenSince === this.#generation) {
+			return
+		}
+		this.#frozenSince = this.#generation
+		await this.#store.putFrozen?.({ generation: this.#generation, since: this.#generation })
 	}
 
 	/** The scope of one invocation, admitted now: the generation and mode it captures, which its writes are fenced on. */
@@ -249,6 +325,7 @@ export class MaintenanceBarrier {
 				if (put.kind !== 'published') {
 					return put
 				}
+				await this.#froze(request)
 			}
 			const stillRunning = await this.#drain()
 			return { kind: 'acknowledged', ack: { generation: request.generation, mode: request.mode, stillRunning } }
@@ -295,6 +372,23 @@ export class MaintenanceBarrier {
 		}
 	}
 
+	/**
+	 * After `request` is published: `open` ends the stretch, a mode that writes nothing keeps it or starts it at the
+	 * request's generation. A failed put of the record is left to the cold start, which then starts the stretch anew.
+	 */
+	async #froze(request: OpsPublishedState): Promise<void> {
+		if (request.mode === 'open') {
+			this.#frozenSince = null
+			return
+		}
+		this.#frozenSince ??= request.generation
+		try {
+			await this.#store.putFrozen?.({ generation: request.generation, since: this.#frozenSince })
+		} catch {
+			// The stored record then names an older generation or none, which a cold start reads as a stretch starting anew.
+		}
+	}
+
 	#isPublished(): boolean {
 		return this.#stored !== null && this.#stored.generation === this.#generation && this.#stored.mode === this.#mode
 	}
@@ -327,6 +421,8 @@ export class MaintenanceBarrier {
 			if (stored !== null && opsTransitionRefused(stored.state, request)) {
 				this.#mode = stored.state.mode
 				this.#generation = stored.state.generation
+				// What happened before it is unknown: its stretch starts at it.
+				this.#frozenSince = stored.state.mode === 'open' ? null : stored.state.generation
 				return { kind: 'stale', published: stored.state }
 			}
 		}
@@ -381,6 +477,17 @@ export class MaintenanceBarrier {
 			done.resolve()
 		}
 	}
+}
+
+/**
+ * The stretch a cold start resumes: none while `open`; the record's when it was written at the published generation;
+ * otherwise, conservatively, one starting at the published generation.
+ */
+function frozenOnLoad(state: OpsPublishedState, frozen: FrozenRecord | null): number | null {
+	if (state.mode === 'open') {
+		return null
+	}
+	return frozen !== null && frozen.generation === state.generation && frozen.since <= state.generation ? frozen.since : state.generation
 }
 
 /** How restrictive a mode is: `open` least, `inspect` most. */

@@ -42,7 +42,10 @@ export async function serveRestore(target: OpsTarget, barrier: MaintenanceBarrie
 		case 'prepare':
 			return await inTurn(barrier, step.generation, serving, () => prepare(recovery, sentinels, step))
 		case 'arm':
-			return await inTurn(barrier, step.generation, serving, () => arm(recovery, step))
+			return await inTurn(barrier, step.generation, serving, async () => {
+				await barrier.restrictedWrite()
+				return await arm(recovery, step)
+			})
 		case 'verify':
 			return await verify(recovery, sentinels, step)
 	}

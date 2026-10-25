@@ -13,6 +13,7 @@ import {
 	OPS_DUMP_PART_SIZE,
 	OPS_EMPTY_TABLE_HASH,
 	OPS_STALE_STATUS,
+	OPS_STATE_KEY,
 	type OpsDumpManifest,
 	type OpsDumpValue,
 	type OpsExportPartAck,
@@ -40,8 +41,10 @@ import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
 import { method } from '../cloudflare/bindings'
 import { type ExportSource, exportStep } from '../cloudflare/export'
 import { IMPORT_MARKER_KEY, importStep, type ImportStorage } from '../cloudflare/import'
-import { MaintenanceBarrier } from '../cloudflare/maintenance'
+import { MaintenanceBarrier, r2MaintenanceStore } from '../cloudflare/maintenance'
+import type { OpsTarget } from '../cloudflare/ops'
 import { r2FileObjectStore } from '../cloudflare/r2-files'
+import { serveRestore } from '../cloudflare/restore'
 
 const CONTRACT_DIGEST = `sha256:${'c'.repeat(64)}`
 const BOOKMARK = '0000000a-00000001-00004f6b-8a4c1f5d0e9b2a37'
@@ -518,7 +521,7 @@ describe('a consistent dump holds one state of the database', () => {
 		expect(await refusal(response)).toEqual({ refused: 'ledger_mismatch', table: null })
 	})
 
-	test('a dump begun under another generation is refused, though no migration ran', async () => {
+	test('an open between begin and a part ends the stretch: the part is refused, though no migration ran', async () => {
 		const target = await harness()
 		seed(target.database)
 		const uploadId = await begin(target, consistent)
@@ -756,3 +759,137 @@ describe('the schema rule reads clauses as the importer does', () => {
 		expect(manifest.tables.find((table) => table.name === 'notes')?.rows).toBe(2)
 	})
 })
+
+describe('a consistent dump spans the generations of one stretch of modes that write nothing', () => {
+	/** Begins the dump at read-only 1, takes its first part, and publishes `read-only` again at generation 2. */
+	async function begunAcrossGenerations(target: Harness): Promise<{ readonly uploadId: string; readonly first: OpsExportPartAck }> {
+		const uploadId = await begin(target, consistent)
+		const first = await part(target, consistent, uploadId, 1, null)
+		expect(first.next).not.toBeNull()
+		await target.barrier.transition({ generation: 2, mode: 'read-only' })
+		return { uploadId, first }
+	}
+
+	/** Enough rows of `loose` that the dump takes two parts: the row bound cuts the first. */
+	function seedTwoParts(target: Harness): void {
+		target.database.run(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 60000) INSERT INTO loose (k, v) SELECT 'k', i FROM n`)
+	}
+
+	const later: OpsExportScope = { ...consistent, generation: 2 }
+
+	test('a part and complete at a newer generation are accepted, a retried begin replays, and the manifest matches a direct read', async () => {
+		const target = await harness()
+		seedTwoParts(target)
+		const { uploadId, first } = await begunAcrossGenerations(target)
+
+		expect(await begin(target, later)).toBe(uploadId)
+		const second = await part(target, later, uploadId, 2, first.next)
+		expect(second.next).toBeNull()
+		const manifest = await complete(target, later, uploadId, [first, second])
+
+		expect(manifest.consistent).toBe(true)
+		const rows = directRows(target, 'loose')
+		expect(manifest.tables.find((table) => table.name === 'loose')).toEqual({
+			name: 'loose',
+			rows: 60_000,
+			hash: foldOpsTableHash(OPS_EMPTY_TABLE_HASH, rows),
+		})
+	}, 60_000)
+
+	test('an import step between two steps starts a new stretch: the next part is refused', async () => {
+		const target = await harness()
+		seedTwoParts(target)
+		const { uploadId, first } = await begunAcrossGenerations(target)
+		await target.barrier.transition({ generation: 3, mode: 'inspect' })
+		const importing = { storage: kvStorage(target.database), bucket: target.bucket, migrations: bundles(), serving: 'application-serving' }
+		await importStep(importing, target.barrier, {
+			step: 'part',
+			object: 'application',
+			generation: 3,
+			source: { object: 'application', dump: DUMP },
+			part: 1,
+		})
+
+		const response = await exportStep(target.source, target.barrier, {
+			...consistent,
+			generation: 3,
+			step: 'part',
+			uploadId,
+			part: 2,
+			cursor: first.next,
+		})
+		expect(await refusal(response)).toEqual({ refused: 'ledger_mismatch', table: null })
+	}, 60_000)
+
+	test("a restore's arm between two steps starts a new stretch: the next part is refused", async () => {
+		const target = await harness()
+		seedTwoParts(target)
+		const { uploadId, first } = await begunAcrossGenerations(target)
+		await target.barrier.transition({ generation: 3, mode: 'inspect' })
+		const armed = await serveRestore(restoringTarget(target), target.barrier, {
+			step: 'arm',
+			object: 'application',
+			generation: 3,
+			sentinel: DUMP,
+			target: BOOKMARK,
+		}, false)
+		expect(armed.status).toBe(200)
+
+		const response = await exportStep(target.source, target.barrier, {
+			...consistent,
+			generation: 3,
+			step: 'part',
+			uploadId,
+			part: 2,
+			cursor: first.next,
+		})
+		expect(await refusal(response)).toEqual({ refused: 'ledger_mismatch', table: null })
+	}, 60_000)
+
+	test('a cold start between two steps keeps the stretch: the barrier loaded again from R2 accepts the rest', async () => {
+		const target = await harness('open')
+		seedTwoParts(target)
+		const store = r2MaintenanceStore(target.bucket, 'application')
+		const before: Harness = { ...target, barrier: await MaintenanceBarrier.load(store) }
+		await before.barrier.transition({ generation: 1, mode: 'read-only' })
+		const { uploadId, first } = await begunAcrossGenerations(before)
+
+		const after: Harness = { ...target, barrier: await MaintenanceBarrier.load(store) }
+		expect(after.barrier.frozenSince).toBe(1)
+		const second = await part(after, later, uploadId, 2, first.next)
+		const manifest = await complete(after, later, uploadId, [first, second])
+		expect(manifest.tables.find((table) => table.name === 'loose')?.rows).toBe(60_000)
+	}, 60_000)
+})
+
+test('R2 keeps the frozen record beside the maintenance state, which stays exactly the two fields an older release parses', async () => {
+	const target = await harness('open')
+	const store = r2MaintenanceStore(target.bucket, 'application')
+	const barrier = await MaintenanceBarrier.load(store)
+	await barrier.transition({ generation: 1, mode: 'closed' })
+	await barrier.transition({ generation: 2, mode: 'read-only' })
+
+	const state = JSON.parse(new TextDecoder().decode(await stored(target, OPS_STATE_KEY('application'))))
+	expect(state).toEqual({ generation: 2, mode: 'read-only' })
+	expect(await store.readFrozen?.()).toEqual({ generation: 2, since: 1 })
+	expect((await MaintenanceBarrier.load(store)).frozenSince).toBe(1)
+})
+
+/** An ops target over the harness whose recovery arms any bookmark and whose abort resets nothing. */
+function restoringTarget(target: Harness): OpsTarget {
+	return {
+		storage: target.source.storage,
+		bucket: target.bucket,
+		recovery: {
+			getCurrentBookmark: () => Promise.resolve(BOOKMARK),
+			getBookmarkForTime: () => Promise.reject(new Error('not called')),
+			onNextSessionRestoreBookmark: () => Promise.resolve(BOOKMARK),
+			abort: () => {},
+		},
+		migrations: [],
+		contractDigest: null,
+		bootFailure: () => Promise.resolve(null),
+		maintenance: () => Promise.reject(new Error('not called')),
+		migrate: () => Promise.reject(new Error('not called')),
+	}
+}

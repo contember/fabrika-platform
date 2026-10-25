@@ -29,7 +29,7 @@ import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
 import { applicationMigrations } from '../build'
 import { type ApplicationState, createContractWorker, FabrikaApplication } from '../cloudflare'
 import { ALARM_SLACK_MS, TICK_HEADER } from '../cloudflare/application'
-import { MaintenanceBarrier, type MaintenanceStore } from '../cloudflare/maintenance'
+import { type FrozenRecord, MaintenanceBarrier, type MaintenanceStore } from '../cloudflare/maintenance'
 import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import { OPS_ENDPOINT } from '../cloudflare/ops'
 import { type ContractImplementation, serve } from '../implement'
@@ -1206,5 +1206,87 @@ describe("a data step in the barrier's turn", () => {
 		release()
 		expect((await opened).kind).toBe('acknowledged')
 		expect(await step).toEqual({ kind: 'stale', published: { generation: 2, mode: 'open' } })
+	})
+})
+
+describe('the stretch of modes that write nothing', () => {
+	/** R2 as a map of the state and the frozen record; `stored` seeds what a cold start finds. */
+	function frozenStore(stored: { state?: OpsPublishedState; frozen?: FrozenRecord } = {}) {
+		let held = stored.state === undefined ? null : { state: stored.state, version: 'v0' }
+		let frozen = stored.frozen ?? null
+		const store: MaintenanceStore = {
+			read: () => Promise.resolve(held),
+			put: (state) => {
+				held = { state, version: `v${state.generation}` }
+				return Promise.resolve(held.version)
+			},
+			readFrozen: () => Promise.resolve(frozen),
+			putFrozen: (record) => {
+				frozen = record
+				return Promise.resolve()
+			},
+		}
+		return { store, frozen: () => frozen, state: () => held?.state ?? null }
+	}
+
+	test('restricting starts it, restricted to restricted keeps it, open ends it, and restricting again starts anew', async () => {
+		const { store, frozen } = frozenStore()
+		const barrier = await MaintenanceBarrier.load(store, { drainBoundMs: 10 })
+		expect(barrier.frozenSince).toBeNull()
+		await barrier.transition({ generation: 1, mode: 'read-only' })
+		expect(barrier.frozenSince).toBe(1)
+		await barrier.transition({ generation: 2, mode: 'closed' })
+		await barrier.transition({ generation: 3, mode: 'inspect' })
+		expect(barrier.frozenSince).toBe(1)
+		expect(frozen()).toEqual({ generation: 3, since: 1 })
+		await barrier.transition({ generation: 4, mode: 'open' })
+		expect(barrier.frozenSince).toBeNull()
+		await barrier.transition({ generation: 5, mode: 'read-only' })
+		expect(barrier.frozenSince).toBe(5)
+	})
+
+	test('a data step that writes starts it again at the current generation, before it writes', async () => {
+		const { store, frozen } = frozenStore()
+		const barrier = await MaintenanceBarrier.load(store, { drainBoundMs: 10 })
+		await barrier.transition({ generation: 1, mode: 'read-only' })
+		await barrier.transition({ generation: 2, mode: 'inspect' })
+		const result = await barrier.step(2, async () => {
+			await barrier.restrictedWrite()
+			return { value: frozen(), holdUntil: null }
+		})
+		expect(result).toEqual({ kind: 'ran', value: { generation: 2, since: 2 } })
+		expect(barrier.frozenSince).toBe(2)
+	})
+
+	test('a cold start resumes a record written at the published generation', async () => {
+		const { store } = frozenStore({ state: { generation: 4, mode: 'read-only' }, frozen: { generation: 4, since: 2 } })
+		expect((await MaintenanceBarrier.load(store)).frozenSince).toBe(2)
+	})
+
+	test.each(
+		[
+			['no record', undefined],
+			['a record of an older generation, as after a put that failed or a release that kept none', { generation: 3, since: 2 }],
+			['a record of a newer generation', { generation: 5, since: 2 }],
+		] as const,
+	)('a restricted cold start with %s starts the stretch at the published generation', async (_, frozen) => {
+		const { store } = frozenStore({ state: { generation: 4, mode: 'read-only' }, ...(frozen === undefined ? {} : { frozen }) })
+		expect((await MaintenanceBarrier.load(store)).frozenSince).toBe(4)
+	})
+
+	test('an open cold start has none, whatever record is left', async () => {
+		const { store } = frozenStore({ state: { generation: 4, mode: 'open' }, frozen: { generation: 4, since: 2 } })
+		expect((await MaintenanceBarrier.load(store)).frozenSince).toBeNull()
+	})
+
+	test('a put of the record that fails leaves the transition acknowledged and the next cold start conservative', async () => {
+		const { store, state } = frozenStore()
+		const failing: MaintenanceStore = { ...store, putFrozen: () => Promise.reject(new Error('R2 is down')) }
+		const barrier = await MaintenanceBarrier.load(failing, { drainBoundMs: 10 })
+		await barrier.transition({ generation: 1, mode: 'read-only' })
+		expect((await barrier.transition({ generation: 2, mode: 'read-only' })).kind).toBe('acknowledged')
+		expect(barrier.frozenSince).toBe(1)
+		expect(state()).toEqual({ generation: 2, mode: 'read-only' })
+		expect((await MaintenanceBarrier.load(store)).frozenSince).toBe(2)
 	})
 })
