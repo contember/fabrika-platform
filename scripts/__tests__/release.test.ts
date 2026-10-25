@@ -20,10 +20,12 @@ import {
 	packageInfo,
 	parseOptions,
 	parseReleaseManifest,
+	publishCommand,
 	readPackages,
 	REGISTRY_BACKOFF_MS,
 	REGISTRY_DEADLINE_MS,
 	type RegistryWaitDeps,
+	releaseDistTag,
 	rewriteExamplePins,
 	rewriteLockfileExamplePins,
 	stagedAppSkill,
@@ -172,6 +174,53 @@ describe('registry dist-tag wait', () => {
 		expect(time.slept.slice(0, 5)).toEqual([...REGISTRY_BACKOFF_MS, 30_000])
 		expect(time.slept.reduce((total, ms) => total + ms, 0)).toBeLessThanOrEqual(REGISTRY_DEADLINE_MS)
 		expect(time.slept.reduce((total, ms) => total + ms, 0)).toBeGreaterThan(REGISTRY_DEADLINE_MS - 30_000)
+	})
+})
+
+describe('release channels', () => {
+	test('a release publishes under latest, an alpha prerelease under alpha, every other prerelease under next', () => {
+		expect(releaseDistTag('0.9.0')).toBe('latest')
+		expect(releaseDistTag('0.9.0+build.1')).toBe('latest')
+		expect(releaseDistTag('0.9.0-alpha.1')).toBe('alpha')
+		expect(releaseDistTag('0.9.0-alpha')).toBe('alpha')
+		expect(releaseDistTag('0.9.0-alpha1.2')).toBe('alpha')
+		expect(releaseDistTag('0.9.0-dev.4')).toBe('next')
+		expect(releaseDistTag('0.9.0-beta.1')).toBe('next')
+		expect(releaseDistTag('0.9.0-rc.alpha.1')).toBe('next')
+		expect(releaseDistTag('0.0.0-ci.0')).toBe('next')
+		expect(() => releaseDistTag('v0.9.0')).toThrow('invalid SemVer')
+	})
+
+	test("publish names the dist-tag of a prerelease and leaves a release on npm's default", () => {
+		expect(publishCommand('a.tgz', '0.9.0', false)).toEqual(['npm', 'publish', 'a.tgz', '--access', 'public', '--ignore-scripts', '--provenance'])
+		expect(publishCommand('a.tgz', '0.9.0-alpha.1', true)).toEqual([
+			'npm',
+			'publish',
+			'a.tgz',
+			'--access',
+			'public',
+			'--ignore-scripts',
+			'--tag',
+			'alpha',
+			'--dry-run',
+		])
+		expect(publishCommand('a.tgz', '0.9.0-dev.4', false)).toEqual([
+			'npm',
+			'publish',
+			'a.tgz',
+			'--access',
+			'public',
+			'--ignore-scripts',
+			'--tag',
+			'next',
+			'--provenance',
+		])
+	})
+
+	test('the example mirror follows latest only: release.yml skips it for every prerelease, alpha included', async () => {
+		const workflow = await readFile(join(import.meta.dir, '..', '..', '.github', 'workflows', 'release.yml'), 'utf8')
+		const mirror = workflow.slice(workflow.indexOf('\n  example-mirror:'))
+		expect(mirror).toContain("if: ${{ !contains(github.ref_name, '-') }}")
 	})
 })
 

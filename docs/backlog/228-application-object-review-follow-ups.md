@@ -117,7 +117,8 @@ statement and a `PRAGMA` before anything runs, so these gaps are defence in dept
 31. `servesOps` counts a prerelease as its minor, so a Cloudflare environment pinned to 0.9.0-dev.0 to 0.9.0-dev.4 gets the
     ops row, the key digests and a required vault, although those prereleases were published before the object served
     the ops channel. The ops row then reaches an application that answers no ops request. Gate on the first release
-    that ships the ops handler, prerelease included.
+    that ships the ops handler, prerelease included. Not by SemVer order alone: `0.9.0-alpha.1` sorts below
+    `0.9.0-dev.0`, and the alpha channel ships the handler (`contract-support.test.ts` pins `0.9.0-alpha.1` as served).
 
 ## Approach / acceptance
 
