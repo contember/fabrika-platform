@@ -1360,7 +1360,8 @@ A cron job of a kit contract that declares `mailer: 'installation' | 'own'` gets
 artifact; the approval diff shows a new `installation` for closer review and a new `own` as a widening. A
 `defineContract` contract cannot declare it. On Cloudflare a `mailer: 'installation'` job of an application on
 framework 0.9 or newer runs in its Durable Object and gets the installation's `FABRIKA_EMAIL_*` set, which Control holds
-as its own Worker's vars and secrets; `mailer: 'own'` sends through the application's own sender.
+as its own Worker's vars and secrets. The provider refuses that deploy for an older release, whose stateless Worker runs
+no job. `mailer: 'own'` sends through the application's own sender.
 
 - `ctx.mail.send(message, signal?)` takes `{ to, subject, text, html?, idempotencyKey, replyTo?, fromName? }` and
   answers `{ status: 'accepted', provider, messageId }`. It aborts with the attempt's `ctx.signal` and with `signal`,
@@ -1953,7 +1954,7 @@ A deploy of an approved contract with a job that declares `mailer: 'installation
 `FABRIKA_EMAIL_PROVIDER=platform`, `FABRIKA_PLATFORM_MAIL_URL` (Control's public origin, plain) and
 `FABRIKA_PLATFORM_MAIL_KEY` (its environment's transport key, sensitive). An older release gets every `FABRIKA_EMAIL_*`
 name Control holds, sensitive on Zerops, or `FABRIKA_EMAIL_PROVIDER=none` when Control has no transport. On Cloudflare
-every deploy gets the set, its credentials as Worker secrets, since the Worker runs no relay. With an invalid
+such a deploy always gets the set, its credentials as Worker secrets, since the Worker runs no relay. With an invalid
 transport, Control refuses a deploy that hands the set before any effect. A deploy after the contract stops declaring it removes
 them. An application cannot set a `FABRIKA_EMAIL_*` or `FABRIKA_PLATFORM_*` variable of its own: both families are
 framework-only.

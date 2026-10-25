@@ -32,7 +32,7 @@ import { SourceFailure } from './github/source/failure'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './github/source/metadata'
 import type { SourceRepository } from './github/source/types'
 import { controlPublicOrigin } from './iam'
-import { readInstallationMail } from './mail-transport'
+import { CLOUDFLARE_MAIL_REMEDY, readInstallationMail } from './mail-transport'
 import type { ControlJobMessage } from './run-lifecycle'
 
 /** The control-plane Worker's raw Cloudflare bindings + vars/secrets — what `WorkerEntrypoint` fills `this.env` with. */
@@ -40,10 +40,13 @@ export interface WorkerBindings
 	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'WAIT_UNTIL' | 'IAM' | 'IAM_ADMIN' | 'MAIL_TRANSPORT'>
 {
 	/**
-	 * The installation's mail transport (`FABRIKA_EMAIL_*`): Worker vars, the provider's credentials Worker secrets, both
-	 * written by Control's own deploy from the installation's GitHub Environment (`fabrika.config.ts`).
+	 * The installation's mail transport: these Worker vars and the provider's own `FABRIKA_EMAIL_*` (its credentials as
+	 * Worker secrets), all written by Control's own deploy from the installation's GitHub Environment (`fabrika.config.ts`).
+	 * The provider's variables belong to an open registry, so `controlEnv` reads them by prefix (`pickEmailEnvironment`).
 	 */
-	readonly [name: `FABRIKA_EMAIL_${string}`]: string | undefined
+	FABRIKA_EMAIL_PROVIDER?: string
+	FABRIKA_EMAIL_FROM?: string
+	FABRIKA_EMAIL_FROM_NAME?: string
 	/** Registry + run history + vault + deploy locks. Migrations in `./migrations` (SQLite dialect). */
 	DB: D1Database
 	/** Control-plane SPA static assets. */
@@ -81,7 +84,7 @@ export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL'
 		WAIT_UNTIL: waitUntil,
 		...(bindings.IAM === undefined ? {} : { IAM: bindings.IAM, IAM_ADMIN: bindings.IAM }),
 		// A Worker has no boot to log an invalid transport at: the deploys that need it are refused, naming the variables.
-		MAIL_TRANSPORT: readInstallationMail(pickEmailEnvironment(bindings), builtinEmailProviders),
+		MAIL_TRANSPORT: readInstallationMail(pickEmailEnvironment(bindings), builtinEmailProviders, CLOUDFLARE_MAIL_REMEDY),
 	}
 	return { ...env, COMMITS: gitHubCommitSource(new GitHubMetadataClient({}), vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory() })) }
 }

@@ -142,8 +142,14 @@ describe('platform scaffold', () => {
 			for (const variable of builtinEmailProviderVariables) {
 				expect(platformStep).toContain(`${variable.name}: \${{ ${variable.secret ? 'secrets' : 'vars'}.${variable.name} }}`)
 			}
-			// Operations sends no mail, and nothing else in the workflow holds a mail credential.
+			// Exactly the IAM and the control-plane steps hold a mail credential: Operations and the rest hold none.
 			expect(operationsStep).not.toContain('FABRIKA_EMAIL_')
+			for (const variable of builtinEmailProviderVariables.filter((candidate) => candidate.secret)) {
+				const reference = `\${{ secrets.${variable.name} }}`
+				expect(workflow.split(reference).length - 1).toBe(2)
+				expect(iamStep).toContain(reference)
+				expect(platformStep).toContain(reference)
+			}
 			expect(files['README.md']).toContain('hands the same set to IAM and to the control plane')
 			expect(files['README.md']).toContain('FABRIKA_RUNNER_KEY')
 			expect(workflow).toContain('FABRIKA_CONTROL_VAULT_KEY: ${{ secrets.FABRIKA_CONTROL_VAULT_KEY }}')

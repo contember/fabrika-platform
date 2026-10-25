@@ -2,6 +2,7 @@ import { createZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { controlMcpSwitch, controlServiceDigest, ControlTableError } from '../../fabrika.service'
 import type { Env } from '../env'
+import { ZEROPS_MAIL_REMEDY } from '../mail-transport'
 import { buildControlRpcDeps, buildRunDeps } from '../services'
 import { zeropsControlProvider, zeropsGitHubSources, zeropsNamespaceProcessConfig } from '../zerops/provider'
 import { createRuntime } from '../zerops/runtime'
@@ -118,7 +119,11 @@ describe('the Zerops namespace process configuration', () => {
 				FABRIKA_EMAIL_FROM: 'mail@example.test',
 				FABRIKA_EMAIL_SMARTEMAILING_API_KEY: 'se-private-key',
 			})
-			expect(runtime.env.MAIL_TRANSPORT).toEqual({ kind: 'invalid', reason: expect.stringContaining('FABRIKA_EMAIL_SMARTEMAILING_USERNAME is missing') })
+			expect(runtime.env.MAIL_TRANSPORT).toEqual({
+				kind: 'invalid',
+				reason: expect.stringContaining('FABRIKA_EMAIL_SMARTEMAILING_USERNAME is missing'),
+				remedy: ZEROPS_MAIL_REMEDY,
+			})
 			await runtime.shutdown()
 		} finally {
 			warn.mockRestore()
