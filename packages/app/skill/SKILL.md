@@ -303,7 +303,8 @@ The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory
 object's transaction, so its `limits.timeoutMs` is at most 25 s. A job's is at most 14 minutes, its default: longer
 work claims a bounded batch per run, and the next run takes the rest (`references/jobs.md`). `ctx.sql` is SQLite there
 (`references/endpoint.md`). No `scan: true`: the checker, the deploy and the boot refuse it. A migration names no
-`fabrika_*` table but `REFERENCES fabrika_files (id)`.
+`fabrika_*` table but `REFERENCES fabrika_files (id)`. The deploy serves each SPA mount's
+built `dir` itself; declare no `assets` on the Worker (`references/app-setup.md`).
 
 The object runs one transaction at a time, so every `await` in a handler that may write holds the whole environment:
 IAM, R2, a `fetch`, a `ctx.connect` call, a binding. One 2 s call caps the environment at half a request a second. A

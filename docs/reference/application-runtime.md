@@ -429,6 +429,11 @@ first and the object again, and it never boots the application.
   (`DatabaseError` `25006`). The object serves other events while a query awaits, so two of its reads may see different
   committed states, as under Postgres's READ COMMITTED, and none sees uncommitted data. Timestamps are UTC ISO text,
   booleans 0 or 1, and the scoped layer answers the same values as on Postgres.
+- **The SPA files are Workers Assets.** The deploy binds `ASSETS` to `fabrika/assets/` beside the Worker's config and,
+  after the application's build, copies each SPA and link mount's build directory there at the mount's prefix
+  (`@fabrika/provider-cloudflare`'s `spa-assets.ts`); a Worker that declares its own `assets` keeps them. The object
+  asks the binding for the request path as it is, and for a GET or HEAD it answers 404 asks for `<prefix>/`, the
+  mount's `index.html` (`bindingAssets`), so a deep link renders as under `diskAssets`.
 - **Jobs run on the object's alarm** (ADR-0065 §5). A job's pending work is a row of `fabrika_wakes`: a `cron` row at
   its next fire, a `kick`, `claim` or `retry` row. Every transaction that changes a wake or a lease arms the alarm at the
   earliest due wake of a job whose lease is free or expired, or at the earliest expiry of a held lease, and the alarm
