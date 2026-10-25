@@ -1,7 +1,9 @@
 -- One consistent backup of an application environment's object (ADR-0070), taken by the `backup` data operation that
--- names it, at most one per operation. `id` is the dump id, a UUIDv7 Control generates, which keys the dump in the
--- environment's bucket. The row keeps the progress a successor resumes from: the upload id and the bookmark from the
--- export's `begin`, every part in `app_env_backup_parts`, and the rehearsal's step, part count and last verify answer.
+-- names it, at most one per operation. `dump_id` is a UUIDv7 Control generates, which keys the dump in the
+-- environment's bucket; a successor that cannot continue the dump under the generation its `begin` ran at
+-- (`dump_generation`) starts a new one under a new dump id and drops the recorded parts. The row keeps the progress a
+-- successor resumes from: the upload id and the bookmark from the export's `begin`, every part in
+-- `app_env_backup_parts`, and the rehearsal's step, part count and last verify answer.
 -- `size_bytes`, `parts` and `tables` are set once the upload completed. `state` turns `succeeded` only once the rehearsal
 -- passed. Codes only, never a message, a value or a row's content. `size_bytes` is a double: a dump can pass int4, a
 -- bigint decodes as a string, and a double holds every integer up to 2^53.
@@ -11,6 +13,8 @@ CREATE TABLE app_env_backups (
 	env              TEXT NOT NULL,
 	operation_id     TEXT NOT NULL UNIQUE,
 	object           TEXT NOT NULL,
+	dump_id          TEXT NOT NULL UNIQUE,
+	dump_generation  INTEGER,
 	state            TEXT NOT NULL CHECK (state IN ('running', 'succeeded', 'failed')),
 	error_code       TEXT,
 	created_at       INTEGER NOT NULL,
@@ -25,7 +29,8 @@ CREATE TABLE app_env_backups (
 	rehearsal_step   TEXT CHECK (rehearsal_step IN ('part', 'link', 'verify', 'discard')),
 	rehearsal_parts  INTEGER,
 	rehearsal_cursor TEXT,
-	FOREIGN KEY (operation_id, app_id, env) REFERENCES app_env_data_operations(id, app_id, env) ON DELETE CASCADE
+	FOREIGN KEY (operation_id, app_id, env) REFERENCES app_env_data_operations(id, app_id, env) ON DELETE CASCADE,
+	FOREIGN KEY (app_id, env) REFERENCES app_envs(app_id, env) ON DELETE CASCADE
 );
 CREATE INDEX idx_app_env_backups_env ON app_env_backups(app_id, env, id);
 

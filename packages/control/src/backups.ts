@@ -10,7 +10,7 @@ import type { AppEnvRow, BackupRow, BackupScheduleRow, ControlRepositories } fro
 
 /** A backup counts for a day: an environment with a succeeded one younger than this is not due. */
 export const BACKUP_INTERVAL_S = 24 * 60 * 60
-/** A backup that did not succeed is tried again no sooner than this after it began, so a failing one never loops. */
+/** A backup that failed is tried again no sooner than this after it ended, so a failing one never loops. */
 export const BACKUP_RETRY_S = 60 * 60
 /** A dump is kept 30 days (ADR-0070 §5); an older one is expired and never offered for a restore. */
 export const BACKUP_RETENTION_S = 30 * 24 * 60 * 60
@@ -75,15 +75,15 @@ export async function runBackupSchedule(deps: BackupScheduleDeps): Promise<Backu
 			summary.errored++
 			continue
 		}
-		summary.started++
-		await turn(summary, row, () => startBackup(driving, { appId: row.app_id, env: row.env, actor: BACKUP_SCHEDULE_ACTOR }))
+		// Only a backup the pass created counts against the starts; a refused environment leaves the budget to the next.
+		if (await turn(summary, row, () => startBackup(driving, { appId: row.app_id, env: row.env, actor: BACKUP_SCHEDULE_ACTOR }))) summary.started++
 	}
 	return summary
 }
 
 /**
  * Whether the environment is due a daily backup: it has a domain, its approved access is served the ops channel, it did
- * not opt out, it has no succeeded backup from the last day, and no backup began within the retry interval. A running
+ * not opt out, it has no succeeded backup from the last day, and no backup failed within the retry interval. A running
  * operation, or a record that does not leave it open, refuses the start itself.
  */
 async function due(deps: BackupScheduleDeps, row: AppEnvRow, now: number): Promise<boolean> {
@@ -93,26 +93,29 @@ async function due(deps: BackupScheduleDeps, row: AppEnvRow, now: number): Promi
 	if (!dailyBackups(await deps.repositories.backups.getSchedule(row.app_id, row.env))) return false
 	const history = await deps.repositories.backups.history(row.app_id, row.env)
 	if (history.lastSucceeded !== null && history.lastSucceeded > now - BACKUP_INTERVAL_S) return false
-	return history.lastStarted === null || history.lastStarted <= now - BACKUP_RETRY_S
+	return history.lastFailed === null || history.lastFailed <= now - BACKUP_RETRY_S
 }
 
+/** Drives one environment's turn into the summary; `true` when an operation was driven. */
 async function turn(
 	summary: BackupScheduleSummary,
 	coordinates: { readonly app_id: string; readonly env: string },
 	drive: () => Promise<DataOperationOutcome | null>,
-): Promise<void> {
+): Promise<boolean> {
 	try {
 		const outcome = await drive()
 		if (outcome?.kind !== 'driven') {
 			summary.skipped++
-			return
+			return false
 		}
 		if (outcome.result === 'succeeded') summary.succeeded++
 		else if (outcome.result === 'failed') summary.failed++
 		else summary.unfinished++
+		return true
 	} catch (error) {
 		warn(coordinates, error)
 		summary.errored++
+		return false
 	}
 }
 

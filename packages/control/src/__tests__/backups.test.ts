@@ -265,7 +265,7 @@ for (const backend of backends) {
 			expect(await recordedMaintenance(b, TARGET)).toBe('open')
 		})
 
-		test('a pass out of time leaves the backup running; the next pass carries on without a second dump', async () => {
+		test('a pass out of time leaves the backup running; the next pass dumps again under a new dump id at its own generation', async () => {
 			const { b, fake, schedule } = await open()
 			let budget = 4
 			const passSpent = () => budget-- <= 0
@@ -274,22 +274,29 @@ for (const backend of backends) {
 			const [operation] = await b.repositories.dataOperations.listForEnvironment(APP, ENV, { limit: 1 })
 			expect(operation).toMatchObject({ kind: 'backup', state: 'running', step: 'backup', target_mode: 'read-only', generation: 1 })
 			expect(await recordedMaintenance(b, TARGET)).toBe('unsettled')
+			const [begun] = await backupsOf(b)
+			expect(begun).toMatchObject({ dump_generation: 1, upload_id: 'upload-1' })
+			expect((await b.repositories.backups.parts(begun?.id ?? '')).map((part) => part.part)).toEqual([1, 2])
 
-			// The next pass fences above every reserved generation in read-only, then sends only what the record lacks.
+			// The next pass fences above every reserved generation in read-only; the exporter bound the dump to generation 1.
 			fake.sent.length = 0
 			budget = 6
 			const second = await runBackupSchedule(schedule({ passSpent }))
 			expect(second).toMatchObject({ continued: 1, started: 0, unfinished: 1 })
 			expect(fake.requests()).toEqual([
 				'state application read-only @2',
+				'export begin @2',
+				'export part 1 @2',
+				'export part 2 @2',
 				'export part 3 @2',
 				'export complete @2',
 				'state application open @3',
 				'state rehearsal inspect @4',
-				'import begin @4',
-				'import part 1 @4',
-				'import part 2 @4',
 			])
+			const [restarted] = await backupsOf(b)
+			expect(restarted).toMatchObject({ id: begun?.id, dump_generation: 2, upload_id: 'upload-2', parts: 3 })
+			expect(restarted?.dump_id).not.toBe(begun?.dump_id)
+			expect(fake.dumps).toEqual(new Map([[begun?.dump_id ?? '', 1], [restarted?.dump_id ?? '', 2]]))
 
 			fake.sent.length = 0
 			const third = await runBackupSchedule(schedule({ passSpent: () => false }))
@@ -297,18 +304,21 @@ for (const backend of backends) {
 			expect(fake.requests()).toEqual([
 				'state application open @5',
 				'state rehearsal inspect @5',
+				'import begin @5',
+				'import part 1 @5',
+				'import part 2 @5',
 				'import part 3 @5',
 				'import link 2 @5',
 				'import verify @5',
 				'import verify @5',
 				'import discard @5',
 			])
-			expect(fake.begins).toBe(1)
-			expect(await backupsOf(b)).toMatchObject([{ state: 'succeeded', parts: 3, rehearsal: 'passed' }])
+			expect(fake.begins).toBe(2)
+			expect(await backupsOf(b)).toMatchObject([{ state: 'succeeded', parts: 3, rehearsal: 'passed', dump_id: restarted?.dump_id }])
 			expect(await recordedMaintenance(b, TARGET)).toBe('open')
 		})
 
-		test("a lost lease mid-dump stops the holder; its successor resumes the dump and refuses the former holder's late request", async () => {
+		test("a lost lease mid-dump stops the holder; its successor dumps again under a new dump id and refuses the former holder's late request", async () => {
 			const { b, fake, deps } = await open()
 			const clock = new ManualClock()
 			fake.fault = async (sent) => {
@@ -324,20 +334,29 @@ for (const backend of backends) {
 			fake.sent.length = 0
 			const resumed = await advanceDataOperation(deps({ clock }), stalled.kind === 'driven' ? stalled.operation.id : '')
 			expect(resumed).toMatchObject({ result: 'succeeded', operation: { state: 'succeeded' } })
-			expect(fake.requests().slice(0, 4)).toEqual(['state application read-only @2', 'export part 2 @2', 'export part 3 @2', 'export complete @2'])
-			expect(fake.begins).toBe(1)
+			expect(fake.requests().slice(0, 6)).toEqual([
+				'state application read-only @2',
+				'export begin @2',
+				'export part 1 @2',
+				'export part 2 @2',
+				'export part 3 @2',
+				'export complete @2',
+			])
+			expect(fake.begins).toBe(2)
 			const late = await fake.export(TARGET, {
 				step: 'part',
 				object: 'application',
 				generation: 1,
 				consistent: true,
-				dump: backup?.id ?? '',
+				dump: backup?.dump_id ?? '',
 				uploadId: 'upload-1',
 				part: 2,
 				cursor: cursorAt(2),
 			})
 			expect(late).toEqual({ kind: 'stale', published: { generation: 3, mode: 'open' } })
-			expect(await backupsOf(b)).toMatchObject([{ state: 'succeeded' }])
+			const [done] = await backupsOf(b)
+			expect(done).toMatchObject({ state: 'succeeded', dump_generation: 2 })
+			expect(done?.dump_id).not.toBe(backup?.dump_id)
 			expect((await b.repositories.backups.parts(backup?.id ?? '')).map((part) => part.part)).toEqual([1, 2, 3])
 		})
 
@@ -378,12 +397,12 @@ for (const backend of backends) {
 			seconds = T0 + BACKUP_RETRY_S
 			expect(await runBackupSchedule(schedule())).toMatchObject({ started: 1, succeeded: 1 })
 
-			// A deploy holds stage's lease: the schedule sends it nothing and tries again next pass.
+			// A deploy holds stage's lease: the schedule sends it nothing, starts nothing, and tries again next pass.
 			const lease = await new SqlDeployLocks(b.db).acquire(runLeaseKey(APP, 'stage'), 'operator', LEASE_TTL_MS)
 			expect(lease).toBe(true)
 			await environment(b, 'stage')
 			fake.sent.length = 0
-			expect(await runBackupSchedule(schedule())).toMatchObject({ started: 1, skipped: 1 })
+			expect(await runBackupSchedule(schedule())).toMatchObject({ started: 0, skipped: 1 })
 			expect(fake.requests('stage')).toEqual([])
 		})
 
@@ -423,10 +442,125 @@ for (const backend of backends) {
 			const stranger = { holder: uuidv7(), nowMs: Date.now() }
 			const input = { id: uuidv7(), appId: APP, env: ENV, operationId: backup.operation_id, object: 'application', preMigration: false }
 			expect(await b.repositories.backups.create(input, stranger)).toBeNull()
-			expect(await b.repositories.backups.fail(backup.id, 'invalid_answer', stranger)).toBe(false)
+			expect(await b.repositories.backups.settle({ backupId: backup.id, outcome: 'failed', code: 'invalid_answer' }, stranger)).toBe(false)
 			expect(await b.repositories.backups.addPart(backup.id, 4, '{}', stranger)).toBe(false)
 			expect(await backupsOf(b)).toEqual([backup])
-			await expect(b.repositories.backups.fail(backup.id, 'Error: tenant 7', stranger)).rejects.toThrow('backup code')
+			await expect(b.repositories.backups.settle({ backupId: backup.id, outcome: 'failed', code: 'Error: tenant 7' }, stranger)).rejects.toThrow(
+				'backup code',
+			)
+		})
+
+		/** Runs `write` under the environment's lease, as an operator holder that is not the schedule. */
+		async function asHolder<T>(b: Backend, env: string, write: (fence: { holder: string; nowMs: number }) => Promise<T>): Promise<T> {
+			const locks = new SqlDeployLocks(b.db)
+			expect(await locks.acquire(runLeaseKey(APP, env), 'operator', LEASE_TTL_MS)).toBe(true)
+			try {
+				return await write({ holder: 'operator', nowMs: Date.now() })
+			} finally {
+				await locks.release(runLeaseKey(APP, env), 'operator')
+			}
+		}
+
+		/** A backup paused after `requests` dump and import requests, its operation still running. */
+		async function paused(b: Backend, deps: (options: { passSpent?: () => boolean }) => DataOperationDeps, requests: number) {
+			let budget = requests
+			const outcome = await startBackup(deps({ passSpent: () => budget-- <= 0 }), { ...TARGET, actor: 'user:test' })
+			if (outcome.kind !== 'driven') throw new Error('the backup did not start')
+			const [backup] = await backupsOf(b)
+			if (backup === undefined) throw new Error('no backup')
+			return { operation: outcome.operation, backup }
+		}
+
+		test('a backup that ended before its operation moved is not dumped again: the step reopens the object and fails', async () => {
+			const { b, fake, deps } = await open()
+			const { operation, backup } = await paused(b, deps, 2)
+			expect(operation).toMatchObject({ state: 'running', step: 'backup' })
+			// A crash between the two writes of a holder that recorded them apart.
+			await asHolder(b, ENV, (fence) => b.repositories.backups.settle({ backupId: backup.id, outcome: 'failed', code: 'invalid_answer' }, fence))
+			fake.sent.length = 0
+			expect(await advanceDataOperation(deps(), operation.id)).toMatchObject({
+				result: 'failed',
+				operation: { state: 'failed', step: 'open', error_code: BACKUP_FAILED_CODE },
+			})
+			expect(fake.requests()).toEqual(['state application read-only @2', 'state application open @3'])
+			expect(await backupsOf(b)).toMatchObject([{ state: 'failed', error_code: 'invalid_answer' }])
+			expect(await recordedMaintenance(b, TARGET)).toBe('open')
+		})
+
+		test('a rehearsal that passed before its operation moved finishes the operation without importing again', async () => {
+			const { b, fake, deps } = await open()
+			const { operation, backup } = await paused(b, deps, 5)
+			expect(operation).toMatchObject({ state: 'running', step: 'verify' })
+			await asHolder(b, ENV, (fence) => b.repositories.backups.settle({ backupId: backup.id, outcome: 'succeeded' }, fence))
+			fake.sent.length = 0
+			expect(await advanceDataOperation(deps(), operation.id)).toMatchObject({ result: 'succeeded', operation: { state: 'succeeded' } })
+			expect(fake.requests().filter((request) => request.startsWith('import') || request.startsWith('export'))).toEqual([])
+			expect(await backupsOf(b)).toMatchObject([{ state: 'succeeded', rehearsal: 'passed' }])
+		})
+
+		test("an operation's step and its backup's checkpoint land together, or neither does", async () => {
+			const { b, deps } = await open()
+			const { operation, backup } = await paused(b, deps, 2)
+			const failed = { backupId: backup.id, outcome: 'failed', code: 'invalid_answer' } as const
+			const reopen = { expectedStep: 'backup', step: 'open', targetMode: 'open' } as const
+			const stranger = { holder: uuidv7(), nowMs: Date.now() }
+			expect(await b.repositories.dataOperations.advance(operation.id, reopen, stranger, failed)).toBe(false)
+			expect(await b.repositories.dataOperations.fail(operation.id, BACKUP_FAILED_CODE, stranger, failed)).toBe(false)
+			expect(await backupsOf(b)).toMatchObject([{ state: 'running', error_code: null }])
+			expect(await b.repositories.dataOperations.get(operation.id)).toMatchObject({ state: 'running', step: 'backup' })
+
+			await asHolder(b, ENV, async (fence) => {
+				// A checkpoint the backup cannot take holds the operation where it is.
+				expect(await b.repositories.backups.settle(failed, fence)).toBe(true)
+				expect(await b.repositories.dataOperations.advance(operation.id, reopen, fence, { backupId: backup.id, outcome: 'succeeded' })).toBe(false)
+				expect(await b.repositories.dataOperations.get(operation.id)).toMatchObject({ step: 'backup' })
+				// One already recorded still lets it move.
+				expect(await b.repositories.dataOperations.advance(operation.id, reopen, fence, failed)).toBe(true)
+			})
+			expect(await b.repositories.dataOperations.get(operation.id)).toMatchObject({ state: 'running', step: 'open' })
+			expect(await backupsOf(b)).toMatchObject([{ state: 'failed', error_code: 'invalid_answer' }])
+		})
+
+		test('environments that refuse a start do not spend the starts: an eligible fifth still starts', async () => {
+			const { b, fake, schedule } = await open()
+			const restricted = ['a1', 'a2', 'a3', 'a4']
+			for (const env of restricted) {
+				await environment(b, env)
+				const generation = await b.repositories.dataOperations.allocateGeneration(APP, env)
+				await asHolder(b, env, async (fence) => {
+					const fields = { id: uuidv7(), appId: APP, env, step: 'restrict', targetMode: 'closed', generation, actor: 'user:ops' } as const
+					const created = await b.repositories.dataOperations.create({ ...fields, kind: 'maintenance' }, fence)
+					expect(await b.repositories.dataOperations.finish(created?.id ?? '', fence)).toBe(true)
+				})
+			}
+			expect(await runBackupSchedule(schedule())).toMatchObject({ started: 1, skipped: 4, succeeded: 1 })
+			for (const env of restricted) expect(fake.requests(env)).toEqual([])
+			expect(await backupsOf(b)).toMatchObject([{ state: 'succeeded' }])
+		})
+
+		test('the retry interval runs from when a failed backup ended, however long it ran', async () => {
+			const { b, fake, schedule } = await open()
+			let budget = 2
+			expect(await runBackupSchedule(schedule({ passSpent: () => budget-- <= 0 }))).toMatchObject({ started: 1, unfinished: 1 })
+			const ended = T0 + 2 * 60 * 60
+			seconds = ended
+			fake.fault = (sent) => sent.op === 'export' ? { refused: 'unsupported_schema', table: 't1' } : undefined
+			expect(await runBackupSchedule(schedule())).toMatchObject({ continued: 1, failed: 1, started: 0 })
+			expect(await backupsOf(b)).toMatchObject([{ state: 'failed', created_at: T0, finished_at: ended }])
+			fake.fault = () => undefined
+			seconds = ended + BACKUP_RETRY_S - 1
+			expect(await runBackupSchedule(schedule())).toMatchObject({ started: 0 })
+			seconds = ended + BACKUP_RETRY_S
+			expect(await runBackupSchedule(schedule())).toMatchObject({ started: 1, succeeded: 1 })
+		})
+
+		test('deleting an environment deletes its backups and their parts', async () => {
+			const { b, deps } = await open()
+			expect(await startBackup(deps(), { ...TARGET, actor: 'user:test' })).toMatchObject({ result: 'succeeded' })
+			const [backup] = await backupsOf(b)
+			expect(await b.repositories.registry.deleteAppEnv(APP, ENV)).toBe(true)
+			expect(await backupsOf(b)).toEqual([])
+			expect(await b.repositories.backups.parts(backup?.id ?? '')).toEqual([])
 		})
 	})
 }

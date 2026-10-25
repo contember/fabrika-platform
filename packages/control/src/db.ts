@@ -1,4 +1,5 @@
 export {
+	type BackupCheckpoint,
 	type BackupCompletion,
 	type BackupHistory,
 	type BackupInput,

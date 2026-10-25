@@ -74,6 +74,8 @@ export class FakeEnvironments implements OpsTransport {
 	/** Export `begin`s answered: each starts another upload. */
 	begins = 0
 	upload: string | null = null
+	/** The generation each dump's `begin` ran at: as the exporter, a later step under another generation is refused. */
+	readonly dumps = new Map<string, number>()
 	rehearsal: { marker: Marker | null; tables: boolean } = { marker: null, tables: false }
 	/** The application object's migration ledger, which `inspect` reports and `migrate` extends. */
 	ledger: OpsMigration[] = []
@@ -152,6 +154,9 @@ export class FakeEnvironments implements OpsTransport {
 		const published = this.published.get(key(target, request.object)) ?? null
 		if (published === null || published.generation !== request.generation) return { kind: 'stale', published }
 		if (published.mode === 'open') return { kind: 'refused', refusal: { refused: 'wrong_mode', table: null } }
+		if (request.step !== 'begin' && this.dumps.get(request.dump) !== request.generation) {
+			return { kind: 'refused', refusal: { refused: 'ledger_mismatch', table: null } }
+		}
 		const answer = this.exportAnswer(request)
 		return fault === 'lose' ? { kind: 'unavailable', reason: 'unreachable' } : answer
 	}
@@ -159,6 +164,7 @@ export class FakeEnvironments implements OpsTransport {
 	private exportAnswer(request: OpsExportRequest): OpsDataAnswer<OpsExportAck> {
 		switch (request.step) {
 			case 'begin':
+				if (request.generation !== null) this.dumps.set(request.dump, request.generation)
 				this.begins++
 				this.upload = `upload-${this.begins}`
 				return { kind: 'ok', value: { step: 'begin', uploadId: this.upload, bookmark: 'bookmark-0001' } }

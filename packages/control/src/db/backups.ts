@@ -1,4 +1,4 @@
-import type { SqlDatabase } from '@fabrika/platform'
+import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import type { LeaseFence } from '../lease'
 import { firstRow } from './returning'
 
@@ -10,7 +10,6 @@ export type RehearsalOutcome = 'pending' | 'passed' | 'failed'
 export type RehearsalStep = 'part' | 'link' | 'verify' | 'discard'
 
 export interface BackupRow {
-	/** The dump id: a UUIDv7 Control generates, which keys the dump in the environment's bucket. */
 	id: string
 	app_id: string
 	env: string
@@ -20,6 +19,10 @@ export interface BackupRow {
 	pre_migration: number
 	/** The object the dump is taken from. */
 	object: string
+	/** The dump id: a UUIDv7 Control generates, which keys the dump in the environment's bucket; a restarted dump gets a new one. */
+	dump_id: string
+	/** The generation the export's `begin` ran at; `null` before it answered. The exporter binds the dump to it. */
+	dump_generation: number | null
 	/** `succeeded` only once the rehearsal passed. */
 	state: BackupState
 	/** A code once failed; never free text. */
@@ -89,10 +92,10 @@ export interface RehearsalProgress {
 	cursor?: string
 }
 
-/** When an environment's newest backup began, and its newest succeeded one; `null` while there is none. */
+/** When an environment's newest succeeded backup began, and when its newest failed one ended; `null` while there is none. */
 export interface BackupHistory {
-	lastStarted: number | null
 	lastSucceeded: number | null
+	lastFailed: number | null
 }
 
 const CODE = /^[a-z][a-z0-9_]{0,63}$/
@@ -100,6 +103,51 @@ const CODE = /^[a-z][a-z0-9_]{0,63}$/
 /** The lease row a backup's writes hold, derived from the backup row they write. */
 const backupLease = `EXISTS (SELECT 1 FROM deploy_locks
 	WHERE lock_key = app_env_backups.app_id || ':' || app_env_backups.env AND holder = ? AND expires_at > ?)`
+
+/**
+ * A backup's terminal record, written in one batch with its operation's next step or end
+ * (`DataOperationRepository.advance`, `finish`, `fail`), so no crash leaves one without the other.
+ */
+export type BackupCheckpoint =
+	| { readonly backupId: string; readonly outcome: 'failed'; readonly code: string }
+	| { readonly backupId: string; readonly outcome: 'rehearsal_failed'; readonly code: string }
+	| { readonly backupId: string; readonly outcome: 'succeeded' }
+
+/**
+ * The fenced statement that records `checkpoint` on a running backup, and the condition that holds once it is recorded,
+ * which the operation's write in the same batch requires. A checkpoint already recorded writes nothing and still holds.
+ */
+export function backupCheckpoint(
+	d1: SqlDatabase,
+	checkpoint: BackupCheckpoint,
+	now: number,
+	fence: LeaseFence,
+): { readonly write: SqlStatement; readonly recorded: { readonly sql: string; readonly values: readonly string[] } } {
+	const { backupId } = checkpoint
+	switch (checkpoint.outcome) {
+		case 'failed':
+			assertCode(checkpoint.code)
+			return {
+				write: d1.prepare(`UPDATE app_env_backups SET state = 'failed', error_code = ?, finished_at = ? WHERE id = ? AND state = 'running'
+					AND ${backupLease} RETURNING id`).bind(checkpoint.code, now, backupId, fence.holder, fence.nowMs),
+				recorded: { sql: `EXISTS (SELECT 1 FROM app_env_backups WHERE id = ? AND state = 'failed')`, values: [backupId] },
+			}
+		case 'rehearsal_failed':
+			assertCode(checkpoint.code)
+			return {
+				write: d1.prepare(`UPDATE app_env_backups
+					SET state = 'failed', error_code = 'rehearsal_failed', rehearsal = 'failed', rehearsal_code = ?, finished_at = ?
+					WHERE id = ? AND state = 'running' AND ${backupLease} RETURNING id`).bind(checkpoint.code, now, backupId, fence.holder, fence.nowMs),
+				recorded: { sql: `EXISTS (SELECT 1 FROM app_env_backups WHERE id = ? AND state = 'failed' AND rehearsal = 'failed')`, values: [backupId] },
+			}
+		case 'succeeded':
+			return {
+				write: d1.prepare(`UPDATE app_env_backups SET state = 'succeeded', rehearsal = 'passed', finished_at = ? WHERE id = ? AND state = 'running'
+					AND ${backupLease} RETURNING id`).bind(now, backupId, fence.holder, fence.nowMs),
+				recorded: { sql: `EXISTS (SELECT 1 FROM app_env_backups WHERE id = ? AND state = 'succeeded')`, values: [backupId] },
+			}
+	}
+}
 
 /**
  * Control's record of an environment's consistent backups (ADR-0070) and their daily schedule. Every write of a backup
@@ -119,9 +167,9 @@ export class BackupRepository {
 			),
 			this.d1
 				.prepare(`INSERT INTO app_env_backups
-					(id, app_id, env, operation_id, object, pre_migration, state, error_code, created_at, finished_at, bookmark, upload_id,
-						size_bytes, parts, tables, rehearsal, rehearsal_code, rehearsal_step, rehearsal_parts, rehearsal_cursor)
-				SELECT ?, ?, ?, ?, ?, ?, 'running', NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, 'pending', NULL, NULL, NULL, NULL
+					(id, app_id, env, operation_id, object, dump_id, dump_generation, pre_migration, state, error_code, created_at, finished_at,
+						bookmark, upload_id, size_bytes, parts, tables, rehearsal, rehearsal_code, rehearsal_step, rehearsal_parts, rehearsal_cursor)
+				SELECT ?, ?, ?, ?, ?, ?, NULL, ?, 'running', NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, 'pending', NULL, NULL, NULL, NULL
 				WHERE EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
 				RETURNING *`)
 				.bind(
@@ -130,6 +178,8 @@ export class BackupRepository {
 					input.env,
 					input.operationId,
 					input.object,
+					// The first dump takes the backup's own id.
+					input.id,
 					input.preMigration ? 1 : 0,
 					this.now(),
 					key,
@@ -160,13 +210,14 @@ export class BackupRepository {
 	}
 
 	async history(appId: string, env: string): Promise<BackupHistory> {
-		const row = await firstRow<{ last_started: number | null; last_succeeded: number | null }>(
+		const row = await firstRow<{ last_succeeded: number | null; last_failed: number | null }>(
 			this.d1
-				.prepare(`SELECT MAX(created_at) AS last_started, MAX(CASE WHEN state = 'succeeded' THEN created_at END) AS last_succeeded
+				.prepare(`SELECT MAX(CASE WHEN state = 'succeeded' THEN created_at END) AS last_succeeded,
+						MAX(CASE WHEN state = 'failed' THEN finished_at END) AS last_failed
 					FROM app_env_backups WHERE app_id = ? AND env = ?`)
 				.bind(appId, env),
 		)
-		return { lastStarted: row.last_started, lastSucceeded: row.last_succeeded }
+		return { lastSucceeded: row.last_succeeded, lastFailed: row.last_failed }
 	}
 
 	/** Every part recorded so far, in order. */
@@ -175,14 +226,33 @@ export class BackupRepository {
 		return results
 	}
 
-	/** The export's `begin` answered: the upload it started and the object's bookmark. */
-	async begun(id: string, upload: { uploadId: string; bookmark: string }, fence: LeaseFence): Promise<boolean> {
-		return await this.mutate(id, 'UPDATE app_env_backups SET upload_id = ?, bookmark = ? WHERE id = ? AND state = ? AND upload_id IS NULL', [
-			upload.uploadId,
-			upload.bookmark,
+	/** The export's `begin` answered at `generation`: the upload it started and the object's bookmark. */
+	async begun(id: string, upload: { uploadId: string; bookmark: string; generation: number }, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
 			id,
-			'running',
-		], fence)
+			'UPDATE app_env_backups SET upload_id = ?, bookmark = ?, dump_generation = ? WHERE id = ? AND state = ? AND upload_id IS NULL',
+			[upload.uploadId, upload.bookmark, upload.generation, id, 'running'],
+			fence,
+		)
+	}
+
+	/**
+	 * Starts the unfinished dump again under `dumpId`: its upload, bookmark, generation and recorded parts are dropped. The
+	 * old upload is abandoned, never completed, so nothing reads it.
+	 */
+	async restart(id: string, dumpId: string, fence: LeaseFence): Promise<boolean> {
+		const results = await this.d1.batch<{ id: string }>([
+			this.lockLease(id, fence),
+			this.d1
+				.prepare(`DELETE FROM app_env_backup_parts WHERE backup_id = ?
+					AND EXISTS (SELECT 1 FROM app_env_backups WHERE id = ? AND state = 'running' AND parts IS NULL AND ${backupLease})`)
+				.bind(id, id, fence.holder, fence.nowMs),
+			this.d1
+				.prepare(`UPDATE app_env_backups SET dump_id = ?, upload_id = NULL, bookmark = NULL, dump_generation = NULL
+					WHERE id = ? AND state = 'running' AND parts IS NULL AND ${backupLease} RETURNING id`)
+				.bind(dumpId, id, fence.holder, fence.nowMs),
+		])
+		return (results[2]?.results.length ?? 0) > 0
 	}
 
 	/** Records part `part` with the answer that uploaded it; `false` when the lease or the backup's state is not as expected. */
@@ -236,36 +306,14 @@ export class BackupRepository {
 		return await this.mutatePart(id, part, 'linked = 1', [], fence)
 	}
 
-	/** The rehearsal passed: the backup counts. Terminal. */
-	async succeed(id: string, fence: LeaseFence): Promise<boolean> {
-		return await this.mutate(id, `UPDATE app_env_backups SET state = 'succeeded', rehearsal = 'passed', finished_at = ? WHERE id = ? AND state = ?`, [
-			this.now(),
-			id,
-			'running',
-		], fence)
-	}
-
-	/** The dump was not taken. Terminal; the code is lowercase snake_case. */
-	async fail(id: string, code: string, fence: LeaseFence): Promise<boolean> {
-		assertCode(code)
-		return await this.mutate(id, `UPDATE app_env_backups SET state = 'failed', error_code = ?, finished_at = ? WHERE id = ? AND state = ?`, [
-			code,
-			this.now(),
-			id,
-			'running',
-		], fence)
-	}
-
-	/** The dump was taken and its rehearsal failed, so it does not count. Terminal. */
-	async rehearsalFailed(id: string, code: string, fence: LeaseFence): Promise<boolean> {
-		assertCode(code)
-		return await this.mutate(
-			id,
-			`UPDATE app_env_backups SET state = 'failed', error_code = 'rehearsal_failed', rehearsal = 'failed', rehearsal_code = ?, finished_at = ?
-				WHERE id = ? AND state = ?`,
-			[code, this.now(), id, 'running'],
-			fence,
-		)
+	/**
+	 * Records a terminal checkpoint on its own: the rehearsal passed, the dump was not taken, or its rehearsal failed. An
+	 * operation records one with its own step instead (`BackupCheckpoint`). `false` unless it changed a running backup.
+	 */
+	async settle(checkpoint: BackupCheckpoint, fence: LeaseFence): Promise<boolean> {
+		const { write } = backupCheckpoint(this.d1, checkpoint, this.now(), fence)
+		const results = await this.d1.batch<{ id: string }>([this.lockLease(checkpoint.backupId, fence), write])
+		return (results[1]?.results.length ?? 0) > 0
 	}
 
 	async getSchedule(appId: string, env: string): Promise<BackupScheduleRow | null> {

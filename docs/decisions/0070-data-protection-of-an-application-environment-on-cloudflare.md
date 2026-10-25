@@ -294,9 +294,12 @@ The verification of the migration phase (ADR-0069 §3) is this rehearsal.
   a domain (ADR-0069 §1), has not opted out, and has no successful backup from the last day. The operation publishes
   `read-only`, waits for the acknowledgement, takes the consistent backup, opens the object at a new generation, and
   then rehearses. The rehearsal reads the stored backup, so it runs after the object reopened. A pass is bounded in
-  time and in the backups it continues and starts, and a backup that does not finish continues in the next pass. After
-  a failed backup the environment waits an hour before the next attempt. A backup starts only from the schedule and
-  only while Control's record leaves the object `open`.
+  time and in the backups it continues and starts, and a backup that does not finish continues in the next pass. The
+  exporter binds a dump to the generation its `begin` ran at, and every pass fences a new one, so a dump the pass finds
+  begun under another generation starts again under a new dump id; the old upload is never completed, and the bucket's
+  lifecycle expires it. Control records a backup's outcome in the same write as its operation's next step. An hour after
+  a failed backup ended the environment is due again. A backup starts only from the schedule and only while Control's
+  record leaves the object `open`.
 - **Before a migration.** A deploy that brings a pending application migration to an environment at a gated release
   runs as one operation under the deploy lease: `read-only`, the backup, its rehearsal, the operation's own deploy, the
   migration request, then `open` at a new generation. A failed backup or rehearsal reopens the object and does not

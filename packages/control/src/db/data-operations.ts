@@ -1,5 +1,6 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { type LeaseFence, runLeaseKey } from '../lease'
+import { type BackupCheckpoint, backupCheckpoint } from './backups'
 import { firstRow } from './returning'
 
 /** What an environment's object admits (ADR-0069 §3). */
@@ -169,8 +170,11 @@ export class DataOperationRepository {
 		return row.generation
 	}
 
-	/** Moves a running operation from `expectedStep` to the next. `false`: the lease, the step or the state was not as expected. */
-	async advance(id: string, change: DataOperationAdvance, fence: LeaseFence): Promise<boolean> {
+	/**
+	 * Moves a running operation from `expectedStep` to the next. `false`: the lease, the step or the state was not as
+	 * expected. A `checkpoint` records its backup's outcome in the same batch; each of these writes takes one.
+	 */
+	async advance(id: string, change: DataOperationAdvance, fence: LeaseFence, checkpoint?: BackupCheckpoint): Promise<boolean> {
 		const sets = ['step = ?', 'updated_at = ?']
 		const setValues: (string | number)[] = [change.step, this.now()]
 		const where = ['id = ?', "state = 'running'", 'step = ?']
@@ -185,25 +189,29 @@ export class DataOperationRepository {
 			where.push('generation < ?')
 			whereValues.push(change.generation)
 		}
-		return await this.mutate(id, `UPDATE app_env_data_operations SET ${sets.join(', ')} WHERE ${where.join(' AND ')}`, [
-			...setValues,
-			...whereValues,
-		], fence)
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET ${sets.join(', ')} WHERE ${where.join(' AND ')}`,
+			[...setValues, ...whereValues],
+			fence,
+			checkpoint,
+		)
 	}
 
 	/** A running operation succeeded. Terminal: `false` once it has finished or failed. */
-	async finish(id: string, fence: LeaseFence): Promise<boolean> {
+	async finish(id: string, fence: LeaseFence, checkpoint?: BackupCheckpoint): Promise<boolean> {
 		const now = this.now()
 		return await this.mutate(
 			id,
 			`UPDATE app_env_data_operations SET state = 'succeeded', updated_at = ?, finished_at = ? WHERE id = ? AND state = 'running'`,
 			[now, now, id],
 			fence,
+			checkpoint,
 		)
 	}
 
 	/** A running operation failed with `errorCode`. Terminal: `false` once it has finished or failed. */
-	async fail(id: string, errorCode: string, fence: LeaseFence): Promise<boolean> {
+	async fail(id: string, errorCode: string, fence: LeaseFence, checkpoint?: BackupCheckpoint): Promise<boolean> {
 		if (!ERROR_CODE.test(errorCode)) throw new Error('a data operation error code is lowercase snake_case, at most 64 characters')
 		const now = this.now()
 		return await this.mutate(
@@ -211,17 +219,29 @@ export class DataOperationRepository {
 			`UPDATE app_env_data_operations SET state = 'failed', error_code = ?, updated_at = ?, finished_at = ? WHERE id = ? AND state = 'running'`,
 			[errorCode, now, now, id],
 			fence,
+			checkpoint,
 		)
 	}
 
-	private async mutate(id: string, sql: string, values: (string | number)[], fence: LeaseFence): Promise<boolean> {
+	private async mutate(id: string, sql: string, values: (string | number)[], fence: LeaseFence, checkpoint?: BackupCheckpoint): Promise<boolean> {
 		// As in `create`, the lease row stays locked through the write.
+		const lock = this.d1.prepare(`UPDATE deploy_locks SET holder = holder
+			WHERE lock_key = (SELECT app_id || ':' || env FROM app_env_data_operations WHERE id = ?)
+				AND holder = ? AND expires_at > ?`).bind(id, fence.holder, fence.nowMs)
+		if (checkpoint === undefined) {
+			const results = await this.d1.batch<{ id: string }>([
+				lock,
+				this.d1.prepare(`${sql} AND ${operationLease} RETURNING id`).bind(...values, fence.holder, fence.nowMs),
+			])
+			return (results[1]?.results.length ?? 0) > 0
+		}
+		// The operation moves only once its backup's checkpoint is recorded, so neither write lands without the other.
+		const { write, recorded } = backupCheckpoint(this.d1, checkpoint, this.now(), fence)
 		const results = await this.d1.batch<{ id: string }>([
-			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
-				WHERE lock_key = (SELECT app_id || ':' || env FROM app_env_data_operations WHERE id = ?)
-					AND holder = ? AND expires_at > ?`).bind(id, fence.holder, fence.nowMs),
-			this.d1.prepare(`${sql} AND ${operationLease} RETURNING id`).bind(...values, fence.holder, fence.nowMs),
+			lock,
+			write,
+			this.d1.prepare(`${sql} AND ${recorded.sql} AND ${operationLease} RETURNING id`).bind(...values, ...recorded.values, fence.holder, fence.nowMs),
 		])
-		return (results[1]?.results.length ?? 0) > 0
+		return (results[2]?.results.length ?? 0) > 0
 	}
 }

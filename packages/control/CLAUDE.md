@@ -402,8 +402,13 @@ other environment, before the provider prepares anything, and the write maps a r
   steps are `restrict` (`read-only`), `backup` (the export's steps), `open` at a new generation, then `verify`, the
   rehearsal into the object `rehearsal`. Every step and part is recorded fenced on the lease (`app_env_backups`,
   `app_env_backup_parts`), so a successor resumes where the record stops; a pass is bounded and leaves the rest to the
-  next. A failed export reopens the object; a failed rehearsal fails the backup with the object already open, and
-  `recordedMaintenance` reads both as `open`. An environment opts out in `app_env_backup_schedules` under
+  next. The exporter binds a dump to the generation its `begin` ran at, so a dump that a successor or the next pass
+  finds begun under another generation starts again under a new `dump_id`, its recorded parts dropped and its old
+  upload abandoned. A backup's terminal outcome is written in one lease-fenced batch with its operation's next step or
+  end (`BackupCheckpoint`), and a step that finds the outcome already written sends nothing. A failed export reopens the
+  object; a failed rehearsal fails the backup with the object already open, and `recordedMaintenance` reads both as
+  `open`. A pass starts at most four backups, counting only the ones it created, and an environment waits an hour after
+  its last failed backup ended. An environment opts out in `app_env_backup_schedules` under
   `data.manage`; `data.read` lists its backups, one older than 30 days as expired. `data.start` with kind `backup` still
   answers 501.
 - **A deploy that brings a pending application migration is a `migrate` data operation (`startMigration`, driven from

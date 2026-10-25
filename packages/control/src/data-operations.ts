@@ -57,6 +57,7 @@ import type { DataOperationDto } from '@fabrika/control-contract'
 import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import { isLeaseLoss, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import type {
+	BackupCheckpoint,
 	BackupPartRow,
 	BackupRow,
 	ControlRegistryRepository,
@@ -616,33 +617,32 @@ class OperationDriver {
 	/**
 	 * A backup: `restrict` publishes `read-only`; `backup` takes the dump at that generation; `open` publishes a new one,
 	 * and fails the operation when the dump failed; `verify` rehearses the dump in `rehearsal`. The backup record holds
-	 * each step's progress, so a successor carries on from it: a dump never restarts, and only one is ever recorded.
+	 * each step's progress, so a successor carries on from it, and only one backup is ever recorded. Each terminal
+	 * outcome of the backup is written with the operation's step, and a step that finds it already written sends nothing.
 	 */
 	private async backupStep(row: DataOperationRow): Promise<Step> {
 		const backup = await this.backupOf(row)
+		const reopen = async (checkpoint?: BackupCheckpoint): Promise<Step> => ({
+			kind: 'next',
+			row: await this.advance(row, { step: 'open', targetMode: 'open', generation: await this.allocate() }, checkpoint),
+		})
 		switch (row.step) {
 			case 'restrict': {
 				const published = await this.publish(row, 'read-only')
-				if (published.kind === 'refused') {
-					this.lease.assertWritten(await this.backups.fail(backup.id, published.code, this.lease.fence()))
-					return await this.failed(row, published.code)
-				}
+				if (published.kind === 'refused') return await this.failed(row, published.code, failedBackup(backup, published.code))
 				if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
 				return { kind: 'next', row: await this.advance(published.row, { step: 'backup' }) }
 			}
 			case 'backup': {
+				// A failed dump still reopens the object before the operation fails.
+				if (backup.state !== 'running') return await reopen()
 				const dumped = await this.dump(row, backup)
 				if (dumped.kind === 'paused' || dumped.kind === 'interrupted') return { kind: 'done', result: dumped.kind }
-				// A failed dump still reopens the object before the operation fails.
-				if (dumped.kind === 'failed') this.lease.assertWritten(await this.backups.fail(backup.id, dumped.code, this.lease.fence()))
-				return { kind: 'next', row: await this.advance(row, { step: 'open', targetMode: 'open', generation: await this.allocate() }) }
+				return await reopen(dumped.kind === 'failed' ? failedBackup(backup, dumped.code) : undefined)
 			}
 			case 'open': {
 				const published = await this.publish(row, 'open')
-				if (published.kind === 'refused') {
-					if (backup.state === 'running') this.lease.assertWritten(await this.backups.fail(backup.id, published.code, this.lease.fence()))
-					return await this.failed(row, published.code)
-				}
+				if (published.kind === 'refused') return await this.failed(row, published.code, failedBackup(backup, published.code))
 				if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
 				if (backup.state === 'failed') {
 					// A release that does not serve the dump changed nothing the object kept: the operation before decides.
@@ -651,14 +651,15 @@ class OperationDriver {
 				return { kind: 'next', row: await this.advance(published.row, { step: 'verify', generation: await this.allocate() }) }
 			}
 			case 'verify': {
-				const rehearsed = await this.rehearse(row, backup)
-				if (rehearsed.kind === 'paused' || rehearsed.kind === 'interrupted') return { kind: 'done', result: rehearsed.kind }
-				if (rehearsed.kind === 'failed') {
-					this.lease.assertWritten(await this.backups.rehearsalFailed(backup.id, rehearsed.code, this.lease.fence()))
-					return await this.failed(row, REHEARSAL_FAILED_CODE)
+				if (backup.state === 'failed') return await this.failed(row, backup.rehearsal === 'failed' ? REHEARSAL_FAILED_CODE : BACKUP_FAILED_CODE)
+				if (backup.state === 'running') {
+					const rehearsed = await this.rehearse(row, backup)
+					if (rehearsed.kind === 'paused' || rehearsed.kind === 'interrupted') return { kind: 'done', result: rehearsed.kind }
+					if (rehearsed.kind === 'failed') {
+						return await this.failed(row, REHEARSAL_FAILED_CODE, { backupId: backup.id, outcome: 'rehearsal_failed', code: rehearsed.code })
+					}
 				}
-				this.lease.assertWritten(await this.backups.succeed(backup.id, this.lease.fence()))
-				await this.finish(row)
+				await this.finish(row, { backupId: backup.id, outcome: 'succeeded' })
 				return { kind: 'done', result: 'succeeded' }
 			}
 			default:
@@ -675,39 +676,35 @@ class OperationDriver {
 	 */
 	private async migrateStep(row: DataOperationRow): Promise<Step> {
 		const backup = await this.backupOf(row)
-		const reopen = async (): Promise<Step> => ({
+		const reopen = async (checkpoint?: BackupCheckpoint): Promise<Step> => ({
 			kind: 'next',
-			row: await this.advance(row, { step: 'open', targetMode: 'open', generation: await this.allocate() }),
+			row: await this.advance(row, { step: 'open', targetMode: 'open', generation: await this.allocate() }, checkpoint),
 		})
 		switch (row.step) {
 			case 'restrict': {
 				const published = await this.publish(row, 'read-only')
-				if (published.kind === 'refused') {
-					this.lease.assertWritten(await this.backups.fail(backup.id, published.code, this.lease.fence()))
-					return await this.failed(row, published.code)
-				}
+				if (published.kind === 'refused') return await this.failed(row, published.code, failedBackup(backup, published.code))
 				if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
 				return { kind: 'next', row: await this.advance(published.row, { step: 'backup' }) }
 			}
 			case 'backup': {
+				if (backup.state !== 'running') return await reopen()
 				const dumped = await this.dump(row, backup)
 				if (dumped.kind === 'paused' || dumped.kind === 'interrupted') return { kind: 'done', result: dumped.kind }
-				if (dumped.kind === 'failed') {
-					this.lease.assertWritten(await this.backups.fail(backup.id, dumped.code, this.lease.fence()))
-					return await reopen()
-				}
+				if (dumped.kind === 'failed') return await reopen(failedBackup(backup, dumped.code))
 				return { kind: 'next', row: await this.advance(row, { step: 'verify' }) }
 			}
 			case 'verify': {
+				if (backup.state === 'failed') return await reopen()
+				if (backup.state === 'succeeded') return { kind: 'next', row: await this.advance(row, { step: 'deploy' }) }
 				// The rehearsal fences `rehearsal` at the record's generation, the one the object is published at.
 				const rehearsed = await this.rehearse(row, backup)
 				if (rehearsed.kind === 'paused' || rehearsed.kind === 'interrupted') return { kind: 'done', result: rehearsed.kind }
-				if (rehearsed.kind === 'failed') {
-					this.lease.assertWritten(await this.backups.rehearsalFailed(backup.id, rehearsed.code, this.lease.fence()))
-					return await reopen()
+				if (rehearsed.kind === 'failed') return await reopen({ backupId: backup.id, outcome: 'rehearsal_failed', code: rehearsed.code })
+				return {
+					kind: 'next',
+					row: await this.advance(await this.require(row.id), { step: 'deploy' }, { backupId: backup.id, outcome: 'succeeded' }),
 				}
-				this.lease.assertWritten(await this.backups.succeed(backup.id, this.lease.fence()))
-				return { kind: 'next', row: await this.advance(await this.require(row.id), { step: 'deploy' }) }
 			}
 			case 'deploy': {
 				const deploy = this.runDeploy
@@ -735,10 +732,7 @@ class OperationDriver {
 			}
 			case 'open': {
 				const published = await this.publish(row, 'open')
-				if (published.kind === 'refused') {
-					if (backup.state === 'running') this.lease.assertWritten(await this.backups.fail(backup.id, published.code, this.lease.fence()))
-					return await this.failed(row, published.code)
-				}
+				if (published.kind === 'refused') return await this.failed(row, published.code, failedBackup(backup, published.code))
 				if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
 				const reopened = await this.reopenedCode(row, backup)
 				if (reopened !== null) return await this.failed(published.row, reopened)
@@ -786,15 +780,23 @@ class OperationDriver {
 	/**
 	 * The consistent dump (ADR-0070 §2), from the progress the record holds: `begin` once, each part from the cursor the
 	 * last recorded part answered, then `complete` with the recorded parts and tables, whose manifest must describe them.
+	 * The exporter binds a dump to the generation its `begin` ran at, so a dump begun under another generation starts
+	 * again under a new dump id; its old upload is never completed.
 	 */
 	private async dump(row: DataOperationRow, start: BackupRow): Promise<DataResult<null>> {
 		let backup = start
-		const scope = { object: backup.object, generation: row.generation, consistent: true, dump: backup.id }
+		if (backup.parts !== null) return { kind: 'ok', value: null }
+		if (backup.upload_id !== null && backup.dump_generation !== row.generation) {
+			this.lease.assertWritten(await this.backups.restart(backup.id, uuidv7(), this.lease.fence()))
+			backup = await this.requireBackup(backup.id)
+		}
+		const scope = { object: backup.object, generation: row.generation, consistent: true, dump: backup.dump_id }
 		if (backup.upload_id === null || backup.bookmark === null) {
 			const begun = await this.exportStep({ ...scope, step: 'begin' })
 			if (begun.kind !== 'ok') return begun
 			if (begun.value.step !== 'begin') return invalidAnswer()
-			this.lease.assertWritten(await this.backups.begun(backup.id, begun.value, this.lease.fence()))
+			const upload = { uploadId: begun.value.uploadId, bookmark: begun.value.bookmark, generation: row.generation }
+			this.lease.assertWritten(await this.backups.begun(backup.id, upload, this.lease.fence()))
 			backup = await this.requireBackup(backup.id)
 		}
 		const { upload_id: uploadId, bookmark } = backup
@@ -834,7 +836,7 @@ class OperationDriver {
 		if (fenced.kind === 'refused') return { kind: 'failed', code: fenced.code }
 		if (fenced.kind !== 'acked') return fenced
 		const generation = fenced.row.generation
-		const source = { object: initial.object, dump: initial.id }
+		const source = { object: initial.object, dump: initial.dump_id }
 		const scope = { object: OPS_REHEARSAL_OBJECT, generation, source }
 		const discard = { step: 'discard', object: OPS_REHEARSAL_OBJECT, generation } as const
 		let backup = initial
@@ -999,24 +1001,37 @@ class OperationDriver {
 		return await this.records.allocateGeneration(this.target.appId, this.target.env)
 	}
 
-	private async advance(row: DataOperationRow, change: Omit<DataOperationAdvance, 'expectedStep'>): Promise<DataOperationRow> {
+	private async advance(
+		row: DataOperationRow,
+		change: Omit<DataOperationAdvance, 'expectedStep'>,
+		checkpoint?: BackupCheckpoint,
+	): Promise<DataOperationRow> {
 		// Under this holder's lease nobody else moves the step, so a refused write means the lease is gone.
-		this.lease.assertWritten(await this.records.advance(row.id, { expectedStep: row.step, ...change }, this.lease.fence()))
+		this.lease.assertWritten(await this.records.advance(row.id, { expectedStep: row.step, ...change }, this.lease.fence(), checkpoint))
 		return await this.require(row.id)
 	}
 
-	private async finish(row: DataOperationRow): Promise<void> {
-		this.lease.assertWritten(await this.records.finish(row.id, this.lease.fence()))
+	private async finish(row: DataOperationRow, checkpoint?: BackupCheckpoint): Promise<void> {
+		this.lease.assertWritten(await this.records.finish(row.id, this.lease.fence(), checkpoint))
 	}
 
-	private async fail(row: DataOperationRow, code: string): Promise<void> {
-		this.lease.assertWritten(await this.records.fail(row.id, code, this.lease.fence()))
+	private async fail(row: DataOperationRow, code: string, checkpoint?: BackupCheckpoint): Promise<void> {
+		this.lease.assertWritten(await this.records.fail(row.id, code, this.lease.fence(), checkpoint))
 	}
 
-	private async failed(row: DataOperationRow, code: string): Promise<{ readonly kind: 'done'; readonly result: 'failed' }> {
-		await this.fail(row, code)
+	private async failed(
+		row: DataOperationRow,
+		code: string,
+		checkpoint?: BackupCheckpoint,
+	): Promise<{ readonly kind: 'done'; readonly result: 'failed' }> {
+		await this.fail(row, code, checkpoint)
 		return { kind: 'done', result: 'failed' }
 	}
+}
+
+/** The checkpoint that fails a backup still running with `code`; none once it ended. */
+function failedBackup(backup: BackupRow, code: string): BackupCheckpoint | undefined {
+	return backup.state === 'running' ? { backupId: backup.id, outcome: 'failed', code } : undefined
 }
 
 function invalidAnswer(): DataStop {
@@ -1039,7 +1054,7 @@ function describes(
 		const recorded = tables.at(index)
 		return recorded !== undefined && table.name === recorded.name && table.rows === recorded.rows && table.hash === recorded.hash
 	})
-	return manifest.dump === backup.id && manifest.object === backup.object && manifest.consistent && manifest.bookmark === bookmark && sameParts
+	return manifest.dump === backup.dump_id && manifest.object === backup.object && manifest.consistent && manifest.bookmark === bookmark && sameParts
 		&& sameTables
 }
 
