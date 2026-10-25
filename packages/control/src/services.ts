@@ -88,6 +88,7 @@ export function vault(env: Env): Promise<Vault> {
 
 /** Assemble provider-neutral run dependencies around one statically selected provider. */
 export async function buildRunDeps(env: Env, provider: ControlProvider): Promise<RunDeps> {
+	const { opsTransport } = opsTransportDeps(env)
 	return {
 		repositories: repositories(env),
 		provider,
@@ -112,6 +113,8 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		...platformTransportDeps(env),
 		...tokenKeyDeps(env),
 		...opsKeyDeps(env),
+		// A deploy that brings a migration asks the object first (ADR-0069 §3); without the channel it never deploys.
+		...(opsTransport === undefined ? {} : { ops: opsTransport }),
 	}
 }
 
