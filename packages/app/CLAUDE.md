@@ -864,8 +864,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   holds and may read (an input file, a put, or a file column read under its table's read action), and refuses any
   other (`wrong_capability`). A query creates no file. Never read a file by its id alone.
 - **The sweep job is a framework job** (`FILE_SWEEP_JOB`, hourly, `StoredFileKinds.sweep(signal)`): it deletes the
-  files no declared column references once past the grace, row and deletion record first, object after, in bounded
-  batches. Its name and schedule are in `files/job-names.ts`, which `contractRecipe` schedules: platform protocol, so change them only additively (ADR-0062).
+  files no declared column references once past the grace, row and deletion record first, in bounded batches; the
+  deletion record is a tombstone, and the object goes only once its key was queued longer than `fileRetentionMs`
+  (`boot`'s option: zero on Bun, `FILE_TOMBSTONE_RETENTION_MS` on Cloudflare, the backups' retention), claimed before
+  the delete so a restore's `cancelDeletions` wins over a sweep that already read the key. A file kind named `__fabrika`
+  or starting with it is refused: the framework keeps its own objects under that prefix. Its name and schedule are in `files/job-names.ts`, which `contractRecipe` schedules: platform protocol, so change them only additively (ADR-0062).
   `serveContract` opens the object storage from `FABRIKA_APP_STORAGE_*` (all or none). Never return a storage URL or
   presign one.
 - **Only a completed clean verdict promotes a file** (`scan.ts`). A file of a `scan: true` kind is

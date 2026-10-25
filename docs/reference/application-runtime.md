@@ -701,10 +701,13 @@ deal_attachments: {
 - **Removing.** Clearing the column or deleting the row removes the reference. The framework's sweep job
   (`fabrika-file-sweep`, `FILE_SWEEP_JOB`, a reserved name, hourly at minute 41) first finishes the deletions a crash
   interrupted, then adopts the legacy files a declared column references, then deletes, in batches, every file past the
-  pending grace that no declared column references. Each in three steps: one transaction deletes the file's row and
-  records its object key in `fabrika_file_deletions` (the foreign key refuses the delete while a reference exists, and
-  a write that holds the row `FOR SHARE` makes it wait); then the object is deleted; then the record. A failed sweep
-  fails the run (`file_sweep_failed`), and the next run finishes it. The grace counts from the file's creation. On
+  pending grace that no declared column references. One transaction deletes the file's row and records its object key
+  in `fabrika_file_deletions` (the foreign key refuses the delete while a reference exists, and a write that holds the
+  row `FOR SHARE` makes it wait). The record is a tombstone: the object is deleted only once its key has been queued
+  longer than the runtime's retention window (none on Bun; 30 days on Cloudflare, the backups' retention, so a restored
+  backup's rows still find their files), by claiming the record first, then deleting the object. A restore cancels the
+  tombstones of the keys its rows reference. A failed sweep fails the run (`file_sweep_failed`), and the next run
+  finishes it. The grace counts from the file's creation. On
   Zerops the crontab runs the sweep when the contract declares a file kind; on Cloudflare the object runs it on the
   Worker's minute tick.
 - **Legacy files.** `0008_files.sql` copies the held files of every file collection of framework 0.6 and earlier into
