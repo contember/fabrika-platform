@@ -14,8 +14,11 @@ export type DeclaredEgress = readonly string[] | PublicEgress
 /**
  * The name suffixes public egress refuses, each with every name under it: local and special-use names (RFC 6761,
  * RFC 6762, RFC 8375, RFC 9476), the names private networks conventionally use (`.internal` holds Google's metadata
- * host and Control's own `operations.internal`), Cloudflare's `workers.dev`, where an installation's Workers have
- * their default routes, and the `zerops` suffix of a Zerops project's private network.
+ * host and Control's own `operations.internal`), and the platform subdomains an installation is served on beside its
+ * own domains: Cloudflare's `workers.dev`, where its Workers have their default routes, and Zerops' `zerops.app`, where
+ * its proxies, Control and IAM have their subdomains (a namespace proxy's `proxy-…-8080.<region>.zerops.app`), with the
+ * `zerops` suffix of a Zerops project's private network. Control knows no list of those subdomains, so every one is
+ * refused, another installation's too.
  */
 export const PUBLIC_EGRESS_REFUSED_SUFFIXES = [
 	'localhost',
@@ -33,12 +36,13 @@ export const PUBLIC_EGRESS_REFUSED_SUFFIXES = [
 	'onion',
 	'alt',
 	'zerops',
+	'zerops.app',
 	'workers.dev',
 ] as const
 
-/** A host name without its trailing dot, lowercased: the form every comparison here uses. */
+/** A host name without its trailing dots, lowercased: the form every comparison here uses. */
 export function normalizedHost(hostname: string): string {
-	return hostname.toLowerCase().replace(/\.$/, '')
+	return hostname.toLowerCase().replace(/\.+$/, '')
 }
 
 const IPV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/
@@ -55,6 +59,7 @@ export function publicEgressRefusal(url: URL, refusedHosts: ReadonlySet<string> 
 	const host = normalizedHost(url.hostname)
 	if (host.startsWith('[') || IPV4.test(host)) return `${host} is an IP address, not a public host name`
 	if (!host.includes('.')) return `${host} is a name of one label, as an internal service or a local machine has`
+	if (host.split('.').some((label) => label === '')) return `${host} has an empty label`
 	const suffix = PUBLIC_EGRESS_REFUSED_SUFFIXES.find((refused) => host === refused || host.endsWith(`.${refused}`))
 	if (suffix !== undefined) return `${host} is under .${suffix}, which names no public website`
 	if (refusedHosts.has(host)) return `${host} is a host of this installation`

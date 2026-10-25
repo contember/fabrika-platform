@@ -205,6 +205,43 @@ describe('the guard under public egress', () => {
 		expect(hops).toBe(PUBLIC_EGRESS_LIMITS.maxRedirects + 1)
 	})
 
+	test('sends no Host, forwarding, Sec- or X-Fabrika header on any hop, in follow and in manual mode', async () => {
+		const { calls, stub } = stubFetch((url) =>
+			url === 'https://www.example.com/'
+				? new Response(null, { status: 302, headers: { location: 'https://cdn.example.net/' } })
+				: new Response('ok')
+		)
+		restore = () => stub.mockRestore()
+		const headers = {
+			host: 'iam.acme.cz',
+			'x-forwarded-host': 'iam.acme.cz',
+			forwarded: 'host=iam.acme.cz',
+			'x-fabrika-token': 'secret',
+			'sec-fetch-site': 'same-origin',
+			'proxy-authorization': 'Basic x',
+			'user-agent': 'site-auditor',
+		}
+		await runAsSite(site, NO_RULES, () => fetch('https://www.example.com/', { headers }))
+		await runAsSite(site, NO_RULES, () => fetch('https://www.example.com/', { headers, redirect: 'manual' }))
+		expect(calls.map((call) => call.url)).toEqual(['https://www.example.com/', 'https://cdn.example.net/', 'https://www.example.com/'])
+		for (const call of calls) {
+			expect([...new Headers(call.init?.headers).keys()]).toEqual(['user-agent'])
+		}
+	})
+
+	test('refuses a preconnect under public egress, and to an undeclared origin; passes only standard fields to an origin', async () => {
+		const { calls, stub } = stubFetch(() => new Response('ok'))
+		restore = () => stub.mockRestore()
+		expect(await refusalOf(async () => runAsSite(site, NO_RULES, async () => fetch.preconnect('https://www.example.com/')))).toMatchObject({
+			reason: 'refused_egress',
+		})
+		expect(await refusalOf(async () => runAsSite(site, ['https://api.example.com'], async () => fetch.preconnect('https://other.example.com/'))))
+			.toMatchObject({ reason: 'undeclared_egress' })
+		const bunOnly = JSON.parse('{"unix":"/var/run/docker.sock","proxy":"http://10.0.0.1:3128","method":"POST","body":"x"}')
+		await runAsSite(site, ['https://api.example.com'], () => fetch('https://api.example.com/v1', bunOnly))
+		expect(calls.map((call) => call.init)).toEqual([{ method: 'POST', body: 'x' }])
+	})
+
 	test('a 303 turns a POST into a GET without its body; a 307 sends the body again', async () => {
 		const { calls, stub } = stubFetch((url) => {
 			if (url === 'https://forms.example.com/see') return new Response(null, { status: 303, headers: { location: '/done' } })

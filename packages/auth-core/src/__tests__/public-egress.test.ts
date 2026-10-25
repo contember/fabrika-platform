@@ -28,6 +28,8 @@ describe('publicEgressRefusal', () => {
 		['http://metadata.google.internal/', '.internal'],
 		['http://router.home.arpa/', '.arpa'],
 		['https://notes-prod.acme.workers.dev/', '.workers.dev'],
+		['https://proxy-ns1-8080.prg1.zerops.app/', '.zerops.app'],
+		['https://www.example..com/', 'empty label'],
 		['http://app.prg1.zerops/', '.zerops'],
 	])('refuses %s', (url, reason) => {
 		expect(refusal(url)).toContain(reason)
@@ -36,11 +38,13 @@ describe('publicEgressRefusal', () => {
 	test("refuses the installation's hosts exactly, not their siblings", () => {
 		expect(refusal('https://iam.acme.cz/token', ['iam.acme.cz'])).toContain('is a host of this installation')
 		expect(refusal('https://IAM.acme.cz./', ['iam.acme.cz'])).toContain('is a host of this installation')
+		expect(refusal('https://iam.acme.cz../', ['iam.acme.cz'])).toContain('is a host of this installation')
 		expect(refusal('https://www.acme.cz/', ['iam.acme.cz'])).toBeNull()
 	})
 
 	test('normalizes a host: lowercase, no trailing dot', () => {
 		expect(normalizedHost('Www.Example.COM.')).toBe('www.example.com')
+		expect(normalizedHost('www.example.com...')).toBe('www.example.com')
 	})
 })
 
