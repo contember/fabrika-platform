@@ -9,11 +9,13 @@ import {
 	FABRIKA_APPLICATION_OBJECTS,
 	FABRIKA_OPS_KEY_DIGESTS,
 	formatEndpointHeader,
+	OPS_DATA_REFUSED_STATUS,
 	OPS_METHOD,
 	OPS_ROW_COUNT_CAP,
 	OPS_STALE_STATUS,
 	type OpsBootFailureContent,
 	type OpsContentView,
+	type OpsDataRefusal,
 	opsKeyDigest,
 	type OpsOperation,
 	type OpsPublishedState,
@@ -42,7 +44,7 @@ import { timingSafeEqual } from 'node:crypto'
 import appPackage from '../../package.json' with { type: 'json' }
 import { jsonResponse } from '../errors.js'
 import { serveExport } from './export.js'
-import { serveImport } from './import.js'
+import { importInProgress, serveImport } from './import.js'
 import type { MaintenanceBarrier, TransitionResult } from './maintenance.js'
 import { serveRestore } from './restore.js'
 import { serveTimers } from './tracker.js'
@@ -168,7 +170,10 @@ export async function serveOps(request: Request, access: OpsAccess | null, targe
 		}
 		case 'state': {
 			const transition = parseOpsStateRequest(body)
-			return transition === null ? opsRefusal() : transitionAnswer(await barrier.transition(transition))
+			const { kv } = target.storage
+			// ADR-0070 §6: an object that holds an import marker never leaves `inspect`.
+			const frozen = () => kv !== undefined && importInProgress({ kv })
+			return transition === null ? opsRefusal() : transitionAnswer(await barrier.transition(transition, frozen))
 		}
 		case 'migrate': {
 			const migration = parseOpsMigrateRequest(body)
@@ -202,6 +207,10 @@ function transitionAnswer(result: TransitionResult): Response {
 			return staleRefusal(result.published)
 		case 'failed':
 			return new Response(null, { status: 503 })
+		case 'frozen': {
+			const refusal: OpsDataRefusal = { refused: 'wrong_mode', table: null }
+			return jsonResponse(refusal, OPS_DATA_REFUSED_STATUS)
+		}
 	}
 }
 

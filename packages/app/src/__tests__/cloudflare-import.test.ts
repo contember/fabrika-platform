@@ -130,9 +130,11 @@ function ddlOf(storage: SqliteStorage): OpsDumpSchemaEntry[] {
 function tableRows(storage: SqliteStorage, table: OpsDumpTablePlan): (readonly OpsDumpValue[])[] {
 	const keyset = `"${table.keyset}"`
 	const projections = table.columns.map((column) => opsDumpColumnProjection(column)).join(', ')
-	const names = table.columns.flatMap((_, index) => [`t${index}`, `v${index}`])
+	const names = table.columns.flatMap((_, index) => [`t${index}`, `v${index}`]).join(', ')
+	// Qualified, so a table named `page` is not the CTE itself.
+	const source = `main."${table.name}"`
 	return storage.sql.exec(
-		`WITH page(k, ${names.join(', ')}) AS (SELECT CAST(${keyset} AS TEXT), ${projections} FROM "${table.name}" ORDER BY ${keyset}) SELECT * FROM page`,
+		`WITH page(k, ${names}) AS (SELECT CAST(${keyset} AS TEXT), ${projections} FROM ${source} ORDER BY ${keyset}) SELECT * FROM page`,
 	).toArray().map((
 		row,
 	) => [readOpsDumpValue('integer', row['k']), ...table.columns.map((_, index) => readOpsDumpValue(row[`t${index}`], row[`v${index}`]))])
@@ -195,13 +197,16 @@ interface DumpOptions {
 	/** How many lines the first part holds; the rest go to a second part. All in one part by default. */
 	readonly split?: number
 	readonly edit?: (manifest: OpsDumpManifest) => OpsDumpManifest
+	/** Rewrites the lines the parts hold; the manifest's tables stay the source's. */
+	readonly lines?: (lines: OpsDumpLine[]) => OpsDumpLine[]
 }
 
 /** The backup of `storage` under `__fabrika/backups/`, as the producer writes it, into `objects`. */
 function writeDump(objects: Map<string, Uint8Array>, storage: SqliteStorage, options: DumpOptions = {}): OpsDumpManifest {
 	const consistent = options.consistent ?? true
 	const source = options.source ?? SOURCE
-	const lines = linesOf(storage).map((line) => encodeOpsDumpLine(line))
+	const read = linesOf(storage)
+	const lines = (options.lines?.(read) ?? read).map((line) => encodeOpsDumpLine(line))
 	const groups = options.split === undefined ? [lines] : [lines.slice(0, options.split), lines.slice(options.split)]
 	const members = groups.map((group, index) => member(group, index < groups.length - 1 ? OPS_DUMP_PART_SIZE : null))
 	const parts: OpsDumpPart[] = members.map((bytes, index) => ({ part: index + 1, size: bytes.length, sha256: sha256(bytes) }))
@@ -612,10 +617,318 @@ describe('discard', () => {
 		expect(await refusal(unmarked, { step: 'discard', object: TARGET, generation: GENERATION })).toEqual({ refused: 'no_import', table: null })
 		expect(one(unmarked.storage, `SELECT count(*) FROM sqlite_schema WHERE name = 'kept'`)).toBe(1)
 
-		const serving = freshTarget(objects, { serving: TARGET })
-		await step(serving, { ...scope(), step: 'begin' })
+		const marked = freshTarget(objects)
+		await step(marked, { ...scope(), step: 'begin' })
+		const serving: Target = { ...marked, serving: TARGET }
 		expect(await refusal(serving, { step: 'discard', object: TARGET, generation: GENERATION })).toEqual({ refused: 'serving_object', table: null })
 		expect(serving.storage.kv.get(IMPORT_MARKER_KEY)).toBeDefined()
+	})
+})
+
+/** Every step Control may send, under `scope()`. */
+function everyStep(): OpsImportRequest[] {
+	return [
+		{ ...scope(), step: 'begin' },
+		{ ...scope(), step: 'part', part: 1 },
+		{ ...scope(), step: 'link', part: 1 },
+		{ ...scope(), step: 'verify', cursor: null },
+		{ ...scope(), step: 'complete' },
+		{ step: 'discard', object: TARGET, generation: GENERATION },
+	]
+}
+
+/** Every verify step from the start, as Control chains them; the last answer. */
+async function verifyAll(target: Target, gate?: MaintenanceBarrier): Promise<{ status: number; body: unknown }> {
+	let cursor: OpsDumpCursor | null = null
+	for (;;) {
+		const answer = await stepOn(target, gate ?? (await barrier()), { ...scope(), step: 'verify', cursor })
+		const next = answer.status === 200 ? parseOpsImportVerifyAck(answer.body)?.next ?? null : null
+		if (next === null) return answer
+		cursor = next
+	}
+}
+
+async function stepOn(target: Target, gate: MaintenanceBarrier, request: OpsImportRequest): Promise<{ status: number; body: unknown }> {
+	const response = await importStep(target, gate, request)
+	return { status: response.status, body: await response.json() }
+}
+
+/** Whether `promise` settles within a few turns of the event loop. */
+async function settles(promise: Promise<unknown>): Promise<boolean> {
+	const settled = promise.then(() => true, () => true)
+	return await Promise.race([settled, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20))])
+}
+
+/** `objects` as R2, every ranged read held from the moment it starts until `release`. */
+function heldRanges(objects: Map<string, Uint8Array>) {
+	const inner = r2(objects)
+	const started = Promise.withResolvers<void>()
+	const gate = Promise.withResolvers<void>()
+	return {
+		bucket: {
+			async get(key: string, options?: { readonly range?: { readonly offset: number; readonly length: number } }) {
+				if (options?.range !== undefined) {
+					started.resolve()
+					await gate.promise
+				}
+				return await inner.get(key, options)
+			},
+		},
+		started: started.promise,
+		release: () => gate.resolve(),
+	}
+}
+
+describe('complete', () => {
+	test('is refused before every part loaded, before the link pass, and before a full verification, and keeps the marker', async () => {
+		const objects = new Map<string, Uint8Array>()
+		writeDump(objects, (await sourceDatabase()).storage)
+		const target = freshTarget(objects)
+		await step(target, { ...scope(), step: 'begin' })
+
+		expect(await refusal(target, { ...scope(), step: 'complete' })).toEqual({ refused: 'part_mismatch', table: null })
+		expect(parseOpsImportPartAck((await step(target, { ...scope(), step: 'part', part: 1 })).body)).toMatchObject({ deferred: 6 })
+		expect(await refusal(target, { ...scope(), step: 'complete' })).toEqual({ refused: 'part_mismatch', table: null })
+		await step(target, { ...scope(), step: 'link', part: 1 })
+		expect(await refusal(target, { ...scope(), step: 'complete' })).toEqual({ refused: 'verify_mismatch', table: null })
+		expect(target.storage.kv.get(IMPORT_MARKER_KEY)).toBeDefined()
+
+		expect((await verifyAll(target)).status).toBe(200)
+		expect((await step(target, { ...scope(), step: 'complete' })).status).toBe(200)
+		expect(target.storage.kv.get(IMPORT_MARKER_KEY)).toBeUndefined()
+	})
+
+	test('is refused after a verification that failed', async () => {
+		const objects = new Map<string, Uint8Array>()
+		writeDump(objects, (await sourceDatabase()).storage)
+		const target = freshTarget(objects)
+		await step(target, { ...scope(), step: 'begin' })
+		await step(target, { ...scope(), step: 'part', part: 1 })
+		await step(target, { ...scope(), step: 'link', part: 1 })
+		expect((await verifyAll(target)).status).toBe(200)
+		target.storage.sql.exec(`UPDATE employees SET name = 'z' WHERE id = 2`)
+
+		expect(parseOpsDataRefusal((await verifyAll(target)).body)).toEqual({ refused: 'verify_mismatch', table: 'employees' })
+		expect(await refusal(target, { ...scope(), step: 'complete' })).toEqual({ refused: 'verify_mismatch', table: null })
+		expect(target.storage.kv.get(IMPORT_MARKER_KEY)).toBeDefined()
+	})
+
+	test('is refused after a verify that skipped ahead with a cursor the object never handed out', async () => {
+		const objects = new Map<string, Uint8Array>()
+		const manifest = writeDump(objects, (await sourceDatabase()).storage)
+		const target = freshTarget(objects)
+		await step(target, { ...scope(), step: 'begin' })
+		await step(target, { ...scope(), step: 'part', part: 1 })
+		await step(target, { ...scope(), step: 'link', part: 1 })
+		const last = manifest.tables.at(-1)?.name ?? ''
+		const skipped: OpsDumpCursor = { table: last, after: null, rows: 0, hash: OPS_EMPTY_TABLE_HASH }
+
+		expect(await refusal(target, { ...scope(), step: 'verify', cursor: skipped })).toEqual({ refused: 'verify_mismatch', table: last })
+		expect(await refusal(target, { ...scope(), step: 'complete' })).toEqual({ refused: 'verify_mismatch', table: null })
+	})
+
+	test('needs a new verification after a link pass that ran once the last one finished', async () => {
+		const objects = new Map<string, Uint8Array>()
+		const source = await sourceDatabase()
+		// The last line, sqlite_sequence's, alone in part 2, which has no deferred key.
+		writeDump(objects, source.storage, { split: linesOf(source.storage).length - 1 })
+		const target = freshTarget(objects)
+		await step(target, { ...scope(), step: 'begin' })
+		await step(target, { ...scope(), step: 'part', part: 1 })
+		expect(parseOpsImportPartAck((await step(target, { ...scope(), step: 'part', part: 2 })).body)).toMatchObject({ deferred: 0 })
+		await step(target, { ...scope(), step: 'link', part: 1 })
+		expect((await verifyAll(target)).status).toBe(200)
+
+		expect(parseOpsImportLinkAck((await step(target, { ...scope(), step: 'link', part: 2 })).body)).toEqual({ step: 'link', part: 2, rows: 0 })
+
+		expect(await refusal(target, { ...scope(), step: 'complete' })).toEqual({ refused: 'verify_mismatch', table: null })
+		expect((await verifyAll(target)).status).toBe(200)
+		expect((await step(target, { ...scope(), step: 'complete' })).status).toBe(200)
+	})
+
+	test('retried after it succeeded answers the same acknowledgement, and holds no marker', async () => {
+		const objects = new Map<string, Uint8Array>()
+		writeDump(objects, (await sourceDatabase()).storage)
+		const target = freshTarget(objects)
+		await importAll(target)
+
+		const again = await step(target, { ...scope(), step: 'complete' })
+
+		expect(again.status).toBe(200)
+		expect(parseOpsImportCompleteAck(again.body)).toEqual({ step: 'complete', source: SOURCE })
+		expect(target.storage.kv.get(IMPORT_MARKER_KEY)).toBeUndefined()
+		const other = { object: SOURCE.object, dump: '0193f1c2-7a4b-7c3d-8e9f-111111111111' }
+		expect(await refusal(target, { ...scope(other), step: 'complete' })).toEqual({ refused: 'no_import', table: null })
+		expect(await refusal(target, { ...scope(), step: 'part', part: 1 })).toEqual({ refused: 'no_import', table: null })
+	})
+})
+
+describe("each step in the barrier's turn", () => {
+	test('a transition waits for a part reading its range; the next step under the old generation is stale', async () => {
+		const objects = new Map<string, Uint8Array>()
+		writeDump(objects, (await sourceDatabase()).storage)
+		const held = heldRanges(objects)
+		const target: Target = { ...freshTarget(objects), bucket: held.bucket }
+		const gate = await barrier()
+		await stepOn(target, gate, { ...scope(), step: 'begin' })
+
+		const loading = stepOn(target, gate, { ...scope(), step: 'part', part: 1 })
+		await held.started
+		const next = gate.transition({ generation: GENERATION + 1, mode: 'inspect' })
+
+		expect(await settles(next)).toBe(false)
+		held.release()
+		expect((await loading).status).toBe(200)
+		expect((await next).kind).toBe('acknowledged')
+		const stale = await stepOn(target, gate, { ...scope(), step: 'link', part: 1 })
+		expect(stale.status).toBe(OPS_STALE_STATUS)
+		expect(parseOpsStaleRefusal(stale.body)).toEqual({ refused: 'stale_generation', published: { generation: GENERATION + 1, mode: 'inspect' } })
+	})
+
+	test('a transition waits for a discard to finish its wipe', async () => {
+		const objects = new Map<string, Uint8Array>()
+		writeDump(objects, (await sourceDatabase()).storage)
+		const plain = freshTarget(objects)
+		const wiping = Promise.withResolvers<void>()
+		const started = Promise.withResolvers<void>()
+		const target: Target = {
+			...plain,
+			storage: {
+				...plain.storage,
+				async deleteAll() {
+					started.resolve()
+					await wiping.promise
+					await plain.storage.deleteAll()
+				},
+			},
+		}
+		const gate = await barrier()
+		await stepOn(target, gate, { ...scope(), step: 'begin' })
+
+		const discarding = stepOn(target, gate, { step: 'discard', object: TARGET, generation: GENERATION })
+		await started.promise
+		const next = gate.transition({ generation: GENERATION + 1, mode: 'inspect' })
+
+		expect(await settles(next)).toBe(false)
+		wiping.resolve()
+		expect((await discarding).status).toBe(200)
+		expect((await next).kind).toBe('acknowledged')
+	})
+
+	test('overlapping retries of a part load it once; concurrent parts each count, so the link pass may run', async () => {
+		const objects = new Map<string, Uint8Array>()
+		const source = await sourceDatabase()
+		writeDump(objects, source.storage)
+		const target = freshTarget(objects)
+		const gate = await barrier()
+		await stepOn(target, gate, { ...scope(), step: 'begin' })
+
+		const [first, again] = await Promise.all([1, 1].map((part) => stepOn(target, gate, { ...scope(), step: 'part', part })))
+
+		expect(again).toEqual(first)
+		expect(first?.status).toBe(200)
+		expect(one(target.storage, 'SELECT count(*) FROM employees')).toBe(3)
+
+		const split = new Map<string, Uint8Array>()
+		writeDump(split, source.storage, { split: linesOf(source.storage).length - 1 })
+		const two = freshTarget(split)
+		const twoGate = await barrier()
+		await stepOn(two, twoGate, { ...scope(), step: 'begin' })
+		const parts = await Promise.all([1, 2].map((part) => stepOn(two, twoGate, { ...scope(), step: 'part', part })))
+		expect(parts.map((answer) => answer.status)).toEqual([200, 200])
+		expect((await stepOn(two, twoGate, { ...scope(), step: 'link', part: 1 })).status).toBe(200)
+	})
+
+	test('a part that fails mid-way rolls back its rows and records nothing, so it loads whole once fixed', async () => {
+		const objects = new Map<string, Uint8Array>()
+		const source = await sourceDatabase()
+		// A note twice: its rowid collides after every employee before it went in.
+		writeDump(objects, source.storage, {
+			lines: (lines) => {
+				const note = lines.findIndex((line) => line.table === 'notes')
+				return [...lines.slice(0, note + 1), ...lines.slice(note)]
+			},
+		})
+		const target = freshTarget(objects)
+		await step(target, { ...scope(), step: 'begin' })
+
+		await expect(step(target, { ...scope(), step: 'part', part: 1 })).rejects.toThrow()
+		expect(one(target.storage, 'SELECT count(*) FROM employees')).toBe(0)
+		expect(one(target.storage, 'SELECT count(*) FROM notes')).toBe(0)
+
+		writeDump(objects, source.storage)
+		const loaded = parseOpsImportPartAck((await step(target, { ...scope(), step: 'part', part: 1 })).body)
+		expect(loaded?.rows).toBe(linesOf(source.storage).length)
+		expect(await importAll(target)).toHaveLength(tablesOf(source.storage).length)
+	})
+})
+
+describe('the object of ordinary traffic', () => {
+	test('refuses every step before it reads storage or R2', async () => {
+		const reads: string[] = []
+		const { storage } = objectStorage()
+		const bucket = {
+			get(key: string) {
+				reads.push(key)
+				return Promise.reject(new Error('R2 is not read for the object of ordinary traffic'))
+			},
+		}
+		const target: Target = { storage, bucket, migrations: release(), serving: TARGET, database: () => new BunDatabase(':memory:') }
+
+		for (const request of everyStep()) {
+			expect(await refusal(target, request)).toEqual({ refused: 'serving_object', table: null })
+		}
+
+		expect(reads).toEqual([])
+		expect(storage.kv.get(IMPORT_MARKER_KEY)).toBeUndefined()
+		expect(one(storage, 'SELECT count(*) FROM sqlite_schema')).toBe(0)
+	})
+})
+
+describe('values and ranges', () => {
+	test('a retained NULL blob stays NULL, an empty one stays a blob, and edge reals round-trip', async () => {
+		const objects = new Map<string, Uint8Array>()
+		const source = await sourceDatabase()
+		source.database.run(`INSERT INTO notes (id, employee_id, body, big, ratio, payload) VALUES (8, 2, NULL, NULL, 5e-324, NULL)`)
+		source.database.run(`INSERT INTO notes (id, employee_id, body, big, ratio, payload) VALUES (9, 2, '', 0, 1.7976931348623157e308, x'')`)
+		writeDump(objects, source.storage)
+		const target = freshTarget(objects)
+
+		await importAll(target)
+
+		expect(tablesOf(target.storage)).toEqual(tablesOf(source.storage))
+		expect(one(target.storage, `SELECT typeof(payload) FROM notes WHERE id = 8`)).toBe('null')
+		expect(one(target.storage, `SELECT typeof(payload) || length(payload) FROM notes WHERE id = 9`)).toBe('blob0')
+		expect(one(target.storage, `SELECT ratio FROM notes WHERE id = 8`)).toBe(5e-324)
+		expect(one(target.storage, `SELECT ratio FROM notes WHERE id = 9`)).toBe(1.7976931348623157e308)
+	})
+
+	test("a table named page, the name of the verification's own CTE", async () => {
+		const migrations = release([...APP_MIGRATIONS, { name: '0004_page.sql', sql: 'CREATE TABLE page (id INTEGER PRIMARY KEY, title TEXT NOT NULL);' }])
+		const { storage } = objectStorage()
+		await migrateSqlite(
+			{ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) },
+			migrations,
+		)
+		storage.sql.exec(`INSERT INTO page (id, title) VALUES (1, 'a'), (2, 'b')`)
+		const objects = new Map<string, Uint8Array>()
+		const manifest = writeDump(objects, storage)
+		const target = freshTarget(objects, { migrations })
+
+		expect(await importAll(target)).toEqual([...manifest.tables])
+		expect(one(target.storage, 'SELECT count(*) FROM page')).toBe(2)
+	})
+
+	test('a range R2 answers short is refused', async () => {
+		const objects = new Map<string, Uint8Array>()
+		writeDump(objects, (await sourceDatabase()).storage)
+		const target = freshTarget(objects)
+		await step(target, { ...scope(), step: 'begin' })
+		const key = OPS_DUMP_KEY({ ...SOURCE, consistent: true }, 'data')
+		objects.set(key, (objects.get(key) ?? new Uint8Array()).slice(0, -1))
+
+		expect(await refusal(target, { ...scope(), step: 'part', part: 1 })).toEqual({ refused: 'part_mismatch', table: null })
+		expect(one(target.storage, 'SELECT count(*) FROM employees')).toBe(0)
 	})
 })
 

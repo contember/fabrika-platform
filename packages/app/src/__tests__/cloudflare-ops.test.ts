@@ -9,10 +9,12 @@ import {
 	FABRIKA_OPS_KEY_DIGESTS,
 	formatEndpointHeader,
 	formatOpsKeyDigests,
+	OPS_DATA_REFUSED_STATUS,
 	OPS_ROW_ID,
 	opsKeyDigest,
 	opsRefusal,
 	parseOpsContentView,
+	parseOpsDataRefusal,
 	parseOpsView,
 	PROXY_SECRET_HEADER,
 	requirementDigest,
@@ -32,7 +34,10 @@ import {
 	type ImplementationLoader,
 } from '../cloudflare'
 import { TICK_HEADER } from '../cloudflare/application'
+import { IMPORT_MARKER_KEY } from '../cloudflare/import'
+import { MaintenanceBarrier } from '../cloudflare/maintenance'
 import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
+import { opsAccess, type OpsTarget, serveOps } from '../cloudflare/ops'
 import { notesApp } from './cloudflare-fixture/src/app'
 import { frameworkEnvFor, keepingProcessEnvironment, keySource, ORIGIN, PROXY_SECRET, workloadTokensFor } from './fixtures/implement/harness'
 
@@ -431,5 +436,84 @@ describe('the Worker authenticates an ops request before it selects an object', 
 			expect(await admitted.text()).toBe('object clone')
 			expect(lookups).toEqual(['clone'])
 		})
+	})
+})
+
+describe('a transition of an object that holds an import marker', () => {
+	const ACCESS = opsAccess({
+		[FABRIKA_OPS_KEY_DIGESTS]: formatOpsKeyDigests([opsKeyDigest(OPS_KEY)]),
+		[FABRIKA_APPLICATION_OBJECT]: 'application',
+		[FABRIKA_APPLICATION_OBJECTS]: 'application,clone',
+	})
+
+	/** A clone's storage with workerd's synchronous KV, and its barrier published `inspect` at 3 over a bucket that takes every put. */
+	async function clone(): Promise<{ readonly target: OpsTarget; readonly kv: Map<string, unknown>; readonly barrier: MaintenanceBarrier }> {
+		const kv = new Map<string, unknown>()
+		const storage = {
+			...bunSqliteStorage(new BunDatabase(':memory:')),
+			kv: {
+				get: (key: string) => kv.get(key),
+				put: (key: string, value: unknown) => {
+					kv.set(key, value)
+				},
+				delete: (key: string) => kv.delete(key),
+			},
+		}
+		const barrier = await MaintenanceBarrier.load({
+			read: () => Promise.resolve({ state: { generation: 3, mode: 'inspect' }, version: 'v3' }),
+			put: (state) => Promise.resolve(`v${state.generation}`),
+		})
+		const target: OpsTarget = {
+			storage,
+			bucket: null,
+			recovery: null,
+			contractDigest: null,
+			migrations: [],
+			bootFailure: () => Promise.resolve(null),
+			maintenance: () => Promise.resolve(barrier),
+			migrate: () => Promise.reject(new Error('not called')),
+		}
+		return { target, kv, barrier }
+	}
+
+	function transition(generation: number, mode: string): Request {
+		return opsRequest('state', { object: 'clone', generation, mode })
+	}
+
+	test('no transition leaves inspect while the marker is there; another inspect generation is acknowledged', async () => {
+		const { target, kv, barrier } = await clone()
+		kv.set(IMPORT_MARKER_KEY, '{}')
+
+		for (const mode of ['open', 'read-only', 'closed']) {
+			const response = await serveOps(transition(4, mode), ACCESS, target)
+			expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
+			expect(parseOpsDataRefusal(await response.json())).toEqual({ refused: 'wrong_mode', table: null })
+		}
+		expect(barrier.view()).toEqual({ mode: 'inspect', generation: 3, published: true })
+		expect((await serveOps(transition(4, 'inspect'), ACCESS, target)).status).toBe(200)
+
+		kv.delete(IMPORT_MARKER_KEY)
+		expect((await serveOps(transition(5, 'open'), ACCESS, target)).status).toBe(200)
+		expect(barrier.view()).toEqual({ mode: 'open', generation: 5, published: true })
+	})
+
+	test("the marker is read in the barrier's turn, after a data step that writes it", async () => {
+		const { target, kv, barrier } = await clone()
+		const writing = Promise.withResolvers<void>()
+		const begun = barrier.step(3, async () => {
+			await writing.promise
+			kv.set(IMPORT_MARKER_KEY, '{}')
+			return { value: null, holdUntil: null }
+		})
+
+		const opening = serveOps(transition(4, 'open'), ACCESS, target)
+		// The request reaches the barrier and queues behind the step before the step writes the marker.
+		const waited = await Promise.race([opening.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20))])
+		expect(waited).toBe(false)
+		writing.resolve()
+		await begun
+
+		expect((await opening).status).toBe(OPS_DATA_REFUSED_STATUS)
+		expect(barrier.view()).toEqual({ mode: 'inspect', generation: 3, published: true })
 	})
 })

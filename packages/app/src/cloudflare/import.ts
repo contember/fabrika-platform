@@ -1,6 +1,7 @@
 // One step of loading a consistent backup into a fresh object (ADR-0070 §6): the ops operation `import`, served before
-// the application boots. Control drives the steps and holds their state; the object keeps only its import marker in KV
-// storage, which every step that writes updates in the same `transactionSync` as its rows.
+// the application boots. Control drives the steps and holds their state; the object keeps only its import marker and
+// the steps' receipts in KV storage, which every step that writes updates in the same `transactionSync` as its rows.
+// Every step runs in the maintenance barrier's turn, so no transition interleaves with it.
 
 import {
 	decodeOpsDumpLine,
@@ -41,6 +42,8 @@ import {
 	type OpsImportRequest,
 	type OpsImportVerifyAck,
 	type OpsStaleRefusal,
+	parseOpsImportCompleteAck,
+	parseOpsImportLinkAck,
 	parseOpsImportPartAck,
 	planOpsDump,
 	readOpsDumpManifest,
@@ -51,7 +54,7 @@ import type { SqliteStorage, SqliteValue } from '@fabrika/db/sqlite'
 import { migrateSqlite, type SqliteMigrationBundle } from '@fabrika/db/sqlite-migrate'
 import { jsonResponse } from '../errors.js'
 import { method } from './bindings.js'
-import type { MaintenanceBarrier } from './maintenance.js'
+import type { MaintenanceBarrier, TurnStep } from './maintenance.js'
 import type { OpsTarget } from './ops.js'
 
 /**
@@ -112,35 +115,72 @@ function loadedPartKey(part: number): string {
 	return `${IMPORT_MARKER_KEY}:part:${part}`
 }
 
-/** The marker: the backup the object is loading, whether `begin` cleared the target, and how many parts are loaded. */
+/** The KV key under which part `part`'s link pass records its acknowledgement. */
+function linkedPartKey(part: number): string {
+	return `${IMPORT_MARKER_KEY}:link:${part}`
+}
+
+/**
+ * The KV key of the receipt `complete` leaves for `source`, so a retried `complete` answers the same. It blocks nothing
+ * and stays for the object's life: `begin` takes only a fresh object, so an object completes one import.
+ */
+function completedKey(source: OpsDumpSource): string {
+	return `${IMPORT_MARKER_KEY}:complete:${source.object}/${source.dump}`
+}
+
+/**
+ * The marker: the backup the object is loading, whether `begin` cleared the target, how many parts are loaded, and the
+ * verification of what is loaded now: `null` for none, else the cursor its next step must carry (`null` once every
+ * table matched the manifest). A part or a link pass that writes resets it.
+ */
 interface ImportMarker {
 	readonly source: OpsDumpSource
 	readonly begun: boolean
 	readonly loaded: number
+	readonly verified: { readonly next: string | null } | null
 }
 
-/** One step of loading the consistent backup `step.source` into the fresh object `target` (ADR-0070 §6). */
+/**
+ * One step of loading the consistent backup `step.source` into the fresh object `target` (ADR-0070 §6), in the
+ * barrier's turn: ADR-0069's stale refusal unless `step.generation` is the published one, then `serving_object` on the
+ * object of ordinary traffic, then `wrong_mode` unless `inspect`. The turn is held across the step's R2 reads, so the
+ * generation and mode it was admitted under still hold when it commits.
+ */
 export async function importStep(target: ImportTarget, barrier: MaintenanceBarrier, step: OpsImportRequest): Promise<Response> {
-	const scoped = scopeRefusal(barrier, step.generation)
-	if (scoped !== null) {
-		return scoped
+	const result = await barrier.step(step.generation, async (mode): Promise<TurnStep<Response>> => {
+		if (step.object === target.serving) {
+			return answered(refused('serving_object'))
+		}
+		if (mode !== 'inspect') {
+			return answered(refused('wrong_mode'))
+		}
+		return answered(await admittedStep(target, step))
+	})
+	if (result.kind === 'ran') {
+		return result.value
 	}
+	const refusal: OpsStaleRefusal = { refused: 'stale_generation', published: result.published }
+	return jsonResponse(refusal, OPS_STALE_STATUS)
+}
+
+async function admittedStep(target: ImportTarget, step: OpsImportRequest): Promise<Response> {
+	const { kv } = target.storage
 	if (step.step === 'discard') {
-		return await discard(target, step.object)
+		return await discard(target)
 	}
 	if (step.step === 'begin') {
 		return await begin(target, step.source)
 	}
-	const marker = readMarker(target.storage.kv)
-	if (marker === null || !marker.begun || !sameSource(marker.source, step.source)) {
-		return refused('no_import')
+	if (importing(kv, step.source) === null) {
+		const completed = step.step === 'complete' ? readCompleted(kv, step.source) : null
+		return completed === null ? refused('no_import') : jsonResponse(completed, 200)
 	}
 	const manifest = await readManifest(target.bucket, step.source)
 	if (manifest === null) {
 		return refused('invalid_manifest')
 	}
 	if (step.step === 'complete') {
-		return complete(target.storage, manifest)
+		return complete(target.storage, step.source, manifest)
 	}
 	const plan = currentPlan(target.storage, manifest)
 	if ('refused' in plan) {
@@ -148,26 +188,22 @@ export async function importStep(target: ImportTarget, barrier: MaintenanceBarri
 	}
 	switch (step.step) {
 		case 'part':
-			return await loadPart(target, marker, manifest, plan, step.part)
+			return await loadPart(target, step.source, manifest, plan, step.part)
 		case 'link':
-			return await linkPart(target, marker, manifest, plan, step.part)
+			return await linkPart(target, step.source, manifest, plan, step.part)
 		case 'verify':
-			return verify(target.storage, manifest, plan, step.cursor)
+			return verify(target.storage, step.source, manifest, plan, step.cursor)
 	}
 }
 
-/**
- * Every step carries the operation's generation: under another one, or before R2 holds the state, the step is stale;
- * under it, the object must be `inspect`.
- */
-function scopeRefusal(barrier: MaintenanceBarrier, generation: number): Response | null {
-	const view = barrier.view()
-	if (!view.published || view.generation !== generation) {
-		const published = view.published && view.generation !== null ? { generation: view.generation, mode: view.mode } : null
-		const refusal: OpsStaleRefusal = { refused: 'stale_generation', published }
-		return jsonResponse(refusal, OPS_STALE_STATUS)
-	}
-	return view.mode === 'inspect' ? null : refused('wrong_mode')
+function answered(response: Response): TurnStep<Response> {
+	return { value: response, holdUntil: null }
+}
+
+/** The marker, when it names `source` and records `begin` done; `null` otherwise. */
+function importing(kv: ImportKv, source: OpsDumpSource): ImportMarker | null {
+	const marker = readMarker(kv)
+	return marker?.begun === true && sameSource(marker.source, source) ? marker : null
 }
 
 /**
@@ -199,7 +235,7 @@ async function begin(target: ImportTarget, source: OpsDumpSource): Promise<Respo
 		return refused('ledger_mismatch')
 	}
 	if (marker === null) {
-		writeMarker(storage.kv, { source, begun: false, loaded: 0 })
+		writeMarker(storage.kv, { source, begun: false, loaded: 0, verified: null })
 	}
 	// A database the framework never migrated has no ledger, and gets none.
 	if (manifest.migrations.length > 0) {
@@ -230,7 +266,7 @@ async function begin(target: ImportTarget, source: OpsDumpSource): Promise<Respo
 		for (const table of [...plan].reverse()) {
 			storage.sql.exec(`DELETE FROM ${quote(table.name)}`)
 		}
-		writeMarker(storage.kv, { source, begun: true, loaded: 0 })
+		writeMarker(storage.kv, { source, begun: true, loaded: 0, verified: null })
 	})
 	return beginAck(manifest)
 }
@@ -242,21 +278,30 @@ function beginAck(manifest: OpsDumpManifest): Response {
 
 /**
  * Inserts part `part`'s rows with their rowids, every value through the wire's binding and every deferred column as
- * NULL, in one transaction that also records the part.
+ * NULL, in one transaction that reads the marker and the part's receipt again, records the part and resets the
+ * verification.
  */
-async function loadPart(target: ImportTarget, marker: ImportMarker, manifest: OpsDumpManifest, plan: readonly OpsDumpTablePlan[], part: number) {
+async function loadPart(target: ImportTarget, source: OpsDumpSource, manifest: OpsDumpManifest, plan: readonly OpsDumpTablePlan[], part: number) {
 	const { storage } = target
 	const recorded = readLoadedPart(storage.kv, part)
 	if (recorded !== null) {
 		return jsonResponse(recorded, 200)
 	}
-	const lines = await readPart(target.bucket, marker.source, manifest, plan, part)
+	const lines = await readPart(target.bucket, source, manifest, plan, part)
 	if (!Array.isArray(lines)) {
 		return jsonResponse(lines, OPS_DATA_REFUSED_STATUS)
 	}
 	const tables = new Map(plan.map((table) => [table.name, table]))
-	let deferred = 0
-	const ack = storage.transactionSync((): OpsImportPartAck => {
+	const ack = storage.transactionSync((): OpsImportPartAck | OpsDataRefusal => {
+		const marker = importing(storage.kv, source)
+		if (marker === null) {
+			return { refused: 'no_import', table: null }
+		}
+		const again = readLoadedPart(storage.kv, part)
+		if (again !== null) {
+			return again
+		}
+		let deferred = 0
 		for (const { table: name, row } of lines) {
 			const table = planned(tables, name)
 			if (insertRow(storage, table, row)) {
@@ -265,10 +310,10 @@ async function loadPart(target: ImportTarget, marker: ImportMarker, manifest: Op
 		}
 		const loaded: OpsImportPartAck = { step: 'part', part, rows: lines.length, deferred }
 		storage.kv.put(loadedPartKey(part), JSON.stringify(loaded))
-		writeMarker(storage.kv, { ...marker, loaded: marker.loaded + 1 })
+		writeMarker(storage.kv, { ...marker, loaded: marker.loaded + 1, verified: null })
 		return loaded
 	})
-	return jsonResponse(ack, 200)
+	return jsonResponse(ack, 'refused' in ack ? OPS_DATA_REFUSED_STATUS : 200)
 }
 
 /** Writes one row; answers whether it has a deferred key for the link pass to set. */
@@ -301,17 +346,36 @@ function insertRow(storage: SqliteStorage, table: OpsDumpTablePlan, row: readonl
 	return waits
 }
 
-/** Sets the deferred keys of part `part`'s rows by their rowids, once every part is loaded, in one transaction. */
-async function linkPart(target: ImportTarget, marker: ImportMarker, manifest: OpsDumpManifest, plan: readonly OpsDumpTablePlan[], part: number) {
-	if (marker.loaded !== manifest.parts.length) {
+/**
+ * Sets the deferred keys of part `part`'s rows by their rowids, once every part is loaded, in one transaction that
+ * reads the marker and the pass's receipt again, records the pass and resets the verification.
+ */
+async function linkPart(target: ImportTarget, source: OpsDumpSource, manifest: OpsDumpManifest, plan: readonly OpsDumpTablePlan[], part: number) {
+	const { storage } = target
+	const recorded = readLinkedPart(storage.kv, part)
+	if (recorded !== null) {
+		return jsonResponse(recorded, 200)
+	}
+	if (importing(storage.kv, source)?.loaded !== manifest.parts.length) {
 		return refused('part_mismatch')
 	}
-	const lines = await readPart(target.bucket, marker.source, manifest, plan, part)
+	const lines = await readPart(target.bucket, source, manifest, plan, part)
 	if (!Array.isArray(lines)) {
 		return jsonResponse(lines, OPS_DATA_REFUSED_STATUS)
 	}
 	const tables = new Map(plan.map((table) => [table.name, table]))
-	const rows = target.storage.transactionSync(() => {
+	const ack = storage.transactionSync((): OpsImportLinkAck | OpsDataRefusal => {
+		const marker = importing(storage.kv, source)
+		if (marker === null) {
+			return { refused: 'no_import', table: null }
+		}
+		if (marker.loaded !== manifest.parts.length) {
+			return { refused: 'part_mismatch', table: null }
+		}
+		const again = readLinkedPart(storage.kv, part)
+		if (again !== null) {
+			return again
+		}
 		let linked = 0
 		for (const { table: name, row } of lines) {
 			const table = planned(tables, name)
@@ -322,7 +386,7 @@ async function linkPart(target: ImportTarget, marker: ImportMarker, manifest: Op
 			}
 			const sets = deferred.map(({ column, value }) => ({ column, binding: opsDumpValueBinding(value) }))
 			const key = opsDumpValueBinding(rowid ?? null)
-			target.storage.sql.exec(
+			storage.sql.exec(
 				`UPDATE ${quote(table.name)} SET ${sets.map(({ column, binding }) => `${quote(column)} = ${binding.sql}`).join(', ')} WHERE ${
 					quote(table.keyset)
 				} = ${key.sql}`,
@@ -330,22 +394,43 @@ async function linkPart(target: ImportTarget, marker: ImportMarker, manifest: Op
 			)
 			linked++
 		}
-		return linked
+		const done: OpsImportLinkAck = { step: 'link', part, rows: linked }
+		storage.kv.put(linkedPartKey(part), JSON.stringify(done))
+		writeMarker(storage.kv, { ...marker, verified: null })
+		return done
 	})
-	const ack: OpsImportLinkAck = { step: 'link', part, rows }
-	return jsonResponse(ack, 200)
+	return jsonResponse(ack, 'refused' in ack ? OPS_DATA_REFUSED_STATUS : 200)
 }
 
 /**
  * Reads the loaded tables back from `cursor` with the producer's projection and fold, at most a part's row bound per
- * step, and compares each finished table with the manifest.
+ * step, and compares each finished table with the manifest. A verification starts at `null`; any other cursor must be
+ * the one the marker records this verification handed out last. It writes no row: only its progress, into the marker,
+ * which a mismatch clears.
  */
-function verify(storage: SqliteStorage, manifest: OpsDumpManifest, plan: readonly OpsDumpTablePlan[], cursor: OpsDumpCursor | null): Response {
+function verify(
+	storage: ImportStorage,
+	source: OpsDumpSource,
+	manifest: OpsDumpManifest,
+	plan: readonly OpsDumpTablePlan[],
+	cursor: OpsDumpCursor | null,
+): Response {
+	const marker = importing(storage.kv, source)
+	if (marker === null) {
+		return refused('no_import')
+	}
+	const mismatch = (table: string | null): Response => {
+		writeMarker(storage.kv, { ...marker, verified: null })
+		return refused('verify_mismatch', table)
+	}
+	if (cursor !== null && (marker.verified?.next ?? null) !== cursorKey(cursor)) {
+		return mismatch(cursor.table)
+	}
 	const tables = new Map(plan.map((table) => [table.name, table]))
 	const order = manifest.tables
 	let index = cursor === null ? 0 : order.findIndex((table) => table.name === cursor.table)
 	if (index < 0) {
-		return refused('verify_mismatch', cursor?.table ?? null)
+		return mismatch(cursor?.table ?? null)
 	}
 	const startOf = (table: OpsDumpTable | undefined): OpsDumpCursor | null =>
 		table === undefined ? null : { table: table.name, after: null, rows: 0, hash: OPS_EMPTY_TABLE_HASH }
@@ -367,19 +452,25 @@ function verify(storage: SqliteStorage, manifest: OpsDumpManifest, plan: readonl
 		}
 		budget -= page.length
 		if (current.rows > expected.rows) {
-			return refused('verify_mismatch', expected.name)
+			return mismatch(expected.name)
 		}
 		if (page.length < OPS_DUMP_PAGE_ROWS) {
 			if (current.rows !== expected.rows || current.hash !== expected.hash) {
-				return refused('verify_mismatch', expected.name)
+				return mismatch(expected.name)
 			}
 			finished.push(expected)
 			index++
 			current = startOf(order[index])
 		}
 	}
+	writeMarker(storage.kv, { ...marker, verified: { next: current === null ? null : cursorKey(current) } })
 	const ack: OpsImportVerifyAck = { step: 'verify', tables: finished, next: current }
 	return jsonResponse(ack, 200)
+}
+
+/** A cursor as the marker records it: its fields in a fixed order, whatever order a request named them in. */
+function cursorKey(cursor: OpsDumpCursor): string {
+	return JSON.stringify([cursor.table, cursor.after, cursor.rows, cursor.hash])
 }
 
 /** One keyset page of `table` after the rowid `after`: each row its rowid, then its columns, as the producer reads them. */
@@ -389,8 +480,9 @@ function readPage(storage: SqliteStorage, table: OpsDumpTablePlan, after: string
 	const names = table.columns.flatMap((_, index) => [`t${index}`, `v${index}`])
 	const select = [keyset, `CAST(${keyset} AS TEXT)`, ...table.columns.map((column) => opsDumpColumnProjection(column))].join(', ')
 	const where = after === null ? '' : ` WHERE ${keyset} > CAST(? AS INTEGER)`
+	// Qualified, so a table named `page` is not the CTE itself.
 	const query =
-		`WITH page(r, k, ${names.join(', ')}) AS (SELECT ${select} FROM ${quote(table.name)}${where} ORDER BY ${keyset} LIMIT ${OPS_DUMP_PAGE_ROWS}) `
+		`WITH page(r, k, ${names.join(', ')}) AS (SELECT ${select} FROM main.${quote(table.name)}${where} ORDER BY ${keyset} LIMIT ${OPS_DUMP_PAGE_ROWS}) `
 		+ `SELECT k, ${names.join(', ')} FROM page ORDER BY r`
 	const rows = after === null ? storage.sql.exec(query).toArray() : storage.sql.exec(query, after).toArray()
 	return rows.map((row) => [
@@ -399,40 +491,52 @@ function readPage(storage: SqliteStorage, table: OpsDumpTablePlan, after: string
 	])
 }
 
-/** Recreates the triggers from the manifest's DDL, compares the whole schema again, and clears the marker. */
-function complete(storage: ImportStorage, manifest: OpsDumpManifest): Response {
-	const matches = storage.transactionSync(() => {
+/**
+ * Once every part is loaded, every link pass a part needs ran, and a verification of what is loaded now matched every
+ * table: recreates the triggers from the manifest's DDL, compares the whole schema again, clears the marker and the
+ * steps' receipts, and leaves the completion's receipt.
+ */
+function complete(storage: ImportStorage, source: OpsDumpSource, manifest: OpsDumpManifest): Response {
+	const answer = storage.transactionSync((): OpsImportCompleteAck | OpsDataRefusal => {
+		const marker = importing(storage.kv, source)
+		if (marker === null) {
+			return { refused: 'no_import', table: null }
+		}
+		const loaded = manifest.parts.map((part) => readLoadedPart(storage.kv, part.part))
+		const unlinked = loaded.some((ack) => ack === null || (ack.deferred > 0 && readLinkedPart(storage.kv, ack.part) === null))
+		if (marker.loaded !== manifest.parts.length || unlinked) {
+			return { refused: 'part_mismatch', table: null }
+		}
+		if (marker.verified === null || marker.verified.next !== null) {
+			return { refused: 'verify_mismatch', table: null }
+		}
 		const present = new Set(readDdl(storage).filter((entry) => entry.type === 'trigger').map((entry) => entry.name))
 		for (const entry of manifest.ddl) {
 			if (entry.type !== 'trigger' || present.has(entry.name)) {
 				continue
 			}
 			if (!TRIGGER_DDL.test(entry.sql)) {
-				return false
+				return { refused: 'schema_mismatch', table: null }
 			}
 			storage.sql.exec(entry.sql)
 		}
 		if (!sameDdl(readDdl(storage), manifest.ddl)) {
-			return false
+			return { refused: 'schema_mismatch', table: null }
 		}
 		for (const part of manifest.parts) {
 			storage.kv.delete(loadedPartKey(part.part))
+			storage.kv.delete(linkedPartKey(part.part))
 		}
 		storage.kv.delete(IMPORT_MARKER_KEY)
-		return true
+		const ack: OpsImportCompleteAck = { step: 'complete', source: { object: source.object, dump: source.dump } }
+		storage.kv.put(completedKey(source), JSON.stringify(ack))
+		return ack
 	})
-	if (!matches) {
-		return refused('schema_mismatch')
-	}
-	const ack: OpsImportCompleteAck = { step: 'complete', source: { object: manifest.object, dump: manifest.dump } }
-	return jsonResponse(ack, 200)
+	return jsonResponse(answer, 'refused' in answer ? OPS_DATA_REFUSED_STATUS : 200)
 }
 
-/** Wipes an `inspect` object that holds an import marker and serves no traffic. */
-async function discard(target: ImportTarget, object: string): Promise<Response> {
-	if (object === target.serving) {
-		return refused('serving_object')
-	}
+/** Wipes an `inspect` object that holds an import marker; the caller refused the object of ordinary traffic. */
+async function discard(target: ImportTarget): Promise<Response> {
 	if (readMarker(target.storage.kv) === null) {
 		return refused('no_import')
 	}
@@ -765,14 +869,22 @@ function readMarker(kv: ImportKv): ImportMarker | null {
 	}
 	const value: unknown = typeof raw === 'string' ? parseJson(raw) : undefined
 	const source: unknown = isRecord(value) ? value['source'] : undefined
+	const verified: unknown = isRecord(value) ? value['verified'] : undefined
+	const next: unknown = isRecord(verified) ? verified['next'] : undefined
 	if (
-		!isRecord(value) || !isRecord(source) || Object.keys(value).length !== 3 || Object.keys(source).length !== 2
+		!isRecord(value) || !isRecord(source) || Object.keys(value).length !== 4 || Object.keys(source).length !== 2
 		|| typeof source['object'] !== 'string' || typeof source['dump'] !== 'string' || typeof value['begun'] !== 'boolean'
 		|| typeof value['loaded'] !== 'number' || !Number.isSafeInteger(value['loaded']) || value['loaded'] < 0
+		|| (verified !== null && (!isRecord(verified) || Object.keys(verified).length !== 1 || (next !== null && typeof next !== 'string')))
 	) {
 		throw new Error('the import marker in KV storage does not parse')
 	}
-	return { source: { object: source['object'], dump: source['dump'] }, begun: value['begun'], loaded: value['loaded'] }
+	return {
+		source: { object: source['object'], dump: source['dump'] },
+		begun: value['begun'],
+		loaded: value['loaded'],
+		verified: verified === null ? null : { next: typeof next === 'string' ? next : null },
+	}
 }
 
 function writeMarker(kv: ImportKv, marker: ImportMarker): void {
@@ -787,6 +899,31 @@ function readLoadedPart(kv: ImportKv, part: number): OpsImportPartAck | null {
 	const ack = typeof raw === 'string' ? parseOpsImportPartAck(parseJson(raw)) : null
 	if (ack === null || ack.part !== part) {
 		throw new Error('a loaded part recorded in KV storage does not parse')
+	}
+	return ack
+}
+
+function readLinkedPart(kv: ImportKv, part: number): OpsImportLinkAck | null {
+	const raw = kv.get(linkedPartKey(part))
+	if (raw === undefined) {
+		return null
+	}
+	const ack = typeof raw === 'string' ? parseOpsImportLinkAck(parseJson(raw)) : null
+	if (ack === null || ack.part !== part) {
+		throw new Error('a link pass recorded in KV storage does not parse')
+	}
+	return ack
+}
+
+/** The acknowledgement `complete` answered for `source`, `null` when it never completed. */
+function readCompleted(kv: ImportKv, source: OpsDumpSource): OpsImportCompleteAck | null {
+	const raw = kv.get(completedKey(source))
+	if (raw === undefined) {
+		return null
+	}
+	const ack = typeof raw === 'string' ? parseOpsImportCompleteAck(parseJson(raw)) : null
+	if (ack === null || !sameSource(ack.source, source)) {
+		throw new Error('a completed import recorded in KV storage does not parse')
 	}
 	return ack
 }

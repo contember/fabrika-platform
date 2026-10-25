@@ -115,6 +115,8 @@ export type TransitionResult =
 	| { readonly kind: 'stale'; readonly published: OpsPublishedState | null }
 	/** R2 could not be read or written: the call fails and Control retries. */
 	| { readonly kind: 'failed' }
+	/** The caller's `frozen` held the object in `inspect`: nothing changed. */
+	| { readonly kind: 'frozen' }
 
 export type MigrateResult<T> = { readonly kind: 'migrated'; readonly value: T } | {
 	readonly kind: 'stale'
@@ -221,14 +223,20 @@ export class MaintenanceBarrier {
 		}
 	}
 
-	/** `POST /__fabrika/ops/state`: the transition of ADR-0069 §3, acknowledged once published and drained. */
-	transition(requested: OpsPublishedState): Promise<TransitionResult> {
+	/**
+	 * `POST /__fabrika/ops/state`: the transition of ADR-0069 §3, acknowledged once published and drained. `frozen` is
+	 * asked in the turn, after every data step before it: while it holds, no transition leaves `inspect`.
+	 */
+	transition(requested: OpsPublishedState, frozen: () => boolean = () => false): Promise<TransitionResult> {
 		// Exactly the state: what R2 stores and a stale refusal names.
 		const request: OpsPublishedState = { generation: requested.generation, mode: requested.mode }
 		return this.#inTurn(async () => {
 			const current = this.#generation === null ? null : { generation: this.#generation, mode: this.#mode }
 			if (opsTransitionRefused(current, request)) {
 				return { kind: 'stale', published: this.#stored }
+			}
+			if (this.#mode === 'inspect' && request.mode !== 'inspect' && frozen()) {
+				return { kind: 'frozen' }
 			}
 			const retry = current !== null && current.generation === request.generation
 			if (!retry || !this.#isPublished()) {
