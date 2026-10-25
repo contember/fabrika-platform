@@ -37,7 +37,8 @@ describe('the release gates', () => {
 		['0.8.12', false],
 		['0.9.0', true],
 		['0.9.0-dev.1', true],
-		// SemVer orders an alpha below every dev prerelease of the version; the gates count both as 0.9.
+		// SemVer orders a cloudflare or alpha prerelease below every dev prerelease of the version; the gates count all as 0.9.
+		['0.9.0-cloudflare.1', true],
 		['0.9.0-alpha.1', true],
 		['1.0.0', true],
 	]

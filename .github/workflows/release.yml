@@ -49,7 +49,7 @@ jobs:
   # The procedure of examples/zerops-app/README.md, run once the release installs from npm.
   example-mirror:
     needs: publish
-    # A prerelease publishes under `alpha` or `next` (`releaseDistTag` in scripts/release.ts); the mirror's main follows `latest`.
+    # A prerelease publishes under its channel's dist-tag or `next` (`releaseDistTag` in scripts/release.ts); the mirror's main follows `latest`.
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15

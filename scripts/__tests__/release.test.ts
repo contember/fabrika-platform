@@ -178,22 +178,24 @@ describe('registry dist-tag wait', () => {
 })
 
 describe('release channels', () => {
-	test('a release publishes under latest, an alpha prerelease under alpha, every other prerelease under next', () => {
+	test('a release publishes under latest, a named channel under its own dist-tag, every other prerelease under next', () => {
 		expect(releaseDistTag('0.9.0')).toBe('latest')
 		expect(releaseDistTag('0.9.0+build.1')).toBe('latest')
+		expect(releaseDistTag('0.9.0-cloudflare.1')).toBe('cloudflare')
+		expect(releaseDistTag('0.9.0-cloudflare')).toBe('cloudflare')
 		expect(releaseDistTag('0.9.0-alpha.1')).toBe('alpha')
-		expect(releaseDistTag('0.9.0-alpha')).toBe('alpha')
-		expect(releaseDistTag('0.9.0-alpha1.2')).toBe('alpha')
+		expect(releaseDistTag('0.9.0-alpha1.2')).toBe('next')
+		expect(releaseDistTag('0.9.0-cloudflare-x.1')).toBe('next')
 		expect(releaseDistTag('0.9.0-dev.4')).toBe('next')
 		expect(releaseDistTag('0.9.0-beta.1')).toBe('next')
-		expect(releaseDistTag('0.9.0-rc.alpha.1')).toBe('next')
+		expect(releaseDistTag('0.9.0-rc.cloudflare.1')).toBe('next')
 		expect(releaseDistTag('0.0.0-ci.0')).toBe('next')
 		expect(() => releaseDistTag('v0.9.0')).toThrow('invalid SemVer')
 	})
 
 	test("publish names the dist-tag of a prerelease and leaves a release on npm's default", () => {
 		expect(publishCommand('a.tgz', '0.9.0', false)).toEqual(['npm', 'publish', 'a.tgz', '--access', 'public', '--ignore-scripts', '--provenance'])
-		expect(publishCommand('a.tgz', '0.9.0-alpha.1', true)).toEqual([
+		expect(publishCommand('a.tgz', '0.9.0-cloudflare.1', true)).toEqual([
 			'npm',
 			'publish',
 			'a.tgz',
@@ -201,7 +203,7 @@ describe('release channels', () => {
 			'public',
 			'--ignore-scripts',
 			'--tag',
-			'alpha',
+			'cloudflare',
 			'--dry-run',
 		])
 		expect(publishCommand('a.tgz', '0.9.0-dev.4', false)).toEqual([
@@ -217,7 +219,7 @@ describe('release channels', () => {
 		])
 	})
 
-	test('the example mirror follows latest only: release.yml skips it for every prerelease, alpha included', async () => {
+	test('the example mirror follows latest only: release.yml skips it for every prerelease, a channel included', async () => {
 		const workflow = await readFile(join(import.meta.dir, '..', '..', '.github', 'workflows', 'release.yml'), 'utf8')
 		const mirror = workflow.slice(workflow.indexOf('\n  example-mirror:'))
 		expect(mirror).toContain("if: ${{ !contains(github.ref_name, '-') }}")
@@ -276,6 +278,22 @@ describe('the source version', () => {
 		expect(() => assertBumpForward('0.0.4', '0.4.3')).not.toThrow()
 		expect(() => assertBumpForward('0.4.3', '0.4.3')).toThrow('bump must move forward: the source is already 0.4.3')
 		expect(() => assertBumpForward('0.4.3', '0.4.2')).toThrow('is not a next release')
+	})
+
+	test('a bump may switch a prerelease to another channel, which SemVer may order lower, but never moves back within one', () => {
+		expect(Bun.semver.order('0.9.0-cloudflare.1', '0.9.0-dev.4')).toBe(-1)
+		expect(() => assertBumpForward('0.9.0-dev.4', '0.9.0-cloudflare.1')).not.toThrow()
+		expect(() => assertBumpForward('0.9.0-cloudflare.1', '0.9.0-cloudflare.2')).not.toThrow()
+		expect(() => assertBumpForward('0.9.0-cloudflare.2', '0.9.0-cloudflare.2')).toThrow('bump must move forward')
+		expect(() => assertBumpForward('0.9.0-cloudflare.2', '0.9.0-cloudflare.1')).toThrow('bump must move forward')
+		expect(() => assertBumpForward('0.9.0-cloudflare.2', '0.9.0-alpha.1')).not.toThrow()
+		expect(() => assertBumpForward('0.9.0-cloudflare.2', '0.9.1-dev.0')).not.toThrow()
+		// `dev` and `beta` share `next`, so beta.1 would move `next` back.
+		expect(() => assertBumpForward('0.9.0-dev.4', '0.9.0-beta.1')).toThrow('bump must move forward')
+		// A switch keeps the release: no channel goes back to an older one, nor to a prerelease of a published release.
+		expect(() => assertBumpForward('0.9.0-dev.4', '0.8.9-cloudflare.1')).toThrow('bump must move forward')
+		expect(() => assertBumpForward('0.9.0', '0.9.0-cloudflare.1')).toThrow('bump must move forward')
+		expect(() => assertBumpForward('0.9.0-cloudflare.3', '0.9.0')).not.toThrow()
 	})
 })
 

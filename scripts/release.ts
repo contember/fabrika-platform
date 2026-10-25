@@ -776,21 +776,38 @@ const packageExists = async (name: string): Promise<boolean> => {
 	throw new Error(`${command.join(' ')} failed (${exitCode})\n${stderr || stdout}`)
 }
 
-/** The npm dist-tags a release publishes under: one channel per kind of version. */
-export type ReleaseDistTag = 'latest' | 'alpha' | 'next'
+/**
+ * The prerelease channels with a dist-tag of their own, each named by the first prerelease identifier of its versions
+ * (`0.9.0-cloudflare.1`). A channel is cut from a long-lived `channel/<name>` branch (release-process.md "Release
+ * channels"). Adding one is a deliberate edit here.
+ */
+export const RELEASE_CHANNELS = ['cloudflare', 'alpha'] as const
+
+/** The npm dist-tags a release publishes under: `latest`, a named channel, or `next` for any other prerelease. */
+export type ReleaseDistTag = 'latest' | 'next' | (typeof RELEASE_CHANNELS)[number]
+
+const RELEASE_VERSION = /^(\d+\.\d+\.\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/
+
+const parseReleaseVersion = (version: string): { readonly core: string; readonly prerelease: string | undefined } => {
+	const match = RELEASE_VERSION.exec(version)
+	if (match?.[1] === undefined) throw new Error(`invalid SemVer ${JSON.stringify(version)}`)
+	return { core: match[1], prerelease: match[2] }
+}
+
+const isReleaseChannel = (identifier: string): identifier is (typeof RELEASE_CHANNELS)[number] =>
+	RELEASE_CHANNELS.some((channel) => channel === identifier)
 
 /**
  * The dist-tag `version` publishes under, which `publish` writes and `registry-smoke` waits for. A release goes to
- * `latest`; a prerelease whose first identifier starts with `alpha` (`0.9.0-alpha.1`) to `alpha`; every other
- * prerelease (`0.9.0-dev.4`, `0.0.0-ci.0`) to `next`. A prerelease never touches `latest`, so a plain install never
- * resolves one.
+ * `latest`; a prerelease whose first identifier is a channel of `RELEASE_CHANNELS` to that channel
+ * (`0.9.0-cloudflare.1` to `cloudflare`); every other prerelease (`0.9.0-dev.4`, `0.0.0-ci.0`) to `next`. A prerelease
+ * never touches `latest`, so a plain install never resolves one.
  */
 export const releaseDistTag = (version: string): ReleaseDistTag => {
-	const match = /^\d+\.\d+\.\d+(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(version)
-	if (match === null) throw new Error(`invalid SemVer ${JSON.stringify(version)}`)
-	const prerelease = match[1]
+	const { prerelease } = parseReleaseVersion(version)
 	if (prerelease === undefined) return 'latest'
-	return prerelease.startsWith('alpha') ? 'alpha' : 'next'
+	const [first = ''] = prerelease.split('.')
+	return isReleaseChannel(first) ? first : 'next'
 }
 
 const compareVersions = (left: string, right: string, source: string): number => {
@@ -1122,9 +1139,19 @@ const DECISION_FABRIKA_PIN = /("@fabrika\/[A-Za-z0-9._-]+@)[^"]*"/g
 export const bumpedDecision = (text: string, version: string): string =>
 	text.split('\n').map((line) => DECISION_NPM_LINE.test(line) ? line.replace(DECISION_FABRIKA_PIN, `$1${version}"`) : line).join('\n')
 
-/** Refuse a bump that would not move the source forward: an older tag would republish a version npm already has. */
+/**
+ * Refuse a bump that would not move the source forward: an older tag would republish a version npm already has.
+ * Within one dist-tag the version must grow. A prerelease source may switch to another channel's prerelease of the same
+ * release or a later one although SemVer orders it lower: `0.9.0-dev.4` to `0.9.0-cloudflare.1`, where `cloudflare`
+ * sorts below `dev`. Each channel's dist-tag then moves only forward, and npm still refuses a version it has.
+ */
 export const assertBumpForward = (sourceVersion: string, version: string): void => {
 	if (compareVersions(version, sourceVersion, 'bump') > 0) return
+	const source = parseReleaseVersion(sourceVersion)
+	const next = parseReleaseVersion(version)
+	const switchesChannel = source.prerelease !== undefined && next.prerelease !== undefined
+		&& releaseDistTag(sourceVersion) !== releaseDistTag(version)
+	if (switchesChannel && compareVersions(next.core, source.core, 'bump') >= 0) return
 	throw new Error(`bump must move forward: the source is already ${sourceVersion}, so ${version} is not a next release`)
 }
 
