@@ -1,7 +1,8 @@
-// The original object's point-in-time restore (ADR-0070 §9 step 6): `prepare` writes the sentinel and answers the
-// bookmarks, `arm` arms the restore and then resets the object, and `verify` tells a restored object from one that was
-// not by the sentinel. Storage is bun:sqlite with an in-memory KV, and the recovery a double that records every call:
-// no local runtime restores, so the reset is simulated by putting the KV back to its state at the target.
+// The original object's point-in-time restore (ADR-0070 §9 step 6): `prepare` writes the operation's sentinel and
+// answers the bookmarks, `arm` arms the restore and then resets the object, and `verify` tells a restored object from
+// one that was not by the sentinel. Storage is bun:sqlite with an in-memory KV, and the recovery a double that records
+// every call and hands out lexically ordered bookmarks, one per KV write: no local runtime restores, so the reset is
+// simulated by putting the KV back to its state at the target.
 
 import {
 	ENDPOINT_HEADER,
@@ -30,20 +31,27 @@ import { MaintenanceBarrier, type MaintenanceStore } from '../cloudflare/mainten
 import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import { OPS_ENDPOINT, type OpsRecovery, type OpsTarget } from '../cloudflare/ops'
 import { serveRestore } from '../cloudflare/restore'
+import { ORIGIN, PROXY_SECRET } from './fixtures/implement/harness'
 
 /** A step on an object ordinary traffic does not reach: the clone a side restore names. */
 const restoreStep = (target: OpsTarget, barrier: MaintenanceBarrier, step: OpsRestoreRequest) => serveRestore(target, barrier, step, false)
-import { ORIGIN, PROXY_SECRET } from './fixtures/implement/harness'
 
 const OBJECT = 'application'
 const SENTINEL = '0192f0c4-7a1e-7c3b-9d2a-5e6f7a8b9c0d'
-const EARLIER_SENTINEL = '0192f0c4-0000-7c3b-9d2a-5e6f7a8b9c0d'
+const OTHER_SENTINEL = '0192f0c4-0000-7c3b-9d2a-5e6f7a8b9c0d'
 const GENERATION = 7
 /** Inside the recovery window. */
 const AT = '2026-10-20T08:00:00.000Z'
 /** Before the window: thirty days back from the test's clock is long past this. */
 const OUTSIDE_WINDOW = '2020-01-01T00:00:00.000Z'
 const WINDOW_START = Date.parse('2026-01-01T00:00:00.000Z')
+/** The object's position when the test starts: ten writes since its creation. */
+const START = 10
+/** Where the target time lies by default: before every write the test makes. */
+const AT_POSITION = 5
+
+/** The bookmark of a position: zero-padded, so lexical order is the order of positions, as Cloudflare's bookmarks are. */
+const bookmark = (position: number) => `bm-${String(position).padStart(8, '0')}`
 
 type Call =
 	| { readonly kind: 'getCurrentBookmark' }
@@ -61,37 +69,42 @@ interface Harness {
 
 interface HarnessOptions {
 	readonly recovery?: boolean
-	/** A bookmark `onNextSessionRestoreBookmark` refuses. */
-	readonly refusedTarget?: string
+	/** The position `getBookmarkForTime` answers for a time inside the window, given the current one; `AT_POSITION` by default. */
+	readonly lookup?: (position: number) => number | Promise<number>
+	/** Runs before `onNextSessionRestoreBookmark` answers; it rejects a bookmark the storage refuses. */
+	readonly arming?: (target: string) => Promise<void>
 }
 
 function harness(options: HarnessOptions = {}): Harness {
 	const calls: Call[] = []
 	const kv = new Map<string, unknown>()
-	let writes = 0
-	const sqlite = bunSqliteStorage(new BunDatabase(':memory:'))
+	let position = START
 	const storage = {
-		...sqlite,
+		...bunSqliteStorage(new BunDatabase(':memory:')),
 		get: (key: string) => Promise.resolve(kv.get(key)),
 		put: (key: string, value: unknown) => {
 			calls.push({ kind: 'kv.put', key, value })
 			kv.set(key, value)
-			writes++
+			position++
 			return Promise.resolve()
 		},
 	}
 	const recovery: OpsRecovery = {
 		getCurrentBookmark: () => {
 			calls.push({ kind: 'getCurrentBookmark' })
-			return Promise.resolve(`current-${writes}`)
+			return Promise.resolve(bookmark(position))
 		},
-		getBookmarkForTime: (time) => {
+		getBookmarkForTime: async (time) => {
 			calls.push({ kind: 'getBookmarkForTime', time })
-			return time < WINDOW_START ? Promise.reject(new Error('the time is outside the recovery window')) : Promise.resolve(`at-${time}`)
+			if (time < WINDOW_START) {
+				throw new Error('the time is outside the recovery window')
+			}
+			return bookmark(await (options.lookup ?? (() => AT_POSITION))(position))
 		},
-		onNextSessionRestoreBookmark: (bookmark) => {
-			calls.push({ kind: 'onNextSessionRestoreBookmark', bookmark })
-			return bookmark === options.refusedTarget ? Promise.reject(new Error('not a bookmark')) : Promise.resolve(`undo-${writes}`)
+		onNextSessionRestoreBookmark: async (target) => {
+			calls.push({ kind: 'onNextSessionRestoreBookmark', bookmark: target })
+			await options.arming?.(target)
+			return bookmark(position)
 		},
 		abort: (reason) => {
 			calls.push({ kind: 'abort', reason })
@@ -163,46 +176,84 @@ function afterAnswer(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
+/** Whether `promise` settled within a few turns of the event loop. */
+async function settles(promise: Promise<unknown>): Promise<boolean> {
+	let settled = false
+	void promise.then(() => (settled = true), () => (settled = true))
+	await Bun.sleep(20)
+	return settled
+}
+
+/** The KV storage as the object's next session finds it after a restore to the state `snapshot` was taken at. */
+function resetTo(kv: Map<string, unknown>, snapshot: ReadonlyMap<string, unknown>): void {
+	kv.clear()
+	for (const [key, value] of snapshot) {
+		kv.set(key, value)
+	}
+}
+
 const recovered = (calls: readonly Call[]) => calls.filter((call) => call.kind === 'onNextSessionRestoreBookmark' || call.kind === 'abort')
 
 describe('prepare', () => {
-	test('writes the sentinel, then answers the current bookmark and the bookmark of the target time', async () => {
+	test("reads the current bookmark, then the target, and keeps both under the operation's own sentinel key", async () => {
 		const { target, calls, kv } = harness()
 		const response = await restoreStep(target, await barrierIn('inspect'), prepare())
 		expect(response.status).toBe(200)
 		const ack = parseOpsRestorePrepareAck(await body(response))
-		expect(ack).toEqual({ step: 'prepare', current: 'current-1', target: `at-${Date.parse(AT)}` })
-		expect([...kv.values()]).toEqual([SENTINEL])
-		// The pre-restore bookmark is read after the sentinel's write, so a restore to it brings the sentinel back.
-		expect(calls.map((call) => call.kind)).toEqual(['getBookmarkForTime', 'kv.put', 'getCurrentBookmark'])
+		expect(ack).toEqual({ step: 'prepare', current: bookmark(START), target: bookmark(AT_POSITION) })
+		expect(kv.size).toBe(1)
+		expect([...kv.keys()][0]).toContain(SENTINEL)
+		// The current bookmark is read before the sentinel's write, so the target is ordered against a state without it.
+		expect(calls.map((call) => call.kind)).toEqual(['getCurrentBookmark', 'getBookmarkForTime', 'kv.put'])
 	})
 
 	test('a target time outside the recovery window is refused as bookmark_unavailable and writes nothing', async () => {
-		const { target, calls, kv } = harness()
+		const { target, kv } = harness()
 		const response = await restoreStep(target, await barrierIn('inspect'), prepare({ at: OUTSIDE_WINDOW }))
 		expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
 		expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'bookmark_unavailable', table: null })
 		expect(kv.size).toBe(0)
-		expect(calls.some((call) => call.kind === 'kv.put')).toBe(false)
 	})
 
-	test('a target time that is not before the sentinel is refused: a restore to it would keep the sentinel', async () => {
-		const { target, kv } = harness()
-		const future = new Date(Date.now() + 60_000).toISOString()
-		const response = await restoreStep(target, await barrierIn('inspect'), prepare({ at: future }))
-		expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
-		expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'bookmark_unavailable', table: null })
-		expect(kv.size).toBe(0)
+	for (const [name, lookup] of [['equal to', (position: number) => position], ['after', (position: number) => position + 1]] as const) {
+		test(`a target ${name} the current bookmark is refused: a restore to it would keep the sentinel`, async () => {
+			const { target, kv } = harness({ lookup })
+			const response = await restoreStep(target, await barrierIn('inspect'), prepare())
+			expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
+			expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'bookmark_unavailable', table: null })
+			expect(kv.size).toBe(0)
+		})
+	}
+
+	test('a target just before the current bookmark is accepted', async () => {
+		const { target } = harness({ lookup: (position) => position - 1 })
+		const ack = parseOpsRestorePrepareAck(await body(await restoreStep(target, await barrierIn('inspect'), prepare())))
+		expect(ack).toEqual({ step: 'prepare', current: bookmark(START), target: bookmark(START - 1) })
 	})
 
-	test('a repeated prepare keeps the one sentinel and answers the same target', async () => {
-		const { target, kv } = harness()
+	test('a retried prepare answers what the first kept, though the lookup has moved past the sentinel', async () => {
+		// The lookup is approximate: its second answer for the same time is newer than the sentinel's write.
+		let lookups = 0
+		const { target, calls, kv } = harness({ lookup: (position) => ++lookups === 1 ? position - 1 : position + 5 })
 		const barrier = await barrierIn('inspect')
-		const first = parseOpsRestorePrepareAck(await body(await restoreStep(target, barrier, prepare())))
-		const second = parseOpsRestorePrepareAck(await body(await restoreStep(target, barrier, prepare())))
-		expect(first?.target).toBe(`at-${Date.parse(AT)}`)
-		expect(second?.target).toBe(first?.target)
-		expect([...kv.values()]).toEqual([SENTINEL])
+		const first = await body(await restoreStep(target, barrier, prepare()))
+		const writes = calls.length
+		const second = await body(await restoreStep(target, barrier, prepare()))
+		expect(parseOpsRestorePrepareAck(first)).toEqual({ step: 'prepare', current: bookmark(START), target: bookmark(START - 1) })
+		expect(second).toEqual(first)
+		// The retry reads only its own key: no lookup and no write.
+		expect(calls.slice(writes)).toEqual([])
+		expect(kv.size).toBe(1)
+	})
+
+	test("another operation's prepare keeps this one's sentinel: prepare(A), prepare(B), verify(A) is present", async () => {
+		const { target, calls } = harness()
+		const barrier = await barrierIn('inspect')
+		await restoreStep(target, barrier, prepare())
+		await restoreStep(target, barrier, prepare({ sentinel: OTHER_SENTINEL }))
+		const ack = parseOpsRestoreVerifyAck(await body(await restoreStep(target, barrier, verify())))
+		expect(ack?.sentinel).toBe('present')
+		expect(calls.some((call) => call.kind === 'onNextSessionRestoreBookmark')).toBe(false)
 	})
 })
 
@@ -216,14 +267,14 @@ describe('arm', () => {
 		}
 		const response = await restoreStep(target, barrier, arm(prepared.target))
 		expect(response.status).toBe(200)
-		expect(parseOpsRestoreArmAck(await body(response))).toEqual({ step: 'arm', undo: 'undo-1' })
+		expect(parseOpsRestoreArmAck(await body(response))).toEqual({ step: 'arm', undo: bookmark(START + 1) })
 		expect(recovered(calls)).toEqual([{ kind: 'onNextSessionRestoreBookmark', bookmark: prepared.target }])
 		await afterAnswer()
 		expect(recovered(calls).map((call) => call.kind)).toEqual(['onNextSessionRestoreBookmark', 'abort'])
 	})
 
 	test('a bookmark the storage refuses is refused as bookmark_unavailable, and the object is not reset', async () => {
-		const { target, calls } = harness({ refusedTarget: 'not-a-bookmark' })
+		const { target, calls } = harness({ arming: () => Promise.reject(new Error('not a bookmark')) })
 		const response = await restoreStep(target, await barrierIn('inspect'), arm('not-a-bookmark'))
 		expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
 		expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'bookmark_unavailable', table: null })
@@ -235,14 +286,14 @@ describe('arm', () => {
 		const { target, calls } = harness()
 		const barrier = await barrierIn('inspect')
 		for (let attempt = 0; attempt < 2; attempt++) {
-			const response = await restoreStep(target, barrier, arm('at-1'))
+			const response = await restoreStep(target, barrier, arm(bookmark(AT_POSITION)))
 			expect(parseOpsRestoreArmAck(await body(response))?.step).toBe('arm')
 			await afterAnswer()
 		}
 		expect(recovered(calls)).toEqual([
-			{ kind: 'onNextSessionRestoreBookmark', bookmark: 'at-1' },
+			{ kind: 'onNextSessionRestoreBookmark', bookmark: bookmark(AT_POSITION) },
 			{ kind: 'abort', reason: expect.any(String) },
-			{ kind: 'onNextSessionRestoreBookmark', bookmark: 'at-1' },
+			{ kind: 'onNextSessionRestoreBookmark', bookmark: bookmark(AT_POSITION) },
 			{ kind: 'abort', reason: expect.any(String) },
 		])
 	})
@@ -253,12 +304,12 @@ describe('verify', () => {
 		const { target, calls } = harness()
 		const barrier = await barrierIn('inspect')
 		await restoreStep(target, barrier, prepare())
-		await restoreStep(target, barrier, arm('at-1'))
+		await restoreStep(target, barrier, arm(bookmark(AT_POSITION)))
 		await afterAnswer()
 		const writes = calls.length
 		const response = await restoreStep(target, barrier, verify())
 		expect(response.status).toBe(200)
-		expect(parseOpsRestoreVerifyAck(await body(response))).toEqual({ step: 'verify', sentinel: 'present', bookmark: 'current-1' })
+		expect(parseOpsRestoreVerifyAck(await body(response))).toEqual({ step: 'verify', sentinel: 'present', bookmark: bookmark(START + 1) })
 		// It writes nothing and arms nothing.
 		expect(calls.slice(writes).map((call) => call.kind)).toEqual(['getCurrentBookmark'])
 	})
@@ -267,16 +318,12 @@ describe('verify', () => {
 		const { target, kv } = harness()
 		const barrier = await barrierIn('inspect')
 		// An abandoned earlier restore prepared this object before the target time.
-		await restoreStep(target, barrier, prepare({ sentinel: EARLIER_SENTINEL }))
+		await restoreStep(target, barrier, prepare({ sentinel: OTHER_SENTINEL }))
 		const atTarget = new Map(kv)
 		await restoreStep(target, barrier, prepare())
-		await restoreStep(target, barrier, arm('at-1'))
+		await restoreStep(target, barrier, arm(bookmark(AT_POSITION)))
 		await afterAnswer()
-		// The reset: the next session starts at the target, with the KV storage as it was then.
-		kv.clear()
-		for (const [key, value] of atTarget) {
-			kv.set(key, value)
-		}
+		resetTo(kv, atTarget)
 		const ack = parseOpsRestoreVerifyAck(await body(await restoreStep(target, barrier, verify())))
 		expect(ack?.sentinel).toBe('absent')
 	})
@@ -297,7 +344,7 @@ describe('the barrier', () => {
 		test(`prepare and arm are refused as wrong_mode while the object is ${mode}`, async () => {
 			const { target, calls, kv } = harness()
 			const barrier = await barrierIn(mode)
-			for (const step of [prepare(), arm('at-1')]) {
+			for (const step of [prepare(), arm(bookmark(AT_POSITION))]) {
 				const response = await restoreStep(target, barrier, step)
 				expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
 				expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'wrong_mode', table: null })
@@ -311,7 +358,7 @@ describe('the barrier', () => {
 	test('a step under another generation gets the stale refusal naming the published state', async () => {
 		const { target, calls } = harness()
 		const barrier = await barrierIn('inspect', GENERATION + 1)
-		for (const step of [prepare(), arm('at-1')]) {
+		for (const step of [prepare(), arm(bookmark(AT_POSITION))]) {
 			const response = await restoreStep(target, barrier, step)
 			expect(response.status).toBe(OPS_STALE_STATUS)
 			expect(parseOpsStaleRefusal(await body(response))).toEqual({
@@ -323,10 +370,18 @@ describe('the barrier', () => {
 		expect(calls).toEqual([])
 	})
 
+	test('the stale refusal comes before serving_object, and serving_object before wrong_mode', async () => {
+		const { target } = harness()
+		const stale = await serveRestore(target, await barrierIn('open', GENERATION + 1), prepare(), true)
+		expect(stale.status).toBe(OPS_STALE_STATUS)
+		const serving = await serveRestore(target, await barrierIn('open'), prepare(), true)
+		expect(parseOpsDataRefusal(await body(serving))).toEqual({ refused: 'serving_object', table: null })
+	})
+
 	test('the object of ordinary traffic refuses prepare and arm as serving_object, even in inspect', async () => {
 		const { target, calls, kv } = harness()
 		const barrier = await barrierIn('inspect')
-		for (const step of [prepare(), arm('at-1')]) {
+		for (const step of [prepare(), arm(bookmark(AT_POSITION))]) {
 			const response = await serveRestore(target, barrier, step, true)
 			expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
 			expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'serving_object', table: null })
@@ -343,20 +398,80 @@ describe('the barrier', () => {
 		expect(parseOpsStaleRefusal(await body(response))).toEqual({ refused: 'stale_generation', published: null })
 	})
 
-	test('a state R2 has not confirmed answers 503, which Control retries', async () => {
+	test('a state R2 has not confirmed is refused as stale, naming what R2 holds', async () => {
 		const { target, calls } = harness()
 		const barrier = await MaintenanceBarrier.load(memoryStore(true), { drainBoundMs: 10 })
 		expect((await barrier.transition({ generation: GENERATION, mode: 'inspect' })).kind).toBe('failed')
 		const response = await restoreStep(target, barrier, prepare())
-		expect(response.status).toBe(503)
+		expect(response.status).toBe(OPS_STALE_STATUS)
+		expect(parseOpsStaleRefusal(await body(response))).toEqual({ refused: 'stale_generation', published: null })
 		expect(calls).toEqual([])
+	})
+
+	test('a transition requested while prepare waits on a lookup is acknowledged only after prepare answers', async () => {
+		const lookup = Promise.withResolvers<number>()
+		const { target, kv } = harness({ lookup: () => lookup.promise })
+		const barrier = await barrierIn('inspect')
+		const prepared = restoreStep(target, barrier, prepare())
+		const opened = barrier.transition({ generation: GENERATION + 1, mode: 'open' })
+		expect(await settles(opened)).toBe(false)
+		lookup.resolve(AT_POSITION)
+		expect((await prepared).status).toBe(200)
+		expect((await opened).kind).toBe('acknowledged')
+		expect(kv.size).toBe(1)
+		// The step that arrives after the transition is fenced by it.
+		const late = await restoreStep(target, barrier, prepare({ sentinel: OTHER_SENTINEL }))
+		expect(parseOpsStaleRefusal(await body(late))).toEqual({ refused: 'stale_generation', published: { generation: GENERATION + 1, mode: 'open' } })
+		expect(kv.size).toBe(1)
+	})
+
+	test('a prepare requested while a transition publishes runs after it, and is fenced by it', async () => {
+		const { target, kv } = harness()
+		const inner = memoryStore()
+		let gate = Promise.resolve()
+		const store: MaintenanceStore = {
+			read: inner.read,
+			put: async (state, version) => {
+				await gate
+				return await inner.put(state, version)
+			},
+		}
+		const barrier = await MaintenanceBarrier.load(store, { drainBoundMs: 10 })
+		expect((await barrier.transition({ generation: GENERATION, mode: 'inspect' })).kind).toBe('acknowledged')
+		const held = Promise.withResolvers<void>()
+		gate = held.promise
+		const opened = barrier.transition({ generation: GENERATION + 1, mode: 'open' })
+		const prepared = restoreStep(target, barrier, prepare())
+		expect(await settles(prepared)).toBe(false)
+		held.resolve()
+		expect((await opened).kind).toBe('acknowledged')
+		expect((await prepared).status).toBe(OPS_STALE_STATUS)
+		expect(kv.size).toBe(0)
+	})
+
+	test('a transition requested while arm runs is acknowledged only after the object was reset', async () => {
+		const arming = Promise.withResolvers<void>()
+		const { target, calls } = harness({ arming: () => arming.promise })
+		const barrier = await barrierIn('inspect')
+		const armed = restoreStep(target, barrier, arm(bookmark(AT_POSITION)))
+		const order: string[] = []
+		const reset = () => calls.some((call) => call.kind === 'abort')
+		const opened = barrier.transition({ generation: GENERATION + 1, mode: 'open' }).then((result) => {
+			order.push(`transition ${result.kind}, reset before it: ${reset()}`)
+		})
+		expect(await settles(opened)).toBe(false)
+		arming.resolve()
+		expect(parseOpsRestoreArmAck(await body(await armed))?.step).toBe('arm')
+		order.push(`answered, reset before it: ${reset()}`)
+		await opened
+		expect(order).toEqual(['answered, reset before it: false', 'transition acknowledged, reset before it: true'])
 	})
 })
 
 test('a runtime without point-in-time recovery does not serve the operation', async () => {
 	const { target, kv } = harness({ recovery: false })
 	const barrier = await barrierIn('inspect')
-	for (const step of [prepare(), arm('at-1'), verify()]) {
+	for (const step of [prepare(), arm(bookmark(AT_POSITION)), verify()]) {
 		const response = await restoreStep(target, barrier, step)
 		expect(response.status).toBe(501)
 		expect(await body(response)).toEqual({ refused: 'not_implemented' })
@@ -380,14 +495,14 @@ describe('through the object', () => {
 			},
 			getCurrentBookmark: () => {
 				calls.push({ kind: 'getCurrentBookmark' })
-				return Promise.resolve('current')
+				return Promise.resolve(bookmark(START))
 			},
 			getBookmarkForTime: (time: number) => {
 				calls.push({ kind: 'getBookmarkForTime', time })
-				return Promise.resolve(`at-${time}`)
+				return Promise.resolve(bookmark(AT_POSITION))
 			},
-			onNextSessionRestoreBookmark: (bookmark: string) => {
-				calls.push({ kind: 'onNextSessionRestoreBookmark', bookmark })
+			onNextSessionRestoreBookmark: (target: string) => {
+				calls.push({ kind: 'onNextSessionRestoreBookmark', bookmark: target })
 				return Promise.resolve('undo')
 			},
 		}
@@ -431,12 +546,12 @@ describe('through the object', () => {
 		const object = original(kv, calls)
 		const verifyClone = { ...verify(), object: 'clone' }
 		const prepared = parseOpsRestorePrepareAck(await body(await object.fetch(restoreRequest({ ...prepare(), object: 'clone' }))))
-		expect(prepared).toEqual({ step: 'prepare', current: 'current', target: `at-${Date.parse(AT)}` })
+		expect(prepared).toEqual({ step: 'prepare', current: bookmark(START), target: bookmark(AT_POSITION) })
 		const armed = await object.fetch(restoreRequest({ ...arm(prepared?.target ?? ''), object: 'clone' }))
 		expect(parseOpsRestoreArmAck(await body(armed))).toEqual({ step: 'arm', undo: 'undo' })
 		await afterAnswer()
 		expect(recovered(calls)).toEqual([
-			{ kind: 'onNextSessionRestoreBookmark', bookmark: `at-${Date.parse(AT)}` },
+			{ kind: 'onNextSessionRestoreBookmark', bookmark: bookmark(AT_POSITION) },
 			{ kind: 'abort', reason: expect.any(String) },
 		])
 		expect(parseOpsRestoreVerifyAck(await body(await object.fetch(restoreRequest(verifyClone))))?.sentinel).toBe('present')

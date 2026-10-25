@@ -47,7 +47,7 @@ import type { MaintenanceBarrier, TransitionResult } from './maintenance.js'
 import { serveRestore } from './restore.js'
 import { serveTimers } from './tracker.js'
 
-/** What the view reads of the object's storage; workerd's `DurableObjectStorage` has both optional members. */
+/** What the view reads of the object's storage; workerd's `DurableObjectStorage` has every optional member. */
 export interface OpsStorage {
 	readonly sql: {
 		exec(query: string, ...bindings: SqliteValue[]): SqliteCursor
@@ -56,6 +56,9 @@ export interface OpsStorage {
 	}
 	/** The bun:sqlite test double has no alarm. */
 	getAlarm?(): Promise<number | null>
+	/** The object's KV storage, which point-in-time recovery rewinds with its SQLite; the bun:sqlite double has none. */
+	get?(key: string): Promise<unknown>
+	put?(key: string, value: unknown): Promise<void>
 	/** The synchronous KV of a SQLite-backed object, in the same database; the bun:sqlite test double has none. */
 	readonly kv?: {
 		get(key: string): unknown

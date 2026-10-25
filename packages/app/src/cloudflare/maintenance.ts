@@ -121,6 +121,17 @@ export type MigrateResult<T> = { readonly kind: 'migrated'; readonly value: T } 
 	readonly published: OpsPublishedState | null
 }
 
+/** What a step run in the barrier's turn answers, and what keeps the turn past the answer (`null`: nothing). */
+export interface TurnStep<T> {
+	readonly value: T
+	readonly holdUntil: Promise<void> | null
+}
+
+export type StepResult<T> = { readonly kind: 'ran'; readonly value: T } | {
+	readonly kind: 'stale'
+	readonly published: OpsPublishedState | null
+}
+
 /** One unit the drain waits for: an admitted invocation, or work it handed on that outlives it. */
 interface Unit {
 	readonly kind: InvocationKind
@@ -165,6 +176,11 @@ export class MaintenanceBarrier {
 
 	view(): OpsMaintenance {
 		return { mode: this.#mode, generation: this.#generation, published: this.#isPublished() }
+	}
+
+	/** What R2 holds as far as this instance knows, `null` before the first publication: what a stale refusal names. */
+	get published(): OpsPublishedState | null {
+		return this.#stored
 	}
 
 	/** The scope of one invocation, admitted now: the generation and mode it captures, which its writes are fenced on. */
@@ -242,6 +258,33 @@ export class MaintenanceBarrier {
 			}
 			return { kind: 'migrated', value: await work() }
 		})
+	}
+
+	/**
+	 * A data step of Control's (ADR-0070): `work` runs in the barrier's turn, only under the published `generation`, with
+	 * the mode it is in. No transition runs until `work` settles, nor, when it answers one, until `holdUntil` settles.
+	 */
+	async step<T>(generation: number, work: (mode: OpsMode) => Promise<TurnStep<T>>): Promise<StepResult<T>> {
+		const previous = this.#turn
+		const done = Promise.withResolvers<void>()
+		this.#turn = done.promise
+		let holdUntil: Promise<void> | null = null
+		await previous
+		try {
+			if (!this.#isPublished() || this.#generation !== generation) {
+				return { kind: 'stale', published: this.#stored }
+			}
+			const answered = await work(this.#mode)
+			holdUntil = answered.holdUntil
+			return { kind: 'ran', value: answered.value }
+		} finally {
+			if (holdUntil === null) {
+				done.resolve()
+			} else {
+				const release = () => done.resolve()
+				holdUntil.then(release, release)
+			}
+		}
 	}
 
 	#isPublished(): boolean {

@@ -5,6 +5,7 @@ import {
 	OPS_STALE_STATUS,
 	type OpsDataRefusal,
 	type OpsDataRefusalReason,
+	type OpsMode,
 	type OpsRestoreArm,
 	type OpsRestorePrepare,
 	type OpsRestoreRequest,
@@ -15,94 +16,114 @@ import {
 	parseOpsRestoreVerifyAck,
 } from '@fabrika/auth-core'
 import { jsonResponse } from '../errors.js'
-import { method } from './bindings.js'
-import type { MaintenanceBarrier } from './maintenance.js'
-import type { OpsRecovery, OpsTarget } from './ops.js'
+import type { MaintenanceBarrier, TurnStep } from './maintenance.js'
+import type { OpsRecovery, OpsStorage, OpsTarget } from './ops.js'
 
-/** The KV key of the sentinel. KV, unlike R2, is rewound with the object's SQLite, so its absence proves the restore. */
-const SENTINEL_KEY = '__fabrika/restore-sentinel'
+/**
+ * The KV key prefix of an operation's sentinel, followed by its id. KV, unlike R2, is rewound with the object's SQLite,
+ * so the absence of an operation's key proves its restore; no operation writes another's.
+ */
+const SENTINEL_PREFIX = '__fabrika/restore-sentinel/'
 
 const ABORT_REASON = 'fabrika: point-in-time restore armed'
 
 /**
- * One step of the original object's point-in-time restore (ADR-0070 §9 step 6). `prepare` and `arm` run only under
- * the published generation, on an object that is not the one ordinary traffic reaches (`serving`), while it is
- * `inspect`; `verify` writes nothing and runs in any mode.
+ * One step of the original object's point-in-time restore (ADR-0070 §9 step 6). `prepare` and `arm` run in the
+ * barrier's turn, only under the published generation, on an object that is not the one ordinary traffic reaches
+ * (`serving`), while it is `inspect`; `verify` writes nothing and runs in any mode.
  */
 export async function serveRestore(target: OpsTarget, barrier: MaintenanceBarrier, step: OpsRestoreRequest, serving: boolean): Promise<Response> {
 	const { recovery } = target
 	if (recovery === null) {
 		return jsonResponse({ refused: 'not_implemented' }, 501)
 	}
-	const sentinel = kvSentinel(target.storage)
+	const sentinels = kvSentinels(target.storage)
 	switch (step.step) {
 		case 'prepare':
-			return barrierRefusal(barrier, step.generation, serving) ?? await prepare(recovery, sentinel, step)
+			return await inTurn(barrier, step.generation, serving, () => prepare(recovery, sentinels, step))
 		case 'arm':
-			return barrierRefusal(barrier, step.generation, serving) ?? await arm(recovery, step)
+			return await inTurn(barrier, step.generation, serving, () => arm(recovery, step))
 		case 'verify':
-			return await verify(recovery, sentinel, step)
+			return await verify(recovery, sentinels, step)
 	}
 }
 
-/** The target's bookmark first, so a refused time writes nothing; the current one after the sentinel's write. */
-async function prepare(recovery: OpsRecovery, sentinel: SentinelStore, step: OpsRestorePrepare): Promise<Response> {
-	const at = Date.parse(step.at)
-	// A target at or after the sentinel's write would keep it, and `verify` could never see the restore.
-	if (at >= Date.now()) {
-		return dataRefusal('bookmark_unavailable')
+/**
+ * The first prepare of an operation reads the current bookmark, then the target's, and keeps both under its sentinel
+ * key; a retried one answers what it kept. A target not lexically before the current bookmark would keep the sentinel.
+ */
+async function prepare(recovery: OpsRecovery, sentinels: SentinelStore, step: OpsRestorePrepare): Promise<TurnStep<Response>> {
+	const kept = await sentinels.read(step.sentinel)
+	if (kept !== undefined) {
+		return answered(answer(parseOpsRestorePrepareAck(kept)))
 	}
+	const current = await recovery.getCurrentBookmark()
 	let target: string
 	try {
-		target = await recovery.getBookmarkForTime(at)
+		target = await recovery.getBookmarkForTime(Date.parse(step.at))
 	} catch {
-		return dataRefusal('bookmark_unavailable')
+		return answered(dataRefusal('bookmark_unavailable'))
 	}
-	await sentinel.write(step.sentinel)
-	return answer(parseOpsRestorePrepareAck({ step: 'prepare', current: await recovery.getCurrentBookmark(), target }))
+	if (!(target < current)) {
+		return answered(dataRefusal('bookmark_unavailable'))
+	}
+	const ack = parseOpsRestorePrepareAck({ step: 'prepare', current, target })
+	if (ack !== null) {
+		await sentinels.write(step.sentinel, ack)
+	}
+	return answered(answer(ack))
 }
 
-/** Arms the restore and resets the object once the answer is out; the answer may still be lost, and `verify` decides. */
-async function arm(recovery: OpsRecovery, step: OpsRestoreArm): Promise<Response> {
+/** Arms the restore and resets the object once the answer is out, holding the barrier's turn until then. */
+async function arm(recovery: OpsRecovery, step: OpsRestoreArm): Promise<TurnStep<Response>> {
 	let undo: string
 	try {
 		undo = await recovery.onNextSessionRestoreBookmark(step.target)
 	} catch {
-		return dataRefusal('bookmark_unavailable')
+		return answered(dataRefusal('bookmark_unavailable'))
 	}
 	const response = answer(parseOpsRestoreArmAck({ step: 'arm', undo }))
-	setTimeout(() => recovery.abort(ABORT_REASON), 0)
-	return response
+	// workerd's abort throws, so on a real object the turn is never released and no transition is acknowledged after it.
+	const reset = new Promise<void>((resolve) =>
+		setTimeout(() => {
+			recovery.abort(ABORT_REASON)
+			resolve()
+		}, 0)
+	)
+	return { value: response, holdUntil: reset }
 }
 
-/** Present only when the KV holds this operation's sentinel: a restore to a time before `prepare` removed it. */
-async function verify(recovery: OpsRecovery, sentinel: SentinelStore, step: OpsRestoreVerify): Promise<Response> {
-	const present = (await sentinel.read()) === step.sentinel
+/** Present while the KV holds this operation's key: a restore to a target before its `prepare` removed it. */
+async function verify(recovery: OpsRecovery, sentinels: SentinelStore, step: OpsRestoreVerify): Promise<Response> {
+	const present = (await sentinels.read(step.sentinel)) !== undefined
 	return answer(parseOpsRestoreVerifyAck({ step: 'verify', sentinel: present ? 'present' : 'absent', bookmark: await recovery.getCurrentBookmark() }))
 }
 
 /**
- * ADR-0070 §1 and §9: ADR-0069's stale refusal unless `generation` is the published one, then `serving_object` on the
- * object of ordinary traffic, then `wrong_mode` unless `inspect`. A state R2 has not confirmed answers 503, as a failed
- * transition does, and Control retries.
+ * ADR-0070 §1 and §9: inside the barrier's turn, ADR-0069's stale refusal unless `generation` is the published one,
+ * then `serving_object` on the object of ordinary traffic, then `wrong_mode` unless `inspect`.
  */
-function barrierRefusal(barrier: MaintenanceBarrier, generation: number, serving: boolean): Response | null {
-	const { mode, generation: current, published } = barrier.view()
-	if (current === null) {
-		const refusal: OpsStaleRefusal = { refused: 'stale_generation', published: null }
-		return jsonResponse(refusal, OPS_STALE_STATUS)
+async function inTurn(
+	barrier: MaintenanceBarrier,
+	generation: number,
+	serving: boolean,
+	work: () => Promise<TurnStep<Response>>,
+): Promise<Response> {
+	const result = await barrier.step(generation, (mode: OpsMode) => {
+		if (serving) {
+			return Promise.resolve(answered(dataRefusal('serving_object')))
+		}
+		return mode === 'inspect' ? work() : Promise.resolve(answered(dataRefusal('wrong_mode')))
+	})
+	if (result.kind === 'ran') {
+		return result.value
 	}
-	if (!published) {
-		return new Response(null, { status: 503 })
-	}
-	if (current !== generation) {
-		const refusal: OpsStaleRefusal = { refused: 'stale_generation', published: { generation: current, mode } }
-		return jsonResponse(refusal, OPS_STALE_STATUS)
-	}
-	if (serving) {
-		return dataRefusal('serving_object')
-	}
-	return mode === 'inspect' ? null : dataRefusal('wrong_mode')
+	const refusal: OpsStaleRefusal = { refused: 'stale_generation', published: result.published }
+	return jsonResponse(refusal, OPS_STALE_STATUS)
+}
+
+function answered(response: Response): TurnStep<Response> {
+	return { value: response, holdUntil: null }
 }
 
 function dataRefusal(reason: OpsDataRefusalReason): Response {
@@ -118,28 +139,26 @@ function answer(parsed: object | null): Response {
 	return jsonResponse(parsed, 200)
 }
 
-/** Where the sentinel lives: the object's KV storage. */
+/** The operations' sentinels in the object's KV storage, each under its own key. */
 interface SentinelStore {
-	read(): Promise<string | null>
-	write(sentinel: string): Promise<void>
+	/** What the operation's key holds, `undefined` when it holds nothing. */
+	read(sentinel: string): Promise<unknown>
+	write(sentinel: string, value: unknown): Promise<void>
 }
 
-/** workerd's `DurableObjectStorage` `get` and `put`, read structurally: the ops seam types only the SQL side. */
-function kvSentinel(storage: unknown): SentinelStore {
-	const call = (name: string): (...args: unknown[]) => unknown => {
-		const found = method(storage, name)
-		if (found === null) {
-			throw new Error(`the object's storage has no ${name}; a Durable Object's storage has it`)
-		}
-		return found
-	}
+function kvSentinels(storage: OpsStorage): SentinelStore {
 	return {
-		async read() {
-			const value: unknown = await call('get')(SENTINEL_KEY)
-			return typeof value === 'string' ? value : null
+		async read(sentinel) {
+			if (storage.get === undefined) {
+				throw new Error("the object's storage has no get; a Durable Object's storage has it")
+			}
+			return await storage.get(`${SENTINEL_PREFIX}${sentinel}`)
 		},
-		async write(sentinel) {
-			await call('put')(SENTINEL_KEY, sentinel)
+		async write(sentinel, value) {
+			if (storage.put === undefined) {
+				throw new Error("the object's storage has no put; a Durable Object's storage has it")
+			}
+			await storage.put(`${SENTINEL_PREFIX}${sentinel}`, value)
 		},
 	}
 }

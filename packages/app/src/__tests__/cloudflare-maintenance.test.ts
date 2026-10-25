@@ -989,3 +989,106 @@ describe('the store the barrier publishes through', () => {
 		expect(puts).toEqual([1, 2])
 	})
 })
+
+describe("a data step in the barrier's turn", () => {
+	/** R2 as a versioned map; `gate` holds every put until it settles. */
+	function gatedStore(): { readonly store: MaintenanceStore; hold(): () => void } {
+		let held: { state: OpsPublishedState; version: string } | null = null
+		let gate: Promise<void> = Promise.resolve()
+		return {
+			store: {
+				read: () => Promise.resolve(held),
+				put: async (state, version) => {
+					await gate
+					if ((held?.version ?? null) !== version) return null
+					held = { state, version: `v${state.generation}` }
+					return held.version
+				},
+			},
+			hold() {
+				const release = Promise.withResolvers<void>()
+				gate = release.promise
+				return release.resolve
+			},
+		}
+	}
+
+	test('runs only under the published generation, with its mode, and a stale step names what R2 holds', async () => {
+		const { store } = gatedStore()
+		const barrier = await MaintenanceBarrier.load(store, { drainBoundMs: 10 })
+		const work = (mode: OpsPublishedState['mode']) => Promise.resolve({ value: mode, holdUntil: null })
+		expect(barrier.published).toBeNull()
+		expect(await barrier.step(1, work)).toEqual({ kind: 'stale', published: null })
+		await barrier.transition({ generation: 3, mode: 'inspect' })
+		expect(barrier.published).toEqual({ generation: 3, mode: 'inspect' })
+		expect(await barrier.step(3, work)).toEqual({ kind: 'ran', value: 'inspect' })
+		expect(await barrier.step(2, work)).toEqual({ kind: 'stale', published: { generation: 3, mode: 'inspect' } })
+	})
+
+	test('a step waits for the put of a pending state; one R2 never confirmed runs no step and names what R2 last confirmed', async () => {
+		const { store, hold } = gatedStore()
+		const barrier = await MaintenanceBarrier.load(store, { drainBoundMs: 10 })
+		await barrier.transition({ generation: 3, mode: 'read-only' })
+		const release = hold()
+		// Pending: memory switched to closed at 4 before the put; the step queued behind it validates once it settles.
+		const closing = barrier.transition({ generation: 4, mode: 'closed' })
+		let ran = false
+		const step = barrier.step(4, () => {
+			ran = true
+			return Promise.resolve({ value: null, holdUntil: null })
+		})
+		expect(await settles(step)).toBe(false)
+		release()
+		expect((await closing).kind).toBe('acknowledged')
+		expect(await step).toEqual({ kind: 'ran', value: null })
+		expect(ran).toBe(true)
+		// A put that fails leaves the state pending: the step is stale, naming 4 closed, what R2 confirmed.
+		const failing = await MaintenanceBarrier.load({ read: store.read, put: () => Promise.reject(new Error('R2 is down')) }, { drainBoundMs: 10 })
+		expect((await failing.transition({ generation: 5, mode: 'inspect' })).kind).toBe('failed')
+		expect(await failing.step(5, () => Promise.resolve({ value: null, holdUntil: null }))).toEqual({
+			kind: 'stale',
+			published: { generation: 4, mode: 'closed' },
+		})
+		expect(failing.published).toEqual({ generation: 4, mode: 'closed' })
+	})
+
+	test('a transition waits for a running step, and then for what the step holds the turn until', async () => {
+		const { store } = gatedStore()
+		const barrier = await MaintenanceBarrier.load(store, { drainBoundMs: 10 })
+		await barrier.transition({ generation: 1, mode: 'inspect' })
+		const running = Promise.withResolvers<void>()
+		const holding = Promise.withResolvers<void>()
+		const step = barrier.step(1, async () => {
+			await running.promise
+			return { value: 'answered', holdUntil: holding.promise }
+		})
+		const opened = barrier.transition({ generation: 2, mode: 'open' })
+		expect(await settles(opened)).toBe(false)
+		running.resolve()
+		expect(await step).toEqual({ kind: 'ran', value: 'answered' })
+		expect(await settles(opened)).toBe(false)
+		holding.resolve()
+		expect((await opened).kind).toBe('acknowledged')
+	})
+
+	test('a step that rejects releases the turn', async () => {
+		const { store } = gatedStore()
+		const barrier = await MaintenanceBarrier.load(store, { drainBoundMs: 10 })
+		await barrier.transition({ generation: 1, mode: 'inspect' })
+		await expect(barrier.step(1, () => Promise.reject(new Error('the step failed')))).rejects.toThrow('the step failed')
+		expect((await barrier.transition({ generation: 2, mode: 'open' })).kind).toBe('acknowledged')
+	})
+
+	test('a step requested while a transition publishes runs after it, under the generation it published', async () => {
+		const { store, hold } = gatedStore()
+		const barrier = await MaintenanceBarrier.load(store, { drainBoundMs: 10 })
+		await barrier.transition({ generation: 1, mode: 'inspect' })
+		const release = hold()
+		const opened = barrier.transition({ generation: 2, mode: 'open' })
+		const step = barrier.step(1, () => Promise.resolve({ value: null, holdUntil: null }))
+		expect(await settles(step)).toBe(false)
+		release()
+		expect((await opened).kind).toBe('acknowledged')
+		expect(await step).toEqual({ kind: 'stale', published: { generation: 2, mode: 'open' } })
+	})
+})
