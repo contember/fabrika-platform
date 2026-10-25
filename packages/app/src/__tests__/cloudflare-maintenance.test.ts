@@ -21,19 +21,20 @@ import {
 import { scoped, type TypedColumnList } from '@fabrika/db'
 import { defineTables } from '@fabrika/db/tables'
 import { Database as BunDatabase } from 'bun:sqlite'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
 import { applicationMigrations } from '../build'
 import { type ApplicationState, createContractWorker, FabrikaApplication } from '../cloudflare'
-import { TICK_HEADER } from '../cloudflare/application'
+import { ALARM_SLACK_MS, TICK_HEADER } from '../cloudflare/application'
 import { MaintenanceBarrier, type MaintenanceStore } from '../cloudflare/maintenance'
 import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import { OPS_ENDPOINT } from '../cloudflare/ops'
 import { type ContractImplementation, serve } from '../implement'
 import { admitInvocation, runGated } from '../implement/dispatch'
+import type { JobClock } from '../jobs/runner'
 import type { NotesTable } from './cloudflare-fixture/src/db/schema.generated'
 import { vocabulary } from './cloudflare-fixture/src/vocabulary'
 import {
@@ -290,7 +291,11 @@ interface StartOptions {
 	readonly bucket?: Bucket
 	readonly database?: BunDatabase
 	readonly load?: () => Promise<{ readonly default: ContractImplementation }>
+	readonly clock?: JobClock
 }
+
+/** IAM's token exchange for the jobs' keys waits for `held`, which a test sets. */
+const iam: { held: Promise<void> } = { held: Promise.resolve() }
 
 async function start(options: StartOptions = {}): Promise<Started> {
 	const implementation = serve(contract, { database: scoped(tables) })
@@ -298,7 +303,10 @@ async function start(options: StartOptions = {}): Promise<Started> {
 	createContractWorker(() => {
 		loads.count++
 		return options.load?.() ?? Promise.resolve({ default: implementation })
-	}, { migrations: [...(await applicationMigrations(FIXTURE_ROOT)), DOCUMENTS_MIGRATION] })
+	}, {
+		migrations: [...(await applicationMigrations(FIXTURE_ROOT)), DOCUMENTS_MIGRATION],
+		...(options.clock === undefined ? {} : { clock: options.clock }),
+	})
 	const database = options.database ?? new BunDatabase(':memory:')
 	const bucket = options.bucket ?? new Bucket()
 	const tokens = workloadTokensFor(implementation)
@@ -307,7 +315,13 @@ async function start(options: StartOptions = {}): Promise<Started> {
 	const env = {
 		...frameworkEnvFor(implementation),
 		FABRIKA_PROXY_SECRET: PROXY_SECRET,
-		IAM: { getJwks: () => keySource.getJwks(), mintFromKey: (input: { app: string; key: string }) => tokens.exchange(input) },
+		IAM: {
+			getJwks: () => keySource.getJwks(),
+			mintFromKey: async (input: { app: string; key: string }) => {
+				await iam.held
+				return await tokens.exchange(input)
+			},
+		},
 		[CLOUDFLARE_FILES_BINDING]: bucket,
 		[FABRIKA_OPS_KEY_DIGESTS]: formatOpsKeyDigests([opsKeyDigest(OPS_KEY)]),
 		[FABRIKA_APPLICATION_OBJECT]: 'application',
@@ -600,6 +614,81 @@ describe('the write fence and the drain', () => {
 				await Promise.all(pending)
 			} finally {
 				holds.job = null
+			}
+		})
+	})
+
+	test('the drain waits for an IAM exchange the attempt stopped waiting for at its deadline', async () => {
+		await keepingProcessEnvironment(async () => {
+			// Waits of a minute or more (the attempt's deadline) end only when the test ends them.
+			const long: (() => void)[] = []
+			const clock: JobClock = {
+				random: () => 0,
+				wait: (ms, signal) =>
+					new Promise<void>((resolve) => {
+						if (ms < 60_000 || signal.aborted) {
+							resolve()
+							return
+						}
+						long.push(resolve)
+						signal.addEventListener('abort', () => resolve(), { once: true })
+					}),
+			}
+			const { object, database, pending } = await start({ clock })
+			expect((await object.fetch(health())).status).toBe(200)
+			await Promise.all(pending.splice(0))
+			makeDue(database, 'slow')
+			const exchange = Promise.withResolvers<void>()
+			iam.held = exchange.promise
+			try {
+				await object.alarm()
+				await until(() => long.length === 1)
+				long[0]?.()
+				// The run returned: its attempt timed out while IAM still holds the exchange.
+				await Promise.all(pending.splice(0))
+				const closing = transition(object, 1, 'closed')
+				expect(await settles(closing)).toBe(false)
+				exchange.resolve()
+				expect(await acked(await closing)).toEqual({ generation: 1, mode: 'closed', stillRunning: 0 })
+			} finally {
+				iam.held = Promise.resolve()
+				exchange.resolve()
+			}
+		})
+	})
+
+	test('a restriction while the alarm waits out the slack arms nothing and reports nothing', async () => {
+		await keepingProcessEnvironment(async () => {
+			const slack: (() => void)[] = []
+			const clock: JobClock = {
+				random: () => 0,
+				wait: (ms, signal) =>
+					new Promise<void>((resolve) => {
+						if (ms <= ALARM_SLACK_MS) {
+							slack.push(resolve)
+							return
+						}
+						signal.addEventListener('abort', () => resolve(), { once: true })
+					}),
+			}
+			const { object, database, pending, alarms } = await start({ clock })
+			expect((await object.fetch(health())).status).toBe(200)
+			await Promise.all(pending.splice(0))
+			database.query('update fabrika_wakes set due_at = ? where job = ?').run(Date.now() + 30, 'slow')
+			const logged: string[] = []
+			const log = spyOn(console, 'error').mockImplementation((...line: unknown[]) => void logged.push(line.map(String).join(' ')))
+			try {
+				const armed = alarms.length
+				const firing = object.alarm()
+				await until(() => slack.length === 1)
+				expect(await acked(await transition(object, 1, 'closed'))).toEqual({ generation: 1, mode: 'closed', stillRunning: 0 })
+				slack[0]?.()
+				await firing
+				await Promise.all(pending)
+				expect(alarms).toHaveLength(armed)
+				expect(logged.filter((line) => line.includes('AlarmFailed') || line.includes('alarm_failed'))).toEqual([])
+			} finally {
+				log.mockRestore()
 			}
 		})
 	})

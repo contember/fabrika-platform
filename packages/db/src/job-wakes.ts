@@ -71,6 +71,11 @@ export interface JobWakes {
 	 * now; an overdue one stays. Answers how many it moved. Refused in a process that serves an application.
 	 */
 	hasten(ids: readonly string[]): Promise<number>
+	/**
+	 * The jobs whose lease a run holds past its expiry, declared or not: a removed job's crashed holder still arms the
+	 * alarm through `next` until someone reaps it.
+	 */
+	expiredHolders(): Promise<readonly string[]>
 }
 
 /** A job the contract declares, and the cron expression its schedule is: its cron wake's key is `cron:<job>:<expression>`. */
@@ -119,6 +124,11 @@ const SQL_NEXT: DialectTexts = {
 		(select w.due_at from ${W} w left join ${L} l on l.job = w.job
 			where l.holder is null or l.expires_at <= ${SQLITE_NOW} order by w.due_at limit 1) as wake,
 		(select ${SQLITE_EPOCH_MS('min(expires_at)')} from ${L} where holder is not null) as held`,
+}
+
+const SQL_EXPIRED_HOLDERS: DialectTexts = {
+	postgres: `select job from ${L} where holder is not null and expires_at <= clock_timestamp() order by job`,
+	sqlite: `select job from ${L} where holder is not null and expires_at <= ${SQLITE_NOW} order by job`,
 }
 
 const SQL_CONSUME: DialectTexts = {
@@ -318,6 +328,17 @@ export function jobWakes(runtime: () => DataLayerRuntime): JobWakes {
 			const [{ wake = null, held = null } = {}] = await rows(using ?? session(), SQL_NEXT, [])
 			const candidates = [wake, held].filter((value) => value !== null).map((value) => wholeNumber(value, 'the next wake'))
 			return candidates.length === 0 ? null : new Date(Math.min(...candidates))
+		},
+
+		async expiredHolders(): Promise<readonly string[]> {
+			return freeze(
+				(await rows(session(), SQL_EXPIRED_HOLDERS, [])).map(({ job }) => {
+					if (typeof job !== 'string') {
+						throw new QueryRefusedError('unexpected_row', `${L} came back in another shape than its migration declares`)
+					}
+					return job
+				}),
+			)
 		},
 
 		async reconcile(declared: readonly DeclaredJob[]): Promise<number> {

@@ -66,6 +66,13 @@ export const TICK_HEADER = 'X-Fabrika-Tick'
 export const ALARM_SLACK_MS = 50
 /** After an internal error the alarm is armed again this far ahead; the repair tick covers a re-arm that failed. */
 export const ALARM_RETRY_MS = 30_000
+/**
+ * The object's KV key that holds the name of the object it is, recorded at its first verified event: an alarm names no
+ * object, and the one ordinary traffic reaches may since have changed. Outside the SQLite, so no dump carries it.
+ */
+export const OBJECT_NAME_KEY = 'fabrika:object'
+/** A repair tick's time: the Worker's `scheduledTime`, digits only. */
+const TICK_TIME = /^\d{1,16}$/
 
 /** The object's alarm. On a SQLite-backed object `setAlarm` and `deleteAlarm` commit with the open transaction. */
 export interface AlarmStorage {
@@ -436,6 +443,8 @@ export class FabrikaApplication {
 	readonly #ops: OpsAccess | null
 	/** The object ordinary traffic reaches, so the one this instance is when such traffic arrives; `null` when malformed. */
 	readonly #object: string | null
+	/** The object this instance is, once a verified event named it or its storage recorded it (`OBJECT_NAME_KEY`). */
+	#name: string | null = null
 	/** The maintenance barrier, read from R2 once per instance; a failed read is not kept, so the next request reads again. */
 	#barrier: Promise<MaintenanceBarrier> | null = null
 	#barrierObject: string | null = null
@@ -525,10 +534,38 @@ export class FabrikaApplication {
 		return await objectScope.run({ storage: this.#state.storage, event }, () => runGated(event, () => this.#serve(outcome.booted, request)))
 	}
 
+	/** The name of the object this instance is: the one its storage recorded, or `null` before a verified event named it. */
+	#recorded(): string | null {
+		if (this.#name === null) {
+			const stored = this.#state.storage.kv?.get(OBJECT_NAME_KEY)
+			if (typeof stored === 'string' && stored !== '') {
+				this.#name = stored
+			}
+		}
+		return this.#name
+	}
+
+	/**
+	 * Whether this instance is the object a verified event names; the first such event records the name, which never
+	 * changes after. A storage without KV (the bun:sqlite double) keeps it in memory only.
+	 */
+	#named(object: string): boolean {
+		const recorded = this.#recorded()
+		if (recorded !== null) {
+			return recorded === object
+		}
+		this.#state.storage.kv?.put(OBJECT_NAME_KEY, object)
+		this.#name = object
+		return true
+	}
+
 	/** The barrier of the object this instance is; every name it is asked under must be the same one. */
 	#maintenance(object: string | null): Promise<MaintenanceBarrier> {
 		if (object === null) {
 			return Promise.reject(new Error(`${FABRIKA_APPLICATION_OBJECT} and ${FABRIKA_APPLICATION_OBJECTS} name no valid set of objects`))
+		}
+		if (!this.#named(object)) {
+			return Promise.reject(new Error('this object is another object than the one the event names'))
 		}
 		if (this.#barrier !== null && this.#barrierObject !== object) {
 			return Promise.reject(new Error('one object instance was asked under two object names'))
@@ -606,7 +643,7 @@ export class FabrikaApplication {
 		const scheduler = booted.app.jobs.scheduler
 		const tick = request.headers.get(TICK_HEADER)
 		if (tick !== null) {
-			return Number.isSafeInteger(Number(tick)) ? this.#tick(scheduler) : Promise.resolve(new Response(null, { status: 400 }))
+			return TICK_TIME.test(tick) && Number.isSafeInteger(Number(tick)) ? this.#tick(scheduler) : Promise.resolve(new Response(null, { status: 400 }))
 		}
 		if (scheduler !== null && !this.#repaired) {
 			this.#state.waitUntil(this.#repairOnce(scheduler))
@@ -616,18 +653,22 @@ export class FabrikaApplication {
 	}
 
 	/**
-	 * workerd calls it when the alarm is due (ADR-0065 §5). Outside `open` it runs nothing and arms nothing: the
-	 * maintenance operation owns the object, and reopening arms the alarm again. It never throws, because after six
-	 * failures the platform stops retrying: an internal error arms it again in `ALARM_RETRY_MS` and is reported.
+	 * workerd calls it when the alarm is due (ADR-0065 §5). Only the object ordinary traffic reaches runs jobs, and only
+	 * in `open`; otherwise it runs nothing and arms nothing: the maintenance operation owns the object, reopening arms the
+	 * alarm again, and the repair tick arms the serving object's. It never throws, because after six failures the platform
+	 * stops retrying: an internal error in `open` arms it again in `ALARM_RETRY_MS` and is reported.
 	 */
 	async alarm(): Promise<void> {
 		let scheduler: JobScheduler | null = null
+		let barrier: MaintenanceBarrier | null = null
 		try {
-			if (this.#barrierObject !== null && this.#barrierObject !== this.#object) {
-				// Another object of the environment (the rehearsal) runs no job.
+			const object = this.#recorded()
+			if (object === null || object !== this.#object) {
+				// No verified event named this object yet, or it is not the one ordinary traffic reaches (a rehearsal, a
+				// former serving object after a deploy moved the traffic): it runs no job.
 				return
 			}
-			const barrier = await this.#maintenance(this.#object)
+			barrier = await this.#maintenance(object)
 			if (barrier.mode !== 'open') {
 				return
 			}
@@ -641,8 +682,12 @@ export class FabrikaApplication {
 				return
 			}
 			const event = barrier.event()
-			await objectScope.run({ storage: this.#state.storage, event }, () => runGated(event, () => this.#wake(booted)))
+			await objectScope.run({ storage: this.#state.storage, event }, () => runGated(event, () => this.#wake(booted, event)))
 		} catch (error) {
+			if (error instanceof MaintenanceFenceError || barrier === null || barrier.mode !== 'open') {
+				// A transition restricted the object meanwhile, or none was ever read: no failure, and nothing is armed outside open.
+				return
+			}
 			console.error('fabrika: the alarm failed: alarm_failed')
 			try {
 				await this.#state.storage.setAlarm?.(Date.now() + ALARM_RETRY_MS)
@@ -660,14 +705,19 @@ export class FabrikaApplication {
 	 * set for the run holding it) and the alarm armed from the projection. The runs go to `waitUntil`: one alarm runs at a
 	 * time, and awaiting a long job would hold back every other wake. No wake is consumed here, only by its run's finish.
 	 */
-	async #wake(scheduler: JobScheduler): Promise<void> {
+	async #wake(scheduler: JobScheduler, event: BarrierEvent): Promise<void> {
 		await this.#repairOnce(scheduler)
 		const early = await scheduler.earlyBy(ALARM_SLACK_MS)
 		if (early > 0) {
 			await this.#clock.wait(early, new AbortController().signal)
 		}
 		const storage = fencedStorage()
-		for (const job of scheduler.jobs) {
+		// A job whose lease is held past its expiry but which the contract no longer declares is reaped too.
+		for (const job of [...scheduler.jobs, ...(await scheduler.orphans())]) {
+			if (!event.writable()) {
+				// A transition restricted the object since the alarm was admitted; reopening arms it again.
+				return
+			}
 			const taken = await storage.transaction(async () => {
 				const taken = await scheduler.take(job)
 				await armAlarm(eventScope().storage, await scheduler.next())

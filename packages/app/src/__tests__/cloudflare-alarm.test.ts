@@ -13,18 +13,19 @@ import { join } from 'node:path'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
 import { applicationMigrations } from '../build'
 import { type ApplicationState, type ApplicationStorage, createContractWorker, FabrikaApplication } from '../cloudflare'
-import { ALARM_RETRY_MS, ALARM_SLACK_MS, TICK_HEADER } from '../cloudflare/application'
+import { ALARM_RETRY_MS, ALARM_SLACK_MS, OBJECT_NAME_KEY, TICK_HEADER } from '../cloudflare/application'
 import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import { CLOUDFLARE_MAX_JOB_SEGMENT_MS } from '../contract/defaults'
 import { serve } from '../implement'
-import type { JobClock } from '../jobs/runner'
+import { type JobClock, SEGMENT_FINISH_RESERVE_MS } from '../jobs/runner'
 import { tables } from './cloudflare-fixture/src/db/tables'
 import { vocabulary } from './cloudflare-fixture/src/vocabulary'
 import { frameworkEnvFor, keepingProcessEnvironment, keySource, ORIGIN, PROXY_SECRET, workloadTokensFor } from './fixtures/implement/harness'
 
 const FIXTURE_ROOT = join(import.meta.dir, 'cloudflare-fixture')
-const STATE_KEY = '__fabrika/ops/application.json'
 const MINUTE = 60_000
+/** The environment's objects: ordinary traffic reaches the one `FABRIKA_APPLICATION_OBJECT` names. */
+const OBJECTS = 'application,clone'
 
 const app = defineApp(vocabulary, tables)
 
@@ -46,6 +47,8 @@ const hourly = app.cron('30 * * * *', { actions: ['notes.read'] }).handle(async 
 })
 
 const contract = app.contract((c) => ({ health: c.health('/healthz'), jobs: { steady, hourly } }))
+/** The contract of a deploy that removed `hourly`. */
+const withoutHourly = app.contract((c) => ({ health: c.health('/healthz'), jobs: { steady } }))
 
 /** The object's alarm as workerd keeps it: set inside a storage transaction, it commits or rolls back with it. */
 class Alarm {
@@ -91,17 +94,18 @@ class Alarm {
 	}
 }
 
-/** The environment's bucket: only the maintenance state, which a test sets. */
-function bucketOf(state: { current: OpsPublishedState | null }) {
+/** The environment's bucket: only each object's maintenance state, which a test sets; absent is `open`. */
+function bucketOf(states: Map<string, OpsPublishedState>) {
 	const unused = () => Promise.reject(new Error('not called'))
 	return {
 		head: unused,
 		put: unused,
 		delete: unused,
 		get: (key: string) => {
-			if (key !== STATE_KEY) return unused()
-			const stored = state.current
-			return Promise.resolve(stored === null ? null : { etag: 'v1', text: () => Promise.resolve(JSON.stringify(stored)) })
+			const object = /^__fabrika\/ops\/([a-z0-9-]+)\.json$/.exec(key)?.[1]
+			if (object === undefined) return unused()
+			const stored = states.get(object)
+			return Promise.resolve(stored === undefined ? null : { etag: 'v1', text: () => Promise.resolve(JSON.stringify(stored)) })
 		},
 	}
 }
@@ -116,33 +120,38 @@ interface Instance {
 interface Started {
 	readonly database: BunDatabase
 	readonly alarm: Alarm
-	readonly maintenance: { current: OpsPublishedState | null }
+	/** Each object's published maintenance state. */
+	readonly states: Map<string, OpsPublishedState>
+	/** The object's synchronous KV, which outlives its instances as its SQLite does. */
+	readonly kv: Map<string, unknown>
 	/** What every instance handed to `waitUntil`. */
 	readonly pending: Promise<unknown>[]
 	/** IAM's token exchange for the jobs' keys waits while held; `free` lets later exchanges through and leaves held ones waiting. */
 	readonly iam: { hold(): () => void; free(): void }
 	readonly instance: Instance
-	/** Another instance, in a fresh isolate, over the same database, alarm and bucket, as after an eviction. */
-	restart(): Instance
+	/**
+	 * Another instance, in a fresh isolate, over the same database, KV, alarm and bucket, as after an eviction; after a
+	 * deploy, with the object ordinary traffic now reaches (`pointer`) or another contract.
+	 */
+	restart(options?: { readonly pointer?: string; readonly contract?: typeof contract | typeof withoutHourly }): Instance
 }
 
 async function start(options: { readonly clock?: JobClock } = {}): Promise<Started> {
 	const migrations = await applicationMigrations(FIXTURE_ROOT)
 	// A fresh isolate: an instance boots the implementation registered when it is constructed, with its own credentials.
-	const isolate = () => {
-		const implementation = serve(contract, { database: scoped(tables) })
+	const isolate = (deployed: typeof contract | typeof withoutHourly = contract) => {
+		const implementation = serve(deployed, { database: scoped(tables) })
 		createContractWorker(() => Promise.resolve({ default: implementation }), {
 			migrations,
 			...(options.clock === undefined ? {} : { clock: options.clock }),
 		})
 		return implementation
 	}
-	const implementation = isolate()
 	const database = new BunDatabase(':memory:')
+	const kv = new Map<string, unknown>()
 	const alarm = new Alarm()
-	const maintenance: { current: OpsPublishedState | null } = { current: null }
+	const states = new Map<string, OpsPublishedState>()
 	const pending: Promise<unknown>[] = []
-	const tokens = workloadTokensFor(implementation)
 	let held: Promise<void> = Promise.resolve()
 	const iam = {
 		hold() {
@@ -154,21 +163,22 @@ async function start(options: { readonly clock?: JobClock } = {}): Promise<Start
 			held = Promise.resolve()
 		},
 	}
-	const env = {
-		...frameworkEnvFor(implementation),
-		FABRIKA_PROXY_SECRET: PROXY_SECRET,
-		[CLOUDFLARE_FILES_BINDING]: bucketOf(maintenance),
-		[FABRIKA_APPLICATION_OBJECT]: 'application',
-		[FABRIKA_APPLICATION_OBJECTS]: 'application',
-		IAM: {
-			getJwks: () => keySource.getJwks(),
-			mintFromKey: async (input: { app: string; key: string }) => {
-				await held
-				return await tokens.exchange(input)
+	const instanceOf = (implementation: ReturnType<typeof isolate>, pointer: string): Instance => {
+		const tokens = workloadTokensFor(implementation)
+		const env = {
+			...frameworkEnvFor(implementation),
+			FABRIKA_PROXY_SECRET: PROXY_SECRET,
+			[CLOUDFLARE_FILES_BINDING]: bucketOf(states),
+			[FABRIKA_APPLICATION_OBJECT]: pointer,
+			[FABRIKA_APPLICATION_OBJECTS]: OBJECTS,
+			IAM: {
+				getJwks: () => keySource.getJwks(),
+				mintFromKey: async (input: { app: string; key: string }) => {
+					await held
+					return await tokens.exchange(input)
+				},
 			},
-		},
-	}
-	const instanceOf = (): Instance => {
+		}
 		const inner = bunSqliteStorage(database)
 		const storage: ApplicationStorage = {
 			sql: inner.sql,
@@ -177,6 +187,7 @@ async function start(options: { readonly clock?: JobClock } = {}): Promise<Start
 			getAlarm: () => Promise.resolve(alarm.scheduled),
 			setAlarm: (time) => alarm.set(time),
 			deleteAlarm: () => alarm.set(null),
+			kv: { get: (key) => kv.get(key), put: (key, value) => void kv.set(key, value), delete: (key) => kv.delete(key) },
 		}
 		const state: ApplicationState = { storage, blockConcurrencyWhile: (callback) => callback(), waitUntil: (promise) => void pending.push(promise) }
 		const object = new FabrikaApplication(state, env)
@@ -196,14 +207,12 @@ async function start(options: { readonly clock?: JobClock } = {}): Promise<Start
 	return {
 		database,
 		alarm,
-		maintenance,
+		states,
+		kv,
 		pending,
 		iam,
-		instance: instanceOf(),
-		restart: () => {
-			isolate()
-			return instanceOf()
-		},
+		instance: instanceOf(isolate(), 'application'),
+		restart: (options = {}) => instanceOf(isolate(options.contract), options.pointer ?? 'application'),
 	}
 }
 
@@ -243,6 +252,11 @@ function leaseOf(database: BunDatabase, job: string): LeaseRow | null {
 /** Moves every pending wake of `job` to `at` (a second ago by default), as time passing to its due time would. */
 function makeDue(database: BunDatabase, job: string, at = Date.now() - 1_000): void {
 	database.query('update fabrika_wakes set due_at = ? where job = ?').run(at, job)
+}
+
+/** Moves the wakes of `job` a day ahead, past any lease's expiry, so the alarm a held lease arms is its expiry whatever the hour. */
+function laterThanAnyLease(database: BunDatabase, job: string): void {
+	makeDue(database, job, Date.now() + 24 * 60 * MINUTE)
 }
 
 /** Moves the lease of `job` past its expiry, as time passing would. */
@@ -316,13 +330,15 @@ describe('the repair tick', () => {
 		})
 	})
 
-	test('without an integer time is 400 and arms nothing', async () => {
+	test('without an integer time is 400 and arms nothing; an empty or blank time is no time', async () => {
 		await keepingProcessEnvironment(async () => {
 			const { alarm, instance } = await start()
-			const tick = await instance.object.fetch(
-				new Request(`${ORIGIN}/`, { method: 'POST', headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET, [TICK_HEADER]: 'soon' } }),
-			)
-			expect(tick.status).toBe(400)
+			for (const time of ['soon', '', ' ', '1.5', '-1', '1e3', '0x10']) {
+				const tick = await instance.object.fetch(
+					new Request(`${ORIGIN}/`, { method: 'POST', headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET, [TICK_HEADER]: time } }),
+				)
+				expect({ time, status: tick.status }).toEqual({ time, status: 400 })
+			}
 			expect(alarm.armed).toEqual([])
 		})
 	})
@@ -350,10 +366,10 @@ describe('the alarm', () => {
 	test('outside open it runs nothing and arms nothing', async () => {
 		await keepingProcessEnvironment(async () => {
 			const started = await repaired()
-			const { database, alarm, maintenance, restart } = started
+			const { database, alarm, states, restart } = started
 			makeDue(database, 'steady')
 			for (const mode of ['read-only', 'closed', 'inspect'] as const) {
-				maintenance.current = { generation: 1, mode }
+				states.set('application', { generation: 1, mode })
 				const object = restart()
 				alarm.scheduled = Date.now()
 				const armed = alarm.armed.length
@@ -447,6 +463,90 @@ describe('the alarm', () => {
 	})
 })
 
+describe('the object an alarm fires in', () => {
+	test('a cold alarm of the former serving object, after a deploy moved ordinary traffic, runs nothing and arms nothing', async () => {
+		await keepingProcessEnvironment(async () => {
+			const started = await repaired()
+			const { database, alarm, states, restart } = started
+			makeDue(database, 'steady')
+			// The original is held in inspect while the clone serves; the original's alarm is still armed.
+			states.set('application', { generation: 1, mode: 'inspect' })
+			const former = restart({ pointer: 'clone' })
+			const armed = alarm.armed.length
+			await former.fire()
+			await settle(started)
+			expect(runs).toEqual([])
+			expect(alarm.armed).toHaveLength(armed)
+			expect(alarm.scheduled).toBeNull()
+			expect(leaseOf(database, 'steady')).toMatchObject({ holder: null })
+		})
+	})
+
+	test('a cold alarm of an object no verified event has named runs nothing and arms nothing; the repair tick names it', async () => {
+		await keepingProcessEnvironment(async () => {
+			const started = await start()
+			const { database, alarm, instance, kv } = started
+			await instance.fire()
+			await settle(started)
+			expect(alarm.armed).toEqual([])
+			// It did not even boot: no migration ran.
+			expect(database.query("select count(*) as count from sqlite_master where name = 'fabrika_wakes'").get()).toEqual({ count: 0 })
+			expect((await instance.tick()).status).toBe(204)
+			expect(kv.get(OBJECT_NAME_KEY)).toBe('application')
+			expect(alarm.scheduled).toBe(earliestWake(database))
+		})
+	})
+})
+
+describe('a removed job', () => {
+	/** `hourly` runs and holds its lease; a deploy then removes it, and the next instance's repair deletes its wakes. */
+	async function removedWhileRunning(): Promise<{ readonly started: Started; readonly deployed: Instance }> {
+		const started = await repaired()
+		const { database, alarm, instance, restart } = started
+		makeDue(database, 'hourly')
+		const running = Promise.withResolvers<void>()
+		hooks.hourly = () => {
+			running.resolve()
+			return new Promise<void>(() => {})
+		}
+		await instance.fire()
+		await running.promise
+		started.pending.splice(0)
+		hooks.hourly = null
+		const deployed = restart({ contract: withoutHourly })
+		expect((await deployed.tick()).status).toBe(204)
+		expect(wakesOf(database, 'hourly')).toEqual([])
+		const expiry = Date.parse(leaseOf(database, 'hourly')?.expires_at ?? '')
+		expect(alarm.scheduled).toBe(Math.min(expiry, earliestWake(database) ?? expiry))
+		expireLease(database, 'hourly')
+		return { started, deployed }
+	}
+
+	const crashed = "fabrika: JobFailed: job 'hourly' failed: crashed (its run's lease expired before the run finished)"
+
+	test('its run that held the lease is reaped and reported by the alarm, which then follows the remaining wakes', async () => {
+		await keepingProcessEnvironment(async () => {
+			const { started, deployed } = await removedWhileRunning()
+			await deployed.fire()
+			await settle(started)
+			expect(leaseOf(started.database, 'hourly')).toMatchObject({ holder: null, last_status: 'failed' })
+			expect(reported('JobFailed')).toEqual([crashed])
+			expect(started.alarm.scheduled).toBe(earliestWake(started.database))
+		})
+	})
+
+	test('its run that held the lease is reaped and reported by the repair tick', async () => {
+		await keepingProcessEnvironment(async () => {
+			const { started, deployed } = await removedWhileRunning()
+			expect((await deployed.tick()).status).toBe(204)
+			await settle(started)
+			expect(leaseOf(started.database, 'hourly')).toMatchObject({ holder: null, last_status: 'failed' })
+			expect(reported('JobFailed')).toEqual([crashed])
+			expect(started.alarm.scheduled).toBe(earliestWake(started.database))
+		})
+	})
+})
+
 describe('a crash at every boundary leaves the wakes or a held lease whose expiry is armed', () => {
 	test('after the wake insert: the alarm committed with it, and the next instance runs the job', async () => {
 		await keepingProcessEnvironment(async () => {
@@ -466,6 +566,7 @@ describe('a crash at every boundary leaves the wakes or a held lease whose expir
 			const started = await repaired()
 			const { database, alarm, instance, restart, iam } = started
 			makeDue(database, 'steady')
+			laterThanAnyLease(database, 'hourly')
 			// The run waits for IAM; the instance is evicted there, so its run never goes on.
 			iam.hold()
 			await instance.fire()
@@ -484,6 +585,7 @@ describe('a crash at every boundary leaves the wakes or a held lease whose expir
 			const started = await repaired()
 			const { database, alarm, instance, restart } = started
 			makeDue(database, 'steady')
+			laterThanAnyLease(database, 'hourly')
 			const running = Promise.withResolvers<void>()
 			hooks.steady = () => {
 				running.resolve()
@@ -587,7 +689,8 @@ describe('one deadline over the segment', () => {
 			const release = iam.hold()
 			await instance.fire()
 			await until(() => virtual.long.length === 1)
-			expect(virtual.long[0]?.ms).toBe(CLOUDFLARE_MAX_JOB_SEGMENT_MS)
+			// The attempt ends before the segment by the finish's reserve.
+			expect(virtual.long[0]?.ms).toBe(CLOUDFLARE_MAX_JOB_SEGMENT_MS - SEGMENT_FINISH_RESERVE_MS)
 			virtual.long[0]?.resolve()
 			await settle(started)
 			release()
@@ -609,11 +712,67 @@ describe('one deadline over the segment', () => {
 			await until(() => virtual.long.length === 1)
 			virtual.advance(10 * MINUTE)
 			release()
-			await until(() => virtual.long.length === 2)
-			expect(virtual.long.map((wait) => wait.ms)).toEqual([CLOUDFLARE_MAX_JOB_SEGMENT_MS, CLOUDFLARE_MAX_JOB_SEGMENT_MS - 10 * MINUTE])
+			await until(() => virtual.long.length >= 2)
 			await settle(started)
+			const attempt = CLOUDFLARE_MAX_JOB_SEGMENT_MS - SEGMENT_FINISH_RESERVE_MS
+			// IAM's wait, then the handler's: what remains of the attempt; the finish's steps wait for the segment's end.
+			expect(virtual.long.map((wait) => wait.ms)).toEqual([
+				attempt,
+				attempt - 10 * MINUTE,
+				...virtual.long.slice(2).map(() => CLOUDFLARE_MAX_JOB_SEGMENT_MS - 10 * MINUTE),
+			])
 			expect(runs).toEqual([{ job: 'steady', attempt: 1 }])
 			expect(leaseOf(database, 'steady')).toMatchObject({ holder: null, last_status: 'succeeded' })
+		})
+	})
+
+	test('a handler that runs to the end of the segment leaves its finish to the lease expiry, which stays armed', async () => {
+		await keepingProcessEnvironment(async () => {
+			const virtual = virtualClock()
+			const started = await repaired({ clock: virtual.clock })
+			const { database, alarm, instance, restart } = started
+			makeDue(database, 'steady')
+			laterThanAnyLease(database, 'hourly')
+			hooks.steady = () => {
+				virtual.advance(CLOUDFLARE_MAX_JOB_SEGMENT_MS)
+				return Promise.resolve()
+			}
+			await instance.fire()
+			await settle(started)
+			expect(runs).toEqual([{ job: 'steady', attempt: 1 }])
+			// No finish was started past the segment: the lease is held, the wake kept, and the deadman armed.
+			expect(leaseOf(database, 'steady')?.holder).not.toBeNull()
+			expect(wakesOf(database, 'steady')[0]?.due_at).toBeLessThan(Date.now())
+			expect(alarm.scheduled).toBe(Date.parse(leaseOf(database, 'steady')?.expires_at ?? ''))
+			hooks.steady = null
+			await recoverAfterExpiry(started, restart())
+		})
+	})
+
+	test('an exchange an attempt stopped waiting for is not reused: the next attempt asks IAM afresh', async () => {
+		await keepingProcessEnvironment(async () => {
+			const virtual = virtualClock()
+			const started = await repaired({ clock: virtual.clock })
+			const { database, instance, iam } = started
+			makeDue(database, 'steady')
+			const release = iam.hold()
+			try {
+				await instance.fire()
+				await until(() => virtual.long.length === 1)
+				virtual.long[0]?.resolve()
+				await settle(started)
+				expect(wakesOf(database, 'steady')[0]).toMatchObject({ reason: 'cron', attempt: 1 })
+				// IAM answers again; the first exchange is still held.
+				iam.free()
+				makeDue(database, 'steady')
+				await instance.fire()
+				await until(() => runs.length === 1)
+				await settle(started)
+				expect(runs).toEqual([{ job: 'steady', attempt: 2 }])
+				expect(leaseOf(database, 'steady')).toMatchObject({ holder: null, last_status: 'succeeded' })
+			} finally {
+				release()
+			}
 		})
 	})
 })

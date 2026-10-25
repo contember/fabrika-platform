@@ -1083,11 +1083,13 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   `requireProxySecret`, `clientAddress: 'vouched'` (the proxy Worker sets the client address from `CF-Connecting-IP`),
   the R2 file store (`r2-files.ts`) and IAM's binding for keys, membership and workload tokens (`bindings.ts`).
 - **Jobs run on the object's alarm** (ADR-0065 §5, `jobs.scheduler` in `runner.ts`). Every wake or lease change
-  arms the alarm in its own transaction (`BootOptions.projectWakes`). `alarm()` does nothing outside `open`; otherwise,
-  per job with a due wake, it reaps, takes the lease or marks the job pending, and re-arms in one transaction, then
+  arms the alarm in its own transaction (`BootOptions.projectWakes`). `alarm()` runs jobs only in the object whose name,
+  recorded in its KV at its first verified event (`OBJECT_NAME_KEY`), is the one ordinary traffic reaches, and only in
+  `open`; otherwise, per job with a due wake (and per removed job a crashed run still holds, `orphans()`), it reaps, takes the lease or marks the job pending, and re-arms in one transaction, then
   runs the job in `waitUntil`. It consumes no wake (the fenced finish does), waits out a wake within `ALARM_SLACK_MS`,
-  and never throws: an internal error re-arms `ALARM_RETRY_MS` later and is reported as `AlarmFailed`. A run it started
-  retries durably (`finish(fence, { kind: 'retry', at })`), a kicked run inline. The repair tick, and the object's first
+  and never throws: an internal error in `open` re-arms `ALARM_RETRY_MS` later and is reported as `AlarmFailed`, a fence
+  refusal is none. A run it started retries durably (`finish(fence, { kind: 'retry', at })`), a kicked run inline; its
+  attempt ends `SEGMENT_FINISH_RESERVE_MS` before the segment, and no finish starts past it. The repair tick, and the object's first
   event after a boot or a reopen, reap, reconcile the cron wakes against the declared jobs and their expressions, and
   re-arm. A kick runs in the object after its commit. A scanning file kind does not boot there (`sqliteProblems`).
 - **Every handler holds the object's transaction.** workerd resets an object whose transaction runs about 30 s, so the
@@ -1124,7 +1126,7 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   verifier and requires `ptype: 'job'` and `workload: <name>`. `ctx.within(action, dim)` is a `Within` over every
   value, `ctx.ref(action, dim, id)` a located `Ref`; both refuse an undeclared action, an action the token lacks, an
   unknown dimension and an ended attempt. A refused key fails the attempt `unauthorized`, an unreachable IAM
-  `iam_unavailable`; no handler runs. The token is cached until `TOKEN_REFRESH_SKEW_SECONDS` before it expires. The
+  `iam_unavailable`; no handler runs. The token is cached until `TOKEN_REFRESH_SKEW_SECONDS` before it expires; an exchange an attempt stopped waiting for is tracked in its admission and not reused (`abandon`). The
   grants' principal is `job:<name>`. There is no in-process mint and no unscoped handle; keep no second path. A job
   creates no scope and manages no member. **It issues links only for the mount the approved artifact says it
   `issues`** (`jobLinks` in `runner.ts`, by the artifact whatever the leaf; `boot` refuses one without a membership

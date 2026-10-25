@@ -19,7 +19,7 @@ import { openSqlite } from '@fabrika/db/sqlite'
 import { ObjectExistsError, ObjectTooLargeError } from '@fabrika/platform'
 import { Database as BunDatabase } from 'bun:sqlite'
 import { afterEach, describe, expect, test } from 'bun:test'
-import { createTestEnv, type TestEnv } from 'lopata/testing'
+import { createTestEnv, TestClock, type TestEnv } from 'lopata/testing'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -88,6 +88,9 @@ async function deploy(options: { readonly secret?: string | null; readonly vars?
 	const migrations = await applicationMigrations(FIXTURE_ROOT)
 	const worker = createContractWorker(() => Promise.resolve({ default: served.implementation }), { migrations })
 	const testEnv = await createTestEnv({
+		// Lopata's own clock, which only its alarm timers read, an hour behind: no alarm fires by itself while a test runs,
+		// whatever the hour, so a cron wake that falls due mid-test runs nothing; a test fires one with `triggerAlarm`.
+		clock: new TestClock(Date.now() - 60 * 60_000),
 		worker: { default: worker, [CLOUDFLARE_APPLICATION_CLASS]: FabrikaApplication },
 		bindings: {
 			[CLOUDFLARE_APPLICATION_BINDING]: { type: 'durable-object', className: CLOUDFLARE_APPLICATION_CLASS },

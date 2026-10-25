@@ -68,17 +68,22 @@ SQLite database. The Worker only forwards each request to it.**
    alarm is a projection, never state of its own: the earliest due wake of a job whose lease is free or expired, or the
    earliest expiry of a held lease (the deadman). Every transaction that changes a wake or a lease recomputes it and
    calls `setAlarm` or `deleteAlarm` there; on a SQLite-backed object the alarm commits and rolls back with the
-   transaction. `alarm()` returns without re-arming outside the `open` maintenance mode; otherwise, per job with a due
-   wake and in one transaction, it reaps an expired holder, takes the lease without waiting (or marks the job pending)
+   transaction. An alarm names no object, so each object records in its KV (`fabrika:object`, outside the SQLite a dump
+   carries) the name its first verified event reached it under; `alarm()` runs jobs only in the object whose recorded
+   name is the one ordinary traffic reaches, and only in its `open` maintenance mode, and otherwise returns without
+   re-arming. Then, per job with a due wake and in one transaction, it reaps an expired holder, takes the lease without waiting (or marks the job pending)
    and re-arms, then hands each taken lease to `waitUntil`. It consumes no wake: a wake is deleted only in the
    transaction of the fenced finish of a run that started at or after it, so a crash at any point leaves the wakes or a
    held lease whose expiry is armed. It never throws, because the platform stops retrying an alarm after six failures:
-   on an internal error it re-arms 30 s later and reports `AlarmFailed` to Operations. A wake within 50 ms is waited
+   on an internal error in `open` it re-arms 30 s later and reports `AlarmFailed` to Operations; a transition that
+   restricted the object meanwhile is no error. A wake within 50 ms is waited
    for, because `Date.now()` is pinned between I/O, so no run starts before its wake. A run the alarm started retries
    durably: a failed attempt keeps its wakes, moves them to now + backoff and counts the attempt; past the job's
-   `retries` it is reported failed and its cron wake advances to the next fire. Each attempt is one segment with one
-   deadline over the IAM exchange, the handler and the finish. The Worker's cron trigger forwards the repair tick (and
-   the object repairs once when it boots): it reaps, deletes the wakes of an undeclared job or of a changed expression,
+   `retries` it is reported failed and its cron wake advances to the next fire. Each attempt is one segment: the IAM
+   exchange and the handler end before it by a finish reserve (30 s, at most a tenth), and no finish starts past it;
+   the lease then expires and its reap runs the job again. An exchange the attempt stopped waiting for still counts in
+   the drain, and the next attempt asks IAM afresh. The Worker's cron trigger forwards the repair tick (and
+   the object repairs once when it boots): it reaps every expired holder, a removed job's too, deletes the wakes of an undeclared job or of a changed expression,
    inserts each missing cron wake at the next fire, keeps an overdue one so missed fires coalesce into one run, and
    re-arms. It arms the first alarm of an environment nobody called and recovers an alarm whose retries ran out. A kick
    writes a `kick` wake in its site's transaction, so it commits with the writes it follows; a kick without a time also

@@ -172,6 +172,19 @@ describe('the wakes of a job on SQLite', () => {
 		expect((await wakes.next())?.getTime()).toBe(due.getTime())
 	})
 
+	test('the expired holders are the jobs held past their expiry, whether or not anything declares them', async () => {
+		await lease('nightly')
+		await lease('removed')
+		await lease('live')
+		await leases.finish(await lease('free'), 'succeeded')
+		expect(await wakes.expiredHolders()).toEqual([])
+		expire('nightly')
+		expire('removed')
+		expect(await wakes.expiredHolders()).toEqual(['nightly', 'removed'])
+		expect(await leases.reapCrashed('removed')).toBe(true)
+		expect(await wakes.expiredHolders()).toEqual(['nightly'])
+	})
+
 	test('the projection follows a lost lease: the run that lost it consumes nothing, the run that took it over does', async () => {
 		const due = at(-MINUTE)
 		await wakes.schedule({ job: 'sync', reason: 'kick', dueAt: due })

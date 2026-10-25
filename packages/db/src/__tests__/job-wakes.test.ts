@@ -249,6 +249,19 @@ describe.skipIf(!hasPostgres)('the next wake on Postgres', () => {
 		expect(await next()).toBe(due.getTime())
 	})
 
+	test('the expired holders are the jobs held past their expiry, whether or not anything declares them', async () => {
+		await taken(on, 'nightly', 'run')
+		await taken(on, 'removed', 'run')
+		await taken(on, 'live', 'run')
+		expect(await on.leases.finish(await taken(on, 'free', 'run'), 'succeeded')).toBe(true)
+		expect(await on.wakes.expiredHolders()).toEqual([])
+		await on.expire('nightly')
+		await on.expire('removed')
+		expect(await on.wakes.expiredHolders()).toEqual(['nightly', 'removed'])
+		expect(await on.leases.reapCrashed('removed')).toBe(true)
+		expect(await on.wakes.expiredHolders()).toEqual(['nightly'])
+	})
+
 	test('the projection follows a lost lease: the run that lost it consumes nothing, the run that took it over does', async () => {
 		const due = at(-MINUTE)
 		await on.wakes.schedule({ job: 'sync', reason: 'kick', dueAt: due })

@@ -432,13 +432,17 @@ first and the object again, and it never boots the application.
 - **Jobs run on the object's alarm** (ADR-0065 §5). A job's pending work is a row of `fabrika_wakes`: a `cron` row at
   its next fire, a `kick`, `claim` or `retry` row. Every transaction that changes a wake or a lease arms the alarm at the
   earliest due wake of a job whose lease is free or expired, or at the earliest expiry of a held lease, and the alarm
-  commits or rolls back with it. `alarm()` does nothing outside the `open` mode; otherwise, for each job with a due
-  wake, it reaps an expired holder, takes the lease without waiting (or marks the job pending) and re-arms in one
+  commits or rolls back with it. An alarm names no object, so each object records in its KV (`fabrika:object`) the name
+  its first verified event reached it under; `alarm()` does nothing in an object that is not the one ordinary traffic
+  reaches (a rehearsal, a former serving object), in one no verified event has named yet, or outside the `open` mode.
+  Otherwise, for each job with a due wake, and for a removed job whose lease a crashed run still holds, it reaps an
+  expired holder, takes the lease without waiting (or marks the job pending) and re-arms in one
   transaction, and runs the job past its return. A wake is deleted only by the fenced finish of a run that started at
   or after it, so a crash leaves the wake or a held lease whose expiry is armed. A wake within 50 ms is waited for;
-  an internal error re-arms the alarm 30 s later and is an `AlarmFailed` error event. The file sweep is one of these
-  jobs.
-- **The repair tick** (the Worker's cron trigger, and the object's first event after it boots or reopens) reaps, deletes
+  an internal error in `open` re-arms the alarm 30 s later and is an `AlarmFailed` error event; a transition that
+  restricted the object meanwhile is none. The file sweep is one of these jobs.
+- **The repair tick** (the Worker's cron trigger, and the object's first event after it boots or reopens) reaps every
+  expired holder, a removed job's too, deletes
   the wakes of an undeclared job and the cron wake of a changed expression, inserts each missing cron wake at the next
   fire, keeps an overdue one so missed fires coalesce into one run, and re-arms. It arms the first alarm of an
   environment nobody called and recovers an alarm whose retries ran out. It answers 204; a tick without an integer time
@@ -1340,8 +1344,11 @@ process first — and runs one job:
    On Cloudflare a run the alarm started retries durably instead of sleeping: a failed
    attempt keeps the wakes it owned, moves them to now + backoff and counts the attempt,
    and the alarm starts the next attempt; past `retries` the cron wake advances to the
-   next fire. One deadline covers the attempt's IAM exchange, its handler and its finish,
-   so a slow exchange leaves the handler only what remains. A kicked run retries inline.
+   next fire. One segment covers the attempt's IAM exchange, its handler and its finish:
+   the exchange and the handler end 30 s (at most a tenth) before it, so a slow exchange
+   leaves the handler only what remains, and no finish starts past it (the lease expires
+   and its reap runs the job again). An exchange the attempt stopped waiting for counts in
+   a maintenance drain, and the next attempt asks IAM afresh. A kicked run retries inline.
 4. Failures are fixed codes: `timeout`, `lease_lost`, `handler_failed`,
    `query_refused` and `capability_refused` (a framework refusal, chosen by class as a
    request's 5xx is, with the refusal's catalog reason in the result, the log line and the
