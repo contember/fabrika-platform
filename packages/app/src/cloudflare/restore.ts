@@ -26,9 +26,10 @@ const ABORT_REASON = 'fabrika: point-in-time restore armed'
 
 /**
  * One step of the original object's point-in-time restore (ADR-0070 §9 step 6). `prepare` and `arm` run only under
- * the published generation while the object is `inspect`; `verify` writes nothing and runs in any mode.
+ * the published generation, on an object that is not the one ordinary traffic reaches (`serving`), while it is
+ * `inspect`; `verify` writes nothing and runs in any mode.
  */
-export async function serveRestore(target: OpsTarget, barrier: MaintenanceBarrier, step: OpsRestoreRequest): Promise<Response> {
+export async function serveRestore(target: OpsTarget, barrier: MaintenanceBarrier, step: OpsRestoreRequest, serving: boolean): Promise<Response> {
 	const { recovery } = target
 	if (recovery === null) {
 		return jsonResponse({ refused: 'not_implemented' }, 501)
@@ -36,9 +37,9 @@ export async function serveRestore(target: OpsTarget, barrier: MaintenanceBarrie
 	const sentinel = kvSentinel(target.storage)
 	switch (step.step) {
 		case 'prepare':
-			return barrierRefusal(barrier, step.generation) ?? await prepare(recovery, sentinel, step)
+			return barrierRefusal(barrier, step.generation, serving) ?? await prepare(recovery, sentinel, step)
 		case 'arm':
-			return barrierRefusal(barrier, step.generation) ?? await arm(recovery, step)
+			return barrierRefusal(barrier, step.generation, serving) ?? await arm(recovery, step)
 		case 'verify':
 			return await verify(recovery, sentinel, step)
 	}
@@ -81,10 +82,11 @@ async function verify(recovery: OpsRecovery, sentinel: SentinelStore, step: OpsR
 }
 
 /**
- * ADR-0070 §1 and §9: ADR-0069's stale refusal unless `generation` is the published one, then `wrong_mode` unless
- * `inspect`. A state R2 has not confirmed answers 503, as a failed transition does, and Control retries.
+ * ADR-0070 §1 and §9: ADR-0069's stale refusal unless `generation` is the published one, then `serving_object` on the
+ * object of ordinary traffic, then `wrong_mode` unless `inspect`. A state R2 has not confirmed answers 503, as a failed
+ * transition does, and Control retries.
  */
-function barrierRefusal(barrier: MaintenanceBarrier, generation: number): Response | null {
+function barrierRefusal(barrier: MaintenanceBarrier, generation: number, serving: boolean): Response | null {
 	const { mode, generation: current, published } = barrier.view()
 	if (current === null) {
 		const refusal: OpsStaleRefusal = { refused: 'stale_generation', published: null }
@@ -96,6 +98,9 @@ function barrierRefusal(barrier: MaintenanceBarrier, generation: number): Respon
 	if (current !== generation) {
 		const refusal: OpsStaleRefusal = { refused: 'stale_generation', published: { generation: current, mode } }
 		return jsonResponse(refusal, OPS_STALE_STATUS)
+	}
+	if (serving) {
+		return dataRefusal('serving_object')
 	}
 	return mode === 'inspect' ? null : dataRefusal('wrong_mode')
 }

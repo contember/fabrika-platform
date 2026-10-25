@@ -30,6 +30,9 @@ import { MaintenanceBarrier, type MaintenanceStore } from '../cloudflare/mainten
 import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import { OPS_ENDPOINT, type OpsRecovery, type OpsTarget } from '../cloudflare/ops'
 import { serveRestore } from '../cloudflare/restore'
+
+/** A step on an object ordinary traffic does not reach: the clone a side restore names. */
+const restoreStep = (target: OpsTarget, barrier: MaintenanceBarrier, step: OpsRestoreRequest) => serveRestore(target, barrier, step, false)
 import { ORIGIN, PROXY_SECRET } from './fixtures/implement/harness'
 
 const OBJECT = 'application'
@@ -163,7 +166,7 @@ const recovered = (calls: readonly Call[]) => calls.filter((call) => call.kind =
 describe('prepare', () => {
 	test('writes the sentinel, then answers the current bookmark and the bookmark of the target time', async () => {
 		const { target, calls, kv } = harness()
-		const response = await serveRestore(target, await barrierIn('inspect'), prepare())
+		const response = await restoreStep(target, await barrierIn('inspect'), prepare())
 		expect(response.status).toBe(200)
 		const ack = parseOpsRestorePrepareAck(await body(response))
 		expect(ack).toEqual({ step: 'prepare', current: 'current-1', target: `at-${Date.parse(AT)}` })
@@ -174,7 +177,7 @@ describe('prepare', () => {
 
 	test('a target time outside the recovery window is refused as bookmark_unavailable and writes nothing', async () => {
 		const { target, calls, kv } = harness()
-		const response = await serveRestore(target, await barrierIn('inspect'), prepare({ at: OUTSIDE_WINDOW }))
+		const response = await restoreStep(target, await barrierIn('inspect'), prepare({ at: OUTSIDE_WINDOW }))
 		expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
 		expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'bookmark_unavailable', table: null })
 		expect(kv.size).toBe(0)
@@ -184,7 +187,7 @@ describe('prepare', () => {
 	test('a target time that is not before the sentinel is refused: a restore to it would keep the sentinel', async () => {
 		const { target, kv } = harness()
 		const future = new Date(Date.now() + 60_000).toISOString()
-		const response = await serveRestore(target, await barrierIn('inspect'), prepare({ at: future }))
+		const response = await restoreStep(target, await barrierIn('inspect'), prepare({ at: future }))
 		expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
 		expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'bookmark_unavailable', table: null })
 		expect(kv.size).toBe(0)
@@ -193,8 +196,8 @@ describe('prepare', () => {
 	test('a repeated prepare keeps the one sentinel and answers the same target', async () => {
 		const { target, kv } = harness()
 		const barrier = await barrierIn('inspect')
-		const first = parseOpsRestorePrepareAck(await body(await serveRestore(target, barrier, prepare())))
-		const second = parseOpsRestorePrepareAck(await body(await serveRestore(target, barrier, prepare())))
+		const first = parseOpsRestorePrepareAck(await body(await restoreStep(target, barrier, prepare())))
+		const second = parseOpsRestorePrepareAck(await body(await restoreStep(target, barrier, prepare())))
 		expect(first?.target).toBe(`at-${Date.parse(AT)}`)
 		expect(second?.target).toBe(first?.target)
 		expect([...kv.values()]).toEqual([SENTINEL])
@@ -205,11 +208,11 @@ describe('arm', () => {
 	test('arms the target, answers the undo bookmark, and resets the object only after the answer', async () => {
 		const { target, calls } = harness()
 		const barrier = await barrierIn('inspect')
-		const prepared = parseOpsRestorePrepareAck(await body(await serveRestore(target, barrier, prepare())))
+		const prepared = parseOpsRestorePrepareAck(await body(await restoreStep(target, barrier, prepare())))
 		if (prepared === null) {
 			throw new Error('prepare did not answer')
 		}
-		const response = await serveRestore(target, barrier, arm(prepared.target))
+		const response = await restoreStep(target, barrier, arm(prepared.target))
 		expect(response.status).toBe(200)
 		expect(parseOpsRestoreArmAck(await body(response))).toEqual({ step: 'arm', undo: 'undo-1' })
 		expect(recovered(calls)).toEqual([{ kind: 'onNextSessionRestoreBookmark', bookmark: prepared.target }])
@@ -219,7 +222,7 @@ describe('arm', () => {
 
 	test('a bookmark the storage refuses is refused as bookmark_unavailable, and the object is not reset', async () => {
 		const { target, calls } = harness({ refusedTarget: 'not-a-bookmark' })
-		const response = await serveRestore(target, await barrierIn('inspect'), arm('not-a-bookmark'))
+		const response = await restoreStep(target, await barrierIn('inspect'), arm('not-a-bookmark'))
 		expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
 		expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'bookmark_unavailable', table: null })
 		await afterAnswer()
@@ -230,7 +233,7 @@ describe('arm', () => {
 		const { target, calls } = harness()
 		const barrier = await barrierIn('inspect')
 		for (let attempt = 0; attempt < 2; attempt++) {
-			const response = await serveRestore(target, barrier, arm('at-1'))
+			const response = await restoreStep(target, barrier, arm('at-1'))
 			expect(parseOpsRestoreArmAck(await body(response))?.step).toBe('arm')
 			await afterAnswer()
 		}
@@ -247,11 +250,11 @@ describe('verify', () => {
 	test('an object that did not restore still holds the sentinel', async () => {
 		const { target, calls } = harness()
 		const barrier = await barrierIn('inspect')
-		await serveRestore(target, barrier, prepare())
-		await serveRestore(target, barrier, arm('at-1'))
+		await restoreStep(target, barrier, prepare())
+		await restoreStep(target, barrier, arm('at-1'))
 		await afterAnswer()
 		const writes = calls.length
-		const response = await serveRestore(target, barrier, verify())
+		const response = await restoreStep(target, barrier, verify())
 		expect(response.status).toBe(200)
 		expect(parseOpsRestoreVerifyAck(await body(response))).toEqual({ step: 'verify', sentinel: 'present', bookmark: 'current-1' })
 		// It writes nothing and arms nothing.
@@ -262,26 +265,26 @@ describe('verify', () => {
 		const { target, kv } = harness()
 		const barrier = await barrierIn('inspect')
 		// An abandoned earlier restore prepared this object before the target time.
-		await serveRestore(target, barrier, prepare({ sentinel: EARLIER_SENTINEL }))
+		await restoreStep(target, barrier, prepare({ sentinel: EARLIER_SENTINEL }))
 		const atTarget = new Map(kv)
-		await serveRestore(target, barrier, prepare())
-		await serveRestore(target, barrier, arm('at-1'))
+		await restoreStep(target, barrier, prepare())
+		await restoreStep(target, barrier, arm('at-1'))
 		await afterAnswer()
 		// The reset: the next session starts at the target, with the KV storage as it was then.
 		kv.clear()
 		for (const [key, value] of atTarget) {
 			kv.set(key, value)
 		}
-		const ack = parseOpsRestoreVerifyAck(await body(await serveRestore(target, barrier, verify())))
+		const ack = parseOpsRestoreVerifyAck(await body(await restoreStep(target, barrier, verify())))
 		expect(ack?.sentinel).toBe('absent')
 	})
 
 	test('a repeated verify answers the same', async () => {
 		const { target } = harness()
 		const barrier = await barrierIn('inspect')
-		await serveRestore(target, barrier, prepare())
-		const first = await body(await serveRestore(target, barrier, verify()))
-		const second = await body(await serveRestore(target, barrier, verify()))
+		await restoreStep(target, barrier, prepare())
+		const first = await body(await restoreStep(target, barrier, verify()))
+		const second = await body(await restoreStep(target, barrier, verify()))
 		expect(parseOpsRestoreVerifyAck(first)).not.toBeNull()
 		expect(second).toEqual(first)
 	})
@@ -293,7 +296,7 @@ describe('the barrier', () => {
 			const { target, calls, kv } = harness()
 			const barrier = await barrierIn(mode)
 			for (const step of [prepare(), arm('at-1')]) {
-				const response = await serveRestore(target, barrier, step)
+				const response = await restoreStep(target, barrier, step)
 				expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
 				expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'wrong_mode', table: null })
 			}
@@ -307,7 +310,7 @@ describe('the barrier', () => {
 		const { target, calls } = harness()
 		const barrier = await barrierIn('inspect', GENERATION + 1)
 		for (const step of [prepare(), arm('at-1')]) {
-			const response = await serveRestore(target, barrier, step)
+			const response = await restoreStep(target, barrier, step)
 			expect(response.status).toBe(OPS_STALE_STATUS)
 			expect(parseOpsStaleRefusal(await body(response))).toEqual({
 				refused: 'stale_generation',
@@ -318,9 +321,22 @@ describe('the barrier', () => {
 		expect(calls).toEqual([])
 	})
 
+	test('the object of ordinary traffic refuses prepare and arm as serving_object, even in inspect', async () => {
+		const { target, calls, kv } = harness()
+		const barrier = await barrierIn('inspect')
+		for (const step of [prepare(), arm('at-1')]) {
+			const response = await serveRestore(target, barrier, step, true)
+			expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
+			expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'serving_object', table: null })
+		}
+		await afterAnswer()
+		expect(kv.size).toBe(0)
+		expect(calls).toEqual([])
+	})
+
 	test('an object that never had a published state refuses as stale with none', async () => {
 		const { target } = harness()
-		const response = await serveRestore(target, await MaintenanceBarrier.load(memoryStore()), prepare())
+		const response = await restoreStep(target, await MaintenanceBarrier.load(memoryStore()), prepare())
 		expect(response.status).toBe(OPS_STALE_STATUS)
 		expect(parseOpsStaleRefusal(await body(response))).toEqual({ refused: 'stale_generation', published: null })
 	})
@@ -329,7 +345,7 @@ describe('the barrier', () => {
 		const { target, calls } = harness()
 		const barrier = await MaintenanceBarrier.load(memoryStore(true), { drainBoundMs: 10 })
 		expect((await barrier.transition({ generation: GENERATION, mode: 'inspect' })).kind).toBe('failed')
-		const response = await serveRestore(target, barrier, prepare())
+		const response = await restoreStep(target, barrier, prepare())
 		expect(response.status).toBe(503)
 		expect(calls).toEqual([])
 	})
@@ -339,7 +355,7 @@ test('a runtime without point-in-time recovery does not serve the operation', as
 	const { target, kv } = harness({ recovery: false })
 	const barrier = await barrierIn('inspect')
 	for (const step of [prepare(), arm('at-1'), verify()]) {
-		const response = await serveRestore(target, barrier, step)
+		const response = await restoreStep(target, barrier, step)
 		expect(response.status).toBe(501)
 		expect(await body(response)).toEqual({ refused: 'not_implemented' })
 	}

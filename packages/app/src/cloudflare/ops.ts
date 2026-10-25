@@ -168,7 +168,7 @@ export async function serveOps(request: Request, access: OpsAccess | null, targe
 		}
 		case 'restore': {
 			const step = parseOpsRestoreRequest(body)
-			return step === null ? opsRefusal() : await serveRestore(target, barrier, step)
+			return step === null ? opsRefusal() : await serveRestore(target, barrier, step, object === access.objects.object)
 		}
 		case 'timers': {
 			const timers = parseOpsTimersRequest(body)
