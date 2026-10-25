@@ -64,11 +64,15 @@ keeps password enrollment and reset admin-driven. A provider also needs the send
 
 {{EMAIL_PROVIDER_VARIABLES}}
 
-To change or rotate them, re-run `fabrika platform init` with the new values; it rewrites this Environment
-and triggers the workflow, which redeploys IAM.
+The workflow hands the same set to IAM and to the control plane. The control plane hands it to every application
+whose job declares `mailer: 'installation'`, at that application's deploy.
 
-Switching provider leaves the old provider's values stored: init writes the new ones and deletes none. IAM
-reads only the selected provider's variables, but delete the old credentials so nothing holds them, for
+To change or rotate them, re-run `fabrika platform init` with the new values; it rewrites this Environment
+and triggers the workflow, which redeploys IAM and the control plane. An application gets the new set at its next
+deploy: redeploy the environments that send installation mail.
+
+Switching provider leaves the old provider's values stored: init writes the new ones and deletes none. IAM and
+the control plane read only the selected provider's variables, but delete the old credentials so nothing holds them, for
 example after leaving SmartEmailing:
 
 ```sh
@@ -79,6 +83,8 @@ gh variable delete FABRIKA_EMAIL_SMARTEMAILING_TAG --env {{ACCOUNT}}
 
 Remove the same names from the installer env file (init prints its path when it starts), or a later run of
 init resumes them.
+IAM's and the control plane's Workers also keep the old credential as a Worker secret, which neither reads;
+`wrangler secret delete` removes it.
 
 ## Routine redeploy or version bump
 

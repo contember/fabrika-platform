@@ -10,6 +10,8 @@
 
 import type { IamRpc } from '@fabrika/auth'
 import { type AppEnvironment, readEnvironmentName } from '@fabrika/auth-core'
+import { pickEmailEnvironment } from '@fabrika/email'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import type { GitHubAppFetch } from '@fabrika/github-app'
 import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
 import {
@@ -30,12 +32,18 @@ import { SourceFailure } from './github/source/failure'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './github/source/metadata'
 import type { SourceRepository } from './github/source/types'
 import { controlPublicOrigin } from './iam'
+import { readInstallationMail } from './mail-transport'
 import type { ControlJobMessage } from './run-lifecycle'
 
 /** The control-plane Worker's raw Cloudflare bindings + vars/secrets — what `WorkerEntrypoint` fills `this.env` with. */
 export interface WorkerBindings
-	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'WAIT_UNTIL' | 'IAM' | 'IAM_ADMIN'>
+	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'WAIT_UNTIL' | 'IAM' | 'IAM_ADMIN' | 'MAIL_TRANSPORT'>
 {
+	/**
+	 * The installation's mail transport (`FABRIKA_EMAIL_*`): Worker vars, the provider's credentials Worker secrets, both
+	 * written by Control's own deploy from the installation's GitHub Environment (`fabrika.config.ts`).
+	 */
+	readonly [name: `FABRIKA_EMAIL_${string}`]: string | undefined
 	/** Registry + run history + vault + deploy locks. Migrations in `./migrations` (SQLite dialect). */
 	DB: D1Database
 	/** Control-plane SPA static assets. */
@@ -72,6 +80,8 @@ export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL'
 		DEPLOY_QUEUE: cfJobQueue(bindings.DEPLOY_QUEUE),
 		WAIT_UNTIL: waitUntil,
 		...(bindings.IAM === undefined ? {} : { IAM: bindings.IAM, IAM_ADMIN: bindings.IAM }),
+		// A Worker has no boot to log an invalid transport at: the deploys that need it are refused, naming the variables.
+		MAIL_TRANSPORT: readInstallationMail(pickEmailEnvironment(bindings), builtinEmailProviders),
 	}
 	return { ...env, COMMITS: gitHubCommitSource(new GitHubMetadataClient({}), vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory() })) }
 }

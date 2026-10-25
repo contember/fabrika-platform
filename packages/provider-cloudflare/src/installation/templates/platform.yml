@@ -188,6 +188,12 @@ jobs:
           FABRIKA_IAM_ISSUER: ${{ vars.FABRIKA_IAM_ISSUER }}
           OPERATIONS_ARTIFACT_ORIGIN: https://${{ vars.OPERATIONS_HOSTNAME }}
           FABRIKA_CONTROL_BOOTSTRAP_ADMINS: ${{ vars.FABRIKA_CONTROL_BOOTSTRAP_ADMINS }}
+          # The installation's mail transport, the same set as IAM's: the control plane hands it to every application
+          # whose job declares `mailer: 'installation'`. Its credentials become Worker secrets of the control plane only.
+          FABRIKA_EMAIL_PROVIDER: ${{ vars.FABRIKA_EMAIL_PROVIDER }}
+          FABRIKA_EMAIL_FROM: ${{ vars.FABRIKA_EMAIL_FROM }}
+          FABRIKA_EMAIL_FROM_NAME: ${{ vars.FABRIKA_EMAIL_FROM_NAME }}
+          # {{EMAIL_PROVIDER_ENV}}
         run: |
           fabrika platform deploy --provider=cloudflare \
             --runner-config=packages/runner-cloudflare/fabrika-runner.config.ts \

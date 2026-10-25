@@ -135,6 +135,16 @@ describe('platform scaffold', () => {
 			expect(platformStep).toContain('FABRIKA_RUNNER_KEY: ${{ secrets.FABRIKA_RUNNER_KEY }}')
 			expect(platformStep).toContain('--runner-config=packages/runner-cloudflare/fabrika-runner.config.ts')
 			expect(platformStep).toContain('--worker-config=packages/control/fabrika.config.ts')
+			// The control plane holds the same mail transport as IAM, to hand it to applications that send installation mail.
+			for (const name of ['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_FROM_NAME']) {
+				expect(platformStep).toContain(`${name}: \${{ vars.${name} }}`)
+			}
+			for (const variable of builtinEmailProviderVariables) {
+				expect(platformStep).toContain(`${variable.name}: \${{ ${variable.secret ? 'secrets' : 'vars'}.${variable.name} }}`)
+			}
+			// Operations sends no mail, and nothing else in the workflow holds a mail credential.
+			expect(operationsStep).not.toContain('FABRIKA_EMAIL_')
+			expect(files['README.md']).toContain('hands the same set to IAM and to the control plane')
 			expect(files['README.md']).toContain('FABRIKA_RUNNER_KEY')
 			expect(workflow).toContain('FABRIKA_CONTROL_VAULT_KEY: ${{ secrets.FABRIKA_CONTROL_VAULT_KEY }}')
 			expect(workflow).toContain('FABRIKA_CONTROL_DOMAIN: ${{ vars.FABRIKA_CONTROL_DOMAIN }}')
