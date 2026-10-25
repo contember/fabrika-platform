@@ -22,6 +22,7 @@ import {
 import { checkoutRelativeDirectory, cloudflareRunnerJobSchema, type CloudflareRunRecovery } from '../control'
 import { splitManagedEnvironment } from '../managed-secrets'
 import type { RunnerIamReconcile } from '../runner-protocol'
+import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
 const normalizeRegistration = (provider: ControlProvider, input: ProviderRegistrationInput): ProviderRegistration => {
 	if (provider.normalizeRegistration === undefined) throw new Error('the Cloudflare provider normalizes registrations')
@@ -133,6 +134,13 @@ describe('Cloudflare control provider', () => {
 		})
 		expect(provider.opsChannel?.(APPROVED)).toBe(true)
 		expect(provider.opsChannel?.({ ...APPROVED, checker: '0.8.2' })).toBe(false)
+		expect(provider.dataOperations?.(APPROVED)).toBe(true)
+		expect(provider.dataOperations?.({ ...APPROVED, checker: '0.8.2' })).toBe(false)
+		// A published 0.9.0 prerelease answers `inspect` and refuses `state` and `migrate`: its deploys stay plain.
+		for (const checker of PUBLISHED_PRERELEASES) {
+			expect(provider.opsChannel?.({ ...APPROVED, checker })).toBe(true)
+			expect(provider.dataOperations?.({ ...APPROVED, checker })).toBe(false)
+		}
 		const digests = `sha256:${'a'.repeat(64)}`
 		// A plain var lives in the generated config, so a deploy after a downgrade, which hands `null`, leaves it out.
 		expect(splitManagedEnvironment(parseManagedEnvironment({ FABRIKA_OPS_KEY_DIGESTS: digests }))).toEqual({
@@ -733,7 +741,8 @@ describe('Cloudflare control provider', () => {
 		expect(jobs).toEqual([])
 		await deployWith(14 * 60_000, '0.9.0')
 		await deployWith(14 * 60_000 + 1, '0.8.1')
-		expect(jobs.map((job) => job.approvedAccess?.framework)).toEqual(['0.9.0', '0.8.1'])
+		for (const checker of PUBLISHED_PRERELEASES) await deployWith(14 * 60_000 + 1, checker)
+		expect(jobs.map((job) => job.approvedAccess?.framework)).toEqual(['0.9.0', '0.8.1', ...PUBLISHED_PRERELEASES])
 	})
 
 	test('refuses a file kind or a file collection that scans its uploads before any runner call: no scanner runs on Cloudflare', async () => {

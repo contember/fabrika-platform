@@ -20,7 +20,14 @@ import { isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
-import { assertCloudflareContract, assertStatelessEnvironment, capsJobSegments, runsInObject, servesOps } from './contract-support'
+import {
+	assertCloudflareContract,
+	assertStatelessEnvironment,
+	capsJobSegments,
+	runsInObject,
+	servesDataOperations,
+	servesOps,
+} from './contract-support'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
 // cannot typecheck (they do not relax the two strict flags the raw TS needs).
 import { applicationObjectsSchema, type RunnerApprovedAccess, runnerApprovedAccessSchema, type RunnerIamReconcile } from './runner-protocol'
@@ -369,6 +376,8 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 	applicationHopSecret: true,
 	// The environment's object serves Control's ops requests from the release that gets the composed row.
 	opsChannel: (access) => servesOps(access.checker),
+	// From the release whose object holds the barrier; the 0.9.0 prereleases before it serve only `inspect`.
+	dataOperations: (access) => servesOps(access.checker) && servesDataOperations(access.checker),
 	normalizeRegistration,
 	applicationRoot: (source) => checkoutRelativeDirectory(source.workerDir),
 	source: { binding: 'connection' },

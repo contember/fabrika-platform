@@ -136,8 +136,8 @@ export interface OpsTransport {
  * pointer the step names. Only a composition that can deploy hands it.
  */
 export interface OperationDeploys {
-	/** Whether the environment has a domain and its approved release is one the provider serves the ops channel at. */
-	servesOps(target: OpsTarget): Promise<boolean>
+	/** Whether the environment has a domain and its approved release is one the provider serves the data operations at. */
+	servesDataOperations(target: OpsTarget): Promise<boolean>
 	/** Runs the pending run `runId` under `lease` with `objects` as its pointer, and settles it as far as it can. */
 	run(lease: Lease, runId: string, objects: ApplicationObjects): Promise<void>
 }
@@ -402,7 +402,7 @@ export async function startRestore(deps: DataOperationDeps, input: StartRestoreI
 		if (latest?.state === 'running') return { kind: 'refused', reason: 'operation_running' }
 		if ((await recordedMaintenance(deps, input)) !== 'open') return { kind: 'refused', reason: 'not_open' }
 		if ((await redeployable(deps, input)) === null) return { kind: 'refused', reason: 'nothing_deployed' }
-		if (!(await deploys.servesOps(input))) return { kind: 'refused', reason: 'not_served' }
+		if (!(await deploys.servesDataOperations(input))) return { kind: 'refused', reason: 'not_served' }
 		const objects = await recordedObjects(deps, input)
 		if (objects.objects.length >= MAX_APPLICATION_OBJECTS) return { kind: 'refused', reason: 'too_many_objects' }
 		const probe = await driver.inspect()

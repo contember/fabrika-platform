@@ -157,6 +157,8 @@ for (const backend of backends) {
 				migrations: [FIRST],
 				/** The candidate is an older release, which the provider serves no ops channel at. */
 				older: false,
+				/** The release serves the data operations beside the channel; a 0.9.0 prerelease serves only `inspect`. */
+				barrier: true,
 				/** The provider refuses the deploy before accepting it. */
 				refuses: false,
 			}
@@ -166,6 +168,7 @@ for (const backend of backends) {
 				source: { binding: 'connection' },
 				resolveSource: () => Promise.resolve({ commitSha: 'a'.repeat(40) }),
 				opsChannel: (access) => state.serves && !JSON.stringify(access.contract).includes(OLDER_HEALTH),
+				dataOperations: (access) => state.serves && state.barrier && !JSON.stringify(access.contract).includes(OLDER_HEALTH),
 				deploy: async (input) => {
 					holders.push(await holder())
 					if (state.refuses) throw new Error('the provider refused the deploy')
@@ -393,6 +396,31 @@ for (const backend of backends) {
 			expect(await executeDeploy(deps(), { runId: first })).toEqual({ runId: first, status: 'succeeded' })
 			expect(fake.requests()).toEqual([])
 			expect(await operations()).toEqual([])
+		})
+
+		test('a release served the channel without the barrier deploys its migrations plain, and its pin raise guards only the deploy after it', async () => {
+			const { fake, state, deps, run, deployFirst, timeline, operations } = await open()
+			// A 0.9.0 prerelease answers `inspect` and refuses `state` and `migrate`: no deploy may need them.
+			state.barrier = false
+			await deployFirst()
+			state.migrations = [FIRST, SECOND]
+			const pending = await run()
+			expect(await executeDeploy(deps(), { runId: pending })).toEqual({ runId: pending, status: 'succeeded' })
+			expect(fake.requests()).toEqual([])
+			expect(await operations()).toEqual([])
+			// The pin raise itself is plain: the version it replaces held no barrier.
+			state.barrier = true
+			state.migrations = [FIRST, SECOND, '20261027000000_note_flags.sql']
+			const raised = await run()
+			expect(await executeDeploy(deps(), { runId: raised })).toEqual({ runId: raised, status: 'succeeded' })
+			expect(fake.requests()).toEqual([])
+			fake.ledger = state.migrations.map((name) => ({ bundle: 'app', name, checksum: 'a'.repeat(64), appliedAt: '2027-01-14T08:00:00.000Z' }))
+			state.migrations = [...state.migrations, '20261028000000_note_pins.sql']
+			state.deploys.length = 0
+			const guarded = await run()
+			expect(await executeDeploy(deps(), { runId: guarded })).toEqual({ runId: guarded, status: 'succeeded' })
+			expect(timeline()).toEqual(['inspect', ...backupAndRehearsal(1), 'deploy', 'migrate @1', 'state application open @2'])
+			expect(await operations()).toMatchObject([{ kind: 'migrate', state: 'succeeded', run_id: guarded }])
 		})
 
 		test('an environment without a domain deploys plain', async () => {

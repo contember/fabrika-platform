@@ -194,6 +194,7 @@ for (const backend of backends) {
 				source: { binding: 'connection' },
 				resolveSource: () => Promise.resolve({ commitSha: 'a'.repeat(40) }),
 				opsChannel: () => state.serves,
+				dataOperations: () => state.serves,
 				deploy: async (input) => {
 					state.deploys.push({ at: fake.requests().length, objects: input.applicationObjects })
 					const verdict = state.verdict(input.applicationObjects)
@@ -228,7 +229,7 @@ for (const backend of backends) {
 					ops: fake,
 					wait: () => Promise.resolve(),
 					deploys: {
-						servesOps: (target) => real.servesOps(target),
+						servesDataOperations: (target) => real.servesDataOperations(target),
 						run: async (lease, runId, objects) => {
 							const [operation] = await operations()
 							const restore = operation === undefined ? null : await b.repositories.restores.get(operation.id)

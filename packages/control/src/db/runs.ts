@@ -39,8 +39,8 @@ export interface RunRow {
 	approval_json: string | null
 	/** The newer run whose success stopped this one before it started (ADR-0050 §6); NULL for every other run. */
 	superseded_by: string | null
-	/** Whether the version the run deploys installs the ops channel (0 or 1); NULL for a dry run and for older runs. */
-	ops_channel: number | null
+	/** Whether the version the run deploys installs the maintenance barrier (0 or 1); NULL for a dry run and for older runs. */
+	migration_barrier: number | null
 	// `pending_access_json` is no longer read or written; the column stays until a later migration release drops it.
 }
 
@@ -295,21 +295,21 @@ export class RunRepository {
 	}
 
 	/**
-	 * Whether the version the environment runs installed the ops channel, as its last succeeded deploy recorded it; a
-	 * failed run leaves it. `false` when no succeeded run recorded it.
+	 * Whether the version the environment runs installed the maintenance barrier, as its last succeeded deploy recorded it;
+	 * a failed run leaves it. `false` when no succeeded run recorded it.
 	 */
-	async deployedOpsChannel(input: { appId: string; env: string }): Promise<boolean> {
-		const row = await this.d1.prepare(`SELECT ops_channel FROM runs
-			WHERE app_id = ? AND env = ? AND status = 'succeeded' AND ops_channel IS NOT NULL
-			ORDER BY finished_at DESC, id DESC LIMIT 1`).bind(input.appId, input.env).first<{ ops_channel: number }>()
-		return row?.ops_channel === 1
+	async deployedMigrationBarrier(input: { appId: string; env: string }): Promise<boolean> {
+		const row = await this.d1.prepare(`SELECT migration_barrier FROM runs
+			WHERE app_id = ? AND env = ? AND status = 'succeeded' AND migration_barrier IS NOT NULL
+			ORDER BY finished_at DESC, id DESC LIMIT 1`).bind(input.appId, input.env).first<{ migration_barrier: number }>()
+		return row?.migration_barrier === 1
 	}
 
-	/** Record whether the version the run deploys installs the ops channel. */
-	async recordRunOpsChannel(id: string, installs: boolean, fence: LeaseFence): Promise<boolean> {
+	/** Record whether the version the run deploys installs the maintenance barrier. */
+	async recordRunMigrationBarrier(id: string, installs: boolean, fence: LeaseFence): Promise<boolean> {
 		return this.mutateRun(
 			id,
-			`UPDATE runs SET ops_channel = ?
+			`UPDATE runs SET migration_barrier = ?
 			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL`,
 			[installs ? 1 : 0, id],
 			fence,

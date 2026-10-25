@@ -38,8 +38,8 @@ grants count toward `MAX_WITHIN_VALUES` (1000 scope values per `Within`) with th
 whose grants on inner dimensions push one action past 1000 values gets 403 (`CapabilityLimitError`) from a list that
 answered on 0.8; give such a caller a grant on a container instead of per-object grants.
 
-A job without `limits.timeoutMs` now gets 14 minutes per attempt, not 15, on both providers. A job that needs more on
-Zerops declares it.
+A job without `limits.timeoutMs` now gets 14 minutes per attempt, not 15, on both providers, so the contract and its
+digest change at the pin raise. A job that needs more on Zerops declares it.
 
 An application on Cloudflare that raises its pin to 0.9:
 
@@ -62,9 +62,11 @@ An application on Cloudflare that raises its pin to 0.9:
 5. Runs locally on Lopata 0.30 or newer, which implements the object's `storage.transaction`.
 
 The first deploy at 0.9 adds what the object needs: the `FabrikaApplication` class and its Durable Object migration
-(`v0001`, `new_sqlite_classes`), the environment's bucket (`<env>-<app>-files`), the minute tick when the contract has
-a job or a file kind, and the proxy secret that the Worker forwards each request with, which Control issues per
-environment. The object's database starts empty. An application that stays on 0.8 keeps its stateless Worker: Control
+(`v0001`, `new_sqlite_classes`), the environment's bucket (`<env>-<app>-files`), the hourly repair tick when the contract
+has a job or a file kind (the object's alarm runs the jobs), and the proxy secret that the Worker forwards each request
+with, which Control issues per environment. The object's database starts empty. An application pinned to a 0.9.0
+prerelease published before `0.9.0-dev.5` (`dev.0`–`dev.4`, `cloudflare.1`–`cloudflare.2`) keeps the minute tick and
+gets no daily backup, migration phase or side restore: its object answers only `inspect` on the ops channel. An application that stays on 0.8 keeps its stateless Worker: Control
 names the release it read the application with, and the deployer gives that Worker no object, bucket, tick or proxy
 secret, and refuses its jobs, webhooks, public procedures, installation mail and token purposes as before.
 

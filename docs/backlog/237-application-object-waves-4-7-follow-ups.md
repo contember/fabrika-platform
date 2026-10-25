@@ -70,13 +70,20 @@ item 1 needs an oblaka release first.
     `data.recover` offers only `open` for a failed operation. No retry keeps the restriction: an operator who wants the
     migration run again before the object opens has nothing to call. Fix idea: a recovery resolution that resumes a
     failed `migrate` operation at its `deploy` or `migrate` step under a fresh fence.
-16. Whether a deploy guards its migrations follows the last succeeded run's `ops_channel`. A run whose provider deploy
+16. Whether a deploy guards its migrations follows the last succeeded run's `migration_barrier`. A run whose provider deploy
     landed but which failed afterwards (a failed schema reconcile) leaves the record describing the version before it:
     a channel installed that way lets one migrating deploy run plainly, and a channel removed that way blocks migrating
     deploys until a run succeeds. Fix idea: record what the provider accepted, not only succeeded runs.
 17. The ops `migrate` of an object that holds an import marker answers 500 (`ImportInProgress` thrown), not a data
     refusal. Unreachable today: an import keeps the object in `inspect`, which refuses `migrate` first. Fix idea: an
     explicit marker check in the barrier's `migrate` that answers `wrong_mode`.
+18. A side restore never fails `objects_not_deployed` against the real transport. An object the deployed version does
+    not list gets the uniform empty 404, and `httpOpsTransport.call` reads "every key refused" as `unreachable`, never
+    `channel_refused`; only the test double answers `channel_refused`. With a runner that ignores the pointer, the
+    restore stays running at `list` and blocks deploys until an operator recovers it. Fix idea: tell a refusal of every
+    key apart from no answer in the transport, and fail `list` on it.
+19. The same mapping on the rehearsal side: when the deployed version does not list `rehearsal`, a backup or a
+    migration stays interrupted at `verify` on every pass, a migration with the object read-only. Fix with item 20.
 
 **The console.**
 

@@ -39,6 +39,7 @@ import {
 import type { PlatformIamTarget } from '../provider'
 import { CLOUDFLARE_PROXY_WORKER_DIR, PROXY_MANIFEST_DEFINE, proxyManifestJson } from '../proxy'
 import type { RunnerOutcomeFile } from '../runner-protocol'
+import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
 /** Link the application's CLI where the checkout's `bun install` would, under `dir`. */
 const withApplicationCli = async (dir: string): Promise<string> => {
@@ -1667,7 +1668,7 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		)
 		expect(rec.provisions).toEqual([])
 		expect((await deploy(rec, config(), { contract: lasting(14 * 60_000), framework: '0.9.0' })).status).toBe('succeeded')
-		for (const framework of ['0.8.2', null]) {
+		for (const framework of ['0.8.2', null, ...PUBLISHED_PRERELEASES]) {
 			expect((await deploy(rec, config(), { contract: lasting(14 * 60_000 + 1), framework })).status).toBe('succeeded')
 		}
 	})
@@ -1705,6 +1706,14 @@ describe('the cron trigger of a release that serves alarms (servesAlarms)', () =
 		// Another environment of the same application ticks at its own minute.
 		await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.0', env: 'prod', domain: 'prod.example.com' })
 		expect(await crons('prod')).toEqual({ crons: ['56 * * * *'] })
+	})
+
+	test('a published 0.9.0 prerelease keeps the minute tick: its object runs jobs only from it and has no alarm (ADR-0062)', async () => {
+		for (const framework of PUBLISHED_PRERELEASES) {
+			await deploy(rec, config(), { contract: notesArtifact, framework })
+			expect(await crons('stage')).toEqual({ crons: ['* * * * *'] })
+			rec.provisions.shift()
+		}
 	})
 
 	test('a contract with neither a job nor a file kind still gets an empty cron list', async () => {

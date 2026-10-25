@@ -23,8 +23,8 @@ async function main(createRuntime: () => Runtime): Promise<void> {
 	const { opsTransport } = opsTransportDeps(runtime.env)
 	try {
 		await runMaintenance(runtime.env, {
-			// The same pass as the Worker's, for a provider that serves the ops channel and a Control that holds ops keys.
-			...(opsTransport === undefined || runtime.provider.opsChannel === undefined ? {} : {
+			// The same pass as the Worker's, for a provider that serves the data operations and a Control that holds ops keys.
+			...(opsTransport === undefined || runtime.provider.dataOperations === undefined ? {} : {
 				backups: async () =>
 					await runBackupSchedule({
 						repositories: repositories(runtime.env),

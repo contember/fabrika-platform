@@ -63,10 +63,11 @@ function wholeBackup(g: number): string[] {
 	]
 }
 
-/** The provider gate: only an application at the gated release is served the channel. */
-const gatedProvider: Pick<ControlProvider, 'id' | 'opsChannel'> = {
+/** The provider gate: only an application at the gated release is served the channel and the data operations. */
+const gatedProvider: Pick<ControlProvider, 'id' | 'opsChannel' | 'dataOperations'> = {
 	id: TEST_PROVIDER_ID,
 	opsChannel: (access: ProviderApprovedAccess) => access.checker === GATED,
+	dataOperations: (access: ProviderApprovedAccess) => access.checker === GATED,
 }
 
 interface Backend {
@@ -141,7 +142,9 @@ for (const backend of backends) {
 				ops: fake,
 				...(options.passSpent === undefined ? {} : { passSpent: options.passSpent }),
 			})
-			const schedule = (options: { passSpent?: () => boolean; provider?: Pick<ControlProvider, 'id' | 'opsChannel'> } = {}): BackupScheduleDeps => ({
+			const schedule = (
+				options: { passSpent?: () => boolean; provider?: Pick<ControlProvider, 'id' | 'opsChannel' | 'dataOperations'> } = {},
+			): BackupScheduleDeps => ({
 				...deps(options.passSpent === undefined ? {} : { passSpent: options.passSpent }),
 				repositories: b.repositories,
 				provider: options.provider ?? gatedProvider,

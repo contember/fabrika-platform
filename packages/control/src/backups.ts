@@ -29,7 +29,7 @@ export const BACKUP_PASS_STARTS = 4
 export interface BackupScheduleDeps extends Omit<DataOperationDeps, 'repositories'> {
 	repositories: Pick<ControlRepositories, 'dataOperations' | 'backups' | 'registry' | 'runs' | 'applicationObjects' | 'restores'>
 	/** The installation's provider: only an environment whose approved access it serves the ops channel at is backed up. */
-	provider: Pick<ControlProvider, 'id' | 'opsChannel'>
+	provider: Pick<ControlProvider, 'id' | 'opsChannel' | 'dataOperations'>
 	/** Unix SECONDS, the unit every `*_at` column uses. */
 	now?: () => number
 	/** Milliseconds, for the pass's bound. */
@@ -56,11 +56,11 @@ export interface BackupScheduleSummary {
 
 /**
  * One maintenance pass of the data operations Control owns: running restores and migrations nobody drives, running
- * backups, then the daily backups due. A provider without the ops channel (Zerops) drives nothing.
+ * backups, then the daily backups due. A provider without the data operations (Zerops) drives nothing.
  */
 export async function runBackupSchedule(deps: BackupScheduleDeps): Promise<BackupScheduleSummary> {
 	const summary: BackupScheduleSummary = { resumed: 0, continued: 0, started: 0, succeeded: 0, failed: 0, unfinished: 0, skipped: 0, errored: 0 }
-	if (deps.provider.opsChannel === undefined) return summary
+	if (deps.provider.dataOperations === undefined) return summary
 	const clock = deps.clock ?? Date.now
 	const deadline = clock() + BACKUP_PASS_MS
 	const passSpent = deps.passSpent ?? (() => clock() >= deadline)
@@ -97,14 +97,14 @@ export async function runBackupSchedule(deps: BackupScheduleDeps): Promise<Backu
 }
 
 /**
- * Whether the environment is due a daily backup: it has a domain, its approved access is served the ops channel, it did
+ * Whether the environment is due a daily backup: it has a domain, its approved access is served the data operations, it did
  * not opt out, it has no succeeded backup from the last day, and no backup failed within the retry interval. A running
  * operation, or a record that does not leave it open, refuses the start itself.
  */
 async function due(deps: BackupScheduleDeps, row: AppEnvRow, now: number): Promise<boolean> {
 	if (row.domain === null || row.domain === '') return false
 	const { access } = approvedProviderAccess(row)
-	if (access === undefined || deps.provider.opsChannel?.(access) !== true) return false
+	if (access === undefined || deps.provider.opsChannel?.(access) !== true || deps.provider.dataOperations?.(access) !== true) return false
 	if (!dailyBackups(await deps.repositories.backups.getSchedule(row.app_id, row.env))) return false
 	const history = await deps.repositories.backups.history(row.app_id, row.env)
 	if (history.lastSucceeded !== null && history.lastSucceeded > now - BACKUP_INTERVAL_S) return false

@@ -54,7 +54,7 @@ this one import.
   before the clone, and in the deployer from the contract it serves. A file kind or collection with `scan: true` (no
   scanner runs there), a site that declares `sql` (`ctx.sql`, which SQLite does not serve), and a procedure's or a
   webhook's `timeoutMs` above `CLOUDFLARE_MAX_HANDLER_MS` (25 s): the handler holds the object's transaction, and
-  workerd resets an object whose transaction runs about 30 s. From `capsJobSegments`, a job's `timeoutMs` above
+  workerd resets an object whose transaction runs about 30 s. From `capsJobSegments` (`0.9.0-dev.5`, see below), a job's `timeoutMs` above
   `CLOUDFLARE_MAX_JOB_SEGMENT_MS` (14 min) too; a local deploy runs the object, so it is capped as well, while an older
   pin and a Control that names no release are not (ADR-0062).
 - **The platform writes the application Worker's runtime** (`withApplicationRuntime` in `src/provider.ts`, from 0.9):
@@ -62,7 +62,8 @@ this one import.
   migration `v0001` whatever else the application binds, and the tag never moves), `FABRIKA_FILES` to the environment's
   bucket `<env>-<app>-files`, and `triggers.crons` always written when the contract has a job or a file kind: from
   `servesAlarms`, for a release Control names, the hourly repair tick `<m> * * * *` at a minute derived from
-  `<env>-<app>` (stable across deploys; the object's alarm runs the jobs); otherwise, for a local deploy, `* * * * *`.
+  `<env>-<app>` (stable across deploys; the object's alarm runs the jobs); otherwise, for a local deploy or a 0.9.0
+  prerelease before the alarm, `* * * * *`.
   Without a job or a file kind it is `[]`, which clears an older tick (wrangler leaves schedules alone when `triggers`
   is absent). The names are
   `@fabrika/app/build`'s. `assertNoFrameworkVariables` refuses an authored binding of either name and authored
@@ -70,6 +71,14 @@ this one import.
   class, a `script_name` on it, a migration history that does not open with that `v0001` or names the class again
   (a committed `wrangler.jsonc` with a history of its own), another `FABRIKA_FILES` bucket, and triggers the platform
   did not write.
+- **Two kinds of release gate** (`src/contract-support.ts`). `releaseAtLeast` counts a prerelease as its minor:
+  `runsInObject`, `pinsGeneratedEntry` and `servesOps` hold from every 0.9.0 prerelease. `releaseFrom` compares the whole
+  version in semver precedence: `servesDataOperations` (the barrier's `state` and `migrate`, the backups, the migration
+  phase, the side restore), `servesAlarms` and `capsJobSegments` hold from `0.9.0-dev.5`, because the prereleases on
+  npm before it (`dev.0`–`dev.4`, `cloudflare.1`–`cloudflare.2`) run in the object without any of them, and a platform
+  upgrade keeps deploying them as they ran (ADR-0062). Every `cloudflare.<n>` sorts below `dev.5` and keeps the older
+  behaviour. A new gate on something those prereleases lack uses `releaseFrom`; `published-prereleases.ts` lists them
+  for the tests. `dataOperations` on the control provider answers `servesOps && servesDataOperations`.
 - **From `servesOps` the platform composes Control's ops channel** (ADR-0069, `src/provider.ts`): `platformProxied`
   builds the proxy's table with `contractProxyTable(…, { ops: true })`, which adds the canonical ops row, and
   `withApplicationRuntime` writes `FABRIKA_APPLICATION_OBJECT` and `FABRIKA_APPLICATION_OBJECTS` as plain vars from the

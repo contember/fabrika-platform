@@ -105,20 +105,79 @@ const SERVES_OPS_SINCE = { major: 0, minor: 9 }
 /** Whether an environment on release `release` gets the ops row, the ops key digests and the object variables. */
 export const servesOps = (release: string): boolean => releaseAtLeast(release, SERVES_OPS_SINCE)
 
-/** The first framework minor whose application object runs its jobs from its alarm, repaired by an hourly tick. */
-const SERVES_ALARMS_SINCE = { major: 0, minor: 9 }
+/** A release as semver orders it: the numeric core, then the prerelease identifiers (none sorts above any). */
+interface ReleaseVersion {
+	readonly core: readonly number[]
+	readonly prerelease: readonly string[]
+}
 
-/** Whether the Worker of release `release` gets the hourly repair tick instead of the minute tick. */
-export const servesAlarms = (release: string): boolean => releaseAtLeast(release, SERVES_ALARMS_SINCE)
+const parseReleaseVersion = (release: string): ReleaseVersion | null => {
+	const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/.exec(release)
+	if (match === null) return null
+	return { core: [Number(match[1]), Number(match[2]), Number(match[3])], prerelease: match[4] === undefined ? [] : match[4].split('.') }
+}
 
-/** The first framework minor whose Cloudflare deploy refuses a job longer than one segment. */
-const CAPS_JOB_SEGMENTS_SINCE = { major: 0, minor: 9 }
+/** Semver's order of two prerelease identifiers: numerically when both are numeric, a numeric one first, else by ASCII. */
+const compareIdentifiers = (a: string, b: string): number => {
+	const numericA = /^\d+$/.test(a)
+	const numericB = /^\d+$/.test(b)
+	if (numericA && numericB) return Number(a) - Number(b)
+	if (numericA !== numericB) return numericA ? -1 : 1
+	return a < b ? -1 : a > b ? 1 : 0
+}
+
+const compareReleases = (a: ReleaseVersion, b: ReleaseVersion): number => {
+	for (const [index, part] of a.core.entries()) {
+		const other = b.core[index] ?? 0
+		if (part !== other) return part - other
+	}
+	if (a.prerelease.length === 0 || b.prerelease.length === 0) return b.prerelease.length - a.prerelease.length
+	for (const [index, identifier] of a.prerelease.entries()) {
+		const other = b.prerelease[index]
+		if (other === undefined) return 1
+		const order = compareIdentifiers(identifier, other)
+		if (order !== 0) return order
+	}
+	return a.prerelease.length - b.prerelease.length
+}
+
+/**
+ * Whether framework release `release` is at or above the exact version `since` in semver's precedence, prerelease
+ * included; a release that is not a semver version never is (ADR-0062).
+ */
+export const releaseFrom = (release: string, since: string): boolean => {
+	const floor = parseReleaseVersion(since)
+	if (floor === null) throw new Error(`releaseFrom: \`${since}\` is not a semver version`)
+	const version = parseReleaseVersion(release)
+	return version !== null && compareReleases(version, floor) >= 0
+}
+
+/**
+ * The first framework release whose application object holds the maintenance barrier (`state`, `migrate`) and serves
+ * the data operations, runs its jobs from its alarm, and whose deploy caps a job at one segment. The 0.9.0 prereleases
+ * published before it (`dev.0`–`dev.4`, `cloudflare.1`–`cloudflare.2`) run in the object without any of that and answer
+ * `state` and `migrate` 501, so these gates compare the whole version where `releaseAtLeast` counts a prerelease as
+ * its minor. A prerelease of another channel sorts by its name: every `cloudflare.<n>` keeps the older behaviour.
+ */
+const OBJECT_OPERATIONS_SINCE = '0.9.0-dev.5'
+
+/**
+ * Whether the object of release `release` holds the maintenance barrier and serves Control's data operations: the
+ * backups, the migration phase and the side restore (ADR-0069 §3, ADR-0070).
+ */
+export const servesDataOperations = (release: string): boolean => releaseFrom(release, OBJECT_OPERATIONS_SINCE)
+
+/**
+ * Whether the Worker of release `release` gets the hourly repair tick instead of the minute tick: an older object runs
+ * its jobs only from the minute tick and has no alarm.
+ */
+export const servesAlarms = (release: string): boolean => releaseFrom(release, OBJECT_OPERATIONS_SINCE)
 
 /**
  * Whether the Cloudflare deploy of release `release` refuses a job whose `timeoutMs` exceeds one segment
  * (`CLOUDFLARE_MAX_JOB_SEGMENT_MS`). An older release deploys as it did (ADR-0062).
  */
-export const capsJobSegments = (release: string): boolean => releaseAtLeast(release, CAPS_JOB_SEGMENTS_SINCE)
+export const capsJobSegments = (release: string): boolean => releaseFrom(release, OBJECT_OPERATIONS_SINCE)
 
 /**
  * Refuse what a stateless Worker of an older release cannot run: a job, a webhook, a public procedure, installation

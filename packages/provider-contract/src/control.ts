@@ -578,6 +578,13 @@ export interface ControlProvider {
 	 * release logic. Absent means no environment of this provider is.
 	 */
 	opsChannel?(access: ProviderApprovedAccess): boolean
+	/**
+	 * Whether the object at this approved access, served the ops channel, also holds the maintenance barrier (`state`,
+	 * `migrate`) and serves Control's data operations: the daily backups, a deploy's migration phase and the side restore
+	 * (ADR-0069 §3, ADR-0070). A release can serve the channel without them. Absent means no environment of this
+	 * provider is.
+	 */
+	dataOperations?(access: ProviderApprovedAccess): boolean
 	/** Absent means the provider deploys public sources only. */
 	readonly source?: ProviderSourceCapabilities
 	/**

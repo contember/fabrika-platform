@@ -448,7 +448,9 @@ included, refuses one whose `JSON.stringify` exceeds 4 MiB in UTF-8.
 - What only a live account shows is built against the probes' dry runs and unconfirmed: point-in-time recovery and its
   reset, R2's multipart limits, workerd decompressing a member with a large header comment, and the bookmark format.
 - On Zerops an application has no object, and nothing changes.
-- **Rollout.** Backups ship in framework 0.9.0, gated by `servesOps` like the channel.
+- **Rollout.** Backups, the migration phase and the side restore ship in framework 0.9.0, gated by
+  `servesDataOperations`, which holds from `0.9.0-dev.5`: the 0.9.0 prereleases published before it serve the channel's
+  `inspect` but not `state` or `migrate`, so their environments keep plain deploys and get no backup (ADR-0062).
   - **Generated files.** No installation file changes. The environment's next deploy at a gated release writes the R2
     lifecycle rule and lists `rehearsal`; `platform upgrade` alone changes no application.
   - **Environment variables.** That deploy writes `FABRIKA_APPLICATION_OBJECTS` with `rehearsal`; a side restore's

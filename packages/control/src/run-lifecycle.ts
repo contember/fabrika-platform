@@ -574,11 +574,11 @@ export async function executeDeployUnderLease(
  */
 export function operationDeploys(deps: RunDeps): OperationDeploys {
 	return {
-		async servesOps(target) {
+		async servesDataOperations(target) {
 			const row = await deps.repositories.registry.getAppEnv(target.appId, target.env)
 			if (row === null || row.domain === null || row.domain === '') return false
 			const { access } = approvedProviderAccess(row)
-			return access !== undefined && deps.provider.opsChannel?.(access) === true
+			return access !== undefined && deps.provider.opsChannel?.(access) === true && deps.provider.dataOperations?.(access) === true
 		},
 		async run(lease, runId, objects) {
 			await executeDeployUnderLease(deps, { runId }, lease, objects)
@@ -815,8 +815,10 @@ async function deployUnder(
 		const hasDomain = appEnv.domain !== null && appEnv.domain !== ''
 		const opsChannel = !dryRun && hasDomain && approvedAccess !== undefined && deps.provider.opsChannel?.(approvedAccess) === true
 		managedEnvironment[FABRIKA_OPS_KEY_DIGESTS] = opsChannel ? await reconcileOpsKey(deps, app.id, appEnv.env, runId, invocation) : null
-		// Once the run succeeds, this is what the next deploy reads to know whether the running version answers `inspect`.
-		if (!dryRun) await invocation.write((fence) => runs.recordRunOpsChannel(runId, opsChannel, fence))
+		// A release can serve the channel (`inspect`) without the barrier, whose `state` and `migrate` the phase needs.
+		const barrier = opsChannel && deps.provider.dataOperations?.(approvedAccess) === true
+		// Once the run succeeds, this is what the next deploy reads to know whether the running version holds the barrier.
+		if (!dryRun) await invocation.write((fence) => runs.recordRunMigrationBarrier(runId, barrier, fence))
 		// Parsed once, before any provider effect: a provider writes what it is handed and checks none of it again.
 		const handed = parseManagedEnvironment(managedEnvironment)
 		// A provider removes a managed name it is not handed, so a name missing here would delete the variable.
@@ -925,7 +927,7 @@ async function deployUnder(
 			await projectTerminalRun(deps, runId, dryRun, finished, outcome.artifactState)
 			return finished
 		}
-		const guarded = operationDeploy || !opsChannel ? null : await guardedMigrations(deps, approvedRow, invocation.work.signal)
+		const guarded = operationDeploy || !barrier ? null : await guardedMigrations(deps, approvedRow, invocation.work.signal)
 		if (guarded === null) return { runId, status: await deployRun() }
 		const pending = guarded.pending.length === 1 ? '1 application migration' : `${guarded.pending.length} application migrations`
 		runLogs.log(
@@ -982,11 +984,11 @@ const MIGRATION_ACTOR = 'deploy'
 
 /**
  * The candidate's application migrations its environment's object has not applied, when the deploy needs the migration
- * phase (ADR-0069 §3): the caller checked the candidate's gate and domain, and the version running installed the ops
- * channel, as the last succeeded deploy recorded it. A publication proves nothing: it precedes the provider, and a run
- * that failed after it left the running version as it was. Without an installed channel the deploy is plain, and the
+ * phase (ADR-0069 §3): the caller checked that the candidate installs the maintenance barrier, and the version running
+ * installed it, as the last succeeded deploy recorded it. A publication proves nothing: it precedes the provider, and a
+ * run that failed after it left the running version as it was. Without an installed barrier the deploy is plain, and the
  * object migrates on its cold start. `null` for a plain deploy. Throws, before any provider effect, when an installed
- * channel does not say: a deploy that may migrate never runs unguarded.
+ * barrier's channel does not say: a deploy that may migrate never runs unguarded.
  */
 async function guardedMigrations(
 	deps: RunDeps,
@@ -994,7 +996,7 @@ async function guardedMigrations(
 	signal: AbortSignal,
 ): Promise<{ readonly ops: OpsTransport; readonly pending: readonly string[] } | null> {
 	const target = { appId: candidate.app_id, env: candidate.env }
-	if (!(await deps.repositories.runs.deployedOpsChannel(target))) return null
+	if (!(await deps.repositories.runs.deployedMigrationBarrier(target))) return null
 	const answer = await pendingMigrations(
 		deps.ops,
 		target,
