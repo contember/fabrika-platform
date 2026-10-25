@@ -123,4 +123,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [238](238-a-renamed-application-worker-starts-with-an-empty-object.md): A Cloudflare environment whose application Worker changes its name gets a new, empty Durable Object; a guard that refuses the rename once the environment holds one.
 - [239](239-a-changed-sql-statement-shows-no-closer-review-line.md): A changed statement of a site whose `sql:` declaration is unchanged shows no closer-review line in the approval diff.
 - [240](240-channel-prereleases-sort-below-the-release-floors.md): A channel prerelease (`0.9.0-cloudflare.<n>`) sorts below the `0.9.0-dev.5` release floors, so the Cloudflare gates deny it the alarm, segment cap, data operations and raw SQL its code has; decide before the next channel release.
+- [241](241-verify-the-cloudflare-email-adapter-on-a-live-account.md): The Cloudflare email adapter is verified only against a stubbed `fetch`; its message id, sender, quota and size answers wait for a live account.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
