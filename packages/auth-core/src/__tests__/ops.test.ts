@@ -17,6 +17,8 @@ import {
 	OPS_DUMP_MANIFEST_MAX_BYTES,
 	OPS_DUMP_MAX_PARTS,
 	OPS_DUMP_PAGE_ROWS,
+	OPS_DUMP_PART_MAX_RAW_BYTES,
+	OPS_DUMP_PART_MAX_ROWS,
 	OPS_DUMP_PART_SIZE,
 	OPS_EMPTY_TABLE_HASH,
 	OPS_METHOD,
@@ -545,6 +547,10 @@ describe('dump bounds', () => {
 		expect(OPS_DUMP_MAX_PARTS).toBe(10_000)
 		expect(OPS_DUMP_PAGE_ROWS).toBe(1000)
 		expect(OPS_DUMP_MANIFEST_MAX_BYTES).toBe(4 * 1024 * 1024)
+		expect(OPS_DUMP_PART_MAX_RAW_BYTES).toBe(16 * 1024 * 1024)
+		expect(OPS_DUMP_PART_MAX_ROWS).toBe(50_000)
+		// A 2 MB row of text or blobs doubles as hex, and still fits one part's raw bound.
+		expect(OPS_DUMP_PART_MAX_RAW_BYTES).toBeGreaterThan(2 * 2_000_000 + 1024)
 		expect(OPS_DUMP_FORMAT).toBe(1)
 	})
 
@@ -581,12 +587,13 @@ describe('the canonical row encoding', () => {
 		{ type: 'real', value: Number.NEGATIVE_INFINITY },
 		{ type: 'blob', value: '00FF10' },
 		{ type: 'blob', value: '' },
-		{ type: 'text', value: 'a\u0000b\u{1F600}' },
+		// 'a', NUL, 'b' and U+1F600, as UTF-8 bytes.
+		{ type: 'text', value: '610062F09F9880' },
 		{ type: 'text', value: '' },
 		null,
 	]
 	const encoded = '["i:9007199254740993","i:-9223372036854775808","i:9223372036854775807","r:-0","r:0","r:0.1","r:5e-324",'
-		+ '"r:1.7976931348623157e+308","r:Infinity","r:-Infinity","b:00FF10","b:","t:a\\u0000b\u{1F600}","t:",null]'
+		+ '"r:1.7976931348623157e+308","r:Infinity","r:-Infinity","b:00FF10","b:","t:610062F09F9880","t:",null]'
 
 	test('is stable', () => {
 		expect(encodeOpsDumpRow(row)).toBe(encoded)
@@ -617,6 +624,9 @@ describe('the canonical row encoding', () => {
 			{ type: 'integer', value: '1.5' },
 			{ type: 'blob', value: 'ab' },
 			{ type: 'blob', value: 'ABC' },
+			{ type: 'text', value: 'hi' },
+			{ type: 'text', value: '6a' },
+			{ type: 'text', value: '686' },
 		]
 		for (const value of values) {
 			expect(() => encodeOpsDumpRow([value])).toThrow()
@@ -642,15 +652,18 @@ describe('the canonical row encoding', () => {
 				'["r:1E+21"]',
 				'["b:ab"]',
 				'["b:ABC"]',
+				'["t:hi"]',
+				'["t:6a"]',
+				'["t:616"]',
 				'["x:1"]',
 				'["i"]',
 				'[1]',
 				'[true]',
-				'[["t:a"]]',
-				'{"0":"t:a"}',
-				'[ "t:a"]',
-				'["t:a"] ',
-				'["t:\\u00e9"]',
+				'[["t:61"]]',
+				'{"0":"t:61"}',
+				'[ "t:61"]',
+				'["t:61"] ',
+				'["t:\\u0036\\u0031"]',
 				'not json',
 			]
 		) {
@@ -660,11 +673,11 @@ describe('the canonical row encoding', () => {
 })
 
 describe('a dump line', () => {
-	const row: OpsDumpValue[] = [{ type: 'integer', value: '1' }, { type: 'text', value: 'hi' }, null]
+	const row: OpsDumpValue[] = [{ type: 'integer', value: '1' }, { type: 'text', value: '6869' }, null]
 
 	test('names its table and carries the canonical row', () => {
 		const line = encodeOpsDumpLine({ table: 'notes', row })
-		expect(line).toBe('{"table":"notes","row":["i:1","t:hi",null]}')
+		expect(line).toBe('{"table":"notes","row":["i:1","t:6869",null]}')
 		expect(decodeOpsDumpLine(line)).toEqual({ table: 'notes', row })
 	})
 
@@ -688,7 +701,7 @@ describe('a dump line', () => {
 
 describe('a table hash', () => {
 	const spec = (hash: string, row: string) => createHash('sha256').update(`${hash}\n${row}`, 'utf8').digest('hex')
-	const inserted = [{ rowid: 3, row: '["i:3","t:c"]' }, { rowid: 1, row: '["i:1","t:a\\u0000"]' }, { rowid: 2, row: '["i:2","t:\u{1F600}"]' }]
+	const inserted = [{ rowid: 3, row: '["i:3","t:63"]' }, { rowid: 1, row: '["i:1","t:6100"]' }, { rowid: 2, row: '["i:2","t:F09F9880"]' }]
 	const keyset = [...inserted].sort((left, right) => left.rowid - right.rowid).map((entry) => entry.row)
 
 	test('starts from the SHA-256 of the empty string', () => {
@@ -828,6 +841,20 @@ describe('the export answers', () => {
 		}
 	})
 
+	test('a part short of the fixed size is the last one: its answer has no next cursor', () => {
+		const ack: OpsExportPartAck = { step: 'part', uploaded, tables: [authors], next: cursor }
+		expect(parseOpsExportPartAck(ack)).toEqual(ack)
+		expect(parseOpsExportPartAck({ ...ack, next: null })).toEqual({ ...ack, next: null })
+		for (const size of [1, OPS_DUMP_PART_SIZE - 1]) {
+			const short = { ...ack, uploaded: { ...uploaded, size } }
+			expect(parseOpsExportPartAck(short)).toBeNull()
+			expect(parseOpsExportPartAck({ ...short, next: null })).toEqual({ ...short, next: null })
+		}
+		const over = { ...ack, uploaded: { ...uploaded, size: OPS_DUMP_PART_SIZE + 1 } }
+		expect(parseOpsExportPartAck(over)).toBeNull()
+		expect(parseOpsExportPartAck({ ...over, next: null })).toBeNull()
+	})
+
 	test('complete answers the manifest it wrote', () => {
 		const ack: OpsExportCompleteAck = { step: 'complete', manifest }
 		expect(parseOpsExportCompleteAck(ack)).toEqual(ack)
@@ -848,9 +875,31 @@ describe('the manifest', () => {
 	test('refuses a text larger than the bound, and a text that is no JSON', () => {
 		const view = { type: 'view', name: 'big', table: 'big', sql: 'x'.repeat(OPS_DUMP_MANIFEST_MAX_BYTES) }
 		const large = JSON.stringify({ ...manifest, ddl: [...manifest.ddl, view] })
-		expect(parseOpsDumpManifest(JSON.parse(large))).not.toBeNull()
+		expect(parseOpsDumpManifest(JSON.parse(large))).toBeNull()
+		expect(parseOpsExportCompleteAck({ step: 'complete', manifest: JSON.parse(large) })).toBeNull()
 		expect(readOpsDumpManifest(large)).toBeNull()
 		expect(readOpsDumpManifest('not json')).toBeNull()
+	})
+
+	test('is bounded in UTF-8 bytes at every ingress: exactly the bound passes, one byte more does not', () => {
+		/** The manifest with a view whose SQL is padded with two-byte characters until it serializes to `bytes`. */
+		const sized = (bytes: number): OpsDumpManifest => {
+			const base = { ...manifest, ddl: [...manifest.ddl, { type: 'view' as const, name: 'big', table: 'big', sql: 'x' }] }
+			const missing = bytes - new TextEncoder().encode(JSON.stringify(base)).length
+			const sql = `${'\u00e9'.repeat(Math.floor(missing / 2))}${'x'.repeat((missing % 2) + 1)}`
+			return { ...manifest, ddl: [...manifest.ddl, { type: 'view', name: 'big', table: 'big', sql }] }
+		}
+		const atBound = sized(OPS_DUMP_MANIFEST_MAX_BYTES)
+		const above = sized(OPS_DUMP_MANIFEST_MAX_BYTES + 1)
+		expect(new TextEncoder().encode(JSON.stringify(atBound)).length).toBe(OPS_DUMP_MANIFEST_MAX_BYTES)
+		expect(new TextEncoder().encode(JSON.stringify(above)).length).toBe(OPS_DUMP_MANIFEST_MAX_BYTES + 1)
+		expect(JSON.stringify(atBound).length).toBeLessThan(OPS_DUMP_MANIFEST_MAX_BYTES)
+		expect(parseOpsDumpManifest(JSON.parse(JSON.stringify(atBound)))).toEqual(atBound)
+		expect(readOpsDumpManifest(JSON.stringify(atBound))).toEqual(atBound)
+		expect(parseOpsExportCompleteAck({ step: 'complete', manifest: atBound })).toEqual({ step: 'complete', manifest: atBound })
+		expect(parseOpsDumpManifest(JSON.parse(JSON.stringify(above)))).toBeNull()
+		expect(readOpsDumpManifest(JSON.stringify(above))).toBeNull()
+		expect(parseOpsExportCompleteAck({ step: 'complete', manifest: above })).toBeNull()
 	})
 
 	test('refuses an unknown key, a wrong type and a missing field at every level', () => {

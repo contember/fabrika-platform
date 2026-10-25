@@ -336,9 +336,19 @@ export const OPS_DUMP_PAGE_ROWS = 1000
 
 /**
  * The size of every part of a dump's data object but the last, which is at most this. R2 refuses a multipart upload
- * whose parts differ in size, and a part below 5 MiB; a 2 MB row, its blobs as hex, fits one part uncompressed.
+ * whose parts differ in size, and a part below 5 MiB; a 2 MB row, its text and blobs as hex, fits one part uncompressed.
  */
 export const OPS_DUMP_PART_SIZE = 8 * 1024 * 1024
+
+/**
+ * The most bytes one part decompresses to: its lines, each with its newline. An import step holds a part's every form
+ * at once (compressed, decompressed, the lines, the values, the bound bytes), so this bounds its memory well inside an
+ * isolate's 128 MB.
+ */
+export const OPS_DUMP_PART_MAX_RAW_BYTES = 16 * 1024 * 1024
+
+/** The most rows one part holds, which bounds the inserts, and the link updates, of one import step. */
+export const OPS_DUMP_PART_MAX_ROWS = 50_000
 
 /** R2's most parts in one multipart upload. */
 export const OPS_DUMP_MAX_PARTS = 10_000
@@ -363,8 +373,9 @@ export function OPS_DUMP_KEY(ref: OpsDumpRef, file: 'data' | 'manifest'): string
 }
 
 /**
- * One stored value, as `typeof()` names it. An integer travels as its decimal text and a blob as upper-case hex, because
- * workerd reads an int64 into a double; a real travels as the double workerd reads exactly.
+ * One stored value, as `typeof()` names it. An integer travels as its decimal text, because workerd reads an int64 into
+ * a double; a real travels as the double workerd reads exactly. Text and a blob travel as the upper-case hex of their
+ * bytes, so text that is not valid UTF-8 keeps every byte.
  */
 export type OpsDumpValue =
 	| null
@@ -374,8 +385,54 @@ export type OpsDumpValue =
 	| { readonly type: 'blob'; readonly value: string }
 
 /**
+ * The two result columns a dump reads for `column`: `typeof()` and the value in the form `readOpsDumpValue` takes, an
+ * integer as `CAST(c AS TEXT)`, a real as itself, text as `hex(CAST(c AS BLOB))` and a blob as `hex(c)`.
+ */
+export function opsDumpColumnProjection(column: string): string {
+	const c = quoteIdentifier(column)
+	return `typeof(${c}), CASE typeof(${c}) WHEN 'integer' THEN CAST(${c} AS TEXT) WHEN 'real' THEN ${c} WHEN 'text' THEN hex(CAST(${c} AS BLOB)) WHEN 'blob' THEN hex(${c}) END`
+}
+
+/** The value `opsDumpColumnProjection` read. Throws, naming no value, on a pair it would not produce. */
+export function readOpsDumpValue(type: unknown, value: unknown): OpsDumpValue {
+	if (type === 'null' && value === null) return null
+	if (type === 'integer' && typeof value === 'string' && isInt64Text(value)) return { type, value }
+	if (type === 'real' && typeof value === 'number' && !Number.isNaN(value)) return { type, value }
+	if ((type === 'text' || type === 'blob') && typeof value === 'string' && BLOB_HEX.test(value)) return { type, value }
+	throw new Error('a projected dump value does not match its type')
+}
+
+/** What a statement binds for one value of a dump. */
+export type OpsDumpParam = string | number | Uint8Array | null
+
+/** The SQL expression that writes a value back and the parameter its `?` binds. */
+export interface OpsDumpBinding {
+	readonly sql: string
+	readonly param: OpsDumpParam
+}
+
+/**
+ * How the importer writes a value back, a rowid included, without a double or a JavaScript string in between: an
+ * integer as its decimal text through `CAST(? AS INTEGER)`, a real through `CAST(? AS REAL)` (a binder may bind an
+ * integral double as an integer), text as its bytes through `CAST(? AS TEXT)`, and a blob as its bytes.
+ */
+export function opsDumpValueBinding(value: OpsDumpValue): OpsDumpBinding {
+	if (value === null) return { sql: '?', param: null }
+	switch (value.type) {
+		case 'integer':
+			return { sql: 'CAST(? AS INTEGER)', param: value.value }
+		case 'real':
+			return { sql: 'CAST(? AS REAL)', param: value.value }
+		case 'text':
+			return { sql: 'CAST(? AS TEXT)', param: hexBytes(value.value) }
+		case 'blob':
+			return { sql: '?', param: hexBytes(value.value) }
+	}
+}
+
+/**
  * The canonical encoding of a row, the text a table hash is computed over: a JSON array (`JSON.stringify`, so no
- * whitespace) of `null` or a tagged string per value, `i:<decimal>`, `r:<shortest round-trip double>`, `t:<text>` or
+ * whitespace) of `null` or a tagged string per value, `i:<decimal>`, `r:<shortest round-trip double>`, `t:<HEX>` or
  * `b:<HEX>`. A real keeps `-0`, `Infinity` and `-Infinity`; NaN is never stored. Throws, naming no value, on a value
  * outside these rules.
  */
@@ -423,6 +480,111 @@ export function foldOpsTableHash(hash: string, rows: Iterable<string>): string {
 	let current = hash
 	for (const row of rows) current = sha256Hex(`${current}\n${row}`)
 	return current
+}
+
+/** A column as `PRAGMA table_xinfo` describes it. */
+export interface OpsDumpSchemaColumn {
+	readonly name: string
+	/** The declared type, as written. */
+	readonly type: string
+	readonly notNull: boolean
+	/** The column's position in the primary key from 1, `0` outside it. */
+	readonly primaryKey: number
+	/** A generated column (`hidden` 2 or 3), which a dump does not carry. */
+	readonly generated: boolean
+}
+
+/** An index as `PRAGMA index_list` and `PRAGMA index_xinfo` (its key columns) describe it. */
+export interface OpsDumpSchemaIndex {
+	readonly unique: boolean
+	readonly origin: 'c' | 'u' | 'pk'
+	readonly partial: boolean
+	/** The key columns in order, `null` for an expression. */
+	readonly columns: readonly (string | null)[]
+}
+
+/** A foreign key as `PRAGMA foreign_key_list` describes it, its rows grouped by `id` and ordered by `seq`. */
+export interface OpsDumpSchemaForeignKey {
+	readonly parent: string
+	readonly columns: readonly string[]
+	/** The parent's columns (`to`), or `null` when the key names the parent's primary key implicitly. */
+	readonly references: readonly string[] | null
+	/**
+	 * Whether the key is `DEFERRABLE INITIALLY DEFERRED`. No PRAGMA reports it: a reader takes it from the table's SQL,
+	 * and one that cannot tell which key a clause belongs to marks every key of that table.
+	 */
+	readonly initiallyDeferred: boolean
+}
+
+/** A table as `PRAGMA table_list` (`type`, `wr`) and the PRAGMAs above describe it. */
+export interface OpsDumpSchemaTable {
+	readonly name: string
+	readonly virtual: boolean
+	readonly withoutRowid: boolean
+	/** Whether the table's SQL declares a `CHECK` constraint; a reader that cannot tell answers `true`. */
+	readonly checked: boolean
+	readonly columns: readonly OpsDumpSchemaColumn[]
+	readonly indexes: readonly OpsDumpSchemaIndex[]
+	readonly foreignKeys: readonly OpsDumpSchemaForeignKey[]
+}
+
+/** Every table a dump holds: `sqlite_schema`'s tables but SQLite's internal ones, `sqlite_sequence` excepted, and `_cf_`'s. */
+export interface OpsDumpSchema {
+	readonly tables: readonly OpsDumpSchemaTable[]
+}
+
+/** How one table is dumped and loaded. */
+export interface OpsDumpTablePlan {
+	readonly name: string
+	/** The name that reads the rowid: the `INTEGER PRIMARY KEY` column, else the first of `rowid`, `_rowid_`, `oid` no column takes. */
+	readonly keyset: string
+	/** Every column that is not generated, in declaration order: a row is the rowid, then these. */
+	readonly columns: readonly string[]
+	/** The columns of the foreign keys inside a cycle, which a part writes `NULL` and the link pass sets, in declaration order. */
+	readonly deferred: readonly string[]
+}
+
+/** The tables of a dump in load order: every parent outside a table's own cycle comes before it. */
+export interface OpsDumpPlan {
+	readonly tables: readonly OpsDumpTablePlan[]
+}
+
+/**
+ * The one rule both the producer, at export `begin`, and the importer, at import `begin`, apply to a schema: the plan
+ * a dump is written and loaded by, or an `unsupported_schema` refusal naming the table. A foreign key whose parent lies
+ * in its own table's cycle (the table itself included) is loaded `NULL` and linked once every row is in, so each of its
+ * columns must take a temporary `NULL`: nullable, outside the primary key, referenced by no foreign key, in a table
+ * without a `CHECK`, a `NOT NULL` generated column, or a partial or expression unique index. A `WITHOUT ROWID` or
+ * virtual table, a table without a name that reads its rowid, a foreign key to a table outside the dump or without the
+ * named key, and a foreign key checked only at commit are refused.
+ */
+export function planOpsDump(schema: OpsDumpSchema): OpsDumpPlan | OpsDataRefusal {
+	const sorted = [...schema.tables].sort((left, right) => compareNames(left.name, right.name))
+	if (!sorted.every((table) => TABLE_NAME.test(table.name)) || !distinct(sorted.map((table) => table.name))) return unsupported(null)
+	const byName = new Map(sorted.map((table) => [table.name, table]))
+	const tables: DescribedTable[] = []
+	for (const table of sorted) {
+		const keyset = table.virtual || table.withoutRowid ? null : rowidName(table)
+		const parents = resolveForeignKeys(table, byName)
+		if (keyset === null || parents === null) return unsupported(table.name)
+		tables.push({ table, keyset, parents })
+	}
+	const cycle = cycleIds(tables)
+	const referenced = new Set(tables.flatMap(({ parents }) => parents.flatMap((key) => key.references.map((column) => columnKey(key.parent, column)))))
+	const plans: OpsDumpTablePlan[] = []
+	for (const { table, keyset, parents } of loadOrder(tables, cycle)) {
+		const inCycle = parents.filter((key) => cycle.get(key.parent) === cycle.get(table.name))
+		const deferredNames = new Set(inCycle.flatMap((key) => key.columns.map(asciiLower)))
+		const deferred = table.columns.filter((column) => deferredNames.has(asciiLower(column.name)))
+		if (deferred.length > 0 && !takesTemporaryNull(table, deferred, referenced)) return unsupported(table.name)
+		plans.push({
+			name: table.name,
+			keyset,
+			columns: table.columns.filter((column) => !column.generated).map((column) => column.name),
+			deferred: deferred.map((column) => column.name),
+		})
+	}
+	return { tables: plans }
 }
 
 /** Where a dump or a verification stands in a table: the last rowid read, and the count and hash folded so far. */
@@ -478,7 +640,10 @@ export interface OpsDumpManifest {
 	readonly parts: readonly OpsDumpPart[]
 }
 
-/** A manifest Control holds or an answer carries; every table's DDL lists it, and its parts are whole. */
+/**
+ * A manifest Control holds or an answer carries; every table's DDL lists it, its parts are whole, and its
+ * `JSON.stringify` is at most `OPS_DUMP_MANIFEST_MAX_BYTES` in UTF-8, wherever it came from.
+ */
 export function parseOpsDumpManifest(body: unknown): OpsDumpManifest | null {
 	if (!exactKeys(body, MANIFEST_KEYS) || prop(body, 'format') !== OPS_DUMP_FORMAT) return null
 	const dump = readMatch(prop(body, 'dump'), UUID)
@@ -500,12 +665,26 @@ export function parseOpsDumpManifest(body: unknown): OpsDumpManifest | null {
 	}
 	const declared = ddl.filter((entry) => entry.type === 'table').map((entry) => entry.name)
 	if (!distinct(ddl.map((entry) => `${entry.type} ${entry.name}`)) || !sameNames(declared, tables.map((table) => table.name))) return null
-	return { format: OPS_DUMP_FORMAT, dump, object, consistent, createdAt, bookmark, release, contractDigest, ddl, migrations, tables, parts }
+	const manifest: OpsDumpManifest = {
+		format: OPS_DUMP_FORMAT,
+		dump,
+		object,
+		consistent,
+		createdAt,
+		bookmark,
+		release,
+		contractDigest,
+		ddl,
+		migrations,
+		tables,
+		parts,
+	}
+	return utf8Length(JSON.stringify(manifest)) <= OPS_DUMP_MANIFEST_MAX_BYTES ? manifest : null
 }
 
-/** A manifest's text as R2 holds it, refused above `OPS_DUMP_MANIFEST_MAX_BYTES`. */
+/** A manifest's text as R2 holds it, refused above `OPS_DUMP_MANIFEST_MAX_BYTES` before it is parsed. */
 export function readOpsDumpManifest(text: string): OpsDumpManifest | null {
-	if (new TextEncoder().encode(text).length > OPS_DUMP_MANIFEST_MAX_BYTES) return null
+	if (utf8Length(text) > OPS_DUMP_MANIFEST_MAX_BYTES) return null
 	return parseOpsDumpManifest(parseJson(text))
 }
 
@@ -602,6 +781,8 @@ export function parseOpsExportPartAck(body: unknown): OpsExportPartAck | null {
 	const tables = readTables(prop(body, 'tables'))
 	const next = readNullable(prop(body, 'next'), readCursor)
 	if (uploaded === null || tables === null || next === undefined || continuesFinished(tables, next)) return null
+	// Only the last part may be short: R2 refuses an upload whose other parts differ in size.
+	if (next !== null && uploaded.size !== OPS_DUMP_PART_SIZE) return null
 	return { step: 'part', uploaded, tables, next }
 }
 
@@ -908,6 +1089,7 @@ export const OPS_DATA_REFUSALS = [
 	'schema_mismatch',
 	'verify_mismatch',
 	'bookmark_unavailable',
+	'row_too_large',
 ] as const
 
 export type OpsDataRefusalReason = (typeof OPS_DATA_REFUSALS)[number]
@@ -947,7 +1129,7 @@ const OPAQUE_TOKEN = /^[!-~]{1,1024}$/
 const INT64_TEXT = /^(?:0|-?[1-9][0-9]{0,18})$/
 const INT64_MIN = -(2n ** 63n)
 const INT64_MAX = 2n ** 63n - 1n
-/** `hex(c)` of a blob. */
+/** `hex(c)` of a blob, and `hex(CAST(c AS BLOB))` of text. */
 const BLOB_HEX = /^(?:[0-9A-F]{2})*$/
 const MANIFEST_KEYS = [
 	'format',
@@ -1146,6 +1328,7 @@ function encodeValue(value: OpsDumpValue): string | null {
 			if (Number.isNaN(value.value)) throw new Error('a dump real must not be NaN')
 			return `r:${realText(value.value)}`
 		case 'text':
+			if (!BLOB_HEX.test(value.value)) throw new Error('dump text must be the upper-case hex of its bytes')
 			return `t:${value.value}`
 		case 'blob':
 			if (!BLOB_HEX.test(value.value)) throw new Error('a dump blob must be upper-case hex')
@@ -1177,7 +1360,7 @@ function readValue(raw: unknown): OpsDumpValue | undefined {
 			return !Number.isNaN(value) && realText(value) === text ? { type: 'real', value } : undefined
 		}
 		case 't:':
-			return { type: 'text', value: text }
+			return BLOB_HEX.test(text) ? { type: 'text', value: text } : undefined
 		case 'b:':
 			return BLOB_HEX.test(text) ? { type: 'blob', value: text } : undefined
 		default:
@@ -1299,9 +1482,129 @@ function readTimer(value: unknown): OpsTimer | null {
 	return (kind === 'waitUntil') === (delayMs === null) ? { kind, since, delayMs, stack } : null
 }
 
+/** A foreign key with its parent's columns named. */
+interface ResolvedForeignKey {
+	readonly parent: string
+	readonly columns: readonly string[]
+	readonly references: readonly string[]
+}
+
+interface DescribedTable {
+	readonly table: OpsDumpSchemaTable
+	readonly keyset: string
+	readonly parents: readonly ResolvedForeignKey[]
+}
+
+const ROWID_NAMES = ['rowid', '_rowid_', 'oid']
+
+function unsupported(table: string | null): OpsDataRefusal {
+	return { refused: 'unsupported_schema', table }
+}
+
+/** A rowid table's `INTEGER PRIMARY KEY` is the rowid itself; any other primary key gets an automatic index (`origin` `pk`). */
+function rowidName(table: OpsDumpSchemaTable): string | null {
+	const key = table.columns.filter((column) => column.primaryKey > 0)
+	const [only] = key
+	if (key.length === 1 && only !== undefined && asciiLower(only.type) === 'integer' && !table.indexes.some((index) => index.origin === 'pk')) {
+		return only.name
+	}
+	const taken = new Set(table.columns.map((column) => asciiLower(column.name)))
+	return ROWID_NAMES.find((name) => !taken.has(name)) ?? null
+}
+
+function resolveForeignKeys(table: OpsDumpSchemaTable, tables: ReadonlyMap<string, OpsDumpSchemaTable>): readonly ResolvedForeignKey[] | null {
+	const keys: ResolvedForeignKey[] = []
+	for (const key of table.foreignKeys) {
+		const parent = tables.get(asciiLower(key.parent))
+		if (parent === undefined || key.initiallyDeferred || key.columns.length === 0) return null
+		const primaryKey = parent.columns.filter((column) => column.primaryKey > 0).sort((left, right) => left.primaryKey - right.primaryKey)
+		const references = key.references ?? primaryKey.map((column) => column.name)
+		if (references.length !== key.columns.length) return null
+		keys.push({ parent: parent.name, columns: key.columns, references })
+	}
+	return keys
+}
+
+/** Each table's cycle, named by its first table: two tables share one exactly when each reaches the other through parents. */
+function cycleIds(tables: readonly DescribedTable[]): ReadonlyMap<string, string> {
+	const parents = new Map(tables.map(({ table, parents }) => [table.name, parents]))
+	const reach = new Map<string, ReadonlySet<string>>()
+	for (const { table } of tables) {
+		const seen = new Set<string>()
+		const pending = [table.name]
+		for (let name = pending.pop(); name !== undefined; name = pending.pop()) {
+			for (const key of parents.get(name) ?? []) {
+				if (!seen.has(key.parent)) {
+					seen.add(key.parent)
+					pending.push(key.parent)
+				}
+			}
+		}
+		reach.set(table.name, seen)
+	}
+	const ids = new Map<string, string>()
+	for (const { table } of tables) {
+		const first = tables.find(({ table: other }) => reach.get(table.name)?.has(other.name) === true && reach.get(other.name)?.has(table.name) === true)
+		ids.set(table.name, first === undefined || compareNames(first.table.name, table.name) > 0 ? table.name : first.table.name)
+	}
+	return ids
+}
+
+/** Repeatedly the first table by name whose every parent outside its own cycle is placed. */
+function loadOrder(tables: readonly DescribedTable[], cycle: ReadonlyMap<string, string>): readonly DescribedTable[] {
+	const placed = new Set<string>()
+	const order: DescribedTable[] = []
+	while (order.length < tables.length) {
+		const next = tables.find(({ table, parents }) =>
+			!placed.has(table.name) && parents.every((key) => placed.has(key.parent) || cycle.get(key.parent) === cycle.get(table.name))
+		)
+		// The cycles form a directed acyclic graph, so one always has every outside parent placed.
+		if (next === undefined) throw new Error('a foreign-key graph without a table to place')
+		placed.add(next.table.name)
+		order.push(next)
+	}
+	return order
+}
+
+/** Whether every deferred column of `table` can hold `NULL` from its part until the link pass, with nothing to violate. */
+function takesTemporaryNull(table: OpsDumpSchemaTable, deferred: readonly OpsDumpSchemaColumn[], referenced: ReadonlySet<string>): boolean {
+	if (table.checked || table.columns.some((column) => column.generated && column.notNull)) return false
+	if (table.indexes.some((index) => index.unique && (index.partial || index.columns.includes(null)))) return false
+	return deferred.every((column) => !column.notNull && column.primaryKey === 0 && !referenced.has(columnKey(table.name, column.name)))
+}
+
+function columnKey(table: string, column: string): string {
+	return `${table}\n${asciiLower(column)}`
+}
+
+/** SQLite compares identifiers case-insensitively in ASCII only. */
+function asciiLower(value: string): string {
+	return value.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
+}
+
+/** Code-unit order, which no locale changes. */
+function compareNames(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0
+}
+
+function quoteIdentifier(name: string): string {
+	return `"${name.replaceAll('"', '""')}"`
+}
+
+function hexBytes(hex: string): Uint8Array {
+	if (!BLOB_HEX.test(hex)) throw new Error('dump bytes must be upper-case hex')
+	const bytes = new Uint8Array(hex.length / 2)
+	for (let index = 0; index < bytes.length; index++) bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16)
+	return bytes
+}
+
 /** Whether a cursor resumes a table the same answer reports finished. */
 function continuesFinished(tables: readonly OpsDumpTable[], next: OpsDumpCursor | null): boolean {
 	return next !== null && tables.some((table) => table.name === next.table)
+}
+
+function utf8Length(text: string): number {
+	return new TextEncoder().encode(text).length
 }
 
 function distinct(values: readonly string[]): boolean {

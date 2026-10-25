@@ -20,7 +20,8 @@ The constraints:
 
 - **workerd reads a SQLite integer into a JavaScript double** (`src/workerd/api/sql.c++`), so an integer above 2^53
   rounds. Binding a bigint throws, and `cast(real as text)` keeps 15 significant digits (probe 8, dry run on local
-  workerd, sprint run log).
+  workerd, sprint run log). Text read into a JavaScript string loses the bytes that are not valid UTF-8:
+  `CAST(x'80' AS TEXT)` and `CAST(x'81' AS TEXT)` read as the same string.
 - **A statement is at most 100 KB; a row can be 2 MB.** A dump of SQL text cannot carry a large row in one `INSERT`.
 - **R2 refuses a multipart upload whose parts differ in size** (probe 9 dry run, error 10048). A part is at least
   5 MiB, except the last, and an upload has at most 10 000 parts.
@@ -60,12 +61,14 @@ restore.
 
 `POST /__fabrika/ops/export` runs one step per request, before boot:
 
-1. **`begin`** walks `sqlite_schema`, refuses a schema it cannot dump, starts the multipart upload of the data object,
-   and answers the upload id and the object's bookmark (`getCurrentBookmark()`).
+1. **`begin`** describes the tables of `sqlite_schema` with the PRAGMAs, applies the schema rule below, refuses a
+   schema it cannot dump, starts the multipart upload of the data object, and answers the upload id and the object's
+   bookmark (`getCurrentBookmark()`).
 2. **`part`** _n_ starts at a cursor and reads keyset pages of at most 1 000 rows, table after table in load order. It
    writes each row as one line, compresses the lines into one gzip member, and uploads it as part _n_. A retried step
    replaces its part. It answers the part's size, SHA-256 and ETag, every table it finished with its row count and
-   hash, and the cursor where the next part starts.
+   hash, and the cursor where the next part starts. An answer with a next cursor whose part is not exactly 8 MiB does
+   not parse.
 3. **`complete`** completes the upload with the parts Control recorded, writes the manifest beside the data, and
    answers the manifest.
 
@@ -76,49 +79,110 @@ boot nor the framework's tables, so it also dumps a database that cannot boot, o
 tables existed. R2's lifecycle aborts an upload that never completes.
 
 **Parts of one size.** Every part but the last is exactly one gzip member (RFC 1952) of exactly 8 MiB; the last is at
-most that. The producer adds whole rows while the compressed member still fits, starts the next part with the row that
-does not, and pads the member to 8 MiB with spaces in its header's comment field (`FCOMMENT`). A row never spans two
-parts, so the importer reads, checks and loads any part alone, by its byte range. The data object as a whole is a
-multi-member gzip file that any gzip reader decompresses. 8 MiB is above R2's minimum and holds the largest row
-uncompressed, its blobs as hex; 10 000 parts bound a dump at about 80 GB compressed, above the 10 GB an object holds.
+most that. The producer adds whole rows while all three bounds hold: the compressed member fits 8 MiB, its
+uncompressed lines with their newlines stay within 16 MiB, and it holds at most 50 000 rows. It starts the next part
+with the row that would break one, and pads the member to 8 MiB with spaces in its header's comment field (`FCOMMENT`).
+A row that breaks a bound alone, in an empty part, is refused as `row_too_large`, naming the table. A row never spans
+two parts, so the importer reads, checks and loads any part alone, by its byte range. The data object as a whole is a
+multi-member gzip file that any gzip reader decompresses.
+
+- **8 MiB** is above R2's minimum part and holds the largest row, its text and blobs as hex, uncompressed. 10 000 parts
+  bound a dump at about 80 GB compressed, above the 10 GB an object holds.
+- **16 MiB uncompressed** bounds an import step's memory. The compressed size alone does not: a thousand rows of
+  repeated text compress far below 8 MiB and expand past a gigabyte. A naive step that holds every form of a part at
+  once (compressed, decompressed, split into lines, parsed into values and bound as bytes) peaks near 90 MB, inside a
+  Durable Object's 128 MB isolate. A 2 MB row is about 4 MB as hex, so the bound leaves room for the largest row.
+- **50 000 rows** bounds an import step's CPU: one insert per row and one link update per deferred row. At tens of
+  microseconds a row that is about a second, far below a request's CPU limit. 10 000 parts hold 500 million rows.
+- The cost is padding: a part of small, compressible rows stops at the raw or the row bound with little compressed
+  data, and is padded to 8 MiB.
 
 **What a dump holds.** Every table of `sqlite_schema` but SQLite's internal ones and Cloudflare's `_cf_` tables. It
 includes `sqlite_sequence`, so `AUTOINCREMENT` keeps its counter, and the migration ledger's two tables. A row is its
-rowid, then every column that is not generated, in declaration order; a rowid alias column repeats the rowid. A table
-is read in rowid order, which is its keyset order.
+rowid, then every column that is not generated, in declaration order. A table is read in rowid order, which is its
+keyset order.
 
-**Load order.** The producer writes tables parents first: it repeatedly places the first table by name all of whose
-foreign-key parents other than itself are placed, and when none is left, the first remaining table by name. A foreign
-key whose parent is the table itself or a table placed after it is **deferred** (§6). The manifest lists the tables in
-this order, and the importer derives the deferred keys from that list and its schema; it never orders anything itself.
+**The keyset** is the name a step reads and writes the rowid by. It is the table's `INTEGER PRIMARY KEY` column when
+it has one, which is the rowid itself: a rowid table whose primary key is one column of declared type `INTEGER` with no
+automatic index (`PRAGMA index_list` origin `pk`; `INTEGER PRIMARY KEY DESC` gets one, and is no alias). Otherwise it
+is the first of `rowid`, `_rowid_` and `oid` that no column takes, compared as SQLite compares identifiers. A table
+with neither is refused: a column of that name may hold anything, duplicates included. An `INTEGER PRIMARY KEY` column
+repeats the rowid in the row, and the importer writes it once.
 
-**Refused schemas.** `begin` refuses, as `unsupported_schema` naming the table:
+**One schema rule.** `planOpsDump`, in the ops wire, takes the description the PRAGMAs give (`table_list`,
+`table_xinfo`, `index_list`, `index_xinfo` and `foreign_key_list`, plus whether the table's SQL declares a `CHECK` or
+an `INITIALLY DEFERRED` key, which no PRAGMA reports) and answers the plan or the refusal. The producer applies it at
+export `begin` and the importer at import `begin`, so the two never disagree on the keyset, the load order or the
+deferred columns.
 
-- a `WITHOUT ROWID` table, whose keyset would put key values, which are content, into Control's record;
+**Load order.** Two tables share a **cycle** when each reaches the other through foreign-key parents; a table whose key
+references itself is in a cycle of its own. The producer writes tables parents first: it repeatedly places the first
+table by name all of whose parents outside its own cycle are placed. A foreign key whose parent lies in the child's own
+cycle is **deferred** (§6): its columns are loaded `NULL` and set by the link pass. Every other key's parent rows are
+loaded before its child's. The manifest lists the tables in this order, and the importer checks it against its own
+plan; it never orders anything itself.
+
+**Refused schemas.** `begin` refuses, as `unsupported_schema` naming the table (no table for a name the refusal may not
+carry):
+
+- a `WITHOUT ROWID` table, whose keyset would put key values, which are content, into Control's record; no primary key
+  is accepted as its keyset;
 - a virtual table, which the data layer does not read either;
 - a table whose name breaks the data layer's identifier rule;
-- a deferred foreign key with a column that is `NOT NULL`, which the importer could not write as `NULL`.
+- a table without a keyset;
+- a foreign key to a table outside the dump, one that names its parent's primary key implicitly when the parent has
+  none, and one whose column counts differ;
+- a foreign key that is `DEFERRABLE INITIALLY DEFERRED`: SQLite checks it at commit, which is the end of the request,
+  so a violation would reset the object instead of failing its step (§6);
+- a deferred column that cannot hold a temporary `NULL`: one that is `NOT NULL`, part of the primary key, or referenced
+  by any foreign key as its parent key (two unique keys `a.k` and `b.k` referencing each other), or one in a table with
+  a `CHECK`, a `NOT NULL` generated column, or a partial or expression unique index, any of which a temporary `NULL`
+  may violate. A composite key in a cycle is therefore accepted only when every column of it is nullable and none is a
+  referenced key.
+
+An acyclic graph is always accepted, and so is a cycle of one table or several whose deferred columns are nullable,
+unchecked and unreferenced.
 
 ### 3. Lossless values
 
 Each column is projected in SQL as `(typeof(c), value)`:
 
-| `typeof(c)` | Projected value   | Encoded as                                                                                 |
-| ----------- | ----------------- | ------------------------------------------------------------------------------------------ |
-| `integer`   | `cast(c as text)` | `i:<decimal>`                                                                              |
-| `real`      | `c`               | `r:` and ECMAScript's shortest round-trip text of the double, keeping `-0` and `±Infinity` |
-| `text`      | `c`               | `t:<text>`                                                                                 |
-| `blob`      | `hex(c)`          | `b:<HEX>`                                                                                  |
-| `null`      | `NULL`            | `null`                                                                                     |
+| `typeof(c)` | Projected value        | Encoded as                                                                                 |
+| ----------- | ---------------------- | ------------------------------------------------------------------------------------------ |
+| `integer`   | `cast(c as text)`      | `i:<decimal>`                                                                              |
+| `real`      | `c`                    | `r:` and ECMAScript's shortest round-trip text of the double, keeping `-0` and `±Infinity` |
+| `text`      | `hex(cast(c as blob))` | `t:<HEX>`, the bytes of the text in the database's encoding, UTF-8                         |
+| `blob`      | `hex(c)`               | `b:<HEX>`                                                                                  |
+| `null`      | `NULL`                 | `null`                                                                                     |
+
+`opsDumpColumnProjection` writes this projection, and `readOpsDumpValue` reads it.
 
 **A real crosses as the double itself.** workerd loses precision on int64 only; a double reaches JavaScript exactly,
 and `Number.prototype.toString` writes the shortest text that reads back as the same double. `cast(real as text)` keeps
 15 digits, and `printf` depends on how SQLite converts. SQLite never stores NaN.
 
+**Text crosses as its bytes.** A JavaScript string cannot hold text that is not valid UTF-8, so text is read as the hex
+of its bytes and tagged `t:`, apart from a blob's `b:`. The hash is computed over that form, so two texts that differ
+in one byte hash differently.
+
+**Values are written back in SQL, never through a JavaScript value that could change them** (`opsDumpValueBinding`):
+
+| Value   | Bound as         | Written as           |
+| ------- | ---------------- | -------------------- |
+| integer | its decimal text | `CAST(? AS INTEGER)` |
+| real    | the double       | `CAST(? AS REAL)`    |
+| text    | its bytes        | `CAST(? AS TEXT)`    |
+| blob    | its bytes        | `?`                  |
+| null    | `null`           | `?`                  |
+
+A rowid is an integer and is written the same way. The cast keeps the storage class in every column: decimal text bound
+bare stays text in a column without affinity or a `STRICT` `ANY` one, and a binder may bind an integral double as an
+integer. The column's affinity then applies exactly as it did when the source row was written.
+
 **The canonical row encoding** is the `JSON.stringify` of the array of encoded values: no whitespace, NUL escaped,
 characters outside the BMP written as they are. ECMAScript specifies `JSON.stringify`, so every runtime writes the same
 text. A **line** of the dump is `{"table":"<name>","row":<row encoding>}`, and the data object is gzip-compressed
-NDJSON. The importer binds each value back as its own type and never through a double.
+NDJSON.
 
 **A table hash** starts as the SHA-256 of the empty string. Each row, in keyset order, replaces it with the SHA-256 of
 the hash's hex, a newline and the row's encoding. The hash folds page after page and step after step, so the cursor
@@ -164,14 +228,27 @@ target `inspect` under the import operation's generation, and every step carries
    marker that names the backup into the target's KV storage, then applies the migrations up to the manifest's ledger:
    each bundle of the release must begin with exactly the manifest's files and checksums, files after them are not
    applied, and any difference is refused as `ledger_mismatch`. The resulting `sqlite_schema` must equal the manifest's
-   DDL (`schema_mismatch`). It then drops the triggers, so that no trigger fires on a loaded row. It answers the number
-   of parts. A `begin` retried on a target whose marker names the same backup answers again.
+   DDL, and the schema rule's plan of it must list the manifest's tables in the manifest's order (`schema_mismatch`).
+   It then clears the target, in one `transactionSync` that also records in the marker that `begin` is done:
+   - it drops the triggers, so that no trigger fires on a removed or a loaded row;
+   - it sets every deferred column of every table the manifest lists to `NULL`, which the schema rule guarantees each
+     can hold;
+   - it deletes every row of those tables in reverse load order, children before parents, so no foreign key is
+     violated and no `ON DELETE` action reaches a row still there. The migrations' seed rows go, and so do
+     `sqlite_sequence`'s, so a loaded row never collides with a seed, a seed the source deleted never survives, and an
+     `AUTOINCREMENT` counter is the source's.
+
+   The rows it deletes are the ones this release's migrations wrote into an empty database in the same step, so
+   clearing costs no more than migrating did. It answers the number of parts. A `begin` retried on a target whose
+   marker names the same backup resumes after what its marker records: it applies the migrations still missing and
+   clears, or, once `begin` is done, answers again.
 2. **`part`** _n_ reads the part by its byte range and refuses it as `part_mismatch` unless its size and SHA-256 match
-   the manifest. It inserts the rows with their rowids in one `transactionSync`, which also records the part in the
-   marker, so a retried part loads nothing twice. It writes the columns of a deferred foreign key as `NULL`. The
-   ledger's tables are replaced by their dumped rows, so the restored ledger keeps its original times. It answers the
-   rows it loaded and how many have a deferred key to set.
-3. **`link`** _n_, once every part is loaded, sets the deferred keys of part _n_'s rows by rowid, in one
+   the manifest, and when it decompresses to more than 16 MiB or holds more than 50 000 rows; it stops decompressing
+   at the bound. It inserts the rows with their rowids, by the keyset, in one `transactionSync`, which also records the
+   part in the marker, so a retried part loads nothing twice. It writes every value through §3's bindings, and the
+   columns of a deferred foreign key as `NULL`. The ledger's tables load like any other, so the restored ledger keeps
+   its original times. It answers the rows it loaded and how many have a deferred key to set.
+3. **`link`** _n_, once every part is loaded, sets the deferred keys of part _n_'s rows by their keyset, in one
    `transactionSync`. Control calls it only for the parts that reported deferred rows.
 4. **`verify`** reads the tables back from a cursor with the producer's projection and fold, and compares each
    finished table's count and hash with the manifest (`verify_mismatch`, naming the table).
@@ -185,9 +262,10 @@ when it is not the object of ordinary traffic.
 therefore never serve.
 
 **Foreign keys are checked immediately.** A key the load order satisfies is checked as each row goes in. A deferred key
-is written `NULL` and set by the link pass once every row is in, and that update is checked at once too. A violation
-throws inside its step's `transactionSync` and rolls back that step alone, so no violation can reach the end of a
-request and reset the object.
+is written `NULL` and set by the link pass once every row is in, and that update is checked at once too: its parent row
+is loaded, and the parent's key column is never deferred, so it holds its final value. A violation throws inside its
+step's `transactionSync` and rolls back that step alone, so no violation can reach the end of a request and reset the
+object. The schema rule refuses an `INITIALLY DEFERRED` key, the one kind SQLite checks only at commit.
 
 ### 7. Rehearsal
 
@@ -282,7 +360,8 @@ carries no generation. It holds no row, but a stack may name the application's c
 
 Every request names its `object`, as ADR-0069's do. Inside the prefix the uniform refusal and the stale refusal stay as
 ADR-0069 has them. A step the object refuses after authentication gets 422 with a reason and, where one is at fault,
-the table's name. Every answer is parsed by the wire's strict parser.
+the table's name. Every answer is parsed by the wire's strict parser. Every reader of a manifest, a complete answer
+included, refuses one whose `JSON.stringify` exceeds 4 MiB in UTF-8.
 
 ## Consequences
 
@@ -290,12 +369,12 @@ the table's name. Every answer is parsed by the wire's strict parser.
   rewinds the data that serves.
 - Each daily backup puts the environment in `read-only` for as long as the export takes: seconds for the tens of MB
   typical of an internal application, unmeasured until a live run.
-- An environment's bucket holds 30 daily backups and the pre-migration ones. A part's padding stores at most one row's
-  worth of unused bytes per 8 MiB.
-- A schema with a `WITHOUT ROWID` table, a virtual table, or a deferred foreign key with a `NOT NULL` column cannot be
-  backed up; `begin` names the table, and the console shows it.
-- Text that is not valid UTF-8 does not survive a dump. The data layer writes JavaScript strings and refuses raw SQL on
-  SQLite (ADR-0065 rule 7), so only an authored migration's SQL could store such text.
+- An environment's bucket holds 30 daily backups and the pre-migration ones. Every part but the last takes 8 MiB, so a
+  dump of small, compressible rows is mostly padding.
+- A schema the rule refuses (§2) cannot be backed up: a `WITHOUT ROWID` or virtual table, a table whose rowid no name
+  reads, an `INITIALLY DEFERRED` foreign key, or a cycle of foreign keys whose columns cannot be `NULL` for a while.
+  `begin` names the table, and the console shows it.
+- Text survives byte for byte, valid UTF-8 or not; as hex it doubles in size before compression.
 - No trigger fires while a backup loads; the importer drops the triggers and recreates them from the manifest.
 - A side restore makes the service unavailable from the moment the original turns `inspect` until the pointer deploy
   completes. It adds one name to `FABRIKA_APPLICATION_OBJECTS` until the original is deleted, and the list holds 16.
@@ -326,6 +405,10 @@ the table's name. Every answer is parsed by the wire's strict parser.
   store between steps.
 - **`cast(real as text)` or `printf` for reals.** Rejected: the first keeps 15 digits, the second depends on how
   SQLite converts. The double itself crosses exactly.
+- **Text as a JavaScript string.** Half the size of hex. Rejected: text that is not valid UTF-8 reads as replacement
+  characters, two different values become one, and the hash cannot see it.
+- **Bounding a part by its compressed size alone.** Fewer, fuller parts. Rejected: compressible rows expand without
+  bound in the step that loads them.
 - **`defer_foreign_keys` for self-referencing keys.** Rejected: deferral ends with the request, and a table spans many
   steps, so a row whose parent lies in a later part fails at the request's end and resets the object. The link pass
   sets such keys once every row is in.
