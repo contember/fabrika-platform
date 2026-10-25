@@ -305,11 +305,17 @@ none and answers its row with 404. Its senders reach it over the platform transp
   operator deletes them.
 - An application on Cloudflare holds the provider credential and sends directly, so the gate of §8 does not cover it,
   as it does not cover an older release on Zerops. A relay on the Worker would close that gap (Alternatives).
-- **Rollout on Cloudflare.** A `fabrika.ref` bump does not rewrite the generated workflow. Until the operator re-runs
-  `fabrika platform init`, which refreshes `.github/workflows/platform.yml`, the workflow passes Control no
-  `FABRIKA_EMAIL_*`: Control's deploy writes `FABRIKA_EMAIL_PROVIDER=none`, and applications see no mail, as before.
-  After that run, each environment that declares `mailer: 'installation'` gets the set at its next deploy. A switched
-  provider leaves its credential as a Worker secret of IAM and Control that neither reads.
+- **Rollout on Cloudflare.** A `fabrika.ref` bump does not rewrite the generated workflow. The operator bumps
+  `fabrika.ref` to a release that holds Control's copy, then re-runs `fabrika platform init --provider=cloudflare` with
+  that release's CLI, which refreshes `.github/workflows/platform.yml`; an older CLI writes the old workflow. Until
+  then the workflow passes Control no `FABRIKA_EMAIL_*`: Control's deploy writes `FABRIKA_EMAIL_PROVIDER=none`, and
+  applications see no mail, as before. After that workflow run the operator redeploys each environment that declares
+  `mailer: 'installation'` (`fabrika control deploy --app=<id> --env=<name>`, or Deploy in the console); until its
+  redeploy an environment keeps `none`. A switched provider leaves its credential as a Worker secret of IAM and Control
+  that neither reads.
+- On Cloudflare an invalid set fails Control's own deploy, so Control keeps running with the transport it had. A
+  Worker secret missing later (a failed `secret put`, a secret deleted by hand) makes Control refuse each deploy that
+  hands the set, naming the Cloudflare operator step: correct the GitHub Environment and re-run the platform workflow.
 - **Postmark has no idempotency either**, so an unknown outcome over it is never retried automatically and needs a
   person, as over SmartEmailing.
 - **SmartEmailing's limits.** It has no idempotency, so an unknown outcome is never retried automatically and needs a

@@ -439,18 +439,23 @@ whose jobs declare `mailer: 'installation'`.
   invalid set fails that deploy, naming the variables; IAM's stage refuses the same set
   first. A local Worker gets no transport. The Worker reads its `FABRIKA_EMAIL_*` per
   invocation (`controlEnv`, `src/platform-cf.ts`): none, a transport, or invalid,
-  as the Bun process does at boot. A provider no longer selected leaves its credential
-  as a Worker secret of IAM and of Control; neither reads it, and
-  `wrangler secret delete` removes it.
+  as the Bun process does at boot. An invalid one makes Control refuse each deploy that
+  hands the set, and the refusal names the Cloudflare operator step
+  (`CLOUDFLARE_MAIL_REMEDY`). A provider no longer selected leaves its credential as a
+  Worker secret of IAM (`prod-propustka-worker`) and of Control (`prod-vozka`); neither
+  reads it, and `wrangler secret delete <NAME> --name <worker>` removes it.
 - **Adding or rotating it on Cloudflare.** Re-run `fabrika platform init` with the new
   values: the workflow redeploys IAM and Control. The environments that use it get the
-  new set at their next deploy.
-- **Rollout on Cloudflare.** A `fabrika.ref` bump does not rewrite the workflow. Until
-  the operator re-runs `fabrika platform init`, which refreshes
-  `.github/workflows/platform.yml`, the workflow hands Control no `FABRIKA_EMAIL_*`.
-  Control's deploy then writes `FABRIKA_EMAIL_PROVIDER=none`, and an application's
-  mailer jobs see no mail, as before. After the re-run and one workflow run, redeploy
-  the environments whose contract has a `mailer: 'installation'` job.
+  new set at their next deploy: `fabrika control deploy --app=<id> --env=<name>`, or
+  **Deploy** on the environment in the console.
+- **Rollout on Cloudflare.** A `fabrika.ref` bump does not rewrite the workflow, and an
+  older release's `init` writes the workflow without Control's copy. Bump `fabrika.ref`
+  to a release that holds it, then re-run `fabrika platform init --provider=cloudflare`
+  with that release's CLI ([release process](release-process.md)), which refreshes
+  `.github/workflows/platform.yml` and dispatches it. Until then Control's deploy gets no
+  `FABRIKA_EMAIL_*` and writes `FABRIKA_EMAIL_PROVIDER=none`, and an application's mailer
+  jobs see no mail, as before. After that workflow run, redeploy each environment whose
+  contract has a `mailer: 'installation'` job, as above.
 
 ## Applications
 

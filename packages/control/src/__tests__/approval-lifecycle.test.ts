@@ -968,7 +968,11 @@ export const contract = app.contract((c) => ({
 			secretNames: new Set(['FABRIKA_EMAIL_RESEND_API_KEY']),
 		},
 	}
-	const invalidTransport: InstallationMail = { kind: 'invalid', reason: 'Email configuration is invalid: FABRIKA_EMAIL_FROM is invalid' }
+	const invalidTransport: InstallationMail = {
+		kind: 'invalid',
+		reason: 'Email configuration is invalid: FABRIKA_EMAIL_FROM is invalid',
+		remedy: 'fix the transport',
+	}
 	const INVALID_REFUSAL =
 		"the contract's job `digest` sends mail through the installation (mailer: 'installation'), and Control's mail transport is invalid"
 
@@ -1013,6 +1017,46 @@ export const contract = app.contract((c) => ({
 		expect(result.status).toBe('succeeded')
 		const managed = w.deploys[0]?.managedEnvironment
 		expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_RESEND_API_KEY'])
+		expect(managed?.['FABRIKA_EMAIL_RESEND_API_KEY']?.value).toBe(RESEND_KEY)
+		const stored = [...w.logs.values()].join('\n')
+		expect(stored).toContain('mail=[redacted]')
+		expect(stored).not.toContain(RESEND_KEY)
+		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toEqual([])
+	})
+
+	test('a 0.9 application without a namespace proxy (Cloudflare) gets the whole transport, never the relay, and no run log keeps its credential', async () => {
+		const w = mailingWorld('0.9.0')
+		await seed(w)
+		// A Cloudflare environment belongs to no deployment namespace.
+		await w.db.registry.upsertAppEnv({
+			appId: 'notes',
+			env: 'stage',
+			domain: 'stage.notes.example.test',
+			namespaceId: null,
+			provider: 'harbor',
+			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: {} }),
+			providerArtifactJson: HARBOR_ARTIFACT,
+		})
+		const { workloadCredentials } = await credentialed(w)
+		// Cloudflare's provider has no namespace proxy: Control's Worker runs no relay, so it hands the set.
+		const { namespaces: _namespaces, ...withoutNamespaces } = provider(w)
+		const result = await executeDeploy({
+			...deps(w),
+			workloadCredentials,
+			mailTransport,
+			...(await relayed(w)),
+			provider: {
+				...withoutNamespaces,
+				deploy: (input) => {
+					input.events.log(`mail=${input.managedEnvironment['FABRIKA_EMAIL_RESEND_API_KEY']?.value ?? 'none'}`)
+					return withoutNamespaces.deploy(input)
+				},
+			},
+		}, { runId: await createdRun(w, 'stage') })
+		expect(result.status).toBe('succeeded')
+		const managed = w.deploys[0]?.managedEnvironment
+		expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_RESEND_API_KEY'])
+		expect(managed?.['FABRIKA_EMAIL_PROVIDER']?.value).toBe('resend')
 		expect(managed?.['FABRIKA_EMAIL_RESEND_API_KEY']?.value).toBe(RESEND_KEY)
 		const stored = [...w.logs.values()].join('\n')
 		expect(stored).toContain('mail=[redacted]')
@@ -1251,7 +1295,7 @@ export const contract = app.contract((c) => ({
 		}
 		const logs = [...w.logs.values()].join('\n')
 		expect(logs).toContain(INVALID_REFUSAL)
-		expect(logs).toContain("'Set or rotate the mail transport'")
+		expect(logs).toContain('Email configuration is invalid: FABRIKA_EMAIL_FROM is invalid; fix the transport')
 		expect(w.deploys).toEqual([])
 	})
 

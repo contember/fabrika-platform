@@ -7,6 +7,7 @@ import type { RelayResult, RunnerStatus } from '@fabrika/runner-cloudflare'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { SourceFailure } from '../github/source/failure'
+import { CLOUDFLARE_MAIL_REMEDY } from '../mail-transport'
 import {
 	cancelRunOnRunner,
 	cloudflareControlProvider,
@@ -86,14 +87,18 @@ describe("the Cloudflare composition's mail transport", () => {
 	test("reads the installation's FABRIKA_EMAIL_* from the Worker's vars and secrets, and hands it to every deploy", async () => {
 		const harness = createHarness()
 		try {
+			// The provider's own variables are Worker secrets the bindings type does not name: an open registry owns them.
+			const providerSecrets = {
+				FABRIKA_EMAIL_RESEND_API_KEY: 're_key',
+				// A provider no longer selected leaves its secret on the Worker; it is never handed on.
+				FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: 'pm_stale',
+			}
 			const bindings: WorkerBindings = {
 				...workerBindings(harness),
 				FABRIKA_EMAIL_PROVIDER: 'resend',
 				FABRIKA_EMAIL_FROM: 'mail@example.test',
 				FABRIKA_EMAIL_FROM_NAME: 'Fabrika',
-				FABRIKA_EMAIL_RESEND_API_KEY: 're_key',
-				// A provider no longer selected leaves its secret on the Worker; it is never handed on.
-				FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: 'pm_stale',
+				...providerSecrets,
 			}
 			const env = controlEnv(bindings, () => {})
 			const deps = await buildRunDeps(env, cloudflareControlProvider(bindings, env))
@@ -119,8 +124,13 @@ describe("the Cloudflare composition's mail transport", () => {
 		try {
 			expect(controlEnv(workerBindings(harness), () => {}).MAIL_TRANSPORT).toEqual({ kind: 'none' })
 			expect(controlEnv({ ...workerBindings(harness), FABRIKA_EMAIL_PROVIDER: '' }, () => {}).MAIL_TRANSPORT).toEqual({ kind: 'none' })
-			const invalid = controlEnv({ ...workerBindings(harness), FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_RESEND_API_KEY: 're_private' }, () => {})
-			expect(invalid.MAIL_TRANSPORT).toEqual({ kind: 'invalid', reason: expect.stringContaining('FABRIKA_EMAIL_FROM is missing') })
+			const key = { FABRIKA_EMAIL_RESEND_API_KEY: 're_private' }
+			const invalid = controlEnv({ ...workerBindings(harness), FABRIKA_EMAIL_PROVIDER: 'resend', ...key }, () => {})
+			expect(invalid.MAIL_TRANSPORT).toEqual({
+				kind: 'invalid',
+				reason: expect.stringContaining('FABRIKA_EMAIL_FROM is missing'),
+				remedy: CLOUDFLARE_MAIL_REMEDY,
+			})
 			expect(JSON.stringify(invalid.MAIL_TRANSPORT)).not.toContain('re_private')
 		} finally {
 			harness.sqlite.close()

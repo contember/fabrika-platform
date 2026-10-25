@@ -29,6 +29,7 @@ import type { Env } from '../env'
 import { gitHubAppClientFactory, vaultGitHubCredentials } from '../github/connections/credentials'
 import { createGitHubSource, SourceRateLimited } from '../github/source'
 import type { CommitSource } from '../github/source/commit-files'
+import { ZEROPS_MAIL_REMEDY } from '../mail-transport'
 import { OLDER_PROXY_READERS } from './older-proxies'
 
 const required = (source: Record<string, string | undefined>, name: string): string => {
@@ -124,6 +125,7 @@ export function zeropsControlProvider(
 
 /** The Zerops installation's provider, over the in-process GitHub source, for the Bun host. */
 export const zeropsComposition: BunProviderComposition = {
+	mailRemedy: ZEROPS_MAIL_REMEDY,
 	compose: (env, source, seams) => {
 		const github = zeropsGitHubSources(env, seams)
 		return { provider: zeropsControlProvider(source, github.port), commits: github.commits }

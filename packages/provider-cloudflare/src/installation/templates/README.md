@@ -69,7 +69,8 @@ whose job declares `mailer: 'installation'`, at that application's deploy.
 
 To change or rotate them, re-run `fabrika platform init` with the new values; it rewrites this Environment
 and triggers the workflow, which redeploys IAM and the control plane. An application gets the new set at its next
-deploy: redeploy the environments that send installation mail.
+deploy: redeploy each environment that sends installation mail with
+`fabrika control deploy --app=<id> --env=<name>`, or **Deploy** in the console.
 
 Switching provider leaves the old provider's values stored: init writes the new ones and deletes none. IAM and
 the control plane read only the selected provider's variables, but delete the old credentials so nothing holds them, for
@@ -83,8 +84,13 @@ gh variable delete FABRIKA_EMAIL_SMARTEMAILING_TAG --env {{ACCOUNT}}
 
 Remove the same names from the installer env file (init prints its path when it starts), or a later run of
 init resumes them.
-IAM's and the control plane's Workers also keep the old credential as a Worker secret, which neither reads;
-`wrangler secret delete` removes it.
+IAM's and the control plane's Workers also keep the old credential as a Worker secret, which neither reads. Delete
+it from both, with the Cloudflare API token in `CLOUDFLARE_API_TOKEN`:
+
+```sh
+bunx wrangler secret delete FABRIKA_EMAIL_SMARTEMAILING_API_KEY --name prod-propustka-worker
+bunx wrangler secret delete FABRIKA_EMAIL_SMARTEMAILING_API_KEY --name prod-vozka
+```
 
 ## Routine redeploy or version bump
 
@@ -95,4 +101,6 @@ Both paths rebuild the account-owned runner image from the exact checkout select
 
 `fabrika.ref` is operator-owned. `fabrika platform init` creates it once and does not overwrite later version pins.
 A bump does not rewrite this workflow. Re-run `fabrika platform init --provider=cloudflare {{ACCOUNT}}` with the same
-flags to bring `.github/workflows/platform.yml` to the one the current CLI generates.
+flags, with the CLI of the release `fabrika.ref` names, to bring `.github/workflows/platform.yml` to the one that release
+generates. A change in what the workflow hands a stage (such as the mail transport the control plane holds) reaches
+the account only this way.

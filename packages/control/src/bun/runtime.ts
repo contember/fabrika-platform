@@ -67,6 +67,8 @@ export interface BunProviderComposition {
 		source: Record<string, string | undefined>,
 		seams: GitHubSourceSeams,
 	): { readonly provider: ControlProvider; readonly commits: CommitSource }
+	/** The operator step an invalid installation mail transport's refusal names (`readInstallationMail`). */
+	readonly mailRemedy: string
 }
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
@@ -155,7 +157,7 @@ export function createRuntime(
 
 	const emailEnvironment = pickEmailEnvironment(source)
 	const emailProviders = overrides.emailProviders ?? builtinEmailProviders
-	const mailTransport = readInstallationMail(emailEnvironment, emailProviders)
+	const mailTransport = readInstallationMail(emailEnvironment, emailProviders, composition.mailRemedy)
 	if (mailTransport.kind === 'invalid') {
 		// One bad variable must not take the Delivery plane down; the deploys that need the transport are refused instead.
 		console.warn(`control: the installation's mail transport is invalid, and every deploy that needs it is refused: ${mailTransport.reason}`)
