@@ -437,8 +437,10 @@ first and the object again, and it never boots the application.
   reaches (a rehearsal, a former serving object), in one no verified event has named yet, or outside the `open` mode.
   Otherwise, for each job with a due wake, and for a removed job whose lease a crashed run still holds, it reaps an
   expired holder, takes the lease without waiting (or marks the job pending) and re-arms in one
-  transaction, and runs the job past its return. A wake is deleted only by the fenced finish of a run that started at
-  or after it, so a crash leaves the wake or a held lease whose expiry is armed. A wake within 50 ms is waited for;
+  transaction, and runs the job past its return. A run owns the wakes due when it took its lease, marked in that
+  transaction; a wake written or merged into afterwards is not its, except a cron wake scheduled again. Only that run's
+  fenced finish consumes or retries what it owns, and a finish or a reap leaves none owned, so a crash leaves the wake
+  or a held lease whose expiry is armed. A wake within 50 ms is waited for;
   an internal error in `open` re-arms the alarm 30 s later and is an `AlarmFailed` error event; a transition that
   restricted the object meanwhile is none. The file sweep is one of these jobs.
 - **The repair tick** (the Worker's cron trigger, and the object's first event after it boots or reopens) reaps every
@@ -804,7 +806,8 @@ is `null`.
   keeps two runs of one job off one row.
 - **A claim that leased rows re-arms its job.** In its fenced transaction it replaces the job's `claim` wake in
   `fabrika_wakes` with one at the next row it could claim (its `<due>`, at least 1 s ahead); a claim that filled its
-  `limit` makes the job due again at once, and a claim that found nothing writes no wake. So a row whose backoff ends,
+  `limit` makes the job due again at once, and a claim that found nothing writes no wake. The claims of one attempt
+  keep the earliest re-arm; its first replaces what an earlier run left. So a row whose backoff ends,
   or a backlog larger than one claim, runs its job without waiting for the schedule (`claim-rearm.test.ts`).
 - `claim` is refused inside `ctx.transaction`, in a request and in a query. A row past `maxAttempts` stays in the
   table, not due, for the application to show or requeue (`packages/db`'s `queue.test.ts`).
@@ -1132,7 +1135,8 @@ A mutation (of an RPC, link or public procedure), a webhook or a cron job declar
 - `ctx.kick` is request-bound and accepts only the declared names. A kick carries no payload: the row it looks at is
   the only record of the work.
 - **Every kick is a durable wake.** It writes a `kick` row of `fabrika_wakes` in the site's transaction, before the
-  answer, so it commits and rolls back with the writes it follows. A thrown handler, a refused output, a cancelled
+  answer, so it commits and rolls back with the writes it follows. A kick without a time is due now by the database's
+  clock, the one leases are taken by. A thrown handler, a refused output, a cancelled
   request and a failed commit kick nothing. A job's kick wakes are written after its attempt succeeded, before its
   finish.
 - Kicks without a time are deduplicated per job and sent after the output validated and the transaction committed. A
@@ -1148,11 +1152,13 @@ A mutation (of an RPC, link or public procedure), a webhook or a cron job declar
   active and one is pending whatever the number of kicks and instances; after a failed run the flag waits for the
   schedule.
 - **On Bun the serving process keeps one timer to the next wake** (`WakeTimer`). A write of this process lowers it in
-  the write's transaction; the 60 s job check refreshes it, which is when it finds a wake another container wrote. When
-  it fires it reaps crashed holders and kicks each job with a due wake through the kick path, so the lease admits one
-  run across containers. A wake already due when the timer is armed is looked at 1 s later, because its own kick is
-  under way. On both runtimes the scheduler skips a job whose lease holder started after every due wake: that run
-  consumes them. The crontab still runs the schedule.
+  the write's transaction, by the delay to the next wake on the database's clock; the 60 s job check refreshes it,
+  which is when it finds a wake another container wrote. When it fires it reaps crashed holders and kicks each job with
+  a due wake through the kick path, so the lease admits one run across containers. A wake already due when the timer
+  is armed is looked at 1 s later, because its own kick is under way. A wake the timer was lowered for but a refresh
+  cannot see yet (its write still committing) is looked for again after 1, 2, 4 and 8 s, within 15 s. A stopping
+  server waits for the refresh under way before it drains the timer's kicks. On both runtimes the scheduler skips a
+  job whose lease holder owns every due wake: that run consumes them. The crontab still runs the schedule.
 - The wake is the recovery path: a kicked run that dies before its finish leaves its wake, and the scheduler runs the
   job again once the lease expired; the schedule stays a second one. A run that fails past its inline retries consumes
   the wakes it owned, so a failing job does not loop (`public-kick.test.ts`, `mutation-kick.test.ts`). On SIGTERM a Bun
@@ -1342,7 +1348,7 @@ process first — and runs one job:
    times with jittered exponential backoff, under a new generation each time, except an
    attempt that failed with `mail_failed` the one retry rule refuses and a `stopped` one.
    On Cloudflare a run the alarm started retries durably instead of sleeping: a failed
-   attempt keeps the wakes it owned, moves them to now + backoff and counts the attempt,
+   attempt keeps the wakes its run owned, moves them to now + backoff and counts the attempt,
    and the alarm starts the next attempt; past `retries` the cron wake advances to the
    next fire. One segment covers the attempt's IAM exchange, its handler and its finish:
    the exchange and the handler end 30 s (at most a tenth) before it, so a slow exchange

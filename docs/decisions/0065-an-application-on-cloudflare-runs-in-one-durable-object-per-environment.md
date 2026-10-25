@@ -72,9 +72,11 @@ SQLite database. The Worker only forwards each request to it.**
    carries) the name its first verified event reached it under; `alarm()` runs jobs only in the object whose recorded
    name is the one ordinary traffic reaches, and only in its `open` maintenance mode, and otherwise returns without
    re-arming. Then, per job with a due wake and in one transaction, it reaps an expired holder, takes the lease without waiting (or marks the job pending)
-   and re-arms, then hands each taken lease to `waitUntil`. It consumes no wake: a wake is deleted only in the
-   transaction of the fenced finish of a run that started at or after it, so a crash at any point leaves the wakes or a
-   held lease whose expiry is armed. It never throws, because the platform stops retrying an alarm after six failures:
+   and re-arms, then hands each taken lease to `waitUntil`. It consumes no wake. A run owns the wakes due when it took
+   its lease, marked in that transaction (`owned`); a wake written or merged into afterwards is not its, except a cron
+   wake scheduled again, whose next fire its finish schedules. Only the transaction of that run's fenced finish consumes
+   or retries what it owns, and a finish or a reap leaves none owned, so a crash at any point leaves the wakes or a held
+   lease whose expiry is armed. It never throws, because the platform stops retrying an alarm after six failures:
    on an internal error in `open` it re-arms 30 s later and reports `AlarmFailed` to Operations; a transition that
    restricted the object meanwhile is no error. A wake within 50 ms is waited
    for, because `Date.now()` is pinned between I/O, so no run starts before its wake. A run the alarm started retries
@@ -86,14 +88,17 @@ SQLite database. The Worker only forwards each request to it.**
    the object repairs once when it boots): it reaps every expired holder, a removed job's too, deletes the wakes of an undeclared job or of a changed expression,
    inserts each missing cron wake at the next fire, keeps an overdue one so missed fires coalesce into one run, and
    re-arms. It arms the first alarm of an environment nobody called and recovers an alarm whose retries ran out. A kick
-   writes a `kick` wake in its site's transaction, so it commits with the writes it follows; a kick without a time also
-   runs in the object after its commit, inline, and `ctx.kick(job, { at })` writes only the wake. A claim that leased
-   rows replaces its job's `claim` wake in its fenced transaction with one at the next row it could claim, at least 1 s
-   ahead (at once after a claim that filled its limit). The alarm takes no job whose lease holder started after every
-   due wake, because that run consumes them, and a run failed past its inline retries consumes the wakes it owned. On
-   Bun the same wakes drive one timer per serving process: a write lowers it in its transaction, the 60 s job check
-   refreshes it and finds a wake another container wrote, and it kicks each job with a due wake through the kick path,
-   so the lease admits one run; crontab still runs the schedule.
+   writes a `kick` wake in its site's transaction, due now by the database's clock or at its `at`, so it commits with
+   the writes it follows; a kick without a time also runs in the object after its commit, inline, and
+   `ctx.kick(job, { at })` writes only the wake. A claim that leased rows sets its job's `claim` wake in its fenced
+   transaction to the next row it could claim, at least 1 s ahead (at once after a claim that filled its limit); the
+   claims of one attempt keep the earliest, and its first replaces what an earlier run left. The alarm takes no job
+   whose lease holder owns every due wake, because that run consumes them, and a run failed past its inline retries
+   consumes the wakes it owned. On Bun the same wakes drive one timer per serving process: a write lowers it in its
+   transaction by the delay on the database's clock, the 60 s job check refreshes it and finds a wake another container
+   wrote, and it kicks each job with a due wake through the kick path, so the lease admits one run; crontab still runs
+   the schedule. A wake the timer was lowered for but a refresh cannot see yet, its write still committing, is looked
+   for again within 15 s.
 6. **Files are R2 objects.** The provider binds a bucket per application environment; the object's file store is R2.
    A kind that scans its uploads is refused on Cloudflare until a scanner runs there.
 7. **`ctx.sql` is refused on SQLite.** On Postgres the runtime role is the boundary under an application's raw SQL

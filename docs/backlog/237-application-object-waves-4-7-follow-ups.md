@@ -61,10 +61,6 @@ item 1 needs an oblaka release first.
 
 **Kicks and the Bun timer.**
 
-14. A due-now kick wake is written at the request's clock (`new Date()` in `dispatch.ts`'s `#recordKicks`), while the
-    finish consumes the wakes due at or before the run's `last_started_at` on the database's clock. A request clock
-    ahead of the database's leaves the wake to the run the kick started, unconsumed, so the job runs once more with
-    nothing to do. Fix idea: write a due-now wake at the database's now, as a job's kicks already do (`leases.now()`).
 15. Kicks of one job in one second merge into one wake (`kick:<job>:<s>`) that keeps the earlier due. A run that
     started between the two kicks consumes the merged wake, so the later kick rests on the pending flag alone, and a
     crash between its commit and `markPending` leaves it to the schedule. Fix idea: let a later kick in the same second

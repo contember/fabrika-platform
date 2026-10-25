@@ -692,8 +692,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   job once, to the request's `waitUntil` or detached, never rejecting, and nothing for a refused, rolled-back or
   cancelled request. The kicked run is the job's own (its key, its lease, its retries), never the request's. Never
   await the kick, and never give it a payload: the job reads its rows. Every kick writes a `kick` wake in the site's
-  transaction (`#recordKicks`, before the answer); `ctx.kick(job, { at })` writes only that wake, deduplicated per job
-  and due second (`kick:<job>:<s>`). A job's kicks are written after its attempt succeeded, before its finish.
+  transaction (`#recordKicks`, before the answer), due now by the database's clock (`JobWakes.now`);
+  `ctx.kick(job, { at })` writes only that wake, deduplicated per job and due second (`kick:<job>:<s>`). A job's kicks
+  are written after its attempt succeeded, before its finish.
 - **A public procedure's challenge is verified after its buckets and its body, before its handler, and recorded once it
   passed** (`challenge.ts`). The provider list is closed (`turnstile`, `altcha`) and each one's browser sources are
   fixed (`CHALLENGE_ORIGINS`: Turnstile's origin, which `buildArtifact` adds to `scriptSrc`/`frameSrc`; ALTCHA's
@@ -1115,11 +1116,15 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   the kick's row. There is no process-local kick state; every kick asks the lease. Never let a kick wait on the lease, and never drop the cron of a kicked job: it is the recovery path. `serveContract` drains
   kicked runs on SIGTERM before it closes the database, and `kit.runJob` waits for them before it runs.
 - **A claim that leased rows re-arms its job** (`rearmClaim` in `@fabrika/db`'s `job-wakes.ts`): in its fenced
-  transaction it replaces `claim:<job>` with a wake at its own next eligible due, at least now + 1 s; a full claim makes
-  it due now + 1 ms; a claim that found nothing writes none.
+  transaction it sets `claim:<job>` to its own next eligible due, at least now + 1 s; a full claim makes it due
+  now + 1 ms; a claim that found nothing writes none. An attempt's claims keep the earliest re-arm (by its fence); its
+  first replaces what an earlier run left.
 - **On Bun the serving process's `WakeTimer` kicks due jobs through the kick path** (`ContractJobs.wake`):
-  `projectWakes` lowers it, the 60 s check refreshes it, and an already-due wake waits `WAKE_RETRY_MS`. `take` and
-  `wake` skip a job whose holder owns every due wake. A run failed past its inline retries consumes the wakes it owned.
+  `projectWakes` lowers it by `JobScheduler.untilNext` (the database's clock), the 60 s check refreshes it, and an
+  already-due wake waits `WAKE_RETRY_MS`. A projected wake a refresh cannot see yet (its write still committing) is
+  looked for again at 1, 2, 4 and 8 s within `WAKE_SETTLE_MS`. `stop()` refuses new refreshes and resolves once the one
+  under way ended; the server awaits it before `stopKicks` and the drain. `take` and `wake` skip a job whose holder
+  owns every due wake (`Wake.owned`). A run failed past its inline retries consumes the wakes it owned.
 - **A job acts only with what IAM signs for its key** (`implement/workload.ts`, ADR-0022 "Principal kinds"). Control
   writes `FABRIKA_JOB_<NAME>_KEY`; each attempt exchanges it through the adapter's `WorkloadTokenSource` (on Bun
   `issuerWorkloadTokens`, IAM's public `WORKLOAD_TOKEN_PATH`), verifies the token with the application's own
