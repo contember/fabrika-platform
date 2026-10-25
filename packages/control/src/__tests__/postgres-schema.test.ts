@@ -159,6 +159,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0017_dev_launcher_contact.sql' },
 			{ bundle: 'control', name: '0018_data_operations.sql' },
 			{ bundle: 'control', name: '0019_ops_keys.sql' },
+			{ bundle: 'control', name: '0020_run_superseded_by.sql' },
 		])
 	})
 
@@ -776,7 +777,9 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		await owned.finish(failed.id, 'failed', 1)
 
 		expect(await db.runs.getSupersedingRun(older.id)).toBeNull()
-		expect(await owned.supersede(older.id)).toBe(false)
+		// Neither a succeeded run of another environment nor a newer run that failed supersedes it.
+		expect(await owned.supersede(older.id, otherEnv.id)).toBe(false)
+		expect(await owned.supersede(older.id, failed.id)).toBe(false)
 		const newer = await create('prod')
 		await owned.start(newer.id)
 		await owned.finish(newer.id, 'succeeded', 0)
@@ -784,11 +787,12 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect((await db.runs.getSupersedingRun(older.id))?.id).toBe(newer.id)
 		expect(await db.runs.getSupersedingRun(newer.id)).toBeNull()
 		expect(await owned.start(older.id)).toBe(false)
-		expect(await owned.supersede(older.id)).toBe(true)
+		expect(await owned.supersede(older.id, newer.id)).toBe(true)
 		const superseded = await db.runs.getRun(older.id)
 		expect(superseded?.status).toBe('failed')
+		expect(superseded?.superseded_by).toBe(newer.id)
 		expect(typeof superseded?.finished_at).toBe('number')
-		expect(await owned.supersede(older.id)).toBe(false)
+		expect(await owned.supersede(older.id, newer.id)).toBe(false)
 	})
 
 	test('repo poll state: the join that selects pollable envs, and the upsert', async () => {

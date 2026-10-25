@@ -37,6 +37,8 @@ export interface RunRow {
 	classification_json: string | null
 	/** The human approval of the classified change, bound to both digests. */
 	approval_json: string | null
+	/** The newer run whose success stopped this one before it started (ADR-0050 §6); NULL for every other run. */
+	superseded_by: string | null
 	// `pending_access_json` is no longer read or written; the column stays until a later migration release drops it.
 }
 
@@ -265,14 +267,15 @@ export class RunRepository {
 	 * Fail a pending run that a newer succeeded run of its environment supersedes, before it starts: an older run never
 	 * deploys over a newer success, and a rollback is a new run (ADR-0050 §6).
 	 */
-	async markRunSuperseded(id: string, fence: LeaseFence): Promise<boolean> {
+	async markRunSuperseded(id: string, supersededBy: string, fence: LeaseFence): Promise<boolean> {
 		return this.mutateRun(
 			id,
-			`UPDATE runs SET status = 'failed', finished_at = ?
+			`UPDATE runs SET status = 'failed', finished_at = ?, superseded_by = ?
 			WHERE id = ? AND status = 'pending' AND cancel_requested_at IS NULL
 				AND EXISTS (SELECT 1 FROM runs newer
-					WHERE newer.app_id = runs.app_id AND newer.env = runs.env AND newer.id > runs.id AND newer.status = 'succeeded')`,
-			[this.now(), id],
+					WHERE newer.id = ? AND newer.app_id = runs.app_id AND newer.env = runs.env AND newer.id > runs.id
+						AND newer.status = 'succeeded')`,
+			[this.now(), supersededBy, id, supersededBy],
 			fence,
 		)
 	}

@@ -605,6 +605,8 @@ describe('approved access through the run lifecycle', () => {
 		const runId = await lapsed(refused)
 		expect((await refuse(refused, runId)).approval).toBeNull()
 		expect((await run(refused, runId)).status).toBe('failed')
+		// A refusal fails the run before it starts, but a newer run did not stop it: an older one published.
+		expect((await getApprovalUseCase(approvals(refused, auth()), runId)).supersededBy).toBeUndefined()
 
 		const cancelled = world()
 		const parked = await lapsed(cancelled)
@@ -757,6 +759,9 @@ describe('approved access through the run lifecycle', () => {
 		expect((await run(w, parked.runId)).status).toBe('failed')
 		expect(w.deploys.map((input) => input.runId)).toEqual([next.runId])
 		expect((await published(w, 'prod')).runId).toBe(next.runId)
+		// The page reads which run stopped it, and the newer run's own approval names none.
+		expect((await getApprovalUseCase(approvals(w, auth()), parked.runId)).supersededBy).toBe(next.runId)
+		expect((await getApprovalUseCase(approvals(w, auth()), next.runId)).supersededBy).toBeUndefined()
 	})
 
 	test('an approved parked run deploys when no newer run of its environment succeeded', async () => {

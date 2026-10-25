@@ -1072,7 +1072,7 @@ async function supersedeRun(deps: RunDeps, invocation: RunInvocation, run: RunRo
 	const runs = deps.repositories.runs
 	const superseding = await runs.getSupersedingRun(run.id)
 	if (superseding === null) return false
-	await invocation.write((fence) => runs.markRunSuperseded(run.id, fence))
+	await invocation.write((fence) => runs.markRunSuperseded(run.id, superseding.id, fence))
 	await logSettlement(deps, { id: run.id, log_key: run.log_key ?? logsKey(run.id) }, `superseded by run ${superseding.id}`)
 	return true
 }

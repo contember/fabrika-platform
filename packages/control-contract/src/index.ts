@@ -607,11 +607,16 @@ export interface ApprovalDto {
 	 */
 	endpoints: SurfaceEndpointDto[]
 	/**
-	 * The human who approved it, once one did. `holds` is false once the approval lapsed: the environment published
-	 * another change first, the change still widens against it, and the run waits for a new approval (ADR-0050 §2). A
-	 * refusal or a cancellation of such a run drops the approval, so a decided run's approval always held.
+	 * The human who approved it, once one did. `holds` is false once the approval lapsed: an older run of the environment
+	 * published another change first, the change still widens against it, and the run waits for a new approval (ADR-0050
+	 * §2). A refusal or a cancellation of such a run drops the approval, so a decided run's approval always held.
 	 */
 	approval: { principalId: string; label: string; approvedAt: number; holds: boolean } | null
+	/**
+	 * The newer run of the environment whose success stopped this one before it started: an older run never deploys over
+	 * a newer one (ADR-0050 §6). Only on one approval read, of a run that failed without starting.
+	 */
+	supersededBy?: string
 }
 
 /** Approve or refuse one parked run. The digests are the ones the approver read; a reclassified run refuses them. */

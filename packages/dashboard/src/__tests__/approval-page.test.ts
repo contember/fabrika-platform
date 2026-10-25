@@ -148,4 +148,13 @@ describe('where a run stands', () => {
 		expect(stage({ status: 'succeeded' }, { protected: false })).toBe('Published without waiting for approval')
 		expect(stage({ status: 'failed' }, { protected: false })).toBe('Failed without waiting for approval')
 	})
+
+	test('a run a newer run superseded says so, approved or not', () => {
+		const stage = (rest: Partial<ApprovalDto>) => approvalStage({ ...APPROVAL, ...rest, run: { ...RUN, status: 'failed' } })
+		expect(stage({ approval: approved, supersededBy: 'run-2' })).toEqual({
+			lamp: 'stop',
+			text: 'Approved, then superseded: a newer run published first, so this one did not deploy',
+		})
+		expect(stage({ outcome: 'no-widening', supersededBy: 'run-2' }).text).toBe('Superseded: a newer run published first, so this one did not deploy')
+	})
 })

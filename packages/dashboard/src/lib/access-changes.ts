@@ -111,9 +111,13 @@ export function approvalStage(approval: ApprovalDto): { readonly lamp: Lamp; rea
 		if (run.status === 'succeeded') return { lamp: 'ok', text: 'Published before the cancellation took effect' }
 		return { lamp: 'run', text: 'Cancelling' }
 	}
+	// An older run never deploys over a newer one: once a newer run published, this one fails before it starts (ADR-0050 §6).
+	if (approval.supersededBy !== undefined) {
+		return { lamp: 'stop', text: `${approved ? 'Approved, then superseded' : 'Superseded'}: a newer run published first, so this one did not deploy` }
+	}
 	if (run.status === 'awaiting_approval') {
 		return approval.approval?.holds === false
-			? { lamp: 'stop', text: 'Approval lapsed: the environment published another change first, and this one still widens access against it' }
+			? { lamp: 'stop', text: 'Approval lapsed: an older run published another change first, and this one still widens access against it' }
 			: { lamp: 'run', text: 'Waiting for a decision' }
 	}
 	if (!approved) return unapproved(approval)

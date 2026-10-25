@@ -443,8 +443,9 @@ never from the words of a line:
   the same facts, unordered.
 - **A run says where it stands.** Approval and publication are two steps (section 2): an approved run is
   queued again and classified once more before it publishes. The page shows which of these holds: approved and waiting
-  to run; published; or the approval lapsed, because the environment published another change first and the change
-  still widens against it, so the run waits for a new approval. A refused or cancelled run says so, and so does a run
+  to run; published; the approval lapsed, because an older run published another change first and the change still
+  widens against it, so the run waits for a new approval; or superseded, because a newer run published first, and an
+  older run never deploys over it (section 6). A refused or cancelled run says so, and so does a run
   that published before its cancellation took effect. A run that never waited, because its change does not widen or
   its environment is not protected, says it published without waiting for approval. Parking a run again
   keeps the approval it held: it names the digests it approved, so it approves nothing the new classification shows,

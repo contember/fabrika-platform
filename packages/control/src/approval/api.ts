@@ -39,9 +39,14 @@ export async function listApprovalsUseCase(c: ApprovalUseCaseContext): Promise<L
 }
 
 export async function getApprovalUseCase(c: ApprovalUseCaseContext, runId: string): Promise<ApprovalDto> {
-	const approval = toApprovalDto(await requireClassifiedRun(c, runId))
+	const run = await requireClassifiedRun(c, runId)
+	const approval = toApprovalDto(run)
 	const crossOrigins = await pendingCrossOrigins(c, approval)
-	return crossOrigins === undefined ? approval : { ...approval, crossOrigins }
+	return {
+		...approval,
+		...(crossOrigins === undefined ? {} : { crossOrigins }),
+		...(run.superseded_by === null ? {} : { supersededBy: run.superseded_by }),
+	}
 }
 
 /**

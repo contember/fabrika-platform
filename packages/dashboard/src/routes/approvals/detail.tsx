@@ -475,7 +475,8 @@ function Decision({ approval, onDone }: { approval: ApprovalDto; onDone: () => v
 			<section>
 				<p className="hint">
 					Approving deploys this change to{' '}
-					<strong>{approval.run.env}</strong>. It holds only for the lines above: if the environment publishes another change first, the run waits again.
+					<strong>{approval.run.env}</strong>. It holds only for the lines above: if an older run publishes another change first, this one waits again, and
+					once a newer run publishes, this one does not deploy.
 				</p>
 				<div className="row-actions">
 					<button type="button" className="primary" disabled={busy} onClick={() => void decide('approve')}>
