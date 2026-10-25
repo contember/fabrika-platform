@@ -319,8 +319,11 @@ The verification of the migration phase (ADR-0069 §3) is this rehearsal.
   migration request, then `open` at a new generation. A failed backup or rehearsal reopens the object and does not
   deploy. A migration is pending when one of the candidate's application migration files is missing from the object's
   ledger, which Control reads with `inspect`; the published snapshot proves nothing, because a published file has not
-  run while its version never booted. The rule applies once the version before the deploy was at a gated release too,
-  and an object that does not answer gets no deploy. The operation's deploy is the run's own. A deploy or a migration
+  run while its version never booted. The rule applies once the version running installed the ops channel, which
+  Control knows from the last succeeded deploy, not from the latest publication: a publication precedes the provider,
+  and a run that failed after it changed nothing that runs. A version without the channel (an older release, or a gated
+  one deployed without a domain) gets a plain deploy, and the object migrates on its cold start. An object whose
+  installed channel does not answer gets no deploy. The operation's deploy is the run's own. A deploy or a migration
   that fails leaves the object restricted, for a recovery.
 - **Opting out** stops the daily backup only. The pre-migration backup belongs to the migration phase and always runs.
 - An environment on an older release gets no backups, and the console says so.

@@ -39,6 +39,8 @@ export interface RunRow {
 	approval_json: string | null
 	/** The newer run whose success stopped this one before it started (ADR-0050 §6); NULL for every other run. */
 	superseded_by: string | null
+	/** Whether the version the run deploys installs the ops channel (0 or 1); NULL for a dry run and for older runs. */
+	ops_channel: number | null
 	// `pending_access_json` is no longer read or written; the column stays until a later migration release drops it.
 }
 
@@ -288,6 +290,28 @@ export class RunRepository {
 			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL
 				AND (commit_sha IS NULL OR LOWER(commit_sha) = ?)`,
 			[commitSha, id, commitSha],
+			fence,
+		)
+	}
+
+	/**
+	 * Whether the version the environment runs installed the ops channel, as its last succeeded deploy recorded it; a
+	 * failed run leaves it. `false` when no succeeded run recorded it.
+	 */
+	async deployedOpsChannel(input: { appId: string; env: string }): Promise<boolean> {
+		const row = await this.d1.prepare(`SELECT ops_channel FROM runs
+			WHERE app_id = ? AND env = ? AND status = 'succeeded' AND ops_channel IS NOT NULL
+			ORDER BY finished_at DESC, id DESC LIMIT 1`).bind(input.appId, input.env).first<{ ops_channel: number }>()
+		return row?.ops_channel === 1
+	}
+
+	/** Record whether the version the run deploys installs the ops channel. */
+	async recordRunOpsChannel(id: string, installs: boolean, fence: LeaseFence): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET ops_channel = ?
+			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL`,
+			[installs ? 1 : 0, id],
 			fence,
 		)
 	}

@@ -36,12 +36,16 @@ const TARGET: OpsTarget = { appId: APP, env: ENV }
 const KEY = runLeaseKey(APP, ENV)
 const FIRST = '20261025000000_notes.sql'
 const SECOND = '20261026000000_note_tags.sql'
+const THIRD = '20261027000000_note_links.sql'
+/** The health path of the contract an older release deploys, by which the provider double tells its access apart. */
+const OLDER_HEALTH = '/healthz-older'
 
 const vault = await createTestVault()
 
-/** The commit a run deploys: the contract and these application migrations. */
-function tree(migrations: readonly string[]): Record<string, string> {
-	const files: Record<string, string> = { 'fabrika.contract.ts': healthOnly(APP) }
+/** The commit a run deploys: the contract, an older release's when `older`, and these application migrations. */
+function tree(migrations: readonly string[], older = false): Record<string, string> {
+	const contract = older ? healthOnly(APP).replace("'/healthz'", `'${OLDER_HEALTH}'`) : healthOnly(APP)
+	const files: Record<string, string> = { 'fabrika.contract.ts': contract }
 	for (const name of migrations) files[`db/migrations/${name}`] = `CREATE TABLE t_${name.slice(15, -4)} (id TEXT PRIMARY KEY);`
 	return files
 }
@@ -150,15 +154,20 @@ for (const backend of backends) {
 				deploys: [] as { at: number; migrations: string[] }[],
 				reconciles: 0,
 				migrations: [FIRST],
+				/** The candidate is an older release, which the provider serves no ops channel at. */
+				older: false,
+				/** The provider refuses the deploy before accepting it. */
+				refuses: false,
 			}
 			const provider: ControlProvider = {
 				id: TEST_PROVIDER_ID,
 				normalizeRegistration: (input) => input,
 				source: { binding: 'connection' },
 				resolveSource: () => Promise.resolve({ commitSha: 'a'.repeat(40) }),
-				opsChannel: () => state.serves,
+				opsChannel: (access) => state.serves && !JSON.stringify(access.contract).includes(OLDER_HEALTH),
 				deploy: async (input) => {
 					holders.push(await holder())
+					if (state.refuses) throw new Error('the provider refused the deploy')
 					state.deploys.push({ at: fake.requests().length, migrations: [...state.migrations] })
 					await input.events.externalId(`${input.runId}-external`)
 					// The release now running bundles the deployed migrations; it applies them on a `migrate` request.
@@ -178,7 +187,7 @@ for (const backend of backends) {
 				provider,
 				logs: store,
 				runLogs: store,
-				commits: memoryCommits(tree(state.migrations)),
+				commits: memoryCommits(tree(state.migrations, state.older)),
 				opsKeys: new VaultOpsKeys(b.repositories.opsKeys, () => Promise.resolve(vault)),
 				ops: fake,
 			})
@@ -371,7 +380,49 @@ for (const backend of backends) {
 			expect(await operations()).toEqual([])
 		})
 
-		test('an object that does not answer inspect gets no unguarded deploy, and the run says why', async () => {
+		test('a downgrade that published and then failed before the provider leaves the next migrating deploy guarded', async () => {
+			const { b, fake, state, deps, run, deployFirst, timeline, operations } = await open()
+			await deployFirst()
+			// The older release's snapshot is published, but no provider accepted it: the object still runs the gated one.
+			state.older = true
+			state.refuses = true
+			const downgrade = await run()
+			expect(await executeDeploy(deps(), { runId: downgrade })).toEqual({ runId: downgrade, status: 'failed' })
+			expect(fake.requests()).toEqual([])
+			const published = await b.repositories.registry.getAppEnv(APP, ENV)
+			expect(published?.published_run_id).toBe(downgrade)
+			expect(published?.published_snapshot_json).toContain(OLDER_HEALTH)
+			state.older = false
+			state.refuses = false
+			state.deploys.length = 0
+			state.migrations = [FIRST, SECOND]
+			const upgrade = await run()
+			expect(await executeDeploy(deps(), { runId: upgrade })).toEqual({ runId: upgrade, status: 'succeeded' })
+			expect(timeline()).toEqual(['inspect', ...backupAndRehearsal(1), 'deploy', 'migrate @1', 'state application open @2'])
+			expect(await operations()).toMatchObject([{ kind: 'migrate', state: 'succeeded', run_id: upgrade }])
+		})
+
+		test('a domain added to a gated environment: the next migrating deploy is plain and installs the channel, the one after is guarded', async () => {
+			const { b, fake, state, deps, run, timeline, operations } = await open({ domain: null })
+			const first = await run()
+			expect(await executeDeploy(deps(), { runId: first })).toEqual({ runId: first, status: 'succeeded' })
+			await b.db.prepare('UPDATE app_envs SET domain = ? WHERE app_id = ? AND env = ?').bind('crm.example.com', APP, ENV).run()
+			// The running version has no channel to answer `inspect`: the deploy is plain, and the object migrates on boot.
+			state.migrations = [FIRST, SECOND]
+			const plain = await run()
+			expect(await executeDeploy(deps(), { runId: plain })).toEqual({ runId: plain, status: 'succeeded' })
+			expect(fake.requests()).toEqual([])
+			expect(await operations()).toEqual([])
+			fake.ledger = [FIRST, SECOND].map((name) => ({ bundle: 'app', name, checksum: 'a'.repeat(64), appliedAt: '2027-01-14T08:00:00.000Z' }))
+			state.deploys.length = 0
+			state.migrations = [FIRST, SECOND, THIRD]
+			const guarded = await run()
+			expect(await executeDeploy(deps(), { runId: guarded })).toEqual({ runId: guarded, status: 'succeeded' })
+			expect(timeline()).toEqual(['inspect', ...backupAndRehearsal(1), 'deploy', 'migrate @1', 'state application open @2'])
+			expect(fake.ledger.map((row) => row.name)).toEqual([FIRST, SECOND, THIRD])
+		})
+
+		test('an installed channel whose object does not answer inspect gets no unguarded deploy, and the run says why', async () => {
 			const { b, fake, state, deps, run, log, deployFirst, operations } = await open()
 			await deployFirst()
 			state.deploys.length = 0

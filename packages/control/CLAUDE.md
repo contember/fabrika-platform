@@ -413,10 +413,13 @@ other environment, before the provider prepares anything, and the write maps a r
   `data.manage`; `data.read` lists its backups, one older than 30 days as expired. `data.start` with kind `backup` still
   answers 501.
 - **A deploy that brings a pending application migration is a `migrate` data operation (`startMigration`, driven from
-  `deployUnder`; ADR-0069 §3, ADR-0070 §8).** Once the run published its snapshot, a deploy with a domain at a release the
-  provider serves the ops channel at, whose environment's version before it was served the channel too, compares the
-  candidate's bundled migration files (`.sql` directly in `db/migrations`) with the object's ledger from `inspect`
-  (`pendingMigrations`), never with the published snapshot. An object that does not answer, or an installation without
+  `deployUnder`; ADR-0069 §3, ADR-0070 §8).** Every non-dry run records `runs.ops_channel`: whether the version it
+  deploys installs the channel (a domain, at a release the provider serves the channel at). Once the run published its
+  snapshot, a deploy that installs the channel, where the environment's last succeeded run recorded it installed too
+  (`deployedOpsChannel`; never the published snapshot, which precedes the provider and survives a failed run), compares
+  the candidate's bundled migration files (`.sql` directly in `db/migrations`) with the object's ledger from `inspect`
+  (`pendingMigrations`). Without an installed channel the deploy is plain and the object migrates on its cold start, as
+  on the first upgrade onto a gated release. An installed channel that does not answer, or an installation without
   `RunDeps.ops`, fails the run before any provider effect. A pending file makes the run's own invocation drive the
   operation under the run's lease: `restrict` (`read-only`), `backup` and `verify` at that generation (a backup record
   with `pre_migration = 1`, rehearsed while the object stays restricted), `deploy` (the run's own deploy; a provider that

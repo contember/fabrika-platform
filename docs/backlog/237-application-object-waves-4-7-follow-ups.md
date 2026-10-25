@@ -65,6 +65,13 @@ item 1 needs an oblaka release first.
     re-arm or a kick for later written by a crontab run (`runContractJob` has no timer) or by a container that stopped
     runs up to 60 s after its due. Decide whether 60 s is the contract, or how a write elsewhere reaches the timer.
 
+**Migrations before a deploy.**
+
+17. A `migrate` operation that failed (`deploy_failed`, `migration_failed`) leaves the object restricted, and
+    `data.recover` offers only `open` for a failed operation. No retry keeps the restriction: an operator who wants the
+    migration run again before the object opens has nothing to call. Fix idea: a recovery resolution that resumes a
+    failed `migrate` operation at its `deploy` or `migrate` step under a fresh fence.
+
 ## Approach / acceptance
 
 Each item lands with a witness that fails before it. Items 1, 9, 11 and 14 need a decision first; item 1 also an oblaka
