@@ -9,12 +9,14 @@
 // case asks and removes once it is over; `files` the file of the repository each generated case sends in a file field
 // (a package a handler inspects), by input field, relative to the application's root; `refusals` the error types of the
 // 400s an endpoint's handler answers its own object with when no fixture can meet its domain rule, which the kit then
-// counts as the handler's answer.
+// counts as the handler's answer; `pins` known values of text columns of the row an endpoint addresses (a skill's slug a
+// package must name), the own scope's, which the kit writes there instead of a marker.
 // Read from source, never executed, within the reader's budget: `export const fixtures = { '<endpoint id>': { … } }`,
 // `export const seeds = { '<endpoint id>': { <column>: <value> } }`, `export const members = { '<endpoint id>':
 // ['<field>'] }` (`invitations`, `links` alike), `export const rows = { '<endpoint id>': { <field>: '<table>' } }` and
 // `export const appRows = { '<endpoint id>': { <table>: { <column>: <value> } } }`, `export const files = { '<endpoint
-// id>': { <field>: '<path>' } }` and `export const refusals = { '<endpoint id>': ['<error type>'] }`, plain literals only.
+// id>': { <field>: '<path>' } }`, `export const refusals = { '<endpoint id>': ['<error type>'] }` and `export const pins
+// = { '<endpoint id>': { <column>: '<value>' } }`, plain literals only.
 // Browser-safe.
 
 import { type AstNode, child, children, identifierName, nodeDepth, parseModule, positionOf, staticKey, staticString } from './ast'
@@ -32,6 +34,7 @@ export const ROWS_EXPORT = 'rows'
 export const APP_ROWS_EXPORT = 'appRows'
 export const FILES_EXPORT = 'files'
 export const REFUSALS_EXPORT = 'refusals'
+export const PINS_EXPORT = 'pins'
 
 /** The exports that list strings by endpoint id: the input fields the kit fills with something it holds, and the refusals. */
 const FIELD_EXPORTS = [MEMBERS_EXPORT, INVITATIONS_EXPORT, LINKS_EXPORT, REFUSALS_EXPORT] as const
@@ -39,7 +42,7 @@ type FieldExport = (typeof FIELD_EXPORTS)[number]
 const isFieldExport = (name: string | undefined): name is FieldExport => FIELD_EXPORTS.some((field) => field === name)
 
 const ALLOWED =
-	"export const fixtures = { 'api.notes.get': { id: '…' } }, export const seeds = { 'api.deals.reopen': { stage: 'won' } }, export const members = { 'api.deals.assign': ['ownerId'] }, export const invitations = { 'api.members.cancel': ['invitationId'] }, export const links = { 'api.notes.unshare': ['linkId'] }, export const rows = { 'api.notes.editComment': { commentId: 'note_comments' } }, export const appRows = { 'portal.guide': { guides: { active: true } } }, export const files = { 'api.skills.publish': { package: 'src/__tests__/fixtures/skill.zip' } } and export const refusals = { 'api.skills.publish': ['skill_frontmatter'] }: string keys, and strings, numbers, booleans, null, arrays and objects"
+	"export const fixtures = { 'api.notes.get': { id: '…' } }, export const seeds = { 'api.deals.reopen': { stage: 'won' } }, export const members = { 'api.deals.assign': ['ownerId'] }, export const invitations = { 'api.members.cancel': ['invitationId'] }, export const links = { 'api.notes.unshare': ['linkId'] }, export const rows = { 'api.notes.editComment': { commentId: 'note_comments' } }, export const appRows = { 'portal.guide': { guides: { active: true } } }, export const files = { 'api.skills.publish': { package: 'src/__tests__/fixtures/skill.zip' } }, export const refusals = { 'api.skills.publish': ['skill_frontmatter'] } and export const pins = { 'api.skills.publish': { slug: 'sample-skill' } }: string keys, and strings, numbers, booleans, null, arrays and objects"
 
 type ById = Readonly<Record<string, Readonly<Record<string, Sample>>>>
 
@@ -62,6 +65,8 @@ export interface EndpointFixtures {
 	readonly files: Readonly<Record<string, Readonly<Record<string, string>>>>
 	/** The error types of the 400s an endpoint's handler may answer its own object with, by endpoint id. */
 	readonly refusals: Readonly<Record<string, readonly string[]>>
+	/** The own scope's value of each pinned text column of the row the endpoint addresses, by endpoint id. */
+	readonly pins: Readonly<Record<string, Readonly<Record<string, string>>>>
 }
 
 export const NO_FIXTURES: EndpointFixtures = {
@@ -74,6 +79,7 @@ export const NO_FIXTURES: EndpointFixtures = {
 	appRows: {},
 	files: {},
 	refusals: {},
+	pins: {},
 }
 
 /**
@@ -184,6 +190,15 @@ function fieldsById(
 	return { ok: true, value: entries }
 }
 
+/** Each entry's string values, by endpoint id: what `rows`, `files` and `pins` hold once checked. */
+const stringsById = (byIdValue: ById): Readonly<Record<string, Readonly<Record<string, string>>>> =>
+	Object.fromEntries(
+		Object.entries(byIdValue).map(([id, named]) => [
+			id,
+			Object.fromEntries(Object.entries(named).flatMap(([key, item]) => (typeof item === 'string' ? [[key, item]] : []))),
+		]),
+	)
+
 /** The fixtures of `files`, by endpoint id; none without the file. */
 export function readEndpointFixtures(
 	files: ReadonlyMap<string, string>,
@@ -209,7 +224,7 @@ export function readEndpointFixtures(
 		if (
 			statement?.type !== 'ExportNamedDeclaration' || declarator === null || declarator === undefined
 			|| (name !== FIXTURES_EXPORT && name !== SEEDS_EXPORT && name !== ROWS_EXPORT && name !== APP_ROWS_EXPORT && name !== FILES_EXPORT
-				&& !isFieldExport(name))
+				&& name !== PINS_EXPORT && !isFieldExport(name))
 			|| read.has(name)
 			|| (isFieldExport(name) && fields.has(name))
 		) {
@@ -218,7 +233,7 @@ export function readEndpointFixtures(
 				findings: [
 					finding(
 						statement ?? undefined,
-						`the file holds export const ${FIXTURES_EXPORT}, ${SEEDS_EXPORT}, ${MEMBERS_EXPORT}, ${INVITATIONS_EXPORT}, ${LINKS_EXPORT}, ${ROWS_EXPORT}, ${APP_ROWS_EXPORT}, ${FILES_EXPORT} and ${REFUSALS_EXPORT} = { … }, each at most once`,
+						`the file holds export const ${FIXTURES_EXPORT}, ${SEEDS_EXPORT}, ${MEMBERS_EXPORT}, ${INVITATIONS_EXPORT}, ${LINKS_EXPORT}, ${ROWS_EXPORT}, ${APP_ROWS_EXPORT}, ${FILES_EXPORT}, ${REFUSALS_EXPORT} and ${PINS_EXPORT} = { … }, each at most once`,
 					),
 				],
 			}
@@ -241,6 +256,14 @@ export function readEndpointFixtures(
 			const named = Object.entries(value.value).find(([, fields]) => Object.values(fields).some((path) => typeof path !== 'string'))
 			if (named !== undefined) {
 				return { ok: false, findings: [finding(child(declarator, 'init'), `the files of ${named[0]} name each field's file as a path string`)] }
+			}
+		}
+		if (name === PINS_EXPORT) {
+			const named = Object.entries(value.value).find(([, columns]) =>
+				Object.values(columns).some((pinned) => typeof pinned !== 'string' || pinned === '')
+			)
+			if (named !== undefined) {
+				return { ok: false, findings: [finding(child(declarator, 'init'), `the pins of ${named[0]} give each column a non-empty string`)] }
 			}
 		}
 		if (name === APP_ROWS_EXPORT) {
@@ -272,6 +295,7 @@ export function readEndpointFixtures(
 					Object.fromEntries(Object.entries(tables).flatMap(([table, columns]) => (isSampleObject(columns) ? [[table, columns]] : []))),
 				]),
 			),
+			pins: stringsById(read.get(PINS_EXPORT) ?? {}),
 			files: Object.fromEntries(
 				Object.entries(read.get(FILES_EXPORT) ?? {}).map(([id, named]) => [
 					id,

@@ -357,9 +357,16 @@ const kitOptions = (fixtures: EndpointFixtures, tested: ReadonlySet<string>): st
 		const valid = types.filter(isDeclarableRefusal)
 		return tested.has(id) && valid.length > 0 ? [`${quote(id)}: [${valid.map(quote).join(', ')}]`] : []
 	})
+	const pins = Object.entries(fixtures.pins).sort(byKey).flatMap(([id, columns]) => {
+		const entries = Object.entries(columns).sort(byKey)
+		return tested.has(id) && entries.length > 0
+			? [`${quote(id)}: { ${entries.map(([column, value]) => `${renderKey(column)}: ${quote(value)}`).join(', ')} }`]
+			: []
+	})
 	const options = [
 		...(files.length === 0 ? [] : [`files: { ${files.join(', ')} }`]),
 		...(refusals.length === 0 ? [] : [`refusals: { ${refusals.join(', ')} }`]),
+		...(pins.length === 0 ? [] : [`pins: { ${pins.join(', ')} }`]),
 	]
 	return options.length === 0 ? '' : `, { ${options.join(', ')} }`
 }
@@ -849,6 +856,16 @@ export const missingEndpointFixtures = ({ tables, policies, artifact, fixtures }
 	}
 	const seeded = (row: EndpointRow): boolean =>
 		row.requirement?.kind === 'action' && (row.requirement.access.form === 'on' || row.requirement.access.form === 'in')
+	for (const id of Object.keys(fixtures.pins).sort()) {
+		if (!tested.some((row) => row.id === id && (seeded(row) || isLinkProcedure(row)))) {
+			findings.push(
+				at(
+					`${id} is no endpoint with an on or in access form, whose row a pin sets`,
+					"export const pins = { '<endpoint id>': { <text column>: '<value>' } }",
+				),
+			)
+		}
+	}
 	for (const id of Object.keys(fixtures.seeds).sort()) {
 		if (!tested.some((row) => row.id === id && seeded(row))) {
 			findings.push(

@@ -35,7 +35,12 @@ afterAll(async () => {
 /** What the handler accepts: a PDF whose text says it is a valid document. */
 const VALID = '%PDF-1.7\nvalid document\n'
 
-function packagesApp() {
+/**
+ * The fixture application. `titled` accepts only a document that names its note's title, as a package names its
+ * skill's slug; `leaky` makes it answer the title of the note it read before, the other scope's on a leak case.
+ */
+function packagesApp(leaky = false) {
+	let lastTitle: string | null = null
 	const app = defineApp(vocabulary, tables)
 	const notes = app.group({ callers: ['human'] }, (r) => ({
 		attach: r.mutation({
@@ -50,6 +55,21 @@ function packagesApp() {
 				throw new HttpError(400, 'document_invalid', 'the document is not a valid one')
 			}
 			return added
+		}),
+		titled: r.mutation({
+			input: z.strictObject({ id: z.uuid(), file: file('attachments') }),
+			output: z.strictObject({ id: z.uuid(), title: z.string() }),
+			access: { action: 'notes.write', on: 'note', from: 'id' },
+		}).handle(async ({ input, ctx }) => {
+			const { title } = await ctx.db.target.get()
+			const answered = leaky && lastTitle !== null ? lastTitle : title
+			lastTitle = title
+			const added = await ctx.db.target.note_attachments.insert({ file: input.file })
+			const opened = await ctx.files.open(input.file)
+			if (new TextDecoder().decode(opened.bytes) !== `%PDF-1.7\n${title}\n`) {
+				throw new HttpError(400, 'title_mismatch', 'the document names another note')
+			}
+			return { id: added.id, title: answered }
 		}),
 	}))
 	const contract = app.contract((c) => ({
@@ -87,6 +107,33 @@ describe('the file fixtures of the endpoint access kit', () => {
 		expect(await kit.denied('api.notes.attach', INPUT)).toEqual({ status: 404 })
 		const other = endpointAccessKit(packagesApp(), tables, database, { refusals: { 'api.notes.attach': ['package_invalid'] } })
 		await expect(other.own('api.notes.attach', INPUT)).rejects.toThrow("the handler refused the case's input (400 document_invalid)")
+	})
+
+	test("a pin gives the own scope's row the value the file names, and the other scope's a distinct one a leak shows", async () => {
+		const path = join(directory, 'titled.pdf')
+		writeFileSync(path, '%PDF-1.7\nQuarterly report\n')
+		const options = {
+			files: { 'api.notes.titled': { file: pathToFileURL(path) } },
+			pins: { 'api.notes.titled': { title: 'Quarterly report' } },
+			refusals: { 'api.notes.titled': ['title_mismatch'] },
+		}
+		const kit = endpointAccessKit(packagesApp(), tables, database, options)
+		expect(await kit.own('api.notes.titled', INPUT)).toEqual({ status: 200 })
+		expect(await kit.leaked('api.notes.titled', INPUT)).toEqual({ answered: true, leaked: [] })
+		expect(await kit.denied('api.notes.titled', INPUT)).toEqual({ status: 404 })
+		// The other scope's row holds `Quarterly report-other`, which the leaky handler answers the own scope with.
+		const leaky = endpointAccessKit(packagesApp(true), tables, database, options)
+		expect(await leaky.leaked('api.notes.titled', INPUT)).toEqual({ answered: true, leaked: ['Quarterly report-other'] })
+		// Without the refusal the other scope's first request, which its own pin refuses, fails the case.
+		const undeclared = endpointAccessKit(packagesApp(), tables, database, { ...options, refusals: {} })
+		await expect(undeclared.leaked('api.notes.titled', INPUT)).rejects.toThrow("the handler refused the case's input (400 title_mismatch)")
+	})
+
+	test("a pin sets only a text column of the row's own state", async () => {
+		const worlds = await database.seedWorlds(tables, 'notes', {}, { title: 'Pinned' })
+		expect([worlds.own.markers.includes('Pinned'), worlds.other.markers.includes('Pinned-other')]).toEqual([true, true])
+		await expect(database.seedWorlds(tables, 'notes', {}, { workspace_id: 'w' })).rejects.toThrow('places the row in its scope')
+		await expect(database.seedWorlds(tables, 'note_documents', {}, { file: 'x' })).rejects.toThrow('holds no text marker')
 	})
 
 	test('a file the kit cannot read, or of none of the kind’s types, throws and names the file', async () => {

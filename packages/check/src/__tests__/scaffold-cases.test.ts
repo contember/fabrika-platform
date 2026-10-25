@@ -93,6 +93,7 @@ describe('the endpoint access cases of a kit application', () => {
 			appRows: {},
 			files: {},
 			refusals: {},
+			pins: {},
 		})
 		expect(read("export const rows = { 'api.notes.get': { commentId: 'note_comments' } }\n").rows).toEqual({
 			'api.notes.get': { commentId: 'note_comments' },
@@ -364,5 +365,31 @@ describe('the refusals of the fixtures: the 400s a handler may answer its own ob
 		expect(() => read("export const refusals = { 'api.notes.upload': 'a' }\n")).toThrow()
 		expect(() => read("export const refusals = { 'api.notes.upload': [] }\n")).toThrow()
 		expect(() => read('export const refusals = {}\nexport const refusals = {}\n')).toThrow()
+	})
+})
+
+describe('the pins of the fixtures: known values of text columns of the row an endpoint addresses', () => {
+	const FILES_ROOT = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'fixtures', 'kit-files')
+	const withFixtures = (text: string) => new Map([...tree(FILES_ROOT), [ENDPOINT_FIXTURES_FILE, text]])
+	const findings = (text: string) => missingEndpointFixtures(scaffoldInputs(withFixtures(text))).map((finding) => finding.message)
+
+	test('the kit of the generated test gets them, and the cases stay as they were', async () => {
+		const text = await endpointTest(withFixtures("export const pins = { 'api.notes.upload': { title: 'Quarterly report' } }\n"))
+		expect(text).toContain("const kit = endpointAccessKit(app, tables, postgres, { pins: { 'api.notes.upload': { title: 'Quarterly report' } } })")
+		expect(text).toContain(
+			"expect(await kit.own('api.notes.upload', { file: 'fabrika:file:documents', id: '00000000-0000-4000-8000-000000000000' })).toEqual({ status: 200 })",
+		)
+		expect(findings("export const pins = { 'api.notes.upload': { title: 'Quarterly report' } }\n")).toEqual([])
+	})
+
+	test('a pin of an endpoint without an addressed row is a finding; a pin is a non-empty string, declared once', () => {
+		expect(findings("export const pins = { 'api.notes.missing': { title: 'x' } }\n")).toEqual([
+			'api.notes.missing is no endpoint with an on or in access form, whose row a pin sets',
+		])
+		const read = (text: string) => scaffoldInputs(withFixtures(text)).fixtures.pins
+		expect(read("export const pins = { 'api.notes.upload': { title: 'x' } }\n")).toEqual({ 'api.notes.upload': { title: 'x' } })
+		expect(() => read("export const pins = { 'api.notes.upload': { title: 1 } }\n")).toThrow()
+		expect(() => read("export const pins = { 'api.notes.upload': { title: '' } }\n")).toThrow()
+		expect(() => read('export const pins = {}\nexport const pins = {}\n')).toThrow()
 	})
 })
