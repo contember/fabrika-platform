@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/iam-contract",
-	"version": "0.9.0-cloudflare.1",
+	"version": "0.9.0-cloudflare.2",
 	"type": "module",
 	"repository": {
 		"type": "git",
