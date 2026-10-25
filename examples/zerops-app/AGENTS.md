@@ -292,7 +292,8 @@ one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`reference
 object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
 The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
 object's transaction, so its `limits.timeoutMs` is at most 25 s. No `sql` (`ctx.sql`) and no `scan: true`: the
-checker, the deploy and the boot refuse both.
+checker, the deploy and the boot refuse both. The deploy serves each SPA mount's built `dir` itself; declare no
+`assets` on the Worker (`references/app-setup.md`).
 
 The object runs one transaction at a time, so every `await` in a handler that may write holds the whole environment:
 IAM, R2, a `fetch`, a `ctx.connect` call, a binding. One 2 s call caps the environment at half a request a second. A
@@ -602,6 +603,22 @@ The platform's build runs the tests, writes the entrypoint, runs `fabrika-check`
 run `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server starts: a
 version does not go live until every generated test passes. It writes every `FABRIKA_*` variable; never set one.
 
+## The deploy surface (Cloudflare)
+
+On Cloudflare `fabrika.config.ts` imports `defineApp`, `Worker` and `iamServiceReference` from
+`@fabrika/provider-cloudflare`, and `resources` returns the application Worker: `main: './fabrika/entry.generated.ts'`,
+`workers_dev: false`, `preview_urls: false`, `routes: []` and `bindings: { IAM: iamServiceReference() }`, with
+`pipeline: { workerDir: '.', build: 'bun run build:web' }` when the application has an SPA. The deploy adds the
+Durable Object, the files bucket, the minute tick, every `FABRIKA_*` variable and the proxy Worker.
+
+It also serves the SPA: when the Worker declares no `assets`, the deploy copies the build directory of each SPA and
+link mount (`dir`, a link's `spa`) into `fabrika/assets/` at the mount's prefix (`/admin` into `fabrika/assets/admin/`)
+after `pipeline.build`, and binds it as `ASSETS`. A deploy whose mount directory the build did not write fails and
+names the mount. Do not declare `assets` yourself. A Worker that declares them keeps them, and the object reads each
+request path from that directory as it is (`/admin/app.js` is `admin/app.js` there), so a hand-written `assets` works
+only for a root mount, or for mounts whose directories nest like their prefixes; it needs `binding: 'ASSETS'` and
+`run_worker_first: true`.
+
 ## The SPA (added when the application has one)
 
 The SPA is React, built from the screens and hooks of the framework: `@fabrika/app/react` runs the typed client's
@@ -750,7 +767,8 @@ await Bun.write(
 
 ## Ignored files
 
-`.gitignore`: `node_modules/`, `fabrika.manifest.json`, `/fabrika/entry.generated.ts`, `/dist/`.
+`.gitignore`: `node_modules/`, `fabrika.manifest.json`, `/fabrika/entry.generated.ts`, `/dist/`, and on Cloudflare
+`/fabrika/assets/`, where a deploy stages the SPA's files.
 
 ---
 
@@ -1663,32 +1681,32 @@ architecture, and a refusal's allowed form is the one fix that passes. There is 
 
 The refusals agents meet most, and their fix:
 
-| Rule                           | Means                                                                                                                                                            | Fix                                                                                       |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `literal`                      | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                                                                         | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)`    |
-| `contract`                     | the contract does not compile (a reserved role, an unknown action, a wrong field)                                                                                | the message names the field                                                               |
-| `package-replacement`          | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                                                                | another name; a registry range such as `^0.0.4`                                           |
-| `generated-test-hash`          | a generated test is missing, edited or stale                                                                                                                     | `bunx fabrika db test-scaffold`, and commit what it writes                                |
-| `endpoint-fixture`             | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member, invitation or link field no endpoint that reads, cancels or revokes one | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)          |
-| `raw-sql`                      | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                                                                       | the handles, or `sql: 'read'` and `ctx.sql`                                               |
-| `forbidden-import`             | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                                                                     | the handles, a file column with `ctx.files`, a connector                                  |
-| `forbidden-global`             | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` in a server module                                                        | the handles; state lives in a table, not in a global; `crypto.randomUUID()` for an id     |
-| `env-read`                     | `process.env`, `Bun.env`                                                                                                                                         | `defineDeps(build)`, which receives the application's variables                           |
-| `client-identity`              | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                                                                       | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy                |
-| `type-assertion`               | `as T` (other than `as const`), `<T>x`                                                                                                                           | fix the type; `fromRow` parses a row into a schema's type                                 |
-| `sensitive-log`                | a log of an error object, a request, headers or the environment                                                                                                  | log a short fixed message                                                                 |
-| `migration-name`               | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                                                            | `bunx fabrika db new <slug>`                                                              |
-| `test-only-import`             | `@fabrika/app/testing`, `@fabrika/app/react/testing`, `@fabrika/db/testing` or `@fabrika/db/testing-sqlite` outside a test file                                  | import them only from `*.test.ts` or `__tests__/`                                         |
-| `spa-server-import`            | the SPA loads a server module                                                                                                                                    | the SPA imports `@fabrika/app/client`, the contract, `src/schemas.ts` and `src/shared/`   |
-| `shared-import`                | a module under `src/shared/` loads a slice, `src/db/`, `@fabrika/*` or a builtin                                                                                 | a shared module imports `zod/v4` and other shared modules only                            |
-| `skipped-test`                 | `.skip`, `.only`, `.todo`                                                                                                                                        | run the test                                                                              |
-| `file-column-migration`        | a file column without `REFERENCES fabrika_files (id)` or without an index it leads                                                                               | both, in a new migration (`references/table-and-migration.md`)                            |
-| `on-conflict-index`            | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                                 | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns |
-| `cross-app-fetch`              | a `fetch` of an absolute URL under no origin a site declares in `egress`                                                                                         | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)              |
-| `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                                             | the endpoint id `<mount>.<group>.<procedure>`                                             |
-| `cloudflare-sql`               | on Cloudflare, a site that declares `sql`                                                                                                                        | the handles (`ctx.db`), without `sql`                                                     |
-| `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                                     | the kind without `scan`, and no public procedure that takes its files                     |
-| `cloudflare-current-timestamp` | on Cloudflare, `DEFAULT CURRENT_TIMESTAMP` in a migration: SQLite stores `YYYY-MM-DD HH:MM:SS`, which every read of the table refuses                            | `DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, in a new migration                     |
+| Rule                           | Means                                                                                                                                                                                                                                                     | Fix                                                                                       |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `literal`                      | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                                                                                                                                                                  | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)`    |
+| `contract`                     | the contract does not compile (a reserved role, an unknown action, a wrong field)                                                                                                                                                                         | the message names the field                                                               |
+| `package-replacement`          | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                                                                                                                                                         | another name; a registry range such as `^0.0.4`                                           |
+| `generated-test-hash`          | a generated test is missing, edited or stale                                                                                                                                                                                                              | `bunx fabrika db test-scaffold`, and commit what it writes                                |
+| `endpoint-fixture`             | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, a member, invitation or link field no endpoint that reads, cancels or revokes one, a file names no file field or a path outside the application, or a refusal is `validation` | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)          |
+| `raw-sql`                      | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                                                                                                                                                                | the handles, or `sql: 'read'` and `ctx.sql`                                               |
+| `forbidden-import`             | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                                                                                                                                                              | the handles, a file column with `ctx.files`, a connector                                  |
+| `forbidden-global`             | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` in a server module                                                                                                                                                 | the handles; state lives in a table, not in a global; `crypto.randomUUID()` for an id     |
+| `env-read`                     | `process.env`, `Bun.env`                                                                                                                                                                                                                                  | `defineDeps(build)`, which receives the application's variables                           |
+| `client-identity`              | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                                                                                                                                                                | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy                |
+| `type-assertion`               | `as T` (other than `as const`), `<T>x`                                                                                                                                                                                                                    | fix the type; `fromRow` parses a row into a schema's type                                 |
+| `sensitive-log`                | a log of an error object, a request, headers or the environment                                                                                                                                                                                           | log a short fixed message                                                                 |
+| `migration-name`               | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                                                                                                                                                     | `bunx fabrika db new <slug>`                                                              |
+| `test-only-import`             | `@fabrika/app/testing`, `@fabrika/app/react/testing`, `@fabrika/db/testing` or `@fabrika/db/testing-sqlite` outside a test file                                                                                                                           | import them only from `*.test.ts` or `__tests__/`                                         |
+| `spa-server-import`            | the SPA loads a server module                                                                                                                                                                                                                             | the SPA imports `@fabrika/app/client`, the contract, `src/schemas.ts` and `src/shared/`   |
+| `shared-import`                | a module under `src/shared/` loads a slice, `src/db/`, `@fabrika/*` or a builtin                                                                                                                                                                          | a shared module imports `zod/v4` and other shared modules only                            |
+| `skipped-test`                 | `.skip`, `.only`, `.todo`                                                                                                                                                                                                                                 | run the test                                                                              |
+| `file-column-migration`        | a file column without `REFERENCES fabrika_files (id)` or without an index it leads                                                                                                                                                                        | both, in a new migration (`references/table-and-migration.md`)                            |
+| `on-conflict-index`            | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                                                                                                                          | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns |
+| `cross-app-fetch`              | a `fetch` of an absolute URL under no origin a site declares in `egress`                                                                                                                                                                                  | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)              |
+| `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                                                                                                                                      | the endpoint id `<mount>.<group>.<procedure>`                                             |
+| `cloudflare-sql`               | on Cloudflare, a site that declares `sql`                                                                                                                                                                                                                 | the handles (`ctx.db`), without `sql`                                                     |
+| `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                                                                                                                              | the kind without `scan`, and no public procedure that takes its files                     |
+| `cloudflare-current-timestamp` | on Cloudflare, `DEFAULT CURRENT_TIMESTAMP` in a migration: SQLite stores `YYYY-MM-DD HH:MM:SS`, which every read of the table refuses                                                                                                                     | `DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, in a new migration                     |
 
 The hints:
 
@@ -5691,7 +5709,7 @@ longer writes. Commit them; never edit, format or import them (`generated-test-h
   `app` or `creates` endpoint refuses a holder of its action in one scope only (403) and answers a global holder. An
   endpoint of several `capabilities` adds a denied case per capability. A public procedure answers anyone without a
   credential, or, behind a challenge, refuses a caller without a solved one. A file input is sent as a generated file
-  of its kind; a `GET` procedure's input goes in its URL.
+  of its kind, or as the file the fixtures name (`files`, below); a `GET` procedure's input goes in its URL.
 - Their kit stands in for IAM, as `testKit` does (below): it creates a scope, assigns or invites a member and issues a
   link under IAM's rules for the caller's grants. A repeated invitation answers the open one, `resend` restarts its
   7 days, and an organization's address is refused for an external role (`internal_mailbox`). So the caller of an endpoint with the dimension's `members.manage`
@@ -5746,6 +5764,21 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   to another holds that row's key. A text column may be given; the key, the version, the creator and a file column may
   not (a file column holds a live, scanned file). Only application tables, and only for an endpoint with a leak or an
   own-object case: the checker refuses a table in a scope, which `rows` and `seeds` address (`endpoint-fixture`).
+- `files['<endpoint id>']` names, by file field, a file of the repository that every case of the endpoint sends there
+  instead of the generated one, a path from the application's root:
+  `export const files = { 'api.skills.publish': { package: 'src/__tests__/fixtures/skill.zip' } }`. Give one when the
+  handler inspects the content (a package it unpacks, a document it parses) and answers 400 to the generated file, which
+  has only the leading bytes of its type. Commit the file; keep it small and free of real data. The kit sends it with the
+  first type of the field's kind its bytes are, and a file it cannot read, or of none of those types, fails the case. The
+  checker refuses a field that holds no file and a path that leaves the application, starts with `.` or has characters
+  other than letters, digits, `_`, `-`, `.` and `/` (`endpoint-fixture`).
+- `refusals['<endpoint id>']` lists the error types of the 400s the endpoint's handler answers its own object with when
+  no fixture can meet its domain rule: `export const refusals = { 'api.skills.publish': ['skill_frontmatter'] }`, where
+  the package must name the skill's slug and the generated case's skill has a generated one. Such a 400 is the
+  handler's own answer, so the request passed the access form: the own case then passes on 200 or that 400, a leak
+  case counts it as answered, and the denial cases still expect 404 or 403. Declare one only after the fixtures above
+  cannot meet the rule, and keep the endpoint's own tests for the rule itself. Any other 400 still fails the case, and
+  the checker refuses `validation`, an input the schema refuses (`endpoint-fixture`).
 - The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).
 - The seed of the tests fills every text column with a marker and every other required column with a sample of its
   type: an enum's first label, `1`, `false`, today. A column with a `DEFAULT` keeps it (`status` is `open`). A column

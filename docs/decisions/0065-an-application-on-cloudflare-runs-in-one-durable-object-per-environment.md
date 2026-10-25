@@ -76,6 +76,13 @@ SQLite database. The Worker only forwards each request to it.**
    interactive transaction, serve every application of the installation, and keep D1's export, Time Travel and
    read replicas.
 
+9. **The SPA's files are Workers Assets the deploy stages.** Workers Assets gives a Worker one directory, and a
+   contract may declare several SPA and link mounts, each with a build directory of its own. When the application
+   Worker declares no `assets`, the deploy binds `ASSETS` to a directory beside its config and, after the
+   application's build, copies each mount's directory into it at the mount's prefix, the most specific mount owning a
+   path; the object asks the binding for the request path as it is, and for a path that names no file for the mount's
+   `index.html`. A Worker that declares its own `assets` keeps them.
+
 ## Consequences
 
 - The paved road runs on Cloudflare: `ctx.db`, jobs, kicks, webhooks, public procedures, files and signed tokens.
@@ -88,6 +95,10 @@ SQLite database. The Worker only forwards each request to it.**
 - Operators read an environment's data in the dashboard's Data Studio; there is no bulk export of an object's SQLite.
 - Local runs and tests need Lopata 0.30 or newer, which implements an object's `storage.transaction` over
   `bun:sqlite` and nests it as workerd does.
+- An application declares no `assets` for its SPA. An existing environment converges on its next deploy: a Worker
+  without `assets` gets the staged directory, and one whose committed config declares `assets` keeps serving from it.
+  The staged layout is the request path, which an older object asks for unchanged, so only the `index.html` of a deep
+  link needs the framework that asks for `<prefix>/`.
 - The object runs from framework 0.9. An application on an older release keeps its stateless Worker: Control names the
   release it read the application with, and the deployer gives that Worker no object, bucket, tick or hop secret, and
   refuses what it cannot run (jobs, webhooks, public procedures, installation mail, token purposes), as before
@@ -102,5 +113,8 @@ SQLite database. The Worker only forwards each request to it.**
   hop per statement; deferred, not rejected, for applications that already run a Postgres.
 - **The Worker handles the request and calls the object per domain operation.** Fewer round trips than per
   statement, but no transaction spans two calls, so the handler's transaction cannot be the object's.
+- **An `ASSETS` binding the application declares, which the checker or the deploy requires.** It cannot serve two
+  mounts with different directories from one Worker, and it leaves each application to repeat a line the contract
+  already implies.
 - **Placing the Worker next to its object.** Placement hints move a Worker towards a backend it calls, not towards a
   Durable Object, and do not affect a call to one.

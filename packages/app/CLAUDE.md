@@ -82,11 +82,11 @@ src/
     application.ts    FabrikaApplication, the environment's one Durable Object: verifies the hop, migrates its SQLite,
                       boots the application once per isolate, serves requests and the tick; registerApplication
     bindings.ts       the bindings the object boots with, read structurally: IAM (keys, membership, workload tokens),
-                      ASSETS, FABRIKA_CONNECT_<IMPORT>
+                      ASSETS (a mount's index for a path that names no file), FABRIKA_CONNECT_<IMPORT>
     r2-files.ts       r2FileObjectStore: the FileObjectStore port over the FABRIKA_FILES bucket (conditional puts,
                       multipart above R2_PART_BYTES, the etag as the version)
     names.ts          the class and binding names the provider shares: FabrikaApplication, FABRIKA_APPLICATION,
-                      FABRIKA_FILES (re-exported by @fabrika/app/build)
+                      FABRIKA_FILES, ASSETS (re-exported by @fabrika/app/build)
     ops.ts            Control's ops channel at the object (ADR-0069): authentication, the uniform refusal, the
                       inspect view read from storage alone
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract; the local `directory`
@@ -970,7 +970,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   `testKit` on a `scoped(tables)` layer of its own: it proves the policy, not the
   application. `endpointAccessKit` boots the application's own `serve(…)` through
   `standInIamKit`, once, because the application's layer binds once per process, with in-memory object
-  storage: `kit.file` seeds one file per scope through the real upload endpoint. Its cases are `denied` (exact 404/403),
+  storage: `kit.file` seeds one file per scope through the real upload endpoint. A case's file input is `sampleFile`'s file
+  of its kind (the type's leading bytes and a marker), or the author's file fixture (`EndpointAccessOptions.files`, by
+  endpoint and field, read once and typed by its bytes), for a handler that inspects the content. A 400 whose type the
+  author declares for the endpoint (`EndpointAccessOptions.refusals`, never `validation`) is the handler's answer and
+  comes back as the status; every other 400 throws. Its cases are `denied` (exact 404/403),
   `leaked` (`{ answered, leaked }`: answered unless a 401, 403, 404 or 5xx, so a precondition's 409 passes; `in`
   across every table that lies in the dimension), and `own` (a caller with only the endpoint's action, or a link
   holder, reaches its own object; on an endpoint that manages members, also on the target's value one assigning role
@@ -1031,9 +1035,13 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   again. For an application with a data layer, before the boot and for every later instance of the isolate, it applies `SQLITE_FRAMEWORK_MIGRATIONS` and the
   application's bundle through `migrateSqlite`, then binds the layer to `openSqlite` over a storage it resolves
   per event from the object's `AsyncLocalStorage` scope (the layer binds once; a statement outside any event throws),
-  so two objects in one isolate never share a database. It captures the environment without `IAM` and `ASSETS`, and boots with
+  so two objects in one isolate never share a database. It captures the environment without `IAM` and `ASSETS` (`CLOUDFLARE_ASSETS_BINDING`), and boots with
   `requireProxySecret`, `clientAddress: 'vouched'` (the proxy Worker sets the client address from `CF-Connecting-IP`),
   the R2 file store (`r2-files.ts`) and IAM's binding for keys, membership and workload tokens (`bindings.ts`).
+- **The SPA files come from `ASSETS`, whose directory mirrors the request paths** (`bindingAssets`): the deploy stages
+  each SPA and link mount's `dir` there at its prefix (`@fabrika/provider-cloudflare`'s `spa-assets.ts`), so the object
+  asks for the request as it came, and a GET or HEAD the binding answers 404 asks once more for `<prefix>/`, which
+  Workers Assets answers with the mount's `index.html`, as `diskAssets` serves it.
 - **Jobs run on the minute tick.** The object runs every contract job whose schedule `isDueAt` the tick's UTC minute,
   and the file sweep when the contract has file kinds, each in `waitUntil`, then `jobs.check()`; a kick runs in the
   object after its commit. A scanning file kind does not boot there (`sqliteProblems`).

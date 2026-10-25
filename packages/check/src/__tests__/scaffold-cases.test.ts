@@ -91,6 +91,8 @@ describe('the endpoint access cases of a kit application', () => {
 			links: {},
 			rows: {},
 			appRows: {},
+			files: {},
+			refusals: {},
 		})
 		expect(read("export const rows = { 'api.notes.get': { commentId: 'note_comments' } }\n").rows).toEqual({
 			'api.notes.get': { commentId: 'note_comments' },
@@ -274,5 +276,93 @@ describe('the application rows of the fixtures: rows of application tables an ow
 		})
 		expect(() => read("export const appRows = { 'shared.notice': { notices: true } }\n")).toThrow()
 		expect(() => read("export const appRows = { 'shared.notice': 'notices' }\n")).toThrow()
+	})
+})
+
+describe('the files of the fixtures: a file of the repository a case sends in a file field', () => {
+	const FILES_ROOT = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'fixtures', 'kit-files')
+	const withFixtures = (text: string) => new Map([...tree(FILES_ROOT), [ENDPOINT_FIXTURES_FILE, text]])
+	const findings = (text: string) => missingEndpointFixtures(scaffoldInputs(withFixtures(text))).map((finding) => finding.message)
+
+	test("the kit of the generated test gets each file beside the test, and the cases keep the kind's marker", async () => {
+		const text = await endpointTest(withFixtures("export const files = { 'api.notes.upload': { file: 'test/fixtures/document.pdf' } }\n"))
+		expect(text).toContain(
+			"const kit = endpointAccessKit(app, tables, postgres, { files: { 'api.notes.upload': { file: new URL('../../test/fixtures/document.pdf', import.meta.url) } } })",
+		)
+		expect(text).toContain("kit.own('api.notes.upload', { file: 'fabrika:file:documents', id: '00000000-0000-4000-8000-000000000000' })")
+		expect(findings("export const files = { 'api.notes.upload': { file: 'test/fixtures/document.pdf' } }\n")).toEqual([])
+	})
+
+	test('no files leave the kit of the generated test as it was', async () => {
+		expect(await endpointTest(tree(FILES_ROOT))).toContain('const kit = endpointAccessKit(app, tables, postgres)\n')
+	})
+
+	test('a file of no tested endpoint, of a field that holds no file, or outside the application is a finding, and is not written', async () => {
+		expect(findings("export const files = { 'api.notes.missing': { file: 'a.pdf' } }\n")).toEqual([
+			'api.notes.missing is no tested endpoint, whose cases could send a file',
+		])
+		expect(findings("export const files = { 'api.notes.upload': { id: 'a.pdf' } }\n")).toEqual([
+			'api.notes.upload: id is no file field of its input, so no case sends a file there',
+		])
+		const outside = ['../secret.pdf', '/etc/passwd', 'test/./a.pdf', '.env', 'test/a.pdf?x', 'C:/a.pdf', 'test\\\\a.pdf', '']
+		for (const path of outside) {
+			const text = `export const files = { 'api.notes.upload': { file: '${path}' } }\n`
+			expect(findings(text)).toEqual([`api.notes.upload: the file of file, '${path.replaceAll('\\\\', '\\')}', is no path inside the application`])
+			expect(await endpointTest(withFixtures(text))).toContain('const kit = endpointAccessKit(app, tables, postgres)\n')
+		}
+	})
+
+	test('the files are, by endpoint, objects of path strings', () => {
+		const read = (text: string) => scaffoldInputs(withFixtures(text)).fixtures.files
+		expect(read("export const files = { 'api.notes.upload': { file: 'a.pdf' } }\n")).toEqual({ 'api.notes.upload': { file: 'a.pdf' } })
+		expect(() => read("export const files = { 'api.notes.upload': { file: 1 } }\n")).toThrow()
+		expect(() => read("export const files = { 'api.notes.upload': 'a.pdf' }\n")).toThrow()
+		expect(() => read('export const files = {}\nexport const files = {}\n')).toThrow()
+	})
+})
+
+describe('the refusals of the fixtures: the 400s a handler may answer its own object with', () => {
+	const FILES_ROOT = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'fixtures', 'kit-files')
+	const withFixtures = (text: string) => new Map([...tree(FILES_ROOT), [ENDPOINT_FIXTURES_FILE, text]])
+	const findings = (text: string) => missingEndpointFixtures(scaffoldInputs(withFixtures(text))).map((finding) => finding.message)
+	const INPUT = "{ file: 'fabrika:file:documents', id: '00000000-0000-4000-8000-000000000000' }"
+
+	test('the kit gets them, the own case also admits their 400, and the denial and leak cases stay as they were', async () => {
+		const text = await endpointTest(
+			withFixtures(
+				"export const files = { 'api.notes.upload': { file: 'test/document.pdf' } }\nexport const refusals = { 'api.notes.upload': ['document_invalid'] }\n",
+			),
+		)
+		expect(text).toContain(
+			"endpointAccessKit(app, tables, postgres, { files: { 'api.notes.upload': { file: new URL('../../test/document.pdf', import.meta.url) } }, refusals: { 'api.notes.upload': ['document_invalid'] } })",
+		)
+		expect(text).toContain(
+			"test('api.notes.upload: a caller with only notes.write, notes.read, notes.write reaches its own note (200, or a refusal its fixtures declare)'",
+		)
+		expect(text).toContain(`expect([200, 400]).toContain((await kit.own('api.notes.upload', ${INPUT})).status)`)
+		expect(text).toContain(`expect(await kit.denied('api.notes.upload', ${INPUT})).toEqual({ status: 404 })`)
+		expect(text).toContain(`expect(await kit.leaked('api.notes.upload', ${INPUT})).toEqual({ answered: true, leaked: [] })`)
+		expect(text).toContain(
+			"expect(await kit.own('api.notes.attach', { file: 'fabrika:file:attachments', id: '00000000-0000-4000-8000-000000000000' })).toEqual({ status: 200 })",
+		)
+	})
+
+	test("a refusal of no tested endpoint, or the input schema's own, is a finding and is not written", async () => {
+		expect(findings("export const refusals = { 'api.notes.missing': ['document_invalid'] }\n")).toEqual([
+			'api.notes.missing is no tested endpoint, whose handler a case runs',
+		])
+		const validation = "export const refusals = { 'api.notes.upload': ['validation'] }\n"
+		expect(findings(validation)).toEqual([
+			"api.notes.upload: 'validation' is no refusal of its handler; an input the schema refuses (validation) is the fixture's mistake",
+		])
+		expect(await endpointTest(withFixtures(validation))).toContain('const kit = endpointAccessKit(app, tables, postgres)\n')
+	})
+
+	test('the refusals are lists of error types, declared once', () => {
+		const read = (text: string) => scaffoldInputs(withFixtures(text)).fixtures.refusals
+		expect(read("export const refusals = { 'api.notes.upload': ['a', 'b'] }\n")).toEqual({ 'api.notes.upload': ['a', 'b'] })
+		expect(() => read("export const refusals = { 'api.notes.upload': 'a' }\n")).toThrow()
+		expect(() => read("export const refusals = { 'api.notes.upload': [] }\n")).toThrow()
+		expect(() => read('export const refusals = {}\nexport const refusals = {}\n')).toThrow()
 	})
 })

@@ -41,6 +41,7 @@ import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE } from './proxy'
 import type { RunnerApprovedAccess } from './runner-protocol'
 import { defaultReconcileSchema } from './schema'
+import { type AssetMount, assetMounts, SPA_ASSETS, SPA_ASSETS_DIRECTORY, stageSpaAssets } from './spa-assets'
 
 const CANCELLED = 'deploy cancelled'
 
@@ -225,13 +226,21 @@ const OBJECT_VARIABLES: Readonly<Record<string, string>> = {
 /**
  * Bind the application's Durable Object, which runs the application over its SQLite, the environment's files bucket,
  * and the minute tick (ADR-0065), and on a release that serves ops name its objects. The object is bound first, so
- * oblaka numbers its migration `v0001` whatever else the application binds, and the tag never moves.
+ * oblaka numbers its migration `v0001` whatever else the application binds, and the tag never moves. With `assets`,
+ * the Worker also gets the Workers Assets the deploy stages the mounts' files into (`SPA_ASSETS`).
  */
-const withApplicationRuntime = (authored: Worker, run: CloudflareDeployRun, runtime: ApplicationRuntime, ops: boolean): Worker => {
+const withApplicationRuntime = (
+	authored: Worker,
+	run: CloudflareDeployRun,
+	runtime: ApplicationRuntime,
+	ops: boolean,
+	assets: boolean,
+): Worker => {
 	const application = applicationWorker(authored)
 	const configured = new Worker({
 		...application.options,
 		...(ops ? { vars: { ...(application.options.vars ?? {}), ...OBJECT_VARIABLES } } : {}),
+		...(assets ? { assets: { ...SPA_ASSETS } } : {}),
 		bindings: {
 			[CLOUDFLARE_APPLICATION_BINDING]: new DurableObject({ name: `${run.appId}-application`, className: CLOUDFLARE_APPLICATION_CLASS }),
 			...(application.options.bindings ?? {}),
@@ -410,6 +419,11 @@ interface StepEnv {
 	readonly managedSecrets: Readonly<Record<string, string>>
 	/** Where the build step regenerates the entry, after `pipeline.build`; null for a release that keeps its authored `main`. */
 	readonly entryBuild: EntryBuild | null
+	/**
+	 * The mounts whose files the deploy stages into the application Worker's assets, from the application's root; null
+	 * when the Worker declares its own `assets` or no mount serves files.
+	 */
+	readonly spaAssets: { readonly mounts: readonly AssetMount[]; readonly root: string } | null
 	generatedConfigs: readonly GeneratedConfig[]
 }
 
@@ -462,6 +476,18 @@ const deleteStaleSecrets = async (env: StepEnv, cwd: string): Promise<void> => {
 		if (result.exitCode !== 0) throw commandError(`wrangler secret delete ${name}`, result)
 		run.log(`  deleted the managed secret ${name}, which this deploy no longer writes`)
 	}
+}
+
+/** Stage the mounts' files beside the application Worker's generated config, where its `assets.directory` points. */
+const stageAssets = async (env: StepEnv, assets: NonNullable<StepEnv['spaAssets']>, generatedDir: string): Promise<void> => {
+	const mounts = assets.mounts.map((mount) => `${mount.prefix} from ${mount.dir}`).join(', ')
+	if (env.run.dryRun) {
+		env.run.log(`  [dry-run] would stage the SPA files into ${SPA_ASSETS_DIRECTORY}: ${mounts}`)
+		return
+	}
+	assertRunning(env.run.signal)
+	const staged = await stageSpaAssets(assets.mounts, assets.root, resolve(generatedDir, SPA_ASSETS_DIRECTORY))
+	env.run.log(`  staged ${staged} SPA files into ${SPA_ASSETS_DIRECTORY}: ${mounts}`)
 }
 
 const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
@@ -529,9 +555,11 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			const application = `${run.env}-${applicationWorker(worker).options.name}`
 			for (const generated of configs) {
 				const generatedDir = dirname(resolve(dir, generated.path))
+				const isApplication = generated.config.name === application
+				// The checkout's build has written the mounts' directories; the walk below checks the staged copy.
+				if (isApplication && env.spaAssets !== null) await stageAssets(env, env.spaAssets, generatedDir)
 				// The checkout's own build step has run by now, so this is the last moment the tree is still ours to check.
 				if (env.platformResources === 'refuse') await assertLiteralAssets(generated, generatedDir)
-				const isApplication = generated.config.name === application
 				await wranglerDeploy(env, generatedDir, isApplication ? env.managedSecrets : {})
 				// A platform component's own secrets carry framework names (IAM's mail transport), so only an application's are swept.
 				if (isApplication && env.platformResources === 'refuse') await deleteStaleSecrets(env, generatedDir)
@@ -703,7 +731,10 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	const managed = withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served))
 	const identified = platformResources === 'refuse' ? withIamIdentity(managed.worker, appEnvironmentId(run.appId, run.env)) : managed.worker
 	const connected = withConnectorBindings(identified, connectors)
-	const worker = runtime === null ? connected : withApplicationRuntime(connected, run, runtime, opsRelease)
+	// An application Worker that declares its own `assets` keeps them; otherwise the platform stages the mounts' files.
+	const mounts = runtime !== null && contract !== null ? assetMounts(contract) : []
+	const spaAssets = mounts.length > 0 && applicationWorker(connected).options.assets === undefined ? { mounts, root: loaded.cwd } : null
+	const worker = runtime === null ? connected : withApplicationRuntime(connected, run, runtime, opsRelease, spaAssets !== null)
 	const dir = workerDir(loaded.config, loaded.cwd)
 	const bounds: DeploymentBounds = {
 		env: run.env,
@@ -739,6 +770,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		entryBuild: runtime !== null && runtime.entry !== null
 			? { cwd: loaded.cwd, config: basename(resolve(run.cwd, run.configPath)), root: resolve(run.cwd) }
 			: null,
+		spaAssets,
 		generatedConfigs: [],
 	}
 	const result = await runSteps(buildPlan(loaded.config, worker, env.entryBuild !== null), run, (step) => runStep(step, env))

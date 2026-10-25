@@ -249,6 +249,22 @@ The platform's build runs the tests, writes the entrypoint, runs `fabrika-check`
 run `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server starts: a
 version does not go live until every generated test passes. It writes every `FABRIKA_*` variable; never set one.
 
+## The deploy surface (Cloudflare)
+
+On Cloudflare `fabrika.config.ts` imports `defineApp`, `Worker` and `iamServiceReference` from
+`@fabrika/provider-cloudflare`, and `resources` returns the application Worker: `main: './fabrika/entry.generated.ts'`,
+`workers_dev: false`, `preview_urls: false`, `routes: []` and `bindings: { IAM: iamServiceReference() }`, with
+`pipeline: { workerDir: '.', build: 'bun run build:web' }` when the application has an SPA. The deploy adds the
+Durable Object, the files bucket, the minute tick, every `FABRIKA_*` variable and the proxy Worker.
+
+It also serves the SPA: when the Worker declares no `assets`, the deploy copies the build directory of each SPA and
+link mount (`dir`, a link's `spa`) into `fabrika/assets/` at the mount's prefix (`/admin` into `fabrika/assets/admin/`)
+after `pipeline.build`, and binds it as `ASSETS`. A deploy whose mount directory the build did not write fails and
+names the mount. Do not declare `assets` yourself. A Worker that declares them keeps them, and the object reads each
+request path from that directory as it is (`/admin/app.js` is `admin/app.js` there), so a hand-written `assets` works
+only for a root mount, or for mounts whose directories nest like their prefixes; it needs `binding: 'ASSETS'` and
+`run_worker_first: true`.
+
 ## The SPA (added when the application has one)
 
 The SPA is React, built from the screens and hooks of the framework: `@fabrika/app/react` runs the typed client's
@@ -397,4 +413,5 @@ await Bun.write(
 
 ## Ignored files
 
-`.gitignore`: `node_modules/`, `fabrika.manifest.json`, `/fabrika/entry.generated.ts`, `/dist/`.
+`.gitignore`: `node_modules/`, `fabrika.manifest.json`, `/fabrika/entry.generated.ts`, `/dist/`, and on Cloudflare
+`/fabrika/assets/`, where a deploy stages the SPA's files.

@@ -20,6 +20,9 @@ import type { Tables } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
 import { type IsolationWorlds, type SampleValue, SEEDED_OBJECT_VERSION, type TestDatabase, type WorldRow } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
+import { readFile } from 'node:fs/promises'
+import { basename } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { z } from 'zod/v4'
 import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
@@ -33,6 +36,7 @@ import {
 } from '../contract/defaults'
 import type { AnyContract } from '../contract/define'
 import type { FileScanner, ScanVerdict } from '../files/scan'
+import { bytesAreOfType, SNIFF_BYTES } from '../files/sniff'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import type { TestCaller, TestGrant } from './caller'
 import { standInIamKit } from './kit'
@@ -108,6 +112,22 @@ export interface EndpointAccessKit {
 	 * challenge never passes.
 	 */
 	anyone(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
+}
+
+export interface EndpointAccessOptions {
+	/**
+	 * The file every case of an endpoint sends in a file field instead of the kit's sample, by endpoint id and input
+	 * field: a file of the application's repository that a handler inspecting the content accepts (a valid package). Its
+	 * type is the first of the field's kind that its bytes are; a file of none of them throws. `files` of the fixtures.
+	 */
+	readonly files?: Readonly<Record<string, Readonly<Record<string, URL>>>>
+	/**
+	 * The error types of the refusals (400) an endpoint's handler answers its own object with when the case's input meets
+	 * no domain rule the kit can satisfy, by endpoint id: such a 400 is the handler's own answer, so the request passed
+	 * the access form, and its case gets it as `{ status: 400 }` instead of failing. Any other 400 still throws, and an
+	 * input the schema refuses (`validation`) always does. `refusals` of the fixtures.
+	 */
+	readonly refusals?: Readonly<Record<string, readonly string[]>>
 }
 
 interface ActionEndpoint {
@@ -285,7 +305,12 @@ export const managerGrants = (
  * The endpoint access kit of `app`, whose data layer is `scoped(tables)`, over `postgres`. It boots `app` once, so the
  * application's layer is bound here and nowhere else in the process.
  */
-export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract>, tables: Tables<DB, P>, postgres: TestDatabase): EndpointAccessKit {
+export function endpointAccessKit<DB, P>(
+	app: ContractImplementation<AnyContract>,
+	tables: Tables<DB, P>,
+	postgres: TestDatabase,
+	options: EndpointAccessOptions = {},
+): EndpointAccessKit {
 	// The objects of the files the cases seed live in memory; their rows are the application's own tables.
 	const objects = new MemoryFileObjects()
 	const { kit, standIn } = standInIamKit(app, {
@@ -427,7 +452,7 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 	}
 
 	/** The request of a case: a GET's input in its URL, a file field's marker as a file of its kind in a multipart body. */
-	const requestOf = (row: ActionEndpoint, body: Readonly<Record<string, unknown>>): readonly [string, RequestInit] => {
+	const requestOf = async (row: ActionEndpoint, body: Readonly<Record<string, unknown>>): Promise<readonly [string, RequestInit]> => {
 		if (row.method === 'GET') {
 			const params = new URLSearchParams(Object.entries(body).map(([name, value]) => [name, value === null ? 'null' : String(value)]))
 			return [params.size === 0 ? row.path : `${row.path}?${params}`, { method: 'GET' }]
@@ -446,7 +471,7 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			for (const item of Array.isArray(value) ? value : [value]) {
 				const kind = fileKindOf(item)
 				if (kind === undefined) throw new Error(`${row.id}: the file field ${name} holds ${JSON.stringify(item)}, not a generated file`)
-				files.push([name, generatedFile(kind)])
+				files.push([name, await generatedFile(row.id, name, kind)])
 			}
 		}
 		const form = new FormData()
@@ -455,9 +480,36 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		return [row.path, { method: 'POST', body: form }]
 	}
 
-	const generatedFile = (kind: string): File => {
-		const sample = sampleFile(kind, kit.artifact.fileKinds?.[kind]?.types ?? [])
-		return new File([sample.bytes], `generated-${kind}`, { type: sample.type })
+	/** The file a case sends in `field`: the author's file fixture of the endpoint's field, else a sample of `kind`. */
+	const generatedFile = async (endpoint: string, field: string, kind: string): Promise<File> => {
+		const types = kit.artifact.fileKinds?.[kind]?.types ?? []
+		const fixture = options.files?.[endpoint]?.[field]
+		if (fixture === undefined) {
+			const sample = sampleFile(kind, types)
+			return new File([sample.bytes], `generated-${kind}`, { type: sample.type })
+		}
+		const path = fileURLToPath(fixture)
+		const bytes = await fixtureBytes(endpoint, field, path)
+		const type = types.find((candidate) => bytesAreOfType(candidate, bytes.subarray(0, SNIFF_BYTES)))
+		if (type === undefined) {
+			throw new Error(`${endpoint}: the file of ${field}, ${path}, is none of the types of files.${kind} (${types.join(', ')})`)
+		}
+		return new File([bytes], basename(path), { type })
+	}
+
+	// A file fixture is read once; every case sends the same bytes.
+	const fixtureFiles = new Map<string, Uint8Array<ArrayBuffer>>()
+	const fixtureBytes = async (endpoint: string, field: string, path: string): Promise<Uint8Array<ArrayBuffer>> => {
+		const known = fixtureFiles.get(path)
+		if (known !== undefined) return known
+		let bytes: Uint8Array<ArrayBuffer>
+		try {
+			bytes = new Uint8Array(await readFile(path))
+		} catch {
+			throw new Error(`${endpoint}: the file of ${field} in the fixtures, ${path}, cannot be read; add it to the repository or correct its path`)
+		}
+		fixtureFiles.set(path, bytes)
+		return bytes
 	}
 
 	const askAs = async (
@@ -466,19 +518,22 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		body: Readonly<Record<string, unknown>>,
 	): Promise<{ readonly status: number; readonly text: string }> => {
 		stockSeededObjects()
-		const [url, init] = requestOf(row, body)
+		const [url, init] = await requestOf(row, body)
 		const response = await fetch(url, init)
 		const text = await response.text()
 		// A 400 hides what the case is about: input is parsed before the access form runs, and a handler's refusal of
 		// the input it was given is no answer to another scope. Either is what the generator could not build.
 		if (response.status === 400) {
 			const type = errorType(text)
+			if (type !== undefined && type !== 'validation' && options.refusals?.[row.id]?.includes(type) === true) {
+				return { status: response.status, text }
+			}
 			throw new Error(
 				type === 'validation'
 					? `${row.id}: the case's input does not match the endpoint's input schema; correct its fixture (${text})`
 					: `${row.id}: the handler refused the case's input (400 ${
 						type ?? 'without a type'
-					}); the case cannot reach what it tests until its fixtures give what the handler needs: a picked person in members, a row of its object in rows, the state in seeds or the whole input in fixtures (${text})`,
+					}); the case cannot reach what it tests until its fixtures give what the handler needs: a picked person in members, a row of its object in rows, the state in seeds, a file it accepts in files, the whole input in fixtures, or the refusal it answers in refusals (${text})`,
 			)
 		}
 		return { status: response.status, text }

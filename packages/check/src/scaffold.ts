@@ -3,7 +3,7 @@
 // one file per application, from the contract: they run the application's own `serve(…)` and handlers. The checker
 // regenerates both to find a missing, edited, stale or orphaned file. Browser-safe: no file API.
 
-import { GENERATED_INVITATION, GENERATED_LINK, GENERATED_MEMBER, GENERATED_ROW_PREFIX } from '@fabrika/app/contract'
+import { GENERATED_FILE_PREFIX, GENERATED_INVITATION, GENERATED_LINK, GENERATED_MEMBER, GENERATED_ROW_PREFIX } from '@fabrika/app/contract'
 import {
 	type ContractArtifact,
 	endpointDirectory,
@@ -16,7 +16,7 @@ import {
 import { type ApplicationRowRefusal, applicationRowRefusalText, applicationRowsPlan, tablePolicies, type Tables } from '@fabrika/db/tables'
 import { ContractSourceError, readContractSource, readTablesDefinition } from './contract'
 import { type ApplicationDialect, applicationDialect } from './dialect'
-import { type EndpointFixtures, isSampleObject, NO_FIXTURES, readEndpointFixtures } from './endpoint-fixtures'
+import { type EndpointFixtures, isFixtureFilePath, isSampleObject, NO_FIXTURES, readEndpointFixtures } from './endpoint-fixtures'
 import type { Finding } from './finding'
 import { CONTRACT_FILE, ENDPOINT_ACCESS_TEST, ENDPOINT_FIXTURES_FILE, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR } from './layout'
 
@@ -295,7 +295,9 @@ const isLinkProcedure = (row: EndpointRow): boolean =>
  * The input an endpoint's cases send: the author's fixture, else a sample of its schema; `undefined` when neither
  * exists. Each field its `members`, `invitations` or `links` name holds `GENERATED_MEMBER`, `GENERATED_INVITATION` or
  * `GENERATED_LINK`, which the kit replaces with a real member, an open invitation or a link it issued; each field its
- * `rows` name holds `GENERATED_ROW_PREFIX` and the table, which the kit replaces with the key of a row it seeded.
+ * `rows` name holds `GENERATED_ROW_PREFIX` and the table, which the kit replaces with the key of a row it seeded; each file
+ * field its `files` name holds its kind's marker (in a list, for a list of files), even where the sample left an optional
+ * one out, which the kit sends as the named file.
  */
 const inputOf = (row: EndpointRow, fixtures: EndpointFixtures): Readonly<Record<string, Sample>> | undefined => {
 	const fixture = fixtures.inputs[row.id]
@@ -309,9 +311,75 @@ const inputOf = (row: EndpointRow, fixtures: EndpointFixtures): Readonly<Record<
 			...generated(fixtures.invitations[row.id], GENERATED_INVITATION),
 			...generated(fixtures.links[row.id], GENERATED_LINK),
 			...Object.entries(fixtures.rows[row.id] ?? {}).map(([field, table]) => [field, `${GENERATED_ROW_PREFIX}${table}`]),
+			...Object.keys(fixtures.files[row.id] ?? {}).flatMap((field) => {
+				const file = fileFieldOf(row.input, field)
+				if (file === undefined) return []
+				const marker = `${GENERATED_FILE_PREFIX}${file.kind}`
+				return [[field, file.list ? [marker] : marker]]
+			}),
 		]),
 	}
 }
+
+/** The file kind of a top-level file field of `input` (a file, an optional or nullable one, or a list of them), or `undefined`. */
+const fileFieldOf = (input: SchemaShape | null, field: string): { readonly kind: string; readonly list: boolean } | undefined => {
+	const kindOf = (shape: SchemaShape | undefined): string | undefined =>
+		shape?.type === 'file' ? shape.kind : shape?.type === 'optional' || shape?.type === 'nullable' ? kindOf(shape.inner) : undefined
+	const shape = input?.type === 'object' ? input.fields[field] : undefined
+	const unwrapped = shape?.type === 'optional' || shape?.type === 'nullable' ? shape.inner : shape
+	if (unwrapped?.type === 'array') {
+		const kind = kindOf(unwrapped.items)
+		return kind === undefined ? undefined : { kind, list: true }
+	}
+	const kind = kindOf(shape)
+	return kind === undefined ? undefined : { kind, list: false }
+}
+
+/** The ids of the endpoints with endpoint access cases. */
+const testedEndpoints = (artifact: ContractArtifact): ReadonlySet<string> =>
+	new Set(artifact.endpoints.filter((row) => isAccessTested(row) || isLinkProcedure(row)).map((row) => row.id))
+
+/** How a generated endpoint access test reaches the application's root, where a file fixture's path starts. */
+const ROOT_FROM_ENDPOINT_TEST = '../'.repeat(ENDPOINT_ACCESS_TEST.split('/').length - 1)
+
+/**
+ * The options of the generated test's kit: the file fixtures of the tested endpoints, each a URL beside the test. Empty
+ * without any, so a test without file fixtures stays as it was.
+ */
+const kitOptions = (fixtures: EndpointFixtures, tested: ReadonlySet<string>): string => {
+	const files = Object.entries(fixtures.files).sort(byKey).flatMap(([id, fields]) => {
+		const valid = Object.entries(fields).sort(byKey).filter(([, path]) => isFixtureFilePath(path))
+		if (!tested.has(id) || valid.length === 0) return []
+		const rendered = valid.map(([field, path]) => `${renderKey(field)}: new URL(${quote(`${ROOT_FROM_ENDPOINT_TEST}${path}`)}, import.meta.url)`)
+		return [`${quote(id)}: { ${rendered.join(', ')} }`]
+	})
+	const refusals = Object.entries(fixtures.refusals).sort(byKey).flatMap(([id, types]) => {
+		const valid = types.filter(isDeclarableRefusal)
+		return tested.has(id) && valid.length > 0 ? [`${quote(id)}: [${valid.map(quote).join(', ')}]`] : []
+	})
+	const options = [
+		...(files.length === 0 ? [] : [`files: { ${files.join(', ')} }`]),
+		...(refusals.length === 0 ? [] : [`refusals: { ${refusals.join(', ')} }`]),
+	]
+	return options.length === 0 ? '' : `, { ${options.join(', ')} }`
+}
+
+/** A refusal the fixtures may declare: a handler's own error type, never the input schema's (`validation`). */
+const isDeclarableRefusal = (type: string): boolean => type !== '' && type !== 'validation'
+
+/**
+ * The own case of an endpoint: 200, or, where its fixtures declare the refusals its handler may answer its own object
+ * with, also the 400 the kit hands back only for one of them.
+ */
+const ownCase = (row: EndpointRow, fixtures: EndpointFixtures, name: string, args: string): Case => {
+	const declared = (fixtures.refusals[row.id] ?? []).filter(isDeclarableRefusal)
+	return declared.length === 0
+		? ownScopeCase(name, `expect(await kit.own(${args})).toEqual({ status: 200 })`)
+		: ownScopeCase(`${name} (200, or a refusal its fixtures declare)`, `expect([200, 400]).toContain((await kit.own(${args})).status)`)
+}
+
+/** An object key as `renderSample` writes one: bare when it is an identifier, else quoted. */
+const renderKey = (key: string): string => (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : quote(key))
 
 /** Whether the endpoint's handler gets `ctx.links`: on or in a dimension a link mount's `issuedBy` names its action for. */
 const issuesLinks = (artifact: ContractArtifact, row: EndpointRow): boolean => {
@@ -426,12 +494,7 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 	}
 	if (linked) {
 		if (own) {
-			cases.push(
-				ownScopeCase(
-					`${row.id}: the holder of a link to a ${access.dimension} reaches it`,
-					`expect(await kit.own(${seededArgs})).toEqual({ status: 200 })`,
-				),
-			)
+			cases.push(ownCase(row, fixtures, `${row.id}: the holder of a link to a ${access.dimension} reaches it`, seededArgs))
 		}
 		return cases
 	}
@@ -440,9 +503,11 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 		if (!unscoped) cases.push(...leaked())
 		if (own) {
 			cases.push(
-				ownScopeCase(
+				ownCase(
+					row,
+					fixtures,
 					`${row.id}: a caller with only ${ownGrants(row, artifact, action, access.dimension)} reaches its own ${access.dimension}`,
-					`expect(await kit.own(${seededArgs})).toEqual({ status: 200 })`,
+					seededArgs,
 				),
 			)
 		}
@@ -531,7 +596,7 @@ const endpointTestBody = (
 		'',
 		`if (${database.name} !== null) {`,
 		`\tafterAll(() => ${database.name}.close())`,
-		`\tconst kit = endpointAccessKit(app, tables, ${database.name})`,
+		`\tconst kit = endpointAccessKit(app, tables, ${database.name}${kitOptions(fixtures, testedEndpoints(artifact))})`,
 		'',
 		describeBlock('endpoints: a caller of one scope reaches nothing of another', cases),
 		'}',
@@ -735,6 +800,51 @@ export const missingEndpointFixtures = ({ tables, policies, artifact, fixtures }
 		// The rule the kit seeds by, read from the policies and the column list: one rule, so the two cannot drift.
 		for (const refusal of applicationRowsPlan(tables, rows).refusals) {
 			findings.push(at(`${id}: ${applicationRowRefusalText(refusal)}`, appRowAllowed(refusal)))
+		}
+	}
+	for (const [id, fields] of Object.entries(fixtures.files).sort(byKey)) {
+		const row = tested.find((candidate) => candidate.id === id)
+		if (row === undefined) {
+			findings.push(
+				at(
+					`${id} is no tested endpoint, whose cases could send a file`,
+					"export const files = { '<endpoint id>': { <file field>: '<path from the application root>' } }, for a tested endpoint with a file input",
+				),
+			)
+			continue
+		}
+		for (const [field, path] of Object.entries(fields).sort(byKey)) {
+			if (fileFieldOf(row.input, field) === undefined) {
+				findings.push(at(`${id}: ${field} is no file field of its input, so no case sends a file there`, 'a top-level file field of the input'))
+			} else if (!isFixtureFilePath(path)) {
+				findings.push(
+					at(
+						`${id}: the file of ${field}, '${path}', is no path inside the application`,
+						"a path from the application's root, '/'-separated, without '..', a leading '/' or '.', or characters other than letters, digits, '_', '-' and '.'",
+					),
+				)
+			}
+		}
+	}
+	for (const [id, types] of Object.entries(fixtures.refusals).sort(byKey)) {
+		if (!tested.some((row) => row.id === id)) {
+			findings.push(
+				at(
+					`${id} is no tested endpoint, whose handler a case runs`,
+					"export const refusals = { '<endpoint id>': ['<error type>'] }, for a tested endpoint",
+				),
+			)
+			continue
+		}
+		for (const type of types) {
+			if (!isDeclarableRefusal(type)) {
+				findings.push(
+					at(
+						`${id}: '${type}' is no refusal of its handler; an input the schema refuses (validation) is the fixture's mistake`,
+						"the error type of a 400 the handler throws (new HttpError(400, '<type>', …))",
+					),
+				)
+			}
 		}
 	}
 	const seeded = (row: EndpointRow): boolean =>

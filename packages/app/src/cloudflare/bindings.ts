@@ -96,18 +96,37 @@ export function bindingWorkloadTokens(binding: unknown): WorkloadTokenSource | u
 	}
 }
 
+/**
+ * The SPA and link mounts' files from the Workers Assets binding, whose directory mirrors the request paths: the mount
+ * `/admin` reads `admin/…` of it, the root mount the rest (the Cloudflare deploy stages each mount's `dir` there). A path
+ * that names no file gets the mount's `index.html`, as `diskAssets` serves it: Workers Assets answers `<prefix>/` with it.
+ */
 export function bindingAssets(binding: unknown): SpaAssets | undefined {
 	const fetchAsset = method(binding, 'fetch')
 	if (fetchAsset === null) {
 		return undefined
 	}
+	const fetched = async (request: Request): Promise<Response> => {
+		const response: unknown = await fetchAsset(request)
+		if (!(response instanceof Response)) {
+			throw new Error('the ASSETS binding answered something that is not a Response')
+		}
+		return response
+	}
 	return {
-		async serve(_mount, request) {
-			const response: unknown = await fetchAsset(request)
-			if (!(response instanceof Response)) {
-				throw new Error('the ASSETS binding answered something that is not a Response')
+		async serve(mount, request) {
+			const response = await fetched(request)
+			if (response.status !== 404 || (request.method !== 'GET' && request.method !== 'HEAD')) {
+				return response
 			}
-			return response
+			const index = new URL(request.url)
+			index.pathname = mount.prefix === '/' ? '/' : `${mount.prefix}/`
+			index.search = ''
+			if (index.pathname === new URL(request.url).pathname) {
+				return response
+			}
+			await response.body?.cancel()
+			return await fetched(new Request(index, { method: request.method, headers: request.headers }))
 		},
 	}
 }
