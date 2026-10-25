@@ -48,6 +48,7 @@ import {
 	servesOps,
 	servesRawSql,
 } from './contract-support'
+import { deployOrder } from './deploy-order'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE } from './proxy'
@@ -557,7 +558,7 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 				return
 			}
 			const application = `${run.env}-${applicationWorker(worker).options.name}`
-			for (const generated of configs) {
+			for (const generated of deployOrder(configs)) {
 				const generatedDir = dirname(resolve(dir, generated.path))
 				// The checkout's own build step has run by now, so this is the last moment the tree is still ours to check.
 				if (env.platformResources === 'refuse') await assertLiteralAssets(generated, generatedDir)

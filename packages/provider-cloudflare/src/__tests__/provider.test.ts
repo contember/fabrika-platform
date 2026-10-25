@@ -36,6 +36,7 @@ import {
 	IAM_APPLICATION_ENTRYPOINT,
 	iamServiceReference,
 } from '..'
+import { deployOrder } from '../deploy-order'
 import type { PlatformIamTarget } from '../provider'
 import { CLOUDFLARE_PROXY_WORKER_DIR, PROXY_MANIFEST_DEFINE, proxyManifestJson } from '../proxy'
 import type { RunnerOutcomeFile } from '../runner-protocol'
@@ -349,17 +350,17 @@ describe('Cloudflare provider', () => {
 			APP_BUILD,
 			['wrangler', 'd1', 'migrations', 'apply', 'DB', '--remote'],
 			['wrangler', 'deploy'],
-			['wrangler', 'deploy'],
 			SECRET_LIST,
+			['wrangler', 'deploy'],
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
 		expect(rec.commands[0]?.cwd).toBe(`${REPO}/app/worker`)
 		expect(rec.commands[1]?.cwd).toBe(`${REPO}/app`)
 		expect(rec.commands[2]?.cwd).toBe(`${REPO}/app/worker`)
-		// The proxy is deployed from the platform's own copy of this package, the application from the checkout.
-		expect(rec.commands[3]?.cwd).toBe(CLOUDFLARE_PROXY_WORKER_DIR)
+		// The application is deployed first, from the checkout; the proxy that binds it after, from the platform's own copy of this package.
+		expect(rec.commands[3]?.cwd).toBe(`${REPO}/app/worker`)
 		expect(rec.commands[4]?.cwd).toBe(`${REPO}/app/worker`)
-		expect(rec.commands[5]?.cwd).toBe(`${REPO}/app/worker`)
+		expect(rec.commands[5]?.cwd).toBe(CLOUDFLARE_PROXY_WORKER_DIR)
 		expect(rec.commands[6]?.cwd).toBe(`${REPO}/app/worker`)
 	})
 
@@ -407,8 +408,8 @@ describe('Cloudflare provider', () => {
 			['sh', '-c', 'bun run build'],
 			APP_BUILD,
 			['wrangler', 'deploy'],
-			['wrangler', 'deploy'],
 			SECRET_LIST,
+			['wrangler', 'deploy'],
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
 		expect(rec.commands[2]?.env).toEqual({ CLOUDFLARE_API_TOKEN: 'tok-1', CLOUDFLARE_ACCOUNT_ID: 'acc-1' })
@@ -425,8 +426,8 @@ describe('Cloudflare provider', () => {
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
 			APP_BUILD,
 			['wrangler', 'deploy'],
-			['wrangler', 'deploy'],
 			SECRET_LIST,
+			['wrangler', 'deploy'],
 		])
 	})
 
@@ -959,9 +960,9 @@ describe('Cloudflare provider', () => {
 		await deploy(rec, assetsApp(), { checkoutDir })
 		expect(rec.commands.map((command) => [command.command, ...command.args, command.cwd === CLOUDFLARE_PROXY_WORKER_DIR])).toEqual([
 			[join(checkoutDir, 'node_modules', '.bin', 'fabrika'), ...APP_BUILD.slice(1), false],
-			['wrangler', 'deploy', true],
 			['wrangler', 'deploy', false],
 			[...SECRET_LIST, false],
+			['wrangler', 'deploy', true],
 		])
 	})
 
@@ -1520,10 +1521,9 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		expect(files[0]?.mode).toBe(0o600)
 		// Gone with its directory, although the deploy failed.
 		expect(existsSync(dirname(files[0]?.path ?? '/'))).toBe(false)
-		// The proxy is deployed first and gets none of them.
+		// The application is deployed first, so its failure stops the deploy before the proxy.
 		const deploys = rec.commands.filter((command) => command.args[0] === 'deploy')
 		expect(deploys.map((command) => command.cwd === CLOUDFLARE_PROXY_WORKER_DIR ? command.args : command.args.slice(0, 2))).toEqual([
-			['deploy'],
 			['deploy', '--secrets-file'],
 		])
 		const printed = [...rec.logs, ...(result.steps.map((step) => step.error ?? ''))].join('\n')
@@ -1547,11 +1547,11 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		const commands = rec.commands.map((command) => [command.command, ...command.args.filter((arg) => !arg.startsWith('/'))])
 		expect(commands).toEqual([
 			APP_BUILD,
-			['wrangler', 'deploy'],
 			['wrangler', 'deploy', '--secrets-file'],
 			SECRET_LIST,
 			['wrangler', 'secret', 'delete', 'FABRIKA_JOB_RETIRED_KEY'],
 			['wrangler', 'secret', 'delete', 'FABRIKA_TOKEN_KEYS'],
+			['wrangler', 'deploy'],
 		])
 		const deletes = rec.commands.filter((command) => command.args[1] === 'delete')
 		expect(deletes.every((command) => command.stdin === '' && command.cwd === `${REPO}/app`)).toBe(true)
@@ -1882,8 +1882,8 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
 			APP_BUILD,
 			['wrangler', 'deploy'],
-			['wrangler', 'deploy'],
 			SECRET_LIST,
+			['wrangler', 'deploy'],
 		])
 	})
 
@@ -1990,5 +1990,38 @@ describe('the ops channel of a gated release (servesOps, ADR-0069)', () => {
 		await expect(redirected('0.9.0')).rejects.toThrow('sets `FABRIKA_APPLICATION_OBJECT` to a value Fabrika did not write')
 		await expect(redirected('0.8.1')).rejects.toThrow('sets `FABRIKA_APPLICATION_OBJECT` to a value Fabrika did not write')
 		expect(rec.provisions).toEqual([])
+	})
+})
+
+describe('the order of the first deploy (deployOrder)', () => {
+	test('deploys the application Worker before the proxy that binds it as `APP`, although oblaka lists the proxy first', async () => {
+		// wrangler refuses a service binding to a script with no deployment yet (code 10145), so on a first deploy the
+		// proxy deployed first fails: "Could not resolve service binding 'APP'. Target script 'stage-demo' has no deployments".
+		const result = await deploy(rec, config())
+		expect(result.status).toBe('succeeded')
+		const { configs } = await generateWranglerConfigs(provisioned().root, 'stage')
+		expect(configs.map((generated) => generated.config.name)).toEqual(['stage-demo-proxy', 'stage-demo'])
+		expect(configs[0]?.config.services).toContainEqual(expect.objectContaining({ binding: 'APP', service: 'stage-demo' }))
+		const deploys = rec.commands.filter((command) => command.args[0] === 'deploy')
+		expect(deploys.map((command) => command.cwd === CLOUDFLARE_PROXY_WORKER_DIR ? 'proxy' : 'application')).toEqual(['application', 'proxy'])
+	})
+
+	const generated = (name: string, ...services: string[]): GeneratedConfig => ({
+		path: `${name}/wrangler.json`,
+		config: { name, services: services.map((service) => ({ binding: service.toUpperCase(), service })) },
+		content: '',
+	})
+	const names = (configs: readonly GeneratedConfig[]): Array<string | undefined> => configs.map((item) => item.config.name)
+
+	test('puts every Worker another generated config binds before its binder, and keeps oblaka order otherwise', () => {
+		const configs = [generated('proxy', 'app', 'stage-iam'), generated('other'), generated('app', 'worker'), generated('worker')]
+		expect(names(deployOrder(configs))).toEqual(['worker', 'app', 'proxy', 'other'])
+		expect(names(deployOrder([generated('a'), generated('b', 'b')]))).toEqual(['a', 'b'])
+	})
+
+	test('refuses a cycle of service bindings among the generated configs, naming it', () => {
+		expect(() => deployOrder([generated('a', 'b'), generated('b', 'c'), generated('c', 'a')])).toThrow(
+			'deploy-worker: the generated Workers bind each other as services in a cycle (`a` → `b` → `c` → `a`), so none can deploy first',
+		)
 	})
 })
