@@ -2,7 +2,11 @@ import { CONTROL_ACTIONS, CONTROL_APP_ID, CONTROL_SCOPES } from '@fabrika/contro
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import { type CloudflareAppConfig, D1Database, Queue, R2Bucket, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
 import { beforeAll, describe, expect, test } from 'bun:test'
-import type { buildControlWorker as BuildControlWorker } from '../../fabrika.config'
+import type {
+	buildControlWorker as BuildControlWorker,
+	controlEmailSecrets as ControlEmailSecrets,
+	controlEmailVars as ControlEmailVars,
+} from '../../fabrika.config'
 
 // fabrika's OWN deploy surface (packages/control/fabrika.config.ts). These
 // tests prove: defineApp accepts fabrika's config, the resource graph materializes with fabrika's full
@@ -14,12 +18,16 @@ import type { buildControlWorker as BuildControlWorker } from '../../fabrika.con
 // domain here so the destination assertions below are deterministic, then load the module.
 let config: CloudflareAppConfig
 let buildControlWorker: typeof BuildControlWorker
+let controlEmailVars: typeof ControlEmailVars
+let controlEmailSecrets: typeof ControlEmailSecrets
 
 beforeAll(async () => {
 	process.env['FABRIKA_CONTROL_DOMAIN'] = 'vozka.test.example.com'
 	const mod = await import('../../fabrika.config')
 	config = mod.default
 	buildControlWorker = mod.buildControlWorker
+	controlEmailVars = mod.controlEmailVars
+	controlEmailSecrets = mod.controlEmailSecrets
 })
 
 /** Resolve a Worker binding by name (oblaka exposes the materialized graph on `worker.options`). */
@@ -112,6 +120,73 @@ describe('defineApp(vozka config)', () => {
 		process.env['OPERATIONS_ARTIFACT_ORIGIN'] = 'https://errors.example.test'
 		expect(application(buildControlWorker({ env: 'stage' })).options.vars?.['OPERATIONS_ARTIFACT_ORIGIN']).toBe('https://errors.example.test')
 		delete process.env['OPERATIONS_ARTIFACT_ORIGIN']
+	})
+})
+
+describe("the installation's mail transport", () => {
+	const resend = {
+		FABRIKA_EMAIL_PROVIDER: 'resend',
+		FABRIKA_EMAIL_FROM: 'Fabrika <mail@example.test>',
+		FABRIKA_EMAIL_RESEND_API_KEY: 're_private-key',
+	}
+	const ahasend = {
+		FABRIKA_EMAIL_PROVIDER: 'ahasend',
+		FABRIKA_EMAIL_FROM: 'mail@example.test',
+		FABRIKA_EMAIL_FROM_NAME: 'Fabrika',
+		FABRIKA_EMAIL_AHASEND_API_KEY: 'aha_private-key',
+		FABRIKA_EMAIL_AHASEND_ACCOUNT_ID: 'account-1',
+		// Another provider's leftover: never read, never written.
+		FABRIKA_EMAIL_RESEND_API_KEY: 're_stale-key',
+	}
+
+	test('the sender and the non-secret variables ride as vars; the credentials are Worker secrets only', () => {
+		expect(controlEmailVars(false, resend)).toEqual({ FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'Fabrika <mail@example.test>' })
+		expect(controlEmailSecrets(resend)).toEqual(['FABRIKA_EMAIL_RESEND_API_KEY'])
+		expect(controlEmailVars(false, ahasend)).toEqual({
+			FABRIKA_EMAIL_PROVIDER: 'ahasend',
+			FABRIKA_EMAIL_FROM: 'mail@example.test',
+			FABRIKA_EMAIL_FROM_NAME: 'Fabrika',
+			FABRIKA_EMAIL_AHASEND_ACCOUNT_ID: 'account-1',
+		})
+		expect(controlEmailSecrets(ahasend)).toEqual(['FABRIKA_EMAIL_AHASEND_API_KEY'])
+	})
+
+	test('no provider, or one passed empty by the workflow, is an explicit none with no secret', () => {
+		for (const source of [{}, { FABRIKA_EMAIL_PROVIDER: 'none' }, { FABRIKA_EMAIL_PROVIDER: '', FABRIKA_EMAIL_RESEND_API_KEY: '' }]) {
+			expect(controlEmailVars(false, source)).toEqual({ FABRIKA_EMAIL_PROVIDER: 'none' })
+			expect(controlEmailSecrets(source)).toEqual([])
+		}
+	})
+
+	test('a local Worker gets no transport, whatever the shell holds', () => {
+		expect(controlEmailVars(true, resend)).toEqual({})
+	})
+
+	test('an invalid set refuses the deploy, naming variables and never a value', () => {
+		const { FABRIKA_EMAIL_RESEND_API_KEY: _key, ...noKey } = resend
+		expect(() => controlEmailVars(false, noKey)).toThrow('FABRIKA_EMAIL_RESEND_API_KEY is missing')
+		expect(() => controlEmailSecrets({ ...resend, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow('FABRIKA_EMAIL_PROVIDER must be none or one of')
+		expect(() => controlEmailVars(false, { ...resend, FABRIKA_EMAIL_FROM: 'not an address' })).toThrow(/FABRIKA_EMAIL_FROM is invalid/)
+		try {
+			controlEmailVars(false, { ...resend, FABRIKA_EMAIL_FROM: 'not an address' })
+		} catch (error) {
+			expect(String(error)).not.toContain('re_private-key')
+		}
+	})
+
+	test("the Worker's vars carry the transport the deploy environment holds", () => {
+		const names = Object.keys(resend)
+		Object.assign(process.env, resend)
+		try {
+			const vars = application(buildControlWorker({ env: 'stage' })).options.vars ?? {}
+			expect(vars['FABRIKA_EMAIL_PROVIDER']).toBe('resend')
+			expect(vars['FABRIKA_EMAIL_FROM']).toBe('Fabrika <mail@example.test>')
+			expect(vars['FABRIKA_EMAIL_RESEND_API_KEY']).toBeUndefined()
+			expect(application(buildControlWorker({ env: 'local' })).options.vars?.['FABRIKA_EMAIL_PROVIDER']).toBeUndefined()
+		} finally {
+			for (const name of names) delete process.env[name]
+		}
+		expect(application(buildControlWorker({ env: 'stage' })).options.vars?.['FABRIKA_EMAIL_PROVIDER']).toBe('none')
 	})
 })
 

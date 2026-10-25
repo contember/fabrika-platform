@@ -153,14 +153,19 @@ as `dropped`: an operator's decision, never a silent loss.
   service-level, the credentials sensitive ([ADR-0004](0004-secrets-live-in-the-platform.md)). The installer writes
   IAM's copy, not Control: Control does not deploy IAM, and a sensitive value cannot be read back, so Control could only
   rewrite IAM and restart it blind. On Cloudflare the installation's GitHub Environment holds the set, and the workflow
-  passes it to IAM. Control on Cloudflare holds no transport, because Cloudflare runs no jobs.
+  passes it to IAM's deploy and to Control's. Control's deploy writes the provider, the sender and the provider's
+  non-secret variables as Worker vars and the credentials as Worker secrets, as IAM's does: an application on framework
+  0.9 runs its jobs in its Durable Object ([ADR-0065](0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)),
+  and Control is where a deploy reads the transport from on every cloud.
 - Control is the source for applications. A deploy of an environment whose approved contract has a job that declares
   `mailer: 'installation'` hands it one of two things:
   - **the relay**, on Zerops, when the approved snapshot records framework 0.7.0 or newer:
     `FABRIKA_EMAIL_PROVIDER=platform`, the platform transport's URL and key, and nothing of the provider (ADR-0064).
     Control hands it whether or not its own transport is valid, because the relay holds what it cannot send;
   - **the set**, for an older release or a snapshot that records no release: every `FABRIKA_EMAIL_*` Control holds,
-    service-level and always sensitive ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
+    service-level and always sensitive ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md));
+  - **the set** on Cloudflare, whatever the release: the Worker runs no relay (§8). The deploy writes every name as a
+    Worker secret, and the provider refuses it to a release before 0.9, whose stateless Worker runs no job.
 
   Once the contract stops declaring it, the deploy hands nothing and Zerops removes the stale variables with the rest
   of the framework's families. The names are framework variables
@@ -298,6 +303,13 @@ none and answers its row with 404. Its senders reach it over the platform transp
 - A Cloudflare installation cannot drop a mail setting by re-running `platform init`: it writes the values it is given
   and deletes none, so an old provider's variables, a display name or a tag stay in the GitHub Environment until the
   operator deletes them.
+- An application on Cloudflare holds the provider credential and sends directly, so the gate of §8 does not cover it,
+  as it does not cover an older release on Zerops. A relay on the Worker would close that gap (Alternatives).
+- **Rollout on Cloudflare.** A `fabrika.ref` bump does not rewrite the generated workflow. Until the operator re-runs
+  `fabrika platform init`, which refreshes `.github/workflows/platform.yml`, the workflow passes Control no
+  `FABRIKA_EMAIL_*`: Control's deploy writes `FABRIKA_EMAIL_PROVIDER=none`, and applications see no mail, as before.
+  After that run, each environment that declares `mailer: 'installation'` gets the set at its next deploy. A switched
+  provider leaves its credential as a Worker secret of IAM and Control that neither reads.
 - **Postmark has no idempotency either**, so an unknown outcome over it is never retried automatically and needs a
   person, as over SmartEmailing.
 - **SmartEmailing's limits.** It has no idempotency, so an unknown outcome is never retried automatically and needs a
@@ -329,6 +341,21 @@ mail it does not own. Control relays it instead (§8): it already holds the tran
 A new installation service would hold the transport and the queue. Rejected because it adds a service to deploy,
 upgrade and secure, while Control already has the transport, a job queue, the console and the deploy that hands an
 application its key.
+
+### Keep Control on Cloudflare without a transport
+
+Cloudflare applications ran no jobs before framework 0.9, so Control's Worker held no transport and handed `none`.
+Since an application runs its jobs in its Durable Object, that leaves every installation mailer on Cloudflare without
+mail while IAM holds a working provider. Rejected: the installation configures one transport for IAM and its
+applications on every cloud.
+
+### Run the relay on Control's Worker
+
+Cloudflare applications would get the relay's URL and key instead of the credential, as on Zerops. The relay's queue,
+claims and maintenance are written against Control's Postgres job queue and its Bun consumer loop. A Worker version
+needs a D1 schema, a Cloudflare Queue consumer and the console's release and requeue on it. Deferred, not rejected:
+handing the set is the path an older release already takes on Zerops, and the relay can replace it later without an
+application change, because the application reads either from `FABRIKA_EMAIL_PROVIDER`.
 
 ### Drop a message without a record
 
