@@ -61,10 +61,12 @@ parsed with its `json.ts` readers, not zod.
 (`app/cloudflare/ops.ts`) and Control's composition (`control/services.ts`) take one line per unit; the lead merges
 those lines. ADR-0065 is edited by 2.1, 4.x and 5.x, each in a different wave.
 
-**Release placement (decision D0).** `@fabrika/app` is 0.8.2 in source, and 0.9 has only `-dev` tags. A unit that
-ships in 0.9.0 needs no gate of its own: `runsInObject` covers it, and S1's constants equal it. A unit after 0.9.0 gets
-the next minor. D0 also says whether the SQLite `fabrika` bundle, still one file (`0001_framework.sql`), may change
-under ADR-0017, or whether every new table is a new file.
+**Release placement (decision D0, settled).** The object runtime ships as framework 0.9: the source carries 0.9 and
+Control bundles the 0.8.2 reader, and its first published release is the prerelease 0.9.0-alpha.1 on the `alpha`
+dist-tag ([release channels](../reference/release-process.md#release-channels)). The 0.9.0-dev.0 to 0.9.0-dev.4
+prereleases on `next` were cut from another branch and lack the object runtime. A unit that ships in 0.9.0 needs no
+gate of its own: `runsInObject` covers it, and S1's constants equal it. A unit after 0.9.0 gets the next minor. The
+SQLite `fabrika` bundle keeps `0001_framework.sql` unchanged; every new framework table is a new file (ADR-0017).
 
 ## Work units
 
