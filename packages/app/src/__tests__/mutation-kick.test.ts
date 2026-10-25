@@ -11,7 +11,7 @@ import { QueryRefusedError, type Session } from '@fabrika/db/framework'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
-import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { afterAll, beforeAll, beforeEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test'
 import { WakeTimer } from '../bun'
 import { compileContract, ContractError } from '../contract'
 import type { RequestExecutionContext } from '../fetch'
@@ -267,6 +267,12 @@ async function wakes(): Promise<WakeRow[]> {
 }
 
 const kickKey = (at: number): string => `kick:deliver:${Math.floor(at / 1_000)}`
+
+/** The database's clock, in epoch milliseconds. */
+async function databaseNow(): Promise<number> {
+	const [row] = await admin((sql) => sql.unsafe(`select floor(extract(epoch from clock_timestamp()) * 1000)::bigint::text as now`))
+	return Number(row?.now)
+}
 
 async function outbox(): Promise<string[]> {
 	const rows: { readonly body: string }[] = await admin((sql) => sql.unsafe(`select body from ${schema}.outbox order by body`))
@@ -636,7 +642,129 @@ describe.skipIf(!hasPostgres)('a kick is a durable wake written in the site’s 
 			expect(kicks).toHaveLength(1)
 			expect(await wakes()).toEqual([])
 		} finally {
-			timer.stop()
+			await timer.stop()
 		}
+	})
+
+	test('a delayed kick whose time passed, written while a run holds the lease, is left to the next run', async () => {
+		const running = start()
+		const held = gate()
+		running.world.holdStart = held
+		expect((await running.call('/api/outbox.enqueue', { body: 'kp1' })).status).toBe(200)
+		await held.reached
+		// Due an hour before the held run started, but committed after it took the lease: the run never owned it.
+		const past = (await databaseNow()) - 3_600_000
+		expect((await running.call('/api/outbox.remind', { body: 'kp2', at: [past] })).status).toBe(200)
+		held.open()
+		await running.settled()
+		expect(await wakes()).toEqual([{ reason: 'kick', due_at: past, dedupe: kickKey(past) }])
+		await running.wake()
+		await running.settled()
+		expect(running.world.runs).toHaveLength(2)
+		expect(await wakes()).toEqual([])
+	})
+
+	test("an application clock an hour ahead: a kick is due by the database's clock, and the run it starts consumes it", async () => {
+		setSystemTime(new Date(Date.now() + 3_600_000))
+		const running = start()
+		const held = gate()
+		running.world.holdStart = held
+		try {
+			const before = await databaseNow()
+			expect((await running.call('/api/outbox.enqueue', { body: 'kq' })).status).toBe(200)
+			await held.reached
+			const [wake] = await wakes()
+			expect(wake?.due_at).toBeGreaterThanOrEqual(before)
+			expect(wake?.due_at).toBeLessThanOrEqual(await databaseNow())
+			held.open()
+			await running.settled()
+		} finally {
+			setSystemTime()
+		}
+		expect(running.world.deliveredBodies).toEqual(['kq'])
+		expect(await wakes()).toEqual([])
+	})
+
+	test("an application clock an hour behind: the wake timer waits for a delayed kick by the database's clock", async () => {
+		const kicks: Promise<void>[] = []
+		const timer = new WakeTimer((kick) => void kicks.push(kick))
+		setSystemTime(new Date(Date.now() - 3_600_000))
+		try {
+			const running = start({ projectWakes: timer.project })
+			timer.attach(running.app.jobs)
+			const at = (await databaseNow()) + 400
+			expect((await running.call('/api/outbox.remind', { body: 'kr', at: [at] })).status).toBe(200)
+			await until(() => running.world.deliveredBodies.includes('kr'), 3_000)
+			expect(await databaseNow()).toBeGreaterThanOrEqual(at)
+			await Promise.all(kicks)
+			expect(await wakes()).toEqual([])
+		} finally {
+			setSystemTime()
+			await timer.stop()
+		}
+	})
+
+	test('the wake timer fired before the write that lowered it committed: it looks again and runs the kick', async () => {
+		const kicks: Promise<void>[] = []
+		const timer = new WakeTimer((kick) => void kicks.push(kick))
+		const lock = new SQL({ url, adapter: 'postgres', max: 1 })
+		try {
+			const running = start({ projectWakes: timer.project })
+			timer.attach(running.app.jobs)
+			await lock.unsafe(`select pg_advisory_lock(${COMMIT_LOCK})`)
+			const at = Date.now() + 200
+			const call = running.call('/api/outbox.remind', { body: 'ks', at: [at] })
+			await until(commitWaiting, 3_000)
+			// The timer fires at the kick's time while its COMMIT still waits, and finds nothing.
+			await Bun.sleep(Math.max(0, at - Date.now()) + 300)
+			expect(running.world.runs).toEqual([])
+			await lock.unsafe(`select pg_advisory_unlock(${COMMIT_LOCK})`)
+			expect((await call).status).toBe(200)
+			await until(() => running.world.deliveredBodies.includes('ks'), 3_000)
+			await Promise.all(kicks)
+			expect(await wakes()).toEqual([])
+		} finally {
+			await lock.close()
+			await timer.stop()
+		}
+	})
+
+	test('stopping the wake timer waits for the refresh under way, and nothing it starts comes after', async () => {
+		const kicks: Promise<void>[] = []
+		const timer = new WakeTimer((kick) => void kicks.push(kick))
+		const running = start({ projectWakes: timer.project })
+		const jobs = running.app.jobs
+		const entered = Promise.withResolvers<void>()
+		const release = Promise.withResolvers<void>()
+		timer.attach({
+			...jobs,
+			wake: async (track) => {
+				entered.resolve()
+				await release.promise
+				return jobs.wake(track)
+			},
+		})
+		const due = (await databaseNow()) - 1_000
+		await admin((sql) =>
+			sql.unsafe(`insert into ${schema}.fabrika_wakes (id, job, due_at, reason) values (gen_random_uuid(), 'deliver', ${due}, 'kick')`)
+		)
+		const refreshing = timer.refresh()
+		await entered.promise
+		let stopped = false
+		const stopping = Promise.resolve(timer.stop()).then(() => {
+			stopped = true
+		})
+		await Bun.sleep(50)
+		expect(stopped).toBe(false)
+		release.resolve()
+		await stopping
+		const started = kicks.length
+		expect(started).toBe(1)
+		await refreshing
+		await timer.refresh()
+		await Bun.sleep(50)
+		expect(kicks).toHaveLength(started)
+		await Promise.all(kicks)
+		await running.settled()
 	})
 })

@@ -223,9 +223,10 @@ describe.skipIf(!hasPostgres)('the next wake on Postgres', () => {
 
 	test('null with nothing pending; a held lease answers its expiry; a free job its earliest wake', async () => {
 		expect(await next()).toBeNull()
+		const overdue = at(-MINUTE)
+		await on.wakes.schedule({ job: 'nightly', reason: 'cron', dueAt: overdue, dedupe: 'cron:nightly:0 3 * * *' })
+		expect(await next()).toBe(overdue.getTime())
 		const run = await taken(on, 'nightly', 'run')
-		expect(await next()).toBe(await expiryOf('nightly'))
-		await on.wakes.schedule({ job: 'nightly', reason: 'cron', dueAt: at(-MINUTE), dedupe: 'cron:nightly:0 3 * * *' })
 		expect(await next()).toBe(await expiryOf('nightly'))
 		const soon = at(MINUTE)
 		await on.wakes.schedule({ job: 'other', reason: 'kick', dueAt: soon })
@@ -306,15 +307,60 @@ describe.skipIf(!hasPostgres)('the next wake on Postgres', () => {
 		expect(seen).toBe(due.getTime())
 	})
 
-	test('a wake due after the run started survives its finish; one due exactly at the start is consumed', async () => {
+	test('a wake written after the run took its lease survives its finish, though due before its start', async () => {
+		const before = at(-MINUTE)
+		await on.wakes.schedule({ job: 'drain', reason: 'kick', dueAt: before })
 		const run = await taken(on, 'drain', 'run')
 		const start = await on.epochMs(`(select last_started_at from fabrika_job_leases where job = 'drain')`)
+		// A delayed kick whose time has passed, and a kick at the start, both committed after the run took its lease.
+		await on.wakes.schedule({ job: 'drain', reason: 'kick', dueAt: new Date(start - HOUR) })
 		await on.wakes.schedule({ job: 'drain', reason: 'kick', dueAt: new Date(start) })
-		await on.wakes.schedule({ job: 'drain', reason: 'kick', dueAt: new Date(start + 1) })
-		await Bun.sleep(10)
+		expect((await on.wakes.pending('drain')).map((wake) => wake.owned)).toEqual([false, true, false])
 		expect(await on.leases.finish(run, 'succeeded')).toBe(true)
-		expect(await on.epochMs(`(select last_finished_at from fabrika_job_leases where job = 'drain')`)).toBeGreaterThan(start + 1)
-		expect((await on.wakes.pending('drain')).map((wake) => wake.dueAt.getTime())).toEqual([start + 1])
+		expect((await on.wakes.pending('drain')).map((wake) => wake.dueAt.getTime())).toEqual([start - HOUR, start])
+	})
+
+	test('a later kick merged into a wake the run owns takes it from the run: its finish leaves it to the next run', async () => {
+		// A kick due in one second starts a run; a later kick in that second merges into its wake, and its process stops
+		// before it starts anything.
+		const first = at(-500)
+		await on.wakes.schedule({ job: 'drain', reason: 'kick', dueAt: first, dedupe: 'kick:drain:s' })
+		const run = await taken(on, 'drain', 'run')
+		expect(await on.wakes.pending('drain')).toEqual([expect.objectContaining({ owned: true })])
+		expect(await on.wakes.schedule({ job: 'drain', reason: 'kick', dueAt: at(0), dedupe: 'kick:drain:s' })).toMatchObject({
+			dueAt: first,
+			owned: false,
+		})
+		expect(await on.leases.finish(run, 'succeeded')).toBe(true)
+		expect((await on.wakes.pending('drain')).map((wake) => wake.dueAt.getTime())).toEqual([first.getTime()])
+		expect(await on.leases.finish(await taken(on, 'drain', 'next'), 'succeeded')).toBe(true)
+		expect(await on.wakes.pending('drain')).toEqual([])
+	})
+
+	test("a cron wake scheduled again under its run stays the run's: the finish consumes it and schedules the next fire", async () => {
+		const fire = at(-MINUTE)
+		await on.wakes.schedule({ job: 'digest', reason: 'cron', dueAt: fire, dedupe: 'cron:digest:0 * * * *' })
+		const run = await taken(on, 'digest', 'run')
+		// A repair tick while the run holds the lease schedules the job's next fire under the same key.
+		expect(await on.wakes.schedule({ job: 'digest', reason: 'cron', dueAt: at(HOUR), dedupe: 'cron:digest:0 * * * *' })).toMatchObject({
+			dueAt: fire,
+			owned: true,
+		})
+		const nextFire = at(HOUR)
+		expect(await on.leases.finish(run, 'succeeded', { kind: 'completed', nextCron: { expression: '0 * * * *', dueAt: nextFire } })).toBe(true)
+		expect((await on.wakes.pending('digest')).map((wake) => wake.dueAt.getTime())).toEqual([nextFire.getTime()])
+	})
+
+	test('a reap and a finish leave no wake owned', async () => {
+		await on.wakes.schedule({ job: 'drain', reason: 'kick', dueAt: at(-MINUTE) })
+		await taken(on, 'drain', 'crashed')
+		await on.expire('drain')
+		expect(await on.leases.reapCrashed('drain')).toBe(true)
+		expect((await on.wakes.pending('drain')).map((wake) => wake.owned)).toEqual([false])
+		const lost = await taken(on, 'drain', 'failed')
+		expect((await on.wakes.pending('drain')).map((wake) => wake.owned)).toEqual([true])
+		expect(await on.leases.finish(lost, 'failed')).toBe(true)
+		expect((await on.wakes.pending('drain')).map((wake) => wake.owned)).toEqual([false])
 	})
 
 	test('the earliest eligible wake is an index scan of fabrika_wakes_due over a populated table', async () => {
@@ -514,10 +560,10 @@ describe.skipIf(!hasPostgres)("hasten, the test kit's, on Postgres", () => {
 })
 
 describe.skipIf(!hasPostgres)('the wakes migration', () => {
-	test('an existing schema that holds the earlier framework files applies 0009 alone, and the runtime role writes the table', async () => {
+	test('an existing schema that holds the earlier framework files applies 0009 and 0010 alone, and the runtime role writes the table', async () => {
 		const appId = `wakes-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
-		const earlier = FRAMEWORK_MIGRATIONS.filter((file) => file.name !== '0009_job_wakes.sql')
-		expect(earlier).toHaveLength(FRAMEWORK_MIGRATIONS.length - 1)
+		const earlier = FRAMEWORK_MIGRATIONS.filter((file) => file.name < '0009_job_wakes.sql')
+		expect(earlier).toHaveLength(FRAMEWORK_MIGRATIONS.length - 2)
 		const migrationsOf = (framework: typeof FRAMEWORK_MIGRATIONS) =>
 			definePostgresApplicationMigrations({ appId, directory: '/nonexistent', framework: { bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: framework } })
 		try {
@@ -525,7 +571,7 @@ describe.skipIf(!hasPostgres)('the wakes migration', () => {
 			const before = migrationsOf(earlier)
 			expect(await before.migrate(url, app)).toEqual([...earlier.map((file) => `fabrika/${file.name}`), `app/${app[0]?.name}`])
 			const after = migrationsOf(FRAMEWORK_MIGRATIONS)
-			expect(await after.migrate(url, app)).toEqual(['fabrika/0009_job_wakes.sql'])
+			expect(await after.migrate(url, app)).toEqual(['fabrika/0009_job_wakes.sql', 'fabrika/0010_job_wakes_owned.sql'])
 			const runtime = openPostgres({ url: applicationRuntimeUrl(url, appId), schema: after.schema, max: 1 })
 			try {
 				const migrated = frameworkTablesOf(connected(tables, { database: runtime, capabilities: authority }).database).wakes

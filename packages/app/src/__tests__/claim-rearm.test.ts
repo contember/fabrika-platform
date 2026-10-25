@@ -77,14 +77,18 @@ const tables = defineTables(vocabulary, columns)({
 
 const app = defineApp(vocabulary, tables)
 
-/** The claim's limit for the next run, and the rows each run claimed. */
-const claims: { limit: number; claimed: string[][] } = { limit: 5, claimed: [] }
+/** The claim's limit for the next run, a second claim of another kind in the same run, and the rows each claim took. */
+const claims: { limit: number; then: string | null; claimed: string[][] } = { limit: 5, then: null, claimed: [] }
 
 // Daily, so a claimed row's backoff (the schedule's period) lies a day ahead of every row a test places.
 const render = app.cron('0 3 * * *', { actions: ['reports.render'] }).handle(async ({ ctx }) => {
 	const queue = ctx.db.over(ctx.within('reports.render', 'deal')).report_requests
 	const rows = await queue.claim({ limit: claims.limit, where: [['kind', '=', 'summary']] })
 	claims.claimed.push(rows.map((row) => row.id).sort())
+	if (claims.then !== null) {
+		const more = await queue.claim({ limit: 5, where: [['kind', '=', claims.then]] })
+		claims.claimed.push(more.map((row) => row.id).sort())
+	}
 })
 
 const contract = app.contract(() => ({ jobs: { render } }))
@@ -122,6 +126,7 @@ interface ClaimWake {
 
 beforeEach(() => {
 	claims.limit = 5
+	claims.then = null
 	claims.claimed = []
 })
 
@@ -241,6 +246,20 @@ describe.skipIf(!hasPostgres)('a claim re-arms its job on Postgres', () => {
 		expect(await kit.runJob('render')).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(claims.claimed).toEqual([[]])
 		expect(await pgClaimWakes()).toEqual([])
+	})
+
+	test("a run's later claim of another kind never postpones its full claim's re-arm", async () => {
+		const now = Date.now()
+		await placeRows([...rowsAt(now), { id: 'r7', kind: 'summary', due: now - MINUTE }])
+		claims.limit = 1
+		claims.then = 'detail'
+		const kit = pgKit()
+		expect(await kit.runJob('render')).toEqual({ status: 'succeeded', attempts: 1 })
+		// The summaries filled the claim; the details' next row (r4) is 30 s away.
+		expect(claims.claimed).toEqual([['r1'], ['r2']])
+		const [wake, ...more] = await pgClaimWakes()
+		expect(more).toEqual([])
+		expect(wake?.due_at).toBeLessThanOrEqual(await pgNow())
 	})
 
 	test('a claim re-arms no sooner than a second after it, though a row comes due sooner', async () => {
@@ -400,6 +419,27 @@ describe('a claim re-arms its job under the Cloudflare alarm', () => {
 			await fire()
 			expect(claims.claimed).toEqual([['r1']])
 			expect(alarm.scheduled).toBe(now + 2 * MINUTE)
+		})
+	})
+
+	test("a run's later claim of another kind never postpones its full claim's re-arm, and the alarm runs the job again", async () => {
+		await keepingProcessEnvironment(async () => {
+			const { database, alarm, fire } = await sqlite()
+			const now = Date.now()
+			sqliteRows(database, [...rowsAt(now), { id: 'r7', kind: 'summary', due: now - MINUTE }])
+			claims.limit = 1
+			claims.then = 'detail'
+			kickNow(database)
+			await fire()
+			expect(claims.claimed).toEqual([['r1'], ['r2']])
+			const [wake, ...more] = sqliteWakes(database, 'claim')
+			expect(more).toEqual([])
+			expect(wake?.due_at).toBeLessThanOrEqual(Date.now())
+			expect(alarm.scheduled).toBe(wake?.due_at ?? Number.NaN)
+			claims.then = null
+			claims.limit = 5
+			await fire()
+			expect(claims.claimed).toEqual([['r1'], ['r2'], ['r7']])
 		})
 	})
 

@@ -153,4 +153,11 @@ CREATE UNIQUE INDEX ${JOB_WAKES_TABLE}_dedupe ON ${JOB_WAKES_TABLE} (dedupe) WHE
 CREATE INDEX ${FILE_DELETIONS_TABLE}_recorded_at ON ${FILE_DELETIONS_TABLE} (recorded_at, object_key);
 `,
 	}),
+	Object.freeze({
+		name: '0004_job_wakes_owned.sql',
+		sql: `-- The wakes the run holding the job's lease took when it took the lease: its finish consumes or retries exactly these.
+-- A wake written or merged into afterwards is not taken, though due before the run started: the run may not have read its work.
+ALTER TABLE ${JOB_WAKES_TABLE} ADD COLUMN owned INTEGER NOT NULL DEFAULT 0 CHECK (owned IN (0, 1));
+`,
+	}),
 ])

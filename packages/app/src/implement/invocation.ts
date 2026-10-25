@@ -472,6 +472,8 @@ export interface KickRecorder {
 	readonly kick: (job: string, options?: unknown) => void
 	/** The jobs kicked without `at`, each once: what the dispatcher starts after the commit. */
 	readonly kicked: () => readonly string[]
+	/** Whether the invocation kicked anything, now or for later. */
+	readonly recorded: () => boolean
 	/**
 	 * Every kick's wake, one per job and due second (`kick:<job>:<due second>`); a kick without `at` is due at `now`. The
 	 * site writes them in its transaction, so a rollback leaves none.
@@ -508,6 +510,7 @@ export function kickRecorder(site: string, declared: readonly string[]): KickRec
 			kicks.push({ job, at: kickAt(site, options) })
 		},
 		kicked: () => [...new Set(kicks.filter((kick) => kick.at === undefined).map((kick) => kick.job))],
+		recorded: () => kicks.length > 0,
 		wakes: (now: Date) => {
 			const wakes = new Map<string, NewWake>()
 			for (const { job, at } of kicks) {

@@ -221,6 +221,10 @@ describe('the wakes migration', () => {
 			{ bundle: 'fabrika', name: '0002_job_wakes.sql' },
 		])
 		expect(storage.sql.exec('select job, pending from fabrika_job_kicks').toArray()).toEqual([{ job: 'kept', pending: 1 }])
+		expect((await migrateSqlite(port, [{ bundle: 'fabrika', migrations: SQLITE_FRAMEWORK_MIGRATIONS }])).applied).toEqual([
+			'fabrika/0003_file_deletions_recorded_at.sql',
+			'fabrika/0004_job_wakes_owned.sql',
+		])
 		const migrated = frameworkTablesOf(connected(tables, { database: openSqlite(storage), capabilities: new TestAuthority() }).database).wakes
 		const due = at(MINUTE)
 		await migrated.schedule({ job: 'kept', reason: 'kick', dueAt: due })
@@ -299,17 +303,68 @@ describe('a finish tells the wakes what its run did with them', () => {
 		expect(await wakes.pending('digest')).toHaveLength(1)
 	})
 
-	test('a wake due after the run started survives its finish; one due exactly at the start is consumed', async () => {
+	test('a wake written after the run took its lease survives its finish, though due before its start', async () => {
+		const before = at(-MINUTE)
+		await wakes.schedule({ job: 'drain', reason: 'kick', dueAt: before })
 		const run = await lease('drain')
 		const start = (await leases.state('drain'))?.lastStartedAt
 		if (start === null || start === undefined) throw new Error('no start')
+		// A delayed kick whose time has passed, and a kick at the start, both committed after the run took its lease.
+		await wakes.schedule({ job: 'drain', reason: 'kick', dueAt: new Date(start.getTime() - HOUR) })
 		await wakes.schedule({ job: 'drain', reason: 'kick', dueAt: start })
-		const between = new Date(start.getTime() + 1)
-		await wakes.schedule({ job: 'drain', reason: 'kick', dueAt: between })
-		await Bun.sleep(10)
+		expect((await wakes.pending('drain')).map((wake) => wake.owned)).toEqual([false, true, false])
 		expect(await leases.finish(run, 'succeeded')).toBe(true)
-		expect((await leases.state('drain'))?.lastFinishedAt?.getTime()).toBeGreaterThan(between.getTime())
-		expect(await dues('drain')).toEqual([between.getTime()])
+		expect(await dues('drain')).toEqual([start.getTime() - HOUR, start.getTime()])
+	})
+
+	test('a later kick merged into a wake the run owns takes it from the run: its finish leaves it to the next run', async () => {
+		// A kick due in one second starts a run; a later kick in that second merges into its wake, and its process stops
+		// before it starts anything.
+		const first = at(-500)
+		await wakes.schedule({ job: 'drain', reason: 'kick', dueAt: first, dedupe: 'kick:drain:s' })
+		const run = await lease('drain')
+		expect(await wakes.pending('drain')).toEqual([expect.objectContaining({ owned: true })])
+		expect(await wakes.schedule({ job: 'drain', reason: 'kick', dueAt: at(0), dedupe: 'kick:drain:s' })).toMatchObject({ dueAt: first, owned: false })
+		expect(await leases.finish(run, 'succeeded')).toBe(true)
+		expect(await dues('drain')).toEqual([first.getTime()])
+		expect(await leases.finish(await lease('drain', 'next'), 'succeeded')).toBe(true)
+		expect(await wakes.pending('drain')).toEqual([])
+	})
+
+	test("a cron wake scheduled again under its run stays the run's: the finish consumes it and schedules the next fire", async () => {
+		const fire = at(-MINUTE)
+		await wakes.schedule({ job: 'digest', reason: 'cron', dueAt: fire, dedupe: 'cron:digest:0 * * * *' })
+		const run = await lease('digest')
+		// A repair tick while the run holds the lease schedules the job's next fire under the same key.
+		expect(await wakes.schedule({ job: 'digest', reason: 'cron', dueAt: at(HOUR), dedupe: 'cron:digest:0 * * * *' })).toMatchObject({
+			dueAt: fire,
+			owned: true,
+		})
+		const nextFire = at(HOUR)
+		expect(await leases.finish(run, 'succeeded', { kind: 'completed', nextCron: { expression: '0 * * * *', dueAt: nextFire } })).toBe(true)
+		expect(await dues('digest')).toEqual([nextFire.getTime()])
+	})
+
+	test('a reap and a finish leave no wake owned', async () => {
+		await wakes.schedule({ job: 'drain', reason: 'kick', dueAt: at(-MINUTE) })
+		await lease('drain', 'crashed')
+		expire('drain')
+		expect(await leases.reapCrashed('drain')).toBe(true)
+		expect((await wakes.pending('drain')).map((wake) => wake.owned)).toEqual([false])
+		const lost = await lease('drain', 'failed')
+		expect((await wakes.pending('drain')).map((wake) => wake.owned)).toEqual([true])
+		expect(await leases.finish(lost, 'failed')).toBe(true)
+		expect((await wakes.pending('drain')).map((wake) => wake.owned)).toEqual([false])
+	})
+
+	test('the database clock: now, and how far the next wake is from it', async () => {
+		const now = (await wakes.now()).getTime()
+		expect(Math.abs(now - Date.now())).toBeLessThan(1_000)
+		expect(await wakes.untilNext()).toBeNull()
+		await wakes.schedule({ job: 'drain', reason: 'kick', dueAt: new Date(now + MINUTE) })
+		const until = await wakes.untilNext()
+		expect(until).toBeGreaterThan(MINUTE - 1_000)
+		expect(until).toBeLessThanOrEqual(MINUTE)
 	})
 })
 

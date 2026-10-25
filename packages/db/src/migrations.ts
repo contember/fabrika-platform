@@ -274,4 +274,11 @@ CREATE INDEX ${JOB_WAKES_TABLE}_due ON ${JOB_WAKES_TABLE} (due_at);
 CREATE UNIQUE INDEX ${JOB_WAKES_TABLE}_dedupe ON ${JOB_WAKES_TABLE} (dedupe) WHERE dedupe IS NOT NULL;
 `,
 	}),
+	Object.freeze({
+		name: '0010_job_wakes_owned.sql',
+		sql: `-- The wakes the run holding the job's lease took when it took the lease: its finish consumes or retries exactly these.
+-- A wake written or merged into afterwards is not taken, though due before the run started: the run may not have read its work.
+ALTER TABLE ${JOB_WAKES_TABLE} ADD COLUMN owned BOOLEAN NOT NULL DEFAULT false;
+`,
+	}),
 ])

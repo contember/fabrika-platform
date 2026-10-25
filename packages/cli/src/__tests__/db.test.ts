@@ -354,7 +354,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		const { root, source } = application()
 		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL)')
 		expect(await run(root, 'migrate', [], { source })).toBe(
-			'migrations applied: fabrika/0001_webhooks.sql, fabrika/0002_job_leases.sql, fabrika/0003_form_admissions.sql, fabrika/0004_job_kicks.sql, fabrika/0005_form_files.sql, fabrika/0006_form_bytes.sql, fabrika/0007_webhook_delivery_claims.sql, fabrika/0008_files.sql, fabrika/0009_job_wakes.sql, app/20261008120000_init.sql\n',
+			'migrations applied: fabrika/0001_webhooks.sql, fabrika/0002_job_leases.sql, fabrika/0003_form_admissions.sql, fabrika/0004_job_kicks.sql, fabrika/0005_form_files.sql, fabrika/0006_form_bytes.sql, fabrika/0007_webhook_delivery_claims.sql, fabrika/0008_files.sql, fabrika/0009_job_wakes.sql, fabrika/0010_job_wakes_owned.sql, app/20261008120000_init.sql\n',
 		)
 		expect(await run(root, 'migrate', [], { source })).toBe('migrations: already up to date\n')
 

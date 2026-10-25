@@ -195,6 +195,8 @@ export interface JobScheduler {
 	crashed(job: string, options?: Pick<JobRunOptions, 'reporter'>): Promise<void>
 	/** When the scheduler wakes next: `JobWakes.next`, read in `using` when given. */
 	next(using?: Session): Promise<Date | null>
+	/** How far the next wake is from the database's now, in milliseconds: `JobWakes.untilNext`, read in `using` when given. */
+	untilNext(using?: Session): Promise<number | null>
 	/** Reports a failure of the scheduler itself: the alarm's or the repair's. Never rejects. */
 	failed(step: 'alarm' | 'repair', error: unknown): Promise<void>
 }
@@ -479,7 +481,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			const now = (await framework.jobs.now()).getTime()
 			for (const job of bound.values()) {
 				const due = (await framework.wakes.pending(job.name)).filter((wake) => wake.dueAt.getTime() <= now)
-				if (due.length > 0 && !(await ownedByHolder(job.name, due, framework.jobs))) {
+				if (due.length > 0 && !(await ownedByHolder(job.name, now, framework.jobs, framework.wakes))) {
 					track(kick(job.name))
 				}
 			}
@@ -695,19 +697,20 @@ interface Scheduled {
 }
 
 /**
- * Whether a run holds `job`'s lease and owns every wake of `due`, each due at or before its start: its finish consumes
+ * Whether a run holds `job`'s lease and owns every wake due by `now`, as it took them with the lease: its finish consumes
  * them, so a kick or a pending run for them would only repeat that run. A post-commit kick's run usually owns its wake.
  */
-async function ownedByHolder(job: string, due: readonly Wake[], leases: JobLeases): Promise<boolean> {
+async function ownedByHolder(job: string, now: number, leases: JobLeases, wakes: JobWakes): Promise<boolean> {
 	const state = await leases.state(job)
-	const started = state === null || state.holder === null ? null : state.lastStartedAt
-	return started !== null && due.every((wake) => wake.dueAt.getTime() <= started.getTime())
+	if (state === null || state.holder === null) {
+		return false
+	}
+	return (await wakes.pending(job)).filter((wake) => wake.dueAt.getTime() <= now).every((wake) => wake.owned)
 }
 
-/** The wakes the run holding `job`'s lease owns: those due at or before its start, on the database's clock. */
+/** The wakes the run holding `job`'s lease owns: those it took with the lease. */
 async function ownedWakes(job: string, context: RunnerContext): Promise<readonly Wake[]> {
-	const started = (await context.leases.state(job))?.lastStartedAt ?? null
-	return started === null ? [] : (await context.wakes.pending(job)).filter((wake) => wake.dueAt.getTime() <= started.getTime())
+	return (await context.wakes.pending(job)).filter((wake) => wake.owned)
 }
 
 /**
@@ -825,7 +828,7 @@ function jobScheduler(input: SchedulerInput): JobScheduler {
 				return { fence: null, reaped }
 			}
 			const fence = await leases.tryAcquire(name, attemptId(), job.timeoutMs, job.timeoutMs + LEASE_GRACE_MS)
-			if (fence === null && !(await ownedByHolder(name, due, leases))) {
+			if (fence === null && !(await ownedByHolder(name, now, leases, framework.wakes))) {
 				// The run holding the lease runs once more after it succeeded; a wake it did not own stays pending.
 				await leases.markPending(name)
 			}
@@ -839,6 +842,9 @@ function jobScheduler(input: SchedulerInput): JobScheduler {
 		},
 		next(using?: Session): Promise<Date | null> {
 			return framework.wakes.next(using)
+		},
+		untilNext(using?: Session): Promise<number | null> {
+			return framework.wakes.untilNext(using)
 		},
 		async failed(step: 'alarm' | 'repair', error: unknown): Promise<void> {
 			try {

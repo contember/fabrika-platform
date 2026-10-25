@@ -816,7 +816,7 @@ async function claimRows(
 		// The job runs again when this claim would next find a row; a claim that found nothing leaves the re-arm as it is.
 		const fence = runtime.capabilities.fence()
 		if (fence !== null && rows.length > 0) {
-			// A full claim left rows behind: due at once, a millisecond after the claim so the run holding the lease never owns it.
+			// A full claim left rows behind: due at once.
 			let rearm: Date | null = new Date(now.getTime() + 1)
 			if (rows.length < limit) {
 				const later = nextClaimNode(rowState(table, conditions, [byDue], 1), waiting, scope, model.dates, dialect)
@@ -828,7 +828,7 @@ async function claimRows(
 				)
 				rearm = row === undefined ? null : new Date(Math.max(dueOf(row, table, queue.due).getTime(), now.getTime() + CLAIM_REARM_MIN_MS))
 			}
-			await rearmClaim(runtime, session, fence.job, rearm)
+			await rearmClaim(runtime, session, fence, rearm)
 		}
 		return { rows: await answerFiles(model, site.files, session, answerRows(dialect, table, rowColumnsOf(model), rows), grant.action), claimed }
 	})

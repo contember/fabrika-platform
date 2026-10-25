@@ -969,6 +969,16 @@
 			"enum_labels": []
 		},
 		{
+			"table_name": "fabrika_wakes",
+			"column_name": "owned",
+			"type_name": "bool",
+			"type_type": "b",
+			"type_category": "B",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
 			"table_name": "fabrika_webhook_bindings",
 			"column_name": "id",
 			"type_name": "text",

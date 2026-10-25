@@ -18,6 +18,7 @@ import { diskAssets } from './disk-assets.js'
 import type { FetchService, RequestExecutionContext } from './fetch.js'
 import { clamscanScanner } from './files/clamscan.js'
 import { boot, BootError, type IamKeySource } from './implement/boot.js'
+import { REQUEST_BUDGET_MS } from './implement/bounded.js'
 import { type CrashEvents, environmentCrashReporter, type ProcessCrashKind, reportFatalCrashes, reportWithin } from './implement/crashes.js'
 import { type CapturedEnvironment, captureEnvironment } from './implement/environment.js'
 import { type ContractImplementation, isContractImplementation } from './implement/implement.js'
@@ -141,10 +142,24 @@ const SHUTDOWN_DRAIN_MS = 10_000
 export const WAKE_RETRY_MS = 1_000
 
 /**
+ * How long after a write projected the timer a refresh that cannot see the projected wake looks again: the write may still
+ * be committing, and no transaction that writes a wake outlasts a request's budget.
+ */
+export const WAKE_SETTLE_MS = REQUEST_BUDGET_MS + 5_000
+
+/** A wake a write of this process projected and no refresh has seen yet: its time, and until when the timer looks for it. */
+interface UnseenWake {
+	readonly at: number
+	readonly until: number
+	/** The next look's wait: it doubles from `WAKE_RETRY_MS`. */
+	readonly retry: number
+}
+
+/**
  * The serving process's one timer to the jobs' next wake, Bun's side of the scheduler (ADR-0065 §5): it kicks each job
  * whose wake came due through the kick path, so the lease admits one container. A write of this process lowers it in
- * that write's transaction (`project`, `BootOptions.projectWakes`); a wake another container wrote is found when the
- * serving process refreshes it with its job check. Crontab still runs the schedule.
+ * that write's transaction (`project`, `BootOptions.projectWakes`), by the delay on the database's clock; a wake another
+ * container wrote is found when the serving process refreshes it with its job check. Crontab still runs the schedule.
  */
 export class WakeTimer {
 	readonly #track: (kick: Promise<void>) => void
@@ -156,6 +171,7 @@ export class WakeTimer {
 	/** The refresh under way: one at a time, and a refresh asked for meanwhile looks again after the retry wait. */
 	#refreshing: Promise<void> | null = null
 	#again = false
+	#unseen: UnseenWake | null = null
 
 	/** `track` holds each kick the timer starts until it ended, for the shutdown drain. */
 	constructor(track: (kick: Promise<void>) => void) {
@@ -167,16 +183,25 @@ export class WakeTimer {
 		this.#jobs = jobs
 	}
 
-	/** `BootOptions.projectWakes`: never later than the next wake the write leaves, which a rollback only makes early. */
+	/**
+	 * `BootOptions.projectWakes`: never later than the next wake the write leaves, which a rollback only makes early. The
+	 * timer may fire before the write commits, so the wake stays unseen until a refresh finds it.
+	 */
 	readonly project = async (transaction: Session): Promise<void> => {
-		const next = await this.#jobs?.scheduler?.next(transaction)
-		if (next !== undefined && next !== null) {
-			this.#lower(next.getTime())
+		const delay = await this.#jobs?.scheduler?.untilNext(transaction)
+		if (delay === undefined || delay === null || this.#stopped) {
+			return
 		}
+		const now = Date.now()
+		this.#unseen = { at: Math.min(now + delay, this.#unseen?.at ?? Number.POSITIVE_INFINITY), until: now + WAKE_SETTLE_MS, retry: WAKE_RETRY_MS }
+		this.#lower(now + delay)
 	}
 
 	/** Kicks every job whose wake is due and arms the timer at the next one; it never rejects. */
 	refresh(): Promise<void> {
+		if (this.#stopped) {
+			return Promise.resolve()
+		}
 		if (this.#refreshing !== null) {
 			this.#again = true
 			return this.#refreshing
@@ -194,11 +219,13 @@ export class WakeTimer {
 
 	async #refresh(): Promise<void> {
 		const jobs = this.#jobs
-		if (jobs === null || this.#stopped) {
+		if (jobs === null) {
 			return
 		}
 		clearTimeout(this.#timer)
 		this.#at = Number.POSITIVE_INFINITY
+		const unseen = this.#unseen
+		this.#unseen = null
 		let delay: number | null
 		try {
 			delay = await jobs.wake(this.#track)
@@ -207,14 +234,32 @@ export class WakeTimer {
 			console.error('fabrika: the wake timer could not read the jobs: driver_failed')
 			delay = 0
 		}
+		const now = Date.now()
+		// A projected wake this refresh did not find: its write may not have committed yet.
+		if (unseen !== null && (delay === null || now + delay > unseen.at + WAKE_RETRY_MS) && now < unseen.until) {
+			this.#keepUnseen(unseen)
+			this.#lower(now + unseen.retry)
+		}
 		if (delay !== null) {
-			this.#lower(Date.now() + delay)
+			this.#lower(now + delay)
 		}
 	}
 
-	stop(): void {
+	/** Keeps looking for `unseen`, later next time, beside what writes projected during the refresh. */
+	#keepUnseen(unseen: UnseenWake): void {
+		const later = this.#unseen
+		this.#unseen = {
+			at: Math.min(unseen.at, later?.at ?? Number.POSITIVE_INFINITY),
+			until: Math.max(unseen.until, later?.until ?? 0),
+			retry: unseen.retry * 2,
+		}
+	}
+
+	/** Fires no more and refreshes no more; resolves once a refresh under way ended, so it starts no kick after it. */
+	async stop(): Promise<void> {
 		this.#stopped = true
 		clearTimeout(this.#timer)
+		await this.#refreshing
 	}
 
 	#lower(next: number): void {
@@ -529,7 +574,8 @@ async function startContractServer(
 	}
 	const stop = async (): Promise<void> => {
 		clearInterval(checks)
-		wakes.stop()
+		// Before the kicks stop and the drain takes the timer's kicks: a refresh under way may still start one.
+		await drainWithin(wakes.stop(), SHUTDOWN_DRAIN_MS)
 		served.stopKicks()
 		await server.stop(false)
 		await drainWithin(Promise.all([handler.drain(), ...timerKicks]).then(() => undefined), SHUTDOWN_DRAIN_MS)

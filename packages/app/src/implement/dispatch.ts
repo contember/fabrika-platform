@@ -1099,16 +1099,16 @@ export class ContractRuntime {
 
 	/**
 	 * Writes each kick's wake in the invocation's transaction, after the handler and before the commit: a rollback leaves
-	 * none, and a crash between the commit and the kick's start leaves the wake to the scheduler.
+	 * none, and a crash between the commit and the kick's start leaves the wake to the scheduler. A kick due now is due by
+	 * the database's clock, which takes the lease and marks the wakes a run owns.
 	 */
 	async #recordKicks(invocation: Invocation | null, kicks: KickRecorder): Promise<void> {
-		const wakes = kicks.wakes(new Date())
 		const framework = this.#parts.framework
-		if (invocation === null || framework === null || wakes.length === 0) {
+		if (invocation === null || framework === null || !kicks.recorded()) {
 			return
 		}
 		const transaction = await invocation.frameworkSite('ctx.kick').session()
-		for (const wake of wakes) {
+		for (const wake of kicks.wakes(await framework.wakes.now(transaction))) {
 			await framework.wakes.schedule(wake, transaction)
 		}
 	}
