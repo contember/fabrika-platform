@@ -7,7 +7,7 @@
 
 import { HttpIamMembership, HttpIamTerminals } from '@fabrika/auth'
 import type { Database } from '@fabrika/db'
-import { isScopedDatabase } from '@fabrika/db/framework'
+import { isScopedDatabase, type Session } from '@fabrika/db/framework'
 import type { PostgresOptions } from '@fabrika/db/postgres'
 import type { EmailProviderRegistry } from '@fabrika/email'
 import { directoryEmailProvider } from '@fabrika/email/directory'
@@ -22,7 +22,7 @@ import { type CrashEvents, environmentCrashReporter, type ProcessCrashKind, repo
 import { type CapturedEnvironment, captureEnvironment } from './implement/environment.js'
 import { type ContractImplementation, isContractImplementation } from './implement/implement.js'
 import { issuerWorkloadTokens, type WorkloadTokenSource } from './implement/workload.js'
-import { JOB_CHECK_INTERVAL_MS, type JobRunOptions, type JobRunResult } from './jobs/runner.js'
+import { type ContractJobs, JOB_CHECK_INTERVAL_MS, type JobRunOptions, type JobRunResult } from './jobs/runner.js'
 import { makeProcessUndumpable } from './undumpable.js'
 
 export { diskAssets } from './disk-assets.js'
@@ -135,6 +135,101 @@ async function loadDataLayer(): Promise<DataLayerOpeners> {
 const SHUTDOWN_DRAIN_MS = 10_000
 
 /** Waits for `drain`, at most `ms`; a drain the bound cuts short is logged. */
+/**
+ * How long the wake timer waits for a wake that is already due: such a wake's own kick is under way (the post-commit start,
+ * or the timer's last one), and looking at once would kick its job a second time before that kick took the lease.
+ */
+export const WAKE_RETRY_MS = 1_000
+
+/**
+ * The serving process's one timer to the jobs' next wake, Bun's side of the scheduler (ADR-0065 §5): it kicks each job
+ * whose wake came due through the kick path, so the lease admits one container. A write of this process lowers it in
+ * that write's transaction (`project`, `BootOptions.projectWakes`); a wake another container wrote is found when the
+ * serving process refreshes it with its job check. Crontab still runs the schedule.
+ */
+export class WakeTimer {
+	readonly #track: (kick: Promise<void>) => void
+	#jobs: ContractJobs | null = null
+	#timer: ReturnType<typeof setTimeout> | undefined
+	/** When the armed timer fires, in epoch milliseconds; `Infinity` while none is armed. */
+	#at = Number.POSITIVE_INFINITY
+	#stopped = false
+	/** The refresh under way: one at a time, and a refresh asked for meanwhile looks again after the retry wait. */
+	#refreshing: Promise<void> | null = null
+	#again = false
+
+	/** `track` holds each kick the timer starts until it ended, for the shutdown drain. */
+	constructor(track: (kick: Promise<void>) => void) {
+		this.#track = track
+	}
+
+	/** The booted application's jobs; until then nothing fires. */
+	attach(jobs: ContractJobs): void {
+		this.#jobs = jobs
+	}
+
+	/** `BootOptions.projectWakes`: never later than the next wake the write leaves, which a rollback only makes early. */
+	readonly project = async (transaction: Session): Promise<void> => {
+		const next = await this.#jobs?.scheduler?.next(transaction)
+		if (next !== undefined && next !== null) {
+			this.#lower(next.getTime())
+		}
+	}
+
+	/** Kicks every job whose wake is due and arms the timer at the next one; it never rejects. */
+	refresh(): Promise<void> {
+		if (this.#refreshing !== null) {
+			this.#again = true
+			return this.#refreshing
+		}
+		const refreshing = this.#refresh().finally(() => {
+			this.#refreshing = null
+			if (this.#again) {
+				this.#again = false
+				this.#lower(Date.now())
+			}
+		})
+		this.#refreshing = refreshing
+		return refreshing
+	}
+
+	async #refresh(): Promise<void> {
+		const jobs = this.#jobs
+		if (jobs === null || this.#stopped) {
+			return
+		}
+		clearTimeout(this.#timer)
+		this.#at = Number.POSITIVE_INFINITY
+		let delay: number | null
+		try {
+			delay = await jobs.wake(this.#track)
+		} catch {
+			// A driver error may quote the database URL.
+			console.error('fabrika: the wake timer could not read the jobs: driver_failed')
+			delay = 0
+		}
+		if (delay !== null) {
+			this.#lower(Date.now() + delay)
+		}
+	}
+
+	stop(): void {
+		this.#stopped = true
+		clearTimeout(this.#timer)
+	}
+
+	#lower(next: number): void {
+		const now = Date.now()
+		const at = next <= now ? now + WAKE_RETRY_MS : next
+		if (this.#stopped || at >= this.#at) {
+			return
+		}
+		clearTimeout(this.#timer)
+		this.#at = at
+		this.#timer = setTimeout(() => void this.refresh(), at - now)
+	}
+}
+
 async function drainWithin(drain: Promise<void>, ms: number): Promise<void> {
 	const expired = Promise.withResolvers<void>()
 	const timer = setTimeout(() => {
@@ -396,6 +491,11 @@ async function startContractServer(
 	// Zerops is where a Bun application runs, and a namespace there is one private network (ADR-0022 rule 5).
 	const files = openFileStorage(environment.framework)
 	const workloadTokens = workloadTokensOf(environment.framework)
+	const timerKicks = new Set<Promise<void>>()
+	const wakes = new WakeTimer((kick) => {
+		timerKicks.add(kick)
+		void kick.finally(() => timerKicks.delete(kick))
+	})
 	const served = boot(app, {
 		environment,
 		iam,
@@ -408,24 +508,31 @@ async function startContractServer(
 		requireProxySecret: true,
 		localEmailProviders: LOCAL_EMAIL_PROVIDERS,
 		connections: databaseConnections(environment.framework[DATABASE_CONNECTIONS]) ?? DEFAULT_DATABASE_CONNECTIONS,
+		projectWakes: wakes.project,
 		...(operationsFetch === undefined ? {} : { operationsFetch }),
 	})
+	wakes.attach(served.jobs)
 	// The work a request leaves running (a failure's report, a kicked run) is drained, within a bound, before the database closes.
 	const handler = createBunHandler({ fetch: (request, _env: undefined, exec) => served.fetch(request, exec) }, undefined, {
 		onBackgroundError: () => console.error('fabrika: a background task of a request failed'),
 	})
 	const server = Bun.serve({ port, hostname: '0.0.0.0', fetch: (request) => handler.fetch(request) })
-	// The crontab may never fire; the serving process notices a job that stopped succeeding without being invoked.
-	const check = () => void served.jobs.check()
+	// The crontab may never fire; the serving process notices a job that stopped succeeding without being invoked, and a
+	// wake another container wrote.
+	const check = () => {
+		void served.jobs.check()
+		void wakes.refresh()
+	}
 	const checks = served.jobs.names.length === 0 ? undefined : setInterval(check, JOB_CHECK_INTERVAL_MS)
 	if (checks !== undefined) {
 		check()
 	}
 	const stop = async (): Promise<void> => {
 		clearInterval(checks)
+		wakes.stop()
 		served.stopKicks()
 		await server.stop(false)
-		await drainWithin(handler.drain(), SHUTDOWN_DRAIN_MS)
+		await drainWithin(Promise.all([handler.drain(), ...timerKicks]).then(() => undefined), SHUTDOWN_DRAIN_MS)
 		await database?.close()
 	}
 	process.once('SIGTERM', () => void stop().then(() => process.exit(0)))

@@ -10,6 +10,7 @@ import {
 	type DataSite,
 	type FileBinding,
 	type InvocationTransaction,
+	type NewWake,
 	type QueryRefusal,
 	QueryRefusedError,
 	type Session,
@@ -466,22 +467,58 @@ export function jobSql(frame: RequestFrame, data: DataAccess, mode: SqlMode, ses
 	return data.sql({ mode, check: boundTo(frame, ended, 'tx.sql'), session: async () => session, fail: () => session.fail() })
 }
 
+/** The kicks of one invocation, as `ctx.kick` recorded them. */
+export interface KickRecorder {
+	readonly kick: (job: string, options?: unknown) => void
+	/** The jobs kicked without `at`, each once: what the dispatcher starts after the commit. */
+	readonly kicked: () => readonly string[]
+	/**
+	 * Every kick's wake, one per job and due second (`kick:<job>:<due second>`); a kick without `at` is due at `now`. The
+	 * site writes them in its transaction, so a rollback leaves none.
+	 */
+	readonly wakes: (now: Date) => readonly NewWake[]
+}
+
+/** A kick's due time: `undefined` for one without options; anything but `{ at: <valid Date> }` is refused. */
+function kickAt(site: string, options: unknown): Date | undefined {
+	if (options === undefined) {
+		return undefined
+	}
+	const keys = isPlainObject(options) ? Object.keys(options) : null
+	const at: unknown = isPlainObject(options) ? ownField(options, 'at') : undefined
+	if (keys === null || keys.length !== 1 || keys[0] !== 'at' || !(at instanceof Date) || Number.isNaN(at.getTime())) {
+		throw new QueryRefusedError('invalid_argument', `${site}: ctx.kick takes a job and optionally { at: <Date> }; a kick carries nothing else`)
+	}
+	return new Date(at.getTime())
+}
+
+const kickKey = (job: string, due: Date): string => `kick:${job}:${Math.floor(due.getTime() / 1_000)}`
+
 /**
- * `ctx.kick` of one invocation: it names only a declared job, and records it; the dispatcher sends each recorded job once,
- * after the commit, and nothing on a rollback.
+ * `ctx.kick` of one invocation: it names only a declared job, and records it; the site writes each kick's wake in its
+ * transaction, and the dispatcher starts each job kicked without `at` once, after the commit, and nothing on a rollback.
  */
-export function kickRecorder(
-	site: string,
-	declared: readonly string[],
-): { readonly kick: (job: string) => void; readonly kicked: () => readonly string[] } {
-	const kicked = new Set<string>()
+export function kickRecorder(site: string, declared: readonly string[]): KickRecorder {
+	const kicks: { readonly job: string; readonly at: Date | undefined }[] = []
 	return {
-		kick: (job: string) => {
+		kick: (job: string, options?: unknown) => {
 			if (!declared.includes(job)) {
 				throw new CapabilityRefusedError('undeclared_kick', `${site} does not declare kicks: ['${String(job)}']`)
 			}
-			kicked.add(job)
+			kicks.push({ job, at: kickAt(site, options) })
 		},
-		kicked: () => [...kicked],
+		kicked: () => [...new Set(kicks.filter((kick) => kick.at === undefined).map((kick) => kick.job))],
+		wakes: (now: Date) => {
+			const wakes = new Map<string, NewWake>()
+			for (const { job, at } of kicks) {
+				const dueAt = at ?? now
+				const dedupe = kickKey(job, dueAt)
+				const kept = wakes.get(dedupe)
+				if (kept === undefined || dueAt < kept.dueAt) {
+					wakes.set(dedupe, { job, reason: 'kick', dueAt, dedupe })
+				}
+			}
+			return [...wakes.values()]
+		},
 	}
 }

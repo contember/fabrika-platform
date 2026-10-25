@@ -46,6 +46,7 @@ import {
 	jobHandles,
 	jobSql,
 	jobSqlOutsideTransaction,
+	type KickRecorder,
 	kickRecorder,
 	siteData,
 	type SiteDeclaration,
@@ -140,6 +141,13 @@ export interface ContractJobs {
 	 * twice its period. The serving process calls it every `JOB_CHECK_INTERVAL_MS`; it never throws.
 	 */
 	check(options?: Pick<JobRunOptions, 'reporter'>): Promise<void>
+	/**
+	 * The serving process's wake timer on Bun, where crontab runs the schedule: reaps a crashed holder of every job and
+	 * kicks each contract job with a due wake through the kick path, handing each kick to `track` until it ended. Answers
+	 * how long until a wake is due next on the database's clock (0 while one still is), `null` when none is pending. The
+	 * first call deletes the wakes of jobs the contract no longer declares.
+	 */
+	wake(track: (kick: Promise<void>) => void): Promise<number | null>
 	/** What the Cloudflare object's alarm drives the jobs through; `null` without `@fabrika/db`. */
 	readonly scheduler: JobScheduler | null
 }
@@ -367,6 +375,16 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 	}
 	const names = Object.freeze(entries.map(([name]) => name))
 	const framework = input.framework
+	const declaredJobs: readonly (Scheduled & { readonly timeoutMs: number })[] = [
+		...[...bound.values()].map((job) => ({ name: job.name, expression: job.artifact.schedule, schedule: job.schedule, timeoutMs: job.timeoutMs })),
+		...[...frameworkJobs.values()].map((own) => ({
+			name: own.name,
+			expression: own.job.schedule,
+			schedule: own.schedule,
+			timeoutMs: own.job.timeoutMs,
+		})),
+	]
+	let reconciled = false
 	const contextFor = (tables: FrameworkTables, chosen: OperationsReporter | undefined): RunnerContext => ({
 		artifact: input.artifact,
 		database: input.database,
@@ -435,17 +453,33 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 				admission.release()
 			}
 		},
+		async wake(track: (kick: Promise<void>) => void): Promise<number | null> {
+			if (framework === null) {
+				return null
+			}
+			if (!reconciled) {
+				await framework.wakes.reconcile(declaredJobs.map((job) => ({ job: job.name, expression: job.expression })))
+				reconciled = true
+			}
+			// A crashed holder's expiry is a wake too, and a kick never takes a lease over.
+			for (const job of declaredJobs) {
+				if (await framework.jobs.reapCrashed(job.name)) {
+					await reportCrashed(job.name, input.reporter)
+				}
+			}
+			const now = (await framework.jobs.now()).getTime()
+			for (const job of bound.values()) {
+				const due = (await framework.wakes.pending(job.name)).filter((wake) => wake.dueAt.getTime() <= now)
+				if (due.length > 0 && !(await ownedByHolder(job.name, due, framework.jobs))) {
+					track(kick(job.name))
+				}
+			}
+			const next = await framework.wakes.next()
+			return next === null ? null : Math.max(0, next.getTime() - now)
+		},
 		scheduler: framework === null ? null : jobScheduler({
 			framework,
-			declared: [
-				...[...bound.values()].map((job) => ({ name: job.name, expression: job.artifact.schedule, schedule: job.schedule, timeoutMs: job.timeoutMs })),
-				...[...frameworkJobs.values()].map((own) => ({
-					name: own.name,
-					expression: own.job.schedule,
-					schedule: own.schedule,
-					timeoutMs: own.job.timeoutMs,
-				})),
-			],
+			declared: declaredJobs,
 			contextFor: (reporter) => contextFor(framework, reporter),
 			run(name: string, fence: LeaseFence, options: JobRunOptions): Promise<JobRunResult> {
 				const clock = options.clock ?? systemClock
@@ -623,6 +657,16 @@ interface Scheduled {
 	readonly schedule: CronSchedule
 }
 
+/**
+ * Whether a run holds `job`'s lease and owns every wake of `due`, each due at or before its start: its finish consumes
+ * them, so a kick or a pending run for them would only repeat that run. A post-commit kick's run usually owns its wake.
+ */
+async function ownedByHolder(job: string, due: readonly Wake[], leases: JobLeases): Promise<boolean> {
+	const state = await leases.state(job)
+	const started = state === null || state.holder === null ? null : state.lastStartedAt
+	return started !== null && due.every((wake) => wake.dueAt.getTime() <= started.getTime())
+}
+
 /** The wakes the run holding `job`'s lease owns: those due at or before its start, on the database's clock. */
 async function ownedWakes(job: string, context: RunnerContext): Promise<readonly Wake[]> {
 	const started = (await context.leases.state(job))?.lastStartedAt ?? null
@@ -630,13 +674,13 @@ async function ownedWakes(job: string, context: RunnerContext): Promise<readonly
 }
 
 /**
- * What a finish does with the owned wakes when the run is done with them: they are consumed, and when the job keeps
- * a cron wake (always, for a run the alarm started) its next fire is scheduled under its key. A runtime without wakes
- * (Bun) finds none and gets the store's default.
+ * What a finish does with the owned wakes when the run is done with them, succeeded or failed past its retries: they
+ * are consumed, and when the job keeps a cron wake (always, for a run the alarm started) its next fire is scheduled
+ * under its key. On Bun, where crontab runs the schedule, a job keeps none.
  */
-async function completion(job: Scheduled, context: RunnerContext, durable: boolean): Promise<FinishWakes | undefined> {
+async function completion(job: Scheduled, context: RunnerContext, durable: boolean): Promise<FinishWakes> {
 	if (!durable && !(await context.wakes.pending(job.name)).some((wake) => wake.reason === 'cron')) {
-		return undefined
+		return { kind: 'completed' }
 	}
 	const dueAt = nextFire(job.schedule, await context.leases.now())
 	return dueAt === null ? { kind: 'completed' } : { kind: 'completed', nextCron: { expression: job.expression, dueAt } }
@@ -730,11 +774,12 @@ function jobScheduler(input: SchedulerInput): JobScheduler {
 			await leases.register(name)
 			const reaped = await leases.reapCrashed(name)
 			const now = (await leases.now()).getTime()
-			if (!(await framework.wakes.pending(name)).some((wake) => wake.dueAt.getTime() <= now)) {
+			const due = (await framework.wakes.pending(name)).filter((wake) => wake.dueAt.getTime() <= now)
+			if (due.length === 0) {
 				return { fence: null, reaped }
 			}
 			const fence = await leases.tryAcquire(name, attemptId(), job.timeoutMs, job.timeoutMs + LEASE_GRACE_MS)
-			if (fence === null) {
+			if (fence === null && !(await ownedByHolder(name, due, leases))) {
 				// The run holding the lease runs once more after it succeeded; a wake it did not own stays pending.
 				await leases.markPending(name)
 			}
@@ -767,6 +812,11 @@ function jobScheduler(input: SchedulerInput): JobScheduler {
 
 interface Progress {
 	attempts: number
+}
+
+/** What the attempt that succeeded kicked: `null` until a handler returned. */
+interface Kicked {
+	recorder: KickRecorder | null
 }
 
 /**
@@ -878,8 +928,8 @@ async function runLeased(
 	const scheduled: Scheduled = { name: job.name, expression: job.artifact.schedule, schedule: job.schedule }
 	const attempts = job.artifact.retries + 1
 	progress.attempts = durable ? Math.max(...owned.map((wake) => wake.attempt)) + 1 : 1
-	// The jobs the succeeding attempt kicked; a failed attempt's kicks are dropped with its writes.
-	const kicked: string[] = []
+	// The kicks of the succeeding attempt; a failed attempt's kicks are dropped with its writes.
+	const kicked: Kicked = { recorder: null }
 	let outcome = await attemptOnce(job, fence, progress.attempts, deadline, clock, context, kicked, control)
 	while (!durable && outcome !== null && outcome.code !== 'stopped' && !outcome.final && progress.attempts < attempts) {
 		console.error(`fabrika: job '${job.name}' attempt ${progress.attempts} of ${attempts} failed: ${describeFailure(outcome)}`)
@@ -896,9 +946,14 @@ async function runLeased(
 		outcome = await attemptOnce(job, fence, progress.attempts, deadline, clock, context, kicked, control)
 	}
 	if (outcome === null) {
+		// Before the finish, so a crash between it and a kick's start leaves the kick's wake to the scheduler.
+		const kicks = kicked.recorder
+		for (const wake of kicks?.wakes(await leases.now()) ?? []) {
+			await context.wakes.schedule(wake)
+		}
 		if (await leases.finish(fence, 'succeeded', await completion(scheduled, context, durable))) {
 			// After the lease is released, so a job that kicks another never waits on its own lease; a kick never rejects.
-			await Promise.all(kicked.map((name) => context.kick(name)))
+			await Promise.all((kicks?.kicked() ?? []).map((name) => context.kick(name)))
 			return { status: 'succeeded', attempts: progress.attempts }
 		}
 		return failed(job, progress.attempts, failure('lease_lost'), context.reporter)
@@ -921,8 +976,8 @@ async function runLeased(
 			? { status: 'failed', attempts: progress.attempts, code: outcome.code }
 			: { status: 'failed', attempts: progress.attempts, code: outcome.code, reason: outcome.why.reason }
 	}
-	// Past its retries a durable run is done with its wakes: the next cron fire is scheduled, a kick's wake removed.
-	await leases.finish(fence, 'failed', durable ? await completion(scheduled, context, true) : undefined)
+	// Past its retries a run is done with its wakes: the next cron fire is scheduled, a kick's wake removed.
+	await leases.finish(fence, 'failed', await completion(scheduled, context, durable))
 	return failed(job, progress.attempts, outcome, context.reporter)
 }
 
@@ -1056,10 +1111,10 @@ async function attemptOnce(
 	deadline: number,
 	clock: JobClock,
 	context: RunnerContext,
-	kicked: string[],
+	kicked: Kicked,
 	control: RunControl,
 ): Promise<JobFailure | null> {
-	kicked.length = 0
+	kicked.recorder = null
 	if (isStopped(control)) {
 		return failure('stopped')
 	}
@@ -1106,7 +1161,7 @@ async function attemptOnce(
 			} else {
 				await runAsSite(`job '${job.name}'`, site.egress, async () => await job.handler({ ctx }))
 			}
-			kicked.push(...kicks.kicked())
+			kicked.recorder = kicks
 		}).then(() => null, (error: unknown) => {
 			const failed = failureOf(error, job.mailer === null ? null : (context.mail[job.mailer]?.sender.capabilities ?? null))
 			if (failed.code === 'handler_failed') context.revealHandlerErrors?.(`job '${job.name}' attempt ${attempt}`, error)

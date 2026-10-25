@@ -125,6 +125,11 @@ const SQL_RETRY: DialectTexts = {
 	sqlite: `update ${W} set due_at = cast(?2 as integer), attempt = attempt + 1 where job = ?1 and due_at <= ${SQLITE_RUN_START}`,
 }
 
+const SQL_DROP_CLAIM: DialectTexts = {
+	postgres: `delete from ${W} where job = $1 and dedupe = $2`,
+	sqlite: `delete from ${W} where job = ?1 and dedupe = ?2`,
+}
+
 // A wake is kept when its job is declared and it is no cron wake, or is the cron wake of the declared expression.
 const SQL_RECONCILE: DialectTexts = {
 	postgres: `delete from ${W} where not exists (select 1 from jsonb_to_recordset($1::jsonb) as d(job text, expression text)
@@ -260,6 +265,22 @@ export function leaseProjection(runtime: () => DataLayerRuntime): LeaseProjectio
 		}
 		await project(transaction)
 	}
+}
+
+/** A job's one claim wake: each claim's computation replaces it. */
+const claimKey = (job: string): string => `claim:${job}`
+
+/**
+ * Replaces `job`'s claim wake with one due at `dueAt`, or removes it for `null`, in `transaction`: the claim's fenced
+ * transaction, so the re-arm commits with the rows it leased. Only the latest claim's computation stands.
+ */
+export async function rearmClaim(runtime: DataLayerRuntime, transaction: Session, job: string, dueAt: Date | null): Promise<void> {
+	const parameters = dueAt === null ? null : newWake({ job, reason: 'claim', dueAt, dedupe: claimKey(job) })
+	await rows(transaction, SQL_DROP_CLAIM, [job, claimKey(job)])
+	if (parameters !== null) {
+		await insert(transaction, parameters, job)
+	}
+	await runtime.projectWakes?.(transaction)
 }
 
 export function jobWakes(runtime: () => DataLayerRuntime): JobWakes {

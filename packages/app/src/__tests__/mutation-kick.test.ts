@@ -1,17 +1,22 @@
 // Mutations that kick their job through `boot`'s real pipeline, on a REAL Postgres: a mutation's `ctx.kick` starts a run
 // of the job in the background once the mutation's transaction committed, under the job's own key; a refused request kicks
-// nothing; a process that stops aborts its kicked runs and frees their lease for the schedule. Skips cleanly when
-// FABRIKA_TEST_POSTGRES_URL is unset.
+// nothing; a process that stops aborts its kicked runs and frees their lease for the schedule. Every kick is also a
+// durable wake written in the mutation's transaction, and `ctx.kick(job, { at })` only that, which the wake timer runs.
+// Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
 
 import { boot, type ContractApp, type WorkloadTokenSource } from '@fabrika/app/implement'
 import { ENDPOINT_HEADER, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { applicationSchema, Database } from '@fabrika/db'
+import { QueryRefusedError, type Session } from '@fabrika/db/framework'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { WakeTimer } from '../bun'
 import { compileContract, ContractError } from '../contract'
 import type { RequestExecutionContext } from '../fetch'
+import { CapabilityRefusedError } from '../implement/capability'
+import { kickRecorder } from '../implement/invocation'
 import { testKit } from '../testing'
 import {
 	endpointHeaderFor,
@@ -72,7 +77,11 @@ create constraint trigger outbox_commit after insert on outbox deferrable initia
 
 beforeEach(async () => {
 	if (!hasPostgres) return
-	await admin((sql) => sql.unsafe(`truncate ${schema}.outbox; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_job_kicks`))
+	await admin((sql) =>
+		sql.unsafe(
+			`truncate ${schema}.outbox; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_job_kicks; delete from ${schema}.fabrika_wakes`,
+		)
+	)
 })
 
 afterAll(async () => {
@@ -144,13 +153,21 @@ interface Running {
 	readonly exchanged: string[]
 	/** Holds the next exchange of a workload key until the test opens it. */
 	holdExchange: Gate | null
-	call(path: '/api/outbox.enqueue' | '/api/outbox.refuse' | '/api/outbox.post' | '/api/outbox.peek', body: unknown): Promise<Answer>
-	/** Resolves once every kick the requests started has ended. */
+	call(
+		path: '/api/outbox.enqueue' | '/api/outbox.refuse' | '/api/outbox.post' | '/api/outbox.remind' | '/api/outbox.peek',
+		body: unknown,
+	): Promise<Answer>
+	/** The wake timer's step, once: kicks each job whose wake is due; answers the delay to the next wake. */
+	wake(): Promise<number | null>
+	/** Resolves once every kick the requests and `wake` started has ended. */
 	settled(): Promise<void>
 }
 
-/** An instance of the application over the shared schema, booted as the proxy fronts it. */
-function start(): Running {
+/**
+ * An instance of the application over the shared schema, booted as the proxy fronts it; `projectWakes` is the runtime's
+ * projection of every wake and lease change.
+ */
+function start(options: { readonly projectWakes?: (transaction: Session) => Promise<void> } = {}): Running {
 	const world = new World()
 	const { implementation, variables } = outboxApp(world)
 	const connection = openPostgres({ url, schema, max: 4 })
@@ -171,6 +188,7 @@ function start(): Running {
 		iam: keySource,
 		workloadTokens: recording,
 		database: connection,
+		...(options.projectWakes === undefined ? {} : { projectWakes: options.projectWakes }),
 	})
 	const background = new Set<Promise<unknown>>()
 	const exec: RequestExecutionContext = {
@@ -191,6 +209,7 @@ function start(): Running {
 			const response = await app.fetch(new Request(`${ORIGIN}${path}`, { method: 'POST', headers, body: JSON.stringify(body) }), exec)
 			return { status: response.status, body: JSON.parse(await response.text()) }
 		},
+		wake: () => app.jobs.wake((kick) => void background.add(kick)),
 		async settled() {
 			while (background.size > 0) {
 				const pending = [...background]
@@ -233,6 +252,21 @@ async function leaseOf(): Promise<{ readonly holder: string | null; readonly pen
 	)
 	return row
 }
+
+interface WakeRow {
+	readonly reason: string
+	readonly due_at: number
+	readonly dedupe: string | null
+}
+
+async function wakes(): Promise<WakeRow[]> {
+	const rows: { readonly reason: string; readonly due_at: string; readonly dedupe: string | null }[] = await admin((sql) =>
+		sql.unsafe(`select reason, due_at::text, dedupe from ${schema}.fabrika_wakes where job = 'deliver' order by due_at, id`)
+	)
+	return rows.map((row) => ({ ...row, due_at: Number(row.due_at) }))
+}
+
+const kickKey = (at: number): string => `kick:deliver:${Math.floor(at / 1_000)}`
 
 async function outbox(): Promise<string[]> {
 	const rows: { readonly body: string }[] = await admin((sql) => sql.unsafe(`select body from ${schema}.outbox order by body`))
@@ -477,5 +511,132 @@ describe.skipIf(!hasPostgres)('a mutation that kicks its job', () => {
 		await draining
 		expect(world.runs).toHaveLength(1)
 		expect(world.deliveredBodies).toEqual(['fy'])
+	})
+})
+
+describe('ctx.kick records a job and when it runs, and nothing else', () => {
+	test('a declared job, now or at a Date; one wake per job and due second; a payload, a bad time or another job is refused', () => {
+		const kicks = kickRecorder("'api.outbox.remind'", ['deliver'])
+		const second = Math.floor(Date.now() / 1_000) * 1_000 + 60_000
+		kicks.kick('deliver')
+		kicks.kick('deliver')
+		kicks.kick('deliver', { at: new Date(second + 900) })
+		kicks.kick('deliver', { at: new Date(second + 100) })
+		kicks.kick('deliver', { at: new Date(second + 1_000) })
+		for (const options of [{ at: new Date(second), id: 'm1' }, { at: second }, { at: new Date(Number.NaN) }, 'm1', null, {}]) {
+			expect(() => kicks.kick('deliver', options)).toThrow(QueryRefusedError)
+		}
+		expect(() => kicks.kick('sweep')).toThrow(CapabilityRefusedError)
+		expect(kicks.kicked()).toEqual(['deliver'])
+		const now = new Date(second - 30_000)
+		expect(kicks.wakes(now)).toEqual([
+			{ job: 'deliver', reason: 'kick', dueAt: now, dedupe: kickKey(now.getTime()) },
+			{ job: 'deliver', reason: 'kick', dueAt: new Date(second + 100), dedupe: kickKey(second) },
+			{ job: 'deliver', reason: 'kick', dueAt: new Date(second + 1_000), dedupe: kickKey(second + 1_000) },
+		])
+	})
+})
+
+describe.skipIf(!hasPostgres)('a kick is a durable wake written in the site’s transaction', () => {
+	test('a kick’s wake commits with the mutation, and the run it starts after the commit consumes it', async () => {
+		const running = start()
+		const held = gate()
+		running.world.holdStart = held
+		const before = Date.now()
+		expect((await running.call('/api/outbox.enqueue', { body: 'ka' })).status).toBe(200)
+		await held.reached
+		const [wake, ...more] = await wakes()
+		expect(more).toEqual([])
+		expect(wake).toEqual({ reason: 'kick', due_at: expect.any(Number), dedupe: kickKey(wake?.due_at ?? 0) })
+		expect(wake?.due_at).toBeGreaterThanOrEqual(before)
+		expect(wake?.due_at).toBeLessThanOrEqual(Date.now())
+		held.open()
+		await running.settled()
+		expect(running.world.deliveredBodies).toEqual(['ka'])
+		expect(await wakes()).toEqual([])
+	})
+
+	test('a rolled-back mutation leaves no durable kick: a thrown handler, a refused COMMIT, a refused delayed kick', async () => {
+		const running = start()
+		expect((await running.call('/api/outbox.refuse', { body: 'kb' })).status).toBe(409)
+		expect((await running.call('/api/outbox.remind', { body: 'refused', at: [Date.now() + 3_600_000] })).status).toBe(409)
+		expect((await quietly(() => running.call('/api/outbox.enqueue', { body: REFUSED_AT_COMMIT }))).status).toBe(500)
+		await running.settled()
+		expect(await wakes()).toEqual([])
+		expect(await outbox()).toEqual([])
+		expect(running.world.runs).toEqual([])
+	})
+
+	test('a delayed kick starts nothing after the commit; kicks in one second are one wake, and the run at T1 leaves T2', async () => {
+		const running = start()
+		// Two kicks inside the second of T1, the earlier one kept, and T2 an hour later.
+		const second = (Math.floor(Date.now() / 1_000) + 3_600) * 1_000
+		const [t1, t1Later, t2] = [second + 100, second + 700, second + 3_600_000]
+		expect((await running.call('/api/outbox.remind', { body: 'kc', at: [t1Later, t2, t1] })).status).toBe(200)
+		await running.settled()
+		expect(running.world.runs).toEqual([])
+		expect(await wakes()).toEqual([
+			{ reason: 'kick', due_at: t1, dedupe: kickKey(t1) },
+			{ reason: 'kick', due_at: t2, dedupe: kickKey(t2) },
+		])
+		// Nothing is due yet: the timer kicks nothing and waits for T1.
+		expect(await running.wake()).toBeGreaterThan(3_500_000)
+		await running.settled()
+		expect(running.world.runs).toEqual([])
+		// T1 comes due, as time passing would make it.
+		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_wakes set due_at = due_at - 3700000 where dedupe = '${kickKey(t1)}'`))
+		await running.wake()
+		await running.settled()
+		expect(running.world.runs.map((run) => run.principal)).toEqual(['job:deliver'])
+		expect(running.world.deliveredBodies).toEqual(['kc'])
+		expect(await wakes()).toEqual([{ reason: 'kick', due_at: t2, dedupe: kickKey(t2) }])
+		const next = await running.wake()
+		expect(next).toBeGreaterThan(t2 - Date.now() - 5_000)
+		expect(next).toBeLessThanOrEqual(t2 - Date.now() + 5_000)
+	})
+
+	test('a crash between the commit and the kick’s start leaves the wake, and the wake timer runs the job', async () => {
+		const running = start()
+		// The process stops before the post-commit start reaches the lease: the kick only leaves the shared flag.
+		running.app.stopKicks()
+		expect((await running.call('/api/outbox.enqueue', { body: 'kd' })).status).toBe(200)
+		await running.settled()
+		expect(running.world.runs).toEqual([])
+		expect(await wakes()).toEqual([expect.objectContaining({ reason: 'kick' })])
+		const next = start()
+		expect(await next.wake()).not.toBeNull()
+		await next.settled()
+		expect(next.world.runs.map((run) => run.principal)).toEqual(['job:deliver'])
+		expect(next.world.deliveredBodies).toEqual(['kd'])
+		expect(await wakes()).toEqual([])
+		expect(await outbox()).toEqual([])
+	})
+
+	test("a job's kick is a wake its run writes once it succeeded, consumed by the run it starts", async () => {
+		const running = start()
+		expect(await running.app.jobs.run('sweep')).toEqual({ status: 'succeeded', attempts: 1 })
+		await running.settled()
+		expect(running.world.runs.map((run) => run.principal)).toEqual(['job:deliver'])
+		expect(await wakes()).toEqual([])
+	})
+
+	test('the serving process’s wake timer runs a delayed kick at its time, lowered by the write that recorded it', async () => {
+		const kicks: Promise<void>[] = []
+		const timer = new WakeTimer((kick) => void kicks.push(kick))
+		try {
+			const running = start({ projectWakes: timer.project })
+			timer.attach(running.app.jobs)
+			const at = Date.now() + 400
+			expect((await running.call('/api/outbox.remind', { body: 'ke', at: [at] })).status).toBe(200)
+			expect(running.world.runs).toEqual([])
+			await until(() => running.world.deliveredBodies.includes('ke'), 3_000)
+			expect(Date.now()).toBeGreaterThanOrEqual(at)
+			expect(running.world.runs).toHaveLength(1)
+			await Promise.all(kicks)
+			expect(kicks).toHaveLength(1)
+			expect(await wakes()).toEqual([])
+		} finally {
+			timer.stop()
+		}
 	})
 })

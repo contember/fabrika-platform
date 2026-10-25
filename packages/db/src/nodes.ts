@@ -399,6 +399,25 @@ export function claimNode(
 	return Object.freeze({ ...node, endModifiers: [SelectModifierNode.create('ForUpdate'), SelectModifierNode.create('SkipLocked')] })
 }
 
+/**
+ * When the same claim next finds a row: `select <due> from table where (<conditions> and (<due> > $now and <attempts> <
+ * $max)) and scope order by <due> limit 1`, with `state` the claim's conditions ordered by `<due>`, limited to one.
+ */
+export function nextClaimNode(
+	state: SelectState,
+	due: { readonly due: string; readonly attempts: string; readonly now: Date; readonly maxAttempts: number },
+	scope: OperationNode,
+	days: NameSet,
+	dialect: SqlDialect = 'postgres',
+): SelectQueryNode {
+	const table = state.table
+	const later = allOf([
+		BinaryOperationNode.create(column(table, due.due), OperatorNode.create('>'), ValueNode.create(due.now)),
+		BinaryOperationNode.create(column(table, due.attempts), OperatorNode.create('<'), ValueNode.create(due.maxAttempts)),
+	])
+	return selectNode(state, [due.due], scope, later, days, dialect)
+}
+
 /** `select <columns> from table where scope for update`: a mutation's precondition read of its own target. */
 export function lockedSelectNode(table: string, columns: readonly string[], scope: OperationNode, days: NameSet = NO_DAYS): SelectQueryNode {
 	const node: SelectQueryNode = {

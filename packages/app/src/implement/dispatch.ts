@@ -92,7 +92,17 @@ import type { FailureReports } from './failures'
 import { ServerFault } from './faults'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
-import { boundTo, boundWebhookApp, endpointData, Invocation, kickRecorder, siteData, type SiteDeclaration, undeclaredSql } from './invocation'
+import {
+	boundTo,
+	boundWebhookApp,
+	endpointData,
+	Invocation,
+	type KickRecorder,
+	kickRecorder,
+	siteData,
+	type SiteDeclaration,
+	undeclaredSql,
+} from './invocation'
 import {
 	applicationDirectory,
 	createScope,
@@ -691,6 +701,8 @@ export class ContractRuntime {
 				} finally {
 					frame.end()
 				}
+				// Before the answer opens a file's stream: a failed write then has nothing to cancel.
+				await this.#recordKicks(invocation, kicks)
 				const answer = await this.#answerOf(served, result, request, work, carried)
 				outcome = 'committing'
 				await commitAnswer(invocation, signal, answer)
@@ -1086,8 +1098,24 @@ export class ContractRuntime {
 	}
 
 	/**
-	 * Sends each job once, after the commit: in the background, never awaited and never rejecting. Without an execution
-	 * context a kick runs detached.
+	 * Writes each kick's wake in the invocation's transaction, after the handler and before the commit: a rollback leaves
+	 * none, and a crash between the commit and the kick's start leaves the wake to the scheduler.
+	 */
+	async #recordKicks(invocation: Invocation | null, kicks: KickRecorder): Promise<void> {
+		const wakes = kicks.wakes(new Date())
+		const framework = this.#parts.framework
+		if (invocation === null || framework === null || wakes.length === 0) {
+			return
+		}
+		const transaction = await invocation.frameworkSite('ctx.kick').session()
+		for (const wake of wakes) {
+			await framework.wakes.schedule(wake, transaction)
+		}
+	}
+
+	/**
+	 * Sends each job kicked without `at` once, after the commit: in the background, never awaited and never rejecting.
+	 * Without an execution context a kick runs detached.
 	 */
 	#kickAll(jobs: readonly string[], exec: RequestExecutionContext | undefined): void {
 		for (const job of new Set(jobs)) {
@@ -1193,6 +1221,7 @@ export class ContractRuntime {
 				} finally {
 					frame.end()
 				}
+				await this.#recordKicks(invocation, kicks)
 				const output = served.row.output
 				const answer = output !== null && isFileShape(output)
 					? await this.#fileKinds(served.row.id).download(work, served.row.id, output.kind, result)
@@ -1351,6 +1380,7 @@ export class ContractRuntime {
 				if (!(await tables.completeDelivery(claim, using))) {
 					throw new ServerFault('webhook_claim_lost', `the claim of a delivery to '${served.webhook}' expired and another copy took it over`)
 				}
+				await this.#recordKicks(invocation, kicks)
 				committing = true
 				await invocation?.commit(signal)
 			})
