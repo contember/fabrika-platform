@@ -230,6 +230,8 @@ export interface ControlRpcDeps {
 	mailRelay?: Pick<MailRelay, 'queue' | 'sender'>
 	/** The ops channel to an environment's object; absent without a vault, and the `data.*` calls to an object answer 503. */
 	opsTransport?: OpsTransport
+	/** The run dependencies a restore's own deploys run with (ADR-0070 §9); absent, a restore does not start. */
+	runDeps?: () => Promise<RunDeps>
 }
 
 /** Assemble RPC use-case dependencies around the installation's provider. Vault creation stays lazy. */
@@ -248,6 +250,7 @@ export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: A
 		...(env.MAIL_RELAY === undefined ? {} : { mailRelay: env.MAIL_RELAY }),
 		...installationBrandDeps(env),
 		...opsTransportDeps(env),
+		runDeps: () => buildRunDeps(env, provider),
 		...(provider.namespaces?.republish === undefined
 			? {}
 			: {

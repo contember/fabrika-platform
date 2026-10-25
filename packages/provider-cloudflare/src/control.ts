@@ -1,4 +1,4 @@
-import { type AppEnvironment, appEnvironmentId, FABRIKA_PROXY_SECRET, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type AppEnvironment, appEnvironmentId, type ApplicationObjects, FABRIKA_PROXY_SECRET, parseAppEnvironmentId } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -23,7 +23,7 @@ import { cloudflareArtifactCodec } from './codec'
 import { assertCloudflareContract, assertStatelessEnvironment, capsJobSegments, runsInObject, servesOps } from './contract-support'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
 // cannot typecheck (they do not relax the two strict flags the raw TS needs).
-import { type RunnerApprovedAccess, runnerApprovedAccessSchema, type RunnerIamReconcile } from './runner-protocol'
+import { applicationObjectsSchema, type RunnerApprovedAccess, runnerApprovedAccessSchema, type RunnerIamReconcile } from './runner-protocol'
 
 export * from './runner-protocol'
 
@@ -66,6 +66,8 @@ export interface CloudflareRunnerJob {
 	readonly installationApps?: readonly string[]
 	/** What the deployed proxy enforces and the application starts as; every run but a dry one carries it. */
 	readonly approvedAccess?: RunnerApprovedAccess
+	/** The serving object and the listed objects Control records (ADR-0070 §9); absent, the deployer's defaults. */
+	readonly applicationObjects?: ApplicationObjects
 	readonly dryRun?: boolean
 	/**
 	 * Shared secret the runner verifies before it touches D1 or the container; the binding alone proves
@@ -153,6 +155,7 @@ export const cloudflareRunnerJobSchema = z.object({
 	operationsOrigin: z.string().refine((origin) => isPolicyOrigin(origin, ['https:', 'http:'])).optional(),
 	installationApps: z.array(z.string().refine((id) => !hasUnsafeChars(id) && parseAppEnvironmentId(id) !== null)).optional(),
 	approvedAccess: runnerApprovedAccessSchema.optional(),
+	applicationObjects: applicationObjectsSchema.optional(),
 	dryRun: z.boolean().optional(),
 	secrets: stringRecordSchema.optional(),
 	vars: stringRecordSchema.optional(),
@@ -322,6 +325,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		...(input.environment.operationsOrigin === undefined ? {} : { operationsOrigin: input.environment.operationsOrigin }),
 		...(installationApps === undefined ? {} : { installationApps }),
 		...(approvedAccess === undefined ? {} : { approvedAccess }),
+		...(input.applicationObjects === undefined ? {} : { applicationObjects: input.applicationObjects }),
 		...(input.dryRun ? { dryRun: true } : {}),
 		...(Object.keys(input.secrets).length === 0 ? {} : { secrets: input.secrets }),
 		...(Object.keys(input.vars).length === 0 ? {} : { vars: input.vars }),

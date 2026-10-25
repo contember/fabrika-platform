@@ -11,8 +11,26 @@ export type DataOperationKind = 'maintenance' | 'backup' | 'migrate' | 'recovery
 /**
  * `restrict` and `open` publish a generation; `backup`, `verify`, `deploy` and `migrate` run between them. A recovery
  * first `reconcile`s the record with the object's published state, and `resume` hands back to the interrupted operation.
+ * A restore also `list`s its clone, `import`s into it, `promote`s it, `point`s ordinary traffic at it, waits for it to
+ * `serve`, `rewind`s the original and `check`s its schema; `revert` points traffic back at the original.
  */
-export type DataOperationStep = 'reconcile' | 'restrict' | 'backup' | 'verify' | 'deploy' | 'migrate' | 'resume' | 'open'
+export type DataOperationStep =
+	| 'reconcile'
+	| 'restrict'
+	| 'backup'
+	| 'verify'
+	| 'deploy'
+	| 'migrate'
+	| 'resume'
+	| 'open'
+	| 'list'
+	| 'import'
+	| 'promote'
+	| 'point'
+	| 'serve'
+	| 'rewind'
+	| 'check'
+	| 'revert'
 
 export type DataOperationState = 'running' | 'succeeded' | 'failed'
 

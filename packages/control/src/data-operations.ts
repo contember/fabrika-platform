@@ -3,7 +3,9 @@
 // `OpsTransport`. Control's record is the authority; the object's published state is a copy it reconciles with.
 
 import {
+	type ApplicationObjects,
 	DEFAULT_APPLICATION_OBJECT,
+	MAX_APPLICATION_OBJECTS,
 	OPS_CONTENT_TYPE,
 	OPS_DATA_REFUSED_STATUS,
 	OPS_DUMP_MAX_PARTS,
@@ -29,14 +31,20 @@ import {
 	type OpsInspectRequest,
 	type OpsMigrateAck,
 	type OpsMigrateRequest,
+	type OpsMigration,
 	type OpsMode,
 	type OpsOperation,
 	opsPath,
 	type OpsPublishedState,
+	type OpsRestoreArmAck,
+	type OpsRestorePrepareAck,
+	type OpsRestoreRequest,
+	type OpsRestoreVerifyAck,
 	type OpsStateAck,
 	type OpsStateRequest,
 	type OpsUploadedPart,
 	type OpsView,
+	parseApplicationObjects,
 	parseOpsContentView,
 	parseOpsDataRefusal,
 	parseOpsExportBeginAck,
@@ -49,13 +57,16 @@ import {
 	parseOpsImportPartAck,
 	parseOpsImportVerifyAck,
 	parseOpsMigrateAck,
+	parseOpsRestoreArmAck,
+	parseOpsRestorePrepareAck,
+	parseOpsRestoreVerifyAck,
 	parseOpsStaleRefusal,
 	parseOpsStateAck,
 	parseOpsView,
 } from '@fabrika/auth-core'
 import type { DataOperationDto } from '@fabrika/control-contract'
 import { type DeployLocks, uuidv7 } from '@fabrika/platform'
-import { isLeaseLoss, ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { abortableWait, isLeaseLoss, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import type {
 	BackupCheckpoint,
 	BackupPartRow,
@@ -66,6 +77,8 @@ import type {
 	DataOperationInput,
 	DataOperationResolution,
 	DataOperationRow,
+	RestoreDeploy,
+	RestoreRow,
 	RunRow,
 } from './db'
 import { acquireLease, type Lease, type LeaseClock, runLeaseKey } from './lease'
@@ -104,6 +117,9 @@ export type OpsExportAck = OpsExportBeginAck | OpsExportPartAck | OpsExportCompl
 /** The answer to an import step, parsed by that step's parser. */
 export type OpsImportAck = OpsImportBeginAck | OpsImportPartAck | OpsImportLinkAck | OpsImportVerifyAck | OpsImportCompleteAck | OpsImportDiscardAck
 
+/** The answer to a restore step, parsed by that step's parser. */
+export type OpsRestoreAck = OpsRestorePrepareAck | OpsRestoreArmAck | OpsRestoreVerifyAck
+
 /** Control's calls to an environment's object; every answer is parsed before it is returned. */
 export interface OpsTransport {
 	inspect(target: OpsTarget, request: OpsInspectRequest, signal: AbortSignal): Promise<OpsAnswer<OpsInspection>>
@@ -111,13 +127,29 @@ export interface OpsTransport {
 	migrate(target: OpsTarget, request: OpsMigrateRequest, signal: AbortSignal): Promise<OpsFencedAnswer<OpsMigrateAck>>
 	export(target: OpsTarget, request: OpsExportRequest, signal: AbortSignal): Promise<OpsDataAnswer<OpsExportAck>>
 	import(target: OpsTarget, request: OpsImportRequest, signal: AbortSignal): Promise<OpsDataAnswer<OpsImportAck>>
+	restore(target: OpsTarget, request: OpsRestoreRequest, signal: AbortSignal): Promise<OpsDataAnswer<OpsRestoreAck>>
+}
+
+/**
+ * The deploys a restore runs itself under its lease (ADR-0070 §9): each redeploys what the environment runs now, with the
+ * pointer the step names. Only a composition that can deploy hands it.
+ */
+export interface OperationDeploys {
+	/** Whether the environment has a domain and its approved release is one the provider serves the ops channel at. */
+	servesOps(target: OpsTarget): Promise<boolean>
+	/** Runs the pending run `runId` under `lease` with `objects` as its pointer, and settles it as far as it can. */
+	run(lease: Lease, runId: string, objects: ApplicationObjects): Promise<void>
 }
 
 export interface DataOperationDeps {
-	repositories: Pick<ControlRepositories, 'dataOperations' | 'backups' | 'runs'>
+	repositories: Pick<ControlRepositories, 'dataOperations' | 'backups' | 'runs' | 'applicationObjects' | 'restores'>
 	lock: DeployLocks
 	leaseClock?: LeaseClock
 	ops: OpsTransport
+	/** A restore's own deploys; without them a restore does not start, and one resumed at a deploy stays interrupted. */
+	deploys?: OperationDeploys
+	/** The wait between a restore's `arm` and its `verify`, and before it inspects the clone; real time by default. */
+	wait?: (ms: number, signal: AbortSignal) => Promise<void>
 	/**
 	 * Whether the maintenance pass driving the operation is out of time. Checked before each export and import request;
 	 * once it answers true the operation stops `paused`, running at its recorded progress, for a later pass.
@@ -128,9 +160,19 @@ export interface DataOperationDeps {
 /**
  * Why an operation was not started or advanced: one is still running, the recovery target cannot be recovered, the
  * operation is no longer the environment's newest running one, the record does not leave the environment open (a
- * backup ends by opening it), or the channel.
+ * backup ends by opening it), or the channel. A restore also needs a free name in the object list, a succeeded deploy
+ * to redeploy, a composition that deploys, and a target time before now.
  */
-export type DataOperationRefusal = 'operation_running' | 'not_recoverable' | 'superseded' | 'not_open' | OpsUnavailable
+export type DataOperationRefusal =
+	| 'operation_running'
+	| 'not_recoverable'
+	| 'superseded'
+	| 'not_open'
+	| 'too_many_objects'
+	| 'nothing_deployed'
+	| 'no_deploys'
+	| 'not_past'
+	| OpsUnavailable
 
 /**
  * `interrupted`: the object gave no answer to act on, so the record keeps running at its step and the environment stays
@@ -147,7 +189,40 @@ export const BACKUP_FAILED_CODE = 'backup_failed'
 export const REHEARSAL_FAILED_CODE = 'rehearsal_failed'
 /** A migration's run ended before any provider accepted it, so nothing was deployed and the object was opened again. */
 export const DEPLOY_NOT_STARTED_CODE = 'deploy_not_started'
-const REOPENED_CODES: ReadonlySet<string | null> = new Set([BACKUP_FAILED_CODE, REHEARSAL_FAILED_CODE, DEPLOY_NOT_STARTED_CODE])
+
+/**
+ * The codes a restore fails with while its environment's serving object is open: before anything was frozen (the listing
+ * deploy failed), once the original is open again (the import, the promotion, the pointer deploy failed, or the clone
+ * did not boot and traffic went back), or once the clone serves (the rewind was refused or its schema is not the
+ * expected one, and the original stays `inspect` for an operator).
+ */
+export const LIST_FAILED_CODE = 'list_failed'
+export const IMPORT_FAILED_CODE = 'import_failed'
+export const PROMOTE_FAILED_CODE = 'promote_failed'
+export const POINT_FAILED_CODE = 'point_failed'
+export const CLONE_NOT_SERVING_CODE = 'clone_not_serving'
+export const BOOKMARK_UNAVAILABLE_CODE = 'bookmark_unavailable'
+export const REWIND_FAILED_CODE = 'rewind_failed'
+export const UNEXPECTED_SCHEMA_CODE = 'unexpected_schema'
+/** The pointer deploy back to the original failed: neither object serves, for an operator to recover. */
+export const REVERT_FAILED_CODE = 'revert_failed'
+
+const REOPENED_CODES: ReadonlySet<string | null> = new Set([
+	BACKUP_FAILED_CODE,
+	REHEARSAL_FAILED_CODE,
+	DEPLOY_NOT_STARTED_CODE,
+	LIST_FAILED_CODE,
+	IMPORT_FAILED_CODE,
+	PROMOTE_FAILED_CODE,
+	POINT_FAILED_CODE,
+	CLONE_NOT_SERVING_CODE,
+	BOOKMARK_UNAVAILABLE_CODE,
+	REWIND_FAILED_CODE,
+	UNEXPECTED_SCHEMA_CODE,
+])
+
+/** The failures after which the clone may have been published `open`, so traffic going back to the original fences it first. */
+const CLONE_OPENED_CODES: ReadonlySet<string | null> = new Set([PROMOTE_FAILED_CODE, POINT_FAILED_CODE, CLONE_NOT_SERVING_CODE])
 
 /**
  * The codes a migration fails with while the object stays restricted, for an operator to recover: its run failed after
@@ -161,8 +236,27 @@ export type DataOperationOutcome =
 	| { readonly kind: 'refused'; readonly reason: DataOperationRefusal }
 	| { readonly kind: 'driven'; readonly result: DriveResult; readonly operation: DataOperationRow }
 
-/** Every ops request names the object of ordinary traffic until a side restore names another. */
-const OBJECT = DEFAULT_APPLICATION_OBJECT
+/** The pointer of an environment no restore moved: ordinary traffic reaches `application`, ops requests it and `rehearsal`. */
+export const DEFAULT_APPLICATION_OBJECTS: ApplicationObjects = {
+	object: DEFAULT_APPLICATION_OBJECT,
+	objects: [DEFAULT_APPLICATION_OBJECT, OPS_REHEARSAL_OBJECT],
+}
+
+/**
+ * The pointer Control records for the environment (ADR-0070 §9): the object every ordinary-traffic ops request names,
+ * which every deploy writes as `FABRIKA_APPLICATION_OBJECT(S)`. The defaults until a restore moves it.
+ */
+export async function recordedObjects(
+	deps: { repositories: Pick<ControlRepositories, 'applicationObjects'> },
+	target: OpsTarget,
+): Promise<ApplicationObjects> {
+	const row = await deps.repositories.applicationObjects.get(target.appId, target.env)
+	if (row === null) return DEFAULT_APPLICATION_OBJECTS
+	const parsed = parseApplicationObjects(row.serving, row.listed)
+	if (parsed === null) throw new Error("an environment's recorded application objects do not parse")
+	return parsed
+}
+
 /** How often one step repeats a request whose answer was lost, under the same generation. */
 const ATTEMPTS = 3
 /** One request's bound: a transition drains for 25 s plus a job's 60 s abort grace before it answers. */
@@ -270,6 +364,69 @@ export async function startMigration(deps: DataOperationDeps, lease: Lease, inpu
 	return await driver.run(created.id, false)
 }
 
+export interface StartRestoreInput {
+	readonly appId: string
+	readonly env: string
+	/** The time the data is recovered as of, ISO 8601 in UTC with milliseconds. */
+	readonly at: string
+	/** An opaque principal id (`runActor`). */
+	readonly actor: string
+	/** The current time in milliseconds; the target time must lie before it. */
+	readonly now?: number
+}
+
+/**
+ * Recover the environment's data as of `at` with a side restore (ADR-0070 §9): list a clone with a deploy, freeze and
+ * back up the serving object, import the backup into the clone, move ordinary traffic to it with a deploy, and only then
+ * rewind the frozen original to `at`, which stays `inspect`. It starts only on an open environment whose release serves
+ * the ops channel, with a free name in its object list and a succeeded deploy to redeploy.
+ */
+export async function startRestore(deps: DataOperationDeps, input: StartRestoreInput): Promise<DataOperationOutcome> {
+	const deploys = deps.deploys
+	if (deploys === undefined) return { kind: 'refused', reason: 'no_deploys' }
+	if (!(Date.parse(input.at) < (input.now ?? Date.now()))) return { kind: 'refused', reason: 'not_past' }
+	return await underLease(deps, input, async (driver) => {
+		const latest = await latestOperation(deps, input)
+		if (latest?.state === 'running') return { kind: 'refused', reason: 'operation_running' }
+		if ((await recordedMaintenance(deps, input)) !== 'open') return { kind: 'refused', reason: 'not_open' }
+		if ((await redeployable(deps, input)) === null) return { kind: 'refused', reason: 'nothing_deployed' }
+		if (!(await deploys.servesOps(input))) return { kind: 'refused', reason: 'not_served' }
+		const objects = await recordedObjects(deps, input)
+		if (objects.objects.length >= MAX_APPLICATION_OBJECTS) return { kind: 'refused', reason: 'too_many_objects' }
+		const probe = await driver.inspect()
+		if (probe.kind !== 'ok') return { kind: 'refused', reason: probe.reason }
+		const generation = await deps.repositories.dataOperations.allocateGeneration(input.appId, input.env)
+		const id = uuidv7()
+		const created = await driver.create({
+			id,
+			appId: input.appId,
+			env: input.env,
+			kind: 'restore',
+			step: 'list',
+			targetMode: 'open',
+			generation,
+			actor: input.actor,
+		})
+		await driver.restoreOf(created, { at: input.at, original: objects.object })
+		await driver.backupOf(created)
+		return await driver.run(created.id, false)
+	})
+}
+
+/** The clone a restore imports into: a name `parseApplicationObjectName` accepts, unique to the operation. */
+export function restoreClone(operationId: string): string {
+	return `${DEFAULT_APPLICATION_OBJECT}-${operationId.toLowerCase()}`
+}
+
+/** What a restore's deploys redeploy: the environment's newest succeeded run, at its commit; `null` while there is none. */
+async function redeployable(
+	deps: { repositories: Pick<ControlRepositories, 'runs'> },
+	target: OpsTarget,
+): Promise<{ readonly ref: string; readonly commitSha: string } | null> {
+	const run = await deps.repositories.runs.getLatestSucceededRun(target)
+	return run === null || run.commit_sha === null ? null : { ref: run.ref, commitSha: run.commit_sha }
+}
+
 /** The bundle `@fabrika/app`'s object applies the application's own migrations under (`cloudflare/application.ts`). */
 const APPLICATION_BUNDLE = 'app'
 
@@ -287,6 +444,7 @@ export type PendingMigrations =
 export async function pendingMigrations(
 	ops: OpsTransport | undefined,
 	target: OpsTarget,
+	object: string,
 	candidate: readonly { readonly name: string }[],
 	signal: AbortSignal,
 ): Promise<PendingMigrations> {
@@ -295,7 +453,7 @@ export async function pendingMigrations(
 	// An installation without a vault holds no ops key, so it reaches no object.
 	if (ops === undefined) return { kind: 'unknown', reason: 'no_channel' }
 	for (let attempt = 0;; attempt++) {
-		const answer = await ops.inspect(target, { object: OBJECT, content: false }, signal)
+		const answer = await ops.inspect(target, { object, content: false }, signal)
 		if (answer.kind === 'ok') {
 			const applied = new Set(answer.value.view.migrations.filter((row) => row.bundle === APPLICATION_BUNDLE).map((row) => row.name))
 			return { kind: 'known', pending: bundled.filter((name) => !applied.has(name)) }
@@ -497,18 +655,22 @@ class OperationDriver {
 		throw new ProviderInvocationAbort('lease_lost')
 	}
 
-	/** The backup `operation` takes, recorded with a fresh dump id the first time it is asked for. */
+	/**
+	 * The backup `operation` takes, recorded with a fresh dump id the first time it is asked for: of the object serving
+	 * then, which for a restore is the original it recorded.
+	 */
 	async backupOf(operation: DataOperationRow): Promise<BackupRow> {
 		const found = await this.backups.getForOperation(operation.id)
 		this.lease.assertHeld()
 		if (found !== null) return found
+		const object = operation.kind === 'restore' ? (await this.restoreOf(operation)).original : await this.serving()
 		const created = await this.backups.create(
 			{
 				id: uuidv7(),
 				appId: operation.app_id,
 				env: operation.env,
 				operationId: operation.id,
-				object: OBJECT,
+				object,
 				preMigration: operation.kind === 'migrate',
 			},
 			this.lease.fence(),
@@ -518,9 +680,40 @@ class OperationDriver {
 		throw new ProviderInvocationAbort('lease_lost')
 	}
 
-	async inspect(): Promise<OpsAnswer<OpsInspection>> {
+	/**
+	 * The restore `operation` records, created the first time it is asked for with what `start` names: the target time
+	 * and the object serving when it started.
+	 */
+	async restoreOf(operation: DataOperationRow, start?: { readonly at: string; readonly original: string }): Promise<RestoreRow> {
+		const found = await this.deps.repositories.restores.get(operation.id)
 		this.lease.assertHeld()
-		const answer = await this.deps.ops.inspect(this.target, { object: OBJECT, content: false }, this.lease.signal)
+		if (found !== null) return found
+		if (start === undefined) throw new Error('a restore operation has no restore record')
+		const created = await this.deps.repositories.restores.create(
+			{ operationId: operation.id, appId: operation.app_id, env: operation.env, ...start, clone: restoreClone(operation.id) },
+			this.lease.fence(),
+		)
+		if (created !== null) return created
+		this.lease.abandon()
+		throw new ProviderInvocationAbort('lease_lost')
+	}
+
+	/** The pointer Control records, read under the lease. */
+	private async objects(): Promise<ApplicationObjects> {
+		const objects = await recordedObjects(this.deps, this.target)
+		this.lease.assertHeld()
+		return objects
+	}
+
+	/** The object of ordinary traffic, which every request not naming another object goes to. */
+	private async serving(): Promise<string> {
+		return (await this.objects()).object
+	}
+
+	async inspect(object?: string): Promise<OpsAnswer<OpsInspection>> {
+		const named = object ?? (await this.serving())
+		this.lease.assertHeld()
+		const answer = await this.deps.ops.inspect(this.target, { object: named, content: false }, this.lease.signal)
 		this.lease.assertHeld()
 		return answer
 	}
@@ -568,6 +761,7 @@ class OperationDriver {
 		if (row.kind === 'recovery') return await this.recoveryStep(row)
 		if (row.kind === 'backup') return await this.backupStep(row)
 		if (row.kind === 'migrate') return await this.migrateStep(row)
+		if (row.kind === 'restore') return await this.restoreStep(row)
 		throw new Error(`data operation step ${row.kind}/${row.step} is not driven by this release`)
 	}
 
@@ -744,6 +938,324 @@ class OperationDriver {
 		}
 	}
 
+	/**
+	 * A side restore (ADR-0070 §9). `list` deploys the clone into the object list; `restrict` publishes the original
+	 * `read-only`; `backup` and `verify` take and rehearse the dump at that generation; `import` loads it into the clone,
+	 * published `inspect`; `promote` publishes the clone `open` and the original `inspect` at a new generation; `point`
+	 * deploys the clone as the serving object; `serve` inspects the clone; `rewind` restores the original to the target
+	 * time; `check` compares its ledger with the clone's. A failure before the clone serves goes to `open` (through
+	 * `revert` when traffic may already reach the clone), which opens the original again and fails with the recorded code.
+	 */
+	private async restoreStep(row: DataOperationRow): Promise<Step> {
+		const restore = await this.restoreOf(row)
+		const backup = await this.backupOf(row)
+		const reopen = async (checkpoint?: BackupCheckpoint): Promise<Step> => ({
+			kind: 'next',
+			row: await this.advance(row, { step: 'open', targetMode: 'open', generation: await this.allocate() }, checkpoint),
+		})
+		/** Records why the restore stops, then opens the original again. A recorded failure is never overwritten. */
+		const abandon = async (code: string, step: 'open' | 'revert' = 'open'): Promise<Step> => {
+			await this.restoreFailed(restore, code)
+			if (step === 'open') return await reopen()
+			return { kind: 'next', row: await this.advance(row, { step: 'revert' }) }
+		}
+		switch (row.step) {
+			case 'list': {
+				const objects = await this.objects()
+				// A predecessor's listing deploy succeeded and recorded the clone: nothing is deployed twice.
+				// A successor's fence published `open` at the record's generation, so `read-only` goes out at a new one.
+				if (objects.objects.includes(restore.clone)) {
+					return { kind: 'next', row: await this.advance(row, { step: 'restrict', targetMode: 'read-only', generation: await this.allocate() }) }
+				}
+				if (objects.objects.length >= MAX_APPLICATION_OBJECTS) return await this.failed(row, LIST_FAILED_CODE)
+				const listed = { object: objects.object, objects: [...objects.objects, restore.clone] }
+				const deployed = await this.restoreDeploy(row, restore, 'list', listed)
+				if (deployed === 'unsettled') return { kind: 'done', result: 'interrupted' }
+				if (deployed !== 'succeeded') return await this.failed(row, LIST_FAILED_CODE)
+				await this.recordObjects(listed)
+				return { kind: 'next', row: await this.advance(row, { step: 'restrict', targetMode: 'read-only', generation: await this.allocate() }) }
+			}
+			case 'restrict': {
+				const published = await this.publish(row, 'read-only', restore.original)
+				if (published.kind === 'refused') return await this.failed(row, published.code, failedBackup(backup, published.code))
+				if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
+				return { kind: 'next', row: await this.advance(published.row, { step: 'backup' }) }
+			}
+			case 'backup': {
+				if (backup.state !== 'running') return await reopen()
+				const dumped = await this.dump(row, backup)
+				if (dumped.kind === 'paused' || dumped.kind === 'interrupted') return { kind: 'done', result: dumped.kind }
+				if (dumped.kind === 'failed') return await reopen(failedBackup(backup, dumped.code))
+				return { kind: 'next', row: await this.advance(row, { step: 'verify' }) }
+			}
+			case 'verify': {
+				if (backup.state === 'failed') return await reopen()
+				if (backup.state === 'succeeded') return { kind: 'next', row: await this.advance(row, { step: 'import' }) }
+				const rehearsed = await this.rehearse(row, backup)
+				if (rehearsed.kind === 'paused' || rehearsed.kind === 'interrupted') return { kind: 'done', result: rehearsed.kind }
+				if (rehearsed.kind === 'failed') return await reopen({ backupId: backup.id, outcome: 'rehearsal_failed', code: rehearsed.code })
+				return {
+					kind: 'next',
+					row: await this.advance(await this.require(row.id), { step: 'import' }, { backupId: backup.id, outcome: 'succeeded' }),
+				}
+			}
+			case 'import': {
+				if (restore.failure !== null) return await reopen()
+				const imported = await this.importClone(row, restore, backup)
+				if (imported.kind === 'paused' || imported.kind === 'interrupted') return { kind: 'done', result: imported.kind }
+				// A refused import does not pass on a retry of the same backup: the original opens again and the clone, which
+				// holds the import marker and so never boots, is wiped where it still can be.
+				if (imported.kind === 'failed') {
+					await this.importStep({ step: 'discard', object: restore.clone, generation: (await this.require(row.id)).generation })
+					return await abandon(IMPORT_FAILED_CODE)
+				}
+				return {
+					kind: 'next',
+					row: await this.advance(await this.require(row.id), { step: 'promote', targetMode: 'inspect', generation: await this.allocate() }),
+				}
+			}
+			case 'promote': {
+				if (restore.failure !== null) return await reopen()
+				const opened = await this.publish(row, 'open', restore.clone)
+				if (opened.kind === 'refused') return await abandon(PROMOTE_FAILED_CODE)
+				if (opened.kind !== 'acked') return { kind: 'done', result: opened.kind }
+				// From here the original never boots again: ordinary traffic it receives is refused until the pointer moves.
+				const frozen = await this.publish(opened.row, 'inspect', restore.original)
+				if (frozen.kind === 'refused') return await abandon(PROMOTE_FAILED_CODE)
+				if (frozen.kind !== 'acked') return { kind: 'done', result: frozen.kind }
+				return { kind: 'next', row: await this.advance(frozen.row, { step: 'point' }) }
+			}
+			case 'point': {
+				// A recorded failure goes back through `revert`, which decides whether traffic may have moved.
+				if (restore.failure !== null) return { kind: 'next', row: await this.advance(row, { step: 'revert' }) }
+				const objects = await this.objects()
+				if (objects.object === restore.clone) return { kind: 'next', row: await this.advance(row, { step: 'serve', targetMode: 'open' }) }
+				const pointed = { object: restore.clone, objects: objects.objects }
+				const deployed = await this.restoreDeploy(row, restore, 'point', pointed)
+				if (deployed === 'unsettled') return { kind: 'done', result: 'interrupted' }
+				// A run a provider accepted may have moved traffic before it failed, so it is pointed back first.
+				if (deployed === 'failed') return await abandon(POINT_FAILED_CODE, 'revert')
+				if (deployed === 'not_started') return await abandon(POINT_FAILED_CODE)
+				await this.recordObjects(pointed)
+				return { kind: 'next', row: await this.advance(row, { step: 'serve', targetMode: 'open' }) }
+			}
+			case 'serve': {
+				if (restore.failure !== null) return { kind: 'next', row: await this.advance(row, { step: 'revert' }) }
+				await (this.deps.wait ?? abortableWait)(SERVE_GRACE_MS, this.lease.signal)
+				const probe = await this.inspectWithRetry(restore.clone)
+				if (probe === null) return { kind: 'done', result: 'interrupted' }
+				// The original is not rewound yet, so pointing traffic back at it loses nothing.
+				if (probe.bootFailure !== null) return await abandon(CLONE_NOT_SERVING_CODE, 'revert')
+				return { kind: 'next', row: await this.advance(row, { step: 'rewind', generation: await this.allocate() }) }
+			}
+			case 'rewind':
+				return await this.rewind(row, restore)
+			case 'check': {
+				const original = await this.inspectWithRetry(restore.original)
+				const clone = original === null ? null : await this.inspectWithRetry(restore.clone)
+				if (original === null || clone === null) return { kind: 'done', result: 'interrupted' }
+				if (original.maintenance.mode !== 'inspect' || !ledgerWithin(original.migrations, clone.migrations)) {
+					return await this.failed(row, UNEXPECTED_SCHEMA_CODE)
+				}
+				await this.finish(row)
+				return { kind: 'done', result: 'succeeded' }
+			}
+			case 'revert': {
+				const objects = await this.objects()
+				if (objects.object !== restore.original) {
+					const reverted = { object: restore.original, objects: objects.objects }
+					const deployed = await this.restoreDeploy(row, restore, 'revert', reverted)
+					if (deployed === 'unsettled') return { kind: 'done', result: 'interrupted' }
+					if (deployed !== 'succeeded') return await this.failed(row, REVERT_FAILED_CODE)
+					await this.recordObjects(reverted)
+				} else if (await this.pointAccepted(restore)) {
+					// The pointer deploy failed after a provider accepted it: its version may still point at the clone.
+					const deployed = await this.restoreDeploy(row, restore, 'revert', objects)
+					if (deployed === 'unsettled') return { kind: 'done', result: 'interrupted' }
+					if (deployed !== 'succeeded') return await this.failed(row, REVERT_FAILED_CODE)
+				}
+				return await reopen()
+			}
+			case 'open': {
+				if (restore.failure !== null && CLONE_OPENED_CODES.has(restore.failure)) {
+					const fenced = await this.publish(row, 'inspect', restore.clone)
+					if (fenced.kind === 'refused') return await this.failed(row, fenced.code)
+					if (fenced.kind !== 'acked') return { kind: 'done', result: fenced.kind }
+				}
+				const published = await this.publish(row, 'open', restore.original)
+				if (published.kind === 'refused') return await this.failed(row, published.code, failedBackup(backup, published.code))
+				if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
+				return await this.failed(published.row, reopenedRestoreCode(backup, restore))
+			}
+			default:
+				throw new Error(`a restore has no step ${row.step}`)
+		}
+	}
+
+	/**
+	 * One of a restore's deploys, from the record: the run it names, created the first time to redeploy what the
+	 * environment runs now, then run under this lease with `objects` as the pointer. `not_started`: no provider accepted
+	 * it, or there was nothing to redeploy; `unsettled`: no outcome yet, or no deploys to run it with.
+	 */
+	private async restoreDeploy(
+		row: DataOperationRow,
+		restore: RestoreRow,
+		deploy: RestoreDeploy,
+		objects: ApplicationObjects,
+	): Promise<'succeeded' | 'failed' | 'not_started' | 'unsettled'> {
+		const deploys = this.deps.deploys
+		if (deploys === undefined) return 'unsettled'
+		let runId = restoreRun(restore, deploy)
+		if (runId === null) {
+			runId = uuidv7()
+			this.lease.assertWritten(await this.deps.repositories.restores.nameRun(restore.operation_id, deploy, runId, this.lease.fence()))
+		}
+		let run = await this.deps.repositories.runs.getRun(runId)
+		this.lease.assertHeld()
+		if (run === null) {
+			const source = await redeployable(this.deps, this.target)
+			this.lease.assertHeld()
+			if (source === null) return 'not_started'
+			run = await this.deps.repositories.runs.createRun({ id: runId, appId: row.app_id, env: row.env, ...source, trigger: 'manual', actor: row.actor })
+		}
+		if (run.status === 'pending' || run.status === 'running') {
+			await deploys.run(this.lease, runId, objects)
+			this.lease.assertHeld()
+			run = await this.deps.repositories.runs.getRun(runId)
+			this.lease.assertHeld()
+			if (run === null) throw new Error("a restore's run vanished")
+		}
+		if (run.status === 'succeeded') return 'succeeded'
+		// A parked run waits for a human and no provider has it; a failed one no provider accepted changed nothing.
+		if (run.status === 'awaiting_approval' || (run.status === 'failed' && run.external_run_id === null)) return 'not_started'
+		return run.status === 'failed' ? 'failed' : 'unsettled'
+	}
+
+	/**
+	 * Load the backup into the clone (ADR-0070 §6), fenced `inspect` at the record's generation. Every step is replayed
+	 * from `begin`, which the importer resumes from its marker, and a loaded part or a set link answers its receipt again.
+	 * A `begin` refused as `not_fresh` after a `complete` whose answer was lost is answered by the completion receipt.
+	 */
+	private async importClone(row: DataOperationRow, restore: RestoreRow, backup: BackupRow): Promise<DataResult<null>> {
+		const fenced = await this.publish(row, 'inspect', restore.clone)
+		if (fenced.kind === 'refused') return { kind: 'failed', code: fenced.code }
+		if (fenced.kind !== 'acked') return fenced
+		const source = { object: backup.object, dump: backup.dump_id }
+		const scope = { object: restore.clone, generation: fenced.row.generation, source }
+		const complete = async (): Promise<DataResult<null>> => {
+			const completed = await this.importStep({ ...scope, step: 'complete' })
+			if (completed.kind !== 'ok') return completed
+			if (completed.value.step !== 'complete' || completed.value.source.dump !== source.dump) return invalidAnswer()
+			return { kind: 'ok', value: null }
+		}
+		const begun = await this.importStep({ ...scope, step: 'begin' })
+		if (begun.kind === 'failed' && begun.code === 'not_fresh') return await complete()
+		if (begun.kind !== 'ok') return begun
+		if (begun.value.step !== 'begin' || begun.value.parts !== backup.parts) return invalidAnswer()
+		const deferred: number[] = []
+		for (let part = 1; part <= begun.value.parts; part++) {
+			const loaded = await this.importStep({ ...scope, step: 'part', part })
+			if (loaded.kind !== 'ok') return loaded
+			if (loaded.value.step !== 'part' || loaded.value.part !== part) return invalidAnswer()
+			if (loaded.value.deferred > 0) deferred.push(part)
+		}
+		for (const part of deferred) {
+			const linked = await this.importStep({ ...scope, step: 'link', part })
+			if (linked.kind !== 'ok') return linked
+			if (linked.value.step !== 'link' || linked.value.part !== part) return invalidAnswer()
+		}
+		let cursor: OpsImportVerifyAck['next'] = null
+		do {
+			const verified = await this.importStep({ ...scope, step: 'verify', cursor })
+			if (verified.kind !== 'ok') return verified
+			if (verified.value.step !== 'verify') return invalidAnswer()
+			cursor = verified.value.next
+		} while (cursor !== null)
+		return await complete()
+	}
+
+	/**
+	 * Rewind the original (ADR-0070 §9 step 6), from the record: fence it `inspect` at the record's generation; `prepare`
+	 * once, recording both bookmarks before any `arm`; then each `arm` counted before it is sent, and a `verify` after it,
+	 * since its answer may be lost to the reset. A recorded `arm` is verified before another is sent. An absent sentinel is
+	 * the restore; a present one arms again, at most `MAX_ARMS` times.
+	 */
+	private async rewind(start: DataOperationRow, initial: RestoreRow): Promise<Step> {
+		const fenced = await this.publish(start, 'inspect', initial.original)
+		if (fenced.kind === 'refused') return await this.failed(start, REWIND_FAILED_CODE)
+		if (fenced.kind !== 'acked') return { kind: 'done', result: fenced.kind }
+		const row = fenced.row
+		const object = initial.original
+		const sentinel = row.id
+		let restore = initial
+		if (restore.target_bookmark === null) {
+			const prepared = await this.restoreRequest({ step: 'prepare', object, generation: row.generation, sentinel, at: restore.at })
+			if (prepared.kind === 'failed') {
+				return await this.failed(row, prepared.code === 'bookmark_unavailable' ? BOOKMARK_UNAVAILABLE_CODE : REWIND_FAILED_CODE)
+			}
+			if (prepared.kind !== 'ok') return { kind: 'done', result: prepared.kind }
+			if (prepared.value.step !== 'prepare') return await this.failed(row, 'invalid_answer')
+			const bookmarks = { current: prepared.value.current, target: prepared.value.target }
+			this.lease.assertWritten(await this.deps.repositories.restores.prepared(restore.operation_id, bookmarks, this.lease.fence()))
+			restore = await this.restoreOf(row)
+		}
+		const target = restore.target_bookmark
+		if (target === null) throw new Error('a prepared restore lost its target bookmark')
+		for (;;) {
+			if (restore.arms > 0) {
+				const verified = await this.restoreRequest({ step: 'verify', object, sentinel })
+				if (verified.kind === 'failed') return await this.failed(row, REWIND_FAILED_CODE)
+				if (verified.kind !== 'ok') return { kind: 'done', result: verified.kind }
+				if (verified.value.step !== 'verify') return await this.failed(row, 'invalid_answer')
+				if (verified.value.sentinel === 'absent') return { kind: 'next', row: await this.advance(row, { step: 'check' }) }
+				if (restore.arms >= MAX_ARMS) return await this.failed(row, REWIND_FAILED_CODE)
+			}
+			this.lease.assertWritten(await this.deps.repositories.restores.arming(restore.operation_id, restore.arms, this.lease.fence()))
+			const armed = await this.restoreRequest({ step: 'arm', object, generation: row.generation, sentinel, target })
+			if (armed.kind === 'failed') return await this.failed(row, armed.code === 'bookmark_unavailable' ? BOOKMARK_UNAVAILABLE_CODE : REWIND_FAILED_CODE)
+			if (armed.kind === 'paused') return { kind: 'done', result: 'paused' }
+			// A lost answer is the expected one: the object resets right after it answers, and `verify` decides.
+			if (armed.kind === 'ok' && armed.value.step === 'arm') {
+				this.lease.assertWritten(await this.deps.repositories.restores.armed(restore.operation_id, armed.value.undo, this.lease.fence()))
+			}
+			await (this.deps.wait ?? abortableWait)(RESET_GRACE_MS, this.lease.signal)
+			restore = await this.restoreOf(row)
+		}
+	}
+
+	/** Whether a provider accepted the restore's pointer deploy, so the version running may point at the clone. */
+	private async pointAccepted(restore: RestoreRow): Promise<boolean> {
+		if (restore.point_run_id === null) return false
+		const run = await this.deps.repositories.runs.getRun(restore.point_run_id)
+		this.lease.assertHeld()
+		return run !== null && run.external_run_id !== null
+	}
+
+	/** The object's view, repeating a lost answer; `null` when no answer came. */
+	private async inspectWithRetry(object: string): Promise<OpsView | null> {
+		for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+			const answer = await this.inspect(object)
+			if (answer.kind === 'ok') return answer.value.view
+			if (answer.reason !== 'unreachable') return null
+		}
+		return null
+	}
+
+	private async recordObjects(objects: ApplicationObjects): Promise<void> {
+		const recorded = await this.deps.repositories.applicationObjects.set(
+			this.target.appId,
+			this.target.env,
+			{ serving: objects.object, listed: objects.objects },
+			this.lease.fence(),
+		)
+		this.lease.assertWritten(recorded)
+	}
+
+	private async restoreFailed(restore: RestoreRow, code: string): Promise<void> {
+		if (restore.failure !== null) return
+		this.lease.assertWritten(await this.deps.repositories.restores.failed(restore.operation_id, code, this.lease.fence()))
+	}
+
 	/** Why a migration reached `open` without migrating, or `null` once its backup passed and its run succeeded. */
 	private async reopenedCode(row: DataOperationRow, backup: BackupRow): Promise<string | null> {
 		if (backup.rehearsal === 'failed') return REHEARSAL_FAILED_CODE
@@ -764,9 +1276,10 @@ class OperationDriver {
 	 * 500, which reads as unreachable, so once the attempts are spent its view says whether the boot failed.
 	 */
 	private async migrate(row: DataOperationRow): Promise<DataResult<null>> {
+		const object = await this.serving()
 		for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
 			this.lease.assertHeld()
-			const answer = await this.deps.ops.migrate(this.target, { object: OBJECT, generation: row.generation }, this.lease.signal)
+			const answer = await this.deps.ops.migrate(this.target, { object, generation: row.generation }, this.lease.signal)
 			this.lease.assertHeld()
 			if (answer.kind === 'ok') return answer.value.generation === row.generation ? { kind: 'ok', value: null } : { kind: 'interrupted' }
 			if (answer.kind === 'stale') return { kind: 'failed', code: 'stale_generation' }
@@ -917,12 +1430,17 @@ class OperationDriver {
 		return await this.dataStep((signal) => this.deps.ops.import(this.target, request, signal))
 	}
 
+	/** A restore step; an `arm` goes out once, since its answer is lost to the reset it starts and only `verify` tells. */
+	private async restoreRequest(request: OpsRestoreRequest): Promise<DataResult<OpsRestoreAck>> {
+		return await this.dataStep((signal) => this.deps.ops.restore(this.target, request, signal), request.step === 'arm' ? 1 : ATTEMPTS)
+	}
+
 	/**
 	 * One dump or import request, sent only while the pass has time and the lease holds. A lost answer repeats it, which
 	 * every step tolerates. A refusal, a stale generation and any other unusable answer fail it with a code.
 	 */
-	private async dataStep<T>(send: (signal: AbortSignal) => Promise<OpsDataAnswer<T>>): Promise<DataResult<T>> {
-		for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+	private async dataStep<T>(send: (signal: AbortSignal) => Promise<OpsDataAnswer<T>>, attempts = ATTEMPTS): Promise<DataResult<T>> {
+		for (let attempt = 0; attempt < attempts; attempt++) {
 			if (this.deps.passSpent?.() === true) return { kind: 'paused' }
 			this.lease.assertHeld()
 			const answer = await send(this.lease.signal)
@@ -942,7 +1460,8 @@ class OperationDriver {
 	 * refusal, and the 501 of a release that does not serve the transition, are refused with a code for the caller to
 	 * fail with.
 	 */
-	private async publish(start: DataOperationRow, mode: OpsMode, object: string = OBJECT): Promise<Published> {
+	private async publish(start: DataOperationRow, mode: OpsMode, named?: string): Promise<Published> {
+		const object = named ?? (await this.serving())
 		let row = start
 		let adopted = false
 		let attempts = 0
@@ -1031,6 +1550,44 @@ class OperationDriver {
 		await this.fail(row, code, checkpoint)
 		return { kind: 'done', result: 'failed' }
 	}
+}
+
+/** How long a restore waits after the pointer deploy before it inspects the clone, so traffic can reach it and boot it. */
+const SERVE_GRACE_MS = 30_000
+/** How long a restore waits after an `arm` before its `verify`: the object resets only once it answered. */
+const RESET_GRACE_MS = 2_000
+/** How many `arm`s a rewind sends before it fails: one that never resets the object is not tried for ever. */
+const MAX_ARMS = 3
+
+/** The run a restore's deploy names, `null` before it was named. */
+function restoreRun(restore: RestoreRow, deploy: RestoreDeploy): string | null {
+	switch (deploy) {
+		case 'list':
+			return restore.list_run_id
+		case 'point':
+			return restore.point_run_id
+		case 'revert':
+			return restore.revert_run_id
+	}
+}
+
+/** Why a restore that reached `open` stops: its backup or rehearsal failed, or the code it recorded. */
+function reopenedRestoreCode(backup: BackupRow, restore: RestoreRow): string {
+	if (backup.rehearsal === 'failed') return REHEARSAL_FAILED_CODE
+	if (backup.state === 'failed') return backup.error_code === NOT_SERVED_CODE ? NOT_SERVED_CODE : BACKUP_FAILED_CODE
+	if (restore.failure === null) throw new Error('a restore reached open with nothing recorded against it')
+	return restore.failure
+}
+
+/**
+ * Whether the rewound original's migration ledger is one the clone's could have grown from: every migration the original
+ * applied, the clone applied too, under the same checksum. The clone holds the original's data as it was frozen, and
+ * the original at an earlier time can only miss migrations, never hold another.
+ */
+function ledgerWithin(original: readonly OpsMigration[], clone: readonly OpsMigration[]): boolean {
+	const key = (row: OpsMigration): string => JSON.stringify([row.bundle, row.name, row.checksum])
+	const applied = new Set(clone.map(key))
+	return original.every((row) => applied.has(key(row)))
 }
 
 /** The checkpoint that fails a backup still running with `code`; none once it ended. */
@@ -1161,8 +1718,8 @@ export function httpOpsTransport(deps: HttpOpsTransportDeps): OpsTransport {
 
 	async function data<T>(
 		target: OpsTarget,
-		operation: 'export' | 'import',
-		body: OpsExportRequest | OpsImportRequest,
+		operation: 'export' | 'import' | 'restore',
+		body: OpsExportRequest | OpsImportRequest | OpsRestoreRequest,
 		signal: AbortSignal,
 		parse: (body: unknown) => T | null,
 	): Promise<OpsDataAnswer<T>> {
@@ -1189,10 +1746,11 @@ export function httpOpsTransport(deps: HttpOpsTransportDeps): OpsTransport {
 		migrate: (target, request, signal) => fenced(target, 'migrate', request, signal, parseOpsMigrateAck),
 		export: (target, request, signal) => data(target, 'export', request, signal, (body) => parseExportAck(request, body)),
 		import: (target, request, signal) => data(target, 'import', request, signal, (body) => parseImportAck(request, body)),
+		restore: (target, request, signal) => data(target, 'restore', request, signal, (body) => parseRestoreAck(request, body)),
 	}
 }
 
-type OpsRequest = OpsInspectRequest | OpsStateRequest | OpsMigrateRequest | OpsExportRequest | OpsImportRequest
+type OpsRequest = OpsInspectRequest | OpsStateRequest | OpsMigrateRequest | OpsExportRequest | OpsImportRequest | OpsRestoreRequest
 
 /** A 200 or a 409 of a mutating request, parsed: the stale refusal names what the object published. */
 function settled<T>(answer: { readonly status: number; readonly body: unknown }, parse: (body: unknown) => T | null): OpsFencedAnswer<T> {
@@ -1231,6 +1789,18 @@ function parseImportAck(request: OpsImportRequest, body: unknown): OpsImportAck 
 			return parseOpsImportCompleteAck(body)
 		case 'discard':
 			return parseOpsImportDiscardAck(body)
+	}
+}
+
+/** The answer to a restore step, by the parser of the step it answers. */
+function parseRestoreAck(request: OpsRestoreRequest, body: unknown): OpsRestoreAck | null {
+	switch (request.step) {
+		case 'prepare':
+			return parseOpsRestorePrepareAck(body)
+		case 'arm':
+			return parseOpsRestoreArmAck(body)
+		case 'verify':
+			return parseOpsRestoreVerifyAck(body)
 	}
 }
 

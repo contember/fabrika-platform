@@ -641,6 +641,18 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
 
+	test("hands the runner the pointer Control records, and a job's pointer the application would refuse does not validate (ADR-0070 §9)", async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const applicationObjects = { object: 'application-x', objects: ['application', 'rehearsal', 'application-x'] }
+		await recordingProvider(jobs).deploy({ ...deployInput(), applicationObjects })
+		expect(jobs[0]?.applicationObjects).toEqual(applicationObjects)
+		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
+		await recordingProvider(jobs).deploy(deployInput())
+		expect(jobs[1]).not.toHaveProperty('applicationObjects')
+		const outside = { ...jobs[0], applicationObjects: { object: 'application-x', objects: ['application'] } }
+		expect(cloudflareRunnerJobSchema.safeParse(outside).success).toBe(false)
+	})
+
 	test('an application on a framework before 0.9 keeps the stateless Worker: no hop secret, and what it cannot run is refused (ADR-0062)', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()

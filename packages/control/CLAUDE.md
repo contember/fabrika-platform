@@ -430,6 +430,19 @@ other environment, before the provider prepares anything, and the write maps a r
   it (`deploy_failed`) and a refused migration or failed boot (`migration_failed`) fail the operation with the object
   restricted, for an operator's recovery; no answer leaves it running (interrupted). The run's status is its deploy's
   (ADR-0044); the operation's outcome is the last line of the run's log.
+- **A side restore is a `restore` data operation (`startRestore`, `data.start` kind `restore` with a past `at`;
+  ADR-0070 §9).** Control records the pointer per environment (`app_env_application_objects`: the serving object and the
+  listed ones, at most 16), and every deploy (`deployUnder` → `ProviderDeployInput.applicationObjects`) writes it;
+  without a row it is `application` / `application,rehearsal`, and `inspect`, `migrate` and the backups follow the
+  recorded serving object. Only a restore moves it, after its own deploy succeeded. The steps, recorded in
+  `app_env_restores` beside the operation: `list` (a deploy listing `application-<op>`, redeploying the newest succeeded
+  run under the operation's lease, `operationDeploys`), `restrict`/`backup`/`verify` as a backup, `import` into the clone
+  (`inspect`), `promote` (clone `open`, original `inspect`), `point` (the pointer deploy), `serve` (the clone's view after
+  a grace period), `rewind` (`prepare` once with both bookmarks recorded before any `arm`; each `arm` counted before it
+  is sent and sent once, then `verify`; at most three arms), `check` (the original's ledger within the clone's). A
+  failure before the clone serves is recorded first, then goes through `revert` (a pointer deploy back, when traffic may
+  have moved) to `open`, which fences the clone `inspect` and opens the original; every such code reads as `open`.
+  `bookmark_unavailable`, `rewind_failed` and `unexpected_schema` leave the clone serving and the original `inspect`.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.

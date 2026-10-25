@@ -1,5 +1,6 @@
 import {
 	appEnvironmentId,
+	type ApplicationObjects,
 	type ContractArtifact,
 	FABRIKA_APP_ORIGIN,
 	FABRIKA_IAM_APP_ID,
@@ -36,7 +37,15 @@ import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { publishRunSnapshot } from './approval/publish'
 import { approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
-import { type DriveResult, type OpsTransport, pendingMigrations, recordedMaintenance, startMigration } from './data-operations'
+import {
+	type DriveResult,
+	type OperationDeploys,
+	type OpsTransport,
+	pendingMigrations,
+	recordedMaintenance,
+	recordedObjects,
+	startMigration,
+} from './data-operations'
 import {
 	type AppEnvRow,
 	type AppRow,
@@ -540,12 +549,14 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 
 /**
  * The deploy a data operation runs itself, under the environment's lease it already holds (ADR-0069 "Leases"): the
- * only deploy of an environment that is not `open`. The lease stays the operation's; it is never released here.
+ * only deploy of an environment that is not `open`. The lease stays the operation's; it is never released here. A
+ * restore names the pointer its deploy writes (`objects`); without it the deploy writes the recorded one.
  */
 export async function executeDeployUnderLease(
 	deps: RunDeps,
 	message: DeployJobMessage,
 	lease: Lease,
+	objects?: ApplicationObjects,
 ): Promise<{ runId: string; status: DeployStatus }> {
 	const candidate = await deps.repositories.runs.getRun(message.runId)
 	if (candidate === null) {
@@ -554,7 +565,28 @@ export async function executeDeployUnderLease(
 	if (candidate.status !== 'pending') {
 		return { runId: candidate.id, status: 'skipped' }
 	}
-	return await deployUnder(deps, message, candidate, RunInvocation.underLease(deps, lease, candidate), true)
+	return await deployUnder(deps, message, candidate, RunInvocation.underLease(deps, lease, candidate), true, objects)
+}
+
+/**
+ * A restore's deploys (ADR-0070 §9): each runs a pending run under the restore's lease with the pointer it names, and a
+ * run a provider left running is settled under the same lease, bounded, as a migration's is.
+ */
+export function operationDeploys(deps: RunDeps): OperationDeploys {
+	return {
+		async servesOps(target) {
+			const row = await deps.repositories.registry.getAppEnv(target.appId, target.env)
+			if (row === null || row.domain === null || row.domain === '') return false
+			const { access } = approvedProviderAccess(row)
+			return access !== undefined && deps.provider.opsChannel?.(access) === true
+		},
+		async run(lease, runId, objects) {
+			await executeDeployUnderLease(deps, { runId }, lease, objects)
+			lease.assertHeld()
+			const run = await deps.repositories.runs.getRun(runId)
+			if (run?.status === 'running') await settleUnderLease(deps, RunInvocation.underLease(deps, lease, run))
+		},
+	}
 }
 
 async function deployUnder(
@@ -563,6 +595,7 @@ async function deployUnder(
 	candidate: RunRow,
 	invocation: RunInvocation,
 	operationDeploy: boolean,
+	objects?: ApplicationObjects,
 ): Promise<{ runId: string; status: DeployStatus }> {
 	const runId = candidate.id
 	const dryRun = message.dryRun === true
@@ -801,6 +834,8 @@ async function deployUnder(
 			// A Zerops build holds the source-map bearer, and the provider relays the build's log.
 			releaseContext?.artifactUpload?.bearer ?? '',
 		])
+		// Every deploy writes the pointer Control records, so an ordinary deploy keeps one a restore moved (ADR-0070 §9).
+		const pointer = objects ?? (await recordedObjects(deps, { appId: app.id, env: appEnv.env }))
 		const deployRun = async (): Promise<DeployStatus> => {
 			let outcome: ProviderDeployOutcome
 			try {
@@ -833,6 +868,7 @@ async function deployUnder(
 					secrets,
 					vars,
 					managedEnvironment: handed,
+					applicationObjects: pointer,
 					dryRun,
 					...(sourceBinding === undefined ? {} : { sourceBinding }),
 					...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
@@ -957,10 +993,12 @@ async function guardedMigrations(
 	candidate: AppEnvRow,
 	signal: AbortSignal,
 ): Promise<{ readonly ops: OpsTransport; readonly pending: readonly string[] } | null> {
-	if (!(await deps.repositories.runs.deployedOpsChannel({ appId: candidate.app_id, env: candidate.env }))) return null
+	const target = { appId: candidate.app_id, env: candidate.env }
+	if (!(await deps.repositories.runs.deployedOpsChannel(target))) return null
 	const answer = await pendingMigrations(
 		deps.ops,
-		{ appId: candidate.app_id, env: candidate.env },
+		target,
+		(await recordedObjects(deps, target)).object,
 		approvedSnapshot(candidate).snapshot.migrations,
 		signal,
 	)

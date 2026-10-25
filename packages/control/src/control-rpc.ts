@@ -1,6 +1,6 @@
 import { HttpError, initRpc, isStructuralError, type RpcRouterFor } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
-import { DEFAULT_APPLICATION_OBJECT, type OpsContentView, type OpsView, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type OpsContentView, type OpsView, parseAppEnvironmentId } from '@fabrika/auth-core'
 import {
 	APP_ENV_KINDS,
 	BUILDER_APPROVAL_VERIFIER,
@@ -91,13 +91,16 @@ import { listBackups, toBackupScheduleDto } from './backups'
 import { describeConnector } from './connectors'
 import { consoleAccess } from './console-access'
 import {
+	type DataOperationDeps,
 	type DataOperationOutcome,
 	listDataOperations,
 	type OpsInspection,
 	type OpsTransport,
 	type OpsUnavailable,
+	recordedObjects,
 	startMaintenance,
 	startRecovery,
+	startRestore,
 	toDataOperationDto,
 } from './data-operations'
 import type { ControlRepositories, MailMessageRow, MailRuleRow } from './db'
@@ -109,6 +112,7 @@ import { sourceConnectionList } from './github/connections/status'
 import { appScope } from './iam'
 import { jsonValueSchema } from './json-value'
 import { isInstallationSender, type MailRelay, mayRequeueMail, releaseMailMessage, requeueMailMessage } from './mail-relay/queue'
+import { operationDeploys, type RunDeps } from './run-lifecycle'
 import { buildControlRpcDeps, type ControlRpcDeps } from './services'
 
 interface ControlRpcContext {
@@ -492,6 +496,7 @@ export function createControlRpcRouter(
 			auth: ctx.auth,
 			...(deps.lock === undefined ? {} : { lock: deps.lock }),
 			...(deps.opsTransport === undefined ? {} : { ops: deps.opsTransport }),
+			...(deps.runDeps === undefined ? {} : { runDeps: deps.runDeps }),
 		}
 	}
 
@@ -703,6 +708,8 @@ interface DataUseCaseContext {
 	readonly lock?: DeployLocks
 	/** The ops channel; absent, the views and operations answer 503. */
 	readonly ops?: OpsTransport
+	/** What a restore's own deploys run with; absent, a restore is refused. */
+	readonly runDeps?: () => Promise<RunDeps>
 }
 
 /** An environment the caller may act on with `action`; any other, existing or not, is the same 404. */
@@ -773,7 +780,8 @@ async function readDataContentUseCase(c: DataUseCaseContext, input: { appId: str
 
 async function inspectData(c: DataUseCaseContext, target: { appId: string; env: string }, content: boolean): Promise<OpsInspection> {
 	if (c.ops === undefined) fail(503, 'data operations unavailable')
-	const answer = await c.ops.inspect(target, { object: DEFAULT_APPLICATION_OBJECT, content }, AbortSignal.timeout(DATA_VIEW_TIMEOUT_MS))
+	const { object } = await recordedObjects(c, target)
+	const answer = await c.ops.inspect(target, { object, content }, AbortSignal.timeout(DATA_VIEW_TIMEOUT_MS))
 	if (answer.kind === 'unavailable') failUnavailable(answer.reason)
 	return answer.value
 }
@@ -781,18 +789,32 @@ async function inspectData(c: DataUseCaseContext, target: { appId: string; env: 
 async function startDataOperationUseCase(c: DataUseCaseContext, input: StartDataOperationInput): Promise<DataOperationDto> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
 	if (input.kind === 'backup') fail(501, 'backups are not available in this release')
+	if (input.kind === 'restore') {
+		const deps = await restoreDeps(c)
+		return dataOperationResult(
+			await startRestore(deps, { appId: input.appId, env: input.env, at: new Date(input.at).toISOString(), actor: runActor(c.auth) }),
+		)
+	}
 	const outcome = await startMaintenance(operationDeps(c), { appId: input.appId, env: input.env, mode: input.mode, actor: runActor(c.auth) })
 	return dataOperationResult(outcome)
 }
 
+/** A recovery may resume a restore, which deploys, so it carries the restore's deploys where the composition has them. */
 async function recoverDataOperationUseCase(c: DataUseCaseContext, input: RecoverDataOperationInput): Promise<DataOperationDto> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
-	return dataOperationResult(await startRecovery(operationDeps(c), { ...input, actor: runActor(c.auth) }))
+	const deps = c.runDeps === undefined ? operationDeps(c) : await restoreDeps(c)
+	return dataOperationResult(await startRecovery(deps, { ...input, actor: runActor(c.auth) }))
 }
 
 function operationDeps(c: DataUseCaseContext): { repositories: ControlRepositories; lock: DeployLocks; ops: OpsTransport } {
 	if (c.lock === undefined || c.ops === undefined) fail(503, 'data operations unavailable')
 	return { repositories: c.repositories, lock: c.lock, ops: c.ops }
+}
+
+async function restoreDeps(c: DataUseCaseContext): Promise<DataOperationDeps> {
+	const deps = operationDeps(c)
+	if (c.runDeps === undefined) fail(503, 'restores are unavailable: this composition does not deploy from a data operation')
+	return { ...deps, deploys: operationDeploys(await c.runDeps()) }
 }
 
 /** The record as the operation left it: one the object left unanswered is still `running`, at its step. */
@@ -802,7 +824,11 @@ function dataOperationResult(outcome: DataOperationOutcome): DataOperationDto {
 	if (outcome.reason === 'operation_running') fail(409, 'an operation of this environment is still running: recover it first')
 	if (outcome.reason === 'not_recoverable') fail(409, 'that operation is not one this environment can recover')
 	if (outcome.reason === 'superseded') fail(409, 'a newer operation of this environment supersedes that one')
-	if (outcome.reason === 'not_open') fail(409, 'the environment is not open: open it before a backup')
+	if (outcome.reason === 'not_open') fail(409, 'the environment is not open: open it first')
+	if (outcome.reason === 'too_many_objects') fail(409, "the environment's object list is full (16 names): no clone can be listed")
+	if (outcome.reason === 'nothing_deployed') fail(409, 'the environment has no succeeded deploy to redeploy')
+	if (outcome.reason === 'no_deploys') fail(503, 'restores are unavailable: this composition does not deploy from a data operation')
+	if (outcome.reason === 'not_past') fail(400, 'the restore time must lie in the past')
 	failUnavailable(outcome.reason)
 }
 

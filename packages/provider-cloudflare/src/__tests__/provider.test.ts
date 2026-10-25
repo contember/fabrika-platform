@@ -2,6 +2,7 @@ import { schemaFromContract } from '@fabrika/app/contract'
 import {
 	type AppActionDef,
 	type AppEnvironment,
+	type ApplicationObjects,
 	type ContractArtifact,
 	contractDigest,
 	OPS_REHEARSAL_OBJECT,
@@ -190,6 +191,8 @@ const deploy = (
 		readonly framework?: string | null
 		readonly installationApps?: readonly AppEnvironment[]
 		readonly platformIam?: PlatformIamTarget
+		/** The pointer Control records; none by default. */
+		readonly applicationObjects?: ApplicationObjects
 	} = {},
 ) => {
 	const contract = options.contract ?? (options.platformResources === 'allow' || options.checkoutContract !== undefined ? undefined : notesArtifact)
@@ -236,6 +239,7 @@ const deploy = (
 				},
 			}),
 		...(options.installationApps === undefined ? {} : { installationApps: options.installationApps }),
+		...(options.applicationObjects === undefined ? {} : { applicationObjects: options.applicationObjects }),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
 		log: (line) => {
@@ -1919,6 +1923,20 @@ describe('the ops channel of a gated release (servesOps, ADR-0069)', () => {
 		})
 		// Plain variables: a deploy without them removes them, as every var of a Worker version.
 		expect(rec.commands.some((command) => command.args.includes('FABRIKA_APPLICATION_OBJECT'))).toBe(false)
+	})
+
+	test('the object variables are the pointer Control hands, so a deploy keeps one a side restore moved (ADR-0070 §9)', async () => {
+		const clone = 'application-01a17337-44ab-7010-bf80-0ec571cf4049'
+		const applicationObjects = { object: clone, objects: ['application', 'rehearsal', clone] }
+		expect((await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.0', applicationObjects })).status).toBe('succeeded')
+		expect((await generatedConfig('stage-demo')).vars).toMatchObject({
+			FABRIKA_APPLICATION_OBJECT: clone,
+			FABRIKA_APPLICATION_OBJECTS: `application,rehearsal,${clone}`,
+		})
+		rec.provisions.shift()
+		// An older pin's Worker reads neither, whatever Control records.
+		await deploy(rec, config(), { contract: notesArtifact, framework: '0.8.1', applicationObjects })
+		expect((await generatedConfig('stage-demo')).vars ?? {}).not.toHaveProperty('FABRIKA_APPLICATION_OBJECT')
 	})
 
 	test('a redeploy of an older pin, or from a Control that names no release, writes neither the row nor the variables (ADR-0062)', async () => {

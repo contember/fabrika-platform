@@ -317,9 +317,28 @@ export type DataOperationKind = 'maintenance' | 'backup' | 'migrate' | 'recovery
  * Where an operation stands: `reconcile` reads the record and the object's published state (a recovery's first step),
  * `restrict` publishes a generation in a restricting mode, `backup` and `verify` take and check a consistent backup,
  * `deploy` runs the operation's own deploy, `migrate` runs the pending migrations, `resume` continues the interrupted
- * operation from its recorded step, and `open` publishes the generation that opens the object.
+ * operation from its recorded step, and `open` publishes the generation that opens the object. A side restore (ADR-0070
+ * §9) also `list`s its clone with a deploy, `import`s the backup into it, `promote`s it (the clone `open`, the original
+ * `inspect`), `point`s ordinary traffic at it with a deploy, waits for it to `serve`, `rewind`s the original to the
+ * target time and `check`s the original's schema; `revert` points traffic back at the original with a deploy.
  */
-export type DataOperationStep = 'reconcile' | 'restrict' | 'backup' | 'verify' | 'deploy' | 'migrate' | 'resume' | 'open'
+export type DataOperationStep =
+	| 'reconcile'
+	| 'restrict'
+	| 'backup'
+	| 'verify'
+	| 'deploy'
+	| 'migrate'
+	| 'resume'
+	| 'open'
+	| 'list'
+	| 'import'
+	| 'promote'
+	| 'point'
+	| 'serve'
+	| 'rewind'
+	| 'check'
+	| 'revert'
 
 export type DataOperationState = 'running' | 'succeeded' | 'failed'
 
@@ -371,11 +390,12 @@ export type DataOperationListInput = z.infer<typeof dataOperationListInputSchema
 
 /**
  * An operation a person starts. A migration starts inside a deploy and a recovery has its own request, so neither is
- * started here.
+ * started here. A restore names the time `at` (ISO 8601 with an offset) its environment's data is recovered as of.
  */
 export const startDataOperationInputSchema = z.discriminatedUnion('kind', [
 	z.object({ appId: nonEmpty, env: nonEmpty, kind: z.literal('maintenance'), mode: maintenanceMode }).strict(),
 	z.object({ appId: nonEmpty, env: nonEmpty, kind: z.literal('backup') }).strict(),
+	z.object({ appId: nonEmpty, env: nonEmpty, kind: z.literal('restore'), at: z.string().datetime({ offset: true }) }).strict(),
 ])
 
 export type StartDataOperationInput = z.infer<typeof startDataOperationInputSchema>

@@ -1,5 +1,5 @@
 import { contractArtifactSchema } from '@fabrika/app/contract'
-import { type ContractArtifact, isDigest } from '@fabrika/auth-core'
+import { type ContractArtifact, isDigest, parseApplicationObjects } from '@fabrika/auth-core'
 import { FRAMEWORK_RELEASE_PATTERN } from '@fabrika/provider-contract'
 import { z } from 'zod'
 
@@ -28,6 +28,22 @@ export const CROSS_ORIGINS_ENV = 'FABRIKA_CROSS_ORIGINS'
 
 /** The executor's copy of `CloudflareRunnerJob.operationsOrigin`: the origin of the environment's Operations ingest. */
 export const OPERATIONS_ORIGIN_ENV = 'FABRIKA_OPERATIONS_ORIGIN'
+
+/** The executor's copy of `CloudflareRunnerJob.applicationObjects`: JSON `{ object, objects }`, the pointer Control records. */
+export const APPLICATION_OBJECTS_ENV = 'FABRIKA_RUNNER_APPLICATION_OBJECTS'
+
+/**
+ * The serving object and the listed objects as the job and the executor carry them: the shape `parseApplicationObjects`
+ * accepts, so a pointer the application would refuse never reaches a deploy.
+ */
+export const applicationObjectsSchema = z.object({ object: z.string(), objects: z.array(z.string()) }).strict().transform((value, ctx) => {
+	const parsed = parseApplicationObjects(value.object, value.objects.join(','))
+	if (parsed === null) {
+		ctx.addIssue({ code: 'custom', message: 'not a valid serving object and object list' })
+		return z.NEVER
+	}
+	return parsed
+})
 
 /**
  * The access Control approved for a run (ADR-0050): the contract it read at the commit, in this release's model, and

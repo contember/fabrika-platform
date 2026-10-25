@@ -100,6 +100,10 @@ class FakeObject implements OpsTransport {
 		return Promise.resolve({ kind: 'unavailable', reason: 'invalid_answer' })
 	}
 
+	restore(): Promise<OpsDataAnswer<never>> {
+		return Promise.resolve({ kind: 'unavailable', reason: 'invalid_answer' })
+	}
+
 	transitions(): { generation: number; mode: string }[] {
 		return this.sent.flatMap((sent) => sent.op === 'state' ? [{ generation: sent.generation, mode: sent.mode }] : [])
 	}

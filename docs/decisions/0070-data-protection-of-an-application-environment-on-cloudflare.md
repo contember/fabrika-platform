@@ -357,25 +357,30 @@ environment's deploy lease and `data.manage`.
 8. **The clone stays authoritative.** Going back is a new side restore in the other direction, never a pointer flip.
    The original is deleted after the retention period.
 
+**The pointer lives in Control.** Control records each environment's serving object and object list
+(`app_env_application_objects`), and every deploy of a release that serves the ops channel writes them as
+`FABRIKA_APPLICATION_OBJECT(S)`, so an ordinary deploy after a restore keeps traffic on the clone. Only a restore's own
+deploys move the record. An environment without one gets the defaults, `application` and `application,rehearsal`.
+
 **Invariant: point-in-time recovery never touches the object of ordinary traffic.** The object refuses `prepare` and
 `arm` as `serving_object` while it is `FABRIKA_APPLICATION_OBJECT`, and as `wrong_mode` unless it is `inspect`.
 
-| Failure                                          | Outcome                                                                                              |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| Control dies mid-operation                       | The environment stays in its published mode; a successor fences and resumes from the recorded step   |
-| The listing deploy fails                         | Nothing is frozen; the operation fails and the environment is as before                              |
-| The backup or its rehearsal fails                | The original reopens at a new generation; the operation fails                                        |
-| The import into the clone fails                  | The clone is discarded and the import retried, or the original reopens and the operation fails       |
-| The pointer deploy fails                         | The original is intact: it is published `open` again and the clone `inspect`; the service is back    |
-| The clone does not boot after the pointer deploy | The original is not rewound yet: a pointer deploy back to it, published `open`, restores the service |
-| T lies outside the recovery window               | `prepare` is refused as `bookmark_unavailable`; the clone keeps serving; nothing is lost             |
-| The answer to `arm` is lost                      | `verify` decides: an absent sentinel is a restore; a present one arms again                          |
-| The object did not reset after `arm`             | `verify` finds the sentinel; the operation arms again                                                |
-| The rewound original shows an unexpected schema  | It stays `inspect`; the clone keeps serving; an operator investigates                                |
-| A write arrives during the window                | Fenced by generation (ADR-0069 §3); a webhook gets 503 and retries                                   |
-| Two objects in one isolate                       | Per-object runtime state keeps them apart; the original is `inspect` and never boots                 |
-| The files bucket is shared                       | The original runs no sweep; the tombstones keep the bytes its rows at T reference, for the window    |
-| The original keeps billing storage               | Until it is deleted                                                                                  |
+| Failure                                          | Outcome                                                                                                  |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Control dies mid-operation                       | The environment stays in its published mode; a successor fences and resumes from the recorded step       |
+| The listing deploy fails                         | Nothing is frozen; the operation fails and the environment is as before                                  |
+| The backup or its rehearsal fails                | The original reopens at a new generation; the operation fails                                            |
+| The import into the clone fails                  | The clone is discarded and the original reopens; the operation fails: a retry of that backup would too   |
+| The pointer deploy fails                         | The original is intact: it is published `open` again and the clone `inspect`; the service is back        |
+| The clone does not boot after the pointer deploy | The original is not rewound yet: a pointer deploy back to it, published `open`, restores the service     |
+| T lies outside the recovery window               | `prepare` is refused as `bookmark_unavailable`; the clone keeps serving; nothing is lost                 |
+| The answer to `arm` is lost                      | `verify` decides: an absent sentinel is a restore; a present one arms again                              |
+| The object did not reset after `arm`             | `verify` finds the sentinel; the operation arms again, three times at most, then fails; the clone serves |
+| The rewound original shows an unexpected schema  | It stays `inspect`; the clone keeps serving; an operator investigates                                    |
+| A write arrives during the window                | Fenced by generation (ADR-0069 §3); a webhook gets 503 and retries                                       |
+| Two objects in one isolate                       | Per-object runtime state keeps them apart; the original is `inspect` and never boots                     |
+| The files bucket is shared                       | The original runs no sweep; the tombstones keep the bytes its rows at T reference, for the window        |
+| The original keeps billing storage               | Until it is deleted                                                                                      |
 
 **Not built: an in-place restore and a whole-environment rollback.** Rewinding the serving object, exporting, and
 restoring forward rests on the forward restore succeeding, which is unprobed, and an undo bookmark lost in transit has

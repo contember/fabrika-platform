@@ -69,6 +69,14 @@ export {
 	type NamespaceResourceClaimRow,
 	SourceBindingError,
 } from './db/registry-types'
+export {
+	ApplicationObjectsRepository,
+	type ApplicationObjectsRow,
+	type RestoreDeploy,
+	type RestoreInput,
+	RestoreRepository,
+	type RestoreRow,
+} from './db/restores'
 export { parseProviderJson, RunRepository, type RunRow, type RunStatus, type RunTrigger, serializeProviderJson } from './db/runs'
 export { TokenKeyRepository, type TokenKeyRow } from './db/token-keys'
 export { WorkloadCredentialRepository, type WorkloadCredentialRow } from './db/workload-credentials'

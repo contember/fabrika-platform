@@ -1,4 +1,4 @@
-import type { AppSchema, ContractArtifact, ManagedEnvironment } from '@fabrika/auth-core'
+import type { ApplicationObjects, AppSchema, ContractArtifact, ManagedEnvironment } from '@fabrika/auth-core'
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import type { JsonValue, ProviderEnvelope } from './json'
 
@@ -154,6 +154,11 @@ export interface ProviderDeployInput {
 	readonly vars: Readonly<Record<string, string>>
 	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
 	readonly managedEnvironment: ProviderManagedEnvironment
+	/**
+	 * The object that serves the environment's ordinary traffic and the objects its ops channel reaches, as Control records
+	 * them (ADR-0070 §9). A provider whose application runs in no object ignores it; absent, the provider's defaults.
+	 */
+	readonly applicationObjects?: ApplicationObjects
 	readonly dryRun: boolean
 	readonly sourceBinding?: ProviderSourceBinding
 	/** Optional short-lived, run-scoped Operations artifact destination. */

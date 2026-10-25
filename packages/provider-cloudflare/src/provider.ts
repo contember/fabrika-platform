@@ -2,6 +2,7 @@ import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLAR
 import {
 	type AppEnvironment,
 	appEnvironmentId,
+	type ApplicationObjects,
 	type AppSchema,
 	connectVariables,
 	type ContractArtifact,
@@ -239,13 +240,16 @@ const buildEntry = async (build: EntryBuild, run: CloudflareDeployRun, cf: Cloud
 }
 
 /**
- * The object variables of a release that serves ops (ADR-0069): ordinary traffic reaches `application`, and ops requests
- * reach it and the object a backup is rehearsed in (ADR-0070).
+ * The objects of a release that serves ops (ADR-0069) when Control names none: ordinary traffic reaches `application`,
+ * and ops requests reach it and the object a backup is rehearsed in (ADR-0070).
  */
-const OBJECT_VARIABLES: Readonly<Record<string, string>> = {
-	[FABRIKA_APPLICATION_OBJECT]: DEFAULT_APPLICATION_OBJECT,
-	[FABRIKA_APPLICATION_OBJECTS]: [DEFAULT_APPLICATION_OBJECT, OPS_REHEARSAL_OBJECT].join(','),
-}
+const DEFAULT_OBJECTS: ApplicationObjects = { object: DEFAULT_APPLICATION_OBJECT, objects: [DEFAULT_APPLICATION_OBJECT, OPS_REHEARSAL_OBJECT] }
+
+/** The object variables written from the pointer Control records, so a deploy keeps one a side restore moved (ADR-0070 §9). */
+const objectVariables = (objects: ApplicationObjects): Readonly<Record<string, string>> => ({
+	[FABRIKA_APPLICATION_OBJECT]: objects.object,
+	[FABRIKA_APPLICATION_OBJECTS]: objects.objects.join(','),
+})
 
 /**
  * Bind the application's Durable Object, which runs the application over its SQLite, the environment's files bucket,
@@ -256,7 +260,7 @@ const withApplicationRuntime = (authored: Worker, run: CloudflareDeployRun, runt
 	const application = applicationWorker(authored)
 	const configured = new Worker({
 		...application.options,
-		...(ops ? { vars: { ...application.options.vars, ...OBJECT_VARIABLES } } : {}),
+		...(ops ? { vars: { ...application.options.vars, ...objectVariables(run.applicationObjects ?? DEFAULT_OBJECTS) } } : {}),
 		bindings: {
 			[CLOUDFLARE_APPLICATION_BINDING]: new DurableObject({ name: `${run.appId}-application`, className: CLOUDFLARE_APPLICATION_CLASS }),
 			...application.options.bindings,
@@ -671,6 +675,8 @@ export interface CloudflareDeployRun {
 	readonly approved?: RunnerApprovedAccess
 	/** Every Cloudflare deployment of the installation in Control's registry; a name of another application is refused. */
 	readonly installationApps?: readonly AppEnvironment[]
+	/** The serving object and the listed objects Control records (ADR-0070 §9); absent, `application` and `rehearsal`. */
+	readonly applicationObjects?: ApplicationObjects
 	readonly dryRun: boolean
 	readonly signal: AbortSignal
 	readonly log: (line: string) => void
