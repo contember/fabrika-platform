@@ -776,7 +776,22 @@ const packageExists = async (name: string): Promise<boolean> => {
 	throw new Error(`${command.join(' ')} failed (${exitCode})\n${stderr || stdout}`)
 }
 
-const releaseDistTag = (version: string): 'latest' | 'next' => version.includes('-') ? 'next' : 'latest'
+/** The npm dist-tags a release publishes under: one channel per kind of version. */
+export type ReleaseDistTag = 'latest' | 'alpha' | 'next'
+
+/**
+ * The dist-tag `version` publishes under, which `publish` writes and `registry-smoke` waits for. A release goes to
+ * `latest`; a prerelease whose first identifier starts with `alpha` (`0.9.0-alpha.1`) to `alpha`; every other
+ * prerelease (`0.9.0-dev.4`, `0.0.0-ci.0`) to `next`. A prerelease never touches `latest`, so a plain install never
+ * resolves one.
+ */
+export const releaseDistTag = (version: string): ReleaseDistTag => {
+	const match = /^\d+\.\d+\.\d+(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(version)
+	if (match === null) throw new Error(`invalid SemVer ${JSON.stringify(version)}`)
+	const prerelease = match[1]
+	if (prerelease === undefined) return 'latest'
+	return prerelease.startsWith('alpha') ? 'alpha' : 'next'
+}
 
 const compareVersions = (left: string, right: string, source: string): number => {
 	if (!TAG_PATTERN.test(`v${left}`)) throw new Error(`${source}: invalid SemVer ${JSON.stringify(left)}`)
@@ -784,9 +799,10 @@ const compareVersions = (left: string, right: string, source: string): number =>
 	return Bun.semver.order(left, right)
 }
 
-const publishCommand = (path: string, version: string, dryRun: boolean): readonly string[] => {
+export const publishCommand = (path: string, version: string, dryRun: boolean): readonly string[] => {
 	const command = ['npm', 'publish', path, '--access', 'public', '--ignore-scripts']
-	if (releaseDistTag(version) === 'next') command.push('--tag', 'next')
+	const tag = releaseDistTag(version)
+	if (tag !== 'latest') command.push('--tag', tag)
 	command.push(dryRun ? '--dry-run' : '--provenance')
 	return command
 }

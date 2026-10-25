@@ -137,13 +137,27 @@ Every pack records each tarball's sha512 integrity in `release-manifest.json`.
 
 The application copies the tarballs into `vendor/`, takes the block in place of its `@fabrika/*` entries and runs `bun install`. `fabrika-check` refuses that form unless it is run with `--packed <dir>/release-manifest.json`, and then accepts only tarballs whose bytes match the recorded integrity ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)). The platform build never passes the flag, so such an application does not deploy. `FABRIKA_TEST_RELEASE_PACK=1 bun test scripts/__tests__/release.test.ts` runs that whole path against npm.
 
+## Release channels
+
+The version decides the npm dist-tag a release publishes under. One function, `releaseDistTag` in `scripts/release.ts`, derives it for both `publish` and `registry-smoke`:
+
+| Version                                                                   | Dist-tag | Who resolves it                       |
+| ------------------------------------------------------------------------- | -------- | ------------------------------------- |
+| a release (`0.9.0`)                                                       | `latest` | a plain `npm install @fabrika/app`    |
+| a prerelease whose first identifier starts with `alpha` (`0.9.0-alpha.1`) | `alpha`  | `@fabrika/app@alpha`, or an exact pin |
+| any other prerelease (`0.9.0-dev.4`, CI's `0.0.0-ci.0`)                   | `next`   | `@fabrika/app@next`, or an exact pin  |
+
+The alpha channel is for a minor that is usable before its release: an application outside the repository pins an exact alpha and deploys on an installation of that alpha. A prerelease never moves `latest`, and the `example-mirror` job of `release.yml` skips every prerelease, so the standalone example keeps following `latest` ([Pinning the standalone example](#pinning-the-standalone-example)). Control and the providers read a prerelease as its `major.minor.patch` and do not tell the channels apart.
+
+SemVer orders prerelease identifiers by ASCII, so `0.9.0-alpha.1` sorts below `0.9.0-dev.4`. `release:bump` refuses a version that is not newer than the source, so a source already at a `dev` prerelease of a version cannot move to an `alpha` of the same version; and a range such as `^0.9.0-alpha.1` resolves `0.9.0-dev.4`. Pin exact versions, as every application does anyway.
+
 ## Tagged publication
 
 A `v<semver>` tag starts `.github/workflows/release.yml` on a GitHub-hosted runner. The publish job receives `id-token: write`; no npm token is present. npm trusted publishing authenticates the exact workflow and generates provenance for each public package.
 
-Packages publish in dependency order. A prerelease version uses the `next` dist-tag. On retry, the tool compares the registry's `dist.integrity` with the local tarball's SHA-512 integrity. It accepts an existing version only when the contents match and fails closed on a mismatch.
+Packages publish in dependency order, under the dist-tag of their channel ([Release channels](#release-channels)). On retry, the tool compares the registry's `dist.integrity` with the local tarball's SHA-512 integrity. It accepts an existing version only when the contents match and fails closed on a mismatch.
 
-After publication, `release:registry-smoke` waits for the expected `latest` or `next` dist-tag on every public package, installs every exact version from npm into a clean project, verifies the installed manifests, imports the representative application/provider surfaces, and executes the installed CLI.
+After publication, `release:registry-smoke` waits for the channel's dist-tag on every public package, installs every exact version from npm into a clean project, verifies the installed manifests, imports the representative application/provider surfaces, and executes the installed CLI.
 
 The wait is for npm's replication, not for the publish. A package has been observed reaching its dist-tag about five minutes after `npm publish` answered, so the smoke polls with backoff — 5 s, 10 s, 20 s, then 30 s steps — for up to ten minutes, printing the packages still missing between rounds and asking only about those. Past the deadline it fails with one line per package, naming what the registry answered. A release should no longer need a manual re-run of this step.
 

@@ -1,7 +1,7 @@
 import type { ContractArtifact } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import { needsMinuteTick, pinsGeneratedEntry, releaseAtLeast, runsInObject } from '../contract-support'
+import { needsMinuteTick, pinsGeneratedEntry, releaseAtLeast, runsInObject, servesOps } from '../contract-support'
 
 describe('releaseAtLeast', () => {
 	const since = { major: 0, minor: 9 }
@@ -37,12 +37,15 @@ describe('the release gates', () => {
 		['0.8.12', false],
 		['0.9.0', true],
 		['0.9.0-dev.1', true],
+		// SemVer orders an alpha below every dev prerelease of the version; the gates count both as 0.9.
+		['0.9.0-alpha.1', true],
 		['1.0.0', true],
 	]
 	for (const [release, expected] of cases) {
-		test(`${release}: runsInObject and pinsGeneratedEntry are both ${expected}`, () => {
+		test(`${release}: runsInObject, pinsGeneratedEntry and servesOps are all ${expected}`, () => {
 			expect(runsInObject(release)).toBe(expected)
 			expect(pinsGeneratedEntry(release)).toBe(expected)
+			expect(servesOps(release)).toBe(expected)
 		})
 	}
 })
