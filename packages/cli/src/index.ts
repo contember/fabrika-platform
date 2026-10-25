@@ -26,7 +26,7 @@ Usage:
                        [--namespace=<id>] [--installation-id=<n|none>] [--url=<origin>] [--json]
   fabrika namespace <plan|create|adopt|reconcile> --provider=zerops [provider options]
   fabrika control <key|apps|namespaces|register|deploy|runs> [options]
-  fabrika env <inspect|maintenance|operations|recover> <app> <env> [arguments] [--json]
+  fabrika env <inspect|maintenance|operations|recover|backups|restore> <app> <env> [arguments] [--json]
   fabrika builder <init|next|advance|gate|ensure-daemon|induce|build> [options]
   fabrika db <new|migrate|codegen|test-scaffold|test-isolation> [options]
   fabrika job run <name>
@@ -63,8 +63,8 @@ environment approved, as Control answers it to FABRIKA_CONTROL_KEY. Run \`fabrik
 provider-neutral, loads no installation package, and speaks the same typed API the console does. Run
 \`fabrika control --help\` for its surface.
 
-\`fabrika env\` shows an application environment's data through the control plane, and puts it into maintenance or
-recovers a stuck operation. Run \`fabrika env --help\` for its surface.
+\`fabrika env\` shows an application environment's data and backups through the control plane, puts it into
+maintenance, restores its data as of a past time, or recovers a stuck operation. Run \`fabrika env --help\` for its surface.
 
 Which platform commands exist, and how WIDE each one is, is the provider's own answer — Zerops'
 \`platform deploy\` owns the whole ordered sequence while Cloudflare's is one step of a scaffolded
@@ -273,7 +273,7 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 		return
 	}
 	if (parsed.help && parsed.area === 'env') {
-		const { ENV_USAGE } = await import('./env.js')
+		const { ENV_USAGE } = await import('./data.js')
 		console.info(ENV_USAGE)
 		return
 	}
@@ -333,7 +333,7 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 		return
 	}
 	if (parsed.area === 'env') {
-		const { runEnvCli } = await import('./env.js')
+		const { runEnvCli } = await import('./data.js')
 		await runEnvCli(parsed.command, parsed.rest)
 		return
 	}

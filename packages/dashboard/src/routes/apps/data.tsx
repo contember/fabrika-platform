@@ -1,6 +1,6 @@
 import { createPage, Link } from '@buzola/router'
 import { CONTROL_ACTIONS, OPS_ROW_COUNT_CAP, type OpsContentView, type OpsView } from '@fabrika/control-contract'
-import { type ReactNode, useState } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { Chip, type Lamp, Status } from '../../components/Status'
@@ -10,17 +10,22 @@ import {
 	ApiError,
 	type createControlClient,
 	type CursorList,
+	type DataBackupDto,
+	type DataBackupScheduleDto,
 	type DataOperationDto,
 	type DataOperationResolution,
 	type DataOperationState,
+	type DataOperationStep,
+	type DataRehearsalOutcome,
 	type MaintenanceMode,
 } from '../../lib/api'
 import { holdsGlobally, mayDo, opensApplications } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate } from '../../lib/format'
 
-// An application environment's data (ADR-0069): what its object reports, the operations Control ran on it, and the
-// maintenance and recovery controls. consoleAccess only shows or hides a control; each procedure decides.
+// An application environment's data (ADR-0069, ADR-0070): what its object reports, its backups, the operations Control
+// ran on it, and the maintenance, backup schedule, restore and recovery controls. consoleAccess only shows or hides a
+// control; each procedure decides.
 
 type ControlClient = ReturnType<typeof createControlClient>
 
@@ -44,6 +49,39 @@ export type DataAction =
 
 /** The operations the page lists: the newest page only, and it says so. */
 const OPERATION_PAGE = 25
+
+/** The backups the page lists: the newest page only, and it says so. */
+const BACKUP_PAGE = 25
+
+/** Control offers no restore older than a backup's retention, 30 days (ADR-0070 §5). */
+const RESTORE_WINDOW_DAYS = 30
+const RESTORE_WINDOW_MS = RESTORE_WINDOW_DAYS * 24 * 60 * 60 * 1000
+
+/** How soon the page reads again while its newest operation runs. */
+const OPERATION_POLL_MS = 5_000
+
+/** A side restore's steps on its way to a serving clone (ADR-0070 §9), in Control's order. */
+const RESTORE_STEPS: readonly { readonly step: DataOperationStep; readonly effect: string }[] = [
+	{ step: 'list', effect: 'A deploy lists the clone object, so Control can reach it.' },
+	{ step: 'restrict', effect: 'The serving object is frozen read-only.' },
+	{ step: 'backup', effect: 'A consistent backup of it is taken.' },
+	{ step: 'verify', effect: 'The backup is rehearsed.' },
+	{ step: 'import', effect: 'The backup is imported into the clone.' },
+	{ step: 'promote', effect: 'The clone is opened; the original is set to inspect.' },
+	{ step: 'point', effect: 'A deploy points ordinary traffic at the clone.' },
+	{ step: 'serve', effect: 'Control waits until the clone serves.' },
+	{ step: 'rewind', effect: 'The original is rewound to the restore time.' },
+	{ step: 'check', effect: "The rewound original's schema is checked." },
+]
+
+/** A restore that failed before its clone served goes back to the original. */
+const RESTORE_BACK_STEPS: readonly { readonly step: DataOperationStep; readonly effect: string }[] = [
+	{ step: 'revert', effect: 'A deploy points ordinary traffic back at the original.' },
+	{ step: 'open', effect: 'The clone is set to inspect; the original is opened again.' },
+]
+
+/** The restore failures that leave the clone serving and the original in inspect (`packages/control/CLAUDE.md`). */
+const CLONE_SERVING_CODES: readonly string[] = ['bookmark_unavailable', 'rewind_failed', 'unexpected_schema']
 
 const MAINTENANCE_MODES: readonly { readonly mode: MaintenanceMode; readonly effect: string }[] = [
 	{ mode: 'read-only', effect: 'reads only: a writing endpoint answers 503, and no job runs' },
@@ -74,11 +112,57 @@ async function dataAction(act: () => Promise<DataOperationDto>): Promise<DataAct
 }
 
 export async function loadDataView(client: ControlClient, appId: string, env: string) {
-	const [view, operations] = await Promise.all([
+	const [view, operations, backups, schedule] = await Promise.all([
 		dataRead(() => client.data.view({ appId, env })),
 		dataRead(() => client.data.operations.list({ appId, env, limit: OPERATION_PAGE })),
+		dataRead(() => client.data.backups.list({ appId, env, limit: BACKUP_PAGE })),
+		dataRead(() => client.data.backups.schedule({ appId, env })),
 	])
-	return { view, operations }
+	return { view, operations, backups, schedule }
+}
+
+/** A schedule change: Control answers a caller without `data.manage` as 404 (or 403). */
+export type ScheduleAction =
+	| { readonly kind: 'done'; readonly schedule: DataBackupScheduleDto }
+	| { readonly kind: 'not-allowed' }
+	| { readonly kind: 'refused'; readonly message: string }
+
+export async function setBackupSchedule(client: ControlClient, appId: string, env: string, daily: boolean): Promise<ScheduleAction> {
+	try {
+		return { kind: 'done', schedule: await client.data.backups.setSchedule({ appId, env, daily }) }
+	} catch (cause) {
+		if (!(cause instanceof ApiError)) throw cause
+		if (cause.httpStatus === 403 || cause.httpStatus === 404) return { kind: 'not-allowed' }
+		return { kind: 'refused', message: cause.message }
+	}
+}
+
+export function startRestore(client: ControlClient, appId: string, env: string, at: string): Promise<DataAction> {
+	return dataAction(() => client.data.start({ appId, env, kind: 'restore', at }))
+}
+
+export type RestoreTime = { readonly ok: true; readonly at: string } | { readonly ok: false; readonly problem: string }
+
+/**
+ * A `datetime-local` value, read in the browser's zone, as the time a restore recovers the data as of: in the past and
+ * within the window. Control checks the past again.
+ */
+export function parseRestoreTime(value: string, nowMs: number): RestoreTime {
+	const ms = value.trim() === '' ? Number.NaN : new Date(value).getTime()
+	if (Number.isNaN(ms)) return { ok: false, problem: 'Choose the time to restore the data as of.' }
+	if (ms >= nowMs) return { ok: false, problem: 'The time must lie in the past.' }
+	if (ms < nowMs - RESTORE_WINDOW_MS) return { ok: false, problem: `The time must lie within the last ${RESTORE_WINDOW_DAYS} days.` }
+	return { ok: true, at: new Date(ms).toISOString() }
+}
+
+/** Reads the page again while its newest operation runs, so the page follows it; returns the cancel. */
+export function scheduleOperationPoll(
+	operations: DataRead<CursorList<DataOperationDto>>,
+	invalidate: () => void,
+	schedule: (callback: () => void, delayMs: number) => () => void,
+): () => void {
+	if (operations.kind !== 'ok' || operations.value.items[0]?.state !== 'running') return () => undefined
+	return schedule(invalidate, OPERATION_POLL_MS)
 }
 
 export function startMaintenance(client: ControlClient, appId: string, env: string, mode: MaintenanceMode): Promise<DataAction> {
@@ -139,7 +223,16 @@ export function DataPage(
 				<p className="hint">What this environment's application object holds and admits, and the operations Control ran on it.</p>
 			</div>
 			{/* Buzola reuses the page across params: nothing fetched, selected or refused may carry into another environment. */}
-			<DataView key={JSON.stringify([appId, env])} appId={appId} env={env} view={data.view} operations={data.operations} onChanged={onChanged} />
+			<DataView
+				key={JSON.stringify([appId, env])}
+				appId={appId}
+				env={env}
+				view={data.view}
+				operations={data.operations}
+				backups={data.backups}
+				schedule={data.schedule}
+				onChanged={onChanged}
+			/>
 		</>
 	)
 }
@@ -156,21 +249,33 @@ function BackLink({ appId }: { appId: string }) {
 }
 
 export function DataView(
-	{ appId, env, view, operations, onChanged }: {
+	{ appId, env, view, operations, backups, schedule, onChanged }: {
 		appId: string
 		env: string
 		view: DataRead<DataViewDto>
 		operations: DataRead<CursorList<DataOperationDto>>
+		backups: DataRead<CursorList<DataBackupDto>>
+		schedule: DataRead<DataBackupScheduleDto>
 		onChanged: () => void
 	},
 ) {
 	const access = useConsoleAccess()
+	useEffect(
+		() =>
+			scheduleOperationPoll(operations, onChanged, (callback, delayMs) => {
+				const timer = window.setTimeout(callback, delayMs)
+				return () => window.clearTimeout(timer)
+			}),
+		[operations, onChanged],
+	)
 	return (
 		<DataSections
 			appId={appId}
 			env={env}
 			view={view}
 			operations={operations}
+			backups={backups}
+			schedule={schedule}
 			onChanged={onChanged}
 			manages={mayDo(access, CONTROL_ACTIONS.DATA_MANAGE, { app: appId, env })}
 			// Content is a global grant only (ADR-0069 §2): an unknown answer or a grant at the app or the environment does not offer it.
@@ -180,11 +285,13 @@ export function DataView(
 }
 
 export function DataSections(
-	{ appId, env, view, operations, onChanged, manages, readsContent }: {
+	{ appId, env, view, operations, backups, schedule, onChanged, manages, readsContent }: {
 		appId: string
 		env: string
 		view: DataRead<DataViewDto>
 		operations: DataRead<CursorList<DataOperationDto>>
+		backups: DataRead<CursorList<DataBackupDto>>
+		schedule: DataRead<DataBackupScheduleDto>
 		onChanged: () => void
 		manages: boolean
 		readsContent: boolean
@@ -194,22 +301,26 @@ export function DataSections(
 
 	return (
 		<>
-			{view.kind === 'ok'
-				? (
-					<>
-						<StateSection appId={appId} env={env} view={view.value} readsContent={readsContent} />
-						{manages && <MaintenanceControl appId={appId} env={env} current={view.value.maintenance.mode} onChanged={onChanged} />}
-						<ContentsSections view={view.value} />
-					</>
-				)
-				: <ReadProblem read={view} />}
+			{view.kind === 'ok' ? <StateSection appId={appId} env={env} view={view.value} readsContent={readsContent} /> : <ReadProblem read={view} />}
+			{stuck !== null && (
+				<section>
+					<div className="section-head">
+						<h2>{stuck.operation.state === 'running' ? 'Running operation' : 'Failed operation'}</h2>
+						<span className="spacer" />
+						{manages && <RecoverControl key={stuck.operation.id} appId={appId} env={env} stuck={stuck} onChanged={onChanged} />}
+					</div>
+					<OperationProgress operation={stuck.operation} />
+				</section>
+			)}
+			{view.kind === 'ok' && manages && <MaintenanceControl appId={appId} env={env} current={view.value.maintenance.mode} onChanged={onChanged} />}
+			{view.kind === 'ok' && manages && <RestoreControl appId={appId} env={env} onChanged={onChanged} />}
+			<BackupsSection appId={appId} env={env} backups={backups} schedule={schedule} manages={manages} onChanged={onChanged} />
+			{view.kind === 'ok' && <ContentsSections view={view.value} />}
 			<section>
 				<div className="section-head">
 					<h2>Operations</h2>
-					<span className="spacer" />
-					{manages && stuck !== null && <RecoverControl key={stuck.operation.id} appId={appId} env={env} stuck={stuck} onChanged={onChanged} />}
 				</div>
-				<p className="section-note">Maintenance, backups, migrations and recoveries Control ran on this environment, newest first.</p>
+				<p className="section-note">Maintenance, backups, migrations, restores and recoveries Control ran on this environment, newest first.</p>
 				{operations.kind === 'ok' ? <OperationsTable page={operations.value} /> : <ReadProblem read={operations} />}
 			</section>
 		</>
@@ -379,6 +490,288 @@ export function RecoveryEffect({ operation, resolution }: { operation: DataOpera
 						does not continue; if it is still running, it is recorded as failed.
 					</p>
 				)}
+		</>
+	)
+}
+
+/** An operation as it stands, and for a side restore each of its steps (ADR-0070 §9). */
+export function OperationProgress({ operation }: { operation: DataOperationDto }) {
+	return (
+		<>
+			<div className="detail-grid">
+				<Field label="Operation">
+					{operation.kind} <code>{shortId(operation.id)}</code>
+				</Field>
+				<Field label="Step">
+					<code>{operation.step}</code>
+				</Field>
+				<Field label="Generation">{operation.generation}</Field>
+				<Field label="Outcome">
+					<Status lamp={operationLamp(operation.state)}>{operation.state}</Status>
+					{operation.errorCode !== null && (
+						<div className="muted small">
+							<code>{operation.errorCode}</code>
+						</div>
+					)}
+				</Field>
+			</div>
+			{operation.kind === 'restore' && <RestoreSteps operation={operation} />}
+		</>
+	)
+}
+
+function RestoreSteps({ operation }: { operation: DataOperationDto }) {
+	const back = RESTORE_BACK_STEPS.some((entry) => entry.step === operation.step)
+	const steps = back ? RESTORE_BACK_STEPS : RESTORE_STEPS
+	const current = steps.findIndex((entry) => entry.step === operation.step)
+	const cloneServes = operation.errorCode !== null && CLONE_SERVING_CODES.includes(operation.errorCode)
+	return (
+		<>
+			{back && (
+				<p className="notice">
+					{operation.state === 'running'
+						? 'The restore failed before the clone served: Control is putting the original back.'
+						: 'The restore failed before the clone served, on its way back to the original.'}
+				</p>
+			)}
+			{cloneServes && (
+				<p className="notice">
+					The clone keeps serving, and the original stays in <code>inspect</code>: nothing is lost. An operator decides what follows.
+				</p>
+			)}
+			<Table
+				colSpan={3}
+				head={
+					<tr>
+						<th>Step</th>
+						<th className="grow">What it does</th>
+						<th>State</th>
+					</tr>
+				}
+			>
+				{steps.map((entry, index) => {
+					const state = stepState(index, current, operation.state)
+					return (
+						<tr key={entry.step}>
+							<td>
+								<code>{entry.step}</code>
+							</td>
+							<td>{entry.effect}</td>
+							<td>
+								<Status lamp={state.lamp}>{state.label}</Status>
+							</td>
+						</tr>
+					)
+				})}
+			</Table>
+		</>
+	)
+}
+
+function stepState(index: number, current: number, state: DataOperationState): { readonly lamp: Lamp; readonly label: string } {
+	if (index < current || (index === current && state === 'succeeded')) return { lamp: 'ok', label: 'done' }
+	if (index === current) return state === 'running' ? { lamp: 'run', label: 'current' } : { lamp: 'stop', label: 'stopped' }
+	return { lamp: 'idle', label: 'pending' }
+}
+
+function RestoreControl({ appId, env, onChanged }: { appId: string; env: string; onChanged: () => void }) {
+	const [value, setValue] = useState('')
+	const [problem, setProblem] = useState<string | null>(null)
+	const [confirming, setConfirming] = useState<string | null>(null)
+	const [outcome, setOutcome] = useState<DataAction | null>(null)
+
+	function review(event: FormEvent) {
+		event.preventDefault()
+		const time = parseRestoreTime(value, Date.now())
+		if (!time.ok) {
+			setProblem(time.problem)
+			return
+		}
+		setProblem(null)
+		setConfirming(time.at)
+	}
+
+	async function restore(at: string) {
+		const next = await startRestore(api, appId, env, at)
+		setOutcome(next)
+		if (next.kind === 'done') onChanged()
+	}
+
+	return (
+		<section>
+			<div className="section-head">
+				<h2>Restore</h2>
+			</div>
+			<p className="section-note">
+				Bring back the data as it was at a time within the last {RESTORE_WINDOW_DAYS}{' '}
+				days. The application keeps serving its current data from a copy; the data of that time is kept beside it for inspection.
+			</p>
+			<form className="toolbar" onSubmit={review}>
+				<input type="datetime-local" aria-label="Restore time" value={value} onChange={(event) => setValue(event.target.value)} />
+				<button type="submit" disabled={outcome?.kind === 'not-in-release'}>Restore to this time…</button>
+			</form>
+			{problem !== null && <p className="error-text" role="alert">{problem}</p>}
+			{outcome !== null && <ActionOutcome outcome={outcome} />}
+			{confirming !== null && (
+				<ConfirmDialog
+					title="Restore the data"
+					confirmLabel="Start the restore"
+					body={<RestoreEffect at={confirming} />}
+					onConfirm={() => restore(confirming)}
+					onClose={() => setConfirming(null)}
+				/>
+			)}
+		</section>
+	)
+}
+
+/** What a side restore does, in the order Control does it (ADR-0070 §9). */
+export function RestoreEffect({ at }: { at: string }) {
+	return (
+		<>
+			<p>
+				Control makes the data as it was at <strong>{fmtIso(at)}</strong> available in a side restore, in this order:
+			</p>
+			<ol>
+				<li>
+					It freezes the serving object <code>read-only</code>: a writing endpoint answers 503 until the clone serves.
+				</li>
+				<li>It takes a consistent backup of it and rehearses that backup.</li>
+				<li>It imports the backup into a new clone object, which holds the data as it is now.</li>
+				<li>It moves the pointer: a deploy points ordinary traffic at the clone, which serves from then on.</li>
+				<li>
+					It rewinds the original object to that time and leaves it in <code>inspect</code>: it serves nothing and is kept for inspection.
+				</li>
+			</ol>
+			<p>
+				Bringing rows from the rewound original into the clone is the application's own step. Going back is a new restore, never a switch.
+			</p>
+		</>
+	)
+}
+
+export function BackupsSection(
+	{ appId, env, backups, schedule, manages, onChanged }: {
+		appId: string
+		env: string
+		backups: DataRead<CursorList<DataBackupDto>>
+		schedule: DataRead<DataBackupScheduleDto>
+		manages: boolean
+		onChanged: () => void
+	},
+) {
+	return (
+		<section>
+			<div className="section-head">
+				<h2>Backups</h2>
+			</div>
+			<p className="section-note">
+				Consistent backups of the application object, newest first. A backup succeeds only once its rehearsal, an import into a scratch object, passed.
+				Control keeps each for {RESTORE_WINDOW_DAYS} days and offers none older for a restore.
+			</p>
+			{schedule.kind === 'ok' && (
+				<ScheduleControl key={String(schedule.value.daily)} appId={appId} env={env} schedule={schedule.value} manages={manages} onChanged={onChanged} />
+			)}
+			{backups.kind === 'ok' ? <BackupsTable page={backups.value} /> : <ReadProblem read={backups} />}
+		</section>
+	)
+}
+
+function ScheduleControl(
+	{ appId, env, schedule, manages, onChanged }: {
+		appId: string
+		env: string
+		schedule: DataBackupScheduleDto
+		manages: boolean
+		onChanged: () => void
+	},
+) {
+	const [busy, setBusy] = useState(false)
+	const [outcome, setOutcome] = useState<ScheduleAction | null>(null)
+
+	async function toggle() {
+		setBusy(true)
+		const next = await setBackupSchedule(api, appId, env, !schedule.daily)
+		setOutcome(next)
+		setBusy(false)
+		if (next.kind === 'done') onChanged()
+	}
+
+	return (
+		<>
+			<div className="toolbar">
+				<span>
+					Daily backups <Status lamp={schedule.daily ? 'ok' : 'idle'}>{schedule.daily ? 'on' : 'off'}</Status>
+				</span>
+				{manages && (
+					<button type="button" className="small" onClick={toggle} disabled={busy}>
+						{schedule.daily ? 'Turn off daily backups' : 'Turn on daily backups'}
+					</button>
+				)}
+				{!schedule.daily && <span className="hint">Off stops the daily backup only: the backup before a migration still runs.</span>}
+			</div>
+			{outcome?.kind === 'not-allowed' && <p className="notice" role="status">You are not allowed to do this on this environment.</p>}
+			{outcome?.kind === 'refused' && <p className="error-text" role="alert">{outcome.message}</p>}
+		</>
+	)
+}
+
+function BackupsTable({ page }: { page: CursorList<DataBackupDto> }) {
+	return (
+		<>
+			<Table
+				colSpan={6}
+				isEmpty={page.items.length === 0}
+				empty={<EmptyState title="No backups yet" />}
+				head={
+					<tr>
+						<th className="grow">Backup</th>
+						<th>Taken</th>
+						<th>Size</th>
+						<th>Parts</th>
+						<th>Rehearsal</th>
+						<th>State</th>
+					</tr>
+				}
+			>
+				{page.items.map((backup) => (
+					<tr key={backup.id}>
+						<td>
+							<code>{shortId(backup.id)}</code>
+							<div className="muted small">
+								of <code>{backup.object}</code>
+							</div>
+						</td>
+						<td>
+							{fmtDate(backup.createdAt)}
+							{backup.expired && (
+								<div>
+									<Chip>expired</Chip>
+								</div>
+							)}
+						</td>
+						<td className="numeric">{backup.sizeBytes === null ? <span className="muted">none yet</span> : fmtBytes(backup.sizeBytes)}</td>
+						<td className="numeric">{backup.parts === null ? <span className="muted">none yet</span> : backup.parts}</td>
+						<td>
+							<Status lamp={rehearsalLamp(backup.rehearsal)}>{backup.rehearsal}</Status>
+							{backup.rehearsalCode !== null && (
+								<div className="muted small">
+									<code>{backup.rehearsalCode}</code>
+								</div>
+							)}
+						</td>
+						<td>
+							<Status lamp={operationLamp(backup.state)}>{backup.state}</Status>
+							{backup.errorCode !== null && (
+								<div className="muted small">
+									<code>{backup.errorCode}</code>
+								</div>
+							)}
+						</td>
+					</tr>
+				))}
+			</Table>
+			{page.nextCursor !== null && <p className="hint">The newest {page.items.length} backups; older ones are not shown.</p>}
 		</>
 	)
 }
@@ -606,6 +999,17 @@ function modeLamp(mode: MaintenanceMode): Lamp {
 			return 'run'
 		case 'closed':
 		case 'inspect':
+			return 'stop'
+	}
+}
+
+function rehearsalLamp(outcome: DataRehearsalOutcome): Lamp {
+	switch (outcome) {
+		case 'passed':
+			return 'ok'
+		case 'pending':
+			return 'idle'
+		case 'failed':
 			return 'stop'
 	}
 }

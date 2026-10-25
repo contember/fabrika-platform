@@ -1,13 +1,22 @@
 import { describe, expect, test } from 'bun:test'
 import { isValidElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { type ConsoleAccessDto, type ControlFetch, createControlClient, type CursorList, type DataOperationDto } from '../lib/api'
+import {
+	type ConsoleAccessDto,
+	type ControlFetch,
+	createControlClient,
+	type CursorList,
+	type DataBackupDto,
+	type DataBackupScheduleDto,
+	type DataOperationDto,
+} from '../lib/api'
 import type { ConsoleCaller } from '../lib/console-access'
 import { ConsoleAccessContext } from '../lib/console-caller'
 import { fmtDate } from '../lib/format'
 import { workspaceGate } from '../routes/_layout'
 import {
 	ActionOutcome,
+	BackupsSection,
 	BootFailureMessage,
 	BootFailureText,
 	type DataAction,
@@ -17,12 +26,18 @@ import {
 	DataView,
 	type DataViewDto,
 	loadDataView,
+	OperationProgress,
+	parseRestoreTime,
 	readBootFailure,
 	RecoverControl,
 	recoverOperation,
 	recoveryChoice,
 	RecoveryEffect,
+	RestoreEffect,
+	scheduleOperationPoll,
+	setBackupSchedule,
 	startMaintenance,
+	startRestore,
 	StateSection,
 } from '../routes/apps/data'
 
@@ -69,6 +84,33 @@ const page = (items: DataOperationDto[], nextCursor: string | null = null): Data
 	value: { items, nextCursor },
 })
 
+const backup = (id: string, overrides: Partial<DataBackupDto> = {}): DataBackupDto => ({
+	id,
+	appId: 'notes',
+	env: 'prod',
+	operationId: `op-of-${id}`,
+	object: 'application',
+	state: 'succeeded',
+	errorCode: null,
+	createdAt: 1_790_000_000,
+	finishedAt: 1_790_000_060,
+	bookmark: '0000000a-0000000b',
+	sizeBytes: 52_428_800,
+	parts: 7,
+	tables: 12,
+	rehearsal: 'passed',
+	rehearsalCode: null,
+	expired: false,
+	...overrides,
+})
+
+const backupPage = (items: DataBackupDto[], nextCursor: string | null = null): DataRead<CursorList<DataBackupDto>> => ({
+	kind: 'ok',
+	value: { items, nextCursor },
+})
+
+const schedule = (daily = true): DataRead<DataBackupScheduleDto> => ({ kind: 'ok', value: { appId: 'notes', env: 'prod', daily, updatedAt: null } })
+
 const holding = (global: string[], scope?: { type: 'app' | 'environment'; value: string; actions: string[] }): ConsoleAccessDto => ({
 	principal: null,
 	global,
@@ -79,10 +121,12 @@ const markup = (
 	access: ConsoleAccessDto | null,
 	read: DataRead<DataViewDto> = { kind: 'ok', value: view() },
 	operations: DataRead<CursorList<DataOperationDto>> = page([operation('op-2')]),
+	backups: DataRead<CursorList<DataBackupDto>> = backupPage([backup('bk-1')]),
+	daily: DataRead<DataBackupScheduleDto> = schedule(),
 ): string =>
 	renderToStaticMarkup(
 		<ConsoleAccessContext.Provider value={access}>
-			<DataView appId="notes" env="prod" view={read} operations={operations} onChanged={() => undefined} />
+			<DataView appId="notes" env="prod" view={read} operations={operations} backups={backups} schedule={daily} onChanged={() => undefined} />
 		</ConsoleAccessContext.Provider>,
 	)
 
@@ -106,7 +150,7 @@ function fakeControl(calls: Call[], answers: Record<string, () => Response>): Co
 const refusal = (status: number, message = 'refused') => () => Response.json({ error: { type: 'error', message } }, { status })
 const result = (value: unknown) => () => Response.json({ result: value })
 
-const MANAGE_ONLY_TEXT = ['Start maintenance', 'Recover']
+const MANAGE_ONLY_TEXT = ['Start maintenance', 'Recover', 'Turn off daily backups', 'Restore to this time']
 
 describe('the data view shows what the environment reports', () => {
 	test('mode, generation, size, table counts, jobs, files, webhooks and the boot failure time', () => {
@@ -156,7 +200,13 @@ describe('the data view shows what the environment reports', () => {
 
 describe('a refusal is a plain not-allowed state, never an error', () => {
 	test('a refused view renders not allowed and no controls', () => {
-		const html = markup(holding(['data.manage', 'data.content.read']), { kind: 'not-allowed' }, { kind: 'not-allowed' })
+		const html = markup(
+			holding(['data.manage', 'data.content.read']),
+			{ kind: 'not-allowed' },
+			{ kind: 'not-allowed' },
+			{ kind: 'not-allowed' },
+			{ kind: 'not-allowed' },
+		)
 		expect(html).toContain('not allowed')
 		expect(html).not.toContain('role="alert"')
 		for (const text of [...MANAGE_ONLY_TEXT, 'Show the error message']) expect(html).not.toContain(text)
@@ -166,33 +216,68 @@ describe('a refusal is a plain not-allowed state, never an error', () => {
 		expect(markup(holding(['data.read']), { kind: 'no-channel' })).toContain('Redeploy')
 	})
 
-	test('the loader reads the view and the operations, and maps 404 and 403 to not-allowed, 409 to no channel', async () => {
+	test('the loader reads the view, the operations, the backups and their schedule, and maps 404 and 403 to not-allowed, 409 to no channel', async () => {
 		const calls: Call[] = []
 		const ok = await loadDataView(
-			createControlClient(fakeControl(calls, { 'data.view': result(view()), 'data.operations.list': result({ items: [], nextCursor: null }) })),
+			createControlClient(
+				fakeControl(calls, {
+					'data.view': result(view()),
+					'data.operations.list': result({ items: [], nextCursor: null }),
+					'data.backups.list': result({ items: [backup('bk-1')], nextCursor: null }),
+					'data.backups.schedule': result({ appId: 'notes', env: 'prod', daily: true, updatedAt: null }),
+				}),
+			),
 			'notes',
 			'prod',
 		)
 		expect(ok.view).toEqual({ kind: 'ok', value: view() })
 		expect(ok.operations).toEqual({ kind: 'ok', value: { items: [], nextCursor: null } })
+		expect(ok.backups).toEqual(backupPage([backup('bk-1')]))
+		expect(ok.schedule).toEqual(schedule())
 		expect(calls).toEqual([
 			{ method: 'data.view', input: { appId: 'notes', env: 'prod' } },
 			{ method: 'data.operations.list', input: { appId: 'notes', env: 'prod', limit: 25 } },
+			{ method: 'data.backups.list', input: { appId: 'notes', env: 'prod', limit: 25 } },
+			{ method: 'data.backups.schedule', input: { appId: 'notes', env: 'prod' } },
 		])
 
 		const hidden = await loadDataView(
-			createControlClient(fakeControl([], { 'data.view': refusal(404), 'data.operations.list': refusal(403) })),
+			createControlClient(
+				fakeControl([], {
+					'data.view': refusal(404),
+					'data.operations.list': refusal(403),
+					'data.backups.list': refusal(404),
+					'data.backups.schedule': refusal(404),
+				}),
+			),
 			'notes',
 			'prod',
 		)
-		expect(hidden).toEqual({ view: { kind: 'not-allowed' }, operations: { kind: 'not-allowed' } })
+		expect(hidden).toEqual({
+			view: { kind: 'not-allowed' },
+			operations: { kind: 'not-allowed' },
+			backups: { kind: 'not-allowed' },
+			schedule: { kind: 'not-allowed' },
+		})
 
 		const unreached = await loadDataView(
-			createControlClient(fakeControl([], { 'data.view': refusal(409), 'data.operations.list': refusal(502) })),
+			createControlClient(
+				fakeControl([], {
+					'data.view': refusal(409),
+					'data.operations.list': refusal(502),
+					'data.backups.list': refusal(503),
+					'data.backups.schedule': refusal(503),
+				}),
+			),
 			'notes',
 			'prod',
 		)
-		expect(unreached).toEqual({ view: { kind: 'no-channel' }, operations: { kind: 'unavailable' } })
+		expect(unreached).toEqual({
+			view: { kind: 'no-channel' },
+			operations: { kind: 'unavailable' },
+			backups: { kind: 'unavailable' },
+			schedule: { kind: 'unavailable' },
+		})
 	})
 })
 
@@ -366,7 +451,17 @@ describe('a data reader reaches the page', () => {
 		const page = (access: ConsoleAccessDto | null) =>
 			renderToStaticMarkup(
 				<ConsoleAccessContext.Provider value={access}>
-					<DataPage appId="notes" env="prod" data={{ view: { kind: 'not-allowed' }, operations: { kind: 'not-allowed' } }} onChanged={() => undefined} />
+					<DataPage
+						appId="notes"
+						env="prod"
+						data={{
+							view: { kind: 'not-allowed' },
+							operations: { kind: 'not-allowed' },
+							backups: { kind: 'not-allowed' },
+							schedule: { kind: 'not-allowed' },
+						}}
+						onChanged={() => undefined}
+					/>
 				</ConsoleAccessContext.Provider>,
 			)
 		expect(page(holding(['data.read']))).not.toContain('back-link')
@@ -375,7 +470,12 @@ describe('a data reader reaches the page', () => {
 })
 
 describe('state stays with its environment, failure and operation', () => {
-	const data: Awaited<ReturnType<typeof loadDataView>> = { view: { kind: 'ok', value: view() }, operations: page([operation('op-2')]) }
+	const data: Awaited<ReturnType<typeof loadDataView>> = {
+		view: { kind: 'ok', value: view() },
+		operations: page([operation('op-2')]),
+		backups: backupPage([]),
+		schedule: schedule(),
+	}
 
 	test('navigating to another environment mounts a fresh view: no fetched content, mode selection or 501 carries over', () => {
 		const keyAt = (appId: string, env: string) =>
@@ -402,6 +502,8 @@ describe('state stays with its environment, failure and operation', () => {
 					env: 'prod',
 					view: data.view,
 					operations: page([operation(id)]),
+					backups: data.backups,
+					schedule: data.schedule,
 					onChanged: () => undefined,
 					manages: true,
 					readsContent: false,
@@ -429,11 +531,23 @@ describe('capped counts, outages and content text', () => {
 
 	test('a 503 from Control reads as unavailable', async () => {
 		const read = await loadDataView(
-			createControlClient(fakeControl([], { 'data.view': refusal(503), 'data.operations.list': refusal(503) })),
+			createControlClient(
+				fakeControl([], {
+					'data.view': refusal(503),
+					'data.operations.list': refusal(503),
+					'data.backups.list': refusal(503),
+					'data.backups.schedule': refusal(503),
+				}),
+			),
 			'notes',
 			'prod',
 		)
-		expect(read).toEqual({ view: { kind: 'unavailable' }, operations: { kind: 'unavailable' } })
+		expect(read).toEqual({
+			view: { kind: 'unavailable' },
+			operations: { kind: 'unavailable' },
+			backups: { kind: 'unavailable' },
+			schedule: { kind: 'unavailable' },
+		})
 		expect(await readBootFailure(createControlClient(fakeControl([], { 'data.content': refusal(503) })), 'notes', 'prod')).toEqual({
 			kind: 'unavailable',
 		})
@@ -448,5 +562,227 @@ describe('capped counts, outages and content text', () => {
 		expect(html).not.toContain('<img')
 		expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
 		expect(html).toContain('&lt;img src=x onerror=alert(2)&gt;')
+	})
+})
+
+describe('backups', () => {
+	test('the list shows each backup: time, size, parts, rehearsal, failures as codes, and expiry past 30 days', () => {
+		const html = markup(
+			holding(['data.read']),
+			undefined,
+			undefined,
+			backupPage([
+				backup('0192f1aa-backup'),
+				backup('0192f1bb-failed', {
+					state: 'failed',
+					errorCode: 'rehearsal_failed',
+					sizeBytes: null,
+					parts: null,
+					rehearsal: 'failed',
+					rehearsalCode: 'hash_mismatch',
+					createdAt: 1_780_000_000,
+					expired: true,
+				}),
+				backup('0192f1cc-running', { state: 'running', rehearsal: 'pending', sizeBytes: null, parts: null, object: 'application-0192f1dd' }),
+			], '0192f1cc-running'),
+		)
+		expect(html).toContain('<code>0192f1aa</code>')
+		expect(html).toContain(fmtDate(1_790_000_000))
+		expect(html).toContain('50.0 MiB')
+		expect(html).toContain('>7<')
+		expect(html).toContain('passed')
+		expect(html).toContain('<code>hash_mismatch</code>')
+		expect(html).toContain('<code>rehearsal_failed</code>')
+		expect(html).toContain('expired')
+		expect(html).toContain('pending')
+		expect(html).toContain('<code>application-0192f1dd</code>')
+		expect(html).toContain('The newest 3 backups')
+	})
+
+	test('no backups reads as none, and a refused list as not allowed', () => {
+		expect(markup(holding(['data.read']), undefined, undefined, backupPage([]))).toContain('No backups yet')
+		const refused = renderToStaticMarkup(
+			<BackupsSection
+				appId="notes"
+				env="prod"
+				backups={{ kind: 'not-allowed' }}
+				schedule={{ kind: 'not-allowed' }}
+				manages={false}
+				onChanged={() => undefined}
+			/>,
+		)
+		expect(refused).toContain('not allowed')
+	})
+
+	test('the schedule reads to data.read; its toggle shows only to a data.manage holder at the environment', () => {
+		const reader = markup(holding(['data.read']))
+		expect(reader).toContain('Daily backups')
+		expect(reader).not.toContain('Turn off daily backups')
+		expect(markup(holding([], { type: 'environment', value: 'stage', actions: ['data.manage'] }))).not.toContain('Turn off daily backups')
+
+		expect(markup(holding(['data.manage']))).toContain('Turn off daily backups')
+		const off = markup(holding([], { type: 'app', value: 'notes', actions: ['data.manage'] }), undefined, undefined, undefined, schedule(false))
+		expect(off).toContain('Turn on daily backups')
+		expect(off).toContain('the backup before a migration still runs')
+	})
+
+	test('the toggle calls data.backups.setSchedule; 404 and 403 read as not allowed, another refusal as Control says', async () => {
+		const calls: Call[] = []
+		const answer = { appId: 'notes', env: 'prod', daily: false, updatedAt: 1_790_000_000 }
+		expect(await setBackupSchedule(createControlClient(fakeControl(calls, { 'data.backups.setSchedule': result(answer) })), 'notes', 'prod', false))
+			.toEqual({ kind: 'done', schedule: answer })
+		expect(calls).toEqual([{ method: 'data.backups.setSchedule', input: { appId: 'notes', env: 'prod', daily: false } }])
+		for (const status of [403, 404]) {
+			expect(
+				await setBackupSchedule(createControlClient(fakeControl([], { 'data.backups.setSchedule': refusal(status) })), 'notes', 'prod', true),
+			).toEqual({ kind: 'not-allowed' })
+		}
+		expect(
+			await setBackupSchedule(createControlClient(fakeControl([], { 'data.backups.setSchedule': refusal(503, 'unavailable') })), 'notes', 'prod', true),
+		).toEqual({ kind: 'refused', message: 'unavailable' })
+	})
+})
+
+/** A `datetime-local` value in the zone the test runs in, as the browser's input gives it. */
+function localInput(ms: number): string {
+	const at = new Date(ms)
+	const pad = (value: number) => String(value).padStart(2, '0')
+	return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`
+}
+
+describe('the side restore', () => {
+	const NOW = Date.parse('2026-10-25T12:00:00.000Z')
+	const DAY = 24 * 60 * 60 * 1000
+
+	test('a time within the last 30 days is the restore time, as an ISO instant', () => {
+		const yesterday = NOW - DAY
+		expect(parseRestoreTime(localInput(yesterday), NOW)).toEqual({ ok: true, at: new Date(yesterday).toISOString() })
+		const nearlyThirty = NOW - 30 * DAY + 60_000
+		expect(parseRestoreTime(localInput(nearlyThirty), NOW)).toEqual({ ok: true, at: new Date(nearlyThirty).toISOString() })
+	})
+
+	test('no time, a future time, now, and a time older than 30 days are refused before anything is sent', () => {
+		expect(parseRestoreTime('', NOW)).toEqual({ ok: false, problem: 'Choose the time to restore the data as of.' })
+		expect(parseRestoreTime('not a time', NOW)).toEqual({ ok: false, problem: 'Choose the time to restore the data as of.' })
+		expect(parseRestoreTime(localInput(NOW + 60_000), NOW)).toEqual({ ok: false, problem: 'The time must lie in the past.' })
+		expect(parseRestoreTime(localInput(NOW), NOW)).toEqual({ ok: false, problem: 'The time must lie in the past.' })
+		expect(parseRestoreTime(localInput(NOW - 30 * DAY - 60_000), NOW)).toEqual({ ok: false, problem: 'The time must lie within the last 30 days.' })
+	})
+
+	test('the confirmation says what the restore does: freeze, backup, clone, pointer, and the original rewound and kept', () => {
+		const at = '2026-10-24T08:30:00.000Z'
+		const html = renderToStaticMarkup(<RestoreEffect at={at} />)
+		expect(html).toContain(fmtDate(Date.parse(at) / 1000))
+		expect(html).toContain('<code>read-only</code>')
+		expect(html).toContain('consistent backup')
+		expect(html).toContain('clone')
+		expect(html).toContain('points ordinary traffic at the clone')
+		expect(html).toContain('rewinds the original')
+		expect(html).toContain('<code>inspect</code>')
+		expect(html).toContain('kept for inspection')
+	})
+
+	test('the restore form shows only to a data.manage holder at the environment', () => {
+		expect(markup(holding(['data.manage']))).toContain('type="datetime-local"')
+		expect(markup(holding(['data.read']))).not.toContain('type="datetime-local"')
+		expect(markup(holding([], { type: 'app', value: 'blog', actions: ['data.manage'] }))).not.toContain('type="datetime-local"')
+	})
+
+	test('starting a restore calls data.start with kind restore; a refusal is shown as Control says, a 404 as not allowed', async () => {
+		const calls: Call[] = []
+		const started = operation('op-r', { kind: 'restore', step: 'list', targetMode: 'open' })
+		const at = '2026-10-24T08:30:00.000Z'
+		expect(await startRestore(createControlClient(fakeControl(calls, { 'data.start': result(started) })), 'notes', 'prod', at)).toEqual({
+			kind: 'done',
+			operation: started,
+		})
+		expect(calls).toEqual([{ method: 'data.start', input: { appId: 'notes', env: 'prod', kind: 'restore', at } }])
+		expect(
+			await startRestore(
+				createControlClient(fakeControl([], { 'data.start': refusal(409, "the environment's object list is full (16 names): no clone can be listed") })),
+				'notes',
+				'prod',
+				at,
+			),
+		).toEqual({ kind: 'refused', message: "the environment's object list is full (16 names): no clone can be listed" })
+		expect(await startRestore(createControlClient(fakeControl([], { 'data.start': refusal(404) })), 'notes', 'prod', at)).toEqual({
+			kind: 'not-allowed',
+		})
+	})
+})
+
+describe('following a running operation', () => {
+	const restore = (overrides: Partial<DataOperationDto>) => operation('0192f1aa-restore', { kind: 'restore', targetMode: 'open', ...overrides })
+
+	/** Each step row's code and the state it reads in, in order. */
+	const stepRows = (html: string): [string, string][] =>
+		[...html.matchAll(/<tr><td><code>([a-z]+)<\/code><\/td><td>[^<]*<\/td><td><span[^>]*>.*?<\/span>([a-z ]+)<\/span><\/td><\/tr>/g)].map((
+			match,
+		) => [match[1] ?? '', match[2] ?? ''])
+
+	test('a running restore shows its kind, step, generation and every step of the restore, done, current and pending', () => {
+		const html = renderToStaticMarkup(<OperationProgress operation={restore({ step: 'import', generation: 9 })} />)
+		expect(html).toContain('restore <code>0192f1aa</code>')
+		expect(html).toContain('>9<')
+		expect(stepRows(html)).toEqual([
+			['list', 'done'],
+			['restrict', 'done'],
+			['backup', 'done'],
+			['verify', 'done'],
+			['import', 'current'],
+			['promote', 'pending'],
+			['point', 'pending'],
+			['serve', 'pending'],
+			['rewind', 'pending'],
+			['check', 'pending'],
+		])
+	})
+
+	test('a restore that failed before the clone served shows the way back to the original', () => {
+		const html = renderToStaticMarkup(<OperationProgress operation={restore({ step: 'revert', state: 'running', errorCode: null })} />)
+		expect(html).toContain('putting the original back')
+		expect(stepRows(html)).toEqual([['revert', 'current'], ['open', 'pending']])
+	})
+
+	test('a restore that failed after the clone served says the clone keeps serving, with its code', () => {
+		const html = renderToStaticMarkup(
+			<OperationProgress operation={restore({ step: 'rewind', state: 'failed', errorCode: 'bookmark_unavailable', finishedAt: 1_790_000_100 })} />,
+		)
+		expect(html).toContain('<code>bookmark_unavailable</code>')
+		expect(html).toContain('The clone keeps serving')
+		expect(stepRows(html)[8]).toEqual(['rewind', 'stopped'])
+	})
+
+	test('a running operation of another kind shows its step without the restore steps', () => {
+		const html = renderToStaticMarkup(<OperationProgress operation={operation('0192f1aa-maint', { step: 'restrict' })} />)
+		expect(html).toContain('maintenance <code>0192f1aa</code>')
+		expect(html).toContain('<code>restrict</code>')
+		expect(stepRows(html)).toEqual([])
+	})
+
+	test('the page shows the running operation with the recovery choices to a data.manage holder only', () => {
+		const running = page([restore({ step: 'point' })])
+		const manager = markup(holding(['data.manage']), undefined, running)
+		expect(manager).toContain('Running operation')
+		expect(manager).toContain('Recover and resume')
+		expect(manager).toContain('Recover and open')
+		const reader = markup(holding(['data.read']), undefined, running)
+		expect(reader).toContain('Running operation')
+		expect(reader).not.toContain('Recover and')
+		expect(markup(holding(['data.manage']), undefined, page([restore({ step: 'check', state: 'succeeded' })]))).not.toContain('Running operation')
+	})
+
+	test('the page reads again while the newest operation runs, and not once it finished', () => {
+		const scheduled: number[] = []
+		const schedule = (_callback: () => void, delayMs: number) => {
+			scheduled.push(delayMs)
+			return () => undefined
+		}
+		scheduleOperationPoll(page([restore({ step: 'import' })]), () => undefined, schedule)
+		expect(scheduled).toHaveLength(1)
+		scheduleOperationPoll(page([restore({ step: 'check', state: 'succeeded' }), restore({ id: 'older' })]), () => undefined, schedule)
+		scheduleOperationPoll(page([]), () => undefined, schedule)
+		scheduleOperationPoll({ kind: 'not-allowed' }, () => undefined, schedule)
+		expect(scheduled).toHaveLength(1)
 	})
 })

@@ -2,8 +2,15 @@
 // one `data.*` procedure of `ControlRpcContract`, reached through the client `fabrika control` uses (`connectControl`).
 
 import { RpcError } from '@fabrika/app'
-import { OPS_ROW_COUNT_CAP, type OpsContentView, type OpsView, parseOpsContentView, parseOpsView } from '@fabrika/auth-core'
-import type { DataOperationDto } from '@fabrika/control-contract'
+import {
+	OPS_ROW_COUNT_CAP,
+	type OpsContentView,
+	type OpsView,
+	parseApplicationObjectName,
+	parseOpsContentView,
+	parseOpsView,
+} from '@fabrika/auth-core'
+import { type DataBackupDto, type DataBackupScheduleDto, type DataOperationDto, startDataOperationInputSchema } from '@fabrika/control-contract'
 import { z } from 'zod'
 import { connectControl, type ControlClient, withoutControlKey } from './control.js'
 
@@ -14,6 +21,9 @@ Usage:
   fabrika env maintenance <app> <env> <open|read-only|closed> [--json]
   fabrika env operations <app> <env> [--json]
   fabrika env recover <app> <env> <operationId> <resume|open> [--json]
+  fabrika env backups <app> <env> [--json]
+  fabrika env backups schedule <app> <env> [on|off] [--json]
+  fabrika env restore <app> <env> --at=<time> [--json]
 
 \`inspect\` prints the environment's data view: the object's maintenance mode and generation, the database size and
 each table's row count (a count at ${OPS_ROW_COUNT_CAP} reads \`${OPS_ROW_COUNT_CAP}+\`: it is capped), the applied migrations,
@@ -30,6 +40,20 @@ and needs \`data.content.read\` granted globally.
 \`recover\` fences an environment whose operation is stuck in \`closed\` at a fresh generation, then \`resume\`s that
 operation from its recorded step, or \`open\`s the environment. A failed operation can only be opened past. It needs
 \`data.manage\`.
+
+\`backups\` lists the environment's consistent backups, newest first, one row each:
+<id> <object> <state> <created at> <size bytes> <parts> <tables> <rehearsal> <rehearsal code> <error code> <expired>.
+A backup counts as \`succeeded\` only once its rehearsal, an import into a scratch object, passed. One older than 30
+days is \`expired\` and never offered for a restore. It needs \`data.read\`.
+
+\`backups schedule\` prints whether the environment takes a daily backup; \`on\` or \`off\` sets it, which needs
+\`data.manage\`. Turning it off stops the daily backup only: the backup before a migration still runs.
+
+\`restore\` brings back the environment's data as it was at \`--at\`, an ISO 8601 time with an offset in the past. It
+is a side restore: the serving object is frozen read-only and backed up, the backup is imported into a new clone
+object, ordinary traffic is pointed at the clone, which serves the current data from then on, and the original is
+rewound to that time and kept in \`inspect\`, serving nothing, for inspection. It starts a data operation and prints
+it; \`operations\` follows it. It needs \`data.manage\`.
 
 A release of the control plane that does not offer a command answers that it is not available; retrying does not
 change that. An environment the caller may not see answers \`not_found\`, as one that does not exist.
@@ -52,6 +76,8 @@ interface EnvArgs {
 	readonly json: boolean
 	readonly content: boolean
 	readonly url: string | undefined
+	/** \`''\` when \`--at\` closes the arguments with no time after it. */
+	readonly at: string | undefined
 }
 
 const COMMAND_FORMS: Readonly<Record<string, string>> = {
@@ -59,6 +85,9 @@ const COMMAND_FORMS: Readonly<Record<string, string>> = {
 	maintenance: '<app> <env> <open|read-only|closed> [--json]',
 	operations: '<app> <env> [--json]',
 	recover: '<app> <env> <operationId> <resume|open> [--json]',
+	backups: '<app> <env> [--json]',
+	'backups schedule': '<app> <env> [on|off] [--json]',
+	restore: '<app> <env> --at=<time> [--json]',
 }
 
 const parseEnvArgs = (argv: readonly string[]): EnvArgs => {
@@ -66,27 +95,31 @@ const parseEnvArgs = (argv: readonly string[]): EnvArgs => {
 	let json = false
 	let content = false
 	let url: string | undefined
-	for (const arg of argv) {
+	let at: string | undefined
+	for (let index = 0; index < argv.length; index++) {
+		const arg = argv[index] ?? ''
 		if (arg === '--json') json = true
 		else if (arg === '--content') content = true
 		else if (arg.startsWith('--url=')) url = arg.slice('--url='.length)
+		else if (arg.startsWith('--at=')) at = arg.slice('--at='.length)
+		else if (arg === '--at') at = argv[++index] ?? ''
 		else if (arg.startsWith('-')) throw new Error(`Unknown option: ${arg}`)
 		else positional.push(arg)
 	}
-	return { positional, json, content, url }
+	return { positional, json, content, url, at }
 }
 
 /** The positional words of `command`, exactly `count` of them. */
 const words = (command: string, args: EnvArgs, count: number): readonly string[] => {
-	if (args.positional.length !== count || args.positional.some((word) => word.trim() === '')) {
-		throw new Error(`Usage: fabrika env ${command} ${COMMAND_FORMS[command] ?? ''}`)
-	}
+	if (args.positional.length !== count || args.positional.some((word) => word.trim() === '')) throw usage(command)
 	return args.positional
 }
 
+const usage = (command: string): Error => new Error(`Usage: fabrika env ${command} ${COMMAND_FORMS[command] ?? ''}`)
+
 const controlClient = (args: EnvArgs, env: Environment): ControlClient => connectControl(args.url, env)
 
-/** Control's own rule for an operation's error code (`db/data-operations.ts`). */
+/** Control's own rule for an operation's or a backup's error code (`db/data-operations.ts`, `db/backups.ts`). */
 const ERROR_CODE = /^[a-z][a-z0-9_]{0,63}$/
 
 /** The known fields of an operation, validated; a field a newer Control adds is dropped, never printed. */
@@ -95,7 +128,24 @@ const dataOperationSchema: z.ZodType<DataOperationDto> = z.object({
 	appId: z.string(),
 	env: z.string(),
 	kind: z.enum(['maintenance', 'backup', 'migrate', 'recovery', 'restore']),
-	step: z.enum(['reconcile', 'restrict', 'backup', 'verify', 'deploy', 'migrate', 'resume', 'open']),
+	step: z.enum([
+		'reconcile',
+		'restrict',
+		'backup',
+		'verify',
+		'deploy',
+		'migrate',
+		'resume',
+		'open',
+		'list',
+		'import',
+		'promote',
+		'point',
+		'serve',
+		'rewind',
+		'check',
+		'revert',
+	]),
 	targetMode: z.enum(['open', 'read-only', 'closed', 'inspect']),
 	generation: z.number().int().nonnegative(),
 	state: z.enum(['running', 'succeeded', 'failed']),
@@ -113,8 +163,8 @@ interface Target {
 	readonly env: string
 }
 
-/** An operation of the environment asked about, and of no other. */
-const ofTarget = (operation: DataOperationDto, target: Target): boolean => operation.appId === target.appId && operation.env === target.env
+/** An answer about the environment asked about, and of no other. */
+const ofTarget = (answer: Target, target: Target): boolean => answer.appId === target.appId && answer.env === target.env
 
 const parseOperation = (value: unknown, target: Target): DataOperationDto => {
 	const parsed = dataOperationSchema.safeParse(value)
@@ -132,8 +182,52 @@ const parseOperationPage = (value: unknown, target: Target): { items: DataOperat
 	return parsed.data
 }
 
+/** The known fields of a backup, validated as an operation's are. */
+const dataBackupSchema: z.ZodType<DataBackupDto> = z.object({
+	id: z.string().uuid(),
+	appId: z.string(),
+	env: z.string(),
+	operationId: z.string().uuid(),
+	object: z.string().refine((name) => parseApplicationObjectName(name) !== null),
+	state: z.enum(['running', 'succeeded', 'failed']),
+	errorCode: z.string().regex(ERROR_CODE).nullable(),
+	createdAt: z.number().int().nonnegative(),
+	finishedAt: z.number().int().nonnegative().nullable(),
+	bookmark: z.string().nullable(),
+	sizeBytes: z.number().int().nonnegative().nullable(),
+	parts: z.number().int().nonnegative().nullable(),
+	tables: z.number().int().nonnegative().nullable(),
+	rehearsal: z.enum(['pending', 'passed', 'failed']),
+	rehearsalCode: z.string().regex(ERROR_CODE).nullable(),
+	expired: z.boolean(),
+})
+
+const dataBackupPageSchema = z.object({ items: z.array(dataBackupSchema), nextCursor: z.string().uuid().nullable() })
+
+const parseBackupPage = (value: unknown, target: Target): { items: DataBackupDto[]; nextCursor: string | null } => {
+	const parsed = dataBackupPageSchema.safeParse(value)
+	if (!parsed.success || !parsed.data.items.every((backup) => ofTarget(backup, target))) {
+		throw new Error('Control returned an unreadable list of backups')
+	}
+	return parsed.data
+}
+
+const dataBackupScheduleSchema: z.ZodType<DataBackupScheduleDto> = z.object({
+	appId: z.string(),
+	env: z.string(),
+	daily: z.boolean(),
+	updatedAt: z.number().int().nonnegative().nullable(),
+})
+
+const parseSchedule = (value: unknown, target: Target): DataBackupScheduleDto => {
+	const parsed = dataBackupScheduleSchema.safeParse(value)
+	if (!parsed.success || !ofTarget(parsed.data, target)) throw new Error('Control returned an unreadable backup schedule')
+	return parsed.data
+}
+
 const MAINTENANCE_MODES = ['open', 'read-only', 'closed'] as const
 const RESOLUTIONS = ['resume', 'open'] as const
+const SCHEDULE_SWITCHES = ['on', 'off'] as const
 
 const oneOf = <T extends string>(value: string, allowed: readonly T[]): T | undefined => allowed.find((candidate) => candidate === value)
 
@@ -151,6 +245,24 @@ const operationLine = (operation: DataOperationDto): string =>
 		operation.errorCode ?? '-',
 		isoSeconds(operation.createdAt),
 	].join('\t')
+
+const backupLine = (backup: DataBackupDto): string =>
+	[
+		backup.id,
+		backup.object,
+		backup.state,
+		isoSeconds(backup.createdAt),
+		backup.sizeBytes === null ? '-' : String(backup.sizeBytes),
+		backup.parts === null ? '-' : String(backup.parts),
+		backup.tables === null ? '-' : String(backup.tables),
+		backup.rehearsal,
+		backup.rehearsalCode ?? '-',
+		backup.errorCode ?? '-',
+		backup.expired ? 'expired' : '-',
+	].join('\t')
+
+const scheduleLines = (schedule: DataBackupScheduleDto): string =>
+	[`daily\t${schedule.daily ? 'on' : 'off'}`, `updatedAt\t${schedule.updatedAt === null ? '-' : isoSeconds(schedule.updatedAt)}`].join('\n')
 
 /** Every control character but tab and line feed: an answer must not drive the operator's terminal. */
 const printable = (text: string): string => text.replace(/[^\P{Cc}\t\n]/gu, '')
@@ -236,6 +348,48 @@ const runRecover = async (args: EnvArgs, env: Environment): Promise<void> => {
 	emitOperation(args, parseOperation(result, { appId, env: environment }))
 }
 
+const runBackups = async (args: EnvArgs, env: Environment): Promise<void> => {
+	if (args.positional[0] === 'schedule' && args.positional.length > 2) {
+		await runBackupSchedule(args, env)
+		return
+	}
+	const [appId = '', environment = ''] = words('backups', args, 2)
+	const page = parseBackupPage(await controlClient(args, env).data.backups.list({ appId, env: environment }), { appId, env: environment })
+	if (page.nextCursor !== null) note(`showing the newest ${page.items.length} backups; older ones exist`)
+	if (!args.json && page.items.length === 0) {
+		note(`${appId} ${environment} has no backups`)
+		return
+	}
+	emit(args, page, () => page.items.map(backupLine).join('\n'))
+}
+
+const runBackupSchedule = async (args: EnvArgs, env: Environment): Promise<void> => {
+	const [, appId = '', environment = '', requested] = args.positional
+	if (args.positional.length > 4 || appId.trim() === '' || environment.trim() === '') throw usage('backups schedule')
+	const client = controlClient(args, env)
+	const target = { appId, env: environment }
+	if (requested === undefined) {
+		const schedule = parseSchedule(await client.data.backups.schedule(target), target)
+		emit(args, schedule, () => scheduleLines(schedule))
+		return
+	}
+	const daily = oneOf(requested, SCHEDULE_SWITCHES)
+	if (daily === undefined) throw new Error(`The schedule is on or off, not "${requested}"`)
+	const schedule = parseSchedule(await client.data.backups.setSchedule({ ...target, daily: daily === 'on' }), target)
+	if (!schedule.daily) note('the backup before a migration still runs')
+	emit(args, schedule, () => scheduleLines(schedule))
+}
+
+const runRestore = async (args: EnvArgs, env: Environment): Promise<void> => {
+	const [appId = '', environment = ''] = words('restore', args, 2)
+	if (args.at === undefined || args.at === '') throw usage('restore')
+	// The contract's own rule for `at`, checked before anything is sent; whether it lies in the past is Control's to decide.
+	const input = startDataOperationInputSchema.safeParse({ appId, env: environment, kind: 'restore', at: args.at })
+	if (!input.success) throw new Error(`The time is ISO 8601 with an offset, such as 2026-10-24T12:00:00.000Z, not "${args.at}"`)
+	const result = await controlClient(args, env).data.start(input.data)
+	emitOperation(args, parseOperation(result, { appId, env: environment }))
+}
+
 const commandRun = (command: string): ((args: EnvArgs, env: Environment) => Promise<void>) | undefined => {
 	switch (command) {
 		case 'inspect':
@@ -246,6 +400,10 @@ const commandRun = (command: string): ((args: EnvArgs, env: Environment) => Prom
 			return runOperations
 		case 'recover':
 			return runRecover
+		case 'backups':
+			return runBackups
+		case 'restore':
+			return runRestore
 		default:
 			return undefined
 	}
@@ -269,6 +427,7 @@ export const runEnvCli = async (command: string | undefined, argv: readonly stri
 		if (run === undefined) throw new Error(`Unknown env command: ${command}\n\n${USAGE}`)
 		const args = parseEnvArgs(argv)
 		if (args.content && command !== 'inspect') throw new Error('--content applies to `env inspect` only')
+		if (args.at !== undefined && command !== 'restore') throw new Error('--at applies to `env restore` only')
 		await run(args, env)
 	} catch (error) {
 		throw new Error(printable(withoutControlKey(diagnostic(command, error), env)))

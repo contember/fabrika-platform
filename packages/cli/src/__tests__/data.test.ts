@@ -1,8 +1,8 @@
 import { OPS_ROW_COUNT_CAP, type OpsContentView, type OpsView } from '@fabrika/auth-core'
-import type { DataOperationDto } from '@fabrika/control-contract'
+import type { DataBackupDto, DataOperationDto } from '@fabrika/control-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { runCli } from '..'
-import { ENV_USAGE, runEnvCli } from '../env.js'
+import { ENV_USAGE, runEnvCli } from '../data.js'
 
 const CONTROL_ENV = { FABRIKA_CONTROL_URL: 'https://control.example', FABRIKA_CONTROL_KEY: 'px_test' } as const
 
@@ -96,14 +96,24 @@ describe('env routing and help', () => {
 		const bare = await captureOutput(() => runEnvCli(undefined, [], CONTROL_ENV))
 		expect(help.out).toBe(ENV_USAGE)
 		expect(bare.out).toBe(ENV_USAGE)
-		for (const form of ['env inspect <app> <env>', 'env maintenance <app> <env>', 'env operations <app> <env>', 'env recover <app> <env>']) {
+		for (
+			const form of [
+				'env inspect <app> <env>',
+				'env maintenance <app> <env>',
+				'env operations <app> <env>',
+				'env recover <app> <env>',
+				'env backups <app> <env>',
+				'env backups schedule <app> <env> [on|off]',
+				'env restore <app> <env> --at=<time>',
+			]
+		) {
 			expect(ENV_USAGE).toContain(form)
 		}
 	})
 
 	test('the top-level usage lists the env area', async () => {
 		const { out } = await captureOutput(() => runCli(['--help']))
-		expect(out).toContain('fabrika env <inspect|maintenance|operations|recover>')
+		expect(out).toContain('fabrika env <inspect|maintenance|operations|recover|backups|restore>')
 	})
 
 	test('routes `fabrika env <command>` to the area, with the key from the process environment', async () => {
@@ -126,6 +136,7 @@ describe('env routing and help', () => {
 		await expect(runEnvCli('inspect', ['notes', 'prod', 'extra'], CONTROL_ENV)).rejects.toThrow('Usage: fabrika env inspect <app> <env>')
 		await expect(runEnvCli('inspect', ['notes', 'prod', '--app=notes'], CONTROL_ENV)).rejects.toThrow('Unknown option: --app=notes')
 		await expect(runEnvCli('operations', ['notes', 'prod', '--content'], CONTROL_ENV)).rejects.toThrow('--content applies to `env inspect` only')
+		await expect(runEnvCli('operations', ['notes', 'prod', `--at=${AT}`], CONTROL_ENV)).rejects.toThrow('--at applies to `env restore` only')
 	})
 })
 
@@ -378,5 +389,169 @@ describe('env output safety', () => {
 		expect(refusal).toBe('Error: not_found: app env ]52;c;cGF5bG9hZA==not found')
 		const usage = await runEnvCli('inspect', ['notes', 'prod', '--x\x1b[2J'], CONTROL_ENV).then(() => '', (error: unknown) => String(error))
 		expect(usage).toBe('Error: Unknown option: --x[2J')
+	})
+})
+
+const BACKUP: DataBackupDto = {
+	id: '0192c4a0-0000-7000-8000-0000000000b1',
+	appId: 'notes',
+	env: 'prod',
+	operationId: '0192c4a0-0000-7000-8000-0000000000b0',
+	object: 'application',
+	state: 'succeeded',
+	errorCode: null,
+	createdAt: 1_761_307_200,
+	finishedAt: 1_761_307_260,
+	bookmark: '0000000a-0000000b',
+	sizeBytes: 52_428_800,
+	parts: 7,
+	tables: 12,
+	rehearsal: 'passed',
+	rehearsalCode: null,
+	expired: false,
+}
+const BACKUP_LINE = `${BACKUP.id}\tapplication\tsucceeded\t2025-10-24T12:00:00.000Z\t52428800\t7\t12\tpassed\t-\t-\t-`
+
+describe('env backups', () => {
+	test("lists the environment's backups, newest first, one row each with its rehearsal and expiry", async () => {
+		const failed: DataBackupDto = {
+			...BACKUP,
+			id: '0192c4a0-0000-7000-8000-0000000000a1',
+			state: 'failed',
+			errorCode: 'rehearsal_failed',
+			sizeBytes: null,
+			parts: null,
+			tables: null,
+			rehearsal: 'failed',
+			rehearsalCode: 'hash_mismatch',
+			expired: true,
+		}
+		const control = fakeControl({ result: { items: [BACKUP, failed], nextCursor: null } })
+		const { out, err } = await captureOutput(() => runEnvCli('backups', ['notes', 'prod'], CONTROL_ENV))
+		expect(control.calls[0]?.body).toEqual({ method: 'data.backups.list', input: { appId: 'notes', env: 'prod' } })
+		expect(out).toBe([
+			BACKUP_LINE,
+			`${failed.id}\tapplication\tfailed\t2025-10-24T12:00:00.000Z\t-\t-\t-\tfailed\thash_mismatch\trehearsal_failed\texpired`,
+		].join('\n'))
+		expect(err).toBe('')
+	})
+
+	test('an empty list says so on stderr; older backups beyond the page are disclosed; --json prints the parsed page', async () => {
+		fakeControl({ result: { items: [], nextCursor: null } })
+		expect(await captureOutput(() => runEnvCli('backups', ['notes', 'prod'], CONTROL_ENV))).toEqual({ out: '', err: 'notes prod has no backups' })
+		fakeControl({ result: { items: [BACKUP], nextCursor: BACKUP.id } })
+		expect((await captureOutput(() => runEnvCli('backups', ['notes', 'prod'], CONTROL_ENV))).err).toBe('showing the newest 1 backups; older ones exist')
+		fakeControl({ result: { items: [{ ...BACKUP, note: 'added by a newer Control' }], nextCursor: null } })
+		const { out } = await captureOutput(() => runEnvCli('backups', ['notes', 'prod', '--json'], CONTROL_ENV))
+		expect(JSON.parse(out)).toEqual({ items: [BACKUP], nextCursor: null })
+	})
+
+	test('refuses a page that does not parse, or that holds a backup of another environment', async () => {
+		for (
+			const item of [
+				{ ...BACKUP, rehearsal: 'skipped' },
+				{ ...BACKUP, errorCode: 'Error: tenant 7' },
+				{ ...BACKUP, object: 'Application\x1b[2J' },
+				{ ...BACKUP, sizeBytes: -1 },
+				{ ...BACKUP, env: 'staging' },
+			]
+		) {
+			fakeControl({ result: { items: [item], nextCursor: null } })
+			await expect(runEnvCli('backups', ['notes', 'prod'], CONTROL_ENV)).rejects.toThrow('Control returned an unreadable list of backups')
+		}
+	})
+
+	test('a refusal prints its code', async () => {
+		fakeControl({ error: { type: 'not_found', message: 'app env not found' } }, 404)
+		await expect(runEnvCli('backups', ['notes', 'prod'], CONTROL_ENV)).rejects.toThrow('not_found: app env not found')
+	})
+})
+
+describe('env backups schedule', () => {
+	const SCHEDULE = { appId: 'notes', env: 'prod', daily: true, updatedAt: null }
+
+	test('reads the schedule without a switch', async () => {
+		const control = fakeControl({ result: SCHEDULE })
+		const { out, err } = await captureOutput(() => runEnvCli('backups', ['schedule', 'notes', 'prod'], CONTROL_ENV))
+		expect(control.calls[0]?.body).toEqual({ method: 'data.backups.schedule', input: { appId: 'notes', env: 'prod' } })
+		expect(out).toBe('daily\ton\nupdatedAt\t-')
+		expect(err).toBe('')
+	})
+
+	test('on and off set it, and off says the backup before a migration still runs', async () => {
+		const control = fakeControl({ result: { ...SCHEDULE, daily: false, updatedAt: 1_761_307_200 } })
+		const off = await captureOutput(() => runEnvCli('backups', ['schedule', 'notes', 'prod', 'off'], CONTROL_ENV))
+		expect(control.calls[0]?.body).toEqual({ method: 'data.backups.setSchedule', input: { appId: 'notes', env: 'prod', daily: false } })
+		expect(off).toEqual({ out: 'daily\toff\nupdatedAt\t2025-10-24T12:00:00.000Z', err: 'the backup before a migration still runs' })
+
+		const on = fakeControl({ result: { ...SCHEDULE, updatedAt: 1_761_307_200 } })
+		const json = await captureOutput(() => runEnvCli('backups', ['schedule', 'notes', 'prod', 'on', '--json'], CONTROL_ENV))
+		expect(on.calls[0]?.body).toEqual({ method: 'data.backups.setSchedule', input: { appId: 'notes', env: 'prod', daily: true } })
+		expect(JSON.parse(json.out)).toEqual({ ...SCHEDULE, updatedAt: 1_761_307_200 })
+	})
+
+	test('refuses a switch other than on or off before anything is sent, and an answer of another environment', async () => {
+		const control = fakeControl({ result: SCHEDULE })
+		await expect(runEnvCli('backups', ['schedule', 'notes', 'prod', 'yes'], CONTROL_ENV)).rejects.toThrow('The schedule is on or off, not "yes"')
+		await expect(runEnvCli('backups', ['schedule', 'notes', 'prod', 'on', 'extra'], CONTROL_ENV)).rejects.toThrow(
+			'Usage: fabrika env backups schedule <app> <env> [on|off]',
+		)
+		expect(control.calls).toEqual([])
+		fakeControl({ result: { ...SCHEDULE, env: 'staging' } })
+		await expect(runEnvCli('backups', ['schedule', 'notes', 'prod'], CONTROL_ENV)).rejects.toThrow('Control returned an unreadable backup schedule')
+	})
+
+	test('a caller without data.manage gets the refusal as its code', async () => {
+		fakeControl({ error: { type: 'not_found', message: 'app env not found' } }, 404)
+		await expect(runEnvCli('backups', ['schedule', 'notes', 'prod', 'off'], CONTROL_ENV)).rejects.toThrow('not_found: app env not found')
+	})
+})
+
+describe('env restore', () => {
+	const RESTORE: DataOperationDto = { ...OPERATION, kind: 'restore', step: 'list', targetMode: 'open' }
+
+	test('starts a side restore at the time given and prints it, pointing at the operations list while it runs', async () => {
+		for (const flags of [[`--at=${AT}`], ['--at', AT]]) {
+			const control = fakeControl({ result: RESTORE })
+			const { out, err } = await captureOutput(() => runEnvCli('restore', ['notes', 'prod', ...flags], CONTROL_ENV))
+			expect(control.calls[0]?.body).toEqual({ method: 'data.start', input: { appId: 'notes', env: 'prod', kind: 'restore', at: AT } })
+			expect(out).toBe(`${OPERATION.id}\trestore\trunning\tlist\topen\t8\t-\t2025-10-24T12:00:00.000Z`)
+			expect(err).toBe('follow it: fabrika env operations notes prod')
+		}
+	})
+
+	test('every step of a restore reads back through operations', async () => {
+		const steps = ['list', 'restrict', 'backup', 'verify', 'import', 'promote', 'point', 'serve', 'rewind', 'check', 'revert', 'open'] as const
+		fakeControl({ result: { items: steps.map((step) => ({ ...RESTORE, step })), nextCursor: null } })
+		const { out } = await captureOutput(() => runEnvCli('operations', ['notes', 'prod'], CONTROL_ENV))
+		expect(out.split('\n').map((line) => line.split('\t')[3])).toEqual([...steps])
+	})
+
+	test('refuses a missing or unreadable time before anything is sent', async () => {
+		const control = fakeControl({ result: RESTORE })
+		await expect(runEnvCli('restore', ['notes', 'prod'], CONTROL_ENV)).rejects.toThrow('Usage: fabrika env restore <app> <env> --at=<time>')
+		await expect(runEnvCli('restore', ['notes', 'prod', '--at'], CONTROL_ENV)).rejects.toThrow('Usage: fabrika env restore <app> <env> --at=<time>')
+		for (const at of ['yesterday', '2026-10-24', '2026-10-24T12:00:00']) {
+			await expect(runEnvCli('restore', ['notes', 'prod', `--at=${at}`], CONTROL_ENV)).rejects.toThrow(
+				`The time is ISO 8601 with an offset, such as ${AT}, not "${at}"`,
+			)
+		}
+		expect(control.calls).toEqual([])
+	})
+
+	test("Control's refusal of a time not in the past, or of a full object list, prints as its code", async () => {
+		fakeControl({ error: { type: 'bad_request', message: 'the restore time must lie in the past' } }, 400)
+		await expect(runEnvCli('restore', ['notes', 'prod', `--at=${AT}`], CONTROL_ENV)).rejects.toThrow(
+			'bad_request: the restore time must lie in the past',
+		)
+		fakeControl({ error: { type: 'conflict', message: "the environment's object list is full (16 names): no clone can be listed" } }, 409)
+		await expect(runEnvCli('restore', ['notes', 'prod', `--at=${AT}`], CONTROL_ENV)).rejects.toThrow('conflict: ')
+	})
+
+	test('a failed restore is an answer: it prints with its code and names the recovery on stderr', async () => {
+		fakeControl({ result: { ...RESTORE, step: 'open', state: 'failed', errorCode: 'import_failed', finishedAt: 1_761_307_260 } })
+		const { out, err } = await captureOutput(() => runEnvCli('restore', ['notes', 'prod', `--at=${AT}`], CONTROL_ENV))
+		expect(out).toBe(`${OPERATION.id}\trestore\tfailed\topen\topen\t8\timport_failed\t2025-10-24T12:00:00.000Z`)
+		expect(err).toBe(`open the environment past it: fabrika env recover notes prod ${OPERATION.id} open`)
 	})
 })
