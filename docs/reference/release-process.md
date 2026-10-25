@@ -152,7 +152,9 @@ A prerelease never moves `latest`, and the `example-mirror` job of `release.yml`
 
 ### A channel branch
 
-A channel ships what `main` has before `main` releases it, without moving `main`'s source version. Its releases are cut from a long-lived branch `channel/<name>`, which follows `main` and carries only the release commits of its own versions on top. `main` keeps its source version; the channel branch carries the channel's version. CI runs on every push to a `channel/**` branch as it does on `main`.
+A channel ships what `main` has before `main` releases it, without moving `main`'s source version. Its releases are cut from a long-lived branch `channel/<name>`, which follows `main` and carries only the release commits of its own versions on top. `main` keeps its source version; the channel branch carries the channel's version. CI runs on every push to a `channel/**` branch and on every pull request into one, as it does for `main`.
+
+A channel branch must contain the release tooling that knows channels (`RELEASE_CHANNELS` in `scripts/release.ts`). A tag runs the `release.ts` of its own commit, so a channel tag cut from a commit without it refuses the bump or publishes under `next`. For the same reason a hotfix into a channel starts only from a tag of that channel (`release:hotfix --from=v0.9.0-cloudflare.1 --tag=v0.9.0-cloudflare.2`), never from an older tag cut before the channel existed.
 
 To cut the next release of a channel:
 
@@ -160,11 +162,15 @@ To cut the next release of a channel:
 2. Run `bun run release:bump --tag=v0.9.0-cloudflare.2`, then `bun run format` and `bun run check:ci`. A merge of `main` brings `main`'s source version back into the conflicting manifests; the bump overwrites them.
 3. Commit the result as `chore: release v0.9.0-cloudflare.2`, push the branch, tag that commit and push the tag.
 
+A channel hotfix ([Cutting a hotfix](#cutting-a-hotfix)) leaves its release commit and tag on `hotfix/<tag>`, not on `channel/<name>`. The channel branch keeps its source version, so its next release must take a version past the hotfix.
+
 `release.yml` starts on a `v*` tag whatever branch the commit is on. Its `verify` job runs `ci.yml` against the tagged commit, `release:validate` refuses a tag that differs from the source version, and npm trusted publishing names the repository and `release.yml`, not a branch.
 
 ### Ordering
 
 `release:bump` refuses a version that is not newer than the source, within one dist-tag. A prerelease source may switch to another channel's prerelease of the same release or a later one, although SemVer may order it lower: SemVer orders prerelease identifiers by ASCII, so `0.9.0-cloudflare.1` sorts below `0.9.0-dev.4`, and the bump from `dev.4` to `cloudflare.1` passes. Going back within a channel (`cloudflare.2` to `cloudflare.1`), between two prereleases that share `next` (`dev.4` to `beta.1`), to an older release, or from a release to a prerelease of it, is refused.
+
+The bump compares with the source only, not with the target channel's dist-tag on npm. A switch to a version below what that dist-tag already names, such as `cloudflare.2` to `0.9.0-dev.1` when `next` is at `dev.4`, passes the bump; `release:publish` then refuses it before it publishes anything, because it refuses a version older than its dist-tag. Pick the next version of the target channel.
 
 A caret range such as `^0.9.0-cloudflare.1` therefore resolves `0.9.0-dev.4`. That does not reach an application that follows the rule: every `@fabrika/*` pin is an exact version ([Pinning the standalone example](#pinning-the-standalone-example)), and the application skill's example pins are exact.
 
