@@ -688,6 +688,7 @@ describe('data RPC', () => {
 			'kind',
 			'recoversOperationId',
 			'resolution',
+			'runId',
 			'state',
 			'step',
 			'targetMode',

@@ -744,6 +744,11 @@ function BackupsTable({ page }: { page: CursorList<DataBackupDto> }) {
 						</td>
 						<td>
 							{fmtDate(backup.createdAt)}
+							{backup.preMigration && (
+								<div>
+									<Chip>before a migration</Chip>
+								</div>
+							)}
 							{backup.expired && (
 								<div>
 									<Chip>expired</Chip>

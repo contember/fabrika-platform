@@ -36,6 +36,7 @@ const OPERATION: DataOperationDto = {
 	finishedAt: null,
 	recoversOperationId: null,
 	resolution: null,
+	runId: null,
 }
 const STUCK_ID = '0192c4a0-0000-7000-8000-0000000000aa'
 const OPERATION_LINE = `${OPERATION.id}\tmaintenance\trunning\trestrict\tread-only\t8\t-\t2025-10-24T12:00:00.000Z`
@@ -398,6 +399,8 @@ const BACKUP: DataBackupDto = {
 	env: 'prod',
 	operationId: '0192c4a0-0000-7000-8000-0000000000b0',
 	object: 'application',
+	dumpId: '0192c4a0-0000-7000-8000-0000000000b2',
+	preMigration: false,
 	state: 'succeeded',
 	errorCode: null,
 	createdAt: 1_761_307_200,
@@ -410,13 +413,14 @@ const BACKUP: DataBackupDto = {
 	rehearsalCode: null,
 	expired: false,
 }
-const BACKUP_LINE = `${BACKUP.id}\tapplication\tsucceeded\t2025-10-24T12:00:00.000Z\t52428800\t7\t12\tpassed\t-\t-\t-`
+const BACKUP_LINE = `${BACKUP.id}\tapplication\tsucceeded\t2025-10-24T12:00:00.000Z\t52428800\t7\t12\tpassed\t-\t-\t-\tdaily`
 
 describe('env backups', () => {
 	test("lists the environment's backups, newest first, one row each with its rehearsal and expiry", async () => {
 		const failed: DataBackupDto = {
 			...BACKUP,
 			id: '0192c4a0-0000-7000-8000-0000000000a1',
+			preMigration: true,
 			state: 'failed',
 			errorCode: 'rehearsal_failed',
 			sizeBytes: null,
@@ -431,7 +435,7 @@ describe('env backups', () => {
 		expect(control.calls[0]?.body).toEqual({ method: 'data.backups.list', input: { appId: 'notes', env: 'prod' } })
 		expect(out).toBe([
 			BACKUP_LINE,
-			`${failed.id}\tapplication\tfailed\t2025-10-24T12:00:00.000Z\t-\t-\t-\tfailed\thash_mismatch\trehearsal_failed\texpired`,
+			`${failed.id}\tapplication\tfailed\t2025-10-24T12:00:00.000Z\t-\t-\t-\tfailed\thash_mismatch\trehearsal_failed\texpired\tpre-migration`,
 		].join('\n'))
 		expect(err).toBe('')
 	})

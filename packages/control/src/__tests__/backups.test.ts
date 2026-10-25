@@ -693,6 +693,8 @@ describe('data.backups RPC', () => {
 			env: ENV,
 			operationId: newest?.operation_id,
 			object: 'application',
+			dumpId: newest?.dump_id,
+			preMigration: false,
 			state: 'succeeded',
 			errorCode: null,
 			createdAt: newest?.created_at,

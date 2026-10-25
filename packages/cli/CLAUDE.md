@@ -66,15 +66,17 @@ label the envelope a registration carries.
 
 ## The `env` area
 
-`src/env.ts` reads and operates one application environment's data through Control
-([ADR-0069](../../docs/decisions/0069-control-reaches-an-application-environments-object.md)): `inspect` (`data.view`,
-or `data.content` with `--content`), `maintenance`, `operations` and `recover`, each one `data.*` procedure. It resolves
-no provider.
+`src/data.ts` reads and operates one application environment's data through Control
+([ADR-0069](../../docs/decisions/0069-control-reaches-an-application-environments-object.md),
+[ADR-0070](../../docs/decisions/0070-data-protection-of-an-application-environment-on-cloudflare.md)): `inspect`
+(`data.view`, or `data.content` with `--content`), `maintenance`, `operations`, `recover`, `backups`, `backups schedule`
+and `restore --at=<time>`, each one `data.*` procedure. It resolves no provider.
 
 - It uses the `control` area's client (`connectControl`): the same origin rule, environment-only key, no redirect and
   dropped key-carrying answers. Every diagnostic has the key cut out.
 - An answer is parsed before it prints: the view by `@fabrika/auth-core`'s strict `parseOpsView` / `parseOpsContentView`,
-  an operation by a projection of `DataOperationDto`'s known fields (ids are UUIDs, an error code is Control's
+  an operation or a backup by a projection of its DTO's known fields (a field an older Control lacks gets a default
+  only where the field is newer than the procedure) (ids are UUIDs, an error code is Control's
   snake_case rule, the coordinates are the ones asked about).
 - Human output and every diagnostic have control characters removed but tab and line feed: the content view's boot
   failure text is the application's own. `--json` prints the parsed value.

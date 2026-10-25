@@ -371,6 +371,8 @@ export interface DataOperationDto {
 	readonly recoversOperationId: string | null
 	/** A recovery's choice after its closed fence; `null` for every other kind. */
 	readonly resolution: DataOperationResolution | null
+	/** A `migrate` operation's deploy run; `null` for every other kind. */
+	readonly runId: string | null
 }
 
 export const DATA_OPERATION_MAX_PAGE_SIZE = 100
@@ -423,7 +425,7 @@ export type DataRehearsalOutcome = 'pending' | 'passed' | 'failed'
  * text and no content; downloading a dump is `data.content.read`.
  */
 export interface DataBackupDto {
-	/** The dump id. */
+	/** The backup's record. */
 	readonly id: string
 	readonly appId: string
 	readonly env: string
@@ -431,6 +433,10 @@ export interface DataBackupDto {
 	readonly operationId: string
 	/** The object it was taken from. */
 	readonly object: string
+	/** The dump's key in the bucket; a resumed backup whose dump started again carries the new one. */
+	readonly dumpId: string
+	/** Taken by a deploy's migration phase, not by the daily schedule. */
+	readonly preMigration: boolean
 	readonly state: DataBackupState
 	/** A code once it failed, never an error message. */
 	readonly errorCode: string | null

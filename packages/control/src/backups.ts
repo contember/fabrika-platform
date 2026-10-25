@@ -146,6 +146,8 @@ export function toBackupDto(row: BackupRow, now: number): DataBackupDto {
 		env: row.env,
 		operationId: row.operation_id,
 		object: row.object,
+		dumpId: row.dump_id,
+		preMigration: row.pre_migration === 1,
 		state: row.state,
 		errorCode: row.error_code,
 		createdAt: row.created_at,

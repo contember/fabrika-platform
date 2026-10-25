@@ -571,6 +571,7 @@ export function toDataOperationDto(row: DataOperationRow): DataOperationDto {
 		finishedAt: row.finished_at,
 		recoversOperationId: row.recovers_operation_id,
 		resolution: row.resolution,
+		runId: row.run_id,
 	}
 }
 

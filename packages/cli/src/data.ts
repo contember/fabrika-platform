@@ -123,7 +123,7 @@ const controlClient = (args: EnvArgs, env: Environment): ControlClient => connec
 const ERROR_CODE = /^[a-z][a-z0-9_]{0,63}$/
 
 /** The known fields of an operation, validated; a field a newer Control adds is dropped, never printed. */
-const dataOperationSchema: z.ZodType<DataOperationDto> = z.object({
+const dataOperationSchema: z.ZodType<DataOperationDto, z.ZodTypeDef, unknown> = z.object({
 	id: z.string().uuid(),
 	appId: z.string(),
 	env: z.string(),
@@ -156,6 +156,8 @@ const dataOperationSchema: z.ZodType<DataOperationDto> = z.object({
 	finishedAt: z.number().int().nonnegative().nullable(),
 	recoversOperationId: z.string().uuid().nullable(),
 	resolution: z.enum(['resume', 'open']).nullable(),
+	// Absent from a Control before the migration phase.
+	runId: z.string().uuid().nullable().default(null),
 })
 
 interface Target {
@@ -189,6 +191,8 @@ const dataBackupSchema: z.ZodType<DataBackupDto> = z.object({
 	env: z.string(),
 	operationId: z.string().uuid(),
 	object: z.string().refine((name) => parseApplicationObjectName(name) !== null),
+	dumpId: z.string().uuid(),
+	preMigration: z.boolean(),
 	state: z.enum(['running', 'succeeded', 'failed']),
 	errorCode: z.string().regex(ERROR_CODE).nullable(),
 	createdAt: z.number().int().nonnegative(),
@@ -259,6 +263,7 @@ const backupLine = (backup: DataBackupDto): string =>
 		backup.rehearsalCode ?? '-',
 		backup.errorCode ?? '-',
 		backup.expired ? 'expired' : '-',
+		backup.preMigration ? 'pre-migration' : 'daily',
 	].join('\t')
 
 const scheduleLines = (schedule: DataBackupScheduleDto): string =>
