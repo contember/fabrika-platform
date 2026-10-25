@@ -413,7 +413,7 @@ const BACKUP: DataBackupDto = {
 	rehearsalCode: null,
 	expired: false,
 }
-const BACKUP_LINE = `${BACKUP.id}\tapplication\tsucceeded\t2025-10-24T12:00:00.000Z\t52428800\t7\t12\tpassed\t-\t-\t-\tdaily`
+const BACKUP_LINE = `${BACKUP.id}\tapplication\tsucceeded\t2025-10-24T12:00:00.000Z\t52428800\t7\t12\tpassed\t-\t-\t-\t-`
 
 describe('env backups', () => {
 	test("lists the environment's backups, newest first, one row each with its rehearsal and expiry", async () => {
@@ -438,6 +438,7 @@ describe('env backups', () => {
 			`${failed.id}\tapplication\tfailed\t2025-10-24T12:00:00.000Z\t-\t-\t-\tfailed\thash_mismatch\trehearsal_failed\texpired\tpre-migration`,
 		].join('\n'))
 		expect(err).toBe('')
+		expect(ENV_USAGE).toContain('<error code> <expired>\n<pre-migration>.')
 	})
 
 	test('an empty list says so on stderr; older backups beyond the page are disclosed; --json prints the parsed page', async () => {

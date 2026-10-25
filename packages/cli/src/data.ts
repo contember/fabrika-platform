@@ -42,9 +42,11 @@ operation from its recorded step, or \`open\`s the environment. A failed operati
 \`data.manage\`.
 
 \`backups\` lists the environment's consistent backups, newest first, one row each:
-<id> <object> <state> <created at> <size bytes> <parts> <tables> <rehearsal> <rehearsal code> <error code> <expired>.
+<id> <object> <state> <created at> <size bytes> <parts> <tables> <rehearsal> <rehearsal code> <error code> <expired>
+<pre-migration>.
 A backup counts as \`succeeded\` only once its rehearsal, an import into a scratch object, passed. One older than 30
-days is \`expired\` and never offered for a restore. It needs \`data.read\`.
+days is \`expired\` and never offered for a restore. The last column is \`pre-migration\` for the backup a migration
+takes before its deploy, and \`-\` for any other, such as a daily backup or a restore's. It needs \`data.read\`.
 
 \`backups schedule\` prints whether the environment takes a daily backup; \`on\` or \`off\` sets it, which needs
 \`data.manage\`. Turning it off stops the daily backup only: the backup before a migration still runs.
@@ -263,7 +265,7 @@ const backupLine = (backup: DataBackupDto): string =>
 		backup.rehearsalCode ?? '-',
 		backup.errorCode ?? '-',
 		backup.expired ? 'expired' : '-',
-		backup.preMigration ? 'pre-migration' : 'daily',
+		backup.preMigration ? 'pre-migration' : '-',
 	].join('\t')
 
 const scheduleLines = (schedule: DataBackupScheduleDto): string =>

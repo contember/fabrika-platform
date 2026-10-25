@@ -34,6 +34,7 @@ import {
 	recoveryChoice,
 	RecoveryEffect,
 	RestoreEffect,
+	RestoreOccurrences,
 	scheduleOperationPoll,
 	setBackupSchedule,
 	startMaintenance,
@@ -643,36 +644,87 @@ describe('backups', () => {
 	})
 })
 
-/** A `datetime-local` value in the zone the test runs in, as the browser's input gives it. */
-function localInput(ms: number): string {
-	const at = new Date(ms)
-	const pad = (value: number) => String(value).padStart(2, '0')
-	return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`
-}
-
 describe('the side restore', () => {
 	const NOW = Date.parse('2026-10-25T12:00:00.000Z')
-	const DAY = 24 * 60 * 60 * 1000
+	const ZONE = 'Europe/Prague'
+	const instant = (local: string, at: string, offset: string) => ({ at, offset, local, timeZone: ZONE })
 
-	test('a time within the last 30 days is the restore time, as an ISO instant', () => {
-		const yesterday = NOW - DAY
-		expect(parseRestoreTime(localInput(yesterday), NOW)).toEqual({ ok: true, at: new Date(yesterday).toISOString() })
-		const nearlyThirty = NOW - 30 * DAY + 60_000
-		expect(parseRestoreTime(localInput(nearlyThirty), NOW)).toEqual({ ok: true, at: new Date(nearlyThirty).toISOString() })
+	test('a local time within the last 30 days is the restore time: its UTC instant and the offset of the zone at it', () => {
+		expect(parseRestoreTime('2026-10-24T13:00', NOW, ZONE)).toEqual({
+			kind: 'ok',
+			time: instant('2026-10-24 13:00', '2026-10-24T11:00:00.000Z', '+02:00'),
+		})
+		expect(parseRestoreTime('2026-09-25T14:01', NOW, ZONE)).toEqual({
+			kind: 'ok',
+			time: instant('2026-09-25 14:01', '2026-09-25T12:01:00.000Z', '+02:00'),
+		})
+		expect(parseRestoreTime('2026-10-25T09:15:30', NOW, 'UTC')).toEqual({
+			kind: 'ok',
+			time: { at: '2026-10-25T09:15:30.000Z', offset: '+00:00', local: '2026-10-25 09:15:30', timeZone: 'UTC' },
+		})
 	})
 
-	test('no time, a future time, now, and a time older than 30 days are refused before anything is sent', () => {
-		expect(parseRestoreTime('', NOW)).toEqual({ ok: false, problem: 'Choose the time to restore the data as of.' })
-		expect(parseRestoreTime('not a time', NOW)).toEqual({ ok: false, problem: 'Choose the time to restore the data as of.' })
-		expect(parseRestoreTime(localInput(NOW + 60_000), NOW)).toEqual({ ok: false, problem: 'The time must lie in the past.' })
-		expect(parseRestoreTime(localInput(NOW), NOW)).toEqual({ ok: false, problem: 'The time must lie in the past.' })
-		expect(parseRestoreTime(localInput(NOW - 30 * DAY - 60_000), NOW)).toEqual({ ok: false, problem: 'The time must lie within the last 30 days.' })
+	test('no time, an impossible one, a future time, now, and a time older than 30 days are refused before anything is sent', () => {
+		const choose = { kind: 'problem', problem: 'Choose the time to restore the data as of.' }
+		for (const value of ['', 'not a time', '2026-02-30T10:00', '2026-13-01T10:00', '2026-10-24T24:00', '2026-10-24T10:60']) {
+			expect(parseRestoreTime(value, NOW, ZONE)).toEqual(choose)
+		}
+		expect(parseRestoreTime('2026-10-25T13:01', NOW, ZONE)).toEqual({ kind: 'problem', problem: 'The time must lie in the past.' })
+		expect(parseRestoreTime('2026-10-25T13:00', NOW, ZONE)).toEqual({ kind: 'problem', problem: 'The time must lie in the past.' })
+		expect(parseRestoreTime('2026-09-25T13:59', NOW, ZONE)).toEqual({ kind: 'problem', problem: 'The time must lie within the last 30 days.' })
 	})
 
-	test('the confirmation says what the restore does: freeze, backup, clone, pointer, and the original rewound and kept', () => {
-		const at = '2026-10-24T08:30:00.000Z'
-		const html = renderToStaticMarkup(<RestoreEffect at={at} />)
-		expect(html).toContain(fmtDate(Date.parse(at) / 1000))
+	test('a local time the clocks skip (spring forward) is refused, not moved to another hour', () => {
+		const spring = Date.parse('2027-04-01T12:00:00.000Z')
+		expect(parseRestoreTime('2027-03-28T02:30', spring, ZONE)).toEqual({
+			kind: 'problem',
+			problem: '2027-03-28 02:30 does not exist in Europe/Prague: the clocks skip it. Choose another time.',
+		})
+		expect(parseRestoreTime('2027-03-28T01:59', spring, ZONE)).toEqual({
+			kind: 'ok',
+			time: instant('2027-03-28 01:59', '2027-03-28T00:59:00.000Z', '+01:00'),
+		})
+		expect(parseRestoreTime('2027-03-28T03:00', spring, ZONE)).toEqual({
+			kind: 'ok',
+			time: instant('2027-03-28 03:00', '2027-03-28T01:00:00.000Z', '+02:00'),
+		})
+	})
+
+	test('a local time the clocks repeat (fall back) offers both instants, earliest first; one not yet past is not offered', () => {
+		expect(parseRestoreTime('2026-10-25T02:30', NOW, ZONE)).toEqual({
+			kind: 'ambiguous',
+			choices: [
+				instant('2026-10-25 02:30', '2026-10-25T00:30:00.000Z', '+02:00'),
+				instant('2026-10-25 02:30', '2026-10-25T01:30:00.000Z', '+01:00'),
+			],
+		})
+		expect(parseRestoreTime('2026-10-25T02:30', Date.parse('2026-10-25T01:00:00.000Z'), ZONE)).toEqual({
+			kind: 'ok',
+			time: instant('2026-10-25 02:30', '2026-10-25T00:30:00.000Z', '+02:00'),
+		})
+	})
+
+	test('the choice between the two instants names each with its offset and UTC instant', () => {
+		const html = renderToStaticMarkup(
+			<RestoreOccurrences
+				choices={[
+					instant('2026-10-25 02:30', '2026-10-25T00:30:00.000Z', '+02:00'),
+					instant('2026-10-25 02:30', '2026-10-25T01:30:00.000Z', '+01:00'),
+				]}
+				chosen="2026-10-25T01:30:00.000Z"
+				onChoose={() => undefined}
+			/>,
+		)
+		expect(html).toContain('Which 2026-10-25 02:30?')
+		expect(html).toContain('The first, at UTC+02:00: <code>2026-10-25T00:30:00.000Z</code>')
+		expect(html).toContain('The second, at UTC+01:00: <code>2026-10-25T01:30:00.000Z</code>')
+		expect(html).toContain('checked="" value="2026-10-25T01:30:00.000Z"')
+	})
+
+	test('the confirmation names the local time, zone, offset and UTC instant, and says what the restore does', () => {
+		const html = renderToStaticMarkup(<RestoreEffect time={instant('2026-10-25 02:30', '2026-10-25T01:30:00.000Z', '+01:00')} />)
+		expect(html).toContain('<strong>2026-10-25 02:30</strong> (Europe/Prague, UTC+01:00)')
+		expect(html).toContain('<code>2026-10-25T01:30:00.000Z</code>')
 		expect(html).toContain('<code>read-only</code>')
 		expect(html).toContain('consistent backup')
 		expect(html).toContain('clone')

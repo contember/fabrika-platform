@@ -141,18 +141,85 @@ export function startRestore(client: ControlClient, appId: string, env: string, 
 	return dataAction(() => client.data.start({ appId, env, kind: 'restore', at }))
 }
 
-export type RestoreTime = { readonly ok: true; readonly at: string } | { readonly ok: false; readonly problem: string }
+/** One instant a local time names: the UTC instant, the zone's offset at it, and the local time as entered. */
+export interface RestoreInstant {
+	readonly at: string
+	/** `+02:00`, the zone's offset from UTC at `at`. */
+	readonly offset: string
+	readonly local: string
+	readonly timeZone: string
+}
+
+/** A local time names one instant, two in a repeated hour (clocks go back), or none. */
+export type RestoreTime =
+	| { readonly kind: 'ok'; readonly time: RestoreInstant }
+	| { readonly kind: 'ambiguous'; readonly choices: readonly [RestoreInstant, RestoreInstant] }
+	| { readonly kind: 'problem'; readonly problem: string }
+
+const LOCAL_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{3}))?)?$/
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** The wall-clock time of `ms` in `timeZone`, as if it were UTC. */
+function wallClock(ms: number, timeZone: string): number {
+	const parts = new Intl.DateTimeFormat('en-US', {
+		timeZone,
+		hourCycle: 'h23',
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit',
+		hour: '2-digit',
+		minute: '2-digit',
+		second: '2-digit',
+	}).formatToParts(ms)
+	const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((entry) => entry.type === type)?.value)
+	return Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute'), part('second')) + (((ms % 1000) + 1000) % 1000)
+}
+
+function formatOffset(minutes: number): string {
+	const sign = minutes < 0 ? '-' : '+'
+	const abs = Math.abs(minutes)
+	return `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`
+}
+
+/** The instants whose wall-clock time in `timeZone` is exactly `wall`, earliest first. */
+function instantsOf(wall: number, timeZone: string): number[] {
+	const offsets = new Set([wallClock(wall - DAY_MS, timeZone) - (wall - DAY_MS), wallClock(wall + DAY_MS, timeZone) - (wall + DAY_MS)])
+	return [...offsets].map((offset) => wall - offset).filter((ms) => wallClock(ms, timeZone) === wall).sort((a, b) => a - b)
+}
 
 /**
- * A `datetime-local` value, read in the browser's zone, as the time a restore recovers the data as of: in the past and
- * within the window. Control checks the past again.
+ * A `datetime-local` value, read in `timeZone` (the browser's), as the time a restore recovers the data as of: in the
+ * past and within the window. A local time the zone skips is refused; one it repeats asks which occurrence is meant.
+ * Control checks the past again.
  */
-export function parseRestoreTime(value: string, nowMs: number): RestoreTime {
-	const ms = value.trim() === '' ? Number.NaN : new Date(value).getTime()
-	if (Number.isNaN(ms)) return { ok: false, problem: 'Choose the time to restore the data as of.' }
-	if (ms >= nowMs) return { ok: false, problem: 'The time must lie in the past.' }
-	if (ms < nowMs - RESTORE_WINDOW_MS) return { ok: false, problem: `The time must lie within the last ${RESTORE_WINDOW_DAYS} days.` }
-	return { ok: true, at: new Date(ms).toISOString() }
+export function parseRestoreTime(value: string, nowMs: number, timeZone: string): RestoreTime {
+	const match = LOCAL_TIME.exec(value.trim())
+	const [year, month, day, hour, minute, second, fraction] = (match?.slice(1) ?? []).map((part) => Number(part ?? 0))
+	const wall = match === null ? Number.NaN : Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 0, hour ?? 0, minute ?? 0, second ?? 0, fraction ?? 0)
+	// Date.UTC normalises an impossible date (February 30) or hour (24:00) instead of refusing it.
+	const normalised = new Date(wall)
+	if (
+		Number.isNaN(wall) || normalised.getUTCMonth() + 1 !== month || normalised.getUTCDate() !== day || normalised.getUTCHours() !== hour
+		|| normalised.getUTCMinutes() !== minute
+	) {
+		return { kind: 'problem', problem: 'Choose the time to restore the data as of.' }
+	}
+	const local = value.trim().replace('T', ' ')
+	const instants = instantsOf(wall, timeZone)
+	if (instants.length === 0) {
+		return { kind: 'problem', problem: `${local} does not exist in ${timeZone}: the clocks skip it. Choose another time.` }
+	}
+	if (instants.every((ms) => ms >= nowMs)) return { kind: 'problem', problem: 'The time must lie in the past.' }
+	const inWindow = instants.filter((ms) => ms < nowMs && ms >= nowMs - RESTORE_WINDOW_MS)
+	const times = inWindow.map((ms) => ({ at: new Date(ms).toISOString(), offset: formatOffset((wall - ms) / 60_000), local, timeZone }))
+	const [earlier, later] = times
+	if (earlier === undefined) return { kind: 'problem', problem: `The time must lie within the last ${RESTORE_WINDOW_DAYS} days.` }
+	return later === undefined ? { kind: 'ok', time: earlier } : { kind: 'ambiguous', choices: [earlier, later] }
+}
+
+/** The zone the browser's `datetime-local` input is in. */
+function browserTimeZone(): string {
+	return Intl.DateTimeFormat().resolvedOptions().timeZone
 }
 
 /** Reads the page again while its newest operation runs, so the page follows it; returns the cancel. */
@@ -577,18 +644,38 @@ function stepState(index: number, current: number, state: DataOperationState): {
 function RestoreControl({ appId, env, onChanged }: { appId: string; env: string; onChanged: () => void }) {
 	const [value, setValue] = useState('')
 	const [problem, setProblem] = useState<string | null>(null)
-	const [confirming, setConfirming] = useState<string | null>(null)
+	const [choices, setChoices] = useState<readonly RestoreInstant[] | null>(null)
+	const [chosen, setChosen] = useState<string | null>(null)
+	const [confirming, setConfirming] = useState<RestoreInstant | null>(null)
 	const [outcome, setOutcome] = useState<DataAction | null>(null)
+
+	function change(next: string) {
+		setValue(next)
+		setChoices(null)
+		setChosen(null)
+	}
 
 	function review(event: FormEvent) {
 		event.preventDefault()
-		const time = parseRestoreTime(value, Date.now())
-		if (!time.ok) {
+		const time = parseRestoreTime(value, Date.now(), browserTimeZone())
+		if (time.kind === 'problem') {
 			setProblem(time.problem)
+			setChoices(null)
+			return
+		}
+		if (time.kind === 'ambiguous') {
+			const picked = time.choices.find((choice) => choice.at === chosen)
+			if (picked === undefined) {
+				setChoices(time.choices)
+				setProblem(`${time.choices[0].local} occurs twice in ${time.choices[0].timeZone}: the clocks go back. Choose which one.`)
+				return
+			}
+			setProblem(null)
+			setConfirming(picked)
 			return
 		}
 		setProblem(null)
-		setConfirming(time.at)
+		setConfirming(time.time)
 	}
 
 	async function restore(at: string) {
@@ -607,17 +694,18 @@ function RestoreControl({ appId, env, onChanged }: { appId: string; env: string;
 				days. The application keeps serving its current data from a copy; the data of that time is kept beside it for inspection.
 			</p>
 			<form className="toolbar" onSubmit={review}>
-				<input type="datetime-local" aria-label="Restore time" value={value} onChange={(event) => setValue(event.target.value)} />
+				<input type="datetime-local" aria-label="Restore time" value={value} onChange={(event) => change(event.target.value)} />
 				<button type="submit" disabled={outcome?.kind === 'not-in-release'}>Restore to this time…</button>
 			</form>
 			{problem !== null && <p className="error-text" role="alert">{problem}</p>}
+			{choices !== null && <RestoreOccurrences choices={choices} chosen={chosen} onChoose={setChosen} />}
 			{outcome !== null && <ActionOutcome outcome={outcome} />}
 			{confirming !== null && (
 				<ConfirmDialog
 					title="Restore the data"
 					confirmLabel="Start the restore"
-					body={<RestoreEffect at={confirming} />}
-					onConfirm={() => restore(confirming)}
+					body={<RestoreEffect time={confirming} />}
+					onConfirm={() => restore(confirming.at)}
 					onClose={() => setConfirming(null)}
 				/>
 			)}
@@ -625,12 +713,30 @@ function RestoreControl({ appId, env, onChanged }: { appId: string; env: string;
 	)
 }
 
+/** The two instants of a repeated local time, each with its offset, for the operator to pick one. */
+export function RestoreOccurrences(
+	{ choices, chosen, onChoose }: { choices: readonly RestoreInstant[]; chosen: string | null; onChoose: (at: string) => void },
+) {
+	return (
+		<fieldset>
+			<legend>Which {choices[0]?.local}?</legend>
+			{choices.map((choice, index) => (
+				<label key={choice.at}>
+					<input type="radio" name="restore-occurrence" value={choice.at} checked={chosen === choice.at} onChange={() => onChoose(choice.at)} />
+					{index === 0 ? 'The first' : 'The second'}, at UTC{choice.offset}: <code>{choice.at}</code>
+				</label>
+			))}
+		</fieldset>
+	)
+}
+
 /** What a side restore does, in the order Control does it (ADR-0070 §9). */
-export function RestoreEffect({ at }: { at: string }) {
+export function RestoreEffect({ time }: { time: RestoreInstant }) {
 	return (
 		<>
 			<p>
-				Control makes the data as it was at <strong>{fmtIso(at)}</strong> available in a side restore, in this order:
+				Control makes the data as it was at <strong>{time.local}</strong> ({time.timeZone}, UTC{time.offset}), the instant{' '}
+				<code>{time.at}</code>, available in a side restore, in this order:
 			</p>
 			<ol>
 				<li>
