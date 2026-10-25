@@ -194,9 +194,9 @@ const cases: readonly RuleCase[] = [
 		rule: 'unchecked-import',
 		bad: {
 			'src/a.ts':
-				"import { x } from '../../shared/x'\nimport { y } from '../dist/y.js'\nimport { z } from '../node_modules/pg/index.js'\nexport { x, y, z }\n",
+				"import { x } from '../../shared/x'\nimport { y } from '../dist/y.js'\nimport { z } from '../node_modules/pg/index.js'\nimport { w } from '../fabrika/assets/w.js'\nexport { x, y, z, w }\n",
 		},
-		expected: ['src/a.ts:1:1', 'src/a.ts:2:1', 'src/a.ts:3:1'],
+		expected: ['src/a.ts:1:1', 'src/a.ts:2:1', 'src/a.ts:3:1', 'src/a.ts:4:1'],
 		good: { 'src/a.ts': "import { x } from './lib/x'\nexport { x }\n", 'src/lib/x.ts': 'export const x = 1\n' },
 	},
 	{

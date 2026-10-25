@@ -6,6 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
+import { readApplicationTree } from '../check'
 import { STRUCTURE_RULE_IDS } from '../rules/structure'
 import { check, CLEAN_APPLICATION } from './helpers'
 
@@ -527,5 +528,21 @@ describe('fabrika-check', () => {
 			'',
 		])
 		expect(result.stderr).toBe('fabrika-check: 1 refusal, 1 hint\n')
+	})
+})
+
+describe('the staged SPA files of a Cloudflare deploy', () => {
+	test('fabrika/assets/ is build output the checker never reads; fabrika/ itself is', async () => {
+		const root = await mkdtemp(join(tmpdir(), 'fabrika-staged-'))
+		try {
+			await mkdir(join(root, 'fabrika', 'assets', 'cli'), { recursive: true })
+			await writeFile(join(root, 'fabrika', 'assets', 'chunk.js'), 'eval("bundled")\n')
+			await writeFile(join(root, 'fabrika', 'assets', 'cli', 'manifest.json'), '{}')
+			await writeFile(join(root, 'fabrika', 'entry.generated.ts'), 'export {}\n')
+			const { files } = await readApplicationTree(root)
+			expect([...files.keys()]).toEqual(['fabrika/entry.generated.ts'])
+		} finally {
+			await rm(root, { recursive: true, force: true })
+		}
 	})
 })

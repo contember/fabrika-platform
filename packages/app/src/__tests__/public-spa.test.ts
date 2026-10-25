@@ -5,6 +5,7 @@ import { compileContract, ContractError, defineContract, parseContractArtifact }
 import { testKit } from '@fabrika/app/testing'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
+import { bindingAssets } from '../cloudflare/bindings'
 import { implement } from '../implement/implement'
 
 const Me = z.strictObject({ id: z.string() })
@@ -169,5 +170,24 @@ describe("an SPA mount's bare prefix", () => {
 		expect(anonymous.status).toBe(302)
 		expect(anonymous.headers.get('Location')).toStartWith('https://iam.test/auth/login?')
 		expect(await (await kit.browser(member)('/app/')).text()).toBe('dist/app')
+	})
+
+	test("on Cloudflare's asset binding: the bare prefix redirects, its routes get the mount's index, a missing asset stays 404", async () => {
+		// The staged directory mirrors the request paths: the mount `/app` is `app/` there, the root mount the rest.
+		const staged: Readonly<Record<string, string>> = { '/': 'site index', '/app/': 'app index', '/app/main.js': 'app script' }
+		const binding = {
+			fetch: (request: Request) => {
+				const body = staged[new URL(request.url).pathname]
+				return Promise.resolve(body === undefined ? new Response('Not found', { status: 404 }) : new Response(body))
+			},
+		}
+		const kit = testKit(app, { assets: bindingAssets(binding) })
+		const member = kit.testCaller([{ role: 'reviewer', scope: { type: 'workspace', value: 'w1' } }])
+		const bare = await kit.browser(member)('/app')
+		expect([bare.status, bare.headers.get('Location')]).toEqual([308, '/app/'])
+		expect(await (await kit.browser(member)('/app/')).text()).toBe('app index')
+		expect(await (await kit.browser(member)('/app/reviews/7')).text()).toBe('app index')
+		expect(await (await kit.browser(member)('/app/main.js')).text()).toBe('app script')
+		expect((await kit.browser(member)('/app/old.js')).status).toBe(404)
 	})
 })

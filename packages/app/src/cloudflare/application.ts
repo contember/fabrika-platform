@@ -19,7 +19,7 @@ import type { CrashReporter } from '../jobs/report.js'
 import { isDueAt } from '../jobs/schedule.js'
 import { environmentScrubber, type Scrubber } from '../jobs/scrub.js'
 import { bindingAssets, bindingKeySource, bindingMembership, bindingTerminals, bindingWorkloadTokens, connectBindings } from './bindings.js'
-import { CLOUDFLARE_FILES_BINDING } from './names.js'
+import { CLOUDFLARE_ASSETS_BINDING, CLOUDFLARE_FILES_BINDING } from './names.js'
 import { type OpsAccess, opsAccess, type OpsStorage, serveOps } from './ops.js'
 import { r2FileObjectStore } from './r2-files.js'
 
@@ -58,7 +58,7 @@ export interface ApplicationState {
 }
 
 /** The framework's bindings: IAM's application entrypoint and the Workers Assets of the SPA. No handler sees them. */
-const FRAMEWORK_BINDINGS: ReadonlySet<string> = new Set(['IAM', 'ASSETS'])
+const FRAMEWORK_BINDINGS: ReadonlySet<string> = new Set(['IAM', CLOUDFLARE_ASSETS_BINDING])
 
 /**
  * The application this isolate booted, once: its module is loaded once, and its `scoped(tables)` layer binds once, to
@@ -138,7 +138,7 @@ async function bootApplication(
 	const app = boot(implementation, {
 		environment,
 		iam: bindingKeySource(env['IAM']),
-		assets: bindingAssets(env['ASSETS']),
+		assets: bindingAssets(env[CLOUDFLARE_ASSETS_BINDING]),
 		membership: bindingMembership(env['IAM']),
 		terminals: bindingTerminals(env['IAM']),
 		workloadTokens: bindingWorkloadTokens(env['IAM']),

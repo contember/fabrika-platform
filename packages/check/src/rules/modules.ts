@@ -1,5 +1,5 @@
 import type { Report } from '../finding'
-import { isIgnoredSegment, isRelativeSpecifier, isTestFile, joinRelative, resolveRelative } from '../layout'
+import { isRelativeSpecifier, isSkippedPath, isTestFile, joinRelative, resolveRelative } from '../layout'
 import type { ModuleReference } from '../references'
 import { type ImportMappings, mappedTargets } from '../resolution'
 
@@ -120,7 +120,7 @@ const checkTestOnly = (reference: ModuleReference, target: string, report: Repor
 /** A path from the root that a mapping or an import lands on, judged by where the checker reads. */
 const containmentProblem = (target: string | undefined): string | undefined => {
 	if (target === undefined) return 'resolves outside the application root, where the checker does not look'
-	if (target.split('/').some(isIgnoredSegment)) return 'resolves into a directory the checker skips'
+	if (isSkippedPath(target)) return 'resolves into a directory the checker skips'
 	return undefined
 }
 

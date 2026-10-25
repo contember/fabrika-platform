@@ -83,6 +83,11 @@ export interface IsolationWorlds {
 	readonly dimension: string
 	readonly own: WorldRow
 	readonly other: WorldRow
+	/**
+	 * Deletes both rows of the table and every row that refers to them, however deep; the containers stay. A case whose
+	 * rows hold pinned values removes them, so the next case can pin the same values again under a unique index.
+	 */
+	readonly remove: () => Promise<void>
 }
 
 /** What a test kit seeds through, over its migrated schema. */
@@ -90,9 +95,17 @@ export interface TestSeeding {
 	/**
 	 * Seeds one row of `table` in each of two fresh chains, with every container row a table owns. `values` (column →
 	 * value) are written into both rows of `table`: the state an endpoint's precondition needs. A text column keeps its
-	 * marker, so a seed of one, or of a column that places the row, throws.
+	 * marker, so a seed of one, or of a column that places the row, throws. `pins` (column → value) give a text column of
+	 * `table` a known value instead of its marker: the value in the own row, and `<value>-other` in the other row, which
+	 * counts among the other row's markers, so a leak of it is still found. A pin of a column that places the row, or of
+	 * no text column, throws.
 	 */
-	seedWorlds<DB, P>(tables: Tables<DB, P>, table: string, values?: Readonly<Record<string, SampleValue>>): Promise<IsolationWorlds>
+	seedWorlds<DB, P>(
+		tables: Tables<DB, P>,
+		table: string,
+		values?: Readonly<Record<string, SampleValue>>,
+		pins?: Readonly<Record<string, string>>,
+	): Promise<IsolationWorlds>
 	/**
 	 * Seeds one row of the application table `table`: its key, version and creator stamped, `values` (column → value)
 	 * as given, a text column too, every other column sampled. A value for a stamped column or a file column throws.
@@ -525,7 +538,17 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		return { key, ...seeded }
 	}
 
-	async function seedWorld(models: TableModels, model: TableModel, world: string, seed: Readonly<Record<string, SampleValue>>): Promise<WorldRow> {
+	/** The value a pin gives the row of `world`: as written in the own row, distinct in the other. */
+	const pinnedValue = (value: string, world: string): string => (world === 'own' ? value : `${value}-${world}`)
+
+	async function seedWorld(
+		models: TableModels,
+		model: TableModel,
+		world: string,
+		seed: Readonly<Record<string, SampleValue>>,
+		pins: Readonly<Record<string, string>>,
+		inserted: InsertedRow[],
+	): Promise<WorldRow> {
 		const markers: string[] = []
 		const values = new Map<string, string>()
 		const links: readonly Container[] = model.chain
@@ -562,7 +585,20 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			}
 			assigned.set(name, value)
 		}
+		for (const [name, value] of Object.entries(pins)) {
+			const column = columnOf(model.name, name)
+			if (assigned.has(name)) {
+				throw new Error(`${model.name}.${name} places the row in its scope or is seeded; a pin gives a text column of the row's own state a known value`)
+			}
+			if (!(await holdsMarker(model, model.name, column))) {
+				throw new Error(`${model.name}.${name} holds no text marker; a pin gives a text column a known value, a seed every other column`)
+			}
+			const pinned = pinnedValue(value, world)
+			assigned.set(name, pinned)
+			markers.push(pinned)
+		}
 		const { row } = await insert(models, model.name, assigned, markers)
+		inserted.push({ table: model.name, match: new Map([[scope.key, key]]) })
 		const updates: Record<string, SampleValue> = {}
 		for (const name of namesOf(model.update)) {
 			updates[name] = row.get(name) ?? await updateSample(model.name, name)
@@ -586,10 +622,16 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 	}
 
 	return {
-		async seedWorlds(tables, table, values = {}) {
+		async seedWorlds(tables, table, values = {}, pins = {}) {
 			const { models, model } = scopedModel(tables, table)
 			const dimension = grantDimension(models, model)
-			return { dimension, own: await seedWorld(models, model, 'own', values), other: await seedWorld(models, model, 'other', values) }
+			const inserted: InsertedRow[] = []
+			return {
+				dimension,
+				own: await seedWorld(models, model, 'own', values, pins, inserted),
+				other: await seedWorld(models, model, 'other', values, pins, inserted),
+				remove: () => backend.remove(inserted),
+			}
 		},
 		async seedRow(tables, table, values = {}) {
 			const { models, model } = scopedModel(tables, table)
