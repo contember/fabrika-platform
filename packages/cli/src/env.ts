@@ -1,4 +1,4 @@
-// The `fabrika env` command area: an application environment's data as Control serves it (ADR-0068). Every command is
+// The `fabrika env` command area: an application environment's data as Control serves it (ADR-0069). Every command is
 // one `data.*` procedure of `ControlRpcContract`, reached through the client `fabrika control` uses (`connectControl`).
 
 import { RpcError } from '@fabrika/app'

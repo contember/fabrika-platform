@@ -67,7 +67,7 @@ label the envelope a registration carries.
 ## The `env` area
 
 `src/env.ts` reads and operates one application environment's data through Control
-([ADR-0068](../../docs/decisions/0068-control-reaches-an-application-environments-object.md)): `inspect` (`data.view`,
+([ADR-0069](../../docs/decisions/0069-control-reaches-an-application-environments-object.md)): `inspect` (`data.view`,
 or `data.content` with `--content`), `maintenance`, `operations` and `recover`, each one `data.*` procedure. It resolves
 no provider.
 

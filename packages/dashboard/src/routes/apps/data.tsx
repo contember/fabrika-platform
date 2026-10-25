@@ -19,7 +19,7 @@ import { holdsGlobally, mayDo, opensApplications } from '../../lib/console-acces
 import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate } from '../../lib/format'
 
-// An application environment's data (ADR-0068): what its object reports, the operations Control ran on it, and the
+// An application environment's data (ADR-0069): what its object reports, the operations Control ran on it, and the
 // maintenance and recovery controls. consoleAccess only shows or hides a control; each procedure decides.
 
 type ControlClient = ReturnType<typeof createControlClient>
@@ -173,7 +173,7 @@ export function DataView(
 			operations={operations}
 			onChanged={onChanged}
 			manages={mayDo(access, CONTROL_ACTIONS.DATA_MANAGE, { app: appId, env })}
-			// Content is a global grant only (ADR-0068 §2): an unknown answer or a grant at the app or the environment does not offer it.
+			// Content is a global grant only (ADR-0069 §2): an unknown answer or a grant at the app or the environment does not offer it.
 			readsContent={access !== null && holdsGlobally(access, CONTROL_ACTIONS.DATA_CONTENT_READ)}
 		/>
 	)
@@ -358,7 +358,7 @@ export function RecoverControl(
 	)
 }
 
-/** What a recovery does, in the order Control does it (ADR-0068 §3). */
+/** What a recovery does, in the order Control does it (ADR-0069 §3). */
 export function RecoveryEffect({ operation, resolution }: { operation: DataOperationDto; resolution: DataOperationResolution }) {
 	const id = <code>{shortId(operation.id)}</code>
 	return (
