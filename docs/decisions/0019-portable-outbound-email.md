@@ -316,6 +316,10 @@ none and answers its row with 404. Its senders reach it over the platform transp
 - On Cloudflare an invalid set fails Control's own deploy, so Control keeps running with the transport it had. A
   Worker secret missing later (a failed `secret put`, a secret deleted by hand) makes Control refuse each deploy that
   hands the set, naming the Cloudflare operator step: correct the GitHub Environment and re-run the platform workflow.
+  Control's deploy uploads the Worker version before it writes its secrets, so for a moment after a first rollout the
+  version names the provider without its credential (a mailer deploy then is refused with that step and can be run
+  again), and after a rotation the old credential serves for that moment. The window is accepted rather than
+  reordering the deploy plan.
 - **Postmark has no idempotency either**, so an unknown outcome over it is never retried automatically and needs a
   person, as over SmartEmailing.
 - **SmartEmailing's limits.** It has no idempotency, so an unknown outcome is never retried automatically and needs a
