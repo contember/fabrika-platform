@@ -144,6 +144,15 @@ export const contract = app.contract((c) => ({
 - A job may also declare `kicks` (another job; the edges never form a cycle), `signs` (`ctx.tokens.sign`),
   `egress` (the HTTPS origins its `fetch` calls) and `issues` (`references/endpoint.md`). `ctx.url('<endpoint id>', …)`
   builds an absolute link to one of the application's procedures, for an e-mail.
+- A job that calls the websites its operators enter (a crawler, an auditor) declares `egress: 'public'`:
+  `app.cron('*/5 * * * *', { actions: ['sites.read'], egress: 'public' })`. Its `fetch` reaches any public host over
+  HTTPS or HTTP on the default port. It is refused (`capability_refused: refused_egress`) for an IP address, a name of
+  one label (`localhost`, an internal service), a name under `.local`, `.internal`, `.workers.dev` and similar, a port,
+  the installation's own hosts (IAM, Control, Operations, every application's domain) and, on Bun (Zerops), a name
+  that resolves to a private address. Every redirect is checked again: `redirect: 'manual'` gets the redirect, the default
+  follows at most 10. A request has 60 s, a response body at most 16 MiB (`oversized_egress`); pass `ctx.signal`, or
+  `AbortSignal.any([ctx.signal, AbortSignal.timeout(8_000)])` for a shorter bound per page. The approver reviews it
+  closely, as reach to anywhere public. Keep the sites operators enter in a table the job reads.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
   each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
 - A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, a framework refusal

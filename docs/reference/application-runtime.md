@@ -1241,6 +1241,35 @@ before boot, or opens its own sockets, escapes it ([ADR-0012](../decisions/0012-
 checker's `cross-app-fetch` accepts an absolute URL whose static prefix is an origin some site declares, and the
 approval lists every origin (`egress.test.ts`).
 
+### Public egress
+
+`egress: 'public'` on a cron job, instead of a list, reaches every public host over HTTPS or HTTP on the scheme's
+default port: a job that calls the websites its operators name, such as a crawler or an auditor
+([ADR-0070](../decisions/0070-a-cron-job-may-reach-the-public-web.md)). A procedure, a mutation and a webhook name their
+origins; the build and the types refuse `'public'` there. The artifact records `'public'` under the job's site, and the
+format stays 2. The guard (`implement/egress.ts`, over `publicEgressRefusal` in `@fabrika/auth-core`) refuses before
+each hop, with `capability_refused: refused_egress`:
+
+- another scheme, a non-default port, every IP literal, a name of one label, and a name under `localhost`, `local`,
+  `internal`, `intranet`, `lan`, `home`, `corp`, `private`, `arpa`, `test`, `invalid`, `example`, `onion`, `alt`,
+  `zerops` or `workers.dev`;
+- the installation's own hosts: every host a framework variable of the environment names (IAM, Operations, its own
+  origin, the platform's receivers, the object store) and `FABRIKA_EGRESS_REFUSED_HOSTS`, which Control writes for a
+  contract with such a job (Control's, IAM's, Operations' and every environment's domain and public origin; `null`
+  otherwise);
+- on Bun, a host with any resolved address that is not public unicast (`node:dns`, every address; the Bun adapter
+  passes `resolveHost` to `boot`). A Worker exposes no resolution, so on Cloudflare a public name of a private address
+  is Cloudflare's network's to route, and DNS rebinding between the check and Bun's own connection is not prevented.
+
+Every hop goes out with `redirect: 'manual'`. Under the caller's `follow` the guard follows at most 10 redirects
+itself, checking each; a 303 (and a 301 or 302 of a `POST`) becomes a `GET` without its body, and another origin loses
+`Authorization`, `Proxy-Authorization` and `Cookie`. `manual` hands the redirect to the caller, and `error` refuses it.
+A request has 60 seconds, its redirects and the reading of its body included, beside the caller's signal; a response body is read up to 16 MiB,
+refused past it by its `Content-Length` or while it streams (`capability_refused: oversized_egress`). The response
+carries the URL of its last hop. The approval diff shows gaining `'public'` as one line for closer review, and the
+checker's `cross-app-fetch` accepts an http(s) prefix the URL rules admit, or whose host is not complete yet, where
+some job declares it (`public-egress.test.ts`).
+
 ## A mount's compatibility promise
 
 `c.rpc('/api/v1', groups, { compatibility: 'backward' })` promises the export's rule to the callers of an RPC mount
@@ -1546,7 +1575,7 @@ reviewed too (`diff.ts:292`).
 | A public procedure's handler holds only its declared actions, on application tables: an insert reads nothing back, a read needs the table's read action, an update or a remove needs an id a verified signed token carries; no role holds a public action                                                                     | types, runtime, review       | none                                                                                                  | `packages/db/src/orm-types.ts` (`PublicApplicationRows`); `packages/app/src/implement/dispatch.ts` (`#publicInvocation`); `packages/auth/src/app-schema.ts` (an app schema whose role grants a public action is refused) |
 | A public procedure's file body is challenged, budgeted, and admitted only from an origin its row admits; its files are scanned before any byte is served                                                                                                                                                                      | build, proxy, runtime        | none                                                                                                  | `packages/app/src/contract/build.ts`; `packages/proxy-core/src/authorize.ts` (`admitFormOrigin`); `packages/app/src/files/kinds.ts`                                                                                      |
 | A stored file is served, opened or written into a column only through a reference the request holds and may read, of the column's kind, and served only when `live`                                                                                                                                                           | types, runtime               | `sql: 'write'` (a statement can write any file id)                                                    | `packages/db/src/file-columns.ts`; `packages/app/src/files/kinds.ts`                                                                                                                                                     |
-| A site's `fetch` reaches only the origins it declares                                                                                                                                                                                                                                                                         | runtime, checker, review     | `egress: ['https://…']`                                                                               | `packages/app/src/implement/egress.ts`; `packages/check/src/check.ts` (`cross-app-fetch`)                                                                                                                                |
+| A site's `fetch` reaches only the origins it declares, a job's `'public'` only public hosts                                                                                                                                                                                                                                   | runtime, checker, review     | `egress: ['https://…']`, `egress: 'public'` (a cron job)                                              | `packages/app/src/implement/egress.ts`; `packages/check/src/check.ts` (`cross-app-fetch`)                                                                                                                                |
 | The framework's binding of the data layer and its test kit stay out of application code                                                                                                                                                                                                                                       | checker, runtime             | none                                                                                                  | `packages/check/src/rules/modules.ts:58`, `:108`; `packages/check/src/rules/framework.ts:149`; `packages/db/src/production.ts:22`                                                                                        |
 | The application reads no environment variable and no other application's origin itself                                                                                                                                                                                                                                        | checker                      | none                                                                                                  | `packages/check/src/rules/runtime.ts:326`, `:131`                                                                                                                                                                        |
 

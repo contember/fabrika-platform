@@ -115,7 +115,16 @@ export type SignsField<Sg, Purposes extends string> =
  * `fetch` refuses any other while the site runs; a public procedure declares none.
  */
 export interface EgressField {
-	readonly egress?: readonly `https://${string}`[]
+	readonly egress?: readonly `https://${string}`[] | Unavailable<"egress: 'public' is a cron job's only: record a row and kick a job that declares it">
+}
+
+/**
+ * A cron job's `egress`: its exact HTTPS origins, or `'public'`, every public host over HTTPS or HTTP on its default
+ * port, for a job that calls the websites its operators name (ADR-0070). The guard refuses IP addresses, local and
+ * internal names and the installation's own hosts, checks each redirect, and bounds each request's time and body.
+ */
+export interface JobEgressField {
+	readonly egress?: readonly `https://${string}`[] | 'public'
 }
 
 /** Each purpose `signs` names is one of `defineApp`'s `tokens`. */

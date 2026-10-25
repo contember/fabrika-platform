@@ -3,7 +3,7 @@
 // commits it after the handler returned and its output passed validation, and rolls it back otherwise. Every handle
 // is bound to the invocation: called from another request, another `boot`, or after it ended, it refuses.
 
-import { type ContractArtifact, JOB_MAILERS, type JobMailer } from '@fabrika/auth-core'
+import { type ContractArtifact, type DeclaredEgress, JOB_MAILERS, type JobMailer, PUBLIC_EGRESS } from '@fabrika/auth-core'
 import {
 	type DataAccess,
 	type DataHandles,
@@ -34,8 +34,8 @@ export interface SiteDeclaration {
 	readonly binds: string | null
 	/** The token purposes `ctx.tokens.sign` may sign. */
 	readonly signs: readonly string[]
-	/** The HTTPS origins the global `fetch` reaches while the site's handler runs. */
-	readonly egress: readonly string[]
+	/** The HTTPS origins the global `fetch` reaches while the site's handler runs, or `'public'`: every public host (a cron job). */
+	readonly egress: DeclaredEgress
 }
 
 /** A public procedure's reach: the texts the verified signed tokens of its request carry, which name the rows it changes. */
@@ -166,10 +166,11 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 		problems.push(`${where}: signs is not a list of token purposes`)
 	}
 	const egressField = ownField(declared, 'egress')
-	const egress = Array.isArray(egressField) ? egressField.filter((origin): origin is string => typeof origin === 'string') : []
-	if (egressField !== undefined && (!Array.isArray(egressField) || egress.length !== egressField.length)) {
-		problems.push(`${where}: egress is not a list of origins`)
+	const origins = Array.isArray(egressField) ? egressField.filter((origin): origin is string => typeof origin === 'string') : []
+	if (egressField !== undefined && egressField !== PUBLIC_EGRESS && (!Array.isArray(egressField) || origins.length !== egressField.length)) {
+		problems.push(`${where}: egress is not a list of origins or '${PUBLIC_EGRESS}'`)
 	}
+	const egress: DeclaredEgress = egressField === PUBLIC_EGRESS ? PUBLIC_EGRESS : Object.freeze([...new Set(origins)].sort())
 	return Object.freeze({
 		sql: sql === 'read' || sql === 'write' ? sql : null,
 		unscoped: Object.freeze(unscoped),
@@ -179,7 +180,7 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 		kicks: Object.freeze([...new Set(kicks)].sort()),
 		binds: typeof binds === 'string' ? binds : null,
 		signs: Object.freeze([...new Set(signs)].sort()),
-		egress: Object.freeze([...new Set(egress)].sort()),
+		egress,
 	})
 }
 
@@ -224,7 +225,7 @@ export function approvedReach(site: string, artifact: ContractArtifact): SiteDec
 			kicks: Object.freeze([...(reach.kicks ?? [])]),
 			binds: reach.binds ?? null,
 			signs: Object.freeze([...(reach.signs ?? [])]),
-			egress: Object.freeze([...(reach.egress ?? [])]),
+			egress: reach.egress === PUBLIC_EGRESS ? PUBLIC_EGRESS : Object.freeze([...(reach.egress ?? [])]),
 		})
 }
 
@@ -243,7 +244,7 @@ function describeDeclaration(declaration: SiteDeclaration): string {
 		...(declaration.kicks.length === 0 ? {} : { kicks: declaration.kicks }),
 		...(declaration.binds === null ? {} : { binds: declaration.binds }),
 		...(declaration.signs.length === 0 ? {} : { signs: declaration.signs }),
-		...(declaration.egress.length === 0 ? {} : { egress: declaration.egress }),
+		...(declaration.egress !== PUBLIC_EGRESS && declaration.egress.length === 0 ? {} : { egress: declaration.egress }),
 	})
 }
 

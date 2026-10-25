@@ -302,6 +302,7 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   | `binds: '<webhook>'`                       | credentialed mutation                    | `ctx.webhooks('<webhook>').bind` and `unbind` (§13)          |
   | `signs: ['<purpose>']`                     | procedure of an RPC mount, job, webhook  | `ctx.tokens.sign` (§14)                                      |
   | `egress: ['https://<host>']`               | credentialed RPC procedure, job, webhook | `fetch` to those origins (§15)                               |
+  | `egress: 'public'`                         | job                                      | `fetch` to public hosts (§15, ADR-0070)                      |
 
   The runtime builds each handle only for the declaring site and enforces its mode. It takes the declaration from
   the approved artifact (`ContractArtifact.declared`), not from the handler module, and refuses to boot a site whose
@@ -547,6 +548,10 @@ idempotently without `sql`.
   stops mistakes and makes a bypass conspicuous; it is no sandbox (§8): code that kept the `fetch` it found before
   boot, or opens its own sockets, escapes it. The checker's `cross-app-fetch` rule accepts an absolute URL under an
   origin some site declares.
+- **`egress: 'public'`** on a cron job reaches every public host over HTTPS or HTTP instead of a list, for a job that
+  calls the websites its operators name. The guard refuses IP literals, local and internal names, non-default ports,
+  the installation's own hosts and, on Bun, a name that resolves to a private address; it checks every redirect hop and
+  bounds each request ([ADR-0070](0070-a-cron-job-may-reach-the-public-web.md)).
 - **Mail.** `ctx.mail.send` in a mailer job takes `attachments: [fileRef]` (only a `live` file the attempt holds, within
   the transport's `maxAttachmentBytes`) and `unsubscribe: { url }`, from which the transport writes `List-Unsubscribe`
   and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058). There are no free headers. A transport without

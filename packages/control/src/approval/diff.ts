@@ -12,6 +12,7 @@ import {
 	compileEndpointTable,
 	type ContractArtifact,
 	type CrossOriginForm,
+	type DeclaredEgress,
 	type DeclaredReach,
 	type DimensionArtifact,
 	type EndpointAuthorization,
@@ -40,6 +41,7 @@ import {
 	planEndpoint,
 	type ProcedureArtifact,
 	type ProcedureChallenge,
+	PUBLIC_EGRESS,
 	type RedirectShape,
 	type RoleArtifact,
 	type SchemaShape,
@@ -424,9 +426,13 @@ function compareDeclared(
 
 /**
  * The origins a site's code calls (`egress`): a new one is a place the site's data may go, so it widens with closer
- * review; a dropped one narrows.
+ * review; a dropped one narrows. A job's `'public'` reaches every public origin, so beside it no origin is a change;
+ * `reachSteps` shows the move to or from it.
  */
-function egressChanges(site: string, from: readonly string[], to: readonly string[]): AccessChange[] {
+function egressChanges(site: string, before: DeclaredEgress, after: DeclaredEgress): AccessChange[] {
+	if (before === PUBLIC_EGRESS || after === PUBLIC_EGRESS) return []
+	const from: readonly string[] = before
+	const to: readonly string[] = after
 	const name = siteName(site)
 	return union(from, to).flatMap((origin) => {
 		if (!from.includes(origin)) return [closerWidening(`${name} calls ${origin}`)]
@@ -504,7 +510,20 @@ function reachSteps(from: DeclaredReach, to: DeclaredReach): AccessChange[] {
 		if (from.issues !== null) changes.push(narrowing(`no longer issues share links of mount \`${from.issues}\``))
 	}
 	changes.push(...mailerChange(from.mailer, to.mailer))
+	changes.push(...publicEgressChange(from.egress, to.egress))
 	return changes
+}
+
+/**
+ * A job's `egress: 'public'` (ADR-0070): its code may send what it holds to any public host, wherever an operator or a
+ * page it fetched points it, so gaining it widens with closer review; losing it narrows. The guard keeps it off the
+ * installation's own hosts and private addresses, which the line does not repeat.
+ */
+function publicEgressChange(from: DeclaredEgress | undefined, to: DeclaredEgress | undefined): AccessChange[] {
+	if ((from === PUBLIC_EGRESS) === (to === PUBLIC_EGRESS)) return []
+	return to === PUBLIC_EGRESS
+		? [closerWidening("calls any public website over HTTPS or HTTP (`egress: 'public'`), wherever its code points it")]
+		: [narrowing('no longer calls any public website')]
 }
 
 /** Undeclared reaches no transport, `own` the application's, and `installation` the installation's credentials. */
