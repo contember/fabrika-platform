@@ -52,7 +52,7 @@ export class GitHubMetadataClient {
 	private readonly validatedPlatformTrees = new Set<string>()
 
 	constructor(options: GitHubMetadataClientOptions) {
-		this.fetchImplementation = options.fetch ?? fetch
+		this.fetchImplementation = options.fetch ?? fetch.bind(globalThis)
 		const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 		if (
 			!Number.isSafeInteger(timeoutMs)

@@ -65,7 +65,7 @@ export class GitHubAppClient {
 		} catch {
 			throw configurationError()
 		}
-		return new GitHubAppClient(config.appId, privateKey, apiBaseUrl, config.fetch ?? fetch, config.now ?? Date.now, timeoutMs)
+		return new GitHubAppClient(config.appId, privateKey, apiBaseUrl, config.fetch ?? fetch.bind(globalThis), config.now ?? Date.now, timeoutMs)
 	}
 
 	/** Read and bind the public identity represented by this client's App credentials. */
