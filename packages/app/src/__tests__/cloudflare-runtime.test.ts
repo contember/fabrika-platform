@@ -1,6 +1,6 @@
 // A contract application on Cloudflare runs in its environment's one Durable Object (ADR-0065): the Worker forwards
-// every request and the minute tick with the proxy secret, the object migrates its SQLite once, boots the application
-// and serves it. Lopata runs the Worker, the object and the R2 bucket in process.
+// every request and the repair tick with the proxy secret, the object migrates its SQLite once, boots the application,
+// serves it and runs its jobs from the alarm. Lopata runs the Worker, the object, its alarm and the R2 bucket in process.
 
 import { compileContract } from '@fabrika/app/contract'
 import { boot, BootError, serve } from '@fabrika/app/implement'
@@ -297,17 +297,30 @@ describe("Control's ops channel", () => {
 	})
 })
 
-describe('the minute tick', () => {
-	test('runs the jobs due in its UTC minute and no other', async () => {
+describe('the repair tick and the alarm', () => {
+	/** The environment's object as Lopata holds it: its SQLite and its alarm. */
+	const objectOf = (target: Deployed) => target.testEnv.durableObject(CLOUDFLARE_APPLICATION_BINDING).get('application')
+
+	/** Moves every pending wake of `job` a second into the past, as time passing to its due time would. */
+	function makeDue(target: Deployed, job: string): void {
+		objectOf(target).sql.exec('update fabrika_wakes set due_at = ? where job = ?', Date.now() - 1_000, job)
+	}
+
+	test('the tick arms the first alarm of an environment nobody called, and the alarm runs the due job and no other', async () => {
 		await keepingProcessEnvironment(async () => {
 			const target = await deploy()
-			await call(target, 'create', { workspaceId: 'w1', title: 'counted' })
-			await target.testEnv.scheduled({ scheduledTime: Date.UTC(2026, 9, 22, 3, 0, 0) })
-			expect(await runsAfter(target.world, 1)).toEqual([{ job: 'nightly', notes: 1 }])
-			await target.testEnv.scheduled({ scheduledTime: Date.UTC(2026, 9, 22, 4, 30, 0) })
-			expect(await runsAfter(target.world, 2)).toEqual([{ job: 'nightly', notes: 1 }, { job: 'halfPast', notes: 1 }])
-			await target.testEnv.scheduled({ scheduledTime: Date.UTC(2026, 9, 22, 4, 31, 0) })
-			expect(await runsAfter(target.world, 3)).toHaveLength(2)
+			await target.testEnv.scheduled({ scheduledTime: Date.now() })
+			const object = objectOf(target)
+			const [earliest] = object.sql.exec('select min(due_at) as due from fabrika_wakes').toArray()
+			const due = Number(earliest?.['due'])
+			expect(due).toBeGreaterThan(Date.now())
+			expect(await object.getAlarm()).toBe(due)
+			makeDue(target, 'nightly')
+			await object.triggerAlarm()
+			expect(await runsAfter(target.world, 1)).toEqual([{ job: 'nightly', notes: 0 }])
+			expect(await runsAfter(target.world, 2)).toHaveLength(1)
+			// The run completed: its next fire is scheduled, and the alarm is armed again from the wakes.
+			expect(await object.getAlarm()).toBeGreaterThan(Date.now())
 		})
 	})
 
@@ -315,7 +328,9 @@ describe('the minute tick', () => {
 		await keepingProcessEnvironment(async () => {
 			const target = await deploy()
 			const objects = await outsideBucket(target)
-			await target.testEnv.scheduled({ scheduledTime: Date.UTC(2026, 9, 22, 4, 15, 0) })
+			await target.testEnv.scheduled({ scheduledTime: Date.now() })
+			makeDue(target, 'putThenFail')
+			await objectOf(target).triggerAlarm()
 			// The job fails, so no run is recorded to wait for; the object hands it to waitUntil.
 			await Bun.sleep(1000)
 			expect(await objects()).toEqual([])
@@ -333,10 +348,11 @@ describe('the migrations', () => {
 			createContractWorker(() => Promise.resolve({ default: served.implementation }), { migrations })
 			const env = { ...variablesOf(served), IAM: iamBinding(served), [CLOUDFLARE_FILES_BINDING]: files.env['FILES'] }
 			const database = new BunDatabase(':memory:')
+			const pending: Promise<unknown>[] = []
 			const instance = (): ApplicationState => ({
 				storage: bunSqliteStorage(database),
 				blockConcurrencyWhile: (callback) => callback(),
-				waitUntil: () => {},
+				waitUntil: (promise) => void pending.push(promise),
 			})
 			const ledger = () =>
 				database.query<{ bundle: string; name: string; applied_at: string }, []>(
@@ -345,6 +361,8 @@ describe('the migrations', () => {
 			const health = () => new Request(`${ORIGIN}/healthz`, { headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET } })
 
 			expect((await new FabrikaApplication(instance(), env).fetch(health())).status).toBe(200)
+			// The first instance's startup repair settles before the next instance, as an evicted one's would.
+			await Promise.all(pending.splice(0))
 			const applied = ledger()
 			expect(applied.map((row) => `${row.bundle}/${row.name}`)).toContain('app/20261022120000_notes.sql')
 			expect(applied.some((row) => row.bundle === 'fabrika')).toBe(true)

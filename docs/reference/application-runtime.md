@@ -404,7 +404,7 @@ An application environment on Cloudflare runs in one Durable Object
 Worker's `fetch` (`createContractWorker`, `packages/app/src/cloudflare.ts`) removes `X-Fabrika-Tick`, sets
 `X-Fabrika-Proxy-Secret` from `FABRIKA_PROXY_SECRET` and forwards the request to the object that
 `FABRIKA_APPLICATION_OBJECT` names in its `FABRIKA_APPLICATION` binding (`application` without the object variables, as
-an older deploy has); its `scheduled` sends that object the minute tick with the controller's `scheduledTime`. An ops
+an older deploy has); its `scheduled` sends that object the repair tick with the controller's `scheduledTime`. An ops
 request under `/__fabrika/ops/` goes to the object its body names
 ([ADR-0069](../decisions/0069-control-reaches-an-application-environments-object.md)); the Worker authenticates it
 first and the object again, and it never boots the application.
@@ -429,8 +429,20 @@ first and the object again, and it never boots the application.
   (`DatabaseError` `25006`). The object serves other events while a query awaits, so two of its reads may see different
   committed states, as under Postgres's READ COMMITTED, and none sees uncommitted data. Timestamps are UTC ISO text,
   booleans 0 or 1, and the scoped layer answers the same values as on Postgres.
-- **The minute tick** starts every job due in its UTC minute, the file sweep among them, and the jobs' check, each past
-  the 204 answer. A tick without an integer time is 400.
+- **Jobs run on the object's alarm** (ADR-0065 §5). A job's pending work is a row of `fabrika_wakes`: a `cron` row at
+  its next fire, a `kick`, `claim` or `retry` row. Every transaction that changes a wake or a lease arms the alarm at the
+  earliest due wake of a job whose lease is free or expired, or at the earliest expiry of a held lease, and the alarm
+  commits or rolls back with it. `alarm()` does nothing outside the `open` mode; otherwise, for each job with a due
+  wake, it reaps an expired holder, takes the lease without waiting (or marks the job pending) and re-arms in one
+  transaction, and runs the job past its return. A wake is deleted only by the fenced finish of a run that started at
+  or after it, so a crash leaves the wake or a held lease whose expiry is armed. A wake within 50 ms is waited for;
+  an internal error re-arms the alarm 30 s later and is an `AlarmFailed` error event. The file sweep is one of these
+  jobs.
+- **The repair tick** (the Worker's cron trigger, and the object's first event after it boots or reopens) reaps, deletes
+  the wakes of an undeclared job and the cron wake of a changed expression, inserts each missing cron wake at the next
+  fire, keeps an overdue one so missed fires coalesce into one run, and re-arms. It arms the first alarm of an
+  environment nobody called and recovers an alarm whose retries ran out. It answers 204; a tick without an integer time
+  is 400.
 - **Refused on SQLite.** `boot` refuses a site that declares `sql` (`ctx.sql` itself refuses with `sql_dialect`): the
   classifier reads Postgres's grammar, and a Durable Object has no runtime role to bound raw SQL. It refuses a
   `scan: true` file kind, because no scanner runs on Cloudflare. The Cloudflare deploy refuses both before any effect.
@@ -708,8 +720,7 @@ deal_attachments: {
   backup's rows still find their files), by claiming the record first, then deleting the object. A restore cancels the
   tombstones of the keys its rows reference. A failed sweep fails the run (`file_sweep_failed`), and the next run
   finishes it. The grace counts from the file's creation. On
-  Zerops the crontab runs the sweep when the contract declares a file kind; on Cloudflare the object runs it on the
-  Worker's minute tick.
+  Zerops the crontab runs the sweep when the contract declares a file kind; on Cloudflare the object's alarm runs it.
 - **Legacy files.** `0008_files.sql` copies the held files of every file collection of framework 0.6 and earlier into
   `fabrika_files` with their ids, marked `legacy`; the old `fabrika_files_<collection>` tables stay. The sweep never
   deletes a legacy file, and drops the marker once a declared column references it. The application adopts the files
@@ -1283,9 +1294,9 @@ export const contract = app.contract((c) => ({
 }))
 ```
 
-On Cloudflare the Worker's one `* * * * *` cron trigger forwards the minute tick to the environment's Durable Object,
-which starts every job due in that UTC minute and the jobs' check, each past its answer; the leases live in the
-object's SQLite. On Zerops each crontab entry runs `fabrika job run <name>` in the application's container, and the
+On Cloudflare the environment's Durable Object runs each job on its alarm when the job's wake is due, and the Worker's
+cron trigger forwards the repair tick that rebuilds the wakes ([On Cloudflare](#on-cloudflare)); the leases and the
+wakes live in the object's SQLite. On Zerops each crontab entry runs `fabrika job run <name>` in the application's container, and the
 lease lives in the application's Postgres schema. The command boots
 the application exactly as `serveContract` does — the framework variables leave the
 process first — and runs one job:
@@ -1307,6 +1318,11 @@ process first — and runs one job:
    capabilities are refused) and fails. A failed attempt is retried up to `retries`
    times with jittered exponential backoff, under a new generation each time, except an
    attempt that failed with `mail_failed` the one retry rule refuses and a `stopped` one.
+   On Cloudflare a run the alarm started retries durably instead of sleeping: a failed
+   attempt keeps the wakes it owned, moves them to now + backoff and counts the attempt,
+   and the alarm starts the next attempt; past `retries` the cron wake advances to the
+   next fire. One deadline covers the attempt's IAM exchange, its handler and its finish,
+   so a slow exchange leaves the handler only what remains. A kicked run retries inline.
 4. Failures are fixed codes: `timeout`, `lease_lost`, `handler_failed`,
    `query_refused` and `capability_refused` (a framework refusal, chosen by class as a
    request's 5xx is, with the refusal's catalog reason in the result, the log line and the
@@ -1568,7 +1584,7 @@ request behavior:
   Minimal structural types for the execution context, cron, and queues remain in
   this entrypoint. `createContractWorker()` is the Worker of a contract application: its
   `fetch` forwards every request to the environment's Durable Object, `FabrikaApplication`,
-  with the proxy secret, and its `scheduled` forwards the minute tick. The object boots the
+  with the proxy secret, and its `scheduled` forwards the repair tick. The object boots the
   application with its environment, verifying tokens through the `IAM` binding and serving
   the SPA from `ASSETS` ([On Cloudflare](#on-cloudflare)).
 - `@fabrika/app/bun` exports `createBunHandler()`. It binds one `FetchService` to

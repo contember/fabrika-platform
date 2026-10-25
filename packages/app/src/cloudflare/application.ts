@@ -1,6 +1,6 @@
-// The Durable Object an application environment runs in (ADR-0065): it migrates its SQLite, boots the application and
-// serves every request and minute tick its Worker forwards. A plain class, so Bun and Lopata load it without
-// `cloudflare:workers`.
+// The Durable Object an application environment runs in (ADR-0065): it migrates its SQLite, boots the application,
+// serves every request and repair tick its Worker forwards, and runs the jobs from its alarm, which it arms from their
+// durable wakes in the transaction of every change. A plain class, so Bun and Lopata load it without `cloudflare:workers`.
 
 import {
 	FABRIKA_APPLICATION_OBJECT,
@@ -9,10 +9,11 @@ import {
 	FABRIKA_PROXY_SECRET,
 	OPS_PREFIX,
 	type OpsBootFailureContent,
+	type OpsMode,
 	parseApplicationObjects,
 	PROXY_SECRET_HEADER,
 } from '@fabrika/auth-core'
-import { isScopedDatabase } from '@fabrika/db/framework'
+import { isScopedDatabase, type LeaseFence, type Session } from '@fabrika/db/framework'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
 import { openSqlite, type SqliteCursor, type SqliteStorage } from '@fabrika/db/sqlite'
 import { migrateSqlite, type SqliteMigrationBundle, type SqliteMigrationTarget } from '@fabrika/db/sqlite-migrate'
@@ -26,7 +27,7 @@ import { MaintenanceFenceError, maintenanceRefusal, proxySecretDigest, runGated 
 import { type CapturedEnvironment, captureEnvironment } from '../implement/environment.js'
 import type { ContractImplementation } from '../implement/implement.js'
 import type { CrashReporter } from '../jobs/report.js'
-import { isDueAt } from '../jobs/schedule.js'
+import { type JobClock, type JobScheduler, systemClock } from '../jobs/runner.js'
 import { environmentScrubber, type Scrubber } from '../jobs/scrub.js'
 import { bindingAssets, bindingKeySource, bindingMembership, bindingTerminals, bindingWorkloadTokens, connectBindings } from './bindings.js'
 import { type BarrierEvent, MaintenanceBarrier, r2MaintenanceStore } from './maintenance.js'
@@ -50,16 +51,32 @@ export interface ContractWorkerOptions {
 	readonly rejections?: CrashEvents
 	/** What posts a report to Operations' ingest; `fetch` by default. */
 	readonly operationsFetch?: (request: Request) => Promise<Response>
+	/** The jobs' and the alarm's waits and an attempt's deadline; the system clock by default. */
+	readonly clock?: JobClock
 }
 
 /**
- * Marks the Worker's minute tick, with its `scheduledTime`. The Worker's `fetch` removes it from every request it
+ * Marks the Worker's repair tick, with its `scheduledTime`. The Worker's `fetch` removes it from every request it
  * forwards, so only its own `scheduled` handler reaches the tick.
  */
 export const TICK_HEADER = 'X-Fabrika-Tick'
 
-/** What the object needs of its `ctx.storage`; a Durable Object's `DurableObjectStorage` fits it. */
-export type ApplicationStorage = SqliteStorage & OpsStorage
+/** A wake runs at most this early: `Date.now()` is pinned between I/O, so an alarm may start a moment before it (I6). */
+export const ALARM_SLACK_MS = 50
+/** After an internal error the alarm is armed again this far ahead; the repair tick covers a re-arm that failed. */
+export const ALARM_RETRY_MS = 30_000
+
+/** The object's alarm. On a SQLite-backed object `setAlarm` and `deleteAlarm` commit with the open transaction. */
+export interface AlarmStorage {
+	setAlarm(scheduledTime: number): Promise<void>
+	deleteAlarm(): Promise<void>
+}
+
+/**
+ * What the object needs of its `ctx.storage`; a Durable Object's `DurableObjectStorage` fits it. A test double without
+ * an alarm arms none.
+ */
+export type ApplicationStorage = SqliteStorage & OpsStorage & Partial<AlarmStorage>
 
 /** What the object needs of its `DurableObjectState`. */
 export interface ApplicationState {
@@ -280,6 +297,7 @@ async function bootApplication(
 		requireProxySecret: true,
 		// The proxy Worker sets `X-Fabrika-Client-Ip` from `CF-Connecting-IP`, the visitor Cloudflare saw.
 		clientAddress: 'vouched',
+		projectWakes: (transaction) => projectWakes(setup, transaction),
 		...(setup.options.operationsFetch === undefined ? {} : { operationsFetch: setup.options.operationsFetch }),
 	})
 	const booted: Booted = { app, migrates }
@@ -364,12 +382,34 @@ type Outcome = { readonly booted: Booted } | { readonly failure: unknown } | { r
 const BOOT_RETRY_MS = 1_000
 const BOOT_RETRY_CAP_MS = 60_000
 
-/** A job run handed to `waitUntil`; the runner logs and reports its own failures. */
-async function runQuietly(app: ContractApp, name: string): Promise<void> {
+/** The alarm armed at `next`, or deleted when nothing is pending; inside a transaction it commits with it. */
+async function armAlarm(storage: ApplicationStorage, next: Date | null): Promise<void> {
+	if (next === null) {
+		await storage.deleteAlarm?.()
+	} else {
+		await storage.setAlarm?.(next.getTime())
+	}
+}
+
+/**
+ * The runtime's projection of the jobs' wakes and leases (ADR-0065 §5, I1): the store runs it in the transaction of
+ * every change, and it arms the alarm of the object whose event runs from `next`. A throw rolls the change back.
+ */
+async function projectWakes(setup: ApplicationSetup, transaction: Session): Promise<void> {
+	// A wake or lease changes only once the application booted.
+	const booted = setup.booted === null ? null : await setup.booted
+	const scheduler = booted?.app.jobs.scheduler ?? null
+	if (scheduler !== null) {
+		await armAlarm(eventScope().storage, await scheduler.next(transaction))
+	}
+}
+
+/** A run the alarm took the lease for, handed to `waitUntil`; the runner logs and reports its own failures. */
+async function runScheduled(scheduler: JobScheduler, job: string, fence: LeaseFence, clock: JobClock): Promise<void> {
 	try {
-		await app.jobs.run(name)
+		await scheduler.run(job, fence, { clock })
 	} catch {
-		console.error(`fabrika: job '${name}' did not start: driver_failed`)
+		console.error(`fabrika: job '${job}' did not start: driver_failed`)
 	}
 }
 
@@ -394,11 +434,15 @@ export class FabrikaApplication {
 	#failedBoots = 0
 	/** When an event may boot again after a failed boot; until then every request answers the failure. */
 	#retryAt = 0
+	/** Whether this instance ran the scheduler's startup repair, which its first open event does. */
+	#repaired = false
+	readonly #clock: JobClock
 
 	constructor(state: ApplicationState, env: Readonly<Record<string, unknown>>) {
 		this.#state = state
 		this.#env = env
 		this.#setup = registered
+		this.#clock = registered?.options.clock ?? systemClock
 		const secret = env[FABRIKA_PROXY_SECRET]
 		this.#secret = typeof secret === 'string' && secret !== '' ? proxySecretDigest(secret) : null
 		this.#ops = opsAccess(env)
@@ -419,8 +463,10 @@ export class FabrikaApplication {
 			return new Response(null, { status: 404 })
 		}
 		if (new URL(request.url).pathname.startsWith(OPS_PREFIX)) {
+			// The mode before the request: a transition that opens the object arms its alarm, which repairs.
+			let before: OpsMode | null = null
 			// Served from storage alone: it never starts a boot or a retry, and waits for one under way only once authenticated.
-			return await serveOps(request, this.#ops, {
+			const response = await serveOps(request, this.#ops, {
 				storage: this.#state.storage,
 				bucket: this.#env[CLOUDFLARE_FILES_BINDING],
 				recovery: objectRecovery(this.#state),
@@ -430,9 +476,17 @@ export class FabrikaApplication {
 					await this.#outcome
 					return this.#bootFailure
 				},
-				maintenance: (object) => this.#maintenance(object),
+				maintenance: async (object) => {
+					const barrier = await this.#maintenance(object)
+					before ??= barrier.mode
+					return barrier
+				},
 				migrate: () => this.#migrated(),
 			})
+			if (before !== null && before !== 'open') {
+				await this.#reopened()
+			}
+			return response
 		}
 		let barrier: MaintenanceBarrier
 		try {
@@ -442,7 +496,7 @@ export class FabrikaApplication {
 			return maintenanceRefusal()
 		}
 		if (barrier.mode !== 'open' && request.headers.get(TICK_HEADER) !== null) {
-			// The tick runs nothing and writes nothing until the object opens.
+			// The tick repairs nothing and writes nothing until the object opens.
 			return new Response(null, { status: 204 })
 		}
 		if (barrier.mode === 'closed' || barrier.mode === 'inspect') {
@@ -537,36 +591,139 @@ export class FabrikaApplication {
 	}
 
 	#serve(booted: Booted, request: Request): Promise<Response> {
+		const scheduler = booted.app.jobs.scheduler
 		const tick = request.headers.get(TICK_HEADER)
 		if (tick !== null) {
-			return Promise.resolve(this.#tick(booted, tick))
+			return Number.isSafeInteger(Number(tick)) ? this.#tick(scheduler) : Promise.resolve(new Response(null, { status: 400 }))
+		}
+		if (scheduler !== null && !this.#repaired) {
+			this.#state.waitUntil(this.#repairOnce(scheduler))
 		}
 		const exec: RequestExecutionContext = { waitUntil: (promise) => this.#state.waitUntil(promise) }
 		return booted.app.fetch(request, exec)
+	}
+
+	/**
+	 * workerd calls it when the alarm is due (ADR-0065 §5). Outside `open` it runs nothing and arms nothing: the
+	 * maintenance operation owns the object, and reopening arms the alarm again. It never throws, because after six
+	 * failures the platform stops retrying: an internal error arms it again in `ALARM_RETRY_MS` and is reported.
+	 */
+	async alarm(): Promise<void> {
+		let scheduler: JobScheduler | null = null
+		try {
+			if (this.#barrierObject !== null && this.#barrierObject !== this.#object) {
+				// Another object of the environment (the rehearsal) runs no job.
+				return
+			}
+			const barrier = await this.#maintenance(this.#object)
+			if (barrier.mode !== 'open') {
+				return
+			}
+			const outcome = await this.#current('apply')
+			if (!('booted' in outcome)) {
+				throw new Error('the application did not boot')
+			}
+			const booted = outcome.booted.app.jobs.scheduler
+			scheduler = booted
+			if (booted === null) {
+				return
+			}
+			const event = barrier.event()
+			await objectScope.run({ storage: this.#state.storage, event }, () => runGated(event, () => this.#wake(booted)))
+		} catch (error) {
+			console.error('fabrika: the alarm failed: alarm_failed')
+			try {
+				await this.#state.storage.setAlarm?.(Date.now() + ALARM_RETRY_MS)
+			} catch {
+				console.error('fabrika: the alarm could not be armed again; the repair tick arms it')
+			}
+			if (scheduler !== null) {
+				this.#state.waitUntil(scheduler.failed('alarm', error))
+			}
+		}
+	}
+
+	/**
+	 * One alarm: per job, in one transaction, a crashed holder reaped, the lease taken for a due wake (or the pending flag
+	 * set for the run holding it) and the alarm armed from the projection. The runs go to `waitUntil`: one alarm runs at a
+	 * time, and awaiting a long job would hold back every other wake. No wake is consumed here, only by its run's finish.
+	 */
+	async #wake(scheduler: JobScheduler): Promise<void> {
+		await this.#repairOnce(scheduler)
+		const early = await scheduler.earlyBy(ALARM_SLACK_MS)
+		if (early > 0) {
+			await this.#clock.wait(early, new AbortController().signal)
+		}
+		const storage = fencedStorage()
+		for (const job of scheduler.jobs) {
+			const taken = await storage.transaction(async () => {
+				const taken = await scheduler.take(job)
+				await armAlarm(eventScope().storage, await scheduler.next())
+				return taken
+			})
+			if (taken.reaped) {
+				this.#state.waitUntil(scheduler.crashed(job))
+			}
+			if (taken.fence !== null) {
+				this.#state.waitUntil(runScheduled(scheduler, job, taken.fence, this.#clock))
+			}
+		}
+	}
+
+	/** The startup repair once per instance, at its first open event; a failure is reported and the next event repairs. */
+	async #repairOnce(scheduler: JobScheduler): Promise<void> {
+		if (this.#repaired) {
+			return
+		}
+		try {
+			this.#repaired = await scheduler.repair()
+		} catch (error) {
+			this.#repairFailed(scheduler, error)
+		}
+	}
+
+	/** A repair the write fence refused is no failure: a transition closed the object, and reopening repairs. */
+	#repairFailed(scheduler: JobScheduler, error: unknown): void {
+		if (error instanceof MaintenanceFenceError) {
+			return
+		}
+		console.error("fabrika: the job scheduler's repair failed: repair_failed")
+		this.#state.waitUntil(scheduler.failed('repair', error))
+	}
+
+	/** The repair tick: the startup repair again, which also arms the first alarm of an environment nobody has called. */
+	async #tick(scheduler: JobScheduler | null): Promise<Response> {
+		if (scheduler === null) {
+			return new Response(null, { status: 204 })
+		}
+		try {
+			this.#repaired = (await scheduler.repair()) || this.#repaired
+		} catch (error) {
+			this.#repairFailed(scheduler, error)
+			return new Response(null, { status: error instanceof MaintenanceFenceError ? 503 : 500 })
+		}
+		return new Response(null, { status: 204 })
+	}
+
+	/** After a transition that opened this object, its alarm fires at once and repairs: an alarm outside `open` armed nothing. */
+	async #reopened(): Promise<void> {
+		if (this.#barrier === null || this.#barrierObject !== this.#object) {
+			return
+		}
+		try {
+			if ((await this.#barrier).mode !== 'open') {
+				return
+			}
+			this.#repaired = false
+			await this.#state.storage.setAlarm?.(Date.now())
+		} catch {
+			console.error('fabrika: the alarm could not be armed after the object opened; the repair tick arms it')
+		}
 	}
 
 	/** The fixed-size digests are compared in constant time, so neither the length nor a prefix of the secret leaks. */
 	#fromWorker(request: Request): boolean {
 		const presented = request.headers.get(PROXY_SECRET_HEADER) ?? ''
 		return this.#secret !== null && presented !== '' && timingSafeEqual(proxySecretDigest(presented), this.#secret)
-	}
-
-	/** Runs every job due in the tick's UTC minute and the jobs' check, each past the answer. */
-	#tick(booted: Booted, scheduledTime: string): Response {
-		const time = Number(scheduledTime)
-		if (!Number.isSafeInteger(time)) {
-			return new Response(null, { status: 400 })
-		}
-		const at = new Date(time)
-		const jobs = booted.app.jobs.scheduled
-		for (const job of jobs) {
-			if (isDueAt(job.schedule, at)) {
-				this.#state.waitUntil(runQuietly(booted.app, job.name))
-			}
-		}
-		if (jobs.length > 0) {
-			this.#state.waitUntil(booted.app.jobs.check())
-		}
-		return new Response(null, { status: 204 })
 	}
 }

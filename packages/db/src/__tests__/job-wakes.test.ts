@@ -398,10 +398,24 @@ describe.skipIf(!hasPostgres)('a finish tells the wakes what its run did with th
 		await on.wakes.schedule({ job: 'kept', reason: 'cron', dueAt: at(MINUTE), dedupe: 'cron:kept:* * * * *' })
 		await on.wakes.schedule({ job: 'gone', reason: 'cron', dueAt: at(MINUTE), dedupe: 'cron:gone:* * * * *' })
 		await on.wakes.schedule({ job: 'gone', reason: 'kick', dueAt: at(MINUTE) })
-		expect(await on.wakes.reconcile(['kept', 'absent'])).toBe(2)
+		expect(await on.wakes.reconcile([{ job: 'kept', expression: '* * * * *' }, { job: 'absent', expression: '0 3 * * *' }])).toBe(2)
 		expect(await on.wakes.pending('gone')).toEqual([])
 		expect(await on.wakes.pending('kept')).toHaveLength(1)
 		expect(await on.wakes.reconcile([])).toBe(1)
+	})
+
+	test("reconcile deletes a declared job's cron wake of another expression, a retried one included, and keeps its other wakes", async () => {
+		await on.wakes.schedule({ job: 'digest', reason: 'cron', dueAt: at(-MINUTE), dedupe: 'cron:digest:0 * * * *' })
+		await on.wakes.schedule({ job: 'digest', reason: 'kick', dueAt: at(MINUTE) })
+		await on.wakes.schedule({ job: 'digest', reason: 'claim', dueAt: at(MINUTE), dedupe: 'claim:digest' })
+		await on.wakes.schedule({ job: 'other', reason: 'cron', dueAt: at(MINUTE), dedupe: 'cron:other:*/5 * * * *' })
+		expect(await on.leases.finish(await taken(on, 'digest', 'run'), 'failed', { kind: 'retry', at: at(MINUTE) })).toBe(true)
+		expect((await on.wakes.pending('digest')).find((wake) => wake.reason === 'cron')?.attempt).toBe(1)
+		const declared = [{ job: 'digest', expression: '30 * * * *' }, { job: 'other', expression: '*/5 * * * *' }]
+		expect(await on.wakes.reconcile(declared)).toBe(1)
+		expect((await on.wakes.pending('digest')).map((wake) => wake.reason).sort()).toEqual(['claim', 'kick'])
+		expect(await on.wakes.pending('other')).toHaveLength(1)
+		expect(await on.wakes.reconcile(declared)).toBe(0)
 	})
 
 	test("the runtime's projection runs inside every change's transaction, after it, and not for a lost finish", async () => {
@@ -429,7 +443,7 @@ describe.skipIf(!hasPostgres)('a finish tells the wakes what its run did with th
 		expect(await projected.leases.finish(current, 'succeeded')).toBe(true)
 		expect(seen.at(-1)).toBeNull()
 		await projected.wakes.schedule({ job: 'gone', reason: 'kick', dueAt: due })
-		expect(await projected.wakes.reconcile(['nightly'])).toBe(1)
+		expect(await projected.wakes.reconcile([{ job: 'nightly', expression: '0 3 * * *' }])).toBe(1)
 		expect(seen).toHaveLength(before + 3)
 		expect(seen.at(-1)).toBeNull()
 	})

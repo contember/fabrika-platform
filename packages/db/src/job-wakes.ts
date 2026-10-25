@@ -60,8 +60,17 @@ export interface JobWakes {
 	 * held lease (its deadman), whichever is earlier; `null` when neither exists. It may be past. Read in `using` when given.
 	 */
 	next(using?: Session): Promise<Date | null>
-	/** Deletes the wakes of every job not in `declared`, the jobs the contract declares; answers how many it deleted. */
-	reconcile(declared: readonly string[]): Promise<number>
+	/**
+	 * Deletes the wakes of every job not in `declared`, the jobs the contract declares with their cron expressions, and
+	 * each declared job's cron wake whose key names another expression; answers how many it deleted.
+	 */
+	reconcile(declared: readonly DeclaredJob[]): Promise<number>
+}
+
+/** A job the contract declares, and the cron expression its schedule is: its cron wake's key is `cron:<job>:<expression>`. */
+export interface DeclaredJob {
+	readonly job: string
+	readonly expression: string
 }
 
 const W = JOB_WAKES_TABLE
@@ -116,9 +125,13 @@ const SQL_RETRY: DialectTexts = {
 	sqlite: `update ${W} set due_at = cast(?2 as integer), attempt = attempt + 1 where job = ?1 and due_at <= ${SQLITE_RUN_START}`,
 }
 
+// A wake is kept when its job is declared and it is no cron wake, or is the cron wake of the declared expression.
 const SQL_RECONCILE: DialectTexts = {
-	postgres: `delete from ${W} where job not in (select jsonb_array_elements_text($1::jsonb)) returning id`,
-	sqlite: `delete from ${W} where job not in (select value from json_each(?1)) returning id`,
+	postgres: `delete from ${W} where not exists (select 1 from jsonb_to_recordset($1::jsonb) as d(job text, expression text)
+		where d.job = ${W}.job and (${W}.reason <> 'cron' or ${W}.dedupe = 'cron:' || d.job || ':' || d.expression)) returning id`,
+	sqlite: `delete from ${W} where not exists (select 1 from json_each(?1) d
+		where json_extract(d.value, '$.job') = ${W}.job
+			and (${W}.reason <> 'cron' or ${W}.dedupe = 'cron:' || json_extract(d.value, '$.job') || ':' || json_extract(d.value, '$.expression'))) returning id`,
 }
 
 function record(row: unknown): Readonly<Record<string, unknown>> {
@@ -272,13 +285,17 @@ export function jobWakes(runtime: () => DataLayerRuntime): JobWakes {
 			return candidates.length === 0 ? null : new Date(Math.min(...candidates))
 		},
 
-		async reconcile(declared: readonly string[]): Promise<number> {
+		async reconcile(declared: readonly DeclaredJob[]): Promise<number> {
 			if (!Array.isArray(declared)) {
-				throw new QueryRefusedError('invalid_argument', 'the declared jobs are a list of names')
+				throw new QueryRefusedError('invalid_argument', 'the declared jobs are a list of jobs with their expressions')
 			}
-			const names = declared.map((job) => nonEmpty(job, 'a declared job'))
+			const jobs = declared.map((entry: unknown) => {
+				const job: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'job') : undefined
+				const expression: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'expression') : undefined
+				return { job: nonEmpty(job, 'a declared job'), expression: nonEmpty(expression, "a declared job's expression") }
+			})
 			return await session().transaction(async (transaction) => {
-				const removed = await rows(transaction, SQL_RECONCILE, [JSON.stringify(names)])
+				const removed = await rows(transaction, SQL_RECONCILE, [JSON.stringify(jobs)])
 				await project(transaction)
 				return removed.length
 			})

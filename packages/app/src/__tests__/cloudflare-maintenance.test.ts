@@ -52,8 +52,8 @@ const FIXTURE_ROOT = join(import.meta.dir, 'cloudflare-fixture')
 const OPS_KEY = 'ops-key-of-the-environment-0123456789abcdef'
 const STATE_KEY = '__fabrika/ops/application.json'
 const WORKSPACE = { type: 'workspace', value: 'w1' }
-/** A minute tick on the file sweep's schedule (minute 41), when no contract job is due. */
-const SWEEP_TICK = Date.UTC(2026, 9, 25, 4, 41, 0)
+/** The file sweep's name: a framework job, which the alarm runs like the contract's. */
+const SWEEP_JOB = 'fabrika-file-sweep'
 /** A stored timestamp past the sweep's grace and the file retention window. */
 const LONG_AGO = '2020-01-01T00:00:00.000Z'
 
@@ -267,9 +267,10 @@ class InputGate {
 	}
 }
 
-/** The object as its Worker reaches it: each request is an event the input gate delivers. */
+/** The object as its Worker reaches it, and as workerd fires its alarm: each is an event the input gate delivers. */
 interface ObjectStub {
 	fetch(request: Request): Promise<Response>
+	alarm(): Promise<void>
 }
 
 interface Started {
@@ -279,6 +280,8 @@ interface Started {
 	/** What the object handed to `waitUntil`. */
 	readonly pending: Promise<unknown>[]
 	readonly loads: { count: number }
+	/** Every time the object armed its alarm, `null` for a delete, in order. */
+	readonly alarms: (number | null)[]
 	/** Another instance of the same object over the same database and bucket, as after an eviction. */
 	restart(): ObjectStub
 }
@@ -300,6 +303,7 @@ async function start(options: StartOptions = {}): Promise<Started> {
 	const bucket = options.bucket ?? new Bucket()
 	const tokens = workloadTokensFor(implementation)
 	const pending: Promise<unknown>[] = []
+	const alarms: (number | null)[] = []
 	const env = {
 		...frameworkEnvFor(implementation),
 		FABRIKA_PROXY_SECRET: PROXY_SECRET,
@@ -317,16 +321,18 @@ async function start(options: StartOptions = {}): Promise<Started> {
 			storage: {
 				...inner,
 				sql: { exec: inner.sql.exec, databaseSize: 0 },
-				getAlarm: () => Promise.resolve(null),
+				getAlarm: () => Promise.resolve(alarms.at(-1) ?? null),
+				setAlarm: (time) => Promise.resolve(void alarms.push(time)),
+				deleteAlarm: () => Promise.resolve(void alarms.push(null)),
 				transaction: (closure) => gate.hold(() => inner.transaction(closure)),
 			},
 			blockConcurrencyWhile: (callback) => gate.hold(callback),
 			waitUntil: (promise) => void pending.push(promise),
 		}
 		const object = new FabrikaApplication(state, env)
-		return { fetch: (request) => gate.deliver(() => object.fetch(request)) }
+		return { fetch: (request) => gate.deliver(() => object.fetch(request)), alarm: () => gate.deliver(() => object.alarm()) }
 	}
-	return { object: instance(), database, bucket, pending, loads, restart: instance }
+	return { object: instance(), database, bucket, pending, loads, alarms, restart: instance }
 }
 
 function opsRequest(operation: string, body: unknown): Request {
@@ -423,8 +429,12 @@ async function upload(object: ObjectStub, body: BodyInit): Promise<Response> {
 }
 
 const health = () => new Request(`${ORIGIN}/healthz`, { headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET } })
-const tick = (at: number) =>
-	new Request(`${ORIGIN}/`, { method: 'POST', headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET, [TICK_HEADER]: String(at) } })
+const tick = () => new Request(`${ORIGIN}/`, { method: 'POST', headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET, [TICK_HEADER]: String(Date.now()) } })
+
+/** Moves every pending wake of `job` a second into the past, as time passing to its due time would. */
+function makeDue(database: BunDatabase, job: string): void {
+	database.query('update fabrika_wakes set due_at = ? where job = ?').run(Date.now() - 1_000, job)
+}
 
 function noteTitles(database: BunDatabase): string[] {
 	return database.query<{ title: string }, []>('select title from notes order by title').all().map((row) => row.title)
@@ -566,9 +576,13 @@ describe('the write fence and the drain', () => {
 		})
 	})
 
-	test('the drain stops a scheduled run the minute tick started and waits until its handler settled', async () => {
+	test('the drain stops a scheduled run the alarm started and waits until its handler settled', async () => {
 		await keepingProcessEnvironment(async () => {
-			const { object, pending } = await start()
+			const { object, database, pending } = await start()
+			// The first event repairs the jobs' wakes; the cron wake of the job is then made due.
+			expect((await object.fetch(health())).status).toBe(200)
+			await Promise.all(pending.splice(0))
+			makeDue(database, 'slow')
 			const started = Promise.withResolvers<AbortSignal>()
 			const release = Promise.withResolvers<void>()
 			holds.job = (signal) => {
@@ -576,7 +590,7 @@ describe('the write fence and the drain', () => {
 				return release.promise
 			}
 			try {
-				expect((await object.fetch(tick(Date.UTC(2026, 9, 25, 3, 0, 0)))).status).toBe(204)
+				await object.alarm()
 				const signal = await started.promise
 				const closing = transition(object, 1, 'closed')
 				expect(await settles(closing)).toBe(false)
@@ -594,6 +608,7 @@ describe('the write fence and the drain', () => {
 		await keepingProcessEnvironment(async () => {
 			const { object, database, bucket, pending } = await start()
 			expect((await object.fetch(health())).status).toBe(200)
+			await Promise.all(pending.splice(0))
 			// Two tombstones past the retention window, whose objects the sweep deletes one after the other.
 			for (const key of ['attachments/first', 'attachments/second']) {
 				bucket.files.set(key, new TextEncoder().encode(key))
@@ -606,7 +621,8 @@ describe('the write fence and the drain', () => {
 				deleting.resolve()
 				return release.promise
 			}
-			expect((await object.fetch(tick(SWEEP_TICK))).status).toBe(204)
+			makeDue(database, SWEEP_JOB)
+			await object.alarm()
 			await deleting.promise
 			const closing = transition(object, 1, 'closed')
 			expect(await settles(closing)).toBe(false)
@@ -677,10 +693,12 @@ describe('the write fence and the drain', () => {
 		outliving.resolve()
 	})
 
-	test('in read-only and closed the minute tick runs nothing and writes nothing', async () => {
+	test('in read-only and closed the alarm and the repair tick run nothing, write nothing and arm nothing', async () => {
 		await keepingProcessEnvironment(async () => {
-			const { object, database, pending } = await start()
+			const { object, database, pending, alarms } = await start()
 			expect((await object.fetch(health())).status).toBe(200)
+			await Promise.all(pending.splice(0))
+			makeDue(database, 'slow')
 			let ran = 0
 			holds.job = () => {
 				ran++
@@ -690,13 +708,19 @@ describe('the write fence and the drain', () => {
 				for (const [generation, mode] of [[1, 'read-only'], [2, 'closed']] as const) {
 					await acked(await transition(object, generation, mode))
 					const changes = database.query<{ changes: number }, []>('select total_changes() as changes').get()?.changes
-					expect((await object.fetch(tick(Date.UTC(2026, 9, 25, 3, 0, 0)))).status).toBe(204)
+					const armed = alarms.length
+					await object.alarm()
+					expect((await object.fetch(tick())).status).toBe(204)
 					await Promise.all(pending.splice(0))
 					expect(database.query<{ changes: number }, []>('select total_changes() as changes').get()?.changes).toBe(changes)
+					expect(alarms).toHaveLength(armed)
 				}
 				expect(ran).toBe(0)
+				// Opening arms the alarm at once; it repairs and runs the job whose wake is overdue.
+				const opened = Date.now()
 				await acked(await transition(object, 3, 'open'))
-				expect((await object.fetch(tick(Date.UTC(2026, 9, 25, 3, 0, 0)))).status).toBe(204)
+				expect(alarms.at(-1)).toBeGreaterThanOrEqual(opened)
+				await object.alarm()
 				await Promise.all(pending.splice(0))
 				expect(ran).toBe(1)
 			} finally {
@@ -740,12 +764,14 @@ describe('an upload in flight at the switch', () => {
 			const next = restart()
 			await acked(await transition(next, 2, 'open'))
 			database.query('update fabrika_files set created_at = ?').run(LONG_AGO)
-			expect((await next.fetch(tick(SWEEP_TICK))).status).toBe(204)
+			makeDue(database, SWEEP_JOB)
+			await next.alarm()
 			await Promise.all(pending.splice(0))
 			expect(storedFiles(database)).toEqual([{ status: 'live', object_key: committed?.object_key ?? '' }])
 			expect(queuedDeletions(database)).toEqual([interrupted ?? ''])
 			database.query('update fabrika_file_deletions set recorded_at = ?').run(LONG_AGO)
-			expect((await next.fetch(tick(SWEEP_TICK))).status).toBe(204)
+			makeDue(database, SWEEP_JOB)
+			await next.alarm()
 			await Promise.all(pending.splice(0))
 			expect(bucket.deleted).toEqual([interrupted ?? ''])
 			expect(bucket.files.has(interrupted ?? '')).toBe(false)
@@ -949,7 +975,8 @@ describe('cold starts', () => {
 			bucket.set({ generation: 1, mode: 'inspect' })
 			const { object, loads } = await start({ bucket })
 			expect((await object.fetch(health())).status).toBe(503)
-			expect((await object.fetch(tick(Date.UTC(2026, 9, 25, 3, 0, 0)))).status).toBe(204)
+			expect((await object.fetch(tick())).status).toBe(204)
+			await object.alarm()
 			const migrate = await object.fetch(opsRequest('migrate', { object: 'application', generation: 1 }))
 			expect(migrate.status).toBe(409)
 			expect(loads.count).toBe(0)

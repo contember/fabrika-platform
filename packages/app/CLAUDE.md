@@ -58,8 +58,9 @@ bun test src/__tests__/job-types.test.ts        # the job handler mistakes, comp
 bun test src/__tests__/connect.test.ts          # an export and an import, each in its own test kit
 bun test src/__tests__/connect-hardening.test.ts # captured connect methods, a hostile owner, budgets and deadlines
 bun test src/__tests__/export-read-only.test.ts # an export handler cannot write (needs FABRIKA_TEST_POSTGRES_URL)
-bun test src/__tests__/cloudflare-runtime.test.ts          # the environment's Durable Object in Lopata: hop, migrations, ctx.db, tick, R2
+bun test src/__tests__/cloudflare-runtime.test.ts          # the environment's Durable Object in Lopata: hop, migrations, ctx.db, alarm, R2
 bun test src/__tests__/cloudflare-runtime-adapter.test.ts  # the object's bindings and crash reports, over bun:sqlite
+bun test src/__tests__/cloudflare-alarm.test.ts            # the object's alarm and repair tick: crash points, durable retries, the segment deadline
 bun test src/__tests__/cloudflare-ops.test.ts       # the ops channel at the object: authentication, the uniform refusal, inspect
 bun test src/__tests__/cloudflare-maintenance.test.ts  # the barrier: transitions published to R2, the drain, the write fence, cold starts
 bun test src/__tests__/cloudflare-export.test.ts    # the dump producer over bun:sqlite and Lopata's R2: hashes, lossless values, part sizes, refusals
@@ -82,11 +83,11 @@ src/
   agent-skill.ts      @fabrika/app/agent-skill — reads skill/; installedAppAgentSkill; renderAgentsFile (node:fs)
   fetch.ts            FetchService and RequestExecutionContext: what both runtime adapters serve
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker: the Worker that forwards each
-                      request and the minute tick to the environment's Durable Object, and an ops request to the
+                      request and the repair tick to the environment's Durable Object, and an ops request to the
                       object its body names; re-exports FabrikaApplication
   cloudflare/         what @fabrika/app/cloudflare runs (ADR-0065)
     application.ts    FabrikaApplication, the environment's one Durable Object: verifies the hop, migrates its SQLite,
-                      boots the application once per isolate, serves requests and the tick; registerApplication
+                      boots the application once per isolate, serves requests, the alarm and the repair tick; registerApplication
     bindings.ts       the bindings the object boots with, read structurally: IAM (keys, membership, workload tokens),
                       ASSETS, FABRIKA_CONNECT_<IMPORT>
     r2-files.ts       r2FileObjectStore: the FileObjectStore port over the FABRIKA_FILES bucket (conditional puts,
@@ -225,7 +226,7 @@ src/
     sniff.ts          the declared type checked against the first bytes
     treatment.ts      FileDownload and the file treatment of ADR-0022
   jobs/               c.cron at runtime; bound by boot, run by `fabrika job run <name>` (runContractJob), on
-                      Cloudflare by the object at the minute tick (isDueAt)
+                      Cloudflare by the object's alarm over the durable wakes (JobScheduler)
     types.ts          JobContext, JobHandler, JobHandlersOf: handlers.jobs.<name>
     runner.ts         bindJobs, the run: lease, attempts, timeout, retries, reports, a site's kick; the framework's own jobs
     schedule.ts       five-field cron in UTC: the due minutes and the period
@@ -1038,7 +1039,7 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   their text verbatim, so their checksums stay the files'. `createContractWorker(load, { migrations })` registers the
   loader; the Worker's `fetch` removes `X-Fabrika-Tick` (`TICK_HEADER`), sets the proxy secret and forwards the request
   to the object `FABRIKA_APPLICATION_OBJECT` names in `FABRIKA_APPLICATION` (`application` without the object
-  variables, an older deploy); its `scheduled` sends the tick there with the `scheduledTime`. Without
+  variables, an older deploy); its `scheduled` sends the repair tick there with the `scheduledTime`. Without
   `FABRIKA_PROXY_SECRET` or the binding it forwards nothing.
 - **An ops request reaches only framework code and never boots the application** (ADR-0069, `cloudflare/ops.ts`). The
   Worker first runs `opsAuthenticated` (the ops row's method and `X-Fabrika-Endpoint` from `opsProxyRow()`, the key's
@@ -1073,9 +1074,14 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   so two objects in one isolate never share a database. It captures the environment without `IAM` and `ASSETS`, and boots with
   `requireProxySecret`, `clientAddress: 'vouched'` (the proxy Worker sets the client address from `CF-Connecting-IP`),
   the R2 file store (`r2-files.ts`) and IAM's binding for keys, membership and workload tokens (`bindings.ts`).
-- **Jobs run on the minute tick.** The object runs every contract job whose schedule `isDueAt` the tick's UTC minute,
-  and the file sweep when the contract has file kinds, each in `waitUntil`, then `jobs.check()`; a kick runs in the
-  object after its commit. A scanning file kind does not boot there (`sqliteProblems`).
+- **Jobs run on the object's alarm** (ADR-0065 §5, `jobs.scheduler` in `runner.ts`). Every wake or lease change
+  arms the alarm in its own transaction (`BootOptions.projectWakes`). `alarm()` does nothing outside `open`; otherwise,
+  per job with a due wake, it reaps, takes the lease or marks the job pending, and re-arms in one transaction, then
+  runs the job in `waitUntil`. It consumes no wake (the fenced finish does), waits out a wake within `ALARM_SLACK_MS`,
+  and never throws: an internal error re-arms `ALARM_RETRY_MS` later and is reported as `AlarmFailed`. A run it started
+  retries durably (`finish(fence, { kind: 'retry', at })`), a kicked run inline. The repair tick, and the object's first
+  event after a boot or a reopen, reap, reconcile the cron wakes against the declared jobs and their expressions, and
+  re-arm. A kick runs in the object after its commit. A scanning file kind does not boot there (`sqliteProblems`).
 - **Every handler holds the object's transaction.** workerd resets an object whose transaction runs about 30 s, so the
   provider refuses a procedure's or a webhook's `timeoutMs` above 25 s (`CLOUDFLARE_MAX_HANDLER_MS`).
 
@@ -1089,7 +1095,7 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   running when the attempt ends (`attemptOnce` calls `cancelInFlight` before the runner touches the lease again). A
   retry renews the lease to a new generation before its backoff. Never run a handler outside `attemptOnce`.
 - **Lease times are the database's**: the runner passes durations, never a timestamp, so a container whose clock is
-  minutes off cannot take a live lease over. `JobClock` has only the waits and the jitter.
+  minutes off cannot take a live lease over. `JobClock` has the waits, the jitter and the clock an attempt's one deadline (IAM exchange, handler, finish) is measured on.
 - **Kicks coalesce on one shared flag: at most one run and one pending, across instances.** A kick takes the lease
   with `tryAcquire`, which never waits for a lock: it shares the request pool, and a run's attempt holds the lease
   row as its fence while it writes. Without the lease it sets `fabrika_job_kicks.pending` (`markPending`, a row no

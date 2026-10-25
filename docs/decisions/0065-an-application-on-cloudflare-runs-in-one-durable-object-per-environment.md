@@ -39,7 +39,7 @@ to the object for every statement pays that latency per statement, and cannot ho
 SQLite database. The Worker only forwards each request to it.**
 
 1. **One object per `<app>@<env>`.** The application's Worker exports the object class; its `fetch` forwards every
-   request to the object named by the environment, and its `scheduled` handler forwards the minute's tick. The object
+   request to the object named by the environment, and its `scheduled` handler forwards the repair tick (§5). The object
    boots the application once and runs every handler, job and webhook delivery itself, so a transaction never crosses
    a network hop.
 2. **The invocation transaction is `ctx.storage.transaction`.** `@fabrika/db` runs on a `DatabaseEngine` of its
@@ -63,9 +63,25 @@ SQLite database. The Worker only forwards each request to it.**
    the object verifies, so another Worker on the account that binds the exported class reaches nothing. Control issues
    the secret per environment because the provider declares the `ControlProvider.applicationHopSecret` capability; the
    deploy writes it as a Worker secret.
-5. **Jobs run on the Worker's cron tick.** The provider gives the Worker one `* * * * *` trigger when the contract
-   has a job; the object runs each job whose schedule is due that minute, and a kick runs in the object after its
-   commit.
+5. **Jobs run on the object's alarm, armed from durable wakes.** Every job's pending work is a row of
+   `fabrika_wakes` (a `cron` row at its next fire per declared job; `kick`, `claim` and `retry` rows beside it). The
+   alarm is a projection, never state of its own: the earliest due wake of a job whose lease is free or expired, or the
+   earliest expiry of a held lease (the deadman). Every transaction that changes a wake or a lease recomputes it and
+   calls `setAlarm` or `deleteAlarm` there; on a SQLite-backed object the alarm commits and rolls back with the
+   transaction. `alarm()` returns without re-arming outside the `open` maintenance mode; otherwise, per job with a due
+   wake and in one transaction, it reaps an expired holder, takes the lease without waiting (or marks the job pending)
+   and re-arms, then hands each taken lease to `waitUntil`. It consumes no wake: a wake is deleted only in the
+   transaction of the fenced finish of a run that started at or after it, so a crash at any point leaves the wakes or a
+   held lease whose expiry is armed. It never throws, because the platform stops retrying an alarm after six failures:
+   on an internal error it re-arms 30 s later and reports `AlarmFailed` to Operations. A wake within 50 ms is waited
+   for, because `Date.now()` is pinned between I/O, so no run starts before its wake. A run the alarm started retries
+   durably: a failed attempt keeps its wakes, moves them to now + backoff and counts the attempt; past the job's
+   `retries` it is reported failed and its cron wake advances to the next fire. Each attempt is one segment with one
+   deadline over the IAM exchange, the handler and the finish. The Worker's cron trigger forwards the repair tick (and
+   the object repairs once when it boots): it reaps, deletes the wakes of an undeclared job or of a changed expression,
+   inserts each missing cron wake at the next fire, keeps an overdue one so missed fires coalesce into one run, and
+   re-arms. It arms the first alarm of an environment nobody called and recovers an alarm whose retries ran out. A kick
+   runs in the object after its commit, inline, as on Bun.
 6. **Files are R2 objects.** The provider binds a bucket per application environment; the object's file store is R2.
    A kind that scans its uploads is refused on Cloudflare until a scanner runs there.
 7. **`ctx.sql` is refused on SQLite.** On Postgres the runtime role is the boundary under an application's raw SQL

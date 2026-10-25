@@ -97,6 +97,8 @@ interface Started extends Observed {
 	readonly loads: { count: number }
 	readonly worker: ContractWorker
 	readonly env: Readonly<Record<string, unknown>>
+	/** What the object handed to `waitUntil`: the first event's startup repair among it. */
+	readonly pending: Promise<unknown>[]
 }
 
 interface StartOptions {
@@ -122,7 +124,12 @@ async function start(options: StartOptions = {}): Promise<Started> {
 	options.seed?.(observed.database)
 	const tokens = workloadTokensFor(served.implementation)
 	const unused = () => Promise.reject(new Error('not called'))
-	const state: ApplicationState = { storage: observed.storage, blockConcurrencyWhile: (callback) => callback(), waitUntil: () => {} }
+	const pending: Promise<unknown>[] = []
+	const state: ApplicationState = {
+		storage: observed.storage,
+		blockConcurrencyWhile: (callback) => callback(),
+		waitUntil: (promise) => void pending.push(promise),
+	}
 	const env = {
 		...frameworkEnvFor(served.implementation),
 		...served.variables,
@@ -139,7 +146,7 @@ async function start(options: StartOptions = {}): Promise<Started> {
 		[FABRIKA_APPLICATION_OBJECT]: 'application',
 		[FABRIKA_APPLICATION_OBJECTS]: 'application,clone',
 	}
-	return { ...observed, object: new FabrikaApplication(state, env), loads, worker, env }
+	return { ...observed, object: new FabrikaApplication(state, env), loads, worker, env, pending }
 }
 
 const health = () => new Request(`${ORIGIN}/healthz`, { headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET } })
@@ -220,9 +227,10 @@ describe('the ops channel at the environment object', () => {
 	test("inspect serves the projection of the object's storage, and writes nothing", async () => {
 		await keepingProcessEnvironment(async () => {
 			const alarm = Date.UTC(2026, 9, 24, 12, 0, 0)
-			const { object, writes } = await start({ alarm, seed: MIXED_CASE_TABLE })
-			// Boots the application, which migrates the object's SQLite.
+			const { object, writes, pending } = await start({ alarm, seed: MIXED_CASE_TABLE })
+			// Boots the application, which migrates the object's SQLite, and repairs the jobs' wakes past the answer.
 			expect((await object.fetch(health())).status).toBe(200)
+			await Promise.all(pending)
 			const before = { ...writes }
 			const view = parseOpsView(await inspected(object))
 			expect(writes).toEqual(before)
@@ -361,7 +369,7 @@ describe('an ops request never boots the application', () => {
 		})
 	})
 
-	test('the minute tick boots a cold instance', async () => {
+	test('the repair tick boots a cold instance', async () => {
 		await keepingProcessEnvironment(async () => {
 			const { object, loads } = await start()
 			const tick = new Request(`${ORIGIN}/`, {
