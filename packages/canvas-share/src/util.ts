@@ -22,7 +22,7 @@ export function json(data: unknown, init: ResponseInit = {}): Response {
 		headers: {
 			'Content-Type': 'application/json',
 			...CORS_HEADERS,
-			...(init.headers || {}),
+			...init.headers,
 		},
 	})
 }

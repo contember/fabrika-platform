@@ -200,6 +200,6 @@ function rewriteUploadPaths(md: string): string {
 
 export function MarkdownPreview({ text }: { text: string }) {
 	const html = useMemo(() => marked.parse(rewriteUploadPaths(text), { async: false }) as string, [text])
-	// biome-ignore lint/security/noDangerouslySetInnerHtml: Canvas modules already execute as code in this document.
+	// oxlint-disable-next-line react/no-danger -- Canvas modules already execute as code in this document.
 	return <div className="prose-canvas font-body text-body text-text-primary leading-relaxed" dangerouslySetInnerHTML={{ __html: html }} />
 }

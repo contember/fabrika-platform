@@ -1,0 +1,55 @@
+{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"plugins": ["typescript", "unicorn", "oxc", "import"],
+	"categories": {
+		"correctness": "error"
+	},
+	"ignorePatterns": [
+		"**/node_modules/**",
+		"**/dist/**",
+		"**/.tsc-out/**",
+		"**/.mine/**",
+		".claude/**",
+		"**/*.js",
+		"**/*.jsx",
+		"**/*.mjs",
+		"**/*.cjs"
+	],
+	"rules": {
+		"no-unused-vars": [
+			"error",
+			{ "args": "none", "caughtErrors": "none", "ignoreRestSiblings": true, "varsIgnorePattern": "^_" }
+		],
+		"no-unused-private-class-members": "off",
+		"typescript/no-explicit-any": "error",
+		"unicorn/no-thenable": "off",
+		"unicorn/no-useless-spread": "off",
+		"unicorn/no-new-array": "off",
+		"no-console": ["error", { "allow": ["info", "warn", "error", "debug", "log"] }]
+	},
+	"overrides": [
+		{
+			"files": [
+				"**/*.tsx",
+				"packages/annotations/src/**",
+				"packages/app/src/react/**",
+				"packages/builder/ui/**",
+				"packages/canvas-kernel/src/**",
+				"packages/dashboard/src/**",
+				"packages/ui/src/**"
+			],
+			"plugins": ["react"],
+			"rules": {
+				"react/no-danger": "error",
+				"react/rules-of-hooks": "error",
+				"react/exhaustive-deps": "off",
+				"react/refs": "off",
+				"react/set-state-in-effect": "off",
+				"react/purity": "off",
+				"react/globals": "off",
+				"react/immutability": "off",
+				"react/static-components": "off"
+			}
+		}
+	]
+}

@@ -43,7 +43,9 @@ describe('the connection factory cannot be replaced by an application module', (
 			return original(options)
 		}
 		expect(Object.isFrozen(Database)).toBe(true)
+		// oxlint-disable-next-line no-import-assign -- The test is the attack: it asserts that the namespace refuses the write.
 		expect(Reflect.set(postgres, 'openPostgres', wrapper)).toBe(false)
+		// oxlint-disable-next-line no-import-assign -- The test is the attack: it asserts that the namespace refuses the write.
 		expect(Reflect.defineProperty(postgres, 'openPostgres', { value: wrapper })).toBe(false)
 		expect(Reflect.defineProperty(Database, 'fromDialect', { value: wrapper })).toBe(false)
 		expect(Reflect.set(Database, 'fromEngine', wrapper)).toBe(false)

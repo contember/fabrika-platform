@@ -43,7 +43,7 @@ function buildFileContext(range: Range): AnnotationContext {
 }
 
 function HighlightedLine({ html }: { html: string }) {
-	// biome-ignore lint/security/noDangerouslySetInnerHtml: highlight.js escapes the file text and adds only its own span markup.
+	// oxlint-disable-next-line react/no-danger -- highlight.js escapes the file text and adds only its own span markup.
 	return <code className="py-px" dangerouslySetInnerHTML={{ __html: html }} />
 }
 

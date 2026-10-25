@@ -3,7 +3,7 @@
 The application checker (D11 of the framework plan): a small syntactic checker over an application's source
 tree. It stops the honest shortcuts a coding agent takes around the framework. It is not a boundary: an aliased or
 indirect call can escape a rule, and the runtime checks stay the real defence. A form spelled out directly must not
-escape. Biome stays the linter for this repository's own code; this package is for applications. Assumes the root
+escape. oxlint stays the linter for this repository's own code; this package is for applications. Assumes the root
 CLAUDE.md.
 
 Published (`publishConfig.access: public`), because applications run it in their own build. It also holds the

@@ -237,8 +237,8 @@ function tomlString(value: string): string {
 }
 
 function tomlMultiline(value: string): string {
-	const escaped = value.replace(/\\/g, '\\\\').replace(/\"\"\"/g, '\\"\\"\\"')
-	return `\"\"\"\n${escaped}\"\"\"`
+	const escaped = value.replace(/\\/g, '\\\\').replace(/"""/g, '\\"\\"\\"')
+	return `"""\n${escaped}"""`
 }
 
 function installManagedFile(

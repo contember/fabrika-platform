@@ -35,16 +35,16 @@ function stripTerminalCruft(value: string): string {
 	return (
 		value
 			// Full OSC sequences: ESC ] … (BEL or ST). e.g. an OSC 10/11 dynamic-color response.
-			// biome-ignore lint/suspicious/noControlCharactersInRegex: matching terminal escape bytes by design.
+			// oxlint-disable-next-line no-control-regex -- matching terminal escape bytes by design.
 			.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
 			// Bare OSC 10/11 color responses whose ESC introducer readline's keypress parser ate
 			// (`1X;rgb:RRRR/GGGG/BBBB`, optional leading `]`). Never appears in a real entered value.
 			.replace(/\]?1[0-9];rgb:[0-9a-fA-F]{1,4}(?:\/[0-9a-fA-F]{1,4}){2}/g, '')
 			// CSI sequences (bracketed-paste markers, cursor-position responses ESC[N;MR, SGR, …).
-			// biome-ignore lint/suspicious/noControlCharactersInRegex: matching terminal escape bytes by design.
+			// oxlint-disable-next-line no-control-regex -- matching terminal escape bytes by design.
 			.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
 			// Any stray C0/C1 control char + DEL.
-			// biome-ignore lint/suspicious/noControlCharactersInRegex: matching terminal control bytes by design.
+			// oxlint-disable-next-line no-control-regex -- matching terminal control bytes by design.
 			.replace(/[\x00-\x1f\x7f]/g, '')
 	)
 }

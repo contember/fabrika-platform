@@ -23,7 +23,7 @@ import type { ZeropsImportProject, ZeropsImportService } from './schema.generate
 import type { ZeropsProjectSpec, ZeropsResourceContext, ZeropsServiceSpec, ZeropsSourceTarget } from './types'
 
 /** The ONLY value fabrika ever writes for `envIsolation`, at either level. Not a default — an assertion. */
-export const ENV_ISOLATION: 'service' = 'service'
+export const ENV_ISOLATION = 'service'
 
 /**
  * The ONLY value fabrika ever writes for `override`, on EVERY service class including managed ones.
