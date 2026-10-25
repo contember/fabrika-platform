@@ -14,6 +14,7 @@ import { testDatabase } from '@fabrika/db/testing-sqlite'
 import { SQL } from 'bun'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
+import { runFixedStatement, sessionOf } from '../../../db/src/database'
 import { tables } from './cloudflare-fixture/src/db/tables'
 import { vocabulary } from './cloudflare-fixture/src/vocabulary'
 
@@ -159,6 +160,33 @@ for (const driver of drivers) {
 			// The run scheduled its fire again from the real now: the same occurrence, which the kit already ran.
 			expect((await wakes.pending('later')).map((wake) => wake.dueAt.getTime())).toEqual([cron?.dueAt.getTime() ?? Number.NaN])
 			await expect(kit.runDueJobs({ within: -1 })).rejects.toThrow('takes milliseconds, 0 or more')
+		})
+
+		/**
+		 * Makes a statement fail that moves a wake below `below` (epoch ms), as a hasten that meets a driver fault: a partial
+		 * index whose expression cannot be computed. Answers what heals it.
+		 */
+		async function failHastens(below: number): Promise<() => Promise<void>> {
+			const session = sessionOf({ database: fresh.database })
+			const expression = fresh.database.dialect === 'sqlite' ? `json(job || '{')` : '(due_at / 0)'
+			await runFixedStatement(session, `create index fail_hasten on fabrika_wakes (${expression}) where due_at < ${Math.floor(below)}`, [])
+			return async () => {
+				await runFixedStatement(session, 'drop index fail_hasten', [])
+			}
+		}
+
+		test('a hasten that failed leaves the cron fire ahead, and the next call runs it, once', async () => {
+			const { kit, wakes } = kitOver()
+			expect(await kit.runDueJobs()).toEqual([])
+			const [cron] = await wakes.pending('later')
+			const heal = await failHastens((cron?.dueAt.getTime() ?? 0) - 30 * MINUTE)
+			await expect(kit.runDueJobs({ within: 3 * HOUR })).rejects.toThrow()
+			expect(runs).toEqual([])
+			expect((await wakes.pending('later')).map((wake) => wake.dueAt.getTime())).toEqual([cron?.dueAt.getTime() ?? Number.NaN])
+			await heal()
+			expect(await kit.runDueJobs({ within: 3 * HOUR })).toEqual([{ job: 'later', result: { status: 'succeeded', attempts: 1 } }])
+			expect(await kit.runDueJobs({ within: 3 * HOUR })).toEqual([])
+			expect(runs).toEqual([{ job: 'later', attempt: 1 }])
 		})
 
 		test('a wake written through the store fires within reach; the failed run retries on a later call, once', async () => {

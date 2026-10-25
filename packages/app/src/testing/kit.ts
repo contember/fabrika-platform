@@ -727,19 +727,22 @@ export function bootTestKit<C extends AnyContract>(
 		const { jobs: leases, wakes } = frameworkTablesOf(app.database)
 		const now = (await leases.now()).getTime()
 		const ahead: string[] = []
+		const fires: string[] = []
 		for (const job of scheduler.jobs) {
 			for (const wake of await wakes.pending(job)) {
 				const due = wake.dueAt.getTime()
 				const fire = wake.reason === 'cron' ? `${wake.dedupe}@${due}` : null
 				if (due > now && due <= now + within && (fire === null || !ranEarly.has(fire))) {
 					ahead.push(wake.id)
-					if (fire !== null) ranEarly.add(fire)
+					if (fire !== null) fires.push(fire)
 				}
 			}
 		}
 		if (ahead.length > 0) {
 			await wakes.hasten(ahead)
 		}
+		// Only once the wakes moved: a hasten that failed left them ahead, and the next call moves them again.
+		for (const fire of fires) ranEarly.add(fire)
 		const taken: { readonly job: string; readonly fence: LeaseFence }[] = []
 		for (const job of scheduler.jobs) {
 			const { fence, reaped } = await scheduler.take(job)
