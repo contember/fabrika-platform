@@ -10,6 +10,8 @@ import {
 	type ControlRpcContract,
 	type CursorList,
 	DATA_OPERATION_MAX_PAGE_SIZE,
+	type DataBackupDto,
+	type DataBackupScheduleDto,
 	type DataOperationDto,
 	type DataOperationListInput,
 	dataOperationListInputSchema,
@@ -20,6 +22,7 @@ import {
 	type MailRuleDto,
 	type RecoverDataOperationInput,
 	recoverDataOperationInputSchema,
+	type SetDataBackupScheduleInput,
 	type StartDataOperationInput,
 	startDataOperationInputSchema,
 } from '@fabrika/control-contract'
@@ -84,6 +87,7 @@ import {
 	listApprovalsUseCase,
 	setEnvironmentProtectionUseCase,
 } from './approval/api'
+import { listBackups, toBackupScheduleDto } from './backups'
 import { describeConnector } from './connectors'
 import { consoleAccess } from './console-access'
 import {
@@ -254,6 +258,7 @@ const setMailRuleInput = z.object({
 
 const dataOperationId = z.object({ operationId: nonEmpty }).strict()
 const dataEnvironment = appEnvironment.strict()
+const setBackupScheduleInput = appEnvironment.extend({ daily: z.boolean() }).strict()
 
 export const controlRpcRouter = createControlRpcRouter(buildControlRpcDeps)
 
@@ -470,6 +475,13 @@ export function createControlRpcRouter(
 			recover: rpc.procedure.input(recoverDataOperationInputSchema).mutation(({ ctx, input }) =>
 				controlCall(() => recoverDataOperationUseCase(dataContext(ctx), input))
 			),
+			backups: rpc.router({
+				list: rpc.procedure.input(dataOperationListInputSchema).query(({ ctx, input }) => controlCall(() => listBackupsUseCase(dataContext(ctx), input))),
+				schedule: rpc.procedure.input(dataEnvironment).query(({ ctx, input }) => controlCall(() => readBackupScheduleUseCase(dataContext(ctx), input))),
+				setSchedule: rpc.procedure.input(setBackupScheduleInput).mutation(({ ctx, input }) =>
+					controlCall(() => setBackupScheduleUseCase(dataContext(ctx), input))
+				),
+			}),
 		}),
 	})
 
@@ -708,6 +720,33 @@ async function listDataOperationsUseCase(c: DataUseCaseContext, input: DataOpera
 	return { items, nextCursor: items.length === limit && last !== undefined ? last.id : null }
 }
 
+/** Newest first; a dump past its retention is listed as expired. */
+async function listBackupsUseCase(c: DataUseCaseContext, input: DataOperationListInput): Promise<CursorList<DataBackupDto>> {
+	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_READ, input.appId, input.env)
+	const limit = input.limit ?? DATA_OPERATION_MAX_PAGE_SIZE
+	const items = await listBackups(c, input, { ...(input.before === undefined ? {} : { before: input.before }), limit }, nowSeconds())
+	const last = items.at(-1)
+	return { items, nextCursor: items.length === limit && last !== undefined ? last.id : null }
+}
+
+async function readBackupScheduleUseCase(c: DataUseCaseContext, input: { appId: string; env: string }): Promise<DataBackupScheduleDto> {
+	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_READ, input.appId, input.env)
+	return toBackupScheduleDto(input, await c.repositories.backups.getSchedule(input.appId, input.env))
+}
+
+/** Opting out stops the daily backup only; the pre-migration backup always runs (ADR-0070 §8). */
+async function setBackupScheduleUseCase(c: DataUseCaseContext, input: SetDataBackupScheduleInput): Promise<DataBackupScheduleDto> {
+	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
+	const schedule = await c.repositories.backups.setSchedule(input.appId, input.env, input.daily, runActor(c.auth))
+	await c.auth.audit({
+		action: 'data.backups.schedule',
+		resourceType: 'app_env',
+		resourceId: `${input.appId}/${input.env}`,
+		metadata: { appId: input.appId, env: input.env, daily: input.daily },
+	})
+	return toBackupScheduleDto(input, schedule)
+}
+
 async function getDataOperationUseCase(c: DataUseCaseContext, id: string): Promise<DataOperationDto> {
 	const row = await c.repositories.dataOperations.get(id)
 	if (row === null || !canAtCoordinates(c.auth, CONTROL_ACTIONS.DATA_READ, row.app_id, row.env)) fail(404, 'data operation not found')
@@ -763,6 +802,7 @@ function dataOperationResult(outcome: DataOperationOutcome): DataOperationDto {
 	if (outcome.reason === 'operation_running') fail(409, 'an operation of this environment is still running: recover it first')
 	if (outcome.reason === 'not_recoverable') fail(409, 'that operation is not one this environment can recover')
 	if (outcome.reason === 'superseded') fail(409, 'a newer operation of this environment supersedes that one')
+	if (outcome.reason === 'not_open') fail(409, 'the environment is not open: open it before a backup')
 	failUnavailable(outcome.reason)
 }
 

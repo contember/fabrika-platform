@@ -8,6 +8,7 @@
 // sha, and the sweep is a guarded UPDATE by age.
 
 import { enqueueUnsettledNamespaces } from './api/namespaces'
+import type { BackupScheduleSummary } from './backups'
 import type { ControlRegistryRepository } from './db'
 import type { DevIdleSummary } from './dev/service'
 import type { Env } from './env'
@@ -34,6 +35,8 @@ export interface MaintenanceSummary {
 	mail: MailMaintenanceSummary
 	/** `dev` environments stopped after their idle period, and stops that failed. */
 	dev: DevIdleSummary
+	/** Daily backups carried on and started (ADR-0070 §8). */
+	backups: BackupScheduleSummary
 }
 
 /** Seams a test drives. Production passes neither and gets the real clock + the global `fetch`. */
@@ -50,6 +53,8 @@ export interface MaintenanceOptions {
 	releases?: () => Promise<OperationsReleaseProjectionSummary>
 	/** A composition root whose provider runs `dev` environments injects their idle stop. */
 	devIdle?: () => Promise<DevIdleSummary>
+	/** A composition root whose provider serves the ops channel injects the daily backups (`runBackupSchedule`). */
+	backups?: () => Promise<BackupScheduleSummary>
 }
 
 /**
@@ -101,7 +106,17 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (mail.requeued > 0 || mail.purged > 0) console.info(`mail maintenance: requeued=${mail.requeued} purged=${mail.purged}`)
 	const dev = options.devIdle === undefined ? { stopped: 0, failed: 0 } : await options.devIdle()
 	if (dev.stopped > 0 || dev.failed > 0) console.info(`dev environments: stopped=${dev.stopped} failed=${dev.failed}`)
-	return { poll, reconcile, swept, operations, releases, mail, dev }
+	// Last: a pass spends at most `BACKUP_PASS_MS` on dump requests, and what it leaves running the next pass continues.
+	const backups = options.backups === undefined
+		? { continued: 0, started: 0, succeeded: 0, failed: 0, unfinished: 0, skipped: 0, errored: 0 }
+		: await options.backups()
+	if (backups.continued > 0 || backups.started > 0 || backups.errored > 0) {
+		console.info(
+			`backups: continued=${backups.continued} started=${backups.started} succeeded=${backups.succeeded} failed=${backups.failed} `
+				+ `unfinished=${backups.unfinished} skipped=${backups.skipped} errored=${backups.errored}`,
+		)
+	}
+	return { poll, reconcile, swept, operations, releases, mail, dev, backups }
 }
 
 /**

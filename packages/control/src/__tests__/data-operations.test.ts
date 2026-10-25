@@ -20,6 +20,7 @@ import {
 	type DataOperationDeps,
 	httpOpsTransport,
 	type OpsAnswer,
+	type OpsDataAnswer,
 	type OpsFencedAnswer,
 	type OpsInspection,
 	type OpsTarget,
@@ -88,6 +89,14 @@ class FakeObject implements OpsTransport {
 	}
 
 	migrate(): Promise<OpsFencedAnswer<never>> {
+		return Promise.resolve({ kind: 'unavailable', reason: 'invalid_answer' })
+	}
+
+	export(): Promise<OpsDataAnswer<never>> {
+		return Promise.resolve({ kind: 'unavailable', reason: 'invalid_answer' })
+	}
+
+	import(): Promise<OpsDataAnswer<never>> {
 		return Promise.resolve({ kind: 'unavailable', reason: 'invalid_answer' })
 	}
 

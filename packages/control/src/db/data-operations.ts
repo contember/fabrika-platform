@@ -141,6 +141,15 @@ export class DataOperationRepository {
 		return results
 	}
 
+	/** Every environment's running operations of `kind`, oldest first. */
+	async listRunning(kind: DataOperationKind, limit: number): Promise<DataOperationRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM app_env_data_operations WHERE state = 'running' AND kind = ? ORDER BY id LIMIT ?`)
+			.bind(kind, limit)
+			.all<DataOperationRow>()
+		return results
+	}
+
 	/**
 	 * The environment's next generation, in one atomic upsert. Unfenced: a generation nobody records is a harmless gap,
 	 * and no number is ever handed out twice.

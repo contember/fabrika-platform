@@ -679,14 +679,19 @@ export type {
 	UpdateNamespaceInput,
 } from './rpc.js'
 export type {
+	DataBackupDto,
+	DataBackupScheduleDto,
+	DataBackupState,
 	DataOperationDto,
 	DataOperationKind,
 	DataOperationListInput,
 	DataOperationResolution,
 	DataOperationState,
 	DataOperationStep,
+	DataRehearsalOutcome,
 	MaintenanceMode,
 	RecoverDataOperationInput,
+	SetDataBackupScheduleInput,
 	StartDataOperationInput,
 } from './rpc.js'
 export { DATA_OPERATION_MAX_PAGE_SIZE, dataOperationListInputSchema, recoverDataOperationInputSchema, startDataOperationInputSchema } from './rpc.js'

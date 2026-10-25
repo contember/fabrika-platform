@@ -285,6 +285,12 @@ export interface ControlRpcContract {
 		content: RpcProcedure<AppEnvironmentInput, OpsContentView>
 		start: RpcProcedure<StartDataOperationInput, DataOperationDto>
 		recover: RpcProcedure<RecoverDataOperationInput, DataOperationDto>
+		/** Consistent backups (ADR-0070): listed and their schedule read under `data.read`, the schedule set under `data.manage`. */
+		backups: {
+			list: RpcProcedure<DataOperationListInput, CursorList<DataBackupDto>>
+			schedule: RpcProcedure<AppEnvironmentInput, DataBackupScheduleDto>
+			setSchedule: RpcProcedure<SetDataBackupScheduleInput, DataBackupScheduleDto>
+		}
 	}
 }
 
@@ -386,3 +392,53 @@ export const recoverDataOperationInputSchema = z.object({
 }).strict()
 
 export type RecoverDataOperationInput = z.infer<typeof recoverDataOperationInputSchema>
+
+/** `succeeded` only once its rehearsal passed. */
+export type DataBackupState = 'running' | 'succeeded' | 'failed'
+
+export type DataRehearsalOutcome = 'pending' | 'passed' | 'failed'
+
+/**
+ * One consistent backup as `data.read` shows it: identifiers, states, codes, sizes and timestamps. It carries no free
+ * text and no content; downloading a dump is `data.content.read`.
+ */
+export interface DataBackupDto {
+	/** The dump id. */
+	readonly id: string
+	readonly appId: string
+	readonly env: string
+	/** The `backup` operation that took it. */
+	readonly operationId: string
+	/** The object it was taken from. */
+	readonly object: string
+	readonly state: DataBackupState
+	/** A code once it failed, never an error message. */
+	readonly errorCode: string | null
+	readonly createdAt: number
+	readonly finishedAt: number | null
+	/** The object's bookmark when the dump began. */
+	readonly bookmark: string | null
+	/** Set once the upload completed. */
+	readonly sizeBytes: number | null
+	readonly parts: number | null
+	/** How many tables the manifest lists. */
+	readonly tables: number | null
+	readonly rehearsal: DataRehearsalOutcome
+	/** The code the rehearsal failed with. */
+	readonly rehearsalCode: string | null
+	/** Past its 30-day retention: never offered for a restore. */
+	readonly expired: boolean
+}
+
+/** Whether the environment takes daily backups: on unless it opted out. Opting out leaves the pre-migration backup. */
+export interface DataBackupScheduleDto {
+	readonly appId: string
+	readonly env: string
+	readonly daily: boolean
+	/** When it was last set; `null` while it keeps the default. */
+	readonly updatedAt: number | null
+}
+
+export interface SetDataBackupScheduleInput extends AppEnvironmentInput {
+	readonly daily: boolean
+}

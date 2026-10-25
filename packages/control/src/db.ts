@@ -1,3 +1,16 @@
+export {
+	type BackupCompletion,
+	type BackupHistory,
+	type BackupInput,
+	type BackupPartRow,
+	BackupRepository,
+	type BackupRow,
+	type BackupScheduleRow,
+	type BackupState,
+	type RehearsalOutcome,
+	type RehearsalProgress,
+	type RehearsalStep,
+} from './db/backups'
 export { BuilderConnectionRepository } from './db/builder-connections'
 export { type ControlRepositories, createControlRepositories } from './db/composition'
 export {

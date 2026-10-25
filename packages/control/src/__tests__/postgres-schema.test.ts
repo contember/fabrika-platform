@@ -160,6 +160,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0018_data_operations.sql' },
 			{ bundle: 'control', name: '0019_ops_keys.sql' },
 			{ bundle: 'control', name: '0020_run_superseded_by.sql' },
+			{ bundle: 'control', name: '0021_backups.sql' },
 		])
 	})
 
@@ -193,6 +194,9 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'app_env_data_operations',
 				'app_env_data_generations',
 				'app_env_ops_keys',
+				'app_env_backups',
+				'app_env_backup_parts',
+				'app_env_backup_schedules',
 			]
 		) {
 			expect(names).toContain(table)
