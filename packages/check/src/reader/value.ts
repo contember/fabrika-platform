@@ -83,7 +83,7 @@ type Role = { readonly callback: Kit } | { readonly procedures: Kit } | null
 const callbackKit = (kind: BuilderKind): Kit => (kind === 'shell' ? 'shell' : kind === 'endpoints' ? 'endpoints' : 'surface')
 
 /** The fields `defineVocabulary` copies from its argument, in its order. */
-const VOCABULARY_SECTIONS = ['app', 'dimensions', 'actions', 'roles', 'locale', 'displayName', 'mail'] as const
+const VOCABULARY_SECTIONS = ['app', 'dimensions', 'actions', 'roles', 'locale', 'displayName', 'mail', 'members', 'directory', 'terminal'] as const
 
 const ALLOWED_VALUE = 'object and array literals, strings, numbers, booleans, null, the c.* and z.* builders, and const imports of such values'
 
