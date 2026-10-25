@@ -471,6 +471,35 @@ describe.skipIf(!hasPostgres)('a finish tells the wakes what its run did with th
 	})
 })
 
+describe.skipIf(!hasPostgres)("hasten, the test kit's, on Postgres", () => {
+	test("moves each named wake that is not yet due to the database's now; an overdue one and an unnamed one stay", async () => {
+		const later = await wakes.schedule({ job: 'hasten-moves', reason: 'kick', dueAt: at(HOUR) })
+		const overdue = await wakes.schedule({ job: 'hasten-moves', reason: 'cron', dueAt: at(-MINUTE), dedupe: 'cron:hasten-moves:0 3 * * *' })
+		const unnamed = await wakes.schedule({ job: 'hasten-moves', reason: 'kick', dueAt: at(2 * HOUR) })
+		const before = (await leases.now()).getTime()
+		expect(await wakes.hasten([later.id, overdue.id])).toBe(1)
+		const after = (await leases.now()).getTime()
+		const pending = await wakes.pending('hasten-moves')
+		expect(pending.map((wake) => wake.id)).toEqual([overdue.id, later.id, unnamed.id])
+		expect(pending[0]?.dueAt).toEqual(overdue.dueAt)
+		expect(pending[1]?.dueAt.getTime()).toBeGreaterThanOrEqual(before)
+		expect(pending[1]?.dueAt.getTime()).toBeLessThanOrEqual(after)
+		expect(pending[1]).toMatchObject({ reason: 'kick', attempt: 0, dedupe: null })
+		expect(pending[2]?.dueAt).toEqual(unnamed.dueAt)
+		expect(await wakes.hasten([later.id])).toBe(0)
+		await expect(wakes.hasten([''])).rejects.toThrow(QueryRefusedError)
+	})
+
+	test('a run that starts after it owns the hastened wake: its finish consumes it and leaves the later one', async () => {
+		const hastened = await wakes.schedule({ job: 'hasten-owned', reason: 'kick', dueAt: at(HOUR) })
+		const later = await wakes.schedule({ job: 'hasten-owned', reason: 'kick', dueAt: at(2 * HOUR) })
+		await wakes.hasten([hastened.id])
+		const run = await lease('hasten-owned')
+		expect(await leases.finish(run, 'succeeded')).toBe(true)
+		expect(await dues('hasten-owned')).toEqual([later.dueAt.getTime()])
+	})
+})
+
 describe.skipIf(!hasPostgres)('the wakes migration', () => {
 	test('an existing schema that holds the earlier framework files applies 0009 alone, and the runtime role writes the table', async () => {
 		const appId = `wakes-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`

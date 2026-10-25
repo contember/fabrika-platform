@@ -11,6 +11,7 @@ import { QueryRefusedError } from './errors'
 import type { DialectTexts, JobOutcome, LeaseChange, LeaseProjection } from './job-leases'
 import { JOB_LEASES_TABLE, JOB_WAKES_TABLE } from './migrations'
 import { SQLITE_NOW_FORMAT } from './migrations-sqlite'
+import { refuseInProduction } from './production'
 import type { DataLayerRuntime } from './store'
 
 export const WAKE_REASONS = ['cron', 'kick', 'claim', 'retry'] as const
@@ -65,6 +66,11 @@ export interface JobWakes {
 	 * each declared job's cron wake whose key names another expression; answers how many it deleted.
 	 */
 	reconcile(declared: readonly DeclaredJob[]): Promise<number>
+	/**
+	 * The test kit's: moves each wake `ids` names that is not yet due to the database's now, so the scheduler takes it
+	 * now; an overdue one stays. Answers how many it moved. Refused in a process that serves an application.
+	 */
+	hasten(ids: readonly string[]): Promise<number>
 }
 
 /** A job the contract declares, and the cron expression its schedule is: its cron wake's key is `cron:<job>:<expression>`. */
@@ -137,6 +143,14 @@ const SQL_RECONCILE: DialectTexts = {
 	sqlite: `delete from ${W} where not exists (select 1 from json_each(?1) d
 		where json_extract(d.value, '$.job') = ${W}.job
 			and (${W}.reason <> 'cron' or ${W}.dedupe = 'cron:' || json_extract(d.value, '$.job') || ':' || json_extract(d.value, '$.expression'))) returning id`,
+}
+
+// Only a wake still ahead moves: moving an overdue one to now would postpone it.
+const SQL_HASTEN: DialectTexts = {
+	postgres: `update ${W} set due_at = ${PG_EPOCH_MS('now()')}
+		where id::text in (select jsonb_array_elements_text($1::jsonb)) and due_at > ${PG_EPOCH_MS('now()')} returning id::text as id`,
+	sqlite: `update ${W} set due_at = ${SQLITE_EPOCH_MS(SQLITE_NOW)}
+		where id in (select value from json_each(?1)) and due_at > ${SQLITE_EPOCH_MS(SQLITE_NOW)} returning id`,
 }
 
 function record(row: unknown): Readonly<Record<string, unknown>> {
@@ -319,6 +333,19 @@ export function jobWakes(runtime: () => DataLayerRuntime): JobWakes {
 				const removed = await rows(transaction, SQL_RECONCILE, [JSON.stringify(jobs)])
 				await project(transaction)
 				return removed.length
+			})
+		},
+
+		async hasten(ids: readonly string[]): Promise<number> {
+			refuseInProduction("the wakes store's hasten")
+			if (!Array.isArray(ids)) {
+				throw new QueryRefusedError('invalid_argument', 'the wakes to hasten are a list of wake ids')
+			}
+			const named = ids.map((id: unknown) => nonEmpty(id, 'a wake id'))
+			return await session().transaction(async (transaction) => {
+				const moved = await rows(transaction, SQL_HASTEN, [JSON.stringify(named)])
+				await project(transaction)
+				return moved.length
 			})
 		},
 	})

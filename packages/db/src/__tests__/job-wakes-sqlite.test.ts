@@ -330,6 +330,47 @@ describe('reconcile', () => {
 	})
 })
 
+describe("hasten, the test kit's", () => {
+	test("moves each named wake that is not yet due to the database's now; an overdue one and an unnamed one stay", async () => {
+		const later = await wakes.schedule({ job: 'remind', reason: 'kick', dueAt: at(HOUR) })
+		const overdue = await wakes.schedule({ job: 'remind', reason: 'cron', dueAt: at(-MINUTE), dedupe: 'cron:remind:0 3 * * *' })
+		const unnamed = await wakes.schedule({ job: 'remind', reason: 'kick', dueAt: at(2 * HOUR) })
+		const before = (await leases.now()).getTime()
+		expect(await wakes.hasten([later.id, overdue.id])).toBe(1)
+		const after = (await leases.now()).getTime()
+		const pending = await wakes.pending('remind')
+		expect(pending.map((wake) => wake.id)).toEqual([overdue.id, later.id, unnamed.id])
+		expect(pending[0]?.dueAt).toEqual(overdue.dueAt)
+		expect(pending[1]?.dueAt.getTime()).toBeGreaterThanOrEqual(before)
+		expect(pending[1]?.dueAt.getTime()).toBeLessThanOrEqual(after)
+		expect(pending[1]).toMatchObject({ reason: 'kick', attempt: 0, dedupe: null })
+		expect(pending[2]?.dueAt).toEqual(unnamed.dueAt)
+		expect(await wakes.hasten([later.id])).toBe(0)
+	})
+
+	test('a run that starts after it owns the hastened wake: its finish consumes it and leaves the later one', async () => {
+		const hastened = await wakes.schedule({ job: 'remind', reason: 'kick', dueAt: at(HOUR) })
+		const later = await wakes.schedule({ job: 'remind', reason: 'kick', dueAt: at(2 * HOUR) })
+		await wakes.hasten([hastened.id])
+		const run = await lease('remind')
+		expect(await leases.finish(run, 'succeeded')).toBe(true)
+		expect(await dues('remind')).toEqual([later.dueAt.getTime()])
+	})
+
+	test("runs the runtime's projection in its transaction, and refuses a list that is not of ids", async () => {
+		const seen: (number | null)[] = []
+		const projected = layer(async (transaction) => {
+			seen.push((await projected.wakes.next(transaction))?.getTime() ?? null)
+		})
+		const wake = await projected.wakes.schedule({ job: 'remind', reason: 'kick', dueAt: at(HOUR) })
+		expect(seen).toEqual([wake.dueAt.getTime()])
+		expect(await projected.wakes.hasten([wake.id])).toBe(1)
+		expect(seen).toHaveLength(2)
+		expect(seen.at(-1)).toBe((await wakes.pending('remind'))[0]?.dueAt.getTime() ?? Number.NaN)
+		await expect(wakes.hasten([''])).rejects.toThrow(QueryRefusedError)
+	})
+})
+
 /** The holder of `job`'s lease as `transaction` sees it. */
 async function holderIn(transaction: Session, job: string): Promise<unknown> {
 	const [row] = await runFixedStatement(transaction, 'select holder from fabrika_job_leases where job = ?1', [job])

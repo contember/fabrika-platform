@@ -31,6 +31,7 @@ import {
 	workloadKeyVariable,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
+import { frameworkTablesOf, type LeaseFence } from '@fabrika/db/framework'
 import { refuseInProduction } from '@fabrika/db/production'
 import { MemoryEmailSender } from '@fabrika/email/memory'
 import type { FileObjectStore } from '@fabrika/platform'
@@ -198,6 +199,15 @@ export interface TestKit<C extends AnyContract> {
 	/** Waits for the work requests left running: the runs a site's `ctx.kick` sent, a failure's report. */
 	drain(): Promise<void>
 	/**
+	 * Runs every job with a wake due now or within `within` ms (0 by default) once, as the Cloudflare object's alarm
+	 * runs it: the startup repair first (each job's cron wake at its next fire), then each wake ahead moved to now, then
+	 * each due job under its lease, a failed run's retry moved to its backoff. It first waits for the runs a site's
+	 * `ctx.kick` sent. Nothing else fires on its own. Handlers keep real time: only the wakes move, never the clock, so
+	 * a run again schedules its cron fire from now, and a later call skips a cron fire this kit already ran early. Needs
+	 * the application's data layer.
+	 */
+	runDueJobs(options?: { readonly within?: number }): Promise<readonly DueJobRun[]>
+	/**
 	 * The stand-in for every job's transport: what reached it (`accepted`, `handoffs`) and its faults (`refuse`,
 	 * `unavailable`, `unreachable`, `loseAnswers`, `during`, `heal`). Each message carries the transport key,
 	 * `transportMailKey(kit.mailKeyScope, key)`. Under `mail: 'none'` nothing reaches it.
@@ -216,6 +226,12 @@ export interface TestKit<C extends AnyContract> {
 	 * challenge whatever the contract's `cost`, so solving one takes milliseconds.
 	 */
 	solveChallenge(procedure: object): Promise<string>
+}
+
+/** A job `runDueJobs` ran, and its run's result. */
+export interface DueJobRun {
+	readonly job: string
+	readonly result: JobRunResult
 }
 
 /** The names of the contract's cron jobs. */
@@ -693,6 +709,46 @@ export function bootTestKit<C extends AnyContract>(
 		return application.jobs.run(name, runOptions)
 	}
 
+	// The cron fires `runDueJobs` ran early, as `<key>@<due>`: a run schedules the same fire again from the real now.
+	const ranEarly = new Set<string>()
+	const runDueJobs = async (dueOptions: { readonly within?: number } = {}): Promise<readonly DueJobRun[]> => {
+		const within = dueOptions.within ?? 0
+		if (!Number.isFinite(within) || within < 0) {
+			throw new TypeError('runDueJobs({ within }) takes milliseconds, 0 or more')
+		}
+		const scheduler = application.jobs.scheduler
+		if (scheduler === null || app.database === null) {
+			throw new Error(
+				"runDueJobs runs the jobs over the application's data layer: serve(contract, { database: scoped(tables) }) and testKit(app, { database })",
+			)
+		}
+		await drain()
+		await scheduler.repair()
+		const { jobs: leases, wakes } = frameworkTablesOf(app.database)
+		const now = (await leases.now()).getTime()
+		const ahead: string[] = []
+		for (const job of scheduler.jobs) {
+			for (const wake of await wakes.pending(job)) {
+				const due = wake.dueAt.getTime()
+				const fire = wake.reason === 'cron' ? `${wake.dedupe}@${due}` : null
+				if (due > now && due <= now + within && (fire === null || !ranEarly.has(fire))) {
+					ahead.push(wake.id)
+					if (fire !== null) ranEarly.add(fire)
+				}
+			}
+		}
+		if (ahead.length > 0) {
+			await wakes.hasten(ahead)
+		}
+		const taken: { readonly job: string; readonly fence: LeaseFence }[] = []
+		for (const job of scheduler.jobs) {
+			const { fence, reaped } = await scheduler.take(job)
+			if (reaped) await scheduler.crashed(job)
+			if (fence !== null) taken.push({ job, fence })
+		}
+		return await Promise.all(taken.map(async ({ job, fence }) => ({ job, result: await scheduler.run(job, fence) })))
+	}
+
 	const acceptInvitation = (invitationId: string, person?: LabelledTestCaller): LabelledTestCaller => {
 		if (standIn === null) {
 			throw new Error('this kit was given its own membership transport, so its IAM holds no invitation to accept')
@@ -725,6 +781,7 @@ export function bootTestKit<C extends AnyContract>(
 			iam,
 			runJob,
 			drain,
+			runDueJobs,
 			acceptInvitation,
 			mail,
 			mailKeyScope,
