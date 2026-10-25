@@ -65,6 +65,7 @@ import type {
 	DataOperationInput,
 	DataOperationResolution,
 	DataOperationRow,
+	RunRow,
 } from './db'
 import { acquireLease, type Lease, type LeaseClock, runLeaseKey } from './lease'
 
@@ -112,7 +113,7 @@ export interface OpsTransport {
 }
 
 export interface DataOperationDeps {
-	repositories: Pick<ControlRepositories, 'dataOperations' | 'backups'>
+	repositories: Pick<ControlRepositories, 'dataOperations' | 'backups' | 'runs'>
 	lock: DeployLocks
 	leaseClock?: LeaseClock
 	ops: OpsTransport
@@ -143,7 +144,16 @@ export type DriveResult = 'succeeded' | 'failed' | 'interrupted' | 'paused' | 'l
  */
 export const BACKUP_FAILED_CODE = 'backup_failed'
 export const REHEARSAL_FAILED_CODE = 'rehearsal_failed'
-const REOPENED_CODES: ReadonlySet<string | null> = new Set([BACKUP_FAILED_CODE, REHEARSAL_FAILED_CODE])
+/** A migration's run ended before any provider accepted it, so nothing was deployed and the object was opened again. */
+export const DEPLOY_NOT_STARTED_CODE = 'deploy_not_started'
+const REOPENED_CODES: ReadonlySet<string | null> = new Set([BACKUP_FAILED_CODE, REHEARSAL_FAILED_CODE, DEPLOY_NOT_STARTED_CODE])
+
+/**
+ * The codes a migration fails with while the object stays restricted, for an operator to recover: its run failed after
+ * a provider accepted it, or the object refused the migration or failed to boot.
+ */
+export const DEPLOY_FAILED_CODE = 'deploy_failed'
+export const MIGRATION_FAILED_CODE = 'migration_failed'
 
 export type DataOperationOutcome =
 	| { readonly kind: 'busy' }
@@ -218,6 +228,79 @@ export async function startBackup(deps: DataOperationDeps, input: StartBackupInp
 		await driver.backupOf(created)
 		return await driver.run(created.id, false)
 	})
+}
+
+export interface StartMigrationInput {
+	readonly appId: string
+	readonly env: string
+	/** An opaque principal id: the run's actor. */
+	readonly actor: string
+	/** The run whose deploy brings the migration: it is the operation's own deploy. */
+	readonly runId: string
+	/** Deploys that run under the operation's lease, and settles it as far as it can; the run's row then says how it ended. */
+	readonly deploy: () => Promise<void>
+}
+
+/**
+ * The migration phase of a deploy (ADR-0069 §3, ADR-0070 §8), under the lease the run already holds, which stays the
+ * run's: `read-only` at a fresh generation, the backup at that generation and its rehearsal, the run's deploy, the
+ * `migrate` request at the published generation, then `open` at a new one. A failed backup or rehearsal opens the object
+ * again before anything is deployed.
+ */
+export async function startMigration(deps: DataOperationDeps, lease: Lease, input: StartMigrationInput): Promise<DataOperationOutcome> {
+	const driver = new OperationDriver(deps, lease, input, input.deploy)
+	const latest = await latestOperation(deps, input)
+	if (latest?.state === 'running') return { kind: 'refused', reason: 'operation_running' }
+	if ((await recordedMaintenance(deps, input)) !== 'open') return { kind: 'refused', reason: 'not_open' }
+	lease.assertHeld()
+	const generation = await deps.repositories.dataOperations.allocateGeneration(input.appId, input.env)
+	const created = await driver.create({
+		id: uuidv7(),
+		appId: input.appId,
+		env: input.env,
+		kind: 'migrate',
+		runId: input.runId,
+		step: 'restrict',
+		targetMode: 'read-only',
+		generation,
+		actor: input.actor,
+	})
+	await driver.backupOf(created)
+	return await driver.run(created.id, false)
+}
+
+/** The bundle `@fabrika/app`'s object applies the application's own migrations under (`cloudflare/application.ts`). */
+const APPLICATION_BUNDLE = 'app'
+
+/** The candidate's application migrations the object has not applied, or why the object could not say. */
+export type PendingMigrations =
+	| { readonly kind: 'known'; readonly pending: readonly string[] }
+	| { readonly kind: 'unknown'; readonly reason: OpsUnavailable }
+
+/**
+ * Which of the candidate's migration files the environment's object has not applied: the ones its build bundles (each
+ * `.sql` file directly in `db/migrations`) against the object's own ledger. The ledger, not the published snapshot,
+ * because a published file has not run when its version never booted or a restore rewound the database. A candidate
+ * without a migration asks nothing; without a transport the answer is unknown.
+ */
+export async function pendingMigrations(
+	ops: OpsTransport | undefined,
+	target: OpsTarget,
+	candidate: readonly { readonly name: string }[],
+	signal: AbortSignal,
+): Promise<PendingMigrations> {
+	const bundled = candidate.map(({ name }) => name).filter((name) => name.endsWith('.sql') && !name.includes('/'))
+	if (bundled.length === 0) return { kind: 'known', pending: [] }
+	// An installation without a vault holds no ops key, so it reaches no object.
+	if (ops === undefined) return { kind: 'unknown', reason: 'no_channel' }
+	for (let attempt = 0;; attempt++) {
+		const answer = await ops.inspect(target, { object: OBJECT, content: false }, signal)
+		if (answer.kind === 'ok') {
+			const applied = new Set(answer.value.view.migrations.filter((row) => row.bundle === APPLICATION_BUNDLE).map((row) => row.name))
+			return { kind: 'known', pending: bundled.filter((name) => !applied.has(name)) }
+		}
+		if (answer.reason !== 'unreachable' || attempt + 1 >= ATTEMPTS) return { kind: 'unknown', reason: answer.reason }
+	}
 }
 
 export interface StartRecoveryInput {
@@ -383,7 +466,13 @@ class OperationDriver {
 	/** What this holder saw each object acknowledge, so a step after a successor's fence does not publish it twice. */
 	private readonly acknowledged = new Map<string, OpsPublishedState>()
 
-	constructor(private readonly deps: DataOperationDeps, private readonly lease: Lease, private readonly target: OpsTarget) {}
+	constructor(
+		private readonly deps: DataOperationDeps,
+		private readonly lease: Lease,
+		private readonly target: OpsTarget,
+		/** The deploy of a migration's run, which only the holder running that run has; a successor reads the run's row. */
+		private runDeploy?: () => Promise<void>,
+	) {}
 
 	private get records() {
 		return this.deps.repositories.dataOperations
@@ -413,7 +502,14 @@ class OperationDriver {
 		this.lease.assertHeld()
 		if (found !== null) return found
 		const created = await this.backups.create(
-			{ id: uuidv7(), appId: operation.app_id, env: operation.env, operationId: operation.id, object: OBJECT },
+			{
+				id: uuidv7(),
+				appId: operation.app_id,
+				env: operation.env,
+				operationId: operation.id,
+				object: OBJECT,
+				preMigration: operation.kind === 'migrate',
+			},
 			this.lease.fence(),
 		)
 		if (created !== null) return created
@@ -470,6 +566,7 @@ class OperationDriver {
 		}
 		if (row.kind === 'recovery') return await this.recoveryStep(row)
 		if (row.kind === 'backup') return await this.backupStep(row)
+		if (row.kind === 'migrate') return await this.migrateStep(row)
 		throw new Error(`data operation step ${row.kind}/${row.step} is not driven by this release`)
 	}
 
@@ -567,6 +664,123 @@ class OperationDriver {
 			default:
 				throw new Error(`a backup has no step ${row.step}`)
 		}
+	}
+
+	/**
+	 * A migration phase: `restrict` publishes `read-only`; `backup` takes the dump at that generation; `verify` rehearses
+	 * it while the object stays restricted; `deploy` runs the operation's run, or a successor reads how it ended; `migrate`
+	 * sends the request at the published generation; `open` publishes a new one. A failed dump or rehearsal, and a run
+	 * that ended before a provider accepted it, go to `open` and fail the operation once the object acknowledged it. A
+	 * failed deploy or migration fails the operation where it stands, the object restricted, for an operator to recover.
+	 */
+	private async migrateStep(row: DataOperationRow): Promise<Step> {
+		const backup = await this.backupOf(row)
+		const reopen = async (): Promise<Step> => ({
+			kind: 'next',
+			row: await this.advance(row, { step: 'open', targetMode: 'open', generation: await this.allocate() }),
+		})
+		switch (row.step) {
+			case 'restrict': {
+				const published = await this.publish(row, 'read-only')
+				if (published.kind === 'refused') {
+					this.lease.assertWritten(await this.backups.fail(backup.id, published.code, this.lease.fence()))
+					return await this.failed(row, published.code)
+				}
+				if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
+				return { kind: 'next', row: await this.advance(published.row, { step: 'backup' }) }
+			}
+			case 'backup': {
+				const dumped = await this.dump(row, backup)
+				if (dumped.kind === 'paused' || dumped.kind === 'interrupted') return { kind: 'done', result: dumped.kind }
+				if (dumped.kind === 'failed') {
+					this.lease.assertWritten(await this.backups.fail(backup.id, dumped.code, this.lease.fence()))
+					return await reopen()
+				}
+				return { kind: 'next', row: await this.advance(row, { step: 'verify' }) }
+			}
+			case 'verify': {
+				// The rehearsal fences `rehearsal` at the record's generation, the one the object is published at.
+				const rehearsed = await this.rehearse(row, backup)
+				if (rehearsed.kind === 'paused' || rehearsed.kind === 'interrupted') return { kind: 'done', result: rehearsed.kind }
+				if (rehearsed.kind === 'failed') {
+					this.lease.assertWritten(await this.backups.rehearsalFailed(backup.id, rehearsed.code, this.lease.fence()))
+					return await reopen()
+				}
+				this.lease.assertWritten(await this.backups.succeed(backup.id, this.lease.fence()))
+				return { kind: 'next', row: await this.advance(await this.require(row.id), { step: 'deploy' }) }
+			}
+			case 'deploy': {
+				const deploy = this.runDeploy
+				this.runDeploy = undefined
+				if (deploy !== undefined) await deploy()
+				const run = await this.migrationRun(row)
+				if (run.status === 'succeeded') return { kind: 'next', row: await this.advance(row, { step: 'migrate' }) }
+				if (run.status !== 'failed') return { kind: 'done', result: 'interrupted' }
+				// No provider accepted the run, so the object still runs the version it backed up.
+				if (run.external_run_id === null) return await reopen()
+				return await this.failed(row, DEPLOY_FAILED_CODE)
+			}
+			case 'migrate': {
+				// A successor's fence or an adopted refusal moved the generation: the request names the published one.
+				const restricted = await this.publish(row, 'read-only')
+				if (restricted.kind === 'refused') return await this.failed(row, restricted.code)
+				if (restricted.kind !== 'acked') return { kind: 'done', result: restricted.kind }
+				const migrated = await this.migrate(restricted.row)
+				if (migrated.kind === 'failed') return await this.failed(restricted.row, migrated.code)
+				if (migrated.kind !== 'ok') return { kind: 'done', result: migrated.kind }
+				return {
+					kind: 'next',
+					row: await this.advance(restricted.row, { step: 'open', targetMode: 'open', generation: await this.allocate() }),
+				}
+			}
+			case 'open': {
+				const published = await this.publish(row, 'open')
+				if (published.kind === 'refused') {
+					if (backup.state === 'running') this.lease.assertWritten(await this.backups.fail(backup.id, published.code, this.lease.fence()))
+					return await this.failed(row, published.code)
+				}
+				if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
+				const reopened = await this.reopenedCode(row, backup)
+				if (reopened !== null) return await this.failed(published.row, reopened)
+				await this.finish(published.row)
+				return { kind: 'done', result: 'succeeded' }
+			}
+			default:
+				throw new Error(`a migration has no step ${row.step}`)
+		}
+	}
+
+	/** Why a migration reached `open` without migrating, or `null` once its backup passed and its run succeeded. */
+	private async reopenedCode(row: DataOperationRow, backup: BackupRow): Promise<string | null> {
+		if (backup.rehearsal === 'failed') return REHEARSAL_FAILED_CODE
+		if (backup.state === 'failed') return backup.error_code === NOT_SERVED_CODE ? NOT_SERVED_CODE : BACKUP_FAILED_CODE
+		return (await this.migrationRun(row)).status === 'succeeded' ? null : DEPLOY_NOT_STARTED_CODE
+	}
+
+	private async migrationRun(row: DataOperationRow): Promise<RunRow> {
+		if (row.run_id === null) throw new Error('a migration names no run')
+		const run = await this.deps.repositories.runs.getRun(row.run_id)
+		this.lease.assertHeld()
+		if (run === null) throw new Error("a migration's run vanished")
+		return run
+	}
+
+	/**
+	 * The `migrate` request at the record's generation. A lost answer repeats it. The object answers a failed boot with a
+	 * 500, which reads as unreachable, so once the attempts are spent its view says whether the boot failed.
+	 */
+	private async migrate(row: DataOperationRow): Promise<DataResult<null>> {
+		for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+			this.lease.assertHeld()
+			const answer = await this.deps.ops.migrate(this.target, { object: OBJECT, generation: row.generation }, this.lease.signal)
+			this.lease.assertHeld()
+			if (answer.kind === 'ok') return answer.value.generation === row.generation ? { kind: 'ok', value: null } : { kind: 'interrupted' }
+			if (answer.kind === 'stale') return { kind: 'failed', code: 'stale_generation' }
+			if (answer.reason === 'not_served') return { kind: 'failed', code: MIGRATION_FAILED_CODE }
+			if (answer.reason !== 'unreachable') return { kind: 'interrupted' }
+		}
+		const probe = await this.inspect()
+		return probe.kind === 'ok' && probe.value.view.bootFailure !== null ? { kind: 'failed', code: MIGRATION_FAILED_CODE } : { kind: 'interrupted' }
 	}
 
 	/**

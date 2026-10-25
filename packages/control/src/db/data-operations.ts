@@ -40,6 +40,8 @@ export interface DataOperationRow {
 	recovers_operation_id: string | null
 	/** A recovery's choice after its closed fence; `null` for every other kind. */
 	resolution: DataOperationResolution | null
+	/** The run a `migrate` operation deploys, of the same environment; `null` for every other kind. */
+	run_id: string | null
 }
 
 export interface DataOperationFields {
@@ -57,8 +59,9 @@ export interface DataOperationFields {
 export type DataOperationInput =
 	& DataOperationFields
 	& (
-		| { kind: Exclude<DataOperationKind, 'recovery'> }
+		| { kind: Exclude<DataOperationKind, 'recovery' | 'migrate'> }
 		| { kind: 'recovery'; recovers: { operationId: string; resolution: DataOperationResolution } }
+		| { kind: 'migrate'; runId: string }
 	)
 
 export interface DataOperationAdvance {
@@ -101,8 +104,8 @@ export class DataOperationRepository {
 			this.d1
 				.prepare(`INSERT INTO app_env_data_operations
 					(id, app_id, env, kind, step, target_mode, generation, state, error_code, actor, created_at, updated_at, finished_at,
-						recovers_operation_id, resolution)
-				SELECT ?, ?, ?, ?, ?, ?, ?, 'running', NULL, ?, ?, ?, NULL, ?, ?
+						recovers_operation_id, resolution, run_id)
+				SELECT ?, ?, ?, ?, ?, ?, ?, 'running', NULL, ?, ?, ?, NULL, ?, ?, ?
 				WHERE EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
 				RETURNING *`)
 				.bind(
@@ -118,6 +121,7 @@ export class DataOperationRepository {
 					now,
 					input.kind === 'recovery' ? input.recovers.operationId : null,
 					input.kind === 'recovery' ? input.recovers.resolution : null,
+					input.kind === 'migrate' ? input.runId : null,
 					key,
 					fence.holder,
 					fence.nowMs,

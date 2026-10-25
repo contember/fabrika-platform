@@ -9,6 +9,7 @@ import {
 	FABRIKA_TOKEN_KEYS,
 	isFrameworkVariableName,
 	MANAGED_VARIABLE_NAMES,
+	type OpsMode,
 	parseManagedEnvironment,
 } from '@fabrika/auth-core'
 import type { RunLogLine } from '@fabrika/control-contract'
@@ -16,6 +17,7 @@ import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS, operationsManagedEnvironment } fro
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { BlobStore, DeployLocks, JobQueue } from '@fabrika/platform'
 import {
+	abortableWait,
 	type ControlProvider,
 	type ProviderApp,
 	type ProviderApprovedAccess,
@@ -34,13 +36,14 @@ import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { publishRunSnapshot } from './approval/publish'
 import { approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
-import { recordedMaintenance } from './data-operations'
+import { type DriveResult, type OpsTransport, pendingMigrations, recordedMaintenance, startMigration } from './data-operations'
 import {
 	type AppEnvRow,
 	type AppRow,
 	type ControlRegistryRepository,
 	type ControlRepositories,
 	crossOriginsField,
+	type DataOperationRow,
 	type DeploymentNamespaceRow,
 	isUnconfirmedNamespaceUpdate,
 	type OperationsCatalogRepository,
@@ -123,6 +126,11 @@ export interface RunDeps {
 	tokenKeys?: TokenKeysPort
 	/** Each environment's ops key, sealed in the vault (ADR-0069); absent without a vault, and then a gated deploy fails. */
 	opsKeys?: OpsKeysPort
+	/**
+	 * The ops channel to each environment's object (ADR-0069); absent without a vault. A deploy at a gated release whose
+	 * candidate brings a migration asks the object's ledger through it, and without it does not deploy.
+	 */
+	ops?: OpsTransport
 	/**
 	 * The installation's mail transport; absent means none, and then a job that declares `mailer: 'installation'` gets
 	 * `FABRIKA_EMAIL_PROVIDER=none`. An invalid one refuses only the deploys that need it.
@@ -563,6 +571,27 @@ async function deployUnder(
 	// Lock order is always app/env, then namespace: a namespace path never takes an app/env lease.
 	let namespaceLease: Lease | null = null
 	let logWriter: RunLogWriter | null = null
+	/** The run's status after `error` stopped its deploy, writing what this holder still may. */
+	const failedDeploy = async (error: unknown): Promise<DeployStatus> => {
+		if (error instanceof RunSettled) return 'skipped'
+		if (!invocation.lost && !invocation.cancelled) await invocation.boundary().catch(() => {})
+		// Lease loss stops this invocation's effects; the next holder settles what it recorded (ADR-0044).
+		if (invocation.lost) return 'running'
+		if (invocation.cancelled) return (await settleCancelledInvocation(deps, invocation)).status
+		if (accepted) return 'running'
+		const reason = failureReason(error)
+		console.error(`deploy run ${runId} failed: ${reason}`)
+		// The run log is where `runs log` and the console read a failure from, so it lands there before the row turns failed.
+		logWriter?.log(`deploy failed: ${reason}`)
+		await logWriter?.flush()
+		try {
+			await invocation.write((fence) => runs.markRunFinished(runId, 'failed', null, fence))
+		} catch (refused) {
+			return refused instanceof RunSettled ? 'skipped' : 'running'
+		}
+		await projectTerminalRun(deps, runId, dryRun, 'failed')
+		return 'failed'
+	}
 
 	try {
 		const run = await invocation.read()
@@ -770,116 +799,209 @@ async function deployUnder(
 			// A Zerops build holds the source-map bearer, and the provider relays the build's log.
 			releaseContext?.artifactUpload?.bearer ?? '',
 		])
-		let outcome: ProviderDeployOutcome
-		try {
-			if (ingestGap !== null) {
-				runLogs.log(`operations ingest not injected: app has no active ingest config (${ingestGap})`)
-			}
-			// A relay-backed provider re-flushes its own full buffer to this key, so these lines survive only
-			// in the control log there — flush first so ours can never land after a relay flush.
-			await runLogs.flush()
-			await invocation.boundary()
-			if (namespaceLease !== null && namespaceId !== null) {
-				const queue = deps.queue
-				if (queue === undefined) throw new Error('a namespace republish needs the control queue')
-				// The proxy routes what the registry holds before the app it fronts changes (ADR-0022).
-				await republishUnderLease({ ...deps, queue }, namespaceLease, namespaceId, {
-					wait: 'active',
-					log: (line) => runLogs.log(line),
+		const deployRun = async (): Promise<DeployStatus> => {
+			let outcome: ProviderDeployOutcome
+			try {
+				if (ingestGap !== null) {
+					runLogs.log(`operations ingest not injected: app has no active ingest config (${ingestGap})`)
+				}
+				// A relay-backed provider re-flushes its own full buffer to this key, so these lines survive only
+				// in the control log there — flush first so ours can never land after a relay flush.
+				await runLogs.flush()
+				await invocation.boundary()
+				if (namespaceLease !== null && namespaceId !== null) {
+					const queue = deps.queue
+					if (queue === undefined) throw new Error('a namespace republish needs the control queue')
+					// The proxy routes what the registry holds before the app it fronts changes (ADR-0022).
+					await republishUnderLease({ ...deps, queue }, namespaceLease, namespaceId, {
+						wait: 'active',
+						log: (line) => runLogs.log(line),
+						signal: invocation.work.signal,
+						boundary: async () => {
+							await invocation.boundary()
+						},
+					})
+					await namespaceLease.release()
+					namespaceLease = null
+				}
+				const deployInput: ProviderDeployInput = {
+					runId,
+					app: registration.app,
+					environment: registration.environment,
+					secrets,
+					vars,
+					managedEnvironment: handed,
+					dryRun,
+					...(sourceBinding === undefined ? {} : { sourceBinding }),
+					...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
 					signal: invocation.work.signal,
-					boundary: async () => {
-						await invocation.boundary()
+					events: {
+						log: (line) => runLogs.log(line),
+						externalId: async (externalId, providerState) => {
+							if (providerState !== undefined) serializeProviderJson(providerState)
+							await invocation.write((fence) => runs.recordInitialRunExternalId(runId, externalId, providerState, fence))
+							accepted = true
+							const acceptedRun = await invocation.boundary()
+							if (deps.operations !== undefined) {
+								await projectOperationsRun(deps.operations, acceptedRun, { dryRun, phase: 'provider_accepted', artifactState: 'pending' })
+							}
+						},
+						checkpoint: async (providerState) => {
+							serializeProviderJson(providerState)
+							await invocation.write((fence) => runs.checkpointRunProviderState(runId, providerState, fence))
+							await invocation.boundary()
+						},
+						boundary: async () => {
+							await invocation.boundary()
+						},
 					},
-				})
-				await namespaceLease.release()
-				namespaceLease = null
-			}
-			const deployInput: ProviderDeployInput = {
-				runId,
-				app: registration.app,
-				environment: registration.environment,
-				secrets,
-				vars,
-				managedEnvironment: handed,
-				dryRun,
-				...(sourceBinding === undefined ? {} : { sourceBinding }),
-				...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
-				signal: invocation.work.signal,
-				events: {
-					log: (line) => runLogs.log(line),
-					externalId: async (externalId, providerState) => {
-						if (providerState !== undefined) serializeProviderJson(providerState)
-						await invocation.write((fence) => runs.recordInitialRunExternalId(runId, externalId, providerState, fence))
-						accepted = true
-						const acceptedRun = await invocation.boundary()
-						if (deps.operations !== undefined) {
-							await projectOperationsRun(deps.operations, acceptedRun, { dryRun, phase: 'provider_accepted', artifactState: 'pending' })
-						}
-					},
-					checkpoint: async (providerState) => {
-						serializeProviderJson(providerState)
-						await invocation.write((fence) => runs.checkpointRunProviderState(runId, providerState, fence))
-						await invocation.boundary()
-					},
-					boundary: async () => {
-						await invocation.boundary()
-					},
-				},
-			}
-			outcome = await deps.provider.deploy(deployInput)
-		} finally {
-			await runLogs.flush()
-		}
-		await invocation.boundary()
-		if (outcome.state === 'running') return { runId, status: 'running' }
-		let state = outcome.state
-		let exitCode = outcome.exitCode ?? null
-		if (state === 'succeeded') {
-			const access = registration.environment.access
-			if (dryRun) {
-				if (access !== undefined && deps.iamSchema !== undefined) {
-					runLogs.log(`[dry-run] would reconcile the authz schema of \`${appEnvironmentId(app.id, appEnv.env)}\` with IAM`)
 				}
-			} else {
-				const schema = await applyApprovedSchema(deps, appEnv, access, invocation.work.signal)
-				if (schema !== null) {
-					runLogs.log(`reconcile-schema failed: ${schema.reason}`)
-					state = 'failed'
-					exitCode = null
-				}
+				outcome = await deps.provider.deploy(deployInput)
+			} finally {
+				await runLogs.flush()
 			}
-			await runLogs.flush()
 			await invocation.boundary()
+			if (outcome.state === 'running') return 'running'
+			let state = outcome.state
+			let exitCode = outcome.exitCode ?? null
+			if (state === 'succeeded') {
+				const access = registration.environment.access
+				if (dryRun) {
+					if (access !== undefined && deps.iamSchema !== undefined) {
+						runLogs.log(`[dry-run] would reconcile the authz schema of \`${appEnvironmentId(app.id, appEnv.env)}\` with IAM`)
+					}
+				} else {
+					const schema = await applyApprovedSchema(deps, appEnv, access, invocation.work.signal)
+					if (schema !== null) {
+						runLogs.log(`reconcile-schema failed: ${schema.reason}`)
+						state = 'failed'
+						exitCode = null
+					}
+				}
+				await runLogs.flush()
+				await invocation.boundary()
+			}
+			const finished = state
+			await invocation.write((fence) => runs.markRunFinished(runId, finished, exitCode, fence))
+			if (finished === 'succeeded' && !dryRun) await retirePlatformKeys(deps, approvedRow, runId)
+			await projectTerminalRun(deps, runId, dryRun, finished, outcome.artifactState)
+			return finished
 		}
-		const finished = state
-		await invocation.write((fence) => runs.markRunFinished(runId, finished, exitCode, fence))
-		if (finished === 'succeeded' && !dryRun) await retirePlatformKeys(deps, approvedRow, runId)
-		await projectTerminalRun(deps, runId, dryRun, finished, outcome.artifactState)
-		return { runId, status: finished }
-	} catch (error) {
-		if (error instanceof RunSettled) return { runId, status: 'skipped' }
-		if (!invocation.lost && !invocation.cancelled) await invocation.boundary().catch(() => {})
-		// Lease loss stops this invocation's effects; the next holder settles what it recorded (ADR-0044).
-		if (invocation.lost) return { runId, status: 'running' }
-		if (invocation.cancelled) return await settleCancelledInvocation(deps, invocation)
-		if (accepted) return { runId, status: 'running' }
-		const reason = failureReason(error)
-		console.error(`deploy run ${runId} failed: ${reason}`)
-		// The run log is where `runs log` and the console read a failure from, so it lands there before the row turns failed.
-		logWriter?.log(`deploy failed: ${reason}`)
-		await logWriter?.flush()
-		try {
+		const guarded = operationDeploy || !opsChannel ? null : await guardedMigrations(deps, appEnv, approvedRow, invocation.work.signal)
+		if (guarded === null) return { runId, status: await deployRun() }
+		const pending = guarded.pending.length === 1 ? '1 application migration' : `${guarded.pending.length} application migrations`
+		runLogs.log(
+			`${pending} the environment has not applied: the deploy runs as a migrate data operation (read-only, backup, verify, deploy, migrate, open)`,
+		)
+		await runLogs.flush()
+		let deployed = false
+		const migration = await startMigration(
+			{ repositories: deps.repositories, lock: deps.lock, ops: guarded.ops, ...(deps.leaseClock === undefined ? {} : { leaseClock: deps.leaseClock }) },
+			invocation.lease,
+			{
+				appId: app.id,
+				env: appEnv.env,
+				actor: run.actor ?? MIGRATION_ACTOR,
+				runId,
+				deploy: async () => {
+					deployed = true
+					let status: DeployStatus
+					try {
+						status = await deployRun()
+					} catch (error) {
+						status = await failedDeploy(error)
+					}
+					invocation.lease.assertHeld()
+					if (status === 'running') await settleUnderLease(deps, invocation)
+				},
+			},
+		)
+		if (migration.kind !== 'driven') throw new Error(`the migration phase did not start (${migration.kind === 'refused' ? migration.reason : 'busy'})`)
+		invocation.lease.assertHeld()
+		const line = operationLine(migration.result, migration.operation, await recordedMaintenance(deps, { appId: app.id, env: appEnv.env }))
+		if (!deployed) {
+			runLogs.log(`deploy not started: ${line}`)
+			await runLogs.flush()
 			await invocation.write((fence) => runs.markRunFinished(runId, 'failed', null, fence))
-		} catch (refused) {
-			return { runId, status: refused instanceof RunSettled ? 'skipped' : 'running' }
+			await projectTerminalRun(deps, runId, dryRun, 'failed')
+			return { runId, status: 'failed' }
 		}
-		await projectTerminalRun(deps, runId, dryRun, 'failed')
-		return { runId, status: 'failed' }
+		// The provider may have written the run's log since: append to it rather than rewrite it.
+		await logSettlement(deps, { id: runId, log_key: startedLogKey }, line)
+		const settled = await runs.getRun(runId)
+		return { runId, status: settled?.status === 'succeeded' || settled?.status === 'failed' ? settled.status : 'running' }
+	} catch (error) {
+		return { runId, status: await failedDeploy(error) }
 	} finally {
 		await logWriter?.flush()
 		await namespaceLease?.release()
 		await invocation.release()
 	}
+}
+
+/** The actor a migration records for a run created before runs recorded one. */
+const MIGRATION_ACTOR = 'deploy'
+
+/**
+ * The candidate's application migrations its environment's object has not applied, when the deploy needs the migration
+ * phase (ADR-0069 §3): the caller checked the candidate's gate and domain, and the version before it served the ops
+ * channel too. `null` for a plain deploy. Throws, before any provider effect, when the object cannot say: a deploy that
+ * may migrate never runs unguarded.
+ */
+async function guardedMigrations(
+	deps: RunDeps,
+	before: AppEnvRow,
+	candidate: AppEnvRow,
+	signal: AbortSignal,
+): Promise<{ readonly ops: OpsTransport; readonly pending: readonly string[] } | null> {
+	const { access } = approvedProviderAccess(before)
+	if (access === undefined || deps.provider.opsChannel?.(access) !== true) return null
+	const answer = await pendingMigrations(
+		deps.ops,
+		{ appId: candidate.app_id, env: candidate.env },
+		approvedSnapshot(candidate).snapshot.migrations,
+		signal,
+	)
+	if (answer.kind === 'unknown') {
+		throw new Error(
+			`Control cannot tell whether a migration is pending (${answer.reason}): the environment's object gave no answer, and a deploy that may migrate never runs unguarded`,
+		)
+	}
+	return deps.ops === undefined || answer.pending.length === 0 ? null : { ops: deps.ops, pending: answer.pending }
+}
+
+/** How long a migration waits between settlements of a deploy its provider left running, and how often it tries. */
+const MIGRATION_SETTLE_INTERVAL_MS = 15_000
+const MIGRATION_SETTLE_ATTEMPTS = 40
+
+/**
+ * Settle a migration's own run under the operation's lease, so the migration request follows the deploy without waiting
+ * for the cron. A run still unsettled after the attempts leaves the operation at `deploy`, for a successor to read.
+ */
+async function settleUnderLease(deps: RunDeps, invocation: RunInvocation): Promise<void> {
+	const wait = deps.leaseClock?.wait ?? abortableWait
+	for (let attempt = 0; attempt < MIGRATION_SETTLE_ATTEMPTS; attempt++) {
+		if (attempt > 0) await wait(MIGRATION_SETTLE_INTERVAL_MS, invocation.lease.signal)
+		let settled: RunSettlement | null
+		try {
+			settled = await settleUnfinishedRun(deps, invocation)
+		} catch (error) {
+			// Only a lost lease ends the wait; a settlement that failed is tried again.
+			if (invocation.lost) throw error
+			console.error(`deploy run ${invocation.runId}: settling the migration's deploy failed: ${failureReason(error)}`)
+			settled = 'running'
+		}
+		if (settled !== 'running') return
+	}
+}
+
+/** The run log's line for a migration's end: identifiers, steps and codes only. */
+function operationLine(result: DriveResult, operation: DataOperationRow, recorded: OpsMode | 'unsettled'): string {
+	const named = `data operation ${operation.id}`
+	const after = recorded === 'open' ? 'the environment is open again' : 'the environment stays restricted until an operator recovers it'
+	if (result === 'succeeded') return `${named} succeeded: the migrations ran and the environment is open`
+	if (result === 'failed') return `${named} failed at ${operation.step} (${operation.error_code ?? 'unknown'}); ${after}`
+	return `${named} stopped at ${operation.step} without an answer from the environment's object; ${after}`
 }
 
 /** A failed run's cause as one credential-free line: never the error object, which can carry a clone URL with a token. */

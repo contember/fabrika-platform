@@ -406,6 +406,21 @@ other environment, before the provider prepares anything, and the write maps a r
   `recordedMaintenance` reads both as `open`. An environment opts out in `app_env_backup_schedules` under
   `data.manage`; `data.read` lists its backups, one older than 30 days as expired. `data.start` with kind `backup` still
   answers 501.
+- **A deploy that brings a pending application migration is a `migrate` data operation (`startMigration`, driven from
+  `deployUnder`; ADR-0069 §3, ADR-0070 §8).** Once the run published its snapshot, a deploy with a domain at a release the
+  provider serves the ops channel at, whose environment's version before it was served the channel too, compares the
+  candidate's bundled migration files (`.sql` directly in `db/migrations`) with the object's ledger from `inspect`
+  (`pendingMigrations`), never with the published snapshot. An object that does not answer, or an installation without
+  `RunDeps.ops`, fails the run before any provider effect. A pending file makes the run's own invocation drive the
+  operation under the run's lease: `restrict` (`read-only`), `backup` and `verify` at that generation (a backup record
+  with `pre_migration = 1`, rehearsed while the object stays restricted), `deploy` (the run's own deploy; a provider that
+  answers `running` is settled under the same lease with `settleUnfinishedRun`, bounded), `migrate` at the published
+  generation, `open` at a new one. The record keeps `run_id`, and a successor at `deploy` only reads that run's row. A
+  failed dump or rehearsal, or a run no provider accepted, reopens the object (`backup_failed`, `rehearsal_failed`,
+  `deploy_not_started`, read as `open`) and fails the run without a deploy. A run that failed after a provider accepted
+  it (`deploy_failed`) and a refused migration or failed boot (`migration_failed`) fail the operation with the object
+  restricted, for an operator's recovery; no answer leaves it running (interrupted). The run's status is its deploy's
+  (ADR-0044); the operation's outcome is the last line of the run's log.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.

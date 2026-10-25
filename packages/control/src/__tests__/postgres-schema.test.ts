@@ -161,6 +161,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0019_ops_keys.sql' },
 			{ bundle: 'control', name: '0020_run_superseded_by.sql' },
 			{ bundle: 'control', name: '0021_backups.sql' },
+			{ bundle: 'control', name: '0022_migration_phase.sql' },
 		])
 	})
 

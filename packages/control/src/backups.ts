@@ -27,7 +27,7 @@ export const BACKUP_PASS_CONTINUES = 16
 export const BACKUP_PASS_STARTS = 4
 
 export interface BackupScheduleDeps extends Omit<DataOperationDeps, 'repositories'> {
-	repositories: Pick<ControlRepositories, 'dataOperations' | 'backups' | 'registry'>
+	repositories: Pick<ControlRepositories, 'dataOperations' | 'backups' | 'registry' | 'runs'>
 	/** The installation's provider: only an environment whose approved access it serves the ops channel at is backed up. */
 	provider: Pick<ControlProvider, 'id' | 'opsChannel'>
 	/** Unix SECONDS, the unit every `*_at` column uses. */

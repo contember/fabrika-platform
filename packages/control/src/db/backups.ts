@@ -14,8 +14,10 @@ export interface BackupRow {
 	id: string
 	app_id: string
 	env: string
-	/** The `backup` data operation that takes it. */
+	/** The `backup` or `migrate` data operation that takes it. */
 	operation_id: string
+	/** 1 for the backup a migration phase takes before its deploy, 0 for a daily one. */
+	pre_migration: number
 	/** The object the dump is taken from. */
 	object: string
 	/** `succeeded` only once the rehearsal passed. */
@@ -70,6 +72,8 @@ export interface BackupInput {
 	env: string
 	operationId: string
 	object: string
+	/** Taken by a migration phase before its deploy. */
+	preMigration: boolean
 }
 
 /** The completed upload, as its manifest describes it. */
@@ -115,12 +119,23 @@ export class BackupRepository {
 			),
 			this.d1
 				.prepare(`INSERT INTO app_env_backups
-					(id, app_id, env, operation_id, object, state, error_code, created_at, finished_at, bookmark, upload_id, size_bytes, parts,
-						tables, rehearsal, rehearsal_code, rehearsal_step, rehearsal_parts, rehearsal_cursor)
-				SELECT ?, ?, ?, ?, ?, 'running', NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, 'pending', NULL, NULL, NULL, NULL
+					(id, app_id, env, operation_id, object, pre_migration, state, error_code, created_at, finished_at, bookmark, upload_id,
+						size_bytes, parts, tables, rehearsal, rehearsal_code, rehearsal_step, rehearsal_parts, rehearsal_cursor)
+				SELECT ?, ?, ?, ?, ?, ?, 'running', NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, 'pending', NULL, NULL, NULL, NULL
 				WHERE EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
 				RETURNING *`)
-				.bind(input.id, input.appId, input.env, input.operationId, input.object, this.now(), key, fence.holder, fence.nowMs),
+				.bind(
+					input.id,
+					input.appId,
+					input.env,
+					input.operationId,
+					input.object,
+					input.preMigration ? 1 : 0,
+					this.now(),
+					key,
+					fence.holder,
+					fence.nowMs,
+				),
 		])
 		return results[1]?.results[0] ?? null
 	}

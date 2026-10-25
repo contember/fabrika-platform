@@ -481,8 +481,8 @@ for (const backend of backends) {
 				const holder = lease.fence().holder
 				const generation = await b.repositories.dataOperations.allocateGeneration(APP, ENV)
 				const restricting = { id: uuidv7(), appId: APP, env: ENV, step: 'deploy', targetMode: 'read-only', generation, actor: 'user:test' } as const
-				expect(await b.repositories.dataOperations.create({ ...restricting, kind: 'migrate' }, lease.fence())).not.toBeNull()
 				const own = await run(b)
+				expect(await b.repositories.dataOperations.create({ ...restricting, kind: 'migrate', runId: own }, lease.fence())).toMatchObject({ run_id: own })
 				const unrelated = await run(b)
 				expect(await executeDeploy(deps, { runId: unrelated, dryRun: true })).toEqual({ runId: unrelated, status: 'deferred' })
 				expect(await executeDeployUnderLease(deps, { runId: own, dryRun: true }, lease)).toEqual({ runId: own, status: 'succeeded' })

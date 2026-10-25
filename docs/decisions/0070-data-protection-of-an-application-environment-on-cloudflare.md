@@ -300,7 +300,11 @@ The verification of the migration phase (ADR-0069 §3) is this rehearsal.
 - **Before a migration.** A deploy that brings a pending application migration to an environment at a gated release
   runs as one operation under the deploy lease: `read-only`, the backup, its rehearsal, the operation's own deploy, the
   migration request, then `open` at a new generation. A failed backup or rehearsal reopens the object and does not
-  deploy.
+  deploy. A migration is pending when one of the candidate's application migration files is missing from the object's
+  ledger, which Control reads with `inspect`; the published snapshot proves nothing, because a published file has not
+  run while its version never booted. The rule applies once the version before the deploy was at a gated release too,
+  and an object that does not answer gets no deploy. The operation's deploy is the run's own. A deploy or a migration
+  that fails leaves the object restricted, for a recovery.
 - **Opting out** stops the daily backup only. The pre-migration backup belongs to the migration phase and always runs.
 - An environment on an older release gets no backups, and the console says so.
 
