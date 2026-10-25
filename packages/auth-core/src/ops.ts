@@ -207,7 +207,7 @@ export interface OpsScheduler {
 	readonly alarm: string | null
 }
 
-/** A job's last run and its outcome. */
+/** A job's last run and its outcome: a contract job, or a framework job such as `fabrika-file-sweep`. */
 export interface OpsJob {
 	readonly job: string
 	readonly lastStatus: 'succeeded' | 'failed' | null
@@ -1220,9 +1220,13 @@ function readScheduler(value: unknown): OpsScheduler | null {
 	return raw !== null && alarm === null ? null : { alarm }
 }
 
+/** A framework job of the application runtime (`fabrika-file-sweep`): reserved by its `-`, which no contract job name holds. */
+const FRAMEWORK_JOB_NAME = /^fabrika-[a-z][a-z0-9-]{0,55}$/
+
 function readJob(value: unknown): OpsJob | null {
 	if (!exactKeys(value, ['job', 'lastStatus', 'lastStartedAt', 'lastFinishedAt', 'lastDurationMs'])) return null
-	const job = readMatch(prop(value, 'job'), WORKLOAD_NAME)
+	const raw = prop(value, 'job')
+	const job = readMatch(raw, WORKLOAD_NAME) ?? readMatch(raw, FRAMEWORK_JOB_NAME)
 	const lastStatus = readNullable(prop(value, 'lastStatus'), (status) => readEnum(status, JOB_STATUSES))
 	const lastStartedAt = readNullable(prop(value, 'lastStartedAt'), readTimestamp)
 	const lastFinishedAt = readNullable(prop(value, 'lastFinishedAt'), readTimestamp)

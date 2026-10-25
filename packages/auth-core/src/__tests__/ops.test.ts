@@ -373,6 +373,13 @@ describe('the view refuses text in an identifier slot', () => {
 			expect(parseOpsView({ ...view, webhooks: [{ ...webhook, webhook: name }] })).toBeNull()
 		}
 		expect(parseOpsView({ ...view, jobs: [{ ...job, job: `a${'b'.repeat(64)}` }] })).toBeNull()
+		// A framework job holds the `-` no contract name may hold, and only under its reserved prefix.
+		for (const name of ['fabrika-file-sweep', 'fabrika-file-scan']) {
+			expect(parseOpsView({ ...view, jobs: [{ ...job, job: name }] })).not.toBeNull()
+		}
+		for (const name of ['fabrika-', 'fabrika-File', 'other-sweep']) {
+			expect(parseOpsView({ ...view, jobs: [{ ...job, job: name }] })).toBeNull()
+		}
 	})
 
 	test("a migration's bundle, filename and checksum follow the ledger's rules", () => {
