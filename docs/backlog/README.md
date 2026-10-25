@@ -121,5 +121,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [237](237-application-object-waves-4-7-follow-ups.md): The application object's waves 4–7 follow-ups: no R2 lifecycle rule for dumps yet (needs oblaka), dump and restore edge cases, the CLI's strict parse, the deploy-time reconcile, migrate recovery, the console's modal focus.
 - [236](236-an-in-handler-upload-leaves-bytes-after-an-eviction.md): A `ctx.files.put` inside a writing handler on Cloudflare leaves its bytes in the bucket when the object is evicted before the release; an R2 intent the sweep lists.
 - [239](239-a-changed-sql-statement-shows-no-closer-review-line.md): A changed statement of a site whose `sql:` declaration is unchanged shows no closer-review line in the approval diff.
-- [241](241-verify-the-cloudflare-email-adapter-on-a-live-account.md): The Cloudflare email adapter is verified only against a stubbed `fetch`; its message id, sender, quota and size answers wait for a live account.
+- [241](241-verify-the-cloudflare-email-adapter-on-a-live-account.md): The Cloudflare email adapter is checked live only for an accepted send; its sender, quota, account and size refusals wait for a live check.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

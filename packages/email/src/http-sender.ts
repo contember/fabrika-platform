@@ -58,8 +58,8 @@ export abstract class HttpEmailSender implements EmailSender {
 	/** The request for a message that passed validation. */
 	protected abstract request(message: EmailMessage): HttpEmailRequest | Promise<HttpEmailRequest>
 
-	/** The message id of a 2xx answer; undefined when the answer is not a valid success. May throw a refusal. */
-	protected abstract messageId(response: ProviderResponse): string | undefined
+	/** The message id of a 2xx answer to `message`; undefined when the answer is not a valid success. May throw a refusal. */
+	protected abstract messageId(response: ProviderResponse, message: EmailMessage): string | undefined
 
 	/** A failed answer to the message the provider tells apart beyond its status; undefined leaves it to `refusalByStatus`. */
 	protected refusal(_response: ProviderResponse, _message: EmailMessage): EmailDeliveryError | undefined {
@@ -79,7 +79,7 @@ export abstract class HttpEmailSender implements EmailSender {
 		const response = await postToProvider({ label: this.#label, fetch: this.#fetch, ...request, signal, timeoutMs: this.#timeoutMs })
 		if (!response.ok) throw this.refusal(response, message) ?? refusalByStatus(this.#label, response.status)
 
-		const messageId = this.messageId(response)
+		const messageId = this.messageId(response, message)
 		if (messageId === undefined || messageId === '') {
 			throw new EmailDeliveryError(`${this.#label} returned an invalid success response`, {
 				code: 'malformed_response',
