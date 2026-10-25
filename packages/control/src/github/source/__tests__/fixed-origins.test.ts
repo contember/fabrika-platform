@@ -187,9 +187,10 @@ describe.skipIf(!hasPostgres)('the keyed path of the Zerops composition', () => 
 		}
 	}, 60_000)
 
+	// DROP DATABASE waits for a checkpoint, which takes seconds while the full suite writes to the same server.
 	afterAll(async () => {
 		await dropDatabase()
-	})
+	}, 60_000)
 
 	test('mints the installation token and resolves the private repository at api.github.com only', async () => {
 		const network = githubNetwork()
