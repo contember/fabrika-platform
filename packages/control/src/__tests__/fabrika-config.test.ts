@@ -6,6 +6,7 @@ import type {
 	buildControlWorker as BuildControlWorker,
 	controlEmailSecrets as ControlEmailSecrets,
 	controlEmailVars as ControlEmailVars,
+	controlPipelineSecrets as ControlPipelineSecrets,
 } from '../../fabrika.config'
 
 // fabrika's OWN deploy surface (packages/control/fabrika.config.ts). These
@@ -20,6 +21,7 @@ let config: CloudflareAppConfig
 let buildControlWorker: typeof BuildControlWorker
 let controlEmailVars: typeof ControlEmailVars
 let controlEmailSecrets: typeof ControlEmailSecrets
+let controlPipelineSecrets: typeof ControlPipelineSecrets
 
 beforeAll(async () => {
 	process.env['FABRIKA_CONTROL_DOMAIN'] = 'vozka.test.example.com'
@@ -28,7 +30,22 @@ beforeAll(async () => {
 	buildControlWorker = mod.buildControlWorker
 	controlEmailVars = mod.controlEmailVars
 	controlEmailSecrets = mod.controlEmailSecrets
+	controlPipelineSecrets = mod.controlPipelineSecrets
 })
+
+/** Run `body` with `values` in process.env, then put back what was there before, set or not. */
+function withEnvironment(values: Readonly<Record<string, string>>, body: () => void): void {
+	const before = Object.keys(values).map((name): [string, string | undefined] => [name, process.env[name]])
+	Object.assign(process.env, values)
+	try {
+		body()
+	} finally {
+		for (const [name, value] of before) {
+			if (value === undefined) delete process.env[name]
+			else process.env[name] = value
+		}
+	}
+}
 
 /** Resolve a Worker binding by name (oblaka exposes the materialized graph on `worker.options`). */
 function binding(worker: Worker, name: string): unknown {
@@ -160,12 +177,30 @@ describe("the installation's mail transport", () => {
 
 	test('a local Worker gets no transport, whatever the shell holds', () => {
 		expect(controlEmailVars(true, resend)).toEqual({})
+		// The local stack's capture provider is no built-in one; locally it is never checked.
+		expect(controlEmailVars(true, { FABRIKA_EMAIL_PROVIDER: 'directory' })).toEqual({})
 	})
 
-	test('an invalid set refuses the deploy, naming variables and never a value', () => {
+	test('the pipeline secrets are read at import and never throw: an invalid set names no secret', () => {
+		expect(controlEmailSecrets({ FABRIKA_EMAIL_PROVIDER: 'directory' })).toEqual([])
+		expect(controlEmailSecrets({ FABRIKA_EMAIL_PROVIDER: 'resend' })).toEqual([])
+		expect(controlEmailSecrets({ ...resend, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toEqual([])
+	})
+
+	test("the deploy writes a valid provider's credential as a Worker secret, and no other", () => {
+		const base = ['FABRIKA_CONTROL_VAULT_KEY', 'CLOUDFLARE_API_TOKEN', 'FABRIKA_IAM_PROVISIONING_KEY', 'FABRIKA_RUNNER_KEY', 'OPERATIONS_SYNC_KEY']
+		expect(controlPipelineSecrets(resend)).toEqual([...base, 'FABRIKA_EMAIL_RESEND_API_KEY'])
+		expect(controlPipelineSecrets(ahasend)).toEqual([...base, 'FABRIKA_EMAIL_AHASEND_API_KEY'])
+		expect(controlPipelineSecrets({ FABRIKA_EMAIL_PROVIDER: 'none' })).toEqual(base)
+		expect(controlPipelineSecrets({})).toEqual(base)
+		// The exported config declares the list its import-time environment gives.
+		expect(config.pipeline?.secrets).toEqual(controlPipelineSecrets(process.env))
+	})
+
+	test('an invalid set refuses the deploy when the resource graph is built, naming variables and never a value', () => {
 		const { FABRIKA_EMAIL_RESEND_API_KEY: _key, ...noKey } = resend
 		expect(() => controlEmailVars(false, noKey)).toThrow('FABRIKA_EMAIL_RESEND_API_KEY is missing')
-		expect(() => controlEmailSecrets({ ...resend, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow('FABRIKA_EMAIL_PROVIDER must be none or one of')
+		expect(() => controlEmailVars(false, { ...resend, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow('FABRIKA_EMAIL_PROVIDER must be none or one of')
 		expect(() => controlEmailVars(false, { ...resend, FABRIKA_EMAIL_FROM: 'not an address' })).toThrow(/FABRIKA_EMAIL_FROM is invalid/)
 		try {
 			controlEmailVars(false, { ...resend, FABRIKA_EMAIL_FROM: 'not an address' })
@@ -175,18 +210,16 @@ describe("the installation's mail transport", () => {
 	})
 
 	test("the Worker's vars carry the transport the deploy environment holds", () => {
-		const names = Object.keys(resend)
-		Object.assign(process.env, resend)
-		try {
+		withEnvironment(resend, () => {
 			const vars = application(buildControlWorker({ env: 'stage' })).options.vars ?? {}
 			expect(vars['FABRIKA_EMAIL_PROVIDER']).toBe('resend')
 			expect(vars['FABRIKA_EMAIL_FROM']).toBe('Fabrika <mail@example.test>')
 			expect(vars['FABRIKA_EMAIL_RESEND_API_KEY']).toBeUndefined()
 			expect(application(buildControlWorker({ env: 'local' })).options.vars?.['FABRIKA_EMAIL_PROVIDER']).toBeUndefined()
-		} finally {
-			for (const name of names) delete process.env[name]
-		}
-		expect(application(buildControlWorker({ env: 'stage' })).options.vars?.['FABRIKA_EMAIL_PROVIDER']).toBe('none')
+		})
+		withEnvironment({ FABRIKA_EMAIL_PROVIDER: 'none' }, () => {
+			expect(application(buildControlWorker({ env: 'stage' })).options.vars?.['FABRIKA_EMAIL_PROVIDER']).toBe('none')
+		})
 	})
 })
 
@@ -232,7 +265,7 @@ describe('Pipeline', () => {
 	test('workerDir is the worker package, build builds the dashboard, secrets are the runtime worker secrets', () => {
 		expect(config.pipeline?.workerDir).toBe('.')
 		expect(config.pipeline?.build).toContain('@fabrika/dashboard')
-		expect(config.pipeline?.secrets).toEqual([
+		expect(config.pipeline?.secrets?.slice(0, 5)).toEqual([
 			'FABRIKA_CONTROL_VAULT_KEY',
 			'CLOUDFLARE_API_TOKEN',
 			'FABRIKA_IAM_PROVISIONING_KEY',

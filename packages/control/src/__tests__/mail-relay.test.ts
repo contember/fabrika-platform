@@ -273,7 +273,9 @@ describe('the mail relay: the gate', () => {
 	})
 
 	test('without a transport, or with an invalid one, an installation message is refused as mail_not_configured and not recorded', async () => {
-		for (const transport of [{ kind: 'none' }, { kind: 'invalid', reason: 'FABRIKA_EMAIL_FROM is missing' }] satisfies InstallationMail[]) {
+		for (
+			const transport of [{ kind: 'none' }, { kind: 'invalid', reason: 'FABRIKA_EMAIL_FROM is missing', remedy: 'fix it' }] satisfies InstallationMail[]
+		) {
 			const r = await relay({ transport })
 			const response = await r.send({ key: await installationMailKey(RPC_SECRET) })
 			expect(await answer(response)).toEqual({ status: 503, answer: { error: { code: 'mail_not_configured' } } })
@@ -283,7 +285,9 @@ describe('the mail relay: the gate', () => {
 	})
 
 	test('without a transport, or with an invalid one, an application message is held, a pass rule notwithstanding', async () => {
-		for (const transport of [{ kind: 'none' }, { kind: 'invalid', reason: 'FABRIKA_EMAIL_FROM is missing' }] satisfies InstallationMail[]) {
+		for (
+			const transport of [{ kind: 'none' }, { kind: 'invalid', reason: 'FABRIKA_EMAIL_FROM is missing', remedy: 'fix it' }] satisfies InstallationMail[]
+		) {
 			const r = await relay({ transport })
 			await rule(r.harness, 'notes@prod', 'example.com', 'pass')
 			expect(await decided(r, await r.send({}))).toEqual({ state: 'held', ruleId: null })
