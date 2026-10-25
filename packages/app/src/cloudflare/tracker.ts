@@ -1,9 +1,16 @@
-// The object's pending-work tracker (ADR-0069 §2, ADR-0070 §10): the ops operation `timers`, diagnostics only. While
-// it is on, it wraps the isolate's global timers and records each live timer and each `waitUntil` promise with the stack
-// that registered it. It lives in memory: an eviction drops it, and the next isolate's tracker starts off.
+// The pending-work tracker (ADR-0069 §2, ADR-0070 §10): the ops operation `timers`, diagnostics only. While it is on, it
+// wraps the isolate's global timers and records each live timer and each `waitUntil` promise with the stack that
+// registered it, scrubbed and bounded. Its scope is the isolate, not one object: every object the isolate hosts shares
+// the switch and the records, and only the isolate's eviction resets them, so the next isolate's tracker starts off.
 
 import { OPS_TIMERS_CAP, type OpsTimer, type OpsTimersRequest, type OpsTimersView } from '@fabrika/auth-core'
 import { jsonResponse } from '../errors.js'
+import { type Scrubber, secretScrubber } from '../jobs/scrub.js'
+
+/** A recorded stack keeps the frames nearest the call that registered the work. */
+export const MAX_TIMER_STACK_FRAMES = 20
+/** A recorded stack is cut to this many UTF-8 bytes after it is scrubbed. */
+export const MAX_TIMER_STACK_BYTES = 4 * 1024
 
 /** The global timers the tracker wraps while it is on; `globalThis` fits it. */
 export interface TimerScope {
@@ -16,7 +23,10 @@ export interface TimerScope {
 export interface TimerTracker {
 	/** Switches tracking on (wrapping the scope's timers) or off (restoring them and forgetting every record). */
 	track(on: boolean): void
-	/** Records `promise` until it settles while tracking is on; returns it unchanged. */
+	/**
+	 * While tracking is on, records `promise` until it settles and answers a chain that settles as it does, rejection
+	 * included, so the caller hands the chain to `waitUntil` and an unhandled rejection stays unhandled. Off, `promise`.
+	 */
 	pending<T>(promise: Promise<T>): Promise<T>
 	/** The live records, oldest first, at most `OPS_TIMERS_CAP` of them. */
 	view(): OpsTimersView
@@ -24,9 +34,9 @@ export interface TimerTracker {
 
 type Caller = (...args: never[]) => unknown
 
-/** A tracker over `scope`'s timers, off until `track(true)`. */
-export function timerTracker(scope: TimerScope, now: () => number): TimerTracker {
-	// Keyed by the handle the timer answered, or by a fresh object for a promise; a Map keeps creation order.
+/** A tracker over `scope`'s timers, off until `track(true)`; each stack is scrubbed by `scrubber`. */
+export function timerTracker(scope: TimerScope, now: () => number, scrubber: Scrubber): TimerTracker {
+	// Keyed by the timer's handle (`handleKey`), or by a fresh object for a promise; a Map keeps creation order.
 	const live = new Map<unknown, OpsTimer>()
 	/** The scope's own timers and the tracker's wrappers over them, while tracking is on. */
 	let installed: { readonly own: TimerScope; readonly wrapped: TimerScope } | null = null
@@ -35,7 +45,7 @@ export function timerTracker(scope: TimerScope, now: () => number): TimerTracker
 		kind,
 		since: new Date(now()).toISOString(),
 		delayMs: kind === 'waitUntil' ? null : delayOf(delay),
-		stack: stackBelow(caller),
+		stack: stackBelow(caller, scrubber),
 	})
 
 	// A wrapper that other code kept after `track(false)` still works; it records only while tracking is on.
@@ -49,19 +59,20 @@ export function timerTracker(scope: TimerScope, now: () => number): TimerTracker
 				return Reflect.apply(start, scope, [handler, delay, ...args])
 			}
 			let id: unknown
-			const run = (...callArgs: unknown[]): unknown => {
+			// An ordinary function, so the runtime's receiver (Bun passes the handle) reaches the handler.
+			const run = function(this: unknown, ...callArgs: unknown[]): unknown {
 				if (kind === 'timeout') {
-					live.delete(id)
+					live.delete(handleKey(id))
 				}
-				return Reflect.apply(handler, undefined, callArgs)
+				return Reflect.apply(handler, this, callArgs)
 			}
 			id = Reflect.apply(start, scope, [run, delay, ...args])
-			live.set(id, entry)
+			live.set(handleKey(id), entry)
 			return id
 		}
 		const clear = (stop: (id?: unknown) => void, id: unknown): void => {
 			// A timeout's and an interval's handles share one pool, so either clear ends either kind.
-			live.delete(id)
+			live.delete(handleKey(id))
 			Reflect.apply(stop, scope, [id])
 		}
 		// The stack is taken before `schedule`: a proper tail call (JavaScriptCore) would drop the frame `stackBelow` cuts at.
@@ -83,9 +94,16 @@ export function timerTracker(scope: TimerScope, now: () => number): TimerTracker
 		}
 		const key = {}
 		live.set(key, record('waitUntil', null, pending))
-		const settle = () => live.delete(key)
-		promise.then(settle, settle)
-		return promise
+		return promise.then(
+			(value) => {
+				live.delete(key)
+				return value
+			},
+			(error: unknown) => {
+				live.delete(key)
+				throw error
+			},
+		)
 	}
 
 	return {
@@ -117,28 +135,53 @@ export function timerTracker(scope: TimerScope, now: () => number): TimerTracker
 	}
 }
 
+/**
+ * One key for every form of a handle a clear accepts: Bun's handle object also clears by its number, workerd's handle is
+ * that number already.
+ */
+function handleKey(id: unknown): unknown {
+	if (typeof id !== 'object' || id === null) {
+		return id
+	}
+	const numeric = Number(id)
+	return Number.isSafeInteger(numeric) ? numeric : id
+}
+
 /** The delay a timer was asked for, in whole milliseconds: what the runtime coerces to a number, else 0. */
 function delayOf(delay: unknown): number {
 	const ms = typeof delay === 'number' || typeof delay === 'string' ? Number(delay) : 0
 	return Number.isFinite(ms) && ms > 0 ? Math.min(Math.trunc(ms), Number.MAX_SAFE_INTEGER) : 0
 }
 
-/** The stack of the code that called `caller`, without the tracker's own frames. */
-function stackBelow(caller: Caller): string {
+/** The frames below `caller`, without the tracker's own: at most `MAX_TIMER_STACK_FRAMES`, scrubbed, then cut to bytes. */
+function stackBelow(caller: Caller, scrubber: Scrubber): string {
 	const holder: { stack?: string } = {}
 	Error.captureStackTrace(holder, caller)
-	return (holder.stack ?? '').replace(/^Error\n/, '')
+	const frames = (holder.stack ?? '').replace(/^Error\n/, '').split('\n').slice(0, MAX_TIMER_STACK_FRAMES)
+	return cutToBytes(scrubber.scrub(frames.join('\n')), MAX_TIMER_STACK_BYTES)
 }
 
-/** The isolate's tracker: a fresh isolate, as after an eviction, starts with it off. */
-const isolateTracker = timerTracker(globalThis, () => Date.now())
+/** `text` cut at a character boundary so its UTF-8 encoding fits `bytes`. */
+function cutToBytes(text: string, bytes: number): string {
+	const { read } = new TextEncoder().encodeInto(text, new Uint8Array(bytes))
+	return text.slice(0, read)
+}
 
-/** Records a promise the object hands to `waitUntil` while the tracker is on; returns it unchanged. */
+/**
+ * The isolate's tracker, shared by every object the isolate hosts. Its scrubber knows the credential shapes only: the
+ * tracker is reached before any object captures the environment's secret values.
+ */
+const isolateTracker = timerTracker(globalThis, () => Date.now(), secretScrubber([]))
+
+/**
+ * Records a promise an object hands to `waitUntil` while the tracker is on. Hand the answer, not `promise`, to
+ * `waitUntil`: it rejects as `promise` does, so an unhandled rejection still reaches the crash reporting.
+ */
 export function trackPending<T>(promise: Promise<T>): Promise<T> {
 	return isolateTracker.pending(promise)
 }
 
-/** The object's live timers and `waitUntil` promises; `track` switches the tracker on or off first. */
+/** The isolate's live timers and `waitUntil` promises; `track` switches the isolate's tracker on or off first. */
 export function serveTimers(request: OpsTimersRequest): Response {
 	if (request.track !== null) {
 		isolateTracker.track(request.track)

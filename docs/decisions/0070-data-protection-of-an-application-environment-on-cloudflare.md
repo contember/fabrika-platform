@@ -344,8 +344,11 @@ no recovery. Both wait until probe 7 has exercised every failure boundary on a l
 ### 10. The timers view
 
 `POST /__fabrika/ops/timers` reads the pending-work tracker (ADR-0069 §2): every live timer and `waitUntil` promise of
-the object, with the stack that registered it, oldest first, at most 500 and the count of the rest. `track` switches
-the tracker on or off first. It lives in memory and is off after an eviction. It is diagnostics: it writes nothing and
+the isolate, with the stack that registered it, oldest first, at most 500 and the count of the rest. `track` switches
+the tracker on or off first. Its scope is the isolate, not the object named: global timers belong to no object, so
+every object the isolate hosts shares the switch and the records, and a request naming one object reads and switches
+them for all. It lives in memory, and only the isolate's eviction resets it; the next isolate's tracker is off. Each
+stack is scrubbed of credential shapes and bounded in frames and bytes. It is diagnostics: it writes nothing and
 carries no generation. It holds no row, but a stack may name the application's code paths, so it is
 `data.content.read` only.
 
