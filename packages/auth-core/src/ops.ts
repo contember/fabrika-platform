@@ -1034,6 +1034,10 @@ export function parseOpsRestoreVerifyAck(body: unknown): OpsRestoreVerifyAck | n
 
 /** The most timers one answer lists; the rest are counted in `omitted`. */
 export const OPS_TIMERS_CAP = 500
+/** A timer's stack keeps at most this many frames, the ones nearest the call that registered the work. */
+export const OPS_TIMER_STACK_MAX_FRAMES = 20
+/** A timer's stack is at most this many UTF-8 bytes, cut after it is scrubbed. */
+export const OPS_TIMER_STACK_MAX_BYTES = 4 * 1024
 
 /** `POST /__fabrika/ops/timers`: reads the tracker, or with `track` switches it on or off first. In memory only. */
 export interface OpsTimersRequest {
@@ -1472,13 +1476,17 @@ function readSource(value: unknown): OpsDumpSource | null {
 	return object === null || dump === null ? null : { object, dump }
 }
 
+function boundedStack(stack: string): boolean {
+	return new TextEncoder().encode(stack).length <= OPS_TIMER_STACK_MAX_BYTES && stack.split('\n').length <= OPS_TIMER_STACK_MAX_FRAMES
+}
+
 function readTimer(value: unknown): OpsTimer | null {
 	if (!exactKeys(value, ['kind', 'since', 'delayMs', 'stack'])) return null
 	const kind = readEnum(prop(value, 'kind'), TIMER_KINDS)
 	const since = readTimestamp(prop(value, 'since'))
 	const delayMs = readNullable(prop(value, 'delayMs'), readCount)
 	const stack = prop(value, 'stack')
-	if (kind === null || since === null || delayMs === undefined || typeof stack !== 'string') return null
+	if (kind === null || since === null || delayMs === undefined || typeof stack !== 'string' || !boundedStack(stack)) return null
 	return (kind === 'waitUntil') === (delayMs === null) ? { kind, since, delayMs, stack } : null
 }
 

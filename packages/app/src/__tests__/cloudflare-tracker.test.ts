@@ -2,10 +2,10 @@
 // with the scrubbed, bounded stack that registered it, oldest first and capped; every object of the isolate shares it,
 // and a fresh tracker, as after the isolate's eviction, lists nothing.
 
-import { OPS_TIMERS_CAP, type OpsTimersView, parseOpsTimersView } from '@fabrika/auth-core'
+import { OPS_TIMER_STACK_MAX_BYTES, OPS_TIMER_STACK_MAX_FRAMES, OPS_TIMERS_CAP, type OpsTimersView, parseOpsTimersView } from '@fabrika/auth-core'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { MAX_TIMER_STACK_BYTES, MAX_TIMER_STACK_FRAMES, serveTimers, type TimerScope, type TimerTracker, timerTracker } from '../cloudflare/tracker'
+import { serveTimers, type TimerScope, type TimerTracker, timerTracker } from '../cloudflare/tracker'
 import { REDACTED, secretScrubber } from '../jobs/scrub'
 
 const NOW = Date.parse('2026-10-25T08:00:00.000Z')
@@ -222,16 +222,16 @@ describe('the timer tracker', () => {
 				return handles[0]
 			}
 			deep(100)
-			leakFromFunctionNamed(scope, `huge${'x'.repeat(3 * MAX_TIMER_STACK_BYTES)}`)
+			leakFromFunctionNamed(scope, `huge${'x'.repeat(3 * OPS_TIMER_STACK_MAX_BYTES)}`)
 		} finally {
 			Error.stackTraceLimit = limit
 		}
 
 		const [deepStack, hugeStack] = parsed(tracker.view()).timers.map(({ stack }) => stack)
-		expect(deepStack?.split('\n')).toHaveLength(MAX_TIMER_STACK_FRAMES)
+		expect(deepStack?.split('\n')).toHaveLength(OPS_TIMER_STACK_MAX_FRAMES)
 		expect(deepStack).toContain('leakAHandlerDeadline')
 		expect(hugeStack).toContain('hugexxx')
-		expect(new TextEncoder().encode(hugeStack).length).toBeLessThanOrEqual(MAX_TIMER_STACK_BYTES)
+		expect(new TextEncoder().encode(hugeStack).length).toBeLessThanOrEqual(OPS_TIMER_STACK_MAX_BYTES)
 	})
 
 	test('scrubs a credential a frame carries', () => {

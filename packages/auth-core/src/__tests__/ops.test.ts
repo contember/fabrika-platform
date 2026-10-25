@@ -32,6 +32,8 @@ import {
 	OPS_ROW_PATH,
 	OPS_STALE_STATUS,
 	OPS_STATE_KEY,
+	OPS_TIMER_STACK_MAX_BYTES,
+	OPS_TIMER_STACK_MAX_FRAMES,
 	OPS_TIMERS_CAP,
 	type OpsBootFailureContent,
 	type OpsContentView,
@@ -1120,6 +1122,9 @@ describe('the timers view', () => {
 		expect(parseOpsTimersView(timers)).toEqual(timers)
 		expect(parseOpsTimersView({ tracking: false, timers: [], omitted: 0 })).toEqual({ tracking: false, timers: [], omitted: 0 })
 		expect(parseOpsTimersView({ ...timers, timers: [{ ...timeout, kind: 'interval' }], omitted: 12 })).not.toBeNull()
+		const atBound = { ...timeout, stack: Array.from({ length: OPS_TIMER_STACK_MAX_FRAMES }, () => 'at f').join('\n') }
+		expect(parseOpsTimersView({ ...timers, timers: [atBound] })).not.toBeNull()
+		expect(parseOpsTimersView({ ...timers, timers: [{ ...timeout, stack: 'é'.repeat(OPS_TIMER_STACK_MAX_BYTES / 2) }] })).not.toBeNull()
 	})
 
 	test('refuses an unknown key and a wrong type, a delay on waitUntil, a timer without one, and more than the cap', () => {
@@ -1129,6 +1134,8 @@ describe('the timers view', () => {
 			{ ...timers, timers: [{ ...pending, delayMs: 5 }] },
 			{ ...timers, timers: [{ ...timeout, delayMs: null }] },
 			{ ...timers, timers: Array.from({ length: OPS_TIMERS_CAP + 1 }, () => timeout) },
+			{ ...timers, timers: [{ ...timeout, stack: 'é'.repeat(OPS_TIMER_STACK_MAX_BYTES / 2 + 1) }] },
+			{ ...timers, timers: [{ ...timeout, stack: Array.from({ length: OPS_TIMER_STACK_MAX_FRAMES + 1 }, () => 'at f').join('\n') }] },
 		]
 		for (const body of bodies) {
 			expect(parseOpsTimersView(body)).toBeNull()

@@ -3,14 +3,16 @@
 // registered it, scrubbed and bounded. Its scope is the isolate, not one object: every object the isolate hosts shares
 // the switch and the records, and only the isolate's eviction resets them, so the next isolate's tracker starts off.
 
-import { OPS_TIMERS_CAP, type OpsTimer, type OpsTimersRequest, type OpsTimersView } from '@fabrika/auth-core'
+import {
+	OPS_TIMER_STACK_MAX_BYTES,
+	OPS_TIMER_STACK_MAX_FRAMES,
+	OPS_TIMERS_CAP,
+	type OpsTimer,
+	type OpsTimersRequest,
+	type OpsTimersView,
+} from '@fabrika/auth-core'
 import { jsonResponse } from '../errors.js'
 import { type Scrubber, secretScrubber } from '../jobs/scrub.js'
-
-/** A recorded stack keeps the frames nearest the call that registered the work. */
-export const MAX_TIMER_STACK_FRAMES = 20
-/** A recorded stack is cut to this many UTF-8 bytes after it is scrubbed. */
-export const MAX_TIMER_STACK_BYTES = 4 * 1024
 
 /** The global timers the tracker wraps while it is on; `globalThis` fits it. */
 export interface TimerScope {
@@ -153,12 +155,12 @@ function delayOf(delay: unknown): number {
 	return Number.isFinite(ms) && ms > 0 ? Math.min(Math.trunc(ms), Number.MAX_SAFE_INTEGER) : 0
 }
 
-/** The frames below `caller`, without the tracker's own: at most `MAX_TIMER_STACK_FRAMES`, scrubbed, then cut to bytes. */
+/** The frames below `caller`, without the tracker's own: at most `OPS_TIMER_STACK_MAX_FRAMES`, scrubbed, then cut to bytes. */
 function stackBelow(caller: Caller, scrubber: Scrubber): string {
 	const holder: { stack?: string } = {}
 	Error.captureStackTrace(holder, caller)
-	const frames = (holder.stack ?? '').replace(/^Error\n/, '').split('\n').slice(0, MAX_TIMER_STACK_FRAMES)
-	return cutToBytes(scrubber.scrub(frames.join('\n')), MAX_TIMER_STACK_BYTES)
+	const frames = (holder.stack ?? '').replace(/^Error\n/, '').split('\n').slice(0, OPS_TIMER_STACK_MAX_FRAMES)
+	return cutToBytes(scrubber.scrub(frames.join('\n')), OPS_TIMER_STACK_MAX_BYTES)
 }
 
 /** `text` cut at a character boundary so its UTF-8 encoding fits `bytes`. */
