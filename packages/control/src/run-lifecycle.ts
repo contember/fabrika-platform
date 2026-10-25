@@ -2,6 +2,7 @@ import {
 	appEnvironmentId,
 	type ContractArtifact,
 	FABRIKA_APP_ORIGIN,
+	FABRIKA_EGRESS_REFUSED_HOSTS,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
 	FABRIKA_OPS_KEY_DIGESTS,
@@ -50,6 +51,7 @@ import {
 	serializeProviderJson,
 } from './db'
 import { devLauncherRefusal, platformSourceEnvironment, platformSourceOrigin } from './dev/deploy'
+import { declaresPublicEgress, installationHosts } from './egress-hosts'
 import type { CommitSource } from './github/source/commit-files'
 import { type IamSchemaPort, isIamUnavailable } from './iam-schema'
 import type { InstallationBrandSource } from './installation-brand'
@@ -745,6 +747,13 @@ async function deployUnder(
 		if (appEnv.kind === 'dev') Object.assign(managedEnvironment, platformSourceEnvironment(platformSourceOrigin(deps.controlOrigin), platformSourceKey))
 		// The canonical origin `ctx.url` builds links on; `null` removes a stale one from an environment that has none.
 		managedEnvironment[FABRIKA_APP_ORIGIN] = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
+		// The installation's own hosts, which a cron job's public egress refuses (ADR-0070); `null` removes a stale list.
+		managedEnvironment[FABRIKA_EGRESS_REFUSED_HOSTS] = declaresPublicEgress(approvedContract)
+			? installationHosts(
+				[deps.controlOrigin, deps.iamIssuer, operationsOrigin],
+				await deps.repositories.registry.listAppEnvsByProvider(appEnv.provider),
+			)
+			: null
 		const tokenKeys = dryRun ? null : await reconcileTokenKeys(deps.tokenKeys, app.id, appEnv.env, approvedContract)
 		managedEnvironment[FABRIKA_TOKEN_KEYS] = tokenKeys
 		// Only an environment with a domain, at a release the provider serves the ops channel at, gets the digests (ADR-0069);

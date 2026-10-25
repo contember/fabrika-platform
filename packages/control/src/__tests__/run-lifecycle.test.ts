@@ -711,6 +711,7 @@ describe('provider-neutral run lifecycle', () => {
 			FABRIKA_APP_ORIGIN: 'https://public.example.com',
 			FABRIKA_TOKEN_KEYS: null,
 			FABRIKA_OPS_KEY_DIGESTS: null,
+			FABRIKA_EGRESS_REFUSED_HOSTS: null,
 		})
 		// Control marks each credential once, so a provider writes it as a secret without a rule of its own.
 		expect(Object.keys(input.managedEnvironment).filter((name) => input.managedEnvironment[name]?.credential).sort()).toEqual([
@@ -906,6 +907,7 @@ describe('provider-neutral run lifecycle', () => {
 			FABRIKA_APP_ORIGIN: 'https://public.example.com',
 			FABRIKA_TOKEN_KEYS: null,
 			FABRIKA_OPS_KEY_DIGESTS: null,
+			FABRIKA_EGRESS_REFUSED_HOSTS: null,
 		})
 		expect(pendingInputs[0]?.environment.operationsOrigin).toBeUndefined()
 
@@ -938,6 +940,7 @@ describe('provider-neutral run lifecycle', () => {
 			FABRIKA_APP_ORIGIN: 'https://public.example.com',
 			FABRIKA_TOKEN_KEYS: null,
 			FABRIKA_OPS_KEY_DIGESTS: null,
+			FABRIKA_EGRESS_REFUSED_HOSTS: null,
 		})
 		// The origin a proxy's `connect-src` admits, stated by Control so no provider parses the DSN for it.
 		expect(activeInputs[0]?.environment.operationsOrigin).toBe(new URL(dsn).origin)

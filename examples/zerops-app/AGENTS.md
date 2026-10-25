@@ -223,6 +223,7 @@ the access check. `references/spa.md` shows the stack.
 | e-mail (a cron job only)       | `mailer: 'installation'`                                | `ctx.mail.send`                                    |
 | a file from a public procedure | `file('<kind>')` input, `admission` with `bytesPerHour` | a reference the handler writes into a file column  |
 | an outside HTTPS API           | `egress: ['https://api.example.com']`                   | `fetch` to exactly those origins                   |
+| any public website (a job)     | `egress: 'public'`                                      | `fetch` to public hosts, never the installation    |
 | a signed link (unsubscribe)    | `signs: ['<purpose>']`                                  | `ctx.tokens.sign`                                  |
 | a webhook binding              | `binds: '<webhook>'`                                    | `ctx.webhooks('<webhook>').bind` and `.unbind`     |
 | a job run after the commit     | `kicks: ['<job>']`                                      | `ctx.kick('<job>')`                                |
@@ -1517,6 +1518,11 @@ On Cloudflare a procedure waits for its outside call inside the object's transac
 with it (`SKILL.md`). A mutation records a row and kicks a job, which declares the `egress` and calls outside
 `ctx.transaction` (`references/jobs.md`).
 
+A cron job that calls hosts nobody knows when the contract is written (the websites its operators enter: a crawler, an
+auditor, a link checker) declares `egress: 'public'` instead of a list (`references/jobs.md`). Only a cron job may: a
+procedure, a mutation and a webhook name their origins. Never keep `fetch` from before boot or open sockets to get past
+the list; that is hidden reach.
+
 ## Links to your own procedures: `ctx.url`
 
 `ctx.url('<endpoint id>', { input?, query? })` builds an absolute URL of one of the application's own procedures, on
@@ -1684,7 +1690,7 @@ The refusals agents meet most, and their fix:
 | `skipped-test`                 | `.skip`, `.only`, `.todo`                                                                                                                                        | run the test                                                                              |
 | `file-column-migration`        | a file column without `REFERENCES fabrika_files (id)` or without an index it leads                                                                               | both, in a new migration (`references/table-and-migration.md`)                            |
 | `on-conflict-index`            | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                                 | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns |
-| `cross-app-fetch`              | a `fetch` of an absolute URL under no origin a site declares in `egress`                                                                                         | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)              |
+| `cross-app-fetch`              | a `fetch` of an absolute URL under no origin a site declares in `egress`, or one a job's `egress: 'public'` refuses (an IP address, `localhost`)                 | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)              |
 | `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                                             | the endpoint id `<mount>.<group>.<procedure>`                                             |
 | `cloudflare-sql`               | on Cloudflare, a site that declares `sql`                                                                                                                        | the handles (`ctx.db`), without `sql`                                                     |
 | `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                                     | the kind without `scan`, and no public procedure that takes its files                     |
@@ -1758,11 +1764,11 @@ A 500 answers a fixed message; the server log has one line, `fabrika: <endpoint>
 fixed failure code and, for a framework refusal, its reason and the reason's fixed text, never a value or your error's
 message. The codes you meet most:
 
-| Code                 | Means                                                                                                                                                                                                                                  |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_dialect` (`ctx.sql` on SQLite, Cloudflare) …; the reason's text names the rule |
-| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), or one kept past its request (`ended`, `foreign_work`)                                                     |
-| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                                                                        |
+| Code                 | Means                                                                                                                                                                                                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_dialect` (`ctx.sql` on SQLite, Cloudflare) …; the reason's text names the rule                                         |
+| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), one kept past its request (`ended`, `foreign_work`), or a `fetch` its `egress` refuses (`undeclared_egress`, `refused_egress`, `oversized_egress`) |
+| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                                                                                                                |
 
 With an Operations DSN the same 500 is a `RequestFailed` issue in Operations. Its event also carries what your handler
 threw: the error's type, its message, its stack and its `cause` chain. Read the stack there, not in the log. A crash
@@ -2349,6 +2355,15 @@ export const contract = app.contract((c) => ({
 - A job may also declare `kicks` (another job; the edges never form a cycle), `signs` (`ctx.tokens.sign`),
   `egress` (the HTTPS origins its `fetch` calls) and `issues` (`references/endpoint.md`). `ctx.url('<endpoint id>', …)`
   builds an absolute link to one of the application's procedures, for an e-mail.
+- A job that calls the websites its operators enter (a crawler, an auditor) declares `egress: 'public'`:
+  `app.cron('*/5 * * * *', { actions: ['sites.read'], egress: 'public' })`. Its `fetch` reaches any public host over
+  HTTPS or HTTP on the default port. It is refused (`capability_refused: refused_egress`) for an IP address, a name of
+  one label (`localhost`, an internal service), a name under `.local`, `.internal`, `.workers.dev`, `.zerops.app` and similar, a port,
+  the installation's own hosts (IAM, Control, Operations, every application's domain) and, on Bun (Zerops), a name
+  that resolves to a private address. Every redirect is checked again: `redirect: 'manual'` gets the redirect, the default
+  follows at most 10. A request has 60 s, a response body at most 16 MiB (`oversized_egress`); pass `ctx.signal`, or
+  `AbortSignal.any([ctx.signal, AbortSignal.timeout(8_000)])` for a shorter bound per page. The approver reviews it
+  closely, as reach to anywhere public. Keep the sites operators enter in a table the job reads.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
   each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
 - A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, a framework refusal

@@ -52,6 +52,7 @@ bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced
 bun test src/__tests__/error-reports.test.ts    # what a report carries: scrubbing, frames, causes, caps; crash reports of both adapters
 bun test src/__tests__/intake.test.ts           # the intake recipe's job: each stop, bad records, batches, locks, keys (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/request-signal.test.ts   # ctx.signal of a request handler: a cancelled request, the budget
+bun test src/__tests__/public-egress.test.ts    # a cron job's egress: 'public': the URL rules, the installation's hosts, redirects, bounds, the resolver (the job run needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/request-budget.test.ts   # a writing mutation past REQUEST_BUDGET_MS: aborted, 500, nothing written (10 s; needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/outbox-rule.test.ts      # the generated cases of an outbox write and of an outbound call (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
@@ -186,7 +187,8 @@ src/
     verifiers.ts      a delivery's signature: the presets and the hmac shape, constant-time
     tokens.ts         signed tokens: FABRIKA_TOKEN_KEYS, ctx.tokens.sign, the verification of each token field
     urls.ts           ctx.url: an absolute link to a procedure, on FABRIKA_APP_ORIGIN, with the parameters its URL carries
-    egress.ts         the guard on the global fetch: a site's handler reaches only its declared egress origins
+    egress.ts         the guard on the global fetch: a site's handler reaches only its declared egress origins, or a
+                      cron job's egress: 'public' only public hosts, every redirect hop checked, each request bounded
     faults.ts         ServerFault: a framework failure whose message only the log sees
     failures.ts       FailureReports: a 5xx as one log line and one rate-limited Operations event, by code
     crashes.ts        a boot that throws, an uncaught exception, an unhandled rejection: one crash report each
@@ -716,6 +718,12 @@ vocabulary (`packages/db/CLAUDE.md`).
   connector, IAM, the object store, the JWKS) runs through `platformCall`/`platformFacility`, outside the site's scope;
   a new facility that makes its own requests must too, or every site that uses it needs an egress it never declared.
   It is no sandbox: code that kept the `fetch` it found before boot, or opens sockets, escapes it.
+- **A cron job's `egress: 'public'` reaches public hosts only** (ADR-0070): `runAsSite` takes the job runner's
+  `PublicEgressRules` (`publicEgressRules`: the hosts the framework variables and `FABRIKA_EGRESS_REFUSED_HOSTS` name,
+  and the adapter's `resolveHost`, which only the Bun adapter passes). Each hop goes out with `redirect: 'manual'` after
+  `publicEgressRefusal` (`@fabrika/auth-core`, shared with the checker) and the resolver admit it; the guard follows
+  redirects itself and bounds each request (`PUBLIC_EGRESS_LIMITS`). No other site runs with the rules: `siteEgress`
+  turns a `'public'` it was never meant to hold into no reach.
 - **A webhook's `limits` bound its body and its handler** (`WEBHOOK_LIMITS`): `maxBytes` (1 MiB by default and at most)
   is its row's body limit, read within the deadline `bodyDeadlineMs` derives from it; `timeoutMs` (10 s, at most 60 s)
   is its handler's, which the artifact records on the mount and the delivery claim's lease outlasts.

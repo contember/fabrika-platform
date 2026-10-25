@@ -656,6 +656,11 @@ On Cloudflare a procedure waits for its outside call inside the object's transac
 with it (`SKILL.md`). A mutation records a row and kicks a job, which declares the `egress` and calls outside
 `ctx.transaction` (`references/jobs.md`).
 
+A cron job that calls hosts nobody knows when the contract is written (the websites its operators enter: a crawler, an
+auditor, a link checker) declares `egress: 'public'` instead of a list (`references/jobs.md`). Only a cron job may: a
+procedure, a mutation and a webhook name their origins. Never keep `fetch` from before boot or open sockets to get past
+the list; that is hidden reach.
+
 ## Links to your own procedures: `ctx.url`
 
 `ctx.url('<endpoint id>', { input?, query? })` builds an absolute URL of one of the application's own procedures, on
