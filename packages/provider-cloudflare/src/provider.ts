@@ -486,7 +486,7 @@ const stageAssets = async (env: StepEnv, assets: NonNullable<StepEnv['spaAssets'
 		return
 	}
 	assertRunning(env.run.signal)
-	const staged = await stageSpaAssets(assets.mounts, assets.root, resolve(generatedDir, SPA_ASSETS_DIRECTORY))
+	const staged = await stageSpaAssets(assets.mounts, assets.root, generatedDir)
 	env.run.log(`  staged ${staged} SPA files into ${SPA_ASSETS_DIRECTORY}: ${mounts}`)
 }
 

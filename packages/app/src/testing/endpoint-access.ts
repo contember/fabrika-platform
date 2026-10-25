@@ -124,11 +124,15 @@ export interface EndpointAccessOptions {
 	/**
 	 * The error types of the refusals (400) an endpoint's handler answers its own object with when the case's input meets
 	 * no domain rule the kit can satisfy, by endpoint id: such a 400 is the handler's own answer, so the request passed
-	 * the access form, and its case gets it as `{ status: 400 }` instead of failing. Any other 400 still throws, and an
+	 * the access form, and the endpoint's own case gets it as `{ status: 400 }` instead of failing. A leak, global or
+	 * capability case still throws on it (an answer that holds nothing proves no isolation), so does any other 400, and an
 	 * input the schema refuses (`validation`) always does. `refusals` of the fixtures.
 	 */
 	readonly refusals?: Readonly<Record<string, readonly string[]>>
 }
+
+/** Whether a case takes a refusal the fixtures declare for its endpoint as the handler's answer: only an own case does. */
+type Refusals = 'declared' | 'none'
 
 interface ActionEndpoint {
 	readonly id: string
@@ -429,16 +433,20 @@ export function endpointAccessKit<DB, P>(
 		throw new Error(`${row.id} admits neither a human nor a machine caller`)
 	}
 
-	/** A case's request by a new caller holding `grants`, its generated fields filled for `chain` and that caller. */
+	/**
+	 * A case's request by a new caller holding `grants`, its generated fields filled for `chain` and that caller. Only an
+	 * own case passes `refusals: 'declared'`.
+	 */
 	const ask = async (
 		row: ActionEndpoint,
 		grants: readonly Grant[],
 		input: Readonly<Record<string, unknown>>,
 		chain: Chain,
+		refusals: Refusals = 'none',
 	): Promise<{ readonly status: number; readonly text: string; readonly marks: readonly string[] }> => {
 		const asker = callerFor(row, grants)
 		const asked = withGenerated(row, input, chain, asker.caller)
-		return { ...(await askAs(row, asker.fetch, asked.input)), marks: asked.marks }
+		return { ...(await askAs(row, asker.fetch, asked.input, refusals)), marks: asked.marks }
 	}
 
 	// A seeded file column references an empty object, which a handler that serves or opens the file reads here.
@@ -516,6 +524,7 @@ export function endpointAccessKit<DB, P>(
 		row: ActionEndpoint,
 		fetch: RpcFetch,
 		body: Readonly<Record<string, unknown>>,
+		refusals: Refusals = 'none',
 	): Promise<{ readonly status: number; readonly text: string }> => {
 		stockSeededObjects()
 		const [url, init] = await requestOf(row, body)
@@ -525,8 +534,16 @@ export function endpointAccessKit<DB, P>(
 		// the input it was given is no answer to another scope. Either is what the generator could not build.
 		if (response.status === 400) {
 			const type = errorType(text)
-			if (type !== undefined && type !== 'validation' && options.refusals?.[row.id]?.includes(type) === true) {
+			const declared = type !== undefined && type !== 'validation' && options.refusals?.[row.id]?.includes(type) === true
+			// Only the own case may take it: it shows the access form let the caller through. A leak or a global case that
+			// got it would pass on an answer that holds nothing, which proves nothing.
+			if (declared && refusals === 'declared') {
 				return { status: response.status, text }
+			}
+			if (declared) {
+				throw new Error(
+					`${row.id}: the handler answered its declared refusal (400 ${type}), which only the own case takes; this case proves nothing on it until the fixtures give what the handler needs (${text})`,
+				)
 			}
 			throw new Error(
 				type === 'validation'
@@ -860,7 +877,7 @@ export function endpointAccessKit<DB, P>(
 				await seedAppRows(appRows)
 				if (row.link !== null) {
 					const holder = await linkHolder(row, row.link, seed, input)
-					const { status } = await askAs(row, holder.fetch, { ...input, ...holder.rows })
+					const { status } = await askAs(row, holder.fetch, { ...input, ...holder.rows }, 'declared')
 					return { status }
 				}
 				const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
@@ -869,6 +886,7 @@ export function endpointAccessKit<DB, P>(
 					holding(row, input, scopes.own.grants, scopes.own.chain),
 					addressing(input, access.from, scopes.own),
 					scopes.own.chain,
+					'declared',
 				)
 				return { status }
 			},

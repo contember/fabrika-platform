@@ -78,8 +78,9 @@ export const members = { 'api.tasks.assign': ['assignee'] }
 - `refusals['<endpoint id>']` lists the error types of the 400s the endpoint's handler answers its own object with when
   no fixture can meet its domain rule: `export const refusals = { 'api.skills.publish': ['skill_frontmatter'] }`, where
   the package must name the skill's slug and the generated case's skill has a generated one. Such a 400 is the
-  handler's own answer, so the request passed the access form: the own case then passes on 200 or that 400, a leak
-  case counts it as answered, and the denial cases still expect 404 or 403. Declare one only after the fixtures above
+  handler's own answer, so the request passed the access form: the own case then passes on 200 or that 400, and the
+  denial cases still expect 404 or 403. A leak case still fails on it, because an answer that holds nothing proves no
+  isolation: when the leak case of the endpoint meets the same rule, ask the human. Declare one only after the fixtures above
   cannot meet the rule, and keep the endpoint's own tests for the rule itself. Any other 400 still fails the case, and
   the checker refuses `validation`, an input the schema refuses (`endpoint-fixture`).
 - The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).

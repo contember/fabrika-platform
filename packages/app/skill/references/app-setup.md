@@ -395,8 +395,9 @@ await Bun.write(
   `src/schemas.ts`, `src/shared/` and its own modules; never a slice, `src/db/` or a Bun or Node module. The plugin loads the
   contract without its handlers. A row type the screen declares (`Task` above) is checked against the answer where
   the rows are passed in.
-- The last step points the page's assets at the SPA's prefix (`/`): the mount answers `index.html` for every path
-  under it, so a deep link such as `/tasks/<id>` renders. `define` gives React's production build.
+- The last step points the page's assets at the SPA's prefix (`/`): the mount answers `index.html` for every page
+  route under it (a path without an extension, or a navigation), so a deep link such as `/tasks/<id>` renders; a
+  missing asset such as an old `chunk-….js` is 404. `define` gives React's production build.
 - `sourcemap: 'external'` writes each script's map beside it, and the page names none. The platform build uploads the
   maps to Operations for the release the page reports, so an error's frames show the original source; the mount
   never serves a `.map` file (404). Keep the maps external: `inline` would ship the source to every visitor.

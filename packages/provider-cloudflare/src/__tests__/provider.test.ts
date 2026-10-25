@@ -1943,6 +1943,47 @@ describe("the SPA mounts' files on Workers Assets", () => {
 		}
 	})
 
+	test('a symbolic link in the middle of a mount directory, or on the way to the staged directory, is refused', async () => {
+		const outside = await mkdtemp(join(tmpdir(), 'fabrika-outside-'))
+		fixtures.push(outside)
+		await mkdir(join(outside, 'web'))
+		await writeFile(join(outside, 'web', 'index.html'), 'not the application')
+		for (const [link, to, dir] of [['x', '/', 'x/etc'], ['x', outside, 'x/web'], ['dist', join(outside), 'dist/web']] as const) {
+			const checkoutDir = await builtCheckout(async (root) => {
+				await rm(join(root, link), { recursive: true, force: true })
+				await symlink(to, join(root, link))
+			})
+			const mounts = { ...notesArtifact.mounts, spa: { kind: 'spa' as const, prefix: '/', dir } }
+			const result = await deploy(rec, config(), { checkoutDir, contract: { ...notesArtifact, mounts } })
+			expect(stepError(result, 'deploy-worker')).toBe(
+				link === 'dist'
+					? `cloudflare: mount \`shared\` serves \`dist/share\`, which passes \`dist\`, a symbolic link; the deploy would publish its target`
+					: `cloudflare: mount \`spa\` serves \`${dir}\`, which passes \`x\`, a symbolic link; the deploy would publish its target`,
+			)
+			expect(existsSync(join(checkoutDir, 'fabrika', 'assets', 'passwd'))).toBe(false)
+			expect(existsSync(join(checkoutDir, 'fabrika', 'assets', 'index.html'))).toBe(false)
+		}
+		const redirected = await builtCheckout(async (root) => {
+			await mkdir(join(root, 'fabrika'), { recursive: true })
+			await symlink(outside, join(root, 'fabrika', 'assets'))
+		})
+		const result = await deploy(rec, config(), { checkoutDir: redirected })
+		expect(stepError(result, 'deploy-worker')).toBe(
+			'cloudflare: `fabrika/assets` is a symbolic link, and the deploy stages the SPA files into `fabrika/assets`',
+		)
+		expect(existsSync(join(outside, 'web', 'index.html'))).toBe(true)
+	})
+
+	test("Workers Assets' own configuration files of the build are never staged at the root", async () => {
+		const checkoutDir = await builtCheckout(async (root) => {
+			for (const name of ['_headers', '_redirects', '.assetsignore']) await writeFile(join(root, 'dist', 'app', name), '/* /elsewhere 302')
+		})
+		const result = await deploy(rec, config(), { checkoutDir })
+		expect(result.status).toBe('succeeded')
+		for (const name of ['_headers', '_redirects', '.assetsignore']) expect(existsSync(join(checkoutDir, 'fabrika', 'assets', name))).toBe(false)
+		expect(existsSync(join(checkoutDir, 'fabrika', 'assets', 'index.html'))).toBe(true)
+	})
+
 	test('a dry run names what it would stage and writes nothing', async () => {
 		const checkoutDir = await builtCheckout()
 		await deploy(rec, config(), { checkoutDir, dryRun: true })
