@@ -30,6 +30,7 @@ import type { CrashReporter } from '../jobs/report.js'
 import { type JobClock, type JobScheduler, systemClock } from '../jobs/runner.js'
 import { environmentScrubber, type Scrubber } from '../jobs/scrub.js'
 import { bindingAssets, bindingKeySource, bindingMembership, bindingTerminals, bindingWorkloadTokens, connectBindings } from './bindings.js'
+import { importInProgress } from './import.js'
 import { type BarrierEvent, MaintenanceBarrier, r2MaintenanceStore } from './maintenance.js'
 import { CLOUDFLARE_FILES_BINDING } from './names.js'
 import { type OpsAccess, opsAccess, type OpsRecovery, type OpsStorage, serveOps } from './ops.js'
@@ -229,6 +230,17 @@ class MigrationsPending extends Error {
 	override readonly name = 'MigrationsPending'
 }
 
+/** The object holds an import marker (ADR-0070 §6): it neither boots nor migrates until the import completes or is discarded. */
+class ImportInProgress extends Error {
+	override readonly name = 'ImportInProgress'
+}
+
+/** Whether the object holds an import marker; a storage without the synchronous KV (the bun:sqlite double) holds none. */
+function importing(storage: ApplicationStorage): boolean {
+	const { kv } = storage
+	return kv !== undefined && importInProgress({ kv })
+}
+
 function isMigrationsPending(error: unknown): boolean {
 	return error instanceof MigrationsPending || (error instanceof Error && error.cause instanceof MigrationsPending)
 }
@@ -341,6 +353,10 @@ async function attach(
 	if (setup === null) {
 		throw new Error('no contract application is registered: the generated entrypoint calls createContractWorker before an object starts')
 	}
+	// Before anything loads or migrates, and no boot failure: a half-loaded import never boots.
+	if (importing(state.storage)) {
+		throw new ImportInProgress('import_in_progress')
+	}
 	const environment = captureEnvironment(Object.fromEntries(Object.entries(env).filter(([name]) => !FRAMEWORK_BINDINGS.has(name))))
 	const crashes = environmentCrashReporter(environment, setup.options.operationsFetch)
 	try {
@@ -394,7 +410,10 @@ function bootFailure(error: unknown, scrubber: Scrubber): OpsBootFailureContent 
 	return { at, message, stack: null }
 }
 
-/** `pending`: a restricted cold start found a migration to apply, so the application did not boot; that is no failure. */
+/**
+ * `pending`: a restricted cold start found a migration to apply, or the object holds an import marker, so the
+ * application did not boot; that is no failure.
+ */
 type Outcome = { readonly booted: Booted } | { readonly failure: unknown } | { readonly pending: true }
 
 /** The wait after an instance's first failed boot before an event boots again; it doubles with each failure, to the cap. */
@@ -516,6 +535,10 @@ export class FabrikaApplication {
 			// Fails closed: a state R2 could not give is never read as `open` (ADR-0069 §3, cold starts).
 			return maintenanceRefusal()
 		}
+		if (importing(this.#state.storage)) {
+			// ADR-0070 §6: whatever the mode, a half-loaded import serves nothing; the tick repairs nothing.
+			return request.headers.get(TICK_HEADER) === null ? maintenanceRefusal() : new Response(null, { status: 204 })
+		}
 		if (barrier.mode !== 'open' && request.headers.get(TICK_HEADER) !== null) {
 			// The tick repairs nothing and writes nothing until the object opens.
 			return new Response(null, { status: 204 })
@@ -592,7 +615,7 @@ export class FabrikaApplication {
 		}
 		const outcome = this.#boot('apply')
 		this.#outcome = outcome
-		return 'booted' in (await outcome)
+		return 'booted' in this.#settled(outcome, await outcome)
 	}
 
 	/** Settles either way: a callback that rejects would reset the object, and every request answers the failure instead. */
@@ -601,7 +624,7 @@ export class FabrikaApplication {
 			attach(this.#setup, this.#state, this.#env, policy, (failure) => {
 				this.#bootFailure = failure
 			}).then((booted): Outcome => ({ booted }), (failure: unknown): Outcome => {
-				if (isMigrationsPending(failure)) {
+				if (isMigrationsPending(failure) || failure instanceof ImportInProgress) {
 					return { pending: true }
 				}
 				this.#failedBoots++
@@ -666,6 +689,10 @@ export class FabrikaApplication {
 			if (object === null || object !== this.#object) {
 				// No verified event named this object yet, or it is not the one ordinary traffic reaches (a rehearsal, a
 				// former serving object after a deploy moved the traffic): it runs no job.
+				return
+			}
+			if (importing(this.#state.storage)) {
+				// A half-loaded import runs no job and arms nothing; the repair tick arms the alarm once the object boots.
 				return
 			}
 			barrier = await this.#maintenance(object)

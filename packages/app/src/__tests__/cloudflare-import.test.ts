@@ -5,7 +5,12 @@
 import {
 	encodeOpsDumpLine,
 	encodeOpsDumpRow,
+	ENDPOINT_HEADER,
+	FABRIKA_APPLICATION_OBJECT,
+	FABRIKA_APPLICATION_OBJECTS,
+	FABRIKA_OPS_KEY_DIGESTS,
 	foldOpsTableHash,
+	formatOpsKeyDigests,
 	OPS_DATA_REFUSED_STATUS,
 	OPS_DUMP_KEY,
 	OPS_DUMP_PART_MAX_RAW_BYTES,
@@ -25,6 +30,7 @@ import {
 	type OpsExportPartAck,
 	type OpsExportScope,
 	type OpsImportRequest,
+	opsKeyDigest,
 	type OpsPublishedState,
 	parseOpsDataRefusal,
 	parseOpsDumpManifest,
@@ -39,6 +45,7 @@ import {
 	parseOpsImportVerifyAck,
 	parseOpsStaleRefusal,
 	planOpsDump,
+	PROXY_SECRET_HEADER,
 	readOpsDumpValue,
 } from '@fabrika/auth-core'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
@@ -47,11 +54,21 @@ import { migrateSqlite, type SqliteMigrationBundle } from '@fabrika/db/sqlite-mi
 import { Database as BunDatabase } from 'bun:sqlite'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createTestEnv, type TestEnv } from 'lopata/testing'
+import { join } from 'node:path'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
+import { applicationMigrations } from '../build'
+import { type ApplicationState, createContractWorker, FabrikaApplication } from '../cloudflare'
+import { TICK_HEADER } from '../cloudflare/application'
 import { exportStep } from '../cloudflare/export'
 import { describeDumpSchema, IMPORT_MARKER_KEY, importStep, type ImportStorage, type ImportTarget, serveImport } from '../cloudflare/import'
 import { MaintenanceBarrier } from '../cloudflare/maintenance'
-import type { OpsTarget } from '../cloudflare/ops'
+import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
+import { OPS_ENDPOINT, type OpsTarget } from '../cloudflare/ops'
+import { notesApp as fixtureApp } from './cloudflare-fixture/src/app'
+import type { NotesWorld } from './cloudflare-fixture/src/world'
+import { frameworkEnvFor, keepingProcessEnvironment, keySource, ORIGIN, PROXY_SECRET, workloadTokensFor } from './fixtures/implement/harness'
+
+const FIXTURE_ROOT = join(import.meta.dir, 'cloudflare-fixture')
 
 const SOURCE: OpsDumpSource = { object: 'application', dump: '0193f1c2-7a4b-7c3d-8e9f-0123456789ab' }
 const TARGET = 'clone'
@@ -1119,5 +1136,146 @@ describe('a dump the producer wrote', () => {
 		expect(one(target.storage, `SELECT CAST(big AS TEXT) FROM notes WHERE id = 4`)).toBe(BEYOND_DOUBLE)
 		expect(one(target.storage, `SELECT typeof(body) || hex(body) FROM notes WHERE id = 4`)).toBe('text80')
 		expect(one(target.storage, `SELECT seq FROM sqlite_sequence WHERE name = 'notes'`)).toBe(12)
+	})
+})
+
+describe('an object that holds an import marker', () => {
+	const OPS_KEY = 'ops-key-of-the-environment-0123456789abcdef'
+	const SERVING = 'application'
+	/** Published `open`, so only the marker refuses what follows. */
+	const OPEN: OpsPublishedState = { generation: 2, mode: 'open' }
+
+	/** The environment's bucket: the published state of the serving object, no file. */
+	function stateBucket() {
+		const unused = () => Promise.reject(new Error('not called'))
+		const state = { etag: 'v2', text: () => Promise.resolve(JSON.stringify(OPEN)) }
+		return { head: unused, get: (key: string) => Promise.resolve(key === `__fabrika/ops/${SERVING}.json` ? state : null), put: unused, delete: unused }
+	}
+
+	function health(): Request {
+		return new Request(`${ORIGIN}/healthz`, { headers: { [PROXY_SECRET_HEADER]: PROXY_SECRET } })
+	}
+
+	function tick(): Request {
+		return new Request(`${ORIGIN}/`, { method: 'POST', headers: { [TICK_HEADER]: String(Date.now()), [PROXY_SECRET_HEADER]: PROXY_SECRET } })
+	}
+
+	function opsMigrate(): Request {
+		return new Request(`${ORIGIN}/__fabrika/ops/migrate`, {
+			method: 'POST',
+			headers: {
+				[PROXY_SECRET_HEADER]: PROXY_SECRET,
+				[ENDPOINT_HEADER]: OPS_ENDPOINT,
+				Authorization: `Bearer ${OPS_KEY}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({ object: SERVING, generation: OPEN.generation }),
+		})
+	}
+
+	interface Marked {
+		readonly target: Target
+		readonly object: FabrikaApplication
+		readonly loads: { count: number }
+		readonly runs: NotesWorld['runs']
+		readonly alarms: (number | null)[]
+	}
+
+	/**
+	 * The serving object of the fixture application, holding a backup of the same release half-loaded by the importer:
+	 * `begin` and its one part, no verification. The dump holds a note.
+	 */
+	async function marked(): Promise<Marked> {
+		const migrations = await applicationMigrations(FIXTURE_ROOT)
+		const runs: NotesWorld['runs'] = []
+		const served = fixtureApp({ runs })
+		const loads = { count: 0 }
+		createContractWorker(() => {
+			loads.count++
+			return Promise.resolve({ default: served.implementation })
+		}, { migrations })
+		const bundles = release(migrations)
+		const objects = new Map<string, Uint8Array>()
+		const source = objectStorage()
+		await migrateSqlite(
+			{ exec: (query, ...bindings) => source.storage.sql.exec(query, ...bindings), transactionSync: (fn) => source.storage.transactionSync(fn) },
+			bundles,
+		)
+		source.database().run(`INSERT INTO notes (id, workspace_id, title, created_by, version) VALUES ('n1', 'w1', 'kept', 'u1', 1)`)
+		writeDump(objects, source.storage)
+		const target = freshTarget(objects, { migrations: bundles })
+		await step(target, { ...scope(), step: 'begin' })
+		expect((await step(target, { ...scope(), step: 'part', part: 1 })).status).toBe(200)
+
+		const tokens = workloadTokensFor(served.implementation)
+		const alarms: (number | null)[] = []
+		const state: ApplicationState = {
+			storage: {
+				...target.storage,
+				getAlarm: () => Promise.resolve(alarms.at(-1) ?? null),
+				setAlarm: (time) => Promise.resolve(void alarms.push(time)),
+				deleteAlarm: () => Promise.resolve(void alarms.push(null)),
+			},
+			blockConcurrencyWhile: (callback) => callback(),
+			waitUntil: () => {},
+		}
+		const object = new FabrikaApplication(state, {
+			...frameworkEnvFor(served.implementation),
+			...served.variables,
+			FABRIKA_PROXY_SECRET: PROXY_SECRET,
+			IAM: { getJwks: () => keySource.getJwks(), mintFromKey: (input: { app: string; key: string }) => tokens.exchange(input) },
+			[CLOUDFLARE_FILES_BINDING]: stateBucket(),
+			[FABRIKA_OPS_KEY_DIGESTS]: formatOpsKeyDigests([opsKeyDigest(OPS_KEY)]),
+			[FABRIKA_APPLICATION_OBJECT]: SERVING,
+			[FABRIKA_APPLICATION_OBJECTS]: SERVING,
+		})
+		return { target, object, loads, runs, alarms }
+	}
+
+	/** Neither boots nor migrates: no request, tick, alarm or ops migrate loads the application or applies a file. */
+	async function refusesEverything({ target, object, loads, runs, alarms }: Marked): Promise<void> {
+		const ledger = () => one(target.storage, 'SELECT count(*) FROM fabrika_migrations')
+		const before = ledger()
+
+		const request = await object.fetch(health())
+		expect(request.status).toBe(503)
+		expect(request.headers.get('Retry-After')).not.toBeNull()
+		expect((await object.fetch(tick())).status).toBe(204)
+		await object.alarm()
+		expect((await object.fetch(opsMigrate())).status).toBe(500)
+
+		expect(loads.count).toBe(0)
+		expect(runs).toEqual([])
+		expect(alarms).toEqual([])
+		expect(ledger()).toBe(before)
+	}
+
+	test('refuses a request, a tick, the alarm and a migration; once complete, ordinary traffic boots it', async () => {
+		await keepingProcessEnvironment(async () => {
+			const loaded = await marked()
+			const { target, object, loads } = loaded
+			await refusesEverything(loaded)
+
+			expect((await verifyAll(target)).status).toBe(200)
+			expect((await step(target, { ...scope(), step: 'complete' })).status).toBe(200)
+
+			expect((await object.fetch(health())).status).toBe(200)
+			expect(loads.count).toBe(1)
+			expect(one(target.storage, 'SELECT title FROM notes')).toBe('kept')
+		})
+	})
+
+	test('once discarded, ordinary traffic boots it from scratch', async () => {
+		await keepingProcessEnvironment(async () => {
+			const loaded = await marked()
+			const { target, object, loads } = loaded
+			await refusesEverything(loaded)
+
+			expect((await step(target, { step: 'discard', object: TARGET, generation: GENERATION })).status).toBe(200)
+
+			expect((await object.fetch(health())).status).toBe(200)
+			expect(loads.count).toBe(1)
+			expect(one(target.storage, 'SELECT count(*) FROM notes')).toBe(0)
+		})
 	})
 })
