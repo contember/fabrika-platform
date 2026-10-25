@@ -148,7 +148,8 @@ export function installEgressGuard(): void {
 			}
 			const origin = originOf(input)
 			if (origin !== null && running.origins.has(origin)) {
-				return current(input, init)
+				// Only the standard fields: a runtime's own (Bun's `unix`, `proxy`, `tls`) would send the request elsewhere.
+				return current(input, standardInit(init))
 			}
 			return Promise.reject(
 				new CapabilityRefusedError(
@@ -159,10 +160,45 @@ export function installEgressGuard(): void {
 				),
 			)
 		},
-		{ preconnect: current.preconnect },
+		{
+			// Inside a site's scope a preconnect reaches only a declared origin; public egress, which cannot check a hop
+			// before it connects, refuses every one.
+			preconnect: (...args: Parameters<typeof current.preconnect>): void => {
+				const running = scope.getStore()
+				if (running !== undefined) {
+					const origin = originOf(args[0])
+					if (running.open !== null || origin === null || !running.origins.has(origin)) {
+						throw new CapabilityRefusedError(
+							running.open === null ? 'undeclared_egress' : 'refused_egress',
+							`${running.site} preconnects to ${origin ?? 'a URL that is not absolute'}, which its egress does not reach`,
+						)
+					}
+				}
+				if (typeof current.preconnect === 'function') current.preconnect(...args)
+			},
+		},
 	)
 	guards.add(guarded)
 	globalThis.fetch = guarded
+}
+
+/** `init` with the fields of the Fetch standard only. */
+function standardInit(init: RequestInit | undefined): RequestInit | undefined {
+	if (init === undefined) return undefined
+	return {
+		...(init.method === undefined ? {} : { method: init.method }),
+		...(init.headers === undefined ? {} : { headers: init.headers }),
+		...(init.body === undefined ? {} : { body: init.body }),
+		...(init.redirect === undefined ? {} : { redirect: init.redirect }),
+		...(init.signal === undefined ? {} : { signal: init.signal }),
+		...(init.keepalive === undefined ? {} : { keepalive: init.keepalive }),
+		...(init.integrity === undefined ? {} : { integrity: init.integrity }),
+		...(init.referrer === undefined ? {} : { referrer: init.referrer }),
+		...(init.referrerPolicy === undefined ? {} : { referrerPolicy: init.referrerPolicy }),
+		...(init.cache === undefined ? {} : { cache: init.cache }),
+		...(init.credentials === undefined ? {} : { credentials: init.credentials }),
+		...(init.mode === undefined ? {} : { mode: init.mode }),
+	}
 }
 
 function originOf(input: string | URL | Request): string | null {
@@ -176,6 +212,49 @@ function originOf(input: string | URL | Request): string | null {
 const REDIRECTS: ReadonlySet<number> = new Set([301, 302, 303, 307, 308])
 /** The headers a redirect that turns a request into a `GET` drops with its body (Fetch, "HTTP-redirect fetch"). */
 const BODY_HEADERS = ['content-type', 'content-length', 'content-encoding', 'content-language', 'content-location']
+/**
+ * The request headers public egress never sends, on any hop: the Fetch standard's forbidden request headers (`Host`
+ * among them, which would route a request for a public name to another site at the same address), the forwarding
+ * headers a proxy trusts, and the platform's own `X-Fabrika-*`.
+ */
+const FORBIDDEN_HEADERS = [
+	'accept-charset',
+	'accept-encoding',
+	'access-control-request-headers',
+	'access-control-request-method',
+	'connection',
+	'content-length',
+	'cookie2',
+	'date',
+	'dnt',
+	'expect',
+	'forwarded',
+	'host',
+	'keep-alive',
+	'origin',
+	'referer',
+	'set-cookie',
+	'te',
+	'trailer',
+	'transfer-encoding',
+	'upgrade',
+	'via',
+	'x-http-method',
+	'x-http-method-override',
+	'x-method-override',
+	'x-real-ip',
+]
+const FORBIDDEN_HEADER_PREFIXES = ['proxy-', 'sec-', 'x-forwarded-', 'x-fabrika-']
+
+function withoutForbiddenHeaders(headers: Headers): Headers {
+	for (const name of [...headers.keys()]) {
+		if (FORBIDDEN_HEADERS.includes(name) || FORBIDDEN_HEADER_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+			headers.delete(name)
+		}
+	}
+	return headers
+}
+
 /** The credentials a redirect to another origin drops. */
 const CREDENTIAL_HEADERS = ['authorization', 'proxy-authorization', 'cookie']
 
@@ -218,7 +297,7 @@ async function follow(
 	const mode = request.redirect
 	let url = new URL(request.url)
 	let method = request.method
-	const headers = new Headers(request.headers)
+	const headers = withoutForbiddenHeaders(new Headers(request.headers))
 	// Read once, so that a 307 or a 308 sends it again.
 	let body: ArrayBuffer | null = request.body === null ? null : await request.arrayBuffer()
 	for (let hop = 0;; hop++) {

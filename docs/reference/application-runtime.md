@@ -1252,11 +1252,13 @@ each hop, with `capability_refused: refused_egress`:
 
 - another scheme, a non-default port, every IP literal, a name of one label, and a name under `localhost`, `local`,
   `internal`, `intranet`, `lan`, `home`, `corp`, `private`, `arpa`, `test`, `invalid`, `example`, `onion`, `alt`,
-  `zerops` or `workers.dev`;
+  `zerops`, `workers.dev` or `zerops.app` (the platform subdomains of an installation's Workers, proxies, Control and
+  IAM, which Control holds no list of), and a name with an empty label; trailing dots are dropped first;
 - the installation's own hosts: every host a framework variable of the environment names (IAM, Operations, its own
   origin, the platform's receivers, the object store) and `FABRIKA_EGRESS_REFUSED_HOSTS`, which Control writes for a
   contract with such a job (Control's, IAM's, Operations' and every environment's domain and public origin; `null`
-  otherwise);
+  otherwise). The list is the registry at the deploy: a domain added later is refused from the environment's next
+  deploy;
 - on Bun, a host with any resolved address that is not public unicast (`node:dns`, every address; the Bun adapter
   passes `resolveHost` to `boot`). A Worker exposes no resolution, so on Cloudflare a public name of a private address
   is Cloudflare's network's to route, and DNS rebinding between the check and Bun's own connection is not prevented.
@@ -1264,6 +1266,10 @@ each hop, with `capability_refused: refused_egress`:
 Every hop goes out with `redirect: 'manual'`. Under the caller's `follow` the guard follows at most 10 redirects
 itself, checking each; a 303 (and a 301 or 302 of a `POST`) becomes a `GET` without its body, and another origin loses
 `Authorization`, `Proxy-Authorization` and `Cookie`. `manual` hands the redirect to the caller, and `error` refuses it.
+No hop carries a forbidden request header of the Fetch standard (`Host` among them), `Forwarded`, `X-Forwarded-*`,
+`X-Real-IP`, `Proxy-*`, `Sec-*` or `X-Fabrika-*`. A preconnect under public egress is refused, and one under an origin
+list reaches only a declared origin; a site with origins passes only the standard fields of its `init` (no `unix`,
+`proxy` or `tls`).
 A request has 60 seconds, its redirects and the reading of its body included, beside the caller's signal; a response body is read up to 16 MiB,
 refused past it by its `Content-Length` or while it streams (`capability_refused: oversized_egress`). The response
 carries the URL of its last hop. The approval diff shows gaining `'public'` as one line for closer review, and the

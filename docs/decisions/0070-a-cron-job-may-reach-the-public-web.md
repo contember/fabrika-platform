@@ -63,12 +63,18 @@ Before each hop, and so again after each redirect:
 - **By the URL** (`publicEgressRefusal` in `@fabrika/auth-core`, which the checker shares): a scheme other than
   `https:` and `http:`, a port other than the default, every IP literal (a public one too: a website has a name), a
   name of one label (`localhost`, `iam`, a Zerops service), and every name under `localhost`, `local`, `internal`,
-  `intranet`, `lan`, `home`, `corp`, `private`, `arpa`, `test`, `invalid`, `example`, `onion`, `alt`, `zerops` and
-  `workers.dev`, where an installation's Workers have their default routes.
+  `intranet`, `lan`, `home`, `corp`, `private`, `arpa`, `test`, `invalid`, `example`, `onion`, `alt`, `zerops`,
+  and the platform subdomains an installation is served on beside its own domains: `workers.dev`, where its Workers
+  have their default routes, and `zerops.app`, where its namespace proxies (`proxy-…-8080.<region>.zerops.app`),
+  Control and IAM have theirs. Control holds no list of those subdomains, so every one is refused, another
+  installation's and a stranger's site on `zerops.app` too; a name with an empty label (`a..b`) is refused, and
+  trailing dots are dropped before any comparison.
 - **By the installation's hosts.** Every host a framework variable of the environment names (IAM's issuer and RPC
   URL, the Operations DSN, the environment's own origin, the platform's receivers, the object store), and the hosts
   Control hands as `FABRIKA_EGRESS_REFUSED_HOSTS`: Control's, IAM's, Operations' and every environment's domain and
-  public origin. A host matches exactly; its subdomains are other hosts.
+  public origin. A host matches exactly; its subdomains are other hosts. The list is the registry at the deploy: a
+  domain another application gains later is refused from this environment's next deploy, and the approval line says
+  so. Every such domain sits behind its proxy, which admits the job as it admits anyone on the internet.
 - **By the address, where the runtime resolves.** The Bun adapter resolves the host (`node:dns`, every address) and
   the guard refuses a name with any address that is not public unicast: private, loopback, link-local (the metadata
   address), shared, multicast, reserved, documentation, and IPv6 forms that carry an IPv4 address it cannot vouch for.
@@ -82,6 +88,13 @@ A refusal is `capability_refused: refused_egress`, and the job fails with it.
   itself, checking each target; a 303, and a 301 or 302 of a `POST`, turn into a `GET` without the body; another
   origin loses `Authorization`, `Proxy-Authorization` and `Cookie`. The caller's `manual` gets the redirect, and its
   next `fetch` passes the guard again. `error` refuses one.
+- **No caller-set routing headers.** Every hop drops the Fetch standard's forbidden request headers (`Host` among them,
+  which would send a request for a public name to another site behind the same address), `Forwarded`,
+  `X-Forwarded-*`, `X-Real-IP`, `Proxy-*`, `Sec-*` and `X-Fabrika-*`, in `follow` and in `manual` mode alike.
+- **Only the global `fetch`.** A preconnect under public egress is refused, since no hop can be checked before it
+  connects. A site with origins passes only the Fetch standard's fields of its `init`, so Bun's `unix`, `proxy` or
+  `tls` cannot send a request to an admitted origin elsewhere. The checker refuses `Bun.fetch` and `WebSocket`, which
+  the guard does not see.
 - **60 seconds per request**, its redirects and the reading of its body included, beside the caller's own signal.
 - **16 MiB per response body**, by its `Content-Length` or while it streams (`capability_refused: oversized_egress`).
 - A site that declares origins keeps today's guard: exact origins, the runtime's own redirect handling, no bounds.
@@ -89,7 +102,9 @@ A refusal is `capability_refused: refused_egress`, and the job fails with it.
 ### 4. Review
 
 - The approval diff shows gaining `'public'` as one line for closer review, "calls any public website over HTTPS or
-  HTTP", instead of a line per origin. Losing it narrows. The environment's "off the paved road" list shows it while
+  HTTP", instead of a line per origin. The line says that whoever can write the rows the job reads, or the pages it
+  fetches, can make it fetch any public URL and read the answer (a stored, blind request proxy), and that a domain
+  added later is refused only from the next deploy. Losing it narrows and names the origins the job calls instead. The environment's "off the paved road" list shows it while
   it is published.
 - The checker's `cross-app-fetch` accepts, where some job declares `'public'`, a static URL prefix of http(s) whose
   host is not yet complete or that the URL rules admit. It still refuses one they refuse, such as `http://localhost/`.

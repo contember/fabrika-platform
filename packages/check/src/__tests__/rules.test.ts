@@ -219,13 +219,18 @@ const cases: readonly RuleCase[] = [
 				'export const own = self.width',
 				'',
 			].join('\n'),
+			// Bun's own fetch and a WebSocket: requests the egress guard on the global fetch does not see.
+			'scripts/get.ts': "export const get = () => Bun.fetch('https://example.com')\n",
+			'src/socket.ts': 'export const open = (url: string) => new WebSocket(url)\n',
 		},
 		expected: [
+			'scripts/get.ts:1:26',
 			'src/server.ts:1:1',
 			'src/server.ts:2:1',
 			'src/server.ts:3:22',
 			'src/server.ts:4:21',
 			'src/server.ts:5:1',
+			'src/socket.ts:1:42',
 			'src/widths.ts:3:22',
 			'src/widths.ts:4:20',
 		],
