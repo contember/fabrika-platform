@@ -61,17 +61,13 @@ item 1 needs an oblaka release first.
 
 **Kicks and the Bun timer.**
 
-15. Kicks of one job in one second merge into one wake (`kick:<job>:<s>`) that keeps the earlier due. A run that
-    started between the two kicks consumes the merged wake, so the later kick rests on the pending flag alone, and a
-    crash between its commit and `markPending` leaves it to the schedule. Fix idea: let a later kick in the same second
-    move the merged wake's due to its own time.
-16. A wake written by another process reaches a serving process's `WakeTimer` only at its 60 s job check: a claim
+14. A wake written by another process reaches a serving process's `WakeTimer` only at its 60 s job check: a claim
     re-arm or a kick for later written by a crontab run (`runContractJob` has no timer) or by a container that stopped
     runs up to 60 s after its due. Decide whether 60 s is the contract, or how a write elsewhere reaches the timer.
 
 ## Approach / acceptance
 
-Each item lands with a witness that fails before it. Items 1, 9, 11 and 16 need a decision first; item 1 also an oblaka
+Each item lands with a witness that fails before it. Items 1, 9, 11 and 14 need a decision first; item 1 also an oblaka
 release.
 
 ## Touch points
