@@ -2,6 +2,7 @@
 // once, through the scheduler the Cloudflare object's alarm drives, and nothing fires without it. On SQLite (the object's
 // storage) always, and on Postgres when FABRIKA_TEST_POSTGRES_URL is set.
 
+import { createClient } from '@fabrika/app/client'
 import { defineApp } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
@@ -12,6 +13,7 @@ import { openPostgres } from '@fabrika/db/postgres'
 import { testDatabase } from '@fabrika/db/testing-sqlite'
 import { SQL } from 'bun'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { z } from 'zod/v4'
 import { tables } from './cloudflare-fixture/src/db/tables'
 import { vocabulary } from './cloudflare-fixture/src/vocabulary'
 
@@ -43,7 +45,25 @@ const remind = app.cron(dailyAhead(12), { actions: ['notes.read'], retries: 1 })
 	}
 })
 
-const contract = app.contract((c) => ({ health: c.health('/healthz'), jobs: { later, remind } }))
+const deliver = app.cron(dailyAhead(12), { actions: ['notes.read'] }).handle(({ ctx }) => {
+	runs.push({ job: 'deliver', attempt: ctx.attempt })
+})
+
+const notes = app.group({ callers: ['human'] }, (r) => ({
+	remindLater: r.mutation({
+		input: z.strictObject({ workspaceId: z.string().min(1), title: z.string().min(1), at: z.number() }),
+		output: z.strictObject({ id: z.uuid() }),
+		access: { action: 'notes.write', in: 'workspace', from: 'workspaceId' },
+		kicks: ['deliver'],
+	})
+		.handle(async ({ input, ctx }) => {
+			const { id } = await ctx.db.target.notes.insert({ title: input.title })
+			ctx.kick('deliver', { at: new Date(input.at) })
+			return { id }
+		}),
+}))
+
+const contract = app.contract((c) => ({ api: c.rpc('/api', { notes }), health: c.health('/healthz'), jobs: { later, remind, deliver } }))
 
 const POSTGRES_TABLE = `create table notes (
 	id text primary key,
@@ -158,6 +178,24 @@ for (const driver of drivers) {
 			expect(await kit.runDueJobs({ within: 2_000 })).toEqual([])
 			expect(runs).toEqual([{ job: 'remind', attempt: 1 }, { job: 'remind', attempt: 2 }])
 			expect((await wakes.pending('remind')).map((wake) => wake.reason)).toEqual(['cron'])
+		})
+
+		test("a mutation's delayed kick runs only once the window reaches it, once, and a second call runs it no more", async () => {
+			const { kit, wakes } = kitOver()
+			const editor = kit.testCaller([{ role: 'editor', scope: kit.scope('workspace', 'w1') }])
+			const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
+			const at = Date.now() + 5 * MINUTE
+			await api.notes.remindLater({ workspaceId: 'w1', title: 'Call back', at })
+			await kit.drain()
+			expect(runs).toEqual([])
+			expect((await wakes.pending('deliver')).map(({ reason, dueAt }) => ({ reason, due: dueAt.getTime() }))).toEqual([{ reason: 'kick', due: at }])
+			expect(await kit.runDueJobs({ within: 2 * MINUTE })).toEqual([])
+			expect(runs).toEqual([])
+			expect(await kit.runDueJobs({ within: 10 * MINUTE })).toEqual([{ job: 'deliver', result: { status: 'succeeded', attempts: 1 } }])
+			expect(await kit.runDueJobs({ within: 10 * MINUTE })).toEqual([])
+			expect(runs).toEqual([{ job: 'deliver', attempt: 1 }])
+			// The run consumed the kick; only the cron wake the repair keeps is left.
+			expect((await wakes.pending('deliver')).map((wake) => wake.reason)).toEqual(['cron'])
 		})
 	})
 }
