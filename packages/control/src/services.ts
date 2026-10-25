@@ -133,7 +133,7 @@ export function opsKeyDeps(env: Env): { opsKeys?: OpsKeysPort } {
 	return env.FABRIKA_CONTROL_VAULT_KEY === undefined ? {} : { opsKeys: new VaultOpsKeys(repositories(env).opsKeys, () => vault(env)) }
 }
 
-function opsTransportDeps(env: Env): { opsTransport?: OpsTransport } {
+export function opsTransportDeps(env: Env): { opsTransport?: OpsTransport } {
 	const { opsKeys } = opsKeyDeps(env)
 	if (opsKeys === undefined) return {}
 	return { opsTransport: httpOpsTransport({ registry: repositories(env).registry, opsKeysFor: (appId, name) => opsKeys.opsKeysFor(appId, name) }) }
