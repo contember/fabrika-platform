@@ -853,6 +853,36 @@ for (const backend of backends) {
 			}
 		})
 
+		test('a recovery past a moved pointer settles on a clone that never boots, and an ordinary deploy is not refused', async () => {
+			const f = await open()
+			await f.deployFirst()
+			const id = await f.start()
+			const clone = restoreClone(id)
+			// Every boot of the clone fails once traffic moved to it, so `serve` never gets the answer the rewind needs.
+			f.state.cloneBoots = false
+			expect(await f.drive(id)).toMatchObject({ result: 'interrupted', operation: { state: 'running', step: 'serve' } })
+			expect(await f.drive(id)).toMatchObject({ result: 'interrupted', operation: { state: 'running', step: 'serve' } })
+			// Until then the running restore leaves the environment unsettled, and an ordinary deploy is refused.
+			expect(await recordedMaintenance(f.b, TARGET)).toBe('unsettled')
+			const later = await f.run()
+			expect(await executeDeploy(f.runDeps(), { runId: later })).toMatchObject({ status: 'failed' })
+			const recovered = await startRecovery(f.deps(), { ...TARGET, operationId: id, resolution: 'open', actor: 'user:ops' })
+			expect(recovered).toMatchObject({ result: 'succeeded', operation: { kind: 'recovery', state: 'succeeded', target_mode: 'open' } })
+			expect(await recordedObjects(f.b, TARGET)).toEqual({ object: clone, objects: ['application', 'rehearsal', clone] })
+			expect(await recordedMaintenance(f.b, TARGET)).toBe('open')
+			expect(f.mode(clone)?.mode).toBe('open')
+			expect(f.mode('application')?.mode).toBe('inspect')
+			expect(f.fake.requests().filter((request) => request.includes(' arm '))).toEqual([])
+			expect(await f.b.repositories.dataOperations.get(id)).toMatchObject({ state: 'failed', error_code: 'recovered_open' })
+			// The environment is a broken deploy now: an ordinary deploy of a fixed version keeps traffic on the clone.
+			f.state.cloneBoots = true
+			f.fake.bootFailures.delete(clone)
+			f.state.deploys.length = 0
+			const fixed = await f.run()
+			expect(await executeDeploy(f.runDeps(), { runId: fixed })).toEqual({ runId: fixed, status: 'succeeded' })
+			expect(f.state.deploys.map((deploy) => deploy.objects?.object)).toEqual([clone])
+		})
+
 		test('a recovery does not decide while the pointer deploy has no outcome', async () => {
 			const f = await open()
 			await f.deployFirst()

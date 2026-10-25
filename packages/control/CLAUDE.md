@@ -454,8 +454,10 @@ other environment, before the provider prepares anything, and the write maps a r
   served. `bookmark_unavailable`, `rewind_failed` and `unexpected_schema` leave the clone serving and the original
   `inspect`. A recovery with resolution `open`, also of an interrupted recovery (the chain resolves to the restore),
   keeps the object that may hold writes, where traffic goes: the clone once a provider accepted the pointer deploy,
-  nothing showed the clone served no request, and `serve`'s two checks confirm it; else the original, pointed back
-  first. A restore deploy without an outcome or an unclear answer leaves the recovery interrupted.
+  nothing showed the clone served no request, and `prepare` proves the pointer moved (or `serve` recorded that it did);
+  else the original, pointed back first. It settles with the clone `open` and the original `inspect` without the
+  clone's boot, so a clone that never boots is a broken deploy an ordinary deploy repairs; only the rewind needs
+  `serve`'s boot answer. A restore deploy without an outcome or an unclear answer leaves the recovery interrupted.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.

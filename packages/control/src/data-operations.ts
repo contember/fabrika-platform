@@ -1136,10 +1136,10 @@ class OperationDriver {
 
 	/**
 	 * A recovery that opens past a restore (ADR-0070 §9) keeps the object that may hold writes, once it knows traffic goes
-	 * there. The clone, once a provider accepted the pointer deploy and the restore did not record that the clone served
-	 * no request, confirmed as `serve` confirms it: `prepare` proves the pointer moved off the original, and the clone
-	 * answers its boot; then the original stays `inspect`. A `prepare` refused as `serving_object` keeps the original
-	 * instead. The original is pointed back first by a deploy wherever traffic may have moved, with the clone fenced
+	 * there. The clone, once a provider accepted the pointer deploy, the restore did not record that the clone served no
+	 * request, and `prepare` proves the pointer moved off the original (or `serve` recorded that it did); then the
+	 * original stays `inspect`. The clone's boot is not awaited: one that fails is a broken deploy, which an ordinary
+	 * deploy of a fixed version repairs. A `prepare` refused as `serving_object` keeps the original instead. The original is pointed back first by a deploy wherever traffic may have moved, with the clone fenced
 	 * `inspect`. A deploy without an outcome or an unclear answer leaves the recovery interrupted. The pointer is recorded
 	 * in the batch that moves the recovery to `open`.
 	 */
@@ -1165,11 +1165,7 @@ class OperationDriver {
 				if (pointer.kind !== 'ok') return { kind: 'done', result: pointer.kind === 'paused' ? 'paused' : 'interrupted' }
 				onOriginal = pointer.value.kind === 'original'
 			}
-			if (!onOriginal) {
-				const booted = await this.migrate(current, restore.clone)
-				if (booted.kind !== 'ok') return { kind: 'done', result: 'interrupted' }
-				return await this.settleRecovery(current, { serving: restore.clone, listed })
-			}
+			if (!onOriginal) return await this.settleRecovery(current, { serving: restore.clone, listed })
 			// The original still serves: a new generation takes back the modes this one published.
 			current = await this.advance(current, { step: current.step, generation: await this.allocate() })
 		}

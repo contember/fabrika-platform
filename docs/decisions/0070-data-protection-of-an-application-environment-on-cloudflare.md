@@ -372,9 +372,11 @@ write; Control's maintenance pass owns it and drives it a bounded stretch at a t
 deploys move the record, in the same write as the operation's next step. An environment without one gets the defaults,
 `application` and `application,rehearsal`. A recovery that opens past a restore, also through a recovery of an
 interrupted recovery, keeps the object that may hold writes, and only where traffic goes. The clone, once a provider
-accepted the pointer deploy and nothing showed the clone served no request, and once the same two checks confirm it.
-Otherwise the original, pointed back first. While a restore's deploy has no outcome, or an answer is unclear, the
-recovery waits.
+accepted the pointer deploy, nothing showed the clone served no request, and `prepare` proves the pointer moved off the
+original (or `serve` recorded that it did). It does not wait for the clone's boot: once the clone is `open` and the
+original `inspect`, the environment is open on a broken deploy, which an ordinary deploy of a fixed version repairs.
+Only the rewind needs the boot answer. Otherwise the original, pointed back first. While a restore's deploy has no
+outcome, or an answer is unclear, the recovery waits.
 
 **Invariant: point-in-time recovery never touches the object of ordinary traffic.** The object refuses `prepare` and
 `arm` as `serving_object` while it is `FABRIKA_APPLICATION_OBJECT`, and as `wrong_mode` unless it is `inspect`.
@@ -386,7 +388,7 @@ recovery waits.
 | The backup or its rehearsal fails                | The original reopens at a new generation; the operation fails                                            |
 | The import into the clone fails                  | The clone is discarded and the original reopens; the operation fails: a retry of that backup would too   |
 | The pointer deploy fails                         | Not accepted: the original opens again, the clone `inspect`. Accepted: the confirmation decides          |
-| The clone does not boot after the pointer deploy | Nothing proves it never served, so traffic stays; the operation waits for its boot, nothing is rewound   |
+| The clone does not boot after the pointer deploy | Traffic stays, nothing is rewound; an `open` recovery settles on the clone, a fixed deploy repairs it    |
 | Traffic did not move after the pointer deploy    | `prepare` is refused as `serving_object`; the same deploy back, and the original opens                   |
 | T lies outside the recovery window               | `prepare` is refused as `bookmark_unavailable`; the clone keeps serving; nothing is lost                 |
 | The answer to `arm` is lost                      | `verify` decides: an absent sentinel is a restore; a present one arms again                              |
