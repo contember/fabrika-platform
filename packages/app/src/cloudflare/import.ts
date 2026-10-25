@@ -1,11 +1,839 @@
-// One step of loading a dump into a fresh object (ADR-0070): the ops operation `import`, served before the application boots.
+// One step of loading a consistent backup into a fresh object (ADR-0070 §6): the ops operation `import`, served before
+// the application boots. Control drives the steps and holds their state; the object keeps only its import marker in KV
+// storage, which every step that writes updates in the same `transactionSync` as its rows.
 
-import type { OpsImportRequest } from '@fabrika/auth-core'
+import {
+	decodeOpsDumpLine,
+	encodeOpsDumpRow,
+	foldOpsTableHash,
+	OPS_DATA_REFUSED_STATUS,
+	OPS_DUMP_KEY,
+	OPS_DUMP_MANIFEST_MAX_BYTES,
+	OPS_DUMP_PAGE_ROWS,
+	OPS_DUMP_PART_MAX_RAW_BYTES,
+	OPS_DUMP_PART_MAX_ROWS,
+	OPS_DUMP_PART_SIZE,
+	OPS_EMPTY_TABLE_HASH,
+	OPS_STALE_STATUS,
+	type OpsDataRefusal,
+	type OpsDataRefusalReason,
+	type OpsDumpBinding,
+	opsDumpColumnProjection,
+	type OpsDumpCursor,
+	type OpsDumpLine,
+	type OpsDumpManifest,
+	type OpsDumpSchema,
+	type OpsDumpSchemaColumn,
+	type OpsDumpSchemaEntry,
+	type OpsDumpSchemaForeignKey,
+	type OpsDumpSchemaIndex,
+	type OpsDumpSchemaTable,
+	type OpsDumpSource,
+	type OpsDumpTable,
+	type OpsDumpTablePlan,
+	type OpsDumpValue,
+	opsDumpValueBinding,
+	type OpsImportBeginAck,
+	type OpsImportCompleteAck,
+	type OpsImportDiscardAck,
+	type OpsImportLinkAck,
+	type OpsImportPartAck,
+	type OpsImportRequest,
+	type OpsImportVerifyAck,
+	type OpsStaleRefusal,
+	parseOpsImportPartAck,
+	planOpsDump,
+	readOpsDumpManifest,
+	readOpsDumpValue,
+	sha256Hex,
+} from '@fabrika/auth-core'
+import type { SqliteStorage, SqliteValue } from '@fabrika/db/sqlite'
+import { migrateSqlite, type SqliteMigrationBundle } from '@fabrika/db/sqlite-migrate'
 import { jsonResponse } from '../errors.js'
+import { method } from './bindings.js'
 import type { MaintenanceBarrier } from './maintenance.js'
 import type { OpsTarget } from './ops.js'
 
-/** One step of loading a dump into a fresh object (ADR-0070). Answers 501 until the handler is built (work unit 4.2). */
+/**
+ * One step of loading a dump into a fresh object (ADR-0070). Answers 501 until the ops target carries what
+ * `importStep` needs: the storage's synchronous KV and `deleteAll`, the release's migration bundles and the serving
+ * object's name.
+ */
 export async function serveImport(_target: OpsTarget, _barrier: MaintenanceBarrier, _step: OpsImportRequest): Promise<Response> {
 	return jsonResponse({ refused: 'not_implemented' }, 501)
+}
+
+/** workerd's synchronous KV storage of a SQLite-backed object: it lives in the same database, so it commits with a transaction. */
+export interface ImportKv {
+	get(key: string): unknown
+	put(key: string, value: unknown): void
+	delete(key: string): boolean
+}
+
+/** What the importer needs of the object's storage; a SQLite-backed `DurableObjectStorage` fits it. */
+export interface ImportStorage extends SqliteStorage {
+	readonly kv: ImportKv
+	/** Wipes the object's database, its KV storage and its alarm. */
+	deleteAll(): Promise<void>
+}
+
+/** The object an import step loads into. */
+export interface ImportTarget {
+	readonly storage: ImportStorage
+	/** The environment's bucket (the `FABRIKA_FILES` R2 binding), where the backup lies. */
+	readonly bucket: unknown
+	/** The release's migration bundles in the order the object applies them: the framework's, then the application's. */
+	readonly migrations: readonly SqliteMigrationBundle[]
+	/** The object of ordinary traffic (`FABRIKA_APPLICATION_OBJECT`), which `discard` never wipes. */
+	readonly serving: string
+}
+
+/** The KV key of the import marker. Invariant: an object that holds it never boots and never leaves `inspect`. */
+export const IMPORT_MARKER_KEY = 'fabrika:import'
+
+/** Whether the object holds an import marker, so it must neither boot nor leave `inspect`. */
+export function importInProgress(storage: { readonly kv: ImportKv }): boolean {
+	return storage.kv.get(IMPORT_MARKER_KEY) !== undefined
+}
+
+/** The KV key under which part `part` records its acknowledgement once loaded, so a retry loads nothing twice. */
+function loadedPartKey(part: number): string {
+	return `${IMPORT_MARKER_KEY}:part:${part}`
+}
+
+/** The marker: the backup the object is loading, whether `begin` cleared the target, and how many parts are loaded. */
+interface ImportMarker {
+	readonly source: OpsDumpSource
+	readonly begun: boolean
+	readonly loaded: number
+}
+
+/** One step of loading the consistent backup `step.source` into the fresh object `target` (ADR-0070 §6). */
+export async function importStep(target: ImportTarget, barrier: MaintenanceBarrier, step: OpsImportRequest): Promise<Response> {
+	const scoped = scopeRefusal(barrier, step.generation)
+	if (scoped !== null) {
+		return scoped
+	}
+	if (step.step === 'discard') {
+		return await discard(target, step.object)
+	}
+	if (step.step === 'begin') {
+		return await begin(target, step.source)
+	}
+	const marker = readMarker(target.storage.kv)
+	if (marker === null || !marker.begun || !sameSource(marker.source, step.source)) {
+		return refused('no_import')
+	}
+	const manifest = await readManifest(target.bucket, step.source)
+	if (manifest === null) {
+		return refused('invalid_manifest')
+	}
+	if (step.step === 'complete') {
+		return complete(target.storage, manifest)
+	}
+	const plan = currentPlan(target.storage, manifest)
+	if ('refused' in plan) {
+		return jsonResponse(plan, OPS_DATA_REFUSED_STATUS)
+	}
+	switch (step.step) {
+		case 'part':
+			return await loadPart(target, marker, manifest, plan, step.part)
+		case 'link':
+			return await linkPart(target, marker, manifest, plan, step.part)
+		case 'verify':
+			return verify(target.storage, manifest, plan, step.cursor)
+	}
+}
+
+/**
+ * Every step carries the operation's generation: under another one, or before R2 holds the state, the step is stale;
+ * under it, the object must be `inspect`.
+ */
+function scopeRefusal(barrier: MaintenanceBarrier, generation: number): Response | null {
+	const view = barrier.view()
+	if (!view.published || view.generation !== generation) {
+		const published = view.published && view.generation !== null ? { generation: view.generation, mode: view.mode } : null
+		const refusal: OpsStaleRefusal = { refused: 'stale_generation', published }
+		return jsonResponse(refusal, OPS_STALE_STATUS)
+	}
+	return view.mode === 'inspect' ? null : refused('wrong_mode')
+}
+
+/**
+ * Verifies the manifest, checks the target is fresh, writes the marker, migrates the target to exactly the manifest's
+ * ledger, checks the schema and its plan, then clears the target in one transaction that records `begin` done. A retry
+ * under the same backup resumes after what the marker records.
+ */
+async function begin(target: ImportTarget, source: OpsDumpSource): Promise<Response> {
+	const { storage } = target
+	const manifest = await readManifest(target.bucket, source)
+	if (manifest === null) {
+		return refused('invalid_manifest')
+	}
+	if (!manifest.consistent) {
+		return refused('fuzzy_dump')
+	}
+	const marker = readMarker(storage.kv)
+	if (marker !== null && !sameSource(marker.source, source)) {
+		return refused('not_fresh')
+	}
+	if (marker?.begun === true) {
+		return beginAck(manifest)
+	}
+	if (marker === null && holdsTables(storage)) {
+		return refused('not_fresh')
+	}
+	const bundles = ledgerBundles(target.migrations, manifest)
+	if (bundles === null) {
+		return refused('ledger_mismatch')
+	}
+	if (marker === null) {
+		writeMarker(storage.kv, { source, begun: false, loaded: 0 })
+	}
+	// A database the framework never migrated has no ledger, and gets none.
+	if (manifest.migrations.length > 0) {
+		await migrateSqlite(
+			{ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) },
+			bundles,
+		)
+	}
+	if (!sameDdl(readDdl(storage), manifest.ddl)) {
+		return refused('schema_mismatch')
+	}
+	const plan = currentPlan(storage, manifest)
+	if ('refused' in plan) {
+		return jsonResponse(plan, OPS_DATA_REFUSED_STATUS)
+	}
+	storage.transactionSync(() => {
+		for (const entry of readDdl(storage)) {
+			if (entry.type === 'trigger') {
+				storage.sql.exec(`DROP TRIGGER ${quote(entry.name)}`)
+			}
+		}
+		// Every deferred column takes a temporary NULL (the schema rule), so no row of its cycle references another one after this.
+		for (const table of plan) {
+			if (table.deferred.length > 0) {
+				storage.sql.exec(`UPDATE ${quote(table.name)} SET ${table.deferred.map((column) => `${quote(column)} = NULL`).join(', ')}`)
+			}
+		}
+		for (const table of [...plan].reverse()) {
+			storage.sql.exec(`DELETE FROM ${quote(table.name)}`)
+		}
+		writeMarker(storage.kv, { source, begun: true, loaded: 0 })
+	})
+	return beginAck(manifest)
+}
+
+function beginAck(manifest: OpsDumpManifest): Response {
+	const ack: OpsImportBeginAck = { step: 'begin', parts: manifest.parts.length }
+	return jsonResponse(ack, 200)
+}
+
+/**
+ * Inserts part `part`'s rows with their rowids, every value through the wire's binding and every deferred column as
+ * NULL, in one transaction that also records the part.
+ */
+async function loadPart(target: ImportTarget, marker: ImportMarker, manifest: OpsDumpManifest, plan: readonly OpsDumpTablePlan[], part: number) {
+	const { storage } = target
+	const recorded = readLoadedPart(storage.kv, part)
+	if (recorded !== null) {
+		return jsonResponse(recorded, 200)
+	}
+	const lines = await readPart(target.bucket, marker.source, manifest, plan, part)
+	if (!Array.isArray(lines)) {
+		return jsonResponse(lines, OPS_DATA_REFUSED_STATUS)
+	}
+	const tables = new Map(plan.map((table) => [table.name, table]))
+	let deferred = 0
+	const ack = storage.transactionSync((): OpsImportPartAck => {
+		for (const { table: name, row } of lines) {
+			const table = planned(tables, name)
+			if (insertRow(storage, table, row)) {
+				deferred++
+			}
+		}
+		const loaded: OpsImportPartAck = { step: 'part', part, rows: lines.length, deferred }
+		storage.kv.put(loadedPartKey(part), JSON.stringify(loaded))
+		writeMarker(storage.kv, { ...marker, loaded: marker.loaded + 1 })
+		return loaded
+	})
+	return jsonResponse(ack, 200)
+}
+
+/** Writes one row; answers whether it has a deferred key for the link pass to set. */
+function insertRow(storage: SqliteStorage, table: OpsDumpTablePlan, row: readonly OpsDumpValue[]): boolean {
+	const [rowid, ...values] = row
+	const key = opsDumpValueBinding(rowid ?? null)
+	const columns: string[] = [table.keyset]
+	const bindings = [key]
+	let waits = false
+	for (const [index, column] of table.columns.entries()) {
+		const value = values[index] ?? null
+		// An INTEGER PRIMARY KEY column is the rowid itself, written once.
+		if (column === table.keyset) {
+			continue
+		}
+		const deferred = table.deferred.includes(column)
+		waits ||= deferred && value !== null
+		columns.push(column)
+		bindings.push(opsDumpValueBinding(deferred ? null : value))
+	}
+	if (table.name === SQLITE_SEQUENCE) {
+		// Loading an AUTOINCREMENT table writes its own counter row; the source's row replaces it, whichever table loads first.
+		const name = opsDumpValueBinding(values[0] ?? null)
+		storage.sql.exec(`DELETE FROM ${SQLITE_SEQUENCE} WHERE rowid = ${key.sql} OR name = ${name.sql}`, ...params([key, name]))
+	}
+	storage.sql.exec(
+		`INSERT INTO ${quote(table.name)} (${columns.map(quote).join(', ')}) VALUES (${bindings.map((binding) => binding.sql).join(', ')})`,
+		...params(bindings),
+	)
+	return waits
+}
+
+/** Sets the deferred keys of part `part`'s rows by their rowids, once every part is loaded, in one transaction. */
+async function linkPart(target: ImportTarget, marker: ImportMarker, manifest: OpsDumpManifest, plan: readonly OpsDumpTablePlan[], part: number) {
+	if (marker.loaded !== manifest.parts.length) {
+		return refused('part_mismatch')
+	}
+	const lines = await readPart(target.bucket, marker.source, manifest, plan, part)
+	if (!Array.isArray(lines)) {
+		return jsonResponse(lines, OPS_DATA_REFUSED_STATUS)
+	}
+	const tables = new Map(plan.map((table) => [table.name, table]))
+	const rows = target.storage.transactionSync(() => {
+		let linked = 0
+		for (const { table: name, row } of lines) {
+			const table = planned(tables, name)
+			const [rowid, ...values] = row
+			const deferred = table.columns.flatMap((column, index) => table.deferred.includes(column) ? [{ column, value: values[index] ?? null }] : [])
+			if (deferred.every(({ value }) => value === null)) {
+				continue
+			}
+			const sets = deferred.map(({ column, value }) => ({ column, binding: opsDumpValueBinding(value) }))
+			const key = opsDumpValueBinding(rowid ?? null)
+			target.storage.sql.exec(
+				`UPDATE ${quote(table.name)} SET ${sets.map(({ column, binding }) => `${quote(column)} = ${binding.sql}`).join(', ')} WHERE ${
+					quote(table.keyset)
+				} = ${key.sql}`,
+				...params([...sets.map(({ binding }) => binding), key]),
+			)
+			linked++
+		}
+		return linked
+	})
+	const ack: OpsImportLinkAck = { step: 'link', part, rows }
+	return jsonResponse(ack, 200)
+}
+
+/**
+ * Reads the loaded tables back from `cursor` with the producer's projection and fold, at most a part's row bound per
+ * step, and compares each finished table with the manifest.
+ */
+function verify(storage: SqliteStorage, manifest: OpsDumpManifest, plan: readonly OpsDumpTablePlan[], cursor: OpsDumpCursor | null): Response {
+	const tables = new Map(plan.map((table) => [table.name, table]))
+	const order = manifest.tables
+	let index = cursor === null ? 0 : order.findIndex((table) => table.name === cursor.table)
+	if (index < 0) {
+		return refused('verify_mismatch', cursor?.table ?? null)
+	}
+	const startOf = (table: OpsDumpTable | undefined): OpsDumpCursor | null =>
+		table === undefined ? null : { table: table.name, after: null, rows: 0, hash: OPS_EMPTY_TABLE_HASH }
+	let current = cursor ?? startOf(order[0])
+	const finished: OpsDumpTable[] = []
+	let budget = OPS_DUMP_PART_MAX_ROWS
+	while (current !== null && budget > 0) {
+		const expected = order[index]
+		if (expected === undefined) {
+			throw new Error('a verify cursor past the last table of the manifest')
+		}
+		const page = readPage(storage, planned(tables, expected.name), current.after)
+		const last = page.at(-1)?.[0]
+		current = {
+			table: expected.name,
+			after: last?.type === 'integer' ? last.value : current.after,
+			rows: current.rows + page.length,
+			hash: foldOpsTableHash(current.hash, page.map((row) => encodeOpsDumpRow(row))),
+		}
+		budget -= page.length
+		if (current.rows > expected.rows) {
+			return refused('verify_mismatch', expected.name)
+		}
+		if (page.length < OPS_DUMP_PAGE_ROWS) {
+			if (current.rows !== expected.rows || current.hash !== expected.hash) {
+				return refused('verify_mismatch', expected.name)
+			}
+			finished.push(expected)
+			index++
+			current = startOf(order[index])
+		}
+	}
+	const ack: OpsImportVerifyAck = { step: 'verify', tables: finished, next: current }
+	return jsonResponse(ack, 200)
+}
+
+/** One keyset page of `table` after the rowid `after`: each row its rowid, then its columns, as the producer reads them. */
+function readPage(storage: SqliteStorage, table: OpsDumpTablePlan, after: string | null): (readonly OpsDumpValue[])[] {
+	const keyset = quote(table.keyset)
+	// The CTE names each projected column, so no two result columns share a name whatever the table's columns are called.
+	const names = table.columns.flatMap((_, index) => [`t${index}`, `v${index}`])
+	const select = [keyset, `CAST(${keyset} AS TEXT)`, ...table.columns.map((column) => opsDumpColumnProjection(column))].join(', ')
+	const where = after === null ? '' : ` WHERE ${keyset} > CAST(? AS INTEGER)`
+	const query =
+		`WITH page(r, k, ${names.join(', ')}) AS (SELECT ${select} FROM ${quote(table.name)}${where} ORDER BY ${keyset} LIMIT ${OPS_DUMP_PAGE_ROWS}) `
+		+ `SELECT k, ${names.join(', ')} FROM page ORDER BY r`
+	const rows = after === null ? storage.sql.exec(query).toArray() : storage.sql.exec(query, after).toArray()
+	return rows.map((row) => [
+		readOpsDumpValue('integer', row['k']),
+		...table.columns.map((_, index) => readOpsDumpValue(row[`t${index}`], row[`v${index}`])),
+	])
+}
+
+/** Recreates the triggers from the manifest's DDL, compares the whole schema again, and clears the marker. */
+function complete(storage: ImportStorage, manifest: OpsDumpManifest): Response {
+	const matches = storage.transactionSync(() => {
+		const present = new Set(readDdl(storage).filter((entry) => entry.type === 'trigger').map((entry) => entry.name))
+		for (const entry of manifest.ddl) {
+			if (entry.type !== 'trigger' || present.has(entry.name)) {
+				continue
+			}
+			if (!TRIGGER_DDL.test(entry.sql)) {
+				return false
+			}
+			storage.sql.exec(entry.sql)
+		}
+		if (!sameDdl(readDdl(storage), manifest.ddl)) {
+			return false
+		}
+		for (const part of manifest.parts) {
+			storage.kv.delete(loadedPartKey(part.part))
+		}
+		storage.kv.delete(IMPORT_MARKER_KEY)
+		return true
+	})
+	if (!matches) {
+		return refused('schema_mismatch')
+	}
+	const ack: OpsImportCompleteAck = { step: 'complete', source: { object: manifest.object, dump: manifest.dump } }
+	return jsonResponse(ack, 200)
+}
+
+/** Wipes an `inspect` object that holds an import marker and serves no traffic. */
+async function discard(target: ImportTarget, object: string): Promise<Response> {
+	if (object === target.serving) {
+		return refused('serving_object')
+	}
+	if (readMarker(target.storage.kv) === null) {
+		return refused('no_import')
+	}
+	await target.storage.deleteAll()
+	const ack: OpsImportDiscardAck = { step: 'discard' }
+	return jsonResponse(ack, 200)
+}
+
+/** The plan of the target's schema, which must list the manifest's tables in the manifest's order. */
+function currentPlan(storage: SqliteStorage, manifest: OpsDumpManifest): readonly OpsDumpTablePlan[] | OpsDataRefusal {
+	const plan = planOpsDump(describeDumpSchema(storage))
+	if ('refused' in plan) {
+		return plan
+	}
+	const names = plan.tables.map((table) => table.name)
+	const expected = manifest.tables.map((table) => table.name)
+	if (names.length !== expected.length || names.some((name, index) => name !== expected[index])) {
+		return { refused: 'schema_mismatch', table: null }
+	}
+	return plan.tables
+}
+
+function planned(tables: ReadonlyMap<string, OpsDumpTablePlan>, name: string): OpsDumpTablePlan {
+	const table = tables.get(name)
+	if (table === undefined) {
+		throw new Error('a dump line names a table the plan does not hold')
+	}
+	return table
+}
+
+/**
+ * Part `part`'s lines: its byte range read and checked against the manifest's size and SHA-256, decompressed up to the
+ * raw bound, at most the row bound, each line in the wire's encoding and fitting its table's plan.
+ */
+async function readPart(
+	bucket: unknown,
+	source: OpsDumpSource,
+	manifest: OpsDumpManifest,
+	plan: readonly OpsDumpTablePlan[],
+	part: number,
+): Promise<OpsDumpLine[] | OpsDataRefusal> {
+	const mismatch: OpsDataRefusal = { refused: 'part_mismatch', table: null }
+	const described = manifest.parts[part - 1]
+	if (described === undefined) {
+		return mismatch
+	}
+	// Every part but the last is exactly the fixed size, so part n starts at (n - 1) parts.
+	const body = await r2Get(bucket, OPS_DUMP_KEY({ ...source, consistent: true }, 'data'), {
+		range: { offset: (part - 1) * OPS_DUMP_PART_SIZE, length: described.size },
+	})
+	const bytes = body === null ? null : await bodyBytes(body)
+	if (bytes === null || bytes.length !== described.size || (await sha256OfBytes(bytes)) !== described.sha256) {
+		return mismatch
+	}
+	const text = await gunzipWithin(bytes, OPS_DUMP_PART_MAX_RAW_BYTES)
+	const raw = text?.split('\n')
+	// Each line ends with its newline, so the text ends with one.
+	if (raw === undefined || raw.pop() !== '' || raw.length > OPS_DUMP_PART_MAX_ROWS) {
+		return mismatch
+	}
+	const tables = new Map(plan.map((table) => [table.name, table]))
+	const lines: OpsDumpLine[] = []
+	for (const encoded of raw) {
+		const line = decodeOpsDumpLine(encoded)
+		const table = line === null ? undefined : tables.get(line.table)
+		if (line === null || table === undefined) {
+			return mismatch
+		}
+		if (line.row.length !== table.columns.length + 1 || line.row[0]?.type !== 'integer') {
+			return { refused: 'part_mismatch', table: table.name }
+		}
+		lines.push(line)
+	}
+	return lines
+}
+
+/** `bytes` as one gzip member, or `null` when it does not decompress, decompresses past `bound`, or is not UTF-8. */
+async function gunzipWithin(bytes: Uint8Array, bound: number): Promise<string | null> {
+	const reader = new Blob([bytes.slice()]).stream().pipeThrough(new DecompressionStream('gzip')).getReader()
+	const chunks: Uint8Array[] = []
+	let total = 0
+	try {
+		for (let read = await reader.read(); !read.done; read = await reader.read()) {
+			total += read.value.byteLength
+			if (total > bound) {
+				await reader.cancel()
+				return null
+			}
+			chunks.push(read.value)
+		}
+	} catch {
+		return null
+	}
+	const raw = new Uint8Array(total)
+	let offset = 0
+	for (const chunk of chunks) {
+		raw.set(chunk, offset)
+		offset += chunk.byteLength
+	}
+	try {
+		return new TextDecoder('utf-8', { fatal: true }).decode(raw)
+	} catch {
+		return null
+	}
+}
+
+async function sha256OfBytes(bytes: Uint8Array): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', bytes.slice())
+	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+/** The manifest at the backup's key, or `null` when it is missing, too large, does not parse or names another dump. */
+async function readManifest(bucket: unknown, source: OpsDumpSource): Promise<OpsDumpManifest | null> {
+	const body = await r2Get(bucket, OPS_DUMP_KEY({ ...source, consistent: true }, 'manifest'))
+	if (body === null) {
+		return null
+	}
+	const size: unknown = typeof body === 'object' ? Reflect.get(body, 'size') : undefined
+	if (typeof size === 'number' && size > OPS_DUMP_MANIFEST_MAX_BYTES) {
+		return null
+	}
+	const text = method(body, 'text')
+	if (text === null) {
+		throw new Error('R2 answered the manifest without its body')
+	}
+	const content: unknown = await text()
+	const manifest = typeof content === 'string' ? readOpsDumpManifest(content) : null
+	return manifest !== null && manifest.object === source.object && manifest.dump === source.dump ? manifest : null
+}
+
+/** R2's `get` on the bucket, by method lookup at the binding's edge; `null` for a missing object. */
+async function r2Get(bucket: unknown, key: string, options?: { readonly range: { readonly offset: number; readonly length: number } }) {
+	const get = method(bucket, 'get')
+	if (get === null) {
+		throw new Error("the FABRIKA_FILES binding has no get; a backup lies in the environment's bucket")
+	}
+	const body: unknown = await (options === undefined ? get(key) : get(key, options))
+	return body ?? null
+}
+
+async function bodyBytes(body: unknown): Promise<Uint8Array> {
+	const arrayBuffer = method(body, 'arrayBuffer')
+	if (arrayBuffer === null) {
+		throw new Error('R2 answered a dump part without its body')
+	}
+	const bytes: unknown = await arrayBuffer()
+	if (!(bytes instanceof ArrayBuffer)) {
+		throw new Error('R2 answered a dump part body that is not bytes')
+	}
+	return new Uint8Array(bytes)
+}
+
+/**
+ * Each bundle of the release cut to the manifest's ledger, which each must begin with exactly (by name and checksum);
+ * `null` for any difference, a bundle or a file the release lacks included.
+ */
+function ledgerBundles(release: readonly SqliteMigrationBundle[], manifest: OpsDumpManifest): readonly SqliteMigrationBundle[] | null {
+	const names = new Set(release.map((bundle) => bundle.bundle))
+	if (manifest.migrations.some((migration) => !names.has(migration.bundle))) {
+		return null
+	}
+	const bundles: SqliteMigrationBundle[] = []
+	for (const bundle of release) {
+		const recorded = manifest.migrations.filter((migration) => migration.bundle === bundle.bundle).sort((left, right) =>
+			compareNames(left.name, right.name)
+		)
+		const files = [...bundle.migrations].sort((left, right) => compareNames(left.name, right.name))
+		const prefix = files.slice(0, recorded.length)
+		const same = prefix.length === recorded.length
+			&& prefix.every((file, index) => file.name === recorded[index]?.name && sha256Hex(file.sql) === recorded[index]?.checksum)
+		if (!same) {
+			return null
+		}
+		bundles.push({ bundle: bundle.bundle, migrations: prefix })
+	}
+	return bundles
+}
+
+const SQLITE_SEQUENCE = 'sqlite_sequence'
+
+/** `CREATE TRIGGER` as `sqlite_schema` stores it, the only DDL `complete` runs from the manifest. */
+const TRIGGER_DDL = /^CREATE\s+(?:TEMP\s+|TEMPORARY\s+)?TRIGGER\s/i
+
+/** Whether a dump holds `name`: no SQLite internal table but `sqlite_sequence`, and none of Cloudflare's `_cf_` ones. */
+function dumped(name: string): boolean {
+	return !name.startsWith('_cf_') && (!name.startsWith('sqlite_') || name === SQLITE_SEQUENCE)
+}
+
+/** Whether the object holds any table but Cloudflare's own. */
+function holdsTables(storage: SqliteStorage): boolean {
+	return storage.sql.exec(`SELECT name FROM sqlite_schema WHERE type = 'table'`).toArray().some((row) => !text(row['name']).startsWith('_cf_'))
+}
+
+/** Every `sqlite_schema` entry with SQL a dump's DDL lists, in no particular order. */
+function readDdl(storage: SqliteStorage): OpsDumpSchemaEntry[] {
+	return storage.sql.exec('SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE sql IS NOT NULL').toArray().flatMap((row) => {
+		const name = text(row['name'])
+		const table = text(row['tbl_name'])
+		const type = row['type']
+		if (!dumped(name) || !dumped(table) || (type !== 'table' && type !== 'index' && type !== 'trigger' && type !== 'view')) {
+			return []
+		}
+		return [{ type, name, table, sql: text(row['sql']) }]
+	})
+}
+
+function sameDdl(left: readonly OpsDumpSchemaEntry[], right: readonly OpsDumpSchemaEntry[]): boolean {
+	const canonical = (entries: readonly OpsDumpSchemaEntry[]) =>
+		entries.map((entry) => JSON.stringify([entry.type, entry.name, entry.table, entry.sql])).sort(compareNames).join('\n')
+	return left.length === right.length && canonical(left) === canonical(right)
+}
+
+/**
+ * The schema `planOpsDump` reads, from the PRAGMAs workerd admits, of every table a dump holds. A `CHECK` or an
+ * `INITIALLY DEFERRED` clause is read from the table's SQL outside its quotes and comments; one such clause marks every
+ * foreign key of its table.
+ */
+export function describeDumpSchema(storage: SqliteStorage): OpsDumpSchema {
+	const tables: OpsDumpSchemaTable[] = []
+	for (const row of storage.sql.exec('PRAGMA table_list').toArray()) {
+		const name = text(row['name'])
+		const type = text(row['type'])
+		if (text(row['schema']) !== 'main' || type === 'view' || !dumped(name)) {
+			continue
+		}
+		const virtual = type === 'virtual'
+		const sql = storage.sql.exec(`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?`, name).toArray()[0]?.['sql']
+		const clauses = typeof sql === 'string' ? unquotedSql(sql) : null
+		tables.push({
+			name,
+			virtual,
+			withoutRowid: flag(row['wr']),
+			checked: clauses === null || /\bcheck\b/i.test(clauses),
+			// A virtual table is refused whatever it holds, and its module may not be loaded to describe it.
+			columns: virtual ? [] : describeColumns(storage, name),
+			indexes: virtual ? [] : describeIndexes(storage, name),
+			foreignKeys: virtual ? [] : describeForeignKeys(storage, name, clauses === null || /\binitially\s+deferred\b/i.test(clauses)),
+		})
+	}
+	return { tables }
+}
+
+function describeColumns(storage: SqliteStorage, table: string): OpsDumpSchemaColumn[] {
+	return storage.sql.exec(`PRAGMA table_xinfo(${literal(table)})`).toArray().map((row) => {
+		const hidden = integer(row['hidden'])
+		return {
+			name: text(row['name']),
+			type: text(row['type']),
+			notNull: flag(row['notnull']),
+			primaryKey: integer(row['pk']),
+			generated: hidden === 2 || hidden === 3,
+		}
+	})
+}
+
+function describeIndexes(storage: SqliteStorage, table: string): OpsDumpSchemaIndex[] {
+	return storage.sql.exec(`PRAGMA index_list(${literal(table)})`).toArray().map((row) => {
+		const origin = row['origin']
+		if (origin !== 'c' && origin !== 'u' && origin !== 'pk') {
+			throw new Error('PRAGMA index_list answered an origin SQLite does not write')
+		}
+		const columns = storage.sql.exec(`PRAGMA index_xinfo(${literal(text(row['name']))})`).toArray()
+			.filter((column) => flag(column['key']))
+			.sort((left, right) => integer(left['seqno']) - integer(right['seqno']))
+			.map((column) => typeof column['name'] === 'string' ? column['name'] : null)
+		return { unique: flag(row['unique']), origin, partial: flag(row['partial']), columns }
+	})
+}
+
+function describeForeignKeys(storage: SqliteStorage, table: string, initiallyDeferred: boolean): OpsDumpSchemaForeignKey[] {
+	const keys = new Map<number, { parent: string; rows: { seq: number; from: string; to: string | null }[] }>()
+	for (const row of storage.sql.exec(`PRAGMA foreign_key_list(${literal(table)})`).toArray()) {
+		const id = integer(row['id'])
+		const to = row['to']
+		const entry = { seq: integer(row['seq']), from: text(row['from']), to: typeof to === 'string' ? to : null }
+		const key = keys.get(id)
+		if (key === undefined) {
+			keys.set(id, { parent: text(row['table']), rows: [entry] })
+		} else {
+			key.rows.push(entry)
+		}
+	}
+	return [...keys.entries()].sort(([left], [right]) => left - right).map(([, key]) => {
+		const rows = key.rows.sort((left, right) => left.seq - right.seq)
+		const references = rows.flatMap((row) => row.to === null ? [] : [row.to])
+		if (references.length !== 0 && references.length !== rows.length) {
+			throw new Error('PRAGMA foreign_key_list named the parent columns of a key only in part')
+		}
+		return { parent: key.parent, columns: rows.map((row) => row.from), references: references.length === 0 ? null : references, initiallyDeferred }
+	})
+}
+
+/** `sql` with its string literals, quoted identifiers and comments blanked, so a keyword search finds only clauses. */
+function unquotedSql(sql: string): string {
+	let out = ''
+	let index = 0
+	while (index < sql.length) {
+		const char = sql.charAt(index)
+		const close = char === "'" ? "'" : char === '"' ? '"' : char === '`' ? '`' : char === '[' ? ']' : null
+		if (close !== null) {
+			let end = index + 1
+			for (;;) {
+				end = sql.indexOf(close, end)
+				if (end < 0 || close === ']' || sql.charAt(end + 1) !== close) break
+				end += 2
+			}
+			index = end < 0 ? sql.length : end + 1
+			out += ' '
+		} else if (sql.startsWith('--', index)) {
+			const end = sql.indexOf('\n', index)
+			index = end < 0 ? sql.length : end + 1
+			out += ' '
+		} else if (sql.startsWith('/*', index)) {
+			const end = sql.indexOf('*/', index + 2)
+			index = end < 0 ? sql.length : end + 2
+			out += ' '
+		} else {
+			out += char
+			index++
+		}
+	}
+	return out
+}
+
+/** The import marker, parsed strictly; `null` when the object holds none. A marker that does not parse is a corrupt object. */
+function readMarker(kv: ImportKv): ImportMarker | null {
+	const raw = kv.get(IMPORT_MARKER_KEY)
+	if (raw === undefined) {
+		return null
+	}
+	const value: unknown = typeof raw === 'string' ? parseJson(raw) : undefined
+	const source: unknown = isRecord(value) ? value['source'] : undefined
+	if (
+		!isRecord(value) || !isRecord(source) || Object.keys(value).length !== 3 || Object.keys(source).length !== 2
+		|| typeof source['object'] !== 'string' || typeof source['dump'] !== 'string' || typeof value['begun'] !== 'boolean'
+		|| typeof value['loaded'] !== 'number' || !Number.isSafeInteger(value['loaded']) || value['loaded'] < 0
+	) {
+		throw new Error('the import marker in KV storage does not parse')
+	}
+	return { source: { object: source['object'], dump: source['dump'] }, begun: value['begun'], loaded: value['loaded'] }
+}
+
+function writeMarker(kv: ImportKv, marker: ImportMarker): void {
+	kv.put(IMPORT_MARKER_KEY, JSON.stringify(marker))
+}
+
+function readLoadedPart(kv: ImportKv, part: number): OpsImportPartAck | null {
+	const raw = kv.get(loadedPartKey(part))
+	if (raw === undefined) {
+		return null
+	}
+	const ack = typeof raw === 'string' ? parseOpsImportPartAck(parseJson(raw)) : null
+	if (ack === null || ack.part !== part) {
+		throw new Error('a loaded part recorded in KV storage does not parse')
+	}
+	return ack
+}
+
+function sameSource(left: OpsDumpSource, right: OpsDumpSource): boolean {
+	return left.object === right.object && left.dump === right.dump
+}
+
+function refused(reason: OpsDataRefusalReason, table: string | null = null): Response {
+	const refusal: OpsDataRefusal = { refused: reason, table }
+	return jsonResponse(refusal, OPS_DATA_REFUSED_STATUS)
+}
+
+/** The parameters of `bindings`; `sql.exec` binds bytes as an `ArrayBuffer`. */
+function params(bindings: readonly OpsDumpBinding[]): SqliteValue[] {
+	return bindings.map(({ param }) => param instanceof Uint8Array ? param.slice().buffer : param)
+}
+
+function quote(identifier: string): string {
+	return `"${identifier.replaceAll('"', '""')}"`
+}
+
+function literal(value: string): string {
+	return `'${value.replaceAll("'", "''")}'`
+}
+
+/** Code-unit order, which no locale changes; the migration runner orders files the same way. */
+function compareNames(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0
+}
+
+function parseJson(text: string): unknown {
+	try {
+		return JSON.parse(text)
+	} catch {
+		return undefined
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+// SQLite's own answers: a value of another type is a broken runtime, never input to refuse.
+function text(value: SqliteValue | undefined): string {
+	if (typeof value !== 'string') {
+		throw new Error('SQLite answered a schema name or SQL that is not text')
+	}
+	return value
+}
+
+function integer(value: SqliteValue | undefined): number {
+	if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+		throw new Error('SQLite answered a schema number that is not an integer')
+	}
+	return value
+}
+
+function flag(value: SqliteValue | undefined): boolean {
+	return integer(value) !== 0
 }
