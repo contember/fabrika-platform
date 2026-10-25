@@ -67,8 +67,8 @@ export interface Env {
 	 */
 	COMMITS?: CommitSource
 	/**
-	 * The installation's mail transport, parsed from Control's own `FABRIKA_EMAIL_*` at boot; absent means none. Only the
-	 * Zerops root sets it: Cloudflare runs no jobs.
+	 * The installation's mail transport, parsed from Control's own `FABRIKA_EMAIL_*` (at boot on Bun, per invocation on the
+	 * Worker); absent means none. Control hands it to the deploys whose approved contract has a `mailer: 'installation'` job.
 	 */
 	MAIL_TRANSPORT?: InstallationMail
 	/**

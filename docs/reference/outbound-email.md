@@ -392,11 +392,40 @@ whose jobs declare `mailer: 'installation'`.
 - **Cloudflare.** `fabrika platform init` requires `--email-provider` (`none` or a
   built-in provider). It writes the provider's secret variables as GitHub Environment
   secrets and the rest as variables, and the workflow passes every built-in
-  provider's variables to IAM; an unset one arrives empty and counts as absent. A
-  re-run writes the values it is given and deletes none, so an old provider's
-  variables, a display name or a tag stay until the operator deletes them. Control
-  on Cloudflare holds no transport, so a deploy there hands a `mailer: 'installation'`
-  job `FABRIKA_EMAIL_PROVIDER=none` (below).
+  provider's variables to IAM's deploy and to the control plane's; an unset one
+  arrives empty and counts as absent. A re-run writes the values it is given and
+  deletes none, so an old provider's variables, a display name or a tag stay until
+  the operator deletes them.
+- **Control's Worker.** Control's deploy (`packages/control/fabrika.config.ts`) reads
+  the set with `readInstallationMail` and writes the provider, the sender and the
+  provider's non-secret variables as Worker vars, or `FABRIKA_EMAIL_PROVIDER=none`, and
+  the provider's credentials as Worker secrets (`pipeline.secrets`), never as vars. An
+  invalid set fails that deploy, naming the variables; IAM's stage refuses the same set
+  first. A local Worker gets no transport. The Worker reads its `FABRIKA_EMAIL_*` per
+  invocation (`controlEnv`, `src/platform-cf.ts`): none, a transport, or invalid,
+  as the Bun process does at boot. An invalid one makes Control refuse each deploy that
+  hands the set, and the refusal names the Cloudflare operator step
+  (`CLOUDFLARE_MAIL_REMEDY`). A provider no longer selected leaves its credentials as
+  Worker secrets of IAM (`prod-propustka-worker`) and of Control (`prod-vozka`); neither
+  reads them, and `wrangler secret delete <NAME> --name <worker>` removes each one
+  (`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` name the account).
+- **The deploy's order.** Control's deploy uploads the Worker version before it writes
+  the secrets (`deploy-worker`, then `sync-secrets`). On the first rollout the new
+  version briefly holds the provider's vars without its credential: a mailer deploy
+  in that window is refused with the Cloudflare operator step and can be run again.
+  After a rotation the old credential serves for the same moment.
+- **Adding or rotating it on Cloudflare.** Re-run `fabrika platform init` with the new
+  values: the workflow redeploys IAM and Control. The environments that use it get the
+  new set at their next deploy: `fabrika control deploy --app=<id> --env=<name>`, or
+  **Deploy** on the environment in the console.
+- **Rollout on Cloudflare.** A `fabrika.ref` bump does not rewrite the workflow, and an
+  older release's `init` writes the workflow without Control's copy. Bump `fabrika.ref`
+  to a release that holds it, then re-run `fabrika platform init --provider=cloudflare`
+  with that release's CLI ([release process](release-process.md)), which refreshes
+  `.github/workflows/platform.yml` and dispatches it. Until then Control's deploy gets no
+  `FABRIKA_EMAIL_*` and writes `FABRIKA_EMAIL_PROVIDER=none`, and an application's mailer
+  jobs see no mail, as before. After that workflow run, redeploy each environment whose
+  contract has a `mailer: 'installation'` job, as above.
 
 ## Applications
 
@@ -427,6 +456,10 @@ never sends. `mailer: 'own'` takes the application's own `EmailSender` from
   release the approved snapshot records (`builtinEmailProviderSince`, `@fabrika/email/providers`),
   naming the provider, the pinned release and the one it needs. The running version
   keeps running.
+- A Cloudflare deploy hands the set: the Worker runs no relay. An application on
+  framework 0.9 or newer runs its jobs in its Durable Object (ADR-0065) and reads the
+  set from its Worker's vars and secrets; the provider refuses the set to an older
+  release, whose stateless Worker runs no job (`assertStatelessEnvironment`).
 - Zerops removes the variables a deploy no longer hands, so an environment that moves
   to framework 0.7 loses the provider's credential at that deploy. A Cloudflare deploy
   writes every `FABRIKA_EMAIL_*` and `FABRIKA_PLATFORM_*` it hands, but a platform URL, as
@@ -435,8 +468,9 @@ never sends. `mailer: 'own'` takes the application's own `EmailSender` from
 - Without a transport, a deploy that hands the set hands
   `FABRIKA_EMAIL_PROVIDER=none` and nothing else. The application boots, its mailer
   jobs see `ctx.mail.available` false, and every send fails `mail_not_configured`. An
-  installation from before the transport has no `FABRIKA_EMAIL_*` on `control`, so it
-  lands here with no operator step.
+  installation from before the transport has no `FABRIKA_EMAIL_*` on `control`, and a
+  Cloudflare installation whose workflow predates Control's copy hands Control none, so
+  each lands here with no operator step.
 - With an invalid transport, Control refuses a deploy that hands the set before any
   effect, naming the jobs and the operator step. It does not refuse the approval: the
   transport can change after it.

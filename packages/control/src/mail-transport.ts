@@ -29,23 +29,29 @@ export interface InstallationMailTransport {
 export type InstallationMail =
 	| { readonly kind: 'none' }
 	| { readonly kind: 'transport'; readonly transport: InstallationMailTransport }
-	/** `reason` names variables, never a value. */
-	| { readonly kind: 'invalid'; readonly reason: string }
+	/** `reason` names variables, never a value; `remedy` is the composition's operator step that fixes the transport. */
+	| { readonly kind: 'invalid'; readonly reason: string; readonly remedy: string }
 
 export const NO_INSTALLATION_MAIL: InstallationMail = Object.freeze({ kind: 'none' })
 
 const SENDER_VARIABLES = [EMAIL_PROVIDER_VARIABLE, 'FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_FROM_NAME']
 
-const OPERATOR_STEP =
-	"set FABRIKA_EMAIL_* on both iam and control: see `fabrika platform guide --provider=zerops`, 'Set or rotate the mail transport'"
+/** The operator step on Zerops, where the set is a service variable of `iam` and `control`. */
+export const ZEROPS_MAIL_REMEDY =
+	"set FABRIKA_EMAIL_* on both iam and control: see `fabrika platform guide --provider=zerops`, 'Set or rotate the mail transport', then restart control and deploy again"
 
-export function readInstallationMail(env: EmailEnvironment, registry: EmailProviderRegistry): InstallationMail {
+/** The operator step on Cloudflare, where the installation's GitHub Environment holds the set and its workflow deploys Control. */
+export const CLOUDFLARE_MAIL_REMEDY =
+	"correct FABRIKA_EMAIL_* in the installation's GitHub Environment (re-run `fabrika platform init --provider=cloudflare` with the transport), re-run its platform workflow so Control's Worker holds the set, then deploy again"
+
+/** `remedy` is what an invalid transport's refusal tells the operator to do: each composition names its own. */
+export function readInstallationMail(env: EmailEnvironment, registry: EmailProviderRegistry, remedy: string): InstallationMail {
 	let config: EmailTransportConfig
 	try {
 		config = readEmailTransportConfig(env, registry)
 	} catch (error) {
 		if (!(error instanceof EmailDeliveryError)) throw error
-		return { kind: 'invalid', reason: error.message }
+		return { kind: 'invalid', reason: error.message, remedy }
 	}
 	if (config.kind === 'none') return NO_INSTALLATION_MAIL
 	const variables: Record<string, string> = {}
@@ -87,7 +93,7 @@ export function installationMailEnvironment(
 		jobs.length === 1 ? `job ${names} sends` : `jobs ${names} send`
 	} mail through the installation (mailer: 'installation')`
 	if (mail.kind === 'invalid') {
-		throw new Error(`${subject}, and Control's mail transport is invalid: ${mail.reason}; ${OPERATOR_STEP}, then restart control and deploy again`)
+		throw new Error(`${subject}, and Control's mail transport is invalid: ${mail.reason}; ${mail.remedy}`)
 	}
 	const provider = mail.transport.variables[EMAIL_PROVIDER_VARIABLE] ?? ''
 	const since = providerSince(provider)
