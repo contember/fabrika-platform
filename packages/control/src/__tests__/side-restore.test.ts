@@ -16,7 +16,6 @@ import {
 	advanceDataOperation,
 	BACKUP_FAILED_CODE,
 	BOOKMARK_UNAVAILABLE_CODE,
-	CLONE_NOT_SERVING_CODE,
 	type DataOperationDeps,
 	IMPORT_FAILED_CODE,
 	LIST_FAILED_CODE,
@@ -344,8 +343,8 @@ for (const backend of backends) {
 				`state ${clone} open @4`,
 				'state application inspect @4',
 				`deploy ${clone}`,
-				`migrate ${clone} @4`,
 				'restore application prepare @4',
+				`migrate ${clone} @4`,
 				'state application inspect @5',
 				'restore application arm @5',
 				'restore application verify',
@@ -490,9 +489,8 @@ for (const backend of backends) {
 					operation: { state: 'failed', step: 'open', generation: 5, error_code: POINTER_NOT_DEPLOYED_CODE },
 				})
 				const clone = restoreClone((await f.operations())[0]?.id ?? '')
-				expect(f.timeline().slice(-6)).toEqual([
+				expect(f.timeline().slice(-5)).toEqual([
 					`deploy ${clone}`,
-					`migrate ${clone} @4`,
 					'restore application prepare @4',
 					'deploy application',
 					`state ${clone} inspect @5`,
@@ -515,25 +513,31 @@ for (const backend of backends) {
 			expect(await recordedObjects(f.b, TARGET)).toMatchObject({ object: clone })
 		})
 
-		test('a clone whose boot fails is pointed back, fenced, and the original opens without being rewound', async () => {
+		test('a clone whose boot fails is never pointed back: an earlier instance may have served, so the restore waits for its boot', async () => {
 			const f = await open()
 			await f.deployFirst()
 			f.state.cloneBoots = false
-			expect(await f.restore()).toMatchObject({ result: 'failed', operation: { state: 'failed', step: 'open', error_code: CLONE_NOT_SERVING_CODE } })
+			// Three lost `migrate` answers and a view that reports a failed boot: neither says the clone never served a request.
+			expect(await f.restore()).toMatchObject({ result: 'interrupted', operation: { state: 'running', step: 'serve' } })
 			const clone = restoreClone((await f.operations())[0]?.id ?? '')
-			expect(f.timeline().slice(-8)).toEqual([
+			expect(f.timeline().slice(-6)).toEqual([
 				`deploy ${clone}`,
+				'restore application prepare @4',
 				`migrate ${clone} @4`,
 				`migrate ${clone} @4`,
 				`migrate ${clone} @4`,
 				`inspect ${clone}`,
-				'deploy application',
-				`state ${clone} inspect @5`,
-				'state application open @5',
 			])
-			expect(f.fake.requests().filter((request) => request.startsWith('restore'))).toEqual([])
-			expect(await recordedObjects(f.b, TARGET)).toEqual({ object: 'application', objects: ['application', 'rehearsal', clone] })
-			expect(await recordedMaintenance(f.b, TARGET)).toBe('open')
+			expect(f.state.deploys.map((deploy) => deploy.objects?.object)).toEqual(['application', clone])
+			expect(await f.restoreRow()).toMatchObject({ failure: null, arms: 0 })
+			expect(await recordedObjects(f.b, TARGET)).toMatchObject({ object: clone })
+			expect(f.mode(clone)).toEqual({ generation: 4, mode: 'open' })
+			expect(f.mode('application')).toEqual({ generation: 4, mode: 'inspect' })
+			// Once the clone boots, the next turn goes on from `serve`, with the bookmarks `prepare` recorded.
+			f.fake.bootFailures.delete(clone)
+			expect(await f.drive()).toMatchObject({ result: 'succeeded' })
+			expect(f.state.deploys).toHaveLength(2)
+			expect(f.fake.requests().filter((request) => request.includes('prepare'))).toEqual(['restore application prepare @4'])
 		})
 
 		test('a clone that has not booted is never taken as serving: without a boot answer nothing is rewound', async () => {
@@ -542,19 +546,19 @@ for (const backend of backends) {
 			// An idle clone: its view shows no boot failure, and nothing confirms that it booted.
 			f.fake.fault = (sent) => sent.op === 'migrate' && sent.object !== 'application' ? 'down' : undefined
 			expect(await f.restore()).toMatchObject({ result: 'interrupted', operation: { state: 'running', step: 'serve' } })
-			expect(f.fake.requests().filter((request) => request.startsWith('restore'))).toEqual([])
+			expect(f.fake.requests().filter((request) => request.startsWith('restore'))).toEqual(['restore application prepare @4'])
 			expect(f.mode('application')).toEqual({ generation: 4, mode: 'inspect' })
 			f.fake.fault = () => undefined
 			expect(await f.drive()).toMatchObject({ result: 'succeeded' })
 		})
 
-		test('a target time outside the recovery window leaves the confirmed clone serving and fails with bookmark_unavailable', async () => {
+		test('a target time outside the recovery window leaves the clone serving and fails with bookmark_unavailable', async () => {
 			const f = await open()
 			await f.deployFirst()
 			f.fake.bookmarkUnavailable = true
 			expect(await f.restore()).toMatchObject({ result: 'failed', operation: { state: 'failed', step: 'serve', error_code: BOOKMARK_UNAVAILABLE_CODE } })
 			const clone = restoreClone((await f.operations())[0]?.id ?? '')
-			expect(f.fake.requests().slice(-2)).toEqual([`migrate ${clone} @4`, 'restore application prepare @4'])
+			expect(f.timeline().slice(-2)).toEqual([`deploy ${clone}`, 'restore application prepare @4'])
 			expect(await recordedObjects(f.b, TARGET)).toMatchObject({ object: clone })
 			expect(f.fake.serving).toBe(clone)
 			expect(f.mode(clone)).toEqual({ generation: 4, mode: 'open' })
@@ -680,6 +684,10 @@ for (const backend of backends) {
 			expect(
 				await asHolder(f.b, (fence) => f.b.repositories.dataOperations.advance(id, { expectedStep: 'point', step: 'serve', objects: pointed }, fence)),
 			).toBe(false)
+			// Nor when the operation already is at the step the refused move names.
+			expect(
+				await asHolder(f.b, (fence) => f.b.repositories.dataOperations.advance(id, { expectedStep: 'point', step: 'list', objects: pointed }, fence)),
+			).toBe(false)
 			// A fence that does not hold the lease moves nothing either.
 			expect(
 				await f.b.repositories.dataOperations.advance(id, { expectedStep: 'list', step: 'restrict', objects: pointed }, {
@@ -760,6 +768,91 @@ for (const backend of backends) {
 			expect(f.state.deploys).toHaveLength(1)
 		})
 
+		test('a recovery after a pointer deploy that failed before going live keeps the original, where traffic still goes', async () => {
+			for (const crashAt of ['point', 'serve'] as const) {
+				const f = await open()
+				await f.deployFirst()
+				const id = await f.start()
+				const clone = restoreClone(id)
+				// A provider accepted the pointer deploy, then failed it before its version went live.
+				f.state.verdict = (objects) => objects?.object === 'application' ? 'succeeded' : 'failed'
+				if (crashAt === 'point') {
+					f.setCrash('point')
+				} else {
+					// The holder died once `serve` was recorded, with the clone as the pointer, before `prepare` answered.
+					f.fake.fault = (sent) => {
+						if (sent.op === 'restore' && sent.step === 'prepare') throw new Crash()
+						return undefined
+					}
+				}
+				await expect(f.drive(id)).rejects.toBeInstanceOf(Crash)
+				f.fake.fault = () => undefined
+				expect(await recordedObjects(f.b, TARGET)).toMatchObject({ object: crashAt === 'point' ? 'application' : clone })
+				expect(await startRecovery(f.deps(), { ...TARGET, operationId: id, resolution: 'open', actor: 'user:ops' })).toMatchObject({
+					result: 'succeeded',
+				})
+				expect(f.fake.serving).toBe('application')
+				expect(await recordedObjects(f.b, TARGET)).toEqual({ object: 'application', objects: ['application', 'rehearsal', clone] })
+				expect(f.mode(clone)?.mode).toBe('inspect')
+				expect(f.mode('application')?.mode).toBe('open')
+				expect(f.state.deploys.map((deploy) => deploy.objects?.object)).toEqual(['application', clone, 'application'])
+				await opened?.close()
+				opened = null
+			}
+		})
+
+		test('a recovery that cannot tell where traffic goes opens nothing, and recovering it keeps the clone', async () => {
+			const f = await open()
+			await f.deployFirst()
+			const id = await f.start()
+			const clone = restoreClone(id)
+			f.setCrash('point')
+			await expect(f.drive(id)).rejects.toBeInstanceOf(Crash)
+			f.fake.fault = (sent) => sent.op === 'restore' && sent.step === 'prepare' ? 'down' : undefined
+			const first = await startRecovery(f.deps(), { ...TARGET, operationId: id, resolution: 'open', actor: 'user:ops' })
+			expect(first).toMatchObject({ result: 'interrupted', operation: { kind: 'recovery', state: 'running' } })
+			expect(await recordedObjects(f.b, TARGET)).toMatchObject({ object: 'application' })
+			expect(f.mode('application')?.mode).toBe('inspect')
+			// The only operation a recovery may now name is the interrupted recovery; it still recovers the restore.
+			f.fake.fault = () => undefined
+			const firstId = first.kind === 'driven' ? first.operation.id : ''
+			expect(await startRecovery(f.deps(), { ...TARGET, operationId: firstId, resolution: 'open', actor: 'user:ops' })).toMatchObject({
+				result: 'succeeded',
+			})
+			expect(await recordedObjects(f.b, TARGET)).toEqual({ object: clone, objects: ['application', 'rehearsal', clone] })
+			expect(f.mode(clone)?.mode).toBe('open')
+			expect(f.mode('application')?.mode).toBe('inspect')
+			expect(f.state.deploys.map((deploy) => deploy.objects?.object)).toEqual(['application', clone])
+			expect(await f.b.repositories.dataOperations.get(id)).toMatchObject({ state: 'failed', error_code: 'recovered_open' })
+			expect(await f.b.repositories.dataOperations.get(firstId)).toMatchObject({ state: 'failed', error_code: 'recovered_open' })
+		})
+
+		test('recovering a recovery interrupted while it published keeps the clone of the restore it recovers', async () => {
+			for (const resolution of ['open', 'resume'] as const) {
+				const f = await open()
+				await f.deployFirst()
+				const id = await f.start()
+				const clone = restoreClone(id)
+				f.setCrash('point')
+				await expect(f.drive(id)).rejects.toBeInstanceOf(Crash)
+				f.fake.fault = (sent) => sent.op === 'state' ? 'down' : undefined
+				const first = await startRecovery(f.deps(), { ...TARGET, operationId: id, resolution: 'open', actor: 'user:ops' })
+				expect(first).toMatchObject({ result: 'interrupted', operation: { kind: 'recovery', state: 'running' } })
+				f.fake.fault = () => undefined
+				const firstId = first.kind === 'driven' ? first.operation.id : ''
+				expect(await startRecovery(f.deps(), { ...TARGET, operationId: firstId, resolution, actor: 'user:ops' })).toMatchObject({
+					result: 'succeeded',
+				})
+				expect(await recordedObjects(f.b, TARGET)).toEqual({ object: clone, objects: ['application', 'rehearsal', clone] })
+				expect(f.mode(clone)?.mode).toBe('open')
+				expect(f.mode('application')?.mode).toBe('inspect')
+				expect(f.state.deploys.map((deploy) => deploy.objects?.object)).toEqual(['application', clone])
+				expect(await f.b.repositories.dataOperations.get(id)).toMatchObject({ state: 'failed' })
+				await opened?.close()
+				opened = null
+			}
+		})
+
 		test('a recovery does not decide while the pointer deploy has no outcome', async () => {
 			const f = await open()
 			await f.deployFirst()
@@ -775,12 +868,12 @@ for (const backend of backends) {
 			expect(f.mode('application')?.mode).toBe('inspect')
 		})
 
-		test('a recovery after a clone that did not boot keeps the original, whose revert deploy already ran', async () => {
+		test('a recovery after a pointer deploy that left the original serving keeps the original, whose revert deploy already ran', async () => {
 			const f = await open()
 			await f.deployFirst()
 			const id = await f.start()
 			const clone = restoreClone(id)
-			f.state.cloneBoots = false
+			f.state.ignoresServing = true
 			f.setCrash('revert')
 			await expect(f.drive(id)).rejects.toBeInstanceOf(Crash)
 			expect(await startRecovery(f.deps(), { ...TARGET, operationId: id, resolution: 'open', actor: 'user:ops' })).toMatchObject({
@@ -797,7 +890,7 @@ for (const backend of backends) {
 				const f = await open()
 				await f.deployFirst()
 				const id = await f.start()
-				f.state.cloneBoots = false
+				f.state.ignoresServing = true
 				if (at === 'revert') {
 					f.setCrash('revert')
 				} else {
@@ -811,7 +904,10 @@ for (const backend of backends) {
 				await expect(f.drive(id)).rejects.toBeInstanceOf(Crash)
 				expect(await f.operations()).toMatchObject([{ kind: 'restore', state: 'running', step: at }])
 				f.fake.fault = () => undefined
-				expect(await f.drive(id)).toMatchObject({ result: 'failed', operation: { state: 'failed', step: 'open', error_code: CLONE_NOT_SERVING_CODE } })
+				expect(await f.drive(id)).toMatchObject({
+					result: 'failed',
+					operation: { state: 'failed', step: 'open', error_code: POINTER_NOT_DEPLOYED_CODE },
+				})
 				const clone = restoreClone(id)
 				expect(f.state.deploys.map((deploy) => deploy.objects?.object)).toEqual(['application', clone, 'application'])
 				expect(await recordedObjects(f.b, TARGET)).toEqual({ object: 'application', objects: ['application', 'rehearsal', clone] })

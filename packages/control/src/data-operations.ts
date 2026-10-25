@@ -193,9 +193,9 @@ export const DEPLOY_NOT_STARTED_CODE = 'deploy_not_started'
 
 /**
  * The codes a restore fails with while its environment's serving object is open: before anything was frozen (the listing
- * deploy failed), once the original is open again (the import, the promotion, the pointer deploy failed, or the clone
- * did not boot and traffic went back), or once the clone serves (the rewind was refused or its schema is not the
- * expected one, and the original stays `inspect` for an operator).
+ * deploy failed), once the original is open again (the import, the promotion or the pointer deploy failed, or traffic
+ * never left the original), or once the clone serves (the rewind was refused or its schema is not the expected one,
+ * and the original stays `inspect` for an operator).
  */
 export const LIST_FAILED_CODE = 'list_failed'
 /** The listing deploy succeeded, yet the ops channel does not reach the clone: the runner did not write the pointer. */
@@ -203,7 +203,6 @@ export const OBJECTS_NOT_DEPLOYED_CODE = 'objects_not_deployed'
 export const IMPORT_FAILED_CODE = 'import_failed'
 export const PROMOTE_FAILED_CODE = 'promote_failed'
 export const POINT_FAILED_CODE = 'point_failed'
-export const CLONE_NOT_SERVING_CODE = 'clone_not_serving'
 /** The original still answers as the object of ordinary traffic after the pointer deploy, so traffic never moved. */
 export const POINTER_NOT_DEPLOYED_CODE = 'pointer_not_deployed'
 export const BOOKMARK_UNAVAILABLE_CODE = 'bookmark_unavailable'
@@ -221,7 +220,6 @@ const REOPENED_CODES: ReadonlySet<string | null> = new Set([
 	IMPORT_FAILED_CODE,
 	PROMOTE_FAILED_CODE,
 	POINT_FAILED_CODE,
-	CLONE_NOT_SERVING_CODE,
 	POINTER_NOT_DEPLOYED_CODE,
 	BOOKMARK_UNAVAILABLE_CODE,
 	REWIND_FAILED_CODE,
@@ -232,7 +230,6 @@ const REOPENED_CODES: ReadonlySet<string | null> = new Set([
 const CLONE_OPENED_CODES: ReadonlySet<string | null> = new Set([
 	PROMOTE_FAILED_CODE,
 	POINT_FAILED_CODE,
-	CLONE_NOT_SERVING_CODE,
 	POINTER_NOT_DEPLOYED_CODE,
 ])
 
@@ -635,6 +632,12 @@ type DataStop = { readonly kind: 'failed'; readonly code: string } | { readonly 
 
 type DataResult<T> = { readonly kind: 'ok'; readonly value: T } | DataStop
 
+/** What `prepare` says of ordinary traffic: it still reaches the original, or it moved off it, which both others prove. */
+type Pointer =
+	| { readonly kind: 'original' }
+	| { readonly kind: 'prepared'; readonly bookmarks: { readonly current: string; readonly target: string } }
+	| { readonly kind: 'refused'; readonly code: string }
+
 /** One holder's run of an operation. Every write is fenced on its lease, and each request goes out only while it holds it. */
 class OperationDriver {
 	/** What this holder saw each object acknowledge, so a step after a successor's fence does not publish it twice. */
@@ -743,7 +746,15 @@ class OperationDriver {
 		// A successor first fences out every request its predecessor sent; a recovery that has not reconciled sent none.
 		if (successor && row.step !== 'reconcile') {
 			row = await this.advance(row, { step: row.step, generation: await this.allocate() })
-			const fenced = row.kind === 'restore' ? await this.restoreFence(row) : await this.publish(row, row.target_mode)
+			let fenced: Published
+			if (row.kind === 'restore') {
+				fenced = await this.restoreFence(row)
+			} else if (row.kind === 'recovery' && row.step === 'restrict') {
+				// Its step publishes every mode it needs at the new generation, where one fenced in another mode would be refused.
+				fenced = { kind: 'acked', row }
+			} else {
+				fenced = await this.publish(row, row.target_mode)
+			}
 			if (fenced.kind === 'refused') return (await this.failed(row, fenced.code)).result
 			if (fenced.kind !== 'acked') return fenced.kind
 			row = fenced.row
@@ -780,7 +791,7 @@ class OperationDriver {
 				return { kind: 'next', row: await this.advance(row, { step: 'restrict' }) }
 			}
 			case 'restrict': {
-				const recovered = await this.require(interruptedId)
+				const recovered = await this.recovered(interruptedId)
 				if (recovered.kind === 'restore' && row.resolution === 'open') return await this.recoverRestore(row, recovered)
 				const fenced = await this.publish(row, 'closed')
 				if (fenced.kind === 'refused') return await this.failed(row, fenced.code)
@@ -1050,30 +1061,21 @@ class OperationDriver {
 			}
 			case 'serve': {
 				if (restore.failure !== null) return { kind: 'next', row: await this.advance(row, { step: 'revert' }) }
-				// `migrate` boots the clone and answers only once it booted, and only while the clone is published at this
-				// generation in a mode other than `inspect`: a positive answer, where the view's lack of a boot failure is none.
-				const booted = await this.migrate(row)
-				if (booted.kind === 'failed') return await abandon(CLONE_NOT_SERVING_CODE, 'revert')
-				if (booted.kind !== 'ok') return { kind: 'done', result: 'interrupted' }
 				if (restore.target_bookmark === null) {
-					// The original refuses `prepare` as `serving_object` while the deployed version sends ordinary traffic to it,
-					// so its answer proves the pointer deploy moved traffic off it. `prepare` itself writes only the sentinel.
-					const prepared = await this.restoreRequest({
-						step: 'prepare',
-						object: restore.original,
-						generation: row.generation,
-						sentinel: row.id,
-						at: restore.at,
-					})
-					if (prepared.kind === 'failed' && prepared.code === 'serving_object') return await abandon(POINTER_NOT_DEPLOYED_CODE, 'revert')
-					if (prepared.kind === 'failed') {
-						return await this.failed(row, prepared.code === 'bookmark_unavailable' ? BOOKMARK_UNAVAILABLE_CODE : REWIND_FAILED_CODE)
+					const pointer = await this.pointer(restore, row.generation)
+					if (pointer.kind === 'failed') return await this.failed(row, REWIND_FAILED_CODE)
+					if (pointer.kind !== 'ok') return { kind: 'done', result: pointer.kind }
+					// Traffic still reaches the original, so the clone served no ordinary request and the original takes it back.
+					if (pointer.value.kind === 'original') return await abandon(POINTER_NOT_DEPLOYED_CODE, 'revert')
+					if (pointer.value.kind === 'refused') {
+						return await this.failed(row, pointer.value.code === 'bookmark_unavailable' ? BOOKMARK_UNAVAILABLE_CODE : REWIND_FAILED_CODE)
 					}
-					if (prepared.kind !== 'ok') return { kind: 'done', result: prepared.kind }
-					if (prepared.value.step !== 'prepare') return await this.failed(row, 'invalid_answer')
-					const bookmarks = { current: prepared.value.current, target: prepared.value.target }
-					this.lease.assertWritten(await this.deps.repositories.restores.prepared(restore.operation_id, bookmarks, this.lease.fence()))
+					this.lease.assertWritten(await this.deps.repositories.restores.prepared(restore.operation_id, pointer.value.bookmarks, this.lease.fence()))
 				}
+				// Traffic reaches the clone, so it may hold writes: only its boot answer goes on, and no other answer reverts it,
+				// since an earlier instance may have booted and served whatever the current one reports.
+				const booted = await this.migrate(row, restore.clone)
+				if (booted.kind !== 'ok') return { kind: 'done', result: 'interrupted' }
 				return { kind: 'next', row: await this.advance(row, { step: 'rewind', generation: await this.allocate() }) }
 			}
 			case 'rewind':
@@ -1133,11 +1135,13 @@ class OperationDriver {
 	}
 
 	/**
-	 * A recovery that opens past a restore (ADR-0070 §9) keeps the object that may hold writes. The clone, once a provider
-	 * accepted the pointer deploy and the restore did not record that the clone served no request; then the original stays
-	 * `inspect`. Otherwise the original, pointed back first by a deploy wherever traffic may have moved, with the clone
-	 * fenced `inspect`. A restore deploy without an outcome leaves the recovery interrupted. The pointer is recorded in the
-	 * batch that moves the recovery to `open`.
+	 * A recovery that opens past a restore (ADR-0070 §9) keeps the object that may hold writes, once it knows traffic goes
+	 * there. The clone, once a provider accepted the pointer deploy and the restore did not record that the clone served
+	 * no request, confirmed as `serve` confirms it: `prepare` proves the pointer moved off the original, and the clone
+	 * answers its boot; then the original stays `inspect`. A `prepare` refused as `serving_object` keeps the original
+	 * instead. The original is pointed back first by a deploy wherever traffic may have moved, with the clone fenced
+	 * `inspect`. A deploy without an outcome or an unclear answer leaves the recovery interrupted. The pointer is recorded
+	 * in the batch that moves the recovery to `open`.
 	 */
 	private async recoverRestore(row: DataOperationRow, interrupted: DataOperationRow): Promise<Step> {
 		const restore = await this.restoreOf(interrupted)
@@ -1148,29 +1152,59 @@ class OperationDriver {
 			return { kind: 'done', result: 'interrupted' }
 		}
 		const pointAccepted = point !== null && (point.status === 'succeeded' || point.external_run_id !== null)
-		const listed = objects.objects.includes(restore.clone) ? objects.objects : [...objects.objects, restore.clone]
-		let modes: readonly (readonly [string, OpsMode])[]
-		let kept: { serving: string; listed: readonly string[] }
-		if (pointAccepted && restore.failure === null) {
-			kept = { serving: restore.clone, listed }
-			modes = [[restore.original, 'inspect'], [restore.clone, 'open']]
-		} else {
-			kept = { serving: restore.original, listed: objects.objects }
-			if (revert?.status !== 'succeeded' && (objects.object !== restore.original || pointAccepted)) {
-				const deployed = await this.restoreDeploy(row, restore, 'revert', { object: kept.serving, objects: kept.listed })
-				if (deployed === 'unsettled') return { kind: 'done', result: 'interrupted' }
-				if (deployed !== 'succeeded') return await this.failed(row, REVERT_FAILED_CODE)
-			}
-			modes = objects.objects.includes(restore.clone) ? [[restore.clone, 'inspect'], [restore.original, 'open']] : [[restore.original, 'open']]
-		}
 		let current = row
-		for (const [object, mode] of modes) {
-			const published = await this.publish(current, mode, object)
-			if (published.kind === 'refused') return await this.failed(current, published.code)
-			if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
+		if (pointAccepted && restore.failure === null) {
+			const listed = objects.objects.includes(restore.clone) ? objects.objects : [...objects.objects, restore.clone]
+			const published = await this.publishEach(current, [[restore.original, 'inspect'], [restore.clone, 'open']])
+			if (published.kind !== 'ok') return published.step
 			current = published.row
+			// `serve` recorded the bookmarks only once `prepare` proved the pointer moved.
+			let onOriginal = false
+			if (restore.target_bookmark === null) {
+				const pointer = await this.pointer(restore, current.generation)
+				if (pointer.kind !== 'ok') return { kind: 'done', result: pointer.kind === 'paused' ? 'paused' : 'interrupted' }
+				onOriginal = pointer.value.kind === 'original'
+			}
+			if (!onOriginal) {
+				const booted = await this.migrate(current, restore.clone)
+				if (booted.kind !== 'ok') return { kind: 'done', result: 'interrupted' }
+				return await this.settleRecovery(current, { serving: restore.clone, listed })
+			}
+			// The original still serves: a new generation takes back the modes this one published.
+			current = await this.advance(current, { step: current.step, generation: await this.allocate() })
 		}
-		const settled = await this.advance(current, { step: 'open', targetMode: 'open', objects: kept })
+		const kept = { serving: restore.original, listed: objects.objects }
+		if (revert?.status !== 'succeeded' && (objects.object !== restore.original || pointAccepted)) {
+			const deployed = await this.restoreDeploy(current, restore, 'revert', { object: kept.serving, objects: kept.listed })
+			if (deployed === 'unsettled') return { kind: 'done', result: 'interrupted' }
+			if (deployed !== 'succeeded') return await this.failed(current, REVERT_FAILED_CODE)
+		}
+		const modes: readonly (readonly [string, OpsMode])[] = objects.objects.includes(restore.clone)
+			? [[restore.clone, 'inspect'], [restore.original, 'open']]
+			: [[restore.original, 'open']]
+		const published = await this.publishEach(current, modes)
+		if (published.kind !== 'ok') return published.step
+		return await this.settleRecovery(published.row, kept)
+	}
+
+	/** Publish each object's mode at the record's generation, in order; the step to stop at when one is not acknowledged. */
+	private async publishEach(
+		start: DataOperationRow,
+		modes: readonly (readonly [string, OpsMode])[],
+	): Promise<{ readonly kind: 'ok'; readonly row: DataOperationRow } | { readonly kind: 'stop'; readonly step: Step }> {
+		let row = start
+		for (const [object, mode] of modes) {
+			const published = await this.publish(row, mode, object)
+			if (published.kind === 'refused') return { kind: 'stop', step: await this.failed(row, published.code) }
+			if (published.kind !== 'acked') return { kind: 'stop', step: { kind: 'done', result: published.kind } }
+			row = published.row
+		}
+		return { kind: 'ok', row }
+	}
+
+	/** The recovery records `objects` as the pointer in the batch that moves it to `open`, then retires the chain. */
+	private async settleRecovery(row: DataOperationRow, objects: { readonly serving: string; readonly listed: readonly string[] }): Promise<Step> {
+		const settled = await this.advance(row, { step: 'open', targetMode: 'open', objects })
 		await this.retireChain(settled, 'recovered_open')
 		await this.finish(settled)
 		return { kind: 'done', result: 'succeeded' }
@@ -1305,6 +1339,33 @@ class OperationDriver {
 		}
 	}
 
+	/**
+	 * Where ordinary traffic goes, from `prepare` on the original at `generation` with the restore's sentinel, so a repeated
+	 * one answers what the first kept. The original refuses `serving_object` while the deployed version sends ordinary
+	 * traffic to it, before anything else the step checks, so any other answer of the step proves the pointer moved off
+	 * it. `prepare` itself writes only the sentinel. A lost answer repeats it; a stale or unusable one fails it.
+	 */
+	private async pointer(restore: RestoreRow, generation: number): Promise<DataResult<Pointer>> {
+		const request: OpsRestoreRequest = { step: 'prepare', object: restore.original, generation, sentinel: restore.operation_id, at: restore.at }
+		for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+			if (this.deps.passSpent?.() === true) return { kind: 'paused' }
+			this.lease.assertHeld()
+			const answer = await this.deps.ops.restore(this.target, request, this.lease.signal)
+			this.lease.assertHeld()
+			if (answer.kind === 'refused') {
+				const code = answer.refusal.refused
+				return { kind: 'ok', value: code === 'serving_object' ? { kind: 'original' } : { kind: 'refused', code } }
+			}
+			if (answer.kind === 'ok') {
+				if (answer.value.step !== 'prepare') return invalidAnswer()
+				return { kind: 'ok', value: { kind: 'prepared', bookmarks: { current: answer.value.current, target: answer.value.target } } }
+			}
+			if (answer.kind === 'stale') return { kind: 'failed', code: 'stale_generation' }
+			if (answer.reason !== 'unreachable') return { kind: 'failed', code: answer.reason }
+		}
+		return { kind: 'interrupted' }
+	}
+
 	/** The object's answer to `inspect`, repeating a lost one. */
 	private async inspectAnswer(object: string): Promise<OpsAnswer<OpsInspection>> {
 		let answer = await this.inspect(object)
@@ -1341,11 +1402,12 @@ class OperationDriver {
 	}
 
 	/**
-	 * The `migrate` request at the record's generation. A lost answer repeats it. The object answers a failed boot with a
-	 * 500, which reads as unreachable, so once the attempts are spent its view says whether the boot failed.
+	 * The `migrate` request to `named` (the serving object by default) at the record's generation. A lost answer repeats
+	 * it. The object answers a failed boot with a 500, which reads as unreachable, so once the attempts are spent its view
+	 * says whether its current boot failed.
 	 */
-	private async migrate(row: DataOperationRow): Promise<DataResult<null>> {
-		const object = await this.serving()
+	private async migrate(row: DataOperationRow, named?: string): Promise<DataResult<null>> {
+		const object = named ?? (await this.serving())
 		for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
 			this.lease.assertHeld()
 			const answer = await this.deps.ops.migrate(this.target, { object, generation: row.generation }, this.lease.signal)
@@ -1355,7 +1417,7 @@ class OperationDriver {
 			if (answer.reason === 'not_served') return { kind: 'failed', code: MIGRATION_FAILED_CODE }
 			if (answer.reason !== 'unreachable') return { kind: 'interrupted' }
 		}
-		const probe = await this.inspect()
+		const probe = await this.inspect(object)
 		return probe.kind === 'ok' && probe.value.view.bootFailure !== null ? { kind: 'failed', code: MIGRATION_FAILED_CODE } : { kind: 'interrupted' }
 	}
 
@@ -1573,6 +1635,17 @@ class OperationDriver {
 			if (operation.state === 'running') await this.fail(operation, code)
 			next = operation.recovers_operation_id
 		}
+	}
+
+	/** The operation a chain of recoveries starting at `id` recovers: through each interrupted recovery to what it recovers. */
+	private async recovered(id: string): Promise<DataOperationRow> {
+		const seen = new Set<string>()
+		let operation = await this.require(id)
+		while (operation.kind === 'recovery' && operation.recovers_operation_id !== null && !seen.has(operation.id)) {
+			seen.add(operation.id)
+			operation = await this.require(operation.recovers_operation_id)
+		}
+		return operation
 	}
 
 	private async require(id: string): Promise<DataOperationRow> {

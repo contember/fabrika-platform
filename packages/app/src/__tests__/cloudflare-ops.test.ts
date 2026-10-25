@@ -272,6 +272,23 @@ describe('the ops channel at the environment object', () => {
 		})
 	})
 
+	test('a boot that succeeds after a failed one clears the failure from the view', async () => {
+		await keepingProcessEnvironment(async () => {
+			const served = notesApp({ runs: [] })
+			let attempts = 0
+			const { object, loads } = await start({
+				load: () => attempts++ === 0 ? Promise.reject(new Error('a transient failure')) : Promise.resolve({ default: served.implementation }),
+			})
+			await expect(object.fetch(health())).rejects.toThrow('a transient failure')
+			expect(parseOpsView(await inspected(object))?.bootFailure).not.toBeNull()
+			// Past the first failure's backoff the next event boots again, and this time it boots.
+			await Bun.sleep(1_050)
+			expect((await object.fetch(health())).status).toBe(200)
+			expect(loads.count).toBe(2)
+			expect(parseOpsView(await inspected(object))?.bootFailure).toBeNull()
+		})
+	})
+
 	test("a boot failure's text is scrubbed of the environment's secrets", async () => {
 		await keepingProcessEnvironment(async () => {
 			const { object } = await start({ load: () => Promise.reject(new Error(`could not use ${PROXY_SECRET}`)) })

@@ -223,18 +223,20 @@ export class DataOperationRepository {
 		const sql = `UPDATE app_env_data_operations SET ${sets.join(', ')} WHERE ${where.join(' AND ')}`
 		if (change.objects === undefined) return await this.mutate(id, sql, [...setValues, ...whereValues], fence, checkpoint)
 		if (checkpoint !== undefined) throw new Error('an advance records a backup checkpoint or the pointer, not both')
-		// The pointer follows the operation's move in the same batch, and only once it moved under this lease.
+		// The pointer is written under the UPDATE's own predicate, read just before it in the batch, so it lands exactly when
+		// the UPDATE matches: the lease row stays locked between them and the pointer write leaves the operation untouched.
+		const matched = `${where.join(' AND ')} AND ${operationLease}`
+		const matchedValues = [...whereValues, fence.holder, fence.nowMs]
 		const results = await this.d1.batch<{ id: string }>([
 			this.lock(id, fence),
-			this.d1.prepare(`${sql} AND ${operationLease} RETURNING id`).bind(...setValues, ...whereValues, fence.holder, fence.nowMs),
 			this.d1
 				.prepare(`INSERT INTO app_env_application_objects (app_id, env, serving, listed, updated_at)
-					SELECT app_id, env, ?, ?, ? FROM app_env_data_operations
-					WHERE id = ? AND state = 'running' AND step = ? AND ${operationLease}
+					SELECT app_id, env, ?, ?, ? FROM app_env_data_operations WHERE ${matched}
 					ON CONFLICT (app_id, env) DO UPDATE SET serving = excluded.serving, listed = excluded.listed, updated_at = excluded.updated_at`)
-				.bind(change.objects.serving, change.objects.listed.join(','), this.now(), id, change.step, fence.holder, fence.nowMs),
+				.bind(change.objects.serving, change.objects.listed.join(','), this.now(), ...matchedValues),
+			this.d1.prepare(`UPDATE app_env_data_operations SET ${sets.join(', ')} WHERE ${matched} RETURNING id`).bind(...setValues, ...matchedValues),
 		])
-		return (results[1]?.results.length ?? 0) > 0
+		return (results[2]?.results.length ?? 0) > 0
 	}
 
 	/** A running operation succeeded. Terminal: `false` once it has finished or failed. */

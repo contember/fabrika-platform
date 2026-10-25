@@ -444,16 +444,18 @@ other environment, before the provider prepares anything, and the write maps a r
   `list` (the listing deploy, then `inspect` of the clone: the channel reaches only a listed object, so a refusal is a
   runner that did not forward the pointer, `objects_not_deployed`, before anything is frozen), `restrict`/`backup`/
   `verify` as a backup, `import` into the clone (`inspect`), `promote` (clone `open`, original `inspect`), `point` (the
-  pointer deploy; one no provider accepted reopens the original), `serve` (positive confirmation: `migrate` on the clone
-  answers only once it booted while not `inspect`, and `prepare` on the original is refused as `serving_object` while
-  traffic still reaches it; its bookmarks are recorded here, before any `arm`), `rewind` (each `arm` counted before it is
-  sent and sent once, then `verify`; at most three arms), `check` (the original's ledger within the clone's). A clone
-  that does not boot, or a pointer that did not move, goes through `revert` (a deploy pointing back) to `open`, which
-  fences the clone `inspect` and opens the original; every such code reads as `open`. `bookmark_unavailable`,
-  `rewind_failed` and `unexpected_schema` leave the clone serving and the original `inspect`. A recovery with resolution
-  `open` keeps the object that may hold writes: the clone once a provider accepted the pointer deploy and nothing showed
-  the clone served no request, else the original, pointed back first; a restore deploy without an outcome leaves the
-  recovery interrupted.
+  pointer deploy; one no provider accepted reopens the original), `serve` (positive confirmation: `prepare` on the
+  original is refused as `serving_object` while traffic still reaches it, and its bookmarks are recorded before any
+  `arm`; then `migrate` on the clone answers only once it booted while not `inspect`), `rewind` (each `arm` counted
+  before it is sent and sent once, then `verify`; at most three arms), `check` (the original's ledger within the
+  clone's). Only a pointer that did not move goes through `revert` (a deploy pointing back) to `open`, which fences the
+  clone `inspect` and opens the original; every such code reads as `open`. A clone that gives no boot answer leaves
+  `serve` interrupted, never reverted: a boot failure lives in one instance's memory, so nothing proves the clone never
+  served. `bookmark_unavailable`, `rewind_failed` and `unexpected_schema` leave the clone serving and the original
+  `inspect`. A recovery with resolution `open`, also of an interrupted recovery (the chain resolves to the restore),
+  keeps the object that may hold writes, where traffic goes: the clone once a provider accepted the pointer deploy,
+  nothing showed the clone served no request, and `serve`'s two checks confirm it; else the original, pointed back
+  first. A restore deploy without an outcome or an unclear answer leaves the recovery interrupted.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.

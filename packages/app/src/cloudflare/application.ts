@@ -467,7 +467,7 @@ export class FabrikaApplication {
 	/** The maintenance barrier, read from R2 once per instance; a failed read is not kept, so the next request reads again. */
 	#barrier: Promise<MaintenanceBarrier> | null = null
 	#barrierObject: string | null = null
-	/** The instance's last failed boot, kept in memory for the ops view. */
+	/** The instance's failed boot, kept in memory for the ops view until a boot succeeds. */
 	#bootFailure: OpsBootFailureContent | null = null
 	/** The instance's boot, `null` until the first event that needs the application: an ops request never starts it. */
 	#outcome: Promise<Outcome> | null = null
@@ -623,7 +623,11 @@ export class FabrikaApplication {
 		return this.#state.blockConcurrencyWhile(() =>
 			attach(this.#setup, this.#state, this.#env, policy, (failure) => {
 				this.#bootFailure = failure
-			}).then((booted): Outcome => ({ booted }), (failure: unknown): Outcome => {
+			}).then((booted): Outcome => {
+				// The view reports the current boot: a failure an earlier attempt left is no longer the object's state.
+				this.#bootFailure = null
+				return { booted }
+			}, (failure: unknown): Outcome => {
 				if (isMigrationsPending(failure) || failure instanceof ImportInProgress) {
 					return { pending: true }
 				}
