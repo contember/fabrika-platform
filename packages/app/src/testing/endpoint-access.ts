@@ -124,15 +124,43 @@ export interface EndpointAccessOptions {
 	/**
 	 * The error types of the refusals (400) an endpoint's handler answers its own object with when the case's input meets
 	 * no domain rule the kit can satisfy, by endpoint id: such a 400 is the handler's own answer, so the request passed
-	 * the access form, and the endpoint's own case gets it as `{ status: 400 }` instead of failing. A leak, global or
-	 * capability case still throws on it (an answer that holds nothing proves no isolation), so does any other 400, and an
-	 * input the schema refuses (`validation`) always does. `refusals` of the fixtures.
+	 * the access form, and the endpoint's own case gets it as `{ status: 400 }` instead of failing; so does the other
+	 * scope's request a leak case makes first. The own scope's answer of a leak case, and a global or capability case,
+	 * still throw on it (an answer that holds nothing proves no isolation), so does any other 400, and an input the schema
+	 * refuses (`validation`) always does. `refusals` of the fixtures.
 	 */
 	readonly refusals?: Readonly<Record<string, readonly string[]>>
+	/**
+	 * Known values for text columns of the row the endpoint addresses (the row of the table that owns its dimension), by
+	 * endpoint id: the value in the own scope's row, and `<value>-other` in the other scope's, which counts among the
+	 * other scope's values a leak shows. For a handler whose rule ties a column to the input or a file fixture (a package
+	 * that names the skill's slug). `pins` of the fixtures.
+	 */
+	readonly pins?: Readonly<Record<string, Readonly<Record<string, string>>>>
 }
 
-/** Whether a case takes a refusal the fixtures declare for its endpoint as the handler's answer: only an own case does. */
+/**
+ * Whether a request takes a refusal the fixtures declare for its endpoint as the handler's answer: an own case's, and the
+ * other scope's request a leak case makes first, whose answer is not the one checked.
+ */
 type Refusals = 'declared' | 'none'
+
+/**
+ * The pins of a case's endpoint (column → the own scope's value of a text column), and the removals of the case: rows
+ * seeded with pins are removed once the case is over, so the next case can pin the same values under a unique index.
+ */
+interface Pinning {
+	readonly pins: Readonly<Record<string, string>>
+	readonly removals: (() => Promise<void>)[]
+}
+
+const NO_PINNING: Pinning = { pins: {}, removals: [] }
+
+/** Seeded worlds, their removal taken by the case when they hold pinned values. */
+const pinned = <W extends { readonly remove: () => Promise<void> }>(worlds: W, pinning: Pinning): W => {
+	if (Object.keys(pinning.pins).length > 0) pinning.removals.push(worlds.remove)
+	return worlds
+}
 
 interface ActionEndpoint {
 	readonly id: string
@@ -535,14 +563,14 @@ export function endpointAccessKit<DB, P>(
 		if (response.status === 400) {
 			const type = errorType(text)
 			const declared = type !== undefined && type !== 'validation' && options.refusals?.[row.id]?.includes(type) === true
-			// Only the own case may take it: it shows the access form let the caller through. A leak or a global case that
-			// got it would pass on an answer that holds nothing, which proves nothing.
+			// The own case may take it: it shows the access form let the caller through. The answer a leak case checks, or a
+			// global case's, would pass holding nothing, which proves nothing.
 			if (declared && refusals === 'declared') {
 				return { status: response.status, text }
 			}
 			if (declared) {
 				throw new Error(
-					`${row.id}: the handler answered its declared refusal (400 ${type}), which only the own case takes; this case proves nothing on it until the fixtures give what the handler needs (${text})`,
+					`${row.id}: the handler answered its declared refusal (400 ${type}), which only the own case takes; this case proves nothing on it until the fixtures give what the handler needs (pins, files, fixtures) (${text})`,
 				)
 			}
 			throw new Error(
@@ -566,6 +594,7 @@ export function endpointAccessKit<DB, P>(
 		field: SchemaShape | undefined,
 		seed: Seed,
 		input: Readonly<Record<string, unknown>>,
+		pinning: Pinning = NO_PINNING,
 	): Promise<Scopes> => {
 		const named = rowFields(input)
 		const owner = ownerOf(dimension)
@@ -586,7 +615,7 @@ export function endpointAccessKit<DB, P>(
 				},
 			}
 		}
-		const worlds = await postgres.seedWorlds(tables, owner, seed)
+		const worlds = pinned(await postgres.seedWorlds(tables, owner, seed, pinning.pins), pinning)
 		const own = await rowsIn(worlds.own, named)
 		const other = await rowsIn(worlds.other, named)
 		return {
@@ -641,14 +670,17 @@ export function endpointAccessKit<DB, P>(
 	 * For a report `in` `dimension`: one row in each scope of every table that lies in it, the table that owns it with
 	 * `seed`. Each side's targets are its rows' values of `dimension`, and each caller holds all of them.
 	 */
-	const inScopesOf = async (action: string, dimension: string, field: SchemaShape | undefined, seed: Seed) => {
+	const inScopesOf = async (action: string, dimension: string, field: SchemaShape | undefined, seed: Seed, pinning: Pinning = NO_PINNING) => {
 		const own: InTarget[] = []
 		const other: InTarget[] = []
 		const values: string[] = []
 		for (const name of tableNames) {
 			const mode = policies[name]?.scope.mode
 			if (mode !== 'dimension' && mode !== 'child') continue
-			const worlds = await postgres.seedWorlds(tables, name, name === ownerOf(dimension) ? seed : {})
+			const owned = name === ownerOf(dimension)
+			const worlds = owned
+				? pinned(await postgres.seedWorlds(tables, name, seed, pinning.pins), pinning)
+				: await postgres.seedWorlds(tables, name)
 			const ownAt = worlds.own.chain.findIndex((link) => link.type === dimension)
 			const otherAt = worlds.other.chain.findIndex((link) => link.type === dimension)
 			const ownValue = worlds.own.chain[ownAt]?.value
@@ -660,7 +692,7 @@ export function endpointAccessKit<DB, P>(
 			}
 		}
 		if (own.length === 0) {
-			const scopes = await scopesOf(action, dimension, field, seed, {})
+			const scopes = await scopesOf(action, dimension, field, seed, {}, pinning)
 			return { own: [scopes.own], other: [scopes.other], values: scopes.other.values }
 		}
 		return { own, other, values }
@@ -783,6 +815,7 @@ export function endpointAccessKit<DB, P>(
 		mount: string,
 		seed: Seed,
 		input: Readonly<Record<string, unknown>>,
+		pinning: Pinning,
 	): Promise<{ readonly fetch: RpcFetch; readonly rows: Readonly<Record<string, string>> }> => {
 		const access = row.access
 		if (access.form !== 'on') {
@@ -792,7 +825,7 @@ export function endpointAccessKit<DB, P>(
 		if (owner === undefined) {
 			throw new Error(`${row.id}: no table owns ${access.dimension}, so no link can be bound to one`)
 		}
-		const { own } = await postgres.seedWorlds(tables, owner, seed)
+		const { own } = pinned(await postgres.seedWorlds(tables, owner, seed, pinning.pins), pinning)
 		const holder = kit.testCaller([{ action: row.action, scope: { type: access.dimension, value: own.key } }], {
 			kind: 'link',
 			link: { mount, chain: own.chain },
@@ -809,6 +842,9 @@ export function endpointAccessKit<DB, P>(
 	// the call and the runs it kicked are over. A list per call, so a concurrent case never removes the rows another
 	// was given; the generated cases run one after another, since a row a required foreign key needed is shared.
 	const accessKitOf = (removals: (() => Promise<void>)[]): EndpointAccessKit => {
+		/** The pins of `endpoint`, whose seeded rows this call removes once it is over. */
+		const pinningOf = (endpoint: string): Pinning => ({ pins: options.pins?.[endpoint] ?? {}, removals })
+
 		/** One row of each application table `appRows` names, for this call only. */
 		const seedAppRows = async (appRows: AppRows): Promise<void> => {
 			if (Object.keys(appRows).length === 0) return
@@ -822,7 +858,7 @@ export function endpointAccessKit<DB, P>(
 				if (access.form !== 'on' && access.form !== 'in') {
 					throw new Error(`${endpoint} has the access form ${access.form}; only on and in name an object or a scope value`)
 				}
-				const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
+				const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input, pinningOf(endpoint))
 				const asked = addressing(input, access.from, scopes.other)
 				const { status } = await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), asked, scopes.own.chain)
 				return { status }
@@ -832,12 +868,12 @@ export function endpointAccessKit<DB, P>(
 				const { action, access } = row
 				if (access.form === 'in') {
 					await seedAppRows(appRows)
-					const scopes = await inScopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
+					const scopes = await inScopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, pinningOf(endpoint))
 					const grants = (targets: readonly InTarget[]): Grant[] =>
 						targets.flatMap(({ target, chain }) => holding(row, input, [{ action, scope: { type: access.dimension, value: target } }], chain))
 					const marks: string[] = []
 					for (const side of scopes.other) {
-						const answer = await ask(row, grants(scopes.other), addressing(input, access.from, side), side.chain)
+						const answer = await ask(row, grants(scopes.other), addressing(input, access.from, side), side.chain, 'declared')
 						marks.push(...answer.marks)
 					}
 					const answers = []
@@ -851,14 +887,17 @@ export function endpointAccessKit<DB, P>(
 				}
 				await seedAppRows(appRows)
 				const scopes = access.form === 'on'
-					? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
+					? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input, pinningOf(endpoint))
 					: await listScopesOf(action, access.dimension)
 				const from = access.form === 'on' ? access.from : null
+				// The other scope asks first, to fill whatever a handler keeps between requests; its pins differ from the own
+				// scope's, so a refusal the fixtures declare is its answer too. The own scope's answer is the one checked.
 				const other = await ask(
 					row,
 					holding(row, input, scopes.other.grants, scopes.other.chain),
 					addressing(input, from, scopes.other),
 					scopes.other.chain,
+					'declared',
 				)
 				const answer = await ask(
 					row,
@@ -876,11 +915,11 @@ export function endpointAccessKit<DB, P>(
 				}
 				await seedAppRows(appRows)
 				if (row.link !== null) {
-					const holder = await linkHolder(row, row.link, seed, input)
+					const holder = await linkHolder(row, row.link, seed, input, pinningOf(endpoint))
 					const { status } = await askAs(row, holder.fetch, { ...input, ...holder.rows }, 'declared')
 					return { status }
 				}
-				const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
+				const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input, pinningOf(endpoint))
 				const { status } = await ask(
 					row,
 					holding(row, input, scopes.own.grants, scopes.own.chain),
@@ -937,7 +976,7 @@ export function endpointAccessKit<DB, P>(
 				}
 				const { access } = named
 				if (access.form === 'on' || access.form === 'in') {
-					const scopes = await scopesOf(named.action, access.dimension, fieldOf(named.input, access.from), seed, input)
+					const scopes = await scopesOf(named.action, access.dimension, fieldOf(named.input, access.from), seed, input, pinningOf(endpoint))
 					asked = addressing(asked, access.from, scopes.other)
 					grants.push(...scopes.own.grants)
 				}

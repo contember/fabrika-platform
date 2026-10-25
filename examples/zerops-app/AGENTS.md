@@ -5773,14 +5773,19 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   first type of the field's kind its bytes are, and a file it cannot read, or of none of those types, fails the case. The
   checker refuses a field that holds no file and a path that leaves the application, starts with `.` or has characters
   other than letters, digits, `_`, `-`, `.` and `/` (`endpoint-fixture`).
-- `refusals['<endpoint id>']` lists the error types of the 400s the endpoint's handler answers its own object with when
-  no fixture can meet its domain rule: `export const refusals = { 'api.skills.publish': ['skill_frontmatter'] }`, where
-  the package must name the skill's slug and the generated case's skill has a generated one. Such a 400 is the
-  handler's own answer, so the request passed the access form: the own case then passes on 200 or that 400, and the
-  denial cases still expect 404 or 403. A leak case still fails on it, because an answer that holds nothing proves no
-  isolation: when the leak case of the endpoint meets the same rule, ask the human. Declare one only after the fixtures above
-  cannot meet the rule, and keep the endpoint's own tests for the rule itself. Any other 400 still fails the case, and
-  the checker refuses `validation`, an input the schema refuses (`endpoint-fixture`).
+- `pins['<endpoint id>']` gives text columns of the row the endpoint addresses (the row of the table that owns its
+  dimension) a known value instead of the seed's marker: `export const pins = { 'api.skills.publish': { slug:
+  'published-skill' } }`, when the handler ties the column to the input or to the file in `files` (a package whose
+  `SKILL.md` names the skill's slug). The own scope's row holds the value, the other scope's `<value>-other`, which a
+  leak case still looks for in the own scope's answer. A pin of a column that places the row, or of no text column,
+  fails the case; the checker refuses one of an endpoint without an addressed row (`endpoint-fixture`).
+- `refusals['<endpoint id>']` lists the error types of the 400s the endpoint's handler answers with when its rule ties
+  the row to the input and the scope is the other one: `export const refusals = { 'api.skills.publish':
+  ['skill_frontmatter'] }`, beside the pin above. A leak case asks from the other scope first, whose pinned value the
+  package does not name; that request may answer one of them. The own case passes on 200 or one of them, and the
+  denial cases still expect 404 or 403. The answer a leak case checks, the own scope's, still fails on it, because an
+  answer that holds nothing proves no isolation: pin the row and give the file so that the own scope succeeds. Any
+  other 400 fails the case, and the checker refuses `validation`, an input the schema refuses (`endpoint-fixture`).
 - The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).
 - The seed of the tests fills every text column with a marker and every other required column with a sample of its
   type: an enum's first label, `1`, `false`, today. A column with a `DEFAULT` keeps it (`status` is `open`). A column

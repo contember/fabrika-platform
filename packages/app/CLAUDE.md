@@ -974,8 +974,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   of its kind (the type's leading bytes and a marker), or the author's file fixture (`EndpointAccessOptions.files`, by
   endpoint and field, read once and typed by its bytes), for a handler that inspects the content. A 400 whose type the
   author declares for the endpoint (`EndpointAccessOptions.refusals`, never `validation`) is the handler's answer in
-  the `own` case only (`Refusals`), where it comes back as the status; a leak, global or capability case throws on it,
-  as on every other 400. Its cases are `denied` (exact 404/403),
+  the `own` case and in the other scope's first request of a leak case (`Refusals`), where it comes back as the status;
+  the answer a leak case checks, and a global or capability case, throw on it, as on every other 400.
+  `EndpointAccessOptions.pins` give text columns of the addressed row known values (`seedWorlds`' `pins`: the own row's
+  value, `<value>-other` in the other row, among its markers), so a handler that ties a column to a file fixture
+  answers the own scope in full. Its cases are `denied` (exact 404/403),
   `leaked` (`{ answered, leaked }`: answered unless a 401, 403, 404 or 5xx, so a precondition's 409 passes; `in`
   across every table that lies in the dimension), and `own` (a caller with only the endpoint's action, or a link
   holder, reaches its own object; on an endpoint that manages members, also on the target's value one assigning role
