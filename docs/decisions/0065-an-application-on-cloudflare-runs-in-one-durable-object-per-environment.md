@@ -81,7 +81,14 @@ SQLite database. The Worker only forwards each request to it.**
    the object repairs once when it boots): it reaps, deletes the wakes of an undeclared job or of a changed expression,
    inserts each missing cron wake at the next fire, keeps an overdue one so missed fires coalesce into one run, and
    re-arms. It arms the first alarm of an environment nobody called and recovers an alarm whose retries ran out. A kick
-   runs in the object after its commit, inline, as on Bun.
+   writes a `kick` wake in its site's transaction, so it commits with the writes it follows; a kick without a time also
+   runs in the object after its commit, inline, and `ctx.kick(job, { at })` writes only the wake. A claim that leased
+   rows replaces its job's `claim` wake in its fenced transaction with one at the next row it could claim, at least 1 s
+   ahead (at once after a claim that filled its limit). The alarm takes no job whose lease holder started after every
+   due wake, because that run consumes them, and a run failed past its inline retries consumes the wakes it owned. On
+   Bun the same wakes drive one timer per serving process: a write lowers it in its transaction, the 60 s job check
+   refreshes it and finds a wake another container wrote, and it kicks each job with a due wake through the kick path,
+   so the lease admits one run; crontab still runs the schedule.
 6. **Files are R2 objects.** The provider binds a bucket per application environment; the object's file store is R2.
    A kind that scans its uploads is refused on Cloudflare until a scanner runs there.
 7. **`ctx.sql` is refused on SQLite.** On Postgres the runtime role is the boundary under an application's raw SQL

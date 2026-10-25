@@ -47,6 +47,8 @@ bun test src/__tests__/challenge.test.ts        # the client key and the Turnsti
 bun test src/__tests__/public-kick.test.ts      # a public procedure's kicks: kicked runs, coalescing on the lease, the cron recovery (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/multipart.test.ts        # the streaming multipart reader a procedure with file fields reads its body through, no database
 bun test src/__tests__/mutation-kick.test.ts    # a mutation's ctx.kick: a run after the commit, nothing on a refusal, stopKicks (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/claim-rearm.test.ts      # a claim re-arms its job from its own eligibility, on Postgres and under the Cloudflare alarm (Postgres half needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/test-kit-due-jobs.test.ts # kit.runDueJobs: wakes due within a window run once through the alarm's scheduler (SQLite; FABRIKA_TEST_POSTGRES_URL adds Postgres)
 bun test src/__tests__/job-mail.test.ts         # ctx.mail: the kit's stand-in, prefixed keys, the installation's and the own transport, an installation without mail, fail-closed boot (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/error-reports.test.ts    # what a report carries: scrubbing, frames, causes, caps; crash reports of both adapters
@@ -151,7 +153,10 @@ src/
     types.ts          ProcedureInput, ProcedureResult, PagedProcedure: the types read off a client procedure
   testing/            @fabrika/app/testing — no test-runner dependency
     kit.ts            testKit: boot behind the production proxy decision and a stand-in IAM; the module re-exports
-                      the types its options take (IamMembershipRpc, ChallengeFetch, FileScanner)
+                      the types its options take (IamMembershipRpc, ChallengeFetch, FileScanner); runDueJobs: repair,
+                      then the wakes due within the window moved to the database's now (JobWakes.hasten, test-only),
+                      then take and run for each due job; handlers keep real time, and a cron fire already run early
+                      is skipped
     proxy.ts          endpointProxy: proxy-core's verify service over contractProxyTable
     caller.ts         test callers and their grants
     membership.ts     kitMembership, every kit's stand-in IAM transport: member directories from the kit's callers,
@@ -226,7 +231,8 @@ src/
     sniff.ts          the declared type checked against the first bytes
     treatment.ts      FileDownload and the file treatment of ADR-0022
   jobs/               c.cron at runtime; bound by boot, run by `fabrika job run <name>` (runContractJob), on
-                      Cloudflare by the object's alarm over the durable wakes (JobScheduler)
+                      Bun also by the serving process's WakeTimer, on Cloudflare by the object's alarm over the
+                      durable wakes (JobScheduler)
     types.ts          JobContext, JobHandler, JobHandlersOf: handlers.jobs.<name>
     runner.ts         bindJobs, the run: lease, attempts, timeout, retries, reports, a site's kick; the framework's own jobs
     schedule.ts       five-field cron in UTC: the due minutes and the period
@@ -685,7 +691,9 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **`ctx.kick` sends its jobs only after the commit, and the answer never depends on it** (`#kickAll`): each declared
   job once, to the request's `waitUntil` or detached, never rejecting, and nothing for a refused, rolled-back or
   cancelled request. The kicked run is the job's own (its key, its lease, its retries), never the request's. Never
-  await the kick, and never give it a payload: the job reads its rows.
+  await the kick, and never give it a payload: the job reads its rows. Every kick writes a `kick` wake in the site's
+  transaction (`#recordKicks`, before the answer); `ctx.kick(job, { at })` writes only that wake, deduplicated per job
+  and due second (`kick:<job>:<s>`). A job's kicks are written after its attempt succeeded, before its finish.
 - **A public procedure's challenge is verified after its buckets and its body, before its handler, and recorded once it
   passed** (`challenge.ts`). The provider list is closed (`turnstile`, `altcha`) and each one's browser sources are
   fixed (`CHALLENGE_ORIGINS`: Turnstile's origin, which `buildArtifact` adds to `scriptSrc`/`frameSrc`; ALTCHA's
@@ -1104,6 +1112,12 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   that took the flag but finds a newer run holding the lease sets it again (`handOver`): that run may have read before
   the kick's row. There is no process-local kick state; every kick asks the lease. Never let a kick wait on the lease, and never drop the cron of a kicked job: it is the recovery path. `serveContract` drains
   kicked runs on SIGTERM before it closes the database, and `kit.runJob` waits for them before it runs.
+- **A claim that leased rows re-arms its job** (`rearmClaim` in `@fabrika/db`'s `job-wakes.ts`): in its fenced
+  transaction it replaces `claim:<job>` with a wake at its own next eligible due, at least now + 1 s; a full claim makes
+  it due now + 1 ms; a claim that found nothing writes none.
+- **On Bun the serving process's `WakeTimer` kicks due jobs through the kick path** (`ContractJobs.wake`):
+  `projectWakes` lowers it, the 60 s check refreshes it, and an already-due wake waits `WAKE_RETRY_MS`. `take` and
+  `wake` skip a job whose holder owns every due wake. A run failed past its inline retries consumes the wakes it owned.
 - **A job acts only with what IAM signs for its key** (`implement/workload.ts`, ADR-0022 "Principal kinds"). Control
   writes `FABRIKA_JOB_<NAME>_KEY`; each attempt exchanges it through the adapter's `WorkloadTokenSource` (on Bun
   `issuerWorkloadTokens`, IAM's public `WORKLOAD_TOKEN_PATH`), verifies the token with the application's own

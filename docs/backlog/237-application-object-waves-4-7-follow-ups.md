@@ -7,8 +7,8 @@ blocked-by: []
 # 237 — Application object follow-ups, waves 4–7
 
 **Summary.** The P2s, open decisions and missing pieces the reviews of the application object sprint's waves 4–7 left
-(the data view, backups, the importer, restore, the alarm driver). None blocks a release; item 1 needs an oblaka
-release first.
+(the data view, backups, the importer, restore, the alarm driver, kicks and the Bun timer). None blocks a release;
+item 1 needs an oblaka release first.
 
 ## Problem
 
@@ -59,15 +59,30 @@ release first.
     has no environment). Fix idea: hand the tracker `environmentScrubber(environment)` once captured and scrub at read
     time.
 
+**Kicks and the Bun timer.**
+
+14. A due-now kick wake is written at the request's clock (`new Date()` in `dispatch.ts`'s `#recordKicks`), while the
+    finish consumes the wakes due at or before the run's `last_started_at` on the database's clock. A request clock
+    ahead of the database's leaves the wake to the run the kick started, unconsumed, so the job runs once more with
+    nothing to do. Fix idea: write a due-now wake at the database's now, as a job's kicks already do (`leases.now()`).
+15. Kicks of one job in one second merge into one wake (`kick:<job>:<s>`) that keeps the earlier due. A run that
+    started between the two kicks consumes the merged wake, so the later kick rests on the pending flag alone, and a
+    crash between its commit and `markPending` leaves it to the schedule. Fix idea: let a later kick in the same second
+    move the merged wake's due to its own time.
+16. A wake written by another process reaches a serving process's `WakeTimer` only at its 60 s job check: a claim
+    re-arm or a kick for later written by a crontab run (`runContractJob` has no timer) or by a container that stopped
+    runs up to 60 s after its due. Decide whether 60 s is the contract, or how a write elsewhere reaches the timer.
+
 ## Approach / acceptance
 
-Each item lands with a witness that fails before it. Items 1, 9 and 11 need a decision first; item 1 also an oblaka
+Each item lands with a witness that fails before it. Items 1, 9, 11 and 16 need a decision first; item 1 also an oblaka
 release.
 
 ## Touch points
 
 `oblaka` (bucket lifecycle), `packages/provider-cloudflare` (`provider.ts`, `bounds.ts`), `packages/app`
-(`cloudflare/export.ts`, `cloudflare/restore.ts`, `cloudflare/tracker.ts`, `jobs/schedule.ts`, `jobs/runner.ts`),
+(`cloudflare/export.ts`, `cloudflare/restore.ts`, `cloudflare/tracker.ts`, `jobs/schedule.ts`, `jobs/runner.ts`,
+`implement/dispatch.ts`, `implement/invocation.ts`, `bun.ts`),
 `packages/auth-core` (`ops.ts`), `packages/control` (`data-operations.ts`), `packages/cli` (`env.ts`, `connect.ts`),
 `packages/dashboard`.
 

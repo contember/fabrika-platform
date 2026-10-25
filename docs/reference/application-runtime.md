@@ -626,8 +626,9 @@ work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs
 - **A job reads outside its transaction and writes inside it.** `ctx.db` of a job attempt reads, each statement on its
   own; every write and `tx.sql` runs in `ctx.transaction((tx) => …)`, fenced by the attempt's lease. An attempt
   retries, so its writes are idempotent. There is no `ctx.jobs.enqueue`: work for later is a row a run claims
-  ([Queues and claims](#queues-and-claims)). A site that declares `kicks` starts a run once it committed, and the
-  schedule picks up the rest. The kick carries no payload, so the row stays the only record of the work
+  ([Queues and claims](#queues-and-claims)). A site that declares `kicks` writes a durable wake in its transaction and
+  starts a run once it committed, or later with `ctx.kick(job, { at })` ([Kicks](#kicks)). The kick carries no payload,
+  so the row stays the only record of the work
   ([ADR-0060](../decisions/0060-a-handler-kicks-a-declared-job-after-its-commit.md)).
 - **Every handle is bound to its invocation.** A handle kept past its handler, called from another live request, from
   a request of another `boot`, or from an ended job attempt is refused (500, one log line) before it reads its
@@ -797,6 +798,10 @@ is `null`.
 - **The work runs after the lease, one transaction per row.** A failure or a crash leaves the row as the claim left it,
   due again after the backoff. Attempts count claims, so a job claims only what its run will reach. ADR-0060's lease
   keeps two runs of one job off one row.
+- **A claim that leased rows re-arms its job.** In its fenced transaction it replaces the job's `claim` wake in
+  `fabrika_wakes` with one at the next row it could claim (its `<due>`, at least 1 s ahead); a claim that filled its
+  `limit` makes the job due again at once, and a claim that found nothing writes no wake. So a row whose backoff ends,
+  or a backlog larger than one claim, runs its job without waiting for the schedule (`claim-rearm.test.ts`).
 - `claim` is refused inside `ctx.transaction`, in a request and in a query. A row past `maxAttempts` stays in the
   table, not due, for the application to show or requeue (`packages/db`'s `queue.test.ts`).
 
@@ -1122,20 +1127,34 @@ A mutation (of an RPC, link or public procedure), a webhook or a cron job declar
 
 - `ctx.kick` is request-bound and accepts only the declared names. A kick carries no payload: the row it looks at is
   the only record of the work.
-- Kicks are deduplicated per job and sent after the output validated and the transaction committed. A thrown handler,
-  a refused output, a cancelled request and a failed commit kick nothing. A procedure without a transaction kicks once
-  its answer is built. A job's kicks are sent after its lease is released.
+- **Every kick is a durable wake.** It writes a `kick` row of `fabrika_wakes` in the site's transaction, before the
+  answer, so it commits and rolls back with the writes it follows. A thrown handler, a refused output, a cancelled
+  request and a failed commit kick nothing. A job's kick wakes are written after its attempt succeeded, before its
+  finish.
+- Kicks without a time are deduplicated per job and sent after the output validated and the transaction committed. A
+  procedure without a transaction kicks once its answer is built. A job's kicks are sent after its lease is released.
+- **`ctx.kick(job, { at })` is a kick for later.** It writes only the wake, due at `at`, and starts nothing now.
+  Wakes of one job due in the same second merge into one at the earliest. An `at` that is not a valid `Date` is
+  refused `invalid_argument`. The scheduler runs the job when the wake comes due: the object's alarm on Cloudflare, the
+  serving process's wake timer on Bun.
 - The serving process starts one run in the background (`waitUntil` where the runtime has one, detached otherwise)
   under the job's own key, never the request's. A kick waits for no lock, so it never holds a connection requests
   need: when it cannot take the lease at once it sets the shared flag `fabrika_job_kicks.pending`, and the run holding
   the lease runs the job once more after it succeeded. Every run clears the flag when it starts, so at most one run is
   active and one is pending whatever the number of kicks and instances; after a failed run the flag waits for the
   schedule.
-- The schedule stays the recovery path: a kicked run that dies before its commit leaves its rows to the next scheduled
-  run (`public-kick.test.ts`, `mutation-kick.test.ts`). On SIGTERM a Bun server first aborts the kicked runs in flight:
-  a stopped run frees its lease as failed with the code `stopped`, logs that its schedule runs it again, and reports
-  nothing to Operations. It then stops accepting requests and waits at most 10 s for the rest of its background work
-  before it closes the database.
+- **On Bun the serving process keeps one timer to the next wake** (`WakeTimer`). A write of this process lowers it in
+  the write's transaction; the 60 s job check refreshes it, which is when it finds a wake another container wrote. When
+  it fires it reaps crashed holders and kicks each job with a due wake through the kick path, so the lease admits one
+  run across containers. A wake already due when the timer is armed is looked at 1 s later, because its own kick is
+  under way. On both runtimes the scheduler skips a job whose lease holder started after every due wake: that run
+  consumes them. The crontab still runs the schedule.
+- The wake is the recovery path: a kicked run that dies before its finish leaves its wake, and the scheduler runs the
+  job again once the lease expired; the schedule stays a second one. A run that fails past its inline retries consumes
+  the wakes it owned, so a failing job does not loop (`public-kick.test.ts`, `mutation-kick.test.ts`). On SIGTERM a Bun
+  server first aborts the kicked runs in flight: a stopped run frees its lease as failed with the code `stopped`, logs
+  that its schedule runs it again, and reports nothing to Operations. It then stops accepting requests and waits at
+  most 10 s for the rest of its background work before it closes the database.
 - The build and the checker refuse `kicks` on a query, a read-only site and an export, a name that is no cron job of
   the contract, and a cycle of kick edges between jobs. The artifact records the edges as
   `declared[<site>].kicks`, absent unless declared. The approval shows a new edge; from a public procedure it widens
