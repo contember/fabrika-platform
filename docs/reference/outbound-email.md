@@ -405,9 +405,15 @@ whose jobs declare `mailer: 'installation'`.
   invocation (`controlEnv`, `src/platform-cf.ts`): none, a transport, or invalid,
   as the Bun process does at boot. An invalid one makes Control refuse each deploy that
   hands the set, and the refusal names the Cloudflare operator step
-  (`CLOUDFLARE_MAIL_REMEDY`). A provider no longer selected leaves its credential as a
-  Worker secret of IAM (`prod-propustka-worker`) and of Control (`prod-vozka`); neither
-  reads it, and `wrangler secret delete <NAME> --name <worker>` removes it.
+  (`CLOUDFLARE_MAIL_REMEDY`). A provider no longer selected leaves its credentials as
+  Worker secrets of IAM (`prod-propustka-worker`) and of Control (`prod-vozka`); neither
+  reads them, and `wrangler secret delete <NAME> --name <worker>` removes each one
+  (`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` name the account).
+- **The deploy's order.** Control's deploy uploads the Worker version before it writes
+  the secrets (`deploy-worker`, then `sync-secrets`). On the first rollout the new
+  version briefly holds the provider's vars without its credential: a mailer deploy
+  in that window is refused with the Cloudflare operator step and can be run again.
+  After a rotation the old credential serves for the same moment.
 - **Adding or rotating it on Cloudflare.** Re-run `fabrika platform init` with the new
   values: the workflow redeploys IAM and Control. The environments that use it get the
   new set at their next deploy: `fabrika control deploy --app=<id> --env=<name>`, or

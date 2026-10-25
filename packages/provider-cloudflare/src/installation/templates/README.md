@@ -84,12 +84,15 @@ gh variable delete FABRIKA_EMAIL_SMARTEMAILING_TAG --env {{ACCOUNT}}
 
 Remove the same names from the installer env file (init prints its path when it starts), or a later run of
 init resumes them.
-IAM's and the control plane's Workers also keep the old credential as a Worker secret, which neither reads. Delete
-it from both, with the Cloudflare API token in `CLOUDFLARE_API_TOKEN`:
+IAM's and the control plane's Workers also keep the old provider's credentials as Worker secrets, which neither reads.
+Delete each of them from both Workers, with the account's id in `CLOUDFLARE_ACCOUNT_ID` and its API token in
+`CLOUDFLARE_API_TOKEN`:
 
 ```sh
-bunx wrangler secret delete FABRIKA_EMAIL_SMARTEMAILING_API_KEY --name prod-propustka-worker
-bunx wrangler secret delete FABRIKA_EMAIL_SMARTEMAILING_API_KEY --name prod-vozka
+for worker in prod-propustka-worker prod-vozka; do
+  bunx wrangler secret delete FABRIKA_EMAIL_SMARTEMAILING_USERNAME --name "$worker"
+  bunx wrangler secret delete FABRIKA_EMAIL_SMARTEMAILING_API_KEY --name "$worker"
+done
 ```
 
 ## Routine redeploy or version bump

@@ -995,6 +995,27 @@ export const contract = app.contract((c) => ({
 		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toEqual([])
 	})
 
+	test('an environment outside any namespace gets the whole transport even where the provider has namespaces: no proxy carries the relay', async () => {
+		const w = mailingWorld('0.9.0')
+		await seed(w)
+		await w.db.registry.upsertAppEnv({
+			appId: 'notes',
+			env: 'stage',
+			domain: 'stage.notes.example.test',
+			namespaceId: null,
+			provider: 'harbor',
+			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: {} }),
+			providerArtifactJson: HARBOR_ARTIFACT,
+		})
+		const { workloadCredentials } = await credentialed(w)
+		const result = await executeDeploy({ ...deps(w), workloadCredentials, mailTransport, ...(await relayed(w)) }, {
+			runId: await createdRun(w, 'stage'),
+		})
+		expect(result.status).toBe('succeeded')
+		expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_RESEND_API_KEY'])
+		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toEqual([])
+	})
+
 	test("a 0.7 application behind a namespace proxy sends through Control's relay: its key, and nothing of the provider", async () => {
 		const w = mailingWorld('0.7.0')
 		await seed(w)
