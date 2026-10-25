@@ -134,7 +134,6 @@ async function loadDataLayer(): Promise<DataLayerOpeners> {
 /** How long a stopping process waits for the work its requests left running; a kicked run aborts at once. */
 const SHUTDOWN_DRAIN_MS = 10_000
 
-/** Waits for `drain`, at most `ms`; a drain the bound cuts short is logged. */
 /**
  * How long the wake timer waits for a wake that is already due: such a wake's own kick is under way (the post-commit start,
  * or the timer's last one), and looking at once would kick its job a second time before that kick took the lease.
@@ -230,6 +229,7 @@ export class WakeTimer {
 	}
 }
 
+/** Waits for `drain`, at most `ms`; a drain the bound cuts short is logged. */
 async function drainWithin(drain: Promise<void>, ms: number): Promise<void> {
 	const expired = Promise.withResolvers<void>()
 	const timer = setTimeout(() => {
