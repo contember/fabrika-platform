@@ -762,8 +762,9 @@ await Bun.write(
   `src/schemas.ts`, `src/shared/` and its own modules; never a slice, `src/db/` or a Bun or Node module. The plugin loads the
   contract without its handlers. A row type the screen declares (`Task` above) is checked against the answer where
   the rows are passed in.
-- The last step points the page's assets at the SPA's prefix (`/`): the mount answers `index.html` for every path
-  under it, so a deep link such as `/tasks/<id>` renders. `define` gives React's production build.
+- The last step points the page's assets at the SPA's prefix (`/`): the mount answers `index.html` for every page
+  route under it (a path without an extension, or a navigation), so a deep link such as `/tasks/<id>` renders; a
+  missing asset such as an old `chunk-….js` is 404. `define` gives React's production build.
 - `sourcemap: 'external'` writes each script's map beside it, and the page names none. The platform build uploads the
   maps to Operations for the release the page reports, so an error's frames show the original source; the mount
   never serves a `.map` file (404). Keep the maps external: `inline` would ship the source to every visitor.
@@ -5801,8 +5802,9 @@ export const members = { 'api.tasks.assign': ['assignee'] }
 - `refusals['<endpoint id>']` lists the error types of the 400s the endpoint's handler answers its own object with when
   no fixture can meet its domain rule: `export const refusals = { 'api.skills.publish': ['skill_frontmatter'] }`, where
   the package must name the skill's slug and the generated case's skill has a generated one. Such a 400 is the
-  handler's own answer, so the request passed the access form: the own case then passes on 200 or that 400, a leak
-  case counts it as answered, and the denial cases still expect 404 or 403. Declare one only after the fixtures above
+  handler's own answer, so the request passed the access form: the own case then passes on 200 or that 400, and the
+  denial cases still expect 404 or 403. A leak case still fails on it, because an answer that holds nothing proves no
+  isolation: when the leak case of the endpoint meets the same rule, ask the human. Declare one only after the fixtures above
   cannot meet the rule, and keep the endpoint's own tests for the rule itself. Any other 400 still fails the case, and
   the checker refuses `validation`, an input the schema refuses (`endpoint-fixture`).
 - The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).

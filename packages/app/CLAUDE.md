@@ -1008,8 +1008,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   storage: `kit.file` seeds one file per scope through the real upload endpoint. A case's file input is `sampleFile`'s file
   of its kind (the type's leading bytes and a marker), or the author's file fixture (`EndpointAccessOptions.files`, by
   endpoint and field, read once and typed by its bytes), for a handler that inspects the content. A 400 whose type the
-  author declares for the endpoint (`EndpointAccessOptions.refusals`, never `validation`) is the handler's answer and
-  comes back as the status; every other 400 throws. Its cases are `denied` (exact 404/403),
+  author declares for the endpoint (`EndpointAccessOptions.refusals`, never `validation`) is the handler's answer in
+  the `own` case only (`Refusals`), where it comes back as the status; a leak, global or capability case throws on it,
+  as on every other 400. Its cases are `denied` (exact 404/403),
   `leaked` (`{ answered, leaked }`: answered unless a 401, 403, 404 or 5xx, so a precondition's 409 passes; `in`
   across every table that lies in the dimension), and `own` (a caller with only the endpoint's action, or a link
   holder, reaches its own object; on an endpoint that manages members, also on the target's value one assigning role
@@ -1090,8 +1091,9 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   the R2 file store (`r2-files.ts`) and IAM's binding for keys, membership and workload tokens (`bindings.ts`).
 - **The SPA files come from `ASSETS`, whose directory mirrors the request paths** (`bindingAssets`): the deploy stages
   each SPA and link mount's `dir` there at its prefix (`@fabrika/provider-cloudflare`'s `spa-assets.ts`), so the object
-  asks for the request as it came, and a GET or HEAD the binding answers 404 asks once more for `<prefix>/`, which
-  Workers Assets answers with the mount's `index.html`, as `diskAssets` serves it.
+  asks for the request as it came, and a page route the binding answers 404 (`isPageRoute` in `spa-fallback.ts`: a GET
+  or HEAD whose last segment has no extension, or that accepts `text/html`) asks once more for `<prefix>/`, which
+  Workers Assets answers with the mount's `index.html`, as `diskAssets` serves it; a missing asset stays 404 under both.
 - **Jobs run on the object's alarm** (ADR-0065 §5, `jobs.scheduler` in `runner.ts`). Every wake or lease change
   arms the alarm in its own transaction (`BootOptions.projectWakes`). `alarm()` runs jobs only in the object whose name,
   recorded in its KV at its first verified event (`OBJECT_NAME_KEY`), is the one ordinary traffic reaches, and only in

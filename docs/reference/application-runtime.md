@@ -432,8 +432,9 @@ first and the object again, and it never boots the application.
 - **The SPA files are Workers Assets.** The deploy binds `ASSETS` to `fabrika/assets/` beside the Worker's config and,
   after the application's build, copies each SPA and link mount's build directory there at the mount's prefix
   (`@fabrika/provider-cloudflare`'s `spa-assets.ts`); a Worker that declares its own `assets` keeps them. The object
-  asks the binding for the request path as it is, and for a GET or HEAD it answers 404 asks for `<prefix>/`, the
-  mount's `index.html` (`bindingAssets`), so a deep link renders as under `diskAssets`.
+  asks the binding for the request path as it is, and for a page route it answers 404 (a GET or HEAD whose last
+  segment has no extension, or that accepts `text/html`: `isPageRoute`) asks for `<prefix>/`, the mount's
+  `index.html` (`bindingAssets`), so a deep link renders as under `diskAssets`; a missing asset stays 404 under both.
 - **Jobs run on the object's alarm** (ADR-0065 §5). A job's pending work is a row of `fabrika_wakes`: a `cron` row at
   its next fire, a `kick`, `claim` or `retry` row. Every transaction that changes a wake or a lease arms the alarm at the
   earliest due wake of a job whose lease is free or expired, or at the earliest expiry of a held lease, and the alarm
@@ -1754,8 +1755,8 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   `loseAnswers`, `during` and `heal` inject and clear faults. Each message carries the transport's key,
   `transportMailKey(kit.mailKeyScope, key)`.
 - An SPA mount whose built directory exists under `options.root` (the working directory when omitted) is served from
-  it as the Bun deploy serves it (`diskAssets`): a file by its path, every other path of the mount by its
-  `index.html`; a mount not built is an empty HTML document, and `options.assets` replaces both.
+  it as the Bun deploy serves it (`diskAssets`): a file by its path, every other page route of the mount by its
+  `index.html` (a missing asset is 404); a mount not built is an empty HTML document, and `options.assets` replaces both.
 - `fabrika app dev` (`packages/cli/src/app-dev.ts`) serves the application through this kit (`devKit`, the kit with
   its stand-in IAM) on a loopback port, to click through its screens: a throwaway schema of
   `FABRIKA_TEST_POSTGRES_URL` migrated from `db/migrations/` and dropped on exit, the SPAs from their built

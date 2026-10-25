@@ -151,7 +151,16 @@ describe('diskAssets', () => {
 	})
 
 	test('never serves a file outside the build directory', async () => {
-		expect(await (await assets.serve({ prefix: '/', dir: 'dist/app' }, new Request(`${ORIGIN}/..%2Fsecret.txt`))).text()).toBe('<main>app</main>')
+		const outside = new Request(`${ORIGIN}/..%2Fsecret.txt`, { headers: { Accept: 'text/html' } })
+		expect(await (await assets.serve({ prefix: '/', dir: 'dist/app' }, outside)).text()).toBe('<main>app</main>')
+		expect((await assets.serve({ prefix: '/', dir: 'dist/app' }, new Request(`${ORIGIN}/..%2Fsecret.txt`))).status).toBe(404)
+	})
+
+	test('a missing asset is 404, not the index; a navigation to a dotted route is the page', async () => {
+		const missing = await assets.serve(mount, new Request(`${ORIGIN}/assets/old.js`))
+		expect([missing.status, await missing.text()]).toEqual([404, 'Not found'])
+		const page = await assets.serve(mount, new Request(`${ORIGIN}/releases/v1.2`, { headers: { Accept: 'text/html' } }))
+		expect(await page.text()).toBe('<main>app</main>')
 	})
 })
 

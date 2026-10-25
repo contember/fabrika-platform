@@ -188,7 +188,10 @@ this one import.
   `assets: { directory: 'fabrika/assets', binding: 'ASSETS', run_worker_first: true }`, and the `deploy-worker` step,
   after `pipeline.build` and right before the walk below, empties that directory and copies each mount's build
   directory (from the application root) into it at the mount's prefix: the most specific mount owns a path, a `.map`
-  is left out, a symbolic link or a special file is refused, and a missing directory fails the step naming the mount.
+  and Workers Assets' own `_headers`, `_redirects` and `.assetsignore` at the root are left out, a symbolic link
+  anywhere on a mount's path (`x/etc` with `x -> /`: `resolve` reads only text, so every segment is `lstat`ed), on the
+  way to `fabrika/assets`, or in the tree, and a special file, are refused, and a missing directory fails the step
+  naming the mount. A page route that names no file gets the mount's `index.html`; a missing asset stays 404.
   `bindingAssets` of `@fabrika/app` reads the request path from it as it is, with the mount's `index.html` for a path
   that names no file. An authored `assets` is kept as it is (a committed config of an application that needed it
   before the platform derived it); never merge the two.

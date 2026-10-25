@@ -562,19 +562,22 @@ describe('the SPA files from the ASSETS binding', () => {
 		},
 	}
 	const assets = bindingAssets(binding)
-	const serve = async (prefix: string, path: string, method = 'GET'): Promise<string> => {
+	const serve = async (prefix: string, path: string, method = 'GET', accept?: string): Promise<string> => {
 		if (assets === undefined) throw new Error('a binding with fetch is an asset server')
-		const response = await assets.serve({ prefix, dir: 'ignored on Cloudflare' }, new Request(`https://notes.test${path}`, { method }))
+		const headers = new Headers(accept === undefined ? [] : [['Accept', accept]])
+		const response = await assets.serve({ prefix, dir: 'ignored on Cloudflare' }, new Request(`https://notes.test${path}`, { method, headers }))
 		return `${response.status} ${method === 'HEAD' ? '' : await response.text()}`
 	}
 
-	test("a file by its path, every other path of a mount by the mount's index, and the prefix keeps each mount apart", async () => {
+	test("a file by its path, every other page route of a mount by the mount's index, and the prefix keeps each mount apart", async () => {
 		asked.length = 0
 		expect(await serve('/', '/app.js')).toBe('200 root script')
 		expect(await serve('/admin', '/admin/app.js')).toBe('200 admin script')
 		expect(await serve('/', '/deals/42?tab=notes')).toBe('200 root index')
 		expect(await serve('/admin', '/admin/users/7')).toBe('200 admin index')
-		expect(await serve('/admin', '/admin/missing.js', 'HEAD')).toBe('200 ')
+		expect(await serve('/admin', '/admin/users/7', 'HEAD')).toBe('200 ')
+		// A navigation to a route with a dot in it is still a page.
+		expect(await serve('/', '/releases/v1.2', 'GET', 'text/html,application/xhtml+xml')).toBe('200 root index')
 		expect(asked).toEqual([
 			'GET /app.js',
 			'GET /admin/app.js',
@@ -582,17 +585,21 @@ describe('the SPA files from the ASSETS binding', () => {
 			'GET /',
 			'GET /admin/users/7',
 			'GET /admin/',
-			'HEAD /admin/missing.js',
+			'HEAD /admin/users/7',
 			'HEAD /admin/',
+			'GET /releases/v1.2',
+			'GET /',
 		])
 	})
 
-	test('a mount without its index answers 404 once, and a POST is never redirected to an index', async () => {
+	test('a missing asset stays 404 and is never answered with the index; neither is a mount without its index, nor a POST', async () => {
 		asked.length = 0
+		expect(await serve('/admin', '/admin/missing.js')).toBe('404 Not found')
+		expect(await serve('/', '/chunk-old.css', 'GET', 'text/css,*/*;q=0.1')).toBe('404 Not found')
 		expect(await serve('/docs', '/docs/page')).toBe('404 Not found')
 		expect(await serve('/docs', '/docs/')).toBe('404 Not found')
 		expect(await serve('/', '/missing', 'POST')).toBe('404 Not found')
-		expect(asked).toEqual(['GET /docs/page', 'GET /docs/', 'GET /docs/', 'POST /missing'])
+		expect(asked).toEqual(['GET /admin/missing.js', 'GET /chunk-old.css', 'GET /docs/page', 'GET /docs/', 'GET /docs/', 'POST /missing'])
 	})
 
 	test('a binding without fetch is no asset server', () => {

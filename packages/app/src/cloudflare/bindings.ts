@@ -9,6 +9,7 @@ import type { IamKeySource } from '../implement/boot.js'
 import { CONNECT_BINDING_PREFIX, type ConnectFetch } from '../implement/connect.js'
 import type { SpaAssets } from '../implement/dispatch.js'
 import type { WorkloadTokenSource } from '../implement/workload.js'
+import { isPageRoute } from '../spa-fallback.js'
 
 /** The method `name` of a binding, bound to it, or `null` when it has none. */
 export function method(target: unknown, name: string): ((...args: unknown[]) => unknown) | null {
@@ -98,8 +99,9 @@ export function bindingWorkloadTokens(binding: unknown): WorkloadTokenSource | u
 
 /**
  * The SPA and link mounts' files from the Workers Assets binding, whose directory mirrors the request paths: the mount
- * `/admin` reads `admin/…` of it, the root mount the rest (the Cloudflare deploy stages each mount's `dir` there). A path
- * that names no file gets the mount's `index.html`, as `diskAssets` serves it: Workers Assets answers `<prefix>/` with it.
+ * `/admin` reads `admin/…` of it, the root mount the rest (the Cloudflare deploy stages each mount's `dir` there). A page
+ * route that names no file (`isPageRoute`) gets the mount's `index.html`, as `diskAssets` serves it: Workers Assets
+ * answers `<prefix>/` with it. A missing asset stays 404.
  */
 export function bindingAssets(binding: unknown): SpaAssets | undefined {
 	const fetchAsset = method(binding, 'fetch')
@@ -116,7 +118,7 @@ export function bindingAssets(binding: unknown): SpaAssets | undefined {
 	return {
 		async serve(mount, request) {
 			const response = await fetched(request)
-			if (response.status !== 404 || (request.method !== 'GET' && request.method !== 'HEAD')) {
+			if (response.status !== 404 || !isPageRoute(request)) {
 				return response
 			}
 			const index = new URL(request.url)

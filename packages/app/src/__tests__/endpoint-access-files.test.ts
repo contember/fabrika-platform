@@ -1,7 +1,7 @@
 // The file fixtures and the refusals of the endpoint access kit: a handler that inspects an upload's content refuses
 // the kit's sample file (400), which the kit reports as an input it could not build; it reaches its own object with the
-// file the author names, typed by its bytes; and a refusal the author declares is the handler's answer, which the own
-// case gets as a 400 while the denial still proves the access form. Over `kit-files`' tables, with one attach endpoint that reads the upload,
+// file the author names, typed by its bytes; and a refusal the author declares is the handler's answer in the own case
+// only, which gets it as a 400, while a leak case still throws on it and the denial still proves the access form. Over `kit-files`' tables, with one attach endpoint that reads the upload,
 // on the SQLite test database: an upload is live once a row of the request's transaction holds it, as on Cloudflare.
 
 import { HttpError } from '@fabrika/app'
@@ -80,10 +80,10 @@ describe('the file fixtures of the endpoint access kit', () => {
 		expect(await kit.denied('api.notes.attach', INPUT)).toEqual({ status: 404 })
 	})
 
-	test("a declared refusal is the handler's answer: the own case gets its 400, the leak case is answered, the denial still 404", async () => {
+	test("a declared refusal is the own case's answer only: a leak case throws on it, and the denial is still 404", async () => {
 		const kit = endpointAccessKit(packagesApp(), tables, database, { refusals: { 'api.notes.attach': ['document_invalid'] } })
 		expect(await kit.own('api.notes.attach', INPUT)).toEqual({ status: 400 })
-		expect(await kit.leaked('api.notes.attach', INPUT)).toEqual({ answered: true, leaked: [] })
+		await expect(kit.leaked('api.notes.attach', INPUT)).rejects.toThrow('its declared refusal (400 document_invalid), which only the own case takes')
 		expect(await kit.denied('api.notes.attach', INPUT)).toEqual({ status: 404 })
 		const other = endpointAccessKit(packagesApp(), tables, database, { refusals: { 'api.notes.attach': ['package_invalid'] } })
 		await expect(other.own('api.notes.attach', INPUT)).rejects.toThrow("the handler refused the case's input (400 document_invalid)")
