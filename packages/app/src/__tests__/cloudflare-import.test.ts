@@ -713,6 +713,60 @@ describe('complete', () => {
 		expect(target.storage.kv.get(IMPORT_MARKER_KEY)).toBeDefined()
 	})
 
+	/** A load with more rows than one verify step reads, every part in and linked; `unlinked` is a part with no deferred row. */
+	async function largeLoad(): Promise<{ readonly target: Target; readonly unlinked: number }> {
+		const objects = new Map<string, Uint8Array>()
+		const source = await sourceDatabase()
+		source.database.run(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50005) INSERT INTO audit (at, what) SELECT 'then', 'row ' || i FROM n`,
+		)
+		writeDump(objects, source.storage, { split: 40_000 })
+		const target = freshTarget(objects)
+		await step(target, { ...scope(), step: 'begin' })
+		let unlinked: number | null = null
+		for (const part of [1, 2]) {
+			const loaded = parseOpsImportPartAck((await step(target, { ...scope(), step: 'part', part })).body)
+			if ((loaded?.deferred ?? 0) > 0) {
+				await step(target, { ...scope(), step: 'link', part })
+			} else {
+				unlinked = part
+			}
+		}
+		if (unlinked === null) throw new Error('every part of the test dump has a deferred row')
+		return { target, unlinked }
+	}
+
+	/** The first verify step, and the cursor it handed out; the verification takes more than one step. */
+	async function firstVerify(target: Target): Promise<OpsDumpCursor> {
+		const first = await step(target, { ...scope(), step: 'verify', cursor: null })
+		const cursor = parseOpsImportVerifyAck(first.body)?.next ?? null
+		if (cursor === null) throw new Error('the verification finished in one step')
+		return cursor
+	}
+
+	test('follows a verify whose answer was lost: a retried page, the last one included, answers the same', async () => {
+		const { target } = await largeLoad()
+		const cursor = await firstVerify(target)
+		const last = await step(target, { ...scope(), step: 'verify', cursor })
+		expect(parseOpsImportVerifyAck(last.body)?.next).toBeNull()
+
+		// The answer was lost: Control sends the same cursor again.
+		expect(await step(target, { ...scope(), step: 'verify', cursor })).toEqual(last)
+		expect(await step(target, { ...scope(), step: 'verify', cursor })).toEqual(last)
+		expect((await step(target, { ...scope(), step: 'complete' })).status).toBe(200)
+	})
+
+	test('replays no verify answer once a later write reset the verification', async () => {
+		const { target, unlinked } = await largeLoad()
+		const cursor = await firstVerify(target)
+		expect((await step(target, { ...scope(), step: 'verify', cursor })).status).toBe(200)
+
+		expect(parseOpsImportLinkAck((await step(target, { ...scope(), step: 'link', part: unlinked })).body)).toMatchObject({ rows: 0 })
+
+		expect(await refusal(target, { ...scope(), step: 'verify', cursor })).toEqual({ refused: 'verify_mismatch', table: cursor.table })
+		expect(await refusal(target, { ...scope(), step: 'complete' })).toEqual({ refused: 'verify_mismatch', table: null })
+	})
+
 	test('is refused after a verify that skipped ahead with a cursor the object never handed out', async () => {
 		const objects = new Map<string, Uint8Array>()
 		const manifest = writeDump(objects, (await sourceDatabase()).storage)

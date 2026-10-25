@@ -45,6 +45,7 @@ import {
 	parseOpsImportCompleteAck,
 	parseOpsImportLinkAck,
 	parseOpsImportPartAck,
+	parseOpsImportVerifyAck,
 	planOpsDump,
 	readOpsDumpManifest,
 	readOpsDumpValue,
@@ -131,13 +132,20 @@ function completedKey(source: OpsDumpSource): string {
 /**
  * The marker: the backup the object is loading, whether `begin` cleared the target, how many parts are loaded, and the
  * verification of what is loaded now: `null` for none, else the cursor its next step must carry (`null` once every
- * table matched the manifest). A part or a link pass that writes resets it.
+ * table matched the manifest) and the last step's cursor with its answer, which a retry of that step gets again. A
+ * part or a link pass that writes resets it.
  */
 interface ImportMarker {
 	readonly source: OpsDumpSource
 	readonly begun: boolean
 	readonly loaded: number
-	readonly verified: { readonly next: string | null } | null
+	readonly verified: Verification | null
+}
+
+interface Verification {
+	readonly next: string | null
+	/** `null` after a step that started the verification, which a retry starts again. */
+	readonly replay: { readonly cursor: string; readonly ack: OpsImportVerifyAck } | null
 }
 
 /**
@@ -405,8 +413,8 @@ async function linkPart(target: ImportTarget, source: OpsDumpSource, manifest: O
 /**
  * Reads the loaded tables back from `cursor` with the producer's projection and fold, at most a part's row bound per
  * step, and compares each finished table with the manifest. A verification starts at `null`; any other cursor must be
- * the one the marker records this verification handed out last. It writes no row: only its progress, into the marker,
- * which a mismatch clears.
+ * the one the marker records this verification handed out last, or the one its last step was sent, whose answer it
+ * repeats. It writes no row: only its progress, into the marker, which a mismatch clears.
  */
 function verify(
 	storage: ImportStorage,
@@ -423,8 +431,16 @@ function verify(
 		writeMarker(storage.kv, { ...marker, verified: null })
 		return refused('verify_mismatch', table)
 	}
-	if (cursor !== null && (marker.verified?.next ?? null) !== cursorKey(cursor)) {
-		return mismatch(cursor.table)
+	if (cursor !== null) {
+		const key = cursorKey(cursor)
+		const replay = marker.verified?.replay ?? null
+		// Its answer was lost: what is loaded has not changed since, or the verification would be reset.
+		if (replay?.cursor === key) {
+			return jsonResponse(replay.ack, 200)
+		}
+		if ((marker.verified?.next ?? null) !== key) {
+			return mismatch(cursor.table)
+		}
 	}
 	const tables = new Map(plan.map((table) => [table.name, table]))
 	const order = manifest.tables
@@ -463,8 +479,9 @@ function verify(
 			current = startOf(order[index])
 		}
 	}
-	writeMarker(storage.kv, { ...marker, verified: { next: current === null ? null : cursorKey(current) } })
 	const ack: OpsImportVerifyAck = { step: 'verify', tables: finished, next: current }
+	const next = current === null ? null : cursorKey(current)
+	writeMarker(storage.kv, { ...marker, verified: { next, replay: cursor === null ? null : { cursor: cursorKey(cursor), ack } } })
 	return jsonResponse(ack, 200)
 }
 
@@ -869,22 +886,36 @@ function readMarker(kv: ImportKv): ImportMarker | null {
 	}
 	const value: unknown = typeof raw === 'string' ? parseJson(raw) : undefined
 	const source: unknown = isRecord(value) ? value['source'] : undefined
-	const verified: unknown = isRecord(value) ? value['verified'] : undefined
-	const next: unknown = isRecord(verified) ? verified['next'] : undefined
+	const verified = isRecord(value) ? readVerification(value['verified']) : undefined
 	if (
 		!isRecord(value) || !isRecord(source) || Object.keys(value).length !== 4 || Object.keys(source).length !== 2
 		|| typeof source['object'] !== 'string' || typeof source['dump'] !== 'string' || typeof value['begun'] !== 'boolean'
-		|| typeof value['loaded'] !== 'number' || !Number.isSafeInteger(value['loaded']) || value['loaded'] < 0
-		|| (verified !== null && (!isRecord(verified) || Object.keys(verified).length !== 1 || (next !== null && typeof next !== 'string')))
+		|| typeof value['loaded'] !== 'number' || !Number.isSafeInteger(value['loaded']) || value['loaded'] < 0 || verified === undefined
 	) {
 		throw new Error('the import marker in KV storage does not parse')
 	}
-	return {
-		source: { object: source['object'], dump: source['dump'] },
-		begun: value['begun'],
-		loaded: value['loaded'],
-		verified: verified === null ? null : { next: typeof next === 'string' ? next : null },
+	return { source: { object: source['object'], dump: source['dump'] }, begun: value['begun'], loaded: value['loaded'], verified }
+}
+
+/** The marker's verification; `undefined` when it does not parse. */
+function readVerification(value: unknown): Verification | null | undefined {
+	if (value === null) {
+		return null
 	}
+	if (!isRecord(value) || Object.keys(value).length !== 2) {
+		return undefined
+	}
+	const next = value['next']
+	const replay = value['replay']
+	if (next !== null && typeof next !== 'string') {
+		return undefined
+	}
+	if (replay === null) {
+		return { next, replay: null }
+	}
+	const cursor = isRecord(replay) ? replay['cursor'] : undefined
+	const ack = isRecord(replay) && Object.keys(replay).length === 2 ? parseOpsImportVerifyAck(replay['ack']) : null
+	return typeof cursor === 'string' && ack !== null ? { next, replay: { cursor, ack } } : undefined
 }
 
 function writeMarker(kv: ImportKv, marker: ImportMarker): void {
