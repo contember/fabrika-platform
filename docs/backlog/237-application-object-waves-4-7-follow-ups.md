@@ -17,13 +17,12 @@ item 1 needs an oblaka release first.
 1. **The deploy writes no R2 lifecycle rule** (ADR-0070 §5). oblaka 0.0.18's `R2Bucket` has no lifecycle option, so a
    dump outlives its 30 days in the bucket, and an upload that never completes is not aborted by a rule either.
    Control never offers a backup older than 30 days, so a restore cannot meet a file whose tombstone is past the
-   window; only storage grows. Add lifecycle rules to oblaka's bucket resource, release it, bump the pin in every
+   window; only storage grows. A `begin` that loses its conditional create of the begun record leaves the multipart
+   upload it opened, which only such a rule aborts. Add lifecycle rules to oblaka's bucket resource, release it, bump the pin in every
    package and `runner-container/docker/package.json`, and write the rule on both prefixes at the environment's deploy.
 2. A consistent dump's `begun` record lives in the bucket, so a point-in-time restore of the source between two steps,
-   which rewinds rows but not the ledger, still matches it. An export of an object that holds an import marker is not
-   refused either: an import loads rows at one generation without touching the ledger. The deploy lease prevents both
-   interleavings today. Fix idea: keep the record in the object's KV, which PITR rewinds, and refuse a consistent
-   export while an import marker exists.
+   which rewinds rows but not the ledger, still matches it. The deploy lease prevents that interleaving today. Fix
+   idea: keep the record in the object's KV, which PITR rewinds.
 3. Control's `state` transport reads any 422 as `invalid_answer`, so a transition the barrier refuses as `wrong_mode`
    (an import in progress) fails closed without saying why. Parse the data refusal there as `export` and `import` do.
 
@@ -75,6 +74,18 @@ item 1 needs an oblaka release first.
     landed but which failed afterwards (a failed schema reconcile) leaves the record describing the version before it:
     a channel installed that way lets one migrating deploy run plainly, and a channel removed that way blocks migrating
     deploys until a run succeeds. Fix idea: record what the provider accepted, not only succeeded runs.
+17. The ops `migrate` of an object that holds an import marker answers 500 (`ImportInProgress` thrown), not a data
+    refusal. Unreachable today: an import keeps the object in `inspect`, which refuses `migrate` first. Fix idea: an
+    explicit marker check in the barrier's `migrate` that answers `wrong_mode`.
+
+**The console.**
+
+18. The shared `Modal` (`components/Modal.tsx`) traps no focus, leaves the page behind it reachable, and does not
+    return focus to the control that opened it. Every confirmation in the console inherits that, the side restore's
+    included. Fix it once in `Modal` with a native `<dialog>` and `showModal()`.
+19. A side restore's operation DTO does not carry the clone's and the original's object names, so the console and
+    the CLI cannot show which object serves after `point` or which one keeps the rewound data. Add them additively to
+    `DataOperationDto` from the restore record.
 
 ## Approach / acceptance
 
@@ -87,6 +98,6 @@ release.
 (`cloudflare/export.ts`, `cloudflare/restore.ts`, `cloudflare/tracker.ts`, `jobs/schedule.ts`, `jobs/runner.ts`,
 `implement/dispatch.ts`, `implement/invocation.ts`, `bun.ts`),
 `packages/auth-core` (`ops.ts`), `packages/control` (`data-operations.ts`), `packages/cli` (`env.ts`, `connect.ts`),
-`packages/dashboard`.
+`packages/dashboard` (`components/Modal.tsx`), `packages/control-contract` (`rpc.ts`).
 
 <!-- Origin: ../sprints/sprint-2026-10-24-application-object.md, run log of waves 4–7. -->
