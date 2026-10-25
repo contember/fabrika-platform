@@ -41,7 +41,7 @@ import { crc32, deflateRawSync } from 'node:zlib'
 import appPackage from '../../package.json' with { type: 'json' }
 import { jsonResponse } from '../errors.js'
 import { method } from './bindings.js'
-import { describeDumpSchema } from './import.js'
+import { describeDumpSchema, importInProgress } from './import.js'
 import type { MaintenanceBarrier } from './maintenance.js'
 import type { OpsTarget } from './ops.js'
 
@@ -60,8 +60,8 @@ type Storage = ExportSource['storage']
 
 /**
  * One step of a dump. A diagnostic step runs in any mode. A consistent one runs in the barrier's turn, only at the
- * published generation and never while the object is `open`, so no transition and no migration falls inside it; past
- * `begin` it refuses a database whose state is not the one its `begin` saw.
+ * published generation, never while the object is `open` or holds an import marker, so no transition and no migration
+ * falls inside it; past `begin` it refuses a database whose state is not the one its `begin` saw.
  */
 export async function exportStep(source: ExportSource, barrier: MaintenanceBarrier, step: OpsExportRequest): Promise<Response> {
 	if (!step.consistent) {
@@ -78,7 +78,7 @@ export async function exportStep(source: ExportSource, barrier: MaintenanceBarri
 	return result.kind === 'ran' ? result.value : staleRefusal(result.published)
 }
 
-/** Runs `step`; `state` is what a consistent dump's `begin` records, `null` for a diagnostic one. */
+/** Runs `step`; `state` is what a consistent dump's first `begin` records, `null` for a diagnostic one. */
 async function run(source: ExportSource, step: OpsExportRequest, state: string | null = null): Promise<Response> {
 	switch (step.step) {
 		case 'begin':
@@ -91,15 +91,32 @@ async function run(source: ExportSource, step: OpsExportRequest, state: string |
 }
 
 /**
- * `begin` records the state it saw beside the dump; every later step compares it first. A migration runs at the published
- * generation, so the generation alone would not show one between two steps.
+ * The first `begin` of a dump records the state it saw with its upload and bookmark, once; a retried one replays that
+ * record, and every later step must carry its upload at that state. A migration runs at the published generation, so
+ * the generation alone would not show one between two steps. A storage without the synchronous KV holds no import.
  */
 async function runConsistent(source: ExportSource, step: OpsExportRequest, generation: number): Promise<Response> {
+	const { kv } = source.storage
+	if (kv !== undefined && importInProgress({ kv })) {
+		return dataRefusal({ refused: 'wrong_mode', table: null })
+	}
 	const state = dumpState(source.storage, generation)
-	if (step.step !== 'begin' && (await begunState(source.bucket, step)) !== state) {
+	const begun = await readBegun(source.bucket, step)
+	if (step.step === 'begin') {
+		return begun === null ? await run(source, step, state) : replayed(begun, state)
+	}
+	if (begun?.state !== state || begun.uploadId !== step.uploadId || (step.step === 'complete' && step.bookmark !== begun.bookmark)) {
 		return dataRefusal({ refused: 'ledger_mismatch', table: null })
 	}
-	return await run(source, step, state)
+	return await run(source, step)
+}
+
+/** A retried `begin`: the first one's answer at the state it recorded, refused at any other. */
+function replayed(begun: Begun, state: string): Response {
+	if (begun.state !== state) {
+		return dataRefusal({ refused: 'ledger_mismatch', table: null })
+	}
+	return answer(parseOpsExportBeginAck({ step: 'begin', uploadId: begun.uploadId, bookmark: begun.bookmark }), 'begin')
 }
 
 function staleRefusal(published: OpsPublishedState | null): Response {
@@ -111,22 +128,39 @@ function dataRefusal(refusal: OpsDataRefusal): Response {
 	return jsonResponse(refusal, OPS_DATA_REFUSED_STATUS)
 }
 
-/** Plans the dump, records a consistent one's `state`, starts the multipart upload of its data and answers the object's bookmark. */
+/**
+ * Plans the dump, starts the multipart upload of its data and answers the object's bookmark. A consistent dump records
+ * its `state` with both, only if nothing is recorded yet.
+ */
 async function begin(source: ExportSource, step: OpsExportBegin, state: string | null): Promise<Response> {
 	const plan = planOpsDump(describeDumpSchema(source.storage))
 	if ('refused' in plan) {
 		return dataRefusal(plan)
-	}
-	if (state !== null) {
-		await call(source.bucket, 'put')(stateKey(step), state, { httpMetadata: { contentType: 'text/plain' } })
 	}
 	if (source.recovery === null) {
 		throw new Error("the object's storage has no bookmarks; a Durable Object's storage has them")
 	}
 	const bookmark = await source.recovery.getCurrentBookmark()
 	const upload: unknown = await call(source.bucket, 'createMultipartUpload')(dataKey(step), { httpMetadata: { contentType: 'application/gzip' } })
-	const uploadId = typeof upload === 'object' && upload !== null ? Reflect.get(upload, 'uploadId') : undefined
-	return answer(parseOpsExportBeginAck({ step: 'begin', uploadId, bookmark }), 'begin')
+	const ack = parseOpsExportBeginAck({
+		step: 'begin',
+		uploadId: typeof upload === 'object' && upload !== null ? Reflect.get(upload, 'uploadId') : undefined,
+		bookmark,
+	})
+	if (ack === null || state === null) {
+		return answer(ack, 'begin')
+	}
+	const begun: Begun = { state, uploadId: ack.uploadId, bookmark: ack.bookmark }
+	const options = { httpMetadata: { contentType: 'application/json' }, onlyIf: { etagDoesNotMatch: '*' } }
+	if ((await call(source.bucket, 'put')(begunKey(step), JSON.stringify(begun), options)) === null) {
+		// Another begin recorded the dump first; its upload is the dump's, and this one is left to the lifecycle.
+		const recorded = await readBegun(source.bucket, step)
+		if (recorded === null) {
+			throw new Error("R2 refused to record a dump's begin, yet holds no record of it")
+		}
+		return replayed(recorded, state)
+	}
+	return answer(ack, 'begin')
 }
 
 /** Fills part `n` from its cursor: whole rows while every bound holds, one gzip member padded to the fixed size but the last. */
@@ -222,23 +256,47 @@ function dataKey(scope: OpsExportScope): string {
 	return OPS_DUMP_KEY(scope, 'data')
 }
 
+/** What a consistent dump's first `begin` saw and answered: the digest of the database's state, its upload and bookmark. */
+interface Begun {
+	readonly state: string
+	readonly uploadId: string
+	readonly bookmark: string
+}
+
 /** `begun` in the dump's own prefix, which the bucket's lifecycle expires with the dump. */
-function stateKey(scope: OpsExportScope): string {
+function begunKey(scope: OpsExportScope): string {
 	const manifest = OPS_DUMP_KEY(scope, 'manifest')
 	return `${manifest.slice(0, manifest.lastIndexOf('/'))}/begun`
 }
 
-/** What `begin` recorded for the dump, `null` when it recorded nothing. */
-async function begunState(bucket: unknown, scope: OpsExportScope): Promise<string | null> {
-	const stored: unknown = await call(bucket, 'get')(stateKey(scope))
+/** What the dump's first `begin` recorded, `null` when nothing is recorded; a record that does not parse fails the step. */
+async function readBegun(bucket: unknown, scope: OpsExportScope): Promise<Begun | null> {
+	const stored: unknown = await call(bucket, 'get')(begunKey(scope))
 	if (stored === null) {
 		return null
 	}
 	const body: unknown = await call(stored, 'text')()
-	if (typeof body !== 'string') {
-		throw new Error("R2 answered a dump's begun state without its text")
+	const begun = typeof body === 'string' ? parseBegun(body) : null
+	if (begun === null) {
+		throw new Error("the dump's begin record does not parse")
 	}
-	return body
+	return begun
+}
+
+function parseBegun(text: string): Begun | null {
+	let value: unknown
+	try {
+		value = JSON.parse(text)
+	} catch {
+		return null
+	}
+	if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.keys(value).length !== 3) {
+		return null
+	}
+	const state: unknown = Reflect.get(value, 'state')
+	const uploadId: unknown = Reflect.get(value, 'uploadId')
+	const bookmark: unknown = Reflect.get(value, 'bookmark')
+	return typeof state === 'string' && typeof uploadId === 'string' && typeof bookmark === 'string' ? { state, uploadId, bookmark } : null
 }
 
 function answer<T>(ack: T | null, step: string): Response {

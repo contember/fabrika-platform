@@ -23,6 +23,7 @@ import {
 	parseOpsExportBeginAck,
 	parseOpsExportCompleteAck,
 	parseOpsExportPartAck,
+	parseOpsImportPartAck,
 	parseOpsStaleRefusal,
 } from '@fabrika/auth-core'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
@@ -38,6 +39,7 @@ import { gunzipSync } from 'node:zlib'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
 import { method } from '../cloudflare/bindings'
 import { type ExportSource, exportStep } from '../cloudflare/export'
+import { IMPORT_MARKER_KEY, importStep, type ImportStorage } from '../cloudflare/import'
 import { MaintenanceBarrier } from '../cloudflare/maintenance'
 import { r2FileObjectStore } from '../cloudflare/r2-files'
 
@@ -528,15 +530,139 @@ describe('a consistent dump holds one state of the database', () => {
 		expect(await refusal(response)).toEqual({ refused: 'ledger_mismatch', table: null })
 	})
 
-	test('a begin retried after a migration starts the dump again at the new state, which completes', async () => {
+	test('a begin retried at the same state replays the first: the same upload, no second one, and the dump completes', async () => {
 		const target = await harness()
 		seed(target.database)
-		await begin(target, consistent)
+		const created: unknown[] = []
+		const counted: Harness = { ...target, source: { ...target.source, bucket: countingUploads(target.bucket, created) } }
+		const first = await begin(counted, consistent)
+		const ack = await part(counted, consistent, first, 1, null)
+		const again = await begin(counted, consistent)
+
+		expect(again).toBe(first)
+		expect(created).toHaveLength(1)
+		const manifest = await complete(counted, consistent, again, [ack])
+		expect(manifest.tables).toEqual(ack.tables)
+	})
+
+	test('a begin retried after a data-only migration is refused, and the first upload can no longer complete', async () => {
+		const target = await harness()
+		seed(target.database)
+		const uploadId = await begin(target, consistent)
+		const ack = await part(target, consistent, uploadId, 1, null)
 		await migrateApp(target, 1, `UPDATE workspaces SET name = 'migrated'`)
-		const { manifest } = await dump(target, consistent)
-		expect(manifest.migrations.map(({ bundle, name }) => `${bundle}/${name}`)).toContain('app/0002_app.sql')
+
+		const retried = await exportStep(target.source, target.barrier, { ...consistent, step: 'begin' })
+		expect(await refusal(retried)).toEqual({ refused: 'ledger_mismatch', table: null })
+		const completed = await exportStep(target.source, target.barrier, {
+			...consistent,
+			step: 'complete',
+			uploadId,
+			bookmark: BOOKMARK,
+			parts: [ack.uploaded],
+			tables: ack.tables,
+		})
+		expect(await refusal(completed)).toEqual({ refused: 'ledger_mismatch', table: null })
+		expect(await r2FileObjectStore(target.bucket)?.read(OPS_DUMP_KEY(consistent, 'manifest'))).toBeNull()
+	})
+
+	test('a part or complete that carries another upload id than the recorded one is refused', async () => {
+		const target = await harness()
+		seed(target.database)
+		const uploadId = await begin(target, consistent)
+		const ack = await part(target, consistent, uploadId, 1, null)
+		const other = `${uploadId}-other`
+
+		const parted = await exportStep(target.source, target.barrier, { ...consistent, step: 'part', uploadId: other, part: 1, cursor: null })
+		expect(await refusal(parted)).toEqual({ refused: 'ledger_mismatch', table: null })
+		const completed = await exportStep(target.source, target.barrier, {
+			...consistent,
+			step: 'complete',
+			uploadId: other,
+			bookmark: BOOKMARK,
+			parts: [ack.uploaded],
+			tables: ack.tables,
+		})
+		expect(await refusal(completed)).toEqual({ refused: 'ledger_mismatch', table: null })
+	})
+
+	test('an object that holds an import marker, loaded but not linked, is refused as wrong_mode', async () => {
+		const source = await harness()
+		seed(source.database)
+		// The clone's migrations do not create the trigger the harness adds past them.
+		source.database.run('DROP TRIGGER folders_touch')
+		await dump(source, consistent)
+		const clone = await importingClone(source)
+
+		const response = await exportStep(clone.source, clone.barrier, { ...CLONE_SCOPE, step: 'begin' })
+		expect(await refusal(response)).toEqual({ refused: 'wrong_mode', table: null })
+		expect(clone.source.storage.kv?.get(IMPORT_MARKER_KEY)).toBeDefined()
 	})
 })
+
+/** `bucket`, recording every multipart upload it creates into `created`. */
+function countingUploads(bucket: unknown, created: unknown[]): object {
+	const passed = (name: string) => (...args: unknown[]) => call(bucket, name)(...args)
+	return {
+		get: passed('get'),
+		put: passed('put'),
+		head: passed('head'),
+		resumeMultipartUpload: passed('resumeMultipartUpload'),
+		createMultipartUpload: (...args: unknown[]) => {
+			created.push(args[0])
+			return call(bucket, 'createMultipartUpload')(...args)
+		},
+	}
+}
+
+const CLONE_SCOPE: OpsExportScope = { object: 'application-clone', generation: 1, consistent: true, dump: '01920000-0000-7000-8000-000000000002' }
+
+/** bun:sqlite with workerd's synchronous KV in its `_cf_KV` table, as the importer needs it. */
+function kvStorage(database: Database): ImportStorage {
+	const inner = bunSqliteStorage(database)
+	const hasKv = () => inner.sql.exec(`SELECT 1 AS present FROM sqlite_schema WHERE name = '_cf_KV'`).toArray().length > 0
+	return {
+		sql: inner.sql,
+		transaction: (closure) => inner.transaction(closure),
+		transactionSync: (closure) => inner.transactionSync(closure),
+		kv: {
+			get(key) {
+				if (!hasKv()) return undefined
+				const value = inner.sql.exec('SELECT value FROM _cf_KV WHERE key = ?', key).toArray()[0]?.['value']
+				return typeof value === 'string' ? JSON.parse(value) : undefined
+			},
+			put(key, value) {
+				inner.sql.exec('CREATE TABLE IF NOT EXISTS _cf_KV (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID')
+				inner.sql.exec('INSERT OR REPLACE INTO _cf_KV (key, value) VALUES (?, ?)', key, JSON.stringify(value))
+			},
+			delete(key) {
+				return hasKv() && inner.sql.exec('DELETE FROM _cf_KV WHERE key = ?', key).rowsWritten > 0
+			},
+		},
+		deleteAll: () => Promise.reject(new Error('not called')),
+	}
+}
+
+/**
+ * A clone, published `inspect` at generation 1, into which the real importer loaded `source`'s consistent backup: its
+ * parts are loaded and the self-references of `folders` wait for the link pass, so it holds the import marker.
+ */
+async function importingClone(
+	source: Harness,
+): Promise<{ readonly source: ExportSource & { readonly storage: ImportStorage }; readonly barrier: MaintenanceBarrier }> {
+	const storage = kvStorage(new Database(':memory:'))
+	const barrier = await MaintenanceBarrier.load({ read: () => Promise.resolve(null), put: () => Promise.resolve('v1') })
+	await barrier.transition({ generation: 1, mode: 'inspect' })
+	const target = { storage, bucket: source.bucket, migrations: bundles(), serving: 'application' }
+	const scope = { object: CLONE_SCOPE.object, generation: 1, source: { object: consistent.object, dump: consistent.dump } }
+	const begun = await importStep(target, barrier, { ...scope, step: 'begin' })
+	expect(begun.status).toBe(200)
+	const loaded = await importStep(target, barrier, { ...scope, step: 'part', part: 1 })
+	expect(loaded.status).toBe(200)
+	const ack = parseOpsImportPartAck(await json(loaded))
+	expect(ack?.deferred).toBeGreaterThan(0)
+	return { source: { ...source.source, storage }, barrier }
+}
 
 describe('a consistent step holds the barrier', () => {
 	test('a transition waits for a consistent part under way, which answers at its own generation', async () => {
