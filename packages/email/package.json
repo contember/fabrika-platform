@@ -35,6 +35,11 @@
 			"types": "./src/ahasend.ts",
 			"default": "./src/ahasend.ts"
 		},
+		"./cloudflare": {
+			"bun": "./src/cloudflare.ts",
+			"types": "./src/cloudflare.ts",
+			"default": "./src/cloudflare.ts"
+		},
 		"./lettermint": {
 			"bun": "./src/lettermint.ts",
 			"types": "./src/lettermint.ts",

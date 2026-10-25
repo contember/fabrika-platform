@@ -82,7 +82,7 @@ name, the subject, the body and the idempotency key before any provider I/O.
 
 A composition hands the package a provider registry, a name-to-factory map. The
 registry is open: a composition can add its own provider. `@fabrika/email/providers`
-exports `builtinEmailProviders` (`ahasend`, `lettermint`, `postmark`, `resend`, `smartemailing`), sorted by name, the
+exports `builtinEmailProviders` (`ahasend`, `cloudflare`, `lettermint`, `postmark`, `resend`, `smartemailing`), sorted by name, the
 order every help text and refusal lists them in. Memory is never
 selected by a variable. Directory is a composition input of IAM, and a `directory`
 provider that only a local composition registers (below).
@@ -104,6 +104,8 @@ sender, which does no I/O.
 | `FABRIKA_EMAIL_AHASEND_API_KEY`            | yes    | required for `ahasend`; an API key v2 scoped to `messages:send:{domain}` at least                                             |
 | `FABRIKA_EMAIL_AHASEND_ACCOUNT_ID`         | no     | required for `ahasend`; `[A-Za-z0-9-]{1,64}`                                                                                  |
 | `FABRIKA_EMAIL_AHASEND_BROADCAST_FROM`     | no     | optional, the address a `broadcast` message is sent from, on the account's Marketing domain; without it, `ahasend` sends none |
+| `FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN`       | yes    | required for `cloudflare`; an account API token with only the Email Sending Write permission                                  |
+| `FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID`      | no     | required for `cloudflare`; the account's ID, 32 hexadecimal digits                                                            |
 | `FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN`   | yes    | required for `lettermint`; a project API token                                                                                |
 | `FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE` | no     | optional, the project's broadcast route slug (`[A-Za-z0-9_-]{1,64}`), default `broadcast`                                     |
 | `FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN`      | yes    | required for `postmark`; a server token                                                                                       |
@@ -122,13 +124,14 @@ What each built-in provider offers, and what it has been checked against. "Live"
 recorded on a real account and the received messages inspected; "stubbed" means only the unit tests and the
 conformance kit against a stubbed `fetch`.
 
-| provider        | idempotent | confirmation | unsubscribe | attachments | broadcast                            | checked against                                                                               |
-| --------------- | ---------- | ------------ | ----------- | ----------- | ------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | from its Marketing domain, unchecked | live, 2026-10-22                                                                              |
-| `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | its broadcast route, unchecked       | live, 2026-10-22                                                                              |
-| `postmark`      | no         | `sync`       | yes         | 10 MiB      | its broadcast stream                 | live, 2026-10-22                                                                              |
-| `resend`        | yes        | `sync`       | yes         | 25 MiB      | tagged `category: broadcast`         | live, 2026-10-22                                                                              |
-| `smartemailing` | no         | `queued`     | no          | none        | no                                   | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)) |
+| provider        | idempotent | confirmation | unsubscribe | attachments | broadcast                            | checked against                                                                                  |
+| --------------- | ---------- | ------------ | ----------- | ----------- | ------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | from its Marketing domain, unchecked | live, 2026-10-22                                                                                 |
+| `cloudflare`    | no         | `sync`       | yes         | 3 MiB       | no                                   | stubbed ([backlog 236](../backlog/236-verify-the-cloudflare-email-adapter-on-a-live-account.md)) |
+| `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | its broadcast route, unchecked       | live, 2026-10-22                                                                                 |
+| `postmark`      | no         | `sync`       | yes         | 10 MiB      | its broadcast stream                 | live, 2026-10-22                                                                                 |
+| `resend`        | yes        | `sync`       | yes         | 25 MiB      | tagged `category: broadcast`         | live, 2026-10-22                                                                                 |
+| `smartemailing` | no         | `queued`     | no          | none        | no                                   | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md))    |
 
 A provider that is not idempotent leaves a message whose outcome is unknown (a timeout, a lost answer, a 5xx) to a
 person: it is never sent again automatically (`mayRetryDelivery`). When a provider is checked live, update its row and
@@ -151,7 +154,8 @@ error text never reaches an error.
 A new provider is one module (its sender and its `EmailProvider` declaration), its entry in
 `builtinEmailProviders` (`builtinEmailProviderVariables` lists every provider's variables from it), its release in
 `builtinEmailProviderSince` (the release after the newest one published without it; the type refuses a provider
-without one), its
+without one; Control compares releases without their prerelease tag, so `0.9.0` also admits the `0.9.0-dev.*`
+prereleases published before `cloudflare`), its
 `package.json` export, a unit test and a conformance harness. The installers, the
 Cloudflare workflow and its README read the registry, so neither needs an edit.
 
@@ -254,6 +258,29 @@ A `broadcast` message goes through the project's broadcast route (`route`), `bro
 created; a route the project lacks is a 422 that the adapter answers as `provider_rejected`, naming the variable. Not
 checked live: the test project had no broadcast route, so how Lettermint treats the unsubscribe headers there is not
 known.
+
+## Cloudflare adapter
+
+`CloudflareEmailSender` (`@fabrika/email/cloudflare`) calls Cloudflare Email Service's Email Sending REST API,
+`POST https://api.cloudflare.com/client/v4/accounts/{account}/email/sending/send`, with a bearer API token. Create
+the token on the account with the Email Sending Write permission and nothing else; the account needs Workers Paid and
+an onboarded sending domain to send to any recipient. It sends the REST API, not the Workers `send_email` binding, so
+IAM's Worker, Control on either cloud and an application read one set of `FABRIKA_EMAIL_*`. The sender is
+`from: {address, name}`, the reply-to `reply_to`, the unsubscribe URL the two message headers, and an attachment
+`content` (base64), `filename`, `type` and `disposition: attachment`.
+
+Cloudflare has no idempotency key. Capabilities: not idempotent, `sync`, `listUnsubscribe`, and `maxAttachmentBytes`
+of 3 MiB: Cloudflare counts the whole message, attachments included, against 5 MiB. It takes transactional mail only,
+so it has no `broadcast` capability and refuses a broadcast message before any request.
+
+A 200 groups the recipients into `delivered`, `queued`, `permanent_bounces` and `suppressed_recipients`. A message
+whose recipient is a permanent bounce or suppressed is `provider_rejected`, without the address; otherwise its
+`result.message_id` is the message ID, and a 200 without one is `malformed_response`. A refusal carries numeric codes
+in `errors`, which the adapter does not read: per the documentation a malformed request, an invalid or oversized
+message is a 400, `provider_rejected`; a bad token a 401, and a token without the permission, an account not entitled
+to Email Sending, or sending disabled or paused a 403, `provider_unauthorized`; a 404 (no such account under the path)
+`provider_unauthorized`; a 429 `rate_limited`; a 500 or 503 `provider_unavailable`. A repeated request is delivered
+again. Not checked live ([backlog 236](../backlog/236-verify-the-cloudflare-email-adapter-on-a-live-account.md)).
 
 ## SmartEmailing adapter
 

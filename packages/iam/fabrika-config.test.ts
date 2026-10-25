@@ -217,7 +217,7 @@ describe('IAM resource graph', () => {
 		delete noKey['FABRIKA_EMAIL_RESEND_API_KEY']
 		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noKey)).toThrow('FABRIKA_EMAIL_RESEND_API_KEY')
 		expect(() => iamPipelineVars({ ...REMOTE_SOURCE, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow(
-			'FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, lettermint, postmark, resend, smartemailing',
+			'FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, cloudflare, lettermint, postmark, resend, smartemailing',
 		)
 	})
 
@@ -252,6 +252,30 @@ describe('IAM resource graph', () => {
 		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noCredentials)).toThrow(
 			'FABRIKA_EMAIL_SMARTEMAILING_USERNAME is missing; FABRIKA_EMAIL_SMARTEMAILING_API_KEY is missing',
 		)
+	})
+
+	test('takes the Cloudflare variables from its declaration: the token as a secret, the account ID as a var', () => {
+		const cloudflare = {
+			...REMOTE_SOURCE,
+			FABRIKA_EMAIL_PROVIDER: 'cloudflare',
+			FABRIKA_EMAIL_FROM: 'auth@example.com',
+			FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN: 'private-cloudflare-token',
+			FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID: '023e105f4ecef8ad9ca31a8372d0c353',
+		}
+		const worker = buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, cloudflare)
+
+		expect(worker.options.vars).toMatchObject({
+			FABRIKA_EMAIL_PROVIDER: 'cloudflare',
+			FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID: '023e105f4ecef8ad9ca31a8372d0c353',
+		})
+		expect(iamPipelineVars(cloudflare)).toContain('FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID')
+		expect(iamPipelineSecrets(cloudflare)).toContain('FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN')
+		expect(iamPipelineVars(cloudflare)).not.toContain('FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN')
+		expect(JSON.stringify(worker.options)).not.toContain('private-cloudflare-token')
+
+		const noAccount = { ...cloudflare }
+		delete noAccount['FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID']
+		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noAccount)).toThrow('FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID is missing')
 	})
 
 	test('remote secrets are required but never enter plaintext Worker vars', () => {

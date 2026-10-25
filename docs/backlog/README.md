@@ -118,4 +118,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [229](229-provider-neutral-core-review-follow-ups.md): The provider-neutral core reviews' gaps; P2: a late cancel leaves a Cloudflare version without its IAM schema.
 - [234](234-mcp-authoring-review-follow-ups.md): Review follow-ups of MCP authoring and dev environments: one failing repository fails `list_workspaces`, a long `run_checks` reads as a gone launcher, a crash loop never idles, an abandoned workspace stays bound, a committed launcher state file or booted marker misleads a new container, and the SPA type check awaits an ADR-0062 decision.
 - [235](235-a-long-job-on-cloudflare-has-no-workflow-escape-hatch.md): A job that cannot chunk through claims has no form on Cloudflare; a contract-declared Workflow generated into the entry.
+- [236](236-verify-the-cloudflare-email-adapter-on-a-live-account.md): The Cloudflare email adapter is verified only against a stubbed `fetch`; its message id, sender, quota and size answers wait for a live account.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
