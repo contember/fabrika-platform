@@ -94,8 +94,8 @@ describe('the release gates', () => {
 		})
 	}
 
-	// SemVer orders a channel prerelease below every dev prerelease of the version; the minor gates count it as 0.9.
-	for (const release of ['0.9.0-alpha.1']) {
+	// SemVer orders a cloudflare or alpha prerelease below every dev prerelease of the version; the minor gates count it as 0.9.
+	for (const release of ['0.9.0-cloudflare.1', '0.9.0-alpha.1']) {
 		test(`${release}: runsInObject, pinsGeneratedEntry and servesOps are all true`, () => {
 			expect(runsInObject(release)).toBe(true)
 			expect(pinsGeneratedEntry(release)).toBe(true)

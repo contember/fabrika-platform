@@ -139,17 +139,34 @@ The application copies the tarballs into `vendor/`, takes the block in place of 
 
 ## Release channels
 
-The version decides the npm dist-tag a release publishes under. One function, `releaseDistTag` in `scripts/release.ts`, derives it for both `publish` and `registry-smoke`:
+The version decides the npm dist-tag a release publishes under. One function, `releaseDistTag` in `scripts/release.ts`, derives it for both `publish` and `registry-smoke`. A prerelease whose first identifier is a channel of `RELEASE_CHANNELS` publishes under that channel:
 
-| Version                                                                   | Dist-tag | Who resolves it                       |
-| ------------------------------------------------------------------------- | -------- | ------------------------------------- |
-| a release (`0.9.0`)                                                       | `latest` | a plain `npm install @fabrika/app`    |
-| a prerelease whose first identifier starts with `alpha` (`0.9.0-alpha.1`) | `alpha`  | `@fabrika/app@alpha`, or an exact pin |
-| any other prerelease (`0.9.0-dev.4`, CI's `0.0.0-ci.0`)                   | `next`   | `@fabrika/app@next`, or an exact pin  |
+| Version                                                 | Dist-tag     | Cut from             |
+| ------------------------------------------------------- | ------------ | -------------------- |
+| a release (`0.9.0`)                                     | `latest`     | `main`               |
+| `<version>-cloudflare.<n>` (`0.9.0-cloudflare.1`)       | `cloudflare` | `channel/cloudflare` |
+| `<version>-alpha.<n>` (`0.9.0-alpha.1`)                 | `alpha`      | `channel/alpha`      |
+| any other prerelease (`0.9.0-dev.4`, CI's `0.0.0-ci.0`) | `next`       | any branch           |
 
-The alpha channel is for a minor that is usable before its release: an application outside the repository pins an exact alpha and deploys on an installation of that alpha. A prerelease never moves `latest`, and the `example-mirror` job of `release.yml` skips every prerelease, so the standalone example keeps following `latest` ([Pinning the standalone example](#pinning-the-standalone-example)). Control and the providers read a prerelease as its `major.minor.patch` and do not tell the channels apart.
+A prerelease never moves `latest`, and the `example-mirror` job of `release.yml` skips every prerelease, so the standalone example keeps following `latest` ([Pinning the standalone example](#pinning-the-standalone-example)). Control and the providers read a prerelease as its `major.minor.patch` and do not tell the channels apart: a `0.9.0-cloudflare.1` application is a 0.9 application to them. Adding a channel is a deliberate edit of `RELEASE_CHANNELS`.
 
-SemVer orders prerelease identifiers by ASCII, so `0.9.0-alpha.1` sorts below `0.9.0-dev.4`. `release:bump` refuses a version that is not newer than the source, so a source already at a `dev` prerelease of a version cannot move to an `alpha` of the same version; and a range such as `^0.9.0-alpha.1` resolves `0.9.0-dev.4`. Pin exact versions, as every application does anyway.
+### A channel branch
+
+A channel ships what `main` has before `main` releases it, without moving `main`'s source version. Its releases are cut from a long-lived branch `channel/<name>`, which follows `main` and carries only the release commits of its own versions on top. `main` keeps its source version; the channel branch carries the channel's version. CI runs on every push to a `channel/**` branch as it does on `main`.
+
+To cut the next release of a channel:
+
+1. Merge `main` into `channel/<name>` (a merge, so the branch keeps the tags it published).
+2. Run `bun run release:bump --tag=v0.9.0-cloudflare.2`, then `bun run format` and `bun run check:ci`. A merge of `main` brings `main`'s source version back into the conflicting manifests; the bump overwrites them.
+3. Commit the result as `chore: release v0.9.0-cloudflare.2`, push the branch, tag that commit and push the tag.
+
+`release.yml` starts on a `v*` tag whatever branch the commit is on. Its `verify` job runs `ci.yml` against the tagged commit, `release:validate` refuses a tag that differs from the source version, and npm trusted publishing names the repository and `release.yml`, not a branch.
+
+### Ordering
+
+`release:bump` refuses a version that is not newer than the source, within one dist-tag. A prerelease source may switch to another channel's prerelease of the same release or a later one, although SemVer may order it lower: SemVer orders prerelease identifiers by ASCII, so `0.9.0-cloudflare.1` sorts below `0.9.0-dev.4`, and the bump from `dev.4` to `cloudflare.1` passes. Going back within a channel (`cloudflare.2` to `cloudflare.1`), between two prereleases that share `next` (`dev.4` to `beta.1`), to an older release, or from a release to a prerelease of it, is refused.
+
+A caret range such as `^0.9.0-cloudflare.1` therefore resolves `0.9.0-dev.4`. That does not reach an application that follows the rule: every `@fabrika/*` pin is an exact version ([Pinning the standalone example](#pinning-the-standalone-example)), and the application skill's example pins are exact.
 
 ## Tagged publication
 
