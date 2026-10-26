@@ -103,9 +103,11 @@ no idempotency key.
 
 ### 5. Which deploys get it
 
-- Zerops only, on the namespace-proxy path. Control's Worker runs no relay, so a Cloudflare deploy hands installation
-  mail as the installation's `FABRIKA_EMAIL_*` ([ADR-0019](0019-portable-outbound-email.md) §4), and the `source`
-  receiver goes to no Cloudflare environment: Cloudflare runs no `dev` environment.
+- On Zerops, on the namespace-proxy path. On Cloudflare, mail goes to every environment once Control's Worker runs the
+  relay (it has its `vozka-mail` queue): a Cloudflare environment reaches Control's public origin directly. A Worker
+  without the queue hands installation mail as the installation's `FABRIKA_EMAIL_*`
+  ([ADR-0019](0019-portable-outbound-email.md) §4). The `source` receiver goes to no Cloudflare environment: Cloudflare
+  runs no `dev` environment.
 - Only an application whose approved snapshot records framework release 0.7.0 or newer gets the platform transport. A
   prerelease compares as its release.
 - An older release, and a snapshot that records no framework release, keeps what it had: for mail, the installation's

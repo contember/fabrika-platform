@@ -6,10 +6,12 @@ import { runMaintenance } from './cron'
 import type { Env } from './env'
 import { gitHubAppClientFactory } from './github/connections/credentials'
 import { createSourceConnections } from './github/connections/port'
+import { dispatchMail } from './mail-relay/dispatch'
+import { decodeMailDispatchMessage, type MailDispatchMessage } from './mail-relay/queue'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
 import { reconcileProviderRuns } from './provider-reconcile'
 import { type ControlJobMessage, operationDeploys } from './run-lifecycle'
-import { buildRunDeps, iamSchemaDeps, locks, operationsReleaseDeps, opsTransportDeps, platformTransportDeps, vault } from './services'
+import { buildRunDeps, iamSchemaDeps, locks, operationsReleaseDeps, opsTransportDeps, platformTransportDeps, repositories, vault } from './services'
 
 /**
  * The fabrika control plane — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint`
@@ -25,6 +27,9 @@ import { buildRunDeps, iamSchemaDeps, locks, operationsReleaseDeps, opsTransport
  * `controlEnv` is what makes one `Env` serve both: it presents the raw bindings (`this.env`) as the
  * ports everything downstream is written against. Two of the five need no adapter at all.
  */
+/** The mail relay's queue, whatever environment prefix the deploy gives it. */
+const MAIL_QUEUE_SUFFIX = 'vozka-mail'
+
 export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	/** The runtime-neutral view of this Worker's bindings. Cheap — three closures and a spread. */
 	private get control(): Env {
@@ -41,20 +46,55 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	}
 
 	/**
-	 * The control consumer — deploy jobs and namespace jobs off one queue. One job per message
-	 * (maxBatchSize 1). ack on a handled message — including a `deferred` one, whose re-enqueue
-	 * `runControlJob` has already done; retry only on an unexpected throw (Cloudflare redelivers,
-	 * bounded by the queue's maxRetries).
+	 * The two consumers. The mail relay's queue (`<env>-vozka-mail`) carries one relayed message per job: every send
+	 * failure settles or requeues its row, so only an unexpected throw is retried (maintenance re-enqueues a lost one).
+	 * The control queue carries deploy and namespace jobs, one per message (maxBatchSize 1): ack on a handled message,
+	 * including a `deferred` one, whose re-enqueue `runControlJob` has already done; retry only on an unexpected throw
+	 * (Cloudflare redelivers, bounded by the queue's maxRetries).
 	 */
-	override async queue(batch: MessageBatch<ControlJobMessage>): Promise<void> {
+	override async queue(batch: MessageBatch<unknown>): Promise<void> {
 		const env = this.control
+		if (batch.queue.endsWith(MAIL_QUEUE_SUFFIX)) {
+			await this.dispatchMail(env, batch.messages)
+			return
+		}
 		const provider = cloudflareControlProvider(this.env, env)
 		for (const message of batch.messages) {
 			try {
-				console.info(controlJobLogLine(await runControlJob(env, provider, message.body)))
+				console.info(controlJobLogLine(await runControlJob(env, provider, message.body as ControlJobMessage)))
 				message.ack()
 			} catch (err) {
 				console.error('control consumer error', err instanceof Error ? err.message : 'unknown error')
+				message.retry()
+			}
+		}
+	}
+
+	private async dispatchMail(env: Env, messages: readonly Message<unknown>[]): Promise<void> {
+		const relay = env.MAIL_RELAY
+		for (const message of messages) {
+			if (relay === undefined) {
+				message.retry()
+				continue
+			}
+			let job: MailDispatchMessage
+			try {
+				job = decodeMailDispatchMessage(message.body)
+			} catch {
+				console.error('mail job: undecodable payload, dropped')
+				message.ack()
+				continue
+			}
+			try {
+				await dispatchMail({
+					messages: repositories(env).mailMessages,
+					queue: relay.queue,
+					sender: relay.sender,
+					now: () => Math.floor(Date.now() / 1000),
+				}, job)
+				message.ack()
+			} catch (err) {
+				console.error('mail job failed', err instanceof Error ? err.message : 'unknown error')
 				message.retry()
 			}
 		}

@@ -168,6 +168,14 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 					retryDelay: 30,
 				},
 			}),
+			// The mail relay's dispatch queue (src/mail-relay): one relayed message per job, producer (acceptance, release,
+			// maintenance) and consumer (queue()). The dispatcher settles or requeues its row on every send failure, so a
+			// redelivery is only for an unexpected throw; maintenance re-enqueues a message whose job was lost.
+			MAIL_QUEUE: new Queue({
+				name: 'vozka-mail',
+				binding: 'both',
+				consumer: { maxBatchSize: 1, maxRetries: 5, retryDelay: 60 },
+			}),
 			// IAM is bound in EVERY environment, local included: src/iam.ts verifies an IAM-issued token
 			// and has no local mode to fall back on, and the proxy Worker in front of this one already
 			// binds the same service unconditionally. Local dev therefore wants `packages/iam`'s

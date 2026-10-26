@@ -10,7 +10,7 @@
 
 import type { IamRpc } from '@fabrika/auth'
 import { type AppEnvironment, readEnvironmentName } from '@fabrika/auth-core'
-import { pickEmailEnvironment } from '@fabrika/email'
+import { type EmailSender, emailSenderFromEnv, pickEmailEnvironment } from '@fabrika/email'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import type { GitHubAppFetch } from '@fabrika/github-app'
 import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
@@ -32,12 +32,14 @@ import { SourceFailure } from './github/source/failure'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './github/source/metadata'
 import type { SourceRepository } from './github/source/types'
 import { controlPublicOrigin } from './iam'
+import type { MailDispatchMessage, MailRelay } from './mail-relay/queue'
 import { CLOUDFLARE_MAIL_REMEDY, type InstallationMail, readInstallationMail } from './mail-transport'
 import type { ControlJobMessage } from './run-lifecycle'
 
 /** The control-plane Worker's raw Cloudflare bindings + vars/secrets — what `WorkerEntrypoint` fills `this.env` with. */
 export interface WorkerBindings
-	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'WAIT_UNTIL' | 'IAM' | 'IAM_ADMIN' | 'MAIL_TRANSPORT'>
+	extends
+		Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'WAIT_UNTIL' | 'IAM' | 'IAM_ADMIN' | 'MAIL_TRANSPORT' | 'MAIL_RELAY'>
 {
 	// The installation's mail transport arrives as `FABRIKA_EMAIL_*` Worker vars and secrets, which Control's own deploy
 	// writes from the installation's GitHub Environment (`fabrika.config.ts`). The provider's variables belong to an open
@@ -50,6 +52,11 @@ export interface WorkerBindings
 	RUN_LOGS: R2Bucket
 	/** Deploy job queue — producer here, consumer via the Worker's `queue()` handler. */
 	DEPLOY_QUEUE: Queue<ControlJobMessage>
+	/**
+	 * The mail relay's dispatch queue (`vozka-mail`), producer and consumer here. Without it the Worker runs no relay and
+	 * a deploy hands applications the installation's `FABRIKA_EMAIL_*`, as before the relay ran on Cloudflare.
+	 */
+	MAIL_QUEUE?: Queue<MailDispatchMessage>
 	/** The single Cloudflare account selected by this composition root. */
 	CLOUDFLARE_ACCOUNT_ID?: string
 	/** Account-wide deploy credential. It is passed to the runner only for a live deploy. */
@@ -66,6 +73,30 @@ export interface WorkerBindings
 
 /** The transport each bindings object holds, parsed once: workerd hands every invocation of an isolate the same `env`. */
 const mailByBindings = new WeakMap<WorkerBindings, InstallationMail>()
+
+/** The installation's sender, built once per bindings object; `null` without a transport. */
+const senderByBindings = new WeakMap<WorkerBindings, EmailSender | null>()
+
+function installationSender(bindings: WorkerBindings): EmailSender | null {
+	if (senderByBindings.has(bindings)) return senderByBindings.get(bindings) ?? null
+	const sender = installationMail(bindings).kind === 'transport' ? emailSenderFromEnv(pickEmailEnvironment(bindings), builtinEmailProviders) : null
+	senderByBindings.set(bindings, sender)
+	return sender
+}
+
+/**
+ * The relay, when the Worker has its dispatch queue. IAM on Cloudflare holds the installation's transport itself and
+ * never sends through the relay, so no key authenticates as IAM (`installationSecret: null`).
+ */
+function mailRelay(bindings: WorkerBindings): MailRelay | undefined {
+	if (bindings.MAIL_QUEUE === undefined) return undefined
+	return { queue: cfJobQueue(bindings.MAIL_QUEUE), installationSecret: null, sender: installationSender(bindings) }
+}
+
+const relayOf = (bindings: WorkerBindings): { MAIL_RELAY?: MailRelay } => {
+	const relay = mailRelay(bindings)
+	return relay === undefined ? {} : { MAIL_RELAY: relay }
+}
 
 function installationMail(bindings: WorkerBindings): InstallationMail {
 	const known = mailByBindings.get(bindings)
@@ -91,6 +122,7 @@ export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL'
 		...(bindings.IAM === undefined ? {} : { IAM: bindings.IAM, IAM_ADMIN: bindings.IAM }),
 		// A Worker has no boot to log an invalid transport at: the deploys that need it are refused, naming the variables.
 		MAIL_TRANSPORT: installationMail(bindings),
+		...relayOf(bindings),
 	}
 	return { ...env, COMMITS: gitHubCommitSource(new GitHubMetadataClient({}), vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory() })) }
 }
