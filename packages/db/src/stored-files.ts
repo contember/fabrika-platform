@@ -123,6 +123,9 @@ const FOREIGN_KEY_VIOLATION = '23503'
 const SERVED_COLUMNS = `id::text as id, kind, name, content_type, size, status, object_key, object_version`
 const SQLITE_SERVED_COLUMNS = `id, kind, name, content_type, size, status, object_key, object_version`
 const N = SQLITE_NOW
+// A tombstone's instant in whole milliseconds, as SQLite stores it: the sweep's cutoff is a `Date`, and a key recorded
+// in the cutoff's own millisecond is due (equality), not one microsecond past it.
+const RECORDED_NOW = `date_trunc('milliseconds', now())`
 
 const SQL_STAGE: DialectTexts = {
 	postgres: `insert into ${F} (id, kind, status, object_key, content_type, name, request, created_at)
@@ -137,7 +140,7 @@ const SQL_WRITTEN: DialectTexts = {
 }
 
 const SQL_ABANDON = `with gone as (delete from ${F} where id = $1::uuid and status = 'pending' and request = $2 returning object_key)
-insert into ${D} (object_key, recorded_at) select object_key, now() from gone on conflict (object_key) do nothing returning object_key`
+insert into ${D} (object_key, recorded_at) select object_key, ${RECORDED_NOW} from gone on conflict (object_key) do nothing returning object_key`
 
 // SQLite has no data-modifying CTE: the delete and the record of its object are two statements in one transaction.
 const SQLITE_ABANDON = `delete from ${F} where id = ?1 and status = 'pending' and request = ?2 returning object_key`
@@ -214,7 +217,7 @@ const SQL_CANCEL: DialectTexts = {
 const SQL_REMOVE = `with gone as (
 	delete from ${F} where id = $1::uuid and legacy is null and created_at < now() - $2::bigint * interval '1 millisecond' returning object_key
 )
-insert into ${D} (object_key, recorded_at) select object_key, now() from gone
+insert into ${D} (object_key, recorded_at) select object_key, ${RECORDED_NOW} from gone
 on conflict (object_key) do update set recorded_at = excluded.recorded_at returning object_key`
 
 const SQLITE_REMOVE = `delete from ${F} where id = ?1 and legacy is null and created_at < ${sqliteNowPlus('-?2')} returning object_key`
