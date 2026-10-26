@@ -43,7 +43,8 @@ export interface MailAcceptDeps {
 	readonly messages: MailMessageRepository
 	readonly rules: MailRuleRepository
 	readonly queue: JobQueue<MailDispatchMessage>
-	readonly installationSecret: string
+	/** `null`: IAM does not send through this relay, and no key authenticates as IAM. */
+	readonly installationSecret: string | null
 	/** Whether Control has a mail transport; without one, every application message is held. */
 	readonly hasTransport: boolean
 	/** What Control's sender sends; `null` without one, when a held message waits for the transport to decide. */
@@ -52,7 +53,7 @@ export interface MailAcceptDeps {
 	readonly now: () => number
 }
 
-/** `POST /platform/mail/send`; any other path under the row, and the Worker, which has no relay, answer 404. */
+/** `POST /platform/mail/send`; any other path under the row, and a Control without a relay, answer 404. */
 export function handleMailRelay(ctx: ControlAppContext): Promise<Response> {
 	const relay = ctx.env.MAIL_RELAY
 	if (relay === undefined || ctx.request.method !== 'POST' || new URL(ctx.request.url).pathname !== PLATFORM_MAIL_SEND_PATH) {
@@ -149,7 +150,9 @@ async function gate(deps: MailAcceptDeps, sender: string, domain: string): Promi
 /** The sender a key authenticates, or `null`. */
 async function authenticate(deps: MailAcceptDeps, bearer: string): Promise<string | null> {
 	const hash = await hashPlatformKey(bearer)
-	if (sameDigest(hash, await hashPlatformKey(await installationMailKey(deps.installationSecret)))) return INSTALLATION_IAM_SENDER
+	if (deps.installationSecret !== null && sameDigest(hash, await hashPlatformKey(await installationMailKey(deps.installationSecret)))) {
+		return INSTALLATION_IAM_SENDER
+	}
 	const key = await deps.keys.findValidByHash(hash, deps.now())
 	if (key === null || key.receiver !== MAIL_RECEIVER) return null
 	return `${key.app_id}@${key.env}`

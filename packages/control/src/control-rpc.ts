@@ -103,7 +103,7 @@ import {
 	startRestore,
 	toDataOperationDto,
 } from './data-operations'
-import type { ControlRepositories, MailMessageRow, MailRuleRow } from './db'
+import type { ControlRepositories, MailMessageRepository, MailMessageRow, MailRuleRow } from './db'
 import type { Env } from './env'
 import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from './github/connections/installation'
 import { startSourceConnection } from './github/connections/manifest'
@@ -629,16 +629,17 @@ async function getMailMessage(c: MailUseCaseContext, id: string): Promise<MailMe
 	if (row === null || !readsMailOf(c.auth, row.sender)) fail(404, 'mail message not found')
 	return {
 		...toMailMessageDto(row),
-		content: mailContentOf(c.auth, row),
+		content: await mailContentOf(c.auth, c.repositories.mailMessages, row),
 		requeueable: c.mailRelay !== undefined && mayRequeueMail(row, c.mailRelay.sender),
 	}
 }
 
 /** An installation service's mail carries one-time links (enrollment, password reset), so no caller reads it (ADR-0019 §8). */
-function mailContentOf(auth: AuthContext, row: MailMessageRow): MailContentDto {
+async function mailContentOf(auth: AuthContext, messages: MailMessageRepository, row: MailMessageRow): Promise<MailContentDto> {
 	if (isInstallationSender(row.sender) || !auth.can(CONTROL_ACTIONS.MAIL_CONTENT_READ)) return { kind: 'withheld' }
-	if (row.content === null) return { kind: 'purged' }
-	const parsed = parsePlatformMailRequest(JSON.parse(row.content))
+	const content = await messages.content(row)
+	if (content === null) return { kind: 'purged' }
+	const parsed = parsePlatformMailRequest(JSON.parse(content))
 	if (!parsed.ok) throw new Error('stored mail content does not parse')
 	const { to, subject, text, html, replyTo, fromName, unsubscribeUrl, broadcast, attachments } = parsed.message
 	return {

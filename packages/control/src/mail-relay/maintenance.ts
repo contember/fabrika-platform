@@ -1,5 +1,5 @@
 import type { JobQueue } from '@fabrika/platform'
-import type { MailMessageRepository } from '../db'
+import { MAIL_CONTENT_UPLOAD_GRACE_S, type MailMessageRepository } from '../db'
 import { MAIL_STALE_CLAIM_S } from './dispatch'
 import { enqueueMailDispatch, type MailDispatchMessage } from './queue'
 
@@ -11,7 +11,7 @@ const REQUEUE_BATCH = 100
 
 export interface MailMaintenanceDeps {
 	readonly messages: MailMessageRepository
-	/** Absent on the Worker, which has no dispatcher: the pass then only purges. */
+	/** Absent without a relay (no dispatcher): the pass then only purges and collects. */
 	readonly queue?: JobQueue<MailDispatchMessage>
 	/** Unix seconds. */
 	readonly now: number
@@ -20,11 +20,13 @@ export interface MailMaintenanceDeps {
 export interface MailMaintenanceSummary {
 	readonly requeued: number
 	readonly purged: number
+	/** Content objects whose row never named them, removed. */
+	readonly collected: number
 }
 
 /**
- * Re-enqueues the messages the dispatcher lost (queued ones, and attempts whose consumer stopped after the claim), and
- * forgets the content of final ones past retention.
+ * Re-enqueues the messages the dispatcher lost (queued ones, and attempts whose consumer stopped after the claim),
+ * forgets the content of final ones past retention, and collects content objects no row came to name.
  */
 export async function runMailMaintenance(deps: MailMaintenanceDeps): Promise<MailMaintenanceSummary> {
 	let requeued = 0
@@ -35,5 +37,6 @@ export async function runMailMaintenance(deps: MailMaintenanceDeps): Promise<Mai
 		}
 	}
 	const purged = await deps.messages.purgeFinalContent(deps.now - MAIL_CONTENT_RETENTION_S)
-	return { requeued, purged }
+	const collected = await deps.messages.collectUploads(deps.now - MAIL_CONTENT_UPLOAD_GRACE_S)
+	return { requeued, purged, collected }
 }

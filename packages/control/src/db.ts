@@ -29,6 +29,8 @@ export {
 export { type DevBindInput, DevEnvironmentRepository, type DevEnvironmentRow, type DevReportInput } from './db/dev-environments'
 export {
 	FINAL_MAIL_MESSAGE_STATES,
+	hasMailContent,
+	MAIL_CONTENT_UPLOAD_GRACE_S,
 	type MailMessageInput,
 	type MailMessageListFilter,
 	MailMessageRepository,

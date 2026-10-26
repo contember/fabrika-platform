@@ -103,7 +103,9 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 		...(env.MAIL_RELAY === undefined ? {} : { queue: env.MAIL_RELAY.queue }),
 		now: now(),
 	})
-	if (mail.requeued > 0 || mail.purged > 0) console.info(`mail maintenance: requeued=${mail.requeued} purged=${mail.purged}`)
+	if (mail.requeued > 0 || mail.purged > 0 || mail.collected > 0) {
+		console.info(`mail maintenance: requeued=${mail.requeued} purged=${mail.purged} collected=${mail.collected}`)
+	}
 	const dev = options.devIdle === undefined ? { stopped: 0, failed: 0 } : await options.devIdle()
 	if (dev.stopped > 0 || dev.failed > 0) console.info(`dev environments: stopped=${dev.stopped} failed=${dev.failed}`)
 	// Last: a pass spends at most `BACKUP_PASS_MS` on dump requests, and what it leaves running the next pass continues.

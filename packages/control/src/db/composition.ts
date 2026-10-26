@@ -1,4 +1,4 @@
-import type { SqlDatabase } from '@fabrika/platform'
+import type { BlobStore, SqlDatabase } from '@fabrika/platform'
 import { GitHubConnectionStore } from '../github/connections/store'
 import { BackupRepository } from './backups'
 import { BuilderConnectionRepository } from './builder-connections'
@@ -43,8 +43,14 @@ export interface ControlRepositories {
 	restores: RestoreRepository
 }
 
+export interface ControlRepositoryOptions {
+	now?: () => number
+	/** Where the relay keeps message content its rows cannot hold (D1); without it, the rows hold it (Postgres). */
+	mailContent?: BlobStore
+}
+
 /** The portable repository bundle. */
-export function createControlRepositories(db: SqlDatabase, options: { now?: () => number } = {}): ControlRepositories {
+export function createControlRepositories(db: SqlDatabase, options: ControlRepositoryOptions = {}): ControlRepositories {
 	const now = options.now ?? (() => Math.floor(Date.now() / 1000))
 	return {
 		builderConnections: new BuilderConnectionRepository(db, now),
@@ -61,7 +67,7 @@ export function createControlRepositories(db: SqlDatabase, options: { now?: () =
 		tokenKeys: new TokenKeyRepository(db),
 		opsKeys: new OpsKeyRepository(db),
 		platformTransportKeys: new PlatformTransportKeyRepository(db),
-		mailMessages: new MailMessageRepository(db),
+		mailMessages: new MailMessageRepository(db, options.mailContent ?? null),
 		mailRules: new MailRuleRepository(db),
 		dataOperations: new DataOperationRepository(db, now),
 		backups: new BackupRepository(db, now),

@@ -47,7 +47,7 @@ describe('mail maintenance', () => {
 		await m.messages.claim(deferred, 0, NOW - 3600)
 		await m.messages.defer(deferred, 1, NOW + 60, 'provider_unavailable', NOW - 3600)
 
-		expect(await runMailMaintenance({ messages: m.messages, queue: m.queue, now: NOW })).toEqual({ requeued: 1, purged: 0 })
+		expect(await runMailMaintenance({ messages: m.messages, queue: m.queue, now: NOW })).toEqual({ requeued: 1, purged: 0, collected: 0 })
 		expect(m.jobs).toEqual([{ messageId: lost }])
 	})
 
@@ -73,7 +73,7 @@ describe('mail maintenance', () => {
 	test('without a dispatcher (the Worker) it re-enqueues nothing', async () => {
 		const m = maintenance()
 		await message(m.messages, 'queued', NOW - 3600)
-		expect(await runMailMaintenance({ messages: m.messages, now: NOW })).toEqual({ requeued: 0, purged: 0 })
+		expect(await runMailMaintenance({ messages: m.messages, now: NOW })).toEqual({ requeued: 0, purged: 0, collected: 0 })
 	})
 
 	test('forgets the content of final messages after thirty days, and keeps every other', async () => {
@@ -88,7 +88,7 @@ describe('mail maintenance', () => {
 		const recent = await message(m.messages, 'failed', old + 1)
 		const heldOld = await message(m.messages, 'held', old)
 
-		expect(await runMailMaintenance({ messages: m.messages, now: NOW })).toEqual({ requeued: 0, purged: 4 })
+		expect(await runMailMaintenance({ messages: m.messages, now: NOW })).toEqual({ requeued: 0, purged: 4, collected: 0 })
 		for (const id of [...expired, sentOld]) expect((await m.messages.get(id))?.content).toBeNull()
 		for (const id of [recent, heldOld]) expect((await m.messages.get(id))?.content).not.toBeNull()
 	})
