@@ -43,9 +43,9 @@ this one import.
   `FABRIKA_APPROVED_ACCESS_FILE`, set after every job-supplied name; the executor reads it (`readApprovedAccess`)
   before the config runs. Unset outside a runner (a local deploy).
 - **A contract application from framework 0.9 runs in its Durable Object; an older one keeps its stateless Worker**
-  (ADR-0065, ADR-0062). The release gate is `runsInObject` (`src/contract-support.ts`), read from the release Control
-  read the application with: `ProviderEnvironment.access.checker` in `control.ts`, and
-  `CloudflareRunnerJob.approvedAccess.framework` in the deployer. Before 0.9, `control.ts` refuses a job's, a webhook's
+  (ADR-0065, ADR-0062). The release gate is `runsInObject` (`src/contract-support.ts`), read from the release the
+  application pins: `applicationRelease(ProviderEnvironment.access)` in `control.ts`, which also fills
+  `CloudflareRunnerJob.approvedAccess.framework`, the release the deployer reads. Before 0.9, `control.ts` refuses a job's, a webhook's
   or a public procedure's key, installation mail and token purposes (`assertStatelessEnvironment`) before the runner is
   asked, and sends no `FABRIKA_PROXY_SECRET`; the deployer gives that Worker no object, bucket or tick. An approved
   access that names no release (a Control older than the runner) deploys the stateless shape; a run without approved
@@ -79,7 +79,12 @@ this one import.
   npm before it (`dev.0`–`dev.4`, `cloudflare.1`–`cloudflare.2`) run in the object without any of them, and a platform
   upgrade keeps deploying them as they ran (ADR-0062). Every `cloudflare.<n>` sorts below `dev.5` and keeps the older
   behaviour. A new gate on something those prereleases lack uses `releaseFrom`; `published-prereleases.ts` lists them
-  for the tests. `dataOperations` on the control provider answers `servesOps && servesDataOperations`.
+  for the tests. Every gate reads the application's pin (`applicationRelease`: `ProviderApprovedAccess.framework`),
+  never `checker`, which is this platform's patch of the pin's minor and would pass every `releaseFrom` gate for a
+  prerelease pin. An access approved before Control recorded the pin reads as `<major>.<minor>.0-0` of its reader:
+  the minor gates hold, every `releaseFrom` gate fails closed. An older Control still sends `checker` as the job's
+  `framework`, so its runs keep that error until Control is upgraded; an older runner reads the pin as it read
+  `checker`. `dataOperations` on the control provider answers `servesOps && servesDataOperations`.
 - **From `servesOps` the platform composes Control's ops channel** (ADR-0069, `src/provider.ts`): `platformProxied`
   builds the proxy's table with `contractProxyTable(…, { ops: true })`, which adds the canonical ops row, and
   `withApplicationRuntime` writes `FABRIKA_APPLICATION_OBJECT` and `FABRIKA_APPLICATION_OBJECTS` as plain vars from the

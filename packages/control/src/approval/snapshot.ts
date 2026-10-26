@@ -134,7 +134,8 @@ export const compareText = (a: string, b: string): number => (a < b ? -1 : a > b
 
 /**
  * What a provider publishes for a snapshot: the contract in this release's model and the IAM schema compiled from it,
- * the digest the application's own release computes, and the reader's release, which its build checks with.
+ * the digest the application's own release computes, the reader's release, which its build checks with, and the
+ * application's pinned release, which the provider's release gates read.
  */
 export function approvedAccess(snapshot: AccessSnapshot): ProviderApprovedAccess | undefined {
 	const contract = snapshot.contract
@@ -144,6 +145,7 @@ export function approvedAccess(snapshot: AccessSnapshot): ProviderApprovedAccess
 		contractDigest: applicationContractDigest(contract, snapshot.older),
 		schema: schemaFromContract(contract),
 		checker: snapshot.checker,
+		...(snapshot.framework === undefined ? {} : { framework: snapshot.framework }),
 	}
 }
 

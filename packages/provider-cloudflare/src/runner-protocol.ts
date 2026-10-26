@@ -56,8 +56,10 @@ export interface RunnerApprovedAccess {
 	readonly contract: ContractArtifact
 	readonly contractDigest: string
 	/**
-	 * The framework release whose reader read the application. It picks the Worker's shape: the Durable Object from
-	 * 0.9, the stateless Worker before it. Absent from a Control older than the runner, which deploys the older shape.
+	 * The framework release the application pins (`applicationRelease`), which every release gate of the deployer reads:
+	 * the Durable Object from 0.9, the stateless Worker before it. An older Control sends its reader's
+	 * release here, a newer patch of the same minor. Absent from a Control older than the runner, which deploys the
+	 * older shape.
 	 */
 	readonly framework?: string
 }

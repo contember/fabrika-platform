@@ -67,6 +67,12 @@ export interface ProviderApprovedAccess {
 	 * the framework minor it pins (ADR-0062). Its build checks with that release.
 	 */
 	readonly checker: string
+	/**
+	 * The `@fabrika/app` release the application's `bun.lock` pins (`FRAMEWORK_RELEASE_PATTERN`), which a release gate
+	 * reads: `checker` is this platform's patch of that minor, newer than a prerelease pin. Absent in an access Control
+	 * approved before it recorded the pin.
+	 */
+	readonly framework?: string
 }
 
 /**

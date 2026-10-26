@@ -162,6 +162,18 @@ export const releaseFrom = (release: string, since: string): boolean => {
 }
 
 /**
+ * The release a gate reads for an approved access: the application's pin, never the reader's `checker`, which is this
+ * platform's patch of the pin's minor and so passes a `releaseFrom` gate a prerelease pin does not. An access approved before Control recorded the pin is read as the oldest release of its
+ * reader's minor (`<major>.<minor>.0-0`): every `releaseAtLeast` gate answers as for that minor, and every `releaseFrom`
+ * gate of a prerelease or a patch fails closed, as for an older application, until a deploy reads its pin.
+ */
+export const applicationRelease = (access: { readonly checker: string; readonly framework?: string }): string => {
+	if (access.framework !== undefined) return access.framework
+	const minor = /^(\d+)\.(\d+)\./.exec(access.checker)
+	return minor === null ? access.checker : `${minor[1]}.${minor[2]}.0-0`
+}
+
+/**
  * The first framework release whose application object holds the maintenance barrier (`state`, `migrate`) and serves
  * the data operations, runs its jobs from its alarm, and whose deploy caps a job at one segment. The 0.9.0 prereleases
  * published before it (`dev.0`–`dev.4`, `cloudflare.1`–`cloudflare.2`) run in the object without any of that and answer
