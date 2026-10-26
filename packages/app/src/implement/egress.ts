@@ -299,13 +299,13 @@ async function follow(
 	let method = request.method
 	const headers = withoutForbiddenHeaders(new Headers(request.headers))
 	// Read once, so that a 307 or a 308 sends it again.
-	let body: ArrayBuffer | null = request.body === null ? null : await request.arrayBuffer()
+	let body: ArrayBuffer | null = request.body === null ? null : await untilAborted(signal, request.arrayBuffer())
 	for (let hop = 0;; hop++) {
-		await admit(site, rules, url)
+		await admit(site, rules, url, signal)
 		const response = await send(url.href, { method, headers: new Headers(headers), body, redirect: 'manual', signal })
 		const location = REDIRECTS.has(response.status) ? response.headers.get('location') : null
 		if (location === null || mode === 'manual') {
-			return await capped(site, response, url, hop > 0, done)
+			return await capped(site, response, url, hop > 0, signal, done)
 		}
 		await response.body?.cancel()
 		if (mode === 'error') {
@@ -330,7 +330,7 @@ async function follow(
 }
 
 /** Refuses a hop public egress does not reach: by the URL, by the installation's hosts, by what its name resolves to. */
-async function admit(site: string, rules: PublicEgressRules, url: URL): Promise<void> {
+async function admit(site: string, rules: PublicEgressRules, url: URL, signal: AbortSignal): Promise<void> {
 	const refusal = publicEgressRefusal(url, rules.refusedHosts)
 	if (refusal !== null) {
 		throw new CapabilityRefusedError('refused_egress', `${site} calls ${url.origin}, which public egress refuses: ${refusal}`)
@@ -340,7 +340,7 @@ async function admit(site: string, rules: PublicEgressRules, url: URL): Promise<
 		return
 	}
 	const host = normalizedHost(url.hostname)
-	const addresses = await platformCall(() => resolve(host))
+	const addresses = await untilAborted(signal, platformCall(() => resolve(host)))
 	const internal = addresses.find((address) => !isPublicAddress(address))
 	if (addresses.length === 0 || internal !== undefined) {
 		throw new CapabilityRefusedError(
@@ -356,7 +356,14 @@ async function admit(site: string, rules: PublicEgressRules, url: URL): Promise<
  * `response` with its body bounded by `maxResponseBytes`, and the URL and redirect flag of the request it answers,
  * which a response the guard builds would otherwise lose.
  */
-async function capped(site: string, response: Response, url: URL, redirected: boolean, done: () => void): Promise<Response> {
+async function capped(
+	site: string,
+	response: Response,
+	url: URL,
+	redirected: boolean,
+	signal: AbortSignal,
+	done: () => void,
+): Promise<Response> {
 	const max = PUBLIC_EGRESS_LIMITS.maxResponseBytes
 	const tooLarge = () =>
 		new CapabilityRefusedError(
@@ -376,8 +383,9 @@ async function capped(site: string, response: Response, url: URL, redirected: bo
 	let seen = 0
 	const bound = new ReadableStream<Uint8Array>({
 		async pull(controller) {
-			const read = await reader.read().catch((error: unknown) => {
+			const read = await untilAborted(signal, reader.read()).catch(async (error: unknown) => {
 				done()
+				await reader.cancel(error).catch(() => undefined)
 				throw error
 			})
 			if (read.done) {
@@ -405,6 +413,24 @@ async function capped(site: string, response: Response, url: URL, redirected: bo
 		headers: response.headers,
 	})
 	return withRequestUrl(answer, url, redirected)
+}
+
+/**
+ * `work`, or the signal's reason once it aborts, whichever comes first: a stage the runtime does not abort by the
+ * signal (a resolver, a body read) still ends at the deadline. The work itself is left to settle unobserved.
+ */
+async function untilAborted<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
+	signal.throwIfAborted()
+	let abort = (): void => {}
+	const aborted = new Promise<never>((_resolve, reject) => {
+		abort = () => reject(signal.reason)
+	})
+	signal.addEventListener('abort', abort, { once: true })
+	try {
+		return await Promise.race([work, aborted])
+	} finally {
+		signal.removeEventListener('abort', abort)
+	}
 }
 
 function withRequestUrl(response: Response, url: URL, redirected: boolean): Response {
